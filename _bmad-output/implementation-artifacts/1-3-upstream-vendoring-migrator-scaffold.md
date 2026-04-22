@@ -1,6 +1,6 @@
 # Story 1.3: Upstream vendoring + migrator scaffold
 
-Status: review
+Status: done
 
 ## Story
 
@@ -223,6 +223,20 @@ _To be filled by the dev agent. Expected: 9 new + 2 modified + 1 deleted (`upstr
   - `omc` @ `0ac52cdaa093d6c41763e47055e995adaa4f8987`
   - `clawhip` @ `ff3ba32dc22a143d53bec40870d3b52b2fa11a2b`
   - Docker migrator image builds + runs; `just migrator-test-additive` exits 0 with 3 events all v1.0.1 + `extensions` field. `just bootstrap-verify` regression green (13/13). Status: `ready-for-dev` → `in-progress` → `review`.
+- **2026-04-22 (review):** 3-layer adversarial review (Blind Hunter + Edge Case Hunter + Acceptance Auditor) on commit `d2ae9d3` surfaced 1 CRITICAL + 4 HIGH + 4 MEDIUM + organizational/LOW findings. Per the operator "fix all issues even minors" directive:
+  - **CRITICAL — migrator partial-write risk.** The original migrator wrote events line-by-line directly to the final output path, then `shutil.move`d the source to archive. A crash or OOM mid-write could leave the output truncated AND the source archived — silent data loss. Fixed with `.partial` staging file + `out.flush()` + `os.fsync(out.fileno())` + `os.replace(staging → output)` + archive-only-after-rename, wrapped in try/except that unlinks `.partial` on any failure.
+  - **HIGH — sync_upstream signal-race.** Original `rmtree(dest)` before copy loop could leave operator with empty `upstream/<name>/` if Ctrl-C landed mid-copy. Fixed with staging dir pattern: content assembled in `upstream/.{name}.staging/` then atomic `rename()` into place.
+  - **HIGH — VENDORED.md regex fragility.** Original regex rewrite was brittle to whitespace / column-padding variations. Replaced with line-based parser that splits on `|`, identifies row by first cell == `` `<name>` ``, rewrites cells by index.
+  - **HIGH — Dockerfile runs as root.** Container scanner flag + supply-chain risk. Added `groupadd --system migrator && useradd --system --gid migrator && USER migrator`.
+  - **HIGH — `.tmp/` not in `.gitignore`.** Re-runs of `just migrator-test-additive` would pollute working tree. Added under "Scratch sandbox" comment block.
+  - **MEDIUM — sync_upstream not idempotent.** Re-running against an unchanged upstream rewrote destination + bumped sync date needlessly. Added idempotency short-circuit: if captured SHA == current SHA in VENDORED.md AND dest is non-empty, print "already at X; no changes" and return 0.
+  - **MEDIUM — clone-failure error message unclear.** Now notes whether existing content was preserved, so operator can judge whether a retry is safe.
+  - **MEDIUM — migration-pair split unsafe.** `pair.split("-to-")` would silently misbehave if a future pair name contained multiple `-to-` substrings. Added `maxsplit=1` + length check.
+  - **MEDIUM — assert_migrated.py raw traceback on malformed JSON.** Wrapped `json.loads` in try/except that prints clean `FAIL: invalid JSON in <path> at line N: <exc>` and exits 1.
+  - **Other — justfile shell-quote fragility.** `$(pwd)` → `${PWD}` in docker `-v` mount.
+  - **Skipped (organizational/out-of-scope):** `scripts/` vs `services/` placement (architectural — migrator is correctly under `scripts/` per Architecture §Project Structure); Dockerfile `--platform` pin (deferred to Story 1.4 compose wiring); "graceful fallback" semantic reinterpretation (spec is explicit — hard exit is the chosen behavior); vendored-file-size observation (~50MB — already documented under Repo-size impact; intentional per Architecture).
+  - Applied across 6 files in commit `da2fc39`. Verification: `just bootstrap-verify` 13/13 green, `just sync-upstream omc` confirms idempotency short-circuit live ("already at 0ac52cdaa093; no changes"), `just migrator-test-additive` 3 events v1.0.1+extensions green.
+- **2026-04-22 (finalize):** Completion Notes expanded with review-fix summary; Status `review` → `done`.
 
 ### Completion Notes
 

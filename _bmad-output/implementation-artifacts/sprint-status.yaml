@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: 2026-04-22T01:30:00Z
+# last_updated: 2026-04-22T02:15:00Z
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-04-22T01:30:00Z
+last_updated: 2026-04-22T02:15:00Z
 project: oh-my-bmad
 project_key: NOKEY
 tracking_system: file-system
@@ -48,7 +48,7 @@ development_status:
   epic-1: in-progress
   1-1-monorepo-proof: done
   1-2-remaining-service-and-mcp-scaffolds: done
-  1-3-upstream-vendoring-migrator-scaffold: review
+  1-3-upstream-vendoring-migrator-scaffold: done
   1-4-compose-env-justfile: backlog
   1-5-test-tree-ci-skeleton: backlog
   1-6-ci-gates-imports-events-single-writer: backlog
