@@ -1,6 +1,6 @@
 # Story 1.4: Compose + env + justfile
 
-Status: review
+Status: done
 
 ## Story
 
@@ -451,4 +451,28 @@ _Placeholder._
 
 ### Change Log
 
-- **2026-04-22:** Story 1.4 implemented. 15 new files + 1 modified; atomic commit pending final step. Verification: `docker compose config` validates on both file combos; `docker compose up -d` brings up 6/6 containers healthy in ~10 s on macOS dev host; `just bootstrap-verify` and `just migrator-test-additive` regressions both green. Status: `ready-for-dev` → `in-progress` → `review`.
+- **2026-04-22:** Story 1.4 implemented. 15 new files + 1 modified; atomic scaffold commit `4146529`. Verification: `docker compose config` validates on both file combos; `docker compose up -d` brings up 6/6 containers healthy in ~10 s on macOS dev host; `just bootstrap-verify` and `just migrator-test-additive` regressions both green. Status: `ready-for-dev` → `in-progress` → `review`.
+- **2026-04-23 (review):** 3-layer adversarial review (Blind Hunter + Edge Case Hunter + Acceptance Auditor) on commit `4146529` surfaced 2 CRITICAL + 6 HIGH + 8 MEDIUM + LOW findings. Per the operator "fix all issues even minors" directive, applied across 24 files in commit `9862a4b`:
+  - **CRITICAL — `just backup` tars phantom `/var/lib/oh-my-bmad` on Linux.** Named volume actually lives under `/var/lib/docker/volumes/...`. Recipe would have archived an empty/non-existent dir AND left the stack DOWN (set -e + compose down before tar). Fixed by mounting the named volume into a throwaway `alpine:3` container via `docker run -v <volume>:/source:ro ...` — zero host-path assumption.
+  - **CRITICAL — `just backup` dropped the macOS overlay mid-run.** Compose `down`/`up -d` calls omitted `-f` flags, so post-backup the stack came back up without the bind-mount. Recipe now detects Darwin via `uname -s` and threads the overlay through a `compose_files` array.
+  - **HIGH — services ran as UID 0** (Story 1.3 non-root pattern silently broken). Added shared group `omb` (GID 10000) + per-service user (UID 10001-10006) + `USER <service>` to all 6 Dockerfiles.
+  - **HIGH — `env_file: .env` required caused fresh-clone failure.** `docker compose config` errored with "env file not found" before operator could `cp .env.example .env`. Switched to Compose-v2's `env_file: [{path: .env, required: false}]`.
+  - **HIGH — signal-registration race in `__main__.py`.** Old order: `log → touch → signal.signal(...)`. SIGTERM between `touch()` and handler registration hit Python's default (silent SIGKILL equivalent, sentinel left on disk). Reordered: register handlers → touch → log.
+  - **HIGH — FR52 commit-title claim was unsupported** (no `image:` tags → `docker compose pull` was a structural no-op). Added `image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-<svc>:${OMB_VERSION:-dev}` to every service; Story 1.9 just needs to publish to GHCR.
+  - **HIGH — `dev --watch` advertised hot-reload without `develop: watch:` blocks.** Dropped `--watch`.
+  - **HIGH — README backup section referenced wrong path + `sudo tar`.** Rewritten to use `just backup` + documented restore path via `docker volume create` + `alpine:3 tar -xzf`.
+  - **MEDIUM — `container_name:` blocked multi-instance.** Removed from all 6 services; default compose naming (`<project>-<service>-<replica>`) is readable via `docker compose logs <service>`.
+  - **MEDIUM — `init: true` missing.** Added to every service (PID-1 reaping, signal-race surface).
+  - **MEDIUM — secrets leaked to all services via `env_file`.** Per-service `environment:` lists now scope vars: Telegram token → only telegram-gateway; Anthropic key → orchestrator-adapter + worker-wrapper; GitHub PAT → only worker-wrapper.
+  - **MEDIUM — non-writer services mounted RW.** `registry-api`, `worker-wrapper`, `clawhip-daemon` now mount `oh-my-bmad-data:/var/lib/oh-my-bmad:ro`; `registry-state` keeps RW (per Arch §Category 2: single writer).
+  - **MEDIUM — `dev` recipe forced macOS overlay on Linux.** Now `uname -s` platform-detects.
+  - **MEDIUM — `deploy-vps/macos` `pull` was a no-op.** Now `docker compose pull || true && build && up -d` so it works whether or not GHCR images exist.
+  - **MEDIUM — no `.dockerignore`.** Added 6 per-service files excluding `__pycache__`, `*.pyc`, `.env*`, `.venv/`, cache dirs, `.DS_Store`.
+  - **MEDIUM — `TG_ALLOWLIST_USER_IDS` fail-mode undocumented.** Added FAIL-CLOSED warning in `.env.example`.
+  - **LOW — `backup` name injection surface.** Recipe validates `{{name}}` against `[A-Za-z0-9._-]+` and exits non-zero on mismatch.
+  - **LOW — same-day backup filename collision.** Timestamp upgraded to UTC second-precision (`YYYY-MM-DDTHHMMSSZ`).
+  - **LOW — `.gitignore` `*.env` over-matched.** Narrowed to `/.env` so future committed templates (`docs/deployment/vps.env.template`) aren't silently ignored.
+  - **LOW — `ENV`, `REGISTRY_DB_PATH` consumer not named in `.env.example`.** Added per-var "Consumed by:" annotations satisfying AC-3's "where it's consumed" clause.
+  - **Skipped (documented deviations):** `ENV` → `OMB_ENV` rename (defer — architecture doc references `ENV` in multiple places; cross-doc change worthy of its own story); `console-cli` compose entry (intentional per AC-1 — invoked via `docker compose exec` or host binary); `PYTHONPATH=/app/src` fragility (scaffold tag explicitly calls Story 1.8 as replacement); healthcheck file-existence vs liveness (AC-6 explicitly specifies `test -f /tmp/ready`; real liveness arrives per-service in 2.4/2.9/3.1/5.1/5.10/2.8); `container_name` loss breaking some operator muscle-memory (accepted tradeoff).
+  - Live verification: `docker compose config` exit 0 on both combos; cold rebuild + 6/6 healthy in ~14 s; `docker inspect` shows `user=<service-name>` + `init=true` on every container; `just backup pre-upgrade` round-trip verified with seeded sentinel (`backup-test-sentinel` → archive → extract → string preserved); `bootstrap-verify` 13/13 + `migrator-test-additive` 3/3 green.
+- **2026-04-23 (finalize):** Completion Notes expanded with review-fix summary; Status `review` → `done`.
