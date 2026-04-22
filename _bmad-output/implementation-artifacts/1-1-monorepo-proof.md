@@ -1,6 +1,6 @@
 # Story 1.1: Monorepo proof
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 <!-- This is the FIRST story. No previous-story intelligence; no git history. Scaffold-epic foundation. -->
@@ -264,6 +264,16 @@ Claude Opus 4.7 (1M context) — `claude-opus-4-7[1m]`. Story 1.1 is scaffold-le
 ### Change Log
 
 - **2026-04-22:** Story 1.1 implemented and committed (`052ab32`). 17 files added/rewritten; `uv sync` resolves 3 workspace members; `just bootstrap-verify` passes; cross-workspace `from events import __version__` succeeds. Story status: `ready-for-dev` → `in-progress` → `review`.
+- **2026-04-22:** Adversarial 3-layer code review (Blind Hunter + Edge Case Hunter + Acceptance Auditor) ran against `052ab32`. 11 findings: 2 HIGH, 7 MEDIUM, 2 LOW. Fixes applied + committed as `9edfe5e`:
+  - **HIGH**: untrack `.omc/`, `.claude/sessions/`, `.claude/state/` runtime state and add to `.gitignore` (operator-session ephemeral data was leaking into git).
+  - **HIGH**: clarify `.gitignore` `/var/` rule + README backup path — system path `/var/lib/oh-my-bmad/` is canonical; repo-local `/var/` rule is a guard. README now explicit about this + macOS path parity.
+  - **MEDIUM**: moved `plan_draft.md` → `_bmad-output/inputs/plan_draft.md` (planning input belongs under planning tree).
+  - **MEDIUM**: README quickstart now lists `just` as a prereq.
+  - **MEDIUM**: `bootstrap-verify` now uses `uv sync --frozen` + adds `from registry_api import hello` smoke check (AC-2's `hello()` was asserted but unexercised in original recipe).
+  - **MEDIUM**: relaxed `uv_build` upper bound from `<0.12.0` to no upper bound in all 3 `pyproject.toml` files.
+  - **Skipped**: renaming `events` package (workspace-local resolution makes PyPI collision a non-issue; rename would touch every Story 2.x); cosmetic `.gitignore` negation concern. Both documented in commit body.
+  - **All AC re-verified after fixes**: `just bootstrap-verify` exits 0; `uv sync --frozen` reproducible; `git status` clean except correctly-untracked session runtime files.
+  - Story status: `review` → `done`.
 
 ---
 
