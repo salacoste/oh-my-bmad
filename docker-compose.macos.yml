@@ -1,0 +1,16 @@
+# macOS overlay — bind-mount data volume to operator's home directory so the
+# registry DB and event log are directly accessible from the host (Docker Desktop
+# VMs on macOS sandbox /var/lib/ paths in a way that makes host-side backup or
+# inspection awkward). Merge via:
+#   docker compose -f docker-compose.yml -f docker-compose.macos.yml <cmd>
+#
+# IMPORTANT: run `mkdir -p ${HOME}/.oh-my-bmad` before first `compose up` on macOS.
+services: {}
+
+volumes:
+  oh-my-bmad-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${HOME}/.oh-my-bmad

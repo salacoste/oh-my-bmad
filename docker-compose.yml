@@ -1,0 +1,116 @@
+# oh-my-bmad platform — Linux baseline.
+# Tunnel ingress: operator runs Cloudflared/ngrok/BYO proxy on the HOST;
+# tunnel forwards to telegram-gateway on the compose network.
+# macOS operators overlay with: -f docker-compose.macos.yml
+services:
+  registry-api:
+    build:
+      context: ./services/registry-api
+      dockerfile: Dockerfile
+    container_name: oh-my-bmad-registry-api
+    env_file: .env
+    restart: unless-stopped
+    networks:
+      - oh-my-bmad-net
+    volumes:
+      - oh-my-bmad-data:/var/lib/oh-my-bmad
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  registry-state:
+    build:
+      context: ./services/registry-state
+      dockerfile: Dockerfile
+    container_name: oh-my-bmad-registry-state
+    env_file: .env
+    restart: unless-stopped
+    networks:
+      - oh-my-bmad-net
+    volumes:
+      - oh-my-bmad-data:/var/lib/oh-my-bmad
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  telegram-gateway:
+    build:
+      context: ./services/telegram-gateway
+      dockerfile: Dockerfile
+    container_name: oh-my-bmad-telegram-gateway
+    env_file: .env
+    restart: unless-stopped
+    networks:
+      - oh-my-bmad-net
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  orchestrator-adapter:
+    build:
+      context: ./services/orchestrator-adapter
+      dockerfile: Dockerfile
+    container_name: oh-my-bmad-orchestrator-adapter
+    env_file: .env
+    restart: unless-stopped
+    networks:
+      - oh-my-bmad-net
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  worker-wrapper:
+    build:
+      context: ./services/worker-wrapper
+      dockerfile: Dockerfile
+    container_name: oh-my-bmad-worker-wrapper
+    env_file: .env
+    restart: unless-stopped
+    networks:
+      - oh-my-bmad-net
+    volumes:
+      - oh-my-bmad-data:/var/lib/oh-my-bmad
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  clawhip-daemon:
+    build:
+      context: ./services/clawhip-daemon
+      dockerfile: Dockerfile
+    container_name: oh-my-bmad-clawhip-daemon
+    env_file: .env
+    restart: unless-stopped
+    networks:
+      - oh-my-bmad-net
+    volumes:
+      - oh-my-bmad-data:/var/lib/oh-my-bmad
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+networks:
+  oh-my-bmad-net:
+    driver: bridge
+
+volumes:
+  oh-my-bmad-data:
+    driver: local

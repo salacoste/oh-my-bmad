@@ -49,3 +49,63 @@ migrator-test-additive:
     @test -f .tmp/migrator-test/sample.v1.0.0.archive || (echo "FAIL: archive missing" && exit 1)
     @echo "→ cleanup"
     rm -rf .tmp/migrator-test
+
+# Bring up the stack with the macOS overlay + compose watch for dev hot-reload.
+# Linux operators can invoke `docker compose -f docker-compose.yml up` directly
+# if they prefer to skip the macOS path overlay.
+dev:
+    docker compose -f docker-compose.yml -f docker-compose.macos.yml up --watch
+
+# Placeholder — pytest tree + CI wiring land in Story 1.5.
+test:
+    @echo "pytest lands in Story 1.5 (test tree + CI skeleton)"
+
+# Placeholder — slow-lane test marker lands in Story 1.5.
+test-slow:
+    @echo "slow-test suite lands in Story 1.5"
+
+# Placeholder — contract tests land in Story 1.5 (tests/contract/).
+test-contract:
+    @echo "contract-test suite lands in Story 1.5"
+
+# Placeholder — ruff + mypy wiring lands in Story 1.5.
+lint:
+    @echo "ruff + mypy land in Story 1.5"
+
+# Placeholder — scenario harness (separability, crash-injection) lands in Stories 1.5/2.11/2.12.
+scenarios:
+    @echo "scenario suite lands across Stories 1.5/2.11/2.12"
+
+# Snapshot the platform data volume. Optional `name=` suffix for labeling the
+# archive (e.g., `just backup name=pre-upgrade`). Data dir is controlled by
+# BACKUP_DATA_DIR (Linux default: /var/lib/oh-my-bmad; macOS operators set
+# BACKUP_DATA_DIR=${HOME}/.oh-my-bmad in their shell or override inline).
+backup name="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    data_dir="${BACKUP_DATA_DIR:-/var/lib/oh-my-bmad}"
+    suffix=""
+    if [ -n "{{name}}" ]; then suffix="-{{name}}"; fi
+    archive="oh-my-bmad-backup-$(date +%F)${suffix}.tgz"
+    echo "→ stopping stack"
+    docker compose down
+    echo "→ archiving ${data_dir} → ${archive}"
+    tar -czf "${archive}" "${data_dir}"
+    echo "→ restarting stack"
+    docker compose up -d
+    echo "✓ backup written to ${archive}"
+
+# Build all 6 service images locally (single-arch). Multi-arch buildx bake
+# lands with Story 1.9's release workflow.
+build:
+    docker compose -f docker-compose.yml build
+
+# Linux VPS deploy primitive: pull + up. Docs in Story 1.10a.
+deploy-vps:
+    docker compose -f docker-compose.yml pull
+    docker compose -f docker-compose.yml up -d
+
+# macOS deploy primitive: pull + up with the macOS overlay. Docs in Story 1.10a.
+deploy-macos:
+    docker compose -f docker-compose.yml -f docker-compose.macos.yml pull
+    docker compose -f docker-compose.yml -f docker-compose.macos.yml up -d
