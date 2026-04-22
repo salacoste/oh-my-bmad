@@ -7,12 +7,23 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "clawhip-bridge-mcp",
+    "clawhip-daemon",
+    "console-cli",
     "events",
+    "idempotency",
+    "orchestrator-adapter",
     "registry-api",
+    "registry-state",
+    "secret-hygiene",
+    "session-registry-mcp",
+    "task-registry-mcp",
+    "telegram-gateway",
+    "worker-wrapper",
 ]
 
 [build-system]
-requires = ["uv_build>=0.11.0"]
+requires = ["uv_build>=0.11.0,<0.12"]
 build-backend = "uv_build"
 
 [tool.uv]
@@ -22,5 +33,16 @@ required-version = ">=0.5"
 members = ["services/*", "packages/*", "mcp-servers/*"]
 
 [tool.uv.sources]
+clawhip-bridge-mcp = { workspace = true }
+clawhip-daemon = { workspace = true }
+console-cli = { workspace = true }
 events = { workspace = true }
+idempotency = { workspace = true }
+orchestrator-adapter = { workspace = true }
 registry-api = { workspace = true }
+registry-state = { workspace = true }
+secret-hygiene = { workspace = true }
+session-registry-mcp = { workspace = true }
+task-registry-mcp = { workspace = true }
+telegram-gateway = { workspace = true }
+worker-wrapper = { workspace = true }

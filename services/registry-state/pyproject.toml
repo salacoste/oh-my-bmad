@@ -1,7 +1,7 @@
 [project]
-name = "registry-api"
+name = "registry-state"
 version = "0.1.0"
-description = "HTTP application API surface for the oh-my-bmad task + session registry. Story 1.1 ships scaffold only; FastAPI app and routes arrive in Story 2.9."
+description = "Event-log subscriber + state materializer + SQLite store. Single writer per FR26."
 authors = [
     { name = "R2d2", email = "bad.vano23ru@gmail.com" },
 ]

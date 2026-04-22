@@ -4,10 +4,36 @@ requires-python = ">=3.12"
 
 [manifest]
 members = [
+    "clawhip-bridge-mcp",
+    "clawhip-daemon",
+    "console-cli",
     "events",
+    "idempotency",
     "oh-my-bmad",
+    "orchestrator-adapter",
     "registry-api",
+    "registry-state",
+    "secret-hygiene",
+    "session-registry-mcp",
+    "task-registry-mcp",
+    "telegram-gateway",
+    "worker-wrapper",
 ]
+
+[[package]]
+name = "clawhip-bridge-mcp"
+version = "0.1.0"
+source = { editable = "mcp-servers/clawhip-bridge" }
+
+[[package]]
+name = "clawhip-daemon"
+version = "0.1.0"
+source = { editable = "services/clawhip-daemon" }
+
+[[package]]
+name = "console-cli"
+version = "0.1.0"
+source = { editable = "services/console-cli" }
 
 [[package]]
 name = "events"
@@ -15,21 +41,83 @@ version = "0.1.0"
 source = { editable = "packages/events" }
 
 [[package]]
+name = "idempotency"
+version = "0.1.0"
+source = { editable = "packages/idempotency" }
+
+[[package]]
 name = "oh-my-bmad"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "clawhip-bridge-mcp" },
+    { name = "clawhip-daemon" },
+    { name = "console-cli" },
     { name = "events" },
+    { name = "idempotency" },
+    { name = "orchestrator-adapter" },
     { name = "registry-api" },
+    { name = "registry-state" },
+    { name = "secret-hygiene" },
+    { name = "session-registry-mcp" },
+    { name = "task-registry-mcp" },
+    { name = "telegram-gateway" },
+    { name = "worker-wrapper" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "clawhip-bridge-mcp", editable = "mcp-servers/clawhip-bridge" },
+    { name = "clawhip-daemon", editable = "services/clawhip-daemon" },
+    { name = "console-cli", editable = "services/console-cli" },
     { name = "events", editable = "packages/events" },
+    { name = "idempotency", editable = "packages/idempotency" },
+    { name = "orchestrator-adapter", editable = "services/orchestrator-adapter" },
     { name = "registry-api", editable = "services/registry-api" },
+    { name = "registry-state", editable = "services/registry-state" },
+    { name = "secret-hygiene", editable = "packages/secret-hygiene" },
+    { name = "session-registry-mcp", editable = "mcp-servers/session-registry" },
+    { name = "task-registry-mcp", editable = "mcp-servers/task-registry" },
+    { name = "telegram-gateway", editable = "services/telegram-gateway" },
+    { name = "worker-wrapper", editable = "services/worker-wrapper" },
 ]
+
+[[package]]
+name = "orchestrator-adapter"
+version = "0.1.0"
+source = { editable = "services/orchestrator-adapter" }
 
 [[package]]
 name = "registry-api"
 version = "0.1.0"
 source = { editable = "services/registry-api" }
+
+[[package]]
+name = "registry-state"
+version = "0.1.0"
+source = { editable = "services/registry-state" }
+
+[[package]]
+name = "secret-hygiene"
+version = "0.1.0"
+source = { editable = "packages/secret-hygiene" }
+
+[[package]]
+name = "session-registry-mcp"
+version = "0.1.0"
+source = { editable = "mcp-servers/session-registry" }
+
+[[package]]
+name = "task-registry-mcp"
+version = "0.1.0"
+source = { editable = "mcp-servers/task-registry" }
+
+[[package]]
+name = "telegram-gateway"
+version = "0.1.0"
+source = { editable = "services/telegram-gateway" }
+
+[[package]]
+name = "worker-wrapper"
+version = "0.1.0"
+source = { editable = "services/worker-wrapper" }
