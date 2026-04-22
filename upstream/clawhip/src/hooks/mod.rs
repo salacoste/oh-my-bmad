@@ -1,0 +1,451 @@
+#[allow(dead_code)]
+pub mod prompt_deliver;
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use anyhow::anyhow;
+use serde_json::{Map, Value, json};
+
+use crate::Result;
+use crate::cli::{HookInstallScope, HookProvider, HooksInstallArgs};
+use crate::native_hooks::{
+    CLAUDE_SETTINGS_FILE, CODEX_HOOKS_FILE, HOOK_SCRIPT, SHARED_HOOK_EVENTS, generated_hook_script,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstallReport {
+    pub generated_files: Vec<PathBuf>,
+}
+
+pub fn install(args: HooksInstallArgs) -> Result<()> {
+    let report = run_install(&args)?;
+
+    println!("Installed provider-native hook forwarding:");
+    for path in &report.generated_files {
+        println!("  {}", path.display());
+    }
+    println!("Supported shared events: {}", SHARED_HOOK_EVENTS.join(", "));
+    println!("Ingress: clawhip native hook --provider <codex|claude-code>");
+
+    Ok(())
+}
+
+fn run_install(args: &HooksInstallArgs) -> Result<InstallReport> {
+    ensure_supported_install_scope(args)?;
+    let root = resolve_install_root(args)?;
+    let global_hook_script_path = home_dir()?.join(HOOK_SCRIPT);
+    let providers = selected_providers(args);
+    let mut generated_files = Vec::new();
+
+    write_generated_file(
+        &global_hook_script_path,
+        generated_hook_script(),
+        args.force,
+    )?;
+    generated_files.push(global_hook_script_path.clone());
+
+    for provider in providers {
+        let path = match provider {
+            HookProvider::Codex => write_codex_hooks(&root, &global_hook_script_path)?,
+            HookProvider::ClaudeCode => write_claude_settings(&root, &global_hook_script_path)?,
+        };
+        generated_files.push(path);
+    }
+
+    Ok(InstallReport { generated_files })
+}
+
+fn ensure_supported_install_scope(args: &HooksInstallArgs) -> Result<()> {
+    if args.scope != HookInstallScope::Project {
+        return Ok(());
+    }
+
+    let includes_claude =
+        args.all || args.provider.is_empty() || args.provider.contains(&HookProvider::ClaudeCode);
+    if !includes_claude {
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "Claude Code provider-native hook forwarding is global-only; Codex may use either ~/.codex/hooks.json or <repo>/.codex/hooks.json with the clawhip bridge in ~/.clawhip"
+    )
+    .into())
+}
+
+fn resolve_install_root(args: &HooksInstallArgs) -> Result<PathBuf> {
+    match args.scope {
+        HookInstallScope::Project => Ok(args
+            .root
+            .clone()
+            .unwrap_or(std::env::current_dir()?)
+            .canonicalize()?),
+        HookInstallScope::Global => home_dir(),
+    }
+}
+
+fn selected_providers(args: &HooksInstallArgs) -> Vec<HookProvider> {
+    if args.all || args.provider.is_empty() {
+        vec![HookProvider::Codex, HookProvider::ClaudeCode]
+    } else {
+        args.provider.clone()
+    }
+}
+
+fn write_codex_hooks(root: &Path, hook_script_path: &Path) -> Result<PathBuf> {
+    let path = root.join(CODEX_HOOKS_FILE);
+    let mut document = read_json_object(&path)?;
+    let hooks = ensure_child_object(&mut document, "hooks")?;
+    let command = hook_command(hook_script_path, HookProvider::Codex);
+
+    for event in SHARED_HOOK_EVENTS {
+        upsert_hook_event(hooks, event, &command, codex_matcher_for(event));
+    }
+
+    write_json(&path, Value::Object(document))?;
+    Ok(path)
+}
+
+fn write_claude_settings(root: &Path, hook_script_path: &Path) -> Result<PathBuf> {
+    let path = root.join(CLAUDE_SETTINGS_FILE);
+    let mut document = read_json_object(&path)?;
+    let hooks = ensure_child_object(&mut document, "hooks")?;
+    let command = hook_command(hook_script_path, HookProvider::ClaudeCode);
+
+    for event in SHARED_HOOK_EVENTS {
+        upsert_hook_event(hooks, event, &command, claude_matcher_for(event));
+    }
+
+    write_json(&path, Value::Object(document))?;
+    Ok(path)
+}
+
+fn codex_matcher_for(event: &str) -> Option<&'static str> {
+    match event {
+        "PreToolUse" | "PostToolUse" => Some(".*"),
+        _ => None,
+    }
+}
+
+fn claude_matcher_for(event: &str) -> Option<&'static str> {
+    match event {
+        "PreToolUse" | "PostToolUse" => Some(".*"),
+        _ => None,
+    }
+}
+
+fn hook_command(hook_script_path: &Path, provider: HookProvider) -> String {
+    format!(
+        "node {} --provider {}",
+        shell_escape(&hook_script_path.display().to_string()),
+        provider.as_str()
+    )
+}
+
+fn upsert_hook_event(
+    hooks: &mut Map<String, Value>,
+    event: &str,
+    command: &str,
+    matcher: Option<&str>,
+) {
+    let entry = hooks
+        .entry(event.to_string())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let groups = entry.as_array_mut().expect("hook event groups array");
+
+    if let Some(existing_group) = groups
+        .iter_mut()
+        .find(|group| matcher_matches(group, matcher))
+    {
+        let hooks = ensure_group_hooks(existing_group);
+        if !hooks.iter().any(|hook| hook_command_matches(hook, command)) {
+            hooks.push(json!({
+                "type": "command",
+                "command": command,
+            }));
+        }
+        return;
+    }
+
+    let mut group = Map::new();
+    if let Some(matcher) = matcher {
+        group.insert("matcher".into(), json!(matcher));
+    }
+    group.insert(
+        "hooks".into(),
+        json!([
+            {
+                "type": "command",
+                "command": command,
+            }
+        ]),
+    );
+    groups.push(Value::Object(group));
+}
+
+fn matcher_matches(group: &Value, matcher: Option<&str>) -> bool {
+    match (group.get("matcher").and_then(Value::as_str), matcher) {
+        (None, None) => true,
+        (Some(existing), Some(expected)) => existing == expected,
+        _ => false,
+    }
+}
+
+fn ensure_group_hooks(group: &mut Value) -> &mut Vec<Value> {
+    let object = group.as_object_mut().expect("hook event group object");
+    object
+        .entry("hooks")
+        .or_insert_with(|| Value::Array(Vec::new()))
+        .as_array_mut()
+        .expect("hooks array")
+}
+
+fn hook_command_matches(hook: &Value, command: &str) -> bool {
+    hook.get("type").and_then(Value::as_str) == Some("command")
+        && hook.get("command").and_then(Value::as_str) == Some(command)
+}
+
+fn write_generated_file(path: &Path, content: &str, force: bool) -> Result<()> {
+    if path.exists() && !force {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, content)?;
+    #[cfg(unix)]
+    if path
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|ext| ext == "mjs")
+    {
+        set_executable(path)?;
+    }
+    Ok(())
+}
+
+fn read_json_object(path: &Path) -> Result<Map<String, Value>> {
+    if !path.exists() {
+        return Ok(Map::new());
+    }
+
+    let content = fs::read_to_string(path)?;
+    let value: Value = serde_json::from_str(&content)?;
+    value
+        .as_object()
+        .cloned()
+        .ok_or_else(|| anyhow!("{} must contain a JSON object", path.display()).into())
+}
+
+fn ensure_child_object<'a>(
+    object: &'a mut Map<String, Value>,
+    key: &str,
+) -> Result<&'a mut Map<String, Value>> {
+    let entry = object
+        .entry(key.to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    entry
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("{key} must be a JSON object").into())
+}
+
+fn write_json(path: &Path, value: Value) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, serde_json::to_string_pretty(&value)? + "\n")?;
+    Ok(())
+}
+
+fn shell_escape(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn home_dir() -> Result<PathBuf> {
+    std::env::var("HOME")
+        .map(PathBuf::from)
+        .map_err(|_| anyhow!("HOME environment variable not set").into())
+}
+
+#[cfg(unix)]
+fn set_executable(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = fs::metadata(path)?.permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(path, perms)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+    use tempfile::tempdir;
+
+    #[test]
+    #[serial]
+    fn install_project_scope_writes_codex_hook_file_and_global_bridge() {
+        let dir = tempdir().expect("tempdir");
+        let previous_home = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", dir.path());
+        }
+
+        let report = run_install(&HooksInstallArgs {
+            all: false,
+            provider: vec![HookProvider::Codex],
+            scope: HookInstallScope::Project,
+            root: Some(dir.path().to_path_buf()),
+            force: false,
+        })
+        .expect("project-scoped codex install should succeed");
+
+        assert!(
+            report
+                .generated_files
+                .contains(&dir.path().join(HOOK_SCRIPT))
+        );
+        assert!(
+            report
+                .generated_files
+                .contains(&dir.path().join(CODEX_HOOKS_FILE))
+        );
+        assert!(
+            report
+                .generated_files
+                .contains(&dir.path().join(CODEX_HOOKS_FILE))
+        );
+
+        if let Some(previous) = previous_home {
+            unsafe {
+                std::env::set_var("HOME", previous);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("HOME");
+            }
+        }
+    }
+
+    #[test]
+    fn install_project_scope_rejects_claude() {
+        let dir = tempdir().expect("tempdir");
+        let error = run_install(&HooksInstallArgs {
+            all: false,
+            provider: vec![HookProvider::ClaudeCode],
+            scope: HookInstallScope::Project,
+            root: Some(dir.path().to_path_buf()),
+            force: false,
+        })
+        .expect_err("project-scoped claude install should be rejected");
+
+        assert!(error.to_string().contains("Claude Code"));
+    }
+
+    #[test]
+    fn install_project_scope_rejects_all_when_claude_is_implied() {
+        let dir = tempdir().expect("tempdir");
+        let error = run_install(&HooksInstallArgs {
+            all: true,
+            provider: Vec::new(),
+            scope: HookInstallScope::Project,
+            root: Some(dir.path().to_path_buf()),
+            force: false,
+        })
+        .expect_err("project-scoped all-provider install should be rejected");
+
+        assert!(error.to_string().contains("Claude Code"));
+    }
+
+    #[test]
+    #[serial]
+    fn install_global_scope_writes_provider_files() {
+        let dir = tempdir().expect("tempdir");
+        let previous_home = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", dir.path());
+        }
+
+        let report = run_install(&HooksInstallArgs {
+            all: true,
+            provider: Vec::new(),
+            scope: HookInstallScope::Global,
+            root: Some(dir.path().to_path_buf()),
+            force: false,
+        })
+        .expect("install");
+
+        assert!(
+            report
+                .generated_files
+                .contains(&dir.path().join(HOOK_SCRIPT))
+        );
+        assert!(
+            report
+                .generated_files
+                .contains(&dir.path().join(CODEX_HOOKS_FILE))
+        );
+        assert!(
+            report
+                .generated_files
+                .contains(&dir.path().join(CLAUDE_SETTINGS_FILE))
+        );
+
+        if let Some(previous) = previous_home {
+            unsafe {
+                std::env::set_var("HOME", previous);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("HOME");
+            }
+        }
+    }
+
+    #[test]
+    fn codex_install_writes_shared_events() {
+        let dir = tempdir().expect("tempdir");
+        let path =
+            write_codex_hooks(dir.path(), &dir.path().join(HOOK_SCRIPT)).expect("codex hooks");
+        let document: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        for event in SHARED_HOOK_EVENTS {
+            assert!(document["hooks"][event].is_array(), "missing {event}");
+        }
+    }
+
+    #[test]
+    fn claude_install_writes_shared_events() {
+        let dir = tempdir().expect("tempdir");
+        let path = write_claude_settings(dir.path(), &dir.path().join(HOOK_SCRIPT))
+            .expect("claude settings");
+        let document: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        for event in SHARED_HOOK_EVENTS {
+            assert!(document["hooks"][event].is_array(), "missing {event}");
+        }
+    }
+
+    #[test]
+    fn write_generated_file_preserves_existing_content_without_force() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("generated.mjs");
+        fs::write(&path, "old\n").expect("seed file");
+
+        write_generated_file(&path, "new\n", false).expect("write");
+
+        assert_eq!(fs::read_to_string(&path).expect("read"), "old\n");
+    }
+
+    #[test]
+    fn write_generated_file_overwrites_existing_content_with_force() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("generated.mjs");
+        fs::write(&path, "old\n").expect("seed file");
+
+        write_generated_file(&path, "new\n", true).expect("write");
+
+        assert_eq!(fs::read_to_string(&path).expect("read"), "new\n");
+    }
+}

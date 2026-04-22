@@ -1,0 +1,3 @@
+{"actor":{"id":"r2d2","kind":"operator"},"emitted_at":"2026-04-22T00:00:00Z","event_id":"e-0190abc1-2000-7000-8000-000000000001","payload":{"task_id":"t-0190abc1-2000-7000-8000-000000000002"},"schema_version":"1.0.0","type":"task.created"}
+{"actor":{"id":"omc","kind":"orchestrator"},"emitted_at":"2026-04-22T00:00:01Z","event_id":"e-0190abc1-2000-7000-8000-000000000003","payload":{"task_id":"t-0190abc1-2000-7000-8000-000000000002"},"schema_version":"1.0.0","type":"task.planning.started"}
+{"actor":{"id":"omc","kind":"orchestrator"},"emitted_at":"2026-04-22T00:00:02Z","event_id":"e-0190abc1-2000-7000-8000-000000000004","payload":{"files_changed":0,"task_id":"t-0190abc1-2000-7000-8000-000000000002"},"schema_version":"1.0.0","type":"task.completed"}
