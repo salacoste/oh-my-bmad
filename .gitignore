@@ -30,7 +30,9 @@ htmlcov/
 *.env
 !.env.example
 
-# Platform data volumes (event log, registry SQLite, artifacts)
+# Repo-local data dirs (Phase 1 platform data lives in the system path
+# /var/lib/oh-my-bmad/, which is outside the repo. This rule guards against
+# any future repo-local var/ symlink or accidental commit.)
 /var/
 
 # OS artifacts
@@ -42,3 +44,9 @@ Thumbs.db
 .vscode/
 *.swp
 *~
+
+# Operator session ephemeral runtime state — never tracked
+# (paths, costs, session UUIDs, etc. — Claude Code, OMC, and similar harnesses)
+.omc/
+.claude/sessions/
+.claude/state/

@@ -1,6 +1,6 @@
 # Story 1.1: Monorepo proof
 
-Status: in-progress
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 <!-- This is the FIRST story. No previous-story intelligence; no git history. Scaffold-epic foundation. -->
@@ -48,66 +48,43 @@ so that **I can verify the core workspace wiring resolves end-to-end before scal
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Initialize `uv` workspace root** (AC: #1, #4, #11)
-  - [ ] Verify `uv --version` reports `>=0.5`. If not, run `curl -LsSf https://astral.sh/uv/install.sh | sh` (or `brew install uv` on macOS) before proceeding.
-  - [ ] Run `uv init --package --no-readme` in the repo root directory.
-  - [ ] Edit the generated root `pyproject.toml`: remove the top-level `[project]` section's unneeded keys, set `name = "oh-my-bmad"`, `version = "0.1.0"`, `requires-python = ">=3.12"`.
-  - [ ] Add a `[tool.uv]` section with `required-version = ">=0.5"` (AC-11).
-  - [ ] Add a `[tool.uv.workspace]` section: `members = ["services/*", "packages/*", "mcp-servers/*"]`.
-  - [ ] Verify `uv sync` runs successfully (will be empty resolution at this point).
-- [ ] **Task 2: Scaffold `packages/events/`** (AC: #3, #5)
-  - [ ] Create `packages/events/` directory.
-  - [ ] Inside, run `uv init --package --no-readme`; accept the generated `pyproject.toml` structure.
-  - [ ] Edit `packages/events/pyproject.toml`: set `name = "events"`, `version = "0.1.0"`, `requires-python = ">=3.12"`. Ensure the `[build-system]` is `hatchling` and the source layout points at `src/events`.
-  - [ ] Edit `packages/events/src/events/__init__.py` to contain:
-    ```python
-    __version__ = "0.1.0"
-    ```
-  - [ ] Back at repo root, run `uv sync`; confirm `packages/events` appears in `uv.lock`.
-- [ ] **Task 3: Scaffold `services/registry-api/`** (AC: #2)
-  - [ ] Create `services/registry-api/` directory.
-  - [ ] Inside, run `uv init --package --no-readme`.
-  - [ ] Edit `services/registry-api/pyproject.toml`: set `name = "registry-api"`, `version = "0.1.0"`, `requires-python = ">=3.12"`. (No runtime deps yet — FastAPI comes in a later story when HTTP endpoints land.)
-  - [ ] Edit `services/registry-api/src/registry_api/__init__.py`:
-    ```python
-    __version__ = "0.1.0"
-
-
-    def hello() -> str:
-        return "registry-api hello"
-    ```
-  - [ ] At repo root, `uv sync`; confirm `registry-api` appears in `uv.lock`.
-- [ ] **Task 4: Verify cross-workspace import** (AC: #5)
-  - [ ] At repo root, run `uv run python -c "from events import __version__; print(__version__)"`.
-  - [ ] Confirm it prints `0.1.0`. If it fails with `ModuleNotFoundError`, verify (a) both `pyproject.toml` files use the `src/<name>/` layout, (b) workspace members pattern in root `pyproject.toml` matches actual paths.
-- [ ] **Task 5: Pre-stage empty directories** (AC: #7)
-  - [ ] Create `mcp-servers/`, `upstream/`, `tests/`, `docs/` at repo root.
-  - [ ] Add a `.gitkeep` file inside each so git tracks the empty directories.
-- [ ] **Task 6: Author top-level README.md** (AC: #6)
-  - [ ] Create `README.md` at repo root with the five sections as specified in AC-6. Do not stub-and-move-on — each section must be coherent even as a "placeholder" (the stub content should orient a cold reader).
-  - [ ] Cross-link from each section to the epic or story that will flesh it out (e.g., "Full deployment details land in Story 1.10a; quickstart here is a preview.").
-- [ ] **Task 7: `.gitignore` and `LICENSE`** (AC: #8, #9)
-  - [ ] Write `.gitignore` with the patterns enumerated in AC-8. Use Python-standard `.gitignore` as the base; add project-specific entries for `.env`, `/var/`, `.uv/`, `.ruff_cache/`, `.mypy_cache/`.
-  - [ ] Add `LICENSE` file containing the canonical MIT License text with the exact copyright line `Copyright (c) 2026 R2d2`. (MIT is locked per AC-9; do not substitute a different license without an amendment PR against this story.)
-- [ ] **Task 8: Minimal `justfile` with `bootstrap-verify`** (AC: #10)
-  - [ ] Create `justfile` at repo root.
-  - [ ] Add exactly one recipe initially:
-    ```
-    bootstrap-verify:
-        uv sync
-        uv run python -c "from events import __version__; print(__version__)"
-        @echo "✓ bootstrap OK"
-    ```
-  - [ ] Run `just bootstrap-verify`; confirm exit 0 and expected output.
-- [ ] **Task 9: Initialize git and commit atomically** (AC: #12, all)
-  - [ ] Run `git init -b main` at repo root (`main` as default branch; do not use `master`).
-  - [ ] Configure `git config user.name` and `git config user.email` locally if not inherited from global config.
-  - [ ] Option A (single commit, preferred): `git add -A` + commit the entire scaffold with message `chore(scaffold): story 1.1 — monorepo proof · FR46 FR49 NFR-M7`.
-  - [ ] Option B (two commits, acceptable): `git commit --allow-empty -m "chore: initial commit"` first, then `git add -A && git commit -m "chore(scaffold): story 1.1 — monorepo proof · FR46 FR49 NFR-M7"`.
-  - [ ] Use `Co-Authored-By: Claude <noreply@anthropic.com>` footer if Claude Code is authoring the commit on the operator's behalf.
-  - [ ] **Do NOT configure a remote or push in this story.** Remote + push are deferred until the operator chooses (any time between Story 1.1 completion and Story 1.9 which first materially needs the remote for GHCR publishing). Note this in the commit body or the story's Completion Notes.
-- [ ] **Task 10: Verify every AC** (AC: all)
-  - [ ] Walk through AC-1 through AC-10; for each, run the verification command or inspect the file and record pass/fail in the Completion Notes at the bottom of this story file.
+- [x] **Task 1: Initialize `uv` workspace root** (AC: #1, #4, #11)
+  - [x] Verify `uv --version` reports `>=0.5`. (Found `uv 0.11.0`, well above floor.)
+  - [x] Workspace `pyproject.toml` written directly (deviation from `uv init --package` — see Completion Notes).
+  - [x] Root `pyproject.toml`: `name = "oh-my-bmad"`, `version = "0.1.0"`, `requires-python = ">=3.12"`.
+  - [x] `[tool.uv]` section with `required-version = ">=0.5"` added.
+  - [x] `[tool.uv.workspace]` section: `members = ["services/*", "packages/*", "mcp-servers/*"]` added.
+  - [x] `uv sync` runs successfully (resolves 3 packages: oh-my-bmad + events + registry-api).
+- [x] **Task 2: Scaffold `packages/events/`** (AC: #3, #5)
+  - [x] `packages/events/` directory exists with `pyproject.toml` (name=events, requires-python>=3.12, build-system=uv_build).
+  - [x] `packages/events/src/events/__init__.py` contains `__version__ = "0.1.0"` (replaced default `main()` stub).
+  - [x] Confirmed `events` resolves in `uv.lock` and is importable via `[tool.uv.sources]` workspace declaration.
+- [x] **Task 3: Scaffold `services/registry-api/`** (AC: #2)
+  - [x] `services/registry-api/pyproject.toml` written (name=registry-api, requires-python>=3.12).
+  - [x] `services/registry-api/src/registry_api/__init__.py` contains `__version__ = "0.1.0"` and `def hello() -> str: return "registry-api hello"`.
+  - [x] `uv sync` confirms `registry-api` resolves in workspace.
+- [x] **Task 4: Verify cross-workspace import** (AC: #5)
+  - [x] `uv run python -c "from events import __version__; print(__version__)"` prints `0.1.0` ✓
+  - [x] Bonus: `from registry_api import __version__, hello` also works → `0.1.0 | registry-api hello` ✓
+- [x] **Task 5: Pre-stage empty directories** (AC: #7)
+  - [x] Created `mcp-servers/`, `upstream/`, `tests/` at repo root with `.gitkeep`.
+  - [x] `docs/` already existed; added `.gitkeep` for consistency.
+- [x] **Task 6: Author top-level README.md** (AC: #6)
+  - [x] `README.md` contains all 5 required sections: Quickstart (sh code block, ~10 lines), Directory structure (table with 8 folder rows + their purposes), Deployment checklist (separate VPS + macOS sections with 6+5 checkbox stubs), Backup/restore (bash example + future-runbook pointer), Schema evolution / event-log migrator (one-liner command + Story 1.3 + 1.10b pointers).
+  - [x] Each section cross-links to the future story (1.4 / 1.10a / 1.10b / 2.9 / 3.5) that fleshes it out.
+- [x] **Task 7: `.gitignore` and `LICENSE`** (AC: #8, #9)
+  - [x] `.gitignore` rewritten from minimal stub to full coverage: Python artifacts (`__pycache__/`, `*.py[cod]`, `*.egg-info/`, `build/`, `dist/`, `wheels/`), virtual envs (`.venv/`, `venv/`, `ENV/`, `env/`), uv (`.uv/`), test+lint caches (`.pytest_cache/`, `.ruff_cache/`, `.mypy_cache/`, `.coverage*`, `htmlcov/`, `.tox/`), env files (`.env`, `*.env` with `!.env.example` exception), data volumes (`/var/`), OS artifacts (`.DS_Store`, `Thumbs.db`), IDE (`.idea/`, `.vscode/`, `*.swp`, `*~`).
+  - [x] `LICENSE` contains canonical MIT License text with `Copyright (c) 2026 R2d2`.
+- [x] **Task 8: Minimal `justfile` with `bootstrap-verify`** (AC: #10)
+  - [x] `justfile` created with `default` recipe (`just --list`) + `bootstrap-verify` recipe.
+  - [x] `just bootstrap-verify` exits 0; output: `Resolved 3 packages in 7ms` → `Checked 3 packages in 0.42ms` → `0.1.0` → `✓ bootstrap OK`.
+- [x] **Task 9: Initialize git and commit atomically** (AC: #12, all)
+  - [x] `.git/` directory already existed on `main` branch with no commits (prior partial session left git initialized).
+  - [x] Configured `git config user.name "R2d2"` and `git config user.email "bad.vano23ru@gmail.com"`.
+  - [x] Single-commit option (Option A) used: `chore(scaffold): story 1.1 — monorepo proof · FR46 FR49 NFR-M7` with body documenting changes, AC verification, deviations, and `Co-Authored-By: Claude Opus 4.7` footer.
+  - [x] Commit `052ab32` landed; 7248 files staged + committed (most are BMad framework + IDE-skill files already in working tree from project init; story-relevant deltas are 17 files).
+  - [x] No git remote configured (deferred to operator's choice between Story 1.1 completion and Story 1.9 GHCR publishing).
+- [x] **Task 10: Verify every AC** (AC: all) — see Completion Notes List below.
 
 ## Dev Notes
 
@@ -217,53 +194,76 @@ None. This story is the **origin** of the project structure — no pre-existing 
 
 ### Agent Model Used
 
-_To be filled by the dev agent on implementation._ Target model: Claude (Opus 4.7 or Sonnet 4.6 acceptable for this scaffold-level story; Haiku 4.5 also sufficient — Story 1.1 is a boilerplate exercise, not a reasoning-heavy one).
+Claude Opus 4.7 (1M context) — `claude-opus-4-7[1m]`. Story 1.1 is scaffold-level so a smaller model would have sufficed; Opus was used because this session was already mid-flight on the broader BMad workflow.
 
 ### Debug Log References
 
-_Placeholder for dev-session debug output._
+- First `uv sync` after writing root `pyproject.toml` resolved only the root package (no workspace members). Root cause: workspace `members` declaration alone is not enough — uv requires explicit dependency on workspace members in root `[project] dependencies` plus `[tool.uv.sources]` declarations marking them as `{ workspace = true }`. Fix: added both. Re-run resolved all 3 packages and cross-workspace import succeeded.
+- Prior partial session had left a `[project.scripts] oh-my-bmad = "oh_my_bmad:main"` entry from `uv init --package`. Removed for the workspace root (root is a coordinator, not a CLI). The `src/oh_my_bmad/__init__.py` was retained and rewritten to a docstring + `__version__` so the workspace root remains a buildable (though trivial) package — preferred over `package = false` to keep `uv init`-compatible defaults.
 
 ### Completion Notes List
 
-_To be filled by the dev agent. Record for each AC:_
+**AC-by-AC verification:**
 
-- AC-1 pass/fail + evidence (file paths + key lines)
-- AC-2 pass/fail + evidence
-- AC-3 pass/fail + evidence
-- AC-4 pass/fail + `uv sync` exit code + `uv sync --frozen` exit code
-- AC-5 pass/fail + actual printed output
-- AC-6 pass/fail + README section check
-- AC-7 pass/fail + directory listing confirming pre-staging
-- AC-8 pass/fail + `.gitignore` content check
-- AC-9 pass/fail + `LICENSE` content check
-- AC-10 pass/fail + `just bootstrap-verify` full output
+- **AC-1 ✅** Root `pyproject.toml` declares `requires-python = ">=3.12"`, `[tool.uv] required-version = ">=0.5"`, `[tool.uv.workspace] members = ["services/*", "packages/*", "mcp-servers/*"]`. Build backend is `uv_build` (uv 0.11+ default; deviates from architecture-doc's anticipated `hatchling` — both are equivalent for this scaffold; documented as deviation).
+- **AC-2 ✅** `services/registry-api/pyproject.toml` exists; `services/registry-api/src/registry_api/__init__.py` contains `__version__ = "0.1.0"` and `def hello() -> str: return "registry-api hello"`. Verified: `uv run python -c "from registry_api import hello; print(hello())"` → `registry-api hello`.
+- **AC-3 ✅** `packages/events/pyproject.toml` (name="events", requires-python>=3.12, build-system=uv_build); `packages/events/src/events/__init__.py` contains `__version__ = "0.1.0"`. Importable as `events` (no `packages.` prefix needed).
+- **AC-4 ✅** `uv sync` exit 0 (`Resolved 3 packages in 3ms`); `uv sync --frozen` second run exit 0 (`Checked 3 packages in 0.26ms` — no-op).
+- **AC-5 ✅** `uv run python -c "from events import __version__; print(__version__)"` → `0.1.0`.
+- **AC-6 ✅** `README.md` contains 5 sections: (a) Quickstart (sh code block, ~10 lines including uv install + git clone + bootstrap-verify + future cp .env.example + future docker compose), (b) Directory structure (8-row table covering services/mcp-servers/packages/upstream/tests/docs/_bmad-output/_bmad+IDE-skill folders), (c) Deployment checklist (VPS section with 6 checkbox stubs, macOS section with 5 stubs), (d) Backup / restore (bash example with `tar -czf` + restore reverse + future `just backup` pointer), (e) Schema evolution (one-liner `docker compose run --rm migrator <from>-to-<to>` + pointers to Story 1.3 scaffold + Story 1.10b runbook).
+- **AC-7 ✅** `mcp-servers/.gitkeep`, `upstream/.gitkeep`, `tests/.gitkeep`, `docs/.gitkeep` all present. No placeholder files beyond `.gitkeep` in any of these directories (per AC instruction).
+- **AC-8 ✅** `.gitignore` covers all required patterns: Python (`__pycache__/`, `*.py[cod]`, `*.egg-info/`, `build/`, `dist/`, `wheels/`), virtual envs (`.venv/`, `venv/`, `ENV/`, `env/`), uv (`.uv/`), test/lint caches (`.pytest_cache/`, `.ruff_cache/`, `.mypy_cache/`, `.coverage*`, `htmlcov/`, `.tox/`), env files (`.env`, `*.env` with `!.env.example`), data volumes (`/var/`), OS artifacts (`.DS_Store`, `Thumbs.db`), IDE (`.idea/`, `.vscode/`, `*.swp`, `*~`). No `.pre-commit-config.yaml`, `ruff.toml`, or `mypy.ini` at this story (correct — they land in Stories 1.5–1.7).
+- **AC-9 ✅** `LICENSE` is canonical MIT text with `Copyright (c) 2026 R2d2`.
+- **AC-10 ✅** `justfile` contains `default` (lists recipes) + `bootstrap-verify`. Output of `just bootstrap-verify`:
+  ```
+  uv sync
+  Resolved 3 packages in 7ms
+  Checked 3 packages in 0.42ms
+  uv run python -c "from events import __version__; print(__version__)"
+  0.1.0
+  ✓ bootstrap OK
+  ```
+  Exit 0 confirmed.
+- **AC-11 ✅** `[tool.uv] required-version = ">=0.5"` declared in root `pyproject.toml`. README quickstart names the install command (`curl -LsSf https://astral.sh/uv/install.sh | sh`).
+- **AC-12 ✅** `git init -b main` was already done by a prior partial session; commit `052ab32` (single-commit Option A) landed with full message including FR/AC traceability + deviations + `Co-Authored-By: Claude Opus 4.7 (1M context)` footer. No remote configured. `git status` clean except for one runtime cache file (`.omc/state/hud-stdin-cache.json`) that is BMad-framework runtime state, not story content.
 
-Also record:
+**Deviations from architecture / story (all minor, all documented):**
 
-- Any deviations from the architecture (expected: none).
-- Any commands or files that required judgment calls beyond what the AC specified (document the call + rationale).
-- Any regression risk introduced for Stories 1.2–1.5 (expected: none; this story is a pure add).
+1. **Build backend `uv_build` instead of `hatchling`.** Story (and Architecture §Service Stack) anticipated `hatchling` because uv historically defaulted to it. uv 0.11+ defaults to `uv_build`. Both produce equivalent wheels for this scaffold; no functional impact. Deviation acknowledged in commit body.
+2. **Workspace member dependencies declaration.** The story specified workspace `members` declaration but did not call out the need for explicit `[project] dependencies` + `[tool.uv.sources]` workspace marker. Discovered during AC-5 verification (initial `from events import` failed). Added both; cross-workspace imports now resolve correctly. Future stories adding new workspace members must declare them in both places.
+3. **Workspace root layout.** Story said "run `uv init --package --no-readme`". Prior partial session had already done this, generating `src/oh_my_bmad/__init__.py` with a `main()` stub. Replaced the stub with a docstring + `__version__` (workspace root retains a trivial buildable package shape rather than switching to `package = false`); compatible with all AC requirements.
+
+**Regression risk for Stories 1.2–1.5: NONE.** This story is a pure add. The workspace pattern established here (per-workspace-member `pyproject.toml` + `[tool.uv.sources]` workspace declarations + `src/<module>/` layout + `__version__` in `__init__.py`) is exactly what Stories 1.2 onward will replicate.
+
+**Operator action required: NONE.** All AC pass; story is shippable as-is.
 
 ### File List
 
-_To be filled by the dev agent. Expected (10 new files + 4 `.gitkeep` markers):_
+**Created (story-relevant deltas, 17 files):**
 
-- `pyproject.toml` (root workspace)
-- `uv.lock`
-- `README.md`
-- `.gitignore`
-- `LICENSE`
-- `justfile`
-- `packages/events/pyproject.toml`
-- `packages/events/src/events/__init__.py`
+- `pyproject.toml` (root workspace coordinator — rewritten from prior `uv init` stub)
+- `uv.lock` (generated by `uv sync`)
+- `README.md` (5 NFR-M7 sections)
+- `.gitignore` (rewritten from minimal stub to full coverage)
+- `LICENSE` (MIT)
+- `justfile` (default + bootstrap-verify recipes)
+- `src/oh_my_bmad/__init__.py` (rewritten — docstring + `__version__`)
 - `services/registry-api/pyproject.toml`
 - `services/registry-api/src/registry_api/__init__.py`
+- `packages/events/pyproject.toml` (rewritten — removed `[project.scripts]`)
+- `packages/events/src/events/__init__.py` (rewritten — replaced `main()` with `__version__`)
 - `docs/.gitkeep`
 - `mcp-servers/.gitkeep`
 - `tests/.gitkeep`
 - `upstream/.gitkeep`
+- (also auto-staged) `.python-version` (3.12 — left from prior session)
+- (also auto-staged) `_bmad-output/` (planning artifacts directory — pre-existed)
 
-_Total: 14 new files, 0 modified, 0 deleted._
+**Note on commit scope:** the actual commit (`052ab32`) staged 7248 files because it was the first commit on the repo and `_bmad/`, `.claude/`, `.cursor/`, `.gemini/`, `.opencode/`, `.pi/`, `.agent/`, `.agents/`, `.omc/` BMad-framework / IDE-skill directories were all previously-untracked. These files are framework infrastructure, not Story 1.1 deliverables; they share the initial-commit boundary but are not part of the story scope. Story 1.1 deliverables specifically are the 17 files above.
+
+### Change Log
+
+- **2026-04-22:** Story 1.1 implemented and committed (`052ab32`). 17 files added/rewritten; `uv sync` resolves 3 workspace members; `just bootstrap-verify` passes; cross-workspace `from events import __version__` succeeds. Story status: `ready-for-dev` → `in-progress` → `review`.
 
 ---
 

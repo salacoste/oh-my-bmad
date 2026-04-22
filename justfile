@@ -8,8 +8,11 @@ default:
     @just --list
 
 # Verify the uv workspace resolves and cross-package imports work.
-# This is the Story 1.1 acceptance gate.
+# Story 1.1 acceptance gate. Uses `--frozen` so the committed lockfile is the
+# source of truth; mismatch means the operator must run `uv sync` (without
+# --frozen) to reconcile, then re-commit `uv.lock`.
 bootstrap-verify:
-    uv sync
-    uv run python -c "from events import __version__; print(__version__)"
+    uv sync --frozen
+    uv run python -c "from events import __version__; print('events', __version__)"
+    uv run python -c "from registry_api import __version__, hello; print('registry_api', __version__, '|', hello())"
     @echo "✓ bootstrap OK"

@@ -11,9 +11,10 @@ This repo is the **Phase 1 implementation**. Planning artifacts (product brief, 
 ## Quickstart
 
 ```sh
-# 1. Prereqs: Docker Engine ≥ 24 + Docker Compose v2 + uv ≥ 0.5
-#    Install uv: curl -LsSf https://astral.sh/uv/install.sh | sh
-#    (or: brew install uv)
+# 1. Prereqs: Docker Engine ≥ 24 + Docker Compose v2 + uv ≥ 0.5 + just
+#    Install uv:   curl -LsSf https://astral.sh/uv/install.sh | sh
+#    Install just: brew install just  (macOS)  |  cargo install just  (anywhere)
+#    (or: brew install uv just  on macOS to grab both)
 git clone <this-repo-url> oh-my-bmad && cd oh-my-bmad
 just bootstrap-verify                          # confirms workspace wires up
 
@@ -69,21 +70,24 @@ Both targets are populated as stubs in Story 1.1 and filled in detail by Story 1
 
 ## Backup / restore
 
-`just backup` (lands in Story 1.4) creates a timestamped tarball of `/var/lib/oh-my-bmad/`. Recommended cadence: **daily**, rotated to off-host storage of the operator's choice (S3, Backblaze B2, rsync to NAS, etc.).
+Platform data (event log, registry SQLite, artifacts) lives at the **system path** `/var/lib/oh-my-bmad/` on the deployment host — *not* inside the repo working tree. The repo's `.gitignore` reserves repo-local `/var/` only as a guard against accidental in-tree data dumps; production data is always at the system location.
+
+`just backup` (lands in Story 1.4) creates a timestamped tarball of the system data path. Recommended cadence: **daily**, rotated to off-host storage of the operator's choice (S3, Backblaze B2, rsync to NAS, etc.).
 
 ```sh
-# Manual backup (placeholder until Story 1.4 lands `just backup`):
+# Manual backup of the system data path (placeholder until Story 1.4 lands `just backup`):
+# Run on the host where the platform is deployed:
 docker compose down
 sudo tar -czf "oh-my-bmad-backup-$(date +%F).tgz" /var/lib/oh-my-bmad
 docker compose up -d
 
-# Restore on a fresh host:
+# Restore on a fresh host (re-creates /var/lib/oh-my-bmad from the tarball):
 docker compose down
 sudo tar -xzf oh-my-bmad-backup-<date>.tgz -C /
 docker compose up -d
 ```
 
-Full backup runbook with off-host rotation strategies lands in `docs/backup-restore.md` (Story 1.10b).
+On macOS, the system path is identical (`/var/lib/oh-my-bmad/`); Docker Desktop / Colima mounts the host filesystem so the same `tar` works. The same `sudo` requirement applies. Full backup runbook with off-host rotation strategies lands in `docs/backup-restore.md` (Story 1.10b).
 
 ---
 

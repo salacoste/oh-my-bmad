@@ -46,7 +46,7 @@ development_status:
   # Epic 1: Scaffold & Deployability (11 stories)
   # =========================================================================
   epic-1: in-progress
-  1-1-monorepo-proof: in-progress
+  1-1-monorepo-proof: review
   1-2-remaining-service-and-mcp-scaffolds: backlog
   1-3-upstream-vendoring-migrator-scaffold: backlog
   1-4-compose-env-justfile: backlog
