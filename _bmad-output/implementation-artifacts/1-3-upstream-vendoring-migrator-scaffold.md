@@ -1,6 +1,6 @@
 # Story 1.3: Upstream vendoring + migrator scaffold
 
-Status: in-progress
+Status: review
 
 ## Story
 
@@ -42,45 +42,45 @@ so that **upstream-fork governance is explicit (SHA-pinned, in-tree, auditable) 
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Set up `upstream/` placeholder directories** (AC: #1)
-  - [ ] Remove `upstream/.gitkeep` (no longer needed — subdirs replace it).
-  - [ ] Create `upstream/omc/README.md` and `upstream/clawhip/README.md`, each marking the slot and pointing at `just sync-upstream <name>` for populating real content.
-- [ ] **Task 2: Write `VENDORED.md` manifest** (AC: #2)
-  - [ ] Two entries: OMC + clawhip.
-  - [ ] SHA field set to `PLACEHOLDER` initially; sync date to ISO 8601 UTC of the story commit.
-  - [ ] Include a "Next sync" column pointing at the story that first needs real upstream content.
-- [ ] **Task 3: Implement `just sync-upstream <name>` recipe** (AC: #3, #9)
-  - [ ] Recipe signature: `sync-upstream name:` (just's positional arg).
-  - [ ] Validate `name` ∈ {`omc`, `clawhip`}; error otherwise.
-  - [ ] Read URL from a lookup dict (hard-coded in the recipe; two entries).
-  - [ ] `git clone --depth 1` into a temp dir, capture `HEAD` SHA, rsync (excluding `.git/`) into `upstream/<name>/`.
-  - [ ] Update `VENDORED.md` in-place: replace the entry's SHA + sync date.
-  - [ ] Graceful fallback on network failure (preserve existing content, print warning).
-- [ ] **Task 4: Scaffold `scripts/migrator/` tree** (AC: #4, #5, #7)
-  - [ ] `scripts/migrator/pyproject.toml` (name="migrator", python>=3.12, uv_build>=0.11.0,<1.0, no deps).
-  - [ ] `scripts/migrator/src/migrator/__init__.py` with docstring + `__version__ = "0.1.0"`.
-  - [ ] `scripts/migrator/src/migrator/__main__.py` — the actual migrator logic:
+- [x] **Task 1: Set up `upstream/` placeholder directories** (AC: #1)
+  - [x] Remove `upstream/.gitkeep` (no longer needed — subdirs replace it).
+  - [x] Create `upstream/omc/README.md` and `upstream/clawhip/README.md`, each marking the slot and pointing at `just sync-upstream <name>` for populating real content.
+- [x] **Task 2: Write `VENDORED.md` manifest** (AC: #2)
+  - [x] Two entries: OMC + clawhip.
+  - [x] SHA field set to `PLACEHOLDER` initially; sync date to ISO 8601 UTC of the story commit.
+  - [x] Include a "Next sync" column pointing at the story that first needs real upstream content.
+- [x] **Task 3: Implement `just sync-upstream <name>` recipe** (AC: #3, #9)
+  - [x] Recipe signature: `sync-upstream name:` (just's positional arg).
+  - [x] Validate `name` ∈ {`omc`, `clawhip`}; error otherwise.
+  - [x] Read URL from a lookup dict (hard-coded in the recipe; two entries).
+  - [x] `git clone --depth 1` into a temp dir, capture `HEAD` SHA, rsync (excluding `.git/`) into `upstream/<name>/`.
+  - [x] Update `VENDORED.md` in-place: replace the entry's SHA + sync date.
+  - [x] Graceful fallback on network failure (preserve existing content, print warning).
+- [x] **Task 4: Scaffold `scripts/migrator/` tree** (AC: #4, #5, #7)
+  - [x] `scripts/migrator/pyproject.toml` (name="migrator", python>=3.12, uv_build>=0.11.0,<1.0, no deps).
+  - [x] `scripts/migrator/src/migrator/__init__.py` with docstring + `__version__ = "0.1.0"`.
+  - [x] `scripts/migrator/src/migrator/__main__.py` — the actual migrator logic:
     - Parse CLI arg `<from>-to-<to>` (e.g., `v1.0.0-to-v1.0.1`).
     - Read `EVENT_LOG_PATH` env var (default `/var/lib/oh-my-bmad/registry/events/current.jsonl`) — the path to the JSONL event log to migrate.
     - For `v1.0.0-to-v1.0.1`: additive upgrade — for each event in the log, copy through + add a new optional field (e.g., `extensions: {}`). Emit migrated events to `<path>.v1.0.1.jsonl`, then move original to `<path>.v1.0.0.archive`.
     - Unknown `<from>-to-<to>`: exit non-zero with a clear error listing supported pairs.
-  - [ ] `scripts/migrator/Dockerfile`: Python 3.12-slim-bookworm base, install uv, copy the migrator package, set entrypoint `python -m migrator`.
-- [ ] **Task 5: Synthetic test fixture + `just migrator-test-additive` recipe** (AC: #6)
-  - [ ] Create `scripts/migrator/tests/fixtures/sample_v1.0.0.jsonl` with ≥3 minimal events (JSONL lines each a valid event envelope — simplified shape OK for Story 1.3; full envelope model arrives in Story 2.1).
-  - [ ] Create `just migrator-test-additive` recipe that:
+  - [x] `scripts/migrator/Dockerfile`: Python 3.12-slim-bookworm base, install uv, copy the migrator package, set entrypoint `python -m migrator`.
+- [x] **Task 5: Synthetic test fixture + `just migrator-test-additive` recipe** (AC: #6)
+  - [x] Create `scripts/migrator/tests/fixtures/sample_v1.0.0.jsonl` with ≥3 minimal events (JSONL lines each a valid event envelope — simplified shape OK for Story 1.3; full envelope model arrives in Story 2.1).
+  - [x] Create `just migrator-test-additive` recipe that:
     - Builds the migrator Docker image (`docker build -t oh-my-bmad-migrator:test scripts/migrator/`).
     - Copies the fixture to a temp dir, runs the migrator against it (`docker run --rm -v $(pwd)/tmp:/data -e EVENT_LOG_PATH=/data/sample.jsonl oh-my-bmad-migrator:test v1.0.0-to-v1.0.1`).
     - Asserts the output file exists, every line is valid JSON, every event has the new `extensions` field.
     - Tears down the temp dir.
-  - [ ] Run `just migrator-test-additive` and confirm it exits 0.
-- [ ] **Task 6: Attempt real upstream sync** (AC: #9)
-  - [ ] Run `just sync-upstream omc` once and capture output. If successful, the placeholder README is replaced with real source.
-  - [ ] Run `just sync-upstream clawhip` once and capture output. Same handling.
-  - [ ] Document in Completion Notes: which URLs resolved, which SHAs landed in `VENDORED.md`, whether placeholder content was retained due to fetch failure.
-- [ ] **Task 7: Regression check** (AC: #8)
-  - [ ] Run `just bootstrap-verify`; confirm 13 workspace-member imports still green and no new warnings.
-- [ ] **Task 8: Commit atomically** (AC: #10)
-  - [ ] Single commit per AC-10 title.
+  - [x] Run `just migrator-test-additive` and confirm it exits 0.
+- [x] **Task 6: Attempt real upstream sync** (AC: #9)
+  - [x] Run `just sync-upstream omc` once and capture output. If successful, the placeholder README is replaced with real source.
+  - [x] Run `just sync-upstream clawhip` once and capture output. Same handling.
+  - [x] Document in Completion Notes: which URLs resolved, which SHAs landed in `VENDORED.md`, whether placeholder content was retained due to fetch failure.
+- [x] **Task 7: Regression check** (AC: #8)
+  - [x] Run `just bootstrap-verify`; confirm 13 workspace-member imports still green and no new warnings.
+- [x] **Task 8: Commit atomically** (AC: #10)
+  - [x] Single commit per AC-10 title.
 
 ## Dev Notes
 
@@ -219,4 +219,34 @@ _To be filled by the dev agent. Expected: 9 new + 2 modified + 1 deleted (`upstr
 
 ### Change Log
 
-_To be appended by the dev agent on completion._
+- **2026-04-22:** Story 1.3 implemented and committed (`d2ae9d3`). 1473 files in the atomic commit (most are vendored OMC + clawhip content; story-authored deltas are ~10 files). Real upstream sync succeeded on first attempt (both URLs resolved HTTP 200). Pinned SHAs:
+  - `omc` @ `0ac52cdaa093d6c41763e47055e995adaa4f8987`
+  - `clawhip` @ `ff3ba32dc22a143d53bec40870d3b52b2fa11a2b`
+  - Docker migrator image builds + runs; `just migrator-test-additive` exits 0 with 3 events all v1.0.1 + `extensions` field. `just bootstrap-verify` regression green (13/13). Status: `ready-for-dev` → `in-progress` → `review`.
+
+### Completion Notes
+
+**Implementation summary**
+
+- Placeholder READMEs were written for `upstream/omc/` + `upstream/clawhip/` in Tasks 1–2, then overwritten by real content when Task 6's `just sync-upstream` calls succeeded for both URLs. End state: real vendored content, not placeholders. AC-1 satisfied in its "eventual state" form.
+- `scripts/sync_upstream.py` handles the full sync flow (arg validation → `git clone --depth 1` → rsync-excluding-`.git/` → SHA capture → `VENDORED.md` regex-based in-place rewrite). Graceful fallback on clone failure (non-zero exit + stderr; preserves existing content).
+- `scripts/migrator/` is a standalone Python project outside the uv workspace (operator script, not service). Its own `pyproject.toml` uses the same `uv_build>=0.11.0,<1.0` bound for consistency.
+- Synthetic fixture `sample_v1.0.0.jsonl` contains 3 minimal events (canonical envelope shape).
+- `just migrator-test-additive` builds the Docker image, runs the migrator against the fixture in a temp sandbox, then calls `scripts/migrator/tests/assert_migrated.py` to verify the output + archive. Full end-to-end Docker round-trip tested.
+- `just sync-upstream <name>` uses positional arg; validated omc + clawhip; both live-synced during story implementation.
+
+**Deviations (all minor, all documented)**
+
+1. `just bootstrap-verify` style fix: original inline Python assertion had a dotted path (`.tmp/migrator-test/...`) that just's parser rejected (`error: Unknown start of token '.'`). Extracted assertion into `scripts/migrator/tests/assert_migrated.py` and called via `uv run python`. Pattern-forward: future recipes should prefer standalone assertion scripts over inline Python.
+2. AC-1 said "placeholder content" — actual end-state is real vendored content because Task 6 succeeded. This is the spec's anticipated eventual state; short-circuiting the placeholder phase saved a future round-trip.
+3. AC's `docker compose run --rm migrator …` phrasing deferred to Story 1.4 (compose wiring). Story 1.3 ships `docker run` equivalent capability. Dockerfile is compose-ready.
+
+**Repo-size impact**
+
+~50MB added to the working tree (OMC 48MB, clawhip 1.4MB, 5377 files). Expected per Architecture §Starter Template Evaluation: vendoring over submodules is the deliberate choice for solo-operator infra. `git clone` of this repo now takes longer but is self-contained; no submodule init required.
+
+**AC-by-AC verification:** see commit `d2ae9d3` body for the 10-line green list.
+
+**File List**: 10 story-authored + 1463 vendored (excluded from delta count). 1 deleted: `upstream/.gitkeep`.
+
+**Regression risk for Stories 1.4+:** None. Story 1.4 will consume the migrator Dockerfile into docker-compose.yml as documented.
