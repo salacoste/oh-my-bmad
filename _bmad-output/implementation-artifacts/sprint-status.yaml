@@ -47,7 +47,7 @@ development_status:
   # =========================================================================
   epic-1: in-progress
   1-1-monorepo-proof: done
-  1-2-remaining-service-and-mcp-scaffolds: in-progress
+  1-2-remaining-service-and-mcp-scaffolds: review
   1-3-upstream-vendoring-migrator-scaffold: backlog
   1-4-compose-env-justfile: backlog
   1-5-test-tree-ci-skeleton: backlog
