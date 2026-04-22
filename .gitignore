@@ -25,9 +25,10 @@ env/
 htmlcov/
 .tox/
 
-# Environment files (keep .env.example, ignore real secrets)
-.env
-*.env
+# Environment files (keep .env.example, ignore real secrets).
+# Narrow pattern: repo-root `.env` only, so `docs/deployment/foo.env.template`
+# (or similar committed templates) won't be silently ignored.
+/.env
 !.env.example
 
 # Repo-local data dirs (Phase 1 platform data lives in the system path

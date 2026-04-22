@@ -4,7 +4,9 @@
 # inspection awkward). Merge via:
 #   docker compose -f docker-compose.yml -f docker-compose.macos.yml <cmd>
 #
-# IMPORTANT: run `mkdir -p ${HOME}/.oh-my-bmad` before first `compose up` on macOS.
+# Prerequisite: the bind-mount source must exist before first `compose up`.
+# `just dev` and `just deploy-macos` auto-create it via `mkdir -p`; manual
+# operators should run `mkdir -p "${HOME}/.oh-my-bmad"` first.
 services: {}
 
 volumes:

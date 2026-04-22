@@ -1,111 +1,140 @@
 # oh-my-bmad platform — Linux baseline.
-# Tunnel ingress: operator runs Cloudflared/ngrok/BYO proxy on the HOST;
-# tunnel forwards to telegram-gateway on the compose network.
-# macOS operators overlay with: -f docker-compose.macos.yml
+#
+# Tunnel ingress: operator runs Cloudflared / ngrok / BYO reverse proxy on the
+# HOST (not in compose). The tunnel forwards to telegram-gateway on the compose
+# network. No host ports exposed (NFR-S7: docker-network is the trust boundary).
+#
+# macOS operators merge `-f docker-compose.macos.yml` on top — the overlay
+# bind-mounts the data volume to ${HOME}/.oh-my-bmad because Docker Desktop
+# sandboxes /var/lib/.
+#
+# Secret scoping: each service declares only the env vars it consumes (FR48,
+# least-privilege). `.env` at repo root holds the values; env_file is marked
+# required: false so `docker compose config` works on a fresh clone before
+# `cp .env.example .env`.
+#
+# FR52 upgrade path: every service has an `image:` tag alongside `build:`.
+# `docker compose build` tags the local image; Story 1.9's release workflow
+# publishes to GHCR; operators bump `${VERSION}` in .env and run
+# `docker compose pull && up -d` to upgrade.
+
+x-common-env: &common-env
+  ENV: ${ENV:-development}
+
+x-healthcheck: &healthcheck
+  test: ["CMD", "test", "-f", "/tmp/ready"]
+  interval: 5s
+  timeout: 3s
+  retries: 12
+  start_period: 10s
+
 services:
   registry-api:
     build:
       context: ./services/registry-api
       dockerfile: Dockerfile
-    container_name: oh-my-bmad-registry-api
-    env_file: .env
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-registry-api:${OMB_VERSION:-dev}
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *common-env
+      REGISTRY_DB_PATH: ${REGISTRY_DB_PATH:-/var/lib/oh-my-bmad/registry/state.sqlite3}
+    init: true
     restart: unless-stopped
-    networks:
-      - oh-my-bmad-net
+    networks: [oh-my-bmad-net]
     volumes:
-      - oh-my-bmad-data:/var/lib/oh-my-bmad
-    healthcheck:
-      test: ["CMD", "test", "-f", "/tmp/ready"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-      start_period: 10s
+      - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
+    healthcheck: *healthcheck
 
   registry-state:
     build:
       context: ./services/registry-state
       dockerfile: Dockerfile
-    container_name: oh-my-bmad-registry-state
-    env_file: .env
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-registry-state:${OMB_VERSION:-dev}
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *common-env
+      REGISTRY_DB_PATH: ${REGISTRY_DB_PATH:-/var/lib/oh-my-bmad/registry/state.sqlite3}
+    init: true
     restart: unless-stopped
-    networks:
-      - oh-my-bmad-net
+    networks: [oh-my-bmad-net]
     volumes:
       - oh-my-bmad-data:/var/lib/oh-my-bmad
-    healthcheck:
-      test: ["CMD", "test", "-f", "/tmp/ready"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-      start_period: 10s
+    healthcheck: *healthcheck
 
   telegram-gateway:
     build:
       context: ./services/telegram-gateway
       dockerfile: Dockerfile
-    container_name: oh-my-bmad-telegram-gateway
-    env_file: .env
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-telegram-gateway:${OMB_VERSION:-dev}
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *common-env
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TG_ALLOWLIST_USER_IDS: ${TG_ALLOWLIST_USER_IDS:-}
+    init: true
     restart: unless-stopped
-    networks:
-      - oh-my-bmad-net
-    healthcheck:
-      test: ["CMD", "test", "-f", "/tmp/ready"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-      start_period: 10s
+    networks: [oh-my-bmad-net]
+    healthcheck: *healthcheck
 
   orchestrator-adapter:
     build:
       context: ./services/orchestrator-adapter
       dockerfile: Dockerfile
-    container_name: oh-my-bmad-orchestrator-adapter
-    env_file: .env
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-orchestrator-adapter:${OMB_VERSION:-dev}
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *common-env
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    init: true
     restart: unless-stopped
-    networks:
-      - oh-my-bmad-net
-    healthcheck:
-      test: ["CMD", "test", "-f", "/tmp/ready"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-      start_period: 10s
+    networks: [oh-my-bmad-net]
+    healthcheck: *healthcheck
 
   worker-wrapper:
     build:
       context: ./services/worker-wrapper
       dockerfile: Dockerfile
-    container_name: oh-my-bmad-worker-wrapper
-    env_file: .env
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-worker-wrapper:${OMB_VERSION:-dev}
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *common-env
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      REGISTRY_DB_PATH: ${REGISTRY_DB_PATH:-/var/lib/oh-my-bmad/registry/state.sqlite3}
+    init: true
     restart: unless-stopped
-    networks:
-      - oh-my-bmad-net
+    networks: [oh-my-bmad-net]
     volumes:
-      - oh-my-bmad-data:/var/lib/oh-my-bmad
-    healthcheck:
-      test: ["CMD", "test", "-f", "/tmp/ready"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-      start_period: 10s
+      - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
+    healthcheck: *healthcheck
 
   clawhip-daemon:
     build:
       context: ./services/clawhip-daemon
       dockerfile: Dockerfile
-    container_name: oh-my-bmad-clawhip-daemon
-    env_file: .env
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-clawhip-daemon:${OMB_VERSION:-dev}
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *common-env
+      REGISTRY_DB_PATH: ${REGISTRY_DB_PATH:-/var/lib/oh-my-bmad/registry/state.sqlite3}
+    init: true
     restart: unless-stopped
-    networks:
-      - oh-my-bmad-net
+    networks: [oh-my-bmad-net]
     volumes:
-      - oh-my-bmad-data:/var/lib/oh-my-bmad
-    healthcheck:
-      test: ["CMD", "test", "-f", "/tmp/ready"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-      start_period: 10s
+      - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
+    healthcheck: *healthcheck
 
 networks:
   oh-my-bmad-net:

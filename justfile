@@ -50,11 +50,18 @@ migrator-test-additive:
     @echo "→ cleanup"
     rm -rf .tmp/migrator-test
 
-# Bring up the stack with the macOS overlay + compose watch for dev hot-reload.
-# Linux operators can invoke `docker compose -f docker-compose.yml up` directly
-# if they prefer to skip the macOS path overlay.
+# Bring up the stack. On macOS automatically includes the overlay (bind-mount
+# to ${HOME}/.oh-my-bmad) and ensures the host directory exists. On Linux uses
+# the base compose only (named volume, no host-path prep needed).
 dev:
-    docker compose -f docker-compose.yml -f docker-compose.macos.yml up --watch
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "$(uname -s)" = "Darwin" ]; then
+        mkdir -p "${HOME}/.oh-my-bmad"
+        exec docker compose -f docker-compose.yml -f docker-compose.macos.yml up -d
+    else
+        exec docker compose -f docker-compose.yml up -d
+    fi
 
 # Placeholder — pytest tree + CI wiring land in Story 1.5.
 test:
@@ -76,36 +83,71 @@ lint:
 scenarios:
     @echo "scenario suite lands across Stories 1.5/2.11/2.12"
 
-# Snapshot the platform data volume. Optional `name=` suffix for labeling the
-# archive (e.g., `just backup name=pre-upgrade`). Data dir is controlled by
-# BACKUP_DATA_DIR (Linux default: /var/lib/oh-my-bmad; macOS operators set
-# BACKUP_DATA_DIR=${HOME}/.oh-my-bmad in their shell or override inline).
+# Snapshot the `oh-my-bmad-data` named volume to a local .tgz. Works on Linux
+# (named volume lives under /var/lib/docker/volumes/) AND macOS (overlay binds
+# to ${HOME}/.oh-my-bmad) because we mount the volume into a throwaway alpine
+# container and tar it from there — no host-path assumption. Optional `name=`
+# suffix labels the archive (e.g., `just backup name=pre-upgrade`). Timestamp
+# is UTC second-precision so same-day backups don't collide.
 backup name="":
     #!/usr/bin/env bash
     set -euo pipefail
-    data_dir="${BACKUP_DATA_DIR:-/var/lib/oh-my-bmad}"
+    ts=$(date -u +%FT%H%M%SZ)
+    name_arg='{{name}}'
+    # Validate name contains only safe chars to prevent shell-expansion surprises
+    # when a future operator passes e.g. `name="foo; rm -rf /"`.
+    if [ -n "${name_arg}" ] && ! echo "${name_arg}" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+        echo "ERROR: backup name must match [A-Za-z0-9._-]+, got: ${name_arg}" >&2
+        exit 1
+    fi
     suffix=""
-    if [ -n "{{name}}" ]; then suffix="-{{name}}"; fi
-    archive="oh-my-bmad-backup-$(date +%F)${suffix}.tgz"
+    if [ -n "${name_arg}" ]; then suffix="-${name_arg}"; fi
+    archive="oh-my-bmad-backup-${ts}${suffix}.tgz"
+    # Locate the data volume regardless of compose project prefix.
+    volume=$(docker volume ls --format '{{{{.Name}}' | grep -E '_oh-my-bmad-data$' | head -1 || true)
+    if [ -z "${volume}" ]; then
+        echo "ERROR: no *_oh-my-bmad-data docker volume found. Initialize the stack first (just dev)." >&2
+        exit 1
+    fi
+    compose_files=(-f docker-compose.yml)
+    if [ "$(uname -s)" = "Darwin" ]; then
+        compose_files+=(-f docker-compose.macos.yml)
+    fi
+    # Restart the stack on exit even if tar fails — operators should never lose
+    # their platform to a failed backup attempt.
+    restart() {
+        echo "→ restarting stack"
+        docker compose "${compose_files[@]}" up -d || true
+    }
+    trap restart EXIT
     echo "→ stopping stack"
-    docker compose down
-    echo "→ archiving ${data_dir} → ${archive}"
-    tar -czf "${archive}" "${data_dir}"
-    echo "→ restarting stack"
-    docker compose up -d
-    echo "✓ backup written to ${archive}"
+    docker compose "${compose_files[@]}" down
+    echo "→ archiving volume ${volume} → ${PWD}/${archive}"
+    docker run --rm \
+        -v "${volume}:/source:ro" \
+        -v "${PWD}:/dest" \
+        alpine:3 \
+        tar -czf "/dest/${archive}" -C /source .
+    echo "✓ backup written to ${PWD}/${archive}"
 
 # Build all 6 service images locally (single-arch). Multi-arch buildx bake
 # lands with Story 1.9's release workflow.
 build:
     docker compose -f docker-compose.yml build
 
-# Linux VPS deploy primitive: pull + up. Docs in Story 1.10a.
+# Linux VPS deploy primitive. Pulls pre-built images if OMB_IMAGE_REGISTRY
+# points at a real registry (Story 1.9 publishes to GHCR); builds locally
+# otherwise. `|| true` on `pull` so the recipe doesn't error when images are
+# only local.
 deploy-vps:
-    docker compose -f docker-compose.yml pull
+    docker compose -f docker-compose.yml pull || true
+    docker compose -f docker-compose.yml build
     docker compose -f docker-compose.yml up -d
 
-# macOS deploy primitive: pull + up with the macOS overlay. Docs in Story 1.10a.
+# macOS deploy primitive — same flow plus the macOS overlay and a mkdir
+# prerequisite so the bind-mount source exists.
 deploy-macos:
-    docker compose -f docker-compose.yml -f docker-compose.macos.yml pull
+    mkdir -p "${HOME}/.oh-my-bmad"
+    docker compose -f docker-compose.yml -f docker-compose.macos.yml pull || true
+    docker compose -f docker-compose.yml -f docker-compose.macos.yml build
     docker compose -f docker-compose.yml -f docker-compose.macos.yml up -d

@@ -87,24 +87,24 @@ Both targets are populated as stubs in Story 1.1 and filled in detail by Story 1
 
 ## Backup / restore
 
-Platform data (event log, registry SQLite, artifacts) lives at the **system path** `/var/lib/oh-my-bmad/` on the deployment host — *not* inside the repo working tree. The repo's `.gitignore` reserves repo-local `/var/` only as a guard against accidental in-tree data dumps; production data is always at the system location.
+`just backup` snapshots the `oh-my-bmad-data` named volume to a local `.tgz`
+via a throwaway `alpine` container (works identically on Linux and macOS):
 
-`just backup` (lands in Story 1.4) creates a timestamped tarball of the system data path. Recommended cadence: **daily**, rotated to off-host storage of the operator's choice (S3, Backblaze B2, rsync to NAS, etc.).
+    just backup              # oh-my-bmad-backup-<utc-ts>.tgz
+    just backup pre-upgrade  # oh-my-bmad-backup-<utc-ts>-pre-upgrade.tgz
 
-```sh
-# Manual backup of the system data path (placeholder until Story 1.4 lands `just backup`):
-# Run on the host where the platform is deployed:
-docker compose down
-sudo tar -czf "oh-my-bmad-backup-$(date +%F).tgz" /var/lib/oh-my-bmad
-docker compose up -d
+The optional suffix must match `[A-Za-z0-9._-]+` (safe filename chars only).
 
-# Restore on a fresh host (re-creates /var/lib/oh-my-bmad from the tarball):
-docker compose down
-sudo tar -xzf oh-my-bmad-backup-<date>.tgz -C /
-docker compose up -d
-```
+The recipe stops the stack, tars the volume contents, then brings the stack
+back up (even if tar fails — the restart runs in an `EXIT` trap).
 
-On macOS, the system path is identical (`/var/lib/oh-my-bmad/`); Docker Desktop / Colima mounts the host filesystem so the same `tar` works. The same `sudo` requirement applies. Full backup runbook with off-host rotation strategies lands in `docs/backup-restore.md` (Story 1.10b).
+To restore, extract into a fresh volume before first `compose up`:
+
+    docker volume create oh-my-bmad_oh-my-bmad-data
+    docker run --rm -v oh-my-bmad_oh-my-bmad-data:/dest -v "$PWD:/src" alpine:3 \
+        tar -xzf "/src/oh-my-bmad-backup-<timestamp>.tgz" -C /dest
+
+Then `just dev` (or `just deploy-vps` / `just deploy-macos`).
 
 ---
 

@@ -30,10 +30,10 @@ def _stop(signum: int, _frame: FrameType | None) -> NoReturn:
 
 
 def main() -> None:
-    log.info("%s ready", _SERVICE)
-    _READY.touch()
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
+    _READY.touch()
+    log.info("%s ready", _SERVICE)
     signal.pause()
 
 
