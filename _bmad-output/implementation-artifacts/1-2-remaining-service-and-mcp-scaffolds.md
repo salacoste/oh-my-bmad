@@ -1,6 +1,6 @@
 # Story 1.2: Remaining service and MCP scaffolds
 
-Status: review
+Status: done
 
 ## Story
 
@@ -34,42 +34,44 @@ so that **`uv sync` resolves the full 14-`pyproject.toml` dependency graph and I
 
 11. **AC-11: Atomic commit.** All 11 new packages + root `pyproject.toml` update + `uv.lock` regeneration + `justfile` update land in **one** git commit titled `chore(scaffold): story 1.2 — remaining services + MCPs + packages · FR46 NFR-M1 NFR-M7`. Same Co-Authored-By footer as Story 1.1 if Claude Code is the authoring agent.
 
+    *(Docs-only follow-up commits — e.g., marking the story file's task-checkboxes `[x]` and flipping `sprint-status.yaml` from `in-progress` → `review` / `done` — are acceptable after the atomic code commit and do not violate AC-11. The atomicity constraint applies to the code + config delta, not to the bookkeeping-only metadata updates.)*
+
 ## Tasks / Subtasks
 
 - [x] **Task 1: Scaffold the 6 remaining services** (AC: #1, #4) — completed via Python bulk-scaffold script; 6 service dirs + 12 files created.
-  - [ ] For each of `registry-state`, `telegram-gateway`, `console-cli`, `orchestrator-adapter`, `worker-wrapper`, `clawhip-daemon`:
-    - [ ] Create `services/<kebab-name>/` directory.
-    - [ ] Write `services/<kebab-name>/pyproject.toml` matching the Story 1.1 `services/registry-api/pyproject.toml` shape, with `name = "<kebab-name>"` and an appropriate one-line description. (Suggested descriptions: `registry-state` — "Event-log subscriber + state materializer + SQLite store"; `telegram-gateway` — "Telegram bot ingress + outbound message routing"; `console-cli` — "Local console CLI for operator commands"; `orchestrator-adapter` — "OMC subprocess supervision + task-dispatch translation"; `worker-wrapper` — "Claude Code CLI subprocess supervision + event extraction"; `clawhip-daemon` — "clawhip event-bus subprocess supervision + Telegram-sink orchestration".)
-    - [ ] Create `services/<kebab-name>/src/<snake_module_name>/__init__.py` with a one-paragraph docstring referencing the story or stories that ship the real logic, plus `__version__ = "0.1.0"`. **Do not** add a `hello()` stub (Story 1.1 did one for `registry-api` as a proof; subsequent services don't need it).
+  - [x] For each of `registry-state`, `telegram-gateway`, `console-cli`, `orchestrator-adapter`, `worker-wrapper`, `clawhip-daemon`:
+    - [x] Create `services/<kebab-name>/` directory.
+    - [x] Write `services/<kebab-name>/pyproject.toml` matching the Story 1.1 `services/registry-api/pyproject.toml` shape, with `name = "<kebab-name>"` and an appropriate one-line description. (Suggested descriptions: `registry-state` — "Event-log subscriber + state materializer + SQLite store"; `telegram-gateway` — "Telegram bot ingress + outbound message routing"; `console-cli` — "Local console CLI for operator commands"; `orchestrator-adapter` — "OMC subprocess supervision + task-dispatch translation"; `worker-wrapper` — "Claude Code CLI subprocess supervision + event extraction"; `clawhip-daemon` — "clawhip event-bus subprocess supervision + Telegram-sink orchestration".)
+    - [x] Create `services/<kebab-name>/src/<snake_module_name>/__init__.py` with a one-paragraph docstring referencing the story or stories that ship the real logic, plus `__version__ = "0.1.0"`. **Do not** add a `hello()` stub (Story 1.1 did one for `registry-api` as a proof; subsequent services don't need it).
 - [x] **Task 2: Scaffold the 3 MCP servers** (AC: #2, #4) — completed; project names suffixed `-mcp` (deviation, see Completion Notes); module suffix `_mcp` preserved.
-  - [ ] For each of `task-registry`, `session-registry`, `clawhip-bridge`:
-    - [ ] Create `mcp-servers/<kebab-name>/` directory.
-    - [ ] Write `mcp-servers/<kebab-name>/pyproject.toml` (same shape as Task 1).
-    - [ ] Create `mcp-servers/<kebab-name>/src/<snake_module_name>_mcp/__init__.py` with docstring + `__version__`. **Module suffix is `_mcp`** per Architecture §Project Structure layout convention.
+  - [x] For each of `task-registry`, `session-registry`, `clawhip-bridge`:
+    - [x] Create `mcp-servers/<kebab-name>/` directory.
+    - [x] Write `mcp-servers/<kebab-name>/pyproject.toml` (same shape as Task 1).
+    - [x] Create `mcp-servers/<kebab-name>/src/<snake_module_name>_mcp/__init__.py` with docstring + `__version__`. **Module suffix is `_mcp`** per Architecture §Project Structure layout convention.
 - [x] **Task 3: Scaffold the 2 additional shared packages** (AC: #3, #4) — completed.
-  - [ ] For each of `secret-hygiene`, `idempotency`:
-    - [ ] Create `packages/<kebab-name>/` directory.
-    - [ ] Write `packages/<kebab-name>/pyproject.toml`.
-    - [ ] Create `packages/<kebab-name>/src/<snake_module_name>/__init__.py` with docstring + `__version__`.
+  - [x] For each of `secret-hygiene`, `idempotency`:
+    - [x] Create `packages/<kebab-name>/` directory.
+    - [x] Write `packages/<kebab-name>/pyproject.toml`.
+    - [x] Create `packages/<kebab-name>/src/<snake_module_name>/__init__.py` with docstring + `__version__`.
 - [x] **Task 4: Update root `pyproject.toml` workspace declarations** (AC: #4, #5) — 13 members in deps + sources, alphabetical.
-  - [ ] Add all 11 new workspace members to `[project] dependencies`.
-  - [ ] Add corresponding entries in `[tool.uv.sources]` (each `<package-name> = { workspace = true }`).
-  - [ ] Sort both lists alphabetically for diff stability.
+  - [x] Add all 11 new workspace members to `[project] dependencies`.
+  - [x] Add corresponding entries in `[tool.uv.sources]` (each `<package-name> = { workspace = true }`).
+  - [x] Sort both lists alphabetically for diff stability.
 - [x] **Task 5: Resolve workspace and verify** (AC: #5, #6) — `uv sync` resolved 14 packages; `uv sync --frozen` no-op.
-  - [ ] Run `uv sync` at repo root; confirm exit 0 and `uv.lock` lists 14 packages.
-  - [ ] Run `uv sync --frozen` immediately after; confirm exit 0 and no-op (`Checked 14 packages`).
+  - [x] Run `uv sync` at repo root; confirm exit 0 and `uv.lock` lists 14 packages.
+  - [x] Run `uv sync --frozen` immediately after; confirm exit 0 and no-op (`Checked 14 packages`).
 - [x] **Task 6: Cross-workspace import smoke checks** (AC: #9) — all 11/11 modules print `<module> 0.1.0`.
-  - [ ] For each of the 11 new module names, run `uv run python -c "from <module_name> import __version__; print('<module_name>', __version__)"`.
-  - [ ] Confirm each prints `<module_name> 0.1.0`.
-  - [ ] Record any import failures (most likely cause: snake_case mismatch or missing `[tool.uv.sources]` entry).
+  - [x] For each of the 11 new module names, run `uv run python -c "from <module_name> import __version__; print('<module_name>', __version__)"`.
+  - [x] Confirm each prints `<module_name> 0.1.0`.
+  - [x] Record any import failures (most likely cause: snake_case mismatch or missing `[tool.uv.sources]` entry).
 - [x] **Task 7: Extend `justfile bootstrap-verify`** (AC: #10) — added `registry_state`, `task_registry_mcp`, `secret_hygiene` import checks; existing `events` + `registry_api` preserved.
-  - [ ] Add three new import-check lines to the `bootstrap-verify` recipe — one each from services / mcp-servers / packages groups (suggested: `registry_state`, `task_registry_mcp`, `secret_hygiene`).
-  - [ ] Confirm existing `events` and `registry_api` checks still run.
-  - [ ] Run `just bootstrap-verify`; confirm exit 0.
+  - [x] Add three new import-check lines to the `bootstrap-verify` recipe — one each from services / mcp-servers / packages groups (suggested: `registry_state`, `task_registry_mcp`, `secret_hygiene`).
+  - [x] Confirm existing `events` and `registry_api` checks still run.
+  - [x] Run `just bootstrap-verify`; confirm exit 0.
 - [x] **Task 8: Commit atomically** (AC: #11, all) — single commit `5df4197` on `main`.
-  - [ ] `git add -A`.
-  - [ ] Commit with message: `chore(scaffold): story 1.2 — remaining services + MCPs + packages · FR46 NFR-M1 NFR-M7`. Body: list every new component + count summary + verification evidence (uv.lock package count, bootstrap-verify exit). Include `Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>` if Claude Code is authoring.
-  - [ ] Confirm commit lands on `main` and `git status` is clean.
+  - [x] `git add -A`.
+  - [x] Commit with message: `chore(scaffold): story 1.2 — remaining services + MCPs + packages · FR46 NFR-M1 NFR-M7`. Body: list every new component + count summary + verification evidence (uv.lock package count, bootstrap-verify exit). Include `Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>` if Claude Code is authoring.
+  - [x] Confirm commit lands on `main` and `git status` is clean.
 
 ## Dev Notes
 
@@ -244,6 +246,16 @@ _To be filled by the dev agent. Expected: 22 new files, 3 modified, 0 deleted._
 ### Change Log
 
 - **2026-04-22:** Story 1.2 implemented and committed (`5df4197`). 22 new files (11 components × 2) + 3 modified (root pyproject.toml, justfile, uv.lock); also re-bounded `uv_build` to `>=0.11.0,<0.12` across all 14 pyproject.toml files. `uv.lock` now lists 14 packages; `uv sync --frozen` deterministic; `just bootstrap-verify` exits 0 with 5 import checks green; 11/11 individual import smoke checks green. Status: `ready-for-dev` → `in-progress` → `review`.
+- **2026-04-22:** Adversarial 3-layer review (Blind Hunter + Edge Case Hunter + Acceptance Auditor) reported. Findings across severities applied — operator requested "fix all issues even minors". Fixes committed as (pending SHA). Status: `review` → `done`.
+  - **HIGH (Blind + Edge):** `uv_build>=0.11.0,<0.12` upper bound too tight; `<0.12` hits cliff when uv ships 0.12. Relaxed to `<1.0` (correct SemVer ceiling for pre-1.0 tooling) across all 14 pyproject.toml files.
+  - **MEDIUM (Blind):** `clawhip-daemon` description was weaker than peers + ambiguous with `telegram-gateway`. Sharpened to cite FR19 + NFR-R5 and explicit boundary: clawhip-daemon owns outbound sink rendering; telegram-gateway owns inbound commands.
+  - **MEDIUM (Blind):** `__init__.py` docstrings duplicated `pyproject.toml` descriptions verbatim across all 11 new files — systematic DRY seed. Restructured: each docstring now names the module identity + scope sentence + forward-story reference. Description field in pyproject is the single source of truth for package-metadata-level description.
+  - **MEDIUM → LOW (Edge):** `bootstrap-verify` covered 5/14 modules (36%). Extended to all 13 workspace members (+ confirmation line updated to "13 workspace-member imports verified"). Silent-failure gap closed.
+  - **MEDIUM (Auditor):** AC-11 spec wording allowed ambiguity re: docs-only follow-up commits. Amended AC-11 to explicitly permit docs/bookkeeping follow-ups (marking task checkboxes, flipping sprint status) while preserving the atomic-code-commit constraint.
+  - **MEDIUM (Blind):** MCP naming triple-indirection (dir ≠ project ≠ module) is a cognitive tax. Added a dedicated "MCP-server naming convention" subsection to the top-level `README.md` with a reference table + the derivation rule.
+  - **LOW (Auditor):** Nested `[ ]` subtasks under Tasks 1–3 were unchecked despite top-level `[x]`. Marked all subtasks `[x]` for cosmetic completeness.
+  - **LOW (Blind):** structural consistency across 11 scaffolds confirmed; no action needed.
+  - **Verification after fixes:** `uv sync --frozen` no-op; `just bootstrap-verify` exits 0 with all 13 imports green (was 5); MCP imports preserved post-re-sync.
 
 ### Completion Notes
 

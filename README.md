@@ -34,14 +34,31 @@ just bootstrap-verify                          # confirms workspace wires up
 
 | Folder | Purpose |
 |---|---|
-| `services/` | Deployable backend processes (registry-api, registry-state, telegram-gateway, console-cli, orchestrator-adapter, worker-wrapper, clawhip-daemon). Phase 1 has only `registry-api` scaffolded; the rest land in Story 1.2. |
-| `mcp-servers/` | MCP servers exposing tool/resource contracts to agents (`task-registry`, `session-registry`, `clawhip-bridge`). Distinct from `services/` because they have an MCP protocol surface, not an HTTP surface. Empty in Story 1.1 — populated in Story 1.2. |
-| `packages/` | Shared libraries imported by multiple services and MCP servers (`events`, `secret_hygiene`, `idempotency`). Story 1.1 ships `events/` skeleton; rest land in Story 1.2. |
+| `services/` | Deployable backend processes (registry-api, registry-state, telegram-gateway, console-cli, orchestrator-adapter, worker-wrapper, clawhip-daemon). All 7 scaffolded as of Story 1.2. |
+| `mcp-servers/` | MCP servers exposing tool/resource contracts to agents. Distinct from `services/` because they have an MCP protocol surface, not an HTTP surface. All 3 scaffolded as of Story 1.2. |
+| `packages/` | Shared libraries imported by multiple services and MCP servers (`events`, `secret-hygiene`, `idempotency`). All 3 scaffolded as of Story 1.2. |
 | `upstream/` | Vendored upstream-fork source trees (`omc/`, `clawhip/`), synced via `just sync-upstream <name>`. Empty until Story 1.3 (upstream vendoring). |
 | `tests/` | Cross-service test trees: `separability/`, `crash-injection/`, `idempotency/`, `integration/`, `contract/`, `migrator/`. Empty until Story 1.5 (test tree + CI skeleton). |
 | `docs/` | Operator documentation: deployment guides, runbooks, schema-evolution, exceptions, testing-guide. Empty until Stories 1.10a and 1.10b. |
 | `_bmad-output/` | Planning artifacts (product brief, PRD, architecture, epics, sprint status). Authoritative source of design decisions. |
 | `_bmad/`, `.claude/`, `.cursor/`, `.gemini/`, `.opencode/`, `.pi/`, `.agent/`, `.agents/`, `.omc/` | BMad framework + IDE/skill integration files (kept for ongoing planning amendments). |
+
+### MCP-server naming convention
+
+MCP servers use three names — directory, project, module — that intentionally differ. This is not a typo; it's an accommodation for `uv_build`'s kebab→snake module derivation plus architectural convention.
+
+| Directory (group-scoped) | Project (in `pyproject.toml`) | Python module |
+|---|---|---|
+| `mcp-servers/task-registry/` | `task-registry-mcp` | `task_registry_mcp` |
+| `mcp-servers/session-registry/` | `session-registry-mcp` | `session_registry_mcp` |
+| `mcp-servers/clawhip-bridge/` | `clawhip-bridge-mcp` | `clawhip_bridge_mcp` |
+
+**Rule:** when you see one form, the other two are derivable:
+- Directory = unsuffixed kebab (parent `mcp-servers/` folder already names the contract type).
+- Project name = directory name with `-mcp` suffix.
+- Python module = project name with `-` → `_` (so `task-registry-mcp` → `task_registry_mcp`).
+
+Services and packages follow the simpler 1:1 kebab ↔ snake convention (e.g., `secret-hygiene` ↔ `secret_hygiene`).
 
 ---
 

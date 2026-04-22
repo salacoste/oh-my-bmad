@@ -1,7 +1,7 @@
 [project]
 name = "clawhip-daemon"
 version = "0.1.0"
-description = "clawhip event-bus subprocess supervision + Telegram-sink orchestration."
+description = "Supervises the vendored clawhip event-bus subprocess; owns outbound sink rendering (per-sink delivery policy) while telegram-gateway owns bot-ingress. Per FR19 (event routing to sinks), NFR-R5 (failure detection)."
 authors = [
     { name = "R2d2", email = "bad.vano23ru@gmail.com" },
 ]
@@ -9,5 +9,5 @@ requires-python = ">=3.12"
 dependencies = []
 
 [build-system]
-requires = ["uv_build>=0.11.0,<0.12"]
+requires = ["uv_build>=0.11.0,<1.0"]
 build-backend = "uv_build"
