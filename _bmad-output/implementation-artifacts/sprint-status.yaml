@@ -1,0 +1,188 @@
+# generated: 2026-04-22
+# last_updated: 2026-04-22T01:30:00Z
+# project: oh-my-bmad
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: _bmad-output/implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog → in-progress: Automatically when first story is created (via create-story)
+#   - in-progress → done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+
+generated: 2026-04-22
+last_updated: 2026-04-22T01:30:00Z
+project: oh-my-bmad
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+
+development_status:
+  # =========================================================================
+  # Epic 1: Scaffold & Deployability (11 stories)
+  # =========================================================================
+  epic-1: in-progress
+  1-1-monorepo-proof: in-progress
+  1-2-remaining-service-and-mcp-scaffolds: backlog
+  1-3-upstream-vendoring-migrator-scaffold: backlog
+  1-4-compose-env-justfile: backlog
+  1-5-test-tree-ci-skeleton: backlog
+  1-6-ci-gates-imports-events-single-writer: backlog
+  1-7-secret-scanner-sanitizer: backlog
+  1-8-dockerfile-base-multistage: backlog
+  1-9-ghcr-image-publishing: backlog
+  1-10a-deployment-quickstart-docs: backlog
+  1-10b-full-operator-docs: backlog
+  epic-1-retrospective: optional
+
+  # =========================================================================
+  # Epic 2: Event Spine & Registry (17 stories)
+  # =========================================================================
+  epic-2: backlog
+  2-1-event-envelope-schema-registry: backlog
+  2-2-uuidv7-injectable-clock: backlog
+  2-3-registry-state-sqlite-schema: backlog
+  2-4-event-log-append-writer: backlog
+  2-5-event-log-subscriber-materializer: backlog
+  2-6-snapshot-capture-replay: backlog
+  2-7-idempotency-cache: backlog
+  2-8-clawhip-bridge-mcp-server: backlog
+  2-9-registry-api-http-skeleton: backlog
+  2-10-failure-detection-events: backlog
+  2-11-synthetic-crash-injection-harness: backlog
+  2-12-write-interrupt-harness: backlog
+  2-13-idempotency-100x-replay-test: backlog
+  2-14-migrator-integration-test: backlog
+  2-15-s3-separability-orchestrator-swap: backlog
+  2-16-secret-accessed-audit-events: backlog
+  2-17-log-capture-harness: backlog
+  epic-2-retrospective: optional
+
+  # =========================================================================
+  # Epic 3: Telegram Control Plane (20 stories)
+  # First 3 stories (3-3, 3-4, 3-5) are the Bootstrap Minimum Subset
+  # =========================================================================
+  epic-3: backlog
+  3-1-aiogram-bootstrap-webhook: backlog
+  3-2-allowlist-middleware: backlog
+  3-3-task-command: backlog
+  3-4-approve-command: backlog
+  3-5-ping-command: backlog
+  3-6-fastapi-middleware-stack: backlog
+  3-7-rfc7807-error-envelope: backlog
+  3-8-command-injection-fuzz-test: backlog
+  3-9-task-thread-binding: backlog
+  3-10-approval-request-template: backlog
+  3-11-blocker-notification-template: backlog
+  3-12-completion-summary-template: backlog
+  3-13-self-recovered-summary-template: backlog
+  3-14-status-command-telegram-surface: backlog
+  3-15-logs-command-telegram-surface: backlog
+  3-16-stop-command: backlog
+  3-17-reject-command: backlog
+  3-18-retry-command-telegram-surface: backlog
+  3-19-agent-command: backlog
+  3-20-message-design-docs: backlog
+  epic-3-retrospective: optional
+
+  # =========================================================================
+  # Epic 4: Console CLI Parity (6 stories)
+  # Parallelizable with Epic 3 after Epic 2's registry-api exists
+  # =========================================================================
+  epic-4: backlog
+  4-1-typer-binary-scaffold: backlog
+  4-2-task-status-logs-commands: backlog
+  4-3-decision-and-health-commands: backlog
+  4-4-events-follow-live-tail: backlog
+  4-5-error-rendering-cli: backlog
+  4-6-console-wrapper-symlink: backlog
+  epic-4-retrospective: optional
+
+  # =========================================================================
+  # Epic 5: Autonomous Task Execution (20 stories)
+  # NOTE: Implementation order — 5.8 and 5.9 (MCP servers) land BEFORE 5.1
+  # (worker scaffold). Numeric ordering preserved for FR citation stability;
+  # implementation order documented in epics.md Epic 5 ordering note.
+  # =========================================================================
+  epic-5: backlog
+  5-1-worker-wrapper-scaffold: backlog
+  5-2-session-lifecycle-emission: backlog
+  5-3-worktree-lock-acquisition: backlog
+  5-4-claude-code-subprocess-supervision: backlog
+  5-5-reasoning-breadcrumb-emission: backlog
+  5-6-atomic-file-edit-primitive: backlog
+  5-7-github-api-adapter: backlog
+  5-8-task-registry-mcp-server: backlog
+  5-9-session-registry-mcp-server: backlog
+  5-10-orchestrator-adapter-omc-supervision: backlog
+  5-11-task-plan-emission: backlog
+  5-12-task-execution-driver: backlog
+  5-13-completion-summary-payload: backlog
+  5-14-pr-draft-auto-creation: backlog
+  5-15-per-task-budget-enforcement: backlog
+  5-16-s1-cold-worker-swap-test: backlog
+  5-17a-resume-after-approval-state-machine: backlog
+  5-17b-cross-restart-approval-handling: backlog
+  5-17c-s2-midflight-worker-swap-test: backlog
+  5-18-journey-1-integration-test: backlog
+  epic-5-retrospective: optional
+
+  # =========================================================================
+  # Epic 6: Approval & Policy Gate (14 stories)
+  # =========================================================================
+  epic-6: backlog
+  6-1-capability-tier-enforcement-helpers: backlog
+  6-2-tier-enforcement-mcp-handlers: backlog
+  6-3-tier-enforcement-http-middleware: backlog
+  6-4-decisions-handler: backlog
+  6-5-approval-audit-events: backlog
+  6-6-tier3-audit-events: backlog
+  6-7-worker-approval-wait-state: backlog
+  6-8-precommit-validation-hook: backlog
+  6-9-license-scan-integration: backlog
+  6-10-license-flagged-event-override: backlog
+  6-11-budget-exceeded-enforcement: backlog
+  6-12-decision-interleaving-property-test: backlog
+  6-13-license-scan-integration-test: backlog
+  6-14-tier3-negative-test: backlog
+  epic-6-retrospective: optional
+
+  # =========================================================================
+  # Epic 7: Reconnaissance & Recovery UX (10 stories)
+  # =========================================================================
+  epic-7: backlog
+  7-1-reconstituted-state-handler: backlog
+  7-2-telegram-status-business-logic: backlog
+  7-3-logs-digest-llm-adapter: backlog
+  7-4-telegram-logs-business-logic: backlog
+  7-5-events-raw-tail-endpoint: backlog
+  7-6-retry-hint-injection: backlog
+  7-7-worktree-lock-blocker-persistence: backlog
+  7-8-self-recovered-summary: backlog
+  7-9-journey-3-integration-test: backlog
+  7-10-journey-6-integration-test: backlog
+  epic-7-retrospective: optional

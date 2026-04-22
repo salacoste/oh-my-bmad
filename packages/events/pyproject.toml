@@ -1,0 +1,13 @@
+[project]
+name = "events"
+version = "0.1.0"
+description = "Shared event envelope, schema registry, and serialization primitives for the oh-my-bmad platform."
+authors = [
+    { name = "R2d2", email = "bad.vano23ru@gmail.com" },
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.11.0,<0.12.0"]
+build-backend = "uv_build"

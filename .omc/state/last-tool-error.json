@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"uv run python -c \\\"from events import __version__; print(__version__)\\\" 2>&1 && echo \\\"---\\\" && uv run python -c \\\"from registry_api import __version__, hello; print(__version__, '|', hell...",
+  "error": "Exit code 1\nTraceback (most recent call last):\n  File \"<string>\", line 1, in <module>\nModuleNotFoundError: No module named 'events'",
+  "timestamp": "2026-04-22T01:06:21.996Z",
+  "retry_count": 1
+}

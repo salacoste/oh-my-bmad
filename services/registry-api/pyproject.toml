@@ -1,0 +1,13 @@
+[project]
+name = "registry-api"
+version = "0.1.0"
+description = "HTTP application API surface for the oh-my-bmad task + session registry. Story 1.1 ships scaffold only; FastAPI app and routes arrive in Story 2.9."
+authors = [
+    { name = "R2d2", email = "bad.vano23ru@gmail.com" },
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.11.0,<0.12.0"]
+build-backend = "uv_build"

@@ -1,0 +1,35 @@
+version = 1
+revision = 3
+requires-python = ">=3.12"
+
+[manifest]
+members = [
+    "events",
+    "oh-my-bmad",
+    "registry-api",
+]
+
+[[package]]
+name = "events"
+version = "0.1.0"
+source = { editable = "packages/events" }
+
+[[package]]
+name = "oh-my-bmad"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "events" },
+    { name = "registry-api" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "events", editable = "packages/events" },
+    { name = "registry-api", editable = "services/registry-api" },
+]
+
+[[package]]
+name = "registry-api"
+version = "0.1.0"
+source = { editable = "services/registry-api" }
