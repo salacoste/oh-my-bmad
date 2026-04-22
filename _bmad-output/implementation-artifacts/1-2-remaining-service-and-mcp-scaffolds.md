@@ -261,7 +261,7 @@ _To be filled by the dev agent. Expected: 22 new files, 3 modified, 0 deleted._
 
 **Implementation summary**
 
-- Used a Python bulk-scaffold script (inline) to generate the 11 component scaffolds in one shot. Each scaffold = `pyproject.toml` (kebab-name, version 0.1.0, requires-python>=3.12, deps=[], `uv_build>=0.11.0,<0.12`) + `src/<snake>/__init__.py` (docstring + `__version__`).
+- Used a Python bulk-scaffold script (inline) to generate the 11 component scaffolds in one shot. Each scaffold = `pyproject.toml` (kebab-name, version 0.1.0, requires-python>=3.12, deps=[], `uv_build>=0.11.0,<0.12` in the original scaffold commit — later relaxed to `<1.0` by the review-fix commit `22f8da0`; see Change Log entry 2) + `src/<snake>/__init__.py` (docstring + `__version__`).
 - Root `pyproject.toml` extended: 13 workspace members in `[project] dependencies` and `[tool.uv.sources]` (alphabetical for diff stability).
 - `justfile bootstrap-verify` extended with 3 new import checks; existing `events` + `registry_api` preserved.
 
@@ -274,7 +274,7 @@ _To be filled by the dev agent. Expected: 22 new files, 3 modified, 0 deleted._
 
 **uv_build bound restoration**
 
-- Story 1.1 review fixes had relaxed `uv_build>=0.11.0` (no upper bound) to silence a future-breakage concern. Story 1.2's `uv sync` produced a warning recommending an upper bound. Pragmatic decision: re-bound to `>=0.11.0,<0.12` across all 14 pyproject.toml files. Reversal of the Story 1.1 review fix; rationale documented in commit body.
+- Story 1.1 review fixes had relaxed `uv_build>=0.11.0` (no upper bound) to silence a future-breakage concern. Story 1.2's `uv sync` produced a warning recommending an upper bound. Pragmatic decision: re-bound to `>=0.11.0,<0.12` across all 14 pyproject.toml files. Reversal of the Story 1.1 review fix; rationale documented in commit body. *(Later corrected again: the Story 1.2 review-fix commit `22f8da0` relaxed the bound further to `<1.0` — the SemVer-correct ceiling for pre-1.0 tooling — eliminating the uv-0.12-release cliff. See Change Log entry 2.)*
 - Trade-off: a future uv 0.12 release will require a coordinated bump across all 14 files. Acceptable for solo-operator scaffold; can be revisited when uv 0.12 lands.
 
 **AC-by-AC verification:** see commit body for the 11-line green list.
