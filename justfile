@@ -171,18 +171,21 @@ backup name="":
 # Dockerfile extends this. Run before `just build` / `just deploy-*` on a
 # fresh checkout or whenever `Dockerfile.base` / `uv.lock` changes.
 build-base:
-    docker build -f Dockerfile.base --target runtime-base -t oh-my-bmad-base:local .
+    DOCKER_BUILDKIT=1 docker build -f Dockerfile.base --target runtime-base -t oh-my-bmad-base:local .
 
-# Build all 6 service images locally (single-arch). Multi-arch buildx bake
-# lands with Story 1.9's release workflow. Depends on the shared base image
-# — `build-base` ensures it exists before compose's per-service builds run.
+# Build all 7 service images locally (single-arch: 6 compose services via
+# `docker compose build` + console-cli via `docker build`). Multi-arch buildx
+# bake lands with Story 1.9's release workflow. Depends on the shared base
+# image — `build-base` ensures it exists before per-service builds run.
 build: build-base
     docker compose -f docker-compose.yml build
+    docker build -f services/console-cli/Dockerfile -t oh-my-bmad-console-cli:local .
 
 # Print every oh-my-bmad-* docker image and its size. Operator sanity after
-# `just build` — each service image must stay ≤ 200 MB per Story 1.8 AC-7.
+# `just build` — each service image must stay ≤ 200 MB per Story 1.8 AC-7
+# (worker-wrapper is the documented exception at ~280 MB; see story 1.8 notes).
 image-sizes:
-    docker image ls --format '{{{{.Repository}}:{{{{.Tag}} {{{{.Size}}' | grep -E '^oh-my-bmad-' | sort
+    @docker image ls --format '{{{{.Repository}}:{{{{.Tag}} {{{{.Size}}' | grep -E '(^oh-my-bmad-|/oh-my-bmad-)' | sort
 
 # Linux VPS deploy primitive: build-base → pull-if-available → build → up.
 # Story 1.9's GHCR images will make pull the primary path; until then build

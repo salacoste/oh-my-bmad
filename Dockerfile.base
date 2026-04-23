@@ -10,31 +10,58 @@
 #
 # Requires BuildKit (Docker Engine ≥ 23 has it enabled by default; older
 # versions need `DOCKER_BUILDKIT=1`).
+#
+# Architecture §line-244 mandate: venv at `/opt/venv`, runtime stage carries
+# only the venv (not the workspace source tree). `--no-editable` on `uv sync`
+# makes this possible by installing every workspace member as a built wheel
+# rather than an editable link back to `/app/services/<name>/src`.
+#
+# Story 1.9 (GHCR image publishing) must coordinate the base-image dependency:
+# per-service Dockerfiles `FROM oh-my-bmad-base:local` and GHCR buildx workers
+# have no such local tag. Story 1.9's release.yml will either (a) build the
+# base in-workflow, (b) push the base to GHCR as `oh-my-bmad-base:<version>`
+# and retag the per-service FROMs, or (c) use buildx `additional_contexts` to
+# inject a build-time base context. Noted here so the hand-off is explicit.
 
 # ─── Stage 1: venv-builder ─────────────────────────────────────────────────
-# Installs uv + syncs every workspace member into a single venv at /app/.venv.
+# Installs uv + syncs every workspace member into /opt/venv as built wheels.
 # `--no-dev` skips pytest/ruff/mypy/hypothesis/structlog-from-dev-group (but
 # structlog IS a runtime dep of secret-hygiene and ships via its own
-# pyproject.toml).
+# pyproject.toml). `--no-editable` installs workspace packages as wheels so
+# the source tree is NOT needed in the runtime image.
 FROM python:3.12-slim-bookworm AS venv-builder
 RUN pip install --no-cache-dir uv==0.11.*
-WORKDIR /app
+WORKDIR /build
 COPY pyproject.toml uv.lock ./
 COPY packages/ ./packages/
 COPY services/ ./services/
 COPY mcp-servers/ ./mcp-servers/
 COPY src/ ./src/
-RUN uv sync --frozen --no-dev --all-packages
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+RUN uv sync --frozen --no-dev --all-packages --no-editable
 
 # ─── Stage 2: runtime-base ─────────────────────────────────────────────────
 # Final runtime foundation. Each per-service Dockerfile adds a unique user +
-# entrypoint. Shared `omb` group (GID 10000) so bind-mounted data dirs can
-# be written-group-read regardless of which service touched them first.
+# entrypoint. Shared `omb` group (GID 10000) owns `/app` (group-writable) so
+# service users can write runtime state (logs, caches, SQLite WAL) under
+# their home dir without a per-service chown step.
 FROM python:3.12-slim-bookworm AS runtime-base
-RUN groupadd --system --gid 10000 omb
+# TLS / https support for services that call external APIs (Anthropic,
+# Telegram, GitHub, Node subprocesses, etc.).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && pip uninstall -y pip setuptools wheel 2>/dev/null || true
+# Shared group; per-service users land in each service's Dockerfile.
+RUN groupadd --system --gid 10000 omb \
+ && mkdir -p /app \
+ && chgrp omb /app \
+ && chmod 2775 /app
 WORKDIR /app
-COPY --from=venv-builder /app /app
-ENV PATH="/app/.venv/bin:$PATH" \
+# Copy ONLY the venv (not source — wheels built by --no-editable contain
+# the code already) from the builder.
+COPY --from=venv-builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
-# Entrypoint + USER are set by each per-service Dockerfile that extends this.
+# Entrypoint + USER are set by each per-service Dockerfile.

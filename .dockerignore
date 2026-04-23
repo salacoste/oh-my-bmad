@@ -28,8 +28,12 @@ upstream/
 .git/
 .github/
 
-# Test tree — not needed in runtime images
-tests/
+# Test tree — not needed in runtime images (root-level and co-located per
+# Architecture §line-344 pattern). **/tests/ supersedes the root tests/ line
+# but both kept for belt-and-suspenders clarity.
+**/tests/
+**/test_*.py
+**/__pycache__/
 
 # Docs + top-level non-runtime files
 docs/
