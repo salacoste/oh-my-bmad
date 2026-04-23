@@ -1,14 +1,7 @@
-# SCAFFOLD VERSION — Story 1.8 replaces with multi-stage Dockerfile.base.
-# Build context: services/telegram-gateway/
-FROM python:3.12-slim-bookworm
-# Non-root runtime per Story 1.3 pattern. Service users share a low numeric UID
-# range (10001-10006) so bind-mounted data dirs have consistent ownership on
-# macOS (Docker Desktop) regardless of which service writes first.
-RUN groupadd --system --gid 10000 omb \
- && useradd --system --uid 10003 --gid omb --home /app --shell /usr/sbin/nologin telegram-gateway
-WORKDIR /app
-COPY src/ /app/src/
-RUN chown -R telegram-gateway:omb /app
-ENV PYTHONPATH=/app/src
+# services/telegram-gateway/Dockerfile — thin override of oh-my-bmad-base:local.
+# Pre-req: `just build-base` (or `docker build -f Dockerfile.base
+# --target runtime-base -t oh-my-bmad-base:local .`).
+FROM oh-my-bmad-base:local
+RUN useradd --system --uid 10003 --gid omb --home /app --shell /usr/sbin/nologin telegram-gateway
 USER telegram-gateway
 ENTRYPOINT ["python", "-m", "telegram_gateway"]

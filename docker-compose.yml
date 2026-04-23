@@ -31,8 +31,8 @@ x-healthcheck: &healthcheck
 services:
   registry-api:
     build:
-      context: ./services/registry-api
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/registry-api/Dockerfile
     image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-registry-api:${OMB_VERSION:-dev}
     env_file:
       - path: .env
@@ -49,8 +49,8 @@ services:
 
   registry-state:
     build:
-      context: ./services/registry-state
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/registry-state/Dockerfile
     image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-registry-state:${OMB_VERSION:-dev}
     env_file:
       - path: .env
@@ -67,8 +67,8 @@ services:
 
   telegram-gateway:
     build:
-      context: ./services/telegram-gateway
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/telegram-gateway/Dockerfile
     image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-telegram-gateway:${OMB_VERSION:-dev}
     env_file:
       - path: .env
@@ -84,8 +84,8 @@ services:
 
   orchestrator-adapter:
     build:
-      context: ./services/orchestrator-adapter
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/orchestrator-adapter/Dockerfile
     image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-orchestrator-adapter:${OMB_VERSION:-dev}
     env_file:
       - path: .env
@@ -100,8 +100,8 @@ services:
 
   worker-wrapper:
     build:
-      context: ./services/worker-wrapper
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/worker-wrapper/Dockerfile
     image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-worker-wrapper:${OMB_VERSION:-dev}
     env_file:
       - path: .env
@@ -120,8 +120,8 @@ services:
 
   clawhip-daemon:
     build:
-      context: ./services/clawhip-daemon
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/clawhip-daemon/Dockerfile
     image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-clawhip-daemon:${OMB_VERSION:-dev}
     env_file:
       - path: .env

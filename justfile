@@ -167,23 +167,34 @@ backup name="":
         tar -czf "/dest/${archive}" -C /source .
     echo "✓ backup written to ${PWD}/${archive}"
 
+# Build the shared base image `oh-my-bmad-base:local`. Every per-service
+# Dockerfile extends this. Run before `just build` / `just deploy-*` on a
+# fresh checkout or whenever `Dockerfile.base` / `uv.lock` changes.
+build-base:
+    docker build -f Dockerfile.base --target runtime-base -t oh-my-bmad-base:local .
+
 # Build all 6 service images locally (single-arch). Multi-arch buildx bake
-# lands with Story 1.9's release workflow.
-build:
+# lands with Story 1.9's release workflow. Depends on the shared base image
+# — `build-base` ensures it exists before compose's per-service builds run.
+build: build-base
     docker compose -f docker-compose.yml build
 
-# Linux VPS deploy primitive. Pulls pre-built images if OMB_IMAGE_REGISTRY
-# points at a real registry (Story 1.9 publishes to GHCR); builds locally
-# otherwise. `|| true` on `pull` so the recipe doesn't error when images are
-# only local.
-deploy-vps:
+# Print every oh-my-bmad-* docker image and its size. Operator sanity after
+# `just build` — each service image must stay ≤ 200 MB per Story 1.8 AC-7.
+image-sizes:
+    docker image ls --format '{{{{.Repository}}:{{{{.Tag}} {{{{.Size}}' | grep -E '^oh-my-bmad-' | sort
+
+# Linux VPS deploy primitive: build-base → pull-if-available → build → up.
+# Story 1.9's GHCR images will make pull the primary path; until then build
+# is the source of truth. Docs in Story 1.10a.
+deploy-vps: build-base
     docker compose -f docker-compose.yml pull || true
     docker compose -f docker-compose.yml build
     docker compose -f docker-compose.yml up -d
 
 # macOS deploy primitive — same flow plus the macOS overlay and a mkdir
 # prerequisite so the bind-mount source exists.
-deploy-macos:
+deploy-macos: build-base
     mkdir -p "${HOME}/.oh-my-bmad"
     docker compose -f docker-compose.yml -f docker-compose.macos.yml pull || true
     docker compose -f docker-compose.yml -f docker-compose.macos.yml build

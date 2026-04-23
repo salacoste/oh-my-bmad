@@ -1,0 +1,40 @@
+# Dockerfile.base — shared multi-stage template for every Python service image.
+#
+# Build via:
+#   docker build -f Dockerfile.base --target runtime-base -t oh-my-bmad-base:local .
+# Or via the justfile recipe:
+#   just build-base
+#
+# Per-service Dockerfiles extend via `FROM oh-my-bmad-base:local` + `useradd` +
+# `USER` + `ENTRYPOINT`. See `services/*/Dockerfile` for the thin overrides.
+#
+# Requires BuildKit (Docker Engine ≥ 23 has it enabled by default; older
+# versions need `DOCKER_BUILDKIT=1`).
+
+# ─── Stage 1: venv-builder ─────────────────────────────────────────────────
+# Installs uv + syncs every workspace member into a single venv at /app/.venv.
+# `--no-dev` skips pytest/ruff/mypy/hypothesis/structlog-from-dev-group (but
+# structlog IS a runtime dep of secret-hygiene and ships via its own
+# pyproject.toml).
+FROM python:3.12-slim-bookworm AS venv-builder
+RUN pip install --no-cache-dir uv==0.11.*
+WORKDIR /app
+COPY pyproject.toml uv.lock ./
+COPY packages/ ./packages/
+COPY services/ ./services/
+COPY mcp-servers/ ./mcp-servers/
+COPY src/ ./src/
+RUN uv sync --frozen --no-dev --all-packages
+
+# ─── Stage 2: runtime-base ─────────────────────────────────────────────────
+# Final runtime foundation. Each per-service Dockerfile adds a unique user +
+# entrypoint. Shared `omb` group (GID 10000) so bind-mounted data dirs can
+# be written-group-read regardless of which service touched them first.
+FROM python:3.12-slim-bookworm AS runtime-base
+RUN groupadd --system --gid 10000 omb
+WORKDIR /app
+COPY --from=venv-builder /app /app
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+# Entrypoint + USER are set by each per-service Dockerfile that extends this.

@@ -1,0 +1,49 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.uv/
+
+# Tool caches
+.tmp/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# BMad planning artifacts + agent-tool dotdirs (not runtime assets)
+_bmad/
+_bmad-output/
+upstream/
+.agent/
+.agents/
+.claude/
+.cursor/
+.gemini/
+.opencode/
+.pi/
+.omc/
+
+# Git + CI metadata (not needed inside images)
+.git/
+.github/
+
+# Test tree — not needed in runtime images
+tests/
+
+# Docs + top-level non-runtime files
+docs/
+README.md
+CHANGELOG.md
+LICENSE
+
+# Environment files (never include real secrets)
+.env
+.env.*
+!.env.example
+
+# OS / editor artifacts
+.DS_Store
+Thumbs.db
+*.swp
+*~
