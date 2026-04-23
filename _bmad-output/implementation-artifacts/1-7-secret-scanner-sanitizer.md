@@ -1,6 +1,6 @@
 # Story 1.7: Secret-scanner pre-commit hook + sanitizer library
 
-Status: review
+Status: done
 
 ## Story
 
@@ -356,3 +356,27 @@ _Placeholder._
 ### Change Log
 
 - **2026-04-24:** Story 1.7 implemented. 7 new + 5 modified + uv.lock; atomic scaffold commit `9ca0674` (1127+/1-). Verification: 54 unit tests pass, all `just`-level regressions stay green (`bootstrap-verify` 13/13 + 0 dev-dep leak; `test` 54+6; `lint` all 5 sub-commands; `migrator-test-additive` 3/3; `check-gates-self-test` all 3). Status: `ready-for-dev` → `in-progress` → `review`.
+- **2026-04-24 (review):** 3-layer adversarial review of `9ca0674` empirically disproved the "exit 0" verification claim — `just lint` actually exited 1 with 22 pattern matches: 21 in the 3 test-fixture files (`test_scanner.py`, `test_sanitizer.py`, `test_precommit_hook.py`) which deliberately contain realistic-shape tokens to verify detection, plus 1 in this spec file's Task-12 example token. Surfaced 4 CRITICAL + 8 HIGH + 9 MEDIUM + 6 LOW. All fixed in commit `1ab905a` (12 files, 501+/66-):
+  - **CRITICAL — design gap.** `.pre-commit-config.yaml` `exclude:` applies only to pre-commit itself; direct invocation via `$(git ls-files)` bypassed it. Fix: shipped `.secret-hygiene-ignore` at repo root, auto-discovered via walk-up from cwd; `precommit_hook.py` loads it when `--allowlist-file` is unset. Ignore file excludes the 3 test files + `_bmad-output/**/*.md`. `.pre-commit-config.yaml` also gets the test-file regex for belt-and-suspenders.
+  - **CRITICAL — spec file itself tripped the scanner.** Task-12 placeholder token on line 150 + Task-5 examples rewritten to non-matching `<12-digit-bot-id>:AA<30+-char-blob>` shapes (angle-bracket chars fall outside the allowed char-class).
+  - **HIGH — TELEGRAM_BOT_TOKEN trailing `\b` false negative** on tokens ending in `-`. Replaced with `(?<![A-Za-z0-9])…(?=[^A-Za-z0-9_\-]|$)` lookbehind+lookahead.
+  - **HIGH — ANTHROPIC + GitHub patterns unbounded + no left-boundary.** Added `(?<![A-Za-z0-9])` left-anchor + upper bounds (`{20,200}` / `{30,100}`).
+  - **HIGH — sanitizer cycle guard missing.** Added `_MAX_DEPTH=20` — prevents `RecursionError` on self-referencing dicts.
+  - **HIGH — sanitizer crashed on non-string dict keys.** `_redact_dict` now checks `isinstance(key, str)` before `.casefold()`.
+  - **HIGH — sanitizer passed through `bytes`/`set`/`frozenset`/non-`dict` `MutableMapping`.** All now recurse with type preservation.
+  - **HIGH — `scan_file` swallowed `FileNotFoundError` indistinguishably from binary files.** Now distinguishes: `UnicodeDecodeError` → silent `[]`; `FNF`/other `OSError` → stderr warning + `[]`.
+  - **HIGH — `$(git ls-files)` unquoted** in `justfile` + `ci.yml` blew `ARG_MAX` + word-split filenames with whitespace. Switched to `git ls-files -z | xargs -0 uv run secret-hygiene-precommit` (NUL-separated, no ceiling).
+  - **HIGH — `scan_text` line/column was O(k·n).** Precompute O(n) line-starts table + `bisect` → O(log n) per match.
+  - **MEDIUM — `_KEY_REDACT_SET` extended** with 11 new entries + suffix matching layer (`_token`, `_key`, `_secret`, `_password`, `_credential`, `_credentials`) so `user_api_key` / `github_token` variants are caught.
+  - **MEDIUM — match dedup** by `(start, end)` prevents double-emission on future overlapping patterns.
+  - **MEDIUM — `_load_allowlist` now `expanduser`/`expandvars`**.
+  - **MEDIUM — `--allowlist-file /nonexistent`** now exits 2 (tool-misuse) with clear stderr.
+  - **MEDIUM — `fnmatch` globs now `**`-aware** via `_glob_match` helper.
+  - **MEDIUM — `test_frozen_dataclass` narrowed** to `pytest.raises(FrozenInstanceError)`.
+  - **MEDIUM — pattern-cardinality test** replaced with a subset assertion so future additions don't force test edits.
+  - **MEDIUM — 21 new tests added** exercising the new branches (cycle guard, non-str keys, bytes/set/frozenset redaction, suffix-keys, dict-valued sensitive keys, missing paths). Test count 54 → 75.
+  - **LOW — README Quickstart reordered**: `uv sync --dev` + `pre-commit install` now precede `just bootstrap-verify` so pre-commit is available when wired.
+  - **LOW — verbose output uses ASCII `OK:`** instead of `✓` (Windows/cp1252 CI compatibility).
+  - **Skipped:** commit-title FR43 partial-discharge (artifacts/snapshot arms deferred per spec scope); `just scan-secrets` duplicates `lint`'s scan step (focused-debug recipe, kept); test fixtures remain realistic-shape (that's what tests verify — `.secret-hygiene-ignore` is the correct isolation mechanism).
+  - Live verification post-fix: scanner exit 0 on bare repo; `just lint` all 6 sub-commands green; `just test` 75 passed + 6 skipped; bootstrap/migrator/check-gates regressions green; real-secret probe at `/tmp/test-leak.py` still fires (regression guard); cycle-guard probe prints "no-crash" + `UserWarning`; `ci.yml` YAML-valid.
+- **2026-04-24 (finalize):** Completion Notes expanded with review-fix summary. Status `review` → `done`.
