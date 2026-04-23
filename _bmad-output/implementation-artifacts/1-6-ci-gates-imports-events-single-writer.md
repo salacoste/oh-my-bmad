@@ -1,6 +1,6 @@
 # Story 1.6: Import-graph, event-registry, and single-writer CI gates
 
-Status: review
+Status: done
 
 ## Story
 
@@ -380,3 +380,16 @@ _Placeholder._
 ### Change Log
 
 - **2026-04-23:** Story 1.6 implemented. 20 new + 4 modified files; atomic scaffold commit `fbf18d7` (1116+/-4). Verification: all 3 gates exit 0 on bare repo (20/16/19 files); all 3 `--self-test` modes exit 0 (6/3/2 fixtures, 0 failures); `just lint` runs ruff→format→mypy→3 gates all green; `bootstrap-verify` 13/13; `test` 6 skipped; `migrator-test-additive` 3/3. Status: `ready-for-dev` → `in-progress` → `review`.
+- **2026-04-23 (review):** 3-layer adversarial review of `fbf18d7` surfaced 1 CRITICAL + 4 HIGH + 3 MEDIUM + LOWs. Fixes landed in commit `a834f11` (8 files, 129+/33-):
+  - **CRITICAL — `walk_python_files` blanket-skipped on absolute path parts.** A repo checked out under any dotted ancestor (e.g. `~/.claude/workspaces/`) had every file's absolute path contain a skip-listed component → every file silently dropped → gates reported "✓ OK" with zero actual scanning. Fix: switched to `path.relative_to(root).parts` check. Sanity-probed by symlinking the repo under `/tmp/foo/.claude/repo` → before fix: 0 files scanned; after fix: 20 files, 0 violations.
+  - **HIGH — `check_imports.py` ignored `ast.ImportFrom.level`.** Relative imports (`from .sibling import bar`, level=1) were misresolved as absolute `sibling` and looked up in MODULE_TO_OWNER. Fix: guard on `node.level == 0`.
+  - **HIGH — `check_event_registry.py` `_EMIT_ATTRS` matched ANY `.emit(type=...)`.** `logging.Handler.emit`, PyQt `signal.emit`, socket emit — all would false-positive. Fix: narrowed attribute-form matches to a `_EMIT_RECEIVERS` allowlist (`clawhip`, `events`, `event_bus`, `bus`); future emission surfaces register here.
+  - **HIGH — `check_single_writer.py` `_is_session_like` used substring match.** `user_session.add()`, `login_session.add()`, `http_session.execute()` all false-positived. Fix: replaced with exact-name match against `_SESSION_NAMES` frozenset (`session`, `conn`, `connection`, `db`, `sess`).
+  - **HIGH — Event-registry self-test exercised only `emit_event(type=...)`.** Zero fixture coverage for the `EventEnvelope(type=...)` + `x.emit(type=...)` patterns AC-2 promised to enforce. Fix: added 4 new fixtures (2 clean + 2 violations) for the missing patterns. Self-test fixture count: 3 → 7.
+  - **MEDIUM — `check_single_writer.py` pattern 2 missed `.values()` / `.returning()` chains.** `session.execute(insert(Model).values(x=1))` (outer call func is Attribute, not Name) was invisible. Fix: added `_walk_to_root_dml` that unwraps method chains back to the root DML constructor.
+  - **MEDIUM — `_receiver_name` didn't handle `ast.Call` receivers.** `get_session().add(x)` / `session_factory().execute(...)` patterns silently unchecked. Fix: Call branch added; inspects the callable's name.
+  - **MEDIUM — `_SW_SKIP_DIRS` redundantly listed `_bmad` + `_bmad-output`** (already in `DEFAULT_SKIP_DIRS`). Fix: pared to `{tests, fixtures, migrator}`.
+  - **LOW — `check_event_registry.py` module docstring** updated to state scope explicitly (per Arch §line 451, services/** + mcp-servers/** only) + FR18b partial-discharge disclaimer (event-registry arm; stdout-parse ruff rule deferred to Story 1.7).
+  - **Skipped:** `_NOQA_RE` single-char-reason critique (trivial avoidance); `check_imports.py` not scanning `src/` (speculative until 2.1+); spec-vs-reality filename drift on `session_add_outside.py` (cosmetic).
+  - Live verification post-fix: all 3 gates exit 0; `--self-test` 6/7/2 fixtures, 0 failures; `just check-gates` + `check-gates-self-test` + `lint` + all regressions green; Fix-A sanity probe closes the absolute-path bug.
+- **2026-04-23 (finalize):** Completion Notes expanded with review-fix summary. Status `review` → `done`.
