@@ -1,0 +1,38 @@
+target-version = "py312"
+line-length = 100
+
+extend-exclude = [
+    "upstream",
+    ".venv",
+    "_bmad",
+    "_bmad-output",
+    # AI-tool skill directories present at the repo root (not project code)
+    ".agent",
+    ".agents",
+    ".claude",
+    ".cursor",
+    ".gemini",
+    ".opencode",
+    ".pi",
+    ".omc",
+]
+
+[lint]
+select = [
+    "E",
+    "F",
+    "I",
+    "UP",
+    "B",
+    "SIM",
+    "N",
+]
+# E501: scaffold module docstrings are intentionally long reference text.
+ignore = ["E501"]
+
+[lint.per-file-ignores]
+"tests/**" = ["B", "N"]
+"scripts/**" = ["N"]
+
+[format]
+# Ruff's default formatter settings are fine — single source of truth.

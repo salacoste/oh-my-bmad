@@ -1,0 +1,42 @@
+name: ci
+
+# release.yml (GHCR multi-arch publish) lands in Story 1.9.
+# nightly.yml (full slow-matrix: separability + crash-injection + idempotency replay) deferred.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  pr-gate:
+    name: PR gate (ruff + mypy + pytest)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Sync workspace (incl. dev deps)
+        run: uv sync --frozen --dev
+
+      - name: ruff check
+        run: uv run ruff check .
+
+      - name: ruff format --check
+        run: uv run ruff format --check .
+
+      - name: mypy --strict (packages + registry services)
+        run: uv run mypy --strict packages/ services/registry-api services/registry-state
+
+      - name: pytest -m "not slow"
+        run: uv run pytest -m "not slow"

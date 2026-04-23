@@ -4,6 +4,7 @@ Long-lived no-op so the compose container stays up, passes the
 `test -f /tmp/ready` healthcheck, and exits cleanly on SIGTERM/SIGINT.
 Real FastAPI app + HTTP route handlers land in Story 2.9.
 """
+
 from __future__ import annotations
 
 import logging

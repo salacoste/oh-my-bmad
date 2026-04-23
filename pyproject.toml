@@ -46,3 +46,27 @@ session-registry-mcp = { workspace = true }
 task-registry-mcp = { workspace = true }
 telegram-gateway = { workspace = true }
 worker-wrapper = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "hypothesis",
+    "ruff",
+    "mypy",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "packages", "services", "mcp-servers"]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers"
+markers = [
+    "slow: exclude from PR-gate CI; runs on merge / nightly",
+    "separability: S-1/S-2/S-3 adapter-swap tests",
+    "crash: NFR-R2 crash-injection harness",
+    "idempotency: UUIDv7-key replay tests",
+    "integration: cross-service journey tests",
+    "contract: upstream-fork behavioral contracts",
+    "migrator: event-log schema migrator tests",
+]
+norecursedirs = ["upstream", "_bmad", "_bmad-output", ".venv", ".uv", "node_modules"]

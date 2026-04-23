@@ -6,6 +6,7 @@ migrator runs against the fixture. Verifies: file exists, 3 events, every
 event has schema_version=1.0.1 and an `extensions` field. Post-review-fix
 handles malformed JSON with a clean FAIL message (no raw traceback).
 """
+
 from __future__ import annotations
 
 import json

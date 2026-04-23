@@ -4,6 +4,7 @@ Long-lived no-op so the compose container stays up, passes the
 `test -f /tmp/ready` healthcheck, and exits cleanly on SIGTERM/SIGINT.
 Real OMC subprocess supervision lands in Story 5.10 (OMC subprocess supervision).
 """
+
 from __future__ import annotations
 
 import logging

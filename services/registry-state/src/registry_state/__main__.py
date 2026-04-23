@@ -4,6 +4,7 @@ Long-lived no-op so the compose container stays up, passes the
 `test -f /tmp/ready` healthcheck, and exits cleanly on SIGTERM/SIGINT.
 Real event-log subscriber + SQLite materializer land in Stories 2.4/2.5.
 """
+
 from __future__ import annotations
 
 import logging

@@ -63,25 +63,34 @@ dev:
         exec docker compose -f docker-compose.yml up -d
     fi
 
-# Placeholder — pytest tree + CI wiring land in Story 1.5.
+# PR-gate test suite (excludes @pytest.mark.slow). Runs on `just test`, on
+# every commit via .github/workflows/ci.yml, and local developer workflows.
 test:
-    @echo "pytest lands in Story 1.5 (test tree + CI skeleton)"
+    uv run pytest -m "not slow"
 
-# Placeholder — slow-lane test marker lands in Story 1.5.
+# Full test matrix — includes @pytest.mark.slow. Used by the nightly CI
+# workflow (lands in a later story) and operator-manual full-regression runs.
 test-slow:
-    @echo "slow-test suite lands in Story 1.5"
+    uv run pytest
 
-# Placeholder — contract tests land in Story 1.5 (tests/contract/).
+# Just the contract-test tree. Required before any `just sync-upstream` per
+# Architecture §Post-MVP ops — contract tests pin upstream-fork behavior.
 test-contract:
-    @echo "contract-test suite lands in Story 1.5"
+    uv run pytest tests/contract
 
-# Placeholder — ruff + mypy wiring lands in Story 1.5.
+# Strict lint + format + type-check. ruff rules cover style (E/F/I/UP/B/SIM/N);
+# ruff format --check enforces canonical formatting; mypy --strict gates the
+# platform-owned packages + the registry services (upstream adapters relaxed
+# per mypy.ini).
 lint:
-    @echo "ruff + mypy land in Story 1.5"
+    uv run ruff check .
+    uv run ruff format --check .
+    uv run mypy --strict packages/ services/registry-api services/registry-state
 
-# Placeholder — scenario harness (separability, crash-injection) lands in Stories 1.5/2.11/2.12.
+# Scenario harness (journey-level smoke tests) lands across Stories 2.11 /
+# 2.12 / 5.18. Story 1.5 only wires the harness; real scenarios land later.
 scenarios:
-    @echo "scenario suite lands across Stories 1.5/2.11/2.12"
+    @echo "scenario harness lands across Stories 2.11 / 2.12 / 5.18"
 
 # Snapshot the `oh-my-bmad-data` named volume to a local .tgz. Works on Linux
 # (named volume lives under /var/lib/docker/volumes/) AND macOS (overlay binds

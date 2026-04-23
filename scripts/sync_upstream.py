@@ -32,6 +32,7 @@ Usage
 Or via the wrapper recipe:
     just sync-upstream omc
 """
+
 from __future__ import annotations
 
 import shutil
@@ -149,7 +150,7 @@ def read_current_sha(name: str) -> str | None:
             continue
         first = cells[0]
         # Cell format: `<name>` — strip backticks
-        if first.startswith("`") and first.endswith("`") and first[1:-1] == name:
+        if first.startswith("`") and first.endswith("`") and first[1:-1] == name:  # noqa: SIM102
             if len(cells) >= 3:
                 sha_cell = cells[2].strip("`")
                 if sha_cell and sha_cell != "PLACEHOLDER":

@@ -8,6 +8,7 @@ Story 1.3 ships the trivial `v1.0.0-to-v1.0.1` additive upgrade. Post-review
 fixes (commit `c5...`) add atomic write-rename semantics and input
 validation hardening.
 """
+
 from __future__ import annotations
 
 import json
@@ -50,9 +51,7 @@ def main(argv: list[str]) -> int:
         )
     pair = argv[1]
     if pair not in MIGRATIONS:
-        die(
-            f"unknown migration {pair!r}; supported: {', '.join(sorted(MIGRATIONS))}"
-        )
+        die(f"unknown migration {pair!r}; supported: {', '.join(sorted(MIGRATIONS))}")
     # split with maxsplit to avoid silent unpack errors on future pair names
     # that might legitimately contain multiple `-to-` substrings.
     parts = pair.split("-to-", maxsplit=1)
@@ -61,9 +60,7 @@ def main(argv: list[str]) -> int:
     from_version, to_version = parts
 
     event_log_path = Path(
-        os.environ.get(
-            "EVENT_LOG_PATH", "/var/lib/oh-my-bmad/registry/events/current.jsonl"
-        )
+        os.environ.get("EVENT_LOG_PATH", "/var/lib/oh-my-bmad/registry/events/current.jsonl")
     )
     if not event_log_path.is_file():
         die(f"event log not found: {event_log_path}")
@@ -74,19 +71,17 @@ def main(argv: list[str]) -> int:
     staging_path = output_path.with_suffix(output_path.suffix + ".partial")
     archive_path = event_log_path.with_suffix(f".{from_version}.archive")
 
-    print(
-        f"→ migrating {event_log_path} ({from_version} → {to_version}) "
-        f"→ {output_path}"
-    )
+    print(f"→ migrating {event_log_path} ({from_version} → {to_version}) → {output_path}")
     count = 0
     # Write to a .partial staging file first; only if the full read-migrate
     # pass completes without error do we fsync + rename to the final path and
     # archive the original. Any crash mid-write leaves .partial (reapable)
     # and the original event log untouched — no data loss.
     try:
-        with event_log_path.open(encoding="utf-8") as inp, staging_path.open(
-            "w", encoding="utf-8"
-        ) as out:
+        with (
+            event_log_path.open(encoding="utf-8") as inp,
+            staging_path.open("w", encoding="utf-8") as out,
+        ):
             for raw in inp:
                 line = raw.strip()
                 if not line:
@@ -94,9 +89,7 @@ def main(argv: list[str]) -> int:
                 try:
                     event = json.loads(line)
                 except json.JSONDecodeError as exc:
-                    die(
-                        f"invalid JSONL in {event_log_path} at line {count + 1}: {exc}"
-                    )
+                    die(f"invalid JSONL in {event_log_path} at line {count + 1}: {exc}")
                 migrated = migrate(event)
                 out.write(json.dumps(migrated, sort_keys=True, separators=(",", ":")))
                 out.write("\n")

@@ -4,6 +4,7 @@ Long-lived no-op so the compose container stays up, passes the
 `test -f /tmp/ready` healthcheck, and exits cleanly on SIGTERM/SIGINT.
 Real clawhip-bridge lands in Story 2.8 (clawhip-bridge).
 """
+
 from __future__ import annotations
 
 import logging
