@@ -1,0 +1,12 @@
+# Pre-commit hook config — secret-hygiene scanner.
+# Operator wires via `uv run pre-commit install` once after clone.
+# CI runs the same scanner as a workflow step (.github/workflows/ci.yml).
+repos:
+  - repo: local
+    hooks:
+      - id: secret-hygiene-precommit
+        name: secret-hygiene secret-pattern scan
+        entry: uv run secret-hygiene-precommit
+        language: system
+        types: [text]
+        exclude: ^(\.venv/|upstream/|_bmad/|_bmad-output/|.*\.lock$|\.env\.example$|uv\.lock$)

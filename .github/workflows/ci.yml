@@ -61,5 +61,8 @@ jobs:
           uv run python scripts/check_event_registry.py --self-test
           uv run python scripts/check_single_writer.py --self-test
 
+      - name: Check secrets (full tree)
+        run: uv run secret-hygiene-precommit $(git ls-files)
+
       - name: pytest -m "not slow"
         run: uv run pytest -m "not slow"

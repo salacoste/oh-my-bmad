@@ -6,7 +6,12 @@ authors = [
     { name = "R2d2", email = "bad.vano23ru@gmail.com" },
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "structlog>=24.1",
+]
+
+[project.scripts]
+secret-hygiene-precommit = "secret_hygiene.precommit_hook:main"
 
 [build-system]
 requires = ["uv_build>=0.11.0,<1.0"]

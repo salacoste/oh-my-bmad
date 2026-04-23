@@ -17,6 +17,7 @@ This repo is the **Phase 1 implementation**. Planning artifacts (product brief, 
 #    (or: brew install uv just  on macOS to grab both)
 git clone <this-repo-url> oh-my-bmad && cd oh-my-bmad
 just bootstrap-verify                          # confirms workspace wires up
+uv run pre-commit install                      # wires secret-scanner into .git/hooks/pre-commit
 
 # 2. Configure (Story 1.4 will land .env.example):
 # cp .env.example .env && $EDITOR .env
