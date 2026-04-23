@@ -23,11 +23,38 @@ Usage (pre-commit wires this automatically via .pre-commit-config.yaml)::
 from __future__ import annotations
 
 import argparse
-import fnmatch
+import os
 import sys
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 from .scanner import scan_file
+
+# ---------------------------------------------------------------------------
+# Default ignore-file name (parallels .gitignore / .dockerignore convention)
+# ---------------------------------------------------------------------------
+
+_DEFAULT_IGNORE_FILENAME = ".secret-hygiene-ignore"
+
+
+# ---------------------------------------------------------------------------
+# Auto-discovery
+# ---------------------------------------------------------------------------
+
+
+def _find_default_allowlist(start: Path | None = None) -> Path | None:
+    """Walk upward from *start* (default cwd) to find ``.secret-hygiene-ignore``.
+
+    Returns the first matching :class:`~pathlib.Path`, or ``None`` if no file
+    is found before the filesystem root.
+    """
+    current = (start or Path.cwd()).resolve()
+    for candidate in [current, *current.parents]:
+        path = candidate / _DEFAULT_IGNORE_FILENAME
+        if path.is_file():
+            return path
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Allowlist loading
@@ -35,20 +62,61 @@ from .scanner import scan_file
 
 
 def _load_allowlist(allowlist_path: str) -> list[str]:
-    """Return glob patterns from *allowlist_path*, skipping comments + blanks."""
+    """Return glob patterns from *allowlist_path*, skipping comments + blanks.
+
+    Expands ``~`` and environment variables in *allowlist_path* before opening.
+    Raises :class:`SystemExit` with code 2 on :exc:`FileNotFoundError`.
+    """
+    expanded = os.path.expandvars(os.path.expanduser(allowlist_path))
+    try:
+        raw_lines = Path(expanded).read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        print(
+            f"error: secret-hygiene: allowlist file not found: {expanded}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     globs: list[str] = []
-    with open(allowlist_path, encoding="utf-8") as fh:
-        for raw_line in fh:
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
-                continue
-            globs.append(line)
+    for raw_line in raw_lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        globs.append(line)
     return globs
 
 
+# ---------------------------------------------------------------------------
+# Glob matching (supports ** prefix)
+# ---------------------------------------------------------------------------
+
+
+def _glob_match(file_str: str, pattern: str) -> bool:
+    """Return ``True`` if *file_str* matches *pattern*.
+
+    Handles plain ``fnmatch`` patterns plus the ``**/name`` convention
+    (matches the basename at any depth).
+    """
+    if fnmatchcase(file_str, pattern):
+        return True
+    # Handle **/foo or **/path/to/foo: match at any depth.
+    if pattern.startswith("**/"):
+        suffix = pattern[3:]
+        # Match the full tail path, or any single path segment.
+        if fnmatchcase(file_str, suffix):
+            return True
+        # Walk path segments: **/foo.py matches a/b/foo.py by checking suffix
+        # against progressively shorter tails.
+        parts = file_str.split("/")
+        for i in range(len(parts)):
+            tail = "/".join(parts[i:])
+            if fnmatchcase(tail, suffix):
+                return True
+    return False
+
+
 def _is_allowlisted(file_path: str, globs: list[str]) -> bool:
-    """Return True if *file_path* matches any glob in *globs*."""
-    return any(fnmatch.fnmatch(file_path, pattern) for pattern in globs)
+    """Return ``True`` if *file_path* matches any glob in *globs*."""
+    return any(_glob_match(file_path, pattern) for pattern in globs)
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +154,11 @@ def main(argv: list[str] | None = None) -> int:
         "--allowlist-file",
         metavar="PATH",
         default=None,
-        help="Path to a file with one glob pattern per line; matching files are skipped.",
+        help=(
+            "Path to a file with one glob pattern per line; matching files are skipped. "
+            "When omitted, the scanner auto-discovers a .secret-hygiene-ignore file by "
+            "walking upward from the current working directory."
+        ),
     )
     parser.add_argument(
         "--verbose",
@@ -97,10 +169,21 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
 
-    # Load allowlist globs (if provided).
+    # Load allowlist globs.
+    # If --allowlist-file was given explicitly, use that path (with expanduser/expandvars).
+    # Otherwise auto-discover .secret-hygiene-ignore from cwd upward.
     allowlist_globs: list[str] = []
     if args.allowlist_file is not None:
         allowlist_globs = _load_allowlist(args.allowlist_file)
+    else:
+        discovered = _find_default_allowlist()
+        if discovered is not None:
+            if args.verbose:
+                print(
+                    f"# auto-discovered {_DEFAULT_IGNORE_FILENAME} at {discovered}",
+                    file=sys.stderr,
+                )
+            allowlist_globs = _load_allowlist(str(discovered))
 
     found_any = False
     scanned = 0
@@ -122,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if args.verbose:
-        print(f"✓ secret-hygiene OK ({scanned} files scanned, 0 matches)")
+        print(f"OK: secret-hygiene ({scanned} files scanned, 0 matches)")
 
     return 0
 

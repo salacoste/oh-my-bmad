@@ -62,7 +62,7 @@ jobs:
           uv run python scripts/check_single_writer.py --self-test
 
       - name: Check secrets (full tree)
-        run: uv run secret-hygiene-precommit $(git ls-files)
+        run: git ls-files -z | xargs -0 uv run secret-hygiene-precommit
 
       - name: pytest -m "not slow"
         run: uv run pytest -m "not slow"

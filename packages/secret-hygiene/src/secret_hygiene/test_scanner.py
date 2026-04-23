@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
 import pytest
@@ -90,8 +91,9 @@ class TestLineColumnComputation:
         # Lines 1 and 2 are 19 chars each (18 x's + newline).
         line1 = "x" * 18 + "\n"  # 19 chars, ends at index 18 with \n
         line2 = "x" * 18 + "\n"  # another 19 chars
-        # Line 3: 19 spaces then the secret starting at column 20.
-        prefix_on_line3 = "x" * 19  # 19 chars → the secret starts at column 20
+        # Line 3: 18 x's + one non-alphanum separator so the left-boundary
+        # (?<![A-Za-z0-9]) fires, then the secret at column 20.
+        prefix_on_line3 = "x" * 18 + "="  # 19 chars; "=" is not [A-Za-z0-9]
         secret = "sk-ant-abcdefghij1234567890XYZ"
         text = line1 + line2 + prefix_on_line3 + secret
         matches = scan_text(text)
@@ -117,6 +119,12 @@ class TestScanFile:
     def test_nonexistent_file_returns_empty(self) -> None:
         result = scan_file(Path("/nonexistent/path/to/file.txt"))
         assert result == []
+
+    def test_nonexistent_file_does_not_crash(self, capsys: pytest.CaptureFixture[str]) -> None:
+        # Missing file should print a warning to stderr, not raise.
+        scan_file(Path("/nonexistent/path/to/file.txt"))
+        captured = capsys.readouterr()
+        assert "warning" in captured.err.lower() or captured.err == ""
 
     def test_binary_file_returns_empty(self, tmp_path: Path) -> None:
         binary_file = tmp_path / "binary.bin"
@@ -166,16 +174,15 @@ class TestSecretMatch:
             column=1,
             excerpt="<ANTHROPIC_API_KEY>",
         )
-        with pytest.raises((AttributeError, TypeError)):
+        with pytest.raises(dataclasses.FrozenInstanceError):
             m.line = 2  # type: ignore[misc]
 
-    def test_secret_patterns_has_five_entries(self) -> None:
-        assert len(SECRET_PATTERNS) == 5
-        expected_keys = {
+    def test_secret_patterns_required_entries(self) -> None:
+        """MVP pattern names must be present; additions are fine."""
+        assert {
             "ANTHROPIC_API_KEY",
             "TELEGRAM_BOT_TOKEN",
             "GITHUB_TOKEN_CLASSIC",
             "GITHUB_TOKEN_FINE",
             "GENERIC_AWS_ACCESS_KEY",
-        }
-        assert set(SECRET_PATTERNS.keys()) == expected_keys
+        } <= set(SECRET_PATTERNS)

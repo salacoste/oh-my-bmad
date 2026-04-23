@@ -83,6 +83,19 @@ class TestKeyNameRedaction:
         assert out["API_KEY"] == REDACTED_SENTINEL
         assert out["Password"] == REDACTED_SENTINEL
 
+    def test_key_name_redaction_replaces_nested_dict(self) -> None:
+        """Sensitive key with dict value is replaced wholesale by sentinel."""
+        result = _call({"api_key": {"nested": "anything"}})
+        assert result["api_key"] == REDACTED_SENTINEL
+
+    def test_suffix_key_user_api_key_redacted(self) -> None:
+        """Keys ending in _key/_token/_secret/_password are caught by suffix match."""
+        ed = {"user_api_key": "anything", "github_token": "xyz", "db_password": "pw"}
+        out = _call(ed)
+        assert out["user_api_key"] == REDACTED_SENTINEL
+        assert out["github_token"] == REDACTED_SENTINEL
+        assert out["db_password"] == REDACTED_SENTINEL
+
 
 # ---------------------------------------------------------------------------
 # Nested dict recursion
@@ -172,3 +185,87 @@ class TestStructlogShape:
         ed: dict[str, Any] = {"k": "v"}
         result = redact_secrets(None, "debug", ed)
         assert result is ed
+
+
+# ---------------------------------------------------------------------------
+# Fix D: cycle guard — circular reference must not cause RecursionError
+# ---------------------------------------------------------------------------
+
+
+class TestCycleGuard:
+    def test_circular_dict_does_not_crash(self) -> None:
+        d: dict[str, Any] = {"safe": "value"}
+        d["ref"] = d  # circular reference
+        # Must not raise RecursionError; result content is not specified beyond no-crash.
+        result = redact_secrets(None, "info", d)
+        assert result is d
+
+    def test_deeply_nested_does_not_crash(self) -> None:
+        # Build a 25-level deep nest (exceeds _MAX_DEPTH=20).
+        inner: Any = {"leaf": "value"}
+        for _ in range(25):
+            inner = {"child": inner}
+        ed: dict[str, Any] = {"deep": inner}
+        # Should not raise RecursionError.
+        redact_secrets(None, "info", ed)
+
+
+# ---------------------------------------------------------------------------
+# Fix E: non-string dict keys must not crash
+# ---------------------------------------------------------------------------
+
+
+class TestNonStringKeys:
+    def test_integer_key_does_not_crash(self) -> None:
+        ed: dict[Any, Any] = {42: "value", "normal": "clean"}
+        # Passing a non-dict MutableMapping-shaped value as event_dict is unusual,
+        # but non-string keys inside a nested dict value must be handled.
+        outer: dict[str, Any] = {"data": ed}
+        result = _call(outer)
+        # The nested dict with int key should survive without AttributeError.
+        assert isinstance(result["data"], dict)
+        assert result["data"][42] == "value"
+
+    def test_integer_key_with_secret_value_survives(self) -> None:
+        outer: dict[str, Any] = {"data": {42: "sk-ant-abcdef1234567890XYZA"}}
+        result = _call(outer)
+        # Value under int key should be redacted by value-pattern scan.
+        assert result["data"][42] == REDACTED_SENTINEL
+
+
+# ---------------------------------------------------------------------------
+# Fix F: bytes, set, frozenset handling
+# ---------------------------------------------------------------------------
+
+
+class TestBytesSetFrozenset:
+    def test_bytes_with_secret_redacted(self) -> None:
+        ed: dict[str, Any] = {"data": b"sk-ant-abcdefghij1234567890XYZextended"}
+        out = _call(ed)
+        assert out["data"] == REDACTED_SENTINEL
+
+    def test_bytes_without_secret_passes_through(self) -> None:
+        ed: dict[str, Any] = {"data": b"hello world"}
+        out = _call(ed)
+        assert out["data"] == b"hello world"
+
+    def test_set_with_secret_element_redacted(self) -> None:
+        ed: dict[str, Any] = {"tags": {"normal", "sk-ant-abcdefghij1234567890XYZextended"}}
+        out = _call(ed)
+        assert isinstance(out["tags"], set)
+        assert REDACTED_SENTINEL in out["tags"]
+        assert "normal" in out["tags"]
+
+    def test_frozenset_with_secret_element_redacted(self) -> None:
+        ed: dict[str, Any] = {
+            "tags": frozenset({"normal", "sk-ant-abcdefghij1234567890XYZextended"})
+        }
+        out = _call(ed)
+        assert isinstance(out["tags"], frozenset)
+        assert REDACTED_SENTINEL in out["tags"]
+        assert "normal" in out["tags"]
+
+    def test_frozenset_clean_passes_through(self) -> None:
+        ed: dict[str, Any] = {"tags": frozenset({"a", "b"})}
+        out = _call(ed)
+        assert out["tags"] == frozenset({"a", "b"})

@@ -16,8 +16,9 @@ This repo is the **Phase 1 implementation**. Planning artifacts (product brief, 
 #    Install just: brew install just  (macOS)  |  cargo install just  (anywhere)
 #    (or: brew install uv just  on macOS to grab both)
 git clone <this-repo-url> oh-my-bmad && cd oh-my-bmad
-just bootstrap-verify                          # confirms workspace wires up
+uv sync --dev                                  # installs workspace + dev tools (pre-commit, pytest, ruff, mypy)
 uv run pre-commit install                      # wires secret-scanner into .git/hooks/pre-commit
+just bootstrap-verify                          # confirms workspace wires up (runs --no-dev)
 
 # 2. Configure (Story 1.4 will land .env.example):
 # cp .env.example .env && $EDITOR .env

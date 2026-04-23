@@ -29,12 +29,14 @@ Two redaction strategies are applied in order:
    matching are scanned with :data:`~secret_hygiene.scanner.SECRET_PATTERNS`.
    Any hit replaces the *entire* value with :data:`REDACTED_SENTINEL`.
 
-Both strategies recurse into nested ``dict``, ``list``, and ``tuple``
-structures, preserving the original container types.
+Both strategies recurse into nested ``dict``, ``list``, ``tuple``, ``set``,
+``frozenset``, and ``bytes`` structures, preserving the original container
+types.  A depth guard prevents runaway recursion on circular references.
 """
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import MutableMapping
 from typing import Any
 
@@ -45,6 +47,9 @@ from .scanner import scan_text
 # ---------------------------------------------------------------------------
 
 REDACTED_SENTINEL: str = "***REDACTED***"
+
+# Maximum recursion depth before the cycle/depth guard fires.
+_MAX_DEPTH: int = 20
 
 # ---------------------------------------------------------------------------
 # Key-name redaction set
@@ -66,8 +71,36 @@ _KEY_REDACT_SET: frozenset[str] = frozenset(
         "github_token",
         "private_key",
         "access_key",
+        # Additional sensitive key names (Fix G):
+        "x-api-key",
+        "client_secret",
+        "refresh_token",
+        "session_token",
+        "cookie",
+        "set-cookie",
+        "passwd",
+        "pwd",
+        "credentials",
+        "secret_key",
     }
 )
+
+# Suffix-based key matching: any key whose casefolded form ends with one of
+# these suffixes is treated as sensitive (catches user_api_key, github_token, etc.).
+_KEY_REDACT_SUFFIXES: tuple[str, ...] = (
+    "_token",
+    "_key",
+    "_secret",
+    "_password",
+    "_credential",
+    "_credentials",
+)
+
+
+def _is_secret_key(key: str) -> bool:
+    """Return ``True`` if *key* (string) names a sensitive field."""
+    folded = key.casefold()
+    return folded in _KEY_REDACT_SET or any(folded.endswith(s) for s in _KEY_REDACT_SUFFIXES)
 
 
 # ---------------------------------------------------------------------------
@@ -75,32 +108,83 @@ _KEY_REDACT_SET: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------
 
 
-def _redact_value(value: Any) -> Any:
+def _redact_value(value: Any, _depth: int = 0) -> Any:
     """Return *value* with any secrets replaced by :data:`REDACTED_SENTINEL`.
 
-    Handles ``str``, ``dict``, ``list``, ``tuple`` recursively.  Other types
-    pass through unchanged.
+    Handles ``str``, ``bytes``, ``dict`` / ``MutableMapping``, ``list``,
+    ``tuple``, ``set``, ``frozenset`` recursively.  Other types pass through
+    unchanged.  A depth guard at :data:`_MAX_DEPTH` prevents infinite recursion
+    on circular references.
     """
+    if _depth > _MAX_DEPTH:
+        warnings.warn(
+            "secret-hygiene: redact_value depth limit reached; skipping deeper recursion",
+            stacklevel=2,
+        )
+        return REDACTED_SENTINEL
+
     if isinstance(value, str):
         if scan_text(value):
             return REDACTED_SENTINEL
         return value
+
+    if isinstance(value, bytes):
+        # Decode, scan the text, and return the sentinel if any pattern fires.
+        # If the bytes are not decodable (rare but possible), skip silently.
+        try:
+            decoded = value.decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            return value
+        if scan_text(decoded):
+            return REDACTED_SENTINEL
+        return value
+
     if isinstance(value, dict):
-        return _redact_dict(value)
+        return _redact_dict(value, _depth=_depth)
+
+    # Handle non-dict MutableMappings (e.g. ChainMap, UserDict).
+    if isinstance(value, MutableMapping):
+        result: dict[Any, Any] = {}
+        for k, v in value.items():
+            if isinstance(k, str) and _is_secret_key(k):
+                result[k] = REDACTED_SENTINEL
+            else:
+                result[k] = _redact_value(v, _depth=_depth + 1)
+        return result
+
     if isinstance(value, list):
-        return [_redact_value(item) for item in value]
+        return [_redact_value(item, _depth=_depth + 1) for item in value]
+
     if isinstance(value, tuple):
-        return tuple(_redact_value(item) for item in value)
+        return tuple(_redact_value(item, _depth=_depth + 1) for item in value)
+
+    if isinstance(value, frozenset):
+        return frozenset(
+            REDACTED_SENTINEL if isinstance(item, str) and scan_text(item) else item
+            for item in value
+        )
+
+    if isinstance(value, set):
+        return {
+            REDACTED_SENTINEL if isinstance(item, str) and scan_text(item) else item
+            for item in value
+        }
+
     return value
 
 
-def _redact_dict(d: dict[str, Any]) -> dict[str, Any]:
-    """Redact all sensitive keys and values in *d* (in-place + returned)."""
+def _redact_dict(d: dict[Any, Any], _depth: int = 0) -> dict[Any, Any]:
+    """Redact all sensitive keys and values in *d* (in-place + returned).
+
+    Non-string keys are never tested for name-based redaction (they have no
+    ``.casefold()``), but their associated values are still scanned recursively.
+    """
     for key in list(d.keys()):
-        if key.casefold() in _KEY_REDACT_SET:
+        value = d[key]
+        if isinstance(key, str) and _is_secret_key(key):
             d[key] = REDACTED_SENTINEL
         else:
-            d[key] = _redact_value(d[key])
+            d[key] = _redact_value(value, _depth=_depth + 1)
     return d
 
 

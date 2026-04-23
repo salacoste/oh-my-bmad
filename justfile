@@ -92,13 +92,13 @@ lint:
     uv run python scripts/check_imports.py
     uv run python scripts/check_event_registry.py
     uv run python scripts/check_single_writer.py
-    uv run secret-hygiene-precommit $(git ls-files)
+    git ls-files -z | xargs -0 uv run secret-hygiene-precommit
 
 # Run the secret-hygiene scanner across every tracked file. Pre-commit hook
 # runs it per-commit; this recipe is the full-tree sweep operators run
 # periodically + that `just lint` delegates to.
 scan-secrets:
-    uv run secret-hygiene-precommit $(git ls-files)
+    git ls-files -z | xargs -0 uv run secret-hygiene-precommit
 
 # Architectural-discipline gates: import-graph, event-registry, single-writer.
 # Replicates the CI `Check*` steps locally; run before opening a PR.

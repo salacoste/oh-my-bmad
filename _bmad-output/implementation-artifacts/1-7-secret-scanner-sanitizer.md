@@ -147,7 +147,7 @@ so that **plaintext secrets cannot leak through source control (pre-commit arm) 
   - [x] `just lint` → ruff + format + mypy + 3 gates + scan-secrets all green.
   - [x] `just migrator-test-additive` → 3/3.
   - [x] `just check-gates-self-test` → all 3 self-tests green.
-  - [x] Try committing a file with `TELEGRAM_BOT_TOKEN=123456789:AAH0xYmock_but_realistic_length_token_xxxxxxxx` to a local branch — pre-commit blocks it with the correct error message. Revert before committing anything real.
+  - [x] Try committing a file with `TELEGRAM_BOT_TOKEN=<12-digit-bot-id>:AA<30+-char-blob>` to a local branch — pre-commit blocks it with the correct error message. Revert before committing anything real.
 
 - [x] **Task 13: Atomic commit** (AC: #14)
   - [x] Single commit per AC-14 title.

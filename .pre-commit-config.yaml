@@ -9,4 +9,4 @@ repos:
         entry: uv run secret-hygiene-precommit
         language: system
         types: [text]
-        exclude: ^(\.venv/|upstream/|_bmad/|_bmad-output/|.*\.lock$|\.env\.example$|uv\.lock$)
+        exclude: ^(\.venv/|upstream/|_bmad/|_bmad-output/|.*\.lock$|\.env\.example$|uv\.lock$|packages/secret-hygiene/src/secret_hygiene/test_.*\.py$)

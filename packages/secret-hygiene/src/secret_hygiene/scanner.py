@@ -28,19 +28,35 @@ Intentionally NOT in the MVP set (see spec §Dev Notes):
 
 from __future__ import annotations
 
+import bisect
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Pattern table — single source of truth shared with sanitizer.py
+#
+# Regex notes (review fixes applied):
+#   ANTHROPIC_API_KEY    — left-boundary (?<![A-Za-z0-9]) prevents prefix
+#                          matches; upper-bounded at 200 chars to avoid greedy
+#                          absorption of adjacent tokens.
+#   TELEGRAM_BOT_TOKEN   — replaced trailing \b with (?=[^A-Za-z0-9_\-]|$)
+#                          lookahead; the token's allowed charset includes `-`
+#                          (non-word), so \b could miss tokens ending in `-`.
+#   GITHUB_TOKEN_CLASSIC — left-boundary added; upper-bounded at 100 chars.
+#   GITHUB_TOKEN_FINE    — left-boundary added; upper-bounded at 200 chars.
+#   GENERIC_AWS_ACCESS_KEY — unchanged (AKIA prefix + exact 16 uppercase chars
+#                            already well-bounded by \b).
 # ---------------------------------------------------------------------------
 
 SECRET_PATTERNS: dict[str, re.Pattern[str]] = {
-    "ANTHROPIC_API_KEY": re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}"),
-    "TELEGRAM_BOT_TOKEN": re.compile(r"\b\d{6,12}:AA[A-Za-z0-9_\-]{30,}\b"),
-    "GITHUB_TOKEN_CLASSIC": re.compile(r"ghp_[A-Za-z0-9]{30,}"),
-    "GITHUB_TOKEN_FINE": re.compile(r"github_pat_[A-Za-z0-9_]{30,}"),
+    "ANTHROPIC_API_KEY": re.compile(r"(?<![A-Za-z0-9])sk-ant-[A-Za-z0-9_\-]{20,200}"),
+    "TELEGRAM_BOT_TOKEN": re.compile(
+        r"(?<![A-Za-z0-9])\d{6,12}:AA[A-Za-z0-9_\-]{30,}(?=[^A-Za-z0-9_\-]|$)"
+    ),
+    "GITHUB_TOKEN_CLASSIC": re.compile(r"(?<![A-Za-z0-9])ghp_[A-Za-z0-9]{30,100}"),
+    "GITHUB_TOKEN_FINE": re.compile(r"(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]{30,200}"),
     "GENERIC_AWS_ACCESS_KEY": re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
 }
 
@@ -81,6 +97,36 @@ class SecretMatch:
 
 
 # ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_line_starts(text: str) -> list[int]:
+    """Return a list of character offsets where each line starts (O(n)).
+
+    The list is 0-indexed: ``line_starts[0]`` is always ``0`` (start of line 1),
+    ``line_starts[1]`` is the character offset of line 2, etc.
+    """
+    starts: list[int] = [0]
+    for i, ch in enumerate(text):
+        if ch == "\n":
+            starts.append(i + 1)
+    return starts
+
+
+def _line_col(offset: int, line_starts: list[int]) -> tuple[int, int]:
+    """Convert a character *offset* to a 1-based ``(line, column)`` pair.
+
+    Uses a pre-computed *line_starts* list produced by
+    :func:`_build_line_starts` for O(log n) per call.
+    """
+    line_idx = bisect.bisect_right(line_starts, offset) - 1
+    line = line_idx + 1
+    col = offset - line_starts[line_idx] + 1
+    return line, col
+
+
+# ---------------------------------------------------------------------------
 # Core scanning functions
 # ---------------------------------------------------------------------------
 
@@ -88,44 +134,61 @@ class SecretMatch:
 def scan_text(text: str) -> list[SecretMatch]:
     """Scan *text* for all registered secret patterns.
 
-    Returns one :class:`SecretMatch` per hit (across all patterns).
-    Results are ordered by match start position within the text.
+    Returns one :class:`SecretMatch` per hit (across all patterns), deduplicated
+    by ``(start, end)`` span so overlapping patterns don't double-report the same
+    character range.  Results are ordered by match start position.
     """
-    matches: list[SecretMatch] = []
+    # Build the line-starts index once; O(n) in text length.
+    line_starts = _build_line_starts(text)
+
+    raw_matches: list[SecretMatch] = []
 
     for pattern_name, pattern in SECRET_PATTERNS.items():
         for m in pattern.finditer(text):
-            # Compute 1-based line + column from the flat character offset.
-            prefix = text[: m.start()]
-            line = prefix.count("\n") + 1
-            last_newline = prefix.rfind("\n")
-            column = m.start() - last_newline  # rfind returns -1 if no \n → col = start+1
-
-            matches.append(
+            line, col = _line_col(m.start(), line_starts)
+            raw_matches.append(
                 SecretMatch(
                     pattern_name=pattern_name,
                     start=m.start(),
                     end=m.end(),
                     line=line,
-                    column=column,
+                    column=col,
                     excerpt=f"<{pattern_name}>",
                 )
             )
 
-    matches.sort(key=lambda sm: sm.start)
-    return matches
+    # Deduplicate by (start, end); keep first-encountered pattern for each span.
+    raw_matches.sort(key=lambda sm: (sm.start, sm.end))
+    seen: set[tuple[int, int]] = set()
+    unique: list[SecretMatch] = []
+    for sm in raw_matches:
+        key = (sm.start, sm.end)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(sm)
+
+    return unique
 
 
 def scan_file(path: Path) -> list[SecretMatch]:
-    """Read *path* and return all secret matches, or ``[]`` on read failure.
+    """Read *path* and return all secret matches.
 
-    Silently returns an empty list for binary files (``UnicodeDecodeError``) and
-    files that cannot be read (``OSError`` / ``PermissionError`` / etc.).  This
-    keeps the pre-commit hook non-fatal on binary blobs that slip past
-    pre-commit's ``types: [text]`` filter.
+    * Binary files (``UnicodeDecodeError``) → return ``[]`` silently.
+    * Missing file (``FileNotFoundError``) → print warning to stderr, return ``[]``.
+    * Other I/O errors (``OSError``) → print warning to stderr, return ``[]``.
+
+    Printing to stderr keeps the pre-commit hook non-fatal on transient issues
+    while ensuring operators see the problem.
     """
     try:
         text = path.read_text(encoding="utf-8")
-    except (UnicodeDecodeError, OSError):
+    except UnicodeDecodeError:
+        return []
+    except FileNotFoundError:
+        print(f"warning: secret-hygiene: file not found: {path}", file=sys.stderr)
+        return []
+    except OSError as exc:
+        print(f"warning: secret-hygiene: cannot read {path}: {exc}", file=sys.stderr)
         return []
     return scan_text(text)
