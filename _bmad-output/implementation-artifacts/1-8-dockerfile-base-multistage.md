@@ -1,6 +1,6 @@
 # Story 1.8: Dockerfile.base + multi-stage builds per service
 
-Status: review
+Status: done
 
 ## Story
 
@@ -408,3 +408,19 @@ _Placeholder._
 ### Change Log
 
 - **2026-04-24:** Story 1.8 implemented. 4 new + 8 modified + 6 deleted files; atomic scaffold commit `a30df60`. Image sizes: 6 Python-only services + base + console-cli = 151 MB each (well under 200 MB budget); worker-wrapper = 283 MB (exceeds 200 MB — documented deviation, rationale in commit message). All regressions stay green (`bootstrap-verify` 13/13, `test` 75+6, `lint` all 6 sub-commands, `migrator-test-additive` 3/3, `check-gates-self-test` 3/3, compose up → 6/6 healthy in 23 s). Status: `ready-for-dev` → `in-progress` → `review`.
+- **2026-04-24 (review):** 3-layer adversarial review of `a30df60` surfaced 3 CRITICAL + 7 HIGH + multiple MEDIUM/LOW. Applied in commit `3886c12` (4 files, 65+/21-):
+  - **CRITICAL — worker-wrapper npm/npx/corepack non-functional.** BuildKit `COPY --from=` dereferenced the npm/npx/corepack symlinks in node:lts-bookworm-slim, so the copied files were JS stubs that `require('../lib/cli.js')` — a path that doesn't exist post-copy. `npm --version` → `Cannot find module '../lib/cli.js'`. Fix: copy only real files (`/usr/local/bin/node` + `/usr/local/lib/node_modules`) and recreate the three symlinks via `RUN ln -sf`. Verified: npm 11.12.1, npx 11.12.1, corepack 0.34.6.
+  - **CRITICAL — AC-1 / Arch §244 path violation.** Venv was at `/app/.venv`, spec + arch both mandate `/opt/venv`. Fix: `UV_PROJECT_ENVIRONMENT=/opt/venv` in builder; `COPY --from=venv-builder /opt/venv /opt/venv`; `ENV PATH="/opt/venv/bin:$PATH"`.
+  - **CRITICAL — service user couldn't write to $HOME `/app`.** `useradd --home /app` but `/app` was root:root. Real services would EACCES (hello-world survived because it only writes `/tmp/ready`). Fix: Dockerfile.base creates `/app` with `chgrp omb` + `chmod 2775` (SETGID → children inherit group). All 7 service users share `omb` group → write works without per-service chown.
+  - **HIGH — every service shipped every workspace member's source.** `uv sync` was editable-installing; each image carried the full `src/` tree (full info-disclosure surface). Fix: `--no-editable` flag makes uv build wheels. Side effect: Python-only images dropped from ~194 MB → **155 MB**.
+  - **HIGH — `just image-sizes` grep didn't match compose images.** Anchor `^oh-my-bmad-` missed `ghcr.io/r2d2/oh-my-bmad-*:dev`. Fix: `(^oh-my-bmad-|/oh-my-bmad-)` pattern + `@` prefix + corrected just brace-escaping (matches `backup` recipe pattern).
+  - **HIGH — TLS support hardening.** Explicit `ca-certificates` install (no-op on current slim image but future-safe). `node -e "require('tls')"` → tls-ok verified.
+  - **HIGH — `pip`/`setuptools`/`wheel` reachable on runtime PATH.** Fix: `pip uninstall -y pip setuptools wheel` after venv copy. `which pip` now empty.
+  - **HIGH — `.dockerignore` didn't exclude co-located tests** (`packages/*/src/*/test_*.py` with realistic-shape secret fixtures). Fix: `**/tests/` + `**/test_*.py` + `**/__pycache__/` globs. `find / -name 'test_scanner.py'` in images now returns empty.
+  - **HIGH — `just build` didn't build console-cli.** Completion Notes claimed "7 images built" but recipe only invoked `docker compose build` (6 compose services). Fix: `build` now chains compose-build + explicit `docker build -f services/console-cli/Dockerfile`.
+  - **MEDIUM — `build-base` exports `DOCKER_BUILDKIT=1`** (belt-and-suspenders for Docker < 23).
+  - **MEDIUM — Dockerfile.base header** now documents the Story-1.9 hand-off: per-service `FROM oh-my-bmad-base:local` + GHCR buildx has no local tag; Story 1.9 will handle (build-in-workflow OR push base to GHCR).
+  - **MEDIUM — Builder `WORKDIR /build`** (was `/app`) disambiguates build scratchpad from runtime /app.
+  - **Skipped (documented):** worker-wrapper 200 MB budget still over (286 MB after ca-cert add; floor 272 MB with Node v24; architecturally constrained); FROM chain not digest-pinned (Phase 2+ hardening); `uv==0.11.*` pin loose (acceptable — semver within minors).
+  - Live verification — all 20 review-suite probes green: `just build-base` + base image present; `/app drwxrwsr-x omb`; `which pip` empty; `just build` 7 images; worker-wrapper npm/npx/corepack all functional; user-10001 can write /app; service modules import via installed wheels; no test files in runtime; `just image-sizes` lists 8 images; compose up 6/6 healthy; all regressions green.
+- **2026-04-24 (finalize):** Completion Notes expanded with review-fix summary. Status `review` → `done`.
