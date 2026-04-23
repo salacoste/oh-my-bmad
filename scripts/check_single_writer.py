@@ -49,13 +49,16 @@ _SESSION_WRITE_ATTRS = {"add", "add_all", "merge", "delete"}
 # SQLAlchemy DML constructors (used inside session.execute(...))
 _DML_CONSTRUCTORS = {"insert", "update", "delete"}
 
-# Skip these dirs/names when walking for single-writer checks
+# Skip these dirs/names when walking for single-writer checks.
+# DEFAULT_SKIP_DIRS already covers _bmad, _bmad-output, .venv, upstream, cache
+# dirs, and AI-tool dotdirs. Only add entries specific to this check:
+#   - tests: skip the test tree
+#   - fixtures: skip the self-test fixture tree
+#   - migrator: standalone operator script, not platform code (scripts/migrator/)
 _SW_SKIP_DIRS = DEFAULT_SKIP_DIRS | {
     "tests",
-    "migrator",
     "fixtures",
-    "_bmad",
-    "_bmad-output",
+    "migrator",
 }
 
 # Absolute paths excluded from scanning (registry-state is the sole writer)
@@ -78,26 +81,54 @@ _SCAN_ROOTS = [
 
 
 def _receiver_name(node: ast.expr) -> str | None:
-    """Return the base name of a (possibly chained) attribute expression.
+    """Return the base name of a receiver expression.
 
-    E.g.:
-      session          → "session"
-      self.session     → "session"
-      obj.db.session   → "session"
+    Handles Name, Attribute (returning last .attr), and Call (returning the
+    callable's name, so `get_session().add()` is recognized). Unknown forms
+    return None.
     """
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, ast.Attribute):
         return node.attr
+    if isinstance(node, ast.Call):
+        # e.g. get_session().add(x) — inspect the callable
+        inner = node.func
+        if isinstance(inner, ast.Name):
+            return inner.id
+        if isinstance(inner, ast.Attribute):
+            return inner.attr
     return None
 
 
+# Exact receiver names recognized as SQLAlchemy session/connection objects.
+# Extending this set requires a # noqa: SW001 justification for each new name.
+_SESSION_NAMES = frozenset({"session", "conn", "connection", "db", "sess"})
+
+
 def _is_session_like(name: str | None) -> bool:
-    """True if the receiver name looks like a session or connection."""
-    if name is None:
-        return False
-    lower = name.lower()
-    return "session" in lower or lower in {"conn", "connection", "db"}
+    """True if the receiver name is an exact SQLAlchemy session/conn identifier."""
+    return name is not None and name.lower() in _SESSION_NAMES
+
+
+def _walk_to_root_dml(node: ast.expr) -> str | None:
+    """Walk the leftmost-call chain on *node* and return the root DML constructor name.
+
+    Handles bare forms (`insert(Model)`) and chains (`insert(Model).values(x=1).returning(...)`)
+    by unwrapping Attribute `.value` accesses until the root Call is found.
+    Returns the DML constructor name if the root is `insert`/`update`/`delete`, else None.
+    """
+    current: ast.expr | None = node
+    while isinstance(current, ast.Call):
+        func = current.func
+        if isinstance(func, ast.Name) and func.id in _DML_CONSTRUCTORS:
+            return func.id
+        if isinstance(func, ast.Attribute):
+            # Method call on some receiver — recurse into the receiver
+            current = func.value
+            continue
+        return None
+    return None
 
 
 def _is_write_call(node: ast.Call) -> tuple[bool, str]:
@@ -110,15 +141,17 @@ def _is_write_call(node: ast.Call) -> tuple[bool, str]:
         if _is_session_like(receiver):
             return True, f"{receiver}.{func.attr}()"
 
-    # Pattern 2: session.execute(insert|update|delete(...))
+    # Pattern 2: session.execute(insert|update|delete(...)) — including chains
+    # like insert(Model).values(x=1).returning(Model.id), where the outermost
+    # Call's func is an Attribute. Walk the leftmost-call chain back to find
+    # the root DML constructor.
     if isinstance(func, ast.Attribute) and func.attr == "execute" and node.args:
         receiver = _receiver_name(func.value)
         if _is_session_like(receiver):
             first_arg = node.args[0]
-            if isinstance(first_arg, ast.Call):
-                inner_func = first_arg.func
-                if isinstance(inner_func, ast.Name) and inner_func.id in _DML_CONSTRUCTORS:
-                    return True, f"{receiver}.execute({inner_func.id}(...))"
+            root_dml = _walk_to_root_dml(first_arg)
+            if root_dml is not None:
+                return True, f"{receiver}.execute({root_dml}(...))"
 
     return False, ""
 

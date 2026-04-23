@@ -190,12 +190,16 @@ def _check_rule(
 
 
 def _iter_imports(tree: ast.Module) -> Iterator[tuple[int, str]]:
-    """Yield (lineno, top_level_module) for every import statement in *tree*."""
+    """Yield (lineno, top_level_module) for every ABSOLUTE import in *tree*.
+
+    Relative imports (`from .foo import bar`, level > 0) stay within the same
+    service/package by definition and are never cross-boundary — skipped.
+    """
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 yield node.lineno, _top_level(alias.name)
-        elif isinstance(node, ast.ImportFrom) and node.module:
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
             yield node.lineno, _top_level(node.module)
 
 

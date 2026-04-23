@@ -83,7 +83,13 @@ def walk_python_files(
                 yield root
             continue
         for path in root.rglob("*.py"):
-            # Skip any path component that is in skip_dirs
-            if any(part in skip_dirs for part in path.parts):
+            # Check ONLY components inside the root, not absolute path components
+            # above it. Prevents catastrophic false-clean when the repo is checked
+            # out under a dotted-ancestor path like ~/.claude/workspaces/…
+            try:
+                rel = path.relative_to(root)
+            except ValueError:
+                continue
+            if any(part in skip_dirs for part in rel.parts):
                 continue
             yield path

@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
-"""check_event_registry.py — enforce event-type registration (NFR-O1 / FR18b).
+"""check_event_registry.py — AST-enforce unregistered-event emission (NFR-O1 / FR18b partial).
 
-CI gate: walks all .py files under services/ and mcp-servers/, AST-finds
-emission call sites, and verifies every string-literal `type=` argument
-is present in packages/events/src/events/schema_registry.REGISTRY.
+Scope per Architecture §line 451: walks every .py under `services/**` and
+`mcp-servers/**`, matches `EventEnvelope(...)` / `emit_event(...)` / known
+.emit() receivers. Packages/ is NOT scanned — `packages/events/` is the
+registry definition, not an emission site.
+
+FR18b has two enforcement arms: (a) stdout-parsing ban (custom ruff rule,
+deferred to Story 1.7), (b) typed-events-only state transitions (this script).
 
 Matched call patterns:
   - EventEnvelope(..., type="foo.bar", ...)
   - emit_event(..., type="foo.bar", ...)
-  - <anything>.emit(..., type="foo.bar", ...)   (catches clawhip.emit(...))
+  - <known_receiver>.emit(..., type="foo.bar", ...)  (e.g. clawhip.emit(...))
+
+To add a new emission surface (e.g. `mcp_client.emit(type=...)`), register
+its receiver name in `_EMIT_RECEIVERS` below.
 
 Rules:
   - String literal not in REGISTRY  → error  (exit 1)
@@ -50,7 +57,11 @@ EXTRA_SKIP = {"tests", "fixtures"}
 
 # Callable names / attribute names that trigger inspection
 _EMIT_NAMES = {"EventEnvelope", "emit_event"}  # Name(id=...)
-_EMIT_ATTRS = {"emit"}  # Attribute(attr=...)
+# Attribute-calls matched as "platform event emission".
+# Constrain the receiver name so stdlib `logging.Handler.emit`, PyQt
+# `signal.emit`, `socket.emit`, etc. don't false-positive on `type=` kwarg.
+_EMIT_RECEIVERS = {"clawhip", "events", "event_bus", "bus"}
+_EMIT_ATTRS = {"emit"}
 
 
 # ---------------------------------------------------------------------------
@@ -77,11 +88,17 @@ def _load_registry() -> frozenset[str]:
 
 
 def _is_emit_call(node: ast.Call) -> bool:
-    """Return True if *node* is one of the tracked emission call patterns."""
+    """True if *node* is an EventEnvelope(...)/emit_event(...)/<known>.emit(...) call."""
     func = node.func
-    return (isinstance(func, ast.Name) and func.id in _EMIT_NAMES) or (
-        isinstance(func, ast.Attribute) and func.attr in _EMIT_ATTRS
-    )
+    if isinstance(func, ast.Name) and func.id in _EMIT_NAMES:
+        return True
+    if isinstance(func, ast.Attribute) and func.attr in _EMIT_ATTRS:
+        receiver = func.value
+        if isinstance(receiver, ast.Name) and receiver.id in _EMIT_RECEIVERS:
+            return True
+        if isinstance(receiver, ast.Attribute) and receiver.attr in _EMIT_RECEIVERS:
+            return True
+    return False
 
 
 def _scan(
