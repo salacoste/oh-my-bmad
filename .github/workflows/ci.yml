@@ -5,9 +5,18 @@ name: ci
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
     branches: [main]
+
+# Least-privilege: the PR gate only reads; no token-backed mutations.
+permissions:
+  contents: read
+
+# One run per ref. A push to the same branch cancels the in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   pr-gate:
@@ -18,13 +27,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install uv
+      - name: Install uv + Python 3.12
+        # Third-party action — consider SHA-pinning when the project adopts dependabot.
         uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
-
-      - name: Install Python 3.12
-        run: uv python install 3.12
+          python-version: "3.12"
 
       - name: Sync workspace (incl. dev deps)
         run: uv sync --frozen --dev

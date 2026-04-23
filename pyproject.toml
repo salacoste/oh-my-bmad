@@ -58,8 +58,8 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "packages", "services", "mcp-servers"]
-asyncio_mode = "auto"
-addopts = "-ra --strict-markers"
+asyncio_mode = "strict"
+addopts = "-ra --strict-markers --import-mode=importlib"
 markers = [
     "slow: exclude from PR-gate CI; runs on merge / nightly",
     "separability: S-1/S-2/S-3 adapter-swap tests",
@@ -69,4 +69,24 @@ markers = [
     "contract: upstream-fork behavioral contracts",
     "migrator: event-log schema migrator tests",
 ]
-norecursedirs = ["upstream", "_bmad", "_bmad-output", ".venv", ".uv", "node_modules"]
+norecursedirs = [
+    ".git",
+    ".venv",
+    ".uv",
+    ".tmp",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "upstream",
+    "_bmad",
+    "_bmad-output",
+    "node_modules",
+    ".agent",
+    ".agents",
+    ".claude",
+    ".cursor",
+    ".gemini",
+    ".opencode",
+    ".pi",
+    ".omc",
+]

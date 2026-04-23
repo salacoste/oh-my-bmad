@@ -7,7 +7,7 @@ Real fixture bodies arrive per-story:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -29,4 +29,4 @@ def seeded_uuid7() -> Any:
 
 # Re-exported so a test may `from tests.conftest import FROZEN_EPOCH` once the
 # real fixtures land. Keep deterministic across the Phase-1 test run.
-FROZEN_EPOCH = datetime(2026, 1, 1)
+FROZEN_EPOCH = datetime(2026, 1, 1, tzinfo=UTC)

@@ -4,10 +4,14 @@ line-length = 100
 extend-exclude = [
     "upstream",
     ".venv",
+    ".tmp",
     "_bmad",
     "_bmad-output",
-    # AI-tool skill directories present at the repo root (not project code)
+    "node_modules",
+    # AI-tool skill directories present at the repo root (not project code).
+    # Add new ones as operators install new harnesses.
     ".agent",
+    ".agent-os",
     ".agents",
     ".claude",
     ".cursor",
@@ -27,12 +31,17 @@ select = [
     "SIM",
     "N",
 ]
-# E501: scaffold module docstrings are intentionally long reference text.
-ignore = ["E501"]
-
 [lint.per-file-ignores]
-"tests/**" = ["B", "N"]
-"scripts/**" = ["N"]
+# E501: scaffold module docstrings are deliberately long reference prose.
+# D: pydocstyle ruleset isn't currently selected, but tests don't need docstrings
+# so we pre-stage the ignore for Story 1.6/1.7 when `D` may join the select list.
+"tests/**" = ["B", "N", "D", "E501"]
+"scripts/**" = ["N", "E501"]
+"scripts/migrator/tests/**" = ["B", "N", "D", "E501"]
+"services/*/src/*/__main__.py" = ["E501"]
+"packages/*/src/*/__init__.py" = ["E501"]
+"services/*/src/*/__init__.py" = ["E501"]
+"mcp-servers/*/src/*/__init__.py" = ["E501"]
 
 [format]
 # Ruff's default formatter settings are fine — single source of truth.
