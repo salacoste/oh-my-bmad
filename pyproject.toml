@@ -89,4 +89,6 @@ norecursedirs = [
     ".opencode",
     ".pi",
     ".omc",
+    # Fixture payloads for CI-gate check scripts — not pytest tests.
+    "scripts/checks/fixtures",
 ]

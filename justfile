@@ -78,14 +78,35 @@ test-slow:
 test-contract:
     uv run pytest tests/contract
 
-# Strict lint + format + type-check. ruff rules cover style (E/F/I/UP/B/SIM/N);
-# ruff format --check enforces canonical formatting; mypy --strict gates the
-# platform-owned packages + the registry services (upstream adapters relaxed
-# per mypy.ini).
+# Strict lint + format + type-check + architectural-discipline gates.
+# ruff rules cover style (E/F/I/UP/B/SIM/N); ruff format --check enforces
+# canonical formatting; mypy --strict gates the platform-owned packages +
+# the registry services (upstream adapters relaxed per mypy.ini).
+# The three check-gate scripts enforce import-graph, event-registry, and
+# single-writer constraints — same checks CI runs; splitting them out would
+# create a footgun where `just lint` is green locally but CI fails.
 lint:
     uv run ruff check .
     uv run ruff format --check .
     uv run mypy --strict packages/ services/registry-api services/registry-state
+    uv run python scripts/check_imports.py
+    uv run python scripts/check_event_registry.py
+    uv run python scripts/check_single_writer.py
+
+# Architectural-discipline gates: import-graph, event-registry, single-writer.
+# Replicates the CI `Check*` steps locally; run before opening a PR.
+check-gates:
+    uv run python scripts/check_imports.py
+    uv run python scripts/check_event_registry.py
+    uv run python scripts/check_single_writer.py
+
+# Run the three architectural-gate self-tests — exercises the bundled fixture
+# trees under scripts/checks/fixtures/ to verify each check script's own
+# detection logic still works.
+check-gates-self-test:
+    uv run python scripts/check_imports.py --self-test
+    uv run python scripts/check_event_registry.py --self-test
+    uv run python scripts/check_single_writer.py --self-test
 
 # Scenario harness (journey-level smoke tests) lands across Stories 2.11 /
 # 2.12 / 5.18. Story 1.5 only wires the harness; real scenarios land later.

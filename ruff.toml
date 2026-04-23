@@ -8,6 +8,9 @@ extend-exclude = [
     "_bmad",
     "_bmad-output",
     "node_modules",
+    # Fixture payloads for CI-gate check scripts — deliberately contain
+    # intentional violations that would otherwise produce ruff noise.
+    "scripts/checks/fixtures",
     # AI-tool skill directories present at the repo root (not project code).
     # Add new ones as operators install new harnesses.
     ".agent",

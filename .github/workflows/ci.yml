@@ -46,5 +46,20 @@ jobs:
       - name: mypy --strict (packages + registry services)
         run: uv run mypy --strict packages/ services/registry-api services/registry-state
 
+      - name: Check imports
+        run: uv run python scripts/check_imports.py
+
+      - name: Check event registry
+        run: uv run python scripts/check_event_registry.py
+
+      - name: Check single writer
+        run: uv run python scripts/check_single_writer.py
+
+      - name: Check-scripts self-tests
+        run: |
+          uv run python scripts/check_imports.py --self-test
+          uv run python scripts/check_event_registry.py --self-test
+          uv run python scripts/check_single_writer.py --self-test
+
       - name: pytest -m "not slow"
         run: uv run pytest -m "not slow"
