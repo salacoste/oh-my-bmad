@@ -1,6 +1,6 @@
 # Story 1.5: Test tree + CI skeleton
 
-Status: review
+Status: done
 
 ## Story
 
@@ -511,3 +511,25 @@ Zero mypy fixes. Strict mode against `packages/` + `services/registry-api` + `se
 ### Change Log
 
 - **2026-04-23:** Story 1.5 implemented. 22 new + 13 modified files; atomic scaffold commit `6d03c0b`. Verification: `just test` (6 skipped), `just lint` (all 3 sub-commands green), `just bootstrap-verify` (13/13 imports), `just migrator-test-additive` (3/3 events); `ci.yml` YAML-valid. Status: `ready-for-dev` → `in-progress` → `review`.
+- **2026-04-23 (review):** 3-layer adversarial review on `6d03c0b` surfaced 2 CRITICAL + 6 HIGH + 8 MEDIUM + 5 LOW findings. Applied across 14 files in commit `0ea617e`:
+  - **CRITICAL — `bootstrap-verify` leaked dev deps.** PEP 735 auto-activates `[dependency-groups.dev]` unless `--no-dev` is explicit. `uv sync --frozen` AND subsequent `uv run` calls both needed the flag. Fix: `--no-dev` added to `uv sync` and to every `uv run python -c` line in the recipe. Empirical: `uv pip list | grep -cE "^(pytest|ruff|mypy|hypothesis)"` = **0** on fresh venv after bootstrap-verify (was 4 before).
+  - **CRITICAL — `pytest .` collected from AI-tool dotdirs** (12 errors). Expanded `norecursedirs` to include all 8 dotdirs (`.agent`, `.agents`, `.claude`, `.cursor`, `.gemini`, `.opencode`, `.pi`, `.omc`) + `.git`, `.tmp`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`. Before: `50 tests collected, 12 errors`. After: `6 tests collected`, zero errors.
+  - **HIGH — `tests/subtree/__init__.py` violated spec's "NOT importable packages" rule AND created invalid module name `tests.crash-injection`.** Deleted all 7 `__init__.py` files; switched to `--import-mode=importlib` in `addopts`. Basename collision across 6 trees resolves cleanly without package mode.
+  - **HIGH — `ci.yml` missing `permissions:` block** → inherited repo-default `GITHUB_TOKEN`. Added `permissions: contents: read` (least-privilege for a read-only PR gate).
+  - **HIGH — `ci.yml` missing `concurrency:` group.** Added `concurrency: {group: ci-${{ github.ref }}, cancel-in-progress: true}`.
+  - **HIGH — `ci.yml` triggered duplicate runs on push+PR.** Narrowed `push: branches: [main]` so non-main pushes only trigger via `pull_request`.
+  - **HIGH — `uv python install 3.12` unpinned + cache-bypassing.** Consolidated into `astral-sh/setup-uv@v3` with `python-version: "3.12"` input.
+  - **HIGH — `mypy.ini` adapter-boundary stanzas had wrong module-name prefix** (`services.orchestrator_adapter.adapters.*` never matched because mypy resolves by distribution module, not file path). Corrected to `orchestrator_adapter.*` + `worker_wrapper.*`; added `clawhip_daemon.adapters.*` + `telegram_gateway.adapters.*` for Stories 2.8 / 3.1.
+  - **MEDIUM — `asyncio_mode = "auto"` would hijack every async def in the workspace** once real code lands. Switched to `"strict"` — requires explicit `@pytest.mark.asyncio`.
+  - **MEDIUM — `ruff.toml` global `ignore = ["E501"]` disabled line-length everywhere.** Removed global; added narrow per-file-ignores for files with deliberately-long module docstrings (`services/*/src/*/__main__.py`, `*/src/*/__init__.py`, `tests/**`, `scripts/**`). Net: `ruff check .` now enforces E501 on all executable code — still passes with zero new findings.
+  - **MEDIUM — `tests/conftest.py` `FROZEN_EPOCH` was tz-naive** violating AC-6 + Architecture §Format Patterns line 360 ("ISO 8601 UTC"). Added `from datetime import UTC` + `tzinfo=UTC`.
+  - **MEDIUM — `mypy.ini` excluded `scripts/migrator/`** while the migrator is CI-exercised. Removed exclude so the path is discoverable when future stories point mypy at it.
+  - **MEDIUM — `ruff.toml` extend-exclude omitted `node_modules` + `.tmp/`.** Added + `.agent-os/` for forward compatibility with another AI-tool dotdir.
+  - **MEDIUM — `tests/**` per-file-ignore missing `D`.** Pre-emptively added for when Story 1.6/1.7 may select pydocstyle.
+  - **MEDIUM — `scripts/migrator/tests/**` not in per-file-ignores.** Added with same rule-relaxations as `tests/**`.
+  - **MEDIUM — `tests/.gitkeep` leftover.** Removed.
+  - **LOW — dev-dep version floors** not added; accepted (uv.lock is the reproducibility anchor).
+  - **LOW — `just lint` mypy target hard-coded**; accepted (concrete list matches today's strict-scope; revisit when `services/registry-foo` lands).
+  - **Skipped (not defects):** `astral-sh/setup-uv@v3` floating major tag — inline comment notes "consider SHA-pinning when the project adopts dependabot"; FR47/NFR-M7 citation critique — scaffold commit title can't be rewritten without force-push; spec line 409 explicitly claims the CI-side of NFR-M7 and this story's CI harness is genuinely what enables the operator-runbook regression layer.
+  - Live verification post-fix: `just bootstrap-verify` 13/13 + 0 dev deps; `just test` 6 skipped; `just lint` all 3 green; `just migrator-test-additive` 3/3; `pytest --collect-only .` 6/0; `ci.yml` YAML-valid.
+- **2026-04-23 (finalize):** Completion Notes expanded with review-fix summary. Status `review` → `done`.
