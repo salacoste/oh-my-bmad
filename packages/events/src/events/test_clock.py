@@ -5,7 +5,9 @@ AC-6 / Story 2.2: ~10 tests.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
+
+import pytest
 
 from events.clock import (
     FROZEN_EPOCH,
@@ -97,3 +99,44 @@ class TestTickingClock:
         times = [tc.now() for _ in range(5)]
         for i in range(1, len(times)):
             assert times[i] > times[i - 1]
+
+
+class TestFrozenClockValidation:
+    def test_rejects_naive_datetime(self) -> None:
+        with pytest.raises(ValueError, match="UTC-aware"):
+            FrozenClock(now=datetime(2026, 1, 1))  # naive
+
+    def test_rejects_non_utc_tzinfo(self) -> None:
+        tz = timezone(timedelta(hours=5))
+        with pytest.raises(ValueError, match="UTC-aware"):
+            FrozenClock(now=datetime(2026, 1, 1, tzinfo=tz))
+
+
+class TestTickingClockValidation:
+    def test_rejects_zero_tick(self) -> None:
+        with pytest.raises(ValueError, match="tick_ns must be positive"):
+            TickingClock(tick_ns=0)
+
+    def test_rejects_negative_tick(self) -> None:
+        with pytest.raises(ValueError, match="tick_ns must be positive"):
+            TickingClock(tick_ns=-1)
+
+    def test_rejects_negative_start_ns(self) -> None:
+        with pytest.raises(ValueError, match="start_ns must be non-negative"):
+            TickingClock(start_ns=-1)
+
+    def test_rejects_naive_start_now(self) -> None:
+        with pytest.raises(ValueError, match="UTC-aware"):
+            TickingClock(start_now=datetime(2026, 1, 1))
+
+    def test_sub_microsecond_tick_advances_now_fractionally(self) -> None:
+        # tick_ns=500 → 0.5 µs per call. Advance 4 times → now advances by 2 µs.
+        tc = TickingClock(tick_ns=500, start_now=FROZEN_EPOCH)
+        _ = tc.now()  # drop initial — returns start
+        _ = tc.now()
+        _ = tc.now()
+        _ = tc.now()
+        # After 4 calls, accumulated advance = 4 * 0.5 µs = 2 µs.
+        # The fifth call's return equals FROZEN_EPOCH + 2 µs.
+        value = tc.now()
+        assert value == FROZEN_EPOCH + timedelta(microseconds=2)

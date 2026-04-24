@@ -15,7 +15,6 @@ Usage example::
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime
 from random import Random
 
 import pytest
@@ -30,11 +29,15 @@ def fixed_clock() -> FrozenClock:
 
 @pytest.fixture
 def seeded_uuid7() -> Callable[[], str]:
-    """Factory producing a deterministic UUIDv7 sequence (Random seed 42)."""
+    """Factory producing a deterministic, time-ordered UUIDv7 sequence.
+
+    Uses ``TickingClock`` + ``Random(42)`` so each call advances the
+    timestamp by 1 ms — consecutive UUIDs are k-sortable. Across pytest
+    runs the first N calls always produce the same N UUIDs (both clock
+    and rng are freshly constructed per test via the fixture scope).
+    """
+    from events import TickingClock
+
     rng = Random(42)
-    clock = FrozenClock(mono_ns=0, now=FROZEN_EPOCH)
+    clock = TickingClock(start_now=FROZEN_EPOCH)
     return lambda: new_uuid7(clock=clock, rng=rng)
-
-
-# Kept for any test that imports this directly.
-_ = datetime(2026, 1, 1, tzinfo=UTC)  # sanity — matches FROZEN_EPOCH

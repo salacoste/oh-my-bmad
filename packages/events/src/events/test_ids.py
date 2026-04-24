@@ -67,7 +67,12 @@ class TestUuid7Shape:
         tc = TickingClock()
         rng = Random(42)
         ids = [new_uuid7(clock=tc, rng=rng) for _ in range(100)]
-        assert ids == sorted(ids), "UUIDv7 time-ordering broken"
+        assert ids == sorted(ids), "UUIDv7 lex order must match insertion order"
+        assert len(set(ids)) == len(ids), "duplicate UUIDs generated"
+        # Adjacent UUIDs must differ by exactly 1 ms in their first-48-bit timestamp.
+        timestamps = [int(uid.replace("-", "")[:12], 16) for uid in ids]
+        deltas = [b - a for a, b in zip(timestamps[:-1], timestamps[1:], strict=True)]
+        assert all(d == 1 for d in deltas), f"expected 1-ms deltas; got {set(deltas)}"
 
 
 class TestPrefixedGenerators:
@@ -122,3 +127,29 @@ class TestParsePrefix:
         # "x-" is not a recognized prefix
         fake = "x-" + new_uuid7(clock=FrozenClock(), rng=Random(42))
         assert parse_prefix(fake) is None
+
+
+class TestParsePrefixHardening:
+    def test_rejects_non_uuid_core(self) -> None:
+        assert parse_prefix("e-" + "x" * 36) is None
+        assert parse_prefix("t-not-a-valid-uuid-at-all-just-garbage") is None
+
+    def test_rejects_short_or_empty(self) -> None:
+        assert parse_prefix("") is None
+        assert parse_prefix("e") is None
+        assert parse_prefix("e-") is None
+
+    def test_rejects_non_str(self) -> None:
+        assert parse_prefix(None) is None  # type: ignore[arg-type]
+        assert parse_prefix(42) is None  # type: ignore[arg-type]
+        assert parse_prefix(b"e-xxx") is None  # type: ignore[arg-type]
+
+    def test_rejects_unknown_prefix(self) -> None:
+        from random import Random
+
+        from events.clock import FrozenClock
+        from events.ids import new_uuid7
+
+        uid = new_uuid7(clock=FrozenClock(), rng=Random(42))
+        assert parse_prefix("x-" + uid) is None
+        assert parse_prefix("abc-" + uid) is None

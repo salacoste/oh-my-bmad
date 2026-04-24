@@ -16,10 +16,18 @@ fall back to ``time.time()`` and ``os.urandom`` respectively.
 from __future__ import annotations
 
 import os
+import re
 import time
+from datetime import UTC, datetime, timedelta
 from random import Random
 
 from events.clock import Clock
+
+_UNIX_EPOCH: datetime = datetime(1970, 1, 1, tzinfo=UTC)
+_ONE_MILLISECOND: timedelta = timedelta(milliseconds=1)
+_UUIDV7_BARE_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
 
 
 def new_uuid7(
@@ -32,7 +40,15 @@ def new_uuid7(
     Output always matches regex:
       ``^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$``
     """
-    ts_ms = int(clock.now().timestamp() * 1000) if clock is not None else int(time.time() * 1000)
+    if clock is not None:
+        now = clock.now()
+        if now.tzinfo is None or now.utcoffset() != timedelta(0):
+            raise ValueError(
+                f"Clock.now() must return UTC-aware datetime; got tzinfo={now.tzinfo!r}"
+            )
+        ts_ms = (now - _UNIX_EPOCH) // _ONE_MILLISECOND
+    else:
+        ts_ms = int(time.time() * 1000)
     if not (0 <= ts_ms < (1 << 48)):
         raise ValueError(f"timestamp {ts_ms} out of 48-bit range")
 
@@ -93,15 +109,23 @@ def new_request_id(
 def parse_prefix(s: str) -> tuple[str, str] | None:
     """If ``s`` is ``"<prefix>-<uuidv7>"``, return (prefix, uuid_core); else None.
 
-    Only recognizes the canonical prefixes: ``t-``, ``s-``, ``e-``.
-    Bare UUIDv7 returns ``None`` (no prefix to parse).
+    Only recognizes the canonical prefixes: ``t-``, ``s-``, ``e-``. The UUID
+    core is validated against the canonical UUIDv7 regex — malformed UUIDs
+    return ``None`` even when prefixed correctly.
+
+    Non-str inputs (including ``None``) return ``None`` rather than raising.
     """
-    if "-" not in s or len(s) < 2:
+    if not isinstance(s, str):
         return None
-    prefix, _, rest = s.partition("-")
-    if prefix in {"t", "s", "e"} and len(rest) == 36:
-        return (prefix, rest)
-    return None
+    if len(s) < 2 or s[1] != "-":
+        return None
+    prefix = s[0]
+    if prefix not in {"t", "s", "e"}:
+        return None
+    rest = s[2:]
+    if not _UUIDV7_BARE_RE.match(rest):
+        return None
+    return (prefix, rest)
 
 
 __all__ = [

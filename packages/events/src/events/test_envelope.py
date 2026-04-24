@@ -7,11 +7,13 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta, timezone
+from random import Random
 from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from events import FrozenClock, new_event_id, new_request_id
 from events.envelope import Actor, ActorKind, EventEnvelope
 from events.errors import EventSchemaUnknown, EventValidationError
 from events.schema_registry import register, unregister_all
@@ -20,8 +22,9 @@ from events.schema_registry import register, unregister_all
 # Shared fixtures / helpers
 # ---------------------------------------------------------------------------
 
-_VALID_EVENT_ID = "e-01917e5c-a7d1-7000-8000-000000000001"
-_VALID_REQUEST_ID = "01917e5c-a7d1-7000-8000-000000000002"
+# Deterministic test IDs via Story-2.2 generators (AC-7 replacement pattern).
+_VALID_EVENT_ID = new_event_id(clock=FrozenClock(), rng=Random(42))
+_VALID_REQUEST_ID = new_request_id(clock=FrozenClock(), rng=Random(43))
 _VALID_EMITTED_AT = datetime(2026, 4, 21, 10, 30, 0, tzinfo=UTC)
 
 
@@ -381,7 +384,12 @@ class TestGeneratorIntegration:
             payload={"task_id": "abc"},
             request_id=new_request_id(clock=clock, rng=rng),
         )
-        assert env.event_id.startswith("e-")
+        from events.envelope import _EVENT_ID_RE, _UUIDV7_BARE_RE
+
+        assert _EVENT_ID_RE.match(env.event_id), f"event_id {env.event_id!r} rejected by regex"
+        assert _UUIDV7_BARE_RE.match(env.request_id), (
+            f"request_id {env.request_id!r} rejected by regex"
+        )
 
     def test_deterministic_generator_produces_valid_envelope(self) -> None:
         """Seeded clock+rng give a reproducible, envelope-valid event_id."""

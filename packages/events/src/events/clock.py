@@ -50,6 +50,10 @@ class FrozenClock:
     """
 
     def __init__(self, mono_ns: int = 0, *, now: datetime | None = None) -> None:
+        if now is not None and (now.tzinfo is None or now.utcoffset() != timedelta(0)):
+            raise ValueError(
+                f"FrozenClock.now must be UTC-aware (tzinfo=UTC); got tzinfo={now.tzinfo!r}"
+            )
         self._mono = mono_ns
         self._now = now if now is not None else FROZEN_EPOCH
 
@@ -68,6 +72,14 @@ class TickingClock:
     CURRENT value and then advance, so the sequence they emit matches the
     call order.
 
+    Validation: ``tick_ns`` must be positive, ``start_ns`` non-negative, and
+    ``start_now`` (when provided) must be UTC-aware.
+
+    Sub-microsecond ticks are supported: accumulated nanoseconds are tracked
+    internally and converted to integer-microsecond ``timedelta`` on each
+    call, so e.g. ``tick_ns=500`` advances ``now()`` by 1 µs every two
+    calls (never losing a half-tick).
+
     >>> tc = TickingClock()
     >>> tc.monotonic_ns()
     0
@@ -82,15 +94,28 @@ class TickingClock:
         tick_ns: int = 1_000_000,
         start_now: datetime | None = None,
     ) -> None:
+        if tick_ns <= 0:
+            raise ValueError(f"tick_ns must be positive; got {tick_ns}")
+        if start_ns < 0:
+            raise ValueError(f"start_ns must be non-negative; got {start_ns}")
+        if start_now is not None and (
+            start_now.tzinfo is None or start_now.utcoffset() != timedelta(0)
+        ):
+            raise ValueError(
+                f"TickingClock.start_now must be UTC-aware (tzinfo=UTC); "
+                f"got tzinfo={start_now.tzinfo!r}"
+            )
         self._mono = start_ns
         self._tick_ns = tick_ns
-        self._now = start_now if start_now is not None else FROZEN_EPOCH
-        # Microseconds per tick (1_000_000 ns = 1000 µs = 1 ms).
-        self._tick_us = tick_ns // 1000
+        self._start_now = start_now if start_now is not None else FROZEN_EPOCH
+        # Total nanoseconds accumulated since _start_now. Converted to an
+        # integer-microsecond timedelta on every now() read so fractional-µs
+        # ticks (tick_ns < 1000) accumulate correctly across calls.
+        self._accumulated_ns = 0
 
     def now(self) -> datetime:
-        current = self._now
-        self._now = current + timedelta(microseconds=self._tick_us)
+        current = self._start_now + timedelta(microseconds=self._accumulated_ns // 1000)
+        self._accumulated_ns += self._tick_ns
         return current
 
     def monotonic_ns(self) -> int:
