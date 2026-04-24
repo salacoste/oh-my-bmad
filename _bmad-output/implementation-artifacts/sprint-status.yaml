@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: 2026-04-24T09:00:00Z
+# last_updated: 2026-04-24T10:30:00Z
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-04-24T09:00:00Z
+last_updated: 2026-04-24T10:30:00Z
 project: oh-my-bmad
 project_key: NOKEY
 tracking_system: file-system
@@ -62,8 +62,8 @@ development_status:
   # =========================================================================
   # Epic 2: Event Spine & Registry (17 stories)
   # =========================================================================
-  epic-2: backlog
-  2-1-event-envelope-schema-registry: backlog
+  epic-2: in-progress
+  2-1-event-envelope-schema-registry: review
   2-2-uuidv7-injectable-clock: backlog
   2-3-registry-state-sqlite-schema: backlog
   2-4-event-log-append-writer: backlog
