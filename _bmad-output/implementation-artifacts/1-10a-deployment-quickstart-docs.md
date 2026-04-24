@@ -1,6 +1,6 @@
 # Story 1.10a: Deployment quickstart docs (Bootstrap-blocker)
 
-Status: review
+Status: done
 
 ## Story
 
@@ -351,4 +351,14 @@ _To be filled by the dev agent. Expected: 2 new + 1 modified._
 
 ### Change Log
 
-_To be filled by the dev agent._
+- **2026-04-24:** Story 1.10a implemented. 2 new + 1 modified; atomic scaffold commit `e424932` (663+/27-). Verification green.
+- **2026-04-24 (review):** 3-layer adversarial review surfaced 2 CRITICAL + 2 MAJOR + 6 HIGH + LOW/MEDIUM. Applied in commit `9b2f984` (4 files, 176+/327-):
+  - **CRITICAL — port 8080 is fiction.** `docker-compose.yml` declares zero host `ports:`; `telegram-gateway` hello-world has no HTTP listener. Tunnel examples rewritten with `<port-set-by-Story-3.1>` placeholder + explicit Phase-1-state callout.
+  - **CRITICAL — Compose version v2.20 too low.** `env_file: {path, required: false}` syntax needs Compose v2.24+. Bumped matrices + README checklist.
+  - **MAJOR — `just dev` fresh-clone failure.** Recipe didn't depend on `build-base` → `FROM oh-my-bmad-base:local not found`. Fixed with `dev: build-base` dependency.
+  - **MAJOR — docs over length ceiling.** 308/333 → 244/244 (AC target 150-200). Collapsed tunnel alternatives, removed duplicate Upgrading section (link to README), tightened bootstrap-verify output block.
+  - **HIGH** (6) — Shell-metachar `<TOKEN>` (quoted); tunnel-before-clone reordered; cloudflared jammy-on-noble comment; macOS `OMB_VERSION=dev` recipe accuracy; version-matrix floors (git 2.25, just 1.14 — realistic); README version-string consistency.
+  - **MEDIUM/LOW** — SELinux `:z` vs `:Z` safety; healthcheck-timing caveat for cold build; macOS `registry-state`-is-sole-writer framing; `REGISTRY_DB_PATH` dual-change warning; `brew install --cask ngrok`; `<GITHUB_TOKEN>` placeholder consistency.
+  - Skipped: Story-1.4 prose refs (factual, date-stable); story Completion Notes deferred to finalize commit.
+  - Verification post-fix: scan-secrets clean; `just -n dev` dry-run confirms `build-base` ordering; all regressions green.
+- **2026-04-24 (finalize):** Change Log expanded with review-fix summary. Status `review` → `done`.
