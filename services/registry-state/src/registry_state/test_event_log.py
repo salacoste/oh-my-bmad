@@ -1,0 +1,511 @@
+"""Tests for registry_state.adapters.event_log — Story 2.4 AC-12.
+
+Test classes:
+- TestCurrentDayPath        (~4 tests) — free function, UTC-only guard.
+- TestEventLogWriterRoundTrip (~5 tests) — append + read_log_lines.
+- TestDailyRollover         (~4 tests) — per-day file rollover.
+- TestDurability            (~3 tests) — fdatasync behaviour, idempotent close.
+- TestRecover               (~5 tests) — backward-chunk scan + ftruncate.
+- TestDirectoryCreation     (~1 test) — mkdir(parents=True, exist_ok=True).
+
+All tests use ``tmp_path`` for file I/O.  The ``fixed_clock`` and
+``seeded_uuid7`` fixtures are defined here with identical logic to
+``tests/conftest.py`` (Story 2.2 / AC-13 — no new conftest file added;
+these are the same fixtures re-declared locally so co-located tests can
+run standalone without depending on rootdir conftest traversal).
+
+Async tests use ``pytest.mark.asyncio`` with the project-wide ``asyncio_mode =
+"strict"`` setting from ``pyproject.toml``.
+
+Note on payload round-trip: envelopes use *dict* payloads (not BaseModel
+instances) so that ``to_canonical_json`` + ``from_canonical_json`` produces
+byte-identical + equality-preserving round-trips.  When payload is a
+BaseModel, ``model_dump(mode='python')`` serialises it as a nested dict; the
+round-trip produces an equivalent ``_FrozenDict``, which is NOT equal to the
+original BaseModel instance.  Using ``{"value": "..."}`` dicts avoids this.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Generator
+from datetime import UTC, datetime, timedelta, timezone
+from pathlib import Path
+from random import Random
+
+import pytest
+from events import (
+    FROZEN_EPOCH,
+    Actor,
+    EventEnvelope,
+    FrozenClock,
+    TickingClock,
+    new_event_id,
+    new_uuid7,
+    to_canonical_json,
+)
+from events.schema_registry import register, unregister_all
+from pydantic import BaseModel
+
+from registry_state.adapters.event_log import (
+    EventLogWriter,
+    current_day_path,
+    read_log_lines,
+)
+
+# ---------------------------------------------------------------------------
+# Local fixtures — mirror tests/conftest.py exactly (AC-13: no new conftest)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def fixed_clock() -> FrozenClock:
+    """Stationary clock at FROZEN_EPOCH with mono_ns=0 (mirrors tests/conftest.py)."""
+    return FrozenClock(mono_ns=0, now=FROZEN_EPOCH)
+
+
+@pytest.fixture
+def seeded_uuid7() -> Callable[[], str]:
+    """Deterministic UUIDv7 factory (mirrors tests/conftest.py)."""
+    rng = Random(42)
+    clock = TickingClock(start_now=FROZEN_EPOCH)
+    return lambda: new_uuid7(clock=clock, rng=rng)
+
+
+# ---------------------------------------------------------------------------
+# Test payload model + registry management
+# ---------------------------------------------------------------------------
+
+
+class _SimplePayload(BaseModel):
+    value: str
+
+
+@pytest.fixture(autouse=True)
+def _clean_registry() -> Generator[None, None, None]:
+    """Isolate schema-registry state between tests."""
+    unregister_all()
+    register("task.created", "1.0.0", _SimplePayload)
+    yield
+    unregister_all()
+
+
+# ---------------------------------------------------------------------------
+# Helper: build a minimal valid EventEnvelope with dict payload
+# ---------------------------------------------------------------------------
+
+_ACTOR = Actor(kind="system", id="test")
+
+
+def _make_envelope(
+    clock: FrozenClock | None = None,
+    value: str = "hello",
+    parent_event_id: str | None = None,
+    trace_id: str | None = None,
+    request_id: str | None = None,
+    mono_seed: int = 0,
+) -> EventEnvelope:
+    """Build a minimal valid EventEnvelope for testing.
+
+    Uses a *dict* payload so that ``to_canonical_json`` + ``from_canonical_json``
+    round-trips produce equal envelopes.
+    """
+    rng = Random(mono_seed)
+    clk = clock or FrozenClock(mono_ns=mono_seed, now=FROZEN_EPOCH)
+    eid = new_event_id(clock=clk, rng=rng)
+    rid = request_id or new_uuid7(clock=clk, rng=rng)
+    return EventEnvelope(
+        event_id=eid,
+        schema_version="1.0.0",
+        type="task.created",  # noqa: EVT001 test-only fixture envelope
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload={"value": value},
+        parent_event_id=parent_event_id,
+        trace_id=trace_id,
+        request_id=rid,
+    )
+
+
+# ===========================================================================
+# TestCurrentDayPath
+# ===========================================================================
+
+
+class TestCurrentDayPath:
+    def test_returns_correct_path_for_utc_datetime(self, tmp_path: Path) -> None:
+        now = datetime(2026, 4, 24, 15, 30, 0, tzinfo=UTC)
+        path = current_day_path(tmp_path, now)
+        assert path == tmp_path / "2026-04-24.jsonl"
+
+    def test_raises_for_naive_datetime(self, tmp_path: Path) -> None:
+        naive = datetime(2026, 4, 24, 15, 30, 0)  # no tzinfo
+        with pytest.raises(ValueError, match="UTC-aware"):
+            current_day_path(tmp_path, naive)
+
+    def test_raises_for_non_utc_tzinfo(self, tmp_path: Path) -> None:
+        eastern = datetime(2026, 4, 24, 15, 30, 0, tzinfo=timezone(timedelta(hours=-5)))
+        with pytest.raises(ValueError, match="UTC-aware"):
+            current_day_path(tmp_path, eastern)
+
+    def test_midnight_boundary_adjacent_files(self, tmp_path: Path) -> None:
+        # 23:59:59.999Z → 2026-04-24
+        before_midnight = datetime(2026, 4, 24, 23, 59, 59, 999000, tzinfo=UTC)
+        # 00:00:00.000Z → 2026-04-25
+        after_midnight = datetime(2026, 4, 25, 0, 0, 0, 0, tzinfo=UTC)
+
+        path_before = current_day_path(tmp_path, before_midnight)
+        path_after = current_day_path(tmp_path, after_midnight)
+
+        assert path_before == tmp_path / "2026-04-24.jsonl"
+        assert path_after == tmp_path / "2026-04-25.jsonl"
+        assert path_before != path_after
+
+
+# ===========================================================================
+# TestEventLogWriterRoundTrip
+# ===========================================================================
+
+
+class TestEventLogWriterRoundTrip:
+    @pytest.mark.asyncio
+    async def test_single_append_round_trips(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        env = _make_envelope(clock=fixed_clock)
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        await writer.append(env)
+        await writer.close()
+
+        path = current_day_path(tmp_path, fixed_clock.now())
+        recovered = list(read_log_lines(path))
+        assert len(recovered) == 1
+        assert recovered[0] == env
+
+    @pytest.mark.asyncio
+    async def test_100_envelope_sequence_round_trips(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """100 envelopes written via seeded rng all round-trip with correct order."""
+        rng = Random(42)
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        envelopes = []
+        for i in range(100):
+            clk_i = FrozenClock(mono_ns=i, now=FROZEN_EPOCH)
+            env = EventEnvelope(
+                event_id=new_event_id(clock=clk_i, rng=rng),
+                schema_version="1.0.0",
+                type="task.created",  # noqa: EVT001 test-only fixture envelope
+                emitted_at=FROZEN_EPOCH,
+                emitted_at_monotonic_ns=i,
+                actor=_ACTOR,
+                payload={"value": f"item-{i}"},
+                request_id=new_uuid7(clock=clk_i, rng=rng),
+            )
+            envelopes.append(env)
+            await writer.append(env)
+        await writer.close()
+
+        path = current_day_path(tmp_path, FROZEN_EPOCH)
+        recovered = list(read_log_lines(path))
+        assert len(recovered) == 100
+        assert recovered == envelopes
+
+    @pytest.mark.asyncio
+    async def test_optional_fields_round_trip(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        rng = Random(99)
+        parent_id = new_event_id(clock=fixed_clock, rng=rng)
+        task_id = new_uuid7(clock=fixed_clock, rng=rng)
+        session_id = new_uuid7(clock=fixed_clock, rng=rng)
+        env = EventEnvelope(
+            event_id=new_event_id(clock=fixed_clock, rng=rng),
+            schema_version="1.0.0",
+            type="task.created",  # noqa: EVT001 test-only fixture envelope
+            emitted_at=fixed_clock.now(),
+            emitted_at_monotonic_ns=fixed_clock.monotonic_ns(),
+            actor=_ACTOR,
+            payload={"value": "with-optional"},
+            parent_event_id=parent_id,
+            trace_id=task_id,
+            request_id=session_id,
+        )
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        await writer.append(env)
+        await writer.close()
+
+        path = current_day_path(tmp_path, fixed_clock.now())
+        recovered = list(read_log_lines(path))
+        assert len(recovered) == 1
+        assert recovered[0] == env
+        assert recovered[0].parent_event_id == parent_id
+        assert recovered[0].trace_id == task_id
+
+    @pytest.mark.asyncio
+    async def test_each_line_ends_with_exactly_one_newline(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        env = _make_envelope(clock=fixed_clock)
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        await writer.append(env)
+        await writer.close()
+
+        path = current_day_path(tmp_path, fixed_clock.now())
+        raw = path.read_bytes()
+        # Exactly one trailing newline, no CR, no BOM
+        assert raw.endswith(b"\n")
+        assert raw.count(b"\n") == 1
+        assert b"\r" not in raw
+        assert not raw.startswith(b"\xef\xbb\xbf")  # no BOM
+
+    @pytest.mark.asyncio
+    async def test_canonical_json_bytes_appear_verbatim(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        env = _make_envelope(clock=fixed_clock)
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        await writer.append(env)
+        await writer.close()
+
+        path = current_day_path(tmp_path, fixed_clock.now())
+        raw = path.read_bytes()
+        expected_bytes = to_canonical_json(env)
+        # The file is exactly canonical-json + single newline
+        assert raw == expected_bytes + b"\n"
+
+
+# ===========================================================================
+# TestDailyRollover
+# ===========================================================================
+
+
+class TestDailyRollover:
+    @pytest.mark.asyncio
+    async def test_two_appends_same_day_same_file(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        env1 = _make_envelope(clock=fixed_clock, value="first", mono_seed=1)
+        env2 = _make_envelope(clock=fixed_clock, value="second", mono_seed=2)
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        await writer.append(env1)
+        await writer.append(env2)
+        await writer.close()
+
+        path = current_day_path(tmp_path, fixed_clock.now())
+        recovered = list(read_log_lines(path))
+        assert len(recovered) == 2
+
+    @pytest.mark.asyncio
+    async def test_append_across_midnight_opens_new_file(self, tmp_path: Path) -> None:
+        # TickingClock advancing 1 day per call: first now() = 2026-01-01, second = 2026-01-02
+        day_ns = 86_400 * 1_000_000_000
+        clock = TickingClock(start_now=FROZEN_EPOCH, tick_ns=day_ns)
+        writer = EventLogWriter(base_dir=tmp_path, clock=clock)
+
+        rng = Random(7)
+        clk0 = FrozenClock(mono_ns=0, now=FROZEN_EPOCH)
+        clk1 = FrozenClock(mono_ns=1, now=FROZEN_EPOCH)
+
+        env1 = EventEnvelope(
+            event_id=new_event_id(clock=clk0, rng=rng),
+            schema_version="1.0.0",
+            type="task.created",  # noqa: EVT001 test-only fixture envelope
+            emitted_at=FROZEN_EPOCH,
+            emitted_at_monotonic_ns=0,
+            actor=_ACTOR,
+            payload={"value": "day0"},
+            request_id=new_uuid7(clock=clk0, rng=rng),
+        )
+        await writer.append(env1)
+
+        # Second append: clock.now() advances to 2026-01-02
+        env2 = EventEnvelope(
+            event_id=new_event_id(clock=clk1, rng=rng),
+            schema_version="1.0.0",
+            type="task.created",  # noqa: EVT001 test-only fixture envelope
+            emitted_at=FROZEN_EPOCH,
+            emitted_at_monotonic_ns=1,
+            actor=_ACTOR,
+            payload={"value": "day1"},
+            request_id=new_uuid7(clock=clk1, rng=rng),
+        )
+        await writer.append(env2)
+        await writer.close()
+
+        day0_path = tmp_path / "2026-01-01.jsonl"
+        day1_path = tmp_path / "2026-01-02.jsonl"
+        assert day0_path.exists(), "day-0 file missing"
+        assert day1_path.exists(), "day-1 file missing"
+        assert len(list(read_log_lines(day0_path))) == 1
+        assert len(list(read_log_lines(day1_path))) == 1
+
+    @pytest.mark.asyncio
+    async def test_ticking_clock_1ms_stays_one_file(self, tmp_path: Path) -> None:
+        # 1 ms ticks — all appends land in 2026-01-01 (no midnight crossing)
+        clock = TickingClock(start_now=FROZEN_EPOCH, tick_ns=1_000_000)
+        writer = EventLogWriter(base_dir=tmp_path, clock=clock)
+        rng = Random(11)
+        for i in range(5):
+            env = EventEnvelope(
+                event_id=new_event_id(clock=FrozenClock(mono_ns=i, now=FROZEN_EPOCH), rng=rng),
+                schema_version="1.0.0",
+                type="task.created",  # noqa: EVT001 test-only fixture envelope
+                emitted_at=FROZEN_EPOCH,
+                emitted_at_monotonic_ns=i,
+                actor=_ACTOR,
+                payload={"value": f"ms-{i}"},
+                request_id=new_uuid7(clock=FrozenClock(mono_ns=i + 100, now=FROZEN_EPOCH), rng=rng),
+            )
+            await writer.append(env)
+        await writer.close()
+
+        jsonl_files = list(tmp_path.glob("*.jsonl"))
+        assert len(jsonl_files) == 1
+        assert jsonl_files[0].name == "2026-01-01.jsonl"
+
+    @pytest.mark.asyncio
+    async def test_file_naming_matches_yyyy_mm_dd_pattern(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        env = _make_envelope(clock=fixed_clock)
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        await writer.append(env)
+        await writer.close()
+
+        files = list(tmp_path.glob("*.jsonl"))
+        assert len(files) == 1
+        # FROZEN_EPOCH is 2026-01-01
+        assert files[0].name == "2026-01-01.jsonl"
+
+
+# ===========================================================================
+# TestDurability
+# ===========================================================================
+
+
+class TestDurability:
+    @pytest.mark.asyncio
+    async def test_file_content_visible_immediately_after_append(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """After append() returns, content is readable by a fresh open() call.
+
+        Observable proxy for fdatasync: data visible to a new reader immediately
+        (not stuck in an unflushed OS write-back cache).
+        """
+        env = _make_envelope(clock=fixed_clock)
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        await writer.append(env)
+
+        # Do NOT call close() — verify content is readable while writer is open
+        path = current_day_path(tmp_path, fixed_clock.now())
+        raw = path.read_bytes()
+        assert raw == to_canonical_json(env) + b"\n"
+
+        await writer.close()
+
+    @pytest.mark.asyncio
+    async def test_envelope_recoverable_after_simulated_crash(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """Simulate hard kill after append: data survives and is re-readable."""
+        env = _make_envelope(clock=fixed_clock)
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        await writer.append(env)
+        # Simulate crash: skip close(), create fresh reader
+        path = current_day_path(tmp_path, fixed_clock.now())
+        recovered = list(read_log_lines(path))
+        assert len(recovered) == 1
+        assert recovered[0] == env
+
+    @pytest.mark.asyncio
+    async def test_close_is_idempotent(self, tmp_path: Path, fixed_clock: FrozenClock) -> None:
+        env = _make_envelope(clock=fixed_clock)
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        await writer.append(env)
+        await writer.close()
+        # Second close must not raise
+        await writer.close()
+
+
+# ===========================================================================
+# TestRecover
+# ===========================================================================
+
+
+class TestRecover:
+    @pytest.mark.asyncio
+    async def test_recover_empty_file_returns_zero(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        path = current_day_path(tmp_path, fixed_clock.now())
+        path.write_bytes(b"")
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        truncated = await writer.recover()
+        assert truncated == 0
+
+    @pytest.mark.asyncio
+    async def test_recover_complete_lines_returns_zero(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        content = b'{"key":"val1"}\n{"key":"val2"}\n'
+        path = current_day_path(tmp_path, fixed_clock.now())
+        path.write_bytes(content)
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        truncated = await writer.recover()
+        assert truncated == 0
+        assert path.read_bytes() == content
+
+    @pytest.mark.asyncio
+    async def test_recover_partial_tail_truncates(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        complete = b'{"key":"val1"}\n'
+        partial = b'{"key":"partial-no-newline'
+        path = current_day_path(tmp_path, fixed_clock.now())
+        path.write_bytes(complete + partial)
+
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        truncated = await writer.recover()
+
+        assert truncated == len(partial)
+        assert path.read_bytes() == complete
+
+    @pytest.mark.asyncio
+    async def test_recover_no_newline_truncates_to_zero(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        content = b"no-newline-at-all-so-entire-file-is-partial"
+        path = current_day_path(tmp_path, fixed_clock.now())
+        path.write_bytes(content)
+
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        truncated = await writer.recover()
+
+        assert truncated == len(content)
+        assert path.read_bytes() == b""
+
+    @pytest.mark.asyncio
+    async def test_recover_nonexistent_file_returns_zero(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        # No file created — should return 0 without raising
+        truncated = await writer.recover()
+        assert truncated == 0
+
+
+# ===========================================================================
+# TestDirectoryCreation
+# ===========================================================================
+
+
+class TestDirectoryCreation:
+    def test_constructor_creates_missing_directory_tree(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        nested = tmp_path / "a" / "b" / "c"
+        assert not nested.exists()
+        _writer = EventLogWriter(base_dir=nested, clock=fixed_clock)
+        assert nested.is_dir()
