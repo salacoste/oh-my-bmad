@@ -110,6 +110,30 @@ Then `just dev` (or `just deploy-vps` / `just deploy-macos`).
 
 ---
 
+## Upgrading
+
+Released images live on GHCR (`ghcr.io/<owner>/oh-my-bmad-<service>`).
+To upgrade a running deployment:
+
+1. Edit `.env`:
+
+       OMB_IMAGE_REGISTRY=ghcr.io/<owner>
+       OMB_VERSION=0.2.0                  # or whichever tag you want
+
+2. Pull + restart:
+
+       docker compose pull
+       docker compose up -d
+
+Compose stops each service, pulls the new tag, and starts it with preserved
+volumes. Persistent data (registry DB, event log, artifacts) survives the
+upgrade.
+
+Phase 1 uses tag-based versioning; digest-pinning + signed-image verification
+land in a Phase 2 hardening story.
+
+---
+
 ## Schema evolution / event-log migrator
 
 The event log uses a versioned schema (`schema_version` field on every event envelope). Within a major version, only **additive** changes are permitted. Breaking changes require a one-shot migrator container:

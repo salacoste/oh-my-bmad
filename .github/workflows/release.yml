@@ -1,0 +1,118 @@
+name: release
+
+# Tag-triggered multi-arch build + push of all platform-owned service images
+# to GHCR. See Story 1.9 spec for design rationale.
+#
+# Hand-off from Story 1.8: per-service Dockerfiles `FROM oh-my-bmad-base:local`
+# which doesn't exist on a fresh runner. We build + push the base FIRST, then
+# override the base reference via buildx `--build-context base=...` during
+# per-service builds.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: ${{ github.repository_owner }}
+
+jobs:
+  build-and-push-base:
+    name: Build + push base image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build + push base (multi-arch)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.base
+          target: runtime-base
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/oh-my-bmad-base:${{ steps.ver.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/oh-my-bmad-base:latest
+          cache-from: type=gha,scope=base
+          cache-to: type=gha,mode=max,scope=base
+
+  build-and-push-services:
+    name: Build + push ${{ matrix.service }}
+    needs: build-and-push-base
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - registry-api
+          - registry-state
+          - telegram-gateway
+          - orchestrator-adapter
+          - worker-wrapper
+          - clawhip-daemon
+          - console-cli
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build + push ${{ matrix.service }} (multi-arch)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/${{ matrix.service }}/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/oh-my-bmad-${{ matrix.service }}:${{ needs.build-and-push-base.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/oh-my-bmad-${{ matrix.service }}:latest
+          # Story 1.8 hand-off: replace `FROM oh-my-bmad-base:local` with the
+          # just-pushed GHCR image. `--build-context base=...` tells buildx to
+          # resolve the named context to the given image.
+          build-contexts: |
+            oh-my-bmad-base:local=docker-image://${{ env.REGISTRY }}/${{ env.OWNER }}/oh-my-bmad-base:${{ needs.build-and-push-base.outputs.version }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}

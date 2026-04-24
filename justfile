@@ -202,3 +202,14 @@ deploy-macos: build-base
     docker compose -f docker-compose.yml -f docker-compose.macos.yml pull || true
     docker compose -f docker-compose.yml -f docker-compose.macos.yml build
     docker compose -f docker-compose.yml -f docker-compose.macos.yml up -d
+
+# Build multi-arch base + per-service images locally via buildx (no push).
+# Diagnostic hook — validates the release.yml shape before tagging without
+# actually producing a release. Requires a buildx builder with QEMU:
+#   docker buildx create --name omb-multiarch --use --driver docker-container
+# Pass `version=<X>` to set tag; defaults to `dev`.
+release-local version="dev":
+    docker buildx build --platform linux/amd64,linux/arm64 \
+        -f Dockerfile.base --target runtime-base \
+        -t oh-my-bmad-base:{{version}} .
+    @echo "Base built multi-arch. Service images follow same pattern — see release.yml for the matrix."
