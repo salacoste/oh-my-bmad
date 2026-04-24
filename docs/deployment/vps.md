@@ -9,104 +9,31 @@ that passes `docker compose ps` all-healthy. Audience: Ubuntu 24.04 LTS,
 ## Prerequisites
 
 | Tool | Minimum version | Notes |
-|------|-----------------|-------|
+|------|----------------|-------|
 | Docker Engine | 24.0 | BuildKit enabled by default |
-| Docker Compose | v2.20 | Required for build-contexts |
-| uv | 0.5.0 | Matches pyproject.toml required-version |
-| just | 1.30 | Required for recipes |
-| git | 2.40 | Required for sync-upstream fetch |
+| Docker Compose | v2.24 | Required for `env_file: {path, required}` syntax used in `docker-compose.yml` |
+| uv | 0.5.0 | Matches `pyproject.toml` `[tool.uv] required-version = ">=0.5"` |
+| just | 1.14 | Any recent stable release — no unusual syntax used |
+| git | 2.25 | `--depth 1` clone (Ubuntu 20.04+ default) |
 
 ### Install
 
-```sh
-# Docker Engine + Compose v2 — Docker's official apt repo.
-sudo apt-get update
-sudo apt-get install -y ca-certificates curl
-sudo install -m 0755 -d /etc/apt/keyrings
-sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-    -o /etc/apt/keyrings/docker.asc
-sudo chmod a+r /etc/apt/keyrings/docker.asc
-echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
-  https://download.docker.com/linux/ubuntu \
-  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-sudo apt-get update
-sudo apt-get install -y docker-ce docker-ce-cli containerd.io \
-    docker-buildx-plugin docker-compose-plugin
+Follow the [official Docker Engine install guide](https://docs.docker.com/engine/install/ubuntu/) for Ubuntu. After install:
 
-# Add your user to the docker group (re-login required for the change to take effect).
+```sh
+# Add your user to the docker group (re-login required).
 sudo usermod -aG docker "$USER"
 
-# uv (Python package/workspace manager).
+# uv (Python package/workspace manager):
 curl -LsSf https://astral.sh/uv/install.sh | sh
-# Reload PATH so `uv` is available immediately in this shell session.
 source "$HOME/.local/bin/env"
 
-# just (task runner).
-# Option A — snap (Ubuntu):
+# just (snap is the easiest on Ubuntu):
 sudo snap install just --classic
-# Option B — cargo (any Linux):
-# cargo install just
 
-# git (usually pre-installed; upgrade if below 2.40):
+# git (usually pre-installed):
 sudo apt-get install -y git
 ```
-
----
-
-## Tunnel choice
-
-The Telegram webhook requires HTTPS. oh-my-bmad does not bundle a reverse
-proxy. Run exactly one option on the host (not inside compose).
-
-### Option A — Cloudflare Tunnel (default, recommended)
-
-Free, zero-config, no port-forwarding required. Works behind NAT/firewalls.
-
-```sh
-# Install cloudflared (Debian/Ubuntu):
-curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | \
-    sudo tee /usr/share/keyrings/cloudflare-main.gpg > /dev/null
-echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] \
-    https://pkg.cloudflare.com/cloudflared jammy main' | \
-    sudo tee /etc/apt/sources.list.d/cloudflared.list
-sudo apt-get update && sudo apt-get install -y cloudflared
-
-# Start a temporary tunnel (replace 8080 with your gateway port):
-cloudflared tunnel --url http://localhost:8080
-# cloudflared prints a public *.trycloudflare.com URL — use that as your webhook.
-```
-
-Set `TUNNEL_MODE=cloudflare` in `.env`.
-
-### Option B — ngrok
-
-Adequate for solo-operator use on the free tier.
-
-```sh
-# Install ngrok:
-curl -sSL https://ngrok-agent.s3.amazonaws.com/ngrok.asc | \
-    sudo tee /etc/apt/trusted.gpg.d/ngrok.asc > /dev/null
-echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | \
-    sudo tee /etc/apt/sources.list.d/ngrok.list
-sudo apt-get update && sudo apt-get install -y ngrok
-ngrok config add-authtoken <NGROK_AUTH_TOKEN>
-
-# Start tunnel:
-ngrok http 8080
-```
-
-Set `TUNNEL_MODE=ngrok` in `.env`.
-
-### Option C — BYO reverse proxy
-
-Use nginx, Caddy, or Traefik with your own TLS certificate. Configure TLS
-termination to forward HTTPS → `http://localhost:8080`. Set `TUNNEL_MODE=byo`
-in `.env`.
-
-The `.env.example` `TUNNEL_MODE` section (carried from Story 1.4) documents
-this variable. Only one tunnel should be active at a time.
 
 ---
 
@@ -119,22 +46,12 @@ uv run pre-commit install
 just bootstrap-verify
 ```
 
-Expected output from `just bootstrap-verify`:
+Expected output (abridged):
 
 ```
 events 0.1.0
 registry_api 0.1.0 | hello from registry_api
-registry_state 0.1.0
-telegram_gateway 0.1.0
-console_cli 0.1.0
-orchestrator_adapter 0.1.0
-worker_wrapper 0.1.0
-clawhip_daemon 0.1.0
-task_registry_mcp 0.1.0
-session_registry_mcp 0.1.0
-clawhip_bridge_mcp 0.1.0
-secret_hygiene 0.1.0
-idempotency 0.1.0
+...
 ✓ bootstrap OK (13 workspace-member imports verified)
 ```
 
@@ -157,16 +74,21 @@ Field-by-field annotations:
 | `TG_ALLOWLIST_USER_IDS` | @userinfobot on Telegram — DM it, it replies with your numeric ID | Comma-separated; **WARNING: empty denies ALL users** |
 | `REGISTRY_DB_PATH` | — | Leave at default `/var/lib/oh-my-bmad/registry/state.sqlite3` on VPS |
 | `ENV` | — | Set to `production` for a real VPS (disables Swagger UI at `/v1/docs`) |
-| `TUNNEL_MODE` | — | Must match tunnel option chosen above: `cloudflare`, `ngrok`, or `byo` |
+| `TUNNEL_MODE` | — | Must match tunnel option chosen below: `cloudflare`, `ngrok`, or `byo` |
 | `OMB_IMAGE_REGISTRY` | — | `ghcr.io/<GITHUB_OWNER>` — use your owner namespace, or keep `ghcr.io/r2d2` for canonical upstream images |
 | `OMB_VERSION` | github.com/<owner>/oh-my-bmad/releases | Set to a published semver tag (e.g. `0.1.0`) OR keep `dev` to build locally from source |
+
+> ⚠️ Leave `REGISTRY_DB_PATH` at its default unless you also update
+> `docker-compose.yml`'s volume `target:` to match — the service will write
+> to a container path the mount doesn't cover, silently losing data on
+> container recreate.
 
 Example (safe placeholders — replace every angle-bracket value):
 
 ```ini
 TELEGRAM_BOT_TOKEN=<TELEGRAM_BOT_TOKEN>
 ANTHROPIC_API_KEY=sk-ant-<paste-your-key-here>
-GITHUB_TOKEN=<GITHUB_PAT>
+GITHUB_TOKEN=<GITHUB_TOKEN>
 TG_ALLOWLIST_USER_IDS=<YOUR_TELEGRAM_NUMERIC_ID>
 REGISTRY_DB_PATH=/var/lib/oh-my-bmad/registry/state.sqlite3
 ENV=production
@@ -177,22 +99,65 @@ OMB_VERSION=0.1.0
 
 ---
 
+## Tunnel choice
+
+The Telegram webhook requires HTTPS. oh-my-bmad does not bundle a reverse
+proxy. Run exactly one option on the host (not inside compose).
+
+> **Note (Phase 1 state):** `telegram-gateway` is currently a hello-world
+> container that does NOT listen on any port. The `--url http://localhost:<port>`
+> argument below is a placeholder for when **Story 3.1 (aiogram webhook)**
+> wires the real webhook receiver. You can still install + start your tunnel
+> of choice today as a dry-run — it simply has no backend to forward to
+> until Story 3.1 lands.
+
+### Option A — Cloudflare Tunnel (recommended)
+
+Free, zero-config, no port-forwarding required. Works behind NAT/firewalls.
+
+```sh
+# Install cloudflared (Debian/Ubuntu):
+# Cloudflared publishes a single `jammy` apt suite; it works on Ubuntu 24.04
+# (noble) because the binary is statically linked. No noble-specific suite
+# exists upstream yet.
+curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | \
+    sudo tee /usr/share/keyrings/cloudflare-main.gpg > /dev/null
+echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] \
+    https://pkg.cloudflare.com/cloudflared jammy main' | \
+    sudo tee /etc/apt/sources.list.d/cloudflared.list
+sudo apt-get update && sudo apt-get install -y cloudflared
+
+# Start a temporary tunnel (port is set by Story 3.1):
+cloudflared tunnel --url http://localhost:<port-set-by-Story-3.1>
+# cloudflared prints a public *.trycloudflare.com URL — use that as your webhook.
+```
+
+Set `TUNNEL_MODE=cloudflare` in `.env`.
+
+### Alternatives
+
+If you prefer **ngrok**: `sudo apt-get install -y ngrok` (via the ngrok apt
+repo at https://ngrok.com/docs/agent/install/) or download the binary directly;
+run `ngrok http '<port-set-by-Story-3.1>'`. Set `TUNNEL_MODE=ngrok` in `.env`.
+
+If you prefer a **BYO reverse proxy** (nginx, Caddy, Traefik): configure TLS
+termination to forward HTTPS to the telegram-gateway container on the compose
+network. Set `TUNNEL_MODE=byo` in `.env`.
+
+Only one tunnel should be active at a time.
+
+---
+
 ## Deploy
 
 ```sh
 just deploy-vps
 ```
 
-This recipe chains: `build-base` → `compose pull || true` → `compose build`
-→ `compose up -d`.
-
-- `build-base` builds the shared `oh-my-bmad-base:local` image from
-  `Dockerfile.base`.
-- `compose pull || true` attempts to pull pre-built service images from GHCR;
-  the `|| true` means a `manifest unknown` error (e.g., `OMB_VERSION=dev`) is
-  non-fatal — the build step covers it.
-- `compose build` builds any service whose image wasn't pulled.
-- `compose up -d` starts all 6 compose services in detached mode.
+This recipe chains: `build-base` → `compose pull || true` → `compose build` → `compose up -d`.
+`build-base` builds the shared `oh-my-bmad-base:local` image; `compose pull || true` fetches
+any pre-published GHCR images (non-fatal if absent — e.g. `OMB_VERSION=dev`);
+`compose build` covers any unpulled services; `compose up -d` starts all 6.
 
 Expected final lines:
 
@@ -213,21 +178,13 @@ Expected final lines:
 docker compose ps
 ```
 
-All 6 services should show `Up (healthy)` within 60 seconds. The healthcheck
-uses `/tmp/ready` (Story 1.4) — it fires once the service's `__main__.py`
-startup completes.
+All 6 services should show `Up (healthy)` within ~60 s after container create
+(add several minutes on a cold first-run including `docker compose build`).
+The healthcheck uses `/tmp/ready` (Story 1.4) — it fires once the service's
+`__main__.py` startup completes.
 
-The `/v1/health` HTTP endpoint arrives in Story 2.9. Once it lands:
-
-```sh
-curl http://localhost:<PORT>/v1/health
-# Expected: {"status": "ok"}
-```
-
-The `/ping` Telegram command arrives in Story 3.5. Once it lands, send `/ping`
-to your bot; expect `pong · <latency-ms>ms` within 2 seconds.
-
-Real task execution (the core operator workflow) arrives in Story 5.12.
+The `/v1/health` HTTP endpoint arrives in Story 2.9. The `/ping` Telegram
+command arrives in Story 3.5. Real task execution arrives in Story 5.12.
 
 ---
 
@@ -261,48 +218,27 @@ startup. If you see an import error or missing env-var, fix `.env` and re-run
 Check cloudflared (or ngrok) logs for connection errors. Common causes:
 
 - Wrong port in the tunnel command — must match the gateway port
-  (default `8080`).
+  (arrives in Story 3.1).
 - `TUNNEL_MODE` in `.env` doesn't match the running tunnel type.
 - Firewall or VPS security-group blocks outbound connections on port 7844
   (cloudflared) or 443 (ngrok).
 
 ### 4. `manifest unknown` on `compose pull`
 
-```
-Error response from daemon: manifest unknown
-```
+`OMB_VERSION` points at a tag that hasn't been published to GHCR. Either set
+`OMB_VERSION=dev` to build from local source, or set it to a tag that exists
+at `github.com/<owner>/oh-my-bmad/releases`.
 
-`OMB_VERSION` points at a tag that hasn't been published to GHCR. Either:
+### 5. SELinux blocks bind-mount (RHEL / Rocky / AlmaLinux)
 
-- Set `OMB_VERSION=dev` to build entirely from local source (no pull needed).
-- Set `OMB_VERSION` to a tag that exists at
-  `github.com/<owner>/oh-my-bmad/releases`.
-
-### 5. SELinux blocks bind-mount (RHEL / Fedora hosts)
-
-On SELinux-enforcing systems, the registry bind-mount may fail with
-`permission denied`. Fix: append the `:Z` flag to the volume definition in
-`docker-compose.yml`, or consider switching to the named-volume path used on
-Ubuntu (the default VPS target of this guide).
+The compose stack assumes no SELinux enforcement (Ubuntu 24.04 default). If
+deploying on an SELinux-enforcing host, add `:z` (shared-volume relabel) to
+volume mounts in a compose override — not `:Z` (exclusive), which breaks the
+shared `oh-my-bmad-data` volume when multiple services mount it.
 
 ---
 
 ## Upgrading
 
-When a new `v*` tag is published to GHCR:
-
-```sh
-# 1. Bump the version in .env:
-#    OMB_VERSION=<new-tag>   e.g. OMB_VERSION=0.2.0
-
-# 2. Pull new images and restart:
-docker compose pull
-docker compose up -d
-```
-
-Compose stops each service, pulls the new image tag, and restarts with
-preserved volumes. Persistent data (registry DB, event log, artifacts) survives
-the upgrade.
-
-See the top-level `README.md` Upgrading section for notes on `:latest` tag
-advancement and pre-release tags.
+See the [Upgrading](../../README.md#upgrading) section in the root README for
+the canonical bump + pull + up-d flow.

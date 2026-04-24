@@ -11,7 +11,7 @@ This repo is the **Phase 1 implementation**. Planning artifacts (product brief, 
 ## Quickstart
 
 ```sh
-# Prereqs: Docker Engine ≥ 24 + Docker Compose v2 + uv ≥ 0.5 + just
+# Prereqs: Docker Engine ≥ 24 + Docker Compose v2.24+ + uv ≥ 0.5 + just ≥ 1.14
 #   brew install uv just                                  # macOS
 #   curl -LsSf https://astral.sh/uv/install.sh | sh       # Linux (uv)
 git clone <this-repo-url> oh-my-bmad && cd oh-my-bmad
@@ -67,7 +67,7 @@ Full deployment guides live at [`docs/deployment/vps.md`](docs/deployment/vps.md
 ### VPS (Linux)
 
 - [ ] Provision a VPS (Ubuntu 24.04 LTS recommended, ≥ 2 GB RAM, public IPv4).
-- [ ] Install Docker Engine ≥ 24 + Docker Compose v2 + git + `uv ≥ 0.5` + `just`.
+- [ ] Install Docker Engine ≥ 24 + Docker Compose v2.24+ + git + `uv ≥ 0.5` + `just ≥ 1.14`.
 - [ ] Choose a tunnel for the Telegram webhook ingress: Cloudflare Tunnel (default), ngrok, or BYO reverse proxy.
 - [ ] `git clone` + `cp .env.example .env` + edit secrets (Telegram bot token, Anthropic API key, GitHub PAT, allowlisted user IDs).
 - [ ] `just deploy-vps` → wait for 6/6 healthy.
@@ -75,7 +75,7 @@ Full deployment guides live at [`docs/deployment/vps.md`](docs/deployment/vps.md
 
 ### Local macOS
 
-- [ ] Install Docker Desktop (or Colima ≥ 0.6) + git + `uv ≥ 0.5` + `just`.
+- [ ] Install Docker Desktop (or Colima ≥ 0.6) + git + `uv ≥ 0.5` + `just ≥ 1.14`.
 - [ ] Same `.env` setup as VPS.
 - [ ] `just deploy-macos` → wait for 6/6 healthy.
 - [ ] Same verification.

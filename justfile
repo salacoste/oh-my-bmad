@@ -53,7 +53,9 @@ migrator-test-additive:
 # Bring up the stack. On macOS automatically includes the overlay (bind-mount
 # to ${HOME}/.oh-my-bmad) and ensures the host directory exists. On Linux uses
 # the base compose only (named volume, no host-path prep needed).
-dev:
+# Depends on `build-base` so a fresh clone gets the shared `oh-my-bmad-base:local`
+# image before compose's per-service builds run (they all `FROM oh-my-bmad-base:local`).
+dev: build-base
     #!/usr/bin/env bash
     set -euo pipefail
     if [ "$(uname -s)" = "Darwin" ]; then
