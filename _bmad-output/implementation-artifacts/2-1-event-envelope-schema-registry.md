@@ -1,6 +1,6 @@
 # Story 2.1: Event envelope + schema registry + canonical serializer
 
-Status: review
+Status: done
 
 ## Story
 
@@ -284,4 +284,13 @@ _To be filled. Expected: 4 new + 4 modified + uv.lock regen._
 
 ### Change Log
 
-- **2026-04-24:** Story 2.1 implemented — **first real feature commit** of the project. Atomic scaffold commit `37fede8` (15 files changed, 1150+/21-). Pydantic 2.13.3 locked; `events 0.2.0` on bootstrap. Platform test count 75 → 132 (+57 new tests across errors/registry/envelope/canonical). mypy --strict scope grew 14 → 21 source files; all green. Deviations documented in commit: `mypy_path` config (first multi-file package surfaced the gap); `model_dump(mode="python")` for canonical (JSON mode coerces NaN); dict-first union payload; `# noqa: N818` on EventSchemaUnknown. Status: `ready-for-dev` → `in-progress` → `review`.
+- **2026-04-24:** Story 2.1 implemented — **first real feature commit** of the project. Atomic scaffold commit `37fede8` (15 files changed, 1150+/21-). Pydantic 2.13.3 locked; `events 0.2.0` on bootstrap. Platform test count 75 → 132 (+57 new tests across errors/registry/envelope/canonical). mypy --strict scope grew 14 → 21 source files; all green. Status: `ready-for-dev` → `in-progress` → `review`.
+- **2026-04-24 (review):** 3-layer adversarial review on the high-risk file surfaced 3 CRITICAL + 7 MAJOR + MEDIUM/MINOR. All empirically reproduced. Applied in commit `c5da0b4` (9 files, 429+/64-):
+  - **CRITICAL — EVENT_TYPES stale cross-module binding.** `envelope.py` imported the frozenset at module load; after `register()`, `_rebuild_types_cache()` rebound the schema_registry attribute but the importer held the stale empty value. `EventSchemaUnknown.registered_types` always reported `(empty registry)`. P0 observability bug on the FR21/NFR-O5 path. Fix: envelope.py now uses `from events import schema_registry` + `schema_registry.EVENT_TYPES` at call-time; `__init__.py` gains a PEP 562 `__getattr__` for live-binding re-export.
+  - **CRITICAL — canonical round-trip not byte-stable** on `+00:00` inputs or microsecond precision. Fixed by normalizing `emitted_at` in the field_validator to canonical UTC + ms-precision. Round-trip is now the fixpoint.
+  - **CRITICAL — payload dict mutable via reference.** `env.payload["k"]=v` succeeded. Fix: `@field_validator("payload", mode="after")` wraps dict payloads in a `_FrozenDict` (dict subclass raising TypeError on every mutation method). Recursive. Deviation from spec: dict-subclass rather than `MappingProxyType` to avoid Pydantic v2 strict-mode union-serialization warnings on non-dict Mapping types.
+  - **MAJOR (7)**: `register()` shape validation (event_type regex + semver regex); `create()` isinstance check for BaseModel payloads (coerce via round-trip if wrong class); `UnicodeEncodeError` wrapped in CanonicalSerializationError (surrogate strings); `_normalize_iso_z` dead code deleted; `arbitrary_types_allowed=True` removed (no longer needed); payload round-trip model-identity drop documented with regression test; naive-datetime error-message explicit branch.
+  - **MEDIUM/MINOR**: `test_payload_key_order_irrelevant` rewritten to actually test dict-insertion-order determinism; `EventSchemaUnknown._format` truncates at 10 entries (future info-leak guard); dead `_NumericPayload` class + cargo-cult `arbitrary_types_allowed` removed from test fixtures.
+  - Tests: 57 → 83 in `packages/events/` (+26); platform-wide 132 → 158.
+  - All 10 verification probes green, including 3 empirical repros of the original CRITICAL bugs.
+- **2026-04-24 (finalize):** Change Log captures review-fix summary; Status `review` → `done`.
