@@ -71,9 +71,9 @@ _EMIT_ATTRS = {"emit"}
 
 def _load_registry() -> frozenset[str]:
     try:
-        from events.schema_registry import REGISTRY  # type: ignore[import-untyped]
+        from events.schema_registry import EVENT_TYPES  # type: ignore[import-untyped]
 
-        return REGISTRY
+        return EVENT_TYPES
     except ImportError:
         print(
             "check_event_registry.py: cannot import events.schema_registry — run `uv sync` first",
@@ -196,7 +196,7 @@ def _self_test() -> int:
 
     ns: dict[str, object] = {}
     exec(registry_path.read_text(), ns)  # noqa: S102
-    fixture_registry: frozenset[str] = ns.get("REGISTRY", frozenset())  # type: ignore[assignment]
+    fixture_registry: frozenset[str] = ns.get("EVENT_TYPES", frozenset())  # type: ignore[assignment]
 
     failures: list[str] = []
 

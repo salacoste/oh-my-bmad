@@ -1,0 +1,210 @@
+"""Unit tests for events.canonical — deterministic byte-identical serialization.
+
+AC-6 / Story 2.1: ~10 tests.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Generator
+from datetime import UTC, datetime
+
+import pytest
+from pydantic import BaseModel
+
+from events.canonical import from_canonical_json, to_canonical_json
+from events.envelope import Actor, EventEnvelope
+from events.errors import CanonicalSerializationError
+from events.schema_registry import register, unregister_all
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+_VALID_EVENT_ID = "e-01917e5c-a7d1-7000-8000-000000000001"
+_VALID_REQUEST_ID = "01917e5c-a7d1-7000-8000-000000000002"
+_VALID_EMITTED_AT = datetime(2026, 4, 21, 10, 30, 0, 123000, tzinfo=UTC)
+
+
+class _SimplePayload(BaseModel):
+    value: str
+
+
+class _NumericPayload(BaseModel):
+    number: float
+
+
+@pytest.fixture(autouse=True)
+def _clean_registry() -> Generator[None, None, None]:
+    unregister_all()
+    register("task.created", "1.0.0", _SimplePayload)
+    yield
+    unregister_all()
+
+
+def _make_envelope(**overrides: object) -> EventEnvelope:
+    kwargs: dict[str, object] = dict(
+        event_id=_VALID_EVENT_ID,
+        schema_version="1.0.0",
+        type="task.created",
+        emitted_at=_VALID_EMITTED_AT,
+        emitted_at_monotonic_ns=999,
+        actor=Actor(kind="system", id="sys"),
+        payload={"value": "hello"},
+        request_id=_VALID_REQUEST_ID,
+    )
+    kwargs.update(overrides)
+    return EventEnvelope(**kwargs)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
+class TestToCanonicalJsonReturnsBytes:
+    def test_returns_bytes(self) -> None:
+        env = _make_envelope()
+        result = to_canonical_json(env)
+        assert isinstance(result, bytes)
+
+
+class TestByteIdenticalOutput:
+    def test_same_envelope_two_invocations_identical(self) -> None:
+        env = _make_envelope()
+        assert to_canonical_json(env) == to_canonical_json(env)
+
+
+class TestUtcZSuffix:
+    def test_emitted_at_has_z_suffix_not_plus_00(self) -> None:
+        env = _make_envelope()
+        data = to_canonical_json(env)
+        text = data.decode("utf-8")
+        assert "+00:00" not in text
+        assert "Z" in text
+
+    def test_z_suffix_format_matches_spec(self) -> None:
+        # Architecture line 360: 2026-04-21T10:30:00.123Z
+        env = _make_envelope(emitted_at=datetime(2026, 4, 21, 10, 30, 0, 123000, tzinfo=UTC))
+        text = to_canonical_json(env).decode("utf-8")
+        assert "2026-04-21T10:30:00.123Z" in text
+
+
+class TestMillisecondPrecision:
+    def test_sub_ms_microseconds_stripped(self) -> None:
+        # 123456 microseconds → 123000 after truncation → .123Z
+        env = _make_envelope(emitted_at=datetime(2026, 4, 21, 10, 30, 0, 123456, tzinfo=UTC))
+        text = to_canonical_json(env).decode("utf-8")
+        # Should be .123Z not .123456
+        assert "123456" not in text
+        assert "2026-04-21T10:30:00.123Z" in text
+
+
+class TestSortKeysDeterminism:
+    def test_payload_key_order_irrelevant(self) -> None:
+        """Two envelopes with same payload data in different insertion order → identical bytes."""
+
+        # We can't control key order in dict literals in Python 3.7+ but we can
+        # register a payload model with multiple fields and pass them in different order.
+        class _MultiPayload(BaseModel):
+            b: str
+            a: int
+
+        register("task.updated", "1.0.0", _MultiPayload)
+
+        env1 = EventEnvelope(
+            event_id=_VALID_EVENT_ID,
+            schema_version="1.0.0",
+            type="task.updated",
+            emitted_at=_VALID_EMITTED_AT,
+            emitted_at_monotonic_ns=0,
+            actor=Actor(kind="system", id="sys"),
+            payload=_MultiPayload(b="hello", a=1),
+            request_id=_VALID_REQUEST_ID,
+        )
+        env2 = EventEnvelope(
+            event_id=_VALID_EVENT_ID,
+            schema_version="1.0.0",
+            type="task.updated",
+            emitted_at=_VALID_EMITTED_AT,
+            emitted_at_monotonic_ns=0,
+            actor=Actor(kind="system", id="sys"),
+            payload=_MultiPayload(a=1, b="hello"),
+            request_id=_VALID_REQUEST_ID,
+        )
+        assert to_canonical_json(env1) == to_canonical_json(env2)
+
+    def test_output_keys_are_sorted(self) -> None:
+        env = _make_envelope()
+        text = to_canonical_json(env).decode("utf-8")
+        # actor comes before emitted_at alphabetically
+        assert text.index('"actor"') < text.index('"emitted_at"')
+
+
+class TestAllowNanFalse:
+    def test_nan_payload_raises_canonical_error(self) -> None:
+        class _NanPayload(BaseModel):
+            model_config = {"arbitrary_types_allowed": True}
+            val: float
+
+        register("task.nan", "1.0.0", _NanPayload)
+        env = EventEnvelope(
+            event_id=_VALID_EVENT_ID,
+            schema_version="1.0.0",
+            type="task.nan",
+            emitted_at=_VALID_EMITTED_AT,
+            emitted_at_monotonic_ns=0,
+            actor=Actor(kind="system", id="sys"),
+            payload={"val": float("nan")},
+            request_id=_VALID_REQUEST_ID,
+        )
+        with pytest.raises(CanonicalSerializationError):
+            to_canonical_json(env)
+
+    def test_inf_payload_raises_canonical_error(self) -> None:
+        class _InfPayload(BaseModel):
+            model_config = {"arbitrary_types_allowed": True}
+            val: float
+
+        register("task.inf", "1.0.0", _InfPayload)
+        env = EventEnvelope(
+            event_id=_VALID_EVENT_ID,
+            schema_version="1.0.0",
+            type="task.inf",
+            emitted_at=_VALID_EMITTED_AT,
+            emitted_at_monotonic_ns=0,
+            actor=Actor(kind="system", id="sys"),
+            payload={"val": float("inf")},
+            request_id=_VALID_REQUEST_ID,
+        )
+        with pytest.raises(CanonicalSerializationError):
+            to_canonical_json(env)
+
+
+class TestUtf8Encoding:
+    def test_output_is_valid_utf8(self) -> None:
+        env = _make_envelope()
+        data = to_canonical_json(env)
+        # Should decode without error
+        text = data.decode("utf-8")
+        assert len(text) > 0
+
+
+class TestRoundTrip:
+    def test_from_canonical_json_round_trips(self) -> None:
+        env = _make_envelope()
+        data = to_canonical_json(env)
+        env2 = from_canonical_json(data)
+        assert env2.event_id == env.event_id
+        assert env2.type == env.type
+        assert env2.schema_version == env.schema_version
+        assert env2.request_id == env.request_id
+        # emitted_at: truncated to ms in serialization, so microsecond may differ
+        assert env2.emitted_at.year == env.emitted_at.year
+
+    def test_round_trip_is_byte_stable(self) -> None:
+        """Serializing the deserialized envelope yields the same bytes."""
+        env = _make_envelope()
+        data1 = to_canonical_json(env)
+        env2 = from_canonical_json(data1)
+        data2 = to_canonical_json(env2)
+        assert data1 == data2
