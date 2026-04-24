@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: 2026-04-24T14:00:00Z
+# last_updated: 2026-04-24T15:30:00Z
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-04-24T14:00:00Z
+last_updated: 2026-04-24T15:30:00Z
 project: oh-my-bmad
 project_key: NOKEY
 tracking_system: file-system
@@ -65,7 +65,7 @@ development_status:
   epic-2: in-progress
   2-1-event-envelope-schema-registry: done
   2-2-uuidv7-injectable-clock: done
-  2-3-registry-state-sqlite-schema: backlog
+  2-3-registry-state-sqlite-schema: review
   2-4-event-log-append-writer: backlog
   2-5-event-log-subscriber-materializer: backlog
   2-6-snapshot-capture-replay: backlog
