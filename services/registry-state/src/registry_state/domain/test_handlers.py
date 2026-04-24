@@ -1,0 +1,281 @@
+"""Tests for registry_state.domain.handlers — Story 2.5 AC-13 (6 tests).
+
+Each test opens a fresh in-memory SQLite DB and exercises handler functions
+directly via a live AsyncSession. Local fixtures ``fixed_clock`` +
+``seeded_uuid7`` are inlined per the Story 2.4 convention (no new conftest).
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncGenerator, Callable
+from random import Random
+
+import pytest
+import pytest_asyncio
+from events import (
+    FROZEN_EPOCH,
+    Actor,
+    EventEnvelope,
+    FrozenClock,
+    TickingClock,
+    new_event_id,
+    new_session_id,
+    new_task_id,
+    new_uuid7,
+)
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from registry_state.adapters.sqlite_store import get_session
+from registry_state.domain.errors import MaterializerError
+from registry_state.domain.event_types import (
+    TaskCreatedPayload,
+    TaskExecutionStartedPayload,
+    TaskPlanningStartedPayload,
+    TaskPlanReadyPayload,
+)
+from registry_state.domain.handlers import (
+    handle_task_created,
+    handle_task_execution_started,
+    handle_task_plan_ready,
+    handle_task_planning_started,
+)
+from registry_state.schema import Base, Task
+from registry_state.schema import Session as SessionRow
+
+# ---------------------------------------------------------------------------
+# Local fixtures
+# ---------------------------------------------------------------------------
+
+_ACTOR = Actor(kind="system", id="test-handlers")
+
+
+@pytest.fixture(autouse=True)
+def _ensure_event_types_registered() -> None:
+    """Re-register the 4 task event types before each test.
+
+    ``test_event_log.py`` has an autouse ``_clean_registry`` fixture that calls
+    ``unregister_all()`` at teardown.  When pytest runs the full suite, that
+    teardown fires AFTER our tests collect but BEFORE they execute (depending on
+    ordering), leaving the registry empty.  Re-registering here (idempotent per
+    Story 2.1's register() contract) ensures a clean known state for every test
+    in this file regardless of suite order.
+    """
+    from events.schema_registry import register as _reg
+
+    _reg("task.created", "1.0.0", TaskCreatedPayload)
+    _reg("task.planning.started", "1.0.0", TaskPlanningStartedPayload)
+    _reg("task.plan.ready", "1.0.0", TaskPlanReadyPayload)
+    _reg("task.execution.started", "1.0.0", TaskExecutionStartedPayload)
+
+
+@pytest.fixture
+def fixed_clock() -> FrozenClock:
+    return FrozenClock(mono_ns=0, now=FROZEN_EPOCH)
+
+
+@pytest.fixture
+def seeded_uuid7() -> Callable[[], str]:
+    rng = Random(42)
+    clock = TickingClock(start_now=FROZEN_EPOCH)
+    return lambda: new_uuid7(clock=clock, rng=rng)
+
+
+@pytest_asyncio.fixture
+async def db_session() -> AsyncGenerator[AsyncSession, None]:
+    """In-memory SQLite session with schema created; auto-commits on clean exit.
+
+    NullPool means every connection is independent — we must create schema and
+    run tests on the SAME connection.  We achieve this by using a
+    ``StaticPool`` so all ``connect()`` calls return the same underlying
+    sqlite3 connection, then creating tables once before handing off the
+    session.
+    """
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import StaticPool
+
+    eng = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    async with eng.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    sm = get_session(eng)
+    async with sm() as session, session.begin():
+        yield session
+    await eng.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_created_envelope(
+    mono_ns: int = 1_000_000,
+    seed: int = 42,
+    title: str | None = "Test",
+) -> EventEnvelope:
+    rng = Random(seed)
+    clk = FrozenClock(mono_ns=mono_ns, now=FROZEN_EPOCH)
+    tid = new_task_id(clock=clk, rng=rng)
+    return EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.created",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskCreatedPayload(task_id=tid, title=title),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+
+
+# ===========================================================================
+# Tests
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_task_created_inserts_task_row_with_pending_status(
+    db_session: AsyncSession,
+) -> None:
+    """handle_task_created inserts a Task row with status='pending'."""
+    env = _make_created_envelope()
+    await handle_task_created(db_session, env)
+    assert isinstance(env.payload, TaskCreatedPayload)
+    task = await db_session.get(Task, env.payload.task_id)
+    assert task is not None
+    assert task.status == "pending"
+    assert task.actor_kind == "system"
+    assert task.title == "Test"
+    assert task.last_event_id == env.event_id
+
+
+@pytest.mark.asyncio
+async def test_task_created_is_idempotent(db_session: AsyncSession) -> None:
+    """handle_task_created called twice produces the same row state (ON CONFLICT DO UPDATE)."""
+    env = _make_created_envelope()
+    await handle_task_created(db_session, env)
+    await handle_task_created(db_session, env)  # second call is idempotent
+    assert isinstance(env.payload, TaskCreatedPayload)
+    result = await db_session.execute(
+        text("SELECT COUNT(*) FROM tasks WHERE id = :tid"),
+        {"tid": env.payload.task_id},
+    )
+    count = result.scalar()
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_task_planning_started_updates_status(db_session: AsyncSession) -> None:
+    """handle_task_planning_started transitions task status pending → planning."""
+    env_created = _make_created_envelope(mono_ns=1_000_000)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng = Random(99)
+    clk = FrozenClock(mono_ns=2_000_000, now=FROZEN_EPOCH)
+    env_planning = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.planning.started",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskPlanningStartedPayload(task_id=task_id),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    await handle_task_planning_started(db_session, env_planning)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.status == "planning"
+    assert task.last_event_id == env_planning.event_id
+
+
+@pytest.mark.asyncio
+async def test_task_plan_ready_updates_status(db_session: AsyncSession) -> None:
+    """handle_task_plan_ready transitions task status → plan_ready."""
+    env_created = _make_created_envelope(mono_ns=1_000_000)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng = Random(33)
+    clk = FrozenClock(mono_ns=3_000_000, now=FROZEN_EPOCH)
+    env_pr = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.plan.ready",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskPlanReadyPayload(task_id=task_id, plan_summary="Step 1"),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    await handle_task_plan_ready(db_session, env_pr)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.status == "plan_ready"
+
+
+@pytest.mark.asyncio
+async def test_task_execution_started_updates_status_and_inserts_session_row(
+    db_session: AsyncSession,
+) -> None:
+    """handle_task_execution_started: status → executing + new session row inserted."""
+    env_created = _make_created_envelope(mono_ns=1_000_000)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng4 = Random(4)
+    clk4 = FrozenClock(mono_ns=4_000_000, now=FROZEN_EPOCH)
+    sid = new_session_id(clock=clk4, rng=rng4)
+
+    env_exec = EventEnvelope.create(
+        event_id=new_event_id(clock=clk4, rng=rng4),
+        schema_version="1.0.0",
+        type="task.execution.started",
+        emitted_at=clk4.now(),
+        emitted_at_monotonic_ns=clk4.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskExecutionStartedPayload(task_id=task_id, session_id=sid),
+        request_id=new_uuid7(clock=clk4, rng=rng4),
+    )
+    await handle_task_execution_started(db_session, env_exec)
+
+    task = await db_session.get(Task, task_id)
+    sess = await db_session.get(SessionRow, sid)
+    assert task is not None
+    assert task.status == "executing"
+    assert sess is not None
+    assert sess.worker_kind == "unknown"
+    assert sess.status == "active"
+    assert sess.task_id == task_id
+
+
+@pytest.mark.asyncio
+async def test_handler_on_missing_task_raises_materializer_error(
+    db_session: AsyncSession,
+) -> None:
+    """Handlers raise MaterializerError when the task row doesn't exist."""
+    rng = Random(99)
+    clk = FrozenClock(mono_ns=2_000_000, now=FROZEN_EPOCH)
+    missing_task_id = new_task_id(clock=clk, rng=rng)
+    env = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.planning.started",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskPlanningStartedPayload(task_id=missing_task_id),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    with pytest.raises(MaterializerError) as exc_info:
+        await handle_task_planning_started(db_session, env)
+    assert exc_info.value.event_type == "task.planning.started"
+    assert missing_task_id in exc_info.value.reason
