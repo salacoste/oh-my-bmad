@@ -129,6 +129,18 @@ Compose stops each service, pulls the new tag, and starts it with preserved
 volumes. Persistent data (registry DB, event log, artifacts) survives the
 upgrade.
 
+Notes:
+
+- **`console-cli` is published but not in compose.** The image
+  (`ghcr.io/<owner>/oh-my-bmad-console-cli:<version>`) can be pulled ad-hoc
+  (`docker pull ghcr.io/<owner>/oh-my-bmad-console-cli:<version>`) but isn't
+  brought up by `docker compose up -d`. Story 4.6 will wire a host shim that
+  ties `oh-my-bmad console <cmd>` to the image.
+- **`:latest` only advances on stable semver tags.** Prerelease tags (e.g.
+  `v0.2.0-rc1`, containing a `-`) publish the versioned tag but do NOT move
+  `:latest` — a fork to `v0.2.0-rc1` requires setting `OMB_VERSION=0.2.0-rc1`
+  explicitly.
+
 Phase 1 uses tag-based versioning; digest-pinning + signed-image verification
 land in a Phase 2 hardening story.
 
