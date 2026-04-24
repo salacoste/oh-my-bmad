@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: 2026-04-24T05:45:00Z
+# last_updated: 2026-04-24T06:30:00Z
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-04-24T05:45:00Z
+last_updated: 2026-04-24T06:30:00Z
 project: oh-my-bmad
 project_key: NOKEY
 tracking_system: file-system
@@ -55,7 +55,7 @@ development_status:
   1-7-secret-scanner-sanitizer: done
   1-8-dockerfile-base-multistage: done
   1-9-ghcr-image-publishing: done
-  1-10a-deployment-quickstart-docs: backlog
+  1-10a-deployment-quickstart-docs: review
   1-10b-full-operator-docs: backlog
   epic-1-retrospective: optional
 
