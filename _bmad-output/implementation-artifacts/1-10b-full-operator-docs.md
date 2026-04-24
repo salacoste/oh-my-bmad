@@ -1,6 +1,6 @@
 # Story 1.10b: Full operator documentation set (MVP-ship-blocker, post-Bootstrap)
 
-Status: review
+Status: done
 
 ## Story
 
@@ -236,4 +236,16 @@ _To be filled. Expected: 6 new + 1 modified._
 
 ### Change Log
 
-_To be filled._
+- **2026-04-24:** Story 1.10b implemented. 6 new docs + 1 README modification; atomic scaffold commit `a8efa01` (1246+/1-). Verification green.
+- **2026-04-24 (review):** 3-layer adversarial review surfaced 1 CRITICAL + 4 MAJOR + 2 HIGH + 8 MEDIUM/LOW. Applied in fix commit `429f53c` (7 files, 170+/133-):
+  - **CRITICAL — `docker compose run --rm migrator` broken.** `docker-compose.yml` has no migrator service; it's a standalone image in `scripts/migrator/`. Fixed: replaced with real `docker build + docker run -v <volume>:/var/lib/oh-my-bmad -e EVENT_LOG_PATH=... oh-my-bmad-migrator:latest v<from>-to-<to>` pattern with Linux + macOS volume-mount variants.
+  - **MAJOR — post-migration rename step missing.** Migrator outputs `<path>.v<to>.jsonl` + archives original as `<path>.v<from>.archive`; services default `EVENT_LOG_PATH=.../current.jsonl`, so without a rename they read stale archived data. Fixed: schema-evolution.md now shows explicit rename step for both platforms.
+  - **MAJOR — macOS restore broken.** `docker volume create + tar -xzf` targets named-volume storage, but macOS overlay bind-mounts to `${HOME}/.oh-my-bmad`. Fixed: separate Linux + macOS restore paths.
+  - **MAJOR — testing-guide.md 259 LOC over AC-11 250 cap.** Trimmed to 241 by replacing tautological assertion with meaningful one + condensing prose.
+  - **MAJOR — a8efa01 commit message fabricated "120-260 spec range"** (AC says 120-250). Can't rewrite history; documented here + corrected downstream.
+  - **HIGH — MarkdownV2 prose list omitted backtick** (regex had it). Fixed.
+  - **HIGH — `[Approve]/[Reject]` bracket ambiguity.** Added note clarifying these are inline-keyboard placeholders, not literal MarkdownV2.
+  - **MEDIUM/LOW** — escape_md re-escape caveat; backup filename format `2026-01-15T143022Z` (not `20260115T143022Z`); `just lint` sub-command count 6→7; scaffold-version-tags marked historical; worker-wrapper 280→283 MB size consistency; quarterly restore drill `uv sync --dev` step; migrator-build prerequisite note; archive-cleanup guidance; rsync `--remove-source-files` safety warning.
+  - **Skipped (documented):** operator-runbook added a 3rd probe vs spec's 2 (additive); migrator-dir-per-version-pair spec-sketch was wrong — doc correctly reflects MIGRATIONS dict pattern.
+  - Live verification post-fix: all 6 docs in 120-250 LOC range; scan-secrets clean; all regressions green.
+- **2026-04-24 (finalize):** Change Log expanded; Status `review` → `done`.
