@@ -11,24 +11,20 @@ This repo is the **Phase 1 implementation**. Planning artifacts (product brief, 
 ## Quickstart
 
 ```sh
-# 1. Prereqs: Docker Engine ≥ 24 + Docker Compose v2 + uv ≥ 0.5 + just
-#    Install uv:   curl -LsSf https://astral.sh/uv/install.sh | sh
-#    Install just: brew install just  (macOS)  |  cargo install just  (anywhere)
-#    (or: brew install uv just  on macOS to grab both)
+# Prereqs: Docker Engine ≥ 24 + Docker Compose v2 + uv ≥ 0.5 + just
+#   brew install uv just                                  # macOS
+#   curl -LsSf https://astral.sh/uv/install.sh | sh       # Linux (uv)
 git clone <this-repo-url> oh-my-bmad && cd oh-my-bmad
-uv sync --dev                                  # installs workspace + dev tools (pre-commit, pytest, ruff, mypy)
-uv run pre-commit install                      # wires secret-scanner into .git/hooks/pre-commit
-just bootstrap-verify                          # confirms workspace wires up (runs --no-dev)
-
-# 2. Configure (Story 1.4 will land .env.example):
-# cp .env.example .env && $EDITOR .env
-
-# 3. Deploy (Story 1.4 will land docker-compose.yml):
-# docker compose up -d                         # VPS (Linux)
-# docker compose -f docker-compose.yml -f docker-compose.macos.yml up -d  # macOS
+uv sync --dev
+uv run pre-commit install
+just bootstrap-verify
+cp .env.example .env
+$EDITOR .env                                             # fill in secrets + tunnel choice
+just dev                                                 # macOS: overlay; Linux: base compose
+docker compose ps                                        # expect 6/6 Up (healthy) within 60 s
 ```
 
-> Story 1.1 ships only the workspace skeleton + this README. The full deploy quickstart is finished in Stories 1.4 (compose + env + justfile) and 1.10a (deployment quickstart docs).
+**For detailed deployment guides:** [`docs/deployment/vps.md`](docs/deployment/vps.md) · [`docs/deployment/macos.md`](docs/deployment/macos.md).
 
 ---
 
@@ -41,7 +37,7 @@ just bootstrap-verify                          # confirms workspace wires up (ru
 | `packages/` | Shared libraries imported by multiple services and MCP servers (`events`, `secret-hygiene`, `idempotency`). All 3 scaffolded as of Story 1.2. |
 | `upstream/` | Vendored upstream-fork source trees (`omc/`, `clawhip/`), synced via `just sync-upstream <name>`. Empty until Story 1.3 (upstream vendoring). |
 | `tests/` | Cross-service test trees: `separability/`, `crash-injection/`, `idempotency/`, `integration/`, `contract/`, `migrator/`. Empty until Story 1.5 (test tree + CI skeleton). |
-| `docs/` | Operator documentation: deployment guides, runbooks, schema-evolution, exceptions, testing-guide. Empty until Stories 1.10a and 1.10b. |
+| `docs/` | Operator documentation: [deployment guides](docs/deployment/) landed in Story 1.10a; runbook + schema evolution + exceptions + testing guide + backup-restore + message-design land in Story 1.10b. |
 | `_bmad-output/` | Planning artifacts (product brief, PRD, architecture, epics, sprint status). Authoritative source of design decisions. |
 | `_bmad/`, `.claude/`, `.cursor/`, `.gemini/`, `.opencode/`, `.pi/`, `.agent/`, `.agents/`, `.omc/` | BMad framework + IDE/skill integration files (kept for ongoing planning amendments). |
 
@@ -66,24 +62,23 @@ Services and packages follow the simpler 1:1 kebab ↔ snake convention (e.g., `
 
 ## Deployment checklist
 
-Both targets are populated as stubs in Story 1.1 and filled in detail by Story 1.10a (`docs/deployment/{vps,macos}.md`).
+Full deployment guides live at [`docs/deployment/vps.md`](docs/deployment/vps.md) + [`docs/deployment/macos.md`](docs/deployment/macos.md). The 6-step summary:
 
 ### VPS (Linux)
 
-- [ ] Provision a VPS (Ubuntu 24.04 LTS recommended, ≥2 GB RAM, public IPv4).
-- [ ] Install Docker Engine ≥ 24 + Docker Compose v2 + git + uv ≥ 0.5.
-- [ ] Choose a tunnel for the Telegram webhook ingress: **Cloudflare Tunnel (default)**, ngrok, or BYO reverse proxy. (Story 1.4 docs the three options.)
-- [ ] `git clone` + `cp .env.example .env` + edit secrets (Telegram bot token, Anthropic API key, GitHub PAT, allowlisted user ids).
-- [ ] `docker compose up -d`.
-- [ ] Verify `curl http://localhost:<port>/v1/health` (Story 2.9).
-- [ ] Send `/ping` to the Telegram bot; expect `pong · …` within 2 s (Story 3.5).
+- [ ] Provision a VPS (Ubuntu 24.04 LTS recommended, ≥ 2 GB RAM, public IPv4).
+- [ ] Install Docker Engine ≥ 24 + Docker Compose v2 + git + `uv ≥ 0.5` + `just`.
+- [ ] Choose a tunnel for the Telegram webhook ingress: Cloudflare Tunnel (default), ngrok, or BYO reverse proxy.
+- [ ] `git clone` + `cp .env.example .env` + edit secrets (Telegram bot token, Anthropic API key, GitHub PAT, allowlisted user IDs).
+- [ ] `just deploy-vps` → wait for 6/6 healthy.
+- [ ] Verify `/v1/health` (arrives in Story 2.9) + send `/ping` to the Telegram bot (arrives in Story 3.5).
 
 ### Local macOS
 
-- [ ] Install Docker Desktop (or Colima ≥ 0.6) + git + uv ≥ 0.5.
+- [ ] Install Docker Desktop (or Colima ≥ 0.6) + git + `uv ≥ 0.5` + `just`.
 - [ ] Same `.env` setup as VPS.
-- [ ] `docker compose -f docker-compose.yml -f docker-compose.macos.yml up -d`.
-- [ ] Same `/v1/health` and `/ping` verification.
+- [ ] `just deploy-macos` → wait for 6/6 healthy.
+- [ ] Same verification.
 
 ---
 
