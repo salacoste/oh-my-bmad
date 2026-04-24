@@ -35,19 +35,22 @@ target_metadata = Base.metadata
 
 # ---------------------------------------------------------------------------
 # DB URL resolution priority:
-#   1. REGISTRY_STATE_DB_URL env var (operator / test override)
-#   2. Value set by caller via cfg.set_main_option("sqlalchemy.url", ...)
-#      before invoking command.upgrade() — left untouched.
-#   3. Value from alembic.ini (placeholder: ":memory:" — valid for local testing).
+#   1. Programmatic ``cfg.set_main_option("sqlalchemy.url", ...)`` — e.g.
+#      from tests — is authoritative and always wins.
+#   2. ``REGISTRY_STATE_DB_URL`` env var — for production / operator override.
+#   3. ``_DEFAULT_URL`` (production filesystem path) — final fallback.
 #
-# Rule: ONLY override config when the env var is explicitly set. Never
-# silently replace a URL the caller configured programmatically.
+# The alembic.ini placeholder (``:memory:``) signals "not yet set" and is
+# replaced by option 2 or 3. A non-placeholder URL in the config means the
+# caller (programmatic test code) already decided; we leave it alone.
 # ---------------------------------------------------------------------------
+_ALEMBIC_INI_PLACEHOLDER = "sqlite+aiosqlite:///:memory:"
 _DEFAULT_URL = "sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3"
 
-_env_url = os.environ.get("REGISTRY_STATE_DB_URL")
-if _env_url:
-    config.set_main_option("sqlalchemy.url", _env_url)
+_current_url = config.get_main_option("sqlalchemy.url")
+if _current_url == _ALEMBIC_INI_PLACEHOLDER or _current_url is None:
+    _env_url = os.environ.get("REGISTRY_STATE_DB_URL")
+    config.set_main_option("sqlalchemy.url", _env_url or _DEFAULT_URL)
 
 
 def do_run_migrations(connection: Connection) -> None:

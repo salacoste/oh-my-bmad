@@ -11,9 +11,16 @@ Design decisions:
 - Pragmas applied via ``event.listens_for(engine.sync_engine, "connect")``:
   ``PRAGMA foreign_keys=ON`` is per-connection and OFF by default in SQLite —
   it MUST be applied on every connection open, not at engine creation time.
-- ``read_only=True`` rewrites the URL to SQLite URI mode (``?mode=ro&uri=true``)
-  so the OS rejects writes at the connection level — belt-and-braces with the
-  single-writer CI check.
+- ``read_only=True`` rewrites the URL to SQLite URI mode: the database part
+  gets a ``file:`` prefix and the query string carries ``uri=true&mode=ro``.
+  The pysqlite/aiosqlite dialect recognises ``uri=true`` in the URL query,
+  promotes it to the sqlite3 ``uri=True`` kwarg, and passes the remaining
+  ``mode=ro`` through as the SQLite-URI query — so the OS rejects writes at
+  the connection level (belt-and-braces with the single-writer CI check).
+  The pre-fix implementation only appended ``&mode=ro&uri=true`` to the URL
+  without the ``file:`` prefix; the dialect then ran ``os.path.abspath`` on
+  the database path and sqlite3 silently opened a phantom R/W file — a
+  false-pass for the read-only test.
 """
 
 from __future__ import annotations
@@ -36,22 +43,41 @@ def create_engine(url: str, *, read_only: bool = False) -> AsyncEngine:
     Args:
         url: SQLAlchemy async URL, e.g. ``sqlite+aiosqlite:///path/to/state.sqlite3``
              or ``sqlite+aiosqlite:///:memory:``.
-        read_only: When ``True``, rewrite the URL to SQLite URI mode with
-            ``mode=ro`` so writes are rejected at the OS level.
+        read_only: When ``True``, rewrite the URL to SQLite URI mode
+            (``file:<path>?uri=true&mode=ro``) so writes are rejected at the
+            OS level. The pysqlite/aiosqlite dialect reads ``uri=true`` out
+            of the query string and promotes it to the sqlite3 ``uri=True``
+            kwarg. Rejects in-memory URLs because read-only + in-memory is
+            nonsensical.
 
     Returns:
         Fully configured ``AsyncEngine`` with WAL + FK pragmas wired.
+
+    Raises:
+        ValueError: If ``read_only=True`` with a non-``sqlite+aiosqlite://``
+            URL or with an in-memory path.
     """
+    connect_args: dict[str, Any] = {"check_same_thread": False}
+
     if read_only:
-        # SQLite URI-mode open. The aiosqlite dialect passes connect_args
-        # through to the underlying sqlite3 module.
-        separator = "&" if "?" in url else "?"
-        url = f"{url}{separator}mode=ro&uri=true"
+        # SQLite URI mode: the database component must carry a `file:`
+        # prefix (else the dialect runs os.path.abspath on it and sqlite3
+        # opens it as a plain filename). The `uri=true` flag goes in the
+        # URL query string — the dialect promotes it to a sqlite3 kwarg.
+        prefix = "sqlite+aiosqlite:///"
+        if not url.startswith(prefix):
+            raise ValueError(f"read_only=True requires a sqlite+aiosqlite URL; got {url!r}")
+        path_part = url[len(prefix) :]
+        if path_part == ":memory:" or path_part.startswith(":memory:"):
+            raise ValueError("read_only=True is incompatible with in-memory SQLite")
+        # Strip any pre-existing query string; we own the full query here.
+        path, _, _ = path_part.partition("?")
+        url = f"{prefix}file:{path}?uri=true&mode=ro"
 
     engine = create_async_engine(
         url,
         poolclass=NullPool,
-        connect_args={"check_same_thread": False},
+        connect_args=connect_args,
         future=True,
     )
 

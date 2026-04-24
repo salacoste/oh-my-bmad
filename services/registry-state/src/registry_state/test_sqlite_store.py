@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import tempfile
 from collections.abc import AsyncGenerator
+from random import Random
 from typing import Any
 
 import pytest
@@ -164,8 +165,6 @@ async def test_foreign_key_violation_raises(mem_session: AsyncSession) -> None:
     ignores FK constraints when the pragma is off.
     """
     c = FrozenClock(mono_ns=0, now=FROZEN_EPOCH)
-    from random import Random
-
     r = Random(42)
     orphan_session = Session(
         id=new_session_id(clock=c, rng=r),
@@ -184,57 +183,96 @@ async def test_foreign_key_violation_raises(mem_session: AsyncSession) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_read_only_url_rewrite_adds_mode_ro() -> None:
-    """create_engine(url, read_only=True) appends mode=ro&uri=true to the URL."""
+def test_read_only_url_rewrite_adds_mode_ro_and_file_prefix() -> None:
+    """create_engine(url, read_only=True) rewrites to ``file:<path>?mode=ro``.
+
+    The F2 fix converts ``sqlite+aiosqlite:///path/to/db`` into
+    ``sqlite+aiosqlite:///file:/path/to/db?mode=ro`` — ``file:`` prefix and
+    ``mode=ro`` are both required for SQLite URI mode to reject writes.
+    """
     base_url = "sqlite+aiosqlite:///path/to/state.sqlite3"
     engine = create_engine(base_url, read_only=True)
     url_str = str(engine.url)
     assert "mode=ro" in url_str, f"mode=ro missing from URL: {url_str!r}"
-    assert "uri=true" in url_str, f"uri=true missing from URL: {url_str!r}"
+    assert "file:" in url_str, f"file: prefix missing from URL: {url_str!r}"
     # NullPool — no persistent connections; no dispose needed.
 
 
-def test_read_only_url_rewrite_uses_ampersand_separator_when_query_already_present() -> None:
-    """URL already containing '?' gets '&' separator, not a second '?'."""
+def test_read_only_sets_uri_connect_arg() -> None:
+    """The engine's connect_args must include ``uri=True`` — aiosqlite/sqlite3
+    ignores ``uri=true`` as a URL query parameter; it must be a kwarg.
+    """
+    base_url = "sqlite+aiosqlite:///path/to/state.sqlite3"
+    engine = create_engine(base_url, read_only=True)
+    # create_connect_args returns ([posargs], {kwargs}) for the DB-API call.
+    _args, kwargs = engine.dialect.create_connect_args(engine.url)
+    assert kwargs.get("uri") is True, f"Expected uri=True in connect_args, got: {kwargs!r}"
+
+
+def test_read_only_rejects_memory_url() -> None:
+    """``read_only=True`` + ``:memory:`` is nonsensical — raises ValueError."""
+    with pytest.raises(ValueError, match="in-memory"):
+        create_engine("sqlite+aiosqlite:///:memory:", read_only=True)
+
+
+def test_read_only_rejects_non_aiosqlite_url() -> None:
+    """``read_only=True`` requires a ``sqlite+aiosqlite://`` URL."""
+    with pytest.raises(ValueError, match="sqlite\\+aiosqlite"):
+        create_engine("postgresql+asyncpg://x/y", read_only=True)
+
+
+def test_read_only_strips_preexisting_query_string() -> None:
+    """Pre-existing query params are stripped; mode=ro is authoritative.
+
+    The F2 rewrite owns the query string entirely — a pre-existing
+    ``?timeout=5`` in the URL is dropped so we don't end up with conflicting
+    or surplus params. Final URL carries exactly one ``?`` separator.
+    """
     base_url = "sqlite+aiosqlite:///path/to/db.sqlite3?timeout=5"
     engine = create_engine(base_url, read_only=True)
     url_str = str(engine.url)
-    # Should not contain '?mode=ro' (would double the '?')
+    assert "timeout" not in url_str, f"timeout param not stripped: {url_str!r}"
+    assert "mode=ro" in url_str
     assert url_str.count("?") == 1, f"Multiple '?' in URL: {url_str!r}"
-    # NullPool — no persistent connections; no dispose needed.
 
 
 @pytest.mark.asyncio
 async def test_read_only_engine_rejects_writes() -> None:
-    """A read-only engine raises OperationalError on INSERT.
+    """A read-only engine raises OperationalError on INSERT against a REAL file.
 
-    SQLite URI mode with mode=ro rejects writes at the OS level.
-    We use a real temp file (not :memory:) since URI mode requires a path.
+    Flow:
+      1. Create a real SQLite file via writable engine + ``Base.metadata.create_all``.
+      2. Open the SAME file read-only.
+      3. Attempt an INSERT — must raise OperationalError mentioning "readonly".
+
+    Previously the test relied on the broken URL-rewrite (``uri=true`` in the
+    URL), which aiosqlite silently ignored — so the engine fell back to
+    read/write and no error was raised on writes to a non-existent path
+    (sqlite auto-created a phantom file). This version actually exercises
+    the read-only path.
     """
-    import os
-    import tempfile
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "state.sqlite3")
+        url = f"sqlite+aiosqlite:///{db_path}"
 
-    with tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False) as f:
-        db_path = f.name
-
-    try:
-        # First: create the table using a writable engine.
-        write_engine = create_engine(f"sqlite+aiosqlite:///{db_path}")
+        # First: create the tables using a writable engine.
+        write_engine = create_engine(url)
         async with write_engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         await write_engine.dispose()
 
         # Now open read-only and attempt an INSERT.
-        ro_engine = create_engine(f"sqlite+aiosqlite:///{db_path}", read_only=True)
-        async with ro_engine.connect() as conn:
-            with pytest.raises(OperationalError):
-                await conn.execute(
-                    text(
-                        "INSERT INTO tasks (id, status, created_at, updated_at, "
-                        "actor_kind, actor_id) VALUES "
-                        "('t-test', 'pending', '2026-01-01', '2026-01-01', 'human', 'op')"
+        ro_engine = create_engine(url, read_only=True)
+        try:
+            async with ro_engine.connect() as conn:
+                with pytest.raises(OperationalError, match="readonly|read-only"):
+                    await conn.execute(
+                        text(
+                            "INSERT INTO tasks (id, status, created_at, updated_at, "
+                            "actor_kind, actor_id) VALUES "
+                            "('t-test', 'pending', '2026-01-01', '2026-01-01', "
+                            "'human', 'op')"
+                        )
                     )
-                )
-        await ro_engine.dispose()
-    finally:
-        os.unlink(db_path)
+        finally:
+            await ro_engine.dispose()

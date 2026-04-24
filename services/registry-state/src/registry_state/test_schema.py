@@ -17,7 +17,7 @@ for deterministic IDs matching the conftest pattern from Story 2.2.
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from random import Random
 from typing import Any
 
@@ -441,3 +441,77 @@ async def test_datetime_utc_aware_roundtrip(session: AsyncSession) -> None:
     assert row.created_at.tzinfo is not None, "created_at lost timezone info"
     assert row.updated_at.tzinfo is not None, "updated_at lost timezone info"
     assert row.created_at.utcoffset() == timedelta(0), "created_at not UTC"
+
+
+# ---------------------------------------------------------------------------
+# UTCDateTime TypeDecorator — bind-path contract (F1)
+# ---------------------------------------------------------------------------
+
+
+class TestUTCDateTimeDecorator:
+    """Bind-path tests for UTCDateTime — the roundtrip section above covers
+    the happy UTC case; these tests pin the two contract corners that the
+    previous implementation got wrong (silently):
+
+      1. Non-UTC aware datetimes MUST convert to UTC before tzinfo strip.
+      2. Naive datetimes MUST raise ``ValueError`` — silent coercion would
+         corrupt data.
+    """
+
+    @pytest.mark.asyncio
+    async def test_utc_datetime_converts_non_utc_tzinfo_to_utc(self, session: AsyncSession) -> None:
+        """A +05:00 12:00 wall-clock MUST read back as 07:00 UTC (same instant)."""
+        c = _clock()
+        r = _rng()
+        plus5 = timezone(timedelta(hours=5))
+        # 12:00 in +05:00 == 07:00 UTC.
+        ts_plus5 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=plus5)
+        expected_utc = datetime(2026, 1, 1, 7, 0, 0, tzinfo=UTC)
+
+        row = Task(
+            id=new_task_id(clock=c, rng=r),
+            status="pending",
+            created_at=ts_plus5,
+            updated_at=ts_plus5,
+            actor_kind="human",
+            actor_id="op-1",
+        )
+        session.add(row)
+        await session.commit()
+        await session.refresh(row)
+
+        # Same instant: equality of aware datetimes compares the instant.
+        assert row.created_at == ts_plus5
+        assert row.created_at == expected_utc
+        # Stored value is now UTC-aware (not the original +05:00 offset).
+        assert row.created_at.utcoffset() == timedelta(0)
+        # Wall-clock hour proves astimezone conversion actually ran.
+        assert row.created_at.hour == 7
+
+    @pytest.mark.asyncio
+    async def test_utc_datetime_rejects_naive_datetime(self, session: AsyncSession) -> None:
+        """Inserting a naive datetime raises ``ValueError`` (no silent coerce).
+
+        SQLAlchemy wraps parameter-processing errors in ``StatementError``;
+        the original ``ValueError`` is preserved on ``err.orig``. We assert
+        on the wrapping error message (which includes the ValueError text)
+        and cross-check ``err.orig`` is a ``ValueError``.
+        """
+        from sqlalchemy.exc import StatementError
+
+        c = _clock()
+        r = _rng()
+        naive = datetime(2026, 1, 1, 12, 0, 0)  # no tzinfo
+
+        row = Task(
+            id=new_task_id(clock=c, rng=r),
+            status="pending",
+            created_at=naive,
+            updated_at=naive,
+            actor_kind="human",
+            actor_id="op-1",
+        )
+        session.add(row)
+        with pytest.raises(StatementError, match="tz-aware") as excinfo:
+            await session.flush()
+        assert isinstance(excinfo.value.orig, ValueError)

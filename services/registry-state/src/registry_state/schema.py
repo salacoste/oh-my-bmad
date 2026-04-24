@@ -40,20 +40,28 @@ from sqlalchemy.types import TypeDecorator
 
 
 class UTCDateTime(TypeDecorator[datetime]):
-    """DateTime type that enforces UTC-aware datetimes on read.
+    """DateTime type that stores values as UTC-naive and returns UTC-aware.
 
     SQLite stores datetimes as naive ISO 8601 text (the ``timezone=True``
     parameter has no effect on the storage format in the SQLite dialect).
     On read, ``datetime.fromisoformat()`` returns a naive datetime. This
-    decorator re-attaches ``tzinfo=UTC`` so callers always receive
-    timezone-aware datetimes — matching the Story 2.1 convention of
-    ms-precision UTC everywhere.
+    decorator guarantees the instant is preserved across the roundtrip and
+    callers always receive timezone-aware UTC datetimes — matching the
+    Story 2.1 convention of ms-precision UTC everywhere.
 
-    Write path: strips tzinfo before storage (sqlite3 module cannot handle
-    aware datetimes in parameterised queries without the timezone suffix in
-    the string, and SQLAlchemy's SQLite DateTime type stores as text anyway).
-    Actually we store as-is and let SQLAlchemy's DateTime handle the bind;
-    the result_processor re-attaches UTC.
+    Write path behaviour:
+      - ``None`` passes through unchanged.
+      - Naive datetimes raise ``ValueError`` — silently assuming "local time"
+        or "UTC" would corrupt data. Callers must pass ``datetime.now(UTC)``
+        or similar.
+      - Aware datetimes in any offset are converted to UTC via
+        ``astimezone(UTC)`` BEFORE stripping ``tzinfo`` — preserving the
+        instant. Previously the implementation only stripped ``tzinfo``,
+        which silently re-interpreted a ``+05:00`` wall clock as UTC (a 5h
+        jump into the future on read-back).
+
+    Read path: re-attaches ``tzinfo=UTC`` to the naive value pulled from
+    SQLite.
     """
 
     impl = DateTime
@@ -63,10 +71,16 @@ class UTCDateTime(TypeDecorator[datetime]):
         super().__init__(timezone=True)
 
     def process_bind_param(self, value: datetime | None, dialect: Any) -> datetime | None:
-        if value is not None and value.tzinfo is not None:
-            # Store as UTC naive for SQLite text compatibility.
-            return value.replace(tzinfo=None)
-        return value
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            raise ValueError(
+                "UTCDateTime requires tz-aware datetime; got naive. "
+                "Pass datetime.now(UTC) or similar."
+            )
+        # Convert to UTC *before* stripping tzinfo so the stored wall-clock
+        # actually represents the original instant.
+        return value.astimezone(UTC).replace(tzinfo=None)
 
     def process_result_value(self, value: datetime | None, dialect: Any) -> datetime | None:
         if value is not None and value.tzinfo is None:
@@ -164,12 +178,14 @@ class Snapshot(Base):
 
     ``cursor_event_id`` = last event consumed before this snapshot; replay
     re-applies events ``> cursor_event_id``.
-    ``id`` uses a bare UUIDv7 (no prefix) — a snapshot isn't an event/task/session.
+    ``id`` uses a bare UUIDv7 — 36 hex+hyphen chars, no 2-char prefix, because
+    a snapshot isn't an event/task/session. Width is ``String(36)`` (not 38)
+    to match UUIDv7's canonical textual length.
     """
 
     __tablename__ = "snapshots"
 
-    id: Mapped[str] = mapped_column(String(38), primary_key=True)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     cursor_event_id: Mapped[str] = mapped_column(String(38), nullable=False)
     event_count: Mapped[int] = mapped_column(BigInteger, nullable=False)

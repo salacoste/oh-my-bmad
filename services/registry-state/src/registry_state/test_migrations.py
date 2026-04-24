@@ -78,45 +78,64 @@ def _inspect_db(path: str) -> tuple[frozenset[str], frozenset[str], list[str]]:
     return tables, indexes, versions
 
 
+def _sqlite_master_snapshot(path: str) -> list[tuple[str, str, str]]:
+    """Return sorted ``(type, name, sql)`` tuples from ``sqlite_master``.
+
+    Used by AC-7 to prove a second ``upgrade head`` is byte-identical — not
+    just same-names, but same DDL (CREATE TABLE/INDEX SQL text).
+    """
+    conn = sqlite3.connect(path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY type, name"
+        )
+        return sorted((t, n, s) for t, n, s in cur.fetchall())
+    finally:
+        conn.close()
+
+
 def test_upgrade_head_on_empty_db_creates_all_tables_and_indexes() -> None:
     """AC-6: upgrade head on empty DB creates 5 app tables + alembic_version + 6 indexes."""
-    with tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False) as f:
-        db_path = f.name
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = str(Path(tmpdir) / "state.sqlite3")
+        url = f"sqlite+aiosqlite:///{db_path}"
+        _run_upgrade(url)
 
-    url = f"sqlite+aiosqlite:///{db_path}"
-    _run_upgrade(url)
+        tables, indexes, versions = _inspect_db(db_path)
 
-    tables, indexes, versions = _inspect_db(db_path)
+        # All 5 application tables + alembic_version must exist.
+        missing_tables = _EXPECTED_TABLES - tables
+        assert not missing_tables, f"Missing tables after upgrade head: {missing_tables}"
 
-    # All 5 application tables + alembic_version must exist.
-    missing_tables = _EXPECTED_TABLES - tables
-    assert not missing_tables, f"Missing tables after upgrade head: {missing_tables}"
+        # All 6 indexes must exist.
+        missing_indexes = _EXPECTED_INDEXES - indexes
+        assert not missing_indexes, f"Missing indexes after upgrade head: {missing_indexes}"
 
-    # All 6 indexes must exist.
-    missing_indexes = _EXPECTED_INDEXES - indexes
-    assert not missing_indexes, f"Missing indexes after upgrade head: {missing_indexes}"
-
-    # alembic_version must contain exactly one row with the initial revision id.
-    assert len(versions) == 1, f"Expected 1 alembic_version row, got: {versions}"
-    assert versions[0] == _REVISION, f"Expected revision {_REVISION!r}, got: {versions[0]!r}"
+        # alembic_version must contain exactly one row with the initial revision id.
+        assert len(versions) == 1, f"Expected 1 alembic_version row, got: {versions}"
+        assert versions[0] == _REVISION, f"Expected revision {_REVISION!r}, got: {versions[0]!r}"
 
 
 def test_upgrade_head_twice_is_noop() -> None:
-    """AC-7: running upgrade head twice is idempotent — no DDL re-applied."""
-    with tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False) as f:
-        db_path = f.name
+    """AC-7: running upgrade head twice is idempotent — sqlite_master byte-identical."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = str(Path(tmpdir) / "state.sqlite3")
+        url = f"sqlite+aiosqlite:///{db_path}"
 
-    url = f"sqlite+aiosqlite:///{db_path}"
+        # First upgrade.
+        _run_upgrade(url)
+        tables_1, indexes_1, versions_1 = _inspect_db(db_path)
+        snapshot_1 = _sqlite_master_snapshot(db_path)
 
-    # First upgrade.
-    _run_upgrade(url)
-    tables_1, indexes_1, versions_1 = _inspect_db(db_path)
+        # Second upgrade — must be a no-op.
+        _run_upgrade(url)
+        tables_2, indexes_2, versions_2 = _inspect_db(db_path)
+        snapshot_2 = _sqlite_master_snapshot(db_path)
 
-    # Second upgrade — must be a no-op.
-    _run_upgrade(url)
-    tables_2, indexes_2, versions_2 = _inspect_db(db_path)
-
-    assert tables_1 == tables_2, "Tables changed between two upgrade head calls"
-    assert indexes_1 == indexes_2, "Indexes changed between two upgrade head calls"
-    assert versions_1 == versions_2, "alembic_version changed between two upgrade head calls"
-    assert versions_2 == [_REVISION], f"Unexpected revision after second upgrade: {versions_2}"
+        assert tables_1 == tables_2, "Tables changed between two upgrade head calls"
+        assert indexes_1 == indexes_2, "Indexes changed between two upgrade head calls"
+        assert versions_1 == versions_2, "alembic_version changed between two upgrade head calls"
+        assert versions_2 == [_REVISION], f"Unexpected revision after second upgrade: {versions_2}"
+        # Byte-identical DDL: compares (type, name, sql) tuples.
+        assert snapshot_1 == snapshot_2, "sqlite_master changed between two upgrade head calls"

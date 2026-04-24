@@ -22,6 +22,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
+from registry_state.schema import UTCDateTime
+
 # revision identifiers, used by Alembic.
 revision: str = "0001"
 down_revision: str | None = None
@@ -35,8 +37,8 @@ def upgrade() -> None:
         "tasks",
         sa.Column("id", sa.String(38), nullable=False),
         sa.Column("status", sa.String(32), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("created_at", UTCDateTime(), nullable=False),
+        sa.Column("updated_at", UTCDateTime(), nullable=False),
         sa.Column("actor_kind", sa.String(16), nullable=False),
         sa.Column("actor_id", sa.String(64), nullable=False),
         sa.Column("title", sa.Text(), nullable=True),
@@ -53,9 +55,9 @@ def upgrade() -> None:
         sa.Column("worker_kind", sa.String(32), nullable=False),
         sa.Column("worktree_path", sa.Text(), nullable=True),
         sa.Column("status", sa.String(32), nullable=False),
-        sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("ended_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("last_heartbeat_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("started_at", UTCDateTime(), nullable=False),
+        sa.Column("ended_at", UTCDateTime(), nullable=True),
+        sa.Column("last_heartbeat_at", UTCDateTime(), nullable=True),
         sa.ForeignKeyConstraint(["task_id"], ["tasks.id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -67,7 +69,7 @@ def upgrade() -> None:
         sa.Column("id", sa.String(38), nullable=False),
         sa.Column("type", sa.String(128), nullable=False),
         sa.Column("schema_version", sa.String(16), nullable=False),
-        sa.Column("emitted_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("emitted_at", UTCDateTime(), nullable=False),
         sa.Column("emitted_at_monotonic_ns", sa.BigInteger(), nullable=False),
         sa.Column("actor_kind", sa.String(16), nullable=False),
         sa.Column("actor_id", sa.String(64), nullable=False),
@@ -88,8 +90,8 @@ def upgrade() -> None:
     op.create_table(
         "idempotency_cache",
         sa.Column("idempotency_key", sa.String(36), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("created_at", UTCDateTime(), nullable=False),
+        sa.Column("expires_at", UTCDateTime(), nullable=False),
         sa.Column("result_event_id", sa.String(38), nullable=False),
         sa.Column("request_id_on_first_hit", sa.String(36), nullable=False),
         sa.PrimaryKeyConstraint("idempotency_key"),
@@ -99,8 +101,9 @@ def upgrade() -> None:
     # --- snapshots -------------------------------------------------------
     op.create_table(
         "snapshots",
-        sa.Column("id", sa.String(38), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        # Bare UUIDv7 (36 chars), no 2-char prefix — matches Snapshot.id.
+        sa.Column("id", sa.String(36), nullable=False),
+        sa.Column("created_at", UTCDateTime(), nullable=False),
         sa.Column("cursor_event_id", sa.String(38), nullable=False),
         sa.Column("event_count", sa.BigInteger(), nullable=False),
         sa.Column("byte_size", sa.BigInteger(), nullable=False),
