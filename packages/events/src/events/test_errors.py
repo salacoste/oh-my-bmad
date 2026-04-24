@@ -56,6 +56,30 @@ class TestEventSchemaUnknownEmptyRegistry:
         assert "(empty registry)" in str(exc)
 
 
+class TestEventSchemaUnknownLargeRegistryTruncated:
+    """Fix L.3 — when >10 types registered, truncate with "... (N more)" suffix."""
+
+    def test_eleven_types_truncated(self) -> None:
+        types = frozenset({f"t.{i:02d}" for i in range(11)})
+        exc = EventSchemaUnknown("x.y", "1.0.0", types)
+        msg = str(exc)
+        assert "... (1 more)" in msg
+
+    def test_twenty_types_truncated_with_remaining_count(self) -> None:
+        types = frozenset({f"t.{i:02d}" for i in range(20)})
+        exc = EventSchemaUnknown("x.y", "1.0.0", types)
+        msg = str(exc)
+        assert "... (10 more)" in msg
+
+    def test_ten_types_not_truncated(self) -> None:
+        types = frozenset({f"t.{i:02d}" for i in range(10)})
+        exc = EventSchemaUnknown("x.y", "1.0.0", types)
+        msg = str(exc)
+        assert "more)" not in msg
+        assert "t.00" in msg
+        assert "t.09" in msg
+
+
 class TestCanonicalSerializationError:
     def test_raised_and_catchable_as_events_error(self) -> None:
         with pytest.raises(EventsError):

@@ -7,6 +7,7 @@ isolate state (global mutable registry).
 from __future__ import annotations
 
 from collections.abc import Generator
+from typing import cast
 
 import pytest
 from pydantic import BaseModel
@@ -96,3 +97,53 @@ class TestRebuildTypesCacheManual:
         REGISTRY[("manual.event", "1.0.0")] = _PayloadA
         _rebuild_types_cache()
         assert "manual.event" in sr.EVENT_TYPES
+
+
+# ---------------------------------------------------------------------------
+# Regression tests — code-review follow-up for Story 2.1
+# ---------------------------------------------------------------------------
+
+
+class TestEventTypesCrossModuleLiveBinding:
+    """Fix A — importing ``EVENT_TYPES`` by name captured a stale frozenset."""
+
+    def test_schema_registry_attribute_reflects_updates(self) -> None:
+        """After register(), importers of schema_registry see the update via attribute access."""
+        register("live.bound", "1.0.0", _PayloadA)
+        assert "live.bound" in sr.EVENT_TYPES
+
+    def test_events_package_reexport_is_live(self) -> None:
+        """``from events import EVENT_TYPES`` also reflects live state via PEP 562 __getattr__."""
+        import events
+
+        register("live.bound.two", "1.0.0", _PayloadA)
+        event_types = cast(frozenset[str], events.EVENT_TYPES)
+        assert "live.bound.two" in event_types
+
+
+class TestRegisterRejectsInvalidShape:
+    """Fix D — register() now validates event_type and schema_version shape."""
+
+    def test_rejects_uppercase_type(self) -> None:
+        with pytest.raises(ValueError, match="dotted lowercase past-tense"):
+            register("Bad.Type", "1.0.0", _PayloadA)
+
+    def test_rejects_type_with_no_dot(self) -> None:
+        with pytest.raises(ValueError, match="dotted"):
+            register("nosuffix", "1.0.0", _PayloadA)
+
+    def test_rejects_empty_type(self) -> None:
+        with pytest.raises(ValueError, match="dotted"):
+            register("", "1.0.0", _PayloadA)
+
+    def test_rejects_non_semver_schema_version(self) -> None:
+        with pytest.raises(ValueError, match="semver"):
+            register("valid.type", "not-a-semver", _PayloadA)
+
+    def test_rejects_two_segment_semver(self) -> None:
+        with pytest.raises(ValueError, match="semver"):
+            register("valid.type", "1.0", _PayloadA)
+
+    def test_rejects_four_segment_semver(self) -> None:
+        with pytest.raises(ValueError, match="semver"):
+            register("valid.type", "1.0.0.0", _PayloadA)

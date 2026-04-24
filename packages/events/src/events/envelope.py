@@ -13,13 +13,73 @@ can construct with hard-coded UUIDv7-shaped literals until the generator lands.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from events import schema_registry
 from events.errors import EventSchemaUnknown
-from events.schema_registry import EVENT_TYPES, REGISTRY
+
+
+class _FrozenDict(dict[str, Any]):
+    """Immutable ``dict`` subclass — ``dict`` for Pydantic, frozen for operators.
+
+    We subclass ``dict`` (rather than using ``MappingProxyType``) so Pydantic's
+    strict-mode schema accepts it under the declared ``dict[str, Any]`` type
+    without serializer warnings. All mutation methods are overridden to raise
+    ``TypeError`` — attempting ``env.payload["k"] = v`` or
+    ``env.payload.update(...)`` fails fast.
+    """
+
+    __slots__ = ()
+
+    def __setitem__(self, key: str, value: Any) -> NoReturn:
+        raise TypeError("EventEnvelope.payload is frozen; dict mutation rejected")
+
+    def __delitem__(self, key: str) -> NoReturn:
+        raise TypeError("EventEnvelope.payload is frozen; dict deletion rejected")
+
+    def update(self, *args: Any, **kwargs: Any) -> NoReturn:
+        raise TypeError("EventEnvelope.payload is frozen; dict.update rejected")
+
+    def pop(self, *args: Any, **kwargs: Any) -> NoReturn:
+        raise TypeError("EventEnvelope.payload is frozen; dict.pop rejected")
+
+    def popitem(self) -> NoReturn:
+        raise TypeError("EventEnvelope.payload is frozen; dict.popitem rejected")
+
+    def clear(self) -> NoReturn:
+        raise TypeError("EventEnvelope.payload is frozen; dict.clear rejected")
+
+    def setdefault(self, *args: Any, **kwargs: Any) -> NoReturn:
+        raise TypeError("EventEnvelope.payload is frozen; dict.setdefault rejected")
+
+
+def _deep_freeze_mapping(d: Mapping[str, Any]) -> _FrozenDict:
+    """Return a ``_FrozenDict`` view with nested dicts/lists recursively frozen.
+
+    Pydantic's ``frozen=True`` blocks attribute rebind (``env.payload = ...``)
+    but does NOT block nested in-place mutation (``env.payload["k"] = v``)
+    because the dict is held by reference. Deep-freeze at validation time so
+    the frozen guarantee extends to payload contents.
+    """
+    frozen_inner: dict[str, Any] = {}
+    for k, v in d.items():
+        if isinstance(v, Mapping):
+            frozen_inner[k] = _deep_freeze_mapping(v)
+        elif isinstance(v, list):
+            frozen_inner[k] = tuple(
+                _deep_freeze_mapping(x) if isinstance(x, Mapping) else x for x in v
+            )
+        else:
+            frozen_inner[k] = v
+    # Construct via dict.__init__ path to bypass our overridden __setitem__.
+    result = _FrozenDict.__new__(_FrozenDict)
+    dict.__init__(result, frozen_inner)
+    return result
+
 
 # UUIDv7 shape: `e-` prefix optional, 36-char hex with version-7 nibble.
 _UUIDV7_CORE = r"[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
@@ -54,7 +114,6 @@ class EventEnvelope(BaseModel):
         strict=True,
         extra="forbid",
         populate_by_name=True,
-        arbitrary_types_allowed=True,
     )
 
     event_id: str
@@ -112,6 +171,36 @@ class EventEnvelope(BaseModel):
             raise ValueError("emitted_at must be timezone-aware (UTC)")
         if v.utcoffset() != timedelta(0):
             raise ValueError(f"emitted_at must be UTC (got offset {v.utcoffset()})")
+        # Canonicalize at parse time: normalize to millisecond precision +
+        # canonical ``tzinfo=UTC`` regardless of input format (``Z`` vs
+        # ``+00:00`` vs zero-offset-named-"GMT"; microsecond vs millisecond
+        # precision). This makes round-trip serialization byte-stable — the
+        # validated datetime is the fixpoint of the canonical-JSON encoder.
+        return datetime(
+            v.year,
+            v.month,
+            v.day,
+            v.hour,
+            v.minute,
+            v.second,
+            (v.microsecond // 1000) * 1000,
+            tzinfo=UTC,
+        )
+
+    @field_validator("payload", mode="after")
+    @classmethod
+    def _freeze_payload_dict(cls, v: dict[str, Any] | BaseModel) -> dict[str, Any] | BaseModel:
+        """Deep-freeze dict payloads to a ``_FrozenDict`` (dict subclass).
+
+        Pydantic's ``frozen=True`` blocks attribute rebind (``env.payload = ...``)
+        but does NOT block nested mutation (``env.payload["k"] = v``). This
+        validator deep-wraps dict payloads in ``_FrozenDict`` so the frozen
+        guarantee extends to payload contents. BaseModel payloads get this
+        same guarantee from their own ``frozen=True`` config (future payload
+        models MUST declare ``ConfigDict(frozen=True)``).
+        """
+        if isinstance(v, dict) and not isinstance(v, _FrozenDict):
+            return _deep_freeze_mapping(v)
         return v
 
     @classmethod
@@ -136,13 +225,17 @@ class EventEnvelope(BaseModel):
         payload model when the caller passes a plain dict.
         """
         key = (type, schema_version)
-        if key not in REGISTRY:
-            raise EventSchemaUnknown(type, schema_version, EVENT_TYPES)
-        model_cls = REGISTRY[key]
+        if key not in schema_registry.REGISTRY:
+            raise EventSchemaUnknown(type, schema_version, schema_registry.EVENT_TYPES)
+        model_cls = schema_registry.REGISTRY[key]
         if isinstance(payload, dict):
             validated_payload: dict[str, Any] | BaseModel = model_cls.model_validate(payload)
-        else:
+        elif isinstance(payload, model_cls):
             validated_payload = payload
+        else:
+            # Payload is a BaseModel but wrong subclass — round-trip via dict
+            # to enforce the registered payload-model contract (Fix F).
+            validated_payload = model_cls.model_validate(payload.model_dump())
         actor_obj = actor if isinstance(actor, Actor) else Actor.model_validate(actor)
         return cls(
             event_id=event_id,

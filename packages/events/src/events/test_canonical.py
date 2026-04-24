@@ -29,10 +29,6 @@ class _SimplePayload(BaseModel):
     value: str
 
 
-class _NumericPayload(BaseModel):
-    number: float
-
-
 @pytest.fixture(autouse=True)
 def _clean_registry() -> Generator[None, None, None]:
     unregister_all()
@@ -100,38 +96,12 @@ class TestMillisecondPrecision:
 
 
 class TestSortKeysDeterminism:
-    def test_payload_key_order_irrelevant(self) -> None:
-        """Two envelopes with same payload data in different insertion order → identical bytes."""
-
-        # We can't control key order in dict literals in Python 3.7+ but we can
-        # register a payload model with multiple fields and pass them in different order.
-        class _MultiPayload(BaseModel):
-            b: str
-            a: int
-
-        register("task.updated", "1.0.0", _MultiPayload)
-
-        env1 = EventEnvelope(
-            event_id=_VALID_EVENT_ID,
-            schema_version="1.0.0",
-            type="task.updated",
-            emitted_at=_VALID_EMITTED_AT,
-            emitted_at_monotonic_ns=0,
-            actor=Actor(kind="system", id="sys"),
-            payload=_MultiPayload(b="hello", a=1),
-            request_id=_VALID_REQUEST_ID,
-        )
-        env2 = EventEnvelope(
-            event_id=_VALID_EVENT_ID,
-            schema_version="1.0.0",
-            type="task.updated",
-            emitted_at=_VALID_EMITTED_AT,
-            emitted_at_monotonic_ns=0,
-            actor=Actor(kind="system", id="sys"),
-            payload=_MultiPayload(a=1, b="hello"),
-            request_id=_VALID_REQUEST_ID,
-        )
-        assert to_canonical_json(env1) == to_canonical_json(env2)
+    def test_dict_payload_key_order_irrelevant(self) -> None:
+        """Dict payload with different insertion orders serializes byte-identically (sort_keys)."""
+        # Insertion order differs; json.dumps(sort_keys=True) normalizes.
+        env_ba = _make_envelope(payload={"b": "hello", "a": 1})
+        env_ab = _make_envelope(payload={"a": 1, "b": "hello"})
+        assert to_canonical_json(env_ba) == to_canonical_json(env_ab)
 
     def test_output_keys_are_sorted(self) -> None:
         env = _make_envelope()
@@ -143,7 +113,6 @@ class TestSortKeysDeterminism:
 class TestAllowNanFalse:
     def test_nan_payload_raises_canonical_error(self) -> None:
         class _NanPayload(BaseModel):
-            model_config = {"arbitrary_types_allowed": True}
             val: float
 
         register("task.nan", "1.0.0", _NanPayload)
@@ -162,7 +131,6 @@ class TestAllowNanFalse:
 
     def test_inf_payload_raises_canonical_error(self) -> None:
         class _InfPayload(BaseModel):
-            model_config = {"arbitrary_types_allowed": True}
             val: float
 
         register("task.inf", "1.0.0", _InfPayload)
@@ -208,3 +176,73 @@ class TestRoundTrip:
         env2 = from_canonical_json(data1)
         data2 = to_canonical_json(env2)
         assert data1 == data2
+
+
+# ---------------------------------------------------------------------------
+# Regression tests — code-review follow-up for Story 2.1
+# ---------------------------------------------------------------------------
+
+
+class TestRoundTripByteStableFromVariousInputs:
+    """Fix B — datetime normalization at parse time makes canonical form a fixpoint."""
+
+    def test_round_trip_byte_stable_on_plus_00_00_input(self) -> None:
+        """Input with +00:00 suffix serializes byte-identically to Z-suffix output."""
+        data_plus = (
+            b'{"actor":{"id":"sys","kind":"system"},'
+            b'"emitted_at":"2026-04-21T10:30:00.123+00:00",'
+            b'"emitted_at_monotonic_ns":999,'
+            b'"event_id":"e-01917e5c-a7d1-7000-8000-000000000001",'
+            b'"parent_event_id":null,'
+            b'"payload":{"value":"hello"},'
+            b'"request_id":"01917e5c-a7d1-7000-8000-000000000002",'
+            b'"schema_version":"1.0.0","trace_id":null,"type":"task.created"}'
+        )
+        env = from_canonical_json(data_plus)
+        canonical = to_canonical_json(env)
+        # Re-parse + re-serialize → byte-identical (canonical form is the fixpoint).
+        assert to_canonical_json(from_canonical_json(canonical)) == canonical
+
+    def test_round_trip_byte_stable_on_microsecond_input(self) -> None:
+        """Input with microsecond precision truncates to ms deterministically."""
+        dt_us = datetime(2026, 4, 21, 10, 30, 0, 123456, tzinfo=UTC)
+        env = _make_envelope(emitted_at=dt_us)
+        data = to_canonical_json(env)
+        # Sub-ms bits must be dropped: expect .123Z, never .123456 or similar.
+        assert b".123456" not in data
+        assert b"2026-04-21T10:30:00.123Z" in data
+        # And round-trip is stable.
+        assert to_canonical_json(from_canonical_json(data)) == data
+
+
+class _StringPayload(BaseModel):
+    s: str
+
+
+class TestUnicodeEncodeErrorWrapped:
+    """Fix G — UnicodeEncodeError on lone surrogates now raises CanonicalSerializationError."""
+
+    def test_surrogate_string_raises_canonical_error(self) -> None:
+        register("surrogate.test", "1.0.0", _StringPayload)
+        env = EventEnvelope(
+            event_id=_VALID_EVENT_ID,
+            schema_version="1.0.0",
+            type="surrogate.test",
+            emitted_at=_VALID_EMITTED_AT,
+            emitted_at_monotonic_ns=0,
+            actor=Actor(kind="system", id="sys"),
+            payload={"s": "\ud800"},  # lone high surrogate
+            request_id=_VALID_REQUEST_ID,
+        )
+        with pytest.raises(CanonicalSerializationError):
+            to_canonical_json(env)
+
+
+class TestDatetimeNaiveErrorMessage:
+    """Fix K — naive datetime now has a clear error message (not 'got offset None')."""
+
+    def test_naive_datetime_message_says_naive(self) -> None:
+        from events.canonical import _datetime_to_iso_z
+
+        with pytest.raises(CanonicalSerializationError, match="naive"):
+            _datetime_to_iso_z(datetime(2026, 4, 21, 10, 30, 0))

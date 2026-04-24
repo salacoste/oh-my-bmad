@@ -28,7 +28,14 @@ class EventSchemaUnknown(EventsError):  # noqa: N818
         super().__init__(self._format())
 
     def _format(self) -> str:
-        known = ", ".join(sorted(self.registered_types)) or "(empty registry)"
+        total = len(self.registered_types)
+        if total == 0:
+            known = "(empty registry)"
+        elif total <= 10:
+            known = ", ".join(sorted(self.registered_types))
+        else:
+            first_10 = sorted(self.registered_types)[:10]
+            known = ", ".join(first_10) + f", ... ({total - 10} more)"
         return (
             f"unknown event schema ({self.event_type!r}, {self.schema_version!r}); "
             f"registered types: {known}"

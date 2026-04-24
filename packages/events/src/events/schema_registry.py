@@ -22,6 +22,8 @@ Story 2.1 upgrades to the real dict shape. Future stories ``register()``;
 
 from __future__ import annotations
 
+import re
+
 from pydantic import BaseModel
 
 # Mutable — per-story additions via register().
@@ -29,6 +31,13 @@ REGISTRY: dict[tuple[str, str], type[BaseModel]] = {}
 
 # Convenience: type names only (any version).
 EVENT_TYPES: frozenset[str] = frozenset()
+
+# Shape validators enforced at register() time — fail-fast so typos at
+# registration sites do not poison EVENT_TYPES. Mirror the regexes in
+# envelope.py (``_EVENT_TYPE_RE`` / ``_SEMVER_RE``); intentionally duplicated
+# to avoid an import cycle (envelope imports this module).
+_EVENT_TYPE_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
+_SEMVER_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 
 
 def _rebuild_types_cache() -> None:
@@ -44,12 +53,23 @@ def register(
 ) -> None:
     """Register a (type, version) → payload_model triple.
 
+    Validates ``event_type`` and ``schema_version`` shape per the envelope
+    rules (Architecture §Format Patterns + §Naming Patterns) so typos at
+    registration sites fail fast rather than poisoning ``EVENT_TYPES``.
+
     Idempotent: re-registering the SAME model for the SAME (type, version)
     is a no-op. Registering a DIFFERENT model for an existing key raises
     ``ValueError`` — per NFR-M3 event-schema evolution is additive-only
     within a major version; replacing an existing payload model in place
     violates that.
     """
+    if not _EVENT_TYPE_RE.match(event_type):
+        raise ValueError(
+            f"event_type {event_type!r} must be dotted lowercase past-tense "
+            f"(pattern: {_EVENT_TYPE_RE.pattern})"
+        )
+    if not _SEMVER_RE.match(schema_version):
+        raise ValueError(f"schema_version {schema_version!r} must be semver MAJOR.MINOR.PATCH")
     key = (event_type, schema_version)
     existing = REGISTRY.get(key)
     if existing is None:

@@ -7,12 +7,13 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta, timezone
+from typing import Any, cast
 
 import pytest
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from events.envelope import Actor, ActorKind, EventEnvelope
-from events.errors import EventSchemaUnknown
+from events.errors import EventSchemaUnknown, EventValidationError
 from events.schema_registry import register, unregister_all
 
 # ---------------------------------------------------------------------------
@@ -227,3 +228,128 @@ class TestCreateFactoryRegistered:
         )
         assert isinstance(env.payload, _TaskPayload)
         assert env.payload.task_id == "my-task"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests — code-review follow-up for Story 2.1
+# ---------------------------------------------------------------------------
+
+
+class TestEventSchemaUnknownReportsLiveTypes:
+    """Fix A — EVENT_TYPES was stale-bound: create() always reported empty."""
+
+    def test_event_schema_unknown_reports_live_registered_types(self) -> None:
+        """EventEnvelope.create() must report CURRENT registered types in the error."""
+        from events import schema_registry as sr
+
+        sr.unregister_all()
+        sr.register("known.type", "1.0.0", _TaskPayload)
+        with pytest.raises(EventSchemaUnknown) as exc_info:
+            EventEnvelope.create(
+                event_id=_VALID_EVENT_ID,
+                schema_version="1.0.0",
+                type="unknown.type",
+                emitted_at=_VALID_EMITTED_AT,
+                emitted_at_monotonic_ns=1,
+                actor=Actor(kind="system", id="sys"),
+                payload={},
+                request_id=_VALID_REQUEST_ID,
+            )
+        assert "known.type" in exc_info.value.registered_types
+        sr.unregister_all()
+
+
+class TestPayloadImmutable:
+    """Fix C — Pydantic frozen=True blocks attribute rebind but not nested mutation."""
+
+    def test_payload_dict_setitem_rejected(self) -> None:
+        env = _make_envelope(payload={"k": "v"})
+        payload = cast(dict[str, Any], env.payload)
+        with pytest.raises(TypeError):
+            payload["k"] = "changed"
+
+    def test_payload_dict_new_key_rejected(self) -> None:
+        env = _make_envelope(payload={"k": "v"})
+        payload = cast(dict[str, Any], env.payload)
+        with pytest.raises(TypeError):
+            payload["new"] = "injected"
+
+    def test_payload_dict_delete_rejected(self) -> None:
+        env = _make_envelope(payload={"k": "v"})
+        payload = cast(dict[str, Any], env.payload)
+        with pytest.raises(TypeError):
+            del payload["k"]
+
+    def test_payload_dict_update_rejected(self) -> None:
+        env = _make_envelope(payload={"k": "v"})
+        payload = cast(dict[str, Any], env.payload)
+        with pytest.raises(TypeError):
+            payload.update({"k": "x"})
+
+    def test_payload_dict_clear_rejected(self) -> None:
+        env = _make_envelope(payload={"k": "v"})
+        payload = cast(dict[str, Any], env.payload)
+        with pytest.raises(TypeError):
+            payload.clear()
+
+    def test_payload_nested_dict_also_frozen(self) -> None:
+        env = _make_envelope(payload={"outer": {"inner": 1}})
+        payload = cast(dict[str, Any], env.payload)
+        nested = cast(dict[str, Any], payload["outer"])
+        with pytest.raises(TypeError):
+            nested["inner"] = 99
+
+
+class TestEmittedAtNormalization:
+    """Fix B / Fix E — datetime is canonicalized at parse time."""
+
+    def test_plus_00_00_input_normalized_to_utc(self) -> None:
+        plus_tz = timezone(timedelta(0))  # not UTC identity, but zero offset
+        env = _make_envelope(emitted_at=datetime(2026, 1, 1, 0, 0, 0, tzinfo=plus_tz))
+        assert env.emitted_at.tzinfo is UTC
+
+    def test_gmt_tzinfo_normalized_to_utc(self) -> None:
+        """Any zero-offset tzinfo is normalized to UTC."""
+        gmt_tz = timezone(timedelta(0), "GMT")
+        env = _make_envelope(emitted_at=datetime(2026, 1, 1, 0, 0, 0, tzinfo=gmt_tz))
+        assert env.emitted_at.tzinfo is UTC
+
+    def test_microsecond_precision_truncated_to_millisecond(self) -> None:
+        dt = datetime(2026, 4, 21, 10, 30, 0, 123456, tzinfo=UTC)
+        env = _make_envelope(emitted_at=dt)
+        # 123456 microseconds truncated to 123000 (= 123 ms).
+        assert env.emitted_at.microsecond == 123000
+
+
+class _OtherPayload(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    unrelated_field: str
+
+
+class _ExpectedPayload(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    task_id: str
+
+
+class TestCreateWrongBaseModelPayload:
+    """Fix F — create() must validate BaseModel payloads against the registered model."""
+
+    def test_wrong_basemodel_subclass_coerced_via_roundtrip(self) -> None:
+        from events import schema_registry as sr
+
+        sr.unregister_all()
+        sr.register("typed.event", "1.0.0", _ExpectedPayload)
+        other = _OtherPayload(unrelated_field="x")
+        # Should either succeed via coercion or raise ValidationError — NOT silently accept.
+        with pytest.raises((ValidationError, EventValidationError)):
+            EventEnvelope.create(
+                event_id=_VALID_EVENT_ID,
+                schema_version="1.0.0",
+                type="typed.event",
+                emitted_at=_VALID_EMITTED_AT,
+                emitted_at_monotonic_ns=0,
+                actor=Actor(kind="system", id="sys"),
+                payload=other,
+                request_id=_VALID_REQUEST_ID,
+            )
+        sr.unregister_all()

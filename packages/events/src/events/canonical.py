@@ -31,6 +31,8 @@ def _datetime_to_iso_z(dt: datetime) -> str:
 
     Architecture §line-360: ``2026-04-21T10:30:00.123Z``. Not ``+00:00``.
     """
+    if dt.tzinfo is None:
+        raise CanonicalSerializationError("datetime must be timezone-aware (UTC); got naive")
     if dt.utcoffset() != timedelta(0):
         raise CanonicalSerializationError(f"datetime must be UTC; got offset {dt.utcoffset()}")
     # Truncate to millisecond precision (drop sub-ms microseconds).
@@ -63,22 +65,9 @@ def to_canonical_json(envelope: EventEnvelope) -> bytes:
             allow_nan=False,
             default=_default_encoder,
         )
-    except (ValueError, TypeError) as exc:
+        return text.encode("utf-8")
+    except (ValueError, TypeError, UnicodeEncodeError) as exc:
         raise CanonicalSerializationError(str(exc)) from exc
-    return text.encode("utf-8")
-
-
-def _normalize_iso_z(obj: Any) -> None:
-    """Walk a JSON-dumpable dict/list in place, rewriting +00:00 → Z on ISO strings."""
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            if isinstance(v, str) and v.endswith("+00:00") and "T" in v:
-                obj[k] = v[:-6] + "Z"
-            else:
-                _normalize_iso_z(v)
-    elif isinstance(obj, list):
-        for item in obj:
-            _normalize_iso_z(item)
 
 
 def from_canonical_json(data: bytes) -> EventEnvelope:
