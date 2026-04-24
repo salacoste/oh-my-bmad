@@ -28,6 +28,17 @@ docker compose ps                                        # expect 6/6 Up (health
 
 ---
 
+## Full operator documentation
+
+- [Operator runbook](docs/operator-runbook.md) — paging conditions + per-service recovery playbooks.
+- [Schema evolution](docs/schema-evolution.md) — add an event type + ship a migrator + roll-back procedure.
+- [Exceptions](docs/exceptions.md) — documented naming-rule + convention exceptions.
+- [Testing guide](docs/testing-guide.md) — test-tree layout + harness usage + contract-fixture recording workflow.
+- [Backup / restore](docs/backup-restore.md) — volume snapshot + off-host rsync + fresh-host restore.
+- [Message design](docs/message-design.md) — Telegram template catalog + character budgets.
+
+---
+
 ## Directory structure
 
 | Folder | Purpose |
@@ -37,7 +48,7 @@ docker compose ps                                        # expect 6/6 Up (health
 | `packages/` | Shared libraries imported by multiple services and MCP servers (`events`, `secret-hygiene`, `idempotency`). All 3 scaffolded as of Story 1.2. |
 | `upstream/` | Vendored upstream-fork source trees (`omc/`, `clawhip/`), synced via `just sync-upstream <name>`. Empty until Story 1.3 (upstream vendoring). |
 | `tests/` | Cross-service test trees: `separability/`, `crash-injection/`, `idempotency/`, `integration/`, `contract/`, `migrator/`. Empty until Story 1.5 (test tree + CI skeleton). |
-| `docs/` | Operator documentation: [deployment guides](docs/deployment/) landed in Story 1.10a; runbook + schema evolution + exceptions + testing guide + backup-restore + message-design land in Story 1.10b. |
+| `docs/` | Operator documentation: [deployment guides](docs/deployment/) (Story 1.10a), [runbook](docs/operator-runbook.md) + [schema evolution](docs/schema-evolution.md) + [exceptions](docs/exceptions.md) + [testing guide](docs/testing-guide.md) + [backup-restore](docs/backup-restore.md) + [message design](docs/message-design.md) (Story 1.10b). |
 | `_bmad-output/` | Planning artifacts (product brief, PRD, architecture, epics, sprint status). Authoritative source of design decisions. |
 | `_bmad/`, `.claude/`, `.cursor/`, `.gemini/`, `.opencode/`, `.pi/`, `.agent/`, `.agents/`, `.omc/` | BMad framework + IDE/skill integration files (kept for ongoing planning amendments). |
 
