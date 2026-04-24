@@ -27,6 +27,7 @@ original BaseModel instance.  Using ``{"value": "..."}`` dicts avoids this.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Generator
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
@@ -509,3 +510,339 @@ class TestDirectoryCreation:
         assert not nested.exists()
         _writer = EventLogWriter(base_dir=nested, clock=fixed_clock)
         assert nested.is_dir()
+
+
+# ===========================================================================
+# TestShortWriteAndPoison — F1, F2, F9 hardening
+# ===========================================================================
+
+
+class TestShortWriteAndPoison:
+    @pytest.mark.asyncio
+    async def test_append_after_close_raises(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """Once close() has run, further append() calls raise RuntimeError."""
+        env = _make_envelope(clock=fixed_clock)
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        await writer.append(env)
+        await writer.close()
+
+        with pytest.raises(RuntimeError, match="closed"):
+            await writer.append(env)
+
+    @pytest.mark.asyncio
+    async def test_poisoned_writer_rejects_append_until_recover(
+        self,
+        tmp_path: Path,
+        fixed_clock: FrozenClock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A failed write poisons the writer; recover() cures it.
+
+        1. Monkey-patch os.write to return 0 once (triggers OSError).
+        2. First append() raises; _poisoned becomes True.
+        3. Second append() raises RuntimeError immediately (no os.write call).
+        4. recover() clears the poison.
+        5. Third append() succeeds.
+        """
+        env = _make_envelope(clock=fixed_clock)
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+
+        real_write = os.write
+        call_state = {"poison_next": True, "calls_while_poisoned": 0}
+
+        def flaky_write(fd: int, data: bytes) -> int:
+            if call_state["poison_next"]:
+                call_state["poison_next"] = False
+                return 0  # trigger OSError in the writer
+            call_state["calls_while_poisoned"] += 1
+            return real_write(fd, data)
+
+        monkeypatch.setattr(os, "write", flaky_write)
+
+        # 1: first append fails with OSError (os.write returned 0).
+        with pytest.raises(OSError, match="returned 0"):
+            await writer.append(env)
+        assert writer._poisoned is True
+
+        # 2: subsequent append raises RuntimeError immediately — os.write NOT
+        # called again.
+        calls_before = call_state["calls_while_poisoned"]
+        with pytest.raises(RuntimeError, match="poisoned"):
+            await writer.append(env)
+        assert call_state["calls_while_poisoned"] == calls_before
+
+        # 3: recover() cures the poison.
+        await writer.recover()
+        assert writer._poisoned is False
+
+        # 4: subsequent append succeeds (os.write is now real).
+        await writer.append(env)
+        await writer.close()
+
+        # The line should be in the file (possibly with a partial-zero-byte
+        # tail trimmed by recover()).
+        path = current_day_path(tmp_path, fixed_clock.now())
+        recovered = list(read_log_lines(path))
+        assert len(recovered) == 1
+        assert recovered[0] == env
+
+    @pytest.mark.asyncio
+    async def test_os_write_short_write_loops_to_completion(
+        self,
+        tmp_path: Path,
+        fixed_clock: FrozenClock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A short write (n < len(data)) is retried until all bytes land."""
+        env = _make_envelope(clock=fixed_clock)
+        expected = to_canonical_json(env) + b"\n"
+
+        real_write = os.write
+        state = {"halved_once": False}
+
+        def halving_write(fd: int, data: bytes) -> int:
+            if not state["halved_once"] and len(data) > 1:
+                state["halved_once"] = True
+                half = len(data) // 2
+                return real_write(fd, data[:half])
+            return real_write(fd, data)
+
+        monkeypatch.setattr(os, "write", halving_write)
+
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        await writer.append(env)
+        await writer.close()
+
+        # Despite the short-write, the full line ends up on disk.
+        path = current_day_path(tmp_path, fixed_clock.now())
+        assert path.read_bytes() == expected
+        recovered = list(read_log_lines(path))
+        assert recovered == [env]
+        assert state["halved_once"] is True
+
+
+# ===========================================================================
+# TestMultiDayRecovery — F5, F8 hardening
+# ===========================================================================
+
+
+class TestMultiDayRecovery:
+    @pytest.mark.asyncio
+    async def test_recover_trims_yesterday_file_too(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """recover() iterates every *.jsonl, not just today's.
+
+        Pre-populate yesterday (with partial tail) + today (clean).  recover()
+        trims both; returns the combined byte count.
+        """
+        today_path = tmp_path / "2026-01-01.jsonl"
+        yesterday_path = tmp_path / "2025-12-31.jsonl"
+        today_clean = b'{"k":"today"}\n'
+        yesterday_clean = b'{"k":"yest1"}\n{"k":"yest2"}\n'
+        yesterday_partial = b'{"k":"partial-15b'  # 17 bytes, no newline
+        today_path.write_bytes(today_clean)
+        yesterday_path.write_bytes(yesterday_clean + yesterday_partial)
+
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        trimmed = await writer.recover()
+
+        assert trimmed == len(yesterday_partial)
+        assert yesterday_path.read_bytes() == yesterday_clean
+        assert today_path.read_bytes() == today_clean
+
+    @pytest.mark.asyncio
+    async def test_recover_closes_held_fd(self, tmp_path: Path, fixed_clock: FrozenClock) -> None:
+        """After append() opens an fd, recover() invalidates it.
+
+        A subsequent append() must open a fresh fd (the old one was closed).
+        """
+        env = _make_envelope(clock=fixed_clock)
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        await writer.append(env)
+        assert writer._fd is not None
+        held_fd = writer._fd
+
+        await writer.recover()
+        assert writer._fd is None
+        assert writer._current_date is None
+
+        # Confirm the previously-held fd is indeed closed (os.fstat raises
+        # OSError with EBADF on a closed fd).
+        with pytest.raises(OSError):
+            os.fstat(held_fd)
+
+        # Fresh append opens a new fd and succeeds.
+        await writer.append(env)
+        assert writer._fd is not None
+        await writer.close()
+
+        path = current_day_path(tmp_path, fixed_clock.now())
+        recovered = list(read_log_lines(path))
+        assert recovered == [env, env]
+
+
+# ===========================================================================
+# TestReadLogLinesEagerRaise — F7 hardening
+# ===========================================================================
+
+
+class TestReadLogLinesEagerRaise:
+    def test_missing_file_raises_eagerly(self, tmp_path: Path) -> None:
+        """read_log_lines(missing) raises BEFORE iteration, not on next()."""
+        missing = tmp_path / "nonexistent.jsonl"
+        with pytest.raises(FileNotFoundError):
+            read_log_lines(missing)
+
+
+# ===========================================================================
+# TestCRLFTolerance — F7 hardening
+# ===========================================================================
+
+
+class TestCRLFTolerance:
+    @pytest.mark.asyncio
+    async def test_read_log_lines_strips_cr_from_crlf_line(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """A line with \\r\\n terminator (external-tool tampering) still parses."""
+        env = _make_envelope(clock=fixed_clock)
+        canonical = to_canonical_json(env)
+        # Simulate a file with CRLF line endings (e.g., Windows tool / VCS
+        # translation).  The writer emits LF only; any CR is external.
+        path = tmp_path / "2026-01-01.jsonl"
+        path.write_bytes(canonical + b"\r\n")
+
+        recovered = list(read_log_lines(path))
+        assert recovered == [env]
+
+
+# ===========================================================================
+# TestRolloverAtomicity — F3, F4 hardening
+# ===========================================================================
+
+
+class TestRolloverAtomicity:
+    @pytest.mark.asyncio
+    async def test_open_failure_preserves_old_fd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If os.open fails during rollover, the previous-day fd stays valid.
+
+        1. First append opens fd for day 0.
+        2. Patch os.open to raise OSError once when the new-day file is opened.
+        3. Rollover attempt (clock crosses midnight) raises; _fd is unchanged.
+        4. Patch restored, but we re-use day-0 directly to verify the original
+           fd still works.  This is proven by checking the writer keeps the
+           same _fd and can still write to the day-0 file.
+        """
+        day_ns = 86_400 * 1_000_000_000
+        clock = TickingClock(start_now=FROZEN_EPOCH, tick_ns=day_ns)
+        writer = EventLogWriter(base_dir=tmp_path, clock=clock)
+
+        rng = Random(13)
+        clk0 = FrozenClock(mono_ns=0, now=FROZEN_EPOCH)
+        env1 = EventEnvelope(
+            event_id=new_event_id(clock=clk0, rng=rng),
+            schema_version="1.0.0",
+            type="task.created",  # noqa: EVT001 test-only fixture envelope
+            emitted_at=FROZEN_EPOCH,
+            emitted_at_monotonic_ns=0,
+            actor=_ACTOR,
+            payload={"value": "day0"},
+            request_id=new_uuid7(clock=clk0, rng=rng),
+        )
+        await writer.append(env1)
+        fd_before = writer._fd
+        date_before = writer._current_date
+        assert fd_before is not None
+
+        # Patch os.open to raise once.  The next append() advances the clock
+        # to day 1, triggers rollover, which calls os.open → OSError.
+        real_open = os.open
+        call_state = {"raised": False}
+
+        def flaky_open(
+            path: str | bytes | os.PathLike[str],
+            flags: int,
+            mode: int = 0o777,
+            *,
+            dir_fd: int | None = None,
+        ) -> int:
+            if not call_state["raised"] and b"2026-01-02" in str(path).encode():
+                call_state["raised"] = True
+                raise OSError("simulated open failure")
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+
+        monkeypatch.setattr(os, "open", flaky_open)
+
+        clk1 = FrozenClock(mono_ns=1, now=FROZEN_EPOCH)
+        env2 = EventEnvelope(
+            event_id=new_event_id(clock=clk1, rng=rng),
+            schema_version="1.0.0",
+            type="task.created",  # noqa: EVT001 test-only fixture envelope
+            emitted_at=FROZEN_EPOCH,
+            emitted_at_monotonic_ns=1,
+            actor=_ACTOR,
+            payload={"value": "day1-fails"},
+            request_id=new_uuid7(clock=clk1, rng=rng),
+        )
+        # Rollover attempts os.open → OSError bubbles up; writer is poisoned
+        # (any exception poisons per F1) but _fd must NOT have been
+        # corrupted — old_fd only replaces self._fd AFTER new_fd succeeds.
+        with pytest.raises(OSError, match="simulated open failure"):
+            await writer.append(env2)
+
+        # Key invariant from F3/F4: self._fd still points to day-0's fd
+        # (unchanged) — not None, not a dangling reference.
+        assert writer._fd == fd_before
+        assert writer._current_date == date_before
+        assert call_state["raised"] is True
+
+        # The old fd is still valid — prove with os.fstat.
+        st = os.fstat(fd_before)
+        assert st.st_size > 0
+
+        # Cleanup: recover() clears poison + closes held fd, then close().
+        await writer.recover()
+        # _fd is now None after recover().
+        assert writer._fd is None
+
+
+# ===========================================================================
+# TestFileMode — F14 hardening
+# ===========================================================================
+
+
+class TestFileMode:
+    @pytest.mark.asyncio
+    async def test_created_file_has_mode_0o640(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """Newly-created event-log files are mode 0o640 (not 0o644).
+
+        The actual file mode is ``0o640 & ~umask``.  We read the current
+        process umask (temporarily, then restore) and assert the resulting
+        mode matches the umask-masked intent.
+        """
+        # Capture umask (os.umask must be called to read it; restore immediately).
+        current_umask = os.umask(0o022)
+        os.umask(current_umask)
+
+        env = _make_envelope(clock=fixed_clock)
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        await writer.append(env)
+        await writer.close()
+
+        path = current_day_path(tmp_path, fixed_clock.now())
+        mode_bits = path.stat().st_mode & 0o777
+        expected = 0o640 & ~current_umask
+        assert mode_bits == expected, (
+            f"file mode {oct(mode_bits)} != expected {oct(expected)} "
+            f"(0o640 & ~umask={oct(current_umask)})"
+        )
+        # Explicit guard: under any reasonable umask, the world-read bit must
+        # be clear.  0o644 would leave 0o004 set; 0o640 never does.
+        assert mode_bits & 0o004 == 0, "world-readable bit must be clear"

@@ -28,6 +28,15 @@ sufficient — no temp-file-and-rename dance needed.  Note: POSIX guarantees
 atomicity only for writes ≤ PIPE_BUF on pipes; we rely on the stronger Linux
 ext4/XFS guarantee for regular files.  macOS is a development convenience only.
 
+**Short-write loop + poison-pill** — ``os.write`` may return a byte count
+smaller than the requested length (short write) under resource pressure or
+signals.  We loop until all bytes are written.  If any failure occurs during
+the write sequence (short-write-zero, ENOSPC, EIO, KeyboardInterrupt), the
+file may be left with a partial line on disk.  We mark the writer *poisoned*
+so the next ``append()`` raises immediately instead of silently corrupting
+the log.  Recovery requires calling ``recover()`` (which trims partial tails
+and clears the poison) and reopening the writer.
+
 **asyncio.to_thread layering** — ``append()`` is ``async def`` and offloads the
 blocking ``os.write`` + ``os.fdatasync`` syscalls to the default
 ``ThreadPoolExecutor`` via ``await asyncio.to_thread(...)``.  This keeps the
@@ -36,16 +45,23 @@ only place that touches file descriptors, which keeps the threading model clean.
 
 **UTC-midnight rollover** — per-day file selection is driven by ``clock.now()``
 at each ``append()`` call, using the UTC date only.  No background task; the
-overhead is one ``datetime.date`` comparison per append.
+overhead is one ``datetime.date`` comparison per append.  Rollover opens the
+new fd *before* closing the old one — if ``os.open`` fails, the writer keeps
+working on the previous day's file.
 
 **asyncio.Lock for intra-process serialization** — even though FR26 guarantees a
 single writer process, an asyncio.Lock guards against the edge case where
 multiple coroutines in the same process race (e.g., during a hot-reload).
+
+**File mode 0o640** — audit logs contain task contents + approval trails.
+Files are created group-readable (not world-readable) to limit accidental
+exposure on shared systems.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from collections.abc import Iterator
 from datetime import date, datetime, timedelta
@@ -59,6 +75,11 @@ from events.clock import Clock
 # but is still durable).  Production target is Linux — this fallback is a
 # dev-convenience measure only.
 _fdatasync = getattr(os, "fdatasync", os.fsync)
+
+# macOS compatibility: os.O_DIRECTORY may not exist on all platforms.  When
+# absent, fall back to plain O_RDONLY (directory-fsync is best-effort on such
+# platforms; Linux production is always the target).
+_O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +114,10 @@ def read_log_lines(path: Path) -> Iterator[EventEnvelope]:
     up, or that the writer was killed mid-line.  Callers should run
     ``recover()`` before reading in production.
 
+    CRLF tolerance: the writer emits LF only, so any CR byte in a file is the
+    result of external tooling (editors, VCS translation).  We strip trailing
+    ``\\r`` bytes pragmatically before JSON parsing.
+
     Args:
         path: Path to the ``.jsonl`` file.
 
@@ -100,13 +125,22 @@ def read_log_lines(path: Path) -> Iterator[EventEnvelope]:
         ``EventEnvelope`` objects, one per complete line.
 
     Raises:
-        FileNotFoundError: If *path* does not exist (caller must check).
+        FileNotFoundError: If *path* does not exist.  Raised eagerly (before
+            iteration begins) so callers don't receive a half-constructed
+            generator that only fails on ``next()``.
     """
+    if not path.exists():
+        raise FileNotFoundError(f"event log file not found: {path}")
+    return _read_log_lines_gen(path)
+
+
+def _read_log_lines_gen(path: Path) -> Iterator[EventEnvelope]:
+    """Inner generator for ``read_log_lines`` — deferred file I/O."""
     with open(path, "rb") as f:
         for raw in f:
             if not raw.endswith(b"\n"):
                 return  # trailing partial line — skip silently
-            yield from_canonical_json(raw.rstrip(b"\n"))
+            yield from_canonical_json(raw.rstrip(b"\r\n"))
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +159,9 @@ def _recover_file(path: Path) -> int:
        Otherwise ``ftruncate(fd, P+1)`` and return the truncated byte count.
     4. If no ``\\n`` is found anywhere, truncate to 0 and return file_size.
 
+    After any truncation, the file *and* its parent directory are fsynced so
+    the size-change metadata is durable across power loss.
+
     Returns:
         Number of bytes truncated (0 if file was already clean).
     """
@@ -132,6 +169,8 @@ def _recover_file(path: Path) -> int:
     if size == 0:
         return 0
 
+    trimmed = 0
+    truncated = False
     with open(path, "r+b") as f:
         chunk_size = 4096
         pos = size
@@ -150,15 +189,33 @@ def _recover_file(path: Path) -> int:
         if last_nl == -1:
             # No newline anywhere — the entire file is a partial line.
             f.truncate(0)
-            return size
+            trimmed = size
+            truncated = True
+        else:
+            complete_end = last_nl + 1
+            if complete_end == size:
+                # File already ends cleanly on a newline — no truncation.
+                trimmed = 0
+                truncated = False
+            else:
+                f.truncate(complete_end)
+                trimmed = size - complete_end
+                truncated = True
 
-        complete_end = last_nl + 1
-        if complete_end == size:
-            # File already ends cleanly on a newline.
-            return 0
+        if truncated:
+            f.flush()
+            os.fsync(f.fileno())
 
-        f.truncate(complete_end)
-        return size - complete_end
+    # Fsync the parent directory so the truncation's metadata change (new file
+    # size in the inode / directory entry) is durable across power loss.
+    if truncated:
+        dir_fd = os.open(str(path.parent), os.O_RDONLY | _O_DIRECTORY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+
+    return trimmed
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +237,14 @@ class EventLogWriter:
     The writer is NOT thread-safe across multiple ``EventLogWriter`` instances;
     use only one instance per process (FR26 enforces this at CI level).
     ``asyncio.Lock`` guards intra-process coroutine races within one instance.
+
+    State model:
+
+    - ``_poisoned`` — set to True if any write attempt raised.  The next
+      ``append()`` will raise RuntimeError immediately.  ``recover()`` clears
+      the poison after trimming partial tails.
+    - ``_closed`` — set to True by ``close()``.  Further ``append()`` raises
+      RuntimeError until a fresh writer is constructed.
     """
 
     def __init__(self, *, base_dir: Path, clock: Clock) -> None:
@@ -198,6 +263,8 @@ class EventLogWriter:
         self._fd: int | None = None
         self._current_date: date | None = None
         self._lock: asyncio.Lock = asyncio.Lock()
+        self._poisoned: bool = False
+        self._closed: bool = False
         base_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
@@ -216,63 +283,131 @@ class EventLogWriter:
 
         Args:
             envelope: The event to persist.
+
+        Raises:
+            RuntimeError: If the writer is closed, or if a previous write
+                failed (poisoned state).  In the poisoned case, call
+                ``recover()`` and reconstruct the writer to recover.
         """
         data = to_canonical_json(envelope) + b"\n"
         async with self._lock:
             await asyncio.to_thread(self._sync_append_impl, data)
 
     async def close(self) -> None:
-        """Close the current file handle.
+        """Close the current file handle and mark the writer terminal.
 
         Idempotent — safe to call on a writer that is already closed or that
-        has never written any data.
+        has never written any data.  After ``close()``, further ``append()``
+        calls raise ``RuntimeError`` — construct a fresh writer to resume.
         """
         async with self._lock:
             if self._fd is not None:
+                # Best-effort flush on close — data was already fdatasync'd
+                # after each successful append.
+                with contextlib.suppress(OSError):
+                    _fdatasync(self._fd)
                 fd = self._fd
+                await asyncio.to_thread(os.close, fd)
                 self._fd = None
                 self._current_date = None
-                await asyncio.to_thread(os.close, fd)
+            self._closed = True
 
     async def recover(self) -> int:
-        """Trim any trailing partial line from the current-day file.
+        """Trim trailing partial lines from every ``*.jsonl`` file under *base_dir*.
 
         Must be called ONCE at service startup, BEFORE any ``append()`` call.
-        Scans the current-day file (as determined by ``clock.now()``) backward
-        for the last ``\\n`` and truncates past it if needed.
+        Iterates every ``*.jsonl`` file in ``base_dir`` (not just today's) so
+        partial-tail bytes left by a pre-midnight crash are cleaned up even if
+        restart happens after UTC midnight.  Uses a backward-chunk scan +
+        ``ftruncate`` to trim each file.
+
+        Closes any currently-held fd and clears the rollover cache — the next
+        ``append()`` opens fresh.  Also clears the poison flag: ``recover()``
+        is the cure for a previously poisoned writer.
 
         Returns:
-            Number of bytes truncated (0 if file was already clean or absent).
+            Total number of bytes trimmed across all files (0 if every file
+            was already clean).
         """
         async with self._lock:
-            now = self._clock.now()
-            path = current_day_path(self._base_dir, now)
-            if not path.exists():
-                return 0
-            return await asyncio.to_thread(_recover_file, path)
+            # Invalidate any held fd — we may truncate its underlying file.
+            if self._fd is not None:
+                with contextlib.suppress(OSError):
+                    _fdatasync(self._fd)
+                os.close(self._fd)
+                self._fd = None
+                self._current_date = None
+            # ``recover()`` is the cure for a previously poisoned writer.
+            self._poisoned = False
+            return await asyncio.to_thread(self._recover_all_impl)
 
     # ------------------------------------------------------------------
     # Internal sync helpers (called via asyncio.to_thread)
     # ------------------------------------------------------------------
 
+    def _recover_all_impl(self) -> int:
+        """Trim every ``*.jsonl`` file in ``base_dir``.
+
+        Sorted iteration gives deterministic ordering for test assertions.
+        TOCTOU: if a file disappears between ``glob()`` and ``open()``, skip
+        it silently rather than raising — recovery is best-effort cleanup.
+
+        Returns:
+            Total bytes trimmed across all files.
+        """
+        total = 0
+        for path in sorted(self._base_dir.glob("*.jsonl")):
+            try:
+                total += _recover_file(path)
+            except FileNotFoundError:
+                # TOCTOU: file disappeared between glob and open.  Skip.
+                continue
+        return total
+
     def _sync_append_impl(self, data: bytes) -> None:
         """Blocking write + fdatasync — called in a thread via asyncio.to_thread.
 
         Opens (or rolls to) the current-day file descriptor, writes *data*
-        atomically under ``O_APPEND``, and calls fdatasync.
+        under ``O_APPEND`` with a short-write retry loop, and calls fdatasync.
+        Any exception during the write sequence poisons the writer so a
+        partial-line-on-disk state cannot be silently ignored.
+
+        Raises:
+            RuntimeError: If the writer is closed or poisoned.
+            OSError: If ``os.write`` returns 0, or any syscall fails.
         """
+        if self._poisoned:
+            raise RuntimeError(
+                "EventLogWriter poisoned — previous write failed; call recover() and reopen"
+            )
+        if self._closed:
+            raise RuntimeError("EventLogWriter is closed")
         now = self._clock.now()
         self._ensure_current_day(now)
         assert self._fd is not None  # _ensure_current_day guarantees this
-        os.write(self._fd, data)
-        _fdatasync(self._fd)
+        try:
+            remaining = data
+            while remaining:
+                n = os.write(self._fd, remaining)
+                if n == 0:
+                    raise OSError("os.write returned 0 — cannot proceed")
+                remaining = remaining[n:]
+            _fdatasync(self._fd)
+        except BaseException:
+            # Any failure (ENOSPC, EIO, KeyboardInterrupt, etc.) may have left
+            # a partial line on disk.  Poison the writer so the next append()
+            # raises immediately until recover() + fresh write cycle runs.
+            self._poisoned = True
+            raise
 
     def _ensure_current_day(self, now: datetime) -> None:
-        """Open (or roll) the fd to the correct per-day file.
+        """Open (or roll) the fd to the correct per-day file — atomically.
 
         If the current fd is already open for today's date, this is a no-op.
-        Otherwise the existing fd (if any) is closed and a new one is opened
-        for today's JSONL file.
+        Otherwise the new fd is opened *first*; on success the old fd is
+        fsynced and closed.  If ``os.open`` for the new path fails, the old
+        fd remains valid and the writer continues on the previous day's file
+        — no partial-failure state where ``self._fd`` is None mid-rollover.
 
         Args:
             now: UTC-aware datetime from the clock.
@@ -280,12 +415,22 @@ class EventLogWriter:
         today = now.date()
         if self._current_date == today and self._fd is not None:
             return
-        if self._fd is not None:
-            os.close(self._fd)
-            self._fd = None
         path = current_day_path(self._base_dir, now)
-        self._fd = os.open(str(path), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        # Open the new fd FIRST.  If this raises, the old fd stays valid and
+        # the writer keeps working on the previous day's file.  File mode is
+        # 0o640 (group-readable) — audit logs should not be world-readable.
+        new_fd = os.open(str(path), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o640)
+        old_fd = self._fd
+        self._fd = new_fd
         self._current_date = today
+        if old_fd is not None:
+            # Flush old fd before closing — belt-and-braces durability for
+            # the final bytes written to the previous day's file.  Data was
+            # already fdatasync'd after each successful append, so errors
+            # here are non-fatal.
+            with contextlib.suppress(OSError):
+                _fdatasync(old_fd)
+            os.close(old_fd)
 
 
 __all__ = [
