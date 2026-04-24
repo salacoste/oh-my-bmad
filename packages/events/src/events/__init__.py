@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from events import schema_registry as _schema_registry
 from events.canonical import from_canonical_json, to_canonical_json
+from events.clock import FROZEN_EPOCH, Clock, FrozenClock, SystemClock, TickingClock
 from events.envelope import Actor, EventEnvelope
 from events.errors import (
     CanonicalSerializationError,
@@ -17,9 +18,18 @@ from events.errors import (
     EventsError,
     EventValidationError,
 )
+from events.ids import (
+    new_event_id,
+    new_idempotency_key,
+    new_request_id,
+    new_session_id,
+    new_task_id,
+    new_uuid7,
+    parse_prefix,
+)
 from events.schema_registry import REGISTRY, register
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 
 def __getattr__(name: str) -> object:
@@ -39,15 +49,27 @@ def __getattr__(name: str) -> object:
 
 __all__ = [
     "EVENT_TYPES",
+    "FROZEN_EPOCH",
     "REGISTRY",
     "Actor",
     "CanonicalSerializationError",
+    "Clock",
     "EventEnvelope",
     "EventSchemaUnknown",
     "EventValidationError",
     "EventsError",
+    "FrozenClock",
+    "SystemClock",
+    "TickingClock",
     "__version__",
     "from_canonical_json",
+    "new_event_id",
+    "new_idempotency_key",
+    "new_request_id",
+    "new_session_id",
+    "new_task_id",
+    "new_uuid7",
+    "parse_prefix",
     "register",
     "to_canonical_json",
 ]

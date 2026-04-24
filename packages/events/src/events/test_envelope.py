@@ -353,3 +353,69 @@ class TestCreateWrongBaseModelPayload:
                 request_id=_VALID_REQUEST_ID,
             )
         sr.unregister_all()
+
+
+# ---------------------------------------------------------------------------
+# Story 2.2 integration tests — generator output accepted by Story 2.1 validators
+# ---------------------------------------------------------------------------
+
+
+class TestGeneratorIntegration:
+    """AC-7 / Story 2.2: generators produce IDs that Story 2.1 validators accept."""
+
+    def test_envelope_accepts_generator_output(self) -> None:
+        """Story 2.2 generators produce IDs Story 2.1 validators accept."""
+        from random import Random
+
+        from events import FrozenClock, new_event_id, new_request_id
+
+        clock = FrozenClock()
+        rng = Random(42)
+        env = EventEnvelope(
+            event_id=new_event_id(clock=clock, rng=rng),
+            schema_version="1.0.0",
+            type="task.created",
+            emitted_at=clock.now(),
+            emitted_at_monotonic_ns=clock.monotonic_ns(),
+            actor=Actor(kind="system", id="x"),
+            payload={"task_id": "abc"},
+            request_id=new_request_id(clock=clock, rng=rng),
+        )
+        assert env.event_id.startswith("e-")
+
+    def test_deterministic_generator_produces_valid_envelope(self) -> None:
+        """Seeded clock+rng give a reproducible, envelope-valid event_id."""
+        from random import Random
+
+        from events import FrozenClock, new_event_id
+
+        clock1 = FrozenClock()
+        rng1 = Random(99)
+        clock2 = FrozenClock()
+        rng2 = Random(99)
+        eid1 = new_event_id(clock=clock1, rng=rng1)
+        eid2 = new_event_id(clock=clock2, rng=rng2)
+        assert eid1 == eid2
+        # Both should construct without ValidationError
+        env = EventEnvelope(
+            event_id=eid1,
+            schema_version="1.0.0",
+            type="task.created",
+            emitted_at=_VALID_EMITTED_AT,
+            emitted_at_monotonic_ns=0,
+            actor=Actor(kind="system", id="gen-test"),
+            payload={"task_id": "gen-task"},
+            request_id=_VALID_REQUEST_ID,
+        )
+        assert env.event_id == eid2
+
+    def test_generator_event_id_passes_envelope_regex(self) -> None:
+        """new_event_id() output satisfies the _EVENT_ID_RE from envelope.py."""
+        from random import Random
+
+        from events import FrozenClock, new_event_id
+        from events.envelope import _EVENT_ID_RE
+
+        for seed in range(5):
+            eid = new_event_id(clock=FrozenClock(), rng=Random(seed))
+            assert _EVENT_ID_RE.match(eid), f"Seed {seed}: {eid!r} failed regex"
