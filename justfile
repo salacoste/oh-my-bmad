@@ -8,6 +8,13 @@
 default:
     @just --list
 
+# Apply any pending Alembic migrations to the registry-state SQLite store.
+# DB path is controlled by REGISTRY_STATE_DB_URL env var (default: local dev path
+# sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3 from env.py).
+# Example: REGISTRY_STATE_DB_URL=sqlite+aiosqlite:////tmp/test.sqlite3 just migrate
+migrate:
+    cd services/registry-state && uv run alembic upgrade head
+
 # Verify the uv workspace resolves and every cross-package import works.
 bootstrap-verify:
     uv sync --frozen --no-dev

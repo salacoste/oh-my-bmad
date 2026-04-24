@@ -45,6 +45,9 @@ select = [
 "packages/*/src/*/__init__.py" = ["E501"]
 "services/*/src/*/__init__.py" = ["E501"]
 "mcp-servers/*/src/*/__init__.py" = ["E501"]
+# Alembic migration files use date-prefixed names (e.g. 2026-04-24_0001_initial_schema.py)
+# which violate N999 (invalid module name). This is the standard Alembic convention.
+"services/*/src/*/migrations/versions/*.py" = ["N999"]
 
 [format]
 # Ruff's default formatter settings are fine — single source of truth.
