@@ -14,7 +14,7 @@ Every bot message follows four rules:
 1. **4096-char hard cap** — Telegram rejects `sendMessage` calls over 4096
    chars. Target under 3800 to leave headroom for Markdown-v2 escaping.
 2. **Markdown-v2 escaping** — Characters requiring a backslash escape in
-   `parse_mode=MarkdownV2`: `_ * [ ] ( ) ~ > # + - = | { } . !`
+   `parse_mode=MarkdownV2`: `` _ * [ ] ( ) ~ ` > # + - = | { } . ! ``
    Pass all user-supplied content through `escape_md()` before interpolation.
 3. **Field order** — every message: `task_id` → `summary` → `actions`. This
    order is fixed so the operator sees context before call-to-action.
@@ -38,6 +38,10 @@ Call `escape_md()` on task IDs, file paths, error messages, and any
 platform-generated string before interpolating into a template. Static labels
 and emoji prefixes should be pre-escaped in the template string.
 
+**Call `escape_md()` exactly once per value.** The regex includes `\\` in
+its replacement class, so applying it to already-escaped strings doubles
+the escapes and corrupts output. Never `escape_md(escape_md(x))`.
+
 ---
 
 ## Emoji discipline
@@ -60,6 +64,12 @@ a 🛑 is always a blocker, never ambiguous.
 ---
 
 ## Template catalog
+
+**Note on `[button-label]` placeholders**: In the template renderings below,
+text in square brackets (e.g. `[Approve]`, `[Reject]`, `[Full log in console]`)
+represents **Telegram inline-keyboard buttons**, not literal MarkdownV2
+link syntax. Message body text with actual `[` or `]` characters must be
+backslash-escaped per the escape rules above.
 
 ### `/ping` pong reply — Story 3.5
 

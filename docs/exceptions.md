@@ -34,18 +34,16 @@ Services and packages follow the simpler 1:1 kebab-to-snake convention
 
 ---
 
-## Scaffold-version tags
+## Scaffold-version tags (historical)
 
-Story 1.4 introduced a header comment pattern to mark files that would be
-replaced by a later story:
-
-```python
-# SCAFFOLD VERSION — Story 1.8 replaces this Dockerfile with multi-stage build.
-```
-
-Story 1.8's Dockerfile refactor removed the last remaining scaffold-version
-tags. If you encounter one of these comments in the current codebase, it is
-stale and should be removed in the same PR that adds real logic.
+Stories 1.4 through 1.8 used `# SCAFFOLD VERSION — Story X replaces ...`
+header comments on transient code (Dockerfiles, entrypoints) so reviewers
+knew the shape was deliberately incomplete. Story 1.8 removed the last of
+these tags when it landed the real multi-stage Dockerfile.base. **If you
+encounter this tag in the repo today, it's stale — file a follow-up to
+retire it.** The convention itself is deprecated; future stories should
+reference their replacement story in commit messages rather than in-code
+scaffold tags.
 
 ---
 

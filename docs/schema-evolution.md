@@ -125,35 +125,74 @@ ensures the original log is untouched on failure.
 
 ## Run the migrator
 
-Build the migrator image and invoke it via compose:
+**Prerequisite**: the migrator image must be built before running. Either
+run `just migrator-test-additive` (builds + tests + cleans up) OR manually:
+`docker build --quiet -t oh-my-bmad-migrator:latest scripts/migrator`.
+
+Build the migrator image and run it directly via `docker run`:
 
 ```sh
-docker compose run --rm migrator <from-version>-to-<to-version>
+# Build the migrator image (fast — scripts/migrator/ is tiny).
+docker build --quiet -t oh-my-bmad-migrator:latest scripts/migrator
+
+# Run it against the live event log. On Linux the volume lives under
+# /var/lib/docker/volumes/oh-my-bmad_oh-my-bmad-data; on macOS it's a
+# bind-mount at ${HOME}/.oh-my-bmad. Mount whichever host path matches:
+
+# Linux (named volume):
+docker run --rm \
+    -v oh-my-bmad_oh-my-bmad-data:/var/lib/oh-my-bmad \
+    -e EVENT_LOG_PATH=/var/lib/oh-my-bmad/registry/events/current.jsonl \
+    oh-my-bmad-migrator:latest v<from>-to-<to>
+
+# macOS (bind-mount):
+docker run --rm \
+    -v "${HOME}/.oh-my-bmad:/var/lib/oh-my-bmad" \
+    -e EVENT_LOG_PATH=/var/lib/oh-my-bmad/registry/events/current.jsonl \
+    oh-my-bmad-migrator:latest v<from>-to-<to>
 ```
 
-Example (shipped template — Story 1.3):
-
-```sh
-docker compose run --rm migrator v1.0.0-to-v1.0.1
-```
-
-**What happens internally:**
-
-1. The migrator reads `$EVENT_LOG_PATH`
-   (default `/var/lib/oh-my-bmad/registry/events/current.jsonl`).
-2. Each line is parsed, migrated, and written to a `.partial` staging file.
-3. On success: the staging file is `fsync`-ed then `os.replace`-ed to
-   `current.v<to>.jsonl` (atomic rename — the final file either fully exists
-   or doesn't).
-4. The original `current.jsonl` is moved to `current.v<from>.archive`.
-5. Any crash mid-write leaves `.partial` and the original log untouched — retry
-   is safe.
+The migrator writes each migrated event to a `.partial` staging file, then
+atomically renames it to `current.v<to>.jsonl` and archives the original as
+`current.v<from>.archive`. Any crash mid-write leaves `.partial` and the
+original untouched — a retry is safe.
 
 Stop the stack before running the migrator to avoid concurrent writes:
 
 ```sh
 docker compose down
-docker compose run --rm migrator v1.0.0-to-v1.0.1
+
+# Build and run the migrator (Linux example):
+docker build --quiet -t oh-my-bmad-migrator:latest scripts/migrator
+docker run --rm \
+    -v oh-my-bmad_oh-my-bmad-data:/var/lib/oh-my-bmad \
+    -e EVENT_LOG_PATH=/var/lib/oh-my-bmad/registry/events/current.jsonl \
+    oh-my-bmad-migrator:latest v1.0.0-to-v1.0.1
+```
+
+### Rename the migrated log
+
+The migrator writes output to `<original>.v<to>.jsonl` and archives the
+original as `<original>.v<from>.archive`. Services read `EVENT_LOG_PATH`
+(default `/var/lib/oh-my-bmad/registry/events/current.jsonl`), so the
+migrated file must be renamed back to `current.jsonl` before starting the
+stack:
+
+```sh
+# Linux (named volume):
+docker run --rm -v oh-my-bmad_oh-my-bmad-data:/data alpine:3 sh -c '
+  mv /data/registry/events/current.v<to>.jsonl /data/registry/events/current.jsonl
+'
+
+# macOS (bind-mount):
+mv "${HOME}/.oh-my-bmad/registry/events/current.v<to>.jsonl" \
+   "${HOME}/.oh-my-bmad/registry/events/current.jsonl"
+```
+
+The `.v<from>.archive` file stays as the rollback asset; keep it until
+you've confirmed the migration worked (see Roll-back section below).
+
+```sh
 docker compose up -d
 ```
 
@@ -185,6 +224,23 @@ docker compose up -d
 The archive file is the sole recovery asset for a roll-back. Confirm it is
 present before running a migration, and include it in your next backup
 (`just backup`) immediately after a successful migration.
+
+---
+
+## Cleaning up archive files
+
+After a successful migration and a few days of stable operation, the
+`.v<from>.archive` file under `<event-log-dir>/` can be deleted to
+reclaim disk space. Recommended cadence: keep archives for one quarter,
+then prune:
+
+```sh
+# Linux (named volume):
+rm /var/lib/oh-my-bmad/registry/events/*.archive
+
+# macOS (bind-mount):
+rm "${HOME}/.oh-my-bmad/registry/events/"*.archive
+```
 
 ---
 

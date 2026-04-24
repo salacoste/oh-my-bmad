@@ -54,10 +54,10 @@ recipe to exit with a validation error before touching the stack.
 ### Example output
 
 ```
-→ stopping stack…
-→ taring volume to oh-my-bmad-backup-20260115T143022Z.tgz…
-→ restarting stack…
-✓ backup complete: oh-my-bmad-backup-20260115T143022Z.tgz
+→ stopping stack
+→ archiving volume oh-my-bmad_oh-my-bmad-data → /path/oh-my-bmad-backup-2026-01-15T143022Z.tgz
+→ restarting stack
+✓ backup written to /path/oh-my-bmad-backup-2026-01-15T143022Z.tgz
 ```
 
 ---
@@ -74,16 +74,17 @@ rsync -avz oh-my-bmad-backup-*.tgz <USER>@<BACKUP_HOST>:~/backups/
 
 Replace `<USER>` and `<BACKUP_HOST>` with your backup server credentials.
 The glob copies all local backup archives; add `--remove-source-files` to
-delete after a confirmed transfer.
+delete after a confirmed transfer. Never pass `--remove-source-files` until
+you've verified the destination has a readable copy.
 
 ### S3 / Backblaze B2
 
 ```sh
 # AWS S3 (requires aws CLI + configured credentials):
-aws s3 cp oh-my-bmad-backup-<TIMESTAMP>.tgz s3://<BUCKET>/oh-my-bmad/
+aws s3 cp oh-my-bmad-backup-2026-01-15T143022Z.tgz s3://<BUCKET>/oh-my-bmad/
 
 # Backblaze B2 (requires b2 CLI):
-b2 upload-file <BUCKET> oh-my-bmad-backup-<TIMESTAMP>.tgz oh-my-bmad/oh-my-bmad-backup-<TIMESTAMP>.tgz
+b2 upload-file <BUCKET> oh-my-bmad-backup-2026-01-15T143022Z.tgz oh-my-bmad/oh-my-bmad-backup-2026-01-15T143022Z.tgz
 ```
 
 Exact credentials and bucket configuration are outside the scope of this guide.
@@ -94,54 +95,43 @@ that may include event payloads containing task details.
 
 ## Restore to a fresh host
 
-Follow these steps on a host with no existing oh-my-bmad data.
+The restore path depends on the target platform because the volume shape
+differs (see `docker-compose.yml` vs `docker-compose.macos.yml`).
 
-1. **Clone and install prerequisites:**
-   ```sh
-   git clone <THIS_REPO_URL> oh-my-bmad && cd oh-my-bmad
-   uv sync --dev
-   uv run pre-commit install
-   ```
-   See [`docs/deployment/vps.md`](./deployment/vps.md) or
-   [`docs/deployment/macos.md`](./deployment/macos.md) for full
-   prerequisite installation steps.
+### Linux (named volume)
 
-2. **Create the named volume:**
-   ```sh
-   docker volume create oh-my-bmad_oh-my-bmad-data
-   ```
+1. Install prerequisites (see `docs/deployment/vps.md`).
+2. Clone the repo + copy `.env.example → .env` + edit secrets.
+3. Create the volume Docker Compose expects:
 
-3. **Extract the backup archive into the volume:**
-   ```sh
-   docker run --rm \
-     -v oh-my-bmad_oh-my-bmad-data:/dest \
-     -v "${PWD}:/src" \
-     alpine:3 \
-     tar -xzf "/src/<ARCHIVE_FILE>" -C /dest
-   ```
-   Replace `<ARCHIVE_FILE>` with the actual filename, e.g.
-   `oh-my-bmad-backup-20260115T143022Z.tgz`.
+       docker volume create oh-my-bmad_oh-my-bmad-data
 
-4. **Restore secrets:** The archive does not contain `.env`. Copy and edit it:
-   ```sh
-   cp .env.example .env
-   $EDITOR .env   # fill in TELEGRAM_BOT_TOKEN, ANTHROPIC_API_KEY, etc.
-   ```
-   See the `.env` field reference in
-   [`docs/deployment/vps.md`](./deployment/vps.md#configure-env).
+4. Extract the backup into it:
 
-5. **Start the platform:**
-   ```sh
-   just deploy-vps      # Linux / VPS
-   # or
-   just deploy-macos    # local macOS
-   ```
+       docker run --rm \
+           -v oh-my-bmad_oh-my-bmad-data:/dest \
+           -v "${PWD}:/src" \
+           alpine:3 \
+           tar -xzf "/src/<ARCHIVE_FILE>" -C /dest
 
-6. **Verify:**
-   ```sh
-   docker compose ps
-   # Expected: 6/6 containers Up (healthy) within ~60 s.
-   ```
+5. `just deploy-vps` (includes `build-base` + sync).
+6. Verify `docker compose ps` → 6/6 healthy.
+
+### macOS (bind-mount overlay)
+
+1. Install prerequisites (see `docs/deployment/macos.md`).
+2. Clone the repo + copy `.env.example → .env` + edit secrets.
+3. Create the bind-mount target and extract directly into it:
+
+       mkdir -p "${HOME}/.oh-my-bmad"
+       tar -xzf "<ARCHIVE_FILE>" -C "${HOME}/.oh-my-bmad"
+
+4. `just deploy-macos` (includes `build-base` + overlay merge + mkdir).
+5. Verify `docker compose ps` → 6/6 healthy.
+
+Note: `.env` is NOT restored from the archive — secrets must be re-entered
+manually. Archive only contains the `oh-my-bmad-data` volume (registry DB,
+event log, artifacts).
 
 ---
 
@@ -154,7 +144,8 @@ Follow these steps on a host with no existing oh-my-bmad data.
   capture) lands a compaction mechanism; until then, monthly manual rotation
   prevents unbounded disk growth.
 - **Before any migration or upgrade:** always run `just backup` before
-  `docker compose run --rm migrator ...` or `docker compose pull && up -d`.
+  running the migrator (see [Schema evolution](./schema-evolution.md)) or
+  `docker compose pull && up -d`.
 
 ---
 
@@ -167,8 +158,8 @@ hypothesis. Run a restore drill quarterly:
 2. Copy a recent backup archive to the scratch host.
 3. Follow the [Restore to a fresh host](#restore-to-a-fresh-host) steps above.
 4. Verify `docker compose ps` shows 6/6 healthy.
-5. (Optional) run `just bootstrap-verify` + `just test` to confirm the
-   workspace is intact.
+5. (Optional) run `uv sync --dev` then `just bootstrap-verify` + `just test`
+   to confirm the workspace is intact.
 6. Tear down the scratch host.
 
 The backup archive is the recovery asset only after a successful drill

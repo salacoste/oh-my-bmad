@@ -20,9 +20,9 @@ docker compose ps
 # 2. Does the workspace pass static checks?
 just lint
 
-# Expected: 6 sub-commands complete, exit 0.
-# ruff check + format, mypy, check_imports, check_event_registry,
-# check_single_writer, scan-secrets.
+# Expected: 7 sub-commands complete, exit 0.
+# ruff check, ruff format --check, mypy, check_imports, check_event_registry,
+# check_single_writer, secret-hygiene-precommit.
 
 # 3. Does the Python workspace resolve cleanly?
 just bootstrap-verify

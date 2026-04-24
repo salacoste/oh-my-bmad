@@ -83,25 +83,25 @@ uv run pytest -m "not slow and not contract"
 ## Writing a unit test (co-located)
 
 Place the test file next to the module it tests:
-`packages/events/src/events/test_schema_registry.py` alongside
-`schema_registry.py`. Architecture §line 344 establishes this as the primary
+`packages/secret-hygiene/src/secret_hygiene/test_scanner.py` alongside
+`scanner.py`. Architecture §line 344 establishes this as the primary
 unit-test location.
 
 ```python
-"""Unit tests for schema_registry."""
+"""Unit tests for secret_hygiene.scanner."""
 from __future__ import annotations
-import pytest
-from events.schema_registry import REGISTRY
+from secret_hygiene.scanner import SECRET_PATTERNS
 
-def test_registry_is_frozenset() -> None:
-    assert isinstance(REGISTRY, frozenset)
+_EXPECTED_KEYS = {
+    "ANTHROPIC_API_KEY",
+    "TELEGRAM_BOT_TOKEN",
+    "GITHUB_TOKEN_CLASSIC",
+    "GITHUB_TOKEN_FINE",
+    "GENERIC_AWS_ACCESS_KEY",
+}
 
-@pytest.fixture
-def sample_event_type() -> str:
-    return "task.plan.committed"
-
-def test_registered_type_is_present(sample_event_type: str) -> None:
-    assert sample_event_type in REGISTRY or REGISTRY == frozenset()
+def test_secret_patterns_exports_expected_keys() -> None:
+    assert set(SECRET_PATTERNS.keys()) == _EXPECTED_KEYS
 ```
 
 No marker needed for plain unit tests. Add `@pytest.mark.slow` only if the
@@ -141,65 +141,47 @@ or the `@pytest.mark.integration` marker (excluded from `just test`).
 ## Recording a contract fixture
 
 Contract tests pin the observed I/O behavior of an upstream-fork adapter. When
-the vendored upstream source changes (via `just sync-upstream`), re-running
-`just test-contract` detects drift between the new source and the recorded
-fixture.
+vendored upstream source changes (via `just sync-upstream`), re-running
+`just test-contract` detects drift against the recorded fixture.
 
 ### Workflow
 
 1. **Identify the adapter under test.** Current adapters:
-   - `services/orchestrator-adapter/adapters/omc_subprocess.py` — arrives
-     Story 5.10. Wraps the `upstream/omc/` vendored binary via subprocess.
-   - `services/worker-wrapper/adapters/clawhip_client.py` — arrives Story 2.8.
-     Wraps `upstream/clawhip/` via the `clawhip-bridge-mcp` MCP server.
+   - `services/orchestrator-adapter/adapters/omc_subprocess.py` (Story 5.10)
+   - `services/worker-wrapper/adapters/clawhip_client.py` (Story 2.8)
 
-2. **Record real subprocess I/O** into a fixture file:
-   ```
-   tests/contract/fixtures/<adapter-name>/<test-case-name>.json
-   ```
-   The fixture captures: what went in (stdin / MCP tool call args), what came
-   out (stdout / MCP tool result), and what platform events were emitted.
-
-   Example fixture path:
-   ```
-   tests/contract/fixtures/omc_subprocess/task_plan_committed.json
-   ```
+2. **Record real subprocess I/O** into a fixture file under
+   `tests/contract/fixtures/<adapter-name>/<test-case-name>.json`.
+   The fixture captures: stdin/MCP tool call args, stdout/MCP tool result,
+   and platform events emitted.
 
 3. **Write the contract test** that loads the fixture and replays it:
    ```python
    import json
    from pathlib import Path
-
    import pytest
 
    FIXTURES = Path("tests/contract/fixtures/omc_subprocess")
 
-
    @pytest.mark.contract
    def test_task_plan_committed_replay() -> None:
        fixture = json.loads((FIXTURES / "task_plan_committed.json").read_text())
-       # replay logic arrives Story 5.10
        pytest.skip("omc_subprocess adapter arrives in Story 5.10")
    ```
 
-4. **Verify playback:**
-   ```sh
-   just test-contract
-   ```
-   All contract tests must pass before merging a `just sync-upstream` bump.
+4. **Verify playback:** `just test-contract`. All contract tests must pass
+   before merging a `just sync-upstream` bump.
 
 5. **After a `just sync-upstream <name>` bump:** re-run `just test-contract`
-   BEFORE merging. Contract drift — where the vendored source changed behavior
-   relative to the recorded fixture — fails the PR gate. Update the fixture to
-   reflect the new behavior, then commit both the upstream bump and the
-   fixture update together.
+   before merging. Contract drift fails the PR gate. Update the fixture to
+   reflect new behavior, then commit the upstream bump and fixture together.
 
 ---
 
 ## CI gates
 
-`just lint` runs six sub-commands. The last three are architectural-discipline
-gates that enforce platform-wide invariants:
+`just lint` runs seven sub-commands: `ruff check`, `ruff format --check`,
+`mypy --strict`, then four architectural-discipline gates:
 
 | Gate script | What it checks | Violation tag |
 |-------------|---------------|--------------|

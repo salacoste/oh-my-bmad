@@ -185,7 +185,7 @@ build: build-base
 
 # Print every oh-my-bmad-* docker image and its size. Operator sanity after
 # `just build` — each service image must stay ≤ 200 MB per Story 1.8 AC-7
-# (worker-wrapper is the documented exception at ~280 MB; see story 1.8 notes).
+# (worker-wrapper is the documented exception at ~283 MB; see story 1.8 notes).
 image-sizes:
     @docker image ls --format '{{{{.Repository}}:{{{{.Tag}} {{{{.Size}}' | grep -E '(^oh-my-bmad-|/oh-my-bmad-)' | sort
 
