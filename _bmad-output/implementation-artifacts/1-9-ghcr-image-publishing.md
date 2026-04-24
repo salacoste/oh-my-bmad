@@ -1,6 +1,6 @@
 # Story 1.9: GHCR image publishing on git tag
 
-Status: review
+Status: done
 
 ## Story
 
