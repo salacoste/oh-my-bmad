@@ -1,13 +1,29 @@
 [project]
 name = "registry-api"
-version = "0.1.0"
-description = "HTTP application API surface for the oh-my-bmad task + session registry. Story 1.1 ships scaffold only; FastAPI app and routes arrive in Story 2.9."
+version = "0.2.0"
+description = "HTTP application API surface for the oh-my-bmad task + session registry. Story 2.9 ships FastAPI app + POST /v1/tasks + GET /v1/tasks/{id} (FR1 + FR4 + FR26)."
 authors = [
     { name = "R2d2", email = "bad.vano23ru@gmail.com" },
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.8",
+    "events>=0.3.0",
+    "registry-state>=0.5.0",
+]
 
 [build-system]
 requires = ["uv_build>=0.11.0,<1.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "asgi-lifespan>=2.1",
+    "httpx>=0.27",
+]
+
+[tool.uv.sources]
+events = { workspace = true }
+registry-state = { workspace = true }

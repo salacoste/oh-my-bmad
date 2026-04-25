@@ -1,41 +1,66 @@
-"""registry-api hello-world entrypoint — Story 1.4 scaffold.
+"""registry-api production entry point (Story 2.9 AC-6).
 
-Long-lived no-op so the compose container stays up, passes the
-`test -f /tmp/ready` healthcheck, and exits cleanly on SIGTERM/SIGINT.
-Real FastAPI app + HTTP route handlers land in Story 2.9.
+Reads env vars with sensible defaults, constructs ``SystemClock``, calls
+``build_app``, and runs via ``uvicorn.run`` (programmatic, not CLI subprocess).
+
+Environment variables:
+    REGISTRY_API_DB_URL:   SQLAlchemy async URL for the SQLite store.
+                           Default: sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3
+    REGISTRY_API_LOG_DIR:  Root directory for JSONL event log files.
+                           Default: /var/lib/oh-my-bmad/registry/events
+    REGISTRY_API_HOST:     Bind host for uvicorn. Default: 0.0.0.0
+    REGISTRY_API_PORT:     Bind port for uvicorn. Default: 8080
+
+Logging is configured on stderr with structured ISO-8601 timestamps.
 """
 
 from __future__ import annotations
 
 import logging
-import signal
+import os
 import sys
 from pathlib import Path
-from types import FrameType
-from typing import NoReturn
+
+import uvicorn
+from events.clock import SystemClock
+
+from registry_api.app import build_app
 
 _SERVICE = "registry-api"
-_READY = Path("/tmp/ready")
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    stream=sys.stderr,
 )
 log = logging.getLogger(_SERVICE)
 
-
-def _stop(signum: int, _frame: FrameType | None) -> NoReturn:
-    log.info("%s stopping (signal=%s)", _SERVICE, signum)
-    _READY.unlink(missing_ok=True)
-    sys.exit(0)
+_DEFAULT_DB_URL = "sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3"
+_DEFAULT_LOG_DIR = "/var/lib/oh-my-bmad/registry/events"
+_DEFAULT_HOST = "0.0.0.0"
+_DEFAULT_PORT = "8080"
 
 
 def main() -> None:
-    signal.signal(signal.SIGTERM, _stop)
-    signal.signal(signal.SIGINT, _stop)
-    _READY.touch()
-    log.info("%s ready", _SERVICE)
-    signal.pause()
+    """Read configuration from env, build the app, and start uvicorn."""
+    db_url = os.environ.get("REGISTRY_API_DB_URL", _DEFAULT_DB_URL)
+    log_dir = Path(os.environ.get("REGISTRY_API_LOG_DIR", _DEFAULT_LOG_DIR))
+    host = os.environ.get("REGISTRY_API_HOST", _DEFAULT_HOST)
+    port = int(os.environ.get("REGISTRY_API_PORT", _DEFAULT_PORT))
+
+    log.info(
+        "%s starting — db_url=%r log_dir=%r host=%s port=%d",
+        _SERVICE,
+        db_url,
+        str(log_dir),
+        host,
+        port,
+    )
+
+    clock = SystemClock()
+    app = build_app(base_dir=log_dir, db_url=db_url, clock=clock)
+
+    uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":
