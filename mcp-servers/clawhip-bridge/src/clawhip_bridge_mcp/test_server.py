@@ -1,25 +1,37 @@
 """Tests for clawhip-bridge MCP server (Story 2.8 AC-12).
 
-14+ tests across 5 test classes. No conftest — fixtures inlined per
+Tests across 6 test classes. No conftest — fixtures inlined per
 Story 2.4/2.5 convention. All async tests use pytest-asyncio strict mode.
 
 Classes:
-  TestServerConstruction   — 3 tests
-  TestEmitEventTool        — 5 tests
-  TestTypedEmitTools       — 4 tests
-  TestRecentEventsResource — 4 tests
-  TestEntryPoint           — 2 tests
+  TestServerConstruction   — server-construction structural checks
+  TestEmitEventTool        — generic emit_event tool (incl. concurrency)
+  TestTypedEmitTools       — 4 typed sugar tools
+  TestRecentEventsResource — recent-events resource (incl. limit URI template)
+  TestFastMCPIntegration   — end-to-end via mcp.call_tool() w/ lifespan
+  TestEntryPoint           — env-var validation (subprocess)
 """
 
 from __future__ import annotations
 
+import asyncio
+import os
 import subprocess
 import sys
 from pathlib import Path
 from random import Random
 
 import pytest
-from events import FROZEN_EPOCH, Actor, FrozenClock, TickingClock, new_task_id, new_uuid7
+from events import (
+    FROZEN_EPOCH,
+    Actor,
+    EventEnvelope,
+    FrozenClock,
+    TickingClock,
+    new_event_id,
+    new_request_id,
+    new_task_id,
+)
 from events.schema_registry import register as _reg
 from mcp.server.fastmcp.resources.types import FunctionResource
 from registry_state.adapters.event_log import (  # noqa: IMP001 — mcp-servers→services allowed per AC-7
@@ -34,7 +46,10 @@ from registry_state.domain.event_types import (  # noqa: IMP001 — mcp-servers�
     TaskSummaryEmittedPayload,
 )
 
-from clawhip_bridge_mcp.server import build_server  # noqa: IMP001 — test file in mcp-servers
+from clawhip_bridge_mcp.server import (  # noqa: IMP001 — test file in mcp-servers
+    _validate_limit,
+    build_server,
+)
 
 # ---------------------------------------------------------------------------
 # Local fixtures (inlined — no conftest per project convention)
@@ -58,13 +73,6 @@ def _ensure_event_types_registered() -> None:
 @pytest.fixture
 def fixed_clock() -> FrozenClock:
     return FrozenClock(mono_ns=1_000_000, now=FROZEN_EPOCH)
-
-
-@pytest.fixture
-def seeded_uuid7() -> object:
-    rng = Random(42)
-    clock = TickingClock(start_now=FROZEN_EPOCH)
-    return lambda: new_uuid7(clock=clock, rng=rng)
 
 
 def _task_id(seed: int = 42) -> str:
@@ -106,16 +114,16 @@ class TestServerConstruction:
     async def test_build_server_registers_recent_events_resource(
         self, tmp_path: Path, fixed_clock: FrozenClock
     ) -> None:
-        """build_server registers the recent-events://current-day resource."""
+        """build_server registers the recent-events://current-day/{limit} URI template (F3)."""
         mcp = build_server(
             base_dir=tmp_path,
             clock=fixed_clock,
             actor_kind="system",
             actor_id="test-actor",
         )
-        resources = await mcp.list_resources()
-        uris = [str(r.uri) for r in resources]
-        assert "recent-events://current-day" in uris
+        templates = await mcp.list_resource_templates()
+        uri_templates = [t.uriTemplate for t in templates]
+        assert "recent-events://current-day/{limit}" in uri_templates
 
     @pytest.mark.asyncio
     async def test_no_mutation_tools_exposed(
@@ -246,6 +254,72 @@ class TestEmitEventTool:
         assert envelopes[0].event_id == result["event_id"]
         assert envelopes[0].type == "task.created"
 
+    @pytest.mark.asyncio
+    async def test_concurrent_emit_event_calls_serialize(self, tmp_path: Path) -> None:
+        """F7: 10 concurrent emit_event calls land 10 distinct lines in JSONL.
+
+        Story 2.4's writer holds an internal ``asyncio.Lock``; the 5 emit-tool
+        closures share a single writer. ``asyncio.gather`` 10 dispatches and
+        assert all 10 envelopes appear in the log with distinct event_ids.
+        """
+        log_dir = tmp_path / "events"
+        log_dir.mkdir()
+        clock = TickingClock(start_now=FROZEN_EPOCH)  # Each call gets a unique mono_ns
+        mcp = build_server(
+            base_dir=log_dir,
+            clock=clock,
+            actor_kind="worker",
+            actor_id="concurrent-tester",
+        )
+        fn = mcp._tool_manager._tools["emit_event"].fn
+        results = await asyncio.gather(
+            *[
+                fn(
+                    type="task.created",
+                    payload={
+                        "task_id": f"t-019b76da-0001-7000-8000-{i:012d}",
+                        "title": f"ev-{i}",
+                    },
+                )
+                for i in range(10)
+            ]
+        )
+        assert len(results) == 10
+        assert len({r["event_id"] for r in results}) == 10
+        # Verify all 10 lines persisted to the log.
+        log_path = current_day_path(log_dir, clock.now())
+        envelopes = list(read_log_lines(log_path))
+        assert len(envelopes) == 10
+        assert len({e.event_id for e in envelopes}) == 10
+
+    @pytest.mark.asyncio
+    async def test_emit_event_rejects_extra_fields_in_typed_payload(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """F14: emit_event with extra payload fields → ValidationError per ``extra='forbid'``.
+
+        ``TaskCompletedPayload`` is configured with ``extra='forbid'``. Routing
+        through the generic ``emit_event`` tool MUST still reject extra
+        fields, not silently drop them.
+        """
+        mcp = build_server(
+            base_dir=tmp_path,
+            clock=fixed_clock,
+            actor_kind="worker",
+            actor_id="extra-fields-tester",
+        )
+        fn = mcp._tool_manager._tools["emit_event"].fn
+        with pytest.raises(Exception):  # noqa: B017 — Pydantic ValidationError or wrapped
+            await fn(
+                type="task.completed",
+                payload={
+                    "task_id": _task_id(seed=88),
+                    "summary": "x",
+                    "pr_url": "https://example.com",
+                    "EXTRA_FIELD": "should be rejected",
+                },
+            )
+
 
 # ---------------------------------------------------------------------------
 # TestTypedEmitTools
@@ -330,11 +404,15 @@ class TestRecentEventsResource:
             type="task.created",
             payload={"task_id": _task_id(), "title": "resource test"},
         )
-        # Read via resource fn — cast to FunctionResource for mypy (concrete type has .fn)
-        res_obj = mcp._resource_manager._resources["recent-events://current-day"]
+        # Materialise the resource via the URI template (F3) and read it.
+        tpl = mcp._resource_manager._templates["recent-events://current-day/{limit}"]
+        res_obj = await tpl.create_resource(
+            "recent-events://current-day/50",
+            {"limit": 50},
+        )
         assert isinstance(res_obj, FunctionResource)
-        text = await res_obj.fn()
-        assert isinstance(text, str)
+        raw = await res_obj.read()
+        text = raw if isinstance(raw, str) else raw.decode("utf-8")
         assert len(text) > 0
         import json
 
@@ -356,32 +434,63 @@ class TestRecentEventsResource:
                 type="task.created",
                 payload={"task_id": _task_id(seed=i + 10), "title": f"ev-{i}"},
             )
-        res_obj2 = mcp._resource_manager._resources["recent-events://current-day"]
+        tpl = mcp._resource_manager._templates["recent-events://current-day/{limit}"]
+        res_obj2 = await tpl.create_resource(
+            "recent-events://current-day/50",
+            {"limit": 50},
+        )
         assert isinstance(res_obj2, FunctionResource)
-        text = await res_obj2.fn()
+        raw = await res_obj2.read()
+        text = raw if isinstance(raw, str) else raw.decode("utf-8")
         lines = [ln for ln in text.split("\n") if ln.strip()]
-        # All 3 should be present (default limit=50)
+        # All 3 should be present (limit=50, only 3 events written)
         assert len(lines) == 3
 
+        # Verify limit truncation: ask for 2 and get exactly 2 trailing envelopes.
+        res_obj3 = await tpl.create_resource(
+            "recent-events://current-day/2",
+            {"limit": 2},
+        )
+        assert isinstance(res_obj3, FunctionResource)
+        raw3 = await res_obj3.read()
+        text3 = raw3 if isinstance(raw3, str) else raw3.decode("utf-8")
+        lines3 = [ln for ln in text3.split("\n") if ln.strip()]
+        assert len(lines3) == 2
+
     @pytest.mark.asyncio
-    async def test_recent_events_rejects_limit_out_of_range(
+    async def test_recent_events_resource_rejects_limit_out_of_range(
         self, tmp_path: Path, fixed_clock: FrozenClock
     ) -> None:
-        """recent_events resource validates limit is 1-1000 when called programmatically."""
-        # The resource fn has a fixed internal limit=50. The AC-9 limit
-        # validation (ValueError) applies when limit is passed explicitly.
-        # Since the resource URI is static, limit validation is enforced
-        # via the server's AC-9 contract: callers passing limit=0 or limit=1001
-        # must receive ValueError. We test this via direct server-level call.
-        # Server construction verifies no error; the AC-9 limit validation
-        # is a standalone contract test — no mcp instance needed here.
-        build_server(base_dir=tmp_path, clock=fixed_clock, actor_kind="system", actor_id="res-3")
-        # Validate that the spec's limit bounds are enforced
+        """recent_events resource (production path) raises ValueError for limit ∉ [1, 1000].
+
+        F18: post-F3 the resource takes a real ``limit`` URI-template parameter,
+        so the validation is exercised end-to-end through the FastMCP template
+        registry (not via a test-local helper).
+        """
+        mcp = build_server(
+            base_dir=tmp_path, clock=fixed_clock, actor_kind="system", actor_id="res-3"
+        )
+        # Locate the registered template — FastMCP stores templates by URI template string.
+        templates = mcp._resource_manager._templates
+        tpl = templates["recent-events://current-day/{limit}"]
+
+        # Out-of-range → resource creation propagates ValueError from _validate_limit.
+        with pytest.raises(ValueError, match="limit must be between 1 and 1000"):
+            await tpl.create_resource(
+                "recent-events://current-day/0",
+                {"limit": 0},
+            )
+        with pytest.raises(ValueError, match="limit must be between 1 and 1000"):
+            await tpl.create_resource(
+                "recent-events://current-day/1001",
+                {"limit": 1001},
+            )
+
+        # Cross-check the production helper directly (no mcp instance needed).
         with pytest.raises(ValueError, match="limit must be between 1 and 1000"):
             _validate_limit(0)
         with pytest.raises(ValueError, match="limit must be between 1 and 1000"):
             _validate_limit(1001)
-        # Valid bounds pass
         _validate_limit(1)
         _validate_limit(1000)
 
@@ -393,16 +502,125 @@ class TestRecentEventsResource:
         mcp = build_server(
             base_dir=tmp_path, clock=fixed_clock, actor_kind="system", actor_id="res-4"
         )
-        res_obj4 = mcp._resource_manager._resources["recent-events://current-day"]
+        tpl = mcp._resource_manager._templates["recent-events://current-day/{limit}"]
+        res_obj4 = await tpl.create_resource(
+            "recent-events://current-day/50",
+            {"limit": 50},
+        )
         assert isinstance(res_obj4, FunctionResource)
-        text = await res_obj4.fn()
+        raw = await res_obj4.read()
+        text = raw if isinstance(raw, str) else raw.decode("utf-8")
         assert text == ""
 
 
-def _validate_limit(limit: int) -> None:
-    """Helper matching the AC-9 limit validation contract."""
-    if not (1 <= limit <= 1000):
-        raise ValueError("limit must be between 1 and 1000")
+# ---------------------------------------------------------------------------
+# TestFastMCPIntegration  (F1 + F2)
+# ---------------------------------------------------------------------------
+
+
+class TestFastMCPIntegration:
+    """End-to-end tests via mcp.call_tool() — exercises lifespan + JSON-schema + error mapping.
+
+    F1/F2: previous tests bypassed the FastMCP runtime by reaching into
+    ``mcp._tool_manager._tools[...].fn``. These tests round-trip through
+    ``mcp.call_tool(...)`` AND enter ``mcp._mcp_server.lifespan(...)`` so
+    AC-6 recovery + JSON-schema arg-coercion + error-envelope mapping are
+    actually exercised.
+    """
+
+    @pytest.mark.asyncio
+    async def test_emit_event_via_call_tool(self, tmp_path: Path) -> None:
+        """F1: round-trip emit_event via FastMCP runtime; verify lifespan recovery + log write."""
+        # Pre-populate base_dir with a partial-tail file so we can prove
+        # recover_all_logs() ran inside the lifespan context.  We seed the
+        # surviving complete line as a real canonical envelope so the post-emit
+        # ``read_log_lines`` parse stays clean.
+        log_dir = tmp_path / "events"
+        log_dir.mkdir()
+        partial_path = current_day_path(log_dir, FROZEN_EPOCH)
+        partial_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Build one valid envelope to use as the surviving complete line.
+        from events.canonical import to_canonical_json
+
+        seed_clock = FrozenClock(mono_ns=500_000, now=FROZEN_EPOCH)
+        seed_envelope = EventEnvelope.create(
+            event_id=new_event_id(clock=seed_clock),
+            schema_version="1.0.0",
+            type="task.created",
+            emitted_at=seed_clock.now(),
+            emitted_at_monotonic_ns=seed_clock.monotonic_ns(),
+            actor=Actor(kind="worker", id="seed"),
+            payload={"task_id": _task_id(seed=999), "title": "pre-existing"},
+            request_id=new_request_id(clock=seed_clock),
+        )
+        complete_line = to_canonical_json(seed_envelope) + b"\n"
+        partial_tail = b'{"partial": "no_newline"'  # missing trailing \n
+        partial_path.write_bytes(complete_line + partial_tail)
+
+        clock = FrozenClock(mono_ns=1_000_000, now=FROZEN_EPOCH)
+        mcp = build_server(
+            base_dir=log_dir,
+            clock=clock,
+            actor_kind="worker",
+            actor_id="test-worker-1",
+        )
+
+        # Enter the lifespan context manually — this triggers recover_all_logs().
+        async with mcp._mcp_server.lifespan(mcp._mcp_server):
+            # Recovery should have trimmed the partial-tail line, keeping only the complete one.
+            assert partial_path.read_bytes() == complete_line, (
+                "recover_all_logs should trim trailing partial line"
+            )
+
+            # Now invoke the tool through FastMCP's call_tool runtime.
+            result = await mcp.call_tool(
+                "emit_event",
+                {
+                    "type": "task.created",
+                    "payload": {
+                        "task_id": _task_id(seed=101),
+                        "title": "integration test",
+                    },
+                },
+            )
+            # FastMCP returns (Sequence[ContentBlock], dict). The tuple form is
+            # the unstructured + structured response.
+            assert result is not None
+            _content, structured = result if isinstance(result, tuple) else (result, None)
+            # Structured result (when present) carries the dict the tool returned.
+            if structured is not None:
+                assert "event_id" in structured
+                assert structured["event_id"].startswith("e-")
+
+            # Verify the JSONL log got the event appended (complete-line preserved + new emission).
+            envelopes = list(read_log_lines(partial_path))
+            assert len(envelopes) == 2, (
+                f"expected 2 envelopes (seed + emitted), got {len(envelopes)}"
+            )
+            # The seed envelope is at index 0; the emitted envelope at index 1.
+            assert envelopes[0].event_id == seed_envelope.event_id
+            assert envelopes[1].type == "task.created"
+
+    @pytest.mark.asyncio
+    async def test_emit_event_call_tool_error_maps_to_mcp_error(self, tmp_path: Path) -> None:
+        """F2: unknown event type → FastMCP wraps the error in JSON-RPC error envelope."""
+        log_dir = tmp_path / "events"
+        log_dir.mkdir()
+        clock = FrozenClock(mono_ns=1_000_000, now=FROZEN_EPOCH)
+        mcp = build_server(
+            base_dir=log_dir,
+            clock=clock,
+            actor_kind="worker",
+            actor_id="test-worker-2",
+        )
+        async with mcp._mcp_server.lifespan(mcp._mcp_server):
+            # call_tool should propagate or wrap EventSchemaUnknown.
+            with pytest.raises(Exception):  # noqa: B017 — FastMCP wraps; assert SOME exception
+                await mcp.call_tool(
+                    "emit_event",
+                    {"type": "unregistered.type", "payload": {}},
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -414,33 +632,39 @@ class TestEntryPoint:
     """AC-5 entry point env-var validation tests."""
 
     def test_main_exits_2_on_missing_actor_kind(self, tmp_path: Path) -> None:
-        """python -m clawhip_bridge_mcp without CLAWHIP_BRIDGE_ACTOR_KIND → exit 2."""
-        env = {
-            "PATH": "/usr/bin:/bin",
-            "CLAWHIP_BRIDGE_ACTOR_ID": "test-id",
-            # CLAWHIP_BRIDGE_ACTOR_KIND intentionally omitted
-        }
+        """python -m clawhip_bridge_mcp without CLAWHIP_BRIDGE_ACTOR_KIND → exit 2.
+
+        F8: extend the parent env (preserving PYTHONPATH/VIRTUAL_ENV/etc.) and
+        explicitly delete the variable under test, instead of replacing the env
+        with a hand-rolled minimal one (which broke on tox / non-editable
+        installs / Windows CI).
+        """
+        env = {k: v for k, v in os.environ.items() if k != "CLAWHIP_BRIDGE_ACTOR_KIND"}
+        env["CLAWHIP_BRIDGE_ACTOR_ID"] = "test-id"
         result = subprocess.run(
             [sys.executable, "-m", "clawhip_bridge_mcp"],
             env=env,
             capture_output=True,
             text=True,
+            timeout=10,
         )
-        assert result.returncode == 2
+        assert result.returncode == 2, (
+            f"got {result.returncode} (stdout: {result.stdout!r}, stderr: {result.stderr!r})"
+        )
         assert "CLAWHIP_BRIDGE_ACTOR_KIND" in result.stderr
 
     def test_main_exits_2_on_missing_actor_id(self, tmp_path: Path) -> None:
         """python -m clawhip_bridge_mcp without CLAWHIP_BRIDGE_ACTOR_ID → exit 2."""
-        env = {
-            "PATH": "/usr/bin:/bin",
-            "CLAWHIP_BRIDGE_ACTOR_KIND": "system",
-            # CLAWHIP_BRIDGE_ACTOR_ID intentionally omitted
-        }
+        env = {k: v for k, v in os.environ.items() if k != "CLAWHIP_BRIDGE_ACTOR_ID"}
+        env["CLAWHIP_BRIDGE_ACTOR_KIND"] = "system"
         result = subprocess.run(
             [sys.executable, "-m", "clawhip_bridge_mcp"],
             env=env,
             capture_output=True,
             text=True,
+            timeout=10,
         )
-        assert result.returncode == 2
+        assert result.returncode == 2, (
+            f"got {result.returncode} (stdout: {result.stdout!r}, stderr: {result.stderr!r})"
+        )
         assert "CLAWHIP_BRIDGE_ACTOR_ID" in result.stderr

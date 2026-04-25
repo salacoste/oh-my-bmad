@@ -45,14 +45,26 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(2)
-    if actor_kind_raw not in _VALID_ACTOR_KINDS:
+    # Typed dispatch on the validated string — lets mypy --strict see through
+    # the narrowing without a `# type: ignore[assignment]` (AC-13).
+    actor_kind: ActorKind
+    if actor_kind_raw == "operator":
+        actor_kind = "operator"
+    elif actor_kind_raw == "orchestrator":
+        actor_kind = "orchestrator"
+    elif actor_kind_raw == "worker":
+        actor_kind = "worker"
+    elif actor_kind_raw == "system":
+        actor_kind = "system"
+    elif actor_kind_raw == "clawhip":
+        actor_kind = "clawhip"
+    else:
         print(
             f"clawhip-bridge: CLAWHIP_BRIDGE_ACTOR_KIND={actor_kind_raw!r} is invalid. "
             f"Must be one of: {', '.join(sorted(_VALID_ACTOR_KINDS))}",
             file=sys.stderr,
         )
         sys.exit(2)
-    actor_kind: ActorKind = actor_kind_raw  # type: ignore[assignment]
 
     # -- Required: CLAWHIP_BRIDGE_ACTOR_ID --
     actor_id = os.environ.get("CLAWHIP_BRIDGE_ACTOR_ID", "").strip()

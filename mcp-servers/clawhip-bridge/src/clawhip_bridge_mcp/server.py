@@ -10,13 +10,20 @@ Architecture notes:
     return ``{"event_id": ..., "emitted_at": ...}``. No mutation or deletion
     path exists on this server (AC-2 / FR18b structural guarantee).
   - Tier enforcement (AC-8) is a NO-OP placeholder; full tiers land in
-    Stories 6.1-6.3.
+    Stories 6.1-6.3. The placeholder still returns ``True`` so behaviour is
+    unchanged today, but every emit-tool now ``raise PermissionError`` on
+    ``False`` so call sites are correctly structured for Story 6.1.
   - ``recent_events`` resource (AC-1 / AC-9) reads JSONL via
     ``read_log_lines``; wraps ``FileNotFoundError`` → returns ``""`` so a
-    missing day file is not an error.
-  - Recovery (AC-6): ``writer.recover()`` is awaited lazily on the FIRST
-    tool call rather than at factory-build time, so ``build_server`` stays
-    a synchronous factory (safe to call from both sync and async contexts).
+    missing day file is not an error. The ``limit`` is a real URI-template
+    parameter (``recent-events://current-day/{limit}``) and is validated by
+    ``_validate_limit`` in the production path.
+  - Startup recovery (AC-6): ``recover_all_logs(base_dir)`` runs in
+    FastMCP's lifespan context (entered before the first tool call
+    dispatches). Trims trailing partial JSONL lines from prior process
+    crashes per Story 2.4 AC-6. ``build_server`` itself stays a synchronous
+    factory (safe to call from both sync and async contexts) because the
+    actual recovery I/O is deferred to the lifespan ``async with``.
 """
 
 from __future__ import annotations
@@ -29,7 +36,6 @@ from pathlib import Path
 from events import (  # noqa: IMP001 — events is packages/
     Actor,
     EventEnvelope,
-    EventSchemaUnknown,
     new_event_id,
     new_request_id,
 )
@@ -64,6 +70,16 @@ def _check_tier(actor_kind: ActorKind, tool_name: str) -> bool:
         tool_name,
     )
     return True
+
+
+def _validate_limit(limit: int) -> None:
+    """Validate ``limit`` is in the AC-9 range ``[1, 1000]``.
+
+    Raises:
+        ValueError: if ``limit < 1`` or ``limit > 1000``.
+    """
+    if not (1 <= limit <= 1000):
+        raise ValueError("limit must be between 1 and 1000")
 
 
 # ---------------------------------------------------------------------------
@@ -140,21 +156,18 @@ def build_server(
 
     @mcp.tool()
     async def emit_event(
-        type: str,  # noqa: A002 — `type` is the canonical envelope field name
+        type: str,  # noqa: A002 — `type` is the canonical envelope field name; F13 deferred (FastMCP arg-coercion does not unwrap a single Pydantic model with field aliases)
         payload: dict[str, object],
+        *,
         parent_event_id: str | None = None,
     ) -> dict[str, str]:
         """Emit a typed event to the spine. Validated against REGISTRY.
 
         Raises ``EventSchemaUnknown`` if ``type`` is not registered.
         """
-        _check_tier(actor_kind, "emit_event")
-        if not isinstance(type, str):  # noqa: A002
-            raise TypeError(f"type must be a str, got {type!r}")  # noqa: A002
-        try:
-            return await _emit(type, payload, parent_event_id)  # noqa: A002
-        except EventSchemaUnknown:
-            raise
+        if not _check_tier(actor_kind, "emit_event"):
+            raise PermissionError(f"actor_kind={actor_kind!r} not authorized for emit_event")
+        return await _emit(type, payload, parent_event_id)  # noqa: A002
 
     # ------------------------------------------------------------------
     # Typed sugar tools — type literals baked in, no EVT001 needed
@@ -164,10 +177,12 @@ def build_server(
     async def emit_blocker(
         task_id: str,
         reason: str,
+        *,
         parent_event_id: str | None = None,
     ) -> dict[str, str]:
         """Emit a ``task.blocker_raised`` event."""
-        _check_tier(actor_kind, "emit_blocker")
+        if not _check_tier(actor_kind, "emit_blocker"):
+            raise PermissionError(f"actor_kind={actor_kind!r} not authorized for emit_blocker")
         return await _emit(
             "task.blocker_raised",
             {"task_id": task_id, "reason": reason},
@@ -178,10 +193,12 @@ def build_server(
     async def emit_summary(
         task_id: str,
         summary: str,
+        *,
         parent_event_id: str | None = None,
     ) -> dict[str, str]:
         """Emit a ``task.summary_emitted`` event."""
-        _check_tier(actor_kind, "emit_summary")
+        if not _check_tier(actor_kind, "emit_summary"):
+            raise PermissionError(f"actor_kind={actor_kind!r} not authorized for emit_summary")
         return await _emit(
             "task.summary_emitted",
             {"task_id": task_id, "summary": summary},
@@ -193,10 +210,14 @@ def build_server(
         task_id: str,
         action: str,
         justification: str,
+        *,
         parent_event_id: str | None = None,
     ) -> dict[str, str]:
         """Emit a ``task.approval_requested`` event."""
-        _check_tier(actor_kind, "emit_approval_request")
+        if not _check_tier(actor_kind, "emit_approval_request"):
+            raise PermissionError(
+                f"actor_kind={actor_kind!r} not authorized for emit_approval_request"
+            )
         return await _emit(
             "task.approval_requested",
             {"task_id": task_id, "action": action, "justification": justification},
@@ -207,14 +228,19 @@ def build_server(
     async def emit_completion(
         task_id: str,
         summary: str,
+        *,
         pr_url: str | None = None,
         parent_event_id: str | None = None,
     ) -> dict[str, str]:
         """Emit a ``task.completed`` event."""
-        _check_tier(actor_kind, "emit_completion")
+        if not _check_tier(actor_kind, "emit_completion"):
+            raise PermissionError(f"actor_kind={actor_kind!r} not authorized for emit_completion")
+        payload: dict[str, object] = {"task_id": task_id, "summary": summary}
+        if pr_url is not None:
+            payload["pr_url"] = pr_url
         return await _emit(
             "task.completed",
-            {"task_id": task_id, "summary": summary, "pr_url": pr_url},
+            payload,
             parent_event_id,
         )
 
@@ -222,20 +248,22 @@ def build_server(
     # Resource: recent_events — read-only tail of today's JSONL log
     # ------------------------------------------------------------------
 
-    @mcp.resource("recent-events://current-day")
-    async def recent_events() -> str:
-        """Return the last 50 events from today's JSONL log as newline-joined JSON.
+    @mcp.resource("recent-events://current-day/{limit}")
+    async def recent_events(limit: int = 50) -> str:
+        """Return the last ``limit`` events from today's JSONL log as newline-joined JSON.
 
-        Use the ``limit`` query parameter (1-1000, default 50) to control
-        how many lines are returned. Returns ``""`` when no events have been
-        written today.
+        Args:
+            limit: Number of trailing events to return. Must be in
+                ``[1, 1000]`` (default 50, AC-9 contract).
 
-        Note: ``limit`` cannot be a resource function parameter when the URI
-        is static (FastMCP requires URI-template parameters to match function
-        parameters). The default 50 is used; callers needing a different
-        limit should use the ``emit_*`` tools and filter client-side.
+        Returns:
+            Newline-joined canonical-JSON envelopes, or ``""`` when no events
+            have been written today.
+
+        Raises:
+            ValueError: if ``limit`` is outside ``[1, 1000]``.
         """
-        limit = 50
+        _validate_limit(limit)
         path = current_day_path(base_dir, clock.now())
         try:
             envelopes = list(read_log_lines(path))

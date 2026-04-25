@@ -60,7 +60,7 @@ _ACTOR = Actor(kind="system", id="test-handlers")
 
 @pytest.fixture(autouse=True)
 def _ensure_event_types_registered() -> None:
-    """Re-register the 4 task event types before each test.
+    """Re-register the 8 task event types before each test in this file.
 
     ``test_event_log.py`` has an autouse ``_clean_registry`` fixture that calls
     ``unregister_all()`` at teardown.  When pytest runs the full suite, that
@@ -68,14 +68,24 @@ def _ensure_event_types_registered() -> None:
     ordering), leaving the registry empty.  Re-registering here (idempotent per
     Story 2.1's register() contract) ensures a clean known state for every test
     in this file regardless of suite order.
+
+    F19: a session-scoped variant was considered, but the cross-file
+    ``_clean_registry`` teardown forces a per-test re-registration to remain
+    safe; we keep this autouse fixture, but tighten the docstring to make the
+    "fixture-vs-tests coupling" explicit.  The 4 Story 2.8 types live behind a
+    clear comment so removal of any payload class produces a single localized
+    failure rather than a cryptic registry KeyError.
     """
     from events.schema_registry import register as _reg
 
+    # Pre-Story-2.8 lifecycle types
     _reg("task.created", "1.0.0", TaskCreatedPayload)
     _reg("task.planning.started", "1.0.0", TaskPlanningStartedPayload)
     _reg("task.plan.ready", "1.0.0", TaskPlanReadyPayload)
     _reg("task.execution.started", "1.0.0", TaskExecutionStartedPayload)
-    # Story 2.8 types
+    # Story 2.8 types — only required by the four `test_task_*` and the
+    # `test_story28_*` tests below.  Listed separately so a future split into
+    # per-class fixtures stays mechanical.
     _reg("task.blocker_raised", "1.0.0", TaskBlockerRaisedPayload)
     _reg("task.summary_emitted", "1.0.0", TaskSummaryEmittedPayload)
     _reg("task.approval_requested", "1.0.0", TaskApprovalRequestedPayload)
