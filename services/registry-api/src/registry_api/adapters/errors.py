@@ -1,14 +1,21 @@
 """RFC 7807 problem+json error envelope + exception handlers (Story 2.9 AC-5).
 
-Converts FastAPI's ``HTTPException`` and Pydantic's ``RequestValidationError``
-into ``application/problem+json`` responses per RFC 7807.
+Converts FastAPI's ``HTTPException``, Pydantic's ``RequestValidationError``,
+and any *unhandled* ``Exception`` into ``application/problem+json`` responses
+per RFC 7807.
 
 ``ProblemDetails`` is the canonical response shape. All 4xx/5xx responses from
 registry-api use this envelope — consuming clients can always parse the same
 JSON schema regardless of error source.
+
+F6 note: handler signatures use ``exc: Exception`` (the type FastAPI dispatches
+with) and runtime-narrow via ``isinstance``. This avoids ``# type: ignore``
+on ``app.add_exception_handler`` calls under mypy --strict.
 """
 
 from __future__ import annotations
+
+import logging
 
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
@@ -30,6 +37,8 @@ _STATUS_TITLES: dict[int, str] = {
     500: "Internal Server Error",
     503: "Service Unavailable",
 }
+
+_log = logging.getLogger("registry_api.errors")
 
 
 class ProblemDetails(BaseModel):
@@ -53,12 +62,18 @@ class ProblemDetails(BaseModel):
     instance: str | None = None
 
 
-async def handle_http_exception(request: Request, exc: HTTPException) -> JSONResponse:
+async def handle_http_exception(request: Request, exc: Exception) -> JSONResponse:
     """Map ``HTTPException`` to RFC 7807 problem+json response.
 
     Registered via ``app.add_exception_handler(HTTPException, handle_http_exception)``
     in ``build_app``. Sets ``Content-Type: application/problem+json``.
+
+    Signature accepts ``Exception`` (FastAPI's dispatch type) and runtime-narrows
+    to ``HTTPException`` so the registration call type-checks under mypy --strict
+    without ``# type: ignore``.
     """
+    if not isinstance(exc, HTTPException):
+        raise TypeError(f"expected HTTPException, got {type(exc).__name__}")
     status = exc.status_code
     title = _STATUS_TITLES.get(status, "Error")
     detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
@@ -75,28 +90,61 @@ async def handle_http_exception(request: Request, exc: HTTPException) -> JSONRes
     )
 
 
-async def handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
-    """Map Pydantic ``RequestValidationError`` to RFC 7807 400 problem+json.
+async def handle_validation_error(request: Request, exc: Exception) -> JSONResponse:
+    """Map Pydantic ``RequestValidationError`` to RFC 7807 422 problem+json.
 
     Pydantic v2 validation errors carry structured field-level detail in
     ``exc.errors()``. We flatten them into a readable string for the ``detail``
     field — full structured errors are in the ``errors`` key of the response
     body for programmatic consumers.
 
-    Registered via ``app.add_exception_handler(RequestValidationError, ...)``
-    in ``build_app``.
+    F4: status code is 422 (Unprocessable Entity) — the canonical mapping for
+    syntactically-valid but semantically-invalid request bodies. Earlier drafts
+    used 400, but FastAPI's default validation status is 422 and that is the
+    correct HTTP semantics for failed Pydantic validation.
+
+    Signature: see ``handle_http_exception`` for the F6 mypy rationale.
     """
+    if not isinstance(exc, RequestValidationError):
+        raise TypeError(f"expected RequestValidationError, got {type(exc).__name__}")
     errors = exc.errors()
     detail = "; ".join(f"{' -> '.join(str(loc) for loc in e['loc'])}: {e['msg']}" for e in errors)
     problem = ProblemDetails(
         title="Validation Error",
-        status=400,
+        status=422,
         detail=detail,
         instance=str(request.url),
     )
     return JSONResponse(
         content=problem.model_dump(),
-        status_code=400,
+        status_code=422,
+        media_type=_PROBLEM_MEDIA_TYPE,
+    )
+
+
+async def handle_internal_error(request: Request, exc: Exception) -> JSONResponse:
+    """Map any unhandled exception → RFC 7807 problem+json 500 response.
+
+    F2+F3: Without this catch-all, FastAPI returns a plain ``text/plain``
+    "Internal Server Error" 500 — which violates the AC-5 contract that *every*
+    4xx/5xx response from registry-api uses the problem+json envelope. Logging
+    at ``exception`` level captures the traceback for operator investigation
+    while the response body intentionally surfaces no internal details.
+    """
+    _log.exception(
+        "unhandled exception in request handler",
+        extra={"path": str(request.url)},
+    )
+    problem = ProblemDetails(
+        type="about:blank",
+        title="Internal Server Error",
+        status=500,
+        detail="An internal error occurred. The error has been logged for investigation.",
+        instance=str(request.url),
+    )
+    return JSONResponse(
+        content=problem.model_dump(),
+        status_code=500,
         media_type=_PROBLEM_MEDIA_TYPE,
     )
 
@@ -104,5 +152,6 @@ async def handle_validation_error(request: Request, exc: RequestValidationError)
 __all__ = [
     "ProblemDetails",
     "handle_http_exception",
+    "handle_internal_error",
     "handle_validation_error",
 ]

@@ -1,8 +1,9 @@
 """Tests for registry-api HTTP skeleton (Story 2.9 AC-11).
 
-20 tests across 5 classes. No conftest — all fixtures inlined per project
-convention (Story 2.4/2.5). All async tests use ``pytest.mark.asyncio`` with
-``asyncio_mode = "strict"`` from pyproject.toml.
+Originally 20 tests across 5 classes; expanded to ~28 by the Story 2.9 code
+review (F7, F8, F11, F13, F15, F16, F17, F29 added test coverage). No conftest
+— all fixtures inlined per project convention (Story 2.4/2.5). All async tests
+use ``pytest.mark.asyncio`` with ``asyncio_mode = "strict"`` from pyproject.toml.
 
 Client pattern: ``httpx.AsyncClient(transport=ASGITransport(app=manager.app))``
 with ``asgi_lifespan.LifespanManager`` so the FastAPI lifespan (writer + engine
@@ -15,11 +16,11 @@ DB pattern for GET tests:
     starting the app, then the app's read-only engine reads the data.
 
 Classes:
-  TestPostTasks      (~6) — POST /v1/tasks happy path + validation + log write.
-  TestGetTaskById    (~5) — GET /v1/tasks/{id} happy/not-found + content.
-  TestMiddleware     (~4) — Request-ID / Idempotency-Key / Actor-ID headers.
-  TestErrorHandlers  (~3) — validation error 400, 404 problem+json, content-type.
-  TestEntryPoint     (~2) — __main__ env-var → uvicorn.run args.
+  TestPostTasks      — POST /v1/tasks happy path + validation + log write.
+  TestGetTaskById    — GET /v1/tasks/{id} happy/not-found + content + 422 paths.
+  TestMiddleware     — Request-ID / Idempotency-Key / Actor-ID headers + ordering.
+  TestErrorHandlers  — validation error 422, 404 problem+json, 500 problem+json.
+  TestEntryPoint     — __main__ env-var → uvicorn.run args.
 """
 
 from __future__ import annotations
@@ -317,13 +318,86 @@ class TestPostTasks:
 
     @pytest.mark.asyncio
     async def test_post_tasks_rejects_extra_fields_in_body(self, post_client: AsyncClient) -> None:
-        """POST with unknown field returns 400 (Pydantic extra='forbid' → 422 → handler → 400)."""
+        """POST with unknown field returns 422 (Pydantic extra='forbid' → handler → 422 per F4)."""
         r = await post_client.post("/v1/tasks", json={"title": "ok", "unknown_field": "bad"})
-        # Our handle_validation_error maps RequestValidationError → 400
-        assert r.status_code == 400
+        # Our handle_validation_error maps RequestValidationError → 422 (F4)
+        assert r.status_code == 422
         body = r.json()
-        assert body["status"] == 400
+        assert body["status"] == 422
         assert "title" in body  # RFC 7807 field
+
+    @pytest.mark.asyncio
+    async def test_post_tasks_rejects_empty_title(self, post_client: AsyncClient) -> None:
+        """F7: POST with empty title returns 422 (Field(min_length=1))."""
+        r = await post_client.post("/v1/tasks", json={"title": ""})
+        assert r.status_code == 422
+        body = r.json()
+        assert body["status"] == 422
+        # Error detail must reference the title field
+        assert "title" in body["detail"]
+
+    @pytest.mark.asyncio
+    async def test_post_tasks_returns_location_header(self, post_client: AsyncClient) -> None:
+        """F1: 201 response carries a Location header pointing to the GET endpoint."""
+        r = await post_client.post("/v1/tasks", json={"title": "loc test"})
+        assert r.status_code == 201
+        body = r.json()
+        assert "Location" in r.headers
+        assert r.headers["Location"] == f"/v1/tasks/{body['task_id']}"
+
+    @pytest.mark.asyncio
+    async def test_post_tasks_accepts_repo_and_hint_fields(self, post_client: AsyncClient) -> None:
+        """F9: POST with repo + hint is accepted (extra='forbid' would otherwise 422).
+
+        The HTTP-layer assertion is that ``CreateTaskRequest`` accepts the
+        new optional fields and the handler builds a valid envelope without
+        raising. End-to-end payload-content verification through the JSONL
+        log is intentionally NOT done here because the canonical-serializer
+        bug for nested BaseModel payloads is orthogonal and lives in
+        ``packages/events/src/events/canonical.py``; chasing it from here
+        would broaden Story 2.9's scope.
+        """
+        r = await post_client.post(
+            "/v1/tasks",
+            json={
+                "title": "with extras",
+                "repo": "https://example.com/repo.git",
+                "hint": "be careful",
+            },
+        )
+        assert r.status_code == 201
+        body = r.json()
+        assert body["task_id"].startswith("t-")
+        assert body["event_id"].startswith("e-")
+
+    @pytest.mark.asyncio
+    async def test_post_tasks_works_with_non_existent_log_dir(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """F13: build_app + lifespan boots cleanly with a non-existent base_dir.
+
+        ``EventLogWriter.__init__`` calls ``mkdir(parents=True, exist_ok=True)``
+        per Story 2.4 AC-7, so the app does not need a separate bootstrap step.
+        """
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+
+        # Deliberately point at a deeply nested path that does not exist.
+        events_dir = tmp_path / "does" / "not" / "exist" / "events"
+        assert not events_dir.exists()
+
+        app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://testserver"
+            ) as client,
+        ):
+            r = await client.post("/v1/tasks", json={"title": "bootstrap"})
+            assert r.status_code == 201
+        # The writer should have created the directory tree on init.
+        assert events_dir.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -393,6 +467,17 @@ class TestGetTaskById:
         body = r.json()
         # Seeded task has status='plan_ready'
         assert set(body["next_commands"]) == {"approve", "reject", "stop"}
+
+    @pytest.mark.asyncio
+    async def test_get_task_with_uppercase_id_returns_422(self, get_client: AsyncClient) -> None:
+        """F17: uppercase task_id is rejected by the path regex → 422 problem+json."""
+        # Generate a valid bare UUIDv7, then build a fake t- prefix with uppercase
+        # hex — the path regex only accepts lowercase hex.
+        bare = new_task_id(clock=_FROZEN_CLOCK, rng=Random(101))[2:]  # strip 't-'
+        upper = "t-" + bare.upper()
+        r = await get_client.get(f"/v1/tasks/{upper}")
+        assert r.status_code == 422
+        assert r.headers["content-type"].startswith("application/problem+json")
 
 
 # ---------------------------------------------------------------------------
@@ -479,6 +564,79 @@ class TestMiddleware:
         assert r.status_code == 200
         assert r.json()["actor_id"] == "http-api"
 
+    @pytest.mark.asyncio
+    async def test_request_id_middleware_regenerates_malformed_header(
+        self, post_client: AsyncClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """F8: malformed X-Request-ID is rejected; server generates a fresh UUIDv7.
+
+        Caller-controlled strings must NOT leak into the event envelope's
+        ``request_id`` field — that field is constrained to the bare UUIDv7
+        regex by Story 2.1. A malformed header should be replaced + logged.
+        """
+        bad = "not-a-uuid-at-all"
+        with caplog.at_level("WARNING", logger="registry_api.adapters.middleware"):
+            r = await post_client.post(
+                "/v1/tasks",
+                json={"title": "f8 test"},
+                headers={"X-Request-ID": bad},
+            )
+        assert r.status_code == 201
+        # Server-generated bare UUIDv7 (36 chars), not the malformed input
+        assert r.headers["X-Request-ID"] != bad
+        assert len(r.headers["X-Request-ID"]) == 36
+        # Warning log captured
+        assert any("invalid X-Request-ID header" in rec.message for rec in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_idempotency_middleware_advertises_headers_on_response(
+        self, post_client: AsyncClient
+    ) -> None:
+        """F11+F19: response carries Idempotency-Key echo + X-Idempotency-Status."""
+        idem = new_request_id(clock=_FROZEN_CLOCK, rng=Random(777))
+        r = await post_client.post(
+            "/v1/tasks",
+            json={"title": "idem test"},
+            headers={"Idempotency-Key": idem},
+        )
+        assert r.status_code == 201
+        assert r.headers.get("Idempotency-Key") == idem
+        assert r.headers.get("X-Idempotency-Status") == "not-enforced"
+
+    @pytest.mark.asyncio
+    async def test_middleware_runs_in_order_request_id_idempotency_actor_id(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """F29: by handler entry, request.state has all 3 middleware-set keys."""
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+
+        events_dir = tmp_path / "events"
+        app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+
+        observed: dict[str, list[str]] = {"keys": []}
+
+        @app.get("/debug/order")
+        async def _order_probe(request: Request) -> JSONResponse:
+            observed["keys"] = sorted(
+                k
+                for k in ("actor_id", "idempotency_key", "request_id")
+                if hasattr(request.state, k)
+            )
+            return JSONResponse({"ok": True})
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://testserver"
+            ) as client,
+        ):
+            r = await client.get("/debug/order")
+        assert r.status_code == 200
+        # By the time the handler runs, all three middlewares have populated state.
+        assert observed["keys"] == ["actor_id", "idempotency_key", "request_id"]
+
 
 # ---------------------------------------------------------------------------
 # TestErrorHandlers
@@ -489,14 +647,14 @@ class TestErrorHandlers:
     """AC-5: RFC 7807 problem+json error envelopes."""
 
     @pytest.mark.asyncio
-    async def test_validation_error_returns_400_problem_json(
+    async def test_validation_error_returns_422_problem_json(
         self, post_client: AsyncClient
     ) -> None:
-        """Missing required 'title' field → 400 with RFC 7807 problem+json body."""
+        """F4: Missing required 'title' field → 422 with RFC 7807 problem+json body."""
         r = await post_client.post("/v1/tasks", json={})  # title missing
-        assert r.status_code == 400
+        assert r.status_code == 422
         body = r.json()
-        assert body["status"] == 400
+        assert body["status"] == 422
         assert "title" in body  # RFC 7807 'title' field (not task title)
         assert "detail" in body
 
@@ -515,15 +673,86 @@ class TestErrorHandlers:
         assert "instance" in body
 
     @pytest.mark.asyncio
-    async def test_unhandled_validation_returns_400_with_problem_json_envelope(
+    async def test_unhandled_validation_returns_422_with_problem_json_envelope(
         self, post_client: AsyncClient
     ) -> None:
-        """Extra field in body → 400 problem+json (covers RequestValidationError path)."""
+        """F4: Extra field in body → 422 problem+json (covers RequestValidationError path)."""
         r = await post_client.post("/v1/tasks", json={"title": "t", "extra": "value"})
-        assert r.status_code == 400
+        assert r.status_code == 422
         body = r.json()
-        assert body["status"] == 400
+        assert body["status"] == 422
         assert "application/problem+json" in r.headers["content-type"]
+
+    @pytest.mark.asyncio
+    async def test_empty_body_returns_422_problem_json(self, post_client: AsyncClient) -> None:
+        """F16: empty body → 422 problem+json (RequestValidationError path)."""
+        r = await post_client.post("/v1/tasks", content=b"")
+        assert r.status_code == 422
+        assert r.headers["content-type"].startswith("application/problem+json")
+        body = r.json()
+        assert body["status"] == 422
+
+    @pytest.mark.asyncio
+    async def test_invalid_json_returns_422_problem_json(self, post_client: AsyncClient) -> None:
+        """F16: malformed JSON body → 422 problem+json (RequestValidationError path)."""
+        r = await post_client.post(
+            "/v1/tasks",
+            content=b"not-json",
+            headers={"Content-Type": "application/json"},
+        )
+        assert r.status_code == 422
+        assert r.headers["content-type"].startswith("application/problem+json")
+        body = r.json()
+        assert body["status"] == 422
+
+    @pytest.mark.asyncio
+    async def test_unhandled_exception_returns_500_problem_json(
+        self,
+        tmp_path: Path,
+        fixed_clock: FrozenClock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """F2+F3+F15: synthetic unhandled exception → 500 problem+json envelope.
+
+        Uses ``ASGITransport(raise_app_exceptions=False)`` so test-time httpx
+        observes the wire-level 500 produced by ``handle_internal_error``
+        rather than re-raising the underlying RuntimeError into the test.
+        Starlette's ``BaseHTTPMiddleware`` (used by our middleware stack)
+        re-raises route exceptions through ``call_next``; the catch-all
+        handler still produces a real 500 response over the wire.
+        """
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+
+        events_dir = tmp_path / "events"
+        app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+
+        async def _boom(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("synthetic failure for test")
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app, raise_app_exceptions=False),
+                base_url="http://testserver",
+            ) as client,
+        ):
+            # Replace writer.append after lifespan startup so the POST handler
+            # raises an unhandled RuntimeError, exercising handle_internal_error.
+            # ``app`` (not ``manager.app``) is the FastAPI instance — manager.app
+            # is the asgi-lifespan wrapper around it.
+            monkeypatch.setattr(app.state.writer, "append", _boom)
+            r = await client.post("/v1/tasks", json={"title": "boom"})
+
+        assert r.status_code == 500
+        assert r.headers["content-type"].startswith("application/problem+json")
+        body = r.json()
+        assert body["status"] == 500
+        assert body["title"] == "Internal Server Error"
+        # Detail message must NOT leak the synthetic exception text — the
+        # generic handler intentionally surfaces no internal details.
+        assert "synthetic failure" not in (body.get("detail") or "")
 
 
 # ---------------------------------------------------------------------------
@@ -534,8 +763,14 @@ class TestErrorHandlers:
 class TestEntryPoint:
     """AC-6: __main__ reads env vars and passes them to uvicorn.run."""
 
-    def test_main_uses_default_host_port_when_env_absent(self, tmp_path: Path) -> None:
-        """__main__.main() uses defaults when env vars are absent."""
+    def test_main_uses_default_host_port_with_minimal_env(self, tmp_path: Path) -> None:
+        """F22: ``main()`` uses default HOST/PORT when only DB_URL/LOG_DIR are set.
+
+        Renamed from ``test_main_uses_default_host_port_when_env_absent`` because
+        the test in fact provides REGISTRY_API_DB_URL and REGISTRY_API_LOG_DIR
+        (so the app can start without ``/var/lib/oh-my-bmad`` existing). The
+        defaults under test are HOST and PORT.
+        """
         env = {
             k: v
             for k, v in os.environ.items()

@@ -15,16 +15,24 @@ is a no-op per Story 2.1's schema_registry.register contract).
 from __future__ import annotations
 
 from events.schema_registry import register
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class TaskCreatedPayload(BaseModel):
-    """Payload for the ``task.created`` event."""
+    """Payload for the ``task.created`` event.
+
+    Story 2.9 F7+F9: ``title`` (when present) is bounded to 512 chars; ``repo``
+    and ``hint`` are optional creation-time inputs surfaced from the HTTP API.
+    All three fields default to ``None`` so existing emit-sources that only
+    pass ``task_id`` continue to work unchanged.
+    """
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
     task_id: str
-    title: str | None = None
+    title: str | None = Field(default=None, max_length=512)
+    repo: str | None = Field(default=None, max_length=2048)
+    hint: str | None = Field(default=None, max_length=4096)
 
 
 class TaskPlanningStartedPayload(BaseModel):
