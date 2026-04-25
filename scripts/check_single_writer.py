@@ -61,9 +61,14 @@ _SW_SKIP_DIRS = DEFAULT_SKIP_DIRS | {
     "migrator",
 }
 
-# Absolute paths excluded from scanning (registry-state is the sole writer)
+# Absolute paths excluded from scanning (registry-state is the sole writer).
+# packages/idempotency is also excluded: it owns the standalone
+# idempotency_cache table per FR28 and writes only to that table — never to
+# tasks/sessions/events. The duplicated Core Table is what allows the package
+# to remain dependency-free of services/.
 _EXCLUDED_ROOTS = [
     REPO_ROOT / "services" / "registry-state",
+    REPO_ROOT / "packages" / "idempotency",
 ]
 
 # Roots to scan

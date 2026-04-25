@@ -19,6 +19,14 @@ from __future__ import annotations
 class IdempotencyConflict(Exception):  # noqa: N818 — name reflects the event-type identifier convention (no Error suffix); see Story 2.1's EventSchemaUnknown precedent
     """Raised when ``store()`` detects a primary-key collision for *key*.
 
+    Under FR26 (single-writer) and after Story 2.7's INSERT+SELECT
+    same-transaction fix, this branch is essentially unreachable: a collision
+    means two distinct ``store()`` calls for the same key raced past the
+    per-key asyncio.Lock in ``get_or_run`` AND a concurrent process deleted
+    the row between INSERT and SELECT — both of which violate the single-
+    writer invariant. The exception is retained as a defensive postcondition
+    that documents the invariant.
+
     Attributes:
         key: The idempotency key that collided.
     """

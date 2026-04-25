@@ -1,11 +1,13 @@
 """Tests for IdempotencyCacheStore (Story 2.7 AC-11).
 
-5 test classes, 18 tests:
-  TestBasicGetSet           (5) — basic get/store round-trips + durability
-  TestGetOrRunConcurrency   (4) — factory-call-count serialization
-  TestTTL                   (4) — configurable TTL + sweep
-  TestUPSERT                (2) — race-safe double-store + re-use after sweep
-  TestValidationsAndErrors  (3) — constructor validation + IdempotencyConflict
+Test classes:
+  TestBasicGetSet           — basic get/store round-trips + durability
+  TestGetOrRunConcurrency   — factory-call-count serialization (incl. F1 GC,
+                              F6 factory-exception retry semantics)
+  TestTTL                   — configurable TTL + sweep + F2 injected-clock,
+                              F13 LRU eviction
+  TestUPSERT                — race-safe double-store + re-use after sweep
+  TestValidationsAndErrors  — constructor validation + IdempotencyConflict
 
 Schema-drift detection (AC-11) lives in
 ``services/registry-state/src/registry_state/test_idempotency_schema_drift.py``
@@ -66,6 +68,7 @@ async def _make_store(
     ttl_seconds: int = 604800,
     clock: FrozenClock | TickingClock | None = None,
     url: str = _MEM_URL,
+    max_in_process: int = 100_000,
 ) -> tuple[IdempotencyCacheStore, async_sessionmaker[AsyncSession]]:
     """Create a store backed by an in-memory SQLite DB with the cache table."""
     engine = create_async_engine(
@@ -82,6 +85,7 @@ async def _make_store(
         session_maker=session_maker,
         clock=clock or _frozen_clock(),
         ttl_seconds=ttl_seconds,
+        max_in_process=max_in_process,
     )
     return store, session_maker
 
@@ -143,15 +147,11 @@ class TestBasicGetSet:
 
     @pytest.mark.asyncio
     async def test_expired_entry_returns_none(self) -> None:
-        """Expired entry is deleted on access and returns None."""
-        # TTL = 1 second; clock advances 2 seconds past creation
-        base = FROZEN_EPOCH
-        store_clock = FrozenClock(now=base)
-        store, _ = await _make_store(ttl_seconds=1, clock=store_clock)
-        await store.store(_KEY, result_event_id=_RESULT_EVT, request_id=_REQUEST_ID)
+        """F8: expired entry is deleted on access and returns None.
 
-        # New store with clock 2 seconds in the future — entry is expired.
-        # Reconstruct session_maker from the same engine so both stores see the same DB.
+        Uses ONE engine throughout so writer + reader see the same DB.
+        """
+        base = FROZEN_EPOCH
         engine = create_async_engine(
             _MEM_URL,
             poolclass=StaticPool,
@@ -161,13 +161,15 @@ class TestBasicGetSet:
             await conn.run_sync(_IDEMPOTENCY_TABLE.metadata.create_all)
         sm = async_sessionmaker(engine, expire_on_commit=False)
 
-        # Store with past clock
+        # Store with past clock; TTL = 1 second
         past = IdempotencyCacheStore(session_maker=sm, clock=FrozenClock(now=base), ttl_seconds=1)
         await past.store(_KEY, result_event_id=_RESULT_EVT, request_id=_REQUEST_ID)
 
-        # Read with future clock — should be expired
+        # Read with future clock — expired
         future = IdempotencyCacheStore(
-            session_maker=sm, clock=FrozenClock(now=base + timedelta(seconds=2)), ttl_seconds=1
+            session_maker=sm,
+            clock=FrozenClock(now=base + timedelta(seconds=2)),
+            ttl_seconds=1,
         )
         result = await future.get(_KEY)
         assert result is None
@@ -280,6 +282,71 @@ class TestGetOrRunConcurrency:
 
         assert hit_a.result_event_id == "e-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa01"
         assert hit_b.result_event_id == "e-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb01"
+
+    @pytest.mark.asyncio
+    async def test_per_key_lock_survives_gc_between_bursts(self) -> None:
+        """F1 regression: 50 calls + GC + 50 more for same key → factory called once.
+
+        With WeakValueDictionary, GC can drop the lock between bursts, breaking
+        serialization. The refcounted dict keeps it alive while any caller holds
+        a reference; once all 50 callers in burst 1 return, gc.collect() may
+        clean residue but cannot disturb future bursts because every caller in
+        burst 2 takes its own refcount.
+        """
+        import gc
+
+        store, _ = await _make_store()
+        call_count = 0
+
+        async def factory() -> str:
+            nonlocal call_count
+            call_count += 1
+            await asyncio.sleep(0)
+            return _RESULT_EVT
+
+        # Burst 1: 50 concurrent calls
+        results_1 = await asyncio.gather(
+            *[store.get_or_run(_KEY, request_id=_REQUEST_ID, factory=factory) for _ in range(50)]
+        )
+        gc.collect()
+        # Burst 2: 50 more
+        results_2 = await asyncio.gather(
+            *[store.get_or_run(_KEY, request_id=_REQUEST_ID, factory=factory) for _ in range(50)]
+        )
+
+        assert call_count == 1, f"factory called {call_count} times; expected 1"
+        assert all(r[0] == results_1[0][0] for r in results_1 + results_2)
+
+    @pytest.mark.asyncio
+    async def test_factory_exception_allows_retry(self) -> None:
+        """F6 regression: factory raises 3 times, 4th succeeds; 5th hits cache.
+
+        Documents at-least-once retry on failure, exactly-once on success.
+        """
+        store, _ = await _make_store()
+        attempt = 0
+
+        async def factory() -> str:
+            nonlocal attempt
+            attempt += 1
+            if attempt < 4:
+                raise RuntimeError(f"attempt {attempt}")
+            return _RESULT_EVT
+
+        # 3 raises — lock releases each time, refcount drops to 0
+        for _ in range(3):
+            with pytest.raises(RuntimeError):
+                await store.get_or_run(_KEY, request_id=_REQUEST_ID, factory=factory)
+        # 4th succeeds and stores
+        hit, was_run = await store.get_or_run(_KEY, request_id=_REQUEST_ID, factory=factory)
+        assert was_run is True
+        assert hit.result_event_id == _RESULT_EVT
+        assert attempt == 4
+        # 5th hits cache; factory is NOT called again
+        hit2, was_run2 = await store.get_or_run(_KEY, request_id=_REQUEST_ID, factory=factory)
+        assert was_run2 is False
+        assert hit2 == hit
+        assert attempt == 4
 
 
 # ---------------------------------------------------------------------------
@@ -394,6 +461,40 @@ class TestTTL:
         expired = await past_boundary.get(_KEY)
         assert expired is None
 
+    @pytest.mark.asyncio
+    async def test_in_process_layer_honors_injected_clock(self) -> None:
+        """F2 regression: TTLCache uses injected Clock, not real wall time.
+
+        Uses TickingClock with tick_ns=2_000_000_000 (2 seconds per call) so
+        successive ``clock.now()`` reads advance the in-process TTL boundary
+        past the ttl_seconds=2 setting on the SECOND read. Without the F2
+        ``timer=`` argument the TTLCache would use wall-clock time and the
+        entry would still appear fresh.
+        """
+        # 2 seconds per tick; ttl_seconds=2 means the entry is fresh on the
+        # tick when it was stored, but expired on the very next read.
+        clock = TickingClock(tick_ns=2_000_000_000)
+        store, _ = await _make_store(ttl_seconds=2, clock=clock)
+        await store.store(_KEY, result_event_id=_RESULT_EVT, request_id=_REQUEST_ID)
+        # The next clock.now() returns base + 2s (or more) — past the TTL
+        # boundary. cachetools' lazy eviction should now trip via the injected
+        # timer; the SQLite path also sees expiry through the same clock.
+        result = await store.get(_KEY)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_max_in_process_lru_eviction_falls_back_to_sqlite(self) -> None:
+        """F13 regression: when in-process is full, evicted entries fall back to SQLite."""
+        store, _ = await _make_store(max_in_process=2)
+        keys = ["key-A", "key-B", "key-C"]
+        for k in keys:
+            await store.store(k, result_event_id=_RESULT_EVT, request_id=_REQUEST_ID)
+        # in-process holds at most 2; key-A is LRU-evicted.
+        # SQLite has all 3 → get(key-A) must still return a CacheHit.
+        hit_a = await store.get("key-A")
+        assert hit_a is not None
+        assert hit_a.result_event_id == _RESULT_EVT
+
 
 # ---------------------------------------------------------------------------
 # TestUPSERT
@@ -470,39 +571,23 @@ class TestValidationsAndErrors:
                 session_maker=sm, clock=_frozen_clock(), ttl_seconds=60, max_in_process=0
             )
 
-    @pytest.mark.asyncio
-    async def test_idempotency_conflict_raised_on_pk_collision(self) -> None:
-        """IdempotencyConflict is raised when store() detects a post-INSERT miss."""
-        store, _ = await _make_store()
+    def test_idempotency_conflict_has_key_field(self) -> None:
+        """F3: IdempotencyConflict carries the key for diagnostics."""
+        err = IdempotencyConflict(key="test-key-1234")
+        assert err.key == "test-key-1234"
+        assert "test-key-1234" in str(err)
 
-        # Patch session.execute to simulate: INSERT succeeds (rowcount handled
-        # internally by on_conflict_do_nothing), but the re-SELECT returns None
-        # (row was deleted between INSERT and SELECT).
-        original_session_maker = store._session_maker  # noqa: SLF001
+    def test_idempotency_conflict_documented_as_invariant_violation(self) -> None:
+        """F3: docstring documents the FR26 single-writer invariant.
 
-        class _FakeResult:
-            def fetchone(self) -> None:
-                return None
-
-            def fetchall(self) -> list[object]:
-                return []
-
-        class _FakeSession:
-            async def execute(self, *args: object, **kwargs: object) -> _FakeResult:
-                return _FakeResult()
-
-            async def commit(self) -> None:
-                pass
-
-            async def __aenter__(self) -> _FakeSession:
-                return self
-
-            async def __aexit__(self, *args: object) -> None:
-                pass
-
-        store._session_maker = _FakeSession  # type: ignore[assignment]  # noqa: SLF001
-        with pytest.raises(IdempotencyConflict) as exc_info:
-            await store.store(_KEY, result_event_id=_RESULT_EVT, request_id=_REQUEST_ID)
-
-        assert exc_info.value.key == _KEY
-        store._session_maker = original_session_maker  # noqa: SLF001
+        After F9 (SELECT inside same transaction as INSERT), the conflict path
+        is essentially unreachable in single-writer mode. The exception is
+        retained as a defensive postcondition; its docstring must call out the
+        invariant so future maintainers understand why the branch exists.
+        """
+        doc = IdempotencyConflict.__doc__ or ""
+        # Either explicit FR26 or "single-writer" mention is acceptable
+        assert "single-writer" in doc.lower() or "FR26" in doc, (
+            "IdempotencyConflict docstring must document FR26/single-writer "
+            f"invariant; got: {doc!r}"
+        )

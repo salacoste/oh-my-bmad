@@ -38,19 +38,37 @@ Concurrency model
   TTLCache internal state. cachetools is NOT thread-safe; the global lock
   serializes low-level in-process mutations.
 
-``_key_locks: WeakValueDictionary[str, asyncio.Lock]`` — per-key asyncio locks
-  that serialize high-level ``get_or_run`` operations. A single lock is created
-  per key on first access; the WeakValueDictionary allows GC once all callers
-  for that key have returned.
+``_key_locks: dict[str, asyncio.Lock]`` + ``_key_refcounts: dict[str, int]`` —
+  per-key asyncio locks that serialize high-level ``get_or_run`` operations.
+  A single lock is created per key on first access; an explicit refcount
+  tracks how many callers hold a reference. The lock is removed from the
+  dict only after the last caller releases it. We do NOT use a
+  ``WeakValueDictionary`` here: between bursts of activity Python may GC the
+  Lock, and a subsequent caller would receive a fresh Lock instance —
+  breaking the serialization invariant that proves NFR-R4.
 
-``_key_locks_dict_lock: asyncio.Lock`` — guards the WeakValueDictionary itself
-  so that lock-creation is atomic: two concurrent callers for the same key
-  cannot each create separate locks (which would break the serialization
-  guarantee).
+``_key_locks_dict_lock: asyncio.Lock`` — guards the per-key lock dict itself
+  so that lock-creation/teardown is atomic: two concurrent callers for the
+  same key cannot each create separate locks (which would break the
+  serialization guarantee).
 
 NFR-R4 proof: under a 100× concurrent retry storm for the same key, all 100
 coroutines acquire the same per-key lock, serialize, and the factory runs
 EXACTLY ONCE.
+
+Expiry boundary
+---------------
+Expiry is ``expires_at <= now()`` — exactly-at-expiry IS expired. Both the
+``get()`` lazy-eviction path AND ``sweep_expired()`` use this same boundary
+so the in-process and SQLite layers agree.
+
+Sweep vs. store race
+--------------------
+The ``store()`` method performs INSERT and SELECT in the SAME transaction so
+that a concurrent ``sweep_expired()`` cannot delete the row between the two
+phases. Combined with the FR26 single-writer invariant this makes
+``IdempotencyConflict`` essentially unreachable at runtime; it is retained as
+a defensive postcondition that documents the (sub-)invariant.
 """
 
 from __future__ import annotations
@@ -59,7 +77,6 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from weakref import WeakValueDictionary
 
 import cachetools
 from events.clock import Clock
@@ -190,36 +207,59 @@ class IdempotencyCacheStore:
         self._ttl_seconds = ttl_seconds
 
         # In-process TTLCache — lazy eviction on access.  NOT thread-safe;
-        # every access is guarded by _global_lock.
+        # every access is guarded by _global_lock.  The ``timer`` callable
+        # syncs the in-process TTL boundary to the same Clock used by the
+        # SQLite path (otherwise the in-process layer would honor wall-clock
+        # time while the SQLite layer honors the injected clock).
         self._in_process: cachetools.TTLCache[str, CacheHit] = cachetools.TTLCache(
             maxsize=max_in_process,
             ttl=ttl_seconds,
+            timer=lambda: clock.now().timestamp(),
         )
 
+        # asyncio.Lock() created sync in __init__ — safe on Python 3.12 (loop
+        # bind on first await). Story 2.5/2.6 precedent.
         # Guards all reads/writes to _in_process (low-level cachetools safety).
         self._global_lock: asyncio.Lock = asyncio.Lock()
 
-        # Per-key locks for get_or_run serialization.
-        self._key_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
-        # Guards creation of entries in _key_locks (atomicity of lock-creation).
+        # Per-key locks for get_or_run serialization. Refcounted (NOT a
+        # WeakValueDictionary) so locks survive GC between bursts of activity
+        # for the same key — see module docstring "Concurrency model".
+        self._key_locks: dict[str, asyncio.Lock] = {}
+        self._key_refcounts: dict[str, int] = {}
+        # Guards mutation of _key_locks / _key_refcounts (atomicity of
+        # lock-creation and lock-teardown).
         self._key_locks_dict_lock: asyncio.Lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    async def _lock_for(self, key: str) -> asyncio.Lock:
-        """Return (or create) the asyncio.Lock for *key*.
+    async def _acquire_key_lock(self, key: str) -> asyncio.Lock:
+        """Return (or create) the asyncio.Lock for *key*; bumps refcount.
 
         Creation is atomic: the dict lock is held only for the check-and-set,
-        not for the duration of the per-key operation.
+        not for the duration of the per-key operation. Pair every call with
+        ``_release_key_lock`` (use try/finally) so the lock is freed when the
+        last caller for *key* returns.
         """
         async with self._key_locks_dict_lock:
             lock = self._key_locks.get(key)
             if lock is None:
                 lock = asyncio.Lock()
                 self._key_locks[key] = lock
-        return lock
+                self._key_refcounts[key] = 1
+            else:
+                self._key_refcounts[key] += 1
+            return lock
+
+    async def _release_key_lock(self, key: str) -> None:
+        """Decrement the refcount for *key*; remove the lock when it hits 0."""
+        async with self._key_locks_dict_lock:
+            self._key_refcounts[key] -= 1
+            if self._key_refcounts[key] == 0:
+                del self._key_locks[key]
+                del self._key_refcounts[key]
 
     def _expires_at(self, created_at: datetime) -> datetime:
         return created_at + timedelta(seconds=self._ttl_seconds)
@@ -259,7 +299,7 @@ class IdempotencyCacheStore:
         if hit.expires_at <= now:
             # Expired — delete from SQLite (lazy eviction).
             async with self._session_maker() as session:
-                await session.execute(  # noqa: SW001 — cache writes to its OWN cache table; not to tasks/sessions/events
+                await session.execute(
                     delete(_IDEMPOTENCY_TABLE).where(_IDEMPOTENCY_TABLE.c.idempotency_key == key)
                 )
                 await session.commit()
@@ -282,20 +322,23 @@ class IdempotencyCacheStore:
         Uses SQLite ``INSERT OR IGNORE`` (on_conflict_do_nothing) semantics.
         If a concurrent writer beat us to the PK:
           - Our INSERT is silently discarded.
-          - We re-SELECT the existing row to return the winner's CacheHit.
-          - We raise ``IdempotencyConflict`` only if the re-SELECT returns
-            nothing (should be impossible — means the row was deleted between
-            the INSERT and the SELECT).
+          - The same-transaction SELECT returns the existing winner's row.
+          - ``IdempotencyConflict`` is raised only if the SELECT still
+            returns nothing — a defensive postcondition that, given FR26
+            (single writer) and INSERT+SELECT in one transaction, should be
+            unreachable in production.
 
         Write-through: SQLite is written FIRST; in-process is populated only
-        after a successful SQLite commit.
+        after a successful SQLite commit. INSERT and SELECT execute inside
+        the SAME transaction so a concurrent ``sweep_expired()`` cannot
+        delete the row between phases.
         """
         now = self._clock.now()
         created_at = now
         expires_at = self._expires_at(created_at)
 
         stmt = (
-            sqlite_insert(_IDEMPOTENCY_TABLE)  # noqa: SW001 — cache writes to its OWN cache table; not to tasks/sessions/events
+            sqlite_insert(_IDEMPOTENCY_TABLE)
             .values(
                 idempotency_key=key,
                 created_at=created_at,
@@ -306,18 +349,21 @@ class IdempotencyCacheStore:
             .on_conflict_do_nothing(index_elements=["idempotency_key"])
         )
 
-        async with self._session_maker() as session:
+        async with self._session_maker() as session, session.begin():
             await session.execute(stmt)
-            await session.commit()
-
-            # Re-SELECT to return the WINNER's row (ours or a concurrent writer's).
+            # SELECT inside the SAME transaction — sees the just-INSERTed
+            # row OR the pre-existing winner. A concurrent sweep cannot
+            # delete the row between phases at this isolation level.
             result = await session.execute(
                 select(_IDEMPOTENCY_TABLE).where(_IDEMPOTENCY_TABLE.c.idempotency_key == key)
             )
             row = result.fetchone()
+            # Transaction committed at session.begin() exit.
 
         if row is None:
-            # Should never happen — row was deleted between our INSERT and SELECT.
+            # Defensive: under FR26 + same-transaction SELECT this branch is
+            # unreachable. Retained as a postcondition that documents the
+            # invariant.
             raise IdempotencyConflict(key)
 
         hit = _hit_from_row(row)
@@ -346,25 +392,47 @@ class IdempotencyCacheStore:
         a 100× retry storm).
 
         Algorithm:
-          1. Acquire per-key lock.
+          1. Acquire per-key lock (refcounted).
           2. Check cache — if hit, return (hit, False).
           3. Run factory to get result_event_id.
           4. store(key, result_event_id, request_id).
           5. Return (stored_hit, True).
-        """
-        lock = await self._lock_for(key)
-        async with lock:
-            cached = await self.get(key)
-            if cached is not None:
-                return cached, False
+          6. Release per-key lock (in finally — even on factory exception).
 
-            result_event_id = await factory()
-            stored = await self.store(
-                key,
-                result_event_id=result_event_id,
-                request_id=request_id,
-            )
-            return stored, True
+        Factory contract:
+            - Factory runs at most once per SUCCESSFUL invocation per
+              (key, ttl-window).
+            - On factory exception: the lock releases without storing; the
+              exception propagates to the caller. Subsequent calls with the
+              same key (within the ttl-window) will re-run the factory until
+              one succeeds — i.e., this is at-least-once retry semantics on
+              failure, exactly-once on success.
+            - If your factory has side effects that must NOT be retried, wrap
+              it in a circuit breaker or store a sentinel CacheHit on first
+              attempt.
+
+        Re-entrancy:
+            - The per-key lock is NOT reentrant. A factory MUST NOT
+              recursively call ``get_or_run`` for its OWN key — that would
+              deadlock on the inner call. Calling ``get_or_run`` for a
+              DIFFERENT key from inside a factory is safe.
+        """
+        lock = await self._acquire_key_lock(key)
+        try:
+            async with lock:
+                cached = await self.get(key)
+                if cached is not None:
+                    return cached, False
+
+                result_event_id = await factory()
+                stored = await self.store(
+                    key,
+                    result_event_id=result_event_id,
+                    request_id=request_id,
+                )
+                return stored, True
+        finally:
+            await self._release_key_lock(key)
 
     async def sweep_expired(self) -> int:
         """Delete all expired rows from SQLite; return the number deleted.
@@ -375,13 +443,27 @@ class IdempotencyCacheStore:
 
         Called at startup (and optionally on a periodic schedule in Phase 2).
         Safe to call multiple times (idempotent).
+
+        Expiry boundary
+        ---------------
+        Uses ``expires_at <= now()`` — exactly-at-expiry is expired. This
+        matches the lazy-eviction boundary in ``get()`` so the two layers
+        agree on whether a borderline entry is alive.
+
+        Race condition note
+        -------------------
+        Between SQLite commit and in-process eviction, a concurrent ``get()``
+        can return SQLite-deleted rows from the in-process cache. Self-healing
+        on next access (lazy eviction by cachetools' timer). In production
+        this window is negligible; in tests use barriers if exactness is
+        required.
         """
         now = self._clock.now()
 
         async with self._session_maker() as session:
-            result = await session.execute(  # noqa: SW001 — cache writes to its OWN cache table; not to tasks/sessions/events
+            result = await session.execute(
                 delete(_IDEMPOTENCY_TABLE)
-                .where(_IDEMPOTENCY_TABLE.c.expires_at < now)
+                .where(_IDEMPOTENCY_TABLE.c.expires_at <= now)
                 .returning(_IDEMPOTENCY_TABLE.c.idempotency_key)
             )
             deleted_keys: list[str] = [str(r[0]) for r in result.fetchall()]
