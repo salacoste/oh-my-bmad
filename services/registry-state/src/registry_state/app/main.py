@@ -1,11 +1,21 @@
-"""Subscriber loop entrypoint for registry-state (Story 2.5, AC-6/7/8).
+"""Subscriber loop entrypoint for registry-state (Stories 2.5, 2.6).
 
 ``run_subscriber`` is the long-lived async loop that:
   1. Runs ``recover_all_logs(base_dir)`` to trim trailing partial lines.
-  2. Computes a startup cursor from ``MAX(events.emitted_at_monotonic_ns)``.
-  3. Replays all ``*.jsonl`` files in *base_dir* sorted chronologically,
+  2. (Story 2.6) Restores tasks + sessions from the latest snapshot via
+     ``restore_state_from_latest_snapshot``; logs how many events the
+     snapshot allows us to skip.
+  3. Computes a startup cursor as ``max(snapshot_cursor,
+     MAX(events.emitted_at_monotonic_ns))`` via ``compute_replay_cursor`` —
+     the higher of the snapshot's anchor and any events already persisted
+     past the snapshot.
+  4. Replays all ``*.jsonl`` files in *base_dir* sorted chronologically,
      filtering events already in the DB (``emitted_at_monotonic_ns <= cursor``).
-  4. Tails ALL ``*.jsonl`` files (not just today's) in a 100ms poll loop,
+  5. (Story 2.6) After every successful ``apply_many`` calls
+     ``SnapshotPolicy.maybe_capture(last_env, applied_count)``; once the
+     tally hits the configured ``snapshot_interval`` a fresh snapshot row
+     is written.
+  6. Tails ALL ``*.jsonl`` files (not just today's) in a 100ms poll loop,
      reading only the bytes appended since the last poll, until ``stop_event``
      fires.  Tailing every file in date order means events appended to
      yesterday's file in the last 100ms before UTC midnight are not lost
@@ -45,6 +55,11 @@ from registry_state.domain.event_types import (  # noqa: F401 — side-effect: r
 )
 from registry_state.domain.handlers import register_default_handlers
 from registry_state.domain.materializer import Materializer
+from registry_state.domain.recovery import (
+    compute_replay_cursor,
+    restore_state_from_latest_snapshot,
+)
+from registry_state.domain.snapshots import SnapshotPolicy
 
 log = logging.getLogger(__name__)
 
@@ -109,22 +124,27 @@ async def run_subscriber(
     clock: Clock,
     poll_interval_s: float = 0.1,
     stop_event: asyncio.Event | None = None,
+    snapshot_interval: int = 1000,
 ) -> None:
     """Long-lived subscriber loop: tail the JSONL event log → materialize SQLite state.
 
     Args:
-        base_dir:        Root directory containing ``YYYY-MM-DD.jsonl`` event-log files.
-        db_url:          SQLAlchemy async URL for the registry-state SQLite store.
-        clock:           Injected clock (Story 2.2 discipline) for UTC now + monotonic_ns.
-                         Currently unused inside the loop body — file selection is
-                         driven by glob, not the clock — but retained as a
-                         dependency-injection seam for future heart-beat / metric
-                         emission and for symmetry with ``EventLogWriter``.
-        poll_interval_s: How long to sleep between tail-loop iterations (default 100ms).
-        stop_event:      Optional asyncio.Event; set it to request a clean shutdown.
-                         If ``None``, a local event is created (useful in tests).
+        base_dir:           Root directory containing ``YYYY-MM-DD.jsonl`` event-log files.
+        db_url:             SQLAlchemy async URL for the registry-state SQLite store.
+        clock:              Injected clock (Story 2.2 discipline) for UTC now +
+                            monotonic_ns. Used as the snapshot policy's clock so
+                            snapshot ids + ``created_at`` stamps are deterministic
+                            in tests.
+        poll_interval_s:    How long to sleep between tail-loop iterations (default 100ms).
+        stop_event:         Optional asyncio.Event; set it to request a clean shutdown.
+                            If ``None``, a local event is created (useful in tests).
+        snapshot_interval:  (Story 2.6) Number of newly-applied events between
+                            snapshot captures. ``SnapshotPolicy`` accumulates the
+                            tally and writes a snapshot row once the tally hits
+                            this threshold. The integration suite passes
+                            ``snapshot_interval=2`` to exercise capture without
+                            having to write thousands of envelopes.
     """
-    del clock  # Reserved for future use; see docstring.
     stop = stop_event if stop_event is not None else asyncio.Event()
     engine = create_engine(db_url)
     try:
@@ -136,10 +156,23 @@ async def run_subscriber(
         session_maker = get_session(engine)
         materializer = Materializer(session_maker=session_maker)
         register_default_handlers(materializer)
+        snapshot_policy = SnapshotPolicy(
+            session_maker=session_maker,
+            clock=clock,
+            interval=snapshot_interval,
+        )
 
-        # Compute startup cursor from events already in the DB.
-        async with session_maker() as session:
-            cursor_ns = await materializer.cursor(session)
+        # Story 2.6 startup phase 1: restore tasks + sessions from the
+        # latest snapshot (if any). UPSERTs are idempotent so this is safe
+        # even when the events table already contains rows past the
+        # snapshot's cursor (the AC-12 "stale snapshot + newer events"
+        # case).
+        await restore_state_from_latest_snapshot(session_maker)
+
+        # Story 2.6 startup phase 2: compute the replay cursor as the
+        # higher of the snapshot's cursor and the events table's max —
+        # neither anchor regresses past the other.
+        cursor_ns = await compute_replay_cursor(session_maker)
 
         # Startup replay: read every *.jsonl byte-by-byte (offloaded to thread)
         # and apply only events newer than the persisted cursor.  Populate the
@@ -147,14 +180,26 @@ async def run_subscriber(
         # NEW bytes from each file.
         offsets: dict[str, int] = {}
         startup_applied = 0
+        startup_skipped = 0
         for path in sorted(base_dir.glob("*.jsonl")):
             new_offset, envelopes = await asyncio.to_thread(_read_new_envelopes_since, path, 0)
             offsets[path.name] = new_offset
             new_envelopes = [env for env in envelopes if env.emitted_at_monotonic_ns > cursor_ns]
+            startup_skipped += len(envelopes) - len(new_envelopes)
             if new_envelopes:
-                startup_applied += await materializer.apply_many(new_envelopes)
-        if startup_applied:
-            log.info("startup replay: applied %d new events", startup_applied)
+                applied = await materializer.apply_many(new_envelopes)
+                startup_applied += applied
+                if applied:
+                    last_env = new_envelopes[-1]
+                    await snapshot_policy.maybe_capture(last_env, applied)
+        # Story 2.6 AC-9: instrumentation for "verified via instrumentation
+        # counter". Always log once at startup-replay end so tests can
+        # assert on the line.
+        log.info(
+            "startup replay: skipped %d events via snapshot, applying %d new",
+            startup_skipped,
+            startup_applied,
+        )
 
         # Tail loop: scan ALL *.jsonl files for newly-appended bytes until
         # stop_event fires.  Scanning every file (not just today's) means
@@ -167,7 +212,10 @@ async def run_subscriber(
                     cursor_ns = await materializer.cursor(session)
                 to_apply = [env for env in envelopes if env.emitted_at_monotonic_ns > cursor_ns]
                 if to_apply:
-                    await materializer.apply_many(to_apply)
+                    applied = await materializer.apply_many(to_apply)
+                    if applied:
+                        last_env = to_apply[-1]
+                        await snapshot_policy.maybe_capture(last_env, applied)
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=poll_interval_s)
     finally:
