@@ -345,3 +345,112 @@ async def test_snapshot_policy_rejects_interval_zero_or_negative(
         SnapshotPolicy(session_maker=session_maker, clock=fixed_clock, interval=0)
     with pytest.raises(ValueError, match="interval must be positive"):
         SnapshotPolicy(session_maker=session_maker, clock=fixed_clock, interval=-5)
+
+
+# ===========================================================================
+# Story 2.6 code-review fixes — regression tests
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_snapshot_policy_rejects_negative_applied_count(
+    session_maker: async_sessionmaker[AsyncSession], fixed_clock: FrozenClock
+) -> None:
+    """F12 regression: ``maybe_capture(applied_count<0)`` raises ValueError.
+
+    A negative count would silently rewind the tally and skip a future
+    snapshot capture; the policy must reject it loudly.
+    """
+    policy = SnapshotPolicy(session_maker=session_maker, clock=fixed_clock, interval=10)
+    env = _make_envelope(mono_ns=1_000_000)
+    with pytest.raises(ValueError, match="applied_count must be non-negative"):
+        await policy.maybe_capture(env, applied_count=-1)
+    # Tally untouched.
+    assert await _count_snapshots(session_maker) == 0
+
+
+@pytest.mark.asyncio
+async def test_snapshot_policy_cap_at_one_with_modulo_rollover(
+    session_maker: async_sessionmaker[AsyncSession], fixed_clock: FrozenClock
+) -> None:
+    """F2 regression: large batches produce AT MOST one snapshot per call.
+
+    Concrete F2 probe: interval=10, applied_count=25 → exactly 1 snapshot
+    AND the residual tally lands at 25 % 10 == 5. A subsequent batch of 5
+    crosses the threshold → 2nd snapshot.
+    """
+    policy = SnapshotPolicy(session_maker=session_maker, clock=fixed_clock, interval=10)
+    env = _make_envelope(mono_ns=42_000_000)
+    snap_id = await policy.maybe_capture(env, applied_count=25)
+    assert snap_id is not None
+    assert await _count_snapshots(session_maker) == 1
+    # Internal residual should be 5 (25 % 10), so one more batch of 5
+    # crosses interval and captures a second snapshot.
+    env2 = _make_envelope(mono_ns=43_000_000, seed=2)
+    snap_id2 = await policy.maybe_capture(env2, applied_count=5)
+    assert snap_id2 is not None
+    assert await _count_snapshots(session_maker) == 2
+
+
+@pytest.mark.asyncio
+async def test_snapshot_event_count_excludes_post_cursor_events(
+    session_maker: async_sessionmaker[AsyncSession], fixed_clock: FrozenClock
+) -> None:
+    """F7 regression: ``event_count`` only counts events at-or-below cursor.
+
+    Seeds 5 events: 3 with monotonic_ns ≤ cursor + 2 with monotonic_ns >
+    cursor. The captured snapshot's ``event_count`` must equal 3, not 5 —
+    the post-cursor events are NOT covered by this snapshot.
+    """
+    rng = Random(7)
+    clk = TickingClock(start_now=FROZEN_EPOCH)
+    tid = new_task_id(clock=clk, rng=rng)
+    await _seed_task(session_maker, task_id=tid, title="cursor-filter")
+    cursor_ns = 5_000_000
+    # 3 events at-or-below cursor.
+    for i in (1, 2, 3):
+        eid = new_event_id(clock=clk, rng=rng)
+        await _seed_event(session_maker, event_id=eid, mono_ns=i * 1_000_000, task_id=tid)
+    # 2 events ABOVE cursor.
+    for i in (1, 2):
+        eid = new_event_id(clock=clk, rng=rng)
+        await _seed_event(
+            session_maker,
+            event_id=eid,
+            mono_ns=cursor_ns + i * 1_000_000,
+            task_id=tid,
+        )
+
+    policy = SnapshotPolicy(session_maker=session_maker, clock=fixed_clock, interval=10)
+    env = _make_envelope(mono_ns=cursor_ns)
+    snapshot_id = await policy.capture(env)
+    async with session_maker() as session:
+        row = (
+            await session.execute(
+                text("SELECT event_count FROM snapshots WHERE id = :sid"),
+                {"sid": snapshot_id},
+            )
+        ).one()
+    assert int(row[0]) == 3, (
+        f"F7 regression: event_count {row[0]} should be 3 (events ≤ cursor), not 5"
+    )
+
+
+def test_snapshot_policy_warns_on_interval_one(
+    session_maker: async_sessionmaker[AsyncSession],
+    fixed_clock: FrozenClock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """F11 regression: ``interval=1`` logs a performance-hazard warning.
+
+    Doesn't fail construction (tests use interval=1 deliberately); the
+    warning is informational so operators don't accidentally ship it.
+    """
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="registry_state.domain.snapshots"):
+        SnapshotPolicy(session_maker=session_maker, clock=fixed_clock, interval=1)
+    matched = [
+        r for r in caplog.records if "interval=1 produces one snapshot per event" in r.getMessage()
+    ]
+    assert matched, "expected a warning about interval=1 performance hazard"

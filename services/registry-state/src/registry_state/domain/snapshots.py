@@ -53,8 +53,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import datetime
-from typing import Any
 
 from events.canonical import _default_encoder  # reuse canonical encoder
 from events.clock import Clock
@@ -65,6 +65,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from registry_state.schema import Event, Snapshot, Task
 from registry_state.schema import Session as SessionRow
+
+log = logging.getLogger(__name__)
 
 
 def _datetime_to_iso(dt: datetime | None) -> str | None:
@@ -93,7 +95,37 @@ def _datetime_from_iso(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-def _task_to_dict(t: Task) -> dict[str, Any]:
+def _str_field(d: dict[str, object], key: str) -> str:
+    """Extract a required str-typed field from an untrusted dict.
+
+    Raises ``ValueError`` if the field is missing or not a string. Used by the
+    snapshot-payload deserializers so a malformed payload fails loudly rather
+    than corrupting the materialized state via a wrong-type column write.
+    """
+    if key not in d:
+        raise ValueError(f"required field {key!r} is missing")
+    v = d[key]
+    if not isinstance(v, str):
+        raise ValueError(f"field {key!r} must be str; got {type(v).__name__}")
+    return v
+
+
+def _opt_str_field(d: dict[str, object], key: str) -> str | None:
+    """Extract an optional str-typed field from an untrusted dict.
+
+    Returns ``None`` if the field is absent or explicitly ``None``; raises
+    ``ValueError`` if present-but-wrong-type so a malformed payload fails
+    loudly.
+    """
+    v = d.get(key)
+    if v is None:
+        return None
+    if not isinstance(v, str):
+        raise ValueError(f"field {key!r} must be str or None; got {type(v).__name__}")
+    return v
+
+
+def _task_to_dict(t: Task) -> dict[str, object]:
     """Serialize a Task ORM row to a JSON-safe dict.
 
     Datetime columns are normalized to canonical ISO ``Z`` text via
@@ -112,30 +144,33 @@ def _task_to_dict(t: Task) -> dict[str, Any]:
     }
 
 
-def _task_from_dict(d: dict[str, Any]) -> dict[str, Any]:
+def _task_from_dict(d: dict[str, object]) -> dict[str, object]:
     """Materialize a Task-row dict back into kwargs suitable for ``Task(**)`` / UPSERT.
 
     Inverse of :func:`_task_to_dict`. Datetime fields are parsed to UTC-aware
     instances via :func:`_datetime_from_iso`. Datetimes are guaranteed
-    non-null on Task rows, so the cast is checked with ``assert``.
+    non-null on Task rows, so a missing value raises ``ValueError`` (not an
+    ``assert`` — those vanish under ``python -O``).
     """
-    created_at = _datetime_from_iso(d["created_at"])
-    updated_at = _datetime_from_iso(d["updated_at"])
-    assert created_at is not None
-    assert updated_at is not None
+    created_at = _datetime_from_iso(_str_field(d, "created_at"))
+    updated_at = _datetime_from_iso(_str_field(d, "updated_at"))
+    if created_at is None:
+        raise ValueError(f"task {d.get('id', '?')!r}: created_at must not be null in v1 payload")
+    if updated_at is None:
+        raise ValueError(f"task {d.get('id', '?')!r}: updated_at must not be null in v1 payload")
     return {
-        "id": d["id"],
-        "status": d["status"],
+        "id": _str_field(d, "id"),
+        "status": _str_field(d, "status"),
         "created_at": created_at,
         "updated_at": updated_at,
-        "actor_kind": d["actor_kind"],
-        "actor_id": d["actor_id"],
-        "title": d.get("title"),
-        "last_event_id": d.get("last_event_id"),
+        "actor_kind": _str_field(d, "actor_kind"),
+        "actor_id": _str_field(d, "actor_id"),
+        "title": _opt_str_field(d, "title"),
+        "last_event_id": _opt_str_field(d, "last_event_id"),
     }
 
 
-def _session_to_dict(s: SessionRow) -> dict[str, Any]:
+def _session_to_dict(s: SessionRow) -> dict[str, object]:
     """Serialize a SessionRow ORM row to a JSON-safe dict."""
     return {
         "id": s.id,
@@ -149,19 +184,20 @@ def _session_to_dict(s: SessionRow) -> dict[str, Any]:
     }
 
 
-def _session_from_dict(d: dict[str, Any]) -> dict[str, Any]:
+def _session_from_dict(d: dict[str, object]) -> dict[str, object]:
     """Materialize a SessionRow-row dict back into kwargs for UPSERT."""
-    started_at = _datetime_from_iso(d["started_at"])
-    assert started_at is not None
+    started_at = _datetime_from_iso(_str_field(d, "started_at"))
+    if started_at is None:
+        raise ValueError(f"session {d.get('id', '?')!r}: started_at must not be null in v1 payload")
     return {
-        "id": d["id"],
-        "task_id": d["task_id"],
-        "worker_kind": d["worker_kind"],
-        "worktree_path": d.get("worktree_path"),
-        "status": d["status"],
+        "id": _str_field(d, "id"),
+        "task_id": _str_field(d, "task_id"),
+        "worker_kind": _str_field(d, "worker_kind"),
+        "worktree_path": _opt_str_field(d, "worktree_path"),
+        "status": _str_field(d, "status"),
         "started_at": started_at,
-        "ended_at": _datetime_from_iso(d.get("ended_at")),
-        "last_heartbeat_at": _datetime_from_iso(d.get("last_heartbeat_at")),
+        "ended_at": _datetime_from_iso(_opt_str_field(d, "ended_at")),
+        "last_heartbeat_at": _datetime_from_iso(_opt_str_field(d, "last_heartbeat_at")),
     }
 
 
@@ -190,6 +226,11 @@ class SnapshotPolicy:
     ) -> None:
         if interval <= 0:
             raise ValueError(f"interval must be positive; got {interval}")
+        if interval == 1:
+            log.warning(
+                "SnapshotPolicy interval=1 produces one snapshot per event — "
+                "performance hazard outside tests"
+            )
         self._session_maker = session_maker
         self._clock = clock
         self._interval = interval
@@ -200,38 +241,43 @@ class SnapshotPolicy:
         self._lock = asyncio.Lock()
 
     async def maybe_capture(self, last_envelope: EventEnvelope, applied_count: int) -> str | None:
-        """Increment the tally; capture once per crossed interval boundary.
+        """Increment the tally; capture AT MOST ONCE per call when threshold crossed.
 
-        For batches that span MULTIPLE interval boundaries (e.g. interval=10
-        and applied_count=25), this method captures snapshots until the
-        residual tally drops below ``interval`` — so a 25-event startup
-        replay with interval=10 yields exactly ``25 // 10 == 2`` snapshots
-        (residual tally = 5). The most-recently-captured snapshot's id is
-        returned; intermediate ids are discarded by the caller (the loop
-        flushes them to the DB regardless). The cursor anchor for every
-        capture in the loop is ``last_envelope`` — operationally we only
-        know the LAST envelope applied; the snapshot's task/session rows
-        reflect the materialized state after the entire batch, which is the
-        only consistency boundary we have.
+        Cap-at-1 semantics: even when ``applied_count`` is large enough to
+        cross several interval boundaries (e.g. interval=10 and applied_count=25),
+        this method takes EXACTLY ONE snapshot. The snapshot represents the
+        end-of-batch materialized state — anchored on ``last_envelope`` — and
+        the residual modulo (``25 % 10 == 5``) is rolled forward into
+        ``_events_since_snapshot`` so the next batch's tally remains accurate.
+
+        Why cap-at-1: a single ``apply_many`` only knows the highest envelope
+        applied, so taking N snapshots in a loop would write N identical rows
+        with the same cursor. One snapshot per call is both correct and
+        cheaper.
 
         Args:
             last_envelope: The highest-monotonic_ns envelope that was just
                 applied — used as the snapshot's cursor anchor.
             applied_count: Number of *new* events applied in the just-finished
-                ``apply_many`` batch. Duplicates do NOT count.
+                ``apply_many`` batch. Duplicates do NOT count. Negative values
+                raise ``ValueError`` since they would silently rewind the
+                tally and skip a future snapshot.
 
         Returns:
-            The id of the most-recently-captured snapshot if any, else ``None``.
+            The id of the captured snapshot if one was written, else ``None``.
         """
+        if applied_count < 0:
+            raise ValueError(f"applied_count must be non-negative; got {applied_count}")
         async with self._lock:
             self._events_since_snapshot += applied_count
             if self._events_since_snapshot < self._interval:
                 return None
-            last_id: str | None = None
-            while self._events_since_snapshot >= self._interval:
-                last_id = await self._capture(last_envelope)
-                self._events_since_snapshot -= self._interval
-            return last_id
+            snapshot_id = await self._capture(last_envelope)
+            # Roll forward any overflow so accumulated batches don't lose
+            # progress. Using `%` rather than `-=` makes batches that span
+            # multiple intervals correct in one operation.
+            self._events_since_snapshot %= self._interval
+            return snapshot_id
 
     async def capture(self, last_envelope: EventEnvelope) -> str:
         """Force-capture a snapshot now, ignoring the tally. Returns the new snapshot id."""
@@ -250,10 +296,19 @@ class SnapshotPolicy:
         async with self._session_maker() as session, session.begin():
             tasks = (await session.execute(select(Task))).scalars().all()
             session_rows = (await session.execute(select(SessionRow))).scalars().all()
+            # Restrict the count to events the snapshot's cursor covers — the
+            # snapshot represents state at ``last_envelope.emitted_at_monotonic_ns``,
+            # so post-cursor rows that may have raced into the events table on
+            # parallel writers (or arrived between the read and the count under
+            # a less-strict isolation level) are excluded.
             event_count = (
-                await session.execute(select(func.count()).select_from(Event))
+                await session.execute(
+                    select(func.count())
+                    .select_from(Event)
+                    .where(Event.emitted_at_monotonic_ns <= last_envelope.emitted_at_monotonic_ns)
+                )
             ).scalar_one()
-            payload: dict[str, Any] = {
+            payload: dict[str, object] = {
                 "version": 1,
                 "tasks": [_task_to_dict(t) for t in tasks],
                 "sessions": [_session_to_dict(s) for s in session_rows],

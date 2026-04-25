@@ -575,11 +575,20 @@ async def _count_table(db_url: str, table: str) -> int:
 
 @pytest.mark.asyncio
 async def test_run_subscriber_captures_snapshots_during_replay(tmp_path: Path) -> None:
-    """25 envelopes (~6 tasks) with snapshot_interval=10 → 2 snapshots captured.
+    """3 batches (10, 10, 5) tailed live with snapshot_interval=10 → 2 snapshots captured.
 
-    Walks 6 task journeys (24 envelopes) plus one extra task.created to land
-    on exactly 25 events. Snapshots fire after the 10th and 20th applied
-    event; tally lands at 5 → no third snapshot.
+    Story 2.6 F2 introduced cap-at-1 semantics: at most ONE snapshot per
+    ``maybe_capture`` call. We exercise the per-batch contract by writing
+    envelopes in three chunks AFTER the subscriber has entered its tail
+    loop, so each chunk lands as its own ``apply_many`` invocation:
+
+        batch 1 (10 events) → tally hits interval → capture #1 → tally = 0
+        batch 2 (10 events) → tally hits interval → capture #2 → tally = 0
+        batch 3 (5  events) → tally below interval → no capture
+
+    Total snapshots written: 2. The latest snapshot's ``event_count`` must
+    be >= 20 (it counts events with monotonic_ns ≤ snapshot cursor — Story
+    2.6 F7).
     """
     log_dir = tmp_path / "events"
     log_dir.mkdir()
@@ -606,15 +615,10 @@ async def test_run_subscriber_captures_snapshots_during_replay(tmp_path: Path) -
     )
     assert len(envelopes) == 25
 
-    writer_clock = FrozenClock(mono_ns=0, now=FROZEN_EPOCH)
-    writer = EventLogWriter(base_dir=log_dir, clock=writer_clock)
-    await writer.recover()
-    for env in envelopes:
-        await writer.append(env)
-    await writer.close()
-
+    # Boot subscriber FIRST against an empty log so each subsequent batch
+    # lands as its own tail-loop apply_many invocation. Use a TickingClock
+    # so each snapshot id (UUIDv7) is unique.
     stop = asyncio.Event()
-    # Use a TickingClock so each snapshot id (UUIDv7) is unique.
     sub_clock = TickingClock(start_now=FROZEN_EPOCH, start_ns=0, tick_ns=1_000_000)
     sub_task = asyncio.create_task(
         run_subscriber(
@@ -627,12 +631,35 @@ async def test_run_subscriber_captures_snapshots_during_replay(tmp_path: Path) -
         )
     )
 
-    # Wait until at least 25 events are materialized.
-    deadline = time.monotonic() + 3.0
-    while time.monotonic() < deadline:
-        if await _count_table(db_url, "events") >= 25:
-            break
-        await asyncio.sleep(0.05)
+    # Let the subscriber settle into its tail loop on the empty log.
+    await asyncio.sleep(0.15)
+
+    writer_clock = FrozenClock(mono_ns=0, now=FROZEN_EPOCH)
+    writer = EventLogWriter(base_dir=log_dir, clock=writer_clock)
+    await writer.recover()
+
+    async def _write_chunk(chunk: list[EventEnvelope], wait_count: int) -> None:
+        """Append a chunk and wait until the materializer drains it.
+
+        Each chunk becomes one tail-loop apply_many call (subject to the
+        50ms poll), exercising the cap-at-1 maybe_capture semantics one
+        batch at a time.
+        """
+        for env in chunk:
+            await writer.append(env)
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            if await _count_table(db_url, "events") >= wait_count:
+                return
+            await asyncio.sleep(0.025)
+        raise AssertionError(f"materializer did not drain to {wait_count} events within 2s")
+
+    try:
+        await _write_chunk(envelopes[0:10], wait_count=10)  # → snapshot #1
+        await _write_chunk(envelopes[10:20], wait_count=20)  # → snapshot #2
+        await _write_chunk(envelopes[20:25], wait_count=25)  # tally = 5 → no capture
+    finally:
+        await writer.close()
 
     stop.set()
     await asyncio.wait_for(sub_task, timeout=2.0)
@@ -640,7 +667,8 @@ async def test_run_subscriber_captures_snapshots_during_replay(tmp_path: Path) -
     snap_count = await _count_table(db_url, "snapshots")
     assert snap_count == 2, f"expected 2 snapshots, got {snap_count}"
 
-    # Latest snapshot's event_count >= 20 (snapshots track running count).
+    # Latest snapshot's event_count >= 20 (snapshots track running count
+    # restricted to events with monotonic_ns ≤ snapshot cursor — Story 2.6 F7).
     eng = create_async_engine(db_url, connect_args={"check_same_thread": False})
     try:
         async with eng.connect() as conn:
@@ -700,45 +728,46 @@ async def test_run_subscriber_resumes_from_snapshot_skipping_events(tmp_path: Pa
     assert await _count_table(db_url, "events") == 10
     assert await _count_table(db_url, "snapshots") == 1
 
-    # Now boot the subscriber. We monkey-patch Materializer.apply_many on the
-    # specific instance the subscriber creates by intercepting it via a
-    # subclass — but the simpler route is to wrap the module-level handler
-    # registration. Instead, we use a tiny shim Materializer in app.main by
-    # monkey-patching the class globally for this test.
-    import registry_state.app.main as main_mod
+    # Boot the subscriber with a CountingMaterializer subclass injected via
+    # the materializer_factory kwarg. No monkey-patching — Story 2.6 F6
+    # replaced the module-level mutation with explicit DI so tests can
+    # observe apply_many calls without breaking encapsulation.
+    from collections.abc import Iterable
+
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
     from registry_state.domain.materializer import Materializer as RealMaterializer
 
     received: list[list[EventEnvelope]] = []
 
     class CountingMaterializer(RealMaterializer):
-        async def apply_many(self, envelopes_arg):  # type: ignore[no-untyped-def]
-            collected = list(envelopes_arg)
+        async def apply_many(self, envelopes: Iterable[EventEnvelope]) -> int:
+            collected = list(envelopes)
             received.append(collected)
             return await super().apply_many(collected)
 
-    monkey_target = main_mod.Materializer  # type: ignore[attr-defined]
-    main_mod.Materializer = CountingMaterializer  # type: ignore[attr-defined]
-    try:
-        stop = asyncio.Event()
-        sub_task = asyncio.create_task(
-            run_subscriber(
-                base_dir=log_dir,
-                db_url=db_url,
-                clock=FrozenClock(mono_ns=0, now=FROZEN_EPOCH),
-                poll_interval_s=0.05,
-                stop_event=stop,
-                snapshot_interval=1000,  # avoid extra snapshots during this test
-            )
+    def _counting_factory(sm: async_sessionmaker[AsyncSession]) -> RealMaterializer:
+        return CountingMaterializer(session_maker=sm)
+
+    stop = asyncio.Event()
+    sub_task = asyncio.create_task(
+        run_subscriber(
+            base_dir=log_dir,
+            db_url=db_url,
+            clock=FrozenClock(mono_ns=0, now=FROZEN_EPOCH),
+            poll_interval_s=0.05,
+            stop_event=stop,
+            snapshot_interval=1000,  # avoid extra snapshots during this test
+            materializer_factory=_counting_factory,
         )
-        deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline:
-            if await _count_table(db_url, "events") >= 20:
-                break
-            await asyncio.sleep(0.05)
-        stop.set()
-        await asyncio.wait_for(sub_task, timeout=2.0)
-    finally:
-        main_mod.Materializer = monkey_target  # type: ignore[attr-defined]
+    )
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        if await _count_table(db_url, "events") >= 20:
+            break
+        await asyncio.sleep(0.05)
+    stop.set()
+    await asyncio.wait_for(sub_task, timeout=2.0)
 
     # Assert apply_many was invoked with envelopes[10:20] only — no envs from
     # 0..9 (those have monotonic_ns <= snapshot's cursor and are skipped).
@@ -837,8 +866,11 @@ async def test_full_replay_vs_snapshot_replay_byte_identical(tmp_path: Path) -> 
     stop_b.set()
     await asyncio.wait_for(task_b, timeout=2.0)
 
-    # Snapshots were captured.
-    assert await _count_table(db_url_b, "snapshots") >= 4
+    # At least one snapshot was captured. Cap-at-1 semantics (Story 2.6 F2)
+    # means a 50-envelope startup-replay batch yields ONE snapshot, not
+    # 4-5 — but the byte-for-byte contract below must still hold regardless
+    # of how many were taken.
+    assert await _count_table(db_url_b, "snapshots") >= 1
 
     # The byte-for-byte equivalence: tasks + sessions + events identical.
     state_a = await _capture_db_state(db_url_a)

@@ -37,10 +37,12 @@ import contextlib
 import logging
 import os
 import signal
+from collections.abc import Callable
 from pathlib import Path
 
 from events import EventEnvelope
 from events.clock import Clock, SystemClock
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from registry_state.adapters.event_log import (
     _read_new_envelopes_since,
@@ -56,7 +58,7 @@ from registry_state.domain.event_types import (  # noqa: F401 — side-effect: r
 from registry_state.domain.handlers import register_default_handlers
 from registry_state.domain.materializer import Materializer
 from registry_state.domain.recovery import (
-    compute_replay_cursor,
+    compute_events_max_cursor,
     restore_state_from_latest_snapshot,
 )
 from registry_state.domain.snapshots import SnapshotPolicy
@@ -117,6 +119,19 @@ def _install_signal_handlers(loop: asyncio.AbstractEventLoop, stop_event: asynci
             continue
 
 
+def _default_materializer_factory(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> Materializer:
+    """Production-default ``materializer_factory`` for :func:`run_subscriber`.
+
+    Defined at module level (rather than as a default-arg lambda) so the
+    function has a stable name + signature mypy can verify against the
+    ``Callable`` type annotation. Tests inject their own factory to wrap
+    the materializer (e.g. counting subclass) without monkey-patching.
+    """
+    return Materializer(session_maker=session_maker)
+
+
 async def run_subscriber(
     *,
     base_dir: Path,
@@ -125,6 +140,9 @@ async def run_subscriber(
     poll_interval_s: float = 0.1,
     stop_event: asyncio.Event | None = None,
     snapshot_interval: int = 1000,
+    materializer_factory: Callable[
+        [async_sessionmaker[AsyncSession]], Materializer
+    ] = _default_materializer_factory,
 ) -> None:
     """Long-lived subscriber loop: tail the JSONL event log → materialize SQLite state.
 
@@ -144,6 +162,10 @@ async def run_subscriber(
                             this threshold. The integration suite passes
                             ``snapshot_interval=2`` to exercise capture without
                             having to write thousands of envelopes.
+        materializer_factory: Callable that builds a ``Materializer`` from a
+                            session-maker. Defaults to the :class:`Materializer`
+                            class itself; tests inject subclasses (e.g. a counter
+                            wrapper) without monkey-patching the module.
     """
     stop = stop_event if stop_event is not None else asyncio.Event()
     engine = create_engine(db_url)
@@ -154,7 +176,7 @@ async def run_subscriber(
         await recover_all_logs(base_dir)
 
         session_maker = get_session(engine)
-        materializer = Materializer(session_maker=session_maker)
+        materializer = materializer_factory(session_maker)
         register_default_handlers(materializer)
         snapshot_policy = SnapshotPolicy(
             session_maker=session_maker,
@@ -166,13 +188,15 @@ async def run_subscriber(
         # latest snapshot (if any). UPSERTs are idempotent so this is safe
         # even when the events table already contains rows past the
         # snapshot's cursor (the AC-12 "stale snapshot + newer events"
-        # case).
-        await restore_state_from_latest_snapshot(session_maker)
+        # case). Capture the cursor so phase 2 doesn't re-parse the
+        # snapshot's payload JSON a second time (Story 2.6 F9).
+        restored_cursor_ns = await restore_state_from_latest_snapshot(session_maker)
 
         # Story 2.6 startup phase 2: compute the replay cursor as the
-        # higher of the snapshot's cursor and the events table's max —
-        # neither anchor regresses past the other.
-        cursor_ns = await compute_replay_cursor(session_maker)
+        # higher of the snapshot's cursor (from phase 1) and the events
+        # table's max — neither anchor regresses past the other.
+        events_max_ns = await compute_events_max_cursor(session_maker)
+        cursor_ns = max(restored_cursor_ns, events_max_ns)
 
         # Startup replay: read every *.jsonl byte-by-byte (offloaded to thread)
         # and apply only events newer than the persisted cursor.  Populate the
@@ -194,9 +218,11 @@ async def run_subscriber(
                     await snapshot_policy.maybe_capture(last_env, applied)
         # Story 2.6 AC-9: instrumentation for "verified via instrumentation
         # counter". Always log once at startup-replay end so tests can
-        # assert on the line.
+        # assert on the line. Pure facts — no causal "via snapshot" claim,
+        # because the cursor may have come from the events table instead.
         log.info(
-            "startup replay: skipped %d events via snapshot, applying %d new",
+            "startup replay: cursor=%d, skipped=%d events, applied=%d new",
+            cursor_ns,
             startup_skipped,
             startup_applied,
         )
@@ -208,6 +234,15 @@ async def run_subscriber(
         while not stop.is_set():
             envelopes = await _scan_new_envelopes(base_dir, offsets)
             if envelopes:
+                # Tail loop cursor uses materializer.cursor (events-table-MAX,
+                # not compute_replay_cursor) because:
+                #   1. Events table grows monotonically post-startup
+                #      (snapshots only added, never removed in current
+                #      architecture).
+                #   2. The snapshot cursor is always <= events-max once
+                #      startup replay completes.
+                # If event-table pruning is ever added (Phase 4 retention),
+                # revisit this — pruning would invalidate (1).
                 async with session_maker() as session:
                     cursor_ns = await materializer.cursor(session)
                 to_apply = [env for env in envelopes if env.emitted_at_monotonic_ns > cursor_ns]

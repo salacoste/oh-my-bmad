@@ -6,7 +6,8 @@ Story 2.4 ships: event-log writer (JSONL append).
 Story 2.5 ships: materializer (subscriber → SQLite mutations) + 4 event-type payload
 models + subscriber loop entrypoint.
 Story 2.6 ships: snapshot capture (``SnapshotPolicy``) + snapshot-aware startup
-recovery (``restore_state_from_latest_snapshot`` + ``compute_replay_cursor``).
+recovery (``restore_state_from_latest_snapshot`` + ``compute_events_max_cursor`` +
+``compute_replay_cursor``).
 
 Public surface re-exported here:
   - ORM models: Base, Task, SessionRow (= Session), Event, IdempotencyCache, Snapshot
@@ -17,7 +18,8 @@ Public surface re-exported here:
                     TaskPlanReadyPayload, TaskExecutionStartedPayload
   - Snapshot capture: SnapshotPolicy
   - Recovery (HIGH-RISK, Arch §line-834):
-        compute_replay_cursor, restore_state_from_latest_snapshot
+        compute_events_max_cursor, compute_replay_cursor,
+        restore_state_from_latest_snapshot
   - Subscriber: run_subscriber, main
 
 ``Session`` is re-exported as ``SessionRow`` to avoid clashing with
@@ -41,6 +43,7 @@ from registry_state.domain.event_types import (  # noqa: F401 — side-effect: r
 )
 from registry_state.domain.materializer import Materializer
 from registry_state.domain.recovery import (
+    compute_events_max_cursor,
     compute_replay_cursor,
     restore_state_from_latest_snapshot,
 )
@@ -73,6 +76,7 @@ __all__ = [
     "TaskExecutionStartedPayload",
     "TaskPlanReadyPayload",
     "TaskPlanningStartedPayload",
+    "compute_events_max_cursor",
     "compute_replay_cursor",
     "create_engine",
     "current_day_path",

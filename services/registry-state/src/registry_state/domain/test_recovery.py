@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncGenerator
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from random import Random
 
 import pytest
@@ -39,11 +39,12 @@ from sqlalchemy.pool import StaticPool
 
 from registry_state.adapters.sqlite_store import get_session
 from registry_state.domain.recovery import (
+    compute_events_max_cursor,
     compute_replay_cursor,
     restore_state_from_latest_snapshot,
 )
 from registry_state.domain.snapshots import SnapshotPolicy
-from registry_state.schema import Base, Event, Task
+from registry_state.schema import Base, Event, Snapshot, Task
 from registry_state.schema import Session as SessionRow
 
 # ---------------------------------------------------------------------------
@@ -389,3 +390,226 @@ async def test_restore_payload_v1_format(
         )
     with pytest.raises(ValueError, match="unsupported snapshot payload version"):
         await restore_state_from_latest_snapshot(session_maker)
+
+
+# ===========================================================================
+# Story 2.6 code-review fixes — regression tests
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_restore_does_not_overwrite_existing_created_at(
+    session_maker: async_sessionmaker[AsyncSession], fixed_clock: FrozenClock
+) -> None:
+    """F1 regression: UPSERT preserves the live row's ``created_at``.
+
+    Setup:
+      1. Live DB has a Task row with created_at = T_live (2027-01-01).
+      2. Snapshot payload claims the same task id with created_at = T_snap
+         (2026-01-01) — i.e. SNAPSHOT IS OLDER.
+      3. After restore, the live row's created_at must still be T_live —
+         the snapshot's older value must NOT regress the timestamp.
+
+    This is the F1 bug: the original UPSERT included created_at in the
+    DO UPDATE SET clause, so a stale snapshot would silently overwrite the
+    insertion timestamp.
+    """
+    t_live = datetime(2027, 1, 1, tzinfo=UTC)
+    # Snapshot's older created_at is hard-coded into the payload below as
+    # the canonical "2026-01-01T00:00:00.000Z" form; we only need t_live
+    # here for the post-restore equality check.
+    tid = "t-019b76da-a800-7d79-b000-0000000000f1"
+
+    # Live row with the LATER created_at.
+    async with session_maker() as session, session.begin():
+        session.add(
+            Task(
+                id=tid,
+                status="pending",
+                created_at=t_live,
+                updated_at=t_live,
+                actor_kind="system",
+                actor_id="test",
+                title="live-row",
+            )
+        )
+
+    # Snapshot row whose payload's task carries the EARLIER created_at.
+    payload = {
+        "version": 1,
+        "tasks": [
+            {
+                "id": tid,
+                "status": "pending",
+                "created_at": "2026-01-01T00:00:00.000Z",
+                "updated_at": "2026-01-01T00:00:00.000Z",
+                "actor_kind": "system",
+                "actor_id": "test",
+                "title": "snap-row",
+                "last_event_id": None,
+            }
+        ],
+        "sessions": [],
+        "cursor_emitted_at_monotonic_ns": 1,
+    }
+    snap_id = new_uuid7(clock=fixed_clock)
+    payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    async with session_maker() as session, session.begin():
+        session.add(
+            Snapshot(
+                id=snap_id,
+                created_at=FROZEN_EPOCH,
+                cursor_event_id="e-019b76da-a800-7d79-b000-0000000000f1",
+                event_count=0,
+                byte_size=len(payload_json.encode("utf-8")),
+                payload_json=payload_json,
+            )
+        )
+
+    await restore_state_from_latest_snapshot(session_maker)
+
+    async with session_maker() as session:
+        row = (await session.execute(select(Task).where(Task.id == tid))).scalar_one()
+    # created_at MUST still be the live (later) timestamp — NOT regressed
+    # to the snapshot's older value.
+    assert row.created_at.replace(tzinfo=UTC) == t_live, (
+        f"F1 regression: created_at regressed from {t_live!r} to {row.created_at!r}"
+    )
+    # But other columns ARE updated by the snapshot (e.g. title was "live-row",
+    # snapshot has "snap-row"). This confirms the UPSERT still ran and only
+    # created_at was excluded.
+    assert row.title == "snap-row"
+
+
+@pytest.mark.asyncio
+async def test_restore_orphan_session_in_snapshot_raises_value_error(
+    session_maker: async_sessionmaker[AsyncSession], fixed_clock: FrozenClock
+) -> None:
+    """F3 regression: snapshot with session referencing missing task → ValueError.
+
+    Hand-crafts a v1 payload whose ``sessions[0].task_id`` is NOT present
+    in ``tasks``. Restore must reject the payload with a descriptive
+    ValueError naming the snapshot id and the missing task id, BEFORE any
+    UPSERT touches the live tables.
+    """
+    payload = {
+        "version": 1,
+        "tasks": [],
+        "sessions": [
+            {
+                "id": "s-X",
+                "task_id": "t-MISSING",
+                "worker_kind": "claude-code",
+                "worktree_path": "/tmp/wt",
+                "status": "active",
+                "started_at": "2026-01-01T00:00:00.000Z",
+                "ended_at": None,
+                "last_heartbeat_at": None,
+            }
+        ],
+        "cursor_emitted_at_monotonic_ns": 1,
+    }
+    snap_id = new_uuid7(clock=fixed_clock)
+    payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    async with session_maker() as session, session.begin():
+        session.add(
+            Snapshot(
+                id=snap_id,
+                created_at=FROZEN_EPOCH,
+                cursor_event_id="e-019b76da-a800-7d79-b000-0000000000f3",
+                event_count=0,
+                byte_size=len(payload_json.encode("utf-8")),
+                payload_json=payload_json,
+            )
+        )
+
+    with pytest.raises(ValueError, match="references missing task t-MISSING"):
+        await restore_state_from_latest_snapshot(session_maker)
+
+
+@pytest.mark.asyncio
+async def test_restore_picks_higher_id_when_created_at_ties(
+    session_maker: async_sessionmaker[AsyncSession], fixed_clock: FrozenClock
+) -> None:
+    """F4 regression: ``id DESC`` tiebreak when two snapshots share ``created_at``.
+
+    Inserts two snapshots with the SAME ``created_at`` but different UUIDv7
+    ids. The restore must pick the higher-id snapshot (which is also the
+    one inserted later, since UUIDv7 is monotonic).
+    """
+    same_ca = FROZEN_EPOCH
+    payload_a = {
+        "version": 1,
+        "tasks": [],
+        "sessions": [],
+        "cursor_emitted_at_monotonic_ns": 100,
+    }
+    payload_b = {
+        "version": 1,
+        "tasks": [],
+        "sessions": [],
+        "cursor_emitted_at_monotonic_ns": 200,
+    }
+    pa = json.dumps(payload_a, sort_keys=True, separators=(",", ":"))
+    pb = json.dumps(payload_b, sort_keys=True, separators=(",", ":"))
+    # Force ids in a known order: id_b is HIGHER (lexicographic) than id_a.
+    id_a = "00000000-0000-7000-8000-000000000001"
+    id_b = "00000000-0000-7000-8000-000000000002"
+    async with session_maker() as session, session.begin():
+        session.add(
+            Snapshot(
+                id=id_a,
+                created_at=same_ca,
+                cursor_event_id="e-a",
+                event_count=0,
+                byte_size=len(pa.encode("utf-8")),
+                payload_json=pa,
+            )
+        )
+        session.add(
+            Snapshot(
+                id=id_b,
+                created_at=same_ca,
+                cursor_event_id="e-b",
+                event_count=0,
+                byte_size=len(pb.encode("utf-8")),
+                payload_json=pb,
+            )
+        )
+
+    cursor = await restore_state_from_latest_snapshot(session_maker)
+    assert cursor == 200, "id DESC tiebreak failed: should pick the higher-id snapshot"
+
+    # compute_replay_cursor must agree with restore on the tiebreak.
+    cursor2 = await compute_replay_cursor(session_maker)
+    assert cursor2 == 200
+
+
+@pytest.mark.asyncio
+async def test_compute_events_max_cursor_returns_zero_when_empty(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """F9 split: events-only cursor helper returns 0 on empty events table."""
+    cursor = await compute_events_max_cursor(session_maker)
+    assert cursor == 0
+
+
+@pytest.mark.asyncio
+async def test_compute_events_max_cursor_returns_max(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """F9 split: events-only cursor helper returns ``MAX(events.emitted_at_monotonic_ns)``.
+
+    Crucially does NOT consider snapshots — its caller composes the max
+    with the cursor returned from ``restore_state_from_latest_snapshot``.
+    """
+    rng = Random(11)
+    clk = TickingClock(start_now=FROZEN_EPOCH)
+    tid = new_task_id(clock=clk, rng=rng)
+    await _seed_task(session_maker, task_id=tid, title="events-max")
+    eid1 = f"e-{new_uuid7(clock=clk, rng=rng)}"
+    eid2 = f"e-{new_uuid7(clock=clk, rng=rng)}"
+    await _seed_event(session_maker, event_id=eid1, mono_ns=500, task_id=tid)
+    await _seed_event(session_maker, event_id=eid2, mono_ns=5000, task_id=tid)
+    cursor = await compute_events_max_cursor(session_maker)
+    assert cursor == 5000
