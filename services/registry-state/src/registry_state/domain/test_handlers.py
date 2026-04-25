@@ -29,16 +29,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from registry_state.adapters.sqlite_store import get_session
 from registry_state.domain.errors import MaterializerError
 from registry_state.domain.event_types import (
+    TaskApprovalRequestedPayload,
+    TaskBlockerRaisedPayload,
+    TaskCompletedPayload,
     TaskCreatedPayload,
     TaskExecutionStartedPayload,
     TaskPlanningStartedPayload,
     TaskPlanReadyPayload,
+    TaskSummaryEmittedPayload,
 )
 from registry_state.domain.handlers import (
+    handle_task_approval_requested,
+    handle_task_blocker_raised,
+    handle_task_completed,
     handle_task_created,
     handle_task_execution_started,
     handle_task_plan_ready,
     handle_task_planning_started,
+    handle_task_summary_emitted,
 )
 from registry_state.schema import Base, Task
 from registry_state.schema import Session as SessionRow
@@ -67,6 +75,11 @@ def _ensure_event_types_registered() -> None:
     _reg("task.planning.started", "1.0.0", TaskPlanningStartedPayload)
     _reg("task.plan.ready", "1.0.0", TaskPlanReadyPayload)
     _reg("task.execution.started", "1.0.0", TaskExecutionStartedPayload)
+    # Story 2.8 types
+    _reg("task.blocker_raised", "1.0.0", TaskBlockerRaisedPayload)
+    _reg("task.summary_emitted", "1.0.0", TaskSummaryEmittedPayload)
+    _reg("task.approval_requested", "1.0.0", TaskApprovalRequestedPayload)
+    _reg("task.completed", "1.0.0", TaskCompletedPayload)
 
 
 @pytest.fixture
@@ -334,3 +347,193 @@ async def test_execution_started_on_missing_task_raises_materializer_error(
         await handle_task_execution_started(db_session, env)
     assert exc_info.value.event_type == "task.execution.started"
     assert missing_task_id in exc_info.value.reason
+
+
+# ===========================================================================
+# Story 2.8 — 4 new handler tests
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_task_blocker_raised_updates_last_event_id(
+    db_session: AsyncSession,
+) -> None:
+    """handle_task_blocker_raised updates last_event_id + updated_at; status unchanged."""
+    env_created = _make_created_envelope(mono_ns=1_000_000)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng = Random(200)
+    clk = FrozenClock(mono_ns=5_000_000, now=FROZEN_EPOCH)
+    env_blocker = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.blocker_raised",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskBlockerRaisedPayload(task_id=task_id, reason="CI red"),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    await handle_task_blocker_raised(db_session, env_blocker)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.last_event_id == env_blocker.event_id
+    # Status must NOT change — lifecycle for blockers lands in Stories 5.x/6.x
+    assert task.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_task_summary_emitted_updates_last_event_id(
+    db_session: AsyncSession,
+) -> None:
+    """handle_task_summary_emitted updates last_event_id + updated_at."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=55)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng = Random(201)
+    clk = FrozenClock(mono_ns=6_000_000, now=FROZEN_EPOCH)
+    env_summary = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.summary_emitted",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskSummaryEmittedPayload(task_id=task_id, summary="step 1 done"),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    await handle_task_summary_emitted(db_session, env_summary)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.last_event_id == env_summary.event_id
+
+
+@pytest.mark.asyncio
+async def test_task_approval_requested_updates_last_event_id(
+    db_session: AsyncSession,
+) -> None:
+    """handle_task_approval_requested updates last_event_id + updated_at."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=66)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng = Random(202)
+    clk = FrozenClock(mono_ns=7_000_000, now=FROZEN_EPOCH)
+    env_approval = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.approval_requested",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskApprovalRequestedPayload(
+            task_id=task_id, action="deploy", justification="ready"
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    await handle_task_approval_requested(db_session, env_approval)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.last_event_id == env_approval.event_id
+
+
+@pytest.mark.asyncio
+async def test_task_completed_sets_status_completed(
+    db_session: AsyncSession,
+) -> None:
+    """handle_task_completed sets status='completed' — the only status change in Story 2.8."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=77)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng = Random(203)
+    clk = FrozenClock(mono_ns=8_000_000, now=FROZEN_EPOCH)
+    env_completed = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.completed",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskCompletedPayload(
+            task_id=task_id, summary="all done", pr_url="https://github.com/x/1"
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    await handle_task_completed(db_session, env_completed)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.status == "completed"
+    assert task.last_event_id == env_completed.event_id
+
+
+@pytest.mark.asyncio
+async def test_story28_handlers_raise_materializer_error_on_missing_task(
+    db_session: AsyncSession,
+) -> None:
+    """All 4 Story 2.8 handlers raise MaterializerError when task is missing."""
+    rng = Random(999)
+    clk = FrozenClock(mono_ns=9_000_000, now=FROZEN_EPOCH)
+    missing_id = new_task_id(clock=clk, rng=rng)
+
+    # blocker_raised
+    env_b = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.blocker_raised",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskBlockerRaisedPayload(task_id=missing_id, reason="oops"),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    with pytest.raises(MaterializerError):
+        await handle_task_blocker_raised(db_session, env_b)
+
+    # summary_emitted
+    env_s = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.summary_emitted",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskSummaryEmittedPayload(task_id=missing_id, summary="x"),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    with pytest.raises(MaterializerError):
+        await handle_task_summary_emitted(db_session, env_s)
+
+    # approval_requested
+    env_a = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.approval_requested",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskApprovalRequestedPayload(task_id=missing_id, action="x", justification="y"),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    with pytest.raises(MaterializerError):
+        await handle_task_approval_requested(db_session, env_a)
+
+    # completed
+    env_c = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.completed",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskCompletedPayload(task_id=missing_id, summary="x"),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    with pytest.raises(MaterializerError):
+        await handle_task_completed(db_session, env_c)

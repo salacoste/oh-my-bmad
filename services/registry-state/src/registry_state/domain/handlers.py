@@ -32,10 +32,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_state.domain.errors import MaterializerError
 from registry_state.domain.event_types import (
+    TaskApprovalRequestedPayload,
+    TaskBlockerRaisedPayload,
+    TaskCompletedPayload,
     TaskCreatedPayload,
     TaskExecutionStartedPayload,
     TaskPlanningStartedPayload,
     TaskPlanReadyPayload,
+    TaskSummaryEmittedPayload,
 )
 from registry_state.schema import Session as SessionRow
 from registry_state.schema import Task
@@ -192,6 +196,109 @@ async def handle_task_execution_started(session: AsyncSession, envelope: EventEn
     await session.execute(session_stmt)
 
 
+async def handle_task_blocker_raised(session: AsyncSession, envelope: EventEnvelope) -> None:
+    """Update last_event_id + updated_at for ``task.blocker_raised``.
+
+    Raises ``MaterializerError`` if the task row does not exist (out-of-order
+    replay). Status is intentionally NOT changed — lifecycle status transitions
+    for blockers land in Stories 5.x / 6.x.
+    """
+    payload = _hydrate(envelope.payload, TaskBlockerRaisedPayload)
+    assert isinstance(payload, TaskBlockerRaisedPayload)
+    stmt = (
+        update(Task)
+        .where(Task.id == payload.task_id)
+        .values(
+            last_event_id=envelope.event_id,
+            updated_at=envelope.emitted_at,
+        )
+    )
+    result = cast(CursorResult[tuple[()]], await session.execute(stmt))
+    if result.rowcount != 1:
+        raise MaterializerError(
+            event_id=envelope.event_id,
+            event_type=envelope.type,
+            reason=f"task {payload.task_id!r} not found — out-of-order replay?",
+        )
+
+
+async def handle_task_summary_emitted(session: AsyncSession, envelope: EventEnvelope) -> None:
+    """Update last_event_id + updated_at for ``task.summary_emitted``.
+
+    Raises ``MaterializerError`` if the task row does not exist.
+    """
+    payload = _hydrate(envelope.payload, TaskSummaryEmittedPayload)
+    assert isinstance(payload, TaskSummaryEmittedPayload)
+    stmt = (
+        update(Task)
+        .where(Task.id == payload.task_id)
+        .values(
+            last_event_id=envelope.event_id,
+            updated_at=envelope.emitted_at,
+        )
+    )
+    result = cast(CursorResult[tuple[()]], await session.execute(stmt))
+    if result.rowcount != 1:
+        raise MaterializerError(
+            event_id=envelope.event_id,
+            event_type=envelope.type,
+            reason=f"task {payload.task_id!r} not found — out-of-order replay?",
+        )
+
+
+async def handle_task_approval_requested(session: AsyncSession, envelope: EventEnvelope) -> None:
+    """Update last_event_id + updated_at for ``task.approval_requested``.
+
+    Raises ``MaterializerError`` if the task row does not exist.
+    """
+    payload = _hydrate(envelope.payload, TaskApprovalRequestedPayload)
+    assert isinstance(payload, TaskApprovalRequestedPayload)
+    stmt = (
+        update(Task)
+        .where(Task.id == payload.task_id)
+        .values(
+            last_event_id=envelope.event_id,
+            updated_at=envelope.emitted_at,
+        )
+    )
+    result = cast(CursorResult[tuple[()]], await session.execute(stmt))
+    if result.rowcount != 1:
+        raise MaterializerError(
+            event_id=envelope.event_id,
+            event_type=envelope.type,
+            reason=f"task {payload.task_id!r} not found — out-of-order replay?",
+        )
+
+
+async def handle_task_completed(session: AsyncSession, envelope: EventEnvelope) -> None:
+    """Set task status to ``"completed"`` for ``task.completed``.
+
+    ``"completed"`` is the terminal status — no further lifecycle transitions
+    are expected. Status changes for blockers / approvals / summaries land in
+    Stories 5.x / 6.x; only the completion handler sets status here.
+
+    Raises ``MaterializerError`` if the task row does not exist.
+    """
+    payload = _hydrate(envelope.payload, TaskCompletedPayload)
+    assert isinstance(payload, TaskCompletedPayload)
+    stmt = (
+        update(Task)
+        .where(Task.id == payload.task_id)
+        .values(
+            status="completed",
+            last_event_id=envelope.event_id,
+            updated_at=envelope.emitted_at,
+        )
+    )
+    result = cast(CursorResult[tuple[()]], await session.execute(stmt))
+    if result.rowcount != 1:
+        raise MaterializerError(
+            event_id=envelope.event_id,
+            event_type=envelope.type,
+            reason=f"task {payload.task_id!r} not found — out-of-order replay?",
+        )
+
+
 def register_default_handlers(materializer: object) -> None:
     """Register all 4 task-event handlers onto *materializer*.
 
@@ -216,12 +323,21 @@ def register_default_handlers(materializer: object) -> None:
     materializer.register_handler("task.planning.started", handle_task_planning_started)
     materializer.register_handler("task.plan.ready", handle_task_plan_ready)
     materializer.register_handler("task.execution.started", handle_task_execution_started)
+    # Story 2.8 — 4 new handlers.
+    materializer.register_handler("task.blocker_raised", handle_task_blocker_raised)
+    materializer.register_handler("task.summary_emitted", handle_task_summary_emitted)
+    materializer.register_handler("task.approval_requested", handle_task_approval_requested)
+    materializer.register_handler("task.completed", handle_task_completed)
 
 
 __all__ = [
+    "handle_task_approval_requested",
+    "handle_task_blocker_raised",
+    "handle_task_completed",
     "handle_task_created",
     "handle_task_execution_started",
     "handle_task_plan_ready",
     "handle_task_planning_started",
+    "handle_task_summary_emitted",
     "register_default_handlers",
 ]

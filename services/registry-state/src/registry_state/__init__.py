@@ -36,10 +36,14 @@ from registry_state.adapters.sqlite_store import create_engine, get_session
 from registry_state.app.main import main, run_subscriber
 from registry_state.domain.errors import MaterializerError
 from registry_state.domain.event_types import (  # noqa: F401 — side-effect: register() calls
+    TaskApprovalRequestedPayload,
+    TaskBlockerRaisedPayload,
+    TaskCompletedPayload,
     TaskCreatedPayload,
     TaskExecutionStartedPayload,
     TaskPlanningStartedPayload,
     TaskPlanReadyPayload,
+    TaskSummaryEmittedPayload,
 )
 from registry_state.domain.materializer import Materializer
 from registry_state.domain.recovery import (
@@ -72,10 +76,14 @@ __all__ = [
     "Snapshot",
     "SnapshotPolicy",
     "Task",
+    "TaskApprovalRequestedPayload",
+    "TaskBlockerRaisedPayload",
+    "TaskCompletedPayload",
     "TaskCreatedPayload",
     "TaskExecutionStartedPayload",
     "TaskPlanReadyPayload",
     "TaskPlanningStartedPayload",
+    "TaskSummaryEmittedPayload",
     "compute_events_max_cursor",
     "compute_replay_cursor",
     "create_engine",
