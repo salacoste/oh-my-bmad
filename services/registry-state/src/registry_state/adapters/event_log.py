@@ -143,9 +143,92 @@ def _read_log_lines_gen(path: Path) -> Iterator[EventEnvelope]:
             yield from_canonical_json(raw.rstrip(b"\r\n"))
 
 
+def _read_new_envelopes_since(path: Path, offset: int) -> tuple[int, list[EventEnvelope]]:
+    """Read complete ``\\n``-terminated envelopes from *path* starting at *offset*.
+
+    Used by the subscriber tail loop to consume only the bytes appended since
+    the last poll — bounding the per-iteration cost regardless of how large
+    the per-day log file grows.  Designed to be invoked via
+    ``asyncio.to_thread`` so the blocking ``open``/``seek``/``read`` syscalls
+    do not stall the event loop.
+
+    Behaviour:
+      - If *path* does not exist (e.g., the day's first event has not been
+        appended yet) returns ``(offset, [])`` unchanged.
+      - If *offset* is beyond EOF (file was rotated/truncated externally),
+        the read returns no bytes and the offset is left unchanged.  We do
+        NOT auto-reset to zero — re-reading from the start would replay
+        every event we have already applied.
+      - Trailing partial lines (no terminating ``\\n``) are NOT consumed:
+        the returned offset stops at the last newline so the next call
+        picks up the partial line once it is completed.
+      - CRLF tolerance: any ``\\r`` bytes are stripped before JSON parsing,
+        matching ``read_log_lines``'s permissive policy.
+
+    Args:
+        path: Path to the ``.jsonl`` file.
+        offset: Byte offset to start reading from.
+
+    Returns:
+        ``(new_offset, envelopes)`` where ``new_offset`` is the byte
+        position just past the last complete line, and ``envelopes`` is
+        the parsed envelope list (possibly empty).
+    """
+    if not path.exists():
+        return offset, []
+    envelopes: list[EventEnvelope] = []
+    new_offset = offset
+    with open(path, "rb") as f:
+        f.seek(offset)
+        last_complete_end = offset
+        while True:
+            raw = f.readline()
+            if not raw:
+                break
+            if not raw.endswith(b"\n"):
+                # Trailing partial line — leave it for the next poll to
+                # finish.  The cursor stays at last_complete_end.
+                break
+            envelopes.append(from_canonical_json(raw.rstrip(b"\r\n")))
+            last_complete_end += len(raw)
+        new_offset = last_complete_end
+    return new_offset, envelopes
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+async def recover_all_logs(base_dir: Path) -> int:
+    """Trim trailing partial lines from every ``*.jsonl`` file in *base_dir*.
+
+    Free-function counterpart to :meth:`EventLogWriter.recover` for services
+    that consume the log without writing to it (e.g. the subscriber loop).
+    Sorted iteration produces deterministic ordering for test assertions.
+    TOCTOU: if a file disappears between ``glob()`` and ``open()`` we skip it
+    silently — recovery is best-effort cleanup.
+
+    File I/O is offloaded to the default thread executor via
+    ``asyncio.to_thread`` so the asyncio event loop is not blocked.
+
+    Args:
+        base_dir: Root directory containing ``YYYY-MM-DD.jsonl`` event logs.
+
+    Returns:
+        Total bytes trimmed across all files.  Zero if *base_dir* does not
+        exist or every file was already clean.
+    """
+    if not base_dir.exists():
+        return 0
+    total = 0
+    for path in sorted(base_dir.glob("*.jsonl")):
+        try:
+            total += await asyncio.to_thread(_recover_file, path)
+        except FileNotFoundError:
+            # TOCTOU: file disappeared between glob and open.  Skip.
+            continue
+    return total
 
 
 def _recover_file(path: Path) -> int:
@@ -339,30 +422,11 @@ class EventLogWriter:
                 self._current_date = None
             # ``recover()`` is the cure for a previously poisoned writer.
             self._poisoned = False
-            return await asyncio.to_thread(self._recover_all_impl)
+            return await recover_all_logs(self._base_dir)
 
     # ------------------------------------------------------------------
     # Internal sync helpers (called via asyncio.to_thread)
     # ------------------------------------------------------------------
-
-    def _recover_all_impl(self) -> int:
-        """Trim every ``*.jsonl`` file in ``base_dir``.
-
-        Sorted iteration gives deterministic ordering for test assertions.
-        TOCTOU: if a file disappears between ``glob()`` and ``open()``, skip
-        it silently rather than raising — recovery is best-effort cleanup.
-
-        Returns:
-            Total bytes trimmed across all files.
-        """
-        total = 0
-        for path in sorted(self._base_dir.glob("*.jsonl")):
-            try:
-                total += _recover_file(path)
-            except FileNotFoundError:
-                # TOCTOU: file disappeared between glob and open.  Skip.
-                continue
-        return total
 
     def _sync_append_impl(self, data: bytes) -> None:
         """Blocking write + fdatasync — called in a thread via asyncio.to_thread.
@@ -437,4 +501,5 @@ __all__ = [
     "EventLogWriter",
     "current_day_path",
     "read_log_lines",
+    "recover_all_logs",
 ]

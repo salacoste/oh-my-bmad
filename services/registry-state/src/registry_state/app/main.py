@@ -1,15 +1,22 @@
 """Subscriber loop entrypoint for registry-state (Story 2.5, AC-6/7/8).
 
 ``run_subscriber`` is the long-lived async loop that:
-  1. Runs ``writer.recover()`` to trim trailing partial lines (Story 2.4).
+  1. Runs ``recover_all_logs(base_dir)`` to trim trailing partial lines.
   2. Computes a startup cursor from ``MAX(events.emitted_at_monotonic_ns)``.
   3. Replays all ``*.jsonl`` files in *base_dir* sorted chronologically,
      filtering events already in the DB (``emitted_at_monotonic_ns <= cursor``).
-  4. Tails the current-day file in a 100ms poll loop until ``stop_event`` fires.
+  4. Tails ALL ``*.jsonl`` files (not just today's) in a 100ms poll loop,
+     reading only the bytes appended since the last poll, until ``stop_event``
+     fires.  Tailing every file in date order means events appended to
+     yesterday's file in the last 100ms before UTC midnight are not lost
+     across a rollover boundary.
 
 ``main()`` is the sync wrapper for ``python -m registry_state``:
   - reads env vars (``REGISTRY_STATE_DB_URL``, ``REGISTRY_STATE_LOG_DIR``),
-  - installs SIGTERM/SIGINT → ``stop_event.set()``,
+  - installs SIGTERM/SIGINT → ``stop_event.set()`` (best-effort: on Windows
+    ``loop.add_signal_handler`` raises ``NotImplementedError`` for both
+    signals, so we fall back to default Python handling — only ``SIGINT``
+    is honoured there, via the ``KeyboardInterrupt`` raised in ``main()``).
   - calls ``asyncio.run(run_subscriber(...))``.
 """
 
@@ -22,9 +29,13 @@ import os
 import signal
 from pathlib import Path
 
+from events import EventEnvelope
 from events.clock import Clock, SystemClock
 
-from registry_state.adapters.event_log import EventLogWriter, current_day_path, read_log_lines
+from registry_state.adapters.event_log import (
+    _read_new_envelopes_since,
+    recover_all_logs,
+)
 from registry_state.adapters.sqlite_store import create_engine, get_session
 from registry_state.domain.event_types import (  # noqa: F401 — side-effect: register() calls
     TaskCreatedPayload,
@@ -41,24 +52,54 @@ _DEFAULT_LOG_DIR = "/var/lib/oh-my-bmad/registry/events"
 _DEFAULT_DB_URL = "sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3"
 
 
-async def _replay_all(base_dir: Path, materializer: Materializer, cursor_ns: int) -> int:
-    """Replay all ``*.jsonl`` files in *base_dir* in chronological order.
+async def _scan_new_envelopes(base_dir: Path, offsets: dict[str, int]) -> list[EventEnvelope]:
+    """Scan every ``*.jsonl`` in *base_dir* for newly-appended envelopes.
 
-    Files are sorted by filename (ISO-date ``YYYY-MM-DD.jsonl`` → lex-sort =
-    chronological order).  Only events with
-    ``emitted_at_monotonic_ns > cursor_ns`` are applied; earlier events would
-    be no-ops via the PK conflict anyway, but we skip them eagerly for speed.
+    Iterates files in lexicographic (= chronological) order so the returned
+    list is globally ordered.  For each file we read only the bytes after
+    ``offsets[path.name]`` and update the offset to the new EOF position;
+    new files start at offset 0.  Reads are offloaded to the default thread
+    executor via ``asyncio.to_thread`` to keep the asyncio loop responsive.
 
-    Returns total new events applied across all files.
+    Args:
+        base_dir: Root directory containing ``YYYY-MM-DD.jsonl`` event logs.
+        offsets:  Per-file byte-offset checkpoint, mutated in-place to track
+                  the EOF position seen by the caller.  Keys are
+                  ``path.name`` (e.g. ``"2026-04-24.jsonl"``).
+
+    Returns:
+        Concatenated list of newly-parsed envelopes across all files in
+        date order.
     """
-    total = 0
+    collected: list[EventEnvelope] = []
     for path in sorted(base_dir.glob("*.jsonl")):
-        if not path.exists():
+        prior = offsets.get(path.name, 0)
+        new_offset, envelopes = await asyncio.to_thread(_read_new_envelopes_since, path, prior)
+        offsets[path.name] = new_offset
+        collected.extend(envelopes)
+    return collected
+
+
+def _install_signal_handlers(loop: asyncio.AbstractEventLoop, stop_event: asyncio.Event) -> None:
+    """Best-effort SIGTERM/SIGINT → ``stop_event.set()`` registration.
+
+    On POSIX both signals trigger a clean shutdown via the asyncio loop.
+    On Windows ``loop.add_signal_handler`` raises ``NotImplementedError``
+    (the Proactor and Selector loops do not implement it), so we fall back
+    to default Python behaviour — ``SIGINT`` becomes ``KeyboardInterrupt``
+    inside ``asyncio.run`` and is caught by the outer ``contextlib.suppress``.
+    ``SIGTERM`` cannot be intercepted on Windows.
+    """
+    for sig_name in ("SIGTERM", "SIGINT"):
+        sig = getattr(signal, sig_name, None)
+        if sig is None:
             continue
-        envelopes = [env for env in read_log_lines(path) if env.emitted_at_monotonic_ns > cursor_ns]
-        if envelopes:
-            total += await materializer.apply_many(envelopes)
-    return total
+        try:
+            loop.add_signal_handler(sig, stop_event.set)
+        except (NotImplementedError, RuntimeError):
+            # Windows: add_signal_handler is unsupported for SIGTERM/SIGINT.
+            # KeyboardInterrupt-via-main() handles SIGINT; SIGTERM is lost.
+            continue
 
 
 async def run_subscriber(
@@ -75,16 +116,22 @@ async def run_subscriber(
         base_dir:        Root directory containing ``YYYY-MM-DD.jsonl`` event-log files.
         db_url:          SQLAlchemy async URL for the registry-state SQLite store.
         clock:           Injected clock (Story 2.2 discipline) for UTC now + monotonic_ns.
+                         Currently unused inside the loop body — file selection is
+                         driven by glob, not the clock — but retained as a
+                         dependency-injection seam for future heart-beat / metric
+                         emission and for symmetry with ``EventLogWriter``.
         poll_interval_s: How long to sleep between tail-loop iterations (default 100ms).
         stop_event:      Optional asyncio.Event; set it to request a clean shutdown.
                          If ``None``, a local event is created (useful in tests).
     """
+    del clock  # Reserved for future use; see docstring.
     stop = stop_event if stop_event is not None else asyncio.Event()
     engine = create_engine(db_url)
-    writer = EventLogWriter(base_dir=base_dir, clock=clock)
     try:
-        # Story 2.4 startup contract: trim trailing partial lines across all *.jsonl.
-        await writer.recover()
+        # Startup contract: trim trailing partial lines across all *.jsonl.
+        # Use the free function so we don't construct a full writer just to
+        # reach its recovery routine.
+        await recover_all_logs(base_dir)
 
         session_maker = get_session(engine)
         materializer = Materializer(session_maker=session_maker)
@@ -94,28 +141,36 @@ async def run_subscriber(
         async with session_maker() as session:
             cursor_ns = await materializer.cursor(session)
 
-        # Startup replay: process all historical *.jsonl files in date order.
-        applied = await _replay_all(base_dir, materializer, cursor_ns)
-        if applied:
-            log.info("startup replay: applied %d new events", applied)
+        # Startup replay: read every *.jsonl byte-by-byte (offloaded to thread)
+        # and apply only events newer than the persisted cursor.  Populate the
+        # per-file byte-offset checkpoint so the tail loop only has to read
+        # NEW bytes from each file.
+        offsets: dict[str, int] = {}
+        startup_applied = 0
+        for path in sorted(base_dir.glob("*.jsonl")):
+            new_offset, envelopes = await asyncio.to_thread(_read_new_envelopes_since, path, 0)
+            offsets[path.name] = new_offset
+            new_envelopes = [env for env in envelopes if env.emitted_at_monotonic_ns > cursor_ns]
+            if new_envelopes:
+                startup_applied += await materializer.apply_many(new_envelopes)
+        if startup_applied:
+            log.info("startup replay: applied %d new events", startup_applied)
 
-        # Tail loop: poll current-day file until stop_event fires.
+        # Tail loop: scan ALL *.jsonl files for newly-appended bytes until
+        # stop_event fires.  Scanning every file (not just today's) means
+        # events appended to yesterday's file just before the UTC-midnight
+        # rollover boundary are not lost.
         while not stop.is_set():
-            today_path = current_day_path(base_dir, clock.now())
-            if today_path.exists():
+            envelopes = await _scan_new_envelopes(base_dir, offsets)
+            if envelopes:
                 async with session_maker() as session:
                     cursor_ns = await materializer.cursor(session)
-                to_apply = [
-                    env
-                    for env in read_log_lines(today_path)
-                    if env.emitted_at_monotonic_ns > cursor_ns
-                ]
+                to_apply = [env for env in envelopes if env.emitted_at_monotonic_ns > cursor_ns]
                 if to_apply:
                     await materializer.apply_many(to_apply)
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=poll_interval_s)
     finally:
-        await writer.close()
         await engine.dispose()
 
 
@@ -127,7 +182,9 @@ def main() -> None:
       - ``REGISTRY_STATE_LOG_DIR``: Path to event-log directory (default: ``/var/lib/...``).
 
     Installs SIGTERM/SIGINT handlers that set the stop event for a clean shutdown.
-    On Windows (no SIGTERM), only KeyboardInterrupt is caught.
+    On Windows ``loop.add_signal_handler`` is unsupported for both signals and
+    silently degrades — only ``SIGINT`` is honoured (via ``KeyboardInterrupt``
+    raised inside ``asyncio.run`` and caught here).
     """
     logging.basicConfig(
         level=logging.INFO,
@@ -141,10 +198,7 @@ def main() -> None:
 
     async def _run() -> None:
         loop = asyncio.get_running_loop()
-        sigterm = getattr(signal, "SIGTERM", None)
-        if sigterm is not None:
-            loop.add_signal_handler(sigterm, stop_event.set)
-        loop.add_signal_handler(signal.SIGINT, stop_event.set)
+        _install_signal_handlers(loop, stop_event)
         await run_subscriber(
             base_dir=log_dir,
             db_url=db_url,

@@ -23,6 +23,7 @@ from registry_state.adapters.event_log import (
     EventLogWriter,
     current_day_path,
     read_log_lines,
+    recover_all_logs,
 )
 from registry_state.adapters.sqlite_store import create_engine, get_session
 from registry_state.app.main import main, run_subscriber
@@ -66,5 +67,6 @@ __all__ = [
     "get_session",
     "main",
     "read_log_lines",
+    "recover_all_logs",
     "run_subscriber",
 ]

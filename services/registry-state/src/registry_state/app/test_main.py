@@ -229,7 +229,7 @@ async def test_run_subscriber_live_tail_materializes_within_200ms(tmp_path: Path
     env = EventEnvelope(
         event_id=new_event_id(clock=clk, rng=rng),
         schema_version="1.0.0",
-        type="task.created",  # noqa: EVT001 — test uses plain dict payload, not .create()
+        type="task.created",  # noqa: EVT001 — registry only populated after registry_state.domain.event_types is imported at runtime; the AST scanner can't see that
         emitted_at=clk.now(),
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
@@ -238,9 +238,14 @@ async def test_run_subscriber_live_tail_materializes_within_200ms(tmp_path: Path
     )
     writer = EventLogWriter(base_dir=log_dir, clock=sub_clock)
     await writer.recover()
-    t0 = time.monotonic()
+    # Capture t0 *after* the durable append completes — the SLA budget covers
+    # subscriber-side propagation latency only.  Earlier versions started the
+    # timer before the fdatasync returned, conflating writer + reader time.
+    # We deliberately leave the writer open: closing it forces a flush we do
+    # not need (append already fdatasync'd) and would race with the
+    # subscriber's tail-read on poll boundaries.
     await writer.append(env)
-    await writer.close()
+    t0 = time.monotonic()
 
     # Poll every 50ms for up to 1000ms.
     eng = create_async_engine(db_url, connect_args={"check_same_thread": False})
@@ -262,19 +267,87 @@ async def test_run_subscriber_live_tail_materializes_within_200ms(tmp_path: Path
 
     stop.set()
     await asyncio.wait_for(sub_task, timeout=2.0)
+    await writer.close()
     await eng.dispose()
 
     assert found, "task row never appeared within 1s"
     assert latency_ms < 200, f"SLA breach: materialized in {latency_ms:.1f}ms (budget 200ms)"
 
 
+async def _capture_db_state(db_url: str) -> dict[str, list[tuple[object, ...]]]:
+    """Snapshot the rows that the materializer should converge on.
+
+    Returns lists of plain tuples — they sort and compare predictably and
+    avoid pulling SQLAlchemy session-bound state into the assertion.
+    """
+    eng = create_async_engine(db_url, connect_args={"check_same_thread": False})
+    try:
+        async with eng.connect() as conn:
+            event_rows = (
+                await conn.execute(
+                    text(
+                        "SELECT id, type, emitted_at_monotonic_ns "
+                        "FROM events ORDER BY emitted_at_monotonic_ns, id"
+                    )
+                )
+            ).all()
+            task_rows = (
+                await conn.execute(text("SELECT id, status, last_event_id FROM tasks ORDER BY id"))
+            ).all()
+            session_rows = (
+                await conn.execute(
+                    text("SELECT id, task_id, status, worker_kind FROM sessions ORDER BY id")
+                )
+            ).all()
+    finally:
+        await eng.dispose()
+    return {
+        "events": [tuple(r) for r in event_rows],
+        "tasks": [tuple(r) for r in task_rows],
+        "sessions": [tuple(r) for r in session_rows],
+    }
+
+
+async def _wait_for_status(db_url: str, *, task_id: str, expected: str, timeout_s: float) -> bool:
+    """Poll *db_url* every 50ms until ``tasks.status == expected`` or *timeout_s*."""
+    eng = create_async_engine(db_url, connect_args={"check_same_thread": False})
+    try:
+        sm = get_session(eng)
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+            async with sm() as session:
+                result = await session.execute(
+                    text("SELECT status FROM tasks WHERE id = :tid"), {"tid": task_id}
+                )
+                row = result.one_or_none()
+            if row is not None and row[0] == expected:
+                return True
+        return False
+    finally:
+        await eng.dispose()
+
+
 @pytest.mark.asyncio
 async def test_run_subscriber_is_idempotent_across_3x_replay(tmp_path: Path) -> None:
-    """Run subscriber 3× against the same log; final DB state byte-identical each time."""
+    """Run subscriber 3× against the SAME DB; full DB snapshot identical each time.
+
+    This is the strict reading of "the materializer is idempotent": replaying
+    the same event log 3× into the same SQLite database must converge to the
+    exact same rows in tasks/sessions/events.  Earlier versions of this test
+    used a fresh DB per run, which could only catch a per-run divergence
+    (i.e., non-determinism in the handlers themselves) — it could NOT catch
+    a duplicate-row bug, because the second run started from an empty DB.
+    """
     log_dir = tmp_path / "events"
     log_dir.mkdir()
+    db_path = tmp_path / "state.sqlite3"
+    db_url = f"sqlite+aiosqlite:///{db_path}"
 
-    envelopes, task_id, session_id = _build_journey_envelopes()
+    # Schema once, shared across all 3 runs.
+    await _make_db(db_url)
+
+    envelopes, task_id, _session_id = _build_journey_envelopes()
     writer_clock = FrozenClock(mono_ns=0, now=FROZEN_EPOCH)
     writer = EventLogWriter(base_dir=log_dir, clock=writer_clock)
     await writer.recover()
@@ -282,13 +355,9 @@ async def test_run_subscriber_is_idempotent_across_3x_replay(tmp_path: Path) -> 
         await writer.append(env)
     await writer.close()
 
-    snapshots: list[tuple[str, str | None]] = []
+    snapshots: list[dict[str, list[tuple[object, ...]]]] = []
 
-    for run in range(3):
-        db_path = tmp_path / f"state_{run}.sqlite3"
-        db_url = f"sqlite+aiosqlite:///{db_path}"
-        await _make_db(db_url)
-
+    for _run in range(3):
         stop = asyncio.Event()
         sub = asyncio.create_task(
             run_subscriber(
@@ -300,32 +369,123 @@ async def test_run_subscriber_is_idempotent_across_3x_replay(tmp_path: Path) -> 
             )
         )
 
-        # Wait for executing status.
-        eng = create_async_engine(db_url, connect_args={"check_same_thread": False})
-        sm = get_session(eng)
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline:
-            await asyncio.sleep(0.05)
-            async with sm() as session:
-                result = await session.execute(
-                    text("SELECT status, last_event_id FROM tasks WHERE id = :tid"),
-                    {"tid": task_id},
-                )
-                row = result.one_or_none()
-            if row is not None and row[0] == "executing":
-                snapshots.append((row[0], row[1]))
-                break
+        reached = await _wait_for_status(
+            db_url, task_id=task_id, expected="executing", timeout_s=2.0
+        )
 
         stop.set()
         await asyncio.wait_for(sub, timeout=2.0)
-        await eng.dispose()
 
-    assert len(snapshots) == 3, f"not all 3 runs reached executing state: {snapshots}"
-    assert all(s == snapshots[0] for s in snapshots), (
-        f"idempotency violation — snapshots differ: {snapshots}"
+        assert reached, "subscriber never reached 'executing' state within 2s"
+        snapshots.append(await _capture_db_state(db_url))
+
+    assert snapshots[0] == snapshots[1] == snapshots[2], (
+        f"3× replay produced different states; snapshots: {snapshots}"
     )
-    # Verify last_event_id points at the execution.started event.
-    assert snapshots[0][1] == envelopes[-1].event_id
+    # Sanity: verify last_event_id points at the execution.started event.
+    last_event_id_by_task = dict((row[0], row[2]) for row in snapshots[0]["tasks"])
+    assert last_event_id_by_task[task_id] == envelopes[-1].event_id
+
+
+@pytest.mark.asyncio
+async def test_run_subscriber_tails_across_utc_midnight_boundary(tmp_path: Path) -> None:
+    """F1 probe: events appended to yesterday.jsonl must materialize even after rollover.
+
+    Direct repro of the bug fixed by F1.  Writes a ``task.created`` envelope
+    directly into a YYYY-MM-DD.jsonl file dated ``yesterday``, then to a
+    second file dated ``today``.  The subscriber must tail BOTH files (not
+    just the file matching today's date) and materialize both events within
+    the SLA budget.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from events import to_canonical_json
+
+    log_dir = tmp_path / "events"
+    log_dir.mkdir()
+    db_path = tmp_path / "state.sqlite3"
+    db_url = f"sqlite+aiosqlite:///{db_path}"
+    await _make_db(db_url)
+
+    # Anchor the test on a specific UTC instant so "yesterday" / "today"
+    # filenames are deterministic.
+    today_dt = datetime(2026, 4, 24, 12, 0, 0, tzinfo=UTC)
+    yesterday_dt = today_dt - timedelta(days=1)
+
+    def _write_envelope(when: datetime, mono_ns: int, seed: int) -> str:
+        rng = Random(seed)
+        clk = FrozenClock(mono_ns=mono_ns, now=when)
+        tid = new_task_id(clock=clk, rng=rng)
+        env = EventEnvelope(
+            event_id=new_event_id(clock=clk, rng=rng),
+            schema_version="1.0.0",
+            type="task.created",  # noqa: EVT001 — registry only populated after registry_state.domain.event_types is imported at runtime; the AST scanner can't see that
+            emitted_at=when,
+            emitted_at_monotonic_ns=mono_ns,
+            actor=_ACTOR,
+            payload={"task_id": tid, "title": f"midnight-{seed}"},
+            request_id=new_uuid7(clock=clk, rng=rng),
+        )
+        path = log_dir / f"{when.date().isoformat()}.jsonl"
+        path.write_bytes(to_canonical_json(env) + b"\n")
+        return tid
+
+    # Step 1: log starts EMPTY when the subscriber boots — both tail-loop
+    # paths (yesterday.jsonl and today.jsonl) must come into existence and
+    # be picked up by the rolling rescan.  The pre-F1 implementation only
+    # tailed today.jsonl, so the late-yesterday append below would never
+    # be materialized until process restart.
+    stop = asyncio.Event()
+    sub_task = asyncio.create_task(
+        run_subscriber(
+            base_dir=log_dir,
+            db_url=db_url,
+            clock=FrozenClock(mono_ns=0, now=today_dt),
+            poll_interval_s=0.05,
+            stop_event=stop,
+        )
+    )
+
+    # Wait for the subscriber to settle into its tail loop on an empty log.
+    await asyncio.sleep(0.15)
+
+    # Step 2: simulate the real-world midnight race in monotonic order —
+    # the LATE-pre-midnight event lands in yesterday.jsonl with the lower
+    # mono_ns, and the post-rollover event lands in today.jsonl with the
+    # higher mono_ns.  Both must materialise.
+    yesterday_tid = _write_envelope(yesterday_dt, mono_ns=1_000_000, seed=11)
+    today_tid = _write_envelope(today_dt, mono_ns=2_000_000, seed=22)
+
+    eng = create_async_engine(db_url, connect_args={"check_same_thread": False})
+    sm = get_session(eng)
+    deadline = time.monotonic() + 2.0
+    found_yesterday = False
+    found_today = False
+    while time.monotonic() < deadline and not (found_yesterday and found_today):
+        await asyncio.sleep(0.05)
+        async with sm() as session:
+            for tid, label in (
+                (yesterday_tid, "yesterday"),
+                (today_tid, "today"),
+            ):
+                row = (
+                    await session.execute(text("SELECT 1 FROM tasks WHERE id = :tid"), {"tid": tid})
+                ).one_or_none()
+                if row is not None:
+                    if label == "yesterday":
+                        found_yesterday = True
+                    else:
+                        found_today = True
+
+    stop.set()
+    await asyncio.wait_for(sub_task, timeout=2.0)
+    await eng.dispose()
+
+    assert found_today, "today.jsonl event was not materialized"
+    assert found_yesterday, (
+        "yesterday.jsonl event was not materialized — "
+        "tail loop is missing the rollover-safety scan (F1 regression)"
+    )
 
 
 @pytest.mark.asyncio

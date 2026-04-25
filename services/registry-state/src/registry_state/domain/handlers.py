@@ -106,7 +106,11 @@ async def handle_task_planning_started(session: AsyncSession, envelope: EventEnv
         )
     )
     result = cast(CursorResult[tuple[()]], await session.execute(stmt))
-    if result.rowcount == 0:
+    # ``rowcount != 1`` covers the missing-row case (rowcount == 0), the
+    # dialect-cannot-determine case (rowcount == -1) and the "should never
+    # happen with a PK WHERE" case (rowcount > 1).  Single-row UPDATE on
+    # aiosqlite normally returns 0 or 1; this is defence in depth.
+    if result.rowcount != 1:
         raise MaterializerError(
             event_id=envelope.event_id,
             event_type=envelope.type,
@@ -131,7 +135,11 @@ async def handle_task_plan_ready(session: AsyncSession, envelope: EventEnvelope)
         )
     )
     result = cast(CursorResult[tuple[()]], await session.execute(stmt))
-    if result.rowcount == 0:
+    # ``rowcount != 1`` covers the missing-row case (rowcount == 0), the
+    # dialect-cannot-determine case (rowcount == -1) and the "should never
+    # happen with a PK WHERE" case (rowcount > 1).  Single-row UPDATE on
+    # aiosqlite normally returns 0 or 1; this is defence in depth.
+    if result.rowcount != 1:
         raise MaterializerError(
             event_id=envelope.event_id,
             event_type=envelope.type,
@@ -160,7 +168,11 @@ async def handle_task_execution_started(session: AsyncSession, envelope: EventEn
         )
     )
     result = cast(CursorResult[tuple[()]], await session.execute(stmt))
-    if result.rowcount == 0:
+    # ``rowcount != 1`` covers the missing-row case (rowcount == 0), the
+    # dialect-cannot-determine case (rowcount == -1) and the "should never
+    # happen with a PK WHERE" case (rowcount > 1).  Single-row UPDATE on
+    # aiosqlite normally returns 0 or 1; this is defence in depth.
+    if result.rowcount != 1:
         raise MaterializerError(
             event_id=envelope.event_id,
             event_type=envelope.type,
@@ -186,10 +198,20 @@ def register_default_handlers(materializer: object) -> None:
     Accepts ``object`` to avoid a circular import with ``materializer.py``
     at the type level; the runtime type is ``Materializer``.  Callers
     (``app/main.py``) pass a live ``Materializer`` instance.
+
+    Raises:
+        TypeError: If *materializer* is not a ``Materializer`` instance.
+            This is a runtime check (not ``assert``) so the contract still
+            fires under ``python -O`` where ``assert`` statements are
+            stripped.  mypy enforces the static type via the call sites,
+            but the runtime guard defends against duck-typed callers.
     """
     from registry_state.domain.materializer import Materializer
 
-    assert isinstance(materializer, Materializer)
+    if not isinstance(materializer, Materializer):
+        raise TypeError(
+            f"register_default_handlers expected Materializer, got {type(materializer).__name__}"
+        )
     materializer.register_handler("task.created", handle_task_created)
     materializer.register_handler("task.planning.started", handle_task_planning_started)
     materializer.register_handler("task.plan.ready", handle_task_plan_ready)

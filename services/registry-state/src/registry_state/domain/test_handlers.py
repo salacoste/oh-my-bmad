@@ -279,3 +279,58 @@ async def test_handler_on_missing_task_raises_materializer_error(
         await handle_task_planning_started(db_session, env)
     assert exc_info.value.event_type == "task.planning.started"
     assert missing_task_id in exc_info.value.reason
+
+
+@pytest.mark.asyncio
+async def test_plan_ready_on_missing_task_raises_materializer_error(
+    db_session: AsyncSession,
+) -> None:
+    """``handle_task_plan_ready`` raises MaterializerError when the task row is missing.
+
+    Defends the ``rowcount != 1`` guard added to handlers (was ``rowcount == 0``).
+    Re-asserts the contract for the ``task.plan.ready`` handler so a regression
+    in the rowcount check is caught even if the planning-started variant is
+    refactored away.
+    """
+    rng = Random(123)
+    clk = FrozenClock(mono_ns=3_000_000, now=FROZEN_EPOCH)
+    missing_task_id = new_task_id(clock=clk, rng=rng)
+    env = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.plan.ready",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskPlanReadyPayload(task_id=missing_task_id, plan_summary="x"),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    with pytest.raises(MaterializerError) as exc_info:
+        await handle_task_plan_ready(db_session, env)
+    assert exc_info.value.event_type == "task.plan.ready"
+    assert missing_task_id in exc_info.value.reason
+
+
+@pytest.mark.asyncio
+async def test_execution_started_on_missing_task_raises_materializer_error(
+    db_session: AsyncSession,
+) -> None:
+    """``handle_task_execution_started`` raises MaterializerError when the task is missing."""
+    rng = Random(321)
+    clk = FrozenClock(mono_ns=4_000_000, now=FROZEN_EPOCH)
+    missing_task_id = new_task_id(clock=clk, rng=rng)
+    sid = new_session_id(clock=clk, rng=rng)
+    env = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.execution.started",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskExecutionStartedPayload(task_id=missing_task_id, session_id=sid),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    with pytest.raises(MaterializerError) as exc_info:
+        await handle_task_execution_started(db_session, env)
+    assert exc_info.value.event_type == "task.execution.started"
+    assert missing_task_id in exc_info.value.reason
