@@ -1,12 +1,16 @@
 [project]
 name = "idempotency"
-version = "0.1.0"
+version = "0.2.0"
 description = "UUIDv7 idempotency-key generation + cachetools.TTLCache backed by SQLite for cross-restart durability. 7-day retention per FR28."
 authors = [
     { name = "R2d2", email = "bad.vano23ru@gmail.com" },
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "cachetools>=5.3",
+    "sqlalchemy[asyncio]>=2.0.30",
+    "events>=0.3.0",
+]
 
 [build-system]
 requires = ["uv_build>=0.11.0,<1.0"]

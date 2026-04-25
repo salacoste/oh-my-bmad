@@ -55,6 +55,7 @@ dev = [
     "ruff",
     "mypy",
     "pre-commit",
+    "types-cachetools>=5.3",
 ]
 
 [tool.pytest.ini_options]
