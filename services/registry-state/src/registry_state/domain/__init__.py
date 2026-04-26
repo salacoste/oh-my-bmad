@@ -11,6 +11,11 @@ Story 2.10 adds:
     session.heartbeat_timeout, sink.delivery_failed, task.stop_requested).
   - 4 ``emit_*`` async emission primitives (failure_detection module).
   - HeartbeatMonitor + SinkFailureTracker in-memory detection helpers.
+  - SinkFailureState frozen dataclass for tracker state snapshots.
+
+Re-exports symmetrically: every payload model registered in
+:mod:`registry_state.domain.event_types` is also re-exported here for
+ergonomic ``from registry_state.domain import ...`` access.
 """
 
 from registry_state.domain.errors import MaterializerError
@@ -18,10 +23,19 @@ from registry_state.domain.event_types import (
     ServiceCrashedPayload,
     SessionHeartbeatTimeoutPayload,
     SinkDeliveryFailedPayload,
+    TaskApprovalRequestedPayload,
+    TaskBlockerRaisedPayload,
+    TaskCompletedPayload,
+    TaskCreatedPayload,
+    TaskExecutionStartedPayload,
+    TaskPlanningStartedPayload,
+    TaskPlanReadyPayload,
     TaskStopRequestedPayload,
+    TaskSummaryEmittedPayload,
 )
 from registry_state.domain.failure_detection import (
     HeartbeatMonitor,
+    SinkFailureState,
     SinkFailureTracker,
     emit_service_crashed,
     emit_session_heartbeat_timeout,
@@ -35,8 +49,17 @@ __all__ = [
     "ServiceCrashedPayload",
     "SessionHeartbeatTimeoutPayload",
     "SinkDeliveryFailedPayload",
+    "SinkFailureState",
     "SinkFailureTracker",
+    "TaskApprovalRequestedPayload",
+    "TaskBlockerRaisedPayload",
+    "TaskCompletedPayload",
+    "TaskCreatedPayload",
+    "TaskExecutionStartedPayload",
+    "TaskPlanReadyPayload",
+    "TaskPlanningStartedPayload",
     "TaskStopRequestedPayload",
+    "TaskSummaryEmittedPayload",
     "emit_service_crashed",
     "emit_session_heartbeat_timeout",
     "emit_sink_delivery_failed",
