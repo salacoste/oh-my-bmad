@@ -50,10 +50,14 @@ from registry_state.adapters.event_log import (
 )
 from registry_state.adapters.sqlite_store import create_engine, get_session
 from registry_state.domain.event_types import (  # noqa: F401 — side-effect: register() calls
+    ServiceCrashedPayload,
+    SessionHeartbeatTimeoutPayload,
+    SinkDeliveryFailedPayload,
     TaskCreatedPayload,
     TaskExecutionStartedPayload,
     TaskPlanningStartedPayload,
     TaskPlanReadyPayload,
+    TaskStopRequestedPayload,
 )
 from registry_state.domain.handlers import register_default_handlers
 from registry_state.domain.materializer import Materializer
