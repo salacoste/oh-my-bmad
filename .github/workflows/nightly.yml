@@ -1,0 +1,66 @@
+name: nightly
+
+# Story 2.11 — crash-injection harness (NFR-R1 / NFR-R2 continuous verification).
+# Full slow-matrix (separability + crash-injection + idempotency replay) lands
+# across Stories 2.11–2.15. This initial nightly runs the crash-injection job;
+# other slow jobs are added per their respective stories.
+#
+# Schedule: 3am UTC daily. A push to main also triggers the workflow so a
+# freshly merged crash-harness change can be validated without waiting 24h.
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  push:
+    branches: [main]
+    paths:
+      - "tests/crash-injection/**"
+      - "services/registry-state/**"
+      - "packages/events/**"
+      - "docker-compose.yml"
+      - ".github/workflows/nightly.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Allow one nightly run at a time; an in-flight run is NOT cancelled (nightly
+# has no concurrency group — let it finish rather than produce a half-result).
+
+jobs:
+  crash-injection:
+    name: Crash-injection harness (NFR-R1 / NFR-R2)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv + Python 3.12
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Sync workspace (incl. dev deps)
+        run: uv sync --frozen --dev
+
+      - name: Build base image
+        # services/registry-state/Dockerfile FROMs oh-my-bmad-base:local
+        run: just build-base
+
+      - name: Build registry-state image
+        run: docker compose -f docker-compose.yml build registry-state
+
+      - name: Run crash-injection harness
+        run: just test-crash
+
+      - name: Upload crash-injection summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crash-injection-summary-${{ github.run_id }}
+          path: _bmad-output/test-artifacts/crash-injection-summary-*.json
+          if-no-files-found: warn
+          retention-days: 30

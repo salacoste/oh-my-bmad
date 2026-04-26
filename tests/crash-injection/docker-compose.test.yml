@@ -1,0 +1,40 @@
+# Story 2.11 — crash-injection harness compose overlay.
+#
+# Self-contained registry-state-only stack used by tests/crash-injection/.
+# Phase 1 has no operational telegram-gateway / orchestrator-adapter / worker —
+# the only failure surface that exists today is the JSONL → SQLite materializer
+# owned by registry-state, so the harness boots ONLY that service.
+#
+# This file is NOT merged on top of the base compose (compose merge cannot
+# cleanly drop services that the base file declared). The harness invokes
+# `docker compose -f tests/crash-injection/docker-compose.test.yml ...`
+# directly so only the services declared here are part of the stack.
+#
+# OMB_HARNESS_DATA_DIR is set by tests/crash-injection/_compose.py before
+# invoking compose; it points at the harness's pytest tmp_path / "data".
+# The bind-mount gives the host-side test direct access to the JSONL log
+# (event_log_dir()) and the materialized SQLite DB (db_path()) without
+# entering the container.
+
+services:
+  registry-state:
+    build:
+      context: ../..
+      dockerfile: services/registry-state/Dockerfile
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-registry-state:${OMB_VERSION:-dev}
+    environment:
+      ENV: test
+      REGISTRY_STATE_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+      REGISTRY_STATE_DB_URL: sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3
+    init: true
+    # No restart policy: the harness controls lifecycle deliberately
+    # (kill → restart) and a `restart: unless-stopped` would race the test.
+    restart: "no"
+    volumes:
+      - ${OMB_HARNESS_DATA_DIR:?OMB_HARNESS_DATA_DIR must be exported by the harness}:/var/lib/oh-my-bmad
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+      start_period: 5s

@@ -66,6 +66,7 @@ from registry_state.domain.recovery import (
     restore_state_from_latest_snapshot,
 )
 from registry_state.domain.snapshots import SnapshotPolicy
+from registry_state.schema import Base
 
 log = logging.getLogger(__name__)
 
@@ -174,6 +175,16 @@ async def run_subscriber(
     stop = stop_event if stop_event is not None else asyncio.Event()
     engine = create_engine(db_url)
     try:
+        # Story 2.11: ensure schema exists before the subscriber tries to use
+        # it. ``create_all`` is idempotent (IF NOT EXISTS) so calling it on an
+        # already-migrated DB is safe. In production the Alembic migrations own
+        # the schema; this call handles fresh containers where no prior
+        # ``alembic upgrade head`` was run (e.g. first boot in docker compose).
+        # Tests that inject an in-memory engine already call create_all in their
+        # own fixtures, so this is a no-op for them.
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
         # Startup contract: trim trailing partial lines across all *.jsonl.
         # Use the free function so we don't construct a full writer just to
         # reach its recovery routine.
@@ -182,6 +193,18 @@ async def run_subscriber(
         session_maker = get_session(engine)
         materializer = materializer_factory(session_maker)
         register_default_handlers(materializer)
+        # Story 2.11: /tmp/ready touchpoint flips the docker-compose healthcheck
+        # to "healthy" once the subscriber's startup wiring has completed
+        # (engine open, session-maker ready, handlers registered). The
+        # crash-injection harness (tests/crash-injection/) polls
+        # ``docker inspect --format='{{.State.Health.Status}}'`` against this
+        # signal to know when restart is complete. Best-effort: if /tmp is
+        # read-only or otherwise unwritable, we log and continue — the
+        # subscriber's correctness does not depend on this file.
+        try:
+            Path("/tmp/ready").touch()  # noqa: S108 — healthcheck signal, not data store
+        except OSError as exc:
+            log.warning("failed to touch /tmp/ready healthcheck signal: %s", exc)
         snapshot_policy = SnapshotPolicy(
             session_maker=session_maker,
             clock=clock,

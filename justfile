@@ -87,6 +87,16 @@ test-slow:
 test-contract:
     uv run pytest tests/contract
 
+# Synthetic crash-injection harness (Story 2.11 / NFR-R1 / NFR-R2). Boots
+# `registry-state` under docker compose, drives a synthesized task through
+# each lifecycle phase, kills the container (Linux: `stop --timeout 1`,
+# macOS: `kill --signal SIGKILL`), restarts, and asserts state-reconstruction
+# with zero duplicate events. Requires Docker — tests skip gracefully when
+# `docker info` fails. Slow (~3-5 min); excluded from PR-gate `just test`.
+# Nightly CI invokes this recipe via `.github/workflows/nightly.yml`.
+test-crash:
+    uv run pytest -m crash --tb=short -v tests/crash-injection/
+
 # Strict lint + format + type-check + architectural-discipline gates.
 # ruff rules cover style (E/F/I/UP/B/SIM/N); ruff format --check enforces
 # canonical formatting; mypy --strict gates the platform-owned packages +
@@ -94,10 +104,16 @@ test-contract:
 # The three check-gate scripts enforce import-graph, event-registry, and
 # single-writer constraints — same checks CI runs; splitting them out would
 # create a footgun where `just lint` is green locally but CI fails.
+# Story 2.11 (AC-15): crash-injection harness also passes mypy --strict.
+# `--explicit-package-bases` avoids a module-name conflict when the harness
+# directory (tests/crash-injection/) is not a Python package. Registry_state
+# is found via mypy_path (mypy.ini) because services/registry-state now has
+# a py.typed marker.
 lint:
     uv run ruff check .
     uv run ruff format --check .
     uv run mypy --strict packages/ services/registry-api services/registry-state
+    uv run mypy --strict --explicit-package-bases tests/crash-injection
     uv run python scripts/check_imports.py
     uv run python scripts/check_event_registry.py
     uv run python scripts/check_single_writer.py
