@@ -112,7 +112,7 @@ test-crash:
 lint:
     uv run ruff check .
     uv run ruff format --check .
-    uv run mypy --strict packages/ services/registry-api services/registry-state
+    uv run mypy --strict packages/ services/registry-api services/registry-state services/worker-wrapper
     uv run mypy --strict --explicit-package-bases tests/crash-injection
     uv run python scripts/check_imports.py
     uv run python scripts/check_event_registry.py

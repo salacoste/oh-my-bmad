@@ -103,20 +103,18 @@ def _resolve_output_folder() -> Path:
     return fallback
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def skip_if_no_docker() -> None:
-    """Skip ALL crash-injection tests when ``docker info`` fails or times out.
+    """Skip a test when ``docker info`` fails or times out.
 
-    ``autouse=True`` means every test in this directory automatically
-    depends on this fixture — no explicit parameter needed. The session
-    scope means the ``docker info`` probe runs exactly once per session.
+    Explicit-opt-in fixture (Story 2.12 AC-11): tests that need Docker
+    declare it as a parameter (``skip_if_no_docker``); tests that don't
+    (e.g., Story 2.12's filesystem-only write-interrupt harness) omit it
+    so they run regardless of Docker availability.
 
-    AC-12: a developer without Docker installed must still see
-    ``just test`` pass. The skip reason includes the concrete failure so
-    CI logs pinpoint whether Docker is absent or just slow to start.
-
-    Timeout is 30s (bumped from 5s) to accommodate cold Docker Desktop
-    start-up on macOS (can take 15-30s to become ready).
+    Session-scoped so the ``docker info`` probe runs at most once.
+    Timeout is 30s to accommodate cold Docker Desktop start-up on macOS
+    (can take 15-30s to become ready).
     """
     try:
         proc = subprocess.run(
