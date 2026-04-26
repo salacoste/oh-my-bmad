@@ -21,12 +21,22 @@ Why ``os._exit(137)`` rather than ``sys.exit`` or signal-based kill:
   teardown but ``os.fsync`` and ``os.replace`` never run, leaving the
   target file in its pre-edit state (the atomic-edit invariant).
 
+  (Note: this is NOT a real SIGKILL — ``os._exit`` runs in-process and
+  the kernel still tears down the tmpfile fd cleanly.  The Mach-style
+  "process never gets a chance to clean up" guarantee from a real
+  SIGKILL would be stronger but isn't deterministic enough for a
+  100-iteration test.  ``os._exit(137)`` is the closest deterministic
+  approximation.)
+
 Exit code 137 is the conventional "killed by SIGKILL" code on POSIX
 (128 + 9). Tests assert ``returncode == 137`` for the interrupted path.
 
 This script is invoked with ``python _atomic_edit_runner.py ...`` from
 the harness; the harness adds ``services/worker-wrapper/src`` to
-``sys.path`` via ``PYTHONPATH`` so the import below works.
+``sys.path`` via ``PYTHONPATH``.  As a convenience for manual debugging
+(``python tests/crash-injection/_atomic_edit_runner.py ...``) the script
+also self-augments ``sys.path`` so the import below works without env
+wrangling — see Story 2.12 M8.
 """
 
 from __future__ import annotations
@@ -37,7 +47,16 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from worker_wrapper.domain import atomic_edit
+# Story 2.12 M8: self-augment sys.path so manual `python ...` invocation
+# works without setting PYTHONPATH.  When invoked by the harness this
+# is a no-op (PYTHONPATH is already set, so the path is already present
+# and the redundant insert is harmless).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_WW_SRC = _REPO_ROOT / "services" / "worker-wrapper" / "src"
+if str(_WW_SRC) not in sys.path:
+    sys.path.insert(0, str(_WW_SRC))
+
+from worker_wrapper.domain import atomic_edit  # noqa: E402 — sys.path setup precedes import
 
 
 def _build_kill_after_chunked_write(
@@ -84,7 +103,12 @@ def _build_kill_after_chunked_write(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=(
+            "Write-interrupt harness driver — interrupts atomic_write_bytes "
+            "after N bytes via os._exit(137)."
+        ),
+    )
     parser.add_argument(
         "--target",
         type=Path,

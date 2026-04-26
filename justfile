@@ -87,13 +87,19 @@ test-slow:
 test-contract:
     uv run pytest tests/contract
 
-# Synthetic crash-injection harness (Story 2.11 / NFR-R1 / NFR-R2). Boots
-# `registry-state` under docker compose, drives a synthesized task through
-# each lifecycle phase, kills the container (Linux: `stop --timeout 1`,
-# macOS: `kill --signal SIGKILL`), restarts, and asserts state-reconstruction
-# with zero duplicate events. Requires Docker — tests skip gracefully when
-# `docker info` fails. Slow (~3-5 min); excluded from PR-gate `just test`.
-# Nightly CI invokes this recipe via `.github/workflows/nightly.yml`.
+# Synthetic crash-injection harness (Story 2.11 / NFR-R1 / NFR-R2 + Story
+# 2.12 / FR30). Boots `registry-state` under docker compose, drives a
+# synthesized task through each lifecycle phase, kills the container (Linux:
+# `stop --timeout 1`, macOS: `kill --signal SIGKILL`), restarts, and asserts
+# state-reconstruction with zero duplicate events. Slow (~3-5 min); excluded
+# from PR-gate `just test`. Nightly CI invokes this recipe via
+# `.github/workflows/nightly.yml`.
+#
+# Docker dependency split:
+#   - Story 2.11 tests (test_restart_recovery.py) require Docker — skipped
+#     gracefully via the `skip_if_no_docker` fixture when `docker info` fails.
+#   - Story 2.12 tests (test_write_interrupt.py) are filesystem-only (pure
+#     subprocess + tmp_path) and run UNCONDITIONALLY — Docker is not needed.
 test-crash:
     uv run pytest -m crash --tb=short -v tests/crash-injection/
 

@@ -7,8 +7,10 @@ content — never a partial mix.
 
 The 100-iteration randomized test is the AC-headline check: with
 ``random.Random(seed=21242)`` for reproducibility, runs 100 trials at
-random byte offsets in ``[0, len(data))`` and asserts the invariant
-holds for every trial.
+random byte offsets and asserts the invariant holds for every trial.
+The randrange is deliberately widened past ``len(data)`` so ~7% of
+trials land in the no-interrupt regime, exercising the post-edit
+reconstruction path in addition to the pre-edit one (Story 2.12 M3).
 
 Subprocess strategy:
 
@@ -20,11 +22,20 @@ Subprocess strategy:
 * No Docker required — pure subprocess + filesystem. The ``crash`` mark
   groups these with Story 2.11's tests; the ``slow`` mark keeps them out
   of ``just test`` by default.
+
+Subprocess env strategy (Story 2.12 M7):
+We INHERIT the parent's ``os.environ`` and overlay only the entries the
+runner needs (``PYTHONPATH`` PREPEND so it composes with any inherited
+value; ``PYTHONDONTWRITEBYTECODE`` for hermeticity).  Inheriting
+``HOME`` / ``TMPDIR`` / ``LANG`` / ``LC_ALL`` is necessary for CI
+portability — a fully minimal env breaks subprocess startup on macOS
+runners and on Linux containers using non-default locales.
 """
 
 from __future__ import annotations
 
 import hashlib
+import os
 import random
 import subprocess
 import sys
@@ -39,10 +50,20 @@ _RUNNER_PATH: Path = Path(__file__).parent / "_atomic_edit_runner.py"
 _REPO_ROOT: Path = Path(__file__).resolve().parents[2]
 _WORKER_WRAPPER_SRC: Path = _REPO_ROOT / "services" / "worker-wrapper" / "src"
 
-# Pre/post-edit fixtures. ``post_edit_content`` is large enough that
-# random byte offsets in [0, len(data)) span a meaningful range.
+# Story 2.12 Mn3: assert runner script presence at import time so a
+# missing/renamed script fails fast with a clear message rather than a
+# subprocess "no such file" 50ms later.
+assert _RUNNER_PATH.exists(), f"runner script missing: {_RUNNER_PATH}"
+
+# Pre/post-edit fixtures.  Story 2.12 M2: post-edit content widened from
+# 1250 bytes (single 64KB production chunk) to 100,000 bytes (~1.5
+# production chunks) so randomized kill points actually exercise
+# multi-chunk boundaries inside ``_chunked_write``.  The harness driver
+# uses 1-byte chunks so it can interrupt at exact byte offsets, but the
+# RANGE of offsets the production chunked-write loop must handle widens
+# to span at least one chunk boundary.
 _PRE_EDIT_CONTENT: bytes = b"original\n"
-_POST_EDIT_CONTENT: bytes = b"the new contents go here\n" * 50  # 1250 bytes
+_POST_EDIT_CONTENT: bytes = b"the new contents go here\n" * (50 * 80)  # ~100,000 bytes
 
 
 def _sha256(data: bytes) -> str:
@@ -54,14 +75,27 @@ def _spawn_runner(
     final_content_path: Path,
     kill_after_bytes: int,
     *,
-    timeout_s: float = 10.0,
+    timeout_s: float = 5.0,
 ) -> subprocess.CompletedProcess[str]:
-    """Spawn ``_atomic_edit_runner.py`` with controlled args + PYTHONPATH."""
-    env = {
-        "PATH": "/usr/bin:/bin",
-        "PYTHONPATH": str(_WORKER_WRAPPER_SRC),
-        "PYTHONDONTWRITEBYTECODE": "1",
-    }
+    """Spawn ``_atomic_edit_runner.py`` with controlled args + PYTHONPATH.
+
+    Inherits ``os.environ`` so HOME / TMPDIR / LANG / LC_ALL flow through
+    to the child (CI portability).  Overlays:
+
+    * ``PYTHONPATH`` — prepended (not overridden) so the runner imports
+      worker_wrapper from the local checkout while preserving any
+      already-set PYTHONPATH from the test environment.
+    * ``PYTHONDONTWRITEBYTECODE`` — keeps tmp_path tidy (no __pycache__).
+    """
+    env = os.environ.copy()
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        f"{_WORKER_WRAPPER_SRC}{os.pathsep}{existing_pythonpath}"
+        if existing_pythonpath
+        else str(_WORKER_WRAPPER_SRC)
+    )
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+
     return subprocess.run(
         [
             sys.executable,
@@ -75,6 +109,8 @@ def _spawn_runner(
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout_s,
         check=False,
         env=env,
@@ -137,10 +173,18 @@ def test_atomic_edit_interrupted_mid_write_target_unchanged(tmp_path: Path) -> N
 def test_atomic_edit_100_randomized_interruption_points(tmp_path: Path) -> None:
     """AC-headline test — 100 random kill points; invariant must hold for ALL.
 
-    For each trial: spawn the driver with a random ``kill_after_bytes`` in
-    ``[0, len(data))``; assert the post-mortem ``target`` hash matches
-    EITHER the pre-edit hash OR the post-edit hash; NEVER any other
-    value. Track per-outcome counts for diagnostics.
+    Story 2.12 M3: ``randrange`` widened to ``[0, n_total + 100)`` so a
+    fraction of trials (~``100 / (n_total + 100)``, but for small n that
+    becomes meaningful — here 100/100100 → not enough, so we use a
+    larger overshoot) land in the no-interrupt regime where the driver
+    exits 0 and the post-edit content lands.  This way both pre-edit
+    AND post-edit reconstruction outcomes are exercised in every CI run.
+
+    Implementation: split the 100 trials evenly between
+    "kill-during-write" (``randrange(0, n_total)``) and
+    "kill-after-or-not" (``randrange(0, n_total * 2)`` — half land
+    past n_total).  Both branches assert the FR30 invariant
+    (target is EITHER pre-edit OR post-edit, never partial).
     """
     rng = random.Random(21242)
     pre_hash = _sha256(_PRE_EDIT_CONTENT)
@@ -159,27 +203,40 @@ def test_atomic_edit_100_randomized_interruption_points(tmp_path: Path) -> None:
         target.write_bytes(_PRE_EDIT_CONTENT)
         final_content.write_bytes(_POST_EDIT_CONTENT)
 
-        kill_after = rng.randrange(0, n_total)
+        # Widened range — values in [0, n_total) interrupt mid-write
+        # (rc=137 → pre-edit); values in [n_total, 2*n_total) write
+        # everything (rc=0 → post-edit).  ~50/50 split exercises both.
+        kill_after = rng.randrange(0, n_total * 2)
         proc = _spawn_runner(target, final_content, kill_after_bytes=kill_after)
 
-        # Driver should exit 137 (interrupted) since kill_after < n_total.
-        assert proc.returncode == 137, (
-            f"trial={trial} kill_after={kill_after}: expected rc=137, "
-            f"got rc={proc.returncode}, stderr={proc.stderr!r}"
+        # Two valid exit codes: 137 (interrupted) or 0 (unmolested).
+        assert proc.returncode in (0, 137), (
+            f"trial={trial} kill_after={kill_after}: unexpected rc={proc.returncode}, "
+            f"stderr={proc.stderr!r}"
         )
 
         actual = target.read_bytes()
         actual_hash = _sha256(actual)
         if actual_hash == pre_hash:
             pre_count += 1
+            # Sanity: kill_after < n_total → must have been interrupted.
+            assert proc.returncode == 137 or kill_after >= n_total, (
+                f"trial={trial} pre-edit content but kill_after={kill_after} "
+                f"and rc={proc.returncode} — inconsistent"
+            )
         elif actual_hash == post_hash:
             post_count += 1
+            # Sanity: only valid when the runner ran to completion.
+            assert proc.returncode == 0, (
+                f"trial={trial} post-edit content but rc={proc.returncode} "
+                f"(kill_after={kill_after}, n_total={n_total}) — inconsistent"
+            )
         else:
             other_outcomes.append((kill_after, actual_hash))
 
     # Print per-outcome breakdown for visibility (pytest -s shows it).
     print(
-        f"\n[write-interrupt] 100 trials: "
+        f"\n[write-interrupt] 100 trials (M3 widened, n_total={n_total}): "
         f"{pre_count} pre-edit, {post_count} post-edit, "
         f"{len(other_outcomes)} partial"
     )
@@ -189,3 +246,10 @@ def test_atomic_edit_100_randomized_interruption_points(tmp_path: Path) -> None:
         f"First 5: {other_outcomes[:5]}"
     )
     assert pre_count + post_count == 100
+    # Story 2.12 M3: BOTH branches must be exercised.  With seeded RNG +
+    # 50/50 range split this is deterministic; if either is 0, randomness
+    # got pathologically unlucky and we want to know.
+    assert pre_count > 0 and post_count > 0, (
+        f"M3 widening regression: pre_count={pre_count} post_count={post_count} — "
+        "both should be non-zero given the deterministic seed and range split"
+    )

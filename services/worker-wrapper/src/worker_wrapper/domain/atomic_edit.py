@@ -5,8 +5,11 @@ atomicity.  No third-party deps.
 
 Algorithm
 ---------
-1. Choose tmpfile path: ``<target>.tmp.<pid>.<8-hex-random>`` (sibling of
-   *target* — guaranteed same filesystem).
+1. Choose tmpfile path: ``<target>.tmp.<pid>.<16-hex-random>`` (sibling of
+   *target* — guaranteed same filesystem). ``token_hex(8)`` → 64 random
+   bits, comfortably collision-free in practice (vs. 32 bits from
+   ``token_hex(4)`` which had a birthday collision at ~65k concurrent
+   writers).
 2. ``os.open`` the tmpfile with ``O_WRONLY | O_CREAT | O_EXCL`` so collisions
    between concurrent writers fail loudly rather than silently truncate.
 3. ``_chunked_write(fd, data)`` — module-level helper so the write-interrupt
@@ -20,7 +23,16 @@ Algorithm
    atomicity does NOT imply durability of the directory entry.  A crash
    between the rename and the next page-cache flush can lose the rename.
    Default ON; opt-out for tests writing thousands of small files.
-7. Cleanup tmpfile on ANY exception via ``try/except/finally``
+
+   **Failure handling for dir-fsync:** if the dir-fsync raises after the
+   rename has succeeded, the data is *already on disk* — only its
+   directory-entry durability is weakened.  Raising at this point would
+   tell the caller "the write didn't happen", which would prompt a retry
+   that double-writes.  Instead, the dir-fsync error is logged at WARNING
+   and SUPPRESSED; the next syscall flushing this directory's inode
+   (any subsequent metadata change, periodic background flush) repairs
+   the durability gap.
+7. Cleanup tmpfile on ANY pre-rename exception via ``try/except/finally``
    (``unlink(missing_ok=True)``; OSError on cleanup is logged + swallowed).
 
 Cross-filesystem handling
@@ -44,12 +56,31 @@ each call individually remains atomic (the loser's tmpfile is shadowed
 by the winner's rename).  Worktree-level mutual exclusion lives higher
 in the stack (Story 5.3 worktree-lock).
 
+Mode preservation
+-----------------
+When *target* exists pre-write, its file-mode bits are captured via
+``os.stat`` and re-applied via ``os.chmod`` after ``os.replace`` so that
+e.g. a 0o644 target isn't silently downgraded to 0o600 (the tmpfile's
+``O_EXCL`` creation mode).  The chmod is best-effort: a failure is
+logged at WARNING but does not raise.
+
 Platform support
 ----------------
 POSIX-only (macOS + Linux).  Windows support is out of scope per FR48 /
 Architecture line 200 base-image decision.  ``os.replace``,
 ``os.fsync``, and ``O_EXCL`` all have POSIX-equivalent semantics on
 both supported platforms.
+
+Platform durability notes
+-------------------------
+Linux ext4/xfs honor ``fsync(dir_fd)`` strictly: after it returns,
+the directory entry IS on stable storage.  macOS APFS's
+``fsync(dir_fd)`` is best-effort (Apple's documented design — a
+companion ``F_FULLFSYNC`` ioctl is required for full barrier
+semantics, but it costs an order of magnitude more wall time and
+isn't called from this primitive).  Production deploys target Linux
+containers per FR48 / Architecture line 200; macOS is supported for
+local development where the slightly weaker durability is acceptable.
 """
 
 from __future__ import annotations
@@ -85,13 +116,16 @@ def _chunked_write(fd: int, data: bytes) -> None:
     while pos < n:
         chunk_end = min(pos + _DEFAULT_CHUNK_SIZE, n)
         written = os.write(fd, data[pos:chunk_end])
-        if written <= 0:  # pragma: no cover — POSIX guarantees > 0 or raises
+        if written <= 0:
+            # POSIX guarantees write() returns > 0 or raises; this guard
+            # exists so a misbehaving libc / FUSE filesystem cannot loop
+            # forever silently consuming CPU.
             raise OSError(f"os.write returned {written} on fd={fd}")
         pos += written
 
 
 def atomic_write_bytes(
-    target: Path,
+    target: Path | str,
     data: bytes,
     *,
     fsync_data: bool = True,
@@ -108,9 +142,16 @@ def atomic_write_bytes(
     Stale-tmpfile recovery is OUT OF SCOPE — orphan siblings from
     crashed prior runs are not scavenged here (separate sweeper).
 
+    Validation runs BEFORE any I/O: empty paths and parent-less targets
+    raise ``ValueError`` with no side-effect on the filesystem.
+
+    File mode of an existing *target* is preserved across the replace
+    (best-effort ``os.chmod`` from a captured ``os.stat`` snapshot).
+
     Args:
-        target: Destination path.  Must have a parent directory (i.e.,
-            cannot be ``/`` or any path whose parent is itself).
+        target: Destination path (``Path`` or ``str``).  Must have a
+            parent directory and a non-empty basename (i.e., cannot be
+            ``/`` / ``""`` / any path whose parent is itself).
         data: Bytes to write.
         fsync_data: When True (default), ``fsync`` the tmpfile before
             close.  Disable for performance-critical batch writes that
@@ -118,31 +159,55 @@ def atomic_write_bytes(
         fsync_dir: When True (default), ``fsync`` the parent directory
             after the rename so the directory entry survives a host
             crash.  Disable in tests writing thousands of small files.
+            **A failure of the dir-fsync after a successful rename is
+            logged at WARNING and SUPPRESSED** — the data is already on
+            disk; raising would mislead the caller into double-writing.
 
     Raises:
-        ValueError: if *target* has no parent directory.
-        OSError: on tmpfile creation, write, fsync, or rename failure.
-            Cross-filesystem rename re-raised with a clear message
-            including both paths.
+        ValueError: if *target* is empty or has no parent directory.
+            Raised before any I/O.
+        OSError: on tmpfile creation, write, fsync(data), or rename
+            failure.  Cross-filesystem rename re-raised with a clear
+            message including both paths.  ``FileNotFoundError`` from
+            a missing parent directory is re-raised with a clearer
+            message.  Dir-fsync errors are logged-not-raised (see above).
     """
+    target = Path(target)
+    if not target.name:
+        raise ValueError(f"target has empty basename: {target!r}")
     parent = target.parent
     if parent == target:
         raise ValueError(f"target has no parent directory: {target!r}")
 
-    tmp_name = f"{target.name}.tmp.{os.getpid()}.{secrets.token_hex(4)}"
+    # token_hex(8) → 16 hex chars, 64 bits of randomness.
+    tmp_name = f"{target.name}.tmp.{os.getpid()}.{secrets.token_hex(8)}"
     tmp = parent / tmp_name
 
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    closed = False
+    # Capture existing target's mode (best-effort) so the replace doesn't
+    # silently downgrade e.g. 0o644 → 0o600.  None if target doesn't exist.
+    preserved_mode: int | None = None
+    try:
+        preserved_mode = os.stat(target).st_mode & 0o7777
+    except FileNotFoundError:
+        preserved_mode = None
+    except OSError:
+        # Permission / loop / etc. — fall back to default tmp mode.
+        preserved_mode = None
+
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileNotFoundError as exc:
+        # Parent directory missing — re-raise with a clearer message.
+        raise FileNotFoundError(f"target's parent directory does not exist: {parent}") from exc
+
     try:
         try:
             _chunked_write(fd, data)
             if fsync_data:
                 os.fsync(fd)
         finally:
-            if not closed:
-                os.close(fd)
-                closed = True
+            # finally guarantees close runs even if write/fsync raised.
+            os.close(fd)
 
         try:
             os.replace(tmp, target)
@@ -154,45 +219,78 @@ def atomic_write_bytes(
                 ) from exc
             raise
 
-        if fsync_dir:
-            dir_fd = os.open(parent, os.O_RDONLY)
+        # Restore mode of the previous target (best-effort).
+        if preserved_mode is not None:
             try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
+                os.chmod(target, preserved_mode)
+            except OSError as chmod_exc:
+                logger.warning(
+                    "atomic_write_bytes: chmod-restore failed: %s (target=%s, mode=%o)",
+                    chmod_exc,
+                    target,
+                    preserved_mode,
+                )
+
+        if fsync_dir:
+            # Best-effort directory-entry durability.  Failure here means
+            # data is already on disk but the directory inode hasn't been
+            # flushed; the next metadata change or periodic background
+            # flush will repair it.  Raising would mislead the caller
+            # into thinking the write didn't happen → double-write.
+            try:
+                dir_fd = os.open(parent, os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except OSError as dir_exc:
+                code = errno.errorcode.get(dir_exc.errno if dir_exc.errno is not None else -1, "?")
+                logger.warning(
+                    "atomic_write_bytes: dir-fsync failed (data already on "
+                    "disk; suppressing): %s [%s] (parent=%s)",
+                    dir_exc,
+                    code,
+                    parent,
+                )
     except BaseException:
-        # Best-effort cleanup on ANY failure path (write, fsync, replace,
-        # dir-fsync).  unlink may fail if os.replace already consumed
+        # Best-effort cleanup on ANY failure path BEFORE the rename
+        # succeeded.  unlink may fail if os.replace already consumed
         # the tmpfile (success path doesn't reach here) or if the tmpfile
         # was never created — both are benign.
         try:
             tmp.unlink(missing_ok=True)
         except OSError as cleanup_exc:
+            code = errno.errorcode.get(
+                cleanup_exc.errno if cleanup_exc.errno is not None else -1, "?"
+            )
             logger.warning(
-                "atomic_write_bytes: tmpfile cleanup failed: %s (tmp=%s)",
+                "atomic_write_bytes: tmpfile cleanup failed: %s [%s] (tmp=%s)",
                 cleanup_exc,
+                code,
                 tmp,
             )
         raise
 
 
 def atomic_write_text(
-    target: Path,
+    target: Path | str,
     text: str,
     *,
     encoding: str = "utf-8",
+    errors: str = "strict",
     fsync_data: bool = True,
     fsync_dir: bool = True,
 ) -> None:
     """Encode *text* and call :func:`atomic_write_bytes`.
 
+    *encoding* and *errors* are forwarded to :meth:`str.encode`.
     ``fsync_data`` / ``fsync_dir`` are forwarded to
     :func:`atomic_write_bytes` so callers can opt out of either fsync
     from the text wrapper.
     """
     atomic_write_bytes(
         target,
-        text.encode(encoding),
+        text.encode(encoding, errors),
         fsync_data=fsync_data,
         fsync_dir=fsync_dir,
     )
