@@ -1,10 +1,12 @@
 """Tests for registry_state.domain.failure_detection — Story 2.10 (AC-7).
 
-Originally shipped 21 tests in 4 classes. The post-1.0 review pass extends
-this to ≥40 tests covering: edge-triggered emission, secret redaction,
-clock regression, validator branches, distinct-ids-per-emission, EVENT_TYPES
-membership, future-time heartbeats, registry idempotency, repr smoke, and
-emission failure propagation.
+Originally shipped 21 tests in 4 classes. The post-1.0 review pass (round 1)
+extended this to 66 tests. Round 2 (edge-case findings) further extends to
+≥80 tests, adding: JSONL round-trip equality, serial-write ordering, UTC-strict
+validator rejection, threshold-cache consistency, introspection methods
+(``__len__``, ``tracked_sessions``, ``tracked_sinks``), ``get_state`` nullability
+for unknown sinks, ``is_tracked``, ``remove_sink`` method, and UUIDv7 regex
+assertion on emitted ``request_id``s.
 
 Local fixtures (``fixed_clock``, ``writer``, ``read_envelopes``) match the
 co-located convention from ``test_event_log.py`` / ``test_handlers.py``
@@ -23,6 +25,7 @@ from events import (
     FROZEN_EPOCH,
     EventEnvelope,
     FrozenClock,
+    to_canonical_json,
 )
 from events import schema_registry as _schema_registry
 from events.clock import Clock
@@ -65,6 +68,9 @@ def _ensure_failure_detection_types_registered() -> Generator[None, None, None]:
     call ``unregister_all()`` mid-session (e.g. ``test_event_log.py``).
     The 4 Story 2.10 types are re-registered idempotently before each test
     so payload validation always works.
+
+    # NOTE: per-file fixture mirrors test_handlers.py; consider session-scoped
+    # conftest in a future cleanup.
     """
     # Snapshot current registry state before mutation. Story 2.1 guarantees
     # ``register()`` is idempotent for same-model rebinds, so re-registering
@@ -200,6 +206,21 @@ class TestPayloadModels:
                 last_heartbeat_at=naive,
                 timeout_threshold_s=60.0,
             )
+
+    def test_session_heartbeat_timeout_rejects_non_utc_offset(self) -> None:
+        """``last_heartbeat_at`` must be UTC (zero offset); non-UTC tz-aware rejected."""
+        from datetime import timezone
+
+        eastern = timezone(timedelta(hours=-5))
+        non_utc = datetime(2026, 4, 24, 12, 0, 0, tzinfo=eastern)
+        with pytest.raises(ValidationError) as ei:
+            SessionHeartbeatTimeoutPayload(
+                session_id=_SESSION_ID,
+                task_id=_TASK_ID,
+                last_heartbeat_at=non_utc,
+                timeout_threshold_s=60.0,
+            )
+        assert "utc" in str(ei.value).lower() or "offset" in str(ei.value).lower()
 
     def test_session_heartbeat_timeout_rejects_inf_threshold(self) -> None:
         last_at = datetime(2026, 4, 24, 12, 0, 0, tzinfo=UTC)
@@ -556,6 +577,121 @@ class TestEmissionFunctions:
         assert env1.request_id != env2.request_id
 
     @pytest.mark.asyncio
+    async def test_emit_service_crashed_round_trip_equality(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """Envelope serialized form survives a JSONL round-trip unchanged.
+
+        ``read_log_lines`` returns raw-dict payloads (``EventEnvelope.payload``
+        is untyped after deserialization), so we compare via
+        ``to_canonical_json`` — the canonical bytes for both the in-memory
+        envelope and the recovered one must be identical.
+        """
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        env = await emit_service_crashed(
+            writer, clock=fixed_clock, service="worker-wrapper", exit_code=2
+        )
+        await writer.close()
+        recovered = _read_envelopes(tmp_path, fixed_clock.now())
+        assert len(recovered) == 1
+        assert to_canonical_json(recovered[0]) == to_canonical_json(env)
+
+    @pytest.mark.asyncio
+    async def test_emit_session_heartbeat_timeout_round_trip_equality(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """Canonical JSON survives a JSONL round-trip for ``session.heartbeat_timeout``."""
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        last_at = datetime(2026, 4, 24, 11, 0, 0, tzinfo=UTC)
+        env = await emit_session_heartbeat_timeout(
+            writer,
+            clock=fixed_clock,
+            session_id=_SESSION_ID,
+            task_id=_TASK_ID,
+            last_heartbeat_at=last_at,
+            timeout_threshold_s=30.0,
+        )
+        await writer.close()
+        recovered = _read_envelopes(tmp_path, fixed_clock.now())
+        assert len(recovered) == 1
+        assert to_canonical_json(recovered[0]) == to_canonical_json(env)
+
+    @pytest.mark.asyncio
+    async def test_emit_sink_delivery_failed_round_trip_equality(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """Canonical JSON survives a JSONL round-trip for ``sink.delivery_failed``."""
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        env = await emit_sink_delivery_failed(
+            writer,
+            clock=fixed_clock,
+            sink_name="telegram",
+            consecutive_failures=5,
+            last_error="timeout",
+        )
+        await writer.close()
+        recovered = _read_envelopes(tmp_path, fixed_clock.now())
+        assert len(recovered) == 1
+        assert to_canonical_json(recovered[0]) == to_canonical_json(env)
+
+    @pytest.mark.asyncio
+    async def test_emit_task_stop_requested_round_trip_equality(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """Canonical JSON survives a JSONL round-trip for ``task.stop_requested``."""
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        env = await emit_task_stop_requested(
+            writer,
+            clock=fixed_clock,
+            task_id=_TASK_ID,
+            actor_id="console",
+            actor_kind="operator",
+        )
+        await writer.close()
+        recovered = _read_envelopes(tmp_path, fixed_clock.now())
+        assert len(recovered) == 1
+        assert to_canonical_json(recovered[0]) == to_canonical_json(env)
+
+    @pytest.mark.asyncio
+    async def test_two_emits_same_writer_persist_in_order(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """Two different emit_* on the same writer persist in chronological order."""
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        env1 = await emit_service_crashed(
+            writer, clock=fixed_clock, service="worker-wrapper", exit_code=1
+        )
+        env2 = await emit_task_stop_requested(
+            writer, clock=fixed_clock, task_id=_TASK_ID, actor_id="console"
+        )
+        await writer.close()
+        recovered = _read_envelopes(tmp_path, fixed_clock.now())
+        assert len(recovered) == 2
+        assert to_canonical_json(recovered[0]) == to_canonical_json(env1)
+        assert to_canonical_json(recovered[1]) == to_canonical_json(env2)
+        assert recovered[0].event_id != recovered[1].event_id
+
+    @pytest.mark.asyncio
+    async def test_emit_request_id_is_uuidv7_shaped(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """Auto-generated request_id matches the bare UUIDv7 pattern."""
+        import re
+
+        _bare_uuidv7_re = re.compile(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        )
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        env = await emit_service_crashed(
+            writer, clock=fixed_clock, service="worker-wrapper", exit_code=1
+        )
+        await writer.close()
+        assert env.request_id is not None
+        assert _bare_uuidv7_re.match(env.request_id), (
+            f"request_id {env.request_id!r} does not match bare UUIDv7 pattern"
+        )
+
+    @pytest.mark.asyncio
     async def test_emit_propagates_writer_errors(
         self, tmp_path: Path, fixed_clock: FrozenClock
     ) -> None:
@@ -729,6 +865,29 @@ class TestHeartbeatMonitor:
         assert "HeartbeatMonitor" in r
         assert "sessions=1" in r
 
+    def test_heartbeat_monitor_threshold_cached_matches_property(self) -> None:
+        """``_threshold_s`` cache equals ``timeout_threshold_s`` property value."""
+        clock = _AdvancingClock(FROZEN_EPOCH)
+        monitor = HeartbeatMonitor(heartbeat_interval_s=15.0, clock=clock)
+        assert monitor._threshold_s == monitor.timeout_threshold_s
+        assert monitor.timeout_threshold_s == 30.0
+
+    def test_heartbeat_monitor_len_and_tracked_sessions(self) -> None:
+        """``__len__`` and ``tracked_sessions`` reflect current tracking state."""
+        clock = _AdvancingClock(FROZEN_EPOCH)
+        monitor = HeartbeatMonitor(heartbeat_interval_s=10.0, clock=clock)
+        assert len(monitor) == 0
+        assert monitor.tracked_sessions() == []
+
+        monitor.record_heartbeat("s-1")
+        monitor.record_heartbeat("s-2")
+        assert len(monitor) == 2
+        assert set(monitor.tracked_sessions()) == {"s-1", "s-2"}
+
+        monitor.remove_session("s-1")
+        assert len(monitor) == 1
+        assert monitor.tracked_sessions() == ["s-2"]
+
 
 # ===========================================================================
 # TestSinkFailureTracker — AC-3c
@@ -773,6 +932,7 @@ class TestSinkFailureTracker:
         # passing error=None preserves the prior most-recent error
         tracker.record_failure("telegram", None)
         state = tracker.get_state("telegram")
+        assert state is not None
         assert state.count == 3
         assert state.last_error == "second"
 
@@ -820,7 +980,9 @@ class TestSinkFailureTracker:
         # Synthesise saturation — record_failure caps at 9999.
         for _ in range(10005):
             tracker.record_failure("telegram", "boom")
-        assert tracker.get_state("telegram").count == 9999
+        state = tracker.get_state("telegram")
+        assert state is not None
+        assert state.count == 9999
 
     def test_sink_failure_tracker_repr_smoke(self) -> None:
         tracker = SinkFailureTracker(failure_threshold=3)
@@ -829,6 +991,51 @@ class TestSinkFailureTracker:
         assert "SinkFailureTracker" in r
         assert "sinks=1" in r
         assert "threshold=3" in r
+
+    def test_sink_failure_tracker_remove_sink_clears_tracking(self) -> None:
+        """``remove_sink`` removes both state and emit-mark for the sink."""
+        tracker = SinkFailureTracker(failure_threshold=3)
+        for _ in range(3):
+            tracker.record_failure("telegram", "boom")
+        tracker.mark_emitted("telegram")
+        assert tracker.is_tracked("telegram") is True
+
+        tracker.remove_sink("telegram")
+        assert tracker.is_tracked("telegram") is False
+        assert tracker.get_state("telegram") is None
+        # should_emit returns False for an untracked sink
+        assert tracker.should_emit("telegram") is False
+        # No-op on unknown sink
+        tracker.remove_sink("nonexistent")
+
+    def test_sink_failure_tracker_get_state_returns_none_for_unknown(self) -> None:
+        """``get_state`` returns ``None`` for a sink that has never been recorded."""
+        tracker = SinkFailureTracker(failure_threshold=3)
+        assert tracker.get_state("never-seen") is None
+
+    def test_sink_failure_tracker_is_tracked(self) -> None:
+        """``is_tracked`` reflects whether a sink has any recorded events."""
+        tracker = SinkFailureTracker(failure_threshold=3)
+        assert tracker.is_tracked("telegram") is False
+        tracker.record_failure("telegram", "err")
+        assert tracker.is_tracked("telegram") is True
+        tracker.remove_sink("telegram")
+        assert tracker.is_tracked("telegram") is False
+
+    def test_sink_failure_tracker_len_and_tracked_sinks(self) -> None:
+        """``__len__`` and ``tracked_sinks`` reflect current tracking state."""
+        tracker = SinkFailureTracker(failure_threshold=3)
+        assert len(tracker) == 0
+        assert tracker.tracked_sinks() == []
+
+        tracker.record_failure("telegram", "err")
+        tracker.record_failure("discord", "err")
+        assert len(tracker) == 2
+        assert set(tracker.tracked_sinks()) == {"telegram", "discord"}
+
+        tracker.remove_sink("telegram")
+        assert len(tracker) == 1
+        assert tracker.tracked_sinks() == ["discord"]
 
 
 # ===========================================================================

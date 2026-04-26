@@ -34,6 +34,7 @@ is a no-op per Story 2.1's schema_registry.register contract).
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from events.schema_registry import register
@@ -199,6 +200,15 @@ class SessionHeartbeatTimeoutPayload(BaseModel):
     task_id: str = Field(min_length=1, pattern=_TASK_ID_PATTERN)
     last_heartbeat_at: AwareDatetime
     timeout_threshold_s: float = Field(gt=0, allow_inf_nan=False)
+
+    @field_validator("last_heartbeat_at")
+    @classmethod
+    def _last_heartbeat_utc(cls, v: AwareDatetime) -> AwareDatetime:
+        if v.utcoffset() != timedelta(0):
+            raise ValueError(
+                f"last_heartbeat_at must be UTC (zero offset); got utcoffset={v.utcoffset()!r}"
+            )
+        return v
 
 
 class SinkDeliveryFailedPayload(BaseModel):

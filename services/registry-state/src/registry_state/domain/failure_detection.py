@@ -426,16 +426,22 @@ class HeartbeatMonitor:
         # heartbeat refresh and on remove_session. Edge-triggers prevent
         # duplicate emission across consecutive polling ticks.
         self._emitted: set[str] = set()
+        # Cache 2 × interval as a float once at construction time (E5).
+        # Avoids repeated multiplication in the overdue hot-path and ensures
+        # the ``timeout_threshold_s`` property and ``overdue_sessions`` always
+        # agree on the threshold value.
+        self._threshold_s: float = float(2 * heartbeat_interval_s)
 
     @property
     def timeout_threshold_s(self) -> float:
         """Convenience: the ``2 × interval`` value used in overdue checks.
 
-        Always returns a ``float`` (multiplication promotes int → float
-        explicitly so payload-side strict-mode validation never receives
-        an ``int``).
+        Returns the cached ``_threshold_s`` value (computed once at
+        construction time) so the property and :meth:`overdue_sessions`
+        always agree. Always a ``float`` so payload-side strict-mode
+        validation never receives an ``int``.
         """
-        return float(2 * self._interval_s)
+        return self._threshold_s
 
     def record_heartbeat(self, session_id: str, *, at: datetime | None = None) -> None:
         """Record a fresh heartbeat for *session_id*.
@@ -487,6 +493,18 @@ class HeartbeatMonitor:
         self._last_seen.pop(session_id, None)
         self._emitted.discard(session_id)
 
+    def __len__(self) -> int:
+        """Return the number of currently-tracked sessions."""
+        return len(self._last_seen)
+
+    def tracked_sessions(self) -> list[str]:
+        """Return a snapshot list of currently-tracked session IDs.
+
+        Order matches insertion order (Python ≥3.7 dict guarantee; we
+        require ≥3.12).
+        """
+        return list(self._last_seen)
+
     def mark_emitted(self, session_id: str) -> None:
         """Record that *session_id* has been notified-on as overdue.
 
@@ -507,10 +525,11 @@ class HeartbeatMonitor:
         :meth:`overdue_sessions_and_mark`) after a successful emission to
         prevent re-notification on the next polling tick.
 
-        Iteration order matches insertion order (Python 3.7+ dict guarantee).
+        Iteration order matches insertion order (guaranteed by Python ≥3.7;
+        we require ≥3.12).
         """
         now = _assert_aware(self._clock.now(), field="clock.now()")
-        threshold = self.timeout_threshold_s
+        threshold = self._threshold_s
         result: list[tuple[str, datetime]] = []
         for session_id, last_at in self._last_seen.items():
             if session_id in self._emitted:
@@ -687,9 +706,39 @@ class SinkFailureTracker:
         self.mark_emitted(sink_name)
         return True
 
-    def get_state(self, sink_name: str) -> SinkFailureState:
-        """Return ``SinkFailureState(count, last_error)`` for *sink_name*."""
-        return self._state.get(sink_name, SinkFailureState(count=0, last_error=None))
+    def remove_sink(self, sink_name: str) -> None:
+        """Stop tracking *sink_name*. No-op if not currently tracked.
+
+        Clears both the failure-state entry and the emit-mark checkpoint
+        so that if the sink is re-added later its streak starts fresh.
+        """
+        self._state.pop(sink_name, None)
+        self._emitted_at_count.pop(sink_name, None)
+
+    def get_state(self, sink_name: str) -> SinkFailureState | None:
+        """Return ``SinkFailureState(count, last_error)`` for *sink_name*, or ``None``.
+
+        Returns ``None`` when *sink_name* has never been recorded (neither
+        a failure nor a success). Use :meth:`is_tracked` for an explicit
+        membership check.
+        """
+        return self._state.get(sink_name)
+
+    def is_tracked(self, sink_name: str) -> bool:
+        """Return ``True`` if *sink_name* has at least one recorded event."""
+        return sink_name in self._state
+
+    def __len__(self) -> int:
+        """Return the number of currently-tracked sinks."""
+        return len(self._state)
+
+    def tracked_sinks(self) -> list[str]:
+        """Return a snapshot list of currently-tracked sink names.
+
+        Order matches insertion order (Python ≥3.7 dict guarantee; we
+        require ≥3.12).
+        """
+        return list(self._state)
 
     def __repr__(self) -> str:
         return f"SinkFailureTracker(sinks={len(self._state)}, threshold={self._threshold})"
