@@ -20,6 +20,14 @@ status in the materializer yet. ``task.summary_emitted`` is the closest
 existing post-execution observability event. Real ``verifying`` lifecycle
 status lands with Epic 5 worker-lifecycle stories — a TODO marker is
 placed below to make the proxy mapping easy to revisit.
+
+Note on durability: ``append_envelope`` does not call ``fsync()`` on the
+written file. This matches ``EventLogWriter``'s default behaviour. For the
+crash-injection harness this is safe because the kill targets the
+``registry-state`` *container*, not the harness process — the harness's
+own ``open(..., "ab")`` writes flush via the kernel's page cache before
+the kill subprocess returns, and the bind-mount makes those bytes
+visible inside the container's view of the same path.
 """
 
 from __future__ import annotations
@@ -38,11 +46,10 @@ from events import (
     EventEnvelope,
     TickingClock,
     new_event_id,
+    new_request_id,
     new_session_id,
-    new_uuid7,
     to_canonical_json,
 )
-from events.clock import Clock
 from pydantic import BaseModel
 from registry_state.domain.event_types import (
     TaskApprovalRequestedPayload,
@@ -56,10 +63,14 @@ from registry_state.domain.event_types import (
 if TYPE_CHECKING:
     # ``tests/crash-injection`` has a hyphen in its directory name so it is
     # NOT a Python package — pytest discovers tests via importlib mode. The
-    # _compose module sits next to this file; the type-only reference uses
-    # the same module-path the test file (``test_restart_recovery.py``)
-    # uses at runtime via direct ``from _compose import CrashHarness``.
-    from _compose import CrashHarness  # pragma: no cover
+    # _crash_compose module sits next to this file; the type-only reference
+    # uses the same module-path the test file (``test_restart_recovery.py``)
+    # uses at runtime via direct ``from _crash_compose import CrashHarness``.
+    from _crash_compose import CrashHarness  # pragma: no cover
+
+    # Clock is type-only here — keeping it inside TYPE_CHECKING avoids a
+    # circular-import risk and keeps the runtime import surface narrow.
+    from events.clock import Clock
 
 
 # Synthesized events are emitted by a deterministic test actor — keeping the
@@ -69,11 +80,17 @@ HARNESS_ACTOR: Actor = Actor(kind="system", id="crash-harness")
 
 
 class Phase(StrEnum):
-    """Lifecycle phases the harness drives a synthesized task through.
+    """Lifecycle phases the crash-injection harness drives.
 
-    Each phase appends one MORE event to the sequence the prior phase
-    produced (additive). See :func:`drive_task_through_phase` for the
-    canonical event sequence per phase.
+    Each phase is an **independent** crash-recovery scenario: a fresh
+    ``task_id`` is synthesized for each phase test, and the JSONL log
+    accumulates 4 separate task lifecycles across the session. The word
+    "additive" in the spec refers to the *event sequence within a single
+    phase* — i.e. EXECUTING includes PLANNING's events plus its own —
+    NOT to one task progressing across multiple phase tests.
+
+    See :func:`drive_task_through_phase` for the canonical per-phase
+    event sequence.
     """
 
     PLANNING = "planning"
@@ -87,8 +104,9 @@ class Phase(StrEnum):
 
 def synthesize_envelope(
     *,
-    type: str,  # noqa: A002 — mirrors EventEnvelope.create's keyword-only "type"
+    event_type: str,
     schema_version: str,
+    task_id: str,
     payload: BaseModel,
     clock: Clock,
     rng: Random,
@@ -102,9 +120,11 @@ def synthesize_envelope(
     :data:`HARNESS_ACTOR`; the request_id is freshly generated per call.
 
     Args:
-        type: Event type string (e.g. ``"task.created"``). Must already
+        event_type: Event type string (e.g. ``"task.created"``). Must already
             be registered with :func:`events.schema_registry.register`.
         schema_version: ``MAJOR.MINOR.PATCH`` semver string.
+        task_id: Owning task id; included as a kwarg for traceability and
+            to gate against accidentally-mismatched payload.task_id values.
         payload: Pydantic payload model matching the registered type.
         clock: Strictly-increasing clock — the materializer's cursor
             advancement requires monotonic ``emitted_at_monotonic_ns``.
@@ -113,16 +133,24 @@ def synthesize_envelope(
         rng: Seeded ``random.Random`` for deterministic UUIDv7s.
         parent_event_id: Optional ``e-<uuidv7>`` parent linkage.
     """
+    # Defensive: the lifecycle event payloads all carry ``task_id``;
+    # surface a wiring bug if a caller threads a mismatched id through.
+    payload_task_id = getattr(payload, "task_id", None)
+    if payload_task_id is not None and payload_task_id != task_id:
+        raise ValueError(
+            f"synthesize_envelope: task_id kwarg {task_id!r} does not match "
+            f"payload.task_id {payload_task_id!r}"
+        )
     return EventEnvelope.create(
         event_id=new_event_id(clock=clock, rng=rng),
         schema_version=schema_version,
-        type=type,
+        type=event_type,
         emitted_at=clock.now(),
         emitted_at_monotonic_ns=clock.monotonic_ns(),
         actor=HARNESS_ACTOR,
         payload=payload,
         parent_event_id=parent_event_id,
-        request_id=new_uuid7(clock=clock, rng=rng),
+        request_id=new_request_id(clock=clock, rng=rng),
     )
 
 
@@ -136,11 +164,10 @@ def append_envelope(
 
     Mirrors :class:`EventLogWriter`'s on-disk format (canonical JSON +
     ``\\n``). No fsync is issued — matches the writer's default behaviour
-    when ``REGISTRY_STATE_LOG_FSYNC`` is not set. The harness can rely on
-    the kernel page cache flushing within the SIGTERM-grace window
-    (Linux: 1s; macOS: SIGKILL goes via the host VM and any unflushed
-    bytes within the harness's own append window are still OK because
-    the harness fsyncs implicitly on file close).
+    when ``REGISTRY_STATE_LOG_FSYNC`` is not set. The harness's writes
+    are not interrupted by the kill (the kill targets the
+    ``registry-state`` container, not the harness process), so kernel
+    page-cache propagation is sufficient.
 
     Args:
         log_dir: The host-side bind-mount path (e.g.
@@ -167,8 +194,10 @@ def append_envelope(
     if isinstance(env.payload, BaseModel):
         payload_dict = env.payload.model_dump(mode="python")
     else:
-        # Already a dict (e.g. _FrozenDict) — use as-is.
-        payload_dict = dict(env.payload)
+        # Already a mapping (e.g. _FrozenDict) — copy via spread so both
+        # plain dicts and frozen mappings are handled without depending
+        # on the constructor accepting a non-Mapping iterable.
+        payload_dict = {**env.payload}
     # Rebuild envelope with a dict payload so to_canonical_json serializes it.
     dict_env = EventEnvelope(
         event_id=env.event_id,
@@ -225,8 +254,9 @@ def drive_task_through_phase(
 
     # ---- PLANNING ----------------------------------------------------
     env = synthesize_envelope(
-        type="task.created",
+        event_type="task.created",
         schema_version="1.0.0",
+        task_id=task_id,
         payload=TaskCreatedPayload(task_id=task_id, title="crash-harness task"),
         clock=clock,
         rng=rng,
@@ -235,8 +265,9 @@ def drive_task_through_phase(
     envelopes.append(env)
 
     env = synthesize_envelope(
-        type="task.planning.started",
+        event_type="task.planning.started",
         schema_version="1.0.0",
+        task_id=task_id,
         payload=TaskPlanningStartedPayload(task_id=task_id),
         clock=clock,
         rng=rng,
@@ -249,8 +280,9 @@ def drive_task_through_phase(
 
     # ---- EXECUTING ---------------------------------------------------
     env = synthesize_envelope(
-        type="task.plan.ready",
+        event_type="task.plan.ready",
         schema_version="1.0.0",
+        task_id=task_id,
         payload=TaskPlanReadyPayload(task_id=task_id, plan_summary="synthesized plan"),
         clock=clock,
         rng=rng,
@@ -260,8 +292,9 @@ def drive_task_through_phase(
 
     session_id = new_session_id(clock=clock, rng=rng)
     env = synthesize_envelope(
-        type="task.execution.started",
+        event_type="task.execution.started",
         schema_version="1.0.0",
+        task_id=task_id,
         payload=TaskExecutionStartedPayload(task_id=task_id, session_id=session_id),
         clock=clock,
         rng=rng,
@@ -274,8 +307,9 @@ def drive_task_through_phase(
 
     # ---- AWAITING_APPROVAL -------------------------------------------
     env = synthesize_envelope(
-        type="task.approval_requested",
+        event_type="task.approval_requested",
         schema_version="1.0.0",
+        task_id=task_id,
         payload=TaskApprovalRequestedPayload(
             task_id=task_id,
             action="merge",
@@ -292,8 +326,9 @@ def drive_task_through_phase(
 
     # ---- VERIFYING (Phase 1 proxy: task.summary_emitted) -------------
     env = synthesize_envelope(
-        type="task.summary_emitted",
+        event_type="task.summary_emitted",
         schema_version="1.0.0",
+        task_id=task_id,
         payload=TaskSummaryEmittedPayload(
             task_id=task_id,
             summary="synthesized summary (Phase 1 verifying-proxy)",
@@ -328,6 +363,12 @@ async def wait_for_materialization(
 
     Raises:
         TimeoutError: If the row never appears within ``timeout_s``.
+
+    Only :class:`aiosqlite.OperationalError` is swallowed during polling
+    (DB file not yet created, file locked, schema not yet applied —
+    transient conditions during start-up). Programming errors,
+    schema-mismatch errors, and unexpected exceptions propagate so they
+    surface as test failures rather than as a misleading TimeoutError.
     """
     deadline = time.monotonic() + timeout_s
     uri = f"file:{db_path}?mode=ro"
@@ -340,7 +381,9 @@ async def wait_for_materialization(
                 await cursor.close()
                 if row is not None:
                     return
-        except Exception as exc:  # noqa: BLE001 — DB may not yet exist
+        except aiosqlite.OperationalError as exc:
+            # DB may not yet exist, or schema not yet created, or file
+            # locked by the writer — all transient during start-up.
             last_err = repr(exc)
         await asyncio.sleep(poll_interval_s)
     raise TimeoutError(
@@ -368,15 +411,24 @@ def make_clock_and_rng(*, seed: int = 42) -> tuple[TickingClock, Random]:
     "task not found" failures for later events in the same phase sequence.
 
     Using ``time.monotonic_ns()`` as the anchor guarantees that events
-    written by any phase are always > any cursor left by prior phases.
-    The +1_000_000 offset ensures the first ``monotonic_ns()`` call returns
-    a value strictly greater than the anchor (not equal to it, in case the
-    DB cursor sits exactly at the anchor due to timing).
+    written by any phase are always > any cursor left by prior phases
+    (which is bounded above by the ``time.monotonic_ns()`` value at the
+    time the prior phase's events were written).
+
+    The ``+1_000_000`` offset is a 1ms breathing-room buffer: it prevents
+    a theoretical collision where ``time.monotonic_ns()`` returns the
+    same nanosecond value as the prior phase's last-applied event cursor.
+    ``TickingClock`` returns ``start_ns`` on the FIRST call (not
+    ``start_ns + tick``), so without the offset the very first synthesized
+    event of this phase would have ``emitted_at_monotonic_ns == anchor``.
+    If the prior phase's last event had the same anchor value, the
+    materializer's ``> cursor_ns`` filter would skip it. The +1ms offset
+    ensures strict ``>``.
     """
     now = datetime.now(UTC)
-    # Anchor at the current host monotonic clock so every phase's events
-    # are guaranteed to have emitted_at_monotonic_ns strictly greater than
-    # the cursor left by the previous phase's materialized events.
+    # Anchor at the current host monotonic clock + 1ms breathing room.
+    # See docstring rationale above for why both the anchor and the offset
+    # are necessary.
     start_ns = time.monotonic_ns() + 1_000_000
     return TickingClock(start_now=now, start_ns=start_ns), Random(seed)
 

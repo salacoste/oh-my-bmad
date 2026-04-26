@@ -153,6 +153,100 @@ so that **NFR-R2 (zero tasks lost) and NFR-R1 (100% restart recoverability) are 
   - [x] `just lint` 8/8 green; `check_event_registry` + `check_single_writer` green.
   - [x] Single atomic commit per AC-18.
 
+### Review Findings
+
+#### Batch 1 — Adversarial code review (Acceptance Auditor + Blind Hunter + Edge Case Hunter round 1)
+
+**CRITICAL**
+
+- [x] **[Review][Patch] C1: AC-7 semantic gap — pre-kill wait defeats reconstruction test** [`test_restart_recovery.py:_run_phase_test`] — **CRITICAL.** Pre-kill `wait_for_materialization` materialized events before kill, making post-restart assertions verify durability not JSONL replay. Fix: dropped pre-kill wait entirely; sequence is now append→kill→restart→wait→assert. Single `asyncio.run` in `_async_phase_body` consolidates all async work.
+- [x] **[Review][Patch] C2: `Base.metadata.create_all` in production startup bypasses Alembic** [`app/main.py:run_subscriber`] — **CRITICAL.** Unconditional `create_all` conflicts with Alembic-as-authoritative-migration-source. Fix: gated behind `REGISTRY_STATE_AUTO_CREATE_SCHEMA=1` env var; set only in `docker-compose.test.yml`. Production schema via Alembic (Story 2.14).
+- [x] **[Review][Patch] C3: Nightly workflow — `just` not installed on runner** [`.github/workflows/nightly.yml`] — **CRITICAL.** Fix: added `extractions/setup-just@v2` step before build step.
+- [x] **[Review][Patch] C4: Empty `ids_jsonl` produces invalid SQL `IN ()`** [`test_restart_recovery.py:_assert_phase_recovery`] — **CRITICAL.** Fix: assert `len(envelopes_typed) >= 1` at function entry with clear message.
+- [x] **[Review][Patch] C5: Per-task duplicate assertion accumulates across phases** [`test_restart_recovery.py:_assert_phase_recovery`] — **CRITICAL.** Global `count_jsonl == count_db` didn't catch per-task duplicates. Fix: added per-task `json_extract(payload_json, '$.task_id')` count alongside global invariant.
+- [x] **[Review][Patch] C6: Test order dependency under pytest-randomly** [`test_restart_recovery.py`] — **CRITICAL.** Fix: added `pytest_collection_modifyitems` hook in `conftest.py` pinning 4 phase tests in declaration order.
+
+**MAJOR**
+
+- [x] **[Review][Patch] M1: `subprocess.run(check=False)` swallows stderr in `__exit__`** [`_crash_compose.py:CrashHarness.__exit__`] — **MAJOR.** Fix: log stderr on non-zero returncode via `logging.warning`; added `--remove-orphans` flag.
+- [x] **[Review][Patch] M2: `_wait_for_healthy` raises but leaves container running** [`_crash_compose.py:CrashHarness.__enter__`] — **MAJOR.** Fix: wrapped `_wait_for_healthy()` in try/except; on TimeoutError runs `compose down -v --remove-orphans` then re-raises.
+- [x] **[Review][Patch] M3: `_container_id()` race after kill** [`_crash_compose.py:_container_id`] — **MAJOR.** Fix: filter `compose ps --status=running -q registry-state` to skip dead containers.
+- [x] **[Review][Patch] M4: `docker inspect` Health.Status empty handling** [`_crash_compose.py:_wait_for_healthy`] — **MAJOR.** Fix: format string captures `State.Status`, `State.Health.Status`, `State.ExitCode`; all reported in timeout message.
+- [x] **[Review][Patch] M5: `/tmp/ready` false positive on `compose start`** [`app/main.py`] — **MAJOR.** Fix: delete `/tmp/ready` in `finally` branch of `run_subscriber` on graceful shutdown. Comment clarified (Em1): `/tmp` is writable container layer, not tmpfs — deletion needed for stop/start reuse cycle.
+- [x] **[Review][Patch] M6: `harness.restart()` uses `up -d` instead of `compose start`** [`_crash_compose.py:CrashHarness.restart`] — **MAJOR.** Fix: use `compose start registry-state` first; fall back to `up -d` only if start fails.
+- [x] **[Review][Patch] M7: Three separate `asyncio.run` per phase test** [`test_restart_recovery.py:_run_phase_test`] — **MAJOR.** Fix: consolidated all async work into single `asyncio.run(_async_phase_body(...))`.
+- [x] **[Review][Patch] M8: `wait_for_materialization` swallows all exceptions** [`_crash_events.py:wait_for_materialization`] — **MAJOR.** Fix: only catch `aiosqlite.OperationalError`; re-raise everything else.
+- [x] **[Review][Patch] M9: Bind-mount path on macOS may not be Docker-shared** [`_crash_compose.py:CrashHarness.__enter__`] — **MAJOR.** Fix: write sentinel file + `compose exec test -f ...`; clear error message on failure.
+- [x] **[Review][Patch] M10: `sys.path.insert` with generic module names pollutes namespace** [`conftest.py`] — **MAJOR.** Fix: renamed `_compose.py` → `_crash_compose.py`, `_events.py` → `_crash_events.py`; updated all imports.
+- [x] **[Review][Patch] M11: Per-test summary `passed: True` hardcoded** [`test_restart_recovery.py:_run_phase_test`] — **MAJOR.** Fix: wrap body in try/except AssertionError; append `passed=False, error_message=str(exc)` before re-raising.
+- [x] **[Review][Patch] M12: Compose project name 8-hex collision at 65k concurrent runs** [`_crash_compose.py:CrashHarness.__init__`] — **MAJOR.** Fix: use `f"omb-crash-{os.getpid()}-{uuid4().hex[:12]}"`.
+- [x] **[Review][Patch] M13: `harness.restart()` return value discarded** [`test_restart_recovery.py:_run_phase_test`] — **MAJOR.** Fix: capture `restart_duration_s` directly from `harness.restart()`.
+- [x] **[Review][Patch] M15: AC-7d for AWAITING_APPROVAL/VERIFYING — `last_event_id` update verification** [`handlers.py`] — **MAJOR.** Verified: `handle_task_approval_requested` (line 260) and `handle_task_summary_emitted` (line 236) both update `last_event_id`. No code change needed; documented in test docstrings.
+- [x] **[Review][Patch] M16: `synthesize_envelope` missing `task_id` param** [`_crash_events.py:synthesize_envelope`] — **MAJOR.** Fix: added `task_id: str` kw-only parameter; runtime assertion guards against payload/kwarg mismatch.
+- [x] **[Review][Patch] M17: AC-17 spec says 7/7, implementation is 8/8** — **MAJOR.** Fix: documented in Spec Amendments section below; 8/8 is correct per AC-15 intent.
+
+**MINOR**
+
+- [x] **[Review][Patch] Mn1: subprocess calls without `text=True`** [`_crash_compose.py`] — Added `text=True` to all `subprocess.run` calls so `.stderr` is `str` not `bytes`.
+- [x] **[Review][Patch] Mn2: Pre-creating `event_log_dir` undocumented** [`_crash_compose.py:CrashHarness.__init__`] — Added docstring explaining the root-ownership avoidance rationale.
+- [x] **[Review][Patch] Mn3: Dead code `_ = datetime.now(UTC)`** [`test_restart_recovery.py:1102,1387`] — Removed dead assignment and unused `datetime` import.
+- [x] **[Review][Patch] Mn4: `type` parameter shadows builtin** [`_crash_events.py:synthesize_envelope`] — Renamed `type` → `event_type`; updated all call sites in `drive_task_through_phase`.
+- [x] **[Review][Patch] Mn5: `dict(env.payload)` for non-BaseModel branch** [`_crash_events.py:append_envelope`] — Changed to `{**env.payload}` for safety with frozen mappings.
+- [x] **[Review][Patch] Mn6: `from events.clock import Clock` not type-only** [`_crash_events.py`] — Moved `Clock` import into `TYPE_CHECKING` block; already had `from events.clock import Clock` there.
+- [x] **[Review][Patch] Mn7: Naive YAML parser** [`conftest.py:_resolve_output_folder`] — Replaced with `yaml.safe_load` when PyYAML available; falls back to line-scan with explanatory comment.
+- [x] **[Review][Patch] Mn8: Filename collision in same UTC second** [`conftest.py`] — Added `os.getpid()` to filename.
+- [x] **[Review][Patch] Mn9: `OMB_PRINT_CRASH_ARTIFACT` env var undocumented** [`conftest.py`] — Added to module docstring.
+- [x] **[Review][Patch] Mn10: Missing `concurrency:` block in nightly** [`nightly.yml`] — Added `concurrency: {group: nightly-crash, cancel-in-progress: false}`.
+- [x] **[Review][Patch] Mn11: `if-no-files-found: warn` permits silent failure** [`nightly.yml`] — Changed to `error`.
+- [x] **[Review][Patch] Mn12: `timeout-minutes: 15` may be tight** [`nightly.yml`] — Bumped to 25.
+- [x] **[Review][Patch] Mn13: Add 10s buffer above healthcheck total** [`_crash_compose.py:CrashHarness.restart`] — Timeout bumped to 70s (60s poll + 10s buffer).
+- [x] **[Review][Patch] Mn14: Add `--strict-markers` to `just test-crash`** [`justfile:test-crash`] — Deferred; `--strict-markers` is already enforced globally via `pyproject.toml`.
+- [x] **[Review][Patch] Mn16: Use `new_request_id` instead of `new_uuid7` for request_id** [`_crash_events.py`] — `new_request_id` exists in `events.__init__`; updated to use it.
+- [x] **[Review][Patch] Mn17: Module docstring "fsync implicitly on close" claim wrong** [`_crash_events.py`] — Corrected to: kill targets the registry-state container, not the harness; writes safe via kernel page cache.
+- [x] **[Review][Patch] Mn18: `parents[2]` comment says "3 parents" but uses index 2** [`conftest.py:898`] — Fixed comment to accurately describe `parents[0]=crash-injection, [1]=tests, [2]=repo root`.
+- [x] **[Review][Patch] Mn19: Add `REGISTRY_STATE_AUTO_CREATE_SCHEMA: "1"` to test compose** [`docker-compose.test.yml`] — Added (pairs with C2 fix).
+- [x] **[Review][Patch] Mn20: Verify `Path` imported in `app/main.py`** — Already imported at line 41; no change needed.
+
+**DEFER/DISMISS**
+
+- [x] **[Review][Defer] BH "time.monotonic_ns determinism gap"** — Known partial-determinism trade-off. Clock anchoring via `time.monotonic_ns() + 1_000_000` is the accepted approach; documented in `make_clock_and_rng` docstring.
+- [x] **[Review][Defer] BH "platform.system() == Darwin Windows assumption"** — Windows containers are out of scope for this project. No action needed.
+- [x] **[Review][Defer] BH "fsync after append_envelope"** — Kill targets container, not harness. Comment in `_crash_events.py` updated to clarify.
+
+---
+
+#### Batch 2 — Edge Case Hunter round 2
+
+**CRITICAL**
+
+- [x] **[Review][Patch] EC1: Linux bind-mount uid mismatch (EACCES)** [`_crash_compose.py` + `docker-compose.test.yml`] — **CRITICAL.** Container runs as uid 10002/gid 10000; host runner is uid 1001 on ubuntu-latest. Fix: pre-create all bind-mount dirs with `chmod(0o777)`; add `user: "${OMB_HARNESS_UID:-10002}:${OMB_HARNESS_GID:-10000}"` in `docker-compose.test.yml`; export `OMB_HARNESS_UID`/`OMB_HARNESS_GID` from `_compose_env()`.
+- [x] **[Review][Patch] EC2: AC-7e cursor-advancement assertion vacuously true** [`test_restart_recovery.py:_assert_phase_recovery`] — **CRITICAL.** With pre-kill wait removed (C1), this becomes meaningful. Added `pre_kill_max_mono_ns` baseline captured before kill; post-restart asserts `post_max > pre_kill_max` (strictly advanced). Comment explains why post-restart-only wait is what makes this non-vacuous.
+
+**MAJOR**
+
+- [x] **[Review][Patch] EM1: Linux kill path is graceful shutdown, not crash** [`_crash_compose.py:kill_with_compose_stop`] — **MAJOR.** `compose stop --timeout 1` sends SIGTERM → subscriber drains in <100ms. Fix: SIGKILL (`kill_hard()`) is now the default on ALL platforms. `kill_graceful()` kept for debugging but not used by default. `KillMethod` renamed to `"hard"|"graceful"` for semantic clarity (Em4).
+- [x] **[Review][Patch] EM2: Nightly path filter omits `Dockerfile.base` and `justfile`** [`nightly.yml`] — **MAJOR.** Fix: added both to push-trigger path filter.
+- [x] **[Review][Patch] EM3: `docker info` 5s timeout too short for cold Docker Desktop** [`conftest.py:skip_if_no_docker`] — **MAJOR.** Fix: bumped to 30s.
+- [x] **[Review][Patch] EM4: Docker-skip leaves summary artifact indistinguishable from clean run** [`conftest.py:crash_summary_collector`] — **MAJOR.** Fix: added `"status": "skipped"|"passed"|"failed"` field to artifact payload.
+- [x] **[Review][Patch] EM5: `_skip_if_no_docker` leading underscore makes it non-standard** [`conftest.py`] — **MAJOR.** Fix: renamed to `skip_if_no_docker` with `autouse=True`; `crash_harness` fixture still explicitly depends on it to ensure ordering.
+
+**MINOR**
+
+- [x] **[Review][Patch] Em1: `/tmp/ready` comment wrong about tmpfs** [`app/main.py`] — Comment corrected: `/tmp` is the writable container layer, not tmpfs. Deletion on graceful shutdown prevents stale healthcheck on `compose start` reuse cycles.
+- [x] **[Review][Patch] Em2: `Phase` docstring claims "additive sequences" for one task** [`_crash_events.py:Phase`] — Fixed: each phase synthesizes an **independent** task; "additive" refers to event sequences within a single phase, not across phase tests.
+- [x] **[Review][Patch] Em3: `_container_id()` assumes single replica** [`_crash_compose.py`] — Added assertion: raises `RuntimeError` if `len(lines) > 1`.
+- [x] **[Review][Patch] Em4: `KillMethod` Literal semantically inconsistent** [`_crash_compose.py`] — Renamed `"stop"|"sigkill"` → `"hard"|"graceful"` (applied as part of EM1).
+- [x] **[Review][Patch] Em5: `make_clock_and_rng` docstring wrong about `+1_000_000` rationale** [`_crash_events.py`] — Fixed: `TickingClock` returns `start_ns` on first call (not `start_ns + tick`); offset prevents collision with prior cursor; correct rationale documented.
+- [x] **[Review][Patch] Em7: No assertion that `mode=ro` URI actually opens DB read-only** [`test_restart_recovery.py`] — Added `_assert_ro_enforced()` that attempts INSERT and asserts `OperationalError("readonly")`.
+
+**DEFER**
+
+- [x] **[Review][Defer] Em6: No assertion that subscriber emitted "startup replay" log line** — Would require log-capture wiring not present in Phase 1. Deferred to Story 2.17.
+- [x] **[Review][Defer] Snapshot replay path not exercised** — `snapshot_interval=1000`, harness emits ~17 events per session. Story 2.6 unit tests cover snapshot-restore. Deferred.
+- [x] **[Review][Defer] Idempotency cache not exercised** — Story 2.13 territory.
+- [x] **[Review][Defer] WAL leftover verification post-restart** — SQLite WAL auto-checkpointed on connection close; not a correctness risk for aiosqlite. Deferred.
+- [x] **[Review][Defer] `_wait_for_healthy` retry on cold image-pull** — 60s budget is sufficient for warm runner; cold pull covered by `build-base` + `build registry-state` steps in nightly before `test-crash` runs.
+
 ## Dev Notes
 
 ### Architecture context
@@ -310,8 +404,19 @@ Claude Sonnet 4.6 (claude-sonnet-4-6) — executor subagent
 **Deleted (1):**
 - `tests/crash-injection/test_placeholder.py`
 
+### Spec Amendments (from code review)
+
+- **C1 — Drop pre-kill wait**: The original implementation called `wait_for_materialization` BEFORE the kill, materializing events prior to the crash. This defeats AC-7's purpose (verifying JSONL→SQLite reconstruction). Amended: the post-restart wait is the ONLY `wait_for_materialization` call per phase test. The sequence is: append events → SIGKILL → restart → wait (post-restart) → assert. This is the only path that exercises NFR-R1 / NFR-R2.
+- **C2 — `REGISTRY_STATE_AUTO_CREATE_SCHEMA` env var**: `Base.metadata.create_all` is now gated behind `REGISTRY_STATE_AUTO_CREATE_SCHEMA=1`. This var is set ONLY in `tests/crash-injection/docker-compose.test.yml`. Production gets schema via Alembic (Story 2.14). This is a test-only bypass.
+- **EM1 — SIGKILL on all platforms**: Changed default kill from `compose stop --timeout 1` (Linux) to `docker compose kill --signal SIGKILL` (both platforms). `compose stop` sends SIGTERM which the subscriber handles gracefully (<100ms drain). SIGKILL is the only true crash-recovery test per NFR-R1. `kill_with_compose_stop` renamed to `kill_graceful()`; `kill_with_signal_kill` renamed to `kill_hard()`. `KillMethod` Literal values changed from `"stop"|"sigkill"` to `"hard"|"graceful"`.
+- **M10 / File renames**: `_compose.py` → `_crash_compose.py`, `_events.py` → `_crash_events.py`. The original generic names could collide with other test trees' `sys.path` entries. All imports updated.
+- **M16 — `synthesize_envelope(task_id=...)` param restored**: `task_id: str` added as a kw-only parameter per AC-3. Also verifies `payload.task_id == task_id` at runtime to catch wiring bugs.
+- **Mn16 — `new_request_id` over `new_uuid7`**: Using the semantically correct `new_request_id()` from `events.__init__` instead of raw `new_uuid7()` for the `request_id` field.
+- **AC-17 7/7 → 8/8 acknowledgement**: `just lint` runs 8 steps (added second mypy invocation for `tests/crash-injection/` with `--explicit-package-bases`). 8/8 is correct per AC-15's intent. The story's AC-17 text saying "7/7" was written before AC-15 added the crash-injection mypy step.
+
 ### Change Log
 
 | Date | Version | Description |
 |---|---|---|
 | 2026-04-26 | 1.0 | Story 2.11 implemented — synthetic crash-injection harness, 4 phase tests, CI nightly job |
+| 2026-04-26 | 1.1 | Code-review fixes: 6 CRITICAL (C1-C6), 16 MAJOR (M1-M17 ex M14), 20 MINOR (Mn1-Mn20), 2 CRITICAL round-2 (EC1-EC2), 5 MAJOR round-2 (EM1-EM5), 6 MINOR round-2 (Em1-Em5, Em7); deferred: Em6, snapshot, idempotency-cache, WAL. Final: just test 476+5, just lint 8/8, just check-gates-self-test 3/3. Files renamed: _compose→_crash_compose, _events→_crash_events. |

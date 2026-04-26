@@ -14,6 +14,8 @@ on:
   push:
     branches: [main]
     paths:
+      - "Dockerfile.base"
+      - "justfile"
       - "tests/crash-injection/**"
       - "services/registry-state/**"
       - "packages/events/**"
@@ -24,18 +26,30 @@ on:
 permissions:
   contents: read
 
-# Allow one nightly run at a time; an in-flight run is NOT cancelled (nightly
-# has no concurrency group — let it finish rather than produce a half-result).
+# Concurrency: serialize nightly runs but do NOT cancel in-flight runs —
+# letting a slow run finish is better than producing a half-result.
+concurrency:
+  group: nightly-crash
+  cancel-in-progress: false
 
 jobs:
   crash-injection:
     name: Crash-injection harness (NFR-R1 / NFR-R2)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Bumped from 15 to 25 minutes: the base image build on a cold runner
+    # plus 4 phase tests with 60s healthcheck budgets per restart leaves
+    # little headroom at 15. 25 minutes preserves nightly's "fail fast on
+    # genuine hangs" intent.
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install just
+        # ``just test-crash`` and ``just build-base`` require the just CLI;
+        # ubuntu-latest does not ship with it.
+        uses: extractions/setup-just@v2
 
       - name: Install uv + Python 3.12
         uses: astral-sh/setup-uv@v3
@@ -62,5 +76,8 @@ jobs:
         with:
           name: crash-injection-summary-${{ github.run_id }}
           path: _bmad-output/test-artifacts/crash-injection-summary-*.json
-          if-no-files-found: warn
+          # Fail the upload step (not the whole workflow because of `if: always()`)
+          # when no artifact was produced — silent omission would mask a
+          # broken summary-emit path.
+          if-no-files-found: error
           retention-days: 30

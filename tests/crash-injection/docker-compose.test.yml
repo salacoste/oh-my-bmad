@@ -10,7 +10,7 @@
 # `docker compose -f tests/crash-injection/docker-compose.test.yml ...`
 # directly so only the services declared here are part of the stack.
 #
-# OMB_HARNESS_DATA_DIR is set by tests/crash-injection/_compose.py before
+# OMB_HARNESS_DATA_DIR is set by tests/crash-injection/_crash_compose.py before
 # invoking compose; it points at the harness's pytest tmp_path / "data".
 # The bind-mount gives the host-side test direct access to the JSONL log
 # (event_log_dir()) and the materialized SQLite DB (db_path()) without
@@ -26,6 +26,20 @@ services:
       ENV: test
       REGISTRY_STATE_LOG_DIR: /var/lib/oh-my-bmad/registry/events
       REGISTRY_STATE_DB_URL: sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3
+      # Test-only schema bootstrap. Production gets the schema from Alembic
+      # (Story 2.14's migrator runs ``alembic upgrade head``). The crash
+      # harness does not run Alembic; this env-var gates a Base.metadata.create_all
+      # call inside ``run_subscriber`` so the events/tasks tables exist
+      # on first boot. NEVER set this in production compose.
+      REGISTRY_STATE_AUTO_CREATE_SCHEMA: "1"
+    # EC1: run as the container's expected uid:gid so Linux raw-UID bind-mount
+    # writes succeed. On macOS Docker Desktop VirtioFS translates UIDs
+    # transparently, but on Linux the host directory must be writable by
+    # this uid (10002) or gid (10000). The harness pre-creates the bind-mount
+    # dirs with mode 0o777 on the host side; this user: directive ensures the
+    # container also has the correct identity for any directory it creates at
+    # runtime. OMB_HARNESS_UID / OMB_HARNESS_GID are exported by _compose_env().
+    user: "${OMB_HARNESS_UID:-10002}:${OMB_HARNESS_GID:-10000}"
     init: true
     # No restart policy: the harness controls lifecycle deliberately
     # (kill → restart) and a `restart: unless-stopped` would race the test.

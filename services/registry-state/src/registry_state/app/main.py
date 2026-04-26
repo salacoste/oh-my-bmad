@@ -175,15 +175,19 @@ async def run_subscriber(
     stop = stop_event if stop_event is not None else asyncio.Event()
     engine = create_engine(db_url)
     try:
-        # Story 2.11: ensure schema exists before the subscriber tries to use
-        # it. ``create_all`` is idempotent (IF NOT EXISTS) so calling it on an
-        # already-migrated DB is safe. In production the Alembic migrations own
-        # the schema; this call handles fresh containers where no prior
-        # ``alembic upgrade head`` was run (e.g. first boot in docker compose).
-        # Tests that inject an in-memory engine already call create_all in their
-        # own fixtures, so this is a no-op for them.
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+        # Story 2.11: optional schema bootstrap, gated behind an env var.
+        # In production the Alembic migrations are the authoritative source
+        # of schema (Story 2.14's migrator runs ``alembic upgrade head``).
+        # The crash-injection harness does not run Alembic; setting
+        # ``REGISTRY_STATE_AUTO_CREATE_SCHEMA=1`` (only in
+        # ``tests/crash-injection/docker-compose.test.yml``) opts the test
+        # container into a one-shot ``Base.metadata.create_all`` so the
+        # events/tasks tables exist on first boot. Tests that inject an
+        # in-memory engine already call create_all in their own fixtures
+        # and do not need this path.
+        if os.environ.get("REGISTRY_STATE_AUTO_CREATE_SCHEMA") == "1":
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
 
         # Startup contract: trim trailing partial lines across all *.jsonl.
         # Use the free function so we don't construct a full writer just to
@@ -281,6 +285,28 @@ async def run_subscriber(
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=poll_interval_s)
     finally:
+        # Story 2.11: delete the /tmp/ready healthcheck signal on graceful
+        # shutdown. Clarification on why this is needed:
+        #   - ``docker compose stop`` + ``docker compose start`` REUSES the
+        #     same container (does NOT recreate it), so /tmp persists across
+        #     stop/start cycles (it is part of the writable container layer,
+        #     not a tmpfs mount).
+        #   - A SIGKILL-killed container that is then started via
+        #     ``compose start`` also reuses the same layer, so a stale
+        #     /tmp/ready from before the kill would make the healthcheck
+        #     report "healthy" before the subscriber completes startup-replay.
+        #   - Deleting /tmp/ready here on graceful shutdown ensures that any
+        #     subsequent start (stop→start or kill→start) boots into
+        #     health-status=starting until the subscriber re-establishes
+        #     readiness.
+        #   - Note: ``compose down`` + ``compose up`` RECREATES the container
+        #     (fresh writable layer) so /tmp/ready is always absent on first
+        #     boot. The delete matters only for the stop/start cycle.
+        # Best-effort: log and continue if the delete fails.
+        try:
+            Path("/tmp/ready").unlink(missing_ok=True)  # noqa: S108 — healthcheck signal, not data store
+        except OSError as exc:
+            log.warning("failed to delete /tmp/ready on shutdown: %s", exc)
         await engine.dispose()
 
 
