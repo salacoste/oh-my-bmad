@@ -1,6 +1,6 @@
 # Story 2.12: Write-interrupt harness + atomic-edit verification
 
-Status: review
+Status: done
 
 ## Story
 
