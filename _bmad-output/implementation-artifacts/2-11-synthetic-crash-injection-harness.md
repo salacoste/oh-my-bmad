@@ -1,6 +1,6 @@
 # Story 2.11: Synthetic crash-injection harness
 
-Status: review
+Status: done
 
 ## Story
 
