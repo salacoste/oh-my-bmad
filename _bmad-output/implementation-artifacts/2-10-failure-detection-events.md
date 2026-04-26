@@ -475,6 +475,22 @@ The post-1.0 review pass introduced the following deviations from the original A
 8. **`SinkFailureState` frozen dataclass** replaces the heterogeneous `tuple[int, str | None]` from the original spec. `SinkFailureTracker.get_state` returns the dataclass; the field names (`count`, `last_error`) are stable.
 9. **`record_success` preserves `last_error`** (counter resets to 0). The operational signal — "what was the failure cause when the streak ended?" — is more valuable than the cleared state.
 
+#### Round 2 (Edge Case Hunter)
+
+Applied as a second fix pass (commit `6fd4d3b`) targeting 11 edge-case findings.
+
+10. **`SinkFailureTracker.remove_sink(sink_name)`** added (E1 CRITICAL). Pops from both `_state` and `_emitted_at_count`; no-op for unknown sinks. Without this, removed-sink entries leaked indefinitely.
+11. **JSONL round-trip equality** (E2 MAJOR). Four tests — one per `emit_*` function — verify `to_canonical_json(recovered[0]) == to_canonical_json(emitted_env)`. Uses canonical-JSON comparison because `read_log_lines` returns raw-dict payloads (untyped after deserialization).
+12. **Serial-write ordering** (E3 MAJOR). `test_two_emits_same_writer_persist_in_order` asserts two envelopes appended to the same writer appear in emission order with distinct `event_id`s.
+13. **UTC-strict `@field_validator` on `last_heartbeat_at`** (E4 MAJOR). `SessionHeartbeatTimeoutPayload._last_heartbeat_utc` rejects tz-aware datetimes whose `utcoffset() != timedelta(0)` (e.g. `America/New_York` offset). Requires `from datetime import timedelta` at runtime (restored after it was dropped in round 1).
+14. **`HeartbeatMonitor._threshold_s` cache** (E5 MAJOR). `float(2 * heartbeat_interval_s)` computed once in `__init__` and stored as `_threshold_s`; `timeout_threshold_s` property and `overdue_sessions` both reference the cache so they always agree.
+15. **Introspection methods** (E6 MINOR). `HeartbeatMonitor.__len__()` + `tracked_sessions() -> list[str]`; `SinkFailureTracker.__len__()` + `tracked_sinks() -> list[str]`. Allows callers to inspect tracking state without accessing private dicts.
+16. **`get_state` returns `None` for unknown sinks** (E7 MINOR). `SinkFailureTracker.get_state()` now returns `SinkFailureState | None` (previously returned a default `SinkFailureState(count=0, last_error=None)` for untracked sinks). Added `is_tracked(sink_name) -> bool`. Existing callers on tracked sinks are unaffected; tests updated with `assert state is not None` guards for mypy.
+17. **UUIDv7 regex on `request_id`** (E8 MINOR). `test_emit_request_id_is_uuidv7_shaped` asserts auto-generated `request_id` matches `^[0-9a-f]{8}-…-7…-[89ab]…$`.
+18. **Test-module docstring** updated to reflect round-2 test count (≥80 tests) and enumerate new coverage areas (E9 MINOR).
+19. **`overdue_sessions` dict-order comment** updated from "(Python 3.7+ dict guarantee)" to "(guaranteed by Python ≥3.7; we require ≥3.12)" (E10 MINOR).
+20. **Autouse fixture NOTE comment** added pointing to `test_handlers.py` and suggesting session-scoped conftest as future cleanup (E11 MINOR).
+
 ### References
 
 - `epics.md` Story 2.10 (lines 847–865) — full BDD acceptance criteria.
@@ -525,4 +541,5 @@ Claude Opus 4.7 (executor subagent)
 | Date       | Version | Description                                                                                                                          | Author              |
 |------------|---------|--------------------------------------------------------------------------------------------------------------------------------------|---------------------|
 | 2026-04-26 | 1.0     | Story 2.10 implemented: 4 failure-detection event types + emission primitives + HeartbeatMonitor + SinkFailureTracker. Final test count 418 passed / 6 skipped (+21 new). mypy strict on 64 source files. Atomic commit `0c3e841`. | executor (Opus 4.7) |
-| 2026-04-26 | 1.1     | Code review — 43 adversarial findings (18 MAJOR, 25 MINOR) all addressed; 0 CRITICAL. New emit-fn params (`request_id`, `parent_event_id`, `actor_kind`); edge-triggered trackers with `*_and_mark` helpers; payload validators (`exit_code != 0`, `AwareDatetime`, ID patterns, length caps); `_redact_last_error` defense-in-depth; `SinkFailureState` frozen dataclass; `record_success` preserves `last_error`; structured logging; `__repr__`. Final test count 463 passed / 6 skipped (+45 new vs v1.0). Mypy strict on 64 source files. Fix commit: `<pending>`. | executor (Opus 4.7) |
+| 2026-04-26 | 1.1     | Code review — 43 adversarial findings (18 MAJOR, 25 MINOR) all addressed; 0 CRITICAL. New emit-fn params (`request_id`, `parent_event_id`, `actor_kind`); edge-triggered trackers with `*_and_mark` helpers; payload validators (`exit_code != 0`, `AwareDatetime`, ID patterns, length caps); `_redact_last_error` defense-in-depth; `SinkFailureState` frozen dataclass; `record_success` preserves `last_error`; structured logging; `__repr__`. Final test count 463 passed / 6 skipped (+45 new vs v1.0). Mypy strict on 64 source files. Fix commit: `9a8f741`. | executor (Opus 4.7) |
+| 2026-04-26 | 1.2     | Edge-case findings (11 items: 1 CRITICAL, 4 MAJOR, 6 MINOR) — `remove_sink()` method; 4 JSONL round-trip equality tests + serial-write order test; UTC-strict `@field_validator` on `last_heartbeat_at`; `_threshold_s` cache in `HeartbeatMonitor`; introspection methods (`__len__`, `tracked_sessions`, `tracked_sinks`); `get_state` → `SinkFailureState | None`; `is_tracked()`; UUIDv7 regex on `request_id`; docstring/comment polish. Final test count 476 passed / 6 skipped (+13 new vs v1.1). Mypy strict on 64 source files. Fix commit: `6fd4d3b`. | executor (Sonnet 4.6) |
