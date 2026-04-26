@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: 2026-04-26T09:00:00Z
+# last_updated: 2026-04-26T13:00:00Z
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-04-26T09:00:00Z
+last_updated: 2026-04-26T13:00:00Z
 project: oh-my-bmad
 project_key: NOKEY
 tracking_system: file-system
@@ -72,7 +72,7 @@ development_status:
   2-7-idempotency-cache: done
   2-8-clawhip-bridge-mcp-server: done
   2-9-registry-api-http-skeleton: done
-  2-10-failure-detection-events: review
+  2-10-failure-detection-events: done
   2-11-synthetic-crash-injection-harness: backlog
   2-12-write-interrupt-harness: backlog
   2-13-idempotency-100x-replay-test: backlog

@@ -1,6 +1,6 @@
 # Story 2.10: Failure-detection typed events
 
-Status: review
+Status: done
 
 ## Story
 
