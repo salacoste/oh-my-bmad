@@ -392,6 +392,82 @@ class TestExtensionsField:
             env.extensions = {"k": "changed"}
 
 
+class TestExtensionsImmutable:
+    """Story 2.14 code-review fix M1 / M10 — ``extensions`` deep-frozen.
+
+    Pydantic's ``frozen=True`` blocks ``env.extensions = {...}`` (covered by
+    :class:`TestExtensionsField` above) but does NOT block nested mutation
+    (``env.extensions["k"] = v``). The ``_freeze_and_validate_extensions``
+    validator wraps the dict in :class:`_FrozenDict` so all dict-mutation
+    paths raise ``TypeError``. These tests mirror :class:`TestPayloadImmutable`.
+    """
+
+    def test_extensions_dict_setitem_rejected(self) -> None:
+        env = _make_envelope(extensions={"k": "v"})
+        with pytest.raises(TypeError):
+            env.extensions["k"] = "changed"
+
+    def test_extensions_dict_new_key_rejected(self) -> None:
+        env = _make_envelope(extensions={"k": "v"})
+        with pytest.raises(TypeError):
+            env.extensions["new"] = "injected"
+
+    def test_extensions_dict_delete_rejected(self) -> None:
+        env = _make_envelope(extensions={"k": "v"})
+        with pytest.raises(TypeError):
+            del env.extensions["k"]
+
+    def test_extensions_dict_update_rejected(self) -> None:
+        env = _make_envelope(extensions={"k": "v"})
+        with pytest.raises(TypeError):
+            env.extensions.update({"k": "x"})
+
+    def test_extensions_dict_clear_rejected(self) -> None:
+        env = _make_envelope(extensions={"k": "v"})
+        with pytest.raises(TypeError):
+            env.extensions.clear()
+
+    def test_extensions_nested_dict_also_frozen(self) -> None:
+        env = _make_envelope(extensions={"outer": {"inner": 1}})
+        nested = cast(dict[str, Any], env.extensions["outer"])
+        with pytest.raises(TypeError):
+            nested["inner"] = 99
+
+
+class TestExtensionsRejectsNonJsonSafeValues:
+    """Story 2.14 code-review fix M7 — non-JSON-safe values raise at construction.
+
+    ``dict[str, Any]`` would otherwise silently accept ``datetime``, ``set``,
+    ``bytes``, ``NaN``, ``Infinity``, ``UUID``, etc., which crash later at
+    canonical-JSON serialization. The ``_assert_json_safe`` validator
+    rejects them eagerly so the error fires at the offending caller.
+    """
+
+    def test_nan_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="NaN/Infinity"):
+            _make_envelope(extensions={"k": float("nan")})
+
+    def test_infinity_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="NaN/Infinity"):
+            _make_envelope(extensions={"k": float("inf")})
+
+    def test_datetime_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="not JSON-safe"):
+            _make_envelope(extensions={"k": datetime(2026, 4, 27, tzinfo=UTC)})
+
+    def test_bytes_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="not JSON-safe"):
+            _make_envelope(extensions={"k": b"bytes"})
+
+    def test_set_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="not JSON-safe"):
+            _make_envelope(extensions={"k": {1, 2, 3}})
+
+    def test_nested_non_json_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="not JSON-safe"):
+            _make_envelope(extensions={"outer": {"inner": b"bytes"}})
+
+
 class TestGeneratorIntegration:
     """AC-7 / Story 2.2: generators produce IDs that Story 2.1 validators accept."""
 

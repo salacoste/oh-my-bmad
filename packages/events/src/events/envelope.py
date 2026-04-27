@@ -57,6 +57,48 @@ class _FrozenDict(dict[str, Any]):
         raise TypeError("EventEnvelope.payload is frozen; dict.setdefault rejected")
 
 
+def _assert_json_safe(value: Any, *, path: str) -> None:
+    """Recursively assert *value* is JSON-serializable.
+
+    Rejects ``datetime``, ``set``, ``bytes``, ``NaN``/``Infinity``, ``UUID``,
+    and any other non-JSON leaf types.
+
+    Story 2.14 code-review fix M7. Pydantic accepts ``dict[str, Any]`` for any
+    Python object, but the canonical-JSON encoder later crashes on non-JSON
+    values. Reject at construction time so the error fires at the caller.
+
+    Allowed leaf types: ``str``, ``bool``, ``int``, ``float`` (rejecting
+    ``NaN``/``Inf``), ``None``. Allowed containers: ``dict[str, ...]``,
+    ``list[...]`` (and ``tuple[...]`` — which canonical-JSON treats as list).
+    Anything else raises :class:`ValueError` with the field path.
+    """
+    import math
+
+    if value is None or isinstance(value, (str, bool)):
+        return
+    if isinstance(value, int):
+        # Note: ``bool`` is a subclass of ``int`` — handled above.
+        return
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            raise ValueError(f"{path}: NaN/Infinity is not JSON-safe ({value!r})")
+        return
+    if isinstance(value, dict):
+        for k, v in value.items():
+            if not isinstance(k, str):
+                raise ValueError(f"{path}: dict keys must be str, got {type(k).__name__}")
+            _assert_json_safe(v, path=f"{path}.{k}")
+        return
+    if isinstance(value, (list, tuple)):
+        for i, item in enumerate(value):
+            _assert_json_safe(item, path=f"{path}[{i}]")
+        return
+    raise ValueError(
+        f"{path}: value of type {type(value).__name__!r} is not JSON-safe "
+        f"(allowed: str/int/float/bool/None/dict/list)"
+    )
+
+
 def _deep_freeze_mapping(d: Mapping[str, Any]) -> _FrozenDict:
     """Return a ``_FrozenDict`` view with nested dicts/lists recursively frozen.
 
@@ -126,14 +168,30 @@ class EventEnvelope(BaseModel):
     parent_event_id: str | None = None
     trace_id: str | None = None
     request_id: str
-    extensions: dict[str, object] = Field(default_factory=dict)
+    extensions: dict[str, Any] = Field(default_factory=dict)
     """Reserved for forward-compatible per-event metadata (e.g., ``trace_id``
     when distributed tracing lands in Phase 2). Schema-version 1.0.1+; ignored
     by 1.0.0 consumers per NFR-M3 additive-only rule. v1.0.0 envelopes that
     omit the field receive the default ``{}``; v1.0.1 envelopes round-trip
     the explicit value unchanged. The model retains
     ``ConfigDict(extra="forbid")`` — ``extensions`` is now an EXPECTED field,
-    not a silently ignored extra (Story 2.14 / FR22 / NFR-M3)."""
+    not a silently ignored extra (Story 2.14 / FR22 / NFR-M3).
+
+    Story 2.14 code-review fix M1: ``extensions`` is deep-frozen by the
+    ``_freeze_extensions_dict`` validator below. Pydantic's
+    ``frozen=True`` blocks attribute rebind (``env.extensions = ...``)
+    but NOT nested mutation (``env.extensions["k"] = v``); the validator
+    wraps the dict in :class:`_FrozenDict` so all mutation paths raise
+    ``TypeError``.
+
+    Code-review fix M7: the type annotation is intentionally
+    ``dict[str, Any]`` — JSON-serializability is enforced by the
+    ``_validate_extensions_json_safe`` validator (which rejects
+    ``datetime``, ``set``, ``bytes``, ``NaN``, etc. at construction
+    time). A stricter recursive ``JsonValue`` Pydantic alias was
+    considered but Pydantic v2's recursive-type schema generation
+    materially slows envelope construction; the model_validator path
+    is both faster and gives clearer error messages."""
 
     @field_validator("event_id")
     @classmethod
@@ -211,6 +269,28 @@ class EventEnvelope(BaseModel):
             return _deep_freeze_mapping(v)
         return v
 
+    @field_validator("extensions", mode="after")
+    @classmethod
+    def _freeze_and_validate_extensions(cls, v: dict[str, Any]) -> dict[str, Any]:
+        """Validate JSON-safety + deep-freeze the ``extensions`` dict.
+
+        Story 2.14 code-review fixes M1 + M7:
+
+        * **M1** — ``frozen=True`` blocks attribute rebind but not nested
+          mutation. Wrap the dict in :class:`_FrozenDict` and recursively
+          freeze nested dicts/lists. Mirrors ``_freeze_payload_dict``.
+        * **M7** — ``dict[str, Any]`` would otherwise silently accept
+          non-JSON values (``datetime``, ``set``, ``bytes``, ``NaN``,
+          ``Infinity``, ``UUID``, etc.) which crash later at canonical-JSON
+          serialization. Validate JSON-safety eagerly so the
+          construct-time error fires at the offending caller, not at the
+          serializer half a stack-frame away.
+        """
+        _assert_json_safe(v, path="extensions")
+        if not isinstance(v, _FrozenDict):
+            return _deep_freeze_mapping(v)
+        return v
+
     @classmethod
     def create(
         cls,
@@ -225,7 +305,7 @@ class EventEnvelope(BaseModel):
         parent_event_id: str | None = None,
         trace_id: str | None = None,
         request_id: str,
-        extensions: dict[str, object] | None = None,
+        extensions: dict[str, Any] | None = None,
     ) -> EventEnvelope:
         """Factory that enforces schema-registry membership.
 
