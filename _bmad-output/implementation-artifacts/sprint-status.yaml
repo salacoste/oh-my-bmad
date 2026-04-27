@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: 2026-04-27T22:18:44Z
+# last_updated: 2026-04-27T22:27:31Z
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-04-27T22:18:44Z
+last_updated: 2026-04-27T22:27:31Z
 project: oh-my-bmad
 project_key: NOKEY
 tracking_system: file-system
@@ -80,7 +80,7 @@ development_status:
   2-15-s3-separability-orchestrator-swap: done
   2-16-secret-accessed-audit-events: done
   2-17-log-capture-harness: done
-  epic-2-retrospective: optional
+  epic-2-retrospective: done
 
   # =========================================================================
   # Epic 3: Telegram Control Plane (20 stories)
