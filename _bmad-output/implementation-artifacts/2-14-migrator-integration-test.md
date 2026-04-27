@@ -1,6 +1,6 @@
 # Story 2.14: Migrator integration test (v1.0.0 → v1.0.1 additive)
 
-Status: review
+Status: done
 
 ## Story
 
