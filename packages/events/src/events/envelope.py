@@ -126,6 +126,14 @@ class EventEnvelope(BaseModel):
     parent_event_id: str | None = None
     trace_id: str | None = None
     request_id: str
+    extensions: dict[str, object] = Field(default_factory=dict)
+    """Reserved for forward-compatible per-event metadata (e.g., ``trace_id``
+    when distributed tracing lands in Phase 2). Schema-version 1.0.1+; ignored
+    by 1.0.0 consumers per NFR-M3 additive-only rule. v1.0.0 envelopes that
+    omit the field receive the default ``{}``; v1.0.1 envelopes round-trip
+    the explicit value unchanged. The model retains
+    ``ConfigDict(extra="forbid")`` — ``extensions`` is now an EXPECTED field,
+    not a silently ignored extra (Story 2.14 / FR22 / NFR-M3)."""
 
     @field_validator("event_id")
     @classmethod
@@ -217,12 +225,17 @@ class EventEnvelope(BaseModel):
         parent_event_id: str | None = None,
         trace_id: str | None = None,
         request_id: str,
+        extensions: dict[str, object] | None = None,
     ) -> EventEnvelope:
         """Factory that enforces schema-registry membership.
 
         Raises ``EventSchemaUnknown`` if (type, schema_version) isn't
         registered. The payload dict is validated against the registered
         payload model when the caller passes a plain dict.
+
+        ``extensions`` defaults to ``{}`` (Story 2.14 / NFR-M3). Callers on
+        v1.0.0 omit the kwarg; callers on v1.0.1+ pass the forward-compatible
+        per-event metadata dict.
         """
         key = (type, schema_version)
         if key not in schema_registry.REGISTRY:
@@ -248,6 +261,7 @@ class EventEnvelope(BaseModel):
             parent_event_id=parent_event_id,
             trace_id=trace_id,
             request_id=request_id,
+            extensions=extensions if extensions is not None else {},
         )
 
 

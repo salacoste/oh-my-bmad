@@ -18,6 +18,8 @@ on:
       - "justfile"
       - "tests/crash-injection/**"
       - "tests/idempotency/**"
+      - "tests/migrator/**"
+      - "scripts/migrator/**"
       - "services/registry-state/**"
       - "services/registry-api/**"
       - "packages/events/**"
@@ -127,5 +129,50 @@ jobs:
           path: _bmad-output/test-artifacts/idempotency-replay-*.xml
           # `warn` (not `error`): not all runs produce flakiness data, but
           # CI failures must surface a junitxml under the artifact name.
+          if-no-files-found: warn
+          retention-days: 30
+
+  migrator-integration:
+    name: Migrator integration (FR22 / NFR-M3)
+    # Story 2.14 — verifies the v1.0.0 → v1.0.1 schema migrator over a
+    # 100-event fixture: shape, envelope round-trip, materialized-state
+    # equivalence between archive and migrated log, and idempotent rerun.
+    # Runs the in-process suite (no Docker required — pure pytest invoking
+    # ``migrator.cli.main`` against a tmp_path-staged fixture). The Docker
+    # smoke test for the compose plumbing is provided separately by the
+    # ``just migrator-test-additive`` recipe (Story 1.3); a duplicate
+    # Docker-based test in this nightly was deferred per Task 5.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Install uv + Python 3.12
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Sync workspace (incl. dev deps)
+        run: uv sync --frozen --dev
+
+      - name: Run migrator integration tests
+        # Emit junitxml so flakiness signal survives beyond pass/fail.
+        # The just recipe accepts trailing pytest args via *ARGS.
+        run: |
+          mkdir -p _bmad-output/test-artifacts
+          just test-migrator --junitxml=_bmad-output/test-artifacts/migrator-integration-${{ github.run_id }}.xml
+
+      - name: Upload migrator integration artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migrator-integration-${{ github.run_id }}
+          path: _bmad-output/test-artifacts/migrator-integration-*.xml
           if-no-files-found: warn
           retention-days: 30

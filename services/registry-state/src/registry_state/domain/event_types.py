@@ -262,21 +262,42 @@ class TaskStopRequestedPayload(BaseModel):
 # ---------------------------------------------------------------------------
 
 register("task.created", "1.0.0", TaskCreatedPayload)
+register("task.created", "1.0.1", TaskCreatedPayload)
 register("task.planning.started", "1.0.0", TaskPlanningStartedPayload)
+register("task.planning.started", "1.0.1", TaskPlanningStartedPayload)
 register("task.plan.ready", "1.0.0", TaskPlanReadyPayload)
+register("task.plan.ready", "1.0.1", TaskPlanReadyPayload)
 register("task.execution.started", "1.0.0", TaskExecutionStartedPayload)
+register("task.execution.started", "1.0.1", TaskExecutionStartedPayload)
 
 # Story 2.8 — 4 new event types.
 register("task.blocker_raised", "1.0.0", TaskBlockerRaisedPayload)
+register("task.blocker_raised", "1.0.1", TaskBlockerRaisedPayload)
 register("task.summary_emitted", "1.0.0", TaskSummaryEmittedPayload)
+register("task.summary_emitted", "1.0.1", TaskSummaryEmittedPayload)
 register("task.approval_requested", "1.0.0", TaskApprovalRequestedPayload)
+register("task.approval_requested", "1.0.1", TaskApprovalRequestedPayload)
 register("task.completed", "1.0.0", TaskCompletedPayload)
+register("task.completed", "1.0.1", TaskCompletedPayload)
 
 # Story 2.10 — 4 failure-detection event types (FR24a, NFR-R5).
 register("service.crashed", "1.0.0", ServiceCrashedPayload)
+register("service.crashed", "1.0.1", ServiceCrashedPayload)
 register("session.heartbeat_timeout", "1.0.0", SessionHeartbeatTimeoutPayload)
+register("session.heartbeat_timeout", "1.0.1", SessionHeartbeatTimeoutPayload)
 register("sink.delivery_failed", "1.0.0", SinkDeliveryFailedPayload)
+register("sink.delivery_failed", "1.0.1", SinkDeliveryFailedPayload)
 register("task.stop_requested", "1.0.0", TaskStopRequestedPayload)
+register("task.stop_requested", "1.0.1", TaskStopRequestedPayload)
+
+# Story 2.14 — register all 12 task-event payload models under v1.0.1 alongside
+# their v1.0.0 entries. The migrator (`scripts/migrator/`) emits v1.0.1
+# envelopes carrying the additive ``extensions`` envelope-level field; the
+# payload models are unchanged. Per the schema_registry's idempotent
+# same-model contract, re-registering the SAME model under both versions
+# is permitted (NFR-M3 additive-only evolution within a major version).
+# After this story, ``EVENT_TYPES`` is unchanged at 12 distinct type names;
+# ``REGISTRY`` doubles to 24 (type, version) entries.
 
 __all__ = [
     "ServiceCrashedPayload",

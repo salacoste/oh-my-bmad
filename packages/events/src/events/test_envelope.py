@@ -363,6 +363,35 @@ class TestCreateWrongBaseModelPayload:
 # ---------------------------------------------------------------------------
 
 
+class TestExtensionsField:
+    """Story 2.14 — additive ``extensions`` envelope-level field (FR22 / NFR-M3)."""
+
+    def test_extensions_defaults_to_empty_dict(self) -> None:
+        """v1.0.0 envelopes that omit ``extensions`` get the default ``{}``."""
+        env = _make_envelope()
+        assert env.extensions == {}
+
+    def test_explicit_extensions_round_trip_via_canonical_json(self) -> None:
+        """v1.0.1 envelopes with explicit ``extensions`` round-trip byte-stable."""
+        from events.canonical import to_canonical_json
+
+        env = _make_envelope(
+            schema_version="1.0.1",
+            extensions={"trace_id": "abc-123", "nested": {"k": "v"}},
+        )
+        data = to_canonical_json(env)
+        env2 = EventEnvelope.model_validate_json(data)
+        assert env2.extensions == {"trace_id": "abc-123", "nested": {"k": "v"}}
+        # Re-serialize: byte-identical (canonical-JSON contract).
+        assert to_canonical_json(env2) == data
+
+    def test_extensions_field_frozen_post_creation(self) -> None:
+        """``frozen=True`` blocks attribute rebind on the envelope."""
+        env = _make_envelope(extensions={"k": "v"})
+        with pytest.raises((ValidationError, TypeError)):
+            env.extensions = {"k": "changed"}
+
+
 class TestGeneratorIntegration:
     """AC-7 / Story 2.2: generators produce IDs that Story 2.1 validators accept."""
 

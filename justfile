@@ -114,6 +114,18 @@ test-crash:
 test-idempotency *ARGS:
     uv run pytest -m idempotency -v tests/idempotency/ {{ARGS}}
 
+# Story 2.14 — migrator integration tests (FR22 / NFR-M3).
+# Verifies the v1.0.0 → v1.0.1 additive schema upgrade end-to-end:
+# the 100-event fixture runs through the migrator in-process, the
+# migrated bytes round-trip through ``EventEnvelope.from_canonical_json``,
+# and materializing both the v1.0.0 archive and the v1.0.1 output through
+# fresh in-memory SQLite DBs yields identical observable state
+# (``tasks`` + ``sessions`` + ``events`` identity columns). Pure stdlib
+# + in-memory SQLite — no Docker required; runtime well under 1s.
+# Included in nightly CI as the ``migrator-integration`` job.
+test-migrator *ARGS="":
+    uv run pytest -m migrator -v tests/migrator/ {{ARGS}}
+
 # Strict lint + format + type-check + architectural-discipline gates.
 # ruff rules cover style (E/F/I/UP/B/SIM/N); ruff format --check enforces
 # canonical formatting; mypy --strict gates the platform-owned packages +
@@ -131,7 +143,7 @@ lint:
     uv run ruff check .
     uv run ruff format --check .
     uv run mypy --strict packages/ services/registry-api services/registry-state services/worker-wrapper
-    uv run mypy --strict --explicit-package-bases tests/crash-injection tests/idempotency
+    uv run mypy --strict --explicit-package-bases tests/crash-injection tests/idempotency tests/migrator
     uv run python scripts/check_imports.py
     uv run python scripts/check_event_registry.py
     uv run python scripts/check_single_writer.py

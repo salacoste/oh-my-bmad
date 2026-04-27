@@ -136,6 +136,33 @@ services:
       - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
     healthcheck: *healthcheck
 
+  # Story 2.14 / FR22 / FR50 / NFR-M3 — schema-evolution migrator.
+  # One-shot semantics: ``restart: "no"`` so a successful run exits cleanly.
+  # ``profiles: ["migrate"]`` keeps it OFF by default — the operator's
+  # ``just dev`` (i.e. ``docker compose up -d``) does NOT start the migrator.
+  # Activation:
+  #   docker compose run --rm migrator v1.0.0-to-v1.0.1
+  #   docker compose --profile migrate up migrator
+  # Mounts the same ``oh-my-bmad-data`` volume read-write — the migrator
+  # writes the new log + archive in-place.
+  migrator:
+    build:
+      context: .
+      dockerfile: scripts/migrator/Dockerfile
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-migrator:${OMB_VERSION:-dev}
+    profiles: ["migrate"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *common-env
+      EVENT_LOG_PATH: ${EVENT_LOG_PATH:-/var/lib/oh-my-bmad/registry/events/current.jsonl}
+    init: true
+    restart: "no"
+    networks: [oh-my-bmad-net]
+    volumes:
+      - oh-my-bmad-data:/var/lib/oh-my-bmad
+
 networks:
   oh-my-bmad-net:
     driver: bridge
