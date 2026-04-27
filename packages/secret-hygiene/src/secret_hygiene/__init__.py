@@ -6,7 +6,12 @@ Story 2.16 adds the audit-emission layer via :class:`AuditedSecret` +
 :class:`AuditedBaseSettings` + :func:`audited_secret_field`.
 """
 
-from .audited_secret import AuditedBaseSettings, AuditedSecret, audited_secret_field
+from .audited_secret import (
+    AuditedBaseSettings,
+    AuditedSecret,
+    audited_secret_field,
+    flush_pending_emissions,
+)
 
 __version__ = "0.2.0"
 
@@ -15,4 +20,5 @@ __all__ = [
     "AuditedSecret",
     "__version__",
     "audited_secret_field",
+    "flush_pending_emissions",
 ]

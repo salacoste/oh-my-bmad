@@ -1,36 +1,48 @@
-"""Unit tests for secret_hygiene.audited_secret (Story 2.16).
+"""Unit tests for secret_hygiene.audited_secret (Story 2.16 + 2.16-review).
 
-Covers AC-5 scenarios + AC-1 payload validation:
+Covers AC-5 scenarios + AC-1 payload validation + the 7 High / 10 Med /
+14 Low review-fix patches:
 
 * `secret.accessed` envelope construction + payload contents.
-* Redaction-aware ``__repr__`` / ``__str__``.
+* Redaction-aware ``__repr__`` / ``__str__`` / ``__format__``.
+* Pydantic serialization redaction (``model_dump`` / ``model_dump_json``).
 * Sync-context (no running loop) WARNING + emission skip.
+* Closed-loop ``loop.create_task`` ``RuntimeError`` graceful fallback.
 * ``emit=None`` disables emission entirely.
+* Empty-string / None env-var rejection.
+* Bare ``MySettings()`` (without ``from_env``) loud warning.
 * Emission failure does NOT propagate; secret read still succeeds.
+* ``CancelledError`` / re-entrant emission contract.
 * Payload NEVER carries the secret value.
-* :class:`AuditedBaseSettings` env-var wrapping + repr non-leak.
+* :class:`AuditedBaseSettings` env-var wrapping + repr non-leak +
+  ``AliasChoices`` + ``**overrides`` forwarding + secret_name uniqueness.
 * :class:`SecretAccessedPayload` model construction + serialization.
-
-Per AC-13 target, this file ships ≥10 tests; current count is 14.
+* :func:`flush_pending_emissions` helper (success + timeout paths).
+* GC-anchor invariant for live emission tasks.
+* Concurrent reads stress: 100 coroutines × distinct envelopes.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import gc
 import logging
-from collections.abc import Awaitable
+import time
 from typing import Any, Literal
 
 import pytest
 from events.clock import FROZEN_EPOCH, FrozenClock
 from events.envelope import Actor, EventEnvelope
-from events.schema_registry import REGISTRY, register
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from events.schema_registry import register
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
+from . import audited_secret as audited_secret_module
 from .audited_secret import (
     AuditedBaseSettings,
     AuditedSecret,
     audited_secret_field,
+    flush_pending_emissions,
 )
 
 # ---------------------------------------------------------------------------
@@ -38,17 +50,18 @@ from .audited_secret import (
 # by scripts/check_imports.py). When the full ``just test`` runs, other
 # co-located tests under ``services/registry-state/.../test_*.py`` import
 # ``registry_state.domain.event_types`` which registers the canonical
-# :class:`SecretAccessedPayload` for ``("secret.accessed", "1.0.x")``. When
-# this test file is run in isolation (``uv run pytest packages/secret-hygiene
-# /...``) those service-side test modules are NOT collected, so the schema
-# is missing and ``EventEnvelope.create()`` raises ``EventSchemaUnknown``.
+# :class:`SecretAccessedPayload`. When this test file is run in isolation
+# (``uv run pytest packages/secret-hygiene/...``) those service-side test
+# modules are NOT collected, so the schema is missing and
+# ``EventEnvelope.create()`` raises ``EventSchemaUnknown``.
 #
-# Resolution: register a structurally identical local fallback payload
-# model under the same keys ONLY IF the registry has not already been
-# populated by registry-state. The schema_registry's idempotent same-model
-# contract (Story 2.1) only treats SAME-class re-registration as a no-op;
-# registering a different class for an existing key raises ``ValueError``.
-# Hence the explicit ``key not in REGISTRY`` guard.
+# Resolution (post-review-fix H7): always register the local fallback
+# payload model under the same keys via try/except ValueError (xdist-safe
+# AND tolerant of registry-state having registered the canonical model
+# already). Then bind ``SecretAccessedPayload`` deterministically to the
+# local class — this avoids the test-order-dependent class-binding bug
+# the original code had (where the bound class differed depending on
+# which other test files had been imported first).
 # ---------------------------------------------------------------------------
 
 
@@ -62,18 +75,20 @@ class _LocalSecretAccessedPayload(BaseModel):
 def _ensure_secret_accessed_registered() -> None:
     """Idempotently register ``secret.accessed`` for both schema versions.
 
-    Called at module import time AND from a function-scoped autouse fixture
-    so that tests in this file pass even when other co-located tests under
-    ``packages/events/`` (which use ``unregister_all()`` in autouse
-    teardown — see ``test_envelope.py::_clean_registry``) clear the
-    registry between cases.
+    Called at module import time AND from a function-scoped autouse
+    fixture so tests pass even when other co-located tests under
+    ``packages/events/`` clear the registry between cases.
 
     Re-registering the SAME class is a no-op per the Story 2.1 schema
-    registry contract; if registry-state has already registered the
-    canonical model, this guard skips.
+    registry contract; registering a DIFFERENT class for an already-
+    registered key raises ``ValueError`` — caught and ignored (xdist
+    race tolerance + registry-state-canonical co-existence per L23).
     """
     for _v in ("1.0.0", "1.0.1"):
-        if ("secret.accessed", _v) not in REGISTRY:
+        # Already registered (same class — no-op) or canonical
+        # registry-state class is registered. Either is fine; the
+        # tests don't rely on which class is bound.
+        with contextlib.suppress(ValueError):
             register("secret.accessed", _v, _LocalSecretAccessedPayload)
 
 
@@ -82,23 +97,17 @@ _ensure_secret_accessed_registered()
 
 @pytest.fixture(autouse=True)
 def _re_register_secret_accessed() -> Any:
-    """Re-register ``secret.accessed`` before every test in this file.
-
-    Sibling test files under ``packages/events/`` install autouse fixtures
-    that wipe the registry on teardown. Running our tests after one of
-    those leaves the registry empty and ``EventEnvelope.create()`` raises
-    :class:`EventSchemaUnknown`. Re-register before each test for
-    insulation.
-    """
+    """Re-register ``secret.accessed`` before every test in this file."""
     _ensure_secret_accessed_registered()
     yield
 
 
-# Resolve the active payload-model class (registry-state's canonical class
-# when running the full suite, the local fallback when running isolated).
-# Type-checker sees ``Any`` so attribute access on instances doesn't
-# trip mypy's narrow ``BaseModel`` view.
-SecretAccessedPayload: Any = REGISTRY[("secret.accessed", "1.0.0")]
+# Deterministic class binding (H7): always the local class. The test
+# assertions don't care which class is registered — both have identical
+# field structure — but binding the local class avoids the import-order
+# non-determinism the original code had via REGISTRY[...] lookup.
+SecretAccessedPayload: Any = _LocalSecretAccessedPayload
+
 
 # ---------------------------------------------------------------------------
 # Test helpers
@@ -110,11 +119,7 @@ def _actor() -> Actor:
 
 
 class _RecordingEmitter:
-    """Async callable that records every envelope it receives.
-
-    Used as the ``emit`` hook in tests. Behaves like an awaitable function
-    when called.
-    """
+    """Async callable that records every envelope it receives."""
 
     def __init__(self) -> None:
         self.envelopes: list[EventEnvelope] = []
@@ -135,12 +140,28 @@ class _RaisingEmitter:
         raise self._exc
 
 
-async def _drain() -> None:
-    """Yield to the loop so any scheduled emission tasks run to completion."""
-    # Two yields suffices: one for the create_task to start the coroutine,
-    # one for the awaited callable inside _safe_emit to finish.
-    for _ in range(3):
-        await asyncio.sleep(0)
+class _SlowEmitter:
+    """Async callable that sleeps ``delay_s`` before recording the envelope."""
+
+    def __init__(self, delay_s: float) -> None:
+        self._delay_s = delay_s
+        self.envelopes: list[EventEnvelope] = []
+
+    async def __call__(self, envelope: EventEnvelope) -> None:
+        await asyncio.sleep(self._delay_s)
+        self.envelopes.append(envelope)
+
+
+async def _drain_emissions() -> None:
+    """Deterministic wait for all outstanding emission tasks to settle.
+
+    Replaces the original three-yield ``_drain`` (which was nondeterministic
+    when emit callables yielded internally). Uses ``asyncio.gather`` over
+    the module-global live-task anchor.
+    """
+    tasks = list(audited_secret_module._live_emission_tasks)
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +212,7 @@ class TestAuditedSecretEmission:
         )
 
         assert s.value == "sk-ant-fake-secret-123"
-        await _drain()
+        await _drain_emissions()
 
         assert len(emitter.envelopes) == 1
         env = emitter.envelopes[0]
@@ -213,7 +234,7 @@ class TestAuditedSecretEmission:
         )
 
         assert s.value == secret_str
-        await _drain()
+        await _drain_emissions()
 
         assert len(emitter.envelopes) == 1
         env = emitter.envelopes[0]
@@ -241,14 +262,36 @@ class TestAuditedSecretEmission:
 
         for _ in range(3):
             assert s.value == "value-x"
-        await _drain()
+        await _drain_emissions()
 
         assert len(emitter.envelopes) == 3
         assert {env.type for env in emitter.envelopes} == {"secret.accessed"}
 
+    @pytest.mark.asyncio
+    async def test_concurrent_reads_emit_distinct_envelopes(self) -> None:
+        """M14: 100 coroutines × concurrent reads → 100 distinct envelopes."""
+        emitter = _RecordingEmitter()
+        s = AuditedSecret(
+            "value-c",
+            secret_name="concurrent_check",
+            emit=emitter,
+            actor=_actor(),
+        )
+
+        async def _read() -> str:
+            return s.value
+
+        results = await asyncio.gather(*[_read() for _ in range(100)])
+        await _drain_emissions()
+
+        assert all(r == "value-c" for r in results)
+        assert len(emitter.envelopes) == 100
+        event_ids = {env.event_id for env in emitter.envelopes}
+        assert len(event_ids) == 100  # all distinct
+
 
 # ---------------------------------------------------------------------------
-# AC-2 — redaction-aware repr
+# AC-2 — redaction-aware repr / format
 # ---------------------------------------------------------------------------
 
 
@@ -273,9 +316,46 @@ class TestAuditedSecretRedaction:
             emit=None,
             actor=_actor(),
         )
+        # Object's __format__ falls through to __str__ (which is __repr__).
+        assert format(s, "") == "<REDACTED:api_key>"
         assert "very-secret-value-9999" not in f"{s}"
         assert "very-secret-value-9999" not in f"{s!r}"
-        assert "very-secret-value-9999" not in f"{s!s}"
+
+    def test_model_dump_does_not_leak_secret(self) -> None:
+        """H1: pydantic ``model_dump`` must redact via custom core schema."""
+
+        class M(BaseModel):
+            model_config = ConfigDict(arbitrary_types_allowed=True)
+            secret: AuditedSecret
+
+        s = AuditedSecret(
+            "PLAINTEXT-MODEL-DUMP-LEAK",
+            secret_name="anthropic_api_key",
+            emit=None,
+            actor=_actor(),
+        )
+        m = M(secret=s)
+        dumped = m.model_dump()
+        assert dumped == {"secret": "<REDACTED:anthropic_api_key>"}
+        assert "PLAINTEXT-MODEL-DUMP-LEAK" not in repr(dumped)
+
+    def test_model_dump_json_does_not_leak_secret(self) -> None:
+        """H1: pydantic ``model_dump_json`` must redact via custom core schema."""
+
+        class M(BaseModel):
+            model_config = ConfigDict(arbitrary_types_allowed=True)
+            secret: AuditedSecret
+
+        s = AuditedSecret(
+            "PLAINTEXT-JSON-LEAK-9999",
+            secret_name="anthropic_api_key",
+            emit=None,
+            actor=_actor(),
+        )
+        m = M(secret=s)
+        blob = m.model_dump_json()
+        assert "PLAINTEXT-JSON-LEAK-9999" not in blob
+        assert "<REDACTED:anthropic_api_key>" in blob
 
 
 # ---------------------------------------------------------------------------
@@ -294,17 +374,60 @@ class TestAuditedSecretBestEffort:
             actor=_actor(),
         )
 
-        # Capture structlog WARNING via stdlib logging fallback.
         with caplog.at_level(logging.WARNING, logger="secret_hygiene.audited_secret"):
             v = s.value
 
         assert v == "value-y"
         assert len(emitter.envelopes) == 0
-        # The structlog logger emits via stdlib logging when no processors
-        # are configured for direct capture; either way the warning text
-        # ends up in caplog OR is observable via the side-effect (no
-        # emission). Assert the no-emission side-effect, which is the
-        # contractually meaningful guarantee.
+        # M6: assert the WARNING record was actually captured (stdlib
+        # logger now used so caplog sees it).
+        assert any(
+            r.name == "secret_hygiene.audited_secret"
+            and r.levelno == logging.WARNING
+            and ("no running event loop" in r.getMessage().lower())
+            for r in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_closed_loop_create_task_does_not_crash(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """H2: ``loop.create_task`` raising ``RuntimeError`` must not break ``.value``."""
+        emitter = _RecordingEmitter()
+        s = AuditedSecret(
+            "value-closed",
+            secret_name="closed_loop_secret",
+            emit=emitter,
+            actor=_actor(),
+        )
+
+        running = asyncio.get_running_loop()
+        original_create_task = running.create_task
+
+        def _broken_create_task(coro: Any, *args: Any, **kwargs: Any) -> Any:
+            # Close the coroutine so Python doesn't emit
+            # "coroutine was never awaited" warnings.
+            coro.close()
+            raise RuntimeError("Event loop is closed")
+
+        # Manually patch + restore so teardown doesn't run with the
+        # broken create_task in place (asyncio runner uses create_task
+        # during shutdown_asyncgens).
+        running.create_task = _broken_create_task  # type: ignore[method-assign]
+        try:
+            with caplog.at_level(logging.WARNING, logger="secret_hygiene.audited_secret"):
+                v = s.value
+        finally:
+            running.create_task = original_create_task  # type: ignore[method-assign]
+
+        assert v == "value-closed"
+        assert len(emitter.envelopes) == 0
+        assert any(
+            r.levelno == logging.WARNING
+            and "create_task" in r.getMessage()
+            and "closed loop" in r.getMessage().lower()
+            for r in caplog.records
+        )
 
     def test_emit_none_disables_emission(self, caplog: pytest.LogCaptureFixture) -> None:
         """emit=None → no emission attempt, no warning."""
@@ -318,7 +441,6 @@ class TestAuditedSecretBestEffort:
         with caplog.at_level(logging.WARNING, logger="secret_hygiene.audited_secret"):
             v = s.value
         assert v == "value-z"
-        # No warning records (we skip the entire emission code path).
         relevant = [r for r in caplog.records if r.name == "secret_hygiene.audited_secret"]
         assert relevant == []
 
@@ -337,16 +459,92 @@ class TestAuditedSecretBestEffort:
 
         with caplog.at_level(logging.ERROR, logger="secret_hygiene.audited_secret"):
             v = s.value
-            await _drain()
+            await _drain_emissions()
 
-        # Security path always wins: the secret was returned.
         assert v == "the-actual-secret"
-        # Emit was attempted exactly once.
         assert emitter.calls == 1
+        # M7: assert ERROR record captured + message contains the right keyword.
+        error_records = [r for r in caplog.records if r.levelname == "ERROR"]
+        assert error_records, "expected an ERROR log record but none was captured"
+        assert any("emission" in r.getMessage() for r in error_records)
+
+    @pytest.mark.asyncio
+    async def test_cancelled_error_inside_emit_is_contained(self) -> None:
+        """M1: ``asyncio.CancelledError`` raised inside emit propagates to the task.
+
+        The fire-and-forget task observes CancelledError; ``.value`` returned
+        the secret already (the task hasn't run yet at the point .value
+        returned).
+        """
+        emitter = _RaisingEmitter(asyncio.CancelledError())
+        s = AuditedSecret(
+            "value-cancel",
+            secret_name="cancel_check",
+            emit=emitter,
+            actor=_actor(),
+        )
+
+        v = s.value
+        # Drain — gather with return_exceptions=True so the cancelled task
+        # surfaces as the exception, not a raise.
+        tasks = list(audited_secret_module._live_emission_tasks)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        assert v == "value-cancel"
+        # The task observed the CancelledError.
+        assert any(isinstance(r, asyncio.CancelledError) for r in results)
 
 
 # ---------------------------------------------------------------------------
-# AC-3 / AC-4 — pydantic-settings integration
+# H6 — flush_pending_emissions helper
+# ---------------------------------------------------------------------------
+
+
+class TestFlushPendingEmissions:
+    @pytest.mark.asyncio
+    async def test_flush_waits_for_all_emissions(self) -> None:
+        emitter = _SlowEmitter(delay_s=0.05)
+        s = AuditedSecret(
+            "v-flush",
+            secret_name="flush_check",
+            emit=emitter,
+            actor=_actor(),
+        )
+
+        for _ in range(5):
+            _ = s.value
+
+        await flush_pending_emissions(timeout=2.0)
+        assert len(emitter.envelopes) == 5
+
+    @pytest.mark.asyncio
+    async def test_flush_timeout_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        emitter = _SlowEmitter(delay_s=2.0)
+        s = AuditedSecret(
+            "v-timeout",
+            secret_name="flush_timeout_check",
+            emit=emitter,
+            actor=_actor(),
+        )
+
+        _ = s.value
+
+        with caplog.at_level(logging.WARNING, logger="secret_hygiene.audited_secret"):
+            # Returns normally even though emission still pending.
+            await flush_pending_emissions(timeout=0.05)
+
+        assert any("did not complete within" in r.getMessage() for r in caplog.records)
+
+        # Drain the still-pending task so the test loop teardown is clean.
+        await _drain_emissions()
+
+    @pytest.mark.asyncio
+    async def test_flush_returns_immediately_when_no_pending(self) -> None:
+        # No tasks scheduled → flush should be a no-op.
+        await flush_pending_emissions(timeout=0.01)
+
+
+# ---------------------------------------------------------------------------
+# H3 / H4 — empty-string + None env-var rejection in from_env
 # ---------------------------------------------------------------------------
 
 
@@ -358,6 +556,56 @@ class _DemoSettings(AuditedBaseSettings):
     )
 
 
+class TestFromEnvEmptyAndNone:
+    def test_empty_string_env_var_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+        with pytest.raises(ValueError, match="empty string"):
+            _DemoSettings.from_env(emit=None, actor=_actor())
+
+    def test_none_value_rejected(self) -> None:
+        # Construct a None directly via overrides, bypassing env-vars.
+        # Pre-validator's str isinstance check will not coerce None →
+        # placeholder; from_env's None branch raises.
+        with pytest.raises(ValueError, match=r"None|empty string"):
+            _DemoSettings.from_env(emit=None, actor=_actor(), anthropic_api_key=None)
+
+
+# ---------------------------------------------------------------------------
+# H5 — bare MySettings() (without from_env) loud warning
+# ---------------------------------------------------------------------------
+
+
+class TestUnconfiguredActorWarning:
+    def test_bare_construction_warns_on_value_read(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """H5: reading from a bare ``MySettings(...)`` (no from_env) warns."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+        s = _DemoSettings()  # bare construction — no from_env
+        # Sanity: the placeholder actor is the unconfigured sentinel.
+        assert s.anthropic_api_key._actor is audited_secret_module._UNCONFIGURED_ACTOR
+
+        with caplog.at_level(logging.WARNING, logger="secret_hygiene.audited_secret"):
+            v = s.anthropic_api_key.value
+            v2 = s.anthropic_api_key.value
+        assert v == "x"
+        assert v2 == "x"
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and "audit trail INCOMPLETE" in r.getMessage()
+        ]
+        # Per-instance once-flag: only one warning, not two.
+        assert len(warnings) == 1
+
+
+# ---------------------------------------------------------------------------
+# AC-3 / AC-4 — pydantic-settings integration
+# ---------------------------------------------------------------------------
+
+
 class TestAuditedBaseSettings:
     @pytest.mark.asyncio
     async def test_wraps_env_vars(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -365,12 +613,9 @@ class TestAuditedBaseSettings:
         emitter = _RecordingEmitter()
         settings = _DemoSettings.from_env(emit=emitter, actor=_actor())
 
-        # Field is wrapped, not a raw string.
         assert isinstance(settings.anthropic_api_key, AuditedSecret)
-        # Reading the wrapper returns the env-var value.
         assert settings.anthropic_api_key.value == "test123"
-        await _drain()
-        # One emission fired.
+        await _drain_emissions()
         assert len(emitter.envelopes) == 1
         env = emitter.envelopes[0]
         assert env.type == "secret.accessed"
@@ -383,7 +628,6 @@ class TestAuditedBaseSettings:
         rendered_str = str(settings)
         assert "test123-leak-bait" not in rendered_repr
         assert "test123-leak-bait" not in rendered_str
-        # The redacted form should be present.
         assert "<REDACTED:anthropic_api_key>" in rendered_repr
 
     @pytest.mark.asyncio
@@ -393,18 +637,311 @@ class TestAuditedBaseSettings:
         first = _RecordingEmitter()
         settings = _DemoSettings.from_env(emit=first, actor=_actor())
         assert settings.anthropic_api_key.value == "stable-value"
-        await _drain()
+        await _drain_emissions()
         assert len(first.envelopes) == 1
 
-        # Now re-wrap via a fresh from_env on a NEW instance with a different
-        # emitter. The first instance is independent.
         second = _RecordingEmitter()
         settings2 = _DemoSettings.from_env(emit=second, actor=_actor())
         assert settings2.anthropic_api_key.value == "stable-value"
-        await _drain()
+        await _drain_emissions()
         assert len(second.envelopes) == 1
-        # The first instance's emitter is unchanged.
         assert len(first.envelopes) == 1
+
+
+# ---------------------------------------------------------------------------
+# M2 — AliasChoices support in pre-validator
+# ---------------------------------------------------------------------------
+
+
+class _AliasChoicesSettings(AuditedBaseSettings):
+    secret: AuditedSecret = audited_secret_field("alias_choice_secret")
+    # Override validation_alias post-factory: easier than threading into
+    # audited_secret_field. Pydantic-settings reads validation_alias for
+    # env-var resolution.
+    model_config = AuditedBaseSettings.model_config
+
+
+_AliasChoicesSettings.model_fields["secret"].validation_alias = AliasChoices(
+    "ALIAS_FOO", "ALIAS_BAR"
+)
+_AliasChoicesSettings.model_rebuild(force=True)
+
+
+class TestAliasChoicesSupport:
+    @pytest.mark.asyncio
+    async def test_alias_choices_picks_up_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("ALIAS_FOO", raising=False)
+        monkeypatch.setenv("ALIAS_BAR", "alias-value")
+
+        emitter = _RecordingEmitter()
+        settings = _AliasChoicesSettings.from_env(emit=emitter, actor=_actor())
+        assert settings.secret.value == "alias-value"
+        await _drain_emissions()
+        assert len(emitter.envelopes) == 1
+
+
+# ---------------------------------------------------------------------------
+# L18 — conflict detection in pre-validator
+# ---------------------------------------------------------------------------
+
+
+class TestConflictDetection:
+    def test_conflicting_alias_keys_raises(self) -> None:
+        """Both field-name and alias supplied with different values → raise."""
+        # Use **kwargs dict-splat to satisfy mypy (the alias key isn't a
+        # known declared field name, so direct kwargs trip mypy's
+        # call-arg check).
+        kwargs: dict[str, Any] = {
+            "anthropic_api_key": "value-a",
+            "ANTHROPIC_API_KEY": "value-b",
+        }
+        with pytest.raises(ValidationError) as excinfo:
+            _DemoSettings(**kwargs)
+        # The ValueError nested inside ValidationError carries our message.
+        assert "conflicting values" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# M3 — sentinel marker prevents foreign-extra wrapping
+# ---------------------------------------------------------------------------
+
+
+class TestSentinelMarker:
+    def test_foreign_extra_without_marker_not_wrapped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A field carrying ``audited_secret_name`` extra WITHOUT the marker
+        must NOT be treated as audited.
+        """
+        from pydantic import Field as PydField
+
+        class ForeignSettings(AuditedBaseSettings):
+            real: AuditedSecret = audited_secret_field("real_secret", env_var="REAL_SECRET")
+            # Foreign field with extra-key collision but no marker.
+            decoy: str = PydField(
+                default="hello",
+                json_schema_extra={"audited_secret_name": "decoy_should_not_wrap"},
+            )
+
+        monkeypatch.setenv("REAL_SECRET", "xyz")
+        instance = ForeignSettings()
+        # decoy is NOT wrapped (still a plain str).
+        assert instance.decoy == "hello"
+        assert not isinstance(instance.decoy, AuditedSecret)
+        # And `real` IS wrapped.
+        assert isinstance(instance.real, AuditedSecret)
+
+
+# ---------------------------------------------------------------------------
+# M4 — _UNSET sentinel for default
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultSentinel:
+    def test_default_unset_is_required(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        class S(AuditedBaseSettings):
+            field_x: AuditedSecret = audited_secret_field(
+                "field_x_secret", env_var="FIELD_X_SECRET"
+            )
+
+        monkeypatch.delenv("FIELD_X_SECRET", raising=False)
+        with pytest.raises(ValidationError):
+            S()  # required, no default → ValidationError
+
+    def test_default_none_makes_optional(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        class S(AuditedBaseSettings):
+            field_y: AuditedSecret | None = audited_secret_field(
+                "field_y_secret", env_var="FIELD_Y_SECRET", default=None
+            )
+
+        monkeypatch.delenv("FIELD_Y_SECRET", raising=False)
+        s = S()
+        assert s.field_y is None
+
+
+# ---------------------------------------------------------------------------
+# M8 — secret_name uniqueness in subclass
+# ---------------------------------------------------------------------------
+
+
+class TestSecretNameUniqueness:
+    def test_duplicate_secret_name_raises_at_class_def(self) -> None:
+        with pytest.raises(ValueError, match="unique secret_name"):
+
+            class Dupe(AuditedBaseSettings):  # noqa: F841
+                a: AuditedSecret = audited_secret_field("dupe", env_var="A")
+                b: AuditedSecret = audited_secret_field("dupe", env_var="B")
+
+
+# ---------------------------------------------------------------------------
+# M10 — re-entrant emission guard
+# ---------------------------------------------------------------------------
+
+
+class TestReentrantEmissionGuard:
+    @pytest.mark.asyncio
+    async def test_emit_reading_secret_b_does_not_recurse(self) -> None:
+        """Emit callable that reads a second AuditedSecret must not fan out."""
+        outer_envelopes: list[EventEnvelope] = []
+
+        # secret_b is read INSIDE secret_a's emit — its emission must be skipped.
+        secret_b = AuditedSecret(
+            "value-b",
+            secret_name="reentrant_b",
+            emit=_RecordingEmitter(),
+            actor=_actor(),
+        )
+
+        async def inner_emit(envelope: EventEnvelope) -> None:
+            outer_envelopes.append(envelope)
+            # Read secret_b — this should NOT schedule a new emission
+            # because we're inside an emission already.
+            _ = secret_b.value
+
+        secret_a = AuditedSecret(
+            "value-a",
+            secret_name="reentrant_a",
+            emit=inner_emit,
+            actor=_actor(),
+        )
+
+        _ = secret_a.value
+        await _drain_emissions()
+
+        # Exactly 1 envelope: secret_a's. secret_b's was skipped.
+        assert len(outer_envelopes) == 1
+        payload = outer_envelopes[0].payload
+        if isinstance(payload, dict):
+            assert payload["secret_name"] == "reentrant_a"
+        else:
+            payload_any: Any = payload
+            assert payload_any.secret_name == "reentrant_a"
+
+
+# ---------------------------------------------------------------------------
+# L6 / L19 / L20 — secret_name validation
+# ---------------------------------------------------------------------------
+
+
+class TestSecretNameValidation:
+    def test_audited_secret_rejects_bad_secret_name(self) -> None:
+        with pytest.raises(ValueError, match="secret_name"):
+            AuditedSecret(
+                "x",
+                secret_name="bad name with spaces",
+                emit=None,
+                actor=_actor(),
+            )
+
+    def test_audited_secret_field_rejects_bad_secret_name(self) -> None:
+        with pytest.raises(ValueError, match="secret_name"):
+            audited_secret_field("bad name", env_var="X")
+
+    def test_audited_secret_rejects_oversized_secret_name(self) -> None:
+        with pytest.raises(ValueError, match="secret_name"):
+            AuditedSecret(
+                "x",
+                secret_name="a" * 129,
+                emit=None,
+                actor=_actor(),
+            )
+
+
+# ---------------------------------------------------------------------------
+# L15 — direct construction with empty value allowed
+# ---------------------------------------------------------------------------
+
+
+class TestDirectConstructionEmpty:
+    @pytest.mark.asyncio
+    async def test_audited_secret_value_can_be_empty_string(self) -> None:
+        emitter = _RecordingEmitter()
+        s = AuditedSecret(
+            "",
+            secret_name="empty_ok",
+            emit=emitter,
+            actor=_actor(),
+        )
+        assert s.value == ""
+        await _drain_emissions()
+        assert len(emitter.envelopes) == 1
+
+
+# ---------------------------------------------------------------------------
+# L16 — from_env forwards **overrides
+# ---------------------------------------------------------------------------
+
+
+class _MultiFieldSettings(AuditedBaseSettings):
+    api_key: AuditedSecret = audited_secret_field("api_key", env_var="THE_API_KEY")
+    extra_str: str = "default-extra"
+
+
+class TestFromEnvOverrides:
+    @pytest.mark.asyncio
+    async def test_overrides_propagate_to_cls(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("THE_API_KEY", "from-env-value")
+        settings = _MultiFieldSettings.from_env(
+            emit=None, actor=_actor(), extra_str="override-value"
+        )
+        assert settings.extra_str == "override-value"
+        assert settings.api_key.value == "from-env-value"
+
+
+# ---------------------------------------------------------------------------
+# L24 — clock=None default uses real SystemClock
+# ---------------------------------------------------------------------------
+
+
+class TestSystemClockDefault:
+    @pytest.mark.asyncio
+    async def test_value_with_default_system_clock_emits_increasing_monotonic(
+        self,
+    ) -> None:
+        emitter = _RecordingEmitter()
+        s = AuditedSecret(
+            "v",
+            secret_name="sysclock",
+            emit=emitter,
+            actor=_actor(),
+            clock=None,  # explicit default
+        )
+        _ = s.value
+        # Tiny sleep to guarantee monotonic_ns advances.
+        await asyncio.sleep(0.001)
+        _ = s.value
+        await _drain_emissions()
+
+        assert len(emitter.envelopes) == 2
+        env1, env2 = emitter.envelopes
+        assert env2.emitted_at_monotonic_ns > env1.emitted_at_monotonic_ns
+
+
+# ---------------------------------------------------------------------------
+# L25 — _live_emission_tasks anchor survives gc.collect
+# ---------------------------------------------------------------------------
+
+
+class TestLiveEmissionTasksAnchor:
+    @pytest.mark.asyncio
+    async def test_live_emission_tasks_anchor_survives_gc(self) -> None:
+        """L25: scheduled emission must complete even after a GC sweep."""
+        emitter = _SlowEmitter(delay_s=0.05)
+        s = AuditedSecret(
+            "v-gc",
+            secret_name="gc_check",
+            emit=emitter,
+            actor=_actor(),
+        )
+
+        _ = s.value
+        # Force GC mid-flight; the WeakSet anchor should keep the task alive.
+        gc.collect()
+        time.sleep(0.01)
+        gc.collect()
+
+        await flush_pending_emissions(timeout=2.0)
+        assert len(emitter.envelopes) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -426,16 +963,13 @@ class TestSecretAccessedEnvelopeShape:
         )
 
         _ = s.value
-        await _drain()
+        await _drain_emissions()
 
         assert len(emitter.envelopes) == 1
         env = emitter.envelopes[0]
         assert env.actor.kind == "system"
         assert env.actor.id == "registry-api"
         assert env.emitted_at_monotonic_ns == 12345
-        # Payload validation through registry: it round-trips to a
-        # SecretAccessedPayload because EventEnvelope.create() validated
-        # against the registered model.
         if isinstance(env.payload, dict):
             assert env.payload["secret_name"] == "shape_check"
             assert env.payload["scope"] == "read"
@@ -465,10 +999,5 @@ class TestAwaitableEmit:
             actor=_actor(),
         )
         _ = s.value
-        await _drain()
+        await _drain_emissions()
         assert seen == ["secret.accessed"]
-        # The Awaitable type alias is at the module surface — quick check
-        # that the user-supplied async function returns an awaitable.
-        coro: Awaitable[None] = my_emit(s._build_envelope())
-        assert isinstance(coro, Awaitable)
-        await coro  # consume so no RuntimeWarning fires
