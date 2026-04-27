@@ -34,10 +34,20 @@ Design choices (documented in the Story 2.15 Spec Amendments):
 
 * **In-memory dedupe under restart (AC-7).** On startup the orchestrator
   scans existing ``*.jsonl`` files in ``EVENT_LOG_DIR`` and builds a set
-  of ``task_id``s that already have a ``task.planning.started`` event;
-  tasks present in that set are NEVER re-processed. During tailing each
-  newly-detected ``task.created`` is checked against the set, then added
-  on emit. This is a Phase-1 best-effort behavior — production
+  of ``task_id``s that already have ANY follow-up lifecycle event
+  (``task.planning.started`` / ``task.plan.ready`` /
+  ``task.execution.started`` / ``task.completed``) in the log; tasks
+  present in that set are NEVER re-processed. During tailing each
+  newly-detected ``task.created`` is checked against the set, then
+  added AFTER the lifecycle has been successfully appended (mark-after-
+  emit). The mark-after-emit ordering closes the previous
+  crash-between-mark-and-first-emit window: a crash mid-lifecycle leaves
+  the partial lifecycle in the log, the next run's startup scan picks
+  it up via the present-but-incomplete lifecycle types, and the task
+  is suppressed from re-emit. A crash BEFORE the first append leaves
+  the task with ONLY ``task.created`` in the log; the next run emits
+  the full lifecycle — the desired exactly-once-from-the-orchestrator
+  semantics. This is a Phase-1 best-effort behavior — production
   orchestrators (Story 5.10+) will use proper task-state queries instead
   of log-scanning.
 
@@ -45,9 +55,31 @@ Design choices (documented in the Story 2.15 Spec Amendments):
   envelopes carry this fixed actor identity. ``parent_event_id`` chains
   to the originating ``task.created`` envelope's id for audit traceability.
 
+* **``request_id`` is regenerated per emit (NOT shared across the
+  lifecycle).** Each of the 4 follow-up envelopes calls
+  ``new_request_id()`` independently. Rationale: ``request_id`` in the
+  envelope schema correlates events sharing the same originating
+  request — there is no concept of "this orchestrator caused 4 events
+  in the same request"; each emit is its own logical operation and
+  carries its own correlation id. Audit traceability across the
+  lifecycle is preserved via ``parent_event_id`` (all 4 chain to the
+  ``task.created`` envelope's ``event_id``), not via request_id.
+
 * **``/tmp/ready`` healthcheck signal.** Touched after the first poll
   iteration so docker-compose's ``test -f /tmp/ready`` healthcheck flips
   to ``healthy``. Mirrors the registry-state pattern.
+
+Multi-writer JSONL caveat (M10, deferred to Story 5.10): registry-api
+AND null-orchestrator both append to the same ``YYYY-MM-DD.jsonl``
+file in this test stack. Story 2.4's ``EventLogWriter`` documents
+"use only one instance per process" as the production contract.
+Phase-1 envelope sizes (4 lifecycle types: ~600-900 bytes each
+including base64 payloads) are well below ``PIPE_BUF`` (4096 bytes
+on Linux) so ``write(2)`` calls remain atomic — no torn-line risk
+under current event types. The proper architectural fix (have the
+null-orchestrator emit via the clawhip-bridge MCP rather than the
+JSONL writer directly) is deferred to Story 5.10's real
+orchestrator-adapter.
 
 Environment variables:
 
@@ -75,11 +107,11 @@ from events import (
     new_request_id,
     new_session_id,
 )
+from events.canonical import from_canonical_json
 from events.clock import Clock
 from events.ids import new_event_id
 from registry_state.adapters.event_log import (
     EventLogWriter,
-    _read_new_envelopes_since,
     read_log_lines,
 )
 from registry_state.domain.event_types import (  # noqa: F401 — side-effect: register() calls
@@ -107,36 +139,116 @@ _READY_FILE = Path("/tmp/ready")  # noqa: S108 — healthcheck signal, not data 
 
 
 def _scan_processed_task_ids(base_dir: Path) -> set[str]:
-    """Return the set of ``task_id``s that already have a ``task.planning.started`` event.
+    """Return the set of ``task_id``s whose lifecycle the orchestrator must NOT re-emit.
 
-    Walks every ``*.jsonl`` file under *base_dir* (tolerating a missing
-    directory) and reads each envelope. Any ``task.planning.started``
-    payload's ``task_id`` is added to the returned set. Used at startup
-    to seed the dedupe set so a restart does NOT re-emit the lifecycle
-    for tasks that were already (partially or fully) processed.
+    Story 2.15 code-review fix M5: scan keys on ``task.created`` envelopes
+    that ALREADY have ANY follow-up lifecycle event in the log. The prior
+    implementation keyed only on ``task.planning.started`` — that left a
+    crash-window where the orchestrator marked a task processed BEFORE
+    emitting the first lifecycle event, and a crash between mark and emit
+    would cause the next run to RE-emit the entire lifecycle (the
+    startup-scan would not see ``task.planning.started`` from the prior
+    run, so the task is treated as fresh).
 
-    Reading a partial-tail line raises ``FileNotFoundError``-suppressed
-    cases internally; ``read_log_lines`` itself silently skips trailing
-    partial lines (matches the writer's recovery contract).
+    Tightened contract:
+
+    * Walk every ``*.jsonl`` file under *base_dir* (deterministic sorted
+      iteration).
+    * For each envelope of any ``task.*`` type EXCEPT ``task.created``,
+      add the ``task_id`` to the seen set. The presence of ANY follow-up
+      event (``task.planning.started``, ``task.plan.ready``,
+      ``task.execution.started``, ``task.completed``) marks the task as
+      "lifecycle already started" — re-emitting would violate AC-7.
+    * Tasks whose log-state is ONLY ``task.created`` (no follow-up) are
+      eligible for emission on tail (this is the normal happy path:
+      registry-api emits ``task.created``, null-orchestrator picks it up
+      on the next poll).
+
+    The remaining edge — orchestrator crashes AFTER `processed.add()` but
+    BEFORE the first append — is closed by the new tail-loop logic
+    (mark-after-emit; see :func:`run_null_orchestrator`).
+
+    rglob is used (Mn10 hardening borrowed from Story 2.13's reviewer)
+    so future operators who organize event logs into subdirectories
+    (e.g., ``YYYY/MM/DD.jsonl``) still get correct dedupe seeding.
+
+    Memory note (Mn12): at 1M tasks the seen-set is ~80MB and the full
+    rescan is O(N) on every restart. Acceptable for a Phase-1 test
+    fixture; production orchestrators (Story 5.10+) will use proper
+    task-state queries against registry-state's SQLite projection
+    instead of log-scanning.
     """
     seen: set[str] = set()
     if not base_dir.exists():
         return seen
-    for path in sorted(base_dir.glob("*.jsonl")):
+    # Set of task types whose presence in the log means "lifecycle started"
+    # — the orchestrator must NOT re-emit if any of these are seen.
+    _LIFECYCLE_TYPES = frozenset(
+        {
+            "task.planning.started",
+            "task.plan.ready",
+            "task.execution.started",
+            "task.completed",
+        }
+    )
+    for path in sorted(base_dir.rglob("*.jsonl")):
         try:
             for env in read_log_lines(path):
-                if env.type == "task.planning.started":
-                    payload = env.payload
-                    if isinstance(payload, dict):
-                        task_id = payload.get("task_id")
-                    else:
-                        task_id = getattr(payload, "task_id", None)
-                    if isinstance(task_id, str):
-                        seen.add(task_id)
+                if env.type not in _LIFECYCLE_TYPES:
+                    continue
+                payload = env.payload
+                if isinstance(payload, dict):
+                    task_id = payload.get("task_id")
+                else:
+                    task_id = getattr(payload, "task_id", None)
+                if isinstance(task_id, str):
+                    seen.add(task_id)
         except FileNotFoundError:
             # TOCTOU: file disappeared between glob() and open(). Skip.
             continue
     return seen
+
+
+def _read_new_envelopes_since(path: Path, offset: int) -> tuple[int, list[EventEnvelope]]:
+    """Tail-read complete envelopes from *path* starting at *offset*.
+
+    Inlined from ``registry_state.adapters.event_log._read_new_envelopes_since``
+    per Story 2.15 code-review fix M9 — the upstream symbol is private
+    (underscore-prefixed) and importing across the spine boundary would
+    technically count as "spine source touched" by the test fixture's
+    coupling; story principle is "no spine source changes". Inline copy
+    keeps the fixture self-contained without promoting the spine API.
+
+    Behavior matches the upstream implementation:
+
+    * Missing path → ``(offset, [])``.
+    * Offset beyond EOF → ``(offset, [])`` (no auto-reset).
+    * Trailing partial lines (no terminating ``\\n``) are NOT consumed;
+      offset stops at the last complete newline.
+    * CRLF tolerance: trailing ``\\r`` is stripped before JSON parse.
+
+    Note (Mn3 documentation): callers are expected to invoke this via
+    ``asyncio.to_thread`` so the blocking syscalls don't stall the event
+    loop. The polling caller in :func:`run_null_orchestrator` does this.
+    """
+    if not path.exists():
+        return offset, []
+    envelopes: list[EventEnvelope] = []
+    new_offset = offset
+    with open(path, "rb") as f:
+        f.seek(offset)
+        last_complete_end = offset
+        while True:
+            raw = f.readline()
+            if not raw:
+                break
+            if not raw.endswith(b"\n"):
+                # Trailing partial line — leave for the next poll.
+                break
+            envelopes.append(from_canonical_json(raw.rstrip(b"\r\n")))
+            last_complete_end += len(raw)
+        new_offset = last_complete_end
+    return new_offset, envelopes
 
 
 async def _emit_lifecycle_for_task(
@@ -288,18 +400,33 @@ async def run_null_orchestrator(
     # pattern. Empty dict means every file starts at offset 0 — but the
     # AC-7 dedupe set ensures the startup-replay phase does NOT re-emit
     # lifecycle events for tasks already seen.
+    #
+    # Mn9 (deferred): the offsets dict accumulates entries for every
+    # ``YYYY-MM-DD.jsonl`` file the orchestrator has ever observed. At
+    # one entry per UTC day this leaks at ~365 entries/year — negligible
+    # for a test fixture. A long-running production orchestrator would
+    # want a TTL/LRU bound; defer to Story 5.10's real implementation.
     offsets: dict[str, int] = {}
     first_iteration_done = False
 
     try:
         while not stop.is_set():
             envelopes_seen: list[EventEnvelope] = []
-            for path in sorted(base_dir.glob("*.jsonl")):
-                prior = offsets.get(path.name, 0)
+            # Mn10 hardening: rglob (not glob) so future operators who
+            # nest event logs by date subdirectory still get tailed
+            # correctly. Polling cost note: this re-reads only the bytes
+            # appended since the last offset (O(delta)), not the entire
+            # file — the per-poll cost stays bounded as the log grows.
+            for path in sorted(base_dir.rglob("*.jsonl")):
+                # Use the path RELATIVE to base_dir as the offsets key
+                # (was: ``path.name``) so identically-named files in
+                # nested subdirectories don't collide on the same key.
+                offset_key = str(path.relative_to(base_dir))
+                prior = offsets.get(offset_key, 0)
                 new_offset, envelopes = await asyncio.to_thread(
                     _read_new_envelopes_since, path, prior
                 )
-                offsets[path.name] = new_offset
+                offsets[offset_key] = new_offset
                 envelopes_seen.extend(envelopes)
 
             for env in envelopes_seen:
@@ -318,14 +445,24 @@ async def run_null_orchestrator(
                     continue
                 task_id: str = task_id_obj
                 if task_id in processed:
-                    # AC-7: already processed (either earlier in this run or
-                    # before a restart — startup scan would have caught it).
+                    # AC-7: already processed earlier in this run, OR a
+                    # follow-up lifecycle event for this task is already
+                    # in the log (the startup scan picks up any of the 4
+                    # lifecycle types — see _scan_processed_task_ids).
                     continue
-                # Mark BEFORE emit so a crash mid-emit doesn't double-emit
-                # on restart. The startup scan picks up the partial state
-                # via the ``task.planning.started`` event the next run sees.
-                processed.add(task_id)
+                # Story 2.15 code-review fix M5: mark AFTER successful
+                # emit. The prior implementation marked BEFORE emit which
+                # left a crash-window between mark and first append where
+                # the next run would treat the task as fresh and re-emit.
+                # Now: a crash mid-emit means the next run's startup scan
+                # sees the partial lifecycle (any of the 4 types) and
+                # adds the task_id to the dedupe set, suppressing re-emit.
+                # A crash BEFORE the first append leaves the task ONLY
+                # with task.created in the log; the next run treats it
+                # as fresh and emits the full lifecycle — the desired
+                # exactly-once-from-the-orchestrator semantics.
                 await _emit_lifecycle_for_task(writer=writer, task_created_env=env, clock=clock)
+                processed.add(task_id)
 
             # AC-2 step 4: touch /tmp/ready after the first poll iteration
             # so the docker-compose healthcheck flips to ``healthy``.
