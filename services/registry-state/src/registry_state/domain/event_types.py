@@ -35,7 +35,7 @@ is a no-op per Story 2.1's schema_registry.register contract).
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from events.schema_registry import register
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
@@ -256,6 +256,33 @@ class TaskStopRequestedPayload(BaseModel):
     actor_id: str = Field(min_length=1, max_length=128)
 
 
+class SecretAccessedPayload(BaseModel):
+    """Payload for the ``secret.accessed`` audit event (FR42 / NFR-S3).
+
+    The secret VALUE is NEVER included — only the metadata identifying
+    which secret was read, by which actor, and at what scope. The actor
+    identity is carried on the envelope's ``actor`` field; this payload
+    records the *what* (``secret_name``) and the *kind of access*
+    (``scope``).
+
+    Story 2.16 ships the infrastructure (this payload + the
+    :class:`secret_hygiene.AuditedSecret` wrapper). Phase 1 only supports
+    ``scope="read"``; future stories may add ``"rotated"`` or
+    ``"exposed"`` once those workflows exist.
+
+    Field rules:
+
+    * ``secret_name``: 1..128 chars (stable identifier — e.g.
+      ``"anthropic_api_key"``, ``"telegram_bot_token"``).
+    * ``scope``: literal ``"read"`` (Phase 1).
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    secret_name: str = Field(min_length=1, max_length=128)
+    scope: Literal["read"] = "read"
+
+
 # ---------------------------------------------------------------------------
 # Register all event types with Story 2.1's schema_registry.
 # Idempotent: re-registering the same model for the same key is a no-op.
@@ -296,10 +323,18 @@ register("task.stop_requested", "1.0.1", TaskStopRequestedPayload)
 # payload models are unchanged. Per the schema_registry's idempotent
 # same-model contract, re-registering the SAME model under both versions
 # is permitted (NFR-M3 additive-only evolution within a major version).
-# After this story, ``EVENT_TYPES`` is unchanged at 12 distinct type names;
+# After Story 2.14, ``EVENT_TYPES`` is unchanged at 12 distinct type names;
 # ``REGISTRY`` doubles to 24 (type, version) entries.
 
+# Story 2.16 — register the secret.accessed audit-event payload (FR42 /
+# NFR-S3). One new bare type name (``EVENT_TYPES`` grows 12 → 13); two new
+# (type, version) entries. Same-model contract: identical payload model
+# registered under both v1.0.0 and v1.0.1.
+register("secret.accessed", "1.0.0", SecretAccessedPayload)
+register("secret.accessed", "1.0.1", SecretAccessedPayload)
+
 __all__ = [
+    "SecretAccessedPayload",
     "ServiceCrashedPayload",
     "SessionHeartbeatTimeoutPayload",
     "SinkDeliveryFailedPayload",

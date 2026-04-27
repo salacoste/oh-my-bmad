@@ -1,13 +1,15 @@
 [project]
 name = "secret-hygiene"
-version = "0.1.0"
-description = "Secret scanner (pre-commit) + structlog log-sanitizer + license-scan wrapper. Three-layer secret-hygiene enforcement per NFR-S1."
+version = "0.2.0"
+description = "Secret scanner (pre-commit) + structlog log-sanitizer + license-scan wrapper + AuditedSecret wrapper. Three-layer secret-hygiene enforcement per NFR-S1 plus audit emission per FR42 / NFR-S3."
 authors = [
     { name = "R2d2", email = "bad.vano23ru@gmail.com" },
 ]
 requires-python = ">=3.12"
 dependencies = [
     "structlog>=24.1",
+    "events",
+    "pydantic-settings>=2.5,<3.0",
 ]
 
 [project.scripts]

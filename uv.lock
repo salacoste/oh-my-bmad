@@ -1307,14 +1307,20 @@ wheels = [
 
 [[package]]
 name = "secret-hygiene"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/secret-hygiene" }
 dependencies = [
+    { name = "events" },
+    { name = "pydantic-settings" },
     { name = "structlog" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "structlog", specifier = ">=24.1" }]
+requires-dist = [
+    { name = "events", editable = "packages/events" },
+    { name = "pydantic-settings", specifier = ">=2.5,<3.0" },
+    { name = "structlog", specifier = ">=24.1" },
+]
 
 [[package]]
 name = "session-registry-mcp"
