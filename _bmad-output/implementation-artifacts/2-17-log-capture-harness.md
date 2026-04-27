@@ -312,6 +312,65 @@ Tests MUST import this constant rather than hard-coding the literal — that way
 - `pyproject.toml:65-72` — `[tool.pytest.ini_options].markers` registers `integration`.
 - `_bmad-output/implementation-artifacts/2-16-secret-accessed-audit-events.md:266-285` — recent intelligence on stdlib-vs-structlog logging choices and `caplog` capture.
 
+### Review Findings
+
+Three-layer adversarial review (Blind Hunter + Edge Case Hunter + Acceptance Auditor) against commit `bb59dee`. After dedup: **4 High · 9 Med · 25 Low**. Per user directive ("fix all issues even minors") all are classified `[Patch]`.
+
+**High severity**
+
+- [ ] [Review][Patch] H1: AC-9 fixture-isolation invariant is a chain-presence check, not a snapshot round-trip — unproven against the actual restore-on-teardown regression mode [tests/integration/test_log_capture.py / capture_structlog]
+- [ ] [Review][Patch] H2: `assert_no_plaintext_secrets` re-emits up to 24 chars of leaked secret in `offending_excerpt` — harness itself violates NFR-S1 in its failure path [tests/_log_capture.py:188]
+- [ ] [Review][Patch] H3: `_walk_strings` silently drops leaves at `depth > _MAX_DEPTH` returning `[]` — false-clean for deeply-nested secret leaks [tests/_log_capture.py:78-79]
+- [ ] [Review][Patch] H4: `password=12345` (int) test relies on sanitizer's untested key-name redaction of non-str values; brittle contract assumption [tests/integration/test_log_capture.py / TestLogCaptureRedactionPositive::test_secret_keyed_field_with_nonsecret_value_still_redacted]
+
+**Medium severity**
+
+- [ ] [Review][Patch] M1: teardown when `is_configured()` was False initially — `reset_defaults()` actually re-configures structlog with the default chain, so post-teardown `is_configured()` becomes True; snapshot `was_configured` explicitly [tests/conftest.py / capture_structlog teardown]
+- [ ] [Review][Patch] M2: `dict(structlog.get_config())` is shallow — processors list reference shared with structlog internals; deep-copy the processors list (or filter to documented keyset) [tests/conftest.py:99-101]
+- [ ] [Review][Patch] M3: chain-order invariant (`redact_secrets` BEFORE `_list_capture_processor`) is comment-asserted but not test-pinned; add `test_chain_order_redact_before_capture` introspecting `structlog.get_config()["processors"]` indices [tests/conftest.py + tests/integration/test_log_capture.py]
+- [ ] [Review][Patch] M4: Telegram-token positive test asserts `msg == REDACTED_SENTINEL` (whole-value substitution); loosen to `REDACTED_SENTINEL in msg AND fixture not in msg` so the contract survives sanitizer evolution [tests/integration/test_log_capture.py / TestLogCaptureRedactionPositive::test_telegram_bot_token_in_message_is_redacted]
+- [ ] [Review][Patch] M5: `structlog.stdlib.add_log_level` mixed with `make_filtering_bound_logger` is an undocumented cross-flavour combination — switch to `structlog.processors.add_log_level` (non-stdlib variant) [tests/conftest.py:99-109]
+- [ ] [Review][Patch] M6: function-scoped fixture mutates process-global structlog state; document concurrent-test caveat in fixture docstring (xdist worker-process isolation OK, but in-worker parallelism undefined) [tests/conftest.py / capture_structlog docstring]
+- [ ] [Review][Patch] M7: hard module-load import of `secret_hygiene.scanner` from `tests/_log_capture.py` couples ALL tests to secret-hygiene availability; guard with `pytest.importorskip("secret_hygiene")` or lazy-import inside helpers [tests/_log_capture.py:30 + tests/conftest.py]
+- [ ] [Review][Patch] M8: whitelist case-sensitivity asymmetric with sanitizer's `.casefold()` — document the contract (lowercase-only) in module docstring or casefold both sides [tests/_log_capture.py / assert_only_whitelisted_fields + ALLOWED_LOG_FIELDS docstring]
+- [ ] [Review][Patch] M9: custom-object `__repr__` / `__str__` leak channel not scanned by the walker — document the gap explicitly in module docstring + add a TODO follow-up [tests/_log_capture.py module docstring]
+
+**Low severity**
+
+- [ ] [Review][Patch] L1: set/frozenset path notation `path{idx}` collides with literal-key syntax — render as `path.<set:idx>` for unambiguous diagnostics [tests/_log_capture.py:117-126]
+- [ ] [Review][Patch] L2: both helpers raise on FIRST violation; collect ALL violations and raise a single AssertionError with the full list [tests/_log_capture.py / assert_no_plaintext_secrets + assert_only_whitelisted_fields]
+- [ ] [Review][Patch] L3: positive tests don't pin `level`/`timestamp` presence — add the assertion in at least one positive test [tests/integration/test_log_capture.py]
+- [ ] [Review][Patch] L7: `_walk_strings` allocates per-frame lists — convert to generator with `yield from` for clarity and O(n) memory [tests/_log_capture.py / _walk_strings]
+- [ ] [Review][Patch] L8: `_scan_for_secret` returns FIRST matching pattern — collect all and sort alphabetically for stable error messages [tests/_log_capture.py / _scan_for_secret]
+- [ ] [Review][Patch] L9: no test for `assert_*([])` empty-list behaviour [tests/integration/test_log_capture.py]
+- [ ] [Review][Patch] L10: `test_assert_no_plaintext_secrets_passes_when_sentinel_present` is a positive case mis-classified under `TestLogCaptureRedactionNegative` — move or rename the class [tests/integration/test_log_capture.py]
+- [ ] [Review][Patch] L11: `pytest.raises(match=re.compile(..., re.DOTALL))` — switch to raw-string with inline `(?s)` flag for portability [tests/integration/test_log_capture.py]
+- [ ] [Review][Patch] L13: each test re-acquires `structlog.get_logger("test_log_capture")` — extract a class-level `_logger` fixture [tests/integration/test_log_capture.py]
+- [ ] [Review][Patch] L14: no assertion proves no downstream renderer fires — add a `capsys`-based `assert capsys.readouterr().err == ""` [tests/integration/test_log_capture.py]
+- [ ] [Review][Patch] L15: no test pins contextvar/kwarg precedence (`bind_contextvars(level="bogus")` must NOT shadow the actual `log.info(...)` level) [tests/integration/test_log_capture.py]
+- [ ] [Review][Patch] L18: `test_allowed_log_fields_contains_architecture_required_set` doesn't lock the count; assert `len(ALLOWED_LOG_FIELDS) == 16` to force conscious updates [tests/integration/test_log_capture.py]
+- [ ] [Review][Patch] L19: no positive test using ALL 16 whitelisted fields together — add to detect typos in the literal [tests/integration/test_log_capture.py]
+- [ ] [Review][Patch] L20: `record.get("level", "?")` returns `None` for `level=None` values; use `record.get("level") or "?"` [tests/_log_capture.py error-message helpers]
+- [ ] [Review][Patch] L21: empty `{}` records silently pass `assert_only_whitelisted_fields`; consider adding a min-fields assertion or sentinel test [tests/integration/test_log_capture.py]
+- [ ] [Review][Patch] L22: walker docstring claims "mirrors `_redact_value` exactly" but actually descends INTO non-str members of sets/frozensets (sanitizer doesn't); amend docstring [tests/_log_capture.py / _walk_strings docstring]
+- [ ] [Review][Patch] L23: dead `try/except` around `bytes.decode(errors="replace")` — `errors="replace"` cannot raise; drop the wrapper [tests/_log_capture.py:109-114]
+- [ ] [Review][Patch] L24: mid-yield exception masked if `configure(**snapshot)` raises in `finally` — wrap restore in try/except so original test exception is preserved [tests/conftest.py teardown]
+- [ ] [Review][Patch] L25: `_KEY_REDACT_SET`-dependency on `password` is implicit — pin via `from secret_hygiene.sanitizer import _KEY_REDACT_SET; assert "password" in _KEY_REDACT_SET` in a contract test [tests/integration/test_log_capture.py]
+- [ ] [Review][Patch] L26: no test for non-string dict keys in records (e.g. `{1: "ok"}`) [tests/integration/test_log_capture.py]
+- [ ] [Review][Patch] L27: chain-presence test relies on `__name__` lookup; pin by identity (`from secret_hygiene.sanitizer import redact_secrets; assert redact_secrets in cfg["processors"]`) [tests/integration/test_log_capture.py / TestLogCaptureFixtureContract]
+- [ ] [Review][Patch] L28: no test pins `cache_logger_on_first_use is False`; add to chain-contract test [tests/integration/test_log_capture.py]
+- [ ] [Review][Patch] L30: negative-test regex `r"offending_path: leaked"` not anchored — would match `leaked_token` etc.; add `\n` or `$` anchor [tests/integration/test_log_capture.py]
+- [ ] [Review][Patch] L31: `ALLOWED_LOG_FIELDS` includes `exc_info`/`exception` but the fixture chain doesn't run `format_exc_info` — document so users know `log.exception(...)` produces only `event`+`level`+`timestamp` [tests/_log_capture.py / fixture docstring]
+- [ ] [Review][Patch] L32: walker `_MAX_DEPTH=32` vs sanitizer `_MAX_DEPTH=20` — align to 20 to truly mirror, OR document the asymmetry [tests/_log_capture.py:94]
+
+**Dismissed (not patched)**
+
+- [x] [Review][Defer] L4 (`{{agent_model_name_version}}` placeholder) — cosmetic; not part of any tooling parser.
+- [x] [Review][Defer] L5 (Change Log author column = model id) — convention; defer.
+- [x] [Review][Defer] L6 (`last_updated` duplicated in YAML comment + field) — historical layout, intentional.
+- [x] [Review][Defer] L12 (`list[X]` base class needs Py ≥ 3.9) — repo pin is 3.12 per `pyproject.toml`.
+- [x] [Review][Defer] L29 (24-char unicode-grapheme split) — cosmetic; superseded by H2 fix that drops the excerpt entirely.
+
 ## Dev Agent Record
 
 ### Agent Model Used

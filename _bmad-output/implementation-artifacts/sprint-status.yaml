@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: 2026-04-27T22:00:28Z
+# last_updated: 2026-04-27T22:18:44Z
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-04-27T22:00:28Z
+last_updated: 2026-04-27T22:18:44Z
 project: oh-my-bmad
 project_key: NOKEY
 tracking_system: file-system

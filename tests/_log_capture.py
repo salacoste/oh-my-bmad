@@ -19,6 +19,22 @@ truth for redaction patterns; ``ALLOWED_LOG_FIELDS`` is the single source of
 truth for log-field hygiene. The harness consumes the former read-only and
 exposes the latter for top-level whitelist checks.
 
+Whitelist case-sensitivity
+--------------------------
+``ALLOWED_LOG_FIELDS`` membership is case-SENSITIVE — emitters MUST use
+lowercase field names. The sanitizer's ``_KEY_REDACT_SET`` uses ``.casefold()``,
+but the whitelist deliberately does not, to surface accidental case drift
+(e.g. ``"Request_Id"`` from header propagation) as test failures rather than
+silently allowing them.
+
+Coverage gap — custom-object leak channel
+-----------------------------------------
+Custom objects whose ``__repr__`` / ``__str__`` embed secrets are NOT scanned —
+the walker only enters str / bytes / dict / list / tuple / set / frozenset
+leaves. Services emitting non-primitive objects via structlog MUST register a
+processor that redacts in ``__repr__`` or stringifies before emission. Tracked
+as a future enhancement.
+
 References
 ----------
 - ``architecture.md:416`` — required-fields list (event/level/timestamp/
@@ -32,10 +48,17 @@ References
 
 from __future__ import annotations
 
-from collections.abc import MutableMapping
+from collections.abc import Iterator, MutableMapping
 from typing import Any
 
-from secret_hygiene.scanner import SECRET_PATTERNS
+import pytest
+
+# Defensive import guard: a contributor running ``tests/unit/...`` without the
+# secret-hygiene venv would otherwise fail at module collection. ``importorskip``
+# downgrades that to a clean skip.
+pytest.importorskip("secret_hygiene")
+
+from secret_hygiene.scanner import SECRET_PATTERNS  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Public types
@@ -89,76 +112,121 @@ ALLOWED_LOG_FIELDS: frozenset[str] = frozenset(
 # Yields (dotted_path, str_value) for every str leaf reachable from the record.
 # ---------------------------------------------------------------------------
 
-# Depth bound — matches sanitizer._MAX_DEPTH spirit; prevents runaway recursion
-# on accidental cycles in test-authored records.
-_MAX_DEPTH: int = 32
+# Depth bound — aligned with sanitizer._MAX_DEPTH (= 20). On overflow the
+# walker raises rather than returning ``[]``, so a deeply-nested record cannot
+# silently produce a false-clean scan.
+_MAX_DEPTH: int = 20
 
 
-def _walk_strings(value: Any, path: str, depth: int = 0) -> list[tuple[str, str]]:
-    """Return all ``(dotted_path, str_value)`` pairs reachable from *value*.
+def _walk_strings(value: Any, path: str, depth: int = 0) -> Iterator[tuple[str, str]]:
+    """Yield all ``(dotted_path, str_value)`` pairs reachable from *value*.
 
-    Recursion mirrors :func:`secret_hygiene.sanitizer._redact_value` exactly —
-    same container handling (dict, MutableMapping, list, tuple, set, frozenset),
-    same depth guard. Bytes are decoded with ``errors="replace"`` so binary
-    payloads carrying ASCII-shaped tokens are still scanned.
+    Recursion is at least as thorough as
+    :func:`secret_hygiene.sanitizer._redact_value`: the walker descends into
+    set/frozenset members of any type, while the sanitizer only inspects str
+    members of sets — the asymmetry favours detection. Same depth guard
+    (``_MAX_DEPTH = 20``); on overflow we raise ``AssertionError`` rather than
+    returning empty so a deeply-nested secret cannot produce a false-clean.
     """
     if depth > _MAX_DEPTH:
-        return []
+        raise AssertionError(
+            "max-depth exceeded while walking captured record at "
+            f"path={path!r} depth={depth}; refusing to give a false-clean — "
+            "flatten the record or split the test"
+        )
     if isinstance(value, str):
-        return [(path, value)]
+        yield (path, value)
+        return
     if isinstance(value, bytes):
-        try:
-            decoded = value.decode("utf-8", errors="replace")
-        except Exception:  # noqa: BLE001
-            return []
-        return [(path, decoded)]
+        # ``errors="replace"`` cannot raise — no try/except wrapper needed.
+        yield (path, value.decode("utf-8", errors="replace"))
+        return
     if isinstance(value, dict):
-        out: list[tuple[str, str]] = []
         for k, v in value.items():
             sub = f"{path}.{k}" if path else str(k)
-            out.extend(_walk_strings(v, sub, depth + 1))
-        return out
+            yield from _walk_strings(v, sub, depth + 1)
+        return
     # Non-dict MutableMapping (e.g. ChainMap) — same iteration as dict.
     if isinstance(value, MutableMapping):
-        out2: list[tuple[str, str]] = []
         for k, v in value.items():
             sub = f"{path}.{k}" if path else str(k)
-            out2.extend(_walk_strings(v, sub, depth + 1))
-        return out2
+            yield from _walk_strings(v, sub, depth + 1)
+        return
     if isinstance(value, list | tuple):
-        out3: list[tuple[str, str]] = []
         for idx, item in enumerate(value):
             sub = f"{path}[{idx}]"
-            out3.extend(_walk_strings(item, sub, depth + 1))
-        return out3
+            yield from _walk_strings(item, sub, depth + 1)
+        return
     if isinstance(value, set | frozenset):
-        # Sets are unordered; report a stable synthetic path. Sorting str
-        # members keeps the assertion-message deterministic for sets of strs.
-        out4: list[tuple[str, str]] = []
+        # Sets are unordered; render path as ``path.<set:idx>`` (unambiguous
+        # vs literal-key ``.idx`` and vs list ``[idx]``). Sort members by
+        # ``repr()`` for deterministic ordering across runs.
         items = sorted(value, key=lambda x: repr(x)) if value else []
         for idx, item in enumerate(items):
-            sub = f"{path}{{{idx}}}"
-            out4.extend(_walk_strings(item, sub, depth + 1))
-        return out4
-    return []
+            sub = f"{path}.<set:{idx}>"
+            yield from _walk_strings(item, sub, depth + 1)
+        return
+    return
 
 
-def _scan_for_secret(text: str) -> str | None:
-    """Return the name of the first ``SECRET_PATTERNS`` entry that matches *text*.
+def _scan_for_secret(text: str) -> list[str]:
+    """Return ALL ``SECRET_PATTERNS`` entry names that match *text*, sorted.
 
     Iterates ``SECRET_PATTERNS`` (the FIVE-pattern table at
-    ``scanner.py:53-61``) read-only — never re-defines patterns. Returns
-    ``None`` if no pattern fires.
+    ``scanner.py:53-61``) read-only — never re-defines patterns. Returns an
+    empty list if no pattern fires; otherwise an alphabetically-sorted list
+    of matching pattern names, so error messages are deterministic when
+    multiple patterns hit the same string.
     """
-    for pattern_name, pattern in SECRET_PATTERNS.items():
-        if pattern.search(text) is not None:
-            return pattern_name
-    return None
+    hits = [name for name, pattern in SECRET_PATTERNS.items() if pattern.search(text) is not None]
+    return sorted(hits)
 
 
 # ---------------------------------------------------------------------------
 # Public assertion helpers
 # ---------------------------------------------------------------------------
+
+
+def _format_secret_violation(
+    *,
+    index: int,
+    record: CapturedRecord,
+    path: str,
+    str_value: str,
+    hits: list[str],
+) -> str:
+    """Build the AC-5 contracted violation block (no secret material echoed)."""
+    level = record.get("level") or "?"
+    event = record.get("event") or "?"
+    pattern_str = ",".join(hits)
+    return (
+        "plaintext secret detected in captured log record\n"
+        f"    pattern: {pattern_str}\n"
+        f"    record_index: {index}\n"
+        f"    level: {level}\n"
+        f"    event: {event}\n"
+        f"    offending_path: {path}\n"
+        f"    offending_value_length: {len(str_value)}"
+    )
+
+
+def _format_whitelist_violation(
+    *,
+    index: int,
+    record: CapturedRecord,
+    key: str,
+) -> str:
+    """Build the AC-6 contracted whitelist-violation block."""
+    level = record.get("level") or "?"
+    event = record.get("event") or "?"
+    return (
+        "unknown log field outside whitelist\n"
+        f"    record_index: {index}\n"
+        f"    offending_field: {key}\n"
+        f"    level: {level}\n"
+        f"    event: {event}\n"
+        "    hint: extend ALLOWED_LOG_FIELDS in tests/_log_capture.py if intentional."
+    )
 
 
 def assert_no_plaintext_secrets(records: CapturedLogList) -> None:
@@ -168,33 +236,32 @@ def assert_no_plaintext_secrets(records: CapturedLogList) -> None:
     tuples / sets / frozensets / bytes — exactly mirroring ``_redact_value``)
     and tests every encountered ``str`` value against ``SECRET_PATTERNS``.
 
-    On hit, the error message follows the AC-5 contracted format::
-
-        AssertionError: plaintext secret detected in captured log record
-            pattern: {pattern_name}
-            record_index: {N}
-            level: {level or '?'}
-            event: {event or '?'}
-            offending_path: {dotted-path-from-root}
-            offending_excerpt: {value[:24] + "…" if len(value) > 24 else value}
+    Collects ALL violations across ALL records and raises a single
+    ``AssertionError`` whose message lists each violation block, separated by
+    blank lines and prefixed with ``Violation N of M:``. The harness itself
+    NEVER echoes the offending secret value — only its length is reported, so
+    that test failure output cannot itself violate NFR-S1.
     """
+    violations: list[str] = []
     for index, record in enumerate(records):
         for path, str_value in _walk_strings(record, ""):
-            hit = _scan_for_secret(str_value)
-            if hit is None:
+            hits = _scan_for_secret(str_value)
+            if not hits:
                 continue
-            level = record.get("level", "?")
-            event = record.get("event", "?")
-            excerpt = str_value if len(str_value) <= 24 else str_value[:24] + "…"
-            raise AssertionError(
-                "plaintext secret detected in captured log record\n"
-                f"    pattern: {hit}\n"
-                f"    record_index: {index}\n"
-                f"    level: {level}\n"
-                f"    event: {event}\n"
-                f"    offending_path: {path}\n"
-                f"    offending_excerpt: {excerpt}"
+            violations.append(
+                _format_secret_violation(
+                    index=index,
+                    record=record,
+                    path=path,
+                    str_value=str_value,
+                    hits=hits,
+                )
             )
+    if not violations:
+        return
+    total = len(violations)
+    blocks = [f"Violation {i + 1} of {total}:\n{v}" for i, v in enumerate(violations)]
+    raise AssertionError("\n\n".join(blocks))
 
 
 def assert_only_whitelisted_fields(
@@ -206,26 +273,27 @@ def assert_only_whitelisted_fields(
     Top-level keys only — nested payload fields are domain-owned and not
     candidates for whitelist enforcement.
 
-    On violation::
+    Whitelist comparison is case-SENSITIVE — emitters MUST use lowercase field
+    names. See module docstring for rationale.
 
-        AssertionError: unknown log field outside whitelist
-            record_index: {N}
-            offending_field: {key}
-            level: {level or '?'}
-            event: {event or '?'}
-            hint: extend ALLOWED_LOG_FIELDS in tests/_log_capture.py if intentional.
+    Collects ALL violations across ALL records and raises a single
+    ``AssertionError`` whose message lists each violation block, separated by
+    blank lines and prefixed with ``Violation N of M:``.
     """
+    violations: list[str] = []
     for index, record in enumerate(records):
         for key in record:
             if key in whitelist:
                 continue
-            level = record.get("level", "?")
-            event = record.get("event", "?")
-            raise AssertionError(
-                "unknown log field outside whitelist\n"
-                f"    record_index: {index}\n"
-                f"    offending_field: {key}\n"
-                f"    level: {level}\n"
-                f"    event: {event}\n"
-                "    hint: extend ALLOWED_LOG_FIELDS in tests/_log_capture.py if intentional."
+            violations.append(
+                _format_whitelist_violation(
+                    index=index,
+                    record=record,
+                    key=key,
+                )
             )
+    if not violations:
+        return
+    total = len(violations)
+    blocks = [f"Violation {i + 1} of {total}:\n{v}" for i, v in enumerate(violations)]
+    raise AssertionError("\n\n".join(blocks))
