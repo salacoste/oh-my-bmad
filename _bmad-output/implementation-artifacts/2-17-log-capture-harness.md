@@ -1,6 +1,6 @@
 # Story 2.17: log-capture harness + NFR-S1 redaction test
 
-Status: review
+Status: done
 
 ## Story
 

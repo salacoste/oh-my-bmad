@@ -62,7 +62,7 @@ development_status:
   # =========================================================================
   # Epic 2: Event Spine & Registry (17 stories)
   # =========================================================================
-  epic-2: in-progress
+  epic-2: done
   2-1-event-envelope-schema-registry: done
   2-2-uuidv7-injectable-clock: done
   2-3-registry-state-sqlite-schema: done
@@ -79,7 +79,7 @@ development_status:
   2-14-migrator-integration-test: done
   2-15-s3-separability-orchestrator-swap: done
   2-16-secret-accessed-audit-events: done
-  2-17-log-capture-harness: review
+  2-17-log-capture-harness: done
   epic-2-retrospective: optional
 
   # =========================================================================
