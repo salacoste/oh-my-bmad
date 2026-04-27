@@ -87,7 +87,7 @@ development_status:
   # First 3 stories (3-3, 3-4, 3-5) are the Bootstrap Minimum Subset
   # =========================================================================
   epic-3: in-progress
-  3-1-aiogram-bootstrap-webhook: in-progress
+  3-1-aiogram-bootstrap-webhook: review
   3-2-allowlist-middleware: backlog
   3-3-task-command: backlog
   3-4-approve-command: backlog
