@@ -1,6 +1,6 @@
 # Story 2.13: Idempotency 100× replay test
 
-Status: review
+Status: done
 
 ## Story
 

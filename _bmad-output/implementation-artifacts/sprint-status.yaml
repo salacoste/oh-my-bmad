@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: 2026-04-27T09:30:00Z
+# last_updated: 2026-04-27T11:00:00Z
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-04-27T09:30:00Z
+last_updated: 2026-04-27T11:00:00Z
 project: oh-my-bmad
 project_key: NOKEY
 tracking_system: file-system
@@ -75,7 +75,7 @@ development_status:
   2-10-failure-detection-events: done
   2-11-synthetic-crash-injection-harness: done
   2-12-write-interrupt-harness: done
-  2-13-idempotency-100x-replay-test: review
+  2-13-idempotency-100x-replay-test: done
   2-14-migrator-integration-test: backlog
   2-15-s3-separability-orchestrator-swap: backlog
   2-16-secret-accessed-audit-events: backlog
