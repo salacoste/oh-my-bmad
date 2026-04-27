@@ -1,13 +1,30 @@
 [project]
 name = "telegram-gateway"
-version = "0.1.0"
-description = "Telegram bot ingress (aiogram v3) + outbound message-template routing."
+version = "0.2.0"
+description = "Telegram bot ingress (aiogram v3) + outbound message-template routing. Story 3.1 ships aiogram v3 dispatcher behind a FastAPI webhook + TelegramSettings (first AuditedBaseSettings consumer)."
 authors = [
     { name = "R2d2", email = "bad.vano23ru@gmail.com" },
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "aiogram>=3.13,<4.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic-settings>=2.5,<3.0",
+    "secret-hygiene",
+    "events",
+]
 
 [build-system]
 requires = ["uv_build>=0.11.0,<1.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "asgi-lifespan>=2.1",
+    "httpx>=0.27",
+]
+
+[tool.uv.sources]
+secret-hygiene = { workspace = true }
+events = { workspace = true }
