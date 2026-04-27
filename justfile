@@ -133,7 +133,7 @@ test-migrator *ARGS="":
 # the null fixture's emitted lifecycle — proving FR35 / NFR-M5. The
 # git-diff sentinel (fast) asserts the working tree leaves spine source
 # untouched. Trailing ``*ARGS`` lets nightly forward ``--junitxml=...``.
-test-separability *ARGS="":
+test-separability *ARGS="": build-base
     uv run pytest -m separability -v tests/separability/ {{ARGS}}
 
 # Strict lint + format + type-check + architectural-discipline gates.

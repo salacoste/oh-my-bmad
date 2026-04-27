@@ -21,6 +21,7 @@ Skip behavior: only the e2e test depends on Docker (it requests
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -32,8 +33,10 @@ from typing import Any
 from uuid import uuid4
 
 import _build_null_orchestrator  # type: ignore[import-not-found]  # sys.path-injected via conftest
+import aiosqlite
 import httpx
 import pytest
+from events import EventEnvelope, from_canonical_json
 
 _log = logging.getLogger(__name__)
 
@@ -59,7 +62,10 @@ _CONTAINER_GID = 10000
 
 # Test budget knobs — tightening these without measuring will cause
 # flaky CI on cold runners.
-_HEALTHCHECK_TIMEOUT_S: float = 90.0  # boot 3 services + base-image build cache
+# 180s accommodates cold first-run image builds (registry-state + registry-api
+# FROM oh-my-bmad-base:local; if base image is missing, build-base recipe
+# builds it ~60-90s, leaving 90s margin for healthchecks).
+_HEALTHCHECK_TIMEOUT_S: float = 180.0  # boot 3 services + base-image build cache
 _TASK_COMPLETION_TIMEOUT_S: float = 30.0  # null-orchestrator emits 4 events in ~400ms-1s
 _PORT_WAIT_TIMEOUT_S: float = 30.0  # mapped-port assignment can lag boot
 
@@ -229,6 +235,67 @@ def _read_jsonl_envelopes(log_dir: Path) -> list[dict[str, Any]]:
     return envelopes
 
 
+def _read_typed_envelopes(log_dir: Path) -> list[EventEnvelope]:
+    """Read every envelope as a typed :class:`EventEnvelope` across every ``*.jsonl`` under *log_dir*.
+
+    Used by the assertion phase (M6 round 2) so attribute-based checks
+    (``env.actor.kind``, ``env.event_id``, ``env.parent_event_id``,
+    ``env.emitted_at_monotonic_ns``) can run with full type safety.
+    Mirrors ``_read_jsonl_envelopes`` for partial-line tolerance.
+    """
+    if not log_dir.exists():
+        return []
+    envelopes: list[EventEnvelope] = []
+    for path in sorted(log_dir.glob("*.jsonl")):
+        try:
+            with path.open("rb") as fh:
+                for raw in fh:
+                    if not raw.endswith(b"\n"):
+                        # Trailing partial line — skip per writer contract.
+                        continue
+                    line = raw.rstrip(b"\r\n")
+                    if not line.strip():
+                        continue
+                    try:
+                        envelopes.append(from_canonical_json(line))
+                    except Exception:  # noqa: BLE001 — tolerant per recovery contract
+                        continue
+        except FileNotFoundError:
+            continue
+    return envelopes
+
+
+async def _wait_for_task_status_completed(
+    data_dir: Path, task_id: str, *, timeout_s: float = 10.0
+) -> None:
+    """Poll the registry-state SQLite materializer until ``tasks.status = 'completed'``.
+
+    Round-trip end-to-end verification (M4): the JSONL ``task.completed``
+    envelope having landed proves only the writer side; the materializer
+    is async and may take a beat to project the event into the SQLite
+    ``tasks`` table. Open the DB read-only via the SQLite URI, retry on
+    ``OperationalError`` (DB may not exist yet on cold runs), and assert
+    the row reaches ``'completed'`` within the budget.
+    """
+    db_path = data_dir / "registry" / "state.sqlite3"
+    uri = f"file:{db_path}?mode=ro"
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            async with aiosqlite.connect(uri, uri=True) as conn:
+                cur = await conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,))
+                row = await cur.fetchone()
+                await cur.close()
+                if row and row[0] == "completed":
+                    return
+        except aiosqlite.OperationalError:
+            pass  # DB not yet created or schema not yet migrated; retry.
+        await asyncio.sleep(0.5)
+    raise AssertionError(
+        f"tasks.status did not reach 'completed' for {task_id!r} within {timeout_s}s"
+    )
+
+
 @pytest.mark.separability
 @pytest.mark.slow
 def test_orchestrator_swap_with_null_orchestrator_completes_task_end_to_end(
@@ -287,7 +354,7 @@ def test_orchestrator_swap_with_null_orchestrator_completes_task_end_to_end(
 
         # Step 4 — resolve mapped port + pre-flight TCP probe.
         port = _resolve_registry_api_port(project, env, timeout_s=_PORT_WAIT_TIMEOUT_S)
-        _wait_for_socket("127.0.0.1", port)
+        _wait_for_socket("localhost", port)
 
         # Step 5 — POST a task.
         with httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=10.0) as client:
@@ -343,6 +410,69 @@ def test_orchestrator_swap_with_null_orchestrator_completes_task_end_to_end(
             f"task {task_id!r}: missing lifecycle events {missing!r}; "
             f"types observed={types_for_task!r}"
         )
+
+        # Step 7b (M6 round 2) — strengthened structural assertions on the
+        # typed-envelope view: actor identity, parent_event_id chain,
+        # monotonic_ns ordering, and exact event count.
+        typed_envelopes = _read_typed_envelopes(log_dir)
+
+        def _typed_payload_task_id(env_obj: EventEnvelope) -> str | None:
+            payload = env_obj.payload
+            if isinstance(payload, dict):
+                tid = payload.get("task_id")
+                return tid if isinstance(tid, str) else None
+            return getattr(payload, "task_id", None)
+
+        envelopes_for_task: list[EventEnvelope] = [
+            env_typed
+            for env_typed in typed_envelopes
+            if _typed_payload_task_id(env_typed) == task_id
+        ]
+
+        # Locate the originating task.created envelope.
+        created_env: EventEnvelope = next(e for e in envelopes_for_task if e.type == "task.created")
+        emitted_envs: list[EventEnvelope] = [
+            e for e in envelopes_for_task if e.type != "task.created"
+        ]
+
+        # All 4 emitted events: Actor(kind="orchestrator", id="null-orchestrator").
+        for env_typed in emitted_envs:
+            assert env_typed.actor.kind == "orchestrator", (
+                f"actor.kind={env_typed.actor.kind!r} for type={env_typed.type}"
+            )
+            assert env_typed.actor.id == "null-orchestrator", (
+                f"actor.id={env_typed.actor.id!r} for type={env_typed.type}"
+            )
+
+        # parent_event_id chains to the originating task.created.
+        for env_typed in emitted_envs:
+            assert env_typed.parent_event_id == created_env.event_id, (
+                f"parent_event_id={env_typed.parent_event_id!r} for type={env_typed.type}, "
+                f"expected={created_env.event_id!r}"
+            )
+
+        # Lifecycle ordering: monotonic_ns strictly increasing in canonical order.
+        canonical_order = [
+            "task.created",
+            "task.planning.started",
+            "task.plan.ready",
+            "task.execution.started",
+            "task.completed",
+        ]
+        ordered = sorted(envelopes_for_task, key=lambda e: e.emitted_at_monotonic_ns)
+        assert [e.type for e in ordered] == canonical_order, (
+            f"lifecycle order: {[e.type for e in ordered]}, expected {canonical_order}"
+        )
+
+        # Exactly 5 events for this task — no duplicates.
+        assert len(envelopes_for_task) == 5, (
+            f"got {len(envelopes_for_task)} events; types: {[e.type for e in envelopes_for_task]}"
+        )
+
+        # Step 8 (M4 round 2) — verify the materializer projected the
+        # task.completed event into SQLite tasks.status. Closes the gap
+        # between "JSONL writer fired" and "spine state actually updated".
+        asyncio.run(_wait_for_task_status_completed(data_dir, task_id))
     finally:
         # Best-effort teardown — never let cleanup errors mask test failures.
         proc_down = subprocess.run(
@@ -363,42 +493,61 @@ def test_orchestrator_swap_with_null_orchestrator_completes_task_end_to_end(
 
 @pytest.mark.separability
 def test_spine_source_code_unchanged() -> None:
-    """Sentinel: this story's working tree must NOT modify spine source code.
+    """Sentinel: spine source must remain untouched by this story.
 
-    WORKING TREE assertion only; not a historical commit-graph check.
+    Runs ``git diff --name-only HEAD~1 HEAD -- <spine path>...`` first
+    (the CI signal — catches spine touches in the LAST commit), and
+    falls back to ``HEAD`` (working-tree-vs-HEAD) on fresh/shallow
+    checkouts where ``HEAD~1`` doesn't resolve. Skips on non-git
+    checkouts (e.g., source tarballs).
 
-    Runs ``git diff --name-only HEAD -- <spine path>...`` and asserts
-    the output is empty. Compose YAML changes (``docker-compose.yml``)
-    are config, NOT source under the four spine ``src/`` paths — they
-    are exempt by construction.
-
-    Intent: surface accidental coupling DURING DEVELOPMENT. A future PR
-    that modifies any spine path AND breaks separability semantics will
-    surface here. The check stays fast (sub-second) and fits the
-    PR-gate ``just test`` lane.
+    Intent: surface accidental coupling. A future PR that modifies any
+    spine path AND breaks separability semantics will surface here.
+    The check stays fast (sub-second) and fits the PR-gate
+    ``just test`` lane.
     """
-    # ``git diff`` runs against the current process's CWD. Use cwd=_REPO_ROOT
-    # so this works regardless of how pytest is invoked (from repo root,
-    # from a subdirectory, from CI, etc.).
-    proc = subprocess.run(
-        [
-            "git",
-            "diff",
-            "--name-only",
-            "HEAD",
-            "--",
-            *_SPINE_PATHS,
-        ],
+    SPINE_PATHS = [
+        "services/registry-state/src/",
+        "services/registry-api/src/",
+        "mcp-servers/clawhip-bridge/src/",
+        "services/worker-wrapper/src/",
+    ]
+
+    # Skip on non-git checkout (e.g., source tarball).
+    rev_parse = subprocess.run(
+        ["git", "rev-parse", "--git-dir"],
         cwd=_REPO_ROOT,
-        check=True,
         capture_output=True,
         text=True,
     )
+    if rev_parse.returncode != 0:
+        pytest.skip("non-git checkout (e.g., source tarball)")
+
+    # Try HEAD~1..HEAD first (CI signal — catches spine touches in last commit).
+    try:
+        proc = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD~1", "HEAD", "--", *SPINE_PATHS],
+            cwd=_REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        # Fresh clone or shallow checkout: fall back to working-tree-vs-HEAD.
+        proc = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD", "--", *SPINE_PATHS],
+            cwd=_REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
     assert proc.stdout.strip() == "", (
-        "Spine source code under "
-        f"{_SPINE_PATHS!r} has uncommitted modifications, which would "
-        "violate FR35/NFR-M5. Files changed:\n"
-        f"{proc.stdout}"
+        f"spine source touched in last commit:\n{proc.stdout}\n"
+        "Story 2.15's separability claim requires no source modifications "
+        "to registry-state/registry-api/clawhip-bridge/worker-wrapper. "
+        "If this change is config (compose YAML, mypy.ini, justfile, "
+        "tests/), move it out of the spine src/ directories."
     )
 
 

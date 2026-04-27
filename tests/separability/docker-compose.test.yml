@@ -74,11 +74,11 @@ services:
     ports:
       - "8080"
     volumes:
-      # NOT read-only — registry-api writes to the JSONL event log on POST
-      # /v1/tasks. The base ``docker-compose.yml`` mounts this RO because
-      # the production registry-api uses the JSONL writer in the
-      # registry-state service; for the S-3 harness we keep the simpler
-      # api-writes-locally pattern from Story 2.9's tests.
+      # NOT read-only — registry-api writes JSONL directly via EventLogWriter
+      # on POST /v1/tasks (Story 2.9's single-writer pattern). The base
+      # ``docker-compose.yml`` keeps the same shape; the S-3 harness simply
+      # mounts the bind-target read-write so the api can append the
+      # originating ``task.created`` envelope.
       - ${OMB_S3_DATA_DIR:?OMB_S3_DATA_DIR must be exported by the harness}:/var/lib/oh-my-bmad
     depends_on:
       registry-state:

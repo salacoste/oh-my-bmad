@@ -223,6 +223,12 @@ jobs:
           mkdir -p _bmad-output/test-artifacts
           just test-separability --junitxml=_bmad-output/test-artifacts/s3-separability-${{ github.run_id }}.xml
 
+      - name: Capture compose logs on failure
+        if: failure()
+        run: |
+          mkdir -p _bmad-output/test-artifacts
+          docker ps -a > _bmad-output/test-artifacts/s3-docker-ps.txt 2>&1 || true
+
       - name: Upload S-3 separability artifact
         if: always()
         uses: actions/upload-artifact@v4

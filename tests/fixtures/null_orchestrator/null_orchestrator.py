@@ -137,36 +137,35 @@ _ACTOR: Actor = Actor(kind="orchestrator", id="null-orchestrator")
 # this file after the first poll iteration to flip the health to ``healthy``.
 _READY_FILE = Path("/tmp/ready")  # noqa: S108 — healthcheck signal, not data store
 
+# Set of envelope types the null-orchestrator itself emits. Presence of ANY
+# of these in the log for a given task_id means the orchestrator has already
+# at least started processing — the startup scan keys on this set so a crash
+# between detecting ``task.created`` and emitting the first lifecycle event
+# is correctly handled (crash-victims pre-emit re-emit on restart; tasks
+# with ANY orchestrator-emitted event are skipped).
+ORCHESTRATOR_EMITTED_TYPES: frozenset[str] = frozenset(
+    {
+        "task.planning.started",
+        "task.plan.ready",
+        "task.execution.started",
+        "task.completed",
+    }
+)
+
 
 def _scan_processed_task_ids(base_dir: Path) -> set[str]:
-    """Return the set of ``task_id``s whose lifecycle the orchestrator must NOT re-emit.
+    """Return task_ids that have ≥1 orchestrator-emitted lifecycle event in the log.
 
-    Story 2.15 code-review fix M5: scan keys on ``task.created`` envelopes
-    that ALREADY have ANY follow-up lifecycle event in the log. The prior
-    implementation keyed only on ``task.planning.started`` — that left a
-    crash-window where the orchestrator marked a task processed BEFORE
-    emitting the first lifecycle event, and a crash between mark and emit
-    would cause the next run to RE-emit the entire lifecycle (the
-    startup-scan would not see ``task.planning.started`` from the prior
-    run, so the task is treated as fresh).
+    Restart contract (AC-7): on restart, tasks where ANY orchestrator-emitted
+    event already landed are skipped. Tasks where only ``task.created`` is
+    present (crash-victims pre-emit) ARE re-processed — their lifecycle is
+    re-emitted from scratch. This means crash-victims may produce
+    duplicate-by-task_id lifecycle events across runs; production
+    orchestrators (Story 5.10+) use proper task-state queries to avoid this.
 
-    Tightened contract:
-
-    * Walk every ``*.jsonl`` file under *base_dir* (deterministic sorted
-      iteration).
-    * For each envelope of any ``task.*`` type EXCEPT ``task.created``,
-      add the ``task_id`` to the seen set. The presence of ANY follow-up
-      event (``task.planning.started``, ``task.plan.ready``,
-      ``task.execution.started``, ``task.completed``) marks the task as
-      "lifecycle already started" — re-emitting would violate AC-7.
-    * Tasks whose log-state is ONLY ``task.created`` (no follow-up) are
-      eligible for emission on tail (this is the normal happy path:
-      registry-api emits ``task.created``, null-orchestrator picks it up
-      on the next poll).
-
-    The remaining edge — orchestrator crashes AFTER `processed.add()` but
-    BEFORE the first append — is closed by the new tail-loop logic
-    (mark-after-emit; see :func:`run_null_orchestrator`).
+    Story 2.15 code-review fix M5 (round 2): uses the module-level
+    :data:`ORCHESTRATOR_EMITTED_TYPES` set so the witness types stay in
+    sync with what :func:`_emit_lifecycle_for_task` actually appends.
 
     rglob is used (Mn10 hardening borrowed from Story 2.13's reviewer)
     so future operators who organize event logs into subdirectories
@@ -181,20 +180,10 @@ def _scan_processed_task_ids(base_dir: Path) -> set[str]:
     seen: set[str] = set()
     if not base_dir.exists():
         return seen
-    # Set of task types whose presence in the log means "lifecycle started"
-    # — the orchestrator must NOT re-emit if any of these are seen.
-    _LIFECYCLE_TYPES = frozenset(
-        {
-            "task.planning.started",
-            "task.plan.ready",
-            "task.execution.started",
-            "task.completed",
-        }
-    )
     for path in sorted(base_dir.rglob("*.jsonl")):
         try:
             for env in read_log_lines(path):
-                if env.type not in _LIFECYCLE_TYPES:
+                if env.type not in ORCHESTRATOR_EMITTED_TYPES:
                     continue
                 payload = env.payload
                 if isinstance(payload, dict):

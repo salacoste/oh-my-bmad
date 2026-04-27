@@ -1,6 +1,6 @@
 # Story 2.15: S-3 separability test — orchestrator pass-through
 
-Status: review
+Status: done
 
 ## Story
 
@@ -220,6 +220,58 @@ The existing `ActorKind` Literal includes `"orchestrator"` (verified via Story 2
 ### Test runtime budget
 
 Each test boot involves: docker compose build (cached after first run) + 3-service startup + healthcheck wait + task lifecycle (4 emits over ~400ms-1s) + assertion polls. Budget: ≤30s under nightly CI. If the runtime exceeds this materially, document and consider parallelizing across S-1/S-2/S-3 in the future.
+
+### Spec Amendments — Round 2 (deferred fix follow-up)
+
+Follow-up to commit `4c094e2` (which landed M1 / M3 / M9 / M11). This pass
+applies the seven MAJOR + four MINOR items previously deferred:
+
+- **M2 — `test-separability` recipe gains `build-base` dep.** Cold runs
+  no longer race a missing `oh-my-bmad-base:local` image against the
+  per-service Dockerfiles' `FROM oh-my-bmad-base:local`.
+- **M4 — Materializer round-trip assertion.** After detecting the JSONL
+  `task.completed` envelope, the e2e test now polls
+  `<OMB_S3_DATA_DIR>/registry/state.sqlite3` (read-only URI mode) until
+  `tasks.status = 'completed'`. Closes the gap between "writer fired"
+  and "spine state actually projected".
+- **M5 — AC-7 dedupe gap fix.** `_scan_processed_task_ids` now keys on
+  the module-level `ORCHESTRATOR_EMITTED_TYPES` set (the same 4
+  lifecycle types the orchestrator emits). A crash between
+  `task.created` detection and the first lifecycle append leaves only
+  `task.created` in the log, the next run picks it up cleanly. Tasks
+  with ANY orchestrator-emitted event are skipped on restart.
+- **M6 — Strengthened structural assertions.** New typed-envelope reader
+  drives `Actor(kind="orchestrator", id="null-orchestrator")` checks
+  for all 4 emitted events, `parent_event_id` chain to the originating
+  `task.created`, monotonic_ns ordering matches the canonical 5-event
+  sequence, and exact event count is 5 (no duplicates).
+- **M7 — `git diff HEAD~1 HEAD` + fallback.** The sentinel now runs
+  against the last commit (CI signal) and falls back to working-tree
+  on fresh/shallow clones. Skips on non-git checkouts (source tarballs).
+- **M8 — SHA-tagged image cache.** `_build_null_orchestrator.py` hashes
+  the fixture's source files (Dockerfile + Python + pyproject.toml)
+  and tags the built image as `null-orchestrator:sha-<first16hex>`.
+  Subsequent runs probe the SHA tag, retag as `:latest`, and skip the
+  build. A source edit produces a different SHA → fresh rebuild.
+- **M14 — Healthcheck timeout 90s → 180s.** Accommodates cold first-run
+  image builds when `oh-my-bmad-base:local` isn't cached.
+- **Mn4 — `_wait_for_socket` uses `localhost`.** Lets the resolver pick
+  the address family (matters on dual-stack runners).
+- **Mn8 — Compose logs captured on nightly failure.** New step writes
+  `docker ps -a` to `_bmad-output/test-artifacts/s3-docker-ps.txt`.
+- **Mn17 — `.dockerignore` for the null-orchestrator build context.**
+  Excludes `.git`, `.venv`, `node_modules`, `_bmad-output`, `__pycache__`,
+  `*.pyc`.
+- **Mn2 — Compose YAML docstring drift fix.** Comment now correctly
+  states "registry-api writes JSONL directly via EventLogWriter".
+
+### Change Log
+
+| Version | Date       | Notes                                                                                                  |
+|---------|------------|--------------------------------------------------------------------------------------------------------|
+| v1.2    | 2026-04-27 | Round-2 deferred fixes: M2/M4/M5/M6/M7/M8/M14 + Mn2/Mn4/Mn8/Mn17. Status review → done.                |
+| v1.1    | 2026-04-26 | Round-1 fixes (commit 4c094e2): M1/M3/M9/M11. Status in-progress → review.                             |
+| v1.0    | 2026-04-26 | Initial implementation (commit a8c71ea). FR35 / NFR-M5 S-3 orchestrator-swap test landed.              |
 
 ### What this story does NOT do
 

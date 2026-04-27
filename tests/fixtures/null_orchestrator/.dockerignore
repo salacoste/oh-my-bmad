@@ -1,0 +1,6 @@
+.git
+.venv
+node_modules
+_bmad-output
+__pycache__
+*.pyc
