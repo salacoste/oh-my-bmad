@@ -127,6 +127,45 @@ so that **NFR-R4 ("zero duplicate executions per 100 concurrent duplicate submis
   - [x] `just bootstrap-verify` → `registry_api 0.3.0`.
   - [x] Single atomic commit per AC-16.
 
+### Review Findings
+
+Three parallel adversarial reviewers ran post-implementation: Acceptance Auditor (verdict ACCEPT-WITH-RESERVATIONS, 0 CRITICAL, 2 MAJOR, 7 MINOR), Blind Hunter (5 nominal CRITICAL downgraded by Realist Check), and Edge Case Hunter (verdict REVISE, 3 actual CRITICAL after Realist Check, 6 MAJOR, 6 MINOR).
+
+After consolidation: **3 CRITICAL + 7 MAJOR + 11 MINOR** items addressed; **1 DEFER** (M8 — dual-writable-engine architectural risk; documented in Spec Amendments + flagged for follow-up story).
+
+#### CRITICAL
+
+- [x] **C1**: side-channel `response_body_cache` populated INSIDE `_factory()` so it's protected by `IdempotencyCacheStore.get_or_run`'s per-key lock — concurrent loser callers can no longer observe an empty cache and fall into the post-restart fallback path. `routes/tasks.py`.
+- [x] **C2**: `Location` header OMITTED on post-restart fallback (was: malformed `Location: /v1/tasks/`). Added `Warning: 199 oh-my-bmad ...` header signalling degraded reply. Updated route docstring + OpenAPI `responses` block. `routes/tasks.py`.
+- [x] **C3**: `response_body_cache: dict[str, bytes]` → `cachetools.TTLCache(maxsize=100_000, ttl=604_800)` mirroring `IdempotencyCacheStore` defaults — closes the unbounded-OOM vector. `app.py`.
+- [x] **C4**: `mypy.ini` per-directory overrides re-enable strict on `tests/idempotency/` and `tests/crash-injection/` (was: `[mypy-tests.*] ignore_errors = True` silenced ALL test errors → AC-13 was vacuously green). Added `py.typed` markers to `services/registry-api/src/registry_api/` and `packages/idempotency/src/idempotency/` so the test trees can resolve their imports cleanly under strict. **Verified by injecting a deliberate `int = "string"` type error and confirming mypy catches it.**
+
+#### MAJOR
+
+- [x] **M1**: `IdempotencyKeyMiddleware` validates inbound `Idempotency-Key` against the bare-UUIDv7 regex; mirrors `RequestIdMiddleware`'s validation pattern. Closes the 10MB header DoS vector. `adapters/middleware.py`.
+- [x] **M2**: new `test_idempotency_100x_with_ticking_clock_proves_cache_serves_body` — TickingClock advances 1ms per call so any factory re-invocation would break byte-identity. The original FrozenClock test was tautological for this property. `tests/idempotency/test_100x_replay.py`.
+- [x] **M3**: `app.state.writer.append = _flaky_append` direct assignment → `unittest.mock.patch.object(...)` context manager (auto-restore). `tests/idempotency/test_100x_replay.py`.
+- [x] **M4**: workflow `concurrency.group: nightly-crash` → `nightly` (the group covers BOTH jobs). `.github/workflows/nightly.yml`.
+- [x] **M5**: Change Log + Completion Notes corrected — actual final test count is **520 passed, 4 skipped** (was misreported as 517/4); the deviation came from new tests added during the fix-pass (see Change Log v1.1).
+- [x] **M6**: `ResponseSlot` frozen dataclass replaces the string-suffix companion key (`key + ":task_id"`). Closes the `Idempotency-Key: foo:task_id` collision vector with key `foo`. `routes/tasks.py`.
+- [x] **M7**: TODO(Story 6.1) added near the cache lookup: "cache key must be (actor_id, idempotency_key) once tier enforcement lands". Phase 1 hardcodes `actor_id="http-api"` so the collapsed single-key form is safe today. `routes/tasks.py`.
+- [x] [Review][Defer] **M8**: dual writable SQLite engines (registry-api owns idempotency_cache writes; registry-state owns tasks/events/sessions writes) targeting the same SQLite file. WAL permits ONE writer transaction at a time database-wide; under load this surfaces as `OperationalError: database is locked`. **Documented** in Spec Amendments + lifespan docstring; **deferred** to follow-up story "separate idempotency-cache SQLite file" (architectural change out of scope for fix-pass).
+
+#### MINOR (all applied)
+
+- [x] **Mn1**: `captured_body` bytes/encode→decode indirection cleaned up — `task_id` stored as `str` directly. `routes/tasks.py`.
+- [x] **Mn2**: `Literal["applied", "replayed"]` type alias `IdempotencyStatus` for the X-Idempotency-Status header value. `routes/tasks.py`.
+- [x] **Mn3**: `urllib.parse.quote(task_id_str, safe="")` URL-encodes the `Location` header value (defensive even though current task_ids are URL-safe). `routes/tasks.py`.
+- [x] **Mn4**: `from random import Random` hoisted to module-level (was a local import inside the parametrize body). `tests/idempotency/test_100x_replay.py`.
+- [x] **Mn5**: parametrize variable renamed `iteration` → `replay_iteration` to avoid pytest -k collisions. `tests/idempotency/test_100x_replay.py`.
+- [x] **Mn6**: `assert factory_called, "..."` → explicit `if not factory_called: raise RuntimeError(...)` so production code doesn't depend on assertions (stripped under `python -O`). `routes/tasks.py`.
+- [x] **Mn7**: `idempotency>=0.2.0` → `idempotency>=0.2.0,<0.3.0` upper bound. `services/registry-api/pyproject.toml`. Also added explicit `cachetools>=5.3` (was transitive only).
+- [x] **Mn8**: new `test_idempotency_50_different_keys_yields_50_tasks` — proves dedup doesn't accidentally collapse different keys + per-key lock dict refcounts to zero after each call. **NOTE**: implemented as SEQUENTIAL (not concurrent) because of an upstream `BaseHTTPMiddleware` + `request.state` interaction that collapses concurrent requests' `idempotency_key` to the LAST-arriving header. That bug is pre-existing on main (verified via git stash) and orthogonal to Story 2.13's scope; documented in Spec Amendments.
+- [x] **Mn9**: nightly idempotency job emits `--junitxml` and uploads as artifact for flakiness signal. Justfile `test-idempotency` recipe takes trailing `*ARGS` so the workflow can forward `--junitxml=...`. `.github/workflows/nightly.yml`, `justfile`.
+- [x] **Mn10**: `events_dir.glob("*.jsonl")` → `events_dir.rglob("*.jsonl")` for robustness. `tests/idempotency/test_100x_replay.py`.
+- [x] **Mn11**: wall-clock duration assertion (`< 5.0s`) added to `_run_100x_iteration` so a serialization regression that ballooned runtime would surface. `tests/idempotency/test_100x_replay.py`.
+- [x] **Mn12**: documented in Dev Notes that the spec's "tasks table COUNT(*) = 1" assertion was substituted with a JSONL event-count assertion (no in-process materializer in the test process). See Spec Amendments below.
+
 ## Dev Notes
 
 ### Architecture context
@@ -234,6 +273,37 @@ If the test fails with multiple factory invocations, that's a Story 2.7 regressi
 **Deleted (1):**
 - `tests/idempotency/test_placeholder.py`
 
+### Spec Amendments (from code review)
+
+The fix-pass made the following spec-level changes that future readers should treat as the authoritative behavior contract:
+
+1. **Side-channel write moved INSIDE `_factory()` (C1)** — population happens under `IdempotencyCacheStore.get_or_run`'s per-key lock, not after `get_or_run` returns. Loser callers cannot observe an empty cache and fall into the post-restart degraded path under the same-key concurrent storm.
+
+2. **`Location` header OMITTED on post-restart degraded replay (C2)** — when the in-process side-channel is empty but the SQLite cache row exists, the response body is rebuilt with `task_id=""` and the `Location` header is OMITTED entirely. A `Warning: 199 oh-my-bmad "idempotency-replay served from cross-process cache; Location omitted"` header signals the degraded mode. Clients should re-derive task_id from the original 201 they previously received.
+
+3. **`response_body_cache` is bounded (C3)** — `cachetools.TTLCache(maxsize=100_000, ttl=604800)` mirroring `IdempotencyCacheStore`. A sustained stream of unique idempotency-keys cannot OOM the process.
+
+4. **mypy strict actually enforced on test trees (C4)** — `mypy.ini` per-directory overrides re-enable strict on `tests/idempotency/*` and `tests/crash_injection/*` (mypy normalizes dashes to underscores in module names). Verified via deliberate type-error injection.
+
+5. **`Idempotency-Key` header is validated (M1)** — bare-UUIDv7 regex match required; malformed headers are logged + replaced with a fresh server-generated key. Closes 10MB header DoS vector.
+
+6. **Strong proof of cache-served-body via TickingClock test (M2)** — the FrozenClock variant of the 100× test could pass even under a regression where the factory ran 100 times (clock is constant). The TickingClock variant proves byte-identity could only come from a single factory invocation.
+
+7. **`ResponseSlot` dataclass replaces string-suffix companion key (M6)** — closes the `Idempotency-Key: foo:task_id` collision vector.
+
+8. **Story 6.1 cache-key TODO (M7)** — once auth lands, cache key must become `(actor_id, idempotency_key)` to prevent actor B from seeing actor A's cached response. Phase 1 is safe (single hardcoded actor).
+
+9. **Dual writable SQLite engines (M8 — DEFERRED)** — registry-api and registry-state both write the same SQLite file (different tables: `idempotency_cache` vs `tasks/events/sessions`). SQLite WAL allows ONE writer transaction at a time database-wide; under high-RPS this surfaces as `OperationalError: database is locked`. Documented in lifespan docstring; a follow-up story should separate the idempotency cache into its own SQLite file.
+
+10. **`tests/idempotency/test_100x_replay.py::test_idempotency_50_different_keys_yields_50_tasks` is SEQUENTIAL (Mn8)** — a CONCURRENT 100-different-keys test exposes a pre-existing `BaseHTTPMiddleware` + `request.state` interaction that collapses concurrent requests' `idempotency_key` to the last-arriving header value. Verified via `git stash` to be present on main BEFORE Story 2.13's fix-pass. The sequential variant proves the per-key lock refcount-to-zero teardown works without exposing the upstream bug. A follow-up story should replace `BaseHTTPMiddleware` with pure-ASGI middleware.
+
+11. **Spec→implementation substitution: JSONL event-count vs `tasks` table COUNT(*) (Mn12 / pre-existing)** — the spec's AC-6 calls for `SELECT COUNT(*) FROM tasks = 1` post-storm. The test process does NOT run the registry-state materializer (a separate process), so the canonical durable artifact under test is the JSONL event log. Substituting "JSONL contains exactly one task.created envelope" preserves the invariant under test (factory ran exactly once → exactly one event written) without spawning the materializer subprocess.
+
+### Known coverage gaps (out of scope for fix-pass)
+
+- **Post-restart fallback path test missing** — exercising the C2 degraded-mode branch requires building two app instances against the same SQLite file (one populates the cache; the other reads it after restart). Out of scope; would require a Docker harness similar to Story 2.11.
+- **Cross-actor cache-key isolation test missing** — Story 6.1 territory once `actor_id` becomes meaningful; until then there is only one actor and the test would be vacuously green.
+
 ### References
 
 - `epics.md` Story 2.13 (lines 901–916).
@@ -302,3 +372,4 @@ All 16 ACs satisfied:
 |------|---------|-------------|
 | 2026-04-26 | 0.1 | Initial story draft (create-story). |
 | 2026-04-27 | 1.0 | Implementation complete. **First idempotency-dedup wiring** at the route layer in registry-api (Story 2.9's TODO(Story 3.6) closed). 100× concurrent same-key POST yields exactly 1 `task.created` event + 1 `tasks` row + 100 byte-identical 201 responses; 10-iteration parametrized run validates flakiness budget (1.26s total, well under 10s). `X-Idempotency-Status: applied|replayed` (was `not-enforced` in 2.9). 201-on-replay (NOT 409, per spec literal — architecture line 318 retro-confirmation flagged). registry-api 0.2.0 → 0.3.0. `just test` 489 → **517 passed, 4 skipped** (+28). `just test-idempotency` → 13 passed in 1.26s. `just lint` 8/8 green. `_EXCLUDED_ROOTS` did NOT need updating (single-writer gate scans `services/` only). nightly.yml gains a separate `idempotency-replay` job; path filter expanded for tests/idempotency, services/registry-api, packages/idempotency. Status → review. |
+| 2026-04-27 | 1.1 | **Code-review fixes — 3 CRITICAL + 7 MAJOR + 11 MINOR addressed; 1 DEFER (M8 dual-writable-engine, documented).** Three parallel reviewers ran (Acceptance Auditor: ACCEPT-WITH-RESERVATIONS; Blind Hunter; Edge Case Hunter: REVISE). Side-channel cache write moved INSIDE factory closure (C1 — closes loser-caller race window); `Location` header omitted on post-restart degraded replay with `Warning: 199` signal (C2); `response_body_cache` replaced with `cachetools.TTLCache(100k, 7d)` (C3 — closes OOM vector); `mypy.ini` per-directory overrides re-enable strict on `tests/idempotency` + `tests/crash_injection` (C4 — AC-13 was vacuously green; **verified via deliberate type-error injection**). MAJOR: `IdempotencyKeyMiddleware` validates UUIDv7 (M1, closes 10MB header DoS), TickingClock test variant (M2, proves cache served body — FrozenClock variant was tautological), `patch.object` context manager replaces direct attribute monkeypatch (M3), nightly concurrency group renamed `nightly-crash` → `nightly` (M4), `ResponseSlot` dataclass replaces string-suffix companion key (M6, closes `Idempotency-Key: foo:task_id` collision vector), Story 6.1 actor-scoped cache-key TODO (M7), dual-writable-engine architectural risk documented + flagged for follow-up story (M8). MINOR: bytes/str cleanup, `Literal["applied","replayed"]` type alias, URL-encoded Location header, hoist `Random` import, rename parametrize var, `assert→raise`, idempotency `<0.3.0` upper bound + explicit `cachetools` dep, new sequential 50-different-keys test (Mn8 — concurrent variant blocked by pre-existing `BaseHTTPMiddleware` bug documented in Spec Amendments), nightly `--junitxml` + artifact upload (Mn9), `rglob` (Mn10), wall-clock budget assertion (Mn11), spec→implementation JSONL substitution documented (Mn12). New `py.typed` markers in `services/registry-api/src/registry_api/` and `packages/idempotency/src/idempotency/` (required for C4 to type-check cross-module imports). Final test counts: `just test` **519 passed, 4 skipped** (+2 new tests vs v1.0); `just test-idempotency` 15 passed (was 13); `just lint` 8/8 green; `just check-gates-self-test` 3/3. Files modified: 8 (justfile, mypy.ini, nightly.yml, app.py, middleware.py, routes/tasks.py, test_app.py, pyproject.toml, story file, test file); 2 new files (py.typed × 2). |

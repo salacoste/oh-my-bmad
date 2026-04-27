@@ -12,7 +12,12 @@ dependencies = [
     "pydantic>=2.8",
     "events>=0.3.0",
     "registry-state>=0.5.0",
-    "idempotency>=0.2.0",
+    "idempotency>=0.2.0,<0.3.0",
+    # Story 2.13 review C3 — direct use for the bounded response-body
+    # side-channel cache. ``idempotency`` already pulls cachetools but
+    # the in-process side-channel is owned by registry-api, so the dep
+    # is declared explicitly to avoid relying on a transitive.
+    "cachetools>=5.3",
 ]
 
 [build-system]

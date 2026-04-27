@@ -31,8 +31,10 @@ permissions:
 
 # Concurrency: serialize nightly runs but do NOT cancel in-flight runs —
 # letting a slow run finish is better than producing a half-result.
+# Group name covers BOTH jobs (crash-injection + idempotency-replay) — review
+# M4 renamed `nightly-crash` → `nightly` for accuracy.
 concurrency:
-  group: nightly-crash
+  group: nightly
   cancel-in-progress: false
 
 jobs:
@@ -111,4 +113,19 @@ jobs:
         run: uv sync --frozen --dev
 
       - name: Run idempotency 100× replay test
-        run: just test-idempotency
+        # Mn9: emit junitxml so the upload step has a flakiness signal beyond
+        # pass/fail. The just recipe forwards extra args after `--`.
+        run: |
+          mkdir -p _bmad-output/test-artifacts
+          just test-idempotency -- --junitxml=_bmad-output/test-artifacts/idempotency-replay-${{ github.run_id }}.xml
+
+      - name: Upload idempotency artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: idempotency-replay-${{ github.run_id }}
+          path: _bmad-output/test-artifacts/idempotency-replay-*.xml
+          # `warn` (not `error`): not all runs produce flakiness data, but
+          # CI failures must surface a junitxml under the artifact name.
+          if-no-files-found: warn
+          retention-days: 30

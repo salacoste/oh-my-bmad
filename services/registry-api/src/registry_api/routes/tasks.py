@@ -21,8 +21,12 @@ in Stories 5.x (worker lifecycle) and 6.x (approval gate).
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal
+from urllib.parse import quote
 
+import cachetools
 from events.envelope import Actor, EventEnvelope
 from events.ids import new_event_id, new_task_id
 from fastapi import APIRouter, Path, Request, Response
@@ -36,6 +40,44 @@ from registry_state.schema import Event, Task  # noqa: IMP001 — services→ser
 from sqlalchemy import select
 
 log = logging.getLogger("registry_api.routes.tasks")
+
+# Mn2: Literal type for X-Idempotency-Status — keeps the OpenAPI ``enum``
+# constant in sync with the runtime header value at type-check time.
+IdempotencyStatus = Literal["applied", "replayed"]
+
+
+# ---------------------------------------------------------------------------
+# Side-channel response cache types (Story 2.13 review C1/C3/M6)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ResponseSlot:
+    """Cached response payload for a single idempotency key (Story 2.13 C1/M6).
+
+    A frozen dataclass replaces the prior pair of side-channel keys
+    (``key`` and ``key + ":task_id"``) — the suffix scheme allowed an
+    attacker submitting ``Idempotency-Key: foo:task_id`` to collide
+    with the companion entry for key ``foo``. Storing both fields under
+    a single key removes that collision vector entirely.
+
+    Attributes:
+        body:    Canonical JSON body bytes returned to all replay callers.
+                 Byte-identity is the FR28 / NFR-R4 invariant.
+        task_id: ASCII task_id (``t-<uuidv7>``) used to build the
+                 ``Location`` header. Empty bytes is RESERVED for the
+                 post-restart fallback path where the side-channel was
+                 lost; route handler treats empty as "omit Location".
+    """
+
+    body: bytes
+    task_id: bytes
+
+
+# Type alias for the side-channel cache. Kept here (not in app.py) to avoid
+# a circular import (app.py imports the tasks router; the router needs the
+# slot type for its handler-internal annotations).
+ResponseSlotCache = cachetools.TTLCache[str, ResponseSlot]
 
 # UUIDv7 task-id pattern: t- prefix + standard UUIDv7 hex shape
 _TASK_ID_PATTERN = r"^t-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
@@ -158,14 +200,29 @@ router = APIRouter()
         "`X-Idempotency-Status: replayed`; first attempts return 201 with "
         "`X-Idempotency-Status: applied`. Errors during the first attempt are "
         "NOT cached — subsequent same-key submissions will retry the factory "
-        "until one succeeds."
+        "until one succeeds. "
+        "POST-RESTART DEGRADED MODE (Story 2.13 C2): when the in-process "
+        "side-channel response cache is empty (typically after a process "
+        "restart) but the durable SQLite cache still has the entry, the "
+        "replay returns a minimal body without `task_id` and OMITS the "
+        "`Location` header. A `Warning: 199` header signals the degraded "
+        "response. Clients should re-derive the task_id from the original "
+        "201 response they already received, OR poll the GET endpoint they "
+        "previously discovered."
     ),
     responses={
         201: {
             "description": "Task created (or replayed from idempotency cache).",
             "model": CreateTaskResponse,
             "headers": {
-                "Location": {"schema": {"type": "string"}},
+                "Location": {
+                    "schema": {"type": "string"},
+                    "description": (
+                        "GET endpoint for the new task. OMITTED when the response "
+                        "is a post-restart degraded replay (see route description "
+                        "and `Warning: 199` header)."
+                    ),
+                },
                 "X-Idempotency-Status": {
                     "schema": {"type": "string", "enum": ["applied", "replayed"]},
                     "description": (
@@ -174,6 +231,14 @@ router = APIRouter()
                     ),
                 },
                 "Idempotency-Key": {"schema": {"type": "string"}},
+                "Warning": {
+                    "schema": {"type": "string"},
+                    "description": (
+                        "RFC 7234 `Warning: 199 oh-my-bmad ...` header set ONLY "
+                        "on post-restart degraded replays where the response body "
+                        "and Location are reconstructed without task_id."
+                    ),
+                },
             },
         },
     },
@@ -229,19 +294,36 @@ async def post_tasks(
     clock = app.state.clock
     writer = app.state.writer
     idempotency_cache: IdempotencyCacheStore = app.state.idempotency_cache
-    response_body_cache: dict[str, bytes] = app.state.idempotency_response_cache
+    response_body_cache: ResponseSlotCache = app.state.idempotency_response_cache
 
     idempotency_key: str = request.state.idempotency_key
     request_id: str = request.state.request_id
 
     # Closure flag — distinguishes cache-miss (factory ran) from cache-hit
     # (factory skipped). ``IdempotencyCacheStore.get_or_run`` returns
-    # ``(CacheHit, was_run: bool)``; we ALSO use this flag to know whether
-    # to populate the response-body side-channel cache.
+    # ``(CacheHit, was_run: bool)``; we ALSO use this flag as a defensive
+    # invariant check post-call.
     factory_called: bool = False
-    captured_body: dict[str, bytes] = {}
+    # Mn1: store the task_id as ``str`` to avoid the bytes encode/decode
+    # round-trip that the original implementation did. The slot's
+    # ``task_id`` is bytes for hashing-friendly storage; we decode once at
+    # construction.
+    captured_task_id: dict[str, str] = {}
+
+    # TODO(Story 6.1): cache key must be (actor_id, idempotency_key) once
+    # tier enforcement lands; otherwise actor B can see actor A's cached
+    # response. Phase 1 hardcodes actor_id="http-api" for every request,
+    # so the collapsed single-key form is safe TODAY.
 
     async def _factory() -> str:
+        """Factory closure invoked by ``IdempotencyCacheStore.get_or_run``.
+
+        Population safety (review C1): this closure runs UNDER the per-key
+        ``asyncio.Lock`` inside ``IdempotencyCacheStore``. The slot write
+        on the last line is therefore protected by the same lock that
+        serializes loser callers; loser callers cannot observe a
+        half-populated cache.
+        """
         nonlocal factory_called
         factory_called = True
 
@@ -273,15 +355,26 @@ async def post_tasks(
         await writer.append(envelope)
 
         # Build the 201 body NOW so we can both (a) cache it for byte-identical
-        # replays and (b) hand it back to the outer scope via captured_body.
+        # replays and (b) recover the task_id in the outer scope via the slot.
         response_model = CreateTaskResponse(
             task_id=task_id,
             event_id=event_id,
             created_at=envelope.emitted_at,
         )
         body_bytes = response_model.model_dump_json().encode("utf-8")
-        captured_body["bytes"] = body_bytes
-        captured_body["task_id"] = task_id.encode("utf-8")
+
+        # Review C1: write the slot INSIDE the factory so it's covered by
+        # ``IdempotencyCacheStore.get_or_run``'s per-key lock. Loser callers
+        # for the same key cannot observe an empty cache + fall into the
+        # post-restart fallback path while we hold the lock.
+        # Review M6: single key (no companion ``:task_id`` suffix) so a
+        # malicious ``Idempotency-Key: foo:task_id`` cannot collide with the
+        # entry for key ``foo``.
+        response_body_cache[idempotency_key] = ResponseSlot(
+            body=body_bytes,
+            task_id=task_id.encode("utf-8"),
+        )
+        captured_task_id["value"] = task_id
         return event_id
 
     cache_hit, was_run = await idempotency_cache.get_or_run(
@@ -290,46 +383,59 @@ async def post_tasks(
         factory=_factory,
     )
 
+    # Mn6: replace ``assert`` with explicit ``raise`` — production code
+    # cannot rely on assertions (stripped under ``python -O``).
+    degraded_post_restart = False
     if was_run:
-        assert factory_called, "get_or_run reported was_run=True but factory_called is False"
-        body_bytes = captured_body["bytes"]
-        task_id_bytes = captured_body["task_id"]
-        # Persist body in the side-channel for replay paths (incl. waiters
-        # that lost the per-key lock race and concurrent post-completion
-        # callers from later in the TTL window).
-        response_body_cache[idempotency_key] = body_bytes
-        response_body_cache[idempotency_key + ":task_id"] = task_id_bytes
-        status_value = "applied"
+        if not factory_called:
+            raise RuntimeError(
+                "get_or_run reported was_run=True but factory_called is False — "
+                "side-channel cache invariant violated"
+            )
+        slot = response_body_cache[idempotency_key]
+        body_bytes = slot.body
+        task_id_str = captured_task_id["value"]
+        status_value: IdempotencyStatus = "applied"
     else:
-        # Cache hit. Use the side-channel body if present (typical case
+        # Cache hit. Use the side-channel slot if present (typical case
         # within the same process); otherwise rebuild a minimal body from
         # the cached event_id (post-restart, body-cache empty — see Dev
         # Notes for the trade-off).
-        cached = response_body_cache.get(idempotency_key)
-        if cached is None:
+        slot_or_none = response_body_cache.get(idempotency_key)
+        if slot_or_none is None:
             # Post-restart fallback: rebuild a minimal body. The task_id
             # cannot be recovered without a JSONL replay, so this branch
             # is intentionally conservative — it returns the result_event_id
-            # only, with task_id="" (clients should re-fetch via the original
-            # task's GET endpoint they already polled). Story 3.6 may add a
-            # JSONL-backed body cache; out of scope for 2.13.
+            # only, with task_id="" and OMITS the Location header (review
+            # C2: empty task_id otherwise produced a malformed
+            # ``Location: /v1/tasks/`` URL). Clients should re-derive
+            # task_id from the original 201 they previously received.
+            # Story 3.6 may add a JSONL-backed body cache; out of scope.
             fallback = CreateTaskResponse(
                 task_id="",
                 event_id=cache_hit.result_event_id,
                 created_at=cache_hit.created_at,
             )
             body_bytes = fallback.model_dump_json().encode("utf-8")
-            task_id_bytes = b""
+            task_id_str = ""
+            degraded_post_restart = True
         else:
-            body_bytes = cached
-            task_id_bytes = response_body_cache.get(idempotency_key + ":task_id", b"")
+            body_bytes = slot_or_none.body
+            task_id_str = slot_or_none.task_id.decode("utf-8")
         status_value = "replayed"
 
-    task_id_str = task_id_bytes.decode("utf-8")
-    headers = {
-        "X-Idempotency-Status": status_value,
-        "Location": f"/v1/tasks/{task_id_str}",
-    }
+    headers: dict[str, str] = {"X-Idempotency-Status": status_value}
+    if degraded_post_restart:
+        # RFC 7234 §5.5 — 199 "Miscellaneous warning" with the agent name
+        # so operators tracing a degraded reply have a non-noisy signal.
+        headers["Warning"] = (
+            '199 oh-my-bmad "idempotency-replay served from cross-process cache; Location omitted"'
+        )
+    elif task_id_str:
+        # Mn3: URL-encode the task_id even though current task_ids are
+        # ASCII URL-safe — defensive.
+        headers["Location"] = f"/v1/tasks/{quote(task_id_str, safe='')}"
+
     return Response(
         content=body_bytes,
         status_code=201,

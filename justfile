@@ -108,10 +108,11 @@ test-crash:
 # 100 concurrent same-key POSTs, byte-identical replies, exactly 1
 # ``task.created`` event. The 10× parametrized variant gives the nightly
 # its statistical-flakiness signal. Pure in-memory SQLite + httpx
-# ASGITransport — no Docker required; fast (~1.3s for all 13 cases).
+# ASGITransport — no Docker required; fast (~1.3s for all 15 cases).
 # Included in the PR-gate ``just test`` lane AND nightly CI.
-test-idempotency:
-    uv run pytest -m idempotency -v tests/idempotency/
+# Trailing ``*ARGS`` lets nightly forward ``--junitxml=...`` (Mn9).
+test-idempotency *ARGS:
+    uv run pytest -m idempotency -v tests/idempotency/ {{ARGS}}
 
 # Strict lint + format + type-check + architectural-discipline gates.
 # ruff rules cover style (E/F/I/UP/B/SIM/N); ruff format --check enforces

@@ -612,7 +612,13 @@ class TestMiddleware:
     async def test_lifespan_constructs_idempotency_cache(
         self, tmp_path: Path, fixed_clock: FrozenClock
     ) -> None:
-        """Story 2.13 AC-2: ``app.state.idempotency_cache`` exists post-startup."""
+        """Story 2.13 AC-2: ``app.state.idempotency_cache`` exists post-startup.
+
+        Story 2.13 review C3: ``idempotency_response_cache`` is a
+        ``cachetools.TTLCache`` (not a plain ``dict``) so a sustained
+        stream of unique idempotency-keys cannot OOM the process.
+        """
+        import cachetools  # noqa: PLC0415 — local
         from idempotency import IdempotencyCacheStore  # noqa: PLC0415 — local
 
         db_path = tmp_path / "state.sqlite3"
@@ -626,7 +632,7 @@ class TestMiddleware:
             assert hasattr(app.state, "idempotency_cache")
             assert isinstance(app.state.idempotency_cache, IdempotencyCacheStore)
             assert hasattr(app.state, "idempotency_response_cache")
-            assert isinstance(app.state.idempotency_response_cache, dict)
+            assert isinstance(app.state.idempotency_response_cache, cachetools.TTLCache)
 
     @pytest.mark.asyncio
     async def test_post_tasks_first_call_sets_x_idempotency_status_applied(

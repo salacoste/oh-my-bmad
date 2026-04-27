@@ -1150,6 +1150,7 @@ name = "registry-api"
 version = "0.3.0"
 source = { editable = "services/registry-api" }
 dependencies = [
+    { name = "cachetools" },
     { name = "events" },
     { name = "fastapi" },
     { name = "idempotency" },
@@ -1166,6 +1167,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cachetools", specifier = ">=5.3" },
     { name = "events", editable = "packages/events" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "idempotency", editable = "packages/idempotency" },

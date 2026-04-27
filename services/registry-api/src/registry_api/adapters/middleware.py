@@ -104,8 +104,22 @@ class IdempotencyKeyMiddleware(BaseHTTPMiddleware):
         self._clock = clock
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        # Story 2.13 review M1: validate inbound Idempotency-Key against the
+        # bare-UUIDv7 regex. A 10MB header would otherwise be a trivial DoS
+        # vector + arbitrary client strings would land in SQLite cache PK
+        # column. Mirrors RequestIdMiddleware's validation pattern.
         incoming = request.headers.get("Idempotency-Key")
-        idempotency_key = incoming if incoming else new_idempotency_key(clock=self._clock)
+        if incoming and _UUIDV7_BARE_RE.match(incoming):
+            idempotency_key = incoming
+        else:
+            if incoming:
+                # Truncate the received value to 80 chars in the log to limit
+                # the size of malformed payloads.
+                _log.warning(
+                    "invalid Idempotency-Key header; generating fresh",
+                    extra={"received": incoming[:80]},
+                )
+            idempotency_key = new_idempotency_key(clock=self._clock)
         request.state.idempotency_key = idempotency_key
         response = await call_next(request)
         response.headers["Idempotency-Key"] = idempotency_key
