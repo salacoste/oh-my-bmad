@@ -1,0 +1,22 @@
+[project]
+name = "null-orchestrator"
+version = "0.1.0"
+description = "Pass-through null orchestrator (test fixture). Tails the JSONL event log and emits the canonical task lifecycle for each task.created event. Used by the S-3 separability test (Story 2.15 / FR35 / NFR-M5) to prove the orchestrator layer is swappable without spine source-code changes."
+authors = [
+    { name = "R2d2", email = "bad.vano23ru@gmail.com" },
+]
+requires-python = ">=3.12"
+# Workspace deps: pulled at build time via ``uv sync`` against the repo
+# root's ``uv.lock`` (the Dockerfile copies the workspace pyproject + lock
+# into the build stage). The fixture is NOT a uv workspace member — it lives
+# under ``tests/fixtures/`` which is intentionally outside the workspace
+# include glob — so the Dockerfile installs the deps as wheels resolved
+# against the parent workspace lock.
+dependencies = [
+    "events>=0.3.0",
+    "registry-state>=0.5.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.0,<1.0"]
+build-backend = "uv_build"

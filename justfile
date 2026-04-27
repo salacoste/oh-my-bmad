@@ -126,6 +126,16 @@ test-idempotency *ARGS:
 test-migrator *ARGS="":
     uv run pytest -m migrator -v tests/migrator/ {{ARGS}}
 
+# Story 2.15 — separability tests (FR34 / FR35; S-3 lands here, S-1 + S-2
+# in Stories 5.16 + 5.17c). The S-3 e2e test (slow) boots a 3-service
+# compose stack with ``ORCHESTRATOR_IMAGE=null-orchestrator:latest`` and
+# asserts a task POSTed to registry-api transitions to ``completed`` via
+# the null fixture's emitted lifecycle — proving FR35 / NFR-M5. The
+# git-diff sentinel (fast) asserts the working tree leaves spine source
+# untouched. Trailing ``*ARGS`` lets nightly forward ``--junitxml=...``.
+test-separability *ARGS="":
+    uv run pytest -m separability -v tests/separability/ {{ARGS}}
+
 # Strict lint + format + type-check + architectural-discipline gates.
 # ruff rules cover style (E/F/I/UP/B/SIM/N); ruff format --check enforces
 # canonical formatting; mypy --strict gates the platform-owned packages +
@@ -143,7 +153,7 @@ lint:
     uv run ruff check .
     uv run ruff format --check .
     uv run mypy --strict packages/ services/registry-api services/registry-state services/worker-wrapper
-    uv run mypy --strict --explicit-package-bases tests/crash-injection tests/idempotency tests/migrator
+    uv run mypy --strict --explicit-package-bases tests/crash-injection tests/idempotency tests/migrator tests/separability tests/fixtures/null-orchestrator
     uv run python scripts/check_imports.py
     uv run python scripts/check_event_registry.py
     uv run python scripts/check_single_writer.py

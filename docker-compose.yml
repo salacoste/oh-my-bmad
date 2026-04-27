@@ -86,7 +86,16 @@ services:
     build:
       context: .
       dockerfile: services/orchestrator-adapter/Dockerfile
-    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-orchestrator-adapter:${OMB_VERSION:-dev}
+    # Story 2.15 / FR35 / NFR-M5 — orchestrator pass-through swap.
+    # ``ORCHESTRATOR_IMAGE`` env-var indirection lets operators (and the S-3
+    # separability test) replace the default orchestrator-adapter image with
+    # any compatible image (e.g. ``null-orchestrator:latest``) via a single
+    # variable. When unset, the default tag below is used so operator
+    # behavior is unchanged. The ``build:`` directive remains so
+    # ``docker compose build`` still tags the local default image — the
+    # alternative image is built separately by its own pipeline (the S-3
+    # test harness builds ``null-orchestrator:latest`` itself).
+    image: ${ORCHESTRATOR_IMAGE:-${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-orchestrator-adapter:${OMB_VERSION:-dev}}
     env_file:
       - path: .env
         required: false

@@ -19,6 +19,8 @@ on:
       - "tests/crash-injection/**"
       - "tests/idempotency/**"
       - "tests/migrator/**"
+      - "tests/separability/**"
+      - "tests/fixtures/null-orchestrator/**"
       - "scripts/migrator/**"
       - "services/registry-state/**"
       - "services/registry-api/**"
@@ -174,5 +176,58 @@ jobs:
         with:
           name: migrator-integration-${{ github.run_id }}
           path: _bmad-output/test-artifacts/migrator-integration-*.xml
+          if-no-files-found: warn
+          retention-days: 30
+
+  s3-separability:
+    name: S-3 separability orchestrator-swap (FR35 / NFR-M5)
+    # Story 2.15 — boots a 3-service compose stack with
+    # ``ORCHESTRATOR_IMAGE=null-orchestrator:latest``, POSTs a task, and
+    # asserts the canonical 5-event lifecycle reaches ``task.completed``
+    # without modifying spine source code. Builds the null-orchestrator
+    # fixture image as part of the test (idempotent helper).
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Install uv + Python 3.12
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Sync workspace (incl. dev deps)
+        run: uv sync --frozen --dev
+
+      - name: Build base image
+        # services/registry-state/Dockerfile + services/registry-api/Dockerfile
+        # both FROM oh-my-bmad-base:local. Build before compose builds run.
+        run: just build-base
+
+      - name: Build registry-state + registry-api images
+        # Pre-build the spine images so compose ``up -d`` doesn't pay the
+        # build cost inline against the test's healthcheck budget.
+        run: |
+          docker compose -f docker-compose.yml build registry-state registry-api
+
+      - name: Run S-3 separability tests
+        # Emit junitxml so flakiness signal survives beyond pass/fail.
+        # The just recipe accepts trailing pytest args via *ARGS.
+        run: |
+          mkdir -p _bmad-output/test-artifacts
+          just test-separability --junitxml=_bmad-output/test-artifacts/s3-separability-${{ github.run_id }}.xml
+
+      - name: Upload S-3 separability artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: s3-separability-${{ github.run_id }}
+          path: _bmad-output/test-artifacts/s3-separability-*.xml
           if-no-files-found: warn
           retention-days: 30

@@ -1,0 +1,142 @@
+# Story 2.15 — S-3 separability harness compose overlay (FR35 / NFR-M5).
+#
+# Self-contained 3-service stack used by tests/separability/. We deliberately
+# do NOT rely on compose merge against the base ``docker-compose.yml`` because
+# compose merge cannot cleanly DROP services that the base declares
+# (``telegram-gateway``, ``clawhip-daemon``, ``worker-wrapper``). Instead this
+# file declares only the 3 services the S-3 test exercises:
+#
+#   - registry-api          (POST /v1/tasks → emits task.created)
+#   - registry-state        (JSONL → SQLite materializer; tasks projection)
+#   - orchestrator-adapter  (REPLACED by null-orchestrator:latest via the
+#                            ORCHESTRATOR_IMAGE env-var override — that's the
+#                            whole point of this test: prove the spine doesn't
+#                            care which image the orchestrator slot runs).
+#
+# The harness invokes
+# ``docker compose -f tests/separability/docker-compose.test.yml ...``
+# directly so only these 3 services come up.
+#
+# OMB_S3_DATA_DIR is set by tests/separability/test_s3_orchestrator_swap.py
+# before invoking compose; it points at the harness's pytest tmp_path / "data".
+# The bind-mount gives the host-side test direct access to the JSONL log
+# (for event-content assertions) and the materialized SQLite DB (for task
+# status polling) without entering the container.
+
+services:
+  registry-state:
+    build:
+      context: ../..
+      dockerfile: services/registry-state/Dockerfile
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-registry-state:${OMB_VERSION:-dev}
+    environment:
+      ENV: test
+      REGISTRY_STATE_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+      REGISTRY_STATE_DB_URL: sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3
+      # Test-only schema bootstrap. Production gets the schema from Alembic
+      # (Story 2.14's migrator runs ``alembic upgrade head``); the S-3
+      # harness does not run Alembic. Mirrors the crash-injection overlay.
+      REGISTRY_STATE_AUTO_CREATE_SCHEMA: "1"
+    # Run as the container's expected uid:gid for Linux raw-UID bind-mount
+    # writes (mirrors crash-injection EC1). On macOS Docker Desktop VirtioFS
+    # translates UIDs transparently. Pre-created bind-mount dirs are 0o777.
+    user: "${OMB_S3_UID:-10002}:${OMB_S3_GID:-10000}"
+    init: true
+    restart: "no"
+    networks: [oh-my-bmad-net]
+    volumes:
+      - ${OMB_S3_DATA_DIR:?OMB_S3_DATA_DIR must be exported by the harness}:/var/lib/oh-my-bmad
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+
+  registry-api:
+    build:
+      context: ../..
+      dockerfile: services/registry-api/Dockerfile
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-registry-api:${OMB_VERSION:-dev}
+    environment:
+      ENV: test
+      REGISTRY_API_HOST: 0.0.0.0
+      REGISTRY_API_PORT: "8080"
+      REGISTRY_API_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+      REGISTRY_API_DB_URL: sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3
+    user: "${OMB_S3_UID:-10002}:${OMB_S3_GID:-10000}"
+    init: true
+    restart: "no"
+    networks: [oh-my-bmad-net]
+    # Random host-port mapping — the harness reads the actual mapped port via
+    # ``docker compose port registry-api 8080`` so concurrent runs don't
+    # collide on a fixed host port.
+    ports:
+      - "8080"
+    volumes:
+      # NOT read-only — registry-api writes to the JSONL event log on POST
+      # /v1/tasks. The base ``docker-compose.yml`` mounts this RO because
+      # the production registry-api uses the JSONL writer in the
+      # registry-state service; for the S-3 harness we keep the simpler
+      # api-writes-locally pattern from Story 2.9's tests.
+      - ${OMB_S3_DATA_DIR:?OMB_S3_DATA_DIR must be exported by the harness}:/var/lib/oh-my-bmad
+    depends_on:
+      registry-state:
+        condition: service_healthy
+    # registry-api does NOT touch /tmp/ready (only registry-state does, per
+    # Story 2.11 conventions). Use a Python-based loopback probe against
+    # uvicorn's bound port — Python is in the runtime image so this avoids
+    # adding a curl/wget layer purely for the healthcheck.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket,sys; s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1', 8080)); s.close()"
+      interval: 1s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+
+  orchestrator-adapter:
+    # No ``build:`` — the S-3 test harness drives the
+    # ``ORCHESTRATOR_IMAGE=null-orchestrator:latest`` override. The
+    # ``null-orchestrator:latest`` image is built separately by
+    # ``tests/separability/_build_null_orchestrator.py``. If a tester
+    # forgets to set ``ORCHESTRATOR_IMAGE`` the compose run fails fast
+    # with "image not found" rather than silently building the real
+    # orchestrator-adapter (which would defeat the test's intent).
+    image: ${ORCHESTRATOR_IMAGE:?ORCHESTRATOR_IMAGE must be set by the S-3 harness}
+    environment:
+      ENV: test
+      EVENT_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+      # Speed up the null orchestrator's tail-loop sleep so the e2e test
+      # observes the lifecycle in <30s under nightly CI. Default 100ms
+      # is already fast; this knob exists for further tightening if needed.
+      NULL_ORCHESTRATOR_POLL_INTERVAL_S: "0.1"
+    user: "${OMB_S3_UID:-10002}:${OMB_S3_GID:-10000}"
+    init: true
+    restart: "no"
+    networks: [oh-my-bmad-net]
+    volumes:
+      # Read-write: the null orchestrator appends 4 lifecycle events per
+      # task.created via ``EventLogWriter.append`` — those writes go into
+      # the same JSONL file the registry-api writes the originating
+      # ``task.created`` envelope to. The single-writer architectural
+      # gate doesn't apply here (test fixture, scoped under tests/).
+      - ${OMB_S3_DATA_DIR:?OMB_S3_DATA_DIR must be exported by the harness}:/var/lib/oh-my-bmad
+    depends_on:
+      registry-state:
+        condition: service_healthy
+      registry-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+
+networks:
+  oh-my-bmad-net:
+    driver: bridge
