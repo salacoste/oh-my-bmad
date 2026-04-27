@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: 2026-04-27T22:27:31Z
+# last_updated: 2026-04-27T23:55:00Z
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-04-27T22:27:31Z
+last_updated: 2026-04-27T23:55:00Z
 project: oh-my-bmad
 project_key: NOKEY
 tracking_system: file-system
@@ -86,8 +86,8 @@ development_status:
   # Epic 3: Telegram Control Plane (20 stories)
   # First 3 stories (3-3, 3-4, 3-5) are the Bootstrap Minimum Subset
   # =========================================================================
-  epic-3: backlog
-  3-1-aiogram-bootstrap-webhook: backlog
+  epic-3: in-progress
+  3-1-aiogram-bootstrap-webhook: ready-for-dev
   3-2-allowlist-middleware: backlog
   3-3-task-command: backlog
   3-4-approve-command: backlog
