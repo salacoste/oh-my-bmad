@@ -1,6 +1,6 @@
 # Story 2.16: secret.accessed audit event emission
 
-Status: review
+Status: done
 
 ## Story
 
