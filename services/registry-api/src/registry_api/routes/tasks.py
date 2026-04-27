@@ -27,6 +27,7 @@ from events.envelope import Actor, EventEnvelope
 from events.ids import new_event_id, new_task_id
 from fastapi import APIRouter, Path, Request, Response
 from fastapi.exceptions import HTTPException
+from idempotency import IdempotencyCacheStore
 from pydantic import BaseModel, ConfigDict, Field
 from registry_state.domain.event_types import (  # noqa: IMP001 — services→services allowed per AC-16
     TaskCreatedPayload,
@@ -145,7 +146,6 @@ router = APIRouter()
 @router.post(
     "/tasks",
     status_code=201,
-    response_model=CreateTaskResponse,
     description=(
         "Create a task by appending a `task.created` envelope to the event log. "
         "Returns 201 immediately after durable append; the materializer "
@@ -153,17 +153,35 @@ router = APIRouter()
         "The `Location` response header points to the GET endpoint for the new task — "
         "clients SHOULD poll it with exponential backoff because GET may return 404 "
         "for ~100–200ms after this 201 response (eventual consistency). "
-        "Note: the `Idempotency-Key` request header is read but dedup logic is "
-        "not yet enforced — pending Story 3.6 (FastAPI middleware stack). "
-        "Response headers `Idempotency-Key` (echo) and `X-Idempotency-Status: "
-        "not-enforced` indicate Phase 1 status."
+        "Idempotency-Key dedup is enforced at the route level (Story 2.13): "
+        "duplicate same-key submissions return 201 with byte-identical body and "
+        "`X-Idempotency-Status: replayed`; first attempts return 201 with "
+        "`X-Idempotency-Status: applied`. Errors during the first attempt are "
+        "NOT cached — subsequent same-key submissions will retry the factory "
+        "until one succeeds."
     ),
+    responses={
+        201: {
+            "description": "Task created (or replayed from idempotency cache).",
+            "model": CreateTaskResponse,
+            "headers": {
+                "Location": {"schema": {"type": "string"}},
+                "X-Idempotency-Status": {
+                    "schema": {"type": "string", "enum": ["applied", "replayed"]},
+                    "description": (
+                        "`applied` — first call with this key; factory ran. "
+                        "`replayed` — cache hit; factory NOT run; cached body returned."
+                    ),
+                },
+                "Idempotency-Key": {"schema": {"type": "string"}},
+            },
+        },
+    },
 )
 async def post_tasks(
     body: CreateTaskRequest,
     request: Request,
-    response: Response,
-) -> CreateTaskResponse:
+) -> Response:
     """Create a task by emitting ``task.created`` to the JSONL event log.
 
     EVENTUAL CONSISTENCY: Returns 201 immediately after the event is durably
@@ -180,43 +198,143 @@ async def post_tasks(
     Phase 1 actor identity is read from ``request.state.actor_id`` (set by
     ``ActorIdMiddleware`` on every request — currently hardcoded to ``"http-api"``;
     real auth lands in Story 6.1+).
+
+    Idempotency semantics (Story 2.13 — FR28 / NFR-R4):
+      - First call with key K: factory runs, emits ``task.created``, returns
+        201 with body B and ``X-Idempotency-Status: applied``. The cache stores
+        ``(K → result_event_id)`` durably (SQLite, 7-day TTL); body B is
+        captured in an in-process side-channel keyed by K so replays return
+        byte-identical bytes.
+      - Concurrent same-K calls: per-key asyncio.Lock in
+        ``IdempotencyCacheStore.get_or_run`` serializes them; the factory
+        runs EXACTLY ONCE; losers receive 201 with the SAME body B and
+        ``X-Idempotency-Status: replayed``.
+      - Subsequent same-K calls (post-completion): cache hit → 201 with
+        body B and ``X-Idempotency-Status: replayed``; no event re-emitted.
+      - Errors during first attempt: NOT cached; subsequent same-K
+        submissions retry the factory.
+
+    Architecture line 318 references 409 for "idempotency collision returning
+    prior result"; Story 2.13 returns 201 instead, matching the NFR-R4 spec
+    literally ("all 100 responses 201") and simplifying client logic — the
+    ``X-Idempotency-Status: replayed`` header conveys the dedup signal that
+    a 409 would otherwise carry.
+
+    Route-level wiring (vs middleware-level): keeps the dedup tied to the
+    single endpoint that needs it; non-mutating endpoints (GET) carry no
+    ``X-Idempotency-Status`` header. A future story can hoist this into a
+    generic middleware once additional mutating endpoints land.
     """
     app = request.app
     clock = app.state.clock
     writer = app.state.writer
+    idempotency_cache: IdempotencyCacheStore = app.state.idempotency_cache
+    response_body_cache: dict[str, bytes] = app.state.idempotency_response_cache
 
-    task_id = new_task_id(clock=clock)
-    event_id = new_event_id(clock=clock)
+    idempotency_key: str = request.state.idempotency_key
+    request_id: str = request.state.request_id
 
-    payload = TaskCreatedPayload(
-        task_id=task_id,
-        title=body.title,
-        repo=body.repo,
-        hint=body.hint,
+    # Closure flag — distinguishes cache-miss (factory ran) from cache-hit
+    # (factory skipped). ``IdempotencyCacheStore.get_or_run`` returns
+    # ``(CacheHit, was_run: bool)``; we ALSO use this flag to know whether
+    # to populate the response-body side-channel cache.
+    factory_called: bool = False
+    captured_body: dict[str, bytes] = {}
+
+    async def _factory() -> str:
+        nonlocal factory_called
+        factory_called = True
+
+        task_id = new_task_id(clock=clock)
+        event_id = new_event_id(clock=clock)
+
+        payload = TaskCreatedPayload(
+            task_id=task_id,
+            title=body.title,
+            repo=body.repo,
+            hint=body.hint,
+        )
+
+        # Phase 1: actor_id flows from middleware. TODO(Story 6.1+): real auth.
+        actor = Actor(kind="operator", id=request.state.actor_id)
+
+        envelope = EventEnvelope.create(
+            event_id=event_id,
+            type="task.created",
+            schema_version="1.0.0",
+            emitted_at=clock.now(),
+            emitted_at_monotonic_ns=clock.monotonic_ns(),
+            actor=actor,
+            payload=payload,
+            request_id=request_id,
+            parent_event_id=None,
+        )
+
+        await writer.append(envelope)
+
+        # Build the 201 body NOW so we can both (a) cache it for byte-identical
+        # replays and (b) hand it back to the outer scope via captured_body.
+        response_model = CreateTaskResponse(
+            task_id=task_id,
+            event_id=event_id,
+            created_at=envelope.emitted_at,
+        )
+        body_bytes = response_model.model_dump_json().encode("utf-8")
+        captured_body["bytes"] = body_bytes
+        captured_body["task_id"] = task_id.encode("utf-8")
+        return event_id
+
+    cache_hit, was_run = await idempotency_cache.get_or_run(
+        idempotency_key,
+        request_id=request_id,
+        factory=_factory,
     )
 
-    # Phase 1: actor_id flows from middleware. TODO(Story 6.1+): real auth.
-    actor = Actor(kind="operator", id=request.state.actor_id)
+    if was_run:
+        assert factory_called, "get_or_run reported was_run=True but factory_called is False"
+        body_bytes = captured_body["bytes"]
+        task_id_bytes = captured_body["task_id"]
+        # Persist body in the side-channel for replay paths (incl. waiters
+        # that lost the per-key lock race and concurrent post-completion
+        # callers from later in the TTL window).
+        response_body_cache[idempotency_key] = body_bytes
+        response_body_cache[idempotency_key + ":task_id"] = task_id_bytes
+        status_value = "applied"
+    else:
+        # Cache hit. Use the side-channel body if present (typical case
+        # within the same process); otherwise rebuild a minimal body from
+        # the cached event_id (post-restart, body-cache empty — see Dev
+        # Notes for the trade-off).
+        cached = response_body_cache.get(idempotency_key)
+        if cached is None:
+            # Post-restart fallback: rebuild a minimal body. The task_id
+            # cannot be recovered without a JSONL replay, so this branch
+            # is intentionally conservative — it returns the result_event_id
+            # only, with task_id="" (clients should re-fetch via the original
+            # task's GET endpoint they already polled). Story 3.6 may add a
+            # JSONL-backed body cache; out of scope for 2.13.
+            fallback = CreateTaskResponse(
+                task_id="",
+                event_id=cache_hit.result_event_id,
+                created_at=cache_hit.created_at,
+            )
+            body_bytes = fallback.model_dump_json().encode("utf-8")
+            task_id_bytes = b""
+        else:
+            body_bytes = cached
+            task_id_bytes = response_body_cache.get(idempotency_key + ":task_id", b"")
+        status_value = "replayed"
 
-    envelope = EventEnvelope.create(
-        event_id=event_id,
-        type="task.created",
-        schema_version="1.0.0",
-        emitted_at=clock.now(),
-        emitted_at_monotonic_ns=clock.monotonic_ns(),
-        actor=actor,
-        payload=payload,
-        request_id=request.state.request_id,
-        parent_event_id=None,
-    )
-
-    await writer.append(envelope)
-
-    response.headers["Location"] = f"/v1/tasks/{task_id}"
-    return CreateTaskResponse(
-        task_id=task_id,
-        event_id=event_id,
-        created_at=envelope.emitted_at,
+    task_id_str = task_id_bytes.decode("utf-8")
+    headers = {
+        "X-Idempotency-Status": status_value,
+        "Location": f"/v1/tasks/{task_id_str}",
+    }
+    return Response(
+        content=body_bytes,
+        status_code=201,
+        media_type="application/json",
+        headers=headers,
     )
 
 

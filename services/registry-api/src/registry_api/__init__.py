@@ -3,6 +3,9 @@
 Story 1.1 shipped the scaffold (`hello()` + `__version__` stub).
 Story 2.9 ships the real FastAPI app: POST /v1/tasks + GET /v1/tasks/{id},
 middleware stack, RFC 7807 error envelopes, and OpenAPI auto-docs.
+Story 2.13 wires IdempotencyCacheStore into POST /v1/tasks for FR28 / NFR-R4:
+duplicate Idempotency-Key submissions return the prior result without
+producing duplicate task rows.
 
 Public surface (advertised via ``__all__``):
   - ``build_app``: factory → ``FastAPI`` instance (wired with lifespan,
@@ -15,7 +18,7 @@ importable; the bootstrap-verify check still references it).
 
 from registry_api.app import build_app
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 
 def hello() -> str:

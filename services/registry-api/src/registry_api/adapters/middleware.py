@@ -84,17 +84,19 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 class IdempotencyKeyMiddleware(BaseHTTPMiddleware):
     """Read ``Idempotency-Key`` header; generate if absent; attach to ``request.state``.
 
-    Dedup enforcement is explicitly deferred to Story 3.6. This middleware
-    only reads/generates the key and makes it available to handlers via
-    ``request.state.idempotency_key``.
+    This middleware reads/generates the key and makes it available to handlers
+    via ``request.state.idempotency_key``. It echoes the key on the response.
 
-    F11/F19: Echoes the key back on the response and advertises Phase 1 status
-    via ``X-Idempotency-Status: not-enforced`` so clients can distinguish the
-    Phase 1 (read/generate-only) shape from the Story 3.6 (enforced) shape
-    without parsing semver.
+    Story 2.13: route-level dedup is wired in ``routes/tasks.py`` via
+    ``IdempotencyCacheStore.get_or_run``. The route handler owns the
+    ``X-Idempotency-Status`` header (values: ``applied`` for cache-miss,
+    ``replayed`` for cache-hit). Endpoints that do NOT enforce dedup (e.g.
+    GET routes) carry NO ``X-Idempotency-Status`` header — its absence is the
+    "not enforced for this endpoint" signal. This is a behavior change from
+    the Story 2.9 placeholder which unconditionally set ``not-enforced``.
 
-    TODO(Story 3.6): wire ``IdempotencyCacheStore.get_or_run`` here to enforce
-    at-most-once semantics for mutating endpoints.
+    Cross-route dedup (e.g. via a generic enforcing middleware) is deferred
+    to a future story (3.6 / 6.4) once additional mutating endpoints land.
     """
 
     def __init__(self, app: ASGIApp, *, clock: Clock) -> None:
@@ -107,7 +109,6 @@ class IdempotencyKeyMiddleware(BaseHTTPMiddleware):
         request.state.idempotency_key = idempotency_key
         response = await call_next(request)
         response.headers["Idempotency-Key"] = idempotency_key
-        response.headers["X-Idempotency-Status"] = "not-enforced"
         return response
 
 

@@ -592,7 +592,12 @@ class TestMiddleware:
     async def test_idempotency_middleware_advertises_headers_on_response(
         self, post_client: AsyncClient
     ) -> None:
-        """F11+F19: response carries Idempotency-Key echo + X-Idempotency-Status."""
+        """F11+F19/Story 2.13: response carries Idempotency-Key echo + X-Idempotency-Status.
+
+        After Story 2.13 the route handler owns ``X-Idempotency-Status`` —
+        first calls produce ``applied`` (cache miss → factory ran). The
+        middleware no longer sets the placeholder ``not-enforced`` value.
+        """
         idem = new_request_id(clock=_FROZEN_CLOCK, rng=Random(777))
         r = await post_client.post(
             "/v1/tasks",
@@ -601,7 +606,66 @@ class TestMiddleware:
         )
         assert r.status_code == 201
         assert r.headers.get("Idempotency-Key") == idem
-        assert r.headers.get("X-Idempotency-Status") == "not-enforced"
+        assert r.headers.get("X-Idempotency-Status") == "applied"
+
+    @pytest.mark.asyncio
+    async def test_lifespan_constructs_idempotency_cache(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """Story 2.13 AC-2: ``app.state.idempotency_cache`` exists post-startup."""
+        from idempotency import IdempotencyCacheStore  # noqa: PLC0415 — local
+
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+
+        events_dir = tmp_path / "events"
+        app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+
+        async with LifespanManager(app):
+            assert hasattr(app.state, "idempotency_cache")
+            assert isinstance(app.state.idempotency_cache, IdempotencyCacheStore)
+            assert hasattr(app.state, "idempotency_response_cache")
+            assert isinstance(app.state.idempotency_response_cache, dict)
+
+    @pytest.mark.asyncio
+    async def test_post_tasks_first_call_sets_x_idempotency_status_applied(
+        self, post_client: AsyncClient
+    ) -> None:
+        """Story 2.13 AC-4: first POST with key K returns ``X-Idempotency-Status: applied``."""
+        idem = new_request_id(clock=_FROZEN_CLOCK, rng=Random(2013))
+        r = await post_client.post(
+            "/v1/tasks",
+            json={"title": "applied-test"},
+            headers={"Idempotency-Key": idem},
+        )
+        assert r.status_code == 201
+        assert r.headers.get("X-Idempotency-Status") == "applied"
+        assert r.headers.get("Idempotency-Key") == idem
+
+    @pytest.mark.asyncio
+    async def test_post_tasks_replay_sets_x_idempotency_status_replayed(
+        self, post_client: AsyncClient
+    ) -> None:
+        """Story 2.13 AC-4: sequential same-key POST returns ``replayed``."""
+        idem = new_request_id(clock=_FROZEN_CLOCK, rng=Random(2014))
+        r1 = await post_client.post(
+            "/v1/tasks",
+            json={"title": "replayed-test"},
+            headers={"Idempotency-Key": idem},
+        )
+        assert r1.status_code == 201
+        assert r1.headers.get("X-Idempotency-Status") == "applied"
+        r2 = await post_client.post(
+            "/v1/tasks",
+            json={"title": "replayed-test"},
+            headers={"Idempotency-Key": idem},
+        )
+        assert r2.status_code == 201
+        assert r2.headers.get("X-Idempotency-Status") == "replayed"
+        # Body byte-identical — proves the side-channel cache + the
+        # ``Response(content=...)`` path bypasses Pydantic re-serialization.
+        assert r2.content == r1.content
 
     @pytest.mark.asyncio
     async def test_middleware_runs_in_order_request_id_idempotency_actor_id(

@@ -103,6 +103,16 @@ test-contract:
 test-crash:
     uv run pytest -m crash --tb=short -v tests/crash-injection/
 
+# Story 2.13 — idempotency 100× concurrent-replay test (FR28 / NFR-R4).
+# Exercises ``IdempotencyCacheStore.get_or_run`` wired into POST /v1/tasks:
+# 100 concurrent same-key POSTs, byte-identical replies, exactly 1
+# ``task.created`` event. The 10× parametrized variant gives the nightly
+# its statistical-flakiness signal. Pure in-memory SQLite + httpx
+# ASGITransport — no Docker required; fast (~1.3s for all 13 cases).
+# Included in the PR-gate ``just test`` lane AND nightly CI.
+test-idempotency:
+    uv run pytest -m idempotency -v tests/idempotency/
+
 # Strict lint + format + type-check + architectural-discipline gates.
 # ruff rules cover style (E/F/I/UP/B/SIM/N); ruff format --check enforces
 # canonical formatting; mypy --strict gates the platform-owned packages +
@@ -111,15 +121,16 @@ test-crash:
 # single-writer constraints — same checks CI runs; splitting them out would
 # create a footgun where `just lint` is green locally but CI fails.
 # Story 2.11 (AC-15): crash-injection harness also passes mypy --strict.
+# Story 2.13 (AC-13): idempotency replay tests also pass mypy --strict.
 # `--explicit-package-bases` avoids a module-name conflict when the harness
-# directory (tests/crash-injection/) is not a Python package. Registry_state
-# is found via mypy_path (mypy.ini) because services/registry-state now has
-# a py.typed marker.
+# directory (tests/crash-injection/, tests/idempotency/) is not a Python
+# package. Registry_state is found via mypy_path (mypy.ini) because
+# services/registry-state now has a py.typed marker.
 lint:
     uv run ruff check .
     uv run ruff format --check .
     uv run mypy --strict packages/ services/registry-api services/registry-state services/worker-wrapper
-    uv run mypy --strict --explicit-package-bases tests/crash-injection
+    uv run mypy --strict --explicit-package-bases tests/crash-injection tests/idempotency
     uv run python scripts/check_imports.py
     uv run python scripts/check_event_registry.py
     uv run python scripts/check_single_writer.py

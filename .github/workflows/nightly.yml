@@ -17,8 +17,11 @@ on:
       - "Dockerfile.base"
       - "justfile"
       - "tests/crash-injection/**"
+      - "tests/idempotency/**"
       - "services/registry-state/**"
+      - "services/registry-api/**"
       - "packages/events/**"
+      - "packages/idempotency/**"
       - "docker-compose.yml"
       - ".github/workflows/nightly.yml"
   workflow_dispatch:
@@ -81,3 +84,31 @@ jobs:
           # broken summary-emit path.
           if-no-files-found: error
           retention-days: 30
+
+  idempotency-replay:
+    name: Idempotency 100× replay (NFR-R4 / FR28)
+    # Story 2.13 — verifies the registry-api dedup invariant: 100 concurrent
+    # POSTs with the same Idempotency-Key produce exactly 1 task row and 100
+    # byte-identical 201 responses; runs 10 parametrized iterations to catch
+    # flakiness. No Docker required (in-memory SQLite + ASGI transport).
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Install uv + Python 3.12
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Sync workspace (incl. dev deps)
+        run: uv sync --frozen --dev
+
+      - name: Run idempotency 100× replay test
+        run: just test-idempotency

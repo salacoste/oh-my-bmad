@@ -37,6 +37,7 @@ from pathlib import Path
 from events.clock import Clock
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
+from idempotency import IdempotencyCacheStore
 from registry_state.adapters.event_log import (  # noqa: IMP001 — services→services allowed per AC-16
     EventLogWriter,
 )
@@ -57,6 +58,13 @@ from registry_api.adapters.middleware import (
     RequestIdMiddleware,
 )
 from registry_api.routes.tasks import router as tasks_router
+
+# Idempotency-cache TTL — 7 days per FR28 (Architecture line 205). The cache is
+# created by the registry-state schema (``IdempotencyCache`` ORM model) and
+# written to by ``IdempotencyCacheStore`` from this service. The cache is the
+# ONLY SQLite write surface registry-api owns; tasks/events/sessions remain
+# materialized exclusively by the registry-state subscriber (FR26).
+_IDEMPOTENCY_TTL_SECONDS = 604800
 
 
 def build_app(*, base_dir: Path, db_url: str, clock: Clock) -> FastAPI:
@@ -87,6 +95,15 @@ def build_app(*, base_dir: Path, db_url: str, clock: Clock) -> FastAPI:
         ``engine.dispose()`` and vice versa. The stack also unwinds correctly
         on partial-startup exceptions (e.g. engine creation succeeded but
         writer construction raised — engine still gets disposed).
+
+        Story 2.13: also constructs an ``IdempotencyCacheStore`` backed by a
+        SEPARATE writable engine pointing at the same SQLite file. The cache
+        owns its own table (``idempotency_cache``) per FR28 / Architecture
+        line 205; the read-only engine above continues to gate
+        tasks/events/sessions reads. Two engines on the same file is safe
+        because SQLite's WAL journaling permits multiple readers + a single
+        writer; the cache is the writer for its own table only and the
+        registry-state subscriber remains the writer for FR26-scoped tables.
         """
         async with AsyncExitStack() as stack:
             # Engine first — open the read-only DB before constructing the writer.
@@ -102,6 +119,34 @@ def build_app(*, base_dir: Path, db_url: str, clock: Clock) -> FastAPI:
             app.state.session_maker = session_maker
             app.state.clock = clock
 
+            # Story 2.13: writable engine for the idempotency cache. The cache
+            # writes to its own ``idempotency_cache`` table; tasks/events/
+            # sessions are still materialized solely by registry-state (FR26).
+            # ``check_single_writer`` already excludes ``packages/idempotency/``
+            # from its scan, so this writable surface does not violate FR26.
+            cache_engine = create_engine(db_url, read_only=False)
+            stack.push_async_callback(cache_engine.dispose)
+            cache_session_maker = get_session(cache_engine)
+            idempotency_cache = IdempotencyCacheStore(
+                session_maker=cache_session_maker,
+                clock=clock,
+                ttl_seconds=_IDEMPOTENCY_TTL_SECONDS,
+            )
+            app.state.idempotency_cache = idempotency_cache
+            # In-memory side-channel: maps idempotency_key → cached canonical
+            # JSON bytes of the response body. ``IdempotencyCacheStore.get_or_run``
+            # only stores the ``result_event_id`` (a string) per Story 2.7
+            # AC-1; the response body is captured here so that byte-identity
+            # holds across replays without re-serializing the Pydantic model
+            # (which could introduce key-order differences). Bounded by the
+            # cache's per-key serialization — a dict entry is written only by
+            # the winning factory call, then read by replay calls. Eviction
+            # mirrors the cache TTL: a janitor cleanup is out of scope for
+            # 2.13 (Story 3.6 may add periodic sweeps once an explicit
+            # operator-facing eviction surface is needed).
+            response_body_cache: dict[str, bytes] = {}
+            app.state.idempotency_response_cache = response_body_cache
+
             # Writer last — F13 note: EventLogWriter.__init__ calls
             # base_dir.mkdir(parents=True, exist_ok=True) so a non-existent
             # base_dir is auto-bootstrapped here (Story 2.4 AC-7).
@@ -116,7 +161,7 @@ def build_app(*, base_dir: Path, db_url: str, clock: Clock) -> FastAPI:
 
     app = FastAPI(
         title="oh-my-bmad registry API",
-        version="0.2.0",
+        version="0.3.0",
         lifespan=lifespan,
     )
 

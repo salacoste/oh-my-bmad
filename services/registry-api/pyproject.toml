@@ -1,7 +1,7 @@
 [project]
 name = "registry-api"
-version = "0.2.0"
-description = "HTTP application API surface for the oh-my-bmad task + session registry. Story 2.9 ships FastAPI app + POST /v1/tasks + GET /v1/tasks/{id} (FR1 + FR4 + FR26)."
+version = "0.3.0"
+description = "HTTP application API surface for the oh-my-bmad task + session registry. Story 2.9 ships FastAPI app + POST /v1/tasks + GET /v1/tasks/{id} (FR1 + FR4 + FR26). Story 2.13 wires IdempotencyCacheStore into POST /v1/tasks (FR28 + NFR-R4)."
 authors = [
     { name = "R2d2", email = "bad.vano23ru@gmail.com" },
 ]
@@ -12,6 +12,7 @@ dependencies = [
     "pydantic>=2.8",
     "events>=0.3.0",
     "registry-state>=0.5.0",
+    "idempotency>=0.2.0",
 ]
 
 [build-system]
@@ -27,3 +28,4 @@ dev = [
 [tool.uv.sources]
 events = { workspace = true }
 registry-state = { workspace = true }
+idempotency = { workspace = true }

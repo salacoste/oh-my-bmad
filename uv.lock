@@ -1147,11 +1147,12 @@ wheels = [
 
 [[package]]
 name = "registry-api"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "services/registry-api" }
 dependencies = [
     { name = "events" },
     { name = "fastapi" },
+    { name = "idempotency" },
     { name = "pydantic" },
     { name = "registry-state" },
     { name = "uvicorn", extra = ["standard"] },
@@ -1167,6 +1168,7 @@ dev = [
 requires-dist = [
     { name = "events", editable = "packages/events" },
     { name = "fastapi", specifier = ">=0.110" },
+    { name = "idempotency", editable = "packages/idempotency" },
     { name = "pydantic", specifier = ">=2.8" },
     { name = "registry-state", editable = "services/registry-state" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
