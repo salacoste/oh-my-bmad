@@ -25,7 +25,9 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from asgi_lifespan import LifespanManager
 from events import FROZEN_EPOCH, FrozenClock
 from events.envelope import Actor, EventEnvelope
-from registry_state.adapters.event_log import EventLogWriter  # noqa: IMP001
+from registry_state.adapters.event_log import (  # noqa: IMP001 — services→services allowed (mirror of registry_api/test_app.py:48); see TODO in conftest.py
+    EventLogWriter,
+)
 from secret_hygiene import flush_pending_emissions
 
 from telegram_gateway.app.config import TelegramSettings
