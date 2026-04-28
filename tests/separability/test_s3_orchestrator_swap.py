@@ -506,11 +506,21 @@ def test_spine_source_code_unchanged() -> None:
     The check stays fast (sub-second) and fits the PR-gate
     ``just test`` lane.
     """
+    # Spine paths — orchestrator/runtime/writer code that MUST NOT change
+    # when the orchestrator is swapped (Story 2.15 invariant).
+    #
+    # `:!` git pathspecs EXCLUDE files that ARE permitted to evolve under
+    # Story 2.14's NFR-M3 additive-version rule — specifically the
+    # `domain/event_types.py` catalog, which intentionally grows as new
+    # event types are added (e.g., Story 2.10 failure events, 2.16
+    # secret.accessed, 3.2 telegram.rejected). New event types are
+    # additive and orthogonal to orchestrator separability.
     SPINE_PATHS = [
         "services/registry-state/src/",
         "services/registry-api/src/",
         "mcp-servers/clawhip-bridge/src/",
         "services/worker-wrapper/src/",
+        ":!services/registry-state/src/registry_state/domain/event_types.py",
     ]
 
     # Skip on non-git checkout (e.g., source tarball).

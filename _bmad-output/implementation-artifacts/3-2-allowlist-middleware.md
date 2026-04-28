@@ -1,6 +1,6 @@
 # Story 3.2: Telegram allowlist middleware + rejection event
 
-Status: review
+Status: done
 
 ## Story
 
