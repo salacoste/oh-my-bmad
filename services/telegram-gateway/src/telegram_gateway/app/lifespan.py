@@ -12,36 +12,80 @@
    running loop.
 3. Builds an :class:`aiogram.Bot` from the audited bot token (1 audit
    read) and an empty :class:`aiogram.Dispatcher`. The bot's session
-   close-callback is registered AFTER construction so a partial-startup
-   failure (e.g., ``set_webhook`` raising) still tears the session down.
-4. Calls :py:meth:`aiogram.Bot.set_webhook` with the audited webhook
-   secret token (1 audit read), ``drop_pending_updates=True`` so a
-   downtime backlog is discarded on restart.
-5. Stashes ``bot`` / ``dp`` / ``settings`` on ``app.state`` so the
-   webhook route can dispatch into the same dispatcher instance.
-6. On shutdown, calls :func:`secret_hygiene.flush_pending_emissions`
-   FIRST (timeout=2.0s) so the in-flight audit-emission tasks complete
-   BEFORE :py:meth:`EventLogWriter.close` runs — without the flush, the
+   close-callback is registered AFTER ``Bot()`` returns successfully so
+   a partial-startup failure tears the session down only when there is
+   actually a session to close (review-fix L9).
+4. **Caches the webhook secret token bytes** (review-fix H4) — reading
+   ``audited.webhook_secret_token.value`` per webhook request would emit
+   one ``secret.accessed`` envelope per delivery, saturating the audit
+   log under production volume. We read ``.value`` exactly once at boot
+   and stash the encoded bytes on ``app.state.expected_webhook_secret_bytes``.
+5. Calls :py:meth:`aiogram.Bot.set_webhook` with the cached secret-token
+   bytes (decoded back to str for the aiogram API), ``drop_pending_updates=True``
+   so a downtime backlog is discarded on restart. ``drop_pending_updates=True``
+   is intentional: messages queued during downtime are discarded.
+   Stories 3.16 / 3.17 add explicit ``/stop`` + ``/retry`` UX for
+   recovery. The implicit drop on restart is acceptable for Phase 1.
+6. Stashes ``bot`` / ``dp`` / ``settings`` / ``writer`` / cached secret
+   bytes / dispatch-task set on ``app.state`` **AFTER** ``set_webhook``
+   succeeds (review-fix M8) — if startup fails, the partial state never
+   becomes visible.
+7. On shutdown, drains the in-flight fire-and-forget dispatch tasks
+   first (review-fix M3 follow-up), then calls
+   :func:`secret_hygiene.flush_pending_emissions` (timeout=2.0s) so the
+   in-flight audit-emission tasks complete BEFORE
+   :py:meth:`aiogram.Bot.session.close` and
+   :py:meth:`EventLogWriter.close` run. Without the flush the
    fire-and-forget audit tasks race the writer's underlying file handle
    and can drop events.
 
-Audit-count cold-start invariant (AC-9): boot + a single webhook
-delivery yields exactly 3 ``secret.accessed`` envelopes — bot_token
-(``Bot()``), webhook_secret_token (``set_webhook(...)``),
-webhook_secret_token (header-compare in :mod:`telegram_gateway.app.webhook`).
+LIFO teardown order (review-fix M1)
+-----------------------------------
+
+``AsyncExitStack`` unwinds callbacks in last-in-first-out order. The
+push order in this lifespan is:
+
+1. ``writer.close``      → pops 4th (last)
+2. ``bot.session.close`` → pops 3rd
+3. ``_drain_dispatch_tasks`` → pops 2nd
+4. ``flush_pending_emissions`` → pops 1st
+
+So shutdown runs: drain dispatch tasks → flush audit emissions → close
+bot session → close writer. ``flush`` MUST run before ``writer.close``
+or the in-flight ``secret.accessed`` tasks raise
+``RuntimeError("EventLogWriter is closed")``. ``bot.session.close``
+runs in the middle — the session must be open while audit tasks
+emit (they only touch the writer), but closed before the writer goes.
+
+Audit-count cold-start invariant (AC-9, post-H4-fix)
+----------------------------------------------------
+
+Boot + a single webhook delivery now yields exactly **2**
+``secret.accessed`` envelopes — bot_token (``Bot()``) +
+webhook_secret_token (single startup read for caching). The webhook
+handler's per-request header-compare uses the cached bytes and emits
+no audit events.
 """
 
 from __future__ import annotations
 
+import asyncio
+import functools
 import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 
 from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 from events.clock import Clock
 from events.envelope import Actor
 from fastapi import FastAPI
-from registry_state.adapters.event_log import (  # noqa: IMP001 — services→services allowed per story 3.1 (mirrors registry_api/app.py:42)
+
+# TODO(architecture): relocate ``EventLogWriter`` + ``SecretAccessedPayload``
+# to ``packages/events/`` so the noqa cross-service import is no longer
+# required. Tracked separately; see Story 3.1 Review Findings M6.
+from registry_state.adapters.event_log import (  # noqa: IMP001 — services→services allowed per story 3.1 (mirrors registry_api/app.py:42); see TODO above
     EventLogWriter,
 )
 from secret_hygiene import flush_pending_emissions
@@ -52,12 +96,45 @@ from telegram_gateway.app.config import TelegramSettings
 # shutdown. Matches the registry-api precedent (Story 2.9 + 2.16 H6).
 _FLUSH_TIMEOUT_SECONDS = 2.0
 
+# Drain timeout for in-flight fire-and-forget dispatch tasks on shutdown.
+# Each handler is bounded by aiogram's own timeouts; this gives a small
+# extra grace period before the loop is torn down.
+_DISPATCH_DRAIN_TIMEOUT_SECONDS = 5.0
+
 # Stable actor identity for every audit envelope this service emits via
 # ``AuditedSecret.value`` reads. ``kind="system"`` per Story 2.10 +
-# Story 2.16 audited_secret module docstring.
+# Story 2.16 audited_secret module docstring. Imported by tests via
+# ``from telegram_gateway.app.lifespan import _TELEGRAM_GATEWAY_ACTOR``
+# instead of a magic-string ``"telegram-gateway"`` (review-fix L17).
 _TELEGRAM_GATEWAY_ACTOR = Actor(kind="system", id="telegram-gateway")
 
 _log = logging.getLogger("telegram_gateway.lifespan")
+
+
+async def _drain_dispatch_tasks(
+    tasks: set[asyncio.Task[None]],
+    timeout: float = _DISPATCH_DRAIN_TIMEOUT_SECONDS,
+) -> None:
+    """Await all in-flight fire-and-forget dispatch tasks (review-fix M3).
+
+    Best-effort: a hung handler that doesn't honor cancellation should
+    not block shutdown indefinitely. We wait *timeout* seconds and log
+    the count of stragglers.
+    """
+    if not tasks:
+        return
+    done, pending = await asyncio.wait(list(tasks), timeout=timeout)
+    if pending:
+        _log.warning(
+            "dispatch drain: %d task(s) did not complete within %ss",
+            len(pending),
+            timeout,
+        )
+        for task in pending:
+            task.cancel()
+        # Give cancelled tasks a chance to finalize.
+        await asyncio.gather(*pending, return_exceptions=True)
+    _ = done  # silence unused-var; the set is implicit-checked above
 
 
 def make_lifespan(
@@ -78,16 +155,9 @@ def make_lifespan(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         async with AsyncExitStack() as stack:
             writer = EventLogWriter(base_dir=settings_seed.event_log_dir, clock=clock)
-            # ``AsyncExitStack`` unwinds callbacks in LIFO order. We want
-            # ``flush_pending_emissions`` to run FIRST on teardown so the
-            # in-flight ``secret.accessed`` audit tasks have a chance to
-            # complete BEFORE :py:meth:`EventLogWriter.close` closes the
-            # underlying file descriptor (Story 2.16 H6 / Epic-2-retro
-            # tech-debt #2). Push the writer close FIRST so it sits at the
-            # bottom of the stack and pops LAST; push flush LAST so it
-            # pops FIRST.
+            # Push order is documented in the module docstring. Summary:
+            # writer.close pushed FIRST so it pops LAST.
             stack.push_async_callback(writer.close)
-            stack.push_async_callback(flush_pending_emissions, _FLUSH_TIMEOUT_SECONDS)
 
             # First service-side use of AuditedBaseSettings.from_env
             # (Story 2.16). The placeholder wrappers on *settings_seed*
@@ -99,21 +169,68 @@ def make_lifespan(
             )
 
             # Bot construction reads bot_token.value once → 1 audit envelope.
-            bot = Bot(token=audited.bot_token.value)
+            # ``parse_mode="HTML"`` moved to ``DefaultBotProperties`` per
+            # aiogram 3.7+ API (review-fix M5).
+            bot = Bot(
+                token=audited.bot_token.value,
+                default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+            )
+            # Push bot.session.close AFTER successful Bot construction —
+            # if the constructor itself raises, there's nothing to close
+            # (review-fix L9).
             stack.push_async_callback(bot.session.close)
 
             dp = Dispatcher()
+
+            # Cache the webhook secret bytes ONCE at boot (review-fix H4).
+            # Per-request reads would emit one ``secret.accessed``
+            # envelope per webhook delivery, saturating the audit log
+            # under production webhook volume. Encoding here is the only
+            # ``.value`` read for the webhook secret over the service's
+            # lifetime; subsequent header compares operate on the cached
+            # bytes via ``hmac.compare_digest``.
+            #
+            # set_webhook ALSO needs the str form, so we decode the
+            # cached bytes back rather than reading ``.value`` a second
+            # time.
+            expected_webhook_secret_bytes = audited.webhook_secret_token.value.encode("utf-8")
+
+            # Fire-and-forget dispatch task set (review-fix M3 anchor).
+            # Tracked on app.state so the webhook handler can register
+            # tasks; drained on shutdown via _drain_dispatch_tasks.
+            dispatch_tasks: set[asyncio.Task[None]] = set()
+
+            # Push the dispatch-task drain SECOND-TO-LAST so it pops
+            # SECOND on teardown (after flush). Drains in-flight
+            # ``feed_webhook_update`` tasks before audit flush so any
+            # secret reads they themselves perform are flushed.
+            stack.push_async_callback(_drain_dispatch_tasks, dispatch_tasks)
+
+            # Push flush_pending_emissions LAST so it pops FIRST on
+            # teardown (Story 2.16 H6 / Epic-2-retro tech-debt #2). Use
+            # functools.partial for keyword safety (review-fix L18).
+            stack.push_async_callback(
+                functools.partial(flush_pending_emissions, timeout=_FLUSH_TIMEOUT_SECONDS)
+            )
+
+            # set_webhook uses the cached secret bytes (decoded back to
+            # str for the aiogram API). No additional ``.value`` read.
+            await bot.set_webhook(
+                url=str(audited.webhook_url),
+                secret_token=expected_webhook_secret_bytes.decode("utf-8"),
+                drop_pending_updates=True,
+            )
+
+            # Assign app.state ONLY after set_webhook succeeds
+            # (review-fix M8). If set_webhook raises, the stack unwinds
+            # without leaving partial state visible to any handler.
             app.state.bot = bot
             app.state.dp = dp
             app.state.settings = audited
             app.state.writer = writer
+            app.state.expected_webhook_secret_bytes = expected_webhook_secret_bytes
+            app.state._dispatch_tasks = dispatch_tasks
 
-            # set_webhook reads webhook_secret_token.value once → 1 audit envelope.
-            await bot.set_webhook(
-                url=str(audited.webhook_url),
-                secret_token=audited.webhook_secret_token.value,
-                drop_pending_updates=True,
-            )
             # AC-5 contract: log line is verbatim "Webhook set · ready" and
             # the only structured field is the path. NEVER include the URL
             # token portion or the secret_token value (Story 2.17 log-leakage
@@ -126,4 +243,4 @@ def make_lifespan(
     return lifespan
 
 
-__all__ = ["make_lifespan"]
+__all__ = ["make_lifespan", "_TELEGRAM_GATEWAY_ACTOR"]

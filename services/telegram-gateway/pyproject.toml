@@ -28,3 +28,13 @@ dev = [
 [tool.uv.sources]
 secret-hygiene = { workspace = true }
 events = { workspace = true }
+
+# Review-fix L6: exclude co-located ``test_*.py`` and ``conftest.py``
+# from the wheel — they're development-time fixtures, not runtime
+# code, and shipping them bloats the published artifact + leaks fixture
+# helper names into the public namespace.
+[tool.uv.build-backend]
+source-exclude = [
+    "**/test_*.py",
+    "**/conftest.py",
+]

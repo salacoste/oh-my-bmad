@@ -12,23 +12,26 @@ from aiogram import Bot
 from aiogram.client.session.aiohttp import AiohttpSession
 from asgi_lifespan import LifespanManager
 from events import FROZEN_EPOCH, FrozenClock
-from events.envelope import Actor
 from httpx import ASGITransport, AsyncClient
 
 from telegram_gateway import __version__
 from telegram_gateway.app.config import TelegramSettings
+from telegram_gateway.app.lifespan import _TELEGRAM_GATEWAY_ACTOR  # review-fix L17
 from telegram_gateway.app.main import build_app
 
-_ACTOR = Actor(kind="system", id="telegram-gateway")
+_ACTOR = _TELEGRAM_GATEWAY_ACTOR  # review-fix L17: canonical import, not magic string
 
 
 @pytest_asyncio.fixture
-async def health_client(
+async def client(  # review-fix L3: renamed from health_client → client
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> AsyncIterator[AsyncClient]:
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "1234:fake-bot-token")
     monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET_TOKEN", "fake-webhook-secret-1234")
-    monkeypatch.setenv("TELEGRAM_WEBHOOK_URL", "https://tunnel.example.com/v1/telegram/webhook")
+    monkeypatch.setenv(
+        "TELEGRAM_WEBHOOK_URL",
+        "https://tunnel.example.com/v1/telegram/webhook",
+    )
     monkeypatch.setenv("EVENT_LOG_DIR", str(tmp_path / "events"))
 
     async def fake_set_webhook(self: Bot, **kwargs: Any) -> bool:
@@ -48,17 +51,15 @@ async def health_client(
     app = build_app(settings=settings, clock=FrozenClock(mono_ns=0, now=FROZEN_EPOCH))
     async with (
         LifespanManager(app) as manager,
-        AsyncClient(
-            transport=ASGITransport(app=manager.app), base_url="http://testserver"
-        ) as client,
+        AsyncClient(transport=ASGITransport(app=manager.app), base_url="http://testserver") as c,
     ):
-        yield client
+        yield c
 
 
 @pytest.mark.asyncio
-async def test_health_returns_envelope(health_client: AsyncClient) -> None:
+async def test_health_returns_envelope(client: AsyncClient) -> None:
     """AC-8: ``GET /v1/health`` returns ``{status, service, version}`` JSON."""
-    r = await health_client.get("/v1/health")
+    r = await client.get("/v1/health")
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("application/json")
     body = r.json()

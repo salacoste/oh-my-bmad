@@ -3,8 +3,10 @@
 ``build_app(*, settings, clock) -> FastAPI`` mirrors
 :func:`registry_api.app.build_app` — async lifespan via
 :func:`telegram_gateway.app.lifespan.make_lifespan`, route mounting via
-:func:`fastapi.FastAPI.include_router`, no middleware (Story 3.6 adds
-the request-id / idempotency-key / log-sanitizer / rate-limiter stack).
+:py:meth:`fastapi.FastAPI.add_api_route` (so the operator-supplied
+``settings.webhook_path`` actually takes effect — review-fix H1/M18),
+no middleware (Story 3.6 adds the request-id / idempotency-key /
+log-sanitizer / rate-limiter stack).
 
 The factory takes a ``TelegramSettings`` instance (typically the
 placeholder-wrapped one from ``from_env(emit=None, ...)``) so callers
@@ -21,7 +23,7 @@ from fastapi import FastAPI
 from telegram_gateway import __version__
 from telegram_gateway.app.config import TelegramSettings
 from telegram_gateway.app.lifespan import make_lifespan
-from telegram_gateway.app.webhook import router as webhook_router
+from telegram_gateway.app.webhook import health, telegram_webhook
 
 
 def build_app(*, settings: TelegramSettings, clock: Clock) -> FastAPI:
@@ -45,7 +47,16 @@ def build_app(*, settings: TelegramSettings, clock: Clock) -> FastAPI:
         version=__version__,
         lifespan=make_lifespan(settings, clock),
     )
-    app.include_router(webhook_router)
+    # Mount the webhook route DYNAMICALLY from settings.webhook_path so
+    # operator overrides via TELEGRAM_WEBHOOK_PATH actually take effect
+    # (review-fix H1/M18 — the previous decorator-based mount silently
+    # ignored the field).
+    app.add_api_route(
+        settings.webhook_path,
+        telegram_webhook,
+        methods=["POST"],
+    )
+    app.add_api_route("/v1/health", health, methods=["GET"])
     return app
 
 

@@ -18,18 +18,35 @@ emptying the registry between cases. Without re-registering
 with ``EventSchemaUnknown('secret.accessed', '1.0.0')`` whenever it
 runs after an envelope-test file. The fixture is idempotent (catches
 the ValueError raised by re-registering the same key).
+
+AC-12 noqa import allowlist note (review-fix M6)
+-------------------------------------------------
+
+``registry_state.adapters.event_log.EventLogWriter`` and
+``registry_state.domain.event_types.SecretAccessedPayload`` are imported
+via ``# noqa: IMP001``. The proper fix (relocating these to
+``packages/events/``) is deferred to a separate tech-debt story.
+
+TODO(architecture): relocate ``EventLogWriter`` + ``SecretAccessedPayload``
+to ``packages/events/`` so the noqa cross-service import below is no
+longer required. Tracked separately; see Story 3.1 Review Findings M6.
 """
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
+import pytest_asyncio
 from events import FROZEN_EPOCH, FrozenClock
 from events.schema_registry import register
-from registry_state.domain.event_types import (  # noqa: IMP001 — services→services allowed (mirror of registry_api/test_app.py:48)
+from registry_state.domain.event_types import (  # noqa: IMP001 — services→services allowed (mirror of registry_api/test_app.py:48); see TODO above
     SecretAccessedPayload,
+)
+from secret_hygiene.audited_secret import (
+    _live_emission_tasks,  # noqa: PLC2701 — intentional private-name access for test drain fixture
 )
 
 
@@ -60,3 +77,22 @@ def _re_register_secret_accessed() -> Iterator[None]:
 def fixed_clock() -> FrozenClock:
     """Stationary clock at FROZEN_EPOCH (mirrors tests/conftest.py)."""
     return FrozenClock(mono_ns=0, now=FROZEN_EPOCH)
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _drain_audit_tasks_between_tests() -> AsyncIterator[None]:
+    """Cancel + drain lingering audit-emission tasks between tests (review-fix M21).
+
+    ``secret_hygiene.audited_secret._live_emission_tasks`` is a module-level
+    WeakSet shared across all tests in the process. A test that creates
+    :class:`AuditedSecret` instances and reads ``.value`` on them may
+    schedule emission tasks that outlive the test function. Without
+    cancelling them here, they pollute the next test's audit count or
+    trigger ``RuntimeError("EventLogWriter is closed")`` during teardown.
+    """
+    yield
+    pending = list(_live_emission_tasks)
+    for t in pending:
+        t.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)

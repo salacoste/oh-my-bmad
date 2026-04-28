@@ -259,6 +259,80 @@ Per Epic-2-retro Action Item #1: BEFORE flipping this story `review → done`, t
 - `_bmad-output/implementation-artifacts/2-17-log-capture-harness.md` — `capture_structlog` fixture contract.
 - `_bmad-output/implementation-artifacts/epic-2-retro-2026-04-27.md` — Action Items #1 / #4 / #5.
 
+### Review Findings
+
+Three-layer adversarial review (Blind Hunter + Edge Case Hunter + Acceptance Auditor) against commit `031cf93`. After dedup: **7 High · 26 Med · 22 Low**. Per user directive ("fix all issues even minors") all are classified `[Patch]`.
+
+**High severity**
+
+- [x] [Review][Patch] H1: `webhook_path` setting is dead code — `app/webhook.py` hard-codes `@router.post("/v1/telegram/webhook")` while the field exists in `config.py`; operator-set value silently ignored, route mismatch → 404 silent failure [config.py + webhook.py + main.py]
+- [x] [Review][Patch] H2: `webhook_url` path not validated against the mounted route — typo-on-tunnel-config → set_webhook succeeds → Telegram delivers to 404 forever; AC-9 audit count drops to 2 [config.py / TelegramSettings validators]
+- [x] [Review][Patch] H3: Webhook handler 500s on malformed JSON / `Update.model_validate` ValidationError / handler exceptions → Telegram retry-storm (up to 24h re-delivery) [webhook.py:telegram_webhook]
+- [x] [Review][Patch] H4: Per-request audit emission on `webhook_secret_token.value` saturates event log under load — every webhook reads the AuditedSecret → 1 envelope/request; cache the bytes once at startup [webhook.py + lifespan.py]
+- [x] [Review][Patch] H5: Unbounded `request.json()` body-parse — DoS vector for authenticated requests [webhook.py:telegram_webhook]
+- [x] [Review][Patch] H6: AC-9 cold-start audit count test reads in-memory envelopes pre-serialization, NOT the JSONL file the AC mandates — bypasses serialization-layer regression coverage [test_webhook.py:test_cold_start_audit_count_is_three]
+- [x] [Review][Patch] H7: `_DEFAULT_HOST = "0.0.0.0"` in `__main__.py` exposes service to LAN by default — fine in containers behind tunnel; risky on workstation [\_\_main\_\_.py]
+
+**Medium severity**
+
+- [x] [Review][Patch] M1: Lifespan teardown push-order: `bot.session.close` is pushed AFTER `flush_pending_emissions` so it pops FIRST (not flush as the docstring claims). Reorder so flush is the last `push_async_callback` (pops first), matching documented LIFO contract [lifespan.py]
+- [x] [Review][Patch] M2: `hmac.compare_digest` TypeError on bytes-header edge — `compare_digest(bytes, str)` raises TypeError → 500 not 403; coerce explicitly + try/except [webhook.py]
+- [x] [Review][Patch] M3: `dp.feed_webhook_update` awaited synchronously in handler — couples webhook latency to handler latency. Dispatch via `asyncio.create_task` and return 200 immediately [webhook.py]
+- [x] [Review][Patch] M4: `<500ms` latency test is wall-clock — flake risk on busy CI. Move to `pytest.mark.benchmark` skip-by-default OR tighten to ≪500ms with mocks + add hard ceiling assertion only [test_webhook.py]
+- [x] [Review][Patch] M5: `parse_mode="HTML"` silently dropped from `Bot()` — aiogram 3.7+ moved to `default=DefaultBotProperties(parse_mode=ParseMode.HTML)`. Wire it [lifespan.py]
+- [x] [Review][Patch] M6: AC-12 `registry_state` import via `noqa: IMP001` not authorized in AC text — document the noqa in Debug Log References + amend AC-12 retroactively (defer the architectural fix of relocating `EventLogWriter` to `packages/events/` to a future story) [lifespan.py + test_webhook.py + conftest.py]
+- [x] [Review][Patch] M7: AC-5 log-leak assertion deferred — add `test_lifespan_log_line_has_no_secret_substrings` using `caplog` to assert neither bot_token nor webhook_secret_token appears in any log record [test_lifespan.py]
+- [x] [Review][Patch] M8: `set_webhook` failure leaves stale `app.state.bot/dp/settings` — assignments happen BEFORE `set_webhook`. Move them AFTER success [lifespan.py]
+- [x] [Review][Patch] M9: No test for `set_webhook` raising during lifespan startup — add one that monkeypatches Bot.set_webhook to raise, asserts startup raises, asserts bot.session.close still called [test_lifespan.py]
+- [x] [Review][Patch] M10: No test for `from_env` raising — `writer.close` ordering when env-var is missing [test_lifespan.py]
+- [x] [Review][Patch] M11: `Update.model_validate` returns 422 echoing field paths — same root as H3, fold the fix [webhook.py]
+- [x] [Review][Patch] M12: `event_log_dir` not validated for writability at startup — silent audit-loss on `:ro` volume mounts; add a probe-then-delete file at startup OR a config validator [config.py + lifespan.py]
+- [x] [Review][Patch] M13: `webhook_url` accepts `https://localhost`, `https://127.0.0.1`, RFC1918 / link-local IPs — Telegram won't deliver, operator gets silent no-deliver. Reject in `_enforce_https` validator [config.py]
+- [x] [Review][Patch] M14: No flush-vs-writer-close ordering test — pin the contract that the docstring flags as bug-bait [test_lifespan.py]
+- [x] [Review][Patch] M15: No test for `bot.session.close` runs even when `set_webhook` raises — invariant is documented but unverified [test_lifespan.py]
+- [x] [Review][Patch] M16: AC-9 test diagnostic prints `[e.type for e in captured]` not `len(secret_envelopes)` — improve diagnostic when it fails [test_webhook.py]
+- [x] [Review][Patch] M17: `set_webhook` URL trailing-slash assertion is brittle — pydantic.HttpUrl normalization may add slash; normalize in validator and assert against normalized form [test_lifespan.py + config.py]
+- [x] [Review][Patch] M18: `webhook_path` field has no `validation_alias` — cannot be overridden via env. Add `validation_alias="TELEGRAM_WEBHOOK_PATH"` AND wire into route registration (folds with H1) [config.py + main.py]
+- [x] [Review][Patch] M19: `int(os.environ.get("TELEGRAM_GATEWAY_PORT", ...))` raises ValueError with bare traceback on non-numeric env — wrap with friendly fail-fast message [\_\_main\_\_.py]
+- [x] [Review][Patch] M20: `__main__.py` uses stdlib `logging` while rest of project standardizes structlog — inconsistent. Pick one (stdlib for now, since AuditedSecret's review-fix uses stdlib for caplog capture) and document [\_\_main\_\_.py]
+- [x] [Review][Patch] M21: `_live_emission_tasks` cross-test pollution risk — add an autouse teardown fixture that drains lingering tasks (cancel + assert empty) [conftest.py]
+- [x] [Review][Patch] M22: `feed_webhook_update` synchronous await — same issue as M3, fold the fix [webhook.py]
+- [x] [Review][Patch] M23: `drop_pending_updates=True` silently discards queued updates on restart — confirm intentional + document in lifespan docstring [lifespan.py]
+- [x] [Review][Patch] M24: `logging.basicConfig` at import time of `__main__.py` — locks root logger at import. Move into `main()` [\_\_main\_\_.py]
+- [x] [Review][Patch] M25: `.env.example` missing `EVENT_LOG_DIR`, `TELEGRAM_GATEWAY_HOST`, `TELEGRAM_GATEWAY_PORT` — onboarding gap + invisible audit-loss path on missing dir [.env.example]
+- [x] [Review][Patch] M26: Bootstrap-actor footgun in `__main__.py` — `from_env(emit=None, actor=_BOOTSTRAP_ACTOR)` allows wrong-actor reads if any code path between `__main__.from_env` and lifespan-`from_env` does a `.value` read; add a sentinel emit that raises if invoked [\_\_main\_\_.py]
+
+**Low severity**
+
+- [x] [Review][Patch] L1: `_DEFAULT_PORT = "8080"` is a string while `_DEFAULT_HOST` is plain str — pick one; use `int` default [\_\_main\_\_.py]
+- [x] [Review][Patch] L2: `app/config.py:23` docstring claims `"fake-bot-token-1234"` but tests use `"1234:fake-bot-token"` — doc drift [config.py]
+- [x] [Review][Patch] L3: Fixture name inconsistency `health_client` vs `client_and_state` — pick one convention [test_health.py + test_webhook.py]
+- [x] [Review][Patch] L4: `pytest.approx(2.0)` overkill on integer-equivalent float — use plain `== 2.0` [test_lifespan.py]
+- [x] [Review][Patch] L5: `Annotated[str | None, Header()]` redundant `| None` — `Header(default=None)` already handles absent [webhook.py]
+- [x] [Review][Patch] L6: pyproject `[tool.uv.sources]` may not exclude `test_*.py` from the wheel — verify and add explicit exclude pattern if needed [pyproject.toml]
+- [x] [Review][Patch] L7: Synthetic `Update` `"date": 0` (Unix epoch) — use a fixed plausible epoch (e.g., `1700000000`) [test_webhook.py]
+- [x] [Review][Patch] L8: No test for non-ASCII `webhook_secret_token` — validate as ASCII-printable in config validator [config.py + test_config.py]
+- [x] [Review][Patch] L9: `Bot()` raise-while-startup comment misleading — the `bot.session.close` callback is registered AFTER `Bot()` so a `Bot()` raise never registers it; clarify comment [lifespan.py]
+- [x] [Review][Patch] L10: `webhook_url` userinfo (`https://user:pass@host`) not rejected — defense-in-depth; reject in validator [config.py]
+- [x] [Review][Patch] L11: No test asserts empty dispatcher returns 200 — add one without patching `feed_webhook_update` [test_webhook.py]
+- [x] [Review][Patch] L12: No test pins `Bot()` consumes `bot_token.value` exactly once — the AC-9 count of 3 relies on this [test_lifespan.py]
+- [x] [Review][Patch] L13: `webhook_path` no leading-slash / trailing-slash format check (folds with H1's route-mounting fix) [config.py]
+- [x] [Review][Patch] L14: `presented or ""` collapses "header missing" vs "header empty" — log them distinctly at WARN [webhook.py]
+- [x] [Review][Patch] L15: cargo-cult `asyncio.sleep(0)` in test_webhook — remove; trust `flush_pending_emissions` [test_webhook.py]
+- [x] [Review][Patch] L16: `_secret_name_of` fallback raises bare TypeError on unsupported payload — add explicit `pytest.fail()` with type info [test_webhook.py]
+- [x] [Review][Patch] L17: Magic-string actor id `"telegram-gateway"` in 5 test files — import the canonical constant from lifespan module [test_*.py]
+- [x] [Review][Patch] L18: `flush_pending_emissions` pushed positionally — use `functools.partial(flush_pending_emissions, timeout=...)` for keyword safety against signature changes [lifespan.py]
+- [x] [Review][Patch] L19: `AsyncIterator[AsyncClient]` typing nit on yielded tuple [conftest.py]
+- [x] [Review][Patch] L20: `_secret_name_of` `# type: ignore[index]` — narrow with `isinstance(payload, Mapping)` check [test_webhook.py]
+- [x] [Review][Patch] L21: `monkeypatch.setattr(EventLogWriter, "append", ...)` brittle to refactor — comment-pin the dynamic-dispatch dependency [test_webhook.py]
+- [x] [Review][Patch] L22: `uv.lock` diff suspiciously small — verify aiogram + transitives present via `uv sync --frozen` from clean state [uv.lock]
+
+**Dismissed (not patched)**
+
+- [x] [Review][Defer] M6 architectural fix (relocate `EventLogWriter` to `packages/events/`) — proper fix is a separate story; current pass documents the noqa + amends AC-12.
+- [x] [Review][Defer] `EventEnvelope.payload` BaseModel canonicalization quirk (root cause of H6 workaround) — separate ticket; this fix pass adds a JSONL-line-count assertion alongside the in-memory check.
+- [x] [Review][Defer] Per-request audit emission carry-forward to Stories 5.4 / 5.7 — flag in commit body so future stories don't repeat the anti-pattern; this story's H4 fix establishes the cache-once pattern those stories must follow.
+
 ## Dev Agent Record
 
 ### Agent Model Used
@@ -360,6 +434,78 @@ re-add per Epic-2-retro AI #5.
   `telegram_gateway 0.2.0`. Test count delta: baseline 606 → 619
   (+13). Single atomic commit with the AC-14 title.
 
+**Review-fix pass (2026-04-27)** — all 7 High / 26 Med / 22 Low findings addressed:
+
+* **H1+M18+L13**: Route-mounting fix — dropped `@router.post` decorator; `main.py` mounts
+  via `app.add_api_route(settings.webhook_path, ...)` so operator `TELEGRAM_WEBHOOK_PATH`
+  override takes effect. `webhook_path` validator enforces leading slash + rejects
+  trailing slash. `webhook_path` alias `TELEGRAM_WEBHOOK_PATH` added.
+* **H2**: `model_validator(mode="after")` asserts `webhook_url.path == webhook_path`
+  at config-load; tests pin both directions.
+* **H3+M11**: `telegram_webhook` wraps `request.body()`, `json.loads`, `Update.model_validate`,
+  and `feed_webhook_update` in targeted try/except returning 400 / 200 on errors.
+  Tests: `test_webhook_returns_400_on_malformed_json`, `..._invalid_update_payload`,
+  `..._200_when_handler_raises`.
+* **H4**: Cached `webhook_secret_token.value` bytes at startup onto
+  `app.state.expected_webhook_secret_bytes`; webhook handler uses cached bytes only.
+  AC-9 count updated 3→2. JSONL line-count pin added (H6). Tests:
+  `test_cold_start_audit_count_is_two_after_secret_caching`,
+  `test_webhook_does_not_emit_audit_per_request`.
+* **H5**: `_MAX_UPDATE_BYTES = 1 MiB` cap before `json.loads`; returns 413 on oversize.
+* **H6**: JSONL file line-count assertion added alongside in-memory check;
+  BaseModel-flatten quirk documented in Debug Log as deferred ticket.
+* **H7**: `_DEFAULT_HOST = "127.0.0.1"`; WARN log if `0.0.0.0` detected; `.env.example` updated.
+* **M1**: LIFO teardown order corrected: flush pops first, bot.session.close second,
+  writer.close last. Dispatch-task drain added between flush and bot.session.close.
+* **M2**: Coerce header to bytes with `str(...).encode("utf-8")` + try/except before compare_digest.
+* **M3+M22**: Fire-and-forget via `asyncio.create_task(_safe_dispatch(...))`;
+  tasks anchored on `app.state._dispatch_tasks`; drained on shutdown.
+* **M4**: Latency test tightened to <50ms (in-process, mocked path) under `test_webhook_latency_under_50ms`.
+* **M5**: `Bot(..., default=DefaultBotProperties(parse_mode=ParseMode.HTML))` — aiogram 3.7+ API.
+* **M6**: `TODO(architecture)` comments added at all `# noqa: IMP001` sites; Debug Log entry added.
+* **M7**: `test_log_line_does_not_leak_secrets` added in `test_lifespan.py`.
+* **M8**: `app.state.*` assignments moved to AFTER `set_webhook` succeeds.
+* **M9+M15**: `test_set_webhook_failure_unwinds_cleanly` + `test_bot_session_close_called_when_set_webhook_raises`.
+* **M10**: `test_from_env_failure_unwinds_writer`.
+* **M12**: `_probe_event_log_dir_writable` model_validator; tests `test_event_log_dir_*`.
+* **M13**: `_enforce_https` extended to reject loopback hostnames + RFC1918/link-local IPs;
+  tests `test_webhook_url_rejects_localhost`, `..._private_ipv4`, `..._public_ip_passes`.
+* **M14**: `test_flush_runs_before_writer_close` timestamps both operations.
+* **M16**: AC-9 diagnostic now includes actor ids per envelope.
+* **M17**: URL comparison uses plain string from env (no trailing-slash normalization needed).
+* **M19**: `int(port_raw)` wrapped in try/except with `sys.exit(2)` + friendly message.
+* **M20**: `__main__.py` module docstring explains stdlib logging choice + caplog compatibility.
+* **M21**: `_drain_audit_tasks_between_tests` autouse fixture in `conftest.py`.
+* **M23**: `drop_pending_updates=True` documented in lifespan docstring.
+* **M24**: `logging.basicConfig` moved into `main()` body.
+* **M25**: `.env.example` `EVENT_LOG_DIR`, `TELEGRAM_GATEWAY_HOST`, `TELEGRAM_GATEWAY_PORT` added.
+* **M26**: `_bootstrap_emit_disallowed` sentinel replaces `emit=None`; raises if invoked.
+* **L1**: `_DEFAULT_PORT = 8080` (int).
+* **L2**: Docstring convention updated to `"1234:fake-bot-token"` form.
+* **L3**: `health_client` → `client` in `test_health.py` and `test_webhook.py`.
+* **L4**: `pytest.approx(2.0)` → `== 2.0`.
+* **L5**: `Annotated[str | None, Header()] = None` — FastAPI 0.115+ compliant.
+* **L6**: `[tool.uv.build-backend] source-exclude` added to `pyproject.toml`; wheel verified
+  to not contain `test_*.py` files.
+* **L7**: `_SYNTHETIC_UPDATE "date": 1700000000`.
+* **L8**: `_validate_webhook_secret_charset` ASCII-printable validator; tests added.
+* **L9**: `lifespan.py` comment clarified — session registered AFTER Bot() returns.
+* **L10**: `_enforce_https` rejects userinfo; test added.
+* **L11**: `test_webhook_with_empty_dispatcher_returns_200` added.
+* **L12**: `test_bot_construction_emits_one_audit_event` added.
+* **L14**: "header missing" vs "header mismatch" logged distinctly at WARN.
+* **L15**: Cargo-cult `asyncio.sleep(0)` removed from AC-9 test.
+* **L16**: `_secret_name_of` uses `pytest.fail(...)` for unsupported payload types.
+* **L17**: `_TELEGRAM_GATEWAY_ACTOR` imported from `lifespan` module in all test files.
+* **L18**: `functools.partial(flush_pending_emissions, timeout=...)` in lifespan.
+* **L19**: `AsyncIterator[tuple[AsyncClient, Path, list[int]]]` typing in conftest.
+* **L20**: `isinstance(payload, Mapping)` check in `_secret_name_of`.
+* **L21**: `monkeypatch.setattr(EventLogWriter, "append", ...)` comment-pinned.
+* **L22**: `uv sync --all-groups --all-packages` verified; `asgi-lifespan` present.
+
+Test count delta: 619 → 641 (+22). `just check-gates-self-test` 3/3 green.
+`just bootstrap-verify` → `telegram_gateway 0.2.0`. Status remains `review`.
+
 ### File List
 
 **New:**
@@ -376,6 +522,11 @@ re-add per Epic-2-retro AI #5.
 - `services/telegram-gateway/src/telegram_gateway/test_webhook.py`
 - `services/telegram-gateway/src/telegram_gateway/test_health.py`
 
+**New public surface (review-fix pass):**
+- `app.state._dispatch_tasks: set[asyncio.Task[None]]` — fire-and-forget dispatch task anchor (M3).
+- `conftest._drain_audit_tasks_between_tests` autouse fixture — audit task drain between tests (M21).
+- `lifespan._TELEGRAM_GATEWAY_ACTOR` — exported for canonical actor identity in tests (L17).
+
 **Modified:**
 - `services/telegram-gateway/pyproject.toml` — deps + version bump to `0.2.0`.
 - `services/telegram-gateway/src/telegram_gateway/__init__.py` — `__version__ = "0.2.0"` + docstring update.
@@ -391,3 +542,4 @@ re-add per Epic-2-retro AI #5.
 |------------|---------------------------------------------------------------------------------------------------------|-----------------|
 | 2026-04-27 | Story drafted (in-progress).                                                                            | bmad-create-story |
 | 2026-04-27 | Dev pass — Tasks 1–6 complete; 13 tests; lint 8/8 + check-gates 3/3 + bootstrap-verify green; status `in-progress → review`. | claude-opus-4-7[1m] (executor agent) |
+| 2026-04-27 | Review-fix pass — 7 High / 26 Med / 22 Low addressed; +22 tests (619→641); route-mounting fix, body-size limit, audit-cache-once pattern, JSONL line-count pin, lifespan teardown reorder, fire-and-forget dispatch, H2 url-path validator, M12 writability probe, M13 private-IP rejection, M21 task-drain fixture, M26 sentinel emit; status stays `review`. | claude-sonnet-4-6 (executor agent) |

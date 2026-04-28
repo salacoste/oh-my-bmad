@@ -9,20 +9,27 @@ contract against future regressions of either layer.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
-from events.envelope import Actor
 
 from telegram_gateway.app.config import TelegramSettings
+from telegram_gateway.app.lifespan import _TELEGRAM_GATEWAY_ACTOR  # review-fix L17
 
-_ACTOR = Actor(kind="system", id="telegram-gateway")
+_ACTOR = _TELEGRAM_GATEWAY_ACTOR  # review-fix L17: canonical import
 
 
 def test_repr_does_not_leak_plaintext_secrets(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "1234:fake-bot-token")
     monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET_TOKEN", "fake-webhook-secret-9999")
-    monkeypatch.setenv("TELEGRAM_WEBHOOK_URL", "https://tunnel.example.com/v1")
+    # URL path must match the default webhook_path=/v1/telegram/webhook (H2).
+    monkeypatch.setenv(
+        "TELEGRAM_WEBHOOK_URL",
+        "https://tunnel.example.com/v1/telegram/webhook",
+    )
+    monkeypatch.setenv("EVENT_LOG_DIR", str(tmp_path / "events"))
 
     settings = TelegramSettings.from_env(emit=None, actor=_ACTOR)
     rendered = repr(settings)

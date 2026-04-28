@@ -20,12 +20,12 @@ Test fixture convention
 -----------------------
 
 Co-located tests under :mod:`telegram_gateway.test_*` use the literal
-string ``"fake-bot-token-1234"`` (and similar 4-digit suffixes) so the
+string ``"1234:fake-bot-token"`` (and similar 4-digit-prefix shapes) so the
 ``secret-hygiene-precommit`` Telegram bot-token regex
-``\\d+:[A-Za-z0-9_-]{35}`` (see
+``\\d{6,12}:AA[A-Za-z0-9_\\-]{30,}`` (see
 :mod:`secret_hygiene.scanner`) never matches the fixture. Do NOT shorten
-the comment to a real-shaped token by accident — keep the digit suffix
-short and the colon absent.
+the comment to a real-shaped token by accident — keep the digit prefix
+short (4 digits, never 6+) and never include the ``AA`` suffix marker.
 
 Decision: ``event_log_dir`` is declared HERE rather than threaded through
 ``build_app`` separately. The story spec's AC-4 lifespan code fence
@@ -37,15 +37,33 @@ references ``settings.event_log_dir`` so the field has to live on
 
 from __future__ import annotations
 
+import contextlib
+import ipaddress
+import string
 from pathlib import Path
 from typing import ClassVar
+from urllib.parse import urlparse
 
-from pydantic import Field, HttpUrl, field_validator
+from pydantic import Field, HttpUrl, field_validator, model_validator
 from pydantic_settings import SettingsConfigDict
 from secret_hygiene import (
     AuditedBaseSettings,
     AuditedSecret,
     audited_secret_field,
+)
+
+# Hostnames + IP networks rejected by ``_enforce_https`` because Telegram
+# itself refuses to deliver webhooks to private/loopback/link-local
+# targets. Failing at config-load time produces a clear operator error
+# rather than a silent no-deliver downstream (review-fix M13).
+_REJECTED_HOSTNAMES: frozenset[str] = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
+
+# ASCII-printable charset accepted for ``webhook_secret_token`` (review-fix
+# L8). Telegram's docs state the secret token may contain only ASCII
+# characters; we narrow further to printable (no control chars, no
+# whitespace) to catch operator copy-paste mishaps at config-load.
+_ASCII_PRINTABLE: frozenset[str] = frozenset(
+    string.ascii_letters + string.digits + string.punctuation
 )
 
 
@@ -72,7 +90,15 @@ class TelegramSettings(AuditedBaseSettings):
         "telegram_webhook_secret_token", env_var="TELEGRAM_WEBHOOK_SECRET_TOKEN"
     )
     webhook_url: HttpUrl = Field(validation_alias="TELEGRAM_WEBHOOK_URL")
-    webhook_path: str = Field(default="/v1/telegram/webhook")
+    # Review-fix M18: ``webhook_path`` is overridable via env. Review-fix
+    # H1/L13: leading slash required, trailing slash rejected (unless the
+    # value is exactly ``/``). Combined with ``main.build_app`` mounting
+    # the route from this value, the operator-set path takes effect
+    # instead of being silently ignored.
+    webhook_path: str = Field(
+        default="/v1/telegram/webhook",
+        validation_alias="TELEGRAM_WEBHOOK_PATH",
+    )
     # Default mirrors the registry-state production path (Story 2.4) but
     # is overridable for tests + alternate deployment layouts.
     event_log_dir: Path = Field(
@@ -80,19 +106,131 @@ class TelegramSettings(AuditedBaseSettings):
         validation_alias="EVENT_LOG_DIR",
     )
 
+    @field_validator("webhook_path")
+    @classmethod
+    def _validate_webhook_path(cls, value: str) -> str:
+        """Require a leading slash; reject trailing slash unless ``/`` (review-fix H1/L13)."""
+        if not value.startswith("/"):
+            raise ValueError(f"webhook_path must start with '/': got {value!r}")
+        if value != "/" and value.endswith("/"):
+            raise ValueError(
+                f"webhook_path must not end with '/' (got {value!r}); "
+                "a trailing slash creates a route-mismatch with the URL "
+                "Telegram echoes back"
+            )
+        return value
+
     @field_validator("webhook_url")
     @classmethod
     def _enforce_https(cls, url: HttpUrl) -> HttpUrl:
-        """Reject ``http://`` (architecture.md:217 — Telegram requires HTTPS).
+        """Reject ``http://``, userinfo, private/loopback hosts.
 
-        ``pydantic.HttpUrl`` accepts BOTH ``http`` and ``https``; this
-        validator narrows the contract to ``https`` only. Failing here
-        rather than at ``set_webhook`` time means an operator typo
-        surfaces at startup instead of as a Telegram-side 400.
+        - HTTPS-only (architecture.md:217 — Telegram requires HTTPS).
+        - No userinfo (review-fix L10) — defense-in-depth against credential
+          leakage in logs / process tables.
+        - No private/loopback/link-local hosts (review-fix M13) — Telegram
+          will not deliver to RFC 1918 / 169.254 / loopback addresses, so
+          fail at startup rather than silently no-deliver.
         """
         if url.scheme != "https":
             raise ValueError("webhook_url must be https")
+        if url.username or url.password:
+            raise ValueError("webhook_url must not contain userinfo (user:pass@)")
+        host = url.host or ""
+        if host.lower() in _REJECTED_HOSTNAMES:
+            raise ValueError(
+                f"webhook_url host {host!r} is loopback/wildcard; Telegram cannot deliver to it"
+            )
+        try:
+            parsed_ip = ipaddress.ip_address(host)
+        except ValueError:
+            # Hostname (DNS) — accept; private-network IPs are caught above.
+            pass
+        else:
+            if (
+                parsed_ip.is_private
+                or parsed_ip.is_loopback
+                or parsed_ip.is_link_local
+                or parsed_ip.is_reserved
+                or parsed_ip.is_multicast
+            ):
+                raise ValueError(
+                    f"webhook_url host {host!r} is private/loopback/"
+                    "link-local; Telegram cannot deliver to it"
+                )
         return url
+
+    @field_validator("webhook_secret_token")
+    @classmethod
+    def _validate_webhook_secret_charset(cls, secret: AuditedSecret) -> AuditedSecret:
+        """Require ASCII-printable charset (review-fix L8).
+
+        Telegram echoes the secret back in the
+        ``X-Telegram-Bot-Api-Secret-Token`` HTTP header; non-ASCII
+        characters cannot be transmitted reliably. Catch operator
+        copy-paste mishaps (smart quotes, NBSP, etc.) at config-load.
+        """
+        # Reading ``.value`` on a placeholder-wrapped AuditedSecret is
+        # safe (emit=None) — no audit envelope is fired.
+        value = secret.value
+        if not value:
+            raise ValueError("webhook_secret_token must be non-empty")
+        for ch in value:
+            if ch not in _ASCII_PRINTABLE:
+                raise ValueError(
+                    "webhook_secret_token must contain only ASCII-printable "
+                    f"characters (offending char: {ch!r})"
+                )
+        return secret
+
+    @model_validator(mode="after")
+    def _validate_url_path_matches_route(self) -> TelegramSettings:
+        """Pin ``webhook_url.path`` ≡ ``webhook_path`` (review-fix H2).
+
+        A typo on the operator's tunnel config (e.g.,
+        ``TELEGRAM_WEBHOOK_URL=https://tunnel/v2/telegram/webhook`` while
+        ``webhook_path`` defaults to ``/v1/telegram/webhook``) would let
+        ``set_webhook`` succeed silently — Telegram would then deliver to
+        a 404 forever and the cold-start audit count silently drops.
+
+        Use :func:`urllib.parse.urlparse` directly instead of pydantic's
+        ``url.path`` because pydantic auto-appends ``/`` to bare-host
+        URLs and we want the operator-supplied form preserved.
+        """
+        url_path = urlparse(str(self.webhook_url)).path
+        if url_path != self.webhook_path:
+            raise ValueError(
+                f"webhook_url path must match webhook_path; "
+                f"got {url_path!r} vs {self.webhook_path!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _probe_event_log_dir_writable(self) -> TelegramSettings:
+        """Probe-then-delete a marker file under ``event_log_dir`` (review-fix M12).
+
+        A read-only volume mount (``:ro`` in compose) would silently drop
+        every audit event without surfacing as an error — :class:`EventLogWriter`
+        catches OSError on append + logs a warning per event but the
+        operator may never see the warning storm. Probe at config-load
+        instead: try to create the directory and write+delete a marker
+        file. Surfaces config errors at boot, fail-closed.
+        """
+        target = Path(self.event_log_dir)
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise ValueError(f"event_log_dir {target!s} cannot be created: {exc}") from exc
+        probe = target / ".write-probe"
+        try:
+            probe.write_text("x", encoding="ascii")
+        except OSError as exc:
+            raise ValueError(f"event_log_dir {target!s} is not writable: {exc}") from exc
+        finally:
+            # Best-effort cleanup; ignore if the write itself failed.
+            with contextlib.suppress(OSError):
+                probe.unlink()
+        return self
 
 
 __all__ = ["TelegramSettings"]
