@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: 2026-04-28T00:45:00Z
+# last_updated: 2026-04-27T20:00:00Z
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -88,7 +88,7 @@ development_status:
   # =========================================================================
   epic-3: in-progress
   3-1-aiogram-bootstrap-webhook: done
-  3-2-allowlist-middleware: ready-for-dev
+  3-2-allowlist-middleware: review
   3-3-task-command: backlog
   3-4-approve-command: backlog
   3-5-ping-command: backlog

@@ -283,6 +283,31 @@ class SecretAccessedPayload(BaseModel):
     scope: Literal["read"] = "read"
 
 
+class TelegramRejectedPayload(BaseModel):
+    """Payload for the ``telegram.rejected`` event (FR11 / NFR-S4 audit trail).
+
+    Emitted by the telegram-gateway's allowlist outer middleware when an
+    inbound Telegram update fails the allowlist check. PII surface is
+    intentionally minimal: ``user_id`` plus a structured ``reason`` only.
+    No message content, no username, no chat metadata.
+
+    Field rules:
+
+    * ``user_id``: ``>= 0``. Real Telegram user ids are positive integers
+      (``>= 1``); ``0`` is reserved as the sentinel for events lacking a
+      ``from_user`` (e.g. ``my_chat_member``, ``poll`` updates) which
+      the middleware rejects defensively per Story 3.2 AC-7.
+    * ``reason``: ``"not_in_allowlist"`` (default — user id known but not
+      whitelisted) or ``"no_from_user"`` (event arrived without a sender
+      identity; rejected via the ``user_id=0`` sentinel).
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    user_id: int = Field(ge=0)
+    reason: Literal["not_in_allowlist", "no_from_user"] = "not_in_allowlist"
+
+
 # ---------------------------------------------------------------------------
 # Register all event types with Story 2.1's schema_registry.
 # Idempotent: re-registering the same model for the same key is a no-op.
@@ -333,6 +358,13 @@ register("task.stop_requested", "1.0.1", TaskStopRequestedPayload)
 register("secret.accessed", "1.0.0", SecretAccessedPayload)
 register("secret.accessed", "1.0.1", SecretAccessedPayload)
 
+# Story 3.2 — register the telegram.rejected event payload (FR11 / NFR-S4).
+# One new bare type name (``EVENT_TYPES`` grows 13 → 14); two new
+# (type, version) entries. Same-model contract: identical payload model
+# registered under both v1.0.0 and v1.0.1 (Story 2.14 additive-version rule).
+register("telegram.rejected", "1.0.0", TelegramRejectedPayload)
+register("telegram.rejected", "1.0.1", TelegramRejectedPayload)
+
 __all__ = [
     "SecretAccessedPayload",
     "ServiceCrashedPayload",
@@ -347,4 +379,5 @@ __all__ = [
     "TaskPlanningStartedPayload",
     "TaskStopRequestedPayload",
     "TaskSummaryEmittedPayload",
+    "TelegramRejectedPayload",
 ]

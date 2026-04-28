@@ -105,6 +105,38 @@ class TelegramSettings(AuditedBaseSettings):
         default=Path("/var/lib/oh-my-bmad/events"),
         validation_alias="EVENT_LOG_DIR",
     )
+    # Story 3.2 / FR11 / NFR-S4: allowlist of Telegram user ids.
+    # Closed-by-default — empty frozenset rejects every inbound update
+    # (including the operator's own id). The lifespan emits a startup
+    # WARNING when this set is empty so the operator notices their
+    # ``.env`` is incomplete on first boot. ``pydantic-settings`` parses
+    # JSON-list syntax (``[12345, 67890]``) natively for ``frozenset[int]``.
+    tg_allowlist_user_ids: frozenset[int] = Field(
+        default_factory=frozenset,
+        validation_alias="TG_ALLOWLIST_USER_IDS",
+        description=(
+            "JSON list of allowed Telegram user ids. Empty default = "
+            "closed-by-default (rejects every inbound update). FR11."
+        ),
+    )
+
+    @field_validator("tg_allowlist_user_ids")
+    @classmethod
+    def _validate_allowlist_positive(cls, ids: frozenset[int]) -> frozenset[int]:
+        """Reject Telegram user ids ``<= 0`` (Story 3.2 AC-2).
+
+        Real Telegram user ids are positive integers; ``0`` and negative
+        values are not real ids. The ``user_id=0`` sentinel used by the
+        ``telegram.rejected`` payload's ``no_from_user`` branch is set
+        by the middleware itself, not by operator config.
+        """
+        bad = [i for i in ids if i <= 0]
+        if bad:
+            raise ValueError(
+                f"tg_allowlist_user_ids must contain positive integers; "
+                f"got non-positive value(s): {sorted(bad)!r}"
+            )
+        return ids
 
     @field_validator("webhook_path")
     @classmethod

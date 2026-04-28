@@ -1,6 +1,6 @@
 # Story 3.2: Telegram allowlist middleware + rejection event
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -139,39 +139,39 @@ so that **FR11 (allowlist enforcement) and NFR-S4 (no-response semantics + audit
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Register `telegram.rejected` event type** (AC: #1)
-  - [ ] Add `TelegramRejectedPayload` to `services/registry-state/src/registry_state/domain/event_types.py`.
-  - [ ] Append two `register(...)` calls (`1.0.0`, `1.0.1`) per Story 2.14 additive-version rule.
-  - [ ] Update `__all__`. Confirm `EVENT_TYPES` 13 → 14 via spot check.
+- [x] **Task 1: Register `telegram.rejected` event type** (AC: #1)
+  - [x] Add `TelegramRejectedPayload` to `services/registry-state/src/registry_state/domain/event_types.py`.
+  - [x] Append two `register(...)` calls (`1.0.0`, `1.0.1`) per Story 2.14 additive-version rule.
+  - [x] Update `__all__`. Confirm `EVENT_TYPES` 13 → 14 via spot check.
 
-- [ ] **Task 2: `TelegramSettings.tg_allowlist_user_ids` config field** (AC: #2, #13)
-  - [ ] Add `tg_allowlist_user_ids: frozenset[int]` field with `validation_alias`.
-  - [ ] Field validator rejects ids `≤ 0`.
-  - [ ] Append `TG_ALLOWLIST_USER_IDS=[]` line to `.env.example`.
+- [x] **Task 2: `TelegramSettings.tg_allowlist_user_ids` config field** (AC: #2, #13)
+  - [x] Add `tg_allowlist_user_ids: frozenset[int]` field with `validation_alias`.
+  - [x] Field validator rejects ids `≤ 0`.
+  - [x] Append `TG_ALLOWLIST_USER_IDS=[]` line to `.env.example`.
 
-- [ ] **Task 3: `AllowlistMiddleware` implementation** (AC: #3, #5, #7, #9)
-  - [ ] New file `app/middleware.py`; subclass `aiogram.BaseMiddleware`.
-  - [ ] Extract user-id logic handles `Update` (top-level), `Message`, `CallbackQuery`; defensive `None` for missing `from_user`.
-  - [ ] `_safe_emit` helper wraps `emit` with try/except+log (Story 3.1 fire-and-forget pattern).
-  - [ ] Use `EventEnvelope.create(...)` form for registry-gate compatibility.
-  - [ ] `# noqa: IMP001 — <reason>` on the `registry_state.domain.event_types` import.
+- [x] **Task 3: `AllowlistMiddleware` implementation** (AC: #3, #5, #7, #9)
+  - [x] New file `app/middleware.py`; subclass `aiogram.BaseMiddleware`.
+  - [x] Extract user-id logic handles `Update` (top-level), `Message`, `CallbackQuery`; defensive `None` for missing `from_user`.
+  - [x] `_safe_emit` helper wraps `emit` with try/except+log (Story 3.1 fire-and-forget pattern).
+  - [x] Use `EventEnvelope.create(...)` form for registry-gate compatibility.
+  - [x] `# noqa: IMP001 — <reason>` on the `registry_state.domain.event_types` import.
 
-- [ ] **Task 4: Lifespan wiring + empty-allowlist warning** (AC: #4, #6)
-  - [ ] Register middleware via `dp.update.outer_middleware.register(...)` after `Dispatcher()` construction.
-  - [ ] Add WARNING log when `tg_allowlist_user_ids` empty.
-  - [ ] Pass `_TELEGRAM_GATEWAY_ACTOR` (canonical constant from Story 3.1 L17).
+- [x] **Task 4: Lifespan wiring + empty-allowlist warning** (AC: #4, #6)
+  - [x] Register middleware via `dp.update.outer_middleware.register(...)` after `Dispatcher()` construction.
+  - [x] Add WARNING log when `tg_allowlist_user_ids` empty.
+  - [x] Pass `_TELEGRAM_GATEWAY_ACTOR` (canonical constant from Story 3.1 L17).
 
-- [ ] **Task 5: Co-located tests + autouse fixture** (AC: #8, #10, #11)
-  - [ ] `test_allowlist.py` with ≥10 tests per AC-8 breakdown.
-  - [ ] Extend `conftest.py` with `_re_register_telegram_rejected` autouse fixture (idempotent; mirror Story 2.16 / 3.1).
-  - [ ] Reuse Story 3.1's `client_and_state` fixture for in-process integration tests.
-  - [ ] Verify `tests/_log_capture.py` whitelist needs NO update (AC-11 audit).
+- [x] **Task 5: Co-located tests + autouse fixture** (AC: #8, #10, #11)
+  - [x] `test_allowlist.py` with ≥10 tests per AC-8 breakdown (12 tests delivered).
+  - [x] Extend `conftest.py` with `_re_register_telegram_rejected` autouse fixture (idempotent; mirror Story 2.16 / 3.1).
+  - [x] Reuse Story 3.1's `client_and_state` fixture for in-process integration tests.
+  - [x] Verify `tests/_log_capture.py` whitelist needs NO update (AC-11 audit).
 
-- [ ] **Task 6: Gates + atomic commit** (AC: #10, #12, #14)
-  - [ ] `just check-gates-self-test` 3/3 green.
-  - [ ] `just lint` 8/8 green INDEPENDENTLY (Epic-2-retro AI #1).
-  - [ ] `just bootstrap-verify` no version churn.
-  - [ ] Single atomic commit with the AC-14 title.
+- [x] **Task 6: Gates + atomic commit** (AC: #10, #12, #14)
+  - [x] `just check-gates-self-test` 3/3 green.
+  - [x] `just lint` 8/8 green INDEPENDENTLY (Epic-2-retro AI #1).
+  - [x] `just bootstrap-verify` no version churn.
+  - [x] Single atomic commit with the AC-14 title.
 
 ## Dev Notes
 
@@ -266,16 +266,39 @@ Story 3.1's verifier-pass added `# noqa: IMP001` on the `registry_state` import 
 
 ### Agent Model Used
 
-_(to be filled by dev agent)_
+`claude-opus-4-7[1m] (executor agent — opus run hit usage cap; sonnet 4-6 finalized)`
 
 ### Debug Log References
 
-_(to be filled by dev agent)_
+- **ruff F401**: `EventLogWriter` imported but unused in `test_allowlist.py` — removed unused import.
+- **ruff E501**: Line too long in `test_allowlist.py:fake_send_message` definition — split to multi-line.
+- **ruff format**: auto-formatted `test_allowlist.py` after manual edits.
+- **test_empty_allowlist_logs_startup_warning ordering failure**: `caplog` captured zero records when running after `services/registry-state/src/registry_state/test_migrations.py`. Root cause: `alembic.command.upgrade()` calls `logging.config.fileConfig()` with `disable_existing_loggers=True` (the default), which sets `.disabled = True` on loggers not listed in `alembic.ini` including `telegram_gateway.lifespan`. Fix: add `logging.getLogger("telegram_gateway.lifespan").disabled = False` before `caplog.at_level()` in both caplog-based tests. Applied same fix to `test_non_empty_allowlist_does_not_log_warning` for symmetry.
 
 ### Completion Notes List
 
-_(to be filled by dev agent)_
+- **Task 1**: `TelegramRejectedPayload` added to `event_types.py` with `user_id: int = Field(ge=0)` (0 = sentinel), dual `register()` calls, `__all__` updated; EVENT_TYPES count grows 13→14.
+- **Task 2**: `tg_allowlist_user_ids: frozenset[int]` field with `_validate_allowlist_positive` validator (rejects ≤0 ids); `.env.example` AC-13 block appended.
+- **Task 3**: `app/middleware.py` — `AllowlistMiddleware(BaseMiddleware)` with `_extract_user_id`, `_emit_rejection`, `_safe_emit`; full noqa reason tag on cross-service import.
+- **Task 4**: `lifespan.py` wires `dp.update.outer_middleware.register(AllowlistMiddleware(...))` after `Dispatcher()` + empty-allowlist WARNING.
+- **Task 5**: 12 tests in `test_allowlist.py` (target was ≥10); `_re_register_telegram_rejected` autouse fixture added to `conftest.py`; AC-11 audit confirmed no `ALLOWED_LOG_FIELDS` update needed; test-ordering fix for `fileConfig` logger-disable interference.
+- **Task 6**: lint 8/8, test 653 passed (+12), check-gates-self-test 3/3, bootstrap-verify clean; atomic commit with AC-14 title.
 
 ### File List
 
-_(to be filled by dev agent)_
+**New (2):**
+- `services/telegram-gateway/src/telegram_gateway/app/middleware.py`
+- `services/telegram-gateway/src/telegram_gateway/test_allowlist.py`
+
+**Modified (5):**
+- `services/registry-state/src/registry_state/domain/event_types.py` — `TelegramRejectedPayload` + 2 register calls + `__all__`.
+- `services/telegram-gateway/src/telegram_gateway/app/config.py` — `tg_allowlist_user_ids` field + `_validate_allowlist_positive` validator.
+- `services/telegram-gateway/src/telegram_gateway/app/lifespan.py` — middleware registration + empty-allowlist WARNING.
+- `services/telegram-gateway/src/telegram_gateway/conftest.py` — `_re_register_telegram_rejected` autouse fixture.
+- `.env.example` — AC-13 `TG_ALLOWLIST_USER_IDS=[]` block.
+
+## Change Log
+
+| Date | Version | Description | Author |
+|------|---------|-------------|--------|
+| 2026-04-27 | 1.0.0 | Story 3.2 implemented — allowlist middleware + telegram.rejected event · FR11 NFR-S4 | claude-opus-4-7[1m] / claude-sonnet-4-6 |

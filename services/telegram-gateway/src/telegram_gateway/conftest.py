@@ -44,6 +44,7 @@ from events import FROZEN_EPOCH, FrozenClock
 from events.schema_registry import register
 from registry_state.domain.event_types import (  # noqa: IMP001 — services→services allowed (mirror of registry_api/test_app.py:48); see TODO above
     SecretAccessedPayload,
+    TelegramRejectedPayload,
 )
 from secret_hygiene.audited_secret import (
     _live_emission_tasks,  # noqa: PLC2701 — intentional private-name access for test drain fixture
@@ -57,9 +58,17 @@ def _ensure_secret_accessed_registered() -> None:
             register("secret.accessed", _v, SecretAccessedPayload)
 
 
+def _ensure_telegram_rejected_registered() -> None:
+    """Idempotently register ``telegram.rejected`` for both schema versions (Story 3.2)."""
+    for _v in ("1.0.0", "1.0.1"):
+        with contextlib.suppress(ValueError):
+            register("telegram.rejected", _v, TelegramRejectedPayload)
+
+
 # Module-import side effect: register on collection so even tests that
 # instantiate :class:`AuditedSecret` at module top-level succeed.
 _ensure_secret_accessed_registered()
+_ensure_telegram_rejected_registered()
 
 
 @pytest.fixture(autouse=True)
@@ -70,6 +79,19 @@ def _re_register_secret_accessed() -> Iterator[None]:
     :mod:`packages.secret-hygiene.src.secret_hygiene.test_audited_secret`.
     """
     _ensure_secret_accessed_registered()
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _re_register_telegram_rejected() -> Iterator[None]:
+    """Function-scoped autouse: re-register ``telegram.rejected`` per test (Story 3.2).
+
+    ``packages/events/.../test_envelope.py``'s ``_clean_registry``
+    autouse clears the registry between cases. Without this, allowlist
+    tests fail with ``EventSchemaUnknown('telegram.rejected', '1.0.0')``
+    whenever they run after an envelope-test file.
+    """
+    _ensure_telegram_rejected_registered()
     yield
 
 

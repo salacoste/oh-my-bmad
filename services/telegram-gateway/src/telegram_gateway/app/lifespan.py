@@ -91,6 +91,7 @@ from registry_state.adapters.event_log import (  # noqa: IMP001 — services→s
 from secret_hygiene import flush_pending_emissions
 
 from telegram_gateway.app.config import TelegramSettings
+from telegram_gateway.app.middleware import AllowlistMiddleware
 
 # Drain timeout for in-flight ``secret.accessed`` emission tasks on
 # shutdown. Matches the registry-api precedent (Story 2.9 + 2.16 H6).
@@ -168,6 +169,17 @@ def make_lifespan(
                 clock=clock,
             )
 
+            # Story 3.2 AC-6: closed-by-default surface — an empty
+            # allowlist rejects every inbound update including the
+            # operator's own. Emit a WARNING on first boot so the
+            # ``.env`` gap is loud rather than producing a silent
+            # "/ping never replies" experience.
+            if not audited.tg_allowlist_user_ids:
+                _log.warning(
+                    "TG_ALLOWLIST_USER_IDS is empty — rejecting all inbound "
+                    "updates. Set the env-var to a non-empty list."
+                )
+
             # Bot construction reads bot_token.value once → 1 audit envelope.
             # ``parse_mode="HTML"`` moved to ``DefaultBotProperties`` per
             # aiogram 3.7+ API (review-fix M5).
@@ -181,6 +193,21 @@ def make_lifespan(
             stack.push_async_callback(bot.session.close)
 
             dp = Dispatcher()
+
+            # Story 3.2 AC-4: register the allowlist middleware on the
+            # ``update`` observer's OUTER chain so it fires BEFORE
+            # handler routing. Outer placement matters: defense-in-depth
+            # for unhandled update types (``my_chat_member``, ``poll``,
+            # etc.) — non-allowlisted senders are rejected even when no
+            # handler would have matched (NFR-S4).
+            dp.update.outer_middleware.register(
+                AllowlistMiddleware(
+                    allowlist=audited.tg_allowlist_user_ids,
+                    emit=writer.append,
+                    actor=_TELEGRAM_GATEWAY_ACTOR,
+                    clock=clock,
+                )
+            )
 
             # Cache the webhook secret bytes ONCE at boot (review-fix H4).
             # Per-request reads would emit one ``secret.accessed``
