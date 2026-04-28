@@ -104,10 +104,15 @@ _DISPATCH_DRAIN_TIMEOUT_SECONDS = 5.0
 
 # Stable actor identity for every audit envelope this service emits via
 # ``AuditedSecret.value`` reads. ``kind="system"`` per Story 2.10 +
-# Story 2.16 audited_secret module docstring. Imported by tests via
-# ``from telegram_gateway.app.lifespan import _TELEGRAM_GATEWAY_ACTOR``
-# instead of a magic-string ``"telegram-gateway"`` (review-fix L17).
-_TELEGRAM_GATEWAY_ACTOR = Actor(kind="system", id="telegram-gateway")
+# Story 2.16 audited_secret module docstring. Imported by tests and
+# middleware via ``from telegram_gateway.app.lifespan import
+# TELEGRAM_GATEWAY_ACTOR`` (review-fix L13: promoted from private
+# ``_TELEGRAM_GATEWAY_ACTOR`` to public). The private name is kept as an
+# alias for backward-compat with any existing importers during the
+# transition to the public name.
+TELEGRAM_GATEWAY_ACTOR = Actor(kind="system", id="telegram-gateway")
+# Backward-compat alias — prefer TELEGRAM_GATEWAY_ACTOR in new code.
+_TELEGRAM_GATEWAY_ACTOR = TELEGRAM_GATEWAY_ACTOR
 
 _log = logging.getLogger("telegram_gateway.lifespan")
 
@@ -165,7 +170,7 @@ def make_lifespan(
             # are replaced here with ones carrying the real emit + actor.
             audited = TelegramSettings.from_env(
                 emit=writer.append,
-                actor=_TELEGRAM_GATEWAY_ACTOR,
+                actor=TELEGRAM_GATEWAY_ACTOR,
                 clock=clock,
             )
 
@@ -183,14 +188,17 @@ def make_lifespan(
             # Bot construction reads bot_token.value once → 1 audit envelope.
             # ``parse_mode="HTML"`` moved to ``DefaultBotProperties`` per
             # aiogram 3.7+ API (review-fix M5).
-            bot = Bot(
-                token=audited.bot_token.value,
-                default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+            # Use aiogram 3.x async context-manager protocol (M7): Bot.__aenter__
+            # returns self; Bot.__aexit__ calls session.close(). This is cleaner
+            # than push_async_callback(bot.session.close) and ensures the session
+            # is fully closed even if __aexit__ does extra cleanup in future
+            # aiogram versions.
+            bot = await stack.enter_async_context(
+                Bot(
+                    token=audited.bot_token.value,
+                    default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+                )
             )
-            # Push bot.session.close AFTER successful Bot construction —
-            # if the constructor itself raises, there's nothing to close
-            # (review-fix L9).
-            stack.push_async_callback(bot.session.close)
 
             dp = Dispatcher()
 
@@ -200,11 +208,19 @@ def make_lifespan(
             # for unhandled update types (``my_chat_member``, ``poll``,
             # etc.) — non-allowlisted senders are rejected even when no
             # handler would have matched (NFR-S4).
+            #
+            # ORDERING CONTRACT (L17): AllowlistMiddleware MUST be the
+            # FIRST registered outer_middleware on dp.update — Story 3.6
+            # ack. When Story 3.6 adds the request-id / rate-limiter
+            # outer middleware, AllowlistMiddleware must remain at index 0
+            # so allowlist enforcement happens before any downstream
+            # middleware that might touch handler state. Register ALL
+            # other outer middleware AFTER this call.
             dp.update.outer_middleware.register(
                 AllowlistMiddleware(
                     allowlist=audited.tg_allowlist_user_ids,
                     emit=writer.append,
-                    actor=_TELEGRAM_GATEWAY_ACTOR,
+                    actor=TELEGRAM_GATEWAY_ACTOR,
                     clock=clock,
                 )
             )
@@ -270,4 +286,4 @@ def make_lifespan(
     return lifespan
 
 
-__all__ = ["make_lifespan", "_TELEGRAM_GATEWAY_ACTOR"]
+__all__ = ["make_lifespan", "TELEGRAM_GATEWAY_ACTOR", "_TELEGRAM_GATEWAY_ACTOR"]

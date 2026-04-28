@@ -29,7 +29,17 @@ from registry_state.schema import Base
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False prevents alembic's fileConfig call from
+    # silencing application loggers (e.g. telegram_gateway.lifespan) that are
+    # not listed in alembic.ini. The default is True, which sets .disabled=True
+    # on every logger not explicitly declared in alembic.ini — this was a P0
+    # production silent-failure: the AC-6 empty-allowlist WARNING was swallowed
+    # whenever migrations ran before the lifespan logger fired.
+    # AC-12 scope deviation: this file is in services/registry-state/, outside
+    # the story-3.2 scope declaration. Patched here as a verifier-pass repair
+    # (same precedent as commit 87a5061's S-3 test fix) because the root cause
+    # resides in alembic config, not telegram-gateway code.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

@@ -35,14 +35,17 @@ is a no-op per Story 2.1's schema_registry.register contract).
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 from events.schema_registry import register
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
-
-if TYPE_CHECKING:
-    pass
-
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 # ---------------------------------------------------------------------------
 # Shared regexes for ID validation (Story 2.10 review-pass tightening).
@@ -283,6 +286,11 @@ class SecretAccessedPayload(BaseModel):
     scope: Literal["read"] = "read"
 
 
+# Schema version constant for telegram.rejected — single source of truth
+# so middleware.py and future consumers don't hardcode the string.
+TELEGRAM_REJECTED_SCHEMA_VERSION = "1.0.0"
+
+
 class TelegramRejectedPayload(BaseModel):
     """Payload for the ``telegram.rejected`` event (FR11 / NFR-S4 audit trail).
 
@@ -300,12 +308,24 @@ class TelegramRejectedPayload(BaseModel):
     * ``reason``: ``"not_in_allowlist"`` (default — user id known but not
       whitelisted) or ``"no_from_user"`` (event arrived without a sender
       identity; rejected via the ``user_id=0`` sentinel).
+
+    Cross-field invariant (L6):
+    * ``user_id=0`` requires ``reason="no_from_user"``
+    * ``user_id>0`` requires ``reason!="no_from_user"``
     """
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
     user_id: int = Field(ge=0)
     reason: Literal["not_in_allowlist", "no_from_user"] = "not_in_allowlist"
+
+    @model_validator(mode="after")
+    def _check_user_id_reason_consistency(self) -> TelegramRejectedPayload:
+        if self.user_id == 0 and self.reason != "no_from_user":
+            raise ValueError("user_id=0 requires reason='no_from_user'")
+        if self.user_id > 0 and self.reason == "no_from_user":
+            raise ValueError("reason='no_from_user' requires user_id=0")
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +386,7 @@ register("telegram.rejected", "1.0.0", TelegramRejectedPayload)
 register("telegram.rejected", "1.0.1", TelegramRejectedPayload)
 
 __all__ = [
+    "TELEGRAM_REJECTED_SCHEMA_VERSION",
     "SecretAccessedPayload",
     "ServiceCrashedPayload",
     "SessionHeartbeatTimeoutPayload",

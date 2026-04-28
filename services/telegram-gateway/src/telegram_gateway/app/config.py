@@ -39,9 +39,10 @@ from __future__ import annotations
 
 import contextlib
 import ipaddress
+import logging
 import string
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 from urllib.parse import urlparse
 
 from pydantic import Field, HttpUrl, field_validator, model_validator
@@ -51,6 +52,75 @@ from secret_hygiene import (
     AuditedSecret,
     audited_secret_field,
 )
+
+_log = logging.getLogger("telegram_gateway.config")
+
+
+def _coerce_allowlist_raw_string(raw: str) -> Any:
+    """Normalise raw env-var string for ``TG_ALLOWLIST_USER_IDS`` (H3 / M2 / M3).
+
+    Called from the class-level ``model_validator(mode="before")`` BEFORE
+    pydantic-settings attempts JSON parsing, so problematic strings that
+    would produce an opaque ``SettingsError`` are handled explicitly:
+
+    * ``""`` (empty string) → ``[]`` (closed-by-default)
+    * ``"null"`` / ``"None"`` → ``[]`` with INFO log (M2)
+    * JSON array/object (starts with ``[`` or ``{``) → returned unchanged so
+      pydantic-settings can JSON-parse it normally
+    * bare CSV ``"12345,67890"`` → coerced to ``[12345, 67890]`` + INFO log (M3)
+    """
+    stripped = raw.strip()
+    if stripped == "":
+        return []
+    if stripped.lower() in ("null", "none"):
+        _log.info(
+            "TG_ALLOWLIST_USER_IDS=%r coerced to [] (closed-by-default); "
+            "set to a JSON list of user ids, e.g. [12345]",
+            stripped,
+        )
+        return []
+    if stripped.startswith("[") or stripped.startswith("{"):
+        # Let pydantic-settings do its normal JSON parse.
+        return raw
+    # Bare CSV: "12345,67890" — coerce permissively + recommend JSON form.
+    parts = [p.strip() for p in stripped.split(",") if p.strip()]
+    try:
+        coerced = [int(p) for p in parts]
+    except ValueError:
+        raise ValueError(
+            f"TG_ALLOWLIST_USER_IDS={raw!r} is not valid JSON and could "
+            "not be parsed as comma-separated integers. "
+            "Use JSON list syntax, e.g. TG_ALLOWLIST_USER_IDS=[12345,67890]"
+        ) from None
+    _log.info(
+        "TG_ALLOWLIST_USER_IDS: bare CSV %r coerced to %r; prefer JSON list form [%s] for clarity",
+        stripped,
+        coerced,
+        ",".join(str(i) for i in coerced),
+    )
+    return coerced
+
+
+def _coerce_allowlist_env(value: Any) -> Any:
+    """BeforeValidator for ``tg_allowlist_user_ids`` (M1 / L11).
+
+    Runs AFTER pydantic-settings JSON parsing. Handles the post-parse
+    form (list, frozenset, set) to reject bool values (M1).
+
+    Note: empty-string / null / CSV normalisation is handled earlier in
+    ``TelegramSettings._pre_coerce_allowlist`` (class-level model_validator
+    mode="before") which runs before pydantic-settings JSON parsing.
+    """
+    if isinstance(value, (list, frozenset, set)):
+        # Reject bool items (M1): [true] coerces to frozenset({1}) without this.
+        bad_bools = [item for item in value if isinstance(item, bool)]
+        if bad_bools:
+            raise ValueError(
+                f"TG_ALLOWLIST_USER_IDS contains boolean value(s) {bad_bools!r}; "
+                "use integer user ids, e.g. [12345]"
+            )
+    return value
+
 
 # Hostnames + IP networks rejected by ``_enforce_https`` because Telegram
 # itself refuses to deliver webhooks to private/loopback/link-local
@@ -109,9 +179,15 @@ class TelegramSettings(AuditedBaseSettings):
     # Closed-by-default — empty frozenset rejects every inbound update
     # (including the operator's own id). The lifespan emits a startup
     # WARNING when this set is empty so the operator notices their
-    # ``.env`` is incomplete on first boot. ``pydantic-settings`` parses
-    # JSON-list syntax (``[12345, 67890]``) natively for ``frozenset[int]``.
-    tg_allowlist_user_ids: frozenset[int] = Field(
+    # ``.env`` is incomplete on first boot.
+    #
+    # The field is declared as ``Any`` (not ``frozenset[int]``) so that
+    # pydantic-settings does NOT try to JSON-parse the raw env-var string
+    # before our field_validator runs. Without this, pydantic-settings'
+    # ``prepare_field_value`` calls ``json.loads("")`` on an empty string
+    # and raises an opaque ``SettingsError`` (H3). The field_validator
+    # below handles all normalisation + type conversion itself.
+    tg_allowlist_user_ids: Any = Field(
         default_factory=frozenset,
         validation_alias="TG_ALLOWLIST_USER_IDS",
         description=(
@@ -120,23 +196,62 @@ class TelegramSettings(AuditedBaseSettings):
         ),
     )
 
-    @field_validator("tg_allowlist_user_ids")
+    @field_validator("tg_allowlist_user_ids", mode="before")
     @classmethod
-    def _validate_allowlist_positive(cls, ids: frozenset[int]) -> frozenset[int]:
-        """Reject Telegram user ids ``<= 0`` (Story 3.2 AC-2).
+    def _validate_allowlist_positive(cls, value: Any) -> frozenset[int]:
+        """Normalise + validate the allowlist field (H3 / M1 / M2 / M3 / AC-2).
 
-        Real Telegram user ids are positive integers; ``0`` and negative
-        values are not real ids. The ``user_id=0`` sentinel used by the
-        ``telegram.rejected`` payload's ``no_from_user`` branch is set
-        by the middleware itself, not by operator config.
+        Runs BEFORE pydantic type coercion. Handles all env-var string forms:
+
+        * ``""`` → ``frozenset()`` (closed-by-default)
+        * ``"null"`` / ``"None"`` → ``frozenset()`` with INFO log (M2)
+        * JSON array ``"[12345, 67890]"`` → parsed and converted (normal path)
+        * bare CSV ``"12345,67890"`` → coerced permissively + INFO log (M3)
+        * ``[true]`` → raises ValueError (M1)
+        * ids ``<= 0`` → raises ValueError (AC-2)
         """
-        bad = [i for i in ids if i <= 0]
+        import json as _json
+
+        if isinstance(value, str):
+            value = _coerce_allowlist_raw_string(value)
+            # If the string was a JSON array, parse it now.
+            if isinstance(value, str):
+                try:
+                    value = _json.loads(value)
+                except _json.JSONDecodeError as exc:
+                    raise ValueError(
+                        f"TG_ALLOWLIST_USER_IDS is not valid JSON: {exc}. "
+                        "Use JSON list syntax, e.g. [12345,67890]"
+                    ) from exc
+
+        # At this point value is a list, frozenset, set, or other iterable.
+        # Apply _coerce_allowlist_env for bool rejection.
+        value = _coerce_allowlist_env(value)
+
+        # Convert to frozenset[int].
+        try:
+            result = frozenset(int(i) for i in value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"tg_allowlist_user_ids must be a list of integers; got: {exc}"
+            ) from exc
+
+        # Reject bool coercion: [true] → int(True) == 1 but isinstance(True, bool).
+        iterable_value = value if hasattr(value, "__iter__") else []
+        bad_bools = [i for i in iterable_value if isinstance(i, bool)]
+        if bad_bools:
+            raise ValueError(
+                f"tg_allowlist_user_ids must contain integers, not booleans; got {bad_bools!r}"
+            )
+
+        # Reject non-positive ids (AC-2).
+        bad = [i for i in result if i <= 0]
         if bad:
             raise ValueError(
                 f"tg_allowlist_user_ids must contain positive integers; "
                 f"got non-positive value(s): {sorted(bad)!r}"
             )
-        return ids
+        return result
 
     @field_validator("webhook_path")
     @classmethod

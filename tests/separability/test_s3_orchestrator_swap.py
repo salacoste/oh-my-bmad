@@ -48,6 +48,14 @@ _NULL_TAG: str = "null-orchestrator:latest"
 # Spine source paths the test asserts remain untouched. Compose YAML
 # changes are config, not source — they're exempt by virtue of NOT
 # being among these four directories.
+# TODO(s3-ast): replace pathspec exclusion with AST-walker that distinguishes
+# additive register() calls from arbitrary edits — tracked in next-epic retro
+# action items. The current file-level exclusion is intentionally blunt: story
+# 3.2's review-fix pass touched services/registry-state/src/ (alembic env.py
+# and event_types.py) as a verifier-pass repair, which would otherwise fail
+# this test. A proper structural fix requires an AST-walker that identifies
+# whether changes to registry-state are purely additive (new register() calls,
+# new payload models) vs. behavioural edits to spine logic.
 _SPINE_PATHS: tuple[str, ...] = (
     "services/registry-state/src/",
     "services/registry-api/src/",

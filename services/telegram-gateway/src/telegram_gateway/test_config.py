@@ -244,3 +244,90 @@ def test_event_log_dir_writable_creates_dir(
     settings = TelegramSettings.from_env(emit=None, actor=_ACTOR)
     assert settings.event_log_dir == events_dir
     assert os.path.isdir(events_dir)
+
+
+# ---------------------------------------------------------------------------
+# TG_ALLOWLIST_USER_IDS validation (M15 / H3 / M1 / M2 / M3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "allowlist_value",
+    [
+        "[0]",  # zero is not a valid Telegram user id
+        "[-5]",  # negative id
+        "[1, 0]",  # mixed: one valid, one zero
+        "[-1, -2]",  # all negative
+    ],
+)
+def test_validate_allowlist_rejects_zero_and_negative(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, allowlist_value: str
+) -> None:
+    """M15 / AC-2: zero and negative ids are rejected by _validate_allowlist_positive."""
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "1234:fake-bot-token")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET_TOKEN", "fake-webhook-secret-1234")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_URL", _URL)
+    monkeypatch.setenv("EVENT_LOG_DIR", str(tmp_path / "events"))
+    monkeypatch.setenv("TG_ALLOWLIST_USER_IDS", allowlist_value)
+
+    with pytest.raises(ValidationError) as exc_info:
+        TelegramSettings.from_env(emit=None, actor=_ACTOR)
+    err_msg = str(exc_info.value).lower()
+    assert "positive" in err_msg or "non-positive" in err_msg
+
+
+def test_validate_allowlist_rejects_bool_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """M1: [true] in allowlist must raise, not coerce to frozenset({1})."""
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "1234:fake-bot-token")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET_TOKEN", "fake-webhook-secret-1234")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_URL", _URL)
+    monkeypatch.setenv("EVENT_LOG_DIR", str(tmp_path / "events"))
+    monkeypatch.setenv("TG_ALLOWLIST_USER_IDS", "[true]")
+
+    with pytest.raises((ValidationError, ValueError)):
+        TelegramSettings.from_env(emit=None, actor=_ACTOR)
+
+
+def test_validate_allowlist_empty_string_coerces_to_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """H3: empty-string TG_ALLOWLIST_USER_IDS → frozenset() (closed-by-default)."""
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "1234:fake-bot-token")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET_TOKEN", "fake-webhook-secret-1234")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_URL", _URL)
+    monkeypatch.setenv("EVENT_LOG_DIR", str(tmp_path / "events"))
+    monkeypatch.setenv("TG_ALLOWLIST_USER_IDS", "")
+
+    # Must NOT crash — coerces to empty frozenset (closed-by-default).
+    settings = TelegramSettings.from_env(emit=None, actor=_ACTOR)
+    assert settings.tg_allowlist_user_ids == frozenset()
+
+
+def test_validate_allowlist_null_string_coerces_to_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """M2: TG_ALLOWLIST_USER_IDS=null → frozenset() (closed-by-default)."""
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "1234:fake-bot-token")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET_TOKEN", "fake-webhook-secret-1234")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_URL", _URL)
+    monkeypatch.setenv("EVENT_LOG_DIR", str(tmp_path / "events"))
+    monkeypatch.setenv("TG_ALLOWLIST_USER_IDS", "null")
+
+    settings = TelegramSettings.from_env(emit=None, actor=_ACTOR)
+    assert settings.tg_allowlist_user_ids == frozenset()
+
+
+def test_validate_allowlist_csv_coerces_to_set(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """M3: bare CSV TG_ALLOWLIST_USER_IDS is coerced to frozenset."""
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "1234:fake-bot-token")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET_TOKEN", "fake-webhook-secret-1234")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_URL", _URL)
+    monkeypatch.setenv("EVENT_LOG_DIR", str(tmp_path / "events"))
+    monkeypatch.setenv("TG_ALLOWLIST_USER_IDS", "12345,67890")
+
+    settings = TelegramSettings.from_env(emit=None, actor=_ACTOR)
+    assert settings.tg_allowlist_user_ids == frozenset({12345, 67890})

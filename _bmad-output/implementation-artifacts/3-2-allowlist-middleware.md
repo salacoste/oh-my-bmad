@@ -1,6 +1,6 @@
 # Story 3.2: Telegram allowlist middleware + rejection event
 
-Status: done
+Status: review
 
 ## Story
 
@@ -261,6 +261,65 @@ Story 3.1's verifier-pass added `# noqa: IMP001` on the `registry_state` import 
 - `services/telegram-gateway/src/telegram_gateway/test_webhook.py` — synthetic Update fixture pattern (base for allowlist tests).
 - `packages/secret-hygiene/src/secret_hygiene/test_audited_secret.py::_re_register_secret_accessed` — autouse fixture shape.
 - aiogram v3 docs — `BaseMiddleware`; `outer_middleware` vs `middleware` distinction.
+
+### Review Findings
+
+Three-layer code review of commits `1bd421a + 87a5061`. After dedup: **4 High · 17 Med · 18 Low**. Per user directive ("fix all issues even minors") all are classified `[Patch]`. Story re-opened from `done` → `review` for the fix pass.
+
+**High severity**
+
+- [x] [Review][Patch] H1 (Blind): alembic `fileConfig(disable_existing_loggers=True)` silently disables `telegram_gateway.lifespan` logger in production — dev pass patched the test not the prod code path. AC-6 warning is silently dropped after migrations run [lifespan.py + alembic config]
+- [x] [Review][Patch] H2 (Edge #1+#2): `_UPDATE_CHILD_FIELDS` missing `poll_answer`, `message_reaction`, `purchased_paid_media`, `business_connection`, `chat_boost`, `removed_chat_boost`, `deleted_business_messages`, `message_reaction_count` — several carry `.user` (not `.from_user`); legit allowlisted users mis-bucketed as `no_from_user`. Add fallback `getattr(child, "user", None)` AND extend the tuple [middleware.py:_extract_user_id]
+- [x] [Review][Patch] H3 (Edge #3): `TG_ALLOWLIST_USER_IDS=""` (empty string) raises `SettingsError` and crashes startup instead of falling to closed-by-default; operators commonly clear env-vars manually [config.py / TelegramSettings]
+- [x] [Review][Patch] H4 (Auditor — folded as High): AC-12 S-3 test scope expansion deviates from spec; either amend AC-12 or replace file-level exclusion with structural AST-walker (defer to follow-up story; document the deviation in this fix's Debug Log) [tests/separability/test_s3_orchestrator_swap.py]
+
+**Medium severity**
+
+- [x] [Review][Patch] M1 (Edge #4): `TG_ALLOWLIST_USER_IDS=[true]` coerces to `frozenset({1})` (bool subclass of int); operator typo silently allowlists user-id 1. Use `BeforeValidator` rejecting `bool` instances [config.py]
+- [x] [Review][Patch] M2 (Edge #5): `TG_ALLOWLIST_USER_IDS=null` silently produces empty frozenset; reject explicitly at config-load with clear message [config.py]
+- [x] [Review][Patch] M3 (Edge #6): CSV input `12345,67890` raises opaque `SettingsError` with no JSON-format hint; add `BeforeValidator` that detects bare-CSV and either parses permissively OR raises typed error pointing at JSON contract [config.py]
+- [x] [Review][Patch] M4 (Edge #7): `_safe_emit` lacks `_in_emission` ContextVar guard from Story 2.16 M10; benign today but future writers may read AuditedSecrets and re-enter. Either reuse `secret_hygiene.audited_secret._in_emission` OR document divergence [middleware.py:_safe_emit]
+- [x] [Review][Patch] M5 (Edge #8): `test_emit_failure_does_not_propagate` doesn't assert error log; add `caplog` assertion for `"telegram.rejected emission failed"` [test_allowlist.py]
+- [x] [Review][Patch] M6 (Edge #9): `request_id` freshly minted per emission — no correlation between webhook delivery and rejection envelope. Accept optional `request_id` from `data` dict; fall back to `new_request_id()` [middleware.py]
+- [x] [Review][Patch] M7 (Edge #10): `test_outer_middleware_runs_before_inner` leaks bot session on `BaseException`; use `async with bot.context(auto_close=True)` or `contextlib.aclosing` [test_allowlist.py]
+- [x] [Review][Patch] M8 (Edge #11): `test_event_without_from_user_rejected_with_sentinel` only covers empty-Update; add parametrized cases for `poll`, `message_reaction_count`, `chat_boost`, `removed_chat_boost`, `deleted_business_messages` [test_allowlist.py]
+- [x] [Review][Patch] M9 (Edge #12): No test for multiple-child-fields-populated short-circuit; pin tuple-order behavior with explicit test + defensive log warning when multiple set [middleware.py + test_allowlist.py]
+- [x] [Review][Patch] M10 (Auditor #2): AC-9 latency budget loosened from spec's `<1ms` to `<4ms`; tighten to `<1.5ms` after measuring local p50 OR amend AC-9 in spec to declare `<4ms` officially [test_allowlist.py:test_middleware_p50_latency_under_1ms]
+- [x] [Review][Patch] M11 (Blind): `emit=None` propagation risk — three lifespan tests pass `emit=None` to `from_env`; document and reject in middleware ctor with explicit guard [middleware.py.__init__]
+- [x] [Review][Patch] M12 (Blind): `_safe_emit` uses `_log.error(...)` (no traceback); switch to `_log.exception(...)` to capture stack [middleware.py:_safe_emit]
+- [x] [Review][Patch] M13 (Blind): `test_rejected_user_receives_no_outbound_message` magic `range(5)` sleep loop; replace with `await _drain_dispatch_tasks(app.state._dispatch_tasks, timeout=2.0)` [test_allowlist.py]
+- [x] [Review][Patch] M14 (Blind): `assert jsonl_files` only checks file presence; read JSONL and assert `type == "telegram.rejected"` envelope present [test_allowlist.py]
+- [x] [Review][Patch] M15 (Blind): No test exercises the `_validate_allowlist_positive` field validator (rejecting `[0]`, `[-5]`); add config-level `pytest.raises(ValueError)` test [test_config.py or test_allowlist.py]
+- [x] [Review][Patch] M16 (Blind): No tests parametrized over `edited_message`, `callback_query`, `my_chat_member`, `chat_join_request` Update child types; coverage gap [test_allowlist.py]
+- [x] [Review][Patch] M17 (Blind): Empty-allowlist warning fires only on EMPTY allowlist — non-empty-but-typo'd `[12346]` produces silent rejection of all real users. Defer to follow-up (out-of-scope for this fix pass; document) [lifespan.py]
+
+**Low severity**
+
+- [x] [Review][Patch] L1 (Blind): `schema_version="1.0.0"` hardcoded while 1.0.1 also registered; pull from single source-of-truth constant in `event_types.py` OR document with `# pinned to 1.0.0 because …` [middleware.py:_emit_rejection]
+- [x] [Review][Patch] L2 (Blind): `_extract_user_id` `isinstance(uid, int)` doesn't filter `bool`; `isinstance(uid, int) and not isinstance(uid, bool)` [middleware.py]
+- [x] [Review][Patch] L3 (Blind): `pragma: no cover` on `fake_send_message` masks regression coverage; drop the pragmas [test_allowlist.py]
+- [x] [Review][Patch] L4 (Blind): `from aiogram.types import Update` repeated in 9 test bodies; hoist to module-level [test_allowlist.py]
+- [x] [Review][Patch] L5 (Blind): `actor: Actor | None = None` in `_build_middleware` test helper masks actor-pinning; make `actor` required [test_allowlist.py]
+- [x] [Review][Patch] L6 (Blind): `TelegramRejectedPayload` allows `(user_id=0, reason="not_in_allowlist")` contradiction; add cross-field model_validator [event_types.py]
+- [x] [Review][Patch] L7 (Blind): logger-disable workaround duplicated in two test bodies; move into a `@pytest.fixture` [test_allowlist.py]
+- [x] [Review][Patch] L8 (Blind): `__all__` non-alphabetical in `event_types.py`; sort [event_types.py]
+- [x] [Review][Patch] L9 (Blind): `TYPE_CHECKING` import block is empty dead code; delete [middleware.py]
+- [x] [Review][Patch] L10 (Blind): `_UPDATE_CHILD_FIELDS` order claim over-states the contract; tone down comment + dev-mode `assert` [middleware.py]
+- [x] [Review][Patch] L11 (Blind): `tg_allowlist_user_ids` silently accepts duplicates; pre-validator parsing to `list` first then deduping with WARN [config.py]
+- [x] [Review][Patch] L12 (Blind): 200-char noqa string at `middleware.py` import; shorten to `# noqa: IMP001 — see TODO above` and put rationale in preceding TODO comment [middleware.py + test_allowlist.py]
+- [x] [Review][Patch] L13 (Blind): test imports private `_TELEGRAM_GATEWAY_ACTOR`; promote to public `TELEGRAM_GATEWAY_ACTOR` in lifespan.py [lifespan.py + test_allowlist.py]
+- [x] [Review][Patch] L14 (Auditor #3): AC-1 spec code fence `Field(ge=1)` contradicts AC-7 prose `Field(ge=0)`; patch spec doc to `ge=0` for consistency [story file AC-1]
+- [x] [Review][Patch] L15 (Auditor #4): AC-3 spec says `clock.now_utc()` but Clock Protocol only has `clock.now()`; patch spec doc [story file AC-3]
+- [x] [Review][Patch] L16 (Edge #13): `_UPDATE_CHILD_FIELDS` schema-drift not enforced; add startup-time assertion or unit test that walks `Update.model_fields` and asserts every `from_user`/`user`-bearing field is listed [middleware.py + test]
+- [x] [Review][Patch] L17 (Edge #16): Outer-middleware registration ordering vs Story 3.6 not documented; add comment block + small ordering-pin test [lifespan.py + tests/separability/]
+- [x] [Review][Patch] L18 (Edge #15): S-3 file-level exclusion is blunt; defer AST-walker to follow-up story but document the deviation [tests/separability/]
+
+**Dismissed (not patched)**
+
+- [x] [Review][Defer] M17 (non-empty-but-typo'd allowlist) — out-of-scope for this fix; future "config-validation hardening" story owns it
+- [x] [Review][Defer] H4 / L18 (S-3 AST-walker replacement) — proper structural fix is a separate test-infra story; current pass documents the deviation
+- [x] [Review][Defer] Edge #18 (`_safe_emit` swallows custom BaseExceptions) — same shape as Story 2.16; fix at the audited_secret layer if needed
+- [x] [Review][Defer] Edge #19 (whitelist update) — verified not needed; documented
 
 ## Dev Agent Record
 
