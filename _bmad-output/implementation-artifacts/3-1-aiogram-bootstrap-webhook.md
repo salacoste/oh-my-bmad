@@ -1,6 +1,6 @@
 # Story 3.1: aiogram v3 bootstrap + webhook config
 
-Status: review
+Status: done
 
 ## Story
 
