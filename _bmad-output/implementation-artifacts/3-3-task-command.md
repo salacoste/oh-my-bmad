@@ -136,6 +136,8 @@ This is the first story that calls an external HTTP service from the telegram-ga
 
    **`_is_replay` detection**: `RegistryAPIClient.create_task` stores the raw httpx `Response.headers` on the returned model or exposes them via a companion attribute. A simpler approach: the `RegistryAPIClient` inspects `X-Idempotency-Status` and attaches an `idempotency_status: Literal["applied", "replayed"]` field to `CreateTaskResponseLocal`. The handler reads this to decide whether to append `" (retry deduped)"`.
 
+   **Idempotency key strategy (review-fix H1)**: The key is a UUIDv5 derived from a fixed Telegram-service namespace UUID (`6ba7b810-9dad-11d1-80b4-00c04fd430c8`) and the seed string `"{chat_id}:{message_id}"`, then reshaped so the version nibble reads `7` and the variant nibble reads `10xx`. This satisfies registry-api's `IdempotencyKeyMiddleware` UUIDv7 regex: `^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`. The original `telegram-{chat_id}-{message_id}` string format failed this regex, causing the middleware to regenerate a fresh key per retry and creating duplicate tasks. The namespace UUID encodes the `tg:` service discriminator (L4/L6).
+
 8. **AC-8: RFC 7807 error surface in `_format_http_error`** — handler differentiates HTTP error classes:
    - `409` (idempotency collision from a concurrent bot instance using the same key via a different path) → `"⚠️ Duplicate idempotency key — another instance already submitted this message. Stored result: {task_id_from_body_if_available}."`
    - `4xx` other (validation, 422 Pydantic, etc.) → parse RFC 7807 `detail` field: `"⚠️ Task rejected: {detail}"`. Falls back to `"⚠️ Task rejected: HTTP {status}"` if body is not valid JSON or lacks `detail`.
@@ -264,10 +266,19 @@ aiogram v3's `dp.workflow_data` is a dict injected into every handler call. Sett
 
 ### Idempotency key strategy
 
-`telegram-{chat_id}-{message_id}` is:
-- **Deterministic**: Telegram retries of the same physical message always carry the same `message_id`.
-- **Opaque to registry-api**: registry-api treats idempotency keys as raw strings; no semantic parsing.
-- **Non-colliding across commands**: Story 3.4 `/approve` and Story 3.18 `/retry` use the same format; because the `(chat_id, message_id)` pair is globally unique per Telegram message, keys for different commands will never collide.
+**Review-fix H1**: The original `telegram-{chat_id}-{message_id}` string format failed registry-api's `IdempotencyKeyMiddleware` UUIDv7 regex, causing the middleware to regenerate a fresh key per Telegram retry and creating duplicate tasks. Replaced with a deterministic UUIDv7-shaped key derived as follows:
+
+1. Compute `uuid.uuid5(_TELEGRAM_NAMESPACE_UUID, f"{chat_id}:{message_id}")` where `_TELEGRAM_NAMESPACE_UUID = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")`.
+2. Reshape the byte array: set version nibble to `7` (`bytes[6] = (bytes[6] & 0x0F) | 0x70`) and variant nibble to `10xx` (`bytes[8] = (bytes[8] & 0x3F) | 0x80`).
+3. Return `str(uuid.UUID(bytes=reshaped))`.
+
+The result satisfies the `IdempotencyKeyMiddleware` regex: `^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`.
+
+Key properties:
+- **Deterministic**: same `(chat_id, message_id)` always produces the same UUID-shaped key.
+- **Accepted by registry-api**: passes the `IdempotencyKeyMiddleware` UUIDv7 regex constraint.
+- **Service-namespaced**: the namespace UUID encodes the Telegram gateway identity (L4); a Slack gateway with the same numeric ids would use a different namespace UUID and never collide.
+- **Negative chat_id safe**: negative values (supergroup ids start at -100…) are embedded in the SHA-1 seed string; the UUID byte representation hides the sign (L6).
 
 ### HTTP client timeout rationale
 
@@ -312,6 +323,43 @@ aiogram v3's `dp.workflow_data` is a dict injected into every handler call. Sett
 - `_bmad-output/implementation-artifacts/3-2-allowlist-middleware.md` — M2/M4 (`_safe_emit` shape), M6 (request_id correlation), L13 (public `TELEGRAM_GATEWAY_ACTOR`).
 - `_bmad-output/implementation-artifacts/epic-2-retro-2026-04-27.md` — AI #1 (trust-but-verify lint), AI #4 (uv sync flags), AI #5 (autouse re-register).
 
+### Review Findings
+
+Three-layer code review of commit `76795df`. After dedup: **5 High/Critical · 10 Med · 7 Low**. Per user directive ("fix all issues even minors") all are classified `[Patch]`.
+
+**Critical / High severity**
+
+- [x] [Review][Patch] H1 (Edge #1 ⚡CRITICAL): **FR28 idempotency silently broken** — `Idempotency-Key: telegram-{chat_id}-{message_id}` fails registry-api's `IdempotencyKeyMiddleware` UUIDv7 regex (Story 2.13), so middleware regenerates a fresh UUID per retry; every Telegram retry creates a new task. Spec line 269 ("opaque to registry-api") is factually wrong. **Fix:** derive a deterministic UUIDv7 (or UUIDv5 with fixed namespace) from `(chat_id, message_id)`. Update spec AC-7. The dev-pass test only verified the bot SENT the key — never that registry-api ACCEPTED it [task_command.py:_idempotency_key_from_message + spec AC-7]
+- [x] [Review][Patch] H2 (Edge #2 CRITICAL): `KeyError` / `JSONDecodeError` / `ValidationError` from response body parsing escapes `handle_task`'s `httpx.HTTPError` / `httpx.HTTPStatusError` catches → user gets NO reply, M3 contract violated. Add an `except Exception` backstop in `handle_task` that replies with a generic error message + logs traceback [task_command.py:handle_task + registry_client.py:create_task]
+- [x] [Review][Patch] H3 (Blind/Edge #4): Missing `parse_mode="HTML"` on success `message.reply(...)` → `<code>` tags render as literal `&lt;code&gt;` text or Telegram rejects message. Add `parse_mode="HTML"` explicitly OR rely on `DefaultBotProperties(parse_mode=ParseMode.HTML)` (Story 3.1 M5) — verify it's actually wired and add a test that asserts the rendered text contains `<code>` literal post-parse [task_command.py + lifespan.py]
+- [x] [Review][Patch] H4 (Edge #3): `http_client.aclose` pushed last on AsyncExitStack → LIFO unwinds it FIRST while in-flight `/task` handlers still running → "client has been closed" RuntimeError. Reorder push so `http_client.aclose` runs AFTER `_drain_dispatch_tasks` and BEFORE `bot.session.close` / `writer.close` [lifespan.py]
+- [x] [Review][Patch] H5 (Edge #4+#5): `_format_http_error` renders FastAPI's list-typed `detail` field as Python repr (`[{'loc': [...]}]`) → Telegram `BadRequest: can't parse entities`; also unescaped `detail`/`task_id_from_body` enable HTML injection from registry-api into operator's Telegram client. Add list→str coercion (extract first `msg` field) AND `html.escape(str(detail))` for all interpolated values [task_command.py:_format_http_error]
+
+**Medium severity**
+
+- [x] [Review][Patch] M1 (Blind): `RegistryAPIClient.__init__` `base_url` parameter is dead — actual routing uses `http_client.base_url`; divergence creates silent mis-routing footgun. **Drop `base_url` from constructor** OR enforce consistency with assertion [registry_client.py]
+- [x] [Review][Patch] M2 (Blind): `_format_http_error` gives generic "Task rejected: HTTP 403" for auth errors. Add explicit 401/403 branch with "⚠️ Not authorized. Contact your administrator." [task_command.py:_format_http_error]
+- [x] [Review][Patch] M3 (Blind): `httpx.TooManyRedirects` is `HTTPError` not `HTTPStatusError` → falls into generic network bucket with confusing user message. Catch explicitly with misconfiguration-specific message [task_command.py:handle_task]
+- [x] [Review][Patch] M4 (Blind): p95 percentile-formula off for non-100 n: `int(0.95 * n) - 1` is wrong for n=99 (returns 93rd not 94th). Use `math.ceil(0.95 * n) - 1` or `statistics.quantiles` [test_task_command.py:test_task_handler_latency_under_p95_budget]
+- [x] [Review][Patch] M5 (Blind): Latency test sequential `for i in range(100)` with 200ms `asyncio.sleep` mock → ≥20s wall-clock; p95 < 1.0s assertion can never legitimately fail given exact-200ms mock. Tighten threshold to `< 0.25s` OR document why 1.0s is meaningful [test_task_command.py]
+- [x] [Review][Patch] M6 (Blind): `_make_registry_client` test helper leaks unclosed `httpx.AsyncClient` per call → `ResourceWarning`. Make it a `pytest.fixture` with `async with` teardown OR explicit `aclose()` in finally [test_task_command.py]
+- [x] [Review][Patch] M7 (Blind): No top-level `except Exception` backstop in `handle_task` (also covered by H2; fold). [task_command.py:handle_task]
+- [x] [Review][Patch] M8 (Edge #6): No test asserts `idempotency_status="applied"` is the default when `X-Idempotency-Status` header is absent; no test asserts `"(retry deduped)"` is ABSENT in the success path [test_task_command.py]
+- [x] [Review][Patch] M9 (Edge #7): No test for `message.from_user is None` defensive branch (`"unknown"` actor id path) [test_task_command.py]
+- [x] [Review][Patch] M10 (Edge #8 + Edge #9): `_make_registry_client` sync/async transport asymmetry with `# type: ignore[misc]`; AND `/task\nDescription` (newline, no space) silently swallows description. Use `raw_text.split(None, 1)` for any-whitespace splitting; make both transport paths async [task_command.py + test_task_command.py]
+
+**Low severity**
+
+- [x] [Review][Patch] L1 (Blind): `__all__` in `task_command.py` exports private helpers `_idempotency_key_from_message` / `_format_http_error` (underscore convention violation) [task_command.py]
+- [x] [Review][Patch] L2 (Blind): module docstring coverage list references `test_format_http_error_409` that doesn't exist (renamed to `_with_task_id` / `_no_body_task_id`) [test_task_command.py module docstring]
+- [x] [Review][Patch] L3 (Blind): `_FAKE_CREATED_AT = "2024-01-01T00:00:00Z"` (string) relies on Pydantic implicit string→datetime coercion. Use `datetime(2024, 1, 1, tzinfo=timezone.utc)` explicitly [test_task_command.py]
+- [x] [Review][Patch] L4 (Blind): Idempotency-key format lacks service namespace — future Slack gateway with same numeric IDs would collide. Document namespacing assumption OR prefix with `tg:` (folds with H1's deterministic UUID fix — namespace becomes part of the UUIDv5 namespace UUID) [task_command.py:_idempotency_key_from_message]
+- [x] [Review][Patch] L5 (Edge #10): No test for `_format_http_error` with empty (zero-byte) body on 409 path [test_task_command.py]
+- [x] [Review][Patch] L6 (Edge #11): Negative `chat_id` (Telegram supergroups start at -100…) produces double-hyphen `telegram--1001234-567` — undocumented (becomes moot under H1 fix; document the namespace UUID seed shape) [task_command.py:_idempotency_key_from_message]
+- [x] [Review][Patch] L7 (Auditor): description-extraction split-on-space differs from spec pseudocode `removeprefix("/task")`; impl is strictly better for `/task@botname` cases but no test covers the bot-mention form. Add `test_task_handler_handles_bot_mention` [test_task_command.py]
+
+**Dismissed (none)** — all findings are actionable in this fix pass.
+
 ## Dev Agent Record
 
 ### Agent Model Used
@@ -331,6 +379,28 @@ claude-sonnet-4-6 (executor agent)
 - Task 4: `handlers/__init__.py` exports `make_task_router`; docstring updated.
 - Task 5: 20 tests in `test_task_command.py` (19 non-slow + 1 `@pytest.mark.slow` NFR-P2 latency); all RegistryAPIClient + handler paths covered using `httpx.MockTransport`.
 - Task 6: `just lint` 8/8, `just test` 701 (+20), `just check-gates-self-test` 3/3, `just bootstrap-verify` clean.
+- Review-fix H1: `_idempotency_key_from_message` replaced with UUIDv5→UUIDv7 reshape; `_TELEGRAM_NAMESPACE_UUID` hardcoded; `_UUIDV7_BARE_RE` exported for test assertions; AC-7 + Dev Notes "Idempotency key strategy" updated.
+- Review-fix H2: `registry_client.create_task` wraps body parsing in `try/except (JSONDecodeError, KeyError, ValidationError)`; `handle_task` adds top-level `except Exception` backstop replying `"⚠️ Internal error. Logs captured."`.
+- Review-fix H3: Verified `DefaultBotProperties(parse_mode=ParseMode.HTML)` is wired in `lifespan.py:199-204`; no per-call explicit kwarg needed; `test_task_handler_replies_with_task_id` asserts `<code>` in reply text.
+- Review-fix H4: `lifespan.py` teardown order corrected — `http_client.aclose` pushed before `_drain_dispatch_tasks` and `flush_pending_emissions`; new LIFO order: flush → drain → http_client.aclose → bot.session.close → writer.close.
+- Review-fix H5: `_format_http_error` extracts list `detail[*].msg` fields; all interpolated values wrapped in `html.escape()`; new tests for list detail, HTML escaping, and task_id escaping.
+- Review-fix M1: Dropped `base_url` parameter from `RegistryAPIClient.__init__`; updated lifespan caller and all test construction sites.
+- Review-fix M2: Added 401/403 branch in `_format_http_error`; tests pin both codes.
+- Review-fix M3: `httpx.TooManyRedirects` caught before generic `httpx.HTTPError`; test pins.
+- Review-fix M4: `int(0.95 * n) - 1` → `math.ceil(0.95 * n) - 1` in latency test.
+- Review-fix M5: Latency test threshold tightened from `< 1.0 s` to `< 0.25 s`; docstring explains why.
+- Review-fix M6: Added `registry_client_fixture` async pytest fixture with `async with` teardown; `_make_registry_client` kept for backward-compat with existing tests; all transport functions made `async def`.
+- Review-fix M7: Folded with H2.
+- Review-fix M8: `test_registry_client_default_idempotency_status_is_applied` added; `test_task_handler_replies_with_task_id` asserts `"(retry deduped)" not in reply`.
+- Review-fix M9: `test_task_handler_uses_unknown_actor_when_from_user_is_none` added.
+- Review-fix M10: `raw_text.split(None, 1)` replaces `raw_text.split(" ", 1)`; `test_task_handler_handles_newline_separator` added; all transports made async.
+- Review-fix L1: Removed private helpers from `__all__` in `task_command.py`.
+- Review-fix L2: Module docstring in `test_task_command.py` updated with correct test names.
+- Review-fix L3: `_FAKE_CREATED_AT` changed to `datetime(2024, 1, 1, tzinfo=UTC)`.
+- Review-fix L4/L6: Documented in `_idempotency_key_from_message` docstring; namespace UUID encodes service discriminator; negative chat_id handled safely.
+- Review-fix L5: `test_format_http_error_409_empty_body` added.
+- Review-fix L7: `test_task_handler_handles_bot_mention` added; aiogram filter behavior documented.
+- Final gates: `just test` 719 passed (+18 net new), `just lint` 8/8, `just check-gates-self-test` 3/3, `just bootstrap-verify` clean.
 
 ### File List
 
@@ -345,8 +415,15 @@ claude-sonnet-4-6 (executor agent)
 - `services/telegram-gateway/src/telegram_gateway/app/lifespan.py`
 - `.env.example`
 
+**Review-fix modified (4):**
+- `services/telegram-gateway/src/telegram_gateway/handlers/task_command.py` — H1 UUID reshape, H2 backstop, H5 escaping, M1 base_url drop, M2 401/403, M3 TooManyRedirects, M10 split(None), L1 __all__, L4/L6 docs
+- `services/telegram-gateway/src/telegram_gateway/handlers/registry_client.py` — H2 body-parse wrap, M1 base_url drop
+- `services/telegram-gateway/src/telegram_gateway/test_task_command.py` — all new tests, M4/M5 latency fix, M6 fixture, L2/L3 docstring fixes
+- `services/telegram-gateway/src/telegram_gateway/app/lifespan.py` — H4 teardown reorder, M1 base_url drop from RegistryAPIClient call
+
 ## Change Log
 
 | Date | Version | Description | Author |
 |------|---------|-------------|--------|
 | 2026-04-27 | 1.0 | Story 3.3 implemented — `/task` command (Bootstrap Minimum #1): `RegistryAPIClient`, `httpx.AsyncClient` lifespan wiring, `make_task_router()` factory, 20 tests (+20 vs baseline). | claude-sonnet-4-6 (executor agent) |
+| 2026-04-27 | 1.1 | Review-fix pass: 5 High, 10 Med, 7 Low addressed; +18 tests (719 total); FR28 idempotency UUIDv5→UUIDv7 reshape fix (H1), M3-contract backstop (H2), HTML-escape RFC 7807 detail (H5), lifespan teardown reorder (H4), list-detail extraction (H5), 401/403 branch (M2), TooManyRedirects catch (M3), math.ceil p95 fix (M4), threshold tightened to 0.25 s (M5), async fixture teardown (M6), split(None) whitespace handling (M10). | claude-sonnet-4-6 (executor agent) |

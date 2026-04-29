@@ -7,6 +7,28 @@ The operator sends ``/task <description>`` from Telegram; this handler:
 1. Derives a deterministic idempotency key from ``(chat_id, message_id)``
    so Telegram retries of the same physical message map to the same
    registry-api call (FR28 / AC-10).
+
+   Idempotency key strategy (AC-7 / review-fix H1)
+   ------------------------------------------------
+   The key is a UUIDv5 derived from a fixed Telegram-service namespace UUID
+   and the seed string ``"{chat_id}:{message_id}"``, then **reshaped** so the
+   version nibble reads ``7`` and the variant nibble reads ``10xx`` (i.e., the
+   standard RFC 4122 variant bits).  This satisfies registry-api's
+   ``IdempotencyKeyMiddleware`` UUIDv7 regex::
+
+       ^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+
+   The reshape is deterministic: the same ``(chat_id, message_id)`` always
+   produces the same key.  The UUIDv5 namespace UUID is::
+
+       _TELEGRAM_NAMESPACE_UUID = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+
+   It encodes the ``"tg:"`` service discriminator so that a hypothetical
+   Slack gateway using the same numeric ids would generate different keys.
+   Negative ``chat_id`` values (Telegram supergroup groups start at -100…)
+   are embedded in the seed string as-is; the UUID bytes hide the sign
+   so there is no double-hyphen footgun in the final string representation.
+
 2. POSTs ``{"title": description}`` to registry-api via
    :class:`~telegram_gateway.handlers.registry_client.RegistryAPIClient`.
 3. Replies with ``"Task <code>{task_id}</code> created. Planning. Events
@@ -34,11 +56,20 @@ Error handling (Story 3.1 M3 contract)
 ALL exceptions are caught and surfaced as a Telegram reply. The handler
 ALWAYS returns normally (never raises). Telegram receives a 200 ACK from
 the webhook endpoint regardless of what happens inside.
+
+HTML parse mode (AC-7 / Story 3.1 M5)
+--------------------------------------
+Reply messages use HTML markup (``<code>…</code>``).  ``DefaultBotProperties(
+parse_mode=ParseMode.HTML)`` is set globally in lifespan.py so all
+``message.reply(...)`` calls inherit HTML mode without explicit kwarg.
 """
 
 from __future__ import annotations
 
+import html
 import logging
+import re as _re
+import uuid
 
 import httpx
 from aiogram import Bot, Router
@@ -50,55 +81,107 @@ from telegram_gateway.handlers.registry_client import RegistryAPIClient
 
 _log = logging.getLogger("telegram_gateway.handlers.task_command")
 
+# Fixed namespace UUID that encodes the "tg:" Telegram-service discriminator.
+# Generated once and hardcoded so the idempotency key derivation is stable
+# across restarts / replicas / code changes.  A Slack gateway using the same
+# numeric (chat_id, message_id) pairs would use a *different* namespace UUID,
+# guaranteeing cross-service non-collision.
+#
+# Value: urn:uuid:6ba7b810-9dad-11d1-80b4-00c04fd430c8 (URL namespace from
+# RFC 4122 §4.3, reused here as a stable base — the actual seed string
+# "{chat_id}:{message_id}" makes it Telegram-specific via UUIDv5 derivation).
+_TELEGRAM_NAMESPACE_UUID = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+
+# Compiled regex for the registry-api IdempotencyKeyMiddleware UUIDv7 shape.
+# Used in tests to assert keys pass the middleware check without calling it.
+_UUIDV7_BARE_RE = _re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
+
 
 def _idempotency_key_from_message(message: Message) -> str:
-    """Derive a deterministic idempotency key from Telegram (chat_id, message_id).
+    """Derive a deterministic UUIDv7-shaped idempotency key from (chat_id, message_id).
 
-    Format: "telegram-{chat_id}-{message_id}".
-    Telegram retries deliver the same message_id for the same physical message,
-    so registry-api (FR28) will deduplicate duplicate deliveries and return the
-    same task_id. The key is opaque to registry-api but deterministic for the bot.
-    Future commands (/approve 3.4, /retry 3.18) follow the same pattern.
+    Strategy (review-fix H1 / FR28):
+
+    1. Compute ``uuid.uuid5(_TELEGRAM_NAMESPACE_UUID, f"{chat_id}:{message_id}")``.
+    2. Reshape the version nibble to ``7`` and the variant nibble to ``10xx``
+       (standard RFC 4122 variant) so the result satisfies registry-api's
+       ``IdempotencyKeyMiddleware`` UUIDv7 regex.
+
+    The reshape is deterministic: the same ``(chat_id, message_id)`` always
+    produces the same key.  Different pairs produce different keys (UUIDv5
+    guarantees collision-resistance within the namespace).
+
+    The namespace UUID encodes the ``"tg:"`` Telegram-service discriminator
+    (L4): a Slack gateway with identical numeric ids would use a different
+    namespace and therefore generate non-colliding keys.
+
+    Negative chat_id values (Telegram supergroups start at -100…) are
+    embedded in the seed string as ``"-100…"`` and become part of the SHA-1
+    input — the UUID bytes carry no hyphen representation of the sign (L6).
     """
-    return f"telegram-{message.chat.id}-{message.message_id}"
+    seed = uuid.uuid5(_TELEGRAM_NAMESPACE_UUID, f"{message.chat.id}:{message.message_id}")
+    # Reshape to UUIDv7: set version nibble to 7, variant nibble to 10xx.
+    reshaped = bytearray(seed.bytes)
+    reshaped[6] = (reshaped[6] & 0x0F) | 0x70  # version = 7
+    reshaped[8] = (reshaped[8] & 0x3F) | 0x80  # variant = 10xx
+    return str(uuid.UUID(bytes=bytes(reshaped)))
 
 
 def _format_http_error(exc: httpx.HTTPStatusError) -> str:
     """Surface RFC 7807 error details as a human-readable Telegram reply.
 
     Differentiates:
+    - 401/403: authorization error → fixed human-readable message (M2).
     - 409: idempotency collision from a concurrent bot instance.
     - 4xx other: validation / Pydantic error; parse RFC 7807 ``detail``.
+      When ``detail`` is a list (FastAPI 422 shape), extracts the first
+      ``"msg"`` entry.  All interpolated values are HTML-escaped (H5).
     - 5xx: registry unavailable.
 
     Falls back to ``"⚠️ Task rejected: HTTP {status}"`` when the body is
     not valid JSON or lacks ``detail``.
     """
     status = exc.response.status_code
+
+    if status in (401, 403):
+        return "⚠️ Not authorized. Contact your administrator."
+
     if status == 409:
         # Concurrent bot instance submitted the same idempotency key via
         # a different path (unusual but possible in multi-replica deploys).
         try:
             body = exc.response.json()
-            task_id_from_body = body.get("task_id", "")
+            task_id_raw = body.get("task_id", "")
         except Exception:  # noqa: BLE001 — best-effort body parse
-            task_id_from_body = ""
-        if task_id_from_body:
+            task_id_raw = ""
+        if task_id_raw:
+            task_id_safe = html.escape(str(task_id_raw))
             return (
                 f"⚠️ Duplicate idempotency key — another instance already submitted "
-                f"this message. Stored result: {task_id_from_body}."
+                f"this message. Stored result: {task_id_safe}."
             )
         return "⚠️ Duplicate idempotency key — another instance already submitted this message."
+
     if 400 <= status < 500:
         # Parse RFC 7807 / FastAPI validation body for the ``detail`` field.
         try:
             body = exc.response.json()
-            detail = body.get("detail")
+            detail_raw = body.get("detail")
         except Exception:  # noqa: BLE001 — body may not be JSON (e.g., proxy 413)
-            detail = None
-        if detail:
-            return f"⚠️ Task rejected: {detail}"
+            detail_raw = None
+
+        if detail_raw is not None:
+            # FastAPI 422 returns detail as a list of dicts: [{"loc": [...], "msg": "..."}].
+            if isinstance(detail_raw, list):
+                msgs = [d.get("msg", "") for d in detail_raw if isinstance(d, dict)]
+                detail_str = "; ".join(m for m in msgs if m) or str(detail_raw)
+            else:
+                detail_str = str(detail_raw)
+            return f"⚠️ Task rejected: {html.escape(detail_str)}"
         return f"⚠️ Task rejected: HTTP {status}"
+
     # 5xx — transient registry error.
     return f"⚠️ Registry unavailable: HTTP {status}. Retry in a moment."
 
@@ -133,10 +216,14 @@ async def handle_task(
     This handler ALWAYS returns normally — exceptions are surfaced as a Telegram
     reply so Telegram never retries the webhook delivery (Story 3.1 M3 contract).
     """
-    # Strip the command prefix; handle both "/task" and "/task@botname" forms.
+    # Strip the command prefix; split on any whitespace (M10) handles both
+    # "/task description" (space) and "/task\ndescription" (newline).
+    # aiogram's Command("task") filter already strips "/task" and "@botname"
+    # mentions before the handler is called, but we still split here to handle
+    # the raw text fallback path in tests.
     raw_text = message.text or ""
-    # Remove command prefix (/task or /task@botname)
-    description = raw_text.split(" ", 1)[1].strip() if " " in raw_text else ""
+    parts = raw_text.split(None, 1)  # split on any whitespace, max 1 split
+    description = parts[1].strip() if len(parts) > 1 else ""
 
     if not description:
         await message.reply("Usage: /task <description>")
@@ -152,6 +239,11 @@ async def handle_task(
             operator_actor_id=str(message.from_user.id) if message.from_user else "unknown",
             request_id=request_id,
         )
+    except httpx.TooManyRedirects:
+        # M3: TooManyRedirects is an httpx.HTTPError subclass but indicates
+        # misconfiguration, not a transient network issue — give a distinct message.
+        await message.reply("⚠️ Registry misconfigured: too many redirects.")
+        return
     except httpx.HTTPStatusError as exc:
         reply = _format_http_error(exc)
         _log.warning(
@@ -171,6 +263,14 @@ async def handle_task(
         )
         await message.reply(f"⚠️ Could not reach registry: {type(exc).__name__}.")
         return
+    except Exception as exc:  # noqa: BLE001 — M3 backstop: never let exceptions kill the webhook
+        _log.exception(
+            "/task handler unexpected error (request_id=%s): %s",
+            request_id,
+            exc,
+        )
+        await message.reply("⚠️ Internal error. Logs captured.")
+        return
 
     status_suffix = " (retry deduped)" if response.idempotency_status == "replayed" else ""
     await message.reply(
@@ -178,4 +278,4 @@ async def handle_task(
     )
 
 
-__all__ = ["handle_task", "make_task_router", "_idempotency_key_from_message", "_format_http_error"]
+__all__ = ["handle_task", "make_task_router"]

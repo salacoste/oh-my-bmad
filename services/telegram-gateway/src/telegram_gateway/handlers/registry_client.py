@@ -15,11 +15,12 @@ Python objects.  See AC-2 doc-comment for details.
 
 from __future__ import annotations
 
+import json as _json
 from datetime import datetime
 from typing import Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 
 class CreateTaskResponseLocal(BaseModel):
@@ -52,18 +53,16 @@ class RegistryAPIClient:
     reusable across requests — Story 3.1 H4 cache-once pattern).
     """
 
-    def __init__(self, *, base_url: str, http_client: httpx.AsyncClient) -> None:
+    def __init__(self, *, http_client: httpx.AsyncClient) -> None:
         """Initialise with an already-built long-lived AsyncClient.
 
         Args:
-            base_url:    Base URL for registry-api (e.g. "http://registry-api:8080").
-                         Stored for reference; actual routing uses the ``base_url``
-                         baked into ``http_client`` at construction time.
             http_client: Lifespan-owned ``httpx.AsyncClient``.  NEVER pass a
                          per-request client — that would leave dangling connections
-                         and defeat the TLS session-reuse benefit.
+                         and defeat the TLS session-reuse benefit.  The client's
+                         ``base_url`` must already be set to the registry-api base
+                         URL (e.g. ``http://registry-api:8080``) at construction.
         """
-        self._base_url = base_url
         self._http_client = http_client
 
     @property
@@ -98,7 +97,8 @@ class RegistryAPIClient:
             httpx.HTTPStatusError: On non-2xx responses with the raw httpx
                 ``Response`` attached so callers can inspect status and RFC 7807
                 body (architecture.md:228).
-            httpx.HTTPError:       On network / timeout errors.
+            httpx.HTTPError:       On network / timeout errors, including when
+                registry-api returns a malformed body on a 2xx response.
         """
         headers: dict[str, str] = {
             "Idempotency-Key": idempotency_key,
@@ -116,16 +116,23 @@ class RegistryAPIClient:
         )
         response.raise_for_status()
 
-        data = response.json()
-        idempotency_status: Literal["applied", "replayed"] = (
-            "replayed" if response.headers.get("X-Idempotency-Status") == "replayed" else "applied"
-        )
-        return CreateTaskResponseLocal(
-            task_id=data["task_id"],
-            event_id=data["event_id"],
-            created_at=data["created_at"],
-            idempotency_status=idempotency_status,
-        )
+        # H2: wrap body parsing so shape failures route into handle_task's
+        # existing httpx.HTTPError catch rather than escaping as untyped exceptions.
+        try:
+            data = response.json()
+            idempotency_status: Literal["applied", "replayed"] = (
+                "replayed"
+                if response.headers.get("X-Idempotency-Status") == "replayed"
+                else "applied"
+            )
+            return CreateTaskResponseLocal(
+                task_id=data["task_id"],
+                event_id=data["event_id"],
+                created_at=data["created_at"],
+                idempotency_status=idempotency_status,
+            )
+        except (_json.JSONDecodeError, KeyError, ValidationError) as exc:
+            raise httpx.HTTPError(f"registry-api returned malformed body: {exc}") from exc
 
 
 __all__ = ["CreateTaskResponseLocal", "RegistryAPIClient"]

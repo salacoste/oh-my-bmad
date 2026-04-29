@@ -45,17 +45,24 @@ LIFO teardown order (review-fix M1)
 ``AsyncExitStack`` unwinds callbacks in last-in-first-out order. The
 push order in this lifespan is:
 
-1. ``writer.close``      → pops 4th (last)
-2. ``bot.session.close`` → pops 3rd
-3. ``_drain_dispatch_tasks`` → pops 2nd
-4. ``flush_pending_emissions`` → pops 1st
+1. ``writer.close``          → pops 5th (last)
+2. ``bot.session.close``     → pops 4th
+3. ``http_client.aclose``    → pops 3rd
+4. ``_drain_dispatch_tasks`` → pops 2nd
+5. ``flush_pending_emissions`` → pops 1st
 
-So shutdown runs: drain dispatch tasks → flush audit emissions → close
-bot session → close writer. ``flush`` MUST run before ``writer.close``
-or the in-flight ``secret.accessed`` tasks raise
-``RuntimeError("EventLogWriter is closed")``. ``bot.session.close``
-runs in the middle — the session must be open while audit tasks
-emit (they only touch the writer), but closed before the writer goes.
+So shutdown runs:
+  flush_pending_emissions → drain dispatch tasks → http_client.aclose
+  → bot.session.close → writer.close
+
+``flush`` MUST run before ``writer.close`` or the in-flight
+``secret.accessed`` tasks raise ``RuntimeError("EventLogWriter is
+closed")``. ``http_client.aclose`` runs AFTER dispatch tasks are
+drained: in-flight ``/task`` handlers that are still awaiting the
+registry-api response use the http_client — closing it while they run
+would raise ``"client has been closed" RuntimeError`` (review-fix H4).
+``bot.session.close`` runs after the http client so the bot session
+remains open while audit tasks emit (they only touch the writer).
 
 Audit-count cold-start invariant (AC-9, post-H4-fix)
 ----------------------------------------------------
@@ -246,19 +253,6 @@ def make_lifespan(
             # tasks; drained on shutdown via _drain_dispatch_tasks.
             dispatch_tasks: set[asyncio.Task[None]] = set()
 
-            # Push the dispatch-task drain SECOND-TO-LAST so it pops
-            # SECOND on teardown (after flush). Drains in-flight
-            # ``feed_webhook_update`` tasks before audit flush so any
-            # secret reads they themselves perform are flushed.
-            stack.push_async_callback(_drain_dispatch_tasks, dispatch_tasks)
-
-            # Push flush_pending_emissions LAST so it pops FIRST on
-            # teardown (Story 2.16 H6 / Epic-2-retro tech-debt #2). Use
-            # functools.partial for keyword safety (review-fix L18).
-            stack.push_async_callback(
-                functools.partial(flush_pending_emissions, timeout=_FLUSH_TIMEOUT_SECONDS)
-            )
-
             # set_webhook uses the cached secret bytes (decoded back to
             # str for the aiogram API). No additional ``.value`` read.
             await bot.set_webhook(
@@ -269,16 +263,34 @@ def make_lifespan(
 
             # Story 3.3 AC-4: construct the long-lived httpx.AsyncClient ONCE
             # (Story 3.1 H4 cache-once pattern — never construct per-request).
-            # push_async_callback registers aclose BEFORE app.state assignment
-            # so a failed set_webhook never leaves a dangling client.
             http_client = httpx.AsyncClient(
                 base_url=str(audited.registry_api_base_url),
                 timeout=httpx.Timeout(connect=2.0, read=3.0, write=2.0, pool=2.0),
             )
-            stack.push_async_callback(http_client.aclose)
             registry_client = RegistryAPIClient(
-                base_url=str(audited.registry_api_base_url),
                 http_client=http_client,
+            )
+
+            # LIFO teardown order (review-fix H4): push callbacks so that
+            # shutdown runs in the order documented in the module docstring:
+            #   flush_pending_emissions → _drain_dispatch_tasks
+            #   → http_client.aclose → bot.session.close → writer.close
+            #
+            # Push http_client.aclose FIRST among the three so it pops
+            # THIRD (after drain + flush).  Dispatch tasks must complete
+            # before the http client closes — in-flight /task handlers that
+            # are awaiting registry-api use the http_client, so closing it
+            # first would raise "client has been closed" (review-fix H4).
+            stack.push_async_callback(http_client.aclose)
+
+            # Push _drain_dispatch_tasks so it pops SECOND (before http_client).
+            stack.push_async_callback(_drain_dispatch_tasks, dispatch_tasks)
+
+            # Push flush_pending_emissions LAST so it pops FIRST on
+            # teardown (Story 2.16 H6 / Epic-2-retro tech-debt #2). Use
+            # functools.partial for keyword safety (review-fix L18).
+            stack.push_async_callback(
+                functools.partial(flush_pending_emissions, timeout=_FLUSH_TIMEOUT_SECONDS)
             )
 
             # Story 3.3 AC-5: register the /task command router and inject
