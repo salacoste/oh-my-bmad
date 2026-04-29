@@ -89,7 +89,7 @@ development_status:
   epic-3: in-progress
   3-1-aiogram-bootstrap-webhook: done
   3-2-allowlist-middleware: done
-  3-3-task-command: review
+  3-3-task-command: done
   3-4-approve-command: backlog
   3-5-ping-command: backlog
   3-6-fastapi-middleware-stack: backlog
