@@ -1,6 +1,6 @@
 # Story 3.3: /task command (Bootstrap Minimum #1)
 
-Status: review
+Status: done
 
 ## Story
 
