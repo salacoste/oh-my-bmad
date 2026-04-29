@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: 2026-04-27T18:00:00Z
+# last_updated: 2026-04-27T19:00:00Z
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-04-27T18:00:00Z
+last_updated: 2026-04-27T19:00:00Z
 project: oh-my-bmad
 project_key: NOKEY
 tracking_system: file-system
@@ -91,7 +91,7 @@ development_status:
   3-2-allowlist-middleware: done
   3-3-task-command: done
   3-4-approve-command: done
-  3-5-ping-command: backlog
+  3-5-ping-command: ready-for-dev
   3-6-fastapi-middleware-stack: backlog
   3-7-rfc7807-error-envelope: backlog
   3-8-command-injection-fuzz-test: backlog
