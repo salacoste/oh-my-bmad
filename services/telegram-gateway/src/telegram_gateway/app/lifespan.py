@@ -293,15 +293,18 @@ def make_lifespan(
                 functools.partial(flush_pending_emissions, timeout=_FLUSH_TIMEOUT_SECONDS)
             )
 
-            # Story 3.3 AC-5: register the /task command router and inject
-            # registry_client via aiogram v3 workflow_data so handlers can
-            # declare it as a parameter by name.
-            # make_task_router() creates a fresh Router per lifespan so
-            # aiogram's "already attached" guard never fires across test
-            # lifespans that each build a new Dispatcher.
+            # Story 3.3 AC-5 / Story 3.4 L5: update workflow_data BEFORE
+            # registering routers so handlers never see a missing registry_client.
+            # If include_router raised after workflow_data was not yet set, any
+            # handler that ran during the broken window would KeyError on
+            # registry_client injection. Updating first eliminates that window.
+            dp.workflow_data.update({"registry_client": registry_client})
+
+            # make_task_router() / make_approve_router() create fresh Routers
+            # per lifespan so aiogram's "already attached" guard never fires
+            # across test lifespans that each build a new Dispatcher.
             dp.include_router(make_task_router())
             dp.include_router(make_approve_router())
-            dp.workflow_data.update({"registry_client": registry_client})
 
             # Assign app.state ONLY after set_webhook succeeds
             # (review-fix M8). If set_webhook raises, the stack unwinds

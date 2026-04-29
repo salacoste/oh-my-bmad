@@ -32,15 +32,15 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-from telegram_gateway.handlers.registry_client import (
-    RegistryAPIClient,
+from telegram_gateway.handlers._errors import format_http_error as _format_http_error
+from telegram_gateway.handlers._keys import (
+    UUIDV7_BARE_RE as _UUIDV7_BARE_RE,
 )
-from telegram_gateway.handlers.task_command import (
-    _UUIDV7_BARE_RE,
-    _format_http_error,
-    _idempotency_key_from_message,
-    handle_task,
+from telegram_gateway.handlers._keys import (
+    idempotency_key_from_message as _idempotency_key_from_message,
 )
+from telegram_gateway.handlers.registry_client import RegistryAPIClient
+from telegram_gateway.handlers.task_command import handle_task
 
 # ---------------------------------------------------------------------------
 # Helpers

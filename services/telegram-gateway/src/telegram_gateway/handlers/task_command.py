@@ -66,7 +66,6 @@ parse_mode=ParseMode.HTML)`` is set globally in lifespan.py so all
 
 from __future__ import annotations
 
-import html
 import logging
 
 import httpx
@@ -76,71 +75,22 @@ from aiogram.types import Message
 from events.ids import new_request_id
 
 from telegram_gateway.handlers import _keys
-from telegram_gateway.handlers.registry_client import RegistryAPIClient
+from telegram_gateway.handlers._errors import format_http_error
+from telegram_gateway.handlers.registry_client import RegistryAPIClient, RegistryResponseError
 
 _log = logging.getLogger("telegram_gateway.handlers.task_command")
 
-# Re-export for backward-compat with tests that import _UUIDV7_BARE_RE and
-# _idempotency_key_from_message from task_command (AC-15 / Story 3.4 Task 1).
-_UUIDV7_BARE_RE = _keys.UUIDV7_BARE_RE
+# Story 3.4 L9: backward-compat aliases removed per spec.
+# Canonical locations:
+#   _keys.UUIDV7_BARE_RE  (was _UUIDV7_BARE_RE here)
+#   _keys.idempotency_key_from_message  (was _idempotency_key_from_message here)
+#   _errors.format_http_error  (was _format_http_error here)
+
+# Thin shim kept ONLY for existing tests that have not yet been migrated.
+# DO NOT add new callers — import from _errors or _keys directly.
+_format_http_error = format_http_error
 _idempotency_key_from_message = _keys.idempotency_key_from_message
-
-
-def _format_http_error(exc: httpx.HTTPStatusError) -> str:
-    """Surface RFC 7807 error details as a human-readable Telegram reply.
-
-    Differentiates:
-    - 401/403: authorization error → fixed human-readable message (M2).
-    - 409: idempotency collision from a concurrent bot instance.
-    - 4xx other: validation / Pydantic error; parse RFC 7807 ``detail``.
-      When ``detail`` is a list (FastAPI 422 shape), extracts the first
-      ``"msg"`` entry.  All interpolated values are HTML-escaped (H5).
-    - 5xx: registry unavailable.
-
-    Falls back to ``"⚠️ Task rejected: HTTP {status}"`` when the body is
-    not valid JSON or lacks ``detail``.
-    """
-    status = exc.response.status_code
-
-    if status in (401, 403):
-        return "⚠️ Not authorized. Contact your administrator."
-
-    if status == 409:
-        # Concurrent bot instance submitted the same idempotency key via
-        # a different path (unusual but possible in multi-replica deploys).
-        try:
-            body = exc.response.json()
-            task_id_raw = body.get("task_id", "")
-        except Exception:  # noqa: BLE001 — best-effort body parse
-            task_id_raw = ""
-        if task_id_raw:
-            task_id_safe = html.escape(str(task_id_raw))
-            return (
-                f"⚠️ Duplicate idempotency key — another instance already submitted "
-                f"this message. Stored result: {task_id_safe}."
-            )
-        return "⚠️ Duplicate idempotency key — another instance already submitted this message."
-
-    if 400 <= status < 500:
-        # Parse RFC 7807 / FastAPI validation body for the ``detail`` field.
-        try:
-            body = exc.response.json()
-            detail_raw = body.get("detail")
-        except Exception:  # noqa: BLE001 — body may not be JSON (e.g., proxy 413)
-            detail_raw = None
-
-        if detail_raw is not None:
-            # FastAPI 422 returns detail as a list of dicts: [{"loc": [...], "msg": "..."}].
-            if isinstance(detail_raw, list):
-                msgs = [d.get("msg", "") for d in detail_raw if isinstance(d, dict)]
-                detail_str = "; ".join(m for m in msgs if m) or str(detail_raw)
-            else:
-                detail_str = str(detail_raw)
-            return f"⚠️ Task rejected: {html.escape(detail_str)}"
-        return f"⚠️ Task rejected: HTTP {status}"
-
-    # 5xx — transient registry error.
-    return f"⚠️ Registry unavailable: HTTP {status}. Retry in a moment."
+_UUIDV7_BARE_RE = _keys.UUIDV7_BARE_RE
 
 
 def make_task_router() -> Router:
@@ -186,7 +136,7 @@ async def handle_task(
         await message.reply("Usage: /task <description>")
         return
 
-    idempotency_key = _idempotency_key_from_message(message)
+    idempotency_key = _keys.idempotency_key_from_message(message)
     request_id = new_request_id()
 
     try:
@@ -202,7 +152,7 @@ async def handle_task(
         await message.reply("⚠️ Registry misconfigured: too many redirects.")
         return
     except httpx.HTTPStatusError as exc:
-        reply = _format_http_error(exc)
+        reply = format_http_error(exc)
         _log.warning(
             "registry-api HTTP error for /task (status=%s request_id=%s): %s",
             exc.response.status_code,
@@ -210,6 +160,14 @@ async def handle_task(
             exc,
         )
         await message.reply(reply)
+        return
+    except RegistryResponseError as exc:
+        _log.exception(
+            "registry-api malformed response for /task (request_id=%s): %s",
+            request_id,
+            exc,
+        )
+        await message.reply("⚠️ Registry returned an unexpected response. Logs captured.")
         return
     except httpx.HTTPError as exc:
         _log.warning(

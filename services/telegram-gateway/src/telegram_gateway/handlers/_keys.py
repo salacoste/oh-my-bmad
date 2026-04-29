@@ -73,6 +73,12 @@ def idempotency_key_from_message(message: Message) -> str:
     "telegram-{chat_id}-{message_id}" — that format fails registry-api's
     IdempotencyKeyMiddleware UUIDv7 regex and silently creates duplicate tasks
     on Telegram retries (Story 3.3 H1).
+
+    WARNING: The reshaped UUIDv7 satisfies registry-api's regex but does NOT
+    preserve UUIDv7's monotonic-time-order property — bytes 0-5 are SHA-1
+    derived, not timestamp. This is a shape-compatible idempotency key, not a
+    sortable timestamp. If you need monotonic ordering, use a fresh ``uuid7()``
+    and pass it through. (Story 3.4 M5)
     """
     seed = uuid.uuid5(_TELEGRAM_NAMESPACE_UUID, f"{message.chat.id}:{message.message_id}")
     # Reshape to UUIDv7: set version nibble to 7, variant nibble to 10xx.
@@ -82,4 +88,29 @@ def idempotency_key_from_message(message: Message) -> str:
     return str(uuid.UUID(bytes=bytes(reshaped)))
 
 
-__all__ = ["TASK_ID_PATTERN", "UUIDV7_BARE_RE", "idempotency_key_from_message"]
+def extract_task_id_from_message(message: Message) -> str | None:
+    """Parse a command message and validate the task-id argument against UUIDv7 shape.
+
+    Splits on whitespace with a maximum of 1 split so ``/approve t-xxx trailing``
+    causes the candidate to be ``t-xxx trailing`` which fails TASK_ID_PATTERN,
+    correctly rejecting trailing garbage (Story 3.4 M1).
+
+    Returns the task-id string if valid, None otherwise.
+    Rejects uppercase hex, t-less IDs, and non-UUIDv7 version nibbles.
+
+    Stories 3.4, 3.16, 3.17, 3.18 all import this function — do NOT define
+    a local copy in any handler file.
+    """
+    parts = (message.text or "").split(None, 1)
+    if len(parts) < 2:
+        return None
+    candidate = parts[1]
+    return candidate if TASK_ID_PATTERN.match(candidate) else None
+
+
+__all__ = [
+    "TASK_ID_PATTERN",
+    "UUIDV7_BARE_RE",
+    "extract_task_id_from_message",
+    "idempotency_key_from_message",
+]

@@ -23,6 +23,8 @@ from typing import Literal
 import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from telegram_gateway.handlers._keys import TASK_ID_PATTERN
+
 
 class CreateTaskResponseLocal(BaseModel):
     """Local mirror of registry-api's CreateTaskResponse (Story 2.9).
@@ -40,18 +42,57 @@ class CreateTaskResponseLocal(BaseModel):
     task_id: str
     event_id: str
     created_at: datetime
-    # Derived from X-Idempotency-Status response header (AC-7 / AC-10).
+    # Derived from response body first, then X-Idempotency-Status header (M3 fix).
     # "applied" = first successful submission; "replayed" = Telegram retry
-    # deduplicated by registry-api (FR28). Defaults to "applied" when the
-    # header is absent (e.g., older registry-api versions).
+    # deduplicated by registry-api (FR28). Defaults to "applied" when absent.
     idempotency_status: Literal["applied", "replayed"] = "applied"
+
+
+class DecisionResponseLocal(BaseModel):
+    """Local mirror of registry-api's eventual DecisionResponse (Story 6.4 owns server-side).
+
+    Forward-compatible shape pinned by 3.4's mocked tests; review-time validation
+    must align with 6.4's POST /v1/tasks/{id}/decisions response when that endpoint lands.
+    Source-of-truth: services/registry-api/src/registry_api/routes/tasks.py (Story 6.4).
+    Architecture note: local redefinition keeps cross-service contract as HTTP/JSON
+    (architecture.md:231) — same decision as CreateTaskResponseLocal (Story 3.3 AC-2).
+
+    TODO(story-6.4): verify field names match Story 6.4's serialised JSON keys.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    task_id: str
+    decision_id: str  # "d-<uuidv7>" per FR7 audit trail
+    action: Literal["approve", "reject", "stop", "retry"]
+    decided_at: datetime
+    # Derived from response body first, then X-Idempotency-Status header (M3 fix).
+    # "applied" = first successful submission; "replayed" = Telegram retry
+    # deduplicated by registry-api (FR28). Defaults to "applied" when absent.
+    idempotency_status: Literal["applied", "replayed"] = "applied"
+
+
+class RegistryResponseError(httpx.HTTPError):
+    """Raised when registry-api returns a 2xx response with an unexpected/malformed body.
+
+    Subclasses ``httpx.HTTPError`` so that handler catch-blocks for
+    ``httpx.HTTPError`` still capture it, but handlers can also catch
+    ``RegistryResponseError`` *before* the generic ``httpx.HTTPError``
+    branch to produce a more specific reply:
+    ``"⚠️ Registry returned an unexpected response. Logs captured."``
+
+    This distinguishes a malformed-200 body (bug in registry-api) from a
+    transient network failure (ReadTimeout etc.) — both previously rendered
+    as ``"⚠️ Could not reach registry"`` (H1).
+    """
 
 
 class RegistryAPIClient:
     """httpx-based client for registry-api endpoints used by Telegram handlers.
 
-    Wraps POST /v1/tasks. Constructor takes a pre-built AsyncClient (lifespan-owned,
-    reusable across requests — Story 3.1 H4 cache-once pattern).
+    Wraps POST /v1/tasks and POST /v1/tasks/{id}/decisions. Constructor takes a
+    pre-built AsyncClient (lifespan-owned, reusable across requests — Story 3.1 H4
+    cache-once pattern).
     """
 
     def __init__(self, *, http_client: httpx.AsyncClient) -> None:
@@ -98,8 +139,8 @@ class RegistryAPIClient:
             httpx.HTTPStatusError: On non-2xx responses with the raw httpx
                 ``Response`` attached so callers can inspect status and RFC 7807
                 body (architecture.md:228).
-            httpx.HTTPError:       On network / timeout errors, including when
-                registry-api returns a malformed body on a 2xx response.
+            RegistryResponseError: On 2xx responses with a malformed/unexpected body.
+            httpx.HTTPError:       On network / timeout errors.
         """
         headers: dict[str, str] = {
             "Idempotency-Key": idempotency_key,
@@ -117,14 +158,16 @@ class RegistryAPIClient:
         )
         response.raise_for_status()
 
-        # H2: wrap body parsing so shape failures route into handle_task's
-        # existing httpx.HTTPError catch rather than escaping as untyped exceptions.
+        # H2 / H1: wrap body parsing so shape failures route into handle_task's
+        # RegistryResponseError catch (before the generic httpx.HTTPError branch).
         try:
             data = response.json()
+            # M3: prefer body field, fall back to header.
+            raw_status = data.get("idempotency_status") or response.headers.get(
+                "X-Idempotency-Status", "applied"
+            )
             idempotency_status: Literal["applied", "replayed"] = (
-                "replayed"
-                if response.headers.get("X-Idempotency-Status") == "replayed"
-                else "applied"
+                "replayed" if raw_status == "replayed" else "applied"
             )
             return CreateTaskResponseLocal(
                 task_id=data["task_id"],
@@ -132,8 +175,9 @@ class RegistryAPIClient:
                 created_at=data["created_at"],
                 idempotency_status=idempotency_status,
             )
-        except (_json.JSONDecodeError, KeyError, ValidationError) as exc:
-            raise httpx.HTTPError(f"registry-api returned malformed body: {exc}") from exc
+        except (_json.JSONDecodeError, KeyError, ValidationError, ValueError) as exc:
+            # L6: ValueError included for datetime parse edge-cases.
+            raise RegistryResponseError(f"registry-api returned malformed body: {exc}") from exc
 
     async def submit_decision(
         self,
@@ -162,11 +206,12 @@ class RegistryAPIClient:
             :class:`DecisionResponseLocal` on HTTP 2xx.
 
         Raises:
+            ValueError:        If ``task_id`` does not match TASK_ID_PATTERN.
             httpx.HTTPStatusError: On non-2xx responses with the raw httpx
                 ``Response`` attached so callers can inspect status and RFC 7807
                 body (architecture.md:228).
-            httpx.HTTPError:       On network / timeout errors, including when
-                registry-api returns a malformed body on a 2xx response (H2).
+            RegistryResponseError: On 2xx responses with a malformed/unexpected body.
+            httpx.HTTPError:       On network / timeout errors.
 
         Note:
             POST /v1/tasks/{id}/decisions does NOT exist server-side yet.
@@ -175,6 +220,10 @@ class RegistryAPIClient:
             TODO(story-6.4): verify DecisionResponseLocal field names match
             Story 6.4's serialised JSON keys when that endpoint lands.
         """
+        # M11: validate task_id shape before making any HTTP call.
+        if not TASK_ID_PATTERN.match(task_id):
+            raise ValueError(f"Invalid task_id (does not match TASK_ID_PATTERN): {task_id!r}")
+
         headers: dict[str, str] = {
             "Idempotency-Key": idempotency_key,
             "X-Actor-Id": operator_actor_id,
@@ -194,14 +243,16 @@ class RegistryAPIClient:
         )
         response.raise_for_status()
 
-        # H2: wrap body parsing so shape failures route into handle_approve's
-        # existing httpx.HTTPError catch rather than escaping as untyped exceptions.
+        # H2 / H1: wrap body parsing so shape failures route into handle_approve's
+        # RegistryResponseError catch (before the generic httpx.HTTPError branch).
         try:
             data = response.json()
+            # M3: prefer body field, fall back to header.
+            raw_status = data.get("idempotency_status") or response.headers.get(
+                "X-Idempotency-Status", "applied"
+            )
             idempotency_status: Literal["applied", "replayed"] = (
-                "replayed"
-                if response.headers.get("X-Idempotency-Status") == "replayed"
-                else "applied"
+                "replayed" if raw_status == "replayed" else "applied"
             )
             return DecisionResponseLocal(
                 task_id=data["task_id"],
@@ -210,29 +261,14 @@ class RegistryAPIClient:
                 decided_at=data["decided_at"],
                 idempotency_status=idempotency_status,
             )
-        except (_json.JSONDecodeError, KeyError, ValidationError) as exc:
-            raise httpx.HTTPError(f"registry-api returned malformed body: {exc}") from exc
+        except (_json.JSONDecodeError, KeyError, ValidationError, ValueError) as exc:
+            # L6: ValueError included for datetime parse edge-cases.
+            raise RegistryResponseError(f"registry-api returned malformed body: {exc}") from exc
 
 
-class DecisionResponseLocal(BaseModel):
-    """Local mirror of registry-api's eventual DecisionResponse (Story 6.4 owns server-side).
-
-    Forward-compatible shape pinned by 3.4's mocked tests; review-time validation
-    must align with 6.4's POST /v1/tasks/{id}/decisions response when that endpoint lands.
-    Source-of-truth: services/registry-api/src/registry_api/routes/tasks.py (Story 6.4).
-    Architecture note: local redefinition keeps cross-service contract as HTTP/JSON
-    (architecture.md:231) — same decision as CreateTaskResponseLocal (Story 3.3 AC-2).
-
-    TODO(story-6.4): verify field names match Story 6.4's serialised JSON keys.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    task_id: str
-    decision_id: str  # "d-<uuidv7>" per FR7 audit trail
-    action: Literal["approve", "reject", "stop", "retry"]
-    decided_at: datetime
-    idempotency_status: Literal["applied", "replayed"] = "applied"
-
-
-__all__ = ["CreateTaskResponseLocal", "DecisionResponseLocal", "RegistryAPIClient"]
+__all__ = [
+    "CreateTaskResponseLocal",
+    "DecisionResponseLocal",
+    "RegistryAPIClient",
+    "RegistryResponseError",
+]
