@@ -1,15 +1,15 @@
 """RegistryAPIClient — httpx-based client for registry-api endpoints (Story 3.3 AC-1, AC-2).
 
-Wraps POST /v1/tasks and POST /v1/tasks/{id}/decisions. The client holds a
-pre-built ``httpx.AsyncClient`` that is constructed ONCE at lifespan startup
-(Story 3.1 H4 cache-once pattern) and reused across all handler invocations.
-Never construct a new ``AsyncClient`` per-request.
+Wraps POST /v1/tasks, POST /v1/tasks/{id}/decisions, and GET /v1/health.
+The client holds a pre-built ``httpx.AsyncClient`` that is constructed ONCE at
+lifespan startup (Story 3.1 H4 cache-once pattern) and reused across all handler
+invocations. Never construct a new ``AsyncClient`` per-request.
 
 Architecture boundary
 ---------------------
-``CreateTaskResponseLocal`` and ``DecisionResponseLocal`` are redefined here
-rather than imported from ``registry_api.routes.tasks``.  This keeps the
-transport boundary clean: the cross-service contract is HTTP/JSON
+``CreateTaskResponseLocal``, ``DecisionResponseLocal``, and ``HealthResponseLocal``
+are redefined here rather than imported from ``registry_api.routes.*``.  This keeps
+the transport boundary clean: the cross-service contract is HTTP/JSON
 (architecture.md:231), not shared Python objects.  See AC-2 doc-comment for
 details.
 """
@@ -21,7 +21,7 @@ from datetime import datetime
 from typing import Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from telegram_gateway.handlers._keys import TASK_ID_PATTERN
 
@@ -70,6 +70,25 @@ class DecisionResponseLocal(BaseModel):
     # "applied" = first successful submission; "replayed" = Telegram retry
     # deduplicated by registry-api (FR28). Defaults to "applied" when absent.
     idempotency_status: Literal["applied", "replayed"] = "applied"
+
+
+class HealthResponseLocal(BaseModel):
+    """Local mirror of registry-api's eventual GET /v1/health response.
+
+    FR17 fields: registry status, worker status, clawhip queue depth, platform version.
+    Forward-compatible shape pinned by 3.5's mocked tests; alignment with the
+    eventual server-side endpoint owner (TBD — gap in current epic plan; see Dev Notes).
+
+    TODO(story-TBD): verify field names match the server-side GET /v1/health response
+    when that endpoint lands. Most likely owner: Story 6.x middleware stack or a new
+    platform-observability story between Epics 5 and 7.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    registry_status: Literal["healthy", "degraded", "unhealthy"]
+    worker_status: Literal["idle", "busy", "unhealthy"]
+    clawhip_queue_depth: int = Field(ge=0)
+    version: str  # e.g., "v1.2.3"
 
 
 class RegistryResponseError(httpx.HTTPError):
@@ -265,10 +284,63 @@ class RegistryAPIClient:
             # L6: ValueError included for datetime parse edge-cases.
             raise RegistryResponseError(f"registry-api returned malformed body: {exc}") from exc
 
+    async def get_platform_health(
+        self,
+        *,
+        request_id: str | None = None,
+    ) -> HealthResponseLocal:
+        """GET /v1/health and return a typed local response model.
+
+        No request body. No Idempotency-Key header — GET is idempotent by HTTP
+        semantics (RFC 7231 §4.2.2); Telegram retries safely re-fetch the health
+        summary without duplication concerns. This is the FIRST handler in the bot
+        that omits an idempotency key; document the reason explicitly.
+
+        Args:
+            request_id: UUIDv7 request correlation id. Forwarded as X-Request-ID.
+
+        Returns:
+            HealthResponseLocal on HTTP 2xx.
+
+        Raises:
+            RegistryResponseError: On 2xx with malformed/unexpected body (Story 3.4 H1).
+            httpx.HTTPStatusError: On non-2xx responses.
+            httpx.HTTPError:       On network / timeout errors.
+
+        Note:
+            GET /v1/health does NOT exist server-side yet. No story owner has been
+            assigned (gap in epic plan). Until then a live call returns 404.
+            Tests mock the transport layer and are runnable today.
+        """
+        headers: dict[str, str] = {}
+        if request_id is not None:
+            headers["X-Request-ID"] = request_id
+
+        response = await self._http_client.get(
+            "/v1/health",
+            headers=headers,
+        )
+        response.raise_for_status()
+
+        # H1: wrap body parsing so shape failures raise RegistryResponseError
+        # (before the generic httpx.HTTPError branch in handle_ping).
+        try:
+            data = response.json()
+            return HealthResponseLocal(
+                registry_status=data["registry_status"],
+                worker_status=data["worker_status"],
+                clawhip_queue_depth=data["clawhip_queue_depth"],
+                version=data["version"],
+            )
+        except (_json.JSONDecodeError, KeyError, ValidationError, ValueError) as exc:
+            # L6: ValueError included for edge-cases.
+            raise RegistryResponseError(f"registry-api returned malformed body: {exc}") from exc
+
 
 __all__ = [
     "CreateTaskResponseLocal",
     "DecisionResponseLocal",
+    "HealthResponseLocal",
     "RegistryAPIClient",
     "RegistryResponseError",
 ]

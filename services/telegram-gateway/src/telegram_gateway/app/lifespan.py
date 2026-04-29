@@ -100,7 +100,7 @@ from secret_hygiene import flush_pending_emissions
 
 from telegram_gateway.app.config import TelegramSettings
 from telegram_gateway.app.middleware import AllowlistMiddleware
-from telegram_gateway.handlers import make_approve_router, make_task_router
+from telegram_gateway.handlers import make_approve_router, make_ping_router, make_task_router
 from telegram_gateway.handlers.registry_client import RegistryAPIClient
 
 # Drain timeout for in-flight ``secret.accessed`` emission tasks on
@@ -305,6 +305,7 @@ def make_lifespan(
             # across test lifespans that each build a new Dispatcher.
             dp.include_router(make_task_router())
             dp.include_router(make_approve_router())
+            dp.include_router(make_ping_router())
 
             # Assign app.state ONLY after set_webhook succeeds
             # (review-fix M8). If set_webhook raises, the stack unwinds
