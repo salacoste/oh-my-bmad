@@ -68,8 +68,6 @@ from __future__ import annotations
 
 import html
 import logging
-import re as _re
-import uuid
 
 import httpx
 from aiogram import Bot, Router
@@ -77,56 +75,15 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from events.ids import new_request_id
 
+from telegram_gateway.handlers import _keys
 from telegram_gateway.handlers.registry_client import RegistryAPIClient
 
 _log = logging.getLogger("telegram_gateway.handlers.task_command")
 
-# Fixed namespace UUID that encodes the "tg:" Telegram-service discriminator.
-# Generated once and hardcoded so the idempotency key derivation is stable
-# across restarts / replicas / code changes.  A Slack gateway using the same
-# numeric (chat_id, message_id) pairs would use a *different* namespace UUID,
-# guaranteeing cross-service non-collision.
-#
-# Value: urn:uuid:6ba7b810-9dad-11d1-80b4-00c04fd430c8 (URL namespace from
-# RFC 4122 §4.3, reused here as a stable base — the actual seed string
-# "{chat_id}:{message_id}" makes it Telegram-specific via UUIDv5 derivation).
-_TELEGRAM_NAMESPACE_UUID = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
-
-# Compiled regex for the registry-api IdempotencyKeyMiddleware UUIDv7 shape.
-# Used in tests to assert keys pass the middleware check without calling it.
-_UUIDV7_BARE_RE = _re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-)
-
-
-def _idempotency_key_from_message(message: Message) -> str:
-    """Derive a deterministic UUIDv7-shaped idempotency key from (chat_id, message_id).
-
-    Strategy (review-fix H1 / FR28):
-
-    1. Compute ``uuid.uuid5(_TELEGRAM_NAMESPACE_UUID, f"{chat_id}:{message_id}")``.
-    2. Reshape the version nibble to ``7`` and the variant nibble to ``10xx``
-       (standard RFC 4122 variant) so the result satisfies registry-api's
-       ``IdempotencyKeyMiddleware`` UUIDv7 regex.
-
-    The reshape is deterministic: the same ``(chat_id, message_id)`` always
-    produces the same key.  Different pairs produce different keys (UUIDv5
-    guarantees collision-resistance within the namespace).
-
-    The namespace UUID encodes the ``"tg:"`` Telegram-service discriminator
-    (L4): a Slack gateway with identical numeric ids would use a different
-    namespace and therefore generate non-colliding keys.
-
-    Negative chat_id values (Telegram supergroups start at -100…) are
-    embedded in the seed string as ``"-100…"`` and become part of the SHA-1
-    input — the UUID bytes carry no hyphen representation of the sign (L6).
-    """
-    seed = uuid.uuid5(_TELEGRAM_NAMESPACE_UUID, f"{message.chat.id}:{message.message_id}")
-    # Reshape to UUIDv7: set version nibble to 7, variant nibble to 10xx.
-    reshaped = bytearray(seed.bytes)
-    reshaped[6] = (reshaped[6] & 0x0F) | 0x70  # version = 7
-    reshaped[8] = (reshaped[8] & 0x3F) | 0x80  # variant = 10xx
-    return str(uuid.UUID(bytes=bytes(reshaped)))
+# Re-export for backward-compat with tests that import _UUIDV7_BARE_RE and
+# _idempotency_key_from_message from task_command (AC-15 / Story 3.4 Task 1).
+_UUIDV7_BARE_RE = _keys.UUIDV7_BARE_RE
+_idempotency_key_from_message = _keys.idempotency_key_from_message
 
 
 def _format_http_error(exc: httpx.HTTPStatusError) -> str:

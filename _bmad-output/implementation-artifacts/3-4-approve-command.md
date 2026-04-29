@@ -1,6 +1,6 @@
 # Story 3.4: /approve command (Bootstrap Minimum #2)
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 

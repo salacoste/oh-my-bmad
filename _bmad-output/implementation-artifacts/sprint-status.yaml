@@ -90,7 +90,7 @@ development_status:
   3-1-aiogram-bootstrap-webhook: done
   3-2-allowlist-middleware: done
   3-3-task-command: done
-  3-4-approve-command: ready-for-dev
+  3-4-approve-command: in-progress
   3-5-ping-command: backlog
   3-6-fastapi-middleware-stack: backlog
   3-7-rfc7807-error-envelope: backlog

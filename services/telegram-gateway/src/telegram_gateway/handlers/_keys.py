@@ -1,0 +1,85 @@
+"""Shared idempotency-key helpers for all decision-command handlers (Story 3.4+).
+
+Public helpers shared by /approve, /stop, /reject, /retry handlers
+(Stories 3.4, 3.16, 3.17, 3.18).
+
+Idempotency-key derivation
+--------------------------
+Same UUIDv5→UUIDv7 reshape as Story 3.3 H1.  The key is a UUIDv5 derived
+from _TELEGRAM_NAMESPACE_UUID and seed "{chat_id}:{message_id}", then
+**reshaped** so the version nibble reads ``7`` and the variant nibble reads
+``10xx``.  This satisfies registry-api's IdempotencyKeyMiddleware UUIDv7
+regex::
+
+    ^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+
+WARNING: do NOT revert to the plain-string format "telegram-{chat_id}-{message_id}".
+That format fails the regex and silently creates duplicate tasks on Telegram
+retries (Story 3.3 H1).
+
+Task-id validation
+------------------
+TASK_ID_PATTERN validates the UUIDv7 shape with "t-" prefix per architecture
+naming rules.  Future stories must import from here, not define locally.
+"""
+
+from __future__ import annotations
+
+import re
+import uuid
+
+from aiogram.types import Message
+
+# Fixed namespace UUID encoding the "tg:" Telegram-service discriminator.
+# Reuses RFC 4122 URL namespace UUID (6ba7b810-9dad-11d1-80b4-00c04fd430c8)
+# as a stable base — the seed string "{chat_id}:{message_id}" makes it
+# Telegram-specific via UUIDv5 derivation.  A Slack gateway with the same
+# numeric ids would use a different namespace UUID.
+_TELEGRAM_NAMESPACE_UUID = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+
+# Compiled regex for the registry-api IdempotencyKeyMiddleware UUIDv7 shape.
+# Reused by tests to assert keys pass middleware validation without calling it.
+UUIDV7_BARE_RE: re.Pattern[str] = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
+
+# Compiled regex for the "t-<uuidv7>" task-id format.
+# All handlers that accept a <task-id> argument MUST import from here.
+TASK_ID_PATTERN: re.Pattern[str] = re.compile(
+    r"^t-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
+
+
+def idempotency_key_from_message(message: Message) -> str:
+    """Derive a deterministic UUIDv7-shaped idempotency key from (chat_id, message_id).
+
+    Strategy (Story 3.3 H1 / FR28):
+
+    1. Compute ``uuid.uuid5(_TELEGRAM_NAMESPACE_UUID, f"{chat_id}:{message_id}")``.
+    2. Reshape the version nibble to ``7`` and the variant nibble to ``10xx``
+       (standard RFC 4122 variant) so the result satisfies registry-api's
+       ``IdempotencyKeyMiddleware`` UUIDv7 regex.
+
+    The reshape is deterministic: the same ``(chat_id, message_id)`` always
+    produces the same key.  Different pairs produce different keys (UUIDv5
+    guarantees collision-resistance within the namespace).
+
+    The seed is ``"{chat_id}:{message_id}"`` — NOT ``"{chat_id}:{message_id}:{action}"``.
+    The ``message_id`` is unique per Telegram message; the command IS that message.
+    Adding action to the seed would allow a client bug to re-use the same message
+    with a different action and bypass idempotency.
+
+    WARNING: do not revert to the plain-string format
+    "telegram-{chat_id}-{message_id}" — that format fails registry-api's
+    IdempotencyKeyMiddleware UUIDv7 regex and silently creates duplicate tasks
+    on Telegram retries (Story 3.3 H1).
+    """
+    seed = uuid.uuid5(_TELEGRAM_NAMESPACE_UUID, f"{message.chat.id}:{message.message_id}")
+    # Reshape to UUIDv7: set version nibble to 7, variant nibble to 10xx.
+    reshaped = bytearray(seed.bytes)
+    reshaped[6] = (reshaped[6] & 0x0F) | 0x70  # version = 7
+    reshaped[8] = (reshaped[8] & 0x3F) | 0x80  # variant = 10xx
+    return str(uuid.UUID(bytes=bytes(reshaped)))
+
+
+__all__ = ["TASK_ID_PATTERN", "UUIDV7_BARE_RE", "idempotency_key_from_message"]
