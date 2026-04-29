@@ -75,6 +75,7 @@ import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 
+import httpx
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -92,6 +93,8 @@ from secret_hygiene import flush_pending_emissions
 
 from telegram_gateway.app.config import TelegramSettings
 from telegram_gateway.app.middleware import AllowlistMiddleware
+from telegram_gateway.handlers import make_task_router
+from telegram_gateway.handlers.registry_client import RegistryAPIClient
 
 # Drain timeout for in-flight ``secret.accessed`` emission tasks on
 # shutdown. Matches the registry-api precedent (Story 2.9 + 2.16 H6).
@@ -264,6 +267,29 @@ def make_lifespan(
                 drop_pending_updates=True,
             )
 
+            # Story 3.3 AC-4: construct the long-lived httpx.AsyncClient ONCE
+            # (Story 3.1 H4 cache-once pattern — never construct per-request).
+            # push_async_callback registers aclose BEFORE app.state assignment
+            # so a failed set_webhook never leaves a dangling client.
+            http_client = httpx.AsyncClient(
+                base_url=str(audited.registry_api_base_url),
+                timeout=httpx.Timeout(connect=2.0, read=3.0, write=2.0, pool=2.0),
+            )
+            stack.push_async_callback(http_client.aclose)
+            registry_client = RegistryAPIClient(
+                base_url=str(audited.registry_api_base_url),
+                http_client=http_client,
+            )
+
+            # Story 3.3 AC-5: register the /task command router and inject
+            # registry_client via aiogram v3 workflow_data so handlers can
+            # declare it as a parameter by name.
+            # make_task_router() creates a fresh Router per lifespan so
+            # aiogram's "already attached" guard never fires across test
+            # lifespans that each build a new Dispatcher.
+            dp.include_router(make_task_router())
+            dp.workflow_data.update({"registry_client": registry_client})
+
             # Assign app.state ONLY after set_webhook succeeds
             # (review-fix M8). If set_webhook raises, the stack unwinds
             # without leaving partial state visible to any handler.
@@ -273,6 +299,8 @@ def make_lifespan(
             app.state.writer = writer
             app.state.expected_webhook_secret_bytes = expected_webhook_secret_bytes
             app.state._dispatch_tasks = dispatch_tasks
+            app.state.http_client = http_client
+            app.state.registry_client = registry_client
 
             # AC-5 contract: log line is verbatim "Webhook set · ready" and
             # the only structured field is the path. NEVER include the URL

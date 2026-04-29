@@ -1,6 +1,6 @@
 # Story 3.3: /task command (Bootstrap Minimum #1)
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -186,42 +186,42 @@ This is the first story that calls an external HTTP service from the telegram-ga
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: `RegistryAPIClient` + local response model** (AC: #1, #2)
-  - [ ] New file `services/telegram-gateway/src/telegram_gateway/handlers/registry_client.py`.
-  - [ ] Define `CreateTaskResponseLocal` with `task_id`, `event_id`, `created_at`, `idempotency_status` fields.
-  - [ ] `RegistryAPIClient.__init__` accepts `base_url: str` and `http_client: httpx.AsyncClient`.
-  - [ ] `create_task` POSTs `/v1/tasks`, sets `Idempotency-Key` + `X-Request-ID` headers, returns typed model.
-  - [ ] Parses `X-Idempotency-Status` response header into `idempotency_status` field.
+- [x] **Task 1: `RegistryAPIClient` + local response model** (AC: #1, #2)
+  - [x] New file `services/telegram-gateway/src/telegram_gateway/handlers/registry_client.py`.
+  - [x] Define `CreateTaskResponseLocal` with `task_id`, `event_id`, `created_at`, `idempotency_status` fields.
+  - [x] `RegistryAPIClient.__init__` accepts `base_url: str` and `http_client: httpx.AsyncClient`.
+  - [x] `create_task` POSTs `/v1/tasks`, sets `Idempotency-Key` + `X-Request-ID` headers, returns typed model.
+  - [x] Parses `X-Idempotency-Status` response header into `idempotency_status` field.
 
-- [ ] **Task 2: `TelegramSettings` extension + lifespan wiring** (AC: #3, #4)
-  - [ ] Add `registry_api_base_url: HttpUrl` field to `config.py` with docker-compose default.
-  - [ ] Extend `lifespan.py`: construct `httpx.AsyncClient`, push `aclose` callback, build `RegistryAPIClient`, store both on `app.state`.
-  - [ ] Register `task_command.router` on `dp` and inject `registry_client` via `dp.workflow_data`.
-  - [ ] Append `REGISTRY_API_BASE_URL=...` line to `.env.example`.
+- [x] **Task 2: `TelegramSettings` extension + lifespan wiring** (AC: #3, #4)
+  - [x] Add `registry_api_base_url: HttpUrl` field to `config.py` with docker-compose default.
+  - [x] Extend `lifespan.py`: construct `httpx.AsyncClient`, push `aclose` callback, build `RegistryAPIClient`, store both on `app.state`.
+  - [x] Register `task_command.router` on `dp` and inject `registry_client` via `dp.workflow_data`.
+  - [x] Append `REGISTRY_API_BASE_URL=...` line to `.env.example`.
 
-- [ ] **Task 3: `/task` handler + helpers** (AC: #5, #6, #7, #8, #10, #11)
-  - [ ] New file `services/telegram-gateway/src/telegram_gateway/handlers/task_command.py`.
-  - [ ] `_idempotency_key_from_message` helper function.
-  - [ ] `_format_http_error` function covering 409 / 4xx / 5xx cases, RFC 7807 `detail` parsing.
-  - [ ] Handler replies with HTML-mode `<code>` tag; appends `" (retry deduped)"` on replay.
-  - [ ] Handler ALWAYS returns normally (never propagates to Telegram webhook — Story 3.1 M3 pattern).
-  - [ ] Module docstring documents: no `task.created` emission from bot (AC-11), idempotency ownership (AC-10).
+- [x] **Task 3: `/task` handler + helpers** (AC: #5, #6, #7, #8, #10, #11)
+  - [x] New file `services/telegram-gateway/src/telegram_gateway/handlers/task_command.py`.
+  - [x] `_idempotency_key_from_message` helper function.
+  - [x] `_format_http_error` function covering 409 / 4xx / 5xx cases, RFC 7807 `detail` parsing.
+  - [x] Handler replies with HTML-mode `<code>` tag; appends `" (retry deduped)"` on replay.
+  - [x] Handler ALWAYS returns normally (never propagates to Telegram webhook — Story 3.1 M3 pattern).
+  - [x] Module docstring documents: no `task.created` emission from bot (AC-11), idempotency ownership (AC-10).
 
-- [ ] **Task 4: Populate `handlers/__init__.py`** (AC: #5)
-  - [ ] Export `router` from `task_command.py` so `lifespan.py` imports cleanly.
-  - [ ] Update module docstring to reflect Story 3.3 content.
+- [x] **Task 4: Populate `handlers/__init__.py`** (AC: #5)
+  - [x] Export `make_task_router` from `task_command.py` so `lifespan.py` imports cleanly.
+  - [x] Update module docstring to reflect Story 3.3 content.
 
-- [ ] **Task 5: Co-located tests** (AC: #9, #12, #13)
-  - [ ] `test_task_command.py` with ≥12 tests per AC-12 breakdown.
-  - [ ] `test_registry_client.py` (or inline in `test_task_command.py`) for `RegistryAPIClient` unit tests.
-  - [ ] Verify `check_imports` gate by confirming no `registry_api.*` import in gateway code.
-  - [ ] Mark `test_task_handler_latency_under_p95_budget` with `@pytest.mark.slow`.
+- [x] **Task 5: Co-located tests** (AC: #9, #12, #13)
+  - [x] `test_task_command.py` with ≥12 tests per AC-12 breakdown (20 tests total, 19 non-slow).
+  - [x] `RegistryAPIClient` unit tests inline in `test_task_command.py`.
+  - [x] Verify `check_imports` gate by confirming no `registry_api.*` import in gateway code.
+  - [x] Mark `test_task_handler_latency_under_p95_budget` with `@pytest.mark.slow`.
 
-- [ ] **Task 6: Gates + atomic commit** (AC: #13, #15)
-  - [ ] `just lint` 8/8 green INDEPENDENTLY (Epic-2-retro AI #1).
-  - [ ] `just test` (excluding slow) target ≥681 pass.
-  - [ ] `just bootstrap-verify` no version churn.
-  - [ ] Single atomic commit with the AC-15 title.
+- [x] **Task 6: Gates + atomic commit** (AC: #13, #15)
+  - [x] `just lint` 8/8 green INDEPENDENTLY (Epic-2-retro AI #1).
+  - [x] `just test` (excluding slow) 701 passed (+20 from 681 baseline).
+  - [x] `just bootstrap-verify` no version churn.
+  - [x] Single atomic commit with the AC-15 title.
 
 ## Dev Notes
 
@@ -316,16 +316,37 @@ aiogram v3's `dp.workflow_data` is a dict injected into every handler call. Sett
 
 ### Agent Model Used
 
-_to be filled by dev agent_
+claude-sonnet-4-6 (executor agent)
 
 ### Debug Log References
 
-_to be filled by dev agent_
+- **Router singleton issue**: `router = Router()` at module level caused `RuntimeError: Router is already attached` when multiple lifespan test fixtures each created a new `Dispatcher` and called `dp.include_router(task_router)`. Fixed by replacing the module-level singleton with a `make_task_router()` factory function called once per lifespan. The factory creates a fresh `Router()` per dispatcher instance.
+- **mypy default type**: `registry_api_base_url: HttpUrl = Field(default="http://registry-api:8080", ...)` caused `Incompatible types in assignment` because mypy sees the string literal as `str`, not `HttpUrl`. Fixed by using `HttpUrl("http://registry-api:8080")` as the default value.
 
 ### Completion Notes List
 
-_to be filled by dev agent_
+- Task 1: `RegistryAPIClient` + `CreateTaskResponseLocal` in `handlers/registry_client.py`; local model redefinition (no cross-service import); `idempotency_status` field derived from `X-Idempotency-Status` header.
+- Task 2: `TelegramSettings.registry_api_base_url` field added; `lifespan.py` wired with `httpx.AsyncClient` + `RegistryAPIClient` in `AsyncExitStack`; `dp.workflow_data` injection; `.env.example` updated.
+- Task 3: `/task` handler in `handlers/task_command.py`; `_idempotency_key_from_message` + `_format_http_error` helpers; `make_task_router()` factory (not module-level singleton) to avoid aiogram "already attached" error across test lifespans.
+- Task 4: `handlers/__init__.py` exports `make_task_router`; docstring updated.
+- Task 5: 20 tests in `test_task_command.py` (19 non-slow + 1 `@pytest.mark.slow` NFR-P2 latency); all RegistryAPIClient + handler paths covered using `httpx.MockTransport`.
+- Task 6: `just lint` 8/8, `just test` 701 (+20), `just check-gates-self-test` 3/3, `just bootstrap-verify` clean.
 
 ### File List
 
-_to be filled by dev agent_
+**New (3):**
+- `services/telegram-gateway/src/telegram_gateway/handlers/registry_client.py`
+- `services/telegram-gateway/src/telegram_gateway/handlers/task_command.py`
+- `services/telegram-gateway/src/telegram_gateway/test_task_command.py`
+
+**Modified (4):**
+- `services/telegram-gateway/src/telegram_gateway/handlers/__init__.py`
+- `services/telegram-gateway/src/telegram_gateway/app/config.py`
+- `services/telegram-gateway/src/telegram_gateway/app/lifespan.py`
+- `.env.example`
+
+## Change Log
+
+| Date | Version | Description | Author |
+|------|---------|-------------|--------|
+| 2026-04-27 | 1.0 | Story 3.3 implemented — `/task` command (Bootstrap Minimum #1): `RegistryAPIClient`, `httpx.AsyncClient` lifespan wiring, `make_task_router()` factory, 20 tests (+20 vs baseline). | claude-sonnet-4-6 (executor agent) |

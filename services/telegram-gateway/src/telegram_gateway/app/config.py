@@ -175,6 +175,20 @@ class TelegramSettings(AuditedBaseSettings):
         default=Path("/var/lib/oh-my-bmad/events"),
         validation_alias="EVENT_LOG_DIR",
     )
+    # Story 3.3 / FR1 / FR28: base URL for registry-api HTTP calls.
+    # Default points at the docker-compose service name (internal network,
+    # HTTP is fine for intra-compose traffic — no HTTPS requirement).
+    # Override for non-compose deployments, e.g. REGISTRY_API_BASE_URL=http://localhost:8080.
+    # Trailing slash is normalised away by httpx when joining paths.
+    registry_api_base_url: HttpUrl = Field(
+        default=HttpUrl("http://registry-api:8080"),
+        validation_alias="REGISTRY_API_BASE_URL",
+        description=(
+            "Base URL for registry-api HTTP calls. Default points at the "
+            "docker-compose service name. Override for non-compose deployments."
+        ),
+    )
+
     # Story 3.2 / FR11 / NFR-S4: allowlist of Telegram user ids.
     # Closed-by-default — empty frozenset rejects every inbound update
     # (including the operator's own id). The lifespan emits a startup
