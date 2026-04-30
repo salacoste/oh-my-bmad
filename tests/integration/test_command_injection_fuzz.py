@@ -758,7 +758,14 @@ _BOT_IDENTITY_HEADERS: frozenset[str] = frozenset(
 # Story 3.9 AC-5: chat_id + reply_to_message_id are now forwarded by
 # handle_task when the message carries them (always the case for bot-originating
 # commands — chat.id and message_id are always present on an aiogram Message).
+#
+# H9 review fix: relaxed from exact equality to subset check so future
+# fields (repo, hint, etc.) added to CreateTaskRequest do not trip the
+# injection-prevention assertion — safety is about content of KNOWN fields,
+# not exact key-set equality.  _FORBIDDEN_BODY_KEYS tracks fields that must
+# NEVER carry user-controlled content; populate as the platform develops.
 _EXPECTED_BODY_KEYS: frozenset[str] = frozenset({"title", "chat_id", "reply_to_message_id"})
+_FORBIDDEN_BODY_KEYS: frozenset[str] = frozenset()  # populated as the platform develops
 
 
 def _file_size(path: Path) -> int:
@@ -843,11 +850,15 @@ def _assert_input_safety(
     body_bytes = recorder.last_body or b""
     body_obj = _json.loads(body_bytes.decode("utf-8"))
     assert isinstance(body_obj, dict), f"body not a JSON object: {body_obj!r}"
-    # Story 3.8 review M22: exact key-set match. A future regression that
-    # smuggles the input into a different field would surface here.
-    assert set(body_obj.keys()) == _EXPECTED_BODY_KEYS, (
-        f"body keys mismatch: got {sorted(body_obj.keys())}, expected {sorted(_EXPECTED_BODY_KEYS)}"
+    # H9 review fix: subset check — required fields must all be present, but
+    # future fields (repo, hint, etc.) are permitted without tripping this gate.
+    assert _EXPECTED_BODY_KEYS.issubset(body_obj.keys()), (
+        f"required body keys missing: "
+        f"got {sorted(body_obj.keys())}, expected subset {sorted(_EXPECTED_BODY_KEYS)}"
     )
+    # H9: no forbidden fields may be present (empty today; populate as needed).
+    forbidden_found = _FORBIDDEN_BODY_KEYS.intersection(body_obj.keys())
+    assert not forbidden_found, f"forbidden body keys present: {sorted(forbidden_found)}"
     title_field = body_obj["title"]
     assert isinstance(title_field, str), (
         f"'title' field is not a JSON string: {type(title_field).__name__}"

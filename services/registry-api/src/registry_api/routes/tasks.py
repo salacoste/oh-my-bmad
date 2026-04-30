@@ -32,7 +32,7 @@ from events.ids import new_event_id, new_task_id
 from fastapi import APIRouter, Path, Request, Response
 from fastapi.exceptions import HTTPException
 from idempotency import IdempotencyCacheStore
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from registry_state.domain.event_types import (  # noqa: IMP001 — services→services allowed per AC-16
     TaskCreatedPayload,
 )
@@ -138,8 +138,18 @@ class CreateTaskRequest(BaseModel):
     repo: str | None = Field(default=None, max_length=2048)
     hint: str | None = Field(default=None, max_length=4096)
     # Story 3.9: Telegram thread binding (FR13).
-    chat_id: int | None = None
-    reply_to_message_id: int | None = None
+    # M13: chat_id=0 is rejected (Telegram never uses 0; returns 400 chat not found).
+    # L20: explicit BigInteger bounds guard against attacker-supplied oversized ints.
+    chat_id: int | None = Field(default=None, ge=-(2**63), le=(2**63) - 1)
+    # M13: reply_to_message_id must be strictly positive (Telegram message IDs ≥ 1).
+    reply_to_message_id: int | None = Field(default=None, gt=0)
+
+    @field_validator("chat_id")
+    @classmethod
+    def _chat_id_not_zero(cls, v: int | None) -> int | None:
+        if v == 0:
+            raise ValueError("chat_id must not be 0 — Telegram never uses chat_id=0")
+        return v
 
 
 class CreateTaskResponse(BaseModel):
@@ -178,9 +188,12 @@ class TaskResponse(BaseModel):
     Telegram-thread binding so outbound sinks (clawhip-daemon's
     TelegramSink) can dispatch progress events to the originating thread
     via HTTP — see Story 3.6 review N7 (HTTP-only cross-service contract).
+
+    L19: ``strict=True`` aligns with ``CreateTaskRequest`` — prevents silent
+    type coercion on round-trip serialization tests.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, strict=True)
 
     task_id: str
     status: str
@@ -191,8 +204,16 @@ class TaskResponse(BaseModel):
     last_event: LastEventOut | None
     next_commands: list[str]
     # Story 3.9: Telegram thread binding (FR13).
-    chat_id: int | None
-    reply_to_message_id: int | None
+    # L20: BigInteger bounds; M13: 0 rejected via validator below.
+    chat_id: int | None = Field(default=None, ge=-(2**63), le=(2**63) - 1)
+    reply_to_message_id: int | None = Field(default=None, gt=0)
+
+    @field_validator("chat_id")
+    @classmethod
+    def _chat_id_not_zero(cls, v: int | None) -> int | None:
+        if v == 0:
+            raise ValueError("chat_id must not be 0")
+        return v
 
 
 # ---------------------------------------------------------------------------

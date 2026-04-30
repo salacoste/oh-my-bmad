@@ -80,8 +80,17 @@ class TaskCreatedPayload(BaseModel):
     repo: str | None = Field(default=None, max_length=2048)
     hint: str | None = Field(default=None, max_length=4096)
     # Story 3.9: Telegram thread binding (FR13).
-    chat_id: int | None = None
-    reply_to_message_id: int | None = None
+    # M13: chat_id=0 rejected; L20: explicit BigInteger bounds.
+    chat_id: int | None = Field(default=None, ge=-(2**63), le=(2**63) - 1)
+    # M13: reply_to_message_id must be strictly positive (Telegram msg IDs ≥ 1).
+    reply_to_message_id: int | None = Field(default=None, gt=0)
+
+    @field_validator("chat_id")
+    @classmethod
+    def _chat_id_not_zero(cls, v: int | None) -> int | None:
+        if v == 0:
+            raise ValueError("chat_id must not be 0 — Telegram never uses chat_id=0")
+        return v
 
 
 class TaskPlanningStartedPayload(BaseModel):
@@ -347,10 +356,12 @@ class TelegramRejectedPayload(BaseModel):
 
 register("task.created", "1.0.0", TaskCreatedPayload)
 register("task.created", "1.0.1", TaskCreatedPayload)
-# Story 3.9 AC-11: additive minor bump for the chat_id + reply_to_message_id
-# Telegram-thread binding fields. Same payload model under both versions —
-# the new fields default to ``None`` so v1.0.0/v1.0.1 events continue to
-# deserialize unchanged (NFR-M3 additive-only).
+# Story 3.9 AC-11 / H7: register 1.1.0 here alongside 1.0.0/1.0.1. A
+# packages-side registration in events.schema_registry was attempted but
+# triggers a circular import (events.__init__ → registry_state.__init__ →
+# registry_state.adapters.event_log → events.EventEnvelope while the
+# events package is still being initialized). Service-side registration is
+# the single source of truth.
 register("task.created", "1.1.0", TaskCreatedPayload)
 register("task.planning.started", "1.0.0", TaskPlanningStartedPayload)
 register("task.planning.started", "1.0.1", TaskPlanningStartedPayload)

@@ -13,13 +13,17 @@ dependencies = [
     "httpx>=0.27",
     # Architecture.md:856 LOCK — 3× exponential-backoff retry on the
     # outbound sendMessage call.
-    "tenacity>=8.2",
+    # L7: pinned >=9.0 — lockfile ships 9.1.4; wait_exponential + wait_random
+    # API is stable across 8.x→9.x but we pin to the version in use.
+    "tenacity>=9.0",
     # Workspace deps: events for envelope/payload models;
     # secret-hygiene for the eventual AuditedSecret bot_token wrapper;
     # structlog wired identically to Stories 3.6 / 3.7 (carry-forward).
     "events",
     "secret-hygiene",
     "structlog>=24.1",
+    # M7: TTLCache for immutable Telegram binding lookups.
+    "cachetools>=5.3",
 ]
 
 [build-system]

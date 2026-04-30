@@ -183,6 +183,7 @@ async def test_send_to_thread_terminal_failure_emits_and_returns() -> None:
 
     assert call_count == 3  # all 3 attempts exhausted
     emit_mock.assert_called_once()  # sink.delivery_failed emission triggered
-    call_kwargs = emit_mock.call_args[0][0]
-    assert call_kwargs["sink_name"] == "telegram"
-    assert call_kwargs["consecutive_failures"] == 1
+    payload = emit_mock.call_args[0][0]
+    # H6 review fix: emit now receives a typed SinkDeliveryFailedPayload model.
+    assert payload.sink_name == "telegram"
+    assert payload.consecutive_failures == 1

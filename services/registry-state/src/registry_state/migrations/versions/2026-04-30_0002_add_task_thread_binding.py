@@ -13,6 +13,15 @@ Story 3.9 AC-2 / AC-11 — additive (NFR-M3) migration adding two nullable
 Both nullable so pre-3.9 rows and non-Telegram-originated tasks remain
 valid. Zero-downtime: ``ADD COLUMN ... NULL`` in SQLite is an in-place
 metadata-only change that does not rewrite existing rows.
+
+L14 — IMPORTANT: registry-state MUST be stopped before running this migration
+(FR26 single-writer constraint). Running ``alembic upgrade`` while registry-state
+is writing will result in SQLite ``database is locked`` errors.
+
+L13 — Scaling note: ``chat_id`` and ``reply_to_message_id`` columns have no
+index in this migration. Queries filtering or joining on ``chat_id`` (e.g. Story
+3.10+ broadcast-to-chat features) will full-table-scan at scale. Add a covering
+index in a future migration when that access pattern is implemented.
 """
 
 from __future__ import annotations
@@ -39,5 +48,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("tasks", "reply_to_message_id")
-    op.drop_column("tasks", "chat_id")
+    # L6: wrap in batch_alter_table for SQLite < 3.35 compatibility
+    # (older SQLite does not support DROP COLUMN directly).
+    with op.batch_alter_table("tasks") as batch_op:
+        batch_op.drop_column("reply_to_message_id")
+        batch_op.drop_column("chat_id")

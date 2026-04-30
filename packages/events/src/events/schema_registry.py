@@ -92,3 +92,12 @@ def unregister_all() -> None:
     """
     REGISTRY.clear()
     _rebuild_types_cache()
+
+
+# Story 3.9 AC-11 / H7 NOTE: ``task.created`` schema versions (1.0.0, 1.0.1,
+# 1.1.0) are all registered by ``registry_state.domain.event_types`` at its
+# own module-load time. A deferred packages→services import here would
+# trigger a circular-import cycle (``events.__init__`` is still in flight
+# when ``registry_state.adapters.event_log`` runs ``from events import
+# EventEnvelope``). The service-side registration is the single source of
+# truth; this module exposes only the registry primitive.
