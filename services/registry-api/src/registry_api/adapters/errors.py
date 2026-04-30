@@ -206,26 +206,40 @@ async def handle_validation_error(request: Request, exc: Exception) -> JSONRespo
     detail = "; ".join(f"{' -> '.join(str(loc) for loc in e['loc'])}: {e['msg']}" for e in errors)
 
     # Story 3.7 AC-3: surface per-field errors as a structured list in
-    # ``extensions["errors"]`` so consumers (Telegram renderer / Console CLI
-    # Story 4.5) can render bullet lists instead of parsing the flat
-    # ``detail`` string. Pydantic v2's ``errors()`` may include
+    # ``extensions["validation_errors"]`` so consumers (Telegram renderer /
+    # Console CLI Story 4.5) can render bullet lists instead of parsing the
+    # flat ``detail`` string. Pydantic v2's ``errors()`` may include
     # non-JSON-serializable values (e.g. raw ``bytes`` in ``input``); the
     # ``type`` / ``msg`` / ``loc`` fields used here are all str/scalar so
     # ``str(...)`` coercion is sufficient. We wrap any ``bytes`` defensively
     # via ``repr(...)`` so a ``model_dump()`` JSON-encode never crashes.
+    #
+    # Story 3.7 review H4: nested under "validation_errors" (NOT "errors") to
+    # avoid future namespace collisions in extensions; platform-validation-
+    # error-shape is a strict {loc, msg, type} subset of Pydantic v2's
+    # errors() output (input/ctx/url intentionally dropped per Story 3.7
+    # review L18 — re-add if downstream consumers need them).
+    # Story 3.7 review M6: defensive ``e.get(...)`` to tolerate malformed
+    # error entries that may be missing ``loc`` / ``msg``.
     errors_list: list[dict[str, Any]] = []
     for e in errors:
         loc_list: list[str] = []
-        for p in e["loc"]:
+        for p in e.get("loc", ()):
             loc_list.append(repr(p) if isinstance(p, bytes) else str(p))
-        msg_value: Any = e["msg"]
+        msg_value: Any = e.get("msg", "")
         msg_str = repr(msg_value) if isinstance(msg_value, bytes) else str(msg_value)
         type_value: Any = e.get("type", "")
         type_str = repr(type_value) if isinstance(type_value, bytes) else str(type_value)
         errors_list.append({"loc": loc_list, "msg": msg_str, "type": type_str})
 
-    existing = _build_idempotency_extensions(request) or {}
-    existing["errors"] = errors_list
+    # Story 3.7 review H1: defensive ``dict(...)`` copy guards against any
+    # future caching of the helper's return value (currently always a fresh
+    # dict, but the renderer must not rely on that).
+    existing = dict(_build_idempotency_extensions(request) or {})
+    # Story 3.7 review M9: only set the key when the list is non-empty so
+    # the wire is not polluted with ``"validation_errors": []``.
+    if errors_list:
+        existing["validation_errors"] = errors_list
 
     problem = ProblemDetails(
         type=_PROBLEM_TYPE_VALIDATION,
@@ -233,7 +247,7 @@ async def handle_validation_error(request: Request, exc: Exception) -> JSONRespo
         status=422,
         detail=detail,
         instance=str(request.url),
-        extensions=existing,
+        extensions=existing or None,
     )
     return JSONResponse(
         content=problem.model_dump(exclude_none=True),
@@ -277,6 +291,7 @@ async def handle_internal_error(request: Request, exc: Exception) -> JSONRespons
 
 __all__ = [
     "ProblemDetails",
+    "_PROBLEM_TYPE_DEFAULT",
     "_PROBLEM_TYPE_IDEMPOTENCY_COLLISION",
     "_PROBLEM_TYPE_INTERNAL",
     "_PROBLEM_TYPE_NOT_FOUND",

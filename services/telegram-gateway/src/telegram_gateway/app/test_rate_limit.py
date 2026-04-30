@@ -785,56 +785,118 @@ class TestRateLimitTokenBucketMath:
 # ---------------------------------------------------------------------------
 
 
+def _find_repo_root_for_contract_test(start: Path) -> Path:
+    """Walk up to nearest dir with ``pyproject.toml`` AND ``services/`` (review M10).
+
+    Replaces the brittle 6-deep ``.parent`` chain in the contract test so a
+    repo-layout change raises loudly rather than silently no-opping the test.
+    """
+    p = start
+    while p != p.parent:
+        if (p / "pyproject.toml").exists() and (p / "services").is_dir():
+            return p
+        p = p.parent
+    raise RuntimeError(f"repo root not found from start={start}")
+
+
 class TestRateLimitProblemTypeContract:
     """Story 3.7 AC-4: pin slug parity between renderer constant and middleware body.
 
-    The rate-limited slug is duplicated in three places:
+    The five problem-type slugs are duplicated across:
       1. ``services/registry-api/.../adapters/errors.py`` (catalog source)
       2. ``services/telegram-gateway/.../handlers/_errors.py`` (renderer dispatch)
-      3. ``services/telegram-gateway/.../app/rate_limit.py`` (middleware 429 body)
+      3. ``services/telegram-gateway/.../app/rate_limit.py`` (rate-limited
+         middleware 429 body — only the rate-limited slug)
 
-    This test pins (2) ↔ (3) and asserts the literal value matches the
-    documented slug. Cross-checks (1) by reading the registry-api source
-    file at runtime — failures here indicate one of the three sites has
-    drifted and must be re-aligned by hand.
+    Story 3.7 review H2: the contract test was originally pinning only the
+    rate-limited slug; this expanded form parametrizes across all five
+    constants so a divergence between (1) and (2) on ANY slug (validation,
+    not-found, idempotency-collision, rate-limited, internal) is caught.
+    Review M10: marker-walk repo-root resolver replaces the brittle 6-deep
+    ``.parent`` chain, and the existence guard is dropped so a missing path
+    raises loudly. Uses ``re.search`` so quote-style / ``Final[str]``
+    annotations don't break the assertion.
     """
 
-    def test_rate_limit_problem_type_matches_catalog(self) -> None:
-        """Renderer constant, middleware body, and catalog all agree on ``/errors/rate-limited``."""
-        # (a) Renderer constant pinned to the literal slug.
+    def test_rate_limit_middleware_body_literal_matches_renderer_constant(self) -> None:
+        """(2) ↔ (3) pin: the middleware 429 body literal matches the renderer constant.
+
+        Static-text-level check: ``rate_limit.py`` ships ``"/errors/rate-limited"``
+        as the ``type`` slot of its 429 ProblemDetails body. Any drift here
+        (e.g. a constant rename that misses the middleware) is caught by this
+        test — without it, dispatch silently falls through to the legacy
+        status-code path.
+        """
         from telegram_gateway.handlers._errors import (  # noqa: PLC0415
             _PROBLEM_TYPE_RATE_LIMITED,
         )
 
         assert _PROBLEM_TYPE_RATE_LIMITED == "/errors/rate-limited"
-
-        # (b) Rate-limit middleware ships the same literal in its 429 body.
-        # Read the source file (rather than triggering a 429) so the test is
-        # static-text-level — any future refactor that builds the body from a
-        # different constant (or drifts the literal) is caught immediately.
-        from pathlib import Path as _Path  # noqa: PLC0415
-
-        src = (_Path(__file__).parent / "rate_limit.py").read_text()
+        src = (Path(__file__).parent / "rate_limit.py").read_text()
         assert '"/errors/rate-limited"' in src, (
             "rate_limit.py 429 body literal does not match _PROBLEM_TYPE_RATE_LIMITED; "
             "renderer dispatch will fall through to the legacy status path."
         )
 
-        # (c) Cross-service sanity: the registry-api catalog uses the same
-        # literal. Read by inspection (vs cross-service import via IMP001
-        # opt-out) per Story 3.6 review N7 carry-forward — duplication-with-
-        # contract-test is the chosen contract surface.
+    @pytest.mark.parametrize(
+        ("constant_name", "expected_slug"),
+        [
+            ("_PROBLEM_TYPE_VALIDATION", "/errors/validation"),
+            ("_PROBLEM_TYPE_NOT_FOUND", "/errors/not-found"),
+            ("_PROBLEM_TYPE_IDEMPOTENCY_COLLISION", "/errors/idempotency-collision"),
+            ("_PROBLEM_TYPE_RATE_LIMITED", "/errors/rate-limited"),
+            ("_PROBLEM_TYPE_INTERNAL", "/errors/internal"),
+        ],
+    )
+    def test_problem_type_constant_matches_catalog(
+        self, constant_name: str, expected_slug: str
+    ) -> None:
+        """Story 3.7 review H2: each of the five slugs is pinned across both sides.
+
+        Reads BOTH ``_errors.py`` (gateway renderer) AND ``errors.py``
+        (registry-api catalog) by filesystem inspection, asserts the named
+        constant equals ``expected_slug`` in each file. Uses ``re.search``
+        so ``Final[str]`` annotations or quote-style differences do not
+        break the test.
+
+        Review M10: dropped the existence guard so a layout change raises
+        loudly; uses marker-walk repo-root resolver.
+        """
+        import re as _re  # noqa: PLC0415
+
+        repo_root = _find_repo_root_for_contract_test(Path(__file__).resolve())
+
+        gateway_errors = (
+            repo_root
+            / "services"
+            / "telegram-gateway"
+            / "src"
+            / "telegram_gateway"
+            / "handlers"
+            / "_errors.py"
+        )
         registry_errors = (
-            _Path(__file__).parent.parent.parent.parent.parent.parent
+            repo_root
+            / "services"
             / "registry-api"
             / "src"
             / "registry_api"
             / "adapters"
             / "errors.py"
         )
-        if registry_errors.exists():
-            registry_src = registry_errors.read_text()
-            assert '_PROBLEM_TYPE_RATE_LIMITED = "/errors/rate-limited"' in registry_src, (
-                "registry-api catalog ``_PROBLEM_TYPE_RATE_LIMITED`` does not match the "
-                "telegram-gateway renderer constant; the wire contract has drifted."
-            )
+
+        # Pattern tolerates ``Final[str]``-style annotations + single/double quotes.
+        pattern = _re.compile(
+            rf'{_re.escape(constant_name)}\s*[:=].*["\']{_re.escape(expected_slug)}["\']'
+        )
+
+        gateway_src = gateway_errors.read_text()
+        assert pattern.search(gateway_src), (
+            f"gateway _errors.py does not declare {constant_name}={expected_slug!r}; "
+            f"the wire contract has drifted."
+        )
+        registry_src = registry_errors.read_text()
+        assert pattern.search(registry_src), (
+            f"registry-api errors.py does not declare {constant_name}={expected_slug!r}; "
+            f"the wire contract has drifted."
+        )
