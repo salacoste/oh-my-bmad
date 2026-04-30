@@ -70,6 +70,7 @@ markers = [
     "integration: cross-service journey tests",
     "contract: upstream-fork behavioral contracts",
     "migrator: event-log schema migrator tests",
+    "fuzz: NFR-S5 hypothesis fuzz tests (slow; nightly only)",
 ]
 norecursedirs = [
     ".git",

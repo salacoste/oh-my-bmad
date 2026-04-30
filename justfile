@@ -126,6 +126,15 @@ test-idempotency *ARGS:
 test-migrator *ARGS="":
     uv run pytest -m migrator -v tests/migrator/ {{ARGS}}
 
+# Story 3.8 — NFR-S5 command-injection Hypothesis fuzz suite. Runs the full
+# 13K-example budget (1 combined 10K @slow @fuzz test + 6 per-strategy 500 @fuzz
+# tests). Slow (~5 min); excluded from PR-gate `just test` via @pytest.mark.slow.
+# Per-strategy 500-example tests do run on PR gate (they only carry @fuzz, NOT
+# @slow). Trailing `*ARGS` lets nightly forward `--junitxml=...` (Story 2.13 Mn9
+# carry-forward).
+test-fuzz *ARGS="":
+    uv run pytest tests/integration/test_command_injection_fuzz.py -m fuzz {{ARGS}}
+
 # Story 2.15 — separability tests (FR34 / FR35; S-3 lands here, S-1 + S-2
 # in Stories 5.16 + 5.17c). The S-3 e2e test (slow) boots a 3-service
 # compose stack with ``ORCHESTRATOR_IMAGE=null-orchestrator:latest`` and
@@ -157,6 +166,7 @@ lint:
     uv run python scripts/check_imports.py
     uv run python scripts/check_event_registry.py
     uv run python scripts/check_single_writer.py
+    uv run python scripts/check_no_subprocess.py
     git ls-files -z | xargs -0 uv run secret-hygiene-precommit
 
 # Run the secret-hygiene scanner across every tracked file. Pre-commit hook
