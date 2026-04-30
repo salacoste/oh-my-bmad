@@ -128,10 +128,10 @@ test-migrator *ARGS="":
 
 # Story 3.8 — NFR-S5 command-injection Hypothesis fuzz suite. Runs the full
 # 13K-example budget (1 combined 10K @slow @fuzz test + 6 per-strategy 500 @fuzz
-# tests). Slow (~5 min); excluded from PR-gate `just test` via @pytest.mark.slow.
-# Per-strategy 500-example tests do run on PR gate (they only carry @fuzz, NOT
-# @slow). Trailing `*ARGS` lets nightly forward `--junitxml=...` (Story 2.13 Mn9
-# carry-forward).
+# tests). ~2 min wall-clock with the full 13K example budget. Excluded from
+# PR-gate `just test` via @pytest.mark.slow (combined 10K only; per-strategy
+# 500-example tests DO run on PR gate). Trailing `*ARGS` lets nightly forward
+# `--junitxml=...` (Story 2.13 Mn9 carry-forward).
 test-fuzz *ARGS="":
     uv run pytest tests/integration/test_command_injection_fuzz.py -m fuzz {{ARGS}}
 

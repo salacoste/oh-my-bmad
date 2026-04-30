@@ -39,7 +39,27 @@ DEFAULT_SKIP_DIRS: frozenset[str] = frozenset(
     }
 )
 
-_NOQA_RE = re.compile(r"#\s*noqa:\s*([A-Z]+\d+)\b\s+(\S+.*)")
+# Story 3.8 review H9: multi-tag noqa support.
+#
+# The previous regex captured only the FIRST tag, so a comment like
+# ``# noqa: PLC0415, SHELL001 — reason`` silently failed to suppress
+# ``SHELL001``. The Story 5.4 worker-wrapper subprocess call site needs
+# both ``IMP001`` (cross-service import) and ``SHELL001`` (legitimate
+# shell escape) on the same line; without the multi-tag fix that combined
+# suppression would not parse.
+#
+# New shape:
+#   * Capture group 1 = comma-separated tag list (one or more ``[A-Z]+\d+``)
+#   * Capture group 2 = the reason text (must be non-empty)
+#   * ``noqa:`` is matched case-insensitively (Story 3.8 review M10) — ruff
+#     itself treats the noqa keyword case-insensitively.
+#   * Tag identifiers remain case-sensitive so ``shell001`` would not
+#     accidentally suppress ``SHELL001``.
+_NOQA_RE = re.compile(
+    r"#\s*noqa:\s*([A-Z]+\d+(?:\s*,\s*[A-Z]+\d+)*)\b\s+(\S+.*)",
+    re.IGNORECASE,
+)
+_TAG_RE = re.compile(r"[A-Z]+\d+")
 
 
 @dataclass
@@ -54,13 +74,25 @@ class Violation:
 
 
 def has_noqa(source_line: str, tag: str) -> str | None:
-    """Return the suppression reason if the line contains ``# noqa: TAG <reason>``.
+    """Return the suppression reason if the line contains ``# noqa: TAG[,…] <reason>``.
 
     The reason must be non-empty (bare ``# noqa: TAG`` is not accepted).
     Returns the reason string on match, or None if not suppressed.
+
+    Story 3.8 review H9: supports multi-tag suppressions of the form
+    ``# noqa: PLC0415, SHELL001 — reason``. The reason is the same for all
+    tags on the line (per ruff convention).
+
+    Story 3.8 review L3: when a single line contains multiple violations
+    (cross-service import AND subprocess call), the caller is responsible
+    for invoking ``has_noqa`` with each tag — this helper checks one tag at
+    a time.
     """
     m = _NOQA_RE.search(source_line)
-    if m and m.group(1) == tag:
+    if not m:
+        return None
+    tags = {t.strip() for t in _TAG_RE.findall(m.group(1))}
+    if tag in tags:
         return m.group(2).strip()
     return None
 
