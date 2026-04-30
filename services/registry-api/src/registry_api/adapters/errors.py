@@ -16,6 +16,7 @@ on ``app.add_exception_handler`` calls under mypy --strict.
 from __future__ import annotations
 
 import logging
+from types import MappingProxyType
 from typing import Any
 
 from fastapi import Request
@@ -35,13 +36,24 @@ _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 # Story 3.6 AC-3: hint payload populated when a mutation request reaches an
 # error handler with a server-generated Idempotency-Key. Story 3.7's Telegram
 # renderer will read these stable keys.
-_IDEMPOTENCY_NUDGE: dict[str, Any] = {
-    "idempotency_key_origin": "server-generated",
-    "idempotency_hint": (
-        "Provide a client-generated UUIDv7 Idempotency-Key for true idempotent "
-        "retries (RFC 7231 §4.2.2)."
-    ),
-}
+#
+# Story 3.6 L1: ``MappingProxyType`` makes the module-level source-of-truth
+# read-only; mutating the proxy raises ``TypeError`` so a caller cannot
+# accidentally rebind a key on the shared object. ``_build_idempotency_
+# extensions`` still returns a fresh ``dict(...)`` per request so callers
+# (including Story 3.7's Telegram renderer) can mutate their own copy
+# without touching the shared template. Note: the copy is shallow — the
+# values are flat strings, so this is sufficient. See
+# ``ProblemDetails.extensions`` docstring for the shallow-mutability caveat.
+_IDEMPOTENCY_NUDGE: MappingProxyType[str, Any] = MappingProxyType(
+    {
+        "idempotency_key_origin": "server-generated",
+        "idempotency_hint": (
+            "Provide a client-generated UUIDv7 Idempotency-Key for true idempotent "
+            "retries (RFC 7231 §4.2.2)."
+        ),
+    }
+)
 
 
 def _build_idempotency_extensions(request: Request) -> dict[str, Any] | None:
@@ -50,6 +62,11 @@ def _build_idempotency_extensions(request: Request) -> dict[str, Any] | None:
     Defensive ``getattr(..., None)`` access — ``request.state`` may be
     incomplete if a middleware crashed before populating the flag (Story 2.9
     review F1: exception handlers must not leak state assumptions).
+
+    Story 3.6 L1: returns a SHALLOW copy of ``_IDEMPOTENCY_NUDGE`` (the
+    MappingProxyType source-of-truth is read-only — ``dict(...)`` produces
+    a fresh mutable dict whose string values are themselves immutable, so
+    the shallow copy is sufficient for one level of safety).
     """
     generated = getattr(request.state, "idempotency_key_generated", None)
     if generated is True and request.method.upper() in _MUTATING_METHODS:
@@ -88,6 +105,18 @@ class ProblemDetails(BaseModel):
                     ``model_dump(exclude_none=True)`` keeps it off the wire so
                     healthy responses are not polluted with empty objects.
                     Story 3.7's Telegram renderer will read this nested dict.
+
+                    Shallow-mutability caveat (Story 3.6 L1): although
+                    ``model_config = frozen=True`` blocks reassignment of
+                    the field, Pydantic v2 does NOT freeze nested dict
+                    values — a downstream consumer that does
+                    ``problem.extensions["foo"] = "bar"`` will succeed even
+                    on an instance built from the read-only
+                    ``_IDEMPOTENCY_NUDGE`` template (because
+                    ``_build_idempotency_extensions`` returns a fresh
+                    ``dict(...)`` shallow copy per request). Treat this
+                    field as logically immutable on the wire and avoid
+                    in-place mutation by route handlers / renderers.
     """
 
     model_config = ConfigDict(frozen=True)

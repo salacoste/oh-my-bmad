@@ -68,27 +68,46 @@ class WebhookRateLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         # AC-6: pass through any route that is NOT the webhook path.
-        if request.url.path != self._webhook_path:
+        # Story 3.6 H4: normalize trailing slashes on both sides — strict
+        # equality leaks a bypass when an upstream proxy normalizes
+        # ``/v1/telegram/webhook/`` → ``/v1/telegram/webhook`` (or a future
+        # FastAPI ``redirect_slashes=True`` adds an alias). Match by stripped
+        # path so both variants are rate-limited consistently.
+        if request.url.path.rstrip("/") != self._webhook_path.rstrip("/"):
             return await call_next(request)
 
         async with self._lock:
             now_ns = self._clock.monotonic_ns()
-            elapsed_s = (now_ns - self._last_refill_ns) / 1e9
+            # Story 3.6 M6: clamp to >= 0.0 so a non-monotonic test clock or
+            # backward-skewing wall-clock cannot silently consume tokens via
+            # negative ``elapsed_s``.
+            elapsed_s = max(0.0, (now_ns - self._last_refill_ns) / 1e9)
             self._tokens = min(
                 float(self._capacity),
                 self._tokens + elapsed_s * self._refill_per_second,
             )
-            self._last_refill_ns = now_ns
 
             if self._tokens < 1.0:
                 # AC-5: RFC 7807 problem+json 429. Body is constructed inline —
                 # no cross-service import of registry_api.ProblemDetails (AC-11).
+                # Story 3.6 L2: ``instance`` is the path ONLY (no query string)
+                # so any caller-supplied query params (debug flags, callback
+                # data, secrets-by-mistake) are NOT echoed back in the
+                # public-facing problem-json.
+                # Story 3.6 M6 (deny path): do NOT advance ``_last_refill_ns``
+                # here — under sustained overload, repeatedly probing the
+                # bucket while the bucket value < 1.0 would otherwise accrue
+                # ``elapsed_s × refill_rate`` in sub-ULP increments that round
+                # to 0.0 and silently lose accumulated time. By leaving
+                # ``_last_refill_ns`` untouched on the deny path, the next
+                # successful consumption refills from the LAST consumed time
+                # rather than the last probe time.
                 body = {
                     "type": "/errors/rate-limited",
                     "title": "Too Many Requests",
                     "status": 429,
                     "detail": "Webhook rate limit exceeded; retry after refill.",
-                    "instance": str(request.url),
+                    "instance": request.url.path,
                 }
                 return JSONResponse(
                     content=body,
@@ -97,7 +116,10 @@ class WebhookRateLimitMiddleware(BaseHTTPMiddleware):
                     headers={"Retry-After": "1"},
                 )
 
+            # Consume + advance the refill clock together (M6 consumed-time
+            # advance: ``_last_refill_ns`` only moves on a successful consume).
             self._tokens -= 1.0
+            self._last_refill_ns = now_ns
 
         return await call_next(request)
 

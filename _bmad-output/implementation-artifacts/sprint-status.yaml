@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: 2026-04-30T10:50:38Z
+# last_updated: 2026-04-30T13:45:43Z
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-04-30T10:50:38Z
+last_updated: 2026-04-30T13:45:43Z
 project: oh-my-bmad
 project_key: NOKEY
 tracking_system: file-system
@@ -93,7 +93,7 @@ development_status:
   3-4-approve-command: done
   3-5-ping-command: done
   bootstrap-minimum-milestone: closed  # 2026-04-30 — closed when 3-3, 3-4, 3-5 all done (Bootstrap Minimum Subset complete; operator-control-plane MVP achieved)
-  3-6-fastapi-middleware-stack: review
+  3-6-fastapi-middleware-stack: done
   3-7-rfc7807-error-envelope: backlog
   3-8-command-injection-fuzz-test: backlog
   3-9-task-thread-binding: backlog

@@ -911,3 +911,96 @@ class TestEntryPoint:
 
         assert captured.get("host") == "127.0.0.1"
         assert captured.get("port") == 9999
+
+    def test_configure_logging_emits_each_field_exactly_once(self) -> None:
+        """Story 3.6 H3: each field appears EXACTLY ONCE in rendered JSON output.
+
+        The previous structlog wiring used ``ProcessorFormatter(processor=
+        JSONRenderer())`` (singular) without ``remove_processors_meta``,
+        which left ``_record`` / ``_from_structlog`` keys in the rendered
+        JSON and risked double-applying the pre-chain in some structlog
+        versions. The fix uses the canonical ``ProcessorFormatter(
+        foreign_pre_chain=pre_chain, processors=[remove_processors_meta,
+        JSONRenderer()])`` form.
+
+        This test emits one NATIVE structlog call AND one stdlib
+        ``logging.getLogger(...).info(...)`` call, captures the rendered
+        JSON output, and parses each line to assert that the
+        ``timestamp`` / ``level`` / ``logger`` / ``event`` fields each
+        appear exactly once per record.
+        """
+        import io  # noqa: PLC0415
+        import json  # noqa: PLC0415
+        import logging  # noqa: PLC0415
+
+        import structlog  # noqa: PLC0415
+
+        from registry_api.__main__ import _configure_logging  # noqa: PLC0415
+
+        _configure_logging()
+
+        # Re-point the root handler at an in-memory buffer.
+        buf = io.StringIO()
+        root = logging.getLogger()
+        original_handlers = list(root.handlers)
+        original_level = root.level
+        existing_formatter = original_handlers[0].formatter if original_handlers else None
+        capture_handler = logging.StreamHandler(buf)
+        if existing_formatter is not None:
+            capture_handler.setFormatter(existing_formatter)
+        root.handlers = [capture_handler]
+        root.setLevel(logging.DEBUG)
+
+        try:
+            # Native structlog call.
+            native_log = structlog.get_logger("test_h3_native")
+            native_log.info("native-event", user="alice")
+
+            # Stdlib call (foreign — bridged via ProcessorFormatter).
+            std_log = logging.getLogger("test_h3_stdlib")
+            std_log.warning("stdlib-event", extra={"foreign_field": "bob"})
+        finally:
+            root.handlers = original_handlers
+            root.setLevel(original_level)
+
+        captured = buf.getvalue()
+        records: list[dict[str, object]] = []
+        for line in captured.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            records.append(json.loads(line))
+
+        # Find the two records emitted in this test.
+        native_rec = next((r for r in records if r.get("event") == "native-event"), None)
+        stdlib_rec = next((r for r in records if r.get("event") == "stdlib-event"), None)
+        assert native_rec is not None, f"native record missing in output:\n{captured}"
+        assert stdlib_rec is not None, f"stdlib record missing in output:\n{captured}"
+
+        # Each canonical field must appear EXACTLY ONCE per record. JSON
+        # parsing collapses duplicates by overwriting, so we verify by
+        # counting field-name occurrences in the raw line for each record.
+        for rec_name, rec in (("native", native_rec), ("stdlib", stdlib_rec)):
+            for field in ("timestamp", "level", "logger", "event"):
+                assert field in rec, f"{rec_name} record missing required field {field!r}: {rec}"
+
+        # Re-locate the raw lines and count quoted-key occurrences. JSON
+        # objects with duplicate keys are not standard but structlog could
+        # in principle emit them if the pre-chain ran twice on the same
+        # event_dict — we count to be defensive.
+        for line in captured.splitlines():
+            if '"native-event"' in line or '"stdlib-event"' in line:
+                for field in ("timestamp", "level", "logger", "event"):
+                    occurrences = line.count(f'"{field}":')
+                    assert occurrences == 1, (
+                        f"field {field!r} appeared {occurrences}× in line "
+                        f"(expected exactly 1): {line}"
+                    )
+
+        # Defensive: the leak fields ``_record`` / ``_from_structlog`` must
+        # NOT be in the rendered output (``remove_processors_meta`` strips
+        # them).
+        assert "_record" not in captured, f"_record metadata leaked into rendered JSON:\n{captured}"
+        assert "_from_structlog" not in captured, (
+            f"_from_structlog metadata leaked into rendered JSON:\n{captured}"
+        )

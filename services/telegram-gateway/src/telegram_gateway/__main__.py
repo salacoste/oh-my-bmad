@@ -94,17 +94,37 @@ def _configure_logging() -> None:
     if _STRUCTLOG_CONFIGURED:
         return
 
+    # Story 3.6 H1/H3: ``ExtraAdder`` promotes ``extra={...}`` kwargs from
+    # stdlib ``logging`` calls into the structlog event_dict so the
+    # downstream ``redact_secrets`` processor can value-pattern-redact
+    # secrets that arrive via ``_log.warning(..., extra={...})``. Without
+    # it, stdlib LogRecord extras would never be copied onto the
+    # event_dict and a leaked secret would render unredacted.
     pre_chain: list[structlog.types.Processor] = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_log_level,
         structlog.stdlib.add_logger_name,
+        structlog.stdlib.ExtraAdder(),
         structlog.processors.TimeStamper(fmt="iso", utc=True),
         redact_secrets,
     ]
 
+    # Canonical structlog 24.x bridge pattern (Story 3.6 review H3): the
+    # ``ProcessorFormatter`` runs ``foreign_pre_chain`` ONLY for foreign
+    # (stdlib) records and the ``processors=[remove_processors_meta,
+    # JSONRenderer()]`` list for both flavours. Native structlog records
+    # already had ``pre_chain`` applied via ``structlog.configure(processors=
+    # [*pre_chain, wrap_for_formatter])`` and arrive here flagged with
+    # ``_from_structlog=True`` so the foreign pre-chain is correctly skipped
+    # — each field appears EXACTLY ONCE in the JSON output regardless of
+    # whether the caller used native ``structlog.get_logger(...)`` or stdlib
+    # ``logging.getLogger(...)``.
     formatter = structlog.stdlib.ProcessorFormatter(
-        processor=structlog.processors.JSONRenderer(),
         foreign_pre_chain=pre_chain,
+        processors=[
+            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            structlog.processors.JSONRenderer(),
+        ],
     )
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(formatter)

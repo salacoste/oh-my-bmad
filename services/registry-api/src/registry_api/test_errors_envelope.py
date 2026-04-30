@@ -114,10 +114,18 @@ class TestProblemDetailsExtensions:
     async def test_problem_details_extensions_omitted_on_get_method(
         self, post_client: AsyncClient
     ) -> None:
-        """GET /v1/tasks/<nonexistent> → 404 WITHOUT extensions (non-mutating method)."""
+        """GET /v1/tasks/<valid-shape-but-missing> → 404 WITHOUT extensions.
+
+        Story 3.6 L4: pinned to a known-good UUIDv7 task-id shape that
+        matches the route's ``Path(..., pattern=_TASK_ID_PATTERN)`` regex
+        (``^t-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$``)
+        but is not present in the freshly-seeded DB → deterministic 404.
+        """
         fake_id = "t-" + "0" * 8 + "-" + "0" * 4 + "-7" + "0" * 3 + "-8" + "0" * 3 + "-" + "0" * 12
         r = await post_client.get(f"/v1/tasks/{fake_id}")
-        assert r.status_code in (404, 422)  # 422 if path regex fails, 404 if it passes
+        assert r.status_code == 404, (
+            f"expected deterministic 404 (valid-shape task-id), got {r.status_code}: {r.text}"
+        )
         body = r.json()
         # Non-mutating methods never carry the extensions nudge.
         assert "extensions" not in body, f"unexpected 'extensions' in: {body}"
@@ -126,25 +134,59 @@ class TestProblemDetailsExtensions:
     async def test_internal_error_handler_safe_when_state_missing_idempotency_flag(
         self, tmp_path: Path
     ) -> None:
-        """AC-3 defense: 500 handler does not double-fault when idempotency flag absent.
+        """AC-3 defense: 500 handler does not double-fault when idempotency flag never set.
 
-        Simulates an exception raised before IdempotencyKeyMiddleware populates
-        request.state.idempotency_key_generated. The handler must use
-        getattr(..., None) and return a clean 500 envelope.
+        Story 3.6 M4: pins the GENUINE failure mode the AC describes —
+        ``IdempotencyKeyMiddleware`` crashed (or was bypassed) BEFORE it
+        could populate ``request.state.idempotency_key_generated``. Achieved
+        by installing a custom ``_PreemptingMiddleware`` that runs BEFORE
+        ``IdempotencyKeyMiddleware`` and raises immediately, never letting
+        the inner middleware execute. The 500 handler must use
+        ``getattr(..., None)`` and return a clean envelope without
+        double-faulting on missing state. (Story 2.9 review F1 carry-forward;
+        replaces the prior version that reached into Starlette's private
+        ``request.state._state`` dict.)
         """
+        from starlette.middleware.base import (  # noqa: PLC0415
+            BaseHTTPMiddleware,
+            RequestResponseEndpoint,
+        )
+        from starlette.requests import Request as _Request  # noqa: PLC0415
+        from starlette.responses import Response as _Response  # noqa: PLC0415
+
+        class _PreemptingMiddleware(BaseHTTPMiddleware):
+            """Test-only middleware that raises BEFORE inner middlewares run.
+
+            Installed via ``app.add_middleware(...)`` AFTER
+            ``IdempotencyKeyMiddleware`` is registered so Starlette's
+            outermost-first dispatch order puts it ahead of the inner
+            middleware in the request flow — it never gets a chance to
+            populate ``request.state.idempotency_key_generated`` before
+            this middleware short-circuits with a ``RuntimeError``. The
+            500 handler must therefore tolerate the missing flag.
+            """
+
+            async def dispatch(
+                self, request: _Request, call_next: RequestResponseEndpoint
+            ) -> _Response:
+                raise RuntimeError(
+                    "synthetic preempt — IdempotencyKeyMiddleware never ran "
+                    "for test_internal_error_handler_safe_when_state_missing_"
+                    "idempotency_flag"
+                )
+
         db_path = tmp_path / "state.sqlite3"
         db_url = _db_url(db_path)
         await _seed_tables(db_url)
         events_dir = tmp_path / "events"
         clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
         app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
-
-        @app.post("/debug/crash-before-idem")
-        async def _crash(request: Request) -> JSONResponse:
-            # Delete the flag to simulate middleware crash before setting it.
-            if hasattr(request.state, "idempotency_key_generated"):
-                del request.state._state["idempotency_key_generated"]
-            raise RuntimeError("synthetic crash — test_internal_error_handler")
+        # Starlette stacks middleware as: LIFO of add_middleware calls.
+        # Adding _PreemptingMiddleware LAST means it wraps the entire stack
+        # → it runs FIRST on inbound requests and raises before the
+        # IdempotencyKeyMiddleware (registered earlier in build_app) can
+        # populate request.state.idempotency_key_generated.
+        app.add_middleware(_PreemptingMiddleware)
 
         async with (
             LifespanManager(app) as manager,
@@ -153,15 +195,19 @@ class TestProblemDetailsExtensions:
                 base_url="http://testserver",
             ) as client,
         ):
-            r = await client.post("/debug/crash-before-idem", json={})
+            # Path is irrelevant — _PreemptingMiddleware raises before routing.
+            r = await client.post("/v1/tasks", json={"title": "irrelevant"})
 
         assert r.status_code == 500
         body = r.json()
         assert body["status"] == 500
         assert body["title"] == "Internal Server Error"
         # Must not have double-faulted — extensions absent because flag was missing.
+        assert "extensions" not in body, (
+            f"500 handler tried to read missing flag and returned extensions: {body}"
+        )
         # The handler should not raise; we just get a clean envelope.
-        assert "synthetic crash" not in (body.get("detail") or "")
+        assert "synthetic preempt" not in (body.get("detail") or "")
 
 
 # ---------------------------------------------------------------------------
@@ -170,19 +216,32 @@ class TestProblemDetailsExtensions:
 
 
 class TestLogSanitizer:
-    """AC-8: redact_secrets fires on every log record through the structlog chain."""
+    """AC-8: redact_secrets fires on every log record through the structlog chain.
 
-    def test_log_sanitizer_redacts_bearer_token_in_middleware_warning(self) -> None:
-        """A log record with a sensitive key name is redacted by redact_secrets.
+    Two layers of coverage:
+
+    1. ``test_redact_secrets_redacts_authorization_key_unit`` — pure-unit pin
+       on key-name redaction (``"authorization"`` is in ``_KEY_REDACT_SET``).
+       Kept as a fast regression smoke test for the key-name code path.
+    2. ``test_log_sanitizer_redacts_bearer_token_in_middleware_warning`` —
+       integration test that exercises the AC-8 spec path: a real
+       ``IdempotencyKeyMiddleware`` warning log with a non-redact-set key
+       (``received``) carrying a value-pattern-matching secret, captured
+       through the configured ``ProcessorFormatter`` chain, asserting the
+       secret is replaced by ``***REDACTED***`` in the rendered JSON.
+       (Story 3.6 H1.)
+    """
+
+    def test_redact_secrets_redacts_authorization_key_unit(self) -> None:
+        """Pure unit: ``redact_secrets`` redacts values stored under sensitive key names.
 
         ``secret_hygiene.sanitizer`` uses key-name matching (casefolded) on a
-        ``_KEY_REDACT_SET`` that includes ``"authorization"`` and ``"bearer"``.
-        The test simulates a middleware log that accidentally attaches an
-        authorization header value. The key name triggers unconditional
-        redaction regardless of the value's entropy.
+        ``_KEY_REDACT_SET`` that includes ``"authorization"``. The key name
+        triggers unconditional redaction regardless of the value's entropy.
 
-        Uses the sanitizer processor directly — no need for the full structlog
-        chain (which is only wired in __main__.py at production runtime).
+        Calls the sanitizer processor directly with a synthetic event_dict —
+        does NOT exercise the full structlog chain (covered by the integration
+        sibling test below).
         """
         from secret_hygiene.sanitizer import REDACTED_SENTINEL, redact_secrets  # noqa: PLC0415
 
@@ -198,6 +257,103 @@ class TestLogSanitizer:
         )
         # The event message itself must pass through unchanged.
         assert result["event"] == "invalid Idempotency-Key header; generating fresh"
+
+    @pytest.mark.asyncio
+    async def test_log_sanitizer_redacts_bearer_token_in_middleware_warning(
+        self, tmp_path: Path
+    ) -> None:
+        """AC-8 integration: value-pattern redaction fires in the configured chain.
+
+        Story 3.6 H1: this is the AC-8-shaped scenario.
+            (a) Configure the structlog chain from AC-4 by calling
+                :func:`registry_api.__main__._configure_logging` and re-pointing
+                the root handler at an :class:`io.StringIO` so the rendered JSON
+                is captured.
+            (b) Use a key NOT in ``_KEY_REDACT_SET`` (``received``, the field
+                ``IdempotencyKeyMiddleware`` writes to its warning record's
+                ``extra``) — this proves value-pattern redaction is the safety
+                net, not key-name redaction.
+            (c) Trigger via a real ``IdempotencyKeyMiddleware`` warning log
+                path: send a request with a malformed ``Idempotency-Key``
+                containing a SECRET_PATTERN-matching value so the middleware
+                emits ``_log.warning(..., extra={"received": incoming[:80]})``.
+            (d) Assert ``***REDACTED***`` appears in the captured JSON output
+                AND the secret literal does NOT.
+        """
+        import io  # noqa: PLC0415
+        import logging  # noqa: PLC0415
+
+        from registry_api.__main__ import _configure_logging  # noqa: PLC0415
+
+        # Build a SECRET_PATTERN-matching value WITHOUT embedding a single
+        # contiguous secret-shaped literal in source (so the precommit
+        # secret-hygiene scanner does not flag this test file). The runtime
+        # concatenation produces ``sk-ant-<32 hex chars>`` which matches the
+        # ANTHROPIC_API_KEY regex in ``secret_hygiene.scanner``.
+        secret_value = "sk-ant-" + ("0123456789abcdef" * 2)
+
+        # Configure the canonical AC-4 chain. The function is idempotent
+        # (``_STRUCTLOG_CONFIGURED`` sentinel) so other tests calling it are
+        # safe.
+        _configure_logging()
+
+        # Re-point the root handler at an in-memory buffer so we can read the
+        # rendered JSON. We also need to lower the level on the root logger
+        # to ensure the WARNING message from the middleware is captured.
+        buf = io.StringIO()
+        root = logging.getLogger()
+        original_handlers = list(root.handlers)
+        original_level = root.level
+        # Reuse the formatter from the existing handler so the foreign_pre_chain
+        # (with ``redact_secrets``) is identical to production.
+        existing_formatter = original_handlers[0].formatter
+        capture_handler = logging.StreamHandler(buf)
+        if existing_formatter is not None:
+            capture_handler.setFormatter(existing_formatter)
+        root.handlers = [capture_handler]
+        root.setLevel(logging.DEBUG)
+
+        try:
+            # Build a minimal app and trigger IdempotencyKeyMiddleware's warning
+            # log path with the malformed header.
+            db_path = tmp_path / "state.sqlite3"
+            db_url = _db_url(db_path)
+            await _seed_tables(db_url)
+            events_dir = tmp_path / "events"
+            clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
+            app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+
+            async with (
+                LifespanManager(app) as manager,
+                AsyncClient(
+                    transport=ASGITransport(app=manager.app, raise_app_exceptions=False),
+                    base_url="http://testserver",
+                ) as client,
+            ):
+                # Malformed Idempotency-Key (not bare-UUIDv7) → middleware
+                # logs ``_log.warning("invalid Idempotency-Key header; ...",
+                # extra={"received": incoming[:80]})`` and regenerates.
+                # We don't care about the response body, only the captured log.
+                await client.post(
+                    "/v1/tasks",
+                    json={"title": "trigger sanitizer"},
+                    headers={"Idempotency-Key": secret_value},
+                )
+        finally:
+            # Restore root handlers / level so other tests aren't affected.
+            root.handlers = original_handlers
+            root.setLevel(original_level)
+
+        captured = buf.getvalue()
+        # The middleware emits an INFO-or-higher record carrying our `received`
+        # field. Assert the rendered JSON contains the redaction sentinel and
+        # does NOT contain the secret literal.
+        assert "***REDACTED***" in captured, (
+            f"sanitizer did not fire on the rendered chain; output:\n{captured}"
+        )
+        assert secret_value not in captured, (
+            f"secret literal leaked in rendered JSON output:\n{captured}"
+        )
 
     def test_log_sanitizer_does_not_redact_safe_strings(self) -> None:
         """Non-secret values pass through the sanitizer unchanged (negative test)."""
@@ -223,28 +379,98 @@ class TestRequestIdPropagation:
     """AC-9: request_id appears in downstream log records; absent after request ends."""
 
     @pytest.mark.asyncio
-    async def test_request_id_propagates_into_json_log_record(
-        self, post_client: AsyncClient
-    ) -> None:
-        """Request_id is bound into structlog contextvars during the request lifetime.
+    async def test_request_id_propagates_into_json_log_record(self, tmp_path: Path) -> None:
+        """Request_id is bound into structlog contextvars and rendered in log records.
 
-        Technique: send a POST, assert the echoed X-Request-ID matches what was
-        sent (proves RequestIdMiddleware ran and bound the correct id), then
-        assert that after the response completes the contextvars are clean (the
-        try/finally unbind ran). This exercises the same code-path that would
-        cause downstream logging calls to carry request_id.
+        Story 3.6 H2: this test emits a stdlib ``logging.getLogger(...).info(...)``
+        call from INSIDE a route handler during the request, captures the
+        rendered JSON via the configured chain (AC-4), and asserts the captured
+        record contains ``"request_id": "<rid>"``. This proves the
+        ``RequestIdMiddleware`` ``bind_contextvars(request_id=...)`` actually
+        propagates into rendered log output rather than only echoing on the
+        response header (the previous version of the test pinned only the
+        response-header echo, which would still pass if ``bind_contextvars``
+        were silently broken).
         """
+        import io  # noqa: PLC0415
+        import json  # noqa: PLC0415
+        import logging  # noqa: PLC0415
+
+        from registry_api.__main__ import _configure_logging  # noqa: PLC0415
+
+        # Configure the canonical AC-4 chain (idempotent).
+        _configure_logging()
+
+        # Re-point the root handler at an in-memory buffer so we can read
+        # the rendered JSON. Restore in ``finally``.
+        buf = io.StringIO()
+        root = logging.getLogger()
+        original_handlers = list(root.handlers)
+        original_level = root.level
+        existing_formatter = original_handlers[0].formatter if original_handlers else None
+        capture_handler = logging.StreamHandler(buf)
+        if existing_formatter is not None:
+            capture_handler.setFormatter(existing_formatter)
+        root.handlers = [capture_handler]
+        root.setLevel(logging.DEBUG)
+
         rid = new_request_id(clock=_FROZEN_CLOCK)
 
-        # Make a request — RequestIdMiddleware binds request_id for its duration.
-        r = await post_client.post(
-            "/v1/tasks",
-            json={"title": "propagation test"},
-            headers={"X-Request-ID": rid},
+        try:
+            db_path = tmp_path / "state.sqlite3"
+            db_url = _db_url(db_path)
+            await _seed_tables(db_url)
+            events_dir = tmp_path / "events"
+            clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
+            app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+
+            # Probe endpoint: emit a stdlib log call from INSIDE the handler
+            # so the structlog contextvars (bound by RequestIdMiddleware) are
+            # rendered into the JSON record.
+            @app.get("/debug/log-from-handler")
+            async def _log_probe(request: Request) -> JSONResponse:
+                handler_log = logging.getLogger("registry_api.test_propagation")
+                handler_log.info("probe-event-from-handler")
+                return JSONResponse({"ok": True})
+
+            async with (
+                LifespanManager(app) as manager,
+                AsyncClient(
+                    transport=ASGITransport(app=manager.app),
+                    base_url="http://testserver",
+                ) as client,
+            ):
+                r = await client.get(
+                    "/debug/log-from-handler",
+                    headers={"X-Request-ID": rid},
+                )
+            assert r.status_code == 200
+            assert r.headers.get("X-Request-ID") == rid
+        finally:
+            root.handlers = original_handlers
+            root.setLevel(original_level)
+
+        # Find the probe record in the captured output and assert
+        # ``request_id`` matches what we sent.
+        captured = buf.getvalue()
+        probe_record: dict[str, object] | None = None
+        for line in captured.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("event") == "probe-event-from-handler":
+                probe_record = rec
+                break
+        assert probe_record is not None, (
+            f"probe log record not found in captured JSON output:\n{captured}"
         )
-        assert r.status_code == 201
-        # X-Request-ID echoed on response proves the middleware bound the correct id.
-        assert r.headers.get("X-Request-ID") == rid
+        assert probe_record.get("request_id") == rid, (
+            f"expected request_id={rid!r} in record, got {probe_record!r}"
+        )
 
         # After response completes: unbind must have run — no leakage.
         after = structlog.contextvars.get_merged_contextvars(structlog.get_logger())

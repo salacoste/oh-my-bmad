@@ -98,10 +98,13 @@ class TestRequestIdMiddlewareStructlog:
         Uses structlog.testing.capture_logs() to assert the bound key is
         visible inside the handler and then verifies it is gone after the
         response completes.
+
+        Story 3.6 L6: the dead ``captured_during`` variable removed in this
+        pass; mid-request ``request_id`` visibility is exercised by the H2
+        sibling test ``test_request_id_propagates_into_json_log_record`` in
+        ``test_errors_envelope.py`` which captures rendered JSON.
         """
         rid = new_request_id(clock=_FROZEN_CLOCK)
-
-        captured_during: list[dict[str, object]] = []
 
         # Verify no leftover from a previous request.
         before = structlog.contextvars.get_merged_contextvars(structlog.get_logger())
@@ -125,9 +128,6 @@ class TestRequestIdMiddlewareStructlog:
         before_rec = next((r for r in cap if r.get("event") == "before-request"), None)
         if before_rec is not None:
             assert "request_id" not in before_rec
-
-        # Unused but satisfies the assignment for mypy
-        _ = captured_during
 
     @pytest.mark.asyncio
     async def test_request_id_middleware_unbinds_on_handler_exception(self, tmp_path: Path) -> None:
@@ -223,20 +223,52 @@ class TestIdempotencyKeyMiddleware:
     async def test_idempotency_middleware_response_header_x_idempotency_generated_true(
         self, app_client: AsyncClient
     ) -> None:
-        """Missing Idempotency-Key → X-Idempotency-Generated: true on response."""
-        r = await app_client.get("/debug/state")
-        assert r.status_code == 200
+        """Missing Idempotency-Key on POST → X-Idempotency-Generated: true on response.
+
+        Story 3.6 M5: the header is only emitted on mutation-method responses
+        (POST / PUT / PATCH / DELETE) — read paths omit it because the
+        ``X-Idempotency-Generated`` signal is meaningless without a mutation
+        contract.
+        """
+        # Use the POST /v1/tasks happy-path (mutation method).
+        r = await app_client.post("/v1/tasks", json={"title": "x-idem-gen-true"})
+        assert r.status_code == 201
         assert r.headers.get("x-idempotency-generated") == "true"
 
     @pytest.mark.asyncio
     async def test_idempotency_middleware_response_header_x_idempotency_generated_false_on_client_key(  # noqa: E501
         self, app_client: AsyncClient
     ) -> None:
-        """Client-supplied key → X-Idempotency-Generated: false on response."""
+        """Client-supplied key on POST → X-Idempotency-Generated: false on response.
+
+        Story 3.6 M5: gated to mutation methods (see sibling test above).
+        """
         key = new_idempotency_key(clock=_FROZEN_CLOCK)
-        r = await app_client.get("/debug/state", headers={"Idempotency-Key": key})
-        assert r.status_code == 200
+        r = await app_client.post(
+            "/v1/tasks",
+            json={"title": "x-idem-gen-false"},
+            headers={"Idempotency-Key": key},
+        )
+        assert r.status_code == 201
         assert r.headers.get("x-idempotency-generated") == "false"
+
+    @pytest.mark.asyncio
+    async def test_idempotency_middleware_omits_x_idempotency_generated_on_get(
+        self, app_client: AsyncClient
+    ) -> None:
+        """Story 3.6 M5: GET responses do NOT carry X-Idempotency-Generated.
+
+        Read paths have no meaningful idempotency contract — the header was
+        previously emitted on every response (including GETs), which
+        contradicted the AC-3 mutation-method gate the team applied for the
+        JSON ``extensions`` nudge. M5 fixes the inconsistency by gating the
+        response header to mutation methods.
+        """
+        r = await app_client.get("/debug/state")
+        assert r.status_code == 200
+        assert "x-idempotency-generated" not in r.headers, (
+            f"unexpected X-Idempotency-Generated on GET; headers: {dict(r.headers)}"
+        )
 
     @pytest.mark.asyncio
     async def test_idempotency_middleware_no_legacy_x_idempotency_status_header(

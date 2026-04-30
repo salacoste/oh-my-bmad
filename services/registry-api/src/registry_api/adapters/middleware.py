@@ -1,5 +1,6 @@
 """HTTP middleware stack for registry-api (Story 2.9 AC-4 + Story 3.6 AC-1/AC-2).
 
+
 Three class-based middlewares (subclassing ``BaseHTTPMiddleware``):
 
 - ``RequestIdMiddleware``:      reads ``X-Request-ID`` header; validates against
@@ -47,6 +48,11 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp
+
+# Story 3.6 M5: single source of truth for the mutation-method set, shared
+# with ``adapters/errors.py``. Importing keeps the constant in one place
+# rather than duplicating the literal in two files.
+from registry_api.adapters.errors import _MUTATING_METHODS as _MUTATING_METHODS
 
 # Bare UUIDv7 (no prefix) — matches new_request_id / new_idempotency_key output.
 # Version nibble = 7, variant = 8/9/a/b. Same shape used by events.ids.
@@ -153,7 +159,13 @@ class IdempotencyKeyMiddleware(BaseHTTPMiddleware):
         request.state.idempotency_key_generated = generated
         response = await call_next(request)
         response.headers["Idempotency-Key"] = idempotency_key
-        response.headers["X-Idempotency-Generated"] = "true" if generated else "false"
+        # Story 3.6 M5: only emit the ``X-Idempotency-Generated`` header on
+        # mutation-method responses. On read paths (GET / HEAD / OPTIONS)
+        # the header is meaningless and contradicted the AC-3 mutation-method
+        # gate the team applied for the JSON ``extensions`` nudge — drop it
+        # from non-mutating responses for consistency.
+        if request.method.upper() in _MUTATING_METHODS:
+            response.headers["X-Idempotency-Generated"] = "true" if generated else "false"
         return response
 
 
