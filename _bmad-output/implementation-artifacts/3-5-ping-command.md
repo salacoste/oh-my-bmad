@@ -1,6 +1,6 @@
 # Story 3.5: /ping command (Bootstrap Minimum #3 — closes Bootstrap Milestone)
 
-Status: review (fix-pass in progress)
+Status: done
 
 ## Story
 
