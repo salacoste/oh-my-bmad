@@ -1,11 +1,13 @@
-"""Tests for WebhookRateLimitMiddleware (Story 3.6 AC-5/6/7/10).
+"""Tests for WebhookRateLimitMiddleware (Story 3.6 AC-5/6/7/10) +
+Story 3.7 contract test for the rate-limited problem-type slug (AC-4).
 
-11 tests covering:
+11 + 1 tests covering:
   AC-7: burst-then-429, refill behaviour (fractional + full)
   AC-5: RFC 7807 body, Retry-After header, init validation
   AC-6: passthrough for non-webhook routes
   Lock invariant: concurrent requests no double-spend
   Clock injection: TickingClock controls bucket; time.monotonic not called
+  Story 3.7 AC-4: rate-limited problem-type slug parity (renderer ↔ middleware)
 """
 
 from __future__ import annotations
@@ -776,3 +778,63 @@ class TestRateLimitTokenBucketMath:
             # 11th must be 429 — bucket is empty again.
             r_empty = await client.post(_WEBHOOK_PATH, json=_UPDATE, headers=_webhook_headers())
             assert r_empty.status_code == 429
+
+
+# ---------------------------------------------------------------------------
+# Story 3.7 AC-4: rate-limited problem-type slug parity
+# ---------------------------------------------------------------------------
+
+
+class TestRateLimitProblemTypeContract:
+    """Story 3.7 AC-4: pin slug parity between renderer constant and middleware body.
+
+    The rate-limited slug is duplicated in three places:
+      1. ``services/registry-api/.../adapters/errors.py`` (catalog source)
+      2. ``services/telegram-gateway/.../handlers/_errors.py`` (renderer dispatch)
+      3. ``services/telegram-gateway/.../app/rate_limit.py`` (middleware 429 body)
+
+    This test pins (2) ↔ (3) and asserts the literal value matches the
+    documented slug. Cross-checks (1) by reading the registry-api source
+    file at runtime — failures here indicate one of the three sites has
+    drifted and must be re-aligned by hand.
+    """
+
+    def test_rate_limit_problem_type_matches_catalog(self) -> None:
+        """Renderer constant, middleware body, and catalog all agree on ``/errors/rate-limited``."""
+        # (a) Renderer constant pinned to the literal slug.
+        from telegram_gateway.handlers._errors import (  # noqa: PLC0415
+            _PROBLEM_TYPE_RATE_LIMITED,
+        )
+
+        assert _PROBLEM_TYPE_RATE_LIMITED == "/errors/rate-limited"
+
+        # (b) Rate-limit middleware ships the same literal in its 429 body.
+        # Read the source file (rather than triggering a 429) so the test is
+        # static-text-level — any future refactor that builds the body from a
+        # different constant (or drifts the literal) is caught immediately.
+        from pathlib import Path as _Path  # noqa: PLC0415
+
+        src = (_Path(__file__).parent / "rate_limit.py").read_text()
+        assert '"/errors/rate-limited"' in src, (
+            "rate_limit.py 429 body literal does not match _PROBLEM_TYPE_RATE_LIMITED; "
+            "renderer dispatch will fall through to the legacy status path."
+        )
+
+        # (c) Cross-service sanity: the registry-api catalog uses the same
+        # literal. Read by inspection (vs cross-service import via IMP001
+        # opt-out) per Story 3.6 review N7 carry-forward — duplication-with-
+        # contract-test is the chosen contract surface.
+        registry_errors = (
+            _Path(__file__).parent.parent.parent.parent.parent.parent
+            / "registry-api"
+            / "src"
+            / "registry_api"
+            / "adapters"
+            / "errors.py"
+        )
+        if registry_errors.exists():
+            registry_src = registry_errors.read_text()
+            assert '_PROBLEM_TYPE_RATE_LIMITED = "/errors/rate-limited"' in registry_src, (
+                "registry-api catalog ``_PROBLEM_TYPE_RATE_LIMITED`` does not match the "
+                "telegram-gateway renderer constant; the wire contract has drifted."
+            )

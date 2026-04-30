@@ -1,20 +1,60 @@
-"""Shared HTTP-error formatting for all telegram-gateway command handlers (Story 3.4 M4).
+"""Shared HTTP-error formatting for all telegram-gateway command handlers.
 
-Extracted from ``task_command.py`` so that ``approve_command.py`` and future
-decision-command handlers (3.16, 3.17, 3.18) can import ``format_http_error``
-without coupling to a peer handler's private internals.
+Story 3.4 M4 promoted ``format_http_error`` here from ``task_command.py`` so
+``approve_command.py`` / ``ping_command.py`` / future decision-command
+handlers can share a single renderer.
 
-Previously ``_format_http_error`` lived in ``task_command.py`` with a leading
-underscore.  The leading underscore is dropped here because the function is now
-part of a dedicated shared module — it is intentionally public within the
-``handlers`` package.
+Story 3.7 refactor: dispatch by RFC 7807 ``type`` slug rather than HTTP
+status code. Each problem class has a dedicated private ``_format_*`` helper
+≤15 LoC; legacy status-based fallback preserves back-compat for endpoints
+that still ship ``type=about:blank`` (or unknown slugs).
+
+Slug duplication
+----------------
+The five problem-type slug constants are deliberately duplicated from
+``services/registry-api/src/registry_api/adapters/errors.py`` (Story 3.7
+AC-1 alternative). A contract test in ``app/test_rate_limit.py`` pins the
+strings against the rate-limiter middleware's hardcoded literal AND, by
+inspection, against the registry-api catalog. This avoids the cross-service
+import noqa proliferation flagged by Story 3.6 review N7 — each service
+owns its own constants and the contract is tested at the wire level.
 """
 
 from __future__ import annotations
 
 import html
+import re
+from typing import Any
 
 import httpx
+
+# Story 3.7 AC-1 alternative: duplicate slug constants on the gateway side.
+# Pinned to registry-api's catalog by contract test (Story 3.7 AC-4 in
+# ``app/test_rate_limit.py``).
+_PROBLEM_TYPE_VALIDATION = "/errors/validation"
+_PROBLEM_TYPE_NOT_FOUND = "/errors/not-found"
+_PROBLEM_TYPE_IDEMPOTENCY_COLLISION = "/errors/idempotency-collision"
+_PROBLEM_TYPE_RATE_LIMITED = "/errors/rate-limited"
+_PROBLEM_TYPE_INTERNAL = "/errors/internal"
+_PROBLEM_TYPE_DEFAULT = "about:blank"
+
+# Story 3.7 AC-10: shared with Story 3.3 H2 backstop. Existing ``"⚠️ Internal
+# error. Logs captured."`` strings hardcoded in ``task_command.py`` /
+# ``approve_command.py`` / ``ping_command.py`` are intentionally left in place
+# for back-compat — the renderer reuses this constant so any future drift is
+# centralized here.
+_INTERNAL_ERROR_MESSAGE = "⚠️ Internal error. Logs captured."
+
+# Story 3.7 AC-6: cap validation field-list bullets so a 200-field validation
+# error cannot blow Telegram's 4096-char message limit.
+_VALIDATION_FIELD_CAP = 5
+
+# Story 3.7 AC-8: detect a task-id-shaped substring in a not-found ``detail``
+# string so the renderer can surface ``Task t-<id> not found.`` when the
+# registry hands back a specific id.
+_TASK_ID_PATTERN = re.compile(
+    r"t-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
+)
 
 __all__ = ["format_http_error"]
 
@@ -29,63 +69,147 @@ def format_http_error(
     Args:
         exc:           The ``httpx.HTTPStatusError`` to format.
         command_label: Human-readable label for the failing operation used in
-                       the 4xx reply prefix.  Defaults to ``"Task"`` (preserves
+                       the reply prefix.  Defaults to ``"Task"`` (preserves
                        existing ``/task`` and ``/approve`` behaviour).
                        Pass ``"Health check"`` for ``/ping`` 4xx replies so the
                        message reads ``"⚠️ Health check failed: …"`` rather than
                        the semantically wrong ``"⚠️ Task rejected: …"``.
 
-    Differentiates:
-    - 401/403: authorization error → fixed human-readable message (M2).
-    - 409: idempotency collision from a concurrent bot instance.
-    - 4xx other: validation / Pydantic error; parse RFC 7807 ``detail``.
-      When ``detail`` is a list (FastAPI 422 shape), extracts the first
-      ``"msg"`` entry.  All interpolated values are HTML-escaped (H5).
-    - 5xx: registry unavailable.
-
-    Falls back to ``"⚠️ {command_label} rejected: HTTP {status}"`` (or
-    ``"⚠️ {command_label} failed: HTTP {status}"`` for non-default labels)
-    when the body is not valid JSON or lacks ``detail``.
+    Story 3.7 dispatch: parse the envelope once, route by ``type`` slug to a
+    dedicated renderer. Unknown slugs (or ``about:blank``) fall through to
+    the legacy status-code-based path for back-compat.
     """
     status = exc.response.status_code
+    try:
+        body = exc.response.json()
+        if not isinstance(body, dict):
+            body = {}
+        problem_type = body.get("type", _PROBLEM_TYPE_DEFAULT)
+        detail = body.get("detail")
+        extensions = body.get("extensions") or {}
+        if not isinstance(extensions, dict):
+            extensions = {}
+    except Exception:  # noqa: BLE001 — body may not be JSON (e.g., proxy 413)
+        body = {}
+        problem_type = _PROBLEM_TYPE_DEFAULT
+        detail = None
+        extensions = {}
 
+    if problem_type == _PROBLEM_TYPE_VALIDATION:
+        return _format_validation_error(extensions, detail, command_label)
+    if problem_type == _PROBLEM_TYPE_IDEMPOTENCY_COLLISION:
+        return _format_idempotency_collision(body, command_label)
+    if problem_type == _PROBLEM_TYPE_NOT_FOUND:
+        return _format_not_found(detail, command_label)
+    if problem_type == _PROBLEM_TYPE_RATE_LIMITED:
+        return _format_rate_limited(detail, extensions)
+    if problem_type == _PROBLEM_TYPE_INTERNAL:
+        return _format_internal_error()
+
+    # Fallback: status-code-based legacy path. The 409 branch reuses
+    # ``_format_idempotency_collision`` so back-compat behaviour (rendering a
+    # top-level ``task_id`` from envelopes that don't ship the slug yet) is
+    # preserved without duplicating the renderer.
+    if status == 409:
+        return _format_idempotency_collision(body, command_label)
+    return _format_legacy_status(status, detail, command_label)
+
+
+def _verb(command_label: str) -> str:
+    """Story 3.5 H2: ``"Task" → "rejected"``; non-default → ``"failed"``."""
+    return "rejected" if command_label == "Task" else "failed"
+
+
+def _format_validation_error(
+    extensions: dict[str, Any],
+    detail: Any,
+    command_label: str,
+) -> str:
+    """AC-6: bullet list of per-field errors; cap at 5 fields with ``… and N more``."""
+    verb = _verb(command_label)
+    errors = extensions.get("errors")
+    if not isinstance(errors, list) or not errors:
+        # Fallback: flat ``detail`` rendering when structured list is absent.
+        if detail is not None:
+            return f"⚠️ {command_label} {verb}: {html.escape(str(detail))}"
+        return f"⚠️ {command_label} {verb}: invalid request"
+    head = errors[:_VALIDATION_FIELD_CAP]
+    bullets: list[str] = []
+    for entry in head:
+        if not isinstance(entry, dict):
+            continue
+        loc_raw = entry.get("loc") or []
+        loc_parts = [html.escape(str(p)) for p in loc_raw] if isinstance(loc_raw, list) else []
+        msg = html.escape(str(entry.get("msg", "")))
+        bullets.append(f"• {' → '.join(loc_parts)}: {msg}")
+    overflow = len(errors) - len(head)
+    suffix = f"\n… and {overflow} more" if overflow > 0 else ""
+    return f"⚠️ {command_label} {verb}: invalid request\n" + "\n".join(bullets) + suffix
+
+
+def _format_idempotency_collision(body: dict[str, Any], command_label: str) -> str:
+    """AC-7: prefer ``extensions.task_id``; fall back to top-level ``task_id``."""
+    verb = _verb(command_label)
+    extensions = body.get("extensions") or {}
+    task_id_raw = ""
+    if isinstance(extensions, dict):
+        task_id_raw = extensions.get("task_id", "") or ""
+    if not task_id_raw:
+        task_id_raw = body.get("task_id", "") or ""
+    if task_id_raw:
+        task_id_safe = html.escape(str(task_id_raw))
+        return (
+            f"⚠️ Duplicate idempotency key — another instance already submitted "
+            f"this message. Stored result: {task_id_safe}."
+        )
+    # Verb is unused in the no-task-id branch but verb-aware label is preserved.
+    _ = verb
+    return "⚠️ Duplicate idempotency key — another instance already submitted this message."
+
+
+def _format_not_found(detail: Any, command_label: str) -> str:
+    """AC-8: surface a task-id from ``detail`` when present; else generic message."""
+    if detail is not None:
+        match = _TASK_ID_PATTERN.search(str(detail))
+        if match is not None:
+            return f"⚠️ Task {html.escape(match.group(0))} not found."
+    return f"⚠️ {html.escape(command_label)} not found."
+
+
+def _format_rate_limited(detail: Any, extensions: dict[str, Any]) -> str:
+    """AC-9: surface ``extensions.retry_after_seconds`` when present."""
+    retry_after = extensions.get("retry_after_seconds")
+    if retry_after is not None:
+        return f"⚠️ Rate limit exceeded. Retry in {html.escape(str(retry_after))}s."
+    _ = detail  # detail is operator-supplied prose; rendering kept generic.
+    return "⚠️ Rate limit exceeded. Retry shortly."
+
+
+def _format_internal_error() -> str:
+    """AC-10: shared with Story 3.3 H2 backstop."""
+    return _INTERNAL_ERROR_MESSAGE
+
+
+def _format_legacy_status(status: int, detail: Any, command_label: str) -> str:
+    """Back-compat: status-code-based path for ``about:blank`` / unknown slugs.
+
+    Preserves the pre-Story-3.7 behaviour for endpoints that still ship
+    ``type=about:blank`` (or any unknown slug) so existing tests / handlers
+    that don't migrate to the catalog continue to render as before.
+    """
     if status in (401, 403):
         return "⚠️ Not authorized. Contact your administrator."
 
-    if status == 409:
-        # Concurrent bot instance submitted the same idempotency key via
-        # a different path (unusual but possible in multi-replica deploys).
-        try:
-            body = exc.response.json()
-            task_id_raw = body.get("task_id", "")
-        except Exception:  # noqa: BLE001 — best-effort body parse
-            task_id_raw = ""
-        if task_id_raw:
-            task_id_safe = html.escape(str(task_id_raw))
-            return (
-                f"⚠️ Duplicate idempotency key — another instance already submitted "
-                f"this message. Stored result: {task_id_safe}."
-            )
-        return "⚠️ Duplicate idempotency key — another instance already submitted this message."
-
     if 400 <= status < 500:
-        # Parse RFC 7807 / FastAPI validation body for the ``detail`` field.
-        try:
-            body = exc.response.json()
-            detail_raw = body.get("detail")
-        except Exception:  # noqa: BLE001 — body may not be JSON (e.g., proxy 413)
-            detail_raw = None
-
-        # Verb selection: default label uses "rejected"; custom labels use "failed".
-        verb = "rejected" if command_label == "Task" else "failed"
-
-        if detail_raw is not None:
-            # FastAPI 422 returns detail as a list of dicts: [{"loc": [...], "msg": "..."}].
-            if isinstance(detail_raw, list):
-                msgs = [d.get("msg", "") for d in detail_raw if isinstance(d, dict)]
-                detail_str = "; ".join(m for m in msgs if m) or str(detail_raw)
+        verb = _verb(command_label)
+        if detail is not None:
+            # FastAPI 422 returns detail as a list of dicts:
+            # ``[{"loc": [...], "msg": "..."}]``.
+            if isinstance(detail, list):
+                msgs = [d.get("msg", "") for d in detail if isinstance(d, dict)]
+                detail_str = "; ".join(m for m in msgs if m) or str(detail)
             else:
-                detail_str = str(detail_raw)
+                detail_str = str(detail)
             return f"⚠️ {command_label} {verb}: {html.escape(detail_str)}"
         return f"⚠️ {command_label} {verb}: HTTP {status}"
 

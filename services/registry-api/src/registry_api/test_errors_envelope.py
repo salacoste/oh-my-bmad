@@ -98,7 +98,14 @@ class TestProblemDetailsExtensions:
     async def test_problem_details_extensions_omitted_when_key_client_generated(
         self, post_client: AsyncClient
     ) -> None:
-        """POST /v1/tasks with client-supplied Idempotency-Key → 422 WITHOUT extensions."""
+        """POST /v1/tasks with client-supplied Idempotency-Key → 422 WITHOUT idempotency nudge.
+
+        Story 3.7 AC-3: validation errors now ALWAYS carry ``extensions.errors``
+        (the per-field structured list). The Story 3.6 ``idempotency_*`` keys
+        remain conditional on server-generated key + mutation, so a
+        client-supplied key omits THOSE specific keys but the ``errors`` key
+        is still present.
+        """
         key = new_idempotency_key(clock=_FROZEN_CLOCK)
         r = await post_client.post(
             "/v1/tasks",
@@ -107,8 +114,12 @@ class TestProblemDetailsExtensions:
         )
         assert r.status_code == 422
         body = r.json()
-        # No extensions field at all when key was client-supplied.
-        assert "extensions" not in body, f"unexpected 'extensions' in: {body}"
+        # Story 3.7 AC-3: ``extensions.errors`` always present on validation.
+        ext = body.get("extensions", {})
+        assert "errors" in ext, f"expected 'errors' in extensions; got: {body}"
+        # Story 3.6 nudge keys must NOT be present for client-supplied key.
+        assert "idempotency_key_origin" not in ext, f"unexpected nudge in: {body}"
+        assert "idempotency_hint" not in ext, f"unexpected nudge in: {body}"
 
     @pytest.mark.asyncio
     async def test_problem_details_extensions_omitted_on_get_method(
@@ -523,3 +534,183 @@ class TestRequestIdPropagation:
         # After both requests: clean.
         final = structlog.contextvars.get_merged_contextvars(structlog.get_logger())
         assert "request_id" not in final
+
+
+# ---------------------------------------------------------------------------
+# Story 3.7 AC-1/AC-2/AC-3: problem-type catalog + handler population
+# ---------------------------------------------------------------------------
+
+
+class TestProblemTypeCatalog:
+    """Story 3.7 AC-1/AC-2/AC-3: ``type`` slug populated per problem class.
+
+    6 tests:
+      - test_http_exception_404_envelope_has_not_found_type (AC-2)
+      - test_http_exception_409_envelope_has_idempotency_collision_type (AC-2)
+      - test_validation_error_envelope_has_validation_type_and_errors_extension
+        (AC-2, AC-3)
+      - test_validation_error_extensions_merge_idempotency_nudge_and_errors_list
+        (AC-3 — merge nudge + errors list)
+      - test_internal_error_envelope_has_internal_type (AC-2)
+      - test_problem_type_catalog_keys_match_status_codes (AC-1 — catalog keys
+        are subset of ``_STATUS_TITLES``)
+    """
+
+    @pytest.mark.asyncio
+    async def test_http_exception_404_envelope_has_not_found_type(
+        self, post_client: AsyncClient
+    ) -> None:
+        """AC-2: 404 from a missing task GET → ``type=/errors/not-found``.
+
+        Uses the well-known shape-valid-but-missing UUIDv7 path that produces a
+        deterministic 404 (mirrors the Story 3.6 GET test pattern).
+        """
+        fake_id = "t-" + "0" * 8 + "-" + "0" * 4 + "-7" + "0" * 3 + "-8" + "0" * 3 + "-" + "0" * 12
+        r = await post_client.get(f"/v1/tasks/{fake_id}")
+        assert r.status_code == 404
+        body = r.json()
+        assert body["type"] == "/errors/not-found", (
+            f"expected ``type=/errors/not-found``; got: {body}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_http_exception_409_envelope_has_idempotency_collision_type(
+        self, tmp_path: Path
+    ) -> None:
+        """AC-2: 409 from any HTTPException → ``type=/errors/idempotency-collision``.
+
+        registry-api currently does not emit 409 in production code (it
+        replays via ``X-Idempotency-Status: replayed``); to pin the catalog
+        mapping for the 409 slot we register a test-only route that raises
+        ``HTTPException(409)`` and verify the envelope's ``type`` field.
+        """
+        from starlette.exceptions import HTTPException as _HTTPException  # noqa: PLC0415
+
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+        events_dir = tmp_path / "events"
+        clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
+        app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+
+        @app.get("/debug/raise-409")
+        async def _raise_409(request: Request) -> JSONResponse:
+            raise _HTTPException(status_code=409, detail="synthetic collision")
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://testserver"
+            ) as client,
+        ):
+            r = await client.get("/debug/raise-409")
+
+        assert r.status_code == 409
+        body = r.json()
+        assert body["type"] == "/errors/idempotency-collision", (
+            f"expected ``type=/errors/idempotency-collision``; got: {body}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_validation_error_envelope_has_validation_type_and_errors_extension(
+        self, post_client: AsyncClient
+    ) -> None:
+        """AC-2/AC-3: 422 envelope ships ``type=/errors/validation`` AND ``extensions.errors``."""
+        r = await post_client.post("/v1/tasks", json={})
+        assert r.status_code == 422
+        body = r.json()
+        assert body["type"] == "/errors/validation", f"expected validation type; got: {body}"
+        assert "extensions" in body, f"expected ``extensions``; got: {body}"
+        ext = body["extensions"]
+        assert "errors" in ext, f"expected ``extensions.errors``; got: {body}"
+        assert isinstance(ext["errors"], list)
+        assert len(ext["errors"]) >= 1
+        # Each entry is a dict with loc/msg/type keys (Pydantic v2 shape).
+        first = ext["errors"][0]
+        assert "loc" in first
+        assert "msg" in first
+        assert "type" in first
+
+    @pytest.mark.asyncio
+    async def test_validation_error_extensions_merge_idempotency_nudge_and_errors_list(
+        self, post_client: AsyncClient
+    ) -> None:
+        """AC-3: server-generated key + invalid body → BOTH nudge AND errors list present."""
+        # No ``Idempotency-Key`` header → middleware generates one (server-generated = True).
+        # Invalid body → 422 → validation handler.
+        r = await post_client.post("/v1/tasks", json={})
+        assert r.status_code == 422
+        body = r.json()
+        ext = body.get("extensions", {})
+        # Both Story 3.6 nudge keys present.
+        assert ext.get("idempotency_key_origin") == "server-generated"
+        assert "Idempotency-Key" in ext.get("idempotency_hint", "")
+        # AND Story 3.7 errors list present.
+        assert isinstance(ext.get("errors"), list)
+        assert len(ext["errors"]) >= 1
+
+    @pytest.mark.asyncio
+    async def test_internal_error_envelope_has_internal_type(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """AC-2: 500 envelope ships ``type=/errors/internal``.
+
+        Mirrors ``test_unhandled_exception_returns_500_problem_json`` in
+        ``test_app.py`` — replaces ``writer.append`` post-startup with a
+        synthetic boom, then asserts the catch-all envelope's ``type`` slug.
+        """
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+        events_dir = tmp_path / "events"
+        clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
+        app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+
+        async def _boom(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("synthetic failure for test 3.7 AC-2 internal")
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app, raise_app_exceptions=False),
+                base_url="http://testserver",
+            ) as client,
+        ):
+            monkeypatch.setattr(app.state.writer, "append", _boom)
+            r = await client.post("/v1/tasks", json={"title": "trigger 500"})
+
+        assert r.status_code == 500
+        body = r.json()
+        assert body["type"] == "/errors/internal", f"expected internal type; got: {body}"
+
+    def test_problem_type_catalog_keys_match_status_codes(self) -> None:
+        """AC-1: catalog status keys are a subset of ``_STATUS_TITLES`` keys.
+
+        Pure-unit pin: every status code that maps to a problem-type slug must
+        also have a human-readable title in ``_STATUS_TITLES`` so
+        ``handle_http_exception`` never lookup-misses the title side.
+        """
+        from registry_api.adapters.errors import (  # noqa: PLC0415
+            _PROBLEM_TYPE_IDEMPOTENCY_COLLISION,
+            _PROBLEM_TYPE_INTERNAL,
+            _PROBLEM_TYPE_NOT_FOUND,
+            _PROBLEM_TYPE_RATE_LIMITED,
+            _PROBLEM_TYPE_VALIDATION,
+            _STATUS_TITLES,
+            _STATUS_TO_PROBLEM_TYPE,
+        )
+
+        catalog_keys = set(_STATUS_TO_PROBLEM_TYPE.keys())
+        title_keys = set(_STATUS_TITLES.keys())
+        missing = catalog_keys - title_keys
+        assert not missing, (
+            f"problem-type catalog has status codes not in _STATUS_TITLES: {missing}"
+        )
+        # Pin the slug values too — any rename must be deliberate.
+        assert _STATUS_TO_PROBLEM_TYPE[404] == _PROBLEM_TYPE_NOT_FOUND
+        assert _STATUS_TO_PROBLEM_TYPE[409] == _PROBLEM_TYPE_IDEMPOTENCY_COLLISION
+        assert _STATUS_TO_PROBLEM_TYPE[422] == _PROBLEM_TYPE_VALIDATION
+        assert _STATUS_TO_PROBLEM_TYPE[429] == _PROBLEM_TYPE_RATE_LIMITED
+        assert _STATUS_TO_PROBLEM_TYPE[500] == _PROBLEM_TYPE_INTERNAL

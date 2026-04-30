@@ -27,6 +27,32 @@ from starlette.exceptions import HTTPException
 
 _PROBLEM_MEDIA_TYPE = "application/problem+json"
 
+# Story 3.7 AC-1: problem-type catalog. Stable slugs per problem class so
+# RFC 7807 ``type`` discriminator on the wire pins each error class to a
+# documented identifier. The Telegram renderer (Story 3.7 AC-5) duplicates
+# these literals on the gateway side and a contract test (Story 3.7 AC-4)
+# pins parity — duplication is preferred over cross-service import (Story
+# 3.6 review N7 carry-forward) to keep the import-graph guard clean.
+_PROBLEM_TYPE_VALIDATION = "/errors/validation"
+_PROBLEM_TYPE_NOT_FOUND = "/errors/not-found"
+_PROBLEM_TYPE_IDEMPOTENCY_COLLISION = "/errors/idempotency-collision"
+_PROBLEM_TYPE_RATE_LIMITED = "/errors/rate-limited"
+_PROBLEM_TYPE_INTERNAL = "/errors/internal"
+_PROBLEM_TYPE_DEFAULT = "about:blank"
+
+# Story 3.7 AC-1/AC-2: status-code → problem-type mapping for
+# ``handle_http_exception``. Read-only ``MappingProxyType`` (Story 3.6 L1
+# pattern) so the module-level source-of-truth cannot be mutated by callers.
+_STATUS_TO_PROBLEM_TYPE: MappingProxyType[int, str] = MappingProxyType(
+    {
+        404: _PROBLEM_TYPE_NOT_FOUND,
+        409: _PROBLEM_TYPE_IDEMPOTENCY_COLLISION,
+        422: _PROBLEM_TYPE_VALIDATION,
+        429: _PROBLEM_TYPE_RATE_LIMITED,
+        500: _PROBLEM_TYPE_INTERNAL,
+    }
+)
+
 # Story 3.6 AC-3: HTTP methods that mutate state. Only these methods carry the
 # server-generated-key nudge in the ProblemDetails extensions; non-mutating
 # methods (GET / HEAD / OPTIONS) omit the field entirely so the envelope is
@@ -145,6 +171,7 @@ async def handle_http_exception(request: Request, exc: Exception) -> JSONRespons
     title = _STATUS_TITLES.get(status, "Error")
     detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
     problem = ProblemDetails(
+        type=_STATUS_TO_PROBLEM_TYPE.get(status, _PROBLEM_TYPE_DEFAULT),
         title=title,
         status=status,
         detail=detail,
@@ -177,12 +204,36 @@ async def handle_validation_error(request: Request, exc: Exception) -> JSONRespo
         raise TypeError(f"expected RequestValidationError, got {type(exc).__name__}")
     errors = exc.errors()
     detail = "; ".join(f"{' -> '.join(str(loc) for loc in e['loc'])}: {e['msg']}" for e in errors)
+
+    # Story 3.7 AC-3: surface per-field errors as a structured list in
+    # ``extensions["errors"]`` so consumers (Telegram renderer / Console CLI
+    # Story 4.5) can render bullet lists instead of parsing the flat
+    # ``detail`` string. Pydantic v2's ``errors()`` may include
+    # non-JSON-serializable values (e.g. raw ``bytes`` in ``input``); the
+    # ``type`` / ``msg`` / ``loc`` fields used here are all str/scalar so
+    # ``str(...)`` coercion is sufficient. We wrap any ``bytes`` defensively
+    # via ``repr(...)`` so a ``model_dump()`` JSON-encode never crashes.
+    errors_list: list[dict[str, Any]] = []
+    for e in errors:
+        loc_list: list[str] = []
+        for p in e["loc"]:
+            loc_list.append(repr(p) if isinstance(p, bytes) else str(p))
+        msg_value: Any = e["msg"]
+        msg_str = repr(msg_value) if isinstance(msg_value, bytes) else str(msg_value)
+        type_value: Any = e.get("type", "")
+        type_str = repr(type_value) if isinstance(type_value, bytes) else str(type_value)
+        errors_list.append({"loc": loc_list, "msg": msg_str, "type": type_str})
+
+    existing = _build_idempotency_extensions(request) or {}
+    existing["errors"] = errors_list
+
     problem = ProblemDetails(
+        type=_PROBLEM_TYPE_VALIDATION,
         title="Validation Error",
         status=422,
         detail=detail,
         instance=str(request.url),
-        extensions=_build_idempotency_extensions(request),
+        extensions=existing,
     )
     return JSONResponse(
         content=problem.model_dump(exclude_none=True),
@@ -210,7 +261,7 @@ async def handle_internal_error(request: Request, exc: Exception) -> JSONRespons
     # rather than raising AttributeError — the catch-all handler must
     # never double-fault.
     problem = ProblemDetails(
-        type="about:blank",
+        type=_PROBLEM_TYPE_INTERNAL,
         title="Internal Server Error",
         status=500,
         detail="An internal error occurred. The error has been logged for investigation.",
@@ -226,6 +277,12 @@ async def handle_internal_error(request: Request, exc: Exception) -> JSONRespons
 
 __all__ = [
     "ProblemDetails",
+    "_PROBLEM_TYPE_IDEMPOTENCY_COLLISION",
+    "_PROBLEM_TYPE_INTERNAL",
+    "_PROBLEM_TYPE_NOT_FOUND",
+    "_PROBLEM_TYPE_RATE_LIMITED",
+    "_PROBLEM_TYPE_VALIDATION",
+    "_STATUS_TO_PROBLEM_TYPE",
     "handle_http_exception",
     "handle_internal_error",
     "handle_validation_error",
