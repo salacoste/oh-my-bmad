@@ -726,3 +726,59 @@ async def test_task_handler_latency_under_p95_budget() -> None:
         f"NFR-P2: p95 latency {p95:.3f} s exceeds 0.25 s budget "
         f"(max={latencies[-1]:.3f} s, min={latencies[0]:.3f} s)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Story 3.9 AC-5 / AC-9 — handle_task populates chat_id + reply_to_message_id
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_task_handler_forwards_positive_chat_id_and_message_id() -> None:
+    """AC-5: handle_task forwards chat.id + message_id to create_task (positive chat)."""
+    captured: dict[str, object] = {}
+
+    async def _transport(request: httpx.Request) -> httpx.Response:
+        captured.update(request.read() and __import__("json").loads(request.content))
+        return httpx.Response(
+            status_code=201,
+            content=_VALID_RESPONSE_JSON.encode(),
+            request=request,
+        )
+
+    async with httpx.AsyncClient(
+        base_url="http://registry-api:8080",
+        transport=httpx.MockTransport(_transport),
+    ) as http_client:
+        client = RegistryAPIClient(http_client=http_client)
+        msg = _make_message(text="/task deploy prod", chat_id=123456789, message_id=99)
+        await handle_task(msg, _make_bot(), client)
+
+    assert captured.get("chat_id") == 123456789
+    assert captured.get("reply_to_message_id") == 99
+
+
+@pytest.mark.asyncio
+async def test_task_handler_forwards_negative_supergroup_chat_id() -> None:
+    """AC-5: handle_task forwards negative supergroup chat_id correctly (no sign drop)."""
+    captured: dict[str, object] = {}
+
+    async def _transport(request: httpx.Request) -> httpx.Response:
+        captured.update(__import__("json").loads(request.content))
+        return httpx.Response(
+            status_code=201,
+            content=_VALID_RESPONSE_JSON.encode(),
+            request=request,
+        )
+
+    async with httpx.AsyncClient(
+        base_url="http://registry-api:8080",
+        transport=httpx.MockTransport(_transport),
+    ) as http_client:
+        client = RegistryAPIClient(http_client=http_client)
+        # Supergroup chat ids are large negative numbers (-100 prefix in Telegram).
+        msg = _make_message(text="/task review PR", chat_id=-1001234567890, message_id=777)
+        await handle_task(msg, _make_bot(), client)
+
+    assert captured.get("chat_id") == -1001234567890
+    assert captured.get("reply_to_message_id") == 777

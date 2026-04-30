@@ -140,11 +140,16 @@ async def handle_task(
     request_id = new_request_id()
 
     try:
+        # Story 3.9 AC-5: forward (chat_id, message_id) so registry-api
+        # persists the Telegram-thread binding (FR13). Negative chat ids
+        # (supergroup chats) flow through unchanged.
         response = await registry_client.create_task(
             description=description,
             idempotency_key=idempotency_key,
             operator_actor_id=str(message.from_user.id) if message.from_user else "unknown",
             request_id=request_id,
+            chat_id=message.chat.id,
+            reply_to_message_id=message.message_id,
         )
     except httpx.TooManyRedirects:
         # M3: TooManyRedirects is an httpx.HTTPError subclass but indicates

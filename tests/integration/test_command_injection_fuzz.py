@@ -755,7 +755,10 @@ _BOT_IDENTITY_HEADERS: frozenset[str] = frozenset(
 # with exactly one key — ``title``. If a future regression smuggles the input
 # into a different field (``raw``, ``description``, etc.), the strict-equality
 # key-set assertion below will fail.
-_EXPECTED_BODY_KEYS: frozenset[str] = frozenset({"title"})
+# Story 3.9 AC-5: chat_id + reply_to_message_id are now forwarded by
+# handle_task when the message carries them (always the case for bot-originating
+# commands — chat.id and message_id are always present on an aiogram Message).
+_EXPECTED_BODY_KEYS: frozenset[str] = frozenset({"title", "chat_id", "reply_to_message_id"})
 
 
 def _file_size(path: Path) -> int:

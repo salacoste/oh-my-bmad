@@ -1,13 +1,39 @@
 [project]
 name = "clawhip-daemon"
-version = "0.1.0"
+version = "0.2.0"
 description = "Supervises the vendored clawhip event-bus subprocess; owns outbound sink rendering (per-sink delivery policy) while telegram-gateway owns bot-ingress. Per FR19 (event routing to sinks), NFR-R5 (failure detection)."
 authors = [
     { name = "R2d2", email = "bad.vano23ru@gmail.com" },
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    # Story 3.9 AC-13 — direct Telegram Bot API client (no aiogram in
+    # clawhip-daemon — see story dev notes for the size-vs-utility
+    # rationale).
+    "httpx>=0.27",
+    # Architecture.md:856 LOCK — 3× exponential-backoff retry on the
+    # outbound sendMessage call.
+    "tenacity>=8.2",
+    # Workspace deps: events for envelope/payload models;
+    # secret-hygiene for the eventual AuditedSecret bot_token wrapper;
+    # structlog wired identically to Stories 3.6 / 3.7 (carry-forward).
+    "events",
+    "secret-hygiene",
+    "structlog>=24.1",
+]
 
 [build-system]
 requires = ["uv_build>=0.11.0,<1.0"]
 build-backend = "uv_build"
+
+[tool.uv.sources]
+events = { workspace = true }
+secret-hygiene = { workspace = true }
+
+# Story 3.9 — exclude co-located test_*.py from the wheel (mirrors the
+# telegram-gateway pattern from Story 3.6 review-fix L6).
+[tool.uv.build-backend]
+source-exclude = [
+    "**/test_*.py",
+    "**/conftest.py",
+]

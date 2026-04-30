@@ -66,6 +66,13 @@ async def handle_task_created(session: AsyncSession, envelope: EventEnvelope) ->
     Uses ``ON CONFLICT DO UPDATE`` so re-running the handler with the same
     envelope (e.g. bug-fix replay) produces the same final row state: status
     stays ``pending``; ``last_event_id`` and ``updated_at`` are refreshed.
+
+    Story 3.9 AC-4: persist ``chat_id`` + ``reply_to_message_id`` from the
+    payload when present (Telegram thread binding, FR13). Pre-3.9 v1.0.0
+    payloads omit these fields → both default to ``None`` on the model
+    so the SQL INSERT writes NULL, which is the correct back-compat
+    behaviour. The ON CONFLICT branch refreshes the binding only when the
+    new payload carries it (re-running the same envelope is a no-op).
     """
     payload = _hydrate(envelope.payload, TaskCreatedPayload)
     assert isinstance(payload, TaskCreatedPayload)
@@ -80,6 +87,8 @@ async def handle_task_created(session: AsyncSession, envelope: EventEnvelope) ->
             actor_id=envelope.actor.id,
             title=payload.title,
             last_event_id=envelope.event_id,
+            chat_id=payload.chat_id,
+            reply_to_message_id=payload.reply_to_message_id,
         )
         .on_conflict_do_update(
             index_elements=["id"],

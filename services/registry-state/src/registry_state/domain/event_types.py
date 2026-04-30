@@ -62,6 +62,15 @@ class TaskCreatedPayload(BaseModel):
     and ``hint`` are optional creation-time inputs surfaced from the HTTP API.
     All three fields default to ``None`` so existing emit-sources that only
     pass ``task_id`` continue to work unchanged.
+
+    Story 3.9 AC-1 / AC-11 — additive minor bump (1.0.0 → 1.1.0): ``chat_id``
+    and ``reply_to_message_id`` carry the Telegram thread binding so outbound
+    sinks can deliver progress events to the originating thread (FR13). Both
+    are ``int | None`` (Telegram chat ids are negative for supergroups; the
+    type is ``int``, NOT ``PositiveInt``). The single payload class is
+    registered under both ``1.0.0`` and ``1.1.0`` per the same-model
+    contract — pre-3.9 events deserialize cleanly with the new fields
+    defaulting to ``None`` (additive-only NFR-M3).
     """
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
@@ -70,6 +79,9 @@ class TaskCreatedPayload(BaseModel):
     title: str | None = Field(default=None, max_length=512)
     repo: str | None = Field(default=None, max_length=2048)
     hint: str | None = Field(default=None, max_length=4096)
+    # Story 3.9: Telegram thread binding (FR13).
+    chat_id: int | None = None
+    reply_to_message_id: int | None = None
 
 
 class TaskPlanningStartedPayload(BaseModel):
@@ -335,6 +347,11 @@ class TelegramRejectedPayload(BaseModel):
 
 register("task.created", "1.0.0", TaskCreatedPayload)
 register("task.created", "1.0.1", TaskCreatedPayload)
+# Story 3.9 AC-11: additive minor bump for the chat_id + reply_to_message_id
+# Telegram-thread binding fields. Same payload model under both versions —
+# the new fields default to ``None`` so v1.0.0/v1.0.1 events continue to
+# deserialize unchanged (NFR-M3 additive-only).
+register("task.created", "1.1.0", TaskCreatedPayload)
 register("task.planning.started", "1.0.0", TaskPlanningStartedPayload)
 register("task.planning.started", "1.0.1", TaskPlanningStartedPayload)
 register("task.plan.ready", "1.0.0", TaskPlanReadyPayload)

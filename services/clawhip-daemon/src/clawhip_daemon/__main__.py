@@ -1,42 +1,10 @@
-"""clawhip-daemon hello-world entrypoint — Story 1.4 scaffold.
+"""clawhip-daemon entrypoint — Story 3.9 AC-8.
 
-Long-lived no-op so the compose container stays up, passes the
-`test -f /tmp/ready` healthcheck, and exits cleanly on SIGTERM/SIGINT.
-Real clawhip-bridge lands in Story 2.8 (clawhip-bridge).
+Replaces Story 1.4's hello-world no-op stub with the real Telegram outbound
+sink subscriber loop implemented in :mod:`clawhip_daemon.app.main`.
 """
 
-from __future__ import annotations
-
-import logging
-import signal
-import sys
-from pathlib import Path
-from types import FrameType
-from typing import NoReturn
-
-_SERVICE = "clawhip-daemon"
-_READY = Path("/tmp/ready")
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-)
-log = logging.getLogger(_SERVICE)
-
-
-def _stop(signum: int, _frame: FrameType | None) -> NoReturn:
-    log.info("%s stopping (signal=%s)", _SERVICE, signum)
-    _READY.unlink(missing_ok=True)
-    sys.exit(0)
-
-
-def main() -> None:
-    signal.signal(signal.SIGTERM, _stop)
-    signal.signal(signal.SIGINT, _stop)
-    _READY.touch()
-    log.info("%s ready", _SERVICE)
-    signal.pause()
-
+from clawhip_daemon.app.main import main
 
 if __name__ == "__main__":
     main()

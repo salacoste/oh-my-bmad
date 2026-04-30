@@ -535,3 +535,105 @@ async def test_apply_execution_started_updates_status_and_inserts_session(
     assert sess_row.task_id == task_id
     assert sess_row.worker_kind == "unknown"
     assert sess_row.status == "active"
+
+
+# ===========================================================================
+# Story 3.9 AC-4 — chat_id + reply_to_message_id persisted by materializer
+# ===========================================================================
+
+
+def _task_created_envelope_with_binding(
+    chat_id: int | None = None,
+    reply_to_message_id: int | None = None,
+    mono_ns: int = 100_000,
+) -> EventEnvelope:
+    """Build a task.created envelope with optional Telegram-thread-binding fields."""
+    rng = Random(99)
+    clk = FrozenClock(mono_ns=mono_ns, now=FROZEN_EPOCH)
+    tid = new_task_id(clock=clk, rng=rng)
+    eid = new_event_id(clock=clk, rng=rng)
+    rid = new_uuid7(clock=clk, rng=rng)
+    from events.schema_registry import register as _reg
+
+    from registry_state.domain.event_types import TaskCreatedPayload as TaskCreatedPayloadV1_1
+
+    _reg("task.created", "1.1.0", TaskCreatedPayloadV1_1)
+    return EventEnvelope.create(
+        event_id=eid,
+        schema_version="1.1.0",
+        type="task.created",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskCreatedPayloadV1_1(
+            task_id=tid,
+            title="binding test",
+            chat_id=chat_id,
+            reply_to_message_id=reply_to_message_id,
+        ),
+        request_id=rid,
+    )
+
+
+@pytest.mark.asyncio
+async def test_materializer_persists_both_binding_fields(
+    materializer: Materializer, session_maker: object
+) -> None:
+    """AC-4: task.created with chat_id + reply_to_message_id — both written to Task row."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    assert isinstance(session_maker, async_sessionmaker)
+    env = _task_created_envelope_with_binding(chat_id=-1001234567890, reply_to_message_id=42)
+    await materializer.apply(env)
+    assert isinstance(env.payload, __import__("pydantic", fromlist=["BaseModel"]).BaseModel)
+    from registry_state.domain.event_types import TaskCreatedPayload
+
+    assert isinstance(env.payload, TaskCreatedPayload)
+    task_id = env.payload.task_id
+    async with session_maker() as session:
+        task = await session.get(Task, task_id)
+    assert task is not None
+    assert task.chat_id == -1001234567890
+    assert task.reply_to_message_id == 42
+
+
+@pytest.mark.asyncio
+async def test_materializer_persists_both_binding_fields_as_none(
+    materializer: Materializer, session_maker: object
+) -> None:
+    """AC-4 back-compat: task.created without binding fields — both columns are NULL."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    assert isinstance(session_maker, async_sessionmaker)
+    env = _task_created_envelope_with_binding(chat_id=None, reply_to_message_id=None)
+    await materializer.apply(env)
+    from registry_state.domain.event_types import TaskCreatedPayload
+
+    assert isinstance(env.payload, TaskCreatedPayload)
+    task_id = env.payload.task_id
+    async with session_maker() as session:
+        task = await session.get(Task, task_id)
+    assert task is not None
+    assert task.chat_id is None
+    assert task.reply_to_message_id is None
+
+
+@pytest.mark.asyncio
+async def test_materializer_persists_only_chat_id(
+    materializer: Materializer, session_maker: object
+) -> None:
+    """AC-4: task.created with only chat_id set — chat_id written, reply_to is NULL."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    assert isinstance(session_maker, async_sessionmaker)
+    env = _task_created_envelope_with_binding(chat_id=99999, reply_to_message_id=None)
+    await materializer.apply(env)
+    from registry_state.domain.event_types import TaskCreatedPayload
+
+    assert isinstance(env.payload, TaskCreatedPayload)
+    task_id = env.payload.task_id
+    async with session_maker() as session:
+        task = await session.get(Task, task_id)
+    assert task is not None
+    assert task.chat_id == 99999
+    assert task.reply_to_message_id is None

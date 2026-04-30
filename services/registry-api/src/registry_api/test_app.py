@@ -1004,3 +1004,89 @@ class TestEntryPoint:
         assert "_from_structlog" not in captured, (
             f"_from_structlog metadata leaked into rendered JSON:\n{captured}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Story 3.9 AC-3 / AC-9 — chat_id + reply_to_message_id in POST/GET
+# ---------------------------------------------------------------------------
+
+
+class TestTaskThreadBinding:
+    """AC-3 / AC-9: POST /v1/tasks + GET /v1/tasks/{id} with Telegram binding fields."""
+
+    @pytest.mark.asyncio
+    async def test_post_tasks_accepts_chat_id_and_reply_to(self, post_client: AsyncClient) -> None:
+        """AC-3: POST with chat_id + reply_to_message_id returns 201."""
+        r = await post_client.post(
+            "/v1/tasks",
+            json={
+                "title": "binding task",
+                "chat_id": -1001234567890,
+                "reply_to_message_id": 42,
+            },
+        )
+        assert r.status_code == 201
+        body = r.json()
+        assert body["task_id"].startswith("t-")
+
+    @pytest.mark.asyncio
+    async def test_post_tasks_without_binding_fields_is_back_compat(
+        self, post_client: AsyncClient
+    ) -> None:
+        """AC-3 back-compat: POST without chat_id / reply_to_message_id still returns 201."""
+        r = await post_client.post("/v1/tasks", json={"title": "no binding"})
+        assert r.status_code == 201
+        body = r.json()
+        assert body["task_id"].startswith("t-")
+
+    @pytest.mark.asyncio
+    async def test_get_task_reflects_binding_fields(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """AC-3: GET /v1/tasks/{id} returns chat_id + reply_to_message_id in response body."""
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+
+        # Seed a task row directly with binding fields.
+        engine = _create_engine(db_url)
+        sm = get_session(engine)
+        async with sm() as session:
+            seeded_id = new_task_id(clock=fixed_clock, rng=Random(77))
+            task = Task(
+                id=seeded_id,
+                status="pending",
+                created_at=FROZEN_EPOCH,
+                updated_at=FROZEN_EPOCH,
+                actor_kind="operator",
+                actor_id="http-api",
+                title="binding test",
+                chat_id=-100999,
+                reply_to_message_id=55,
+            )
+            session.add(task)  # noqa: SW001 — test-only fixture seeding, not production write path
+            await session.commit()
+        await engine.dispose()
+
+        events_dir = tmp_path / "events"
+        app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://testserver"
+            ) as client,
+        ):
+            r = await client.get(f"/v1/tasks/{seeded_id}")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["chat_id"] == -100999
+        assert body["reply_to_message_id"] == 55
+
+    @pytest.mark.asyncio
+    async def test_post_tasks_rejects_string_chat_id(self, post_client: AsyncClient) -> None:
+        """AC-3 validation: chat_id must be int — string value returns 422."""
+        r = await post_client.post(
+            "/v1/tasks",
+            json={"title": "bad binding", "chat_id": "not-an-int"},
+        )
+        assert r.status_code == 422

@@ -38,7 +38,9 @@ _EXPECTED_INDEXES = frozenset(
         "ix_tasks_status_updated_at",
     ]
 )
-_REVISION = "0001"
+# Story 3.9: bumped to 0002 (add_task_thread_binding).
+# The expected head revision tracks the latest migration version.
+_REVISION = "0002"
 _INI_PATH = str(Path(__file__).parent.parent.parent / "alembic.ini")
 
 

@@ -515,3 +515,59 @@ class TestUTCDateTimeDecorator:
         with pytest.raises(StatementError, match="tz-aware") as excinfo:
             await session.flush()
         assert isinstance(excinfo.value.orig, ValueError)
+
+
+# ---------------------------------------------------------------------------
+# Story 3.9 AC-2 / AC-9: migration round-trip for chat_id + reply_to_message_id
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_task_thread_binding_columns_roundtrip(session: AsyncSession) -> None:
+    """AC-9: chat_id + reply_to_message_id survive a write → read round-trip.
+
+    Validates that:
+    * Both BigInteger columns accept negative values (Telegram supergroup ids).
+    * Both columns default to NULL when omitted.
+    * Written values read back with identity equality.
+    """
+    c = _clock()
+    r = _rng()
+    task_id_with = new_task_id(clock=c, rng=r)
+    task_id_without = new_task_id(clock=c, rng=r)
+
+    # Row with both binding fields set.
+    row_with = Task(
+        id=task_id_with,
+        status="pending",
+        created_at=FROZEN_EPOCH,
+        updated_at=FROZEN_EPOCH,
+        actor_kind="operator",
+        actor_id="tg:12345",
+        title="with binding",
+        chat_id=-1001234567890,  # supergroup (negative)
+        reply_to_message_id=77,
+    )
+    # Row without binding fields (pre-3.9 / non-Telegram task).
+    row_without = Task(
+        id=task_id_without,
+        status="pending",
+        created_at=FROZEN_EPOCH,
+        updated_at=FROZEN_EPOCH,
+        actor_kind="operator",
+        actor_id="console",
+        title="without binding",
+    )
+    session.add(row_with)
+    session.add(row_without)
+    await session.commit()
+    await session.refresh(row_with)
+    await session.refresh(row_without)
+
+    # Assert binding columns round-trip for the wired task.
+    assert row_with.chat_id == -1001234567890
+    assert row_with.reply_to_message_id == 77
+
+    # Assert NULL for the non-Telegram task.
+    assert row_without.chat_id is None
+    assert row_without.reply_to_message_id is None

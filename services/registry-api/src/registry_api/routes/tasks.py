@@ -125,6 +125,11 @@ class CreateTaskRequest(BaseModel):
 
     F7: ``title`` is bounded ``[1, 512]`` chars — empty titles are rejected
     at the API boundary (422) instead of producing meaningless task rows.
+
+    Story 3.9 AC-3: ``chat_id`` + ``reply_to_message_id`` are optional
+    Telegram-thread-binding fields (FR13). Both ``int | None`` — Telegram
+    supergroup chat ids are negative so ``PositiveInt`` is wrong. ``strict=True``
+    rejects string-coerced ints from JSON, matching the rest of the body.
     """
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
@@ -132,6 +137,9 @@ class CreateTaskRequest(BaseModel):
     title: str = Field(min_length=1, max_length=512)
     repo: str | None = Field(default=None, max_length=2048)
     hint: str | None = Field(default=None, max_length=4096)
+    # Story 3.9: Telegram thread binding (FR13).
+    chat_id: int | None = None
+    reply_to_message_id: int | None = None
 
 
 class CreateTaskResponse(BaseModel):
@@ -164,7 +172,13 @@ class LastEventOut(BaseModel):
 
 
 class TaskResponse(BaseModel):
-    """200 OK response body for GET /v1/tasks/{task_id}."""
+    """200 OK response body for GET /v1/tasks/{task_id}.
+
+    Story 3.9 AC-3: ``chat_id`` + ``reply_to_message_id`` surface the
+    Telegram-thread binding so outbound sinks (clawhip-daemon's
+    TelegramSink) can dispatch progress events to the originating thread
+    via HTTP — see Story 3.6 review N7 (HTTP-only cross-service contract).
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -176,6 +190,9 @@ class TaskResponse(BaseModel):
     actor: ActorOut
     last_event: LastEventOut | None
     next_commands: list[str]
+    # Story 3.9: Telegram thread binding (FR13).
+    chat_id: int | None
+    reply_to_message_id: int | None
 
 
 # ---------------------------------------------------------------------------
@@ -335,15 +352,21 @@ async def post_tasks(
             title=body.title,
             repo=body.repo,
             hint=body.hint,
+            chat_id=body.chat_id,
+            reply_to_message_id=body.reply_to_message_id,
         )
 
         # Phase 1: actor_id flows from middleware. TODO(Story 6.1+): real auth.
         actor = Actor(kind="operator", id=request.state.actor_id)
 
+        # Story 3.9 AC-11: schema_version bumped to 1.1.0 — emit the
+        # additive-minor version that recognises chat_id /
+        # reply_to_message_id. v1.0.0 stays registered (back-compat) but
+        # new emissions always use 1.1.0.
         envelope = EventEnvelope.create(
             event_id=event_id,
             type="task.created",
-            schema_version="1.0.0",
+            schema_version="1.1.0",
             emitted_at=clock.now(),
             emitted_at_monotonic_ns=clock.monotonic_ns(),
             actor=actor,
@@ -494,6 +517,8 @@ async def get_task_by_id(
         actor=ActorOut(kind=task.actor_kind, id=task.actor_id),
         last_event=last_event,
         next_commands=_next_commands_for(task.status),
+        chat_id=task.chat_id,
+        reply_to_message_id=task.reply_to_message_id,
     )
 
 

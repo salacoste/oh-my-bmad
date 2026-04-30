@@ -93,7 +93,14 @@ class Base(DeclarativeBase):
 
 
 class Task(Base):
-    """Persistent task entity. Created on ``task.created`` event; updated by materializer."""
+    """Persistent task entity. Created on ``task.created`` event; updated by materializer.
+
+    Story 3.9 AC-2: ``chat_id`` + ``reply_to_message_id`` carry the Telegram
+    thread binding so outbound sinks (clawhip-daemon's TelegramSink) can
+    deliver progress events to the originating thread (FR13). Both columns
+    are ``BigInteger`` because Telegram supergroup chat ids exceed 2**31;
+    both are nullable for back-compat with pre-3.9 / non-Telegram tasks.
+    """
 
     __tablename__ = "tasks"
 
@@ -105,6 +112,9 @@ class Task(Base):
     actor_id: Mapped[str] = mapped_column(String(64), nullable=False)
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_event_id: Mapped[str | None] = mapped_column(String(38), nullable=True)
+    # Story 3.9: Telegram thread binding (FR13).
+    chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    reply_to_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
 
 class Session(Base):
