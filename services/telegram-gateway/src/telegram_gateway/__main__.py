@@ -8,17 +8,25 @@ callback once the audit writer is up — see
 :mod:`telegram_gateway.app.lifespan`), then runs via
 ``uvicorn.run`` (programmatic, not CLI subprocess).
 
-Logging stack (review-fix M20)
-------------------------------
+Logging stack (Story 3.6 AC-4 — supersedes review-fix M20)
+----------------------------------------------------------
 
-This entrypoint uses the stdlib :mod:`logging` module rather than
-:mod:`structlog`. Rationale: Story 2.16's ``audited_secret`` module
-deliberately routes WARN/ERROR through stdlib so pytest's ``caplog``
-fixture can capture them; mixing structlog at the entrypoint while
-the rest of the platform routes via stdlib would split the log surface
-in unhelpful ways. ``logging.basicConfig`` is invoked inside ``main()``
-(NOT at module import) so importing ``__main__`` for tests does not
-mutate the root logger (review-fix M24).
+Story 3.6 wires structlog here as a JSON renderer plus the
+``redact_secrets`` log-sanitizer processor (NFR-S1). Stdlib
+``logging.getLogger(...)`` callers — which Story 2.16's ``audited_secret``
+module relies on so pytest's ``caplog`` fixture continues to capture
+WARN/ERROR records — are bridged through ``structlog.stdlib.ProcessorFormatter``
+so the unified processor chain runs for both flavours. ``caplog`` keeps
+seeing records (it attaches its own handler at the root); we additionally
+get JSON output + secret redaction on the stderr handler.
+
+Configuration is gated by an idempotency sentinel and invoked inside
+``main()`` (NOT at module import) so importing ``__main__`` for tests does
+not mutate the root logger (review-fix M24).
+
+Story 3.6 deviates from architecture.md:826 which says ``app/main.py`` —
+keeping it at the entry-point avoids pytest fixture pollution; see story
+Dev Notes.
 
 Bootstrap-actor footgun (review-fix M26)
 ----------------------------------------
@@ -54,9 +62,11 @@ import os
 import sys
 from typing import NoReturn
 
+import structlog
 import uvicorn
 from events.clock import SystemClock
 from events.envelope import Actor, EventEnvelope
+from secret_hygiene.sanitizer import redact_secrets
 
 from telegram_gateway.app.config import TelegramSettings
 from telegram_gateway.app.main import build_app
@@ -65,6 +75,54 @@ _SERVICE = "telegram-gateway"
 
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8080
+
+# Story 3.6 AC-4: idempotency sentinel — re-running ``main()`` (e.g. across
+# multiple test cases that import the module) must not double-wire the
+# structlog processor chain or stack handlers on the root logger.
+_STRUCTLOG_CONFIGURED: bool = False
+
+
+def _configure_logging() -> None:
+    """Wire structlog + bridge stdlib logging through the same processor chain.
+
+    Idempotent: re-entry across ``main()`` calls is a no-op. Order of the
+    pre-chain is load-bearing: ``redact_secrets`` MUST run before any
+    rendering or the JSON output contains the unredacted secret bytes
+    (architecture.md:417).
+    """
+    global _STRUCTLOG_CONFIGURED
+    if _STRUCTLOG_CONFIGURED:
+        return
+
+    pre_chain: list[structlog.types.Processor] = [
+        structlog.contextvars.merge_contextvars,
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.add_logger_name,
+        structlog.processors.TimeStamper(fmt="iso", utc=True),
+        redact_secrets,
+    ]
+
+    formatter = structlog.stdlib.ProcessorFormatter(
+        processor=structlog.processors.JSONRenderer(),
+        foreign_pre_chain=pre_chain,
+    )
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(formatter)
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()
+    root_logger.addHandler(handler)
+    root_logger.setLevel(logging.INFO)
+
+    structlog.configure(
+        processors=[
+            *pre_chain,
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+        ],
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        cache_logger_on_first_use=True,
+    )
+    _STRUCTLOG_CONFIGURED = True
+
 
 # Bootstrap actor for the placeholder ``from_env`` call. Never produces
 # audit events (emit is a raise-sentinel) but satisfies the API
@@ -92,14 +150,12 @@ async def _bootstrap_emit_disallowed(envelope: EventEnvelope) -> NoReturn:
 
 def main() -> None:
     """Read configuration from env, build the app, and start uvicorn."""
-    # Configure stdlib logging INSIDE main (review-fix M24). Module-level
-    # basicConfig locks the root logger at import, which makes
-    # ``import telegram_gateway.__main__`` in tests mutate caller state.
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        stream=sys.stderr,
-    )
+    # Story 3.6 AC-4: structlog + secret-redactor bridge replaces the
+    # previous ``logging.basicConfig`` block. Configured INSIDE ``main`` for
+    # the same reason as before (review-fix M24): module-level wiring at
+    # import time mutates the root logger of any test that touches
+    # ``telegram_gateway.__main__``.
+    _configure_logging()
     log = logging.getLogger(_SERVICE)
 
     host = os.environ.get("TELEGRAM_GATEWAY_HOST", _DEFAULT_HOST)

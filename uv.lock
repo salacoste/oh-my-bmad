@@ -1566,6 +1566,8 @@ dependencies = [
     { name = "idempotency" },
     { name = "pydantic" },
     { name = "registry-state" },
+    { name = "secret-hygiene" },
+    { name = "structlog" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -1583,6 +1585,8 @@ requires-dist = [
     { name = "idempotency", editable = "packages/idempotency" },
     { name = "pydantic", specifier = ">=2.8" },
     { name = "registry-state", editable = "services/registry-state" },
+    { name = "secret-hygiene", editable = "packages/secret-hygiene" },
+    { name = "structlog", specifier = ">=24.1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 
@@ -1856,6 +1860,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "pydantic-settings" },
     { name = "secret-hygiene" },
+    { name = "structlog" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -1872,6 +1877,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic-settings", specifier = ">=2.5,<3.0" },
     { name = "secret-hygiene", editable = "packages/secret-hygiene" },
+    { name = "structlog", specifier = ">=24.1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 

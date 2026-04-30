@@ -11,9 +11,29 @@ Environment variables:
     REGISTRY_API_HOST:     Bind host for uvicorn. Default: 0.0.0.0
     REGISTRY_API_PORT:     Bind port for uvicorn. Default: 8080
 
-Logging is configured on stderr with structured ISO-8601 timestamps. Per F12
-of the Story 2.9 code review, the DB URL is redacted before logging so a
-``user:password@host`` URL never leaks the password segment to operator logs.
+Logging stack (Story 3.6 AC-4)
+------------------------------
+
+Structlog is configured here (in ``__main__.py``) — an intentional deviation
+from architecture.md:826 which says ``app/main.py``. ``app/main.py`` is the
+FastAPI factory imported by tests, where wiring structlog would either pollute
+pytest's ``caplog`` fixture or require a test-aware guard. ``__main__.py`` is
+the production entry-point only; tests do not import it. Story 3.6 Dev Notes
+documents this deviation.
+
+Processor chain (architecture.md:413-417 — ``redact_secrets`` MUST run before
+``JSONRenderer`` or it redacts nothing):
+
+    merge_contextvars → add_log_level → add_logger_name
+        → TimeStamper(iso, utc) → redact_secrets → JSONRenderer()
+
+Stdlib ``logging.getLogger(...)`` callers (e.g. F12's DB URL redaction
+message) are bridged through ``structlog.stdlib.ProcessorFormatter`` so they
+travel the same processor chain.
+
+Per F12 of the Story 2.9 code review, the DB URL is redacted before logging
+so a ``user:password@host`` URL never leaks the password segment to operator
+logs.
 """
 
 from __future__ import annotations
@@ -24,18 +44,69 @@ import re
 import sys
 from pathlib import Path
 
+import structlog
 import uvicorn
 from events.clock import SystemClock
+from secret_hygiene.sanitizer import redact_secrets
 
 from registry_api.app import build_app
 
 _SERVICE = "registry-api"
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    stream=sys.stderr,
-)
+# Story 3.6 AC-4: idempotent structlog wiring. Tests that import the
+# ``main`` symbol (TestEntryPoint) call it multiple times; without the
+# guard, the root logger accumulates handlers and the structlog processor
+# chain is double-wrapped on each call.
+_STRUCTLOG_CONFIGURED: bool = False
+
+
+def _configure_logging() -> None:
+    """Wire structlog + bridge stdlib logging through the same processor chain.
+
+    Idempotent: re-running ``main()`` (e.g. across the two ``TestEntryPoint``
+    cases) does not double-wire processors or stack handlers on the root
+    logger. The ``_STRUCTLOG_CONFIGURED`` sentinel + ``handlers.clear()``
+    together keep the configuration deterministic.
+    """
+    global _STRUCTLOG_CONFIGURED
+    if _STRUCTLOG_CONFIGURED:
+        return
+
+    # Shared pre-chain — applied to BOTH stdlib-bridged records (via
+    # ``ProcessorFormatter.foreign_pre_chain``) and structlog-native ones
+    # (via the main ``processors`` list). Order is load-bearing:
+    # ``redact_secrets`` MUST run before any rendering or the JSON output
+    # contains the unredacted secret bytes (architecture.md:417).
+    pre_chain: list[structlog.types.Processor] = [
+        structlog.contextvars.merge_contextvars,
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.add_logger_name,
+        structlog.processors.TimeStamper(fmt="iso", utc=True),
+        redact_secrets,
+    ]
+
+    formatter = structlog.stdlib.ProcessorFormatter(
+        processor=structlog.processors.JSONRenderer(),
+        foreign_pre_chain=pre_chain,
+    )
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(formatter)
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()
+    root_logger.addHandler(handler)
+    root_logger.setLevel(logging.INFO)
+
+    structlog.configure(
+        processors=[
+            *pre_chain,
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+        ],
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        cache_logger_on_first_use=True,
+    )
+    _STRUCTLOG_CONFIGURED = True
+
+
 log = logging.getLogger(_SERVICE)
 
 _DEFAULT_DB_URL = "sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3"
@@ -63,6 +134,7 @@ def _redact_url(url: str) -> str:
 
 def main() -> None:
     """Read configuration from env, build the app, and start uvicorn."""
+    _configure_logging()
     db_url = os.environ.get("REGISTRY_API_DB_URL", _DEFAULT_DB_URL)
     log_dir = Path(os.environ.get("REGISTRY_API_LOG_DIR", _DEFAULT_LOG_DIR))
     host = os.environ.get("REGISTRY_API_HOST", _DEFAULT_HOST)

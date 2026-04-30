@@ -16,6 +16,7 @@ on ``app.add_exception_handler`` calls under mypy --strict.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
@@ -24,6 +25,37 @@ from pydantic import BaseModel, ConfigDict
 from starlette.exceptions import HTTPException
 
 _PROBLEM_MEDIA_TYPE = "application/problem+json"
+
+# Story 3.6 AC-3: HTTP methods that mutate state. Only these methods carry the
+# server-generated-key nudge in the ProblemDetails extensions; non-mutating
+# methods (GET / HEAD / OPTIONS) omit the field entirely so the envelope is
+# not noisy for read paths.
+_MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+# Story 3.6 AC-3: hint payload populated when a mutation request reaches an
+# error handler with a server-generated Idempotency-Key. Story 3.7's Telegram
+# renderer will read these stable keys.
+_IDEMPOTENCY_NUDGE: dict[str, Any] = {
+    "idempotency_key_origin": "server-generated",
+    "idempotency_hint": (
+        "Provide a client-generated UUIDv7 Idempotency-Key for true idempotent "
+        "retries (RFC 7231 §4.2.2)."
+    ),
+}
+
+
+def _build_idempotency_extensions(request: Request) -> dict[str, Any] | None:
+    """Return the AC-3 nudge dict iff the key was server-generated on a mutation.
+
+    Defensive ``getattr(..., None)`` access — ``request.state`` may be
+    incomplete if a middleware crashed before populating the flag (Story 2.9
+    review F1: exception handlers must not leak state assumptions).
+    """
+    generated = getattr(request.state, "idempotency_key_generated", None)
+    if generated is True and request.method.upper() in _MUTATING_METHODS:
+        return dict(_IDEMPOTENCY_NUDGE)
+    return None
+
 
 _STATUS_TITLES: dict[int, str] = {
     400: "Bad Request",
@@ -45,12 +77,17 @@ class ProblemDetails(BaseModel):
     """RFC 7807 problem+json response shape.
 
     Fields:
-        type:     URI reference identifying the problem type. Defaults to
-                  "about:blank" when no specific problem-type URI is defined.
-        title:    Short human-readable summary of the problem type.
-        status:   HTTP status code (mirrors the response status).
-        detail:   Human-readable explanation specific to this occurrence.
-        instance: URI reference identifying the specific occurrence (request URL).
+        type:       URI reference identifying the problem type. Defaults to
+                    "about:blank" when no specific problem-type URI is defined.
+        title:      Short human-readable summary of the problem type.
+        status:     HTTP status code (mirrors the response status).
+        detail:     Human-readable explanation specific to this occurrence.
+        instance:   URI reference identifying the specific occurrence (request URL).
+        extensions: Story 3.6 AC-3: nested dict of platform-specific custom
+                    fields per architecture.md §366–382. Optional — when None,
+                    ``model_dump(exclude_none=True)`` keeps it off the wire so
+                    healthy responses are not polluted with empty objects.
+                    Story 3.7's Telegram renderer will read this nested dict.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -60,6 +97,7 @@ class ProblemDetails(BaseModel):
     status: int
     detail: str | None = None
     instance: str | None = None
+    extensions: dict[str, Any] | None = None
 
 
 async def handle_http_exception(request: Request, exc: Exception) -> JSONResponse:
@@ -82,9 +120,10 @@ async def handle_http_exception(request: Request, exc: Exception) -> JSONRespons
         status=status,
         detail=detail,
         instance=str(request.url),
+        extensions=_build_idempotency_extensions(request),
     )
     return JSONResponse(
-        content=problem.model_dump(),
+        content=problem.model_dump(exclude_none=True),
         status_code=status,
         media_type=_PROBLEM_MEDIA_TYPE,
     )
@@ -114,9 +153,10 @@ async def handle_validation_error(request: Request, exc: Exception) -> JSONRespo
         status=422,
         detail=detail,
         instance=str(request.url),
+        extensions=_build_idempotency_extensions(request),
     )
     return JSONResponse(
-        content=problem.model_dump(),
+        content=problem.model_dump(exclude_none=True),
         status_code=422,
         media_type=_PROBLEM_MEDIA_TYPE,
     )
@@ -135,15 +175,21 @@ async def handle_internal_error(request: Request, exc: Exception) -> JSONRespons
         "unhandled exception in request handler",
         extra={"path": str(request.url)},
     )
+    # Story 3.6 AC-3: ``_build_idempotency_extensions`` uses ``getattr(...,
+    # None)`` so a crash before ``IdempotencyKeyMiddleware`` populated
+    # ``request.state.idempotency_key_generated`` returns ``None`` here
+    # rather than raising AttributeError — the catch-all handler must
+    # never double-fault.
     problem = ProblemDetails(
         type="about:blank",
         title="Internal Server Error",
         status=500,
         detail="An internal error occurred. The error has been logged for investigation.",
         instance=str(request.url),
+        extensions=_build_idempotency_extensions(request),
     )
     return JSONResponse(
-        content=problem.model_dump(),
+        content=problem.model_dump(exclude_none=True),
         status_code=500,
         media_type=_PROBLEM_MEDIA_TYPE,
     )

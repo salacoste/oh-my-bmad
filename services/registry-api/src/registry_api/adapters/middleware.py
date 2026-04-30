@@ -1,4 +1,4 @@
-"""HTTP middleware stack for registry-api (Story 2.9 AC-4).
+"""HTTP middleware stack for registry-api (Story 2.9 AC-4 + Story 3.6 AC-1/AC-2).
 
 Three class-based middlewares (subclassing ``BaseHTTPMiddleware``):
 
@@ -6,13 +6,22 @@ Three class-based middlewares (subclassing ``BaseHTTPMiddleware``):
                                 the bare-UUIDv7 regex; generates via
                                 ``new_request_id(clock=clock)`` if absent or
                                 malformed; attaches to ``request.state.request_id``;
+                                binds into structlog contextvars (Story 3.6 AC-1)
+                                so downstream stdlib log records carry the
+                                ``request_id`` field; unbinds in a ``try/finally``
+                                so a uvicorn worker reused for a subsequent
+                                request never observes the prior request's id;
                                 echoes on response.
 - ``IdempotencyKeyMiddleware``: reads ``Idempotency-Key`` header; generates via
-                                ``new_idempotency_key(clock=clock)`` if absent;
-                                attaches to ``request.state.idempotency_key``. Dedup
-                                NOT enforced (deferred to Story 3.6 per 2.7 AC-12).
-                                Echoes the key + ``X-Idempotency-Status: not-enforced``
-                                on the response so clients can detect Phase 1 status.
+                                ``new_idempotency_key(clock=clock)`` if absent
+                                or malformed; attaches the key to
+                                ``request.state.idempotency_key`` and an origin
+                                flag to ``request.state.idempotency_key_generated``
+                                (Story 3.6 AC-2). Echoes the key plus
+                                ``X-Idempotency-Generated: true|false`` on every
+                                response. Route-level dedup is owned by
+                                ``routes/tasks.py`` via Story 2.13's
+                                ``IdempotencyCacheStore.get_or_run``.
 - ``ActorIdMiddleware``:        Phase 1 placeholder — hardcodes
                                 ``request.state.actor_id = "http-api"``.
                                 Real auth lands in Story 6.1+.
@@ -31,6 +40,7 @@ from __future__ import annotations
 import logging
 import re
 
+import structlog
 from events.clock import Clock
 from events.ids import new_idempotency_key, new_request_id
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -76,7 +86,17 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
                 )
             request_id = new_request_id(clock=self._clock)
         request.state.request_id = request_id
-        response = await call_next(request)
+        # Story 3.6 AC-1: bind into structlog contextvars so any downstream log
+        # record (stdlib bridge or structlog native) carries ``request_id``.
+        # The unbind MUST run on every code path — even when ``call_next``
+        # raises — otherwise a uvicorn worker reused for the next request
+        # observes the previous request's id until its own RequestIdMiddleware
+        # rebinds. The ``try/finally`` placement is load-bearing.
+        structlog.contextvars.bind_contextvars(request_id=request_id)
+        try:
+            response = await call_next(request)
+        finally:
+            structlog.contextvars.unbind_contextvars("request_id")
         response.headers["X-Request-ID"] = request_id
         return response
 
@@ -85,18 +105,22 @@ class IdempotencyKeyMiddleware(BaseHTTPMiddleware):
     """Read ``Idempotency-Key`` header; generate if absent; attach to ``request.state``.
 
     This middleware reads/generates the key and makes it available to handlers
-    via ``request.state.idempotency_key``. It echoes the key on the response.
+    via ``request.state.idempotency_key``. Story 3.6 AC-2 also records the
+    *origin* of the key on ``request.state.idempotency_key_generated``: ``True``
+    when the inbound header was missing or malformed (and a UUIDv7 was
+    server-generated), ``False`` when the client supplied a valid one. The
+    origin is echoed on every response via ``X-Idempotency-Generated``.
 
     Story 2.13: route-level dedup is wired in ``routes/tasks.py`` via
     ``IdempotencyCacheStore.get_or_run``. The route handler owns the
     ``X-Idempotency-Status`` header (values: ``applied`` for cache-miss,
     ``replayed`` for cache-hit). Endpoints that do NOT enforce dedup (e.g.
     GET routes) carry NO ``X-Idempotency-Status`` header — its absence is the
-    "not enforced for this endpoint" signal. This is a behavior change from
-    the Story 2.9 placeholder which unconditionally set ``not-enforced``.
+    "not enforced for this endpoint" signal.
 
-    Cross-route dedup (e.g. via a generic enforcing middleware) is deferred
-    to a future story (3.6 / 6.4) once additional mutating endpoints land.
+    Cross-route dedup is route-scoped via Story 2.13's
+    ``IdempotencyCacheStore.get_or_run``; multi-route enforcement is deferred
+    to Story 6.4 (HTTP API tier middleware).
     """
 
     def __init__(self, app: ASGIApp, *, clock: Clock) -> None:
@@ -111,6 +135,7 @@ class IdempotencyKeyMiddleware(BaseHTTPMiddleware):
         incoming = request.headers.get("Idempotency-Key")
         if incoming and _UUIDV7_BARE_RE.match(incoming):
             idempotency_key = incoming
+            generated = False
         else:
             if incoming:
                 # Truncate the received value to 80 chars in the log to limit
@@ -120,9 +145,15 @@ class IdempotencyKeyMiddleware(BaseHTTPMiddleware):
                     extra={"received": incoming[:80]},
                 )
             idempotency_key = new_idempotency_key(clock=self._clock)
+            generated = True
         request.state.idempotency_key = idempotency_key
+        # Story 3.6 AC-2: origin flag for handler / exception-handler
+        # consumption (errors.py uses it to populate the ProblemDetails
+        # ``extensions`` nudge on mutating-method 4xx/5xx responses).
+        request.state.idempotency_key_generated = generated
         response = await call_next(request)
         response.headers["Idempotency-Key"] = idempotency_key
+        response.headers["X-Idempotency-Generated"] = "true" if generated else "false"
         return response
 
 

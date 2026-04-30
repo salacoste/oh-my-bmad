@@ -18,6 +18,14 @@ dependencies = [
     # the in-process side-channel is owned by registry-api, so the dep
     # is declared explicitly to avoid relying on a transitive.
     "cachetools>=5.3",
+    # Story 3.6 AC-13 — explicit declaration. ``secret-hygiene`` already
+    # pulls structlog transitively, but ``registry_api.adapters.middleware``
+    # imports it directly (AC-1) and ``__main__.py`` configures the
+    # processor chain (AC-4); the import-graph guard prefers explicit
+    # over transitive deps.
+    "structlog>=24.1",
+    # Story 3.6 AC-4 — log sanitizer is a structlog processor.
+    "secret-hygiene",
 ]
 
 [build-system]
