@@ -1,6 +1,6 @@
 # Story 3.5: /ping command (Bootstrap Minimum #3 — closes Bootstrap Milestone)
 
-Status: review
+Status: review (fix-pass in progress)
 
 ## Story
 
@@ -122,7 +122,7 @@ Stories 3.6–3.20 add hardening (middleware stack, command-injection fuzz, mess
 
 8. **AC-8: Backstop** — a top-level `except Exception` catches any unexpected error and replies `"⚠️ Internal error. Logs captured."` (Story 3.3 H2 carry-forward). Handler always returns normally — never propagates (Story 3.1 M3 fire-and-forget contract).
 
-9. **AC-9: Latency budget** — NFR-O4 requires the full round-trip `<2 s`. The bot-side handler budget is `p95 < 0.5 s` (4× headroom). The latency test uses 100 invocations with a 100 ms mocked registry response and asserts `p95 < 0.2 s` (`@pytest.mark.slow`). Uses `math.ceil(0.95 * n) - 1` percentile index formula (Story 3.4 M4 carry-forward).
+9. **AC-9: Latency budget** — NFR-O4 requires the full round-trip `<2 s`. The bot-side handler budget is `<50ms p95` for in-process mocked-handler measurement (10ms mock sleep, 5x overhead headroom). The latency test uses 100 invocations with a 10 ms mocked registry response and asserts `p95 < 0.050 s` (`@pytest.mark.slow`). Uses `math.ceil(0.95 * n) - 1` percentile index formula (Story 3.4 M4 carry-forward). (L7: reconciled from `<0.5s`/`<0.2s` inconsistency to `<50ms p95` with 10ms mock sleep.)
 
 10. **AC-10: Co-located tests (≥13)** — `services/telegram-gateway/src/telegram_gateway/test_ping_command.py`:
     - `test_ping_handler_replies_with_health_summary` — happy path (`registry_status="healthy"`, `worker_status="idle"`, `clawhip_queue_depth=3`, `version="v1.2.3"`); assert reply equals the exact template from AC-4.
@@ -285,6 +285,47 @@ Story 3.1 `_TELEGRAM_GATEWAY_ACTOR` and lifespan `registry_client` injection are
 - Story 3.6 — FastAPI middleware stack (depends on `/v1/health`? check during 3.6 authoring)
 - Story 4.3 — console-CLI `decision-and-health-commands` (parity surface; blocked on server-side endpoint)
 - Epic-2-retro AI #1 — independent gate verify before flipping done
+
+### Review Findings
+
+Three-layer code review of commit `7d40aea`. After dedup: **3 High · 13 Med · 10 Low**. Per user directive ("fix all issues even minors") all are classified `[Patch]`. Story re-opened from `review` for the fix pass.
+
+**High severity**
+
+- [ ] [Review][Patch] H1 (Blind #2): premature `Literal["healthy","degraded","unhealthy"]` on `registry_status` AND `Literal["idle","busy","unhealthy"]` on `worker_status` — server contract NOT yet implemented; if registry-api adds `"warning"` / `"maintenance"` / `"stopped"` / `"offline"`, every `/ping` returns "⚠️ Registry returned an unexpected response" instead of forwarding the actual status. Replace with `str` typing + permissive `extra="ignore"` until server-side endpoint is finalized [registry_client.py:HealthResponseLocal]
+- [ ] [Review][Patch] H2 (Blind #16): `format_http_error` reuse for `/ping` 4xx emits "⚠️ Task rejected: …" — semantically wrong for a health-check command. Add context-aware variant `format_http_error_for_ping(exc)` (or extend `format_http_error(exc, *, command="task"|"ping")`) that emits `"⚠️ Health check failed: {detail}"` for `/ping` 4xx [_errors.py + ping_command.py]
+- [ ] [Review][Patch] H3 (Auditor AC-15): no machine-readable `bootstrap-minimum-milestone: closed` key in sprint-status.yaml; current closure annotation is only an inline comment on the story-status line. Add a dedicated key to the epic-3 block. Folds into the close-out commit [_bmad-output/implementation-artifacts/sprint-status.yaml]
+
+**Medium severity**
+
+- [ ] [Review][Patch] M1 (Blind #1): `get_platform_health` uses manual key extraction (`data["registry_status"]`, etc.) — replace with `HealthResponseLocal.model_validate(data)` matching the established pattern in `CreateTaskResponseLocal` / `DecisionResponseLocal` [registry_client.py:get_platform_health]
+- [ ] [Review][Patch] M2 (Blind #4): `_safe_reply` copy-pasted in `ping_command.py` and `approve_command.py`. Extract to `handlers/_safe_reply.py` (or `_replies.py`) and import in both [shared module + ping_command.py + approve_command.py]
+- [ ] [Review][Patch] M3 (Blind #6): `_log.exception(..., exc)` double-logs exception (traceback already captures it). Drop `exc` from format args in `_log.exception` calls [ping_command.py]
+- [ ] [Review][Patch] M4 (Blind #7 + Edge #6): `test_ping_handler_4xx_replies_error_message` only asserts `"⚠️" in reply_text` — passes for ANY error reply. Tighten to assert the expected /ping-specific 4xx prefix string (folds with H2) [test_ping_command.py]
+- [ ] [Review][Patch] M5 (Blind #8 + Edge #2): `test_ping_handler_swallows_reply_failure` uses `RuntimeError` instead of `aiogram.exceptions.TelegramAPIError`. Switch to `TelegramAPIError`; future tightening of `_safe_reply` to `except TelegramAPIError` would otherwise silently break the production path [test_ping_command.py]
+- [ ] [Review][Patch] M6 (Blind #9 + Edge #9): latency test runs 100 sequential iterations × 100ms = ~10s wall-clock; threshold p95 < 0.2s leaves only 100ms overhead headroom on loaded CI. Reduce mock sleep to `0.010s` and threshold to `0.050s` (or n=20 with proportional threshold) [test_ping_command.py]
+- [ ] [Review][Patch] M7 (Blind #10): `_make_registry_client` helper leaks unclosed `httpx.AsyncClient` — convert to `pytest_asyncio.fixture` with `async with` teardown. Carry-forward from Story 3.4 M10 [test_ping_command.py]
+- [ ] [Review][Patch] M8 (Blind #13 + Edge #1): no end-to-end `handle_ping` test for `RegistryResponseError` branch (only client-level test). Add `test_ping_handler_malformed_200_replies_unexpected_response` mocking the client to raise `RegistryResponseError`, asserting the reply text [test_ping_command.py]
+- [ ] [Review][Patch] M9 (Edge #3): no test for unknown Literal state (e.g., `registry_status="warning"`) → confusing "unexpected response" path. Add documentation test pinning the behavior [test_ping_command.py] — partially folds with H1 (after H1, this path becomes "renders any string")
+- [ ] [Review][Patch] M10 (Edge #4): `clawhip_queue_depth=-1` (sentinel) rejection-path untested. Add test pinning the validator behavior [test_ping_command.py]
+- [ ] [Review][Patch] M11 (Edge #5): `version: str` unbounded — pathological 1000+ char registry response could exceed Telegram's 4096-char message limit; `_safe_reply` swallows the resulting `TelegramBadRequest` silently. Add `max_length=200` to the field [registry_client.py:HealthResponseLocal] + truncate-or-reject test
+- [ ] [Review][Patch] M12 (Edge #7): no test for `worker_status="unhealthy"` + `registry_status="healthy"` (no emoji prefix expected per spec). Mirrors existing `degraded_no_warning_emoji` test [test_ping_command.py]
+- [ ] [Review][Patch] M13 (Edge #10): no test documents `extra="ignore"` forward-compat intent. Add `test_get_platform_health_ignores_extra_fields_for_forward_compat` [test_ping_command.py]
+
+**Low severity**
+
+- [ ] [Review][Patch] L1 (Blind #5): `TooManyRedirects` comment misleading — implies confusion with `RegistryResponseError`. Move catch below `RegistryResponseError`; rewrite comment to explain redirect-loop semantics [ping_command.py]
+- [ ] [Review][Patch] L2 (Blind #11): only `version` tested for HTML-escape; `registry_status`/`worker_status` not. Add a test asserting escape applies to all three string fields [test_ping_command.py]
+- [ ] [Review][Patch] L3 (Blind #12): `HealthResponseLocal` exported from `handlers/__init__.py.__all__` — leaks transport-internal model. Remove from public `__all__` (test imports from `handlers.registry_client` directly anyway) [handlers/__init__.py]
+- [ ] [Review][Patch] L4 (Blind #14): `clawhip_queue_depth` has no upper bound — pathologically large numbers render verbatim. Add `Field(ge=0, le=1_000_000)` defensive ceiling [registry_client.py]
+- [ ] [Review][Patch] L5 (Blind #15): `RegistryAPIClient` constructed inside `async with httpx.AsyncClient` block; assertions outside. Move assertions inside the `async with` for readability [test_ping_command.py]
+- [ ] [Review][Patch] L6 (Edge #8): catch-order in `handle_ping` (`TooManyRedirects → RegistryResponseError → HTTPStatusError → HTTPError`) diverges from `handle_approve` (`TooManyRedirects → HTTPStatusError → RegistryResponseError → HTTPError`). Align with 3.4 to prevent future masking if `RegistryResponseError` inherits from `HTTPStatusError` [ping_command.py]
+- [ ] [Review][Patch] L7 (Auditor Gap #3): spec p95 inconsistency — first sentence says `<0.5s` budget, second says `<0.2s`. Current test enforces 0.2s. Reconcile spec text (which folds into M6) [story file AC-9]
+- [ ] [Review][Patch] L8 (Auditor Gap #4): no test count baseline pin. Document in commit body [completion notes]
+- [ ] [Review][Patch] L9 (Edge #5 follow-up): document Telegram 4096-char limit in `_safe_reply` docstring; truncate-with-`…` if reply exceeds 4000 chars [shared `_safe_reply` module]
+- [ ] [Review][Patch] L10: `__all__` in `ping_command.py` exports `_safe_reply` (private). After M2 extraction, `ping_command.py` imports the public helper from the shared module [ping_command.py]
+
+**Dismissed (none)** — all findings actionable.
 
 ## Dev Agent Record
 

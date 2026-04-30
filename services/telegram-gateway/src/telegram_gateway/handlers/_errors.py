@@ -19,8 +19,21 @@ import httpx
 __all__ = ["format_http_error"]
 
 
-def format_http_error(exc: httpx.HTTPStatusError) -> str:
+def format_http_error(
+    exc: httpx.HTTPStatusError,
+    *,
+    command_label: str = "Task",
+) -> str:
     """Surface RFC 7807 error details as a human-readable Telegram reply.
+
+    Args:
+        exc:           The ``httpx.HTTPStatusError`` to format.
+        command_label: Human-readable label for the failing operation used in
+                       the 4xx reply prefix.  Defaults to ``"Task"`` (preserves
+                       existing ``/task`` and ``/approve`` behaviour).
+                       Pass ``"Health check"`` for ``/ping`` 4xx replies so the
+                       message reads ``"⚠️ Health check failed: …"`` rather than
+                       the semantically wrong ``"⚠️ Task rejected: …"``.
 
     Differentiates:
     - 401/403: authorization error → fixed human-readable message (M2).
@@ -30,8 +43,9 @@ def format_http_error(exc: httpx.HTTPStatusError) -> str:
       ``"msg"`` entry.  All interpolated values are HTML-escaped (H5).
     - 5xx: registry unavailable.
 
-    Falls back to ``"⚠️ Task rejected: HTTP {status}"`` when the body is
-    not valid JSON or lacks ``detail``.
+    Falls back to ``"⚠️ {command_label} rejected: HTTP {status}"`` (or
+    ``"⚠️ {command_label} failed: HTTP {status}"`` for non-default labels)
+    when the body is not valid JSON or lacks ``detail``.
     """
     status = exc.response.status_code
 
@@ -62,6 +76,9 @@ def format_http_error(exc: httpx.HTTPStatusError) -> str:
         except Exception:  # noqa: BLE001 — body may not be JSON (e.g., proxy 413)
             detail_raw = None
 
+        # Verb selection: default label uses "rejected"; custom labels use "failed".
+        verb = "rejected" if command_label == "Task" else "failed"
+
         if detail_raw is not None:
             # FastAPI 422 returns detail as a list of dicts: [{"loc": [...], "msg": "..."}].
             if isinstance(detail_raw, list):
@@ -69,8 +86,8 @@ def format_http_error(exc: httpx.HTTPStatusError) -> str:
                 detail_str = "; ".join(m for m in msgs if m) or str(detail_raw)
             else:
                 detail_str = str(detail_raw)
-            return f"⚠️ Task rejected: {html.escape(detail_str)}"
-        return f"⚠️ Task rejected: HTTP {status}"
+            return f"⚠️ {command_label} {verb}: {html.escape(detail_str)}"
+        return f"⚠️ {command_label} {verb}: HTTP {status}"
 
     # 5xx — transient registry error.
     return f"⚠️ Registry unavailable: HTTP {status}. Retry in a moment."

@@ -53,26 +53,10 @@ from aiogram.types import Message
 from events.ids import new_request_id
 
 from telegram_gateway.handlers._errors import format_http_error
+from telegram_gateway.handlers._safe_reply import safe_reply
 from telegram_gateway.handlers.registry_client import RegistryAPIClient, RegistryResponseError
 
 _log = logging.getLogger("telegram_gateway.handlers.ping_command")
-
-
-async def _safe_reply(message: Message, text: str) -> None:
-    """Reply to a Telegram message, swallowing any delivery failure.
-
-    H2/H3: ALL reply paths in handle_ping use this helper so that a
-    Telegram API error never propagates to the dispatcher and never violates
-    the Story 3.1 M3 fire-and-forget contract.
-    """
-    try:
-        await message.reply(text)
-    except Exception as exc:  # noqa: BLE001
-        _log.exception(
-            "Failed to reply to message %s: %s",
-            getattr(message, "message_id", "?"),
-            exc,
-        )
 
 
 async def handle_ping(
@@ -100,53 +84,56 @@ async def handle_ping(
     try:
         health = await registry_client.get_platform_health(request_id=request_id)
     except httpx.TooManyRedirects:
-        # M3: TooManyRedirects is an httpx.HTTPError subclass but indicates
-        # misconfiguration, not a transient network issue. Treat as network error
-        # since it's not an HTTP status error.
+        # L1/L6: TooManyRedirects caught first — indicates misconfiguration
+        # (redirect loop), not a transient network issue and not an HTTP status
+        # error. Treat as network-level unreachable.
         _log.warning(
             "registry-api too many redirects for /ping (request_id=%s)",
             request_id,
         )
-        await _safe_reply(message, "⚠️ Registry unreachable. Try again in a moment.")
-        return
-    except RegistryResponseError as exc:
-        # H1: malformed-200 body — distinct from network errors (Story 3.4 H1).
-        # Caught BEFORE the generic httpx.HTTPError branch.
-        _log.exception(
-            "registry-api malformed response for /ping (request_id=%s): %s",
-            request_id,
-            exc,
-        )
-        await _safe_reply(message, "⚠️ Registry returned an unexpected response. Logs captured.")
+        await safe_reply(message, "⚠️ Registry unreachable. Try again in a moment.")
         return
     except httpx.HTTPStatusError as exc:
-        # AC-7: non-2xx status → format_http_error from _errors.py (Story 3.4 M4).
-        reply = format_http_error(exc)
+        # L6: HTTPStatusError before RegistryResponseError — aligns with
+        # handle_approve catch order (TooManyRedirects → HTTPStatusError →
+        # RegistryResponseError → HTTPError → Exception).
+        # H2: use command_label="Health check" so 4xx reads
+        # "⚠️ Health check failed: …" not "⚠️ Task rejected: …".
+        reply = format_http_error(exc, command_label="Health check")
         _log.warning(
             "registry-api HTTP error for /ping (status=%s request_id=%s): %s",
             exc.response.status_code,
             request_id,
             exc,
         )
-        await _safe_reply(message, reply)
+        await safe_reply(message, reply)
         return
-    except httpx.HTTPError as exc:
-        # AC-6: network / timeout errors → "Registry unreachable" reply.
-        _log.warning(
-            "registry-api network error for /ping (type=%s request_id=%s): %s",
-            type(exc).__name__,
-            request_id,
-            exc,
-        )
-        await _safe_reply(message, "⚠️ Registry unreachable. Try again in a moment.")
-        return
-    except Exception as exc:  # noqa: BLE001 — AC-8 backstop: never propagate to webhook
+    except RegistryResponseError:
+        # H1: malformed-200 body — distinct from network errors (Story 3.4 H1).
+        # Caught AFTER HTTPStatusError (L6 alignment).
+        # M3: drop exc arg from _log.exception — traceback already captures it.
         _log.exception(
-            "/ping handler unexpected error (request_id=%s): %s",
+            "registry-api malformed response for /ping (request_id=%s)",
             request_id,
-            exc,
         )
-        await _safe_reply(message, "⚠️ Internal error. Logs captured.")
+        await safe_reply(message, "⚠️ Registry returned an unexpected response. Logs captured.")
+        return
+    except httpx.HTTPError:
+        # AC-6: network / timeout errors → "Registry unreachable" reply.
+        # M3: drop exc arg — traceback captures it.
+        _log.warning(
+            "registry-api network error for /ping (request_id=%s)",
+            request_id,
+        )
+        await safe_reply(message, "⚠️ Registry unreachable. Try again in a moment.")
+        return
+    except Exception:  # noqa: BLE001 — AC-8 backstop: never propagate to webhook
+        # M3: drop exc arg — traceback captures it.
+        _log.exception(
+            "/ping handler unexpected error (request_id=%s)",
+            request_id,
+        )
+        await safe_reply(message, "⚠️ Internal error. Logs captured.")
         return
 
     # AC-4: success reply — all interpolated values wrapped in html.escape().
@@ -164,11 +151,11 @@ async def handle_ping(
         f" · version: {version_safe}"
     )
 
-    # AC-4: prefix "⚠️ " only when registry_status == "unhealthy".
-    # "degraded" does not get the prefix.
-    reply_text = f"⚠️ {summary}" if health.registry_status == "unhealthy" else summary
+    # AC-4: prefix "⚠️ " only when registry_status is "unhealthy" (case-insensitive
+    # for resilience — H1). "degraded" does not get the prefix.
+    reply_text = f"⚠️ {summary}" if health.registry_status.lower() == "unhealthy" else summary
 
-    await _safe_reply(message, reply_text)
+    await safe_reply(message, reply_text)
 
 
 def make_ping_router() -> Router:
@@ -186,4 +173,6 @@ def make_ping_router() -> Router:
     return router
 
 
+# L10: _safe_reply removed from __all__ — it now lives in handlers._safe_reply
+# and is imported as safe_reply (public name) from that shared module.
 __all__ = ["handle_ping", "make_ping_router"]

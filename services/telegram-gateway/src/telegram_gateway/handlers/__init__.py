@@ -9,7 +9,8 @@ Future handlers:
 
 from telegram_gateway.handlers.approve_command import make_approve_router
 from telegram_gateway.handlers.ping_command import make_ping_router
-from telegram_gateway.handlers.registry_client import HealthResponseLocal
 from telegram_gateway.handlers.task_command import make_task_router
 
-__all__ = ["HealthResponseLocal", "make_approve_router", "make_ping_router", "make_task_router"]
+# L3: HealthResponseLocal removed from public __all__ — it is a transport-internal
+# model. Tests import it directly from telegram_gateway.handlers.registry_client.
+__all__ = ["make_approve_router", "make_ping_router", "make_task_router"]

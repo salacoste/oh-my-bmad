@@ -79,16 +79,30 @@ class HealthResponseLocal(BaseModel):
     Forward-compatible shape pinned by 3.5's mocked tests; alignment with the
     eventual server-side endpoint owner (TBD — gap in current epic plan; see Dev Notes).
 
+    H1 (permissive str typing): ``registry_status`` and ``worker_status`` use ``str``
+    rather than ``Literal[...]`` because the server-side endpoint is NOT yet
+    implemented.  If registry-api adds ``"warning"`` / ``"maintenance"`` /
+    ``"stopped"`` / ``"offline"`` states, ``Literal`` typing would silently render
+    every ``/ping`` as ``"⚠️ Registry returned an unexpected response"`` instead of
+    forwarding the actual status string.  The ``extra="ignore"`` policy in
+    ``model_config`` ensures unknown future fields are dropped cleanly.
+
     TODO(story-TBD): verify field names match the server-side GET /v1/health response
     when that endpoint lands. Most likely owner: Story 6.x middleware stack or a new
     platform-observability story between Epics 5 and 7.
+    TODO(story-TBD): re-evaluate whether to narrow these to Literal once the server
+    contract is finalised.
     """
 
-    model_config = ConfigDict(frozen=True)
-    registry_status: Literal["healthy", "degraded", "unhealthy"]
-    worker_status: Literal["idle", "busy", "unhealthy"]
-    clawhip_queue_depth: int = Field(ge=0)
-    version: str  # e.g., "v1.2.3"
+    model_config = ConfigDict(frozen=True, extra="ignore")
+    # H1: str + Field constraints rather than Literal — server contract not yet finalised.
+    registry_status: str = Field(min_length=1, max_length=64)
+    worker_status: str = Field(min_length=1, max_length=64)
+    # L4: defensive upper bound prevents absurdly large queue depths rendering verbatim.
+    clawhip_queue_depth: int = Field(ge=0, le=1_000_000)
+    # M11: defensive upper bound prevents overlong version strings exceeding Telegram's
+    # 4096-char message limit when combined with the rest of the reply.
+    version: str = Field(min_length=1, max_length=200)  # e.g., "v1.2.3"
 
 
 class RegistryResponseError(httpx.HTTPError):
@@ -322,18 +336,15 @@ class RegistryAPIClient:
         )
         response.raise_for_status()
 
+        # M1: use model_validate to match the CreateTaskResponseLocal /
+        # DecisionResponseLocal pattern — avoids manual key extraction.
         # H1: wrap body parsing so shape failures raise RegistryResponseError
         # (before the generic httpx.HTTPError branch in handle_ping).
         try:
             data = response.json()
-            return HealthResponseLocal(
-                registry_status=data["registry_status"],
-                worker_status=data["worker_status"],
-                clawhip_queue_depth=data["clawhip_queue_depth"],
-                version=data["version"],
-            )
+            return HealthResponseLocal.model_validate(data)
         except (_json.JSONDecodeError, KeyError, ValidationError, ValueError) as exc:
-            # L6: ValueError included for edge-cases.
+            # ValueError included for edge-cases (e.g. unexpected json type).
             raise RegistryResponseError(f"registry-api returned malformed body: {exc}") from exc
 
 

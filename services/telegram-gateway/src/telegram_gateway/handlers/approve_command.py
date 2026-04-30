@@ -53,6 +53,7 @@ from events.ids import new_request_id
 
 from telegram_gateway.handlers import _keys
 from telegram_gateway.handlers._errors import format_http_error
+from telegram_gateway.handlers._safe_reply import safe_reply as _safe_reply
 from telegram_gateway.handlers.registry_client import RegistryAPIClient, RegistryResponseError
 
 _log = logging.getLogger("telegram_gateway.handlers.approve_command")
@@ -60,23 +61,6 @@ _log = logging.getLogger("telegram_gateway.handlers.approve_command")
 # L2: _extract_task_id promoted to _keys.extract_task_id_from_message.
 # Private alias kept for any callers that imported the old name directly.
 _extract_task_id = _keys.extract_task_id_from_message
-
-
-async def _safe_reply(message: Message, text: str) -> None:
-    """Reply to a Telegram message, swallowing any delivery failure.
-
-    H2/H3: ALL reply paths in handle_approve use this helper so that a
-    Telegram API error never propagates to the dispatcher and never violates
-    the Story 3.1 M3 fire-and-forget contract.
-    """
-    try:
-        await message.reply(text)
-    except Exception as exc:  # noqa: BLE001
-        _log.exception(
-            "Failed to reply to message %s: %s",
-            getattr(message, "message_id", "?"),
-            exc,
-        )
 
 
 async def handle_approve(
