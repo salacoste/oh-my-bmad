@@ -12,6 +12,7 @@ Story 3.10 AC-10 (14 renderer tests) + review-pass additions.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from random import Random
 from typing import Literal
@@ -29,12 +30,31 @@ from events import (
 )
 from events.schema_registry import register as _reg
 
+# Story 3.11 review M1 / M2: cross-service payload imports needed at module
+# scope — promoted from inline imports inside ``_approval_envelope`` /
+# ``_blocker_envelope``. The ``# noqa: IMP001`` matches the existing
+# cross-service exception (Story 2.9 AC-16); ``DiffSummary`` /
+# ``PreCheckResults`` are forward-ref-resolved here so ``_approval_envelope``
+# can use them in its signature without ``# noqa: UP037`` markers.
+# (Other helpers — ``_task_created_envelope`` etc — keep their inline
+# imports per Story 2.9's pattern; promotion scope is limited to what M1 /
+# M2 explicitly call out.)
+from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
+    DiffSummary,
+    PreCheckResults,
+    TaskApprovalRequestedPayload,
+    TaskBlockerRaisedPayload,
+)
+
 from clawhip_daemon.adapters.sinks.telegram_sink import (
     _APPROVAL_MESSAGE_MAX_CHARS,
+    _BLOCKER_AVAILABLE_COMMANDS,
+    _BLOCKER_MESSAGE_MAX_CHARS,
     _DELIVERABLE_EVENT_TYPES,
     _RENDERERS,
     TelegramSink,
     _render,
+    _render_blocker_raised,
 )
 
 # ---------------------------------------------------------------------------
@@ -278,8 +298,8 @@ def _approval_envelope(
     action: str = "merge PR #42",
     justification: str = "tests pass; reviewer approved",
     risk_class: Literal["low", "medium", "high"] | None = None,
-    pre_check_results: "PreCheckResults | None" = None,  # noqa: UP037 — forward ref
-    diff_summary: "DiffSummary | None" = None,  # noqa: UP037 — forward ref
+    pre_check_results: PreCheckResults | None = None,
+    diff_summary: DiffSummary | None = None,
     accepted_commands: list[str] | None = None,
     mono_ns: int = 4_000_000,
 ) -> EventEnvelope:
@@ -288,12 +308,12 @@ def _approval_envelope(
     Story 3.10 review M7: ``risk_class`` is typed ``Literal[...]`` and the
     nested optional models use direct types — drops three legacy
     ``# type: ignore[arg-type]`` markers.
+
+    Story 3.11 review M1 / M2: dropped the forward-ref noqas (``# noqa:
+    UP037``) and the inline ``TaskApprovalRequestedPayload`` import — both
+    types are now imported at top of file.
     """
     _ensure_task_created_registered()
-    from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
-        TaskApprovalRequestedPayload,
-    )
-
     _reg("task.approval_requested", "1.1.0", TaskApprovalRequestedPayload)
 
     rng = Random(99)
@@ -319,13 +339,6 @@ def _approval_envelope(
         payload=payload,
         request_id=rid,
     )
-
-
-# Re-imported here so the ``_approval_envelope`` forward references resolve.
-from registry_state.domain.event_types import (  # noqa: E402, IMP001 — Story 2.9 AC-16
-    DiffSummary,
-    PreCheckResults,
-)
 
 
 def test_render_approval_request_minimal() -> None:
@@ -495,10 +508,12 @@ def test_render_approval_request_total_cap_drops_diff_only() -> None:
     by a small margin recoverable by dropping the diff section alone. All
     10 commands must remain; only ``Diff:`` is gone.
 
-    Sizing rationale: cap is 2000 chars. The diff section
-    ``"Diff: 5 files, +100, -50"`` plus ``\\n\\n`` separator ≈ 28 chars.
-    Justification padding chosen so the FULL message lands just above 2000
-    (overflow ≤ 28) — diff drop alone brings it back under.
+    Sizing rationale (Story 3.11 review H12 — parametric on the cap):
+    The diff section ``"Diff: 5 files, +100, -50"`` plus ``\\n\\n``
+    separator ≈ 28 chars. Justification padding is sized so the FULL
+    message lands just above the cap (overflow ≤ 28) — diff drop alone
+    brings it back under. Pad scales with the cap so future cap moves
+    don't silently re-route through a different ladder step.
     """
     from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
         DiffSummary,
@@ -506,10 +521,13 @@ def test_render_approval_request_total_cap_drops_diff_only() -> None:
 
     cmds = [f"/cmd-{i:02d}" for i in range(10)]
     diff = DiffSummary(files=5, insertions=100, deletions=50)
-    # Need: full assembly > 2000 by at most ~26 chars (the diff section size
-    # plus separator). Empirically (cap=2000): pad=1740 → full=2003,
-    # no_diff=1977 — diff drop alone is the sufficient ladder step.
-    pad = "x" * 1740
+    # Story 3.11 review H12: parametric sizing — pad scales with cap so
+    # the test exercises the same ladder step regardless of cap value.
+    # Empirically (cap=1900): pad=1660 → full=1923, no_diff=1897 — diff
+    # drop alone is sufficient to bring the message under cap. Pad is
+    # expressed as ``cap - 240`` so future cap moves keep the same
+    # ladder-step coverage.
+    pad = "x" * (_APPROVAL_MESSAGE_MAX_CHARS - 240)
     env = _approval_envelope(
         justification=pad,
         diff_summary=diff,
@@ -546,7 +564,10 @@ def test_render_approval_request_total_cap_drops_diff_and_commands() -> None:
         PreCheckResults,
     )
 
-    big_just = "x" * 1300
+    # Story 3.11 review H12: parametric on cap so the test exercises the
+    # same ladder step (diff drop + commands trim, NOT pre-check drop)
+    # regardless of cap value.
+    big_just = "x" * (_APPROVAL_MESSAGE_MAX_CHARS - 700)
     pre = PreCheckResults(
         lint=PreCheckOutcome(passed=1, total=2, status="fail"),
     )
@@ -588,7 +609,11 @@ def test_render_approval_request_total_cap_drops_pre_checks_before_emergency() -
 
     # Justification just under cap so Header+Action+Reason fits but adding
     # pre-checks pushes us over.
-    big_just = "x" * 1900
+    # Story 3.11 review H12: parametric on cap so the test exercises Step 3.5
+    # (pre-check drop) regardless of cap value. Empirically (cap=1900):
+    # pad=1800 → full=1974, no_pre_checks=1897 — Step 3.5 (pre-check drop)
+    # is the sufficient ladder step.
+    big_just = "x" * (_APPROVAL_MESSAGE_MAX_CHARS - 100)
     pre = PreCheckResults(
         lint=PreCheckOutcome(passed=10, total=10, status="pass"),
         types=PreCheckOutcome(passed=20, total=20, status="pass"),
@@ -895,3 +920,607 @@ def test_render_approval_request_with_pre_check_error_status() -> None:
     env = _approval_envelope(pre_check_results=pre)
     result = _render(env)
     assert "⚠️ Unit: 0/0" in result
+
+
+# ---------------------------------------------------------------------------
+# Story 3.11 — _render_blocker_raised renderer + dispatcher tests
+# (Story 3.11 review L3: count dropped from heading — drifts when tests
+# are added/removed.)
+# ---------------------------------------------------------------------------
+
+
+# Story 3.11 review H11: idempotent guard mirroring _REGISTERED — once-per-
+# module instead of once-per-helper-invocation. The 11 blocker tests all
+# go through ``_blocker_envelope`` which used to re-register the schema on
+# every call (matches the M8 pattern Story 3.10 fixed for approval).
+_BLOCKER_REGISTERED: bool = False
+
+
+def _ensure_blocker_raised_registered() -> None:
+    """Register task.blocker_raised 1.1.0 — idempotent (Story 3.11 review H11)."""
+    global _BLOCKER_REGISTERED
+    if _BLOCKER_REGISTERED:
+        return
+    _reg("task.blocker_raised", "1.1.0", TaskBlockerRaisedPayload)
+    _BLOCKER_REGISTERED = True
+
+
+def _blocker_envelope(
+    *,
+    task_id: str = "t-00000000-0000-7000-8000-000000000002",
+    reason: str = "worker crashed mid-execution",
+    blocked_since: datetime | None = None,
+    last_event: str | None = None,
+    last_action: str | None = None,
+    mono_ns: int = 7_000_000,
+) -> EventEnvelope:
+    """Build a task.blocker_raised envelope (schema 1.1.0).
+
+    Story 3.11 review M1 / M2: drops the forward-ref noqa (``# noqa:
+    UP037``) and the inline ``TaskBlockerRaisedPayload`` import — both
+    are now imported at top of file.
+
+    Story 3.11 review H11: schema registration is idempotent via
+    ``_ensure_blocker_raised_registered`` (matches the Story 3.10 M8
+    pattern for ``_REGISTERED``).
+    """
+    _ensure_task_created_registered()
+    _ensure_blocker_raised_registered()
+
+    rng = Random(311)
+    clk = FrozenClock(mono_ns=mono_ns, now=FROZEN_EPOCH)
+    eid = new_event_id(clock=clk, rng=rng)
+    rid = new_uuid7(clock=clk, rng=rng)
+    payload = TaskBlockerRaisedPayload(
+        task_id=task_id,
+        reason=reason,
+        blocked_since=blocked_since,
+        last_event=last_event,
+        last_action=last_action,
+    )
+    return EventEnvelope.create(
+        event_id=eid,
+        schema_version="1.1.0",
+        type="task.blocker_raised",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=payload,
+        request_id=rid,
+    )
+
+
+def test_render_blocker_raised_minimal() -> None:
+    """AC-2: only required fields → header + commands footer; optional sections absent.
+
+    Story 3.11 review L5: footer-order assertion — the four bullets must
+    appear in spec order ``/logs`` → ``/retry`` → ``/stop`` → ``/handoff``.
+    """
+    env = _blocker_envelope(
+        task_id="t-00000000-0000-7000-8000-000000000002",
+        reason="worker crashed",
+    )
+    result = _render(env)
+    # Header line present.
+    assert (
+        "⛔ Task t-00000000-0000-7000-8000-000000000002 blocked. worker crashed. "
+        "See /logs t-00000000-0000-7000-8000-000000000002 for detail." in result
+    )
+    # Available commands footer present with all 4 bullets.
+    assert "Available commands:" in result
+    assert "  • /logs" in result
+    assert "  • /retry" in result
+    assert "  • /stop" in result
+    assert "  • /handoff" in result
+    # Story 3.11 review L5: assert footer bullet ORDER.
+    assert (
+        result.index("/logs")
+        < result.index("/retry")
+        < result.index("/stop")
+        < result.index("/handoff")
+    )
+    # Optional sections absent.
+    assert "Blocked since:" not in result
+    assert "Last event:" not in result
+    assert "Last action:" not in result
+
+
+def test_render_blocker_raised_with_blocked_since() -> None:
+    """AC-2: blocked_since populated → ``Blocked since: <iso>`` line present."""
+    env = _blocker_envelope(
+        blocked_since=datetime(2026, 5, 1, 12, 0, 0, tzinfo=UTC),
+    )
+    result = _render(env)
+    assert "Blocked since: 2026-05-01T12:00:00+00:00" in result
+
+
+def test_render_blocker_raised_with_last_event() -> None:
+    """AC-2: last_event populated → ``Last event: <name>`` line present."""
+    env = _blocker_envelope(last_event="task.execution.started")
+    result = _render(env)
+    assert "Last event: task.execution.started" in result
+
+
+def test_render_blocker_raised_with_last_action() -> None:
+    """AC-2: last_action populated → ``Last action: <text>`` line present."""
+    env = _blocker_envelope(last_action="ran pytest tests/")
+    result = _render(env)
+    assert "Last action: ran pytest tests/" in result
+
+
+def test_render_blocker_raised_html_escapes_task_id_reason_last_event_last_action() -> None:
+    """AC-4 / Story 3.5 H5 carry-forward: HTML-escape all operator-supplied strings.
+
+    No raw ``<`` / ``>`` (only ``&lt;`` / ``&gt;``) appear anywhere in the output.
+
+    Story 3.11 review M4 / Story 3.10 review M5 carry-forward: substring
+    assertions like ``"<b>boom</b>" not in result`` fail to detect partial
+    escapes (e.g. ``&lt;b>boom``). Add per-character invariants on the
+    escaped output so a future renderer drift can't slip past.
+    """
+    env = _blocker_envelope(
+        task_id="t-<x>",
+        reason="<b>boom</b>",
+        last_event="evt<>",
+        last_action="rm -rf <foo>",
+    )
+    result = _render(env)
+    # Sanity: no raw payload strings appear verbatim.
+    assert "<b>boom</b>" not in result
+    assert "<foo>" not in result
+    assert "evt<>" not in result
+    # Escaped forms appear.
+    assert "t-&lt;x&gt;" in result
+    assert "&lt;b&gt;boom&lt;/b&gt;" in result
+    assert "evt&lt;&gt;" in result
+    assert "rm -rf &lt;foo&gt;" in result
+    # Story 3.11 review M4: per-character invariants — once ``&lt;`` /
+    # ``&gt;`` are removed, no raw ``<`` / ``>`` characters remain.
+    assert "<" not in result.replace("&lt;", "")
+    assert ">" not in result.replace("&gt;", "")
+
+
+def test_render_blocker_raised_collapses_multiline_reason_and_last_action() -> None:
+    """AC-2 / Story 3.10 H11 carry-forward: ``\\n`` in reason / last_action collapsed to space.
+
+    The header / available-commands separator (``\\n\\n``) remains intact.
+
+    Story 3.11 review L4: ``next()`` over the split lines uses an explicit
+    default + ``assert`` so a future header-prefix drift produces a clear
+    failure message instead of a bare ``StopIteration``.
+    """
+    env = _blocker_envelope(
+        reason="line1\nline2",
+        last_action="step1\nstep2",
+    )
+    result = _render(env)
+    # Reason / last_action sections are single-line.
+    # Story 3.11 review L4: explicit default + assertion.
+    header_line = next(
+        (line for line in result.split("\n") if line.startswith("⛔ ")),
+        "",
+    )
+    assert header_line, f"header line not found in result: {result!r}"
+    assert "line1 line2" in header_line
+    last_action_line = next(
+        (line for line in result.split("\n") if line.startswith("Last action: ")),
+        "",
+    )
+    assert last_action_line, f"Last action line not found in result: {result!r}"
+    assert last_action_line == "Last action: step1 step2"
+
+
+def test_render_blocker_raised_total_cap_drops_last_action_first() -> None:
+    """AC-5: section-drop ladder Step 2 — last_action dropped first when cap exceeded.
+
+    Sized so that the full message overflows by an amount recoverable by
+    dropping ONLY ``last_action``. ``last_event`` and ``blocked_since``
+    stay present.
+
+    Story 3.11 review H12: sizing is parametric on
+    ``_BLOCKER_MESSAGE_MAX_CHARS`` so future cap moves don't silently
+    re-route through a different ladder step. Empirically (cap=1900):
+    last_action=1700 → full=2003, no_last_action=288.
+    """
+    # last_action is the dominant size driver — boost it just enough to
+    # overflow the cap. Parametric: ``cap - 200`` overflows by ~+100, and
+    # dropping last_action wholesale leaves a ~290-char message well
+    # under cap.
+    big_last_action = "a" * (_BLOCKER_MESSAGE_MAX_CHARS - 200)
+    env = _blocker_envelope(
+        blocked_since=datetime(2026, 5, 1, 12, 0, 0, tzinfo=UTC),
+        last_event="task.execution.started",
+        last_action=big_last_action,
+    )
+    result = _render(env)
+    # Cap honored.
+    assert len(result) <= _BLOCKER_MESSAGE_MAX_CHARS
+    # Mandatory header preserved.
+    assert "⛔ Task " in result
+    # Available commands footer preserved.
+    assert "Available commands:" in result
+    # last_action dropped (Step 2).
+    assert "Last action:" not in result
+    # last_event and blocked_since retained.
+    assert "Last event: task.execution.started" in result
+    # Story 3.11 review M14: blocked_since rendered with timespec="seconds".
+    assert "Blocked since: 2026-05-01T12:00:00+00:00" in result
+
+
+def test_render_blocker_raised_total_cap_drops_in_spec_order() -> None:
+    """AC-5: section-drop ladder Steps 2 + 3 — last_action then last_event dropped.
+
+    Sized so that even after dropping ``last_action``, the message still
+    overflows; dropping ``last_event`` brings it back under cap. Footer
+    and ``blocked_since`` remain.
+
+    Story 3.11 review H12: sizing is parametric on
+    ``_BLOCKER_MESSAGE_MAX_CHARS`` so future cap moves don't silently
+    re-route through a different ladder step. Empirically (cap=1900):
+    reason=1650 + last_event=128 + last_action=200 → full=2231,
+    no_last_action=2016 (Step 2 still over), no_last_action_no_last_event=1874
+    (Step 3 fits).
+    """
+    env = _blocker_envelope(
+        reason="r" * (_BLOCKER_MESSAGE_MAX_CHARS - 250),
+        blocked_since=datetime(2026, 5, 1, 12, 0, 0, tzinfo=UTC),
+        last_event="x" * 128,
+        last_action="a" * 200,
+    )
+    result = _render(env)
+    # Cap honored.
+    assert len(result) <= _BLOCKER_MESSAGE_MAX_CHARS
+    # Mandatory header preserved.
+    assert "⛔ Task " in result
+    # Available commands footer preserved.
+    assert "Available commands:" in result
+    # last_action and last_event dropped.
+    assert "Last action:" not in result
+    assert "Last event:" not in result
+    # blocked_since retained.
+    assert "Blocked since: 2026-05-01T12:00:00+00:00" in result
+
+
+def test_render_blocker_raised_emergency_fallback_when_reason_too_long() -> None:
+    """AC-5: section-drop ladder Step 5 — emergency one-liner; no commands footer.
+
+    When ``reason`` alone is large enough that even header + commands
+    footer can't fit together, the renderer falls back to the one-liner
+    that still embeds ``/logs <id>`` for recovery.
+
+    Story 3.11 review H12: ``reason`` size parametric on the cap so
+    future cap changes still route through Step 5. ``cap + 90`` keeps
+    the size under the model boundary (max_length=2000) when cap=1900,
+    while guaranteeing Steps 1-4 all overflow.
+
+    Story 3.11 review H5: assert the final length is under the cap
+    (defensive self-clamp).
+    """
+    # Reason scales with cap. Header overhead ~80 chars; reason of size
+    # ``cap + 90`` makes Steps 1-4 (which all keep the full reason) all
+    # overflow, forcing Step 5.
+    reason_size = _BLOCKER_MESSAGE_MAX_CHARS + 90
+    env = _blocker_envelope(
+        task_id="t-00000000-0000-7000-8000-0000000000bb",
+        reason="X" * reason_size,
+    )
+    result = _render(env)
+    # One-liner shape from Step 5.
+    assert result == (
+        "⛔ Task t-00000000-0000-7000-8000-0000000000bb blocked. "
+        "(message body too large; see /logs t-00000000-0000-7000-8000-0000000000bb)"
+    )
+    # No available-commands footer in emergency tier.
+    assert "Available commands:" not in result
+    # Story 3.11 review H5: defensive final-length self-check assertion.
+    assert len(result) <= _BLOCKER_MESSAGE_MAX_CHARS
+
+
+def test_render_blocker_raised_payload_type_mismatch_logs_and_falls_back() -> None:
+    """H9 + H10 carry-forward: WARN + placeholder when payload isn't a typed instance.
+
+    Constructs the envelope via :meth:`EventEnvelope.model_construct` to
+    bypass Pydantic validation and forcibly assigns a raw-dict payload
+    (the registration-race scenario). Uses
+    :func:`structlog.testing.capture_logs` because the clawhip-daemon
+    test environment does not configure stdlib logging.
+    """
+    import structlog.testing
+
+    rng = Random(789)
+    clk = FrozenClock(mono_ns=8_000_000, now=FROZEN_EPOCH)
+    eid = new_event_id(clock=clk, rng=rng)
+    rid = new_uuid7(clock=clk, rng=rng)
+    env = EventEnvelope.model_construct(
+        event_id=eid,
+        schema_version="1.1.0",
+        type="task.blocker_raised",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload={"task_id": "t-raw-dict-blocker"},  # type: ignore[arg-type]
+        request_id=rid,
+    )
+    with structlog.testing.capture_logs() as captured:
+        result = _render(env)
+
+    # Placeholder shape returned (Story 3.9 carry-forward).
+    assert result == "Task t-raw-dict-blocker: task.blocker_raised"
+    # H9: structured warning emitted with expected/actual fields.
+    assert any(
+        rec.get("event") == "renderer.payload_type_mismatch"
+        and rec.get("log_level") == "warning"
+        and rec.get("expected") == "TaskBlockerRaisedPayload"
+        and rec.get("actual") == "dict"
+        for rec in captured
+    )
+    # Story 3.11 review L7: assert the placeholder did NOT leak any
+    # blocker-renderer-specific shape (no ⛔ header, no commands footer).
+    assert "⛔" not in result
+    assert "Available commands:" not in result
+
+
+def test_render_dispatcher_routes_blocker_to_renderer() -> None:
+    """AC-3: _render(envelope) for task.blocker_raised invokes _render_blocker_raised.
+
+    The blocker renderer's distinguishing header is ``⛔ Task ... blocked.`` —
+    the placeholder fallback does not include this.
+
+    Story 3.11 review M3 / M10: assert the dispatcher invariant
+    ``_RENDERERS["task.blocker_raised"] is _render_blocker_raised`` (the
+    actual routing contract) — substring-only assertions pass vacuously
+    if the entry is removed but ``task.blocker_raised`` remains in
+    ``_DELIVERABLE_EVENT_TYPES``.
+    """
+    env = _blocker_envelope(reason="explicit dispatch check")
+    result = _render(env)
+    assert result.startswith("⛔ Task ")
+    assert "explicit dispatch check" in result
+    # Story 3.11 review M3 / M10: positive identity assertion on the
+    # dispatcher entry — confirms the new entry was actually added (not
+    # silently absent while a different test path produces the header).
+    assert _RENDERERS["task.blocker_raised"] is _render_blocker_raised
+    # Sanity: the static commands tuple ordering is preserved
+    # (defensive on _BLOCKER_AVAILABLE_COMMANDS contract).
+    assert _BLOCKER_AVAILABLE_COMMANDS == ("/logs", "/retry", "/stop", "/handoff")
+
+
+# ---------------------------------------------------------------------------
+# Story 3.11 review pass — additional renderer tests
+# (M9 / M11 / L8 / L11 + H1 / H4 / H6 behavior coverage)
+# ---------------------------------------------------------------------------
+
+
+def test_render_blocker_raised_full_payload_all_sections() -> None:
+    """M11: happy-path test exercising header + all 3 optional fields + footer in one render.
+
+    Each field contributes a distinct section; assert all 5 are present
+    AND in the spec-defined order (header → blocked_since → last_event →
+    last_action → Available commands).
+    """
+    env = _blocker_envelope(
+        task_id="t-00000000-0000-7000-8000-0000000000aa",
+        reason="worker crashed mid-execution",
+        blocked_since=datetime(2026, 5, 1, 12, 0, 0, tzinfo=UTC),
+        last_event="task.execution.started",
+        last_action="ran pytest tests/",
+    )
+    result = _render(env)
+    # All five sections present.
+    assert "⛔ Task t-00000000-0000-7000-8000-0000000000aa blocked." in result
+    assert "Blocked since: 2026-05-01T12:00:00+00:00" in result
+    assert "Last event: task.execution.started" in result
+    assert "Last action: ran pytest tests/" in result
+    assert "Available commands:" in result
+    # Sections appear in spec order.
+    assert (
+        result.index("⛔ Task ")
+        < result.index("Blocked since:")
+        < result.index("Last event:")
+        < result.index("Last action:")
+        < result.index("Available commands:")
+    )
+    # Sanity: under cap.
+    assert len(result) <= _BLOCKER_MESSAGE_MAX_CHARS
+
+
+def test_render_blocker_raised_total_cap_drops_blocked_since_at_step_4() -> None:
+    """M9: section-drop ladder Step 4 — drop ``blocked_since`` after Steps 2 + 3.
+
+    Sized so that even after dropping ``last_action`` (Step 2) and
+    ``last_event`` (Step 3), the message still overflows; dropping
+    ``blocked_since`` (Step 4) brings it back under cap. The header +
+    commands footer remain.
+
+    Story 3.11 review M9: covers the otherwise-untested Step 4 ladder
+    transition. The narrow band where Step 4 fires is roughly
+    ``cap - 220 < len(reason) <= cap - 175`` once the optional fields
+    are sized to consume the remaining headroom. Empirically (cap=1900):
+    reason=1700, blocked_since=tz-aware datetime, last_event=128 chars,
+    last_action=200 chars: full=2281, no_la=2066, no_la_no_le=1924
+    (Step 3 still over), step4=1882 (Step 4 fits).
+    """
+    # Reason sized so Step 3 still overflows but Step 4 (drop blocked_since)
+    # brings the message under cap. Parametric on cap.
+    reason_size = _BLOCKER_MESSAGE_MAX_CHARS - 200
+    env = _blocker_envelope(
+        reason="r" * reason_size,
+        blocked_since=datetime(2026, 5, 1, 12, 0, 0, tzinfo=UTC),
+        last_event="x" * 128,
+        last_action="a" * 200,
+    )
+    result = _render(env)
+    # Cap honored.
+    assert len(result) <= _BLOCKER_MESSAGE_MAX_CHARS
+    # Header + footer preserved.
+    assert "⛔ Task " in result
+    assert "Available commands:" in result
+    # All three optional sections dropped.
+    assert "Last action:" not in result
+    assert "Last event:" not in result
+    assert "Blocked since:" not in result
+
+
+def test_render_blocker_raised_is_not_async() -> None:
+    """L8 / AC-6: renderer is ``def``, not ``async def`` — pure sync function.
+
+    Confirms the renderer is trivially unit-testable without an event
+    loop. Mirrors the AC-6 carry-forward from Story 3.10's approval
+    renderer.
+    """
+    import inspect
+
+    assert not inspect.iscoroutinefunction(_render_blocker_raised)
+
+
+def test_render_blocker_raised_minimal_emits_no_payload_type_mismatch_warn() -> None:
+    """L11: success path emits NO ``renderer.payload_type_mismatch`` WARN.
+
+    Sibling to the H9 test that asserts the WARN IS emitted on the
+    raw-dict-payload negative path. Without this positive-path assertion
+    a future refactor that always logs the WARN would pass the negative
+    test silently.
+    """
+    import structlog.testing
+
+    env = _blocker_envelope(reason="worker crashed")
+    with structlog.testing.capture_logs() as captured:
+        _ = _render(env)
+
+    assert not any(rec.get("event") == "renderer.payload_type_mismatch" for rec in captured), (
+        f"unexpected payload_type_mismatch on success path: {captured!r}"
+    )
+
+
+def test_render_blocker_raised_strips_trailing_terminal_punctuation_in_reason() -> None:
+    """H1: trailing terminal punctuation in ``reason`` is stripped before injection.
+
+    Without this, ``reason="crashed."`` produces double punctuation in
+    the header line (``"...crashed.. See /logs..."``). Story 3.11 review
+    H1 fixes this by stripping ``.``/``?``/``!``/``:`` before HTML-escape.
+    """
+    for raw in ("crashed.", "crashed?", "crashed!", "crashed:"):
+        env = _blocker_envelope(reason=raw)
+        result = _render(env)
+        # Header line ends with a single period (the renderer-added one),
+        # not double punctuation.
+        assert ". See /logs " in result
+        assert ".." not in result.split(". See /logs ")[0]
+        # The chosen punctuation char does not survive in the rendered
+        # header before the renderer-added period.
+        before_period = result.split(". See /logs ")[0]
+        assert raw[-1] not in before_period.split("blocked. ")[1]
+
+
+def test_render_blocker_raised_collapses_newlines_in_last_event() -> None:
+    """H4: ``last_event`` newlines are collapsed too (not just ``reason`` / ``last_action``).
+
+    A schema-valid ``last_event`` value containing ``\\n`` would
+    otherwise inject a bogus section break since the renderer joins
+    sections with ``\\n\\n``.
+    """
+    # The model boundary allows up to 128 chars; embed a newline.
+    env = _blocker_envelope(last_event="evt\nattacker")
+    result = _render(env)
+    # Newline collapsed to space.
+    assert "Last event: evt attacker" in result
+    # No literal newline appears within the last_event line.
+    assert "Last event: evt\nattacker" not in result
+
+
+def test_render_blocker_raised_collapses_carriage_returns_in_reason_and_last_action() -> None:
+    """H6 / L17: ``\\r\\n`` and bare ``\\r`` are collapsed too (not just ``\\n``).
+
+    Pre-fix, ``reason="line1\\r\\nline2"`` produced ``"line1\\r line2"``
+    after the naive ``.replace("\\n", " ")``. Story 3.11 review H6 / L17
+    extracts ``_collapse_newlines`` which handles ``\\r\\n`` first, then
+    bare ``\\r``, then ``\\n`` so legacy line endings collapse cleanly.
+    """
+    env = _blocker_envelope(
+        reason="line1\r\nline2",
+        last_action="step1\r\nstep2\rstep3",
+    )
+    result = _render(env)
+    # No raw CR or LF survives in the operator-supplied content
+    # (the section separator ``\n\n`` is fine — that's renderer-added).
+    # Header line has no CR / LF embedded.
+    header_line = next(
+        (line for line in result.split("\n") if line.startswith("⛔ ")),
+        "",
+    )
+    assert header_line, f"header line not found: {result!r}"
+    assert "\r" not in header_line
+    # Last action line is single-line.
+    last_action_line = next(
+        (line for line in result.split("\n") if line.startswith("Last action: ")),
+        "",
+    )
+    assert last_action_line == "Last action: step1 step2 step3"
+
+
+def test_render_blocker_raised_blocked_since_drops_microseconds() -> None:
+    """M14: ``blocked_since`` rendered with ``timespec='seconds'`` — no microseconds.
+
+    Without timespec="seconds", microsecond presence shifts the rendered
+    length by 7 chars (``+00:00`` vs ``.123456+00:00``), perturbing the
+    section-drop ladder math. The renderer locks to seconds precision.
+    """
+    aware = datetime(2026, 5, 1, 12, 0, 0, 123456, tzinfo=UTC)
+    env = _blocker_envelope(blocked_since=aware)
+    result = _render(env)
+    # No microsecond fragment.
+    assert ".123456" not in result
+    # Seconds-precision representation present.
+    assert "Blocked since: 2026-05-01T12:00:00+00:00" in result
+
+
+def test_render_blocker_raised_emergency_clamps_to_cap_when_task_id_oversized() -> None:
+    """H2 + H5: emergency one-liner with raw ``<`` task_id — escape-then-slice safety.
+
+    Construct an envelope via ``model_construct`` to bypass the model's
+    1..64 cap on ``task_id`` and force a 65-char raw ``<`` task_id. The
+    pre-fix ``task_id_esc[:64]`` slice would split mid-entity (each ``<``
+    escapes to 5 chars of ``&lt;``); the post-fix
+    ``html.escape(payload.task_id[:64])`` slices the RAW string first.
+    Reason is sized to force Step 5.
+    """
+    # task_id of 65 ``<`` chars — would escape to 65*5 = 325 chars under
+    # the old slice-after-escape code.
+    bad_task_id = "<" * 65
+    # Pydantic v2 ``model_construct`` bypasses field validators — the
+    # 1..64 max_length is intentionally bypassed for this test.
+    payload = TaskBlockerRaisedPayload.model_construct(
+        task_id=bad_task_id,
+        reason="X" * (_BLOCKER_MESSAGE_MAX_CHARS + 90),
+        blocked_since=None,
+        last_event=None,
+        last_action=None,
+    )
+    rng = Random(101)
+    clk = FrozenClock(mono_ns=9_000_000, now=FROZEN_EPOCH)
+    eid = new_event_id(clock=clk, rng=rng)
+    rid = new_uuid7(clock=clk, rng=rng)
+    env = EventEnvelope.model_construct(
+        event_id=eid,
+        schema_version="1.1.0",
+        type="task.blocker_raised",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=payload,
+        request_id=rid,
+    )
+    result = _render(env)
+    # H2: no truncated entity (no bare ``&l`` or ``&lt`` without ``;``).
+    # The escape happens AFTER the slice, so the result contains exactly
+    # 64 fully-formed ``&lt;`` entities per occurrence.
+    # H5: result respects the cap.
+    assert len(result) <= _BLOCKER_MESSAGE_MAX_CHARS
+    # No partial-entity tokens — every ``&l`` is followed by ``t;``.
+    # Use a strict structural check: stripping all complete ``&lt;`` and
+    # ``&gt;`` entities should leave NO bare ``&`` chars from the
+    # task_id occurrences.
+    stripped = result.replace("&lt;", "").replace("&gt;", "")
+    # No truncated entity fragments (e.g. ``&l`` alone) remain.
+    assert "&l" not in stripped
+    assert "&g" not in stripped

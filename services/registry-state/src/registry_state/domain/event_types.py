@@ -126,12 +126,43 @@ class TaskExecutionStartedPayload(BaseModel):
 
 
 class TaskBlockerRaisedPayload(BaseModel):
-    """Payload for the ``task.blocker_raised`` event."""
+    """Payload for the ``task.blocker_raised`` event.
+
+    Story 3.11 AC-1 — additive minor bump (1.0.x → 1.1.0): three optional
+    FR15 fields (``blocked_since``, ``last_event``, ``last_action``) are
+    added so the Telegram blocker-notification renderer can include
+    blocked-since timestamp, the most recent event before the blocker,
+    and the most recent agent action. All three default to ``None`` so
+    legacy v1.0.x events deserialize cleanly. The single payload class
+    is registered under ``1.0.0``, ``1.0.1``, and ``1.1.0`` (additive-only
+    NFR-M3).
+
+    Story 3.10 H3 carry-forward — model-boundary string validators:
+    ``task_id`` (1..64 chars) and ``reason`` (1..2000 chars) gain explicit
+    ``min_length`` / ``max_length`` validators matching the cap pattern set
+    on :class:`TaskApprovalRequestedPayload`. ``last_event`` is bounded to
+    1..128 chars (event-type registry convention); ``last_action`` is
+    bounded to 1..2000 chars (same shape as approval ``action``). Empty
+    strings on the optional fields would render a useless ``Last event:``
+    line with a trailing space — Story 3.11 review H7 closes that gap by
+    adding ``min_length=1`` to both.
+
+    Story 3.11 review H8: ``blocked_since`` is typed
+    :class:`pydantic.AwareDatetime` so naive timestamps (``.isoformat()``
+    omits the offset suffix → operator sees ambiguous "12:00:00" with no
+    timezone) are rejected at the payload boundary.
+    """
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
-    task_id: str
-    reason: str
+    task_id: str = Field(min_length=1, max_length=64)
+    reason: str = Field(min_length=1, max_length=2000)
+    # Story 3.11 — optional FR15 fields (additive, schema 1.1.0).
+    # H8: AwareDatetime — naive datetimes rejected at the model boundary.
+    blocked_since: AwareDatetime | None = None
+    # H7: min_length=1 — empty string produces a useless ``Last event:`` line.
+    last_event: str | None = Field(default=None, min_length=1, max_length=128)
+    last_action: str | None = Field(default=None, min_length=1, max_length=2000)
 
 
 class TaskSummaryEmittedPayload(BaseModel):
@@ -494,6 +525,13 @@ register("task.execution.started", "1.0.1", TaskExecutionStartedPayload)
 # Story 2.8 — 4 new event types.
 register("task.blocker_raised", "1.0.0", TaskBlockerRaisedPayload)
 register("task.blocker_raised", "1.0.1", TaskBlockerRaisedPayload)
+# Story 3.11 AC-1 / AC-9: additive 1.1.0 with optional FR15 fields. Same-model
+# contract — pre-3.11 events (no blocked_since / last_event / last_action)
+# deserialize cleanly under 1.1.0 with the new fields defaulting to None
+# (NFR-M3 additive-only). Story 3.9 H7 carry-forward — registration in
+# event_types.py (NOT packages/events/.../schema_registry.py) avoids the
+# circular import the dev pass discovered.
+register("task.blocker_raised", "1.1.0", TaskBlockerRaisedPayload)
 register("task.summary_emitted", "1.0.0", TaskSummaryEmittedPayload)
 register("task.summary_emitted", "1.0.1", TaskSummaryEmittedPayload)
 register("task.approval_requested", "1.0.0", TaskApprovalRequestedPayload)

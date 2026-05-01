@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: 2026-05-01T13:52:00Z
+# last_updated: 2026-05-01T18:30:00Z
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-01T13:52:00Z
+last_updated: 2026-05-01T18:30:00Z
 project: oh-my-bmad
 project_key: NOKEY
 tracking_system: file-system
@@ -98,7 +98,7 @@ development_status:
   3-8-command-injection-fuzz-test: done
   3-9-task-thread-binding: done
   3-10-approval-request-template: done
-  3-11-blocker-notification-template: backlog
+  3-11-blocker-notification-template: done
   3-12-completion-summary-template: backlog
   3-13-self-recovered-summary-template: backlog
   3-14-status-command-telegram-surface: backlog

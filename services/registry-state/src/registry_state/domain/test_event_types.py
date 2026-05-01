@@ -25,6 +25,7 @@ Story 3.10 review-pass additions (H3, H4, H5, H6, L9, M13, H12):
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Literal
 
 import pytest
@@ -34,6 +35,7 @@ from registry_state.domain.event_types import (
     DiffSummary,
     PreCheckOutcome,
     TaskApprovalRequestedPayload,
+    TaskBlockerRaisedPayload,
 )
 
 
@@ -215,3 +217,111 @@ def test_diff_summary_rejects_overflow_value() -> None:
         DiffSummary(files=0, insertions=10**9 + 1, deletions=0)
     with pytest.raises(ValidationError):
         DiffSummary(files=0, insertions=0, deletions=10**9 + 1)
+
+
+# ---------------------------------------------------------------------------
+# Story 3.11 — TaskBlockerRaisedPayload v1.1.0 additive extension (3 tests)
+# ---------------------------------------------------------------------------
+
+
+def test_task_blocker_raised_payload_v1_0_back_compat() -> None:
+    """AC-1: Pre-3.11 v1.0.0/v1.0.1 shape (task_id + reason only) deserializes cleanly under 1.1.0.
+
+    All three new optional fields default to None — additive-only NFR-M3.
+    """
+    payload = TaskBlockerRaisedPayload(
+        task_id=_VALID_TASK_ID,
+        reason="worker crashed mid-execution",
+    )
+    assert payload.blocked_since is None
+    assert payload.last_event is None
+    assert payload.last_action is None
+
+
+def test_task_blocker_raised_payload_rejects_empty_task_id() -> None:
+    """AC-1 / Story 3.10 H3 carry-forward: task_id min_length=1 — empty string rejected."""
+    with pytest.raises(ValidationError):
+        TaskBlockerRaisedPayload(task_id="", reason="worker crashed")
+
+
+def test_task_blocker_raised_payload_rejects_oversized_reason() -> None:
+    """AC-1 / Story 3.10 H3 carry-forward: reason max_length=2000 — 2001 chars rejected."""
+    with pytest.raises(ValidationError):
+        TaskBlockerRaisedPayload(task_id=_VALID_TASK_ID, reason="X" * 2001)
+
+
+# ---------------------------------------------------------------------------
+# Story 3.11 review pass — boundary + AwareDatetime tests (M5, M6, M7, M8, H8)
+# ---------------------------------------------------------------------------
+
+
+def test_task_blocker_raised_payload_rejects_oversized_task_id() -> None:
+    """M5 / Story 3.10 H3 carry-forward: task_id max_length=64 — 65 chars rejected.
+
+    The emergency one-liner safety relies on this upper bound (Story 3.11
+    review H2 + M5).
+    """
+    with pytest.raises(ValidationError):
+        TaskBlockerRaisedPayload(task_id="t" * 65, reason="worker crashed")
+
+
+def test_task_blocker_raised_payload_rejects_oversized_last_event() -> None:
+    """M6 / Story 3.11 H7: last_event max_length=128 — 129 chars rejected."""
+    with pytest.raises(ValidationError):
+        TaskBlockerRaisedPayload(
+            task_id=_VALID_TASK_ID,
+            reason="worker crashed",
+            last_event="x" * 129,
+        )
+
+
+def test_task_blocker_raised_payload_rejects_oversized_last_action() -> None:
+    """M7 / Story 3.11 H7: last_action max_length=2000 — 2001 chars rejected."""
+    with pytest.raises(ValidationError):
+        TaskBlockerRaisedPayload(
+            task_id=_VALID_TASK_ID,
+            reason="worker crashed",
+            last_action="a" * 2001,
+        )
+
+
+def test_task_blocker_raised_payload_rejects_empty_last_event() -> None:
+    """H7: last_event min_length=1 — empty string rejected (no useless trailing-space line)."""
+    with pytest.raises(ValidationError):
+        TaskBlockerRaisedPayload(
+            task_id=_VALID_TASK_ID,
+            reason="worker crashed",
+            last_event="",
+        )
+
+
+def test_task_blocker_raised_payload_rejects_empty_last_action() -> None:
+    """H7: last_action min_length=1 — empty string rejected."""
+    with pytest.raises(ValidationError):
+        TaskBlockerRaisedPayload(
+            task_id=_VALID_TASK_ID,
+            reason="worker crashed",
+            last_action="",
+        )
+
+
+def test_task_blocker_raised_payload_accepts_aware_blocked_since() -> None:
+    """M8 / H8: tz-aware datetime is accepted (round-trips cleanly under AwareDatetime)."""
+    aware = datetime(2026, 5, 1, 12, 0, 0, tzinfo=UTC)
+    payload = TaskBlockerRaisedPayload(
+        task_id=_VALID_TASK_ID,
+        reason="worker crashed",
+        blocked_since=aware,
+    )
+    assert payload.blocked_since == aware
+
+
+def test_task_blocker_raised_payload_rejects_naive_blocked_since() -> None:
+    """M8 / H8: naive datetime (no tzinfo) raises ValidationError under AwareDatetime."""
+    naive = datetime(2026, 5, 1, 12, 0, 0)
+    with pytest.raises(ValidationError):
+        TaskBlockerRaisedPayload(
+            task_id=_VALID_TASK_ID,
+            reason="worker crashed",
+            blocked_since=naive,
+        )

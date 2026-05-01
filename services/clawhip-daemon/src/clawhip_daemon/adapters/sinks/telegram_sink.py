@@ -65,6 +65,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
     PreCheckResults,
     TaskApprovalRequestedPayload,
+    TaskBlockerRaisedPayload,
 )
 
 from clawhip_daemon.adapters.telegram_outbound import TelegramOutbound
@@ -319,11 +320,19 @@ async def _scan_all_files(
 # extensions) can double their UTF-16 length vs. Python's ``len()``. Capping
 # at 2000 codepoints leaves headroom for worst-case UTF-16 expansion
 # (≈4000 code units) without exceeding Telegram's wire limit.
+#
+# Story 3.11 review H3 / L15: tightened from 2000 → 1900 codepoints.
+# A 2000-codepoint cap admitted pathological UTF-16 expansions (2000
+# plane-1 emoji = 4000 UTF-16 units, plus header/footer/entities push
+# over the 4096-unit wire limit). 1900 leaves an extra 5% headroom.
+# **Parity invariant:** ``_APPROVAL_MESSAGE_MAX_CHARS`` and
+# ``_BLOCKER_MESSAGE_MAX_CHARS`` MUST move together — future renderers
+# inherit the same cap; if you change one, change both.
 _BULLET_PREFIX: str = "  • "
 _APPROVAL_BULLET_MAX_CHARS: int = 200
 _APPROVAL_BULLET_TEXT_MAX_CHARS: int = _APPROVAL_BULLET_MAX_CHARS - len(_BULLET_PREFIX)
 _APPROVAL_MAX_COMMANDS: int = 10
-_APPROVAL_MESSAGE_MAX_CHARS: int = 2000
+_APPROVAL_MESSAGE_MAX_CHARS: int = 1900
 
 # Story 3.10 AC-5: ordered pre-check field iteration (lint → types → unit →
 # integration). Field name → Capitalized display label.
@@ -387,6 +396,24 @@ def _truncate(text: str, limit: int) -> str:
     if limit == 1:
         return "…"
     return text[: limit - 1] + "…"
+
+
+def _collapse_newlines(text: str) -> str:
+    """Collapse all line-break sequences (``\\r\\n``, ``\\r``, ``\\n``) to single spaces.
+
+    Story 3.11 review H6 / L17 / M12: extracted helper so renderers don't
+    diverge stylistically (``"\\n"`` vs ``chr(10)``). Order matters:
+    ``\\r\\n`` is collapsed first so the trailing ``\\n`` doesn't decay
+    a CRLF to ``" \\n"`` → ``"  "``. Bare ``\\r`` is collapsed next so
+    legacy Mac line endings don't leak into HTML-escaped output. Finally
+    bare ``\\n`` (the common case) is collapsed.
+
+    The function is total — call sites do not pre-validate. Used on both
+    operator-supplied free-form text (``reason``, ``last_action``) and
+    registry-controlled strings (``last_event``, defense-in-depth) before
+    HTML-escaping.
+    """
+    return text.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
 
 
 # Story 3.10 review M13: status → emoji map. Widened from binary
@@ -533,7 +560,10 @@ def _assemble_approval_sections(
     task_id_esc = html.escape(payload.task_id)
     action_esc = html.escape(payload.action)
     # H11: collapse newlines so the section separator stays unambiguous.
-    justification_esc = html.escape(payload.justification.replace("\n", " "))
+    # Story 3.11 review L17: ``_collapse_newlines`` covers ``\r\n`` / ``\r``
+    # / ``\n`` uniformly — bare ``\r`` from legacy Mac line endings would
+    # otherwise survive a naive ``.replace("\n", " ")``.
+    justification_esc = html.escape(_collapse_newlines(payload.justification))
 
     sections: list[str] = [
         f"🔒 Approval required — task {task_id_esc}",
@@ -730,12 +760,239 @@ def _render_approval_request(envelope: EventEnvelope) -> str:
     # Review H2: defense-in-depth cap on ``task_id`` (the model boundary
     # already caps at 64 chars; this is the same ceiling for any path that
     # bypasses Pydantic validation).
-    task_id_esc = html.escape(payload.task_id)
-    task_id_for_fallback = task_id_esc[:_EMERGENCY_TASK_ID_MAX_CHARS]
-    return (
+    #
+    # Story 3.11 review H2 (retroactive 3.10 fix): cap on the RAW ``task_id``
+    # BEFORE ``html.escape`` — slicing the escaped string can split an HTML
+    # entity mid-token (e.g. 64 raw ``<`` chars escape to 64 × 5 = 320 chars
+    # of ``&lt;``; slicing the escaped form at 64 lands inside ``&lt;`` and
+    # produces invalid markup like ``...&lt;&lt;&l``).
+    task_id_capped = payload.task_id[:_EMERGENCY_TASK_ID_MAX_CHARS]
+    task_id_for_fallback = html.escape(task_id_capped)
+    result = (
         f"🔒 Approval required — task {task_id_for_fallback}"
         f"\n\n(message body too large; see /logs {task_id_for_fallback})"
     )
+    # Story 3.11 review H5 carry-forward: defensive final length self-check.
+    # Header overhead + 64-char escaped ``task_id`` × 2 occurrences is well
+    # under the cap in practice; the clamp is here so a future header tweak
+    # cannot silently breach the wire limit.
+    if len(result) > _APPROVAL_MESSAGE_MAX_CHARS:
+        result = result[:_APPROVAL_MESSAGE_MAX_CHARS]
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Renderer (Story 3.11 — blocker-notification template, FR15)
+# ---------------------------------------------------------------------------
+
+#: Story 3.11 AC-2 — static recovery commands listed in the blocker
+#: notification footer. Platform-defined (not operator-supplied) so they
+#: live as a renderer-side constant; if a future story makes the list
+#: dynamic per-task it can promote this to a payload field.
+_BLOCKER_AVAILABLE_COMMANDS: tuple[str, ...] = ("/logs", "/retry", "/stop", "/handoff")
+
+#: Story 3.11 review M13: cache the ``list(...)`` form module-side so
+#: ``_assemble_blocker_sections`` doesn't allocate a fresh list per render
+#: call. ``_build_command_bullets`` mutates nothing on its input — passing
+#: the shared list is safe.
+_BLOCKER_COMMANDS_LIST: list[str] = list(_BLOCKER_AVAILABLE_COMMANDS)
+
+#: Story 3.11 AC-5 — same codepoint cap as approvals (Story 3.10 M1 UTF-16
+#: surrogate-pair safety carry-forward). Telegram's 4096-char limit counts
+#: UTF-16 code units; capping at 1900 codepoints leaves headroom for
+#: worst-case expansion plus header/footer/entity overhead.
+#:
+#: Story 3.11 review H3 / L15: tightened from 2000 → 1900 in lockstep with
+#: ``_APPROVAL_MESSAGE_MAX_CHARS``. **Parity invariant** — both caps move
+#: together; future renderers (3.12 / 3.13) inherit the same value.
+_BLOCKER_MESSAGE_MAX_CHARS: int = 1900
+
+
+def _assemble_blocker_sections(
+    payload: TaskBlockerRaisedPayload,
+    *,
+    include_blocked_since: bool,
+    include_last_event: bool,
+    include_last_action: bool,
+    include_commands_footer: bool,
+) -> str:
+    """Join the blocker sections in spec order with ``{nl}{nl}`` separators.
+
+    Header is mandatory; the optional context fields and the commands
+    footer honor boolean levers the section-drop ladder in
+    :func:`_render_blocker_raised` flips on overflow.
+
+    Story 3.11 AC-4: HTML-escape ``task_id``, ``reason`` (after newline
+    collapse), ``last_event``, ``last_action`` (after newline collapse).
+
+    Story 3.10 review H11 carry-forward + Story 3.11 review H6 / L17 / M12:
+    multi-line ``reason`` / ``last_event`` / ``last_action`` are collapsed
+    via :func:`_collapse_newlines` (handles ``\\r\\n`` / ``\\r`` / ``\\n``
+    uniformly) before HTML-escaping so the section separator
+    (``{nl}{nl}``) remains visually unambiguous.
+
+    Story 3.11 review H1: trailing terminal punctuation (``.``/``?``/``!``/``:``)
+    is stripped from the collapsed ``reason`` BEFORE HTML-escaping so the
+    header line doesn't render double punctuation
+    (e.g. ``reason="crashed."`` produced ``"...crashed.. See /logs..."``
+    pre-fix; post-fix renders cleanly as ``"...crashed. See /logs..."``).
+    """
+    task_id_esc = html.escape(payload.task_id)
+    # H6 / L17 / M12: collapse newlines uniformly (``\r\n`` / ``\r`` / ``\n``)
+    # so the section separator stays unambiguous and bare-CR legacy line
+    # endings don't survive into HTML output.
+    # H1: strip trailing terminal punctuation from the raw reason before
+    # escape so the header doesn't render double punctuation.
+    reason_collapsed = _collapse_newlines(payload.reason).rstrip(".?!:")
+    reason_esc = html.escape(reason_collapsed)
+
+    sections: list[str] = [
+        f"⛔ Task {task_id_esc} blocked. {reason_esc}. See /logs {task_id_esc} for detail.",
+    ]
+    if include_blocked_since and payload.blocked_since is not None:
+        # blocked_since is internal (datetime → ASCII via .isoformat());
+        # no escape needed (AC-4).
+        # Story 3.11 review M14: lock format to ``timespec="seconds"`` so
+        # microsecond presence/absence doesn't shift the ladder math by
+        # 7 chars (``+00:00`` vs ``.123456+00:00``).
+        sections.append(f"Blocked since: {payload.blocked_since.isoformat(timespec='seconds')}")
+    if include_last_event and payload.last_event is not None:
+        # M14 carry-forward: defense-in-depth escape on the registry-
+        # controlled string. Story 3.11 review H4: collapse newlines
+        # too — schema permits 128 chars including line breaks; an
+        # emitter shipping ``last_event="evt\n\nattacker"`` would
+        # otherwise inject a bogus section break.
+        sections.append(f"Last event: {html.escape(_collapse_newlines(payload.last_event))}")
+    if include_last_action and payload.last_action is not None:
+        # H11 carry-forward: collapse newlines before escape (M12 — use
+        # the same helper as ``reason`` / ``last_event`` for consistency).
+        sections.append(f"Last action: {html.escape(_collapse_newlines(payload.last_action))}")
+    if include_commands_footer:
+        # Story 3.11 review M13: pass the cached list (allocated once at
+        # module scope) instead of allocating a fresh list per call.
+        bullets = _build_command_bullets(_BLOCKER_COMMANDS_LIST, len(_BLOCKER_AVAILABLE_COMMANDS))
+        sections.append("Available commands:\n" + "\n".join(bullets))
+    return "\n\n".join(sections)
+
+
+def _render_blocker_raised(envelope: EventEnvelope) -> str:
+    """Render the FR15 blocker-notification message — Story 3.11 AC-2/AC-4/AC-5.
+
+    Sections (in order, with optional ones omitted on ``None``):
+
+      1. Header (always) — ``⛔ Task {task_id} blocked. {reason}. See /logs {task_id} for detail.``
+      2. Blocked since (omitted if ``blocked_since is None``).
+      3. Last event (omitted if ``last_event is None``).
+      4. Last action (omitted if ``last_action is None``).
+      5. Available commands footer (always except emergency fallback).
+
+    Length safety (AC-5) — section-drop ladder:
+
+      Step 1: full message — return if under cap.
+      Step 2: drop ``last_action``.
+      Step 3: drop ``last_event``.
+      Step 4: drop ``blocked_since``.
+      Step 5: emergency one-liner —
+        ``⛔ Task {task_id} blocked. (message body too large; see /logs {task_id})``
+        with the available-commands footer dropped.
+
+    Story 3.10 review H9 carry-forward: when the dispatcher routes here
+    but the runtime payload is not a typed
+    :class:`TaskBlockerRaisedPayload` (registration race / version drift),
+    a structured WARN is emitted before falling back to the placeholder.
+
+    Story 3.11 review L12: non-string ``last_event`` / ``last_action``
+    (model_construct-bypass scenarios) would raise inside ``html.escape``;
+    the existing ``try/except`` block in :meth:`TelegramSink._handle`
+    (Story 3.10 review M11) catches the exception and falls back to the
+    placeholder shape — the renderer itself does not duplicate that
+    isolation per-field.
+    """
+    payload = envelope.payload
+    if not isinstance(payload, TaskBlockerRaisedPayload):
+        # H9 carry-forward: structured warning so SRE can detect schema-
+        # registry registration races / version drift.
+        _log.warning(
+            "renderer.payload_type_mismatch",
+            event_type=envelope.type,
+            expected="TaskBlockerRaisedPayload",
+            actual=type(payload).__name__,
+        )
+        task_id = _extract_task_id(envelope) or "<unknown>"
+        return f"Task {html.escape(task_id)}: {html.escape(envelope.type)}"
+
+    # Step 1: full message.
+    text = _assemble_blocker_sections(
+        payload,
+        include_blocked_since=True,
+        include_last_event=True,
+        include_last_action=True,
+        include_commands_footer=True,
+    )
+    if len(text) <= _BLOCKER_MESSAGE_MAX_CHARS:
+        return text
+
+    # Step 2: drop last_action.
+    text = _assemble_blocker_sections(
+        payload,
+        include_blocked_since=True,
+        include_last_event=True,
+        include_last_action=False,
+        include_commands_footer=True,
+    )
+    if len(text) <= _BLOCKER_MESSAGE_MAX_CHARS:
+        return text
+
+    # Step 3: drop last_event.
+    text = _assemble_blocker_sections(
+        payload,
+        include_blocked_since=True,
+        include_last_event=False,
+        include_last_action=False,
+        include_commands_footer=True,
+    )
+    if len(text) <= _BLOCKER_MESSAGE_MAX_CHARS:
+        return text
+
+    # Step 4: drop blocked_since (header + commands footer only).
+    # Story 3.11 review L10: ``include_blocked_since=False`` is the
+    # ladder-driven lever; the renderer also short-circuits with
+    # ``payload.blocked_since is not None`` inside the helper. The two
+    # gates are intentionally independent — the boolean is the lever the
+    # ladder pulls; the ``is not None`` check is the per-field omission.
+    # Story 3.11 review L18: Step 4 fires in a narrow band (roughly
+    # ``1820 < len(reason) <= 1844`` with all 3 optional fields populated)
+    # — it is NOT dead code; tests cover the transition explicitly.
+    text = _assemble_blocker_sections(
+        payload,
+        include_blocked_since=False,
+        include_last_event=False,
+        include_last_action=False,
+        include_commands_footer=True,
+    )
+    if len(text) <= _BLOCKER_MESSAGE_MAX_CHARS:
+        return text
+
+    # Step 5: emergency one-liner — header + commands footer can't fit
+    # together (typically because ``reason`` is pathologically long).
+    # Operator can recover via /logs <id>.
+    # Story 3.10 review H2 carry-forward + Story 3.11 review H2: cap on
+    # the RAW ``task_id`` BEFORE ``html.escape`` so a 64-char raw ``<``
+    # task_id (which escapes to 64 × 5 = 320 chars of ``&lt;``) cannot
+    # split an HTML entity mid-token when sliced at 64.
+    task_id_capped = payload.task_id[:_EMERGENCY_TASK_ID_MAX_CHARS]
+    task_id_for_fallback = html.escape(task_id_capped)
+    result = (
+        f"⛔ Task {task_id_for_fallback} blocked. "
+        f"(message body too large; see /logs {task_id_for_fallback})"
+    )
+    # Story 3.11 review H5: defensive final length self-check. The header
+    # overhead + 64-char escaped ``task_id`` × 2 occurrences sits well
+    # under the cap in practice; the clamp guards against future header
+    # tweaks silently breaching the wire limit.
+    if len(result) > _BLOCKER_MESSAGE_MAX_CHARS:
+        result = result[:_BLOCKER_MESSAGE_MAX_CHARS]
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -744,16 +1001,21 @@ def _render_approval_request(envelope: EventEnvelope) -> str:
 
 _RenderFn = Callable[[EventEnvelope], str]
 
-# Story 3.10 AC-4 / AC-15: read-only dispatch table (MappingProxyType — Story
-# 3.6 review L1 + Story 3.7 H4 carry-forward). Stories 3.11/3.12/3.13 will
-# add task.blocker_raised, task.completed, task.self_recovered entries.
+# Story 3.10 AC-4 / AC-15 + Story 3.11 AC-3: read-only dispatch table
+# (MappingProxyType — Story 3.6 review L1 + Story 3.7 H4 carry-forward).
+# Stories 3.12/3.13 will add task.completed and task.self_recovered entries.
 #
 # Story 3.10 review M2: annotation tightened from ``Mapping[...]`` to
 # ``MappingProxyType[...]`` so mypy enforces immutability at the type level
 # (matches the runtime guarantee).
+#
+# Story 3.11 review L2: dict-literal insertion order is irrelevant — the
+# dispatcher in ``_render`` does an O(1) ``.get(envelope.type)`` lookup by
+# key, NOT a sequential scan. Entries can be added in any order.
 _RENDERERS: MappingProxyType[str, _RenderFn] = MappingProxyType(
     {
         "task.approval_requested": _render_approval_request,
+        "task.blocker_raised": _render_blocker_raised,
     }
 )
 
