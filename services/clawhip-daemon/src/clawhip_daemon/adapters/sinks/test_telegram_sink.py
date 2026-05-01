@@ -245,19 +245,292 @@ async def test_sink_skips_non_task_event() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 5. Placeholder renderer output shape
+# Story 3.10 — _render_approval_request renderer + dispatcher tests (14)
 # ---------------------------------------------------------------------------
 
 
-def test_render_placeholder_output_shape() -> None:
-    """AC-7: _render returns 'Task {task_id}: {event_type}' with HTML escaping."""
-    result = _render("t-00000000-0000-7000-8000-000000000001", "task.completed")
-    assert result == "Task t-00000000-0000-7000-8000-000000000001: task.completed"
+def _approval_envelope(
+    *,
+    task_id: str = "t-00000000-0000-7000-8000-000000000001",
+    action: str = "merge PR #42",
+    justification: str = "tests pass; reviewer approved",
+    risk_class: str | None = None,
+    pre_check_results: object = None,
+    diff_summary: object = None,
+    accepted_commands: list[str] | None = None,
+    mono_ns: int = 4_000_000,
+) -> EventEnvelope:
+    """Build a task.approval_requested envelope (schema 1.1.0)."""
+    _ensure_task_created_registered()
+    from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
+        TaskApprovalRequestedPayload,
+    )
+
+    _reg("task.approval_requested", "1.1.0", TaskApprovalRequestedPayload)
+
+    rng = Random(99)
+    clk = FrozenClock(mono_ns=mono_ns, now=FROZEN_EPOCH)
+    eid = new_event_id(clock=clk, rng=rng)
+    rid = new_uuid7(clock=clk, rng=rng)
+    payload = TaskApprovalRequestedPayload(
+        task_id=task_id,
+        action=action,
+        justification=justification,
+        risk_class=risk_class,  # type: ignore[arg-type]
+        pre_check_results=pre_check_results,  # type: ignore[arg-type]
+        diff_summary=diff_summary,  # type: ignore[arg-type]
+        accepted_commands=accepted_commands,
+    )
+    return EventEnvelope.create(
+        event_id=eid,
+        schema_version="1.1.0",
+        type="task.approval_requested",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=payload,
+        request_id=rid,
+    )
 
 
-def test_render_html_escapes_special_chars() -> None:
-    """AC-7: _render HTML-escapes task_id and event_type (Story 3.5 H5 carry-forward)."""
-    result = _render("t-<hack>", "task.<evil>")
-    assert "<hack>" not in result
-    assert "&lt;hack&gt;" in result
-    assert "&lt;evil&gt;" in result
+def test_render_approval_request_minimal() -> None:
+    """AC-5: only required fields → header + Action + Reason; no optional sections."""
+    env = _approval_envelope()
+    result = _render(env)
+    assert "🔒 Approval required — task t-00000000-0000-7000-8000-000000000001" in result
+    assert "Action: merge PR #42" in result
+    assert "Reason: tests pass; reviewer approved" in result
+    assert "Risk:" not in result
+    assert "Pre-checks:" not in result
+    assert "Diff:" not in result
+    assert "Accepted commands:" not in result
+
+
+def test_render_approval_request_with_risk_class_low() -> None:
+    """AC-5: risk_class='low' → 'Risk: low' line present."""
+    env = _approval_envelope(risk_class="low")
+    result = _render(env)
+    assert "Risk: low" in result
+
+
+def test_render_approval_request_with_risk_class_medium() -> None:
+    """AC-5: risk_class='medium' → 'Risk: medium' line present."""
+    env = _approval_envelope(risk_class="medium")
+    result = _render(env)
+    assert "Risk: medium" in result
+
+
+def test_render_approval_request_with_risk_class_high() -> None:
+    """AC-5: risk_class='high' → 'Risk: high' line present."""
+    env = _approval_envelope(risk_class="high")
+    result = _render(env)
+    assert "Risk: high" in result
+
+
+def test_render_approval_request_with_full_pre_checks_all_pass() -> None:
+    """AC-5: 4 pre-checks all-pass → 4 ✅ lines in spec order (Lint, Types, Unit, Integration)."""
+    from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
+        PreCheckOutcome,
+        PreCheckResults,
+    )
+
+    pre = PreCheckResults(
+        lint=PreCheckOutcome(passed=142, total=142, status="pass"),
+        types=PreCheckOutcome(passed=88, total=88, status="pass"),
+        unit=PreCheckOutcome(passed=315, total=315, status="pass"),
+        integration=PreCheckOutcome(passed=27, total=27, status="pass"),
+    )
+    env = _approval_envelope(pre_check_results=pre)
+    result = _render(env)
+    assert "Pre-checks:" in result
+    assert "✅ Lint: 142/142" in result
+    assert "✅ Types: 88/88" in result
+    assert "✅ Unit: 315/315" in result
+    assert "✅ Integration: 27/27" in result
+    # Spec order: Lint before Types before Unit before Integration.
+    assert (
+        result.index("Lint")
+        < result.index("Types")
+        < result.index("Unit")
+        < result.index("Integration")
+    )
+
+
+def test_render_approval_request_with_pre_check_one_fail() -> None:
+    """AC-5: one ❌ check carries ' (failed)' suffix."""
+    from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
+        PreCheckOutcome,
+        PreCheckResults,
+    )
+
+    pre = PreCheckResults(
+        lint=PreCheckOutcome(passed=142, total=142, status="pass"),
+        unit=PreCheckOutcome(passed=312, total=315, status="fail"),
+    )
+    env = _approval_envelope(pre_check_results=pre)
+    result = _render(env)
+    assert "✅ Lint: 142/142" in result
+    assert "❌ Unit: 312/315 (failed)" in result
+
+
+def test_render_approval_request_with_partial_pre_checks() -> None:
+    """AC-5: only 2 of 4 pre-check fields populated → exactly 2 lines rendered."""
+    from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
+        PreCheckOutcome,
+        PreCheckResults,
+    )
+
+    pre = PreCheckResults(
+        lint=PreCheckOutcome(passed=10, total=10, status="pass"),
+        types=PreCheckOutcome(passed=5, total=5, status="pass"),
+    )
+    env = _approval_envelope(pre_check_results=pre)
+    result = _render(env)
+    # Pre-check block exists.
+    assert "Pre-checks:" in result
+    # Exactly 2 outcome lines (✅ or ❌) in the rendered string.
+    outcome_line_count = sum(1 for line in result.splitlines() if line.startswith(("✅", "❌")))
+    assert outcome_line_count == 2
+    assert "Lint" in result
+    assert "Types" in result
+    assert "Unit" not in result
+    assert "Integration" not in result
+
+
+def test_render_approval_request_with_diff_summary() -> None:
+    """AC-5: DiffSummary renders as 'Diff: N files, +I, -D'."""
+    from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
+        DiffSummary,
+    )
+
+    env = _approval_envelope(diff_summary=DiffSummary(files=5, insertions=234, deletions=89))
+    result = _render(env)
+    assert "Diff: 5 files, +234, -89" in result
+
+
+def test_render_approval_request_with_accepted_commands_capped_at_10() -> None:
+    """AC-6: 12 commands → 10 visible bullets + '… and 2 more' overflow line."""
+    cmds = [f"/cmd-{i}" for i in range(12)]
+    env = _approval_envelope(accepted_commands=cmds)
+    result = _render(env)
+    assert "Accepted commands:" in result
+    # All first 10 commands present.
+    for i in range(10):
+        assert f"  • /cmd-{i}" in result
+    # 11th and 12th not directly listed.
+    assert "  • /cmd-10" not in result
+    assert "  • /cmd-11" not in result
+    # Overflow indicator.
+    assert "  • … and 2 more" in result
+
+
+def test_render_approval_request_html_escapes_task_id_action_justification_commands() -> None:
+    """AC-7: HTML-escape every operator-supplied string (Story 3.5 H5 carry-forward)."""
+    env = _approval_envelope(
+        task_id="t-<x>",
+        action="rm -rf <foo>",
+        justification="<b>bold</b>",
+        accepted_commands=["/cmd <x>"],
+    )
+    result = _render(env)
+    # Raw < / > / & gone from operator-supplied substrings.
+    assert "<x>" not in result.replace("&lt;x&gt;", "")
+    assert "<foo>" not in result.replace("&lt;foo&gt;", "")
+    assert "<b>bold</b>" not in result
+    # Escaped variants present.
+    assert "&lt;x&gt;" in result
+    assert "&lt;foo&gt;" in result
+    assert "&lt;b&gt;bold&lt;/b&gt;" in result
+
+
+def test_render_approval_request_total_cap_drops_diff_then_commands() -> None:
+    """AC-6: >3500-char message → drop ' (failed)' → drop diff → drop commands."""
+    from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
+        DiffSummary,
+        PreCheckOutcome,
+        PreCheckResults,
+    )
+
+    # Justification just under 3500 so Header+Action+Reason alone don't trip
+    # the emergency one-liner; section-drop ladder must do the work.
+    big_just = "x" * 3000
+    pre = PreCheckResults(
+        lint=PreCheckOutcome(passed=1, total=2, status="fail"),
+    )
+    env = _approval_envelope(
+        justification=big_just,
+        pre_check_results=pre,
+        diff_summary=DiffSummary(files=5, insertions=100, deletions=50),
+        accepted_commands=[f"/cmd-{i}" * 10 for i in range(10)],
+    )
+    result = _render(env)
+    # Length cap honored.
+    assert len(result) <= 3500
+    # Mandatory sections preserved.
+    assert "🔒 Approval required" in result
+    assert "Action:" in result
+    assert "Reason:" in result
+    # AC-6 ladder step 2 — diff section dropped (sits ABOVE commands in drop
+    # priority).
+    assert "Diff:" not in result
+    # AC-6 ladder step 1 — ' (failed)' suffix dropped: pre-check line shows
+    # status emoji + counts but no '(failed)' tail.
+    assert " (failed)" not in result
+    # AC-6 ladder step 3 — commands trimmed from the bottom (full list had 10
+    # entries; result keeps strictly fewer + an overflow indicator).
+    assert "… and " in result
+    visible_bullets = sum(1 for line in result.splitlines() if line.startswith("  • /cmd-"))
+    assert visible_bullets < 10
+
+
+def test_render_approval_request_emergency_fallback_when_justification_too_long() -> None:
+    """AC-6: justification = 'X' * 5000 → emergency one-liner pointing at /logs."""
+    env = _approval_envelope(
+        task_id="t-00000000-0000-7000-8000-0000000000aa",
+        justification="X" * 5000,
+    )
+    result = _render(env)
+    assert result == (
+        "🔒 Approval required — task t-00000000-0000-7000-8000-0000000000aa"
+        "\n\n(message body too large; see /logs t-00000000-0000-7000-8000-0000000000aa)"
+    )
+
+
+def test_render_dispatcher_routes_approval_to_renderer() -> None:
+    """AC-4: _render(envelope) for task.approval_requested invokes _render_approval_request."""
+    env = _approval_envelope(action="apply migration")
+    result = _render(env)
+    # The approval renderer's distinguishing header is '🔒 Approval required' —
+    # the placeholder fallback does not include this.
+    assert result.startswith("🔒 Approval required —")
+    assert "Action: apply migration" in result
+
+
+def test_render_dispatcher_falls_back_to_placeholder_for_unknown_type() -> None:
+    """AC-4: unknown event type → 'Task <id>: <type>' placeholder (Story 3.9 shape)."""
+    rng = Random(123)
+    clk = FrozenClock(mono_ns=5_000_000, now=FROZEN_EPOCH)
+    task_id = new_task_id(clock=clk, rng=rng)
+    _ensure_task_created_registered()
+    from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
+        TaskExecutionStartedPayload,
+    )
+
+    _reg("task.execution.started", "1.0.0", TaskExecutionStartedPayload)
+    eid = new_event_id(clock=clk, rng=rng)
+    rid = new_uuid7(clock=clk, rng=rng)
+    env = EventEnvelope.create(
+        event_id=eid,
+        schema_version="1.0.0",
+        type="task.execution.started",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskExecutionStartedPayload(
+            task_id=task_id,
+            session_id="s-00000000-0000-7000-8000-000000000001",
+        ),
+        request_id=rid,
+    )
+    result = _render(env)
+    assert result == f"Task {task_id}: task.execution.started"

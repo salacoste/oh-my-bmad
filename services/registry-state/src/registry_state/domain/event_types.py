@@ -143,14 +143,74 @@ class TaskSummaryEmittedPayload(BaseModel):
     summary: str
 
 
+class PreCheckOutcome(BaseModel):
+    """Outcome of a single pre-check (lint / types / unit / integration).
+
+    Story 3.10 AC-2: ``passed`` and ``total`` are non-negative integers (a 0/0
+    result is technically valid — renders as ``0/0``). ``status`` is derived
+    semantically by the emitter; the renderer just shows it.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    passed: int = Field(ge=0)
+    total: int = Field(ge=0)
+    status: Literal["pass", "fail"]
+
+
+class PreCheckResults(BaseModel):
+    """Aggregate pre-check results for an approval request (Story 3.10 AC-2).
+
+    Each individual check is optional — the renderer omits the line when the
+    corresponding field is ``None``.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    lint: PreCheckOutcome | None = None
+    types: PreCheckOutcome | None = None
+    unit: PreCheckOutcome | None = None
+    integration: PreCheckOutcome | None = None
+
+
+class DiffSummary(BaseModel):
+    """Diff summary for an approval request (Story 3.10 AC-3).
+
+    Renders as ``<files> files, +<insertions>, -<deletions>``. All three
+    fields are required when ``DiffSummary`` is non-None — the emitter
+    either populates the whole struct or leaves it ``None``.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    files: int = Field(ge=0)
+    insertions: int = Field(ge=0)
+    deletions: int = Field(ge=0)
+
+
 class TaskApprovalRequestedPayload(BaseModel):
-    """Payload for the ``task.approval_requested`` event."""
+    """Payload for the ``task.approval_requested`` event.
+
+    Story 3.10 AC-1 — additive minor bump (1.0.0 → 1.1.0): four optional
+    FR14 fields (``risk_class``, ``pre_check_results``, ``diff_summary``,
+    ``accepted_commands``) are added so the Telegram approval-request
+    renderer can include risk class, pre-check status, diff summary, and
+    the exact commands accepted. All four default to ``None`` so legacy
+    v1.0.0 events (Story 2.8 emit shape) deserialize cleanly. The single
+    payload class is registered under both ``1.0.0`` and ``1.1.0``
+    (additive-only NFR-M3).
+    """
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
     task_id: str
     action: str
     justification: str
+    # Story 3.10 — optional FR14 fields (additive, schema 1.1.0).
+    risk_class: Literal["low", "medium", "high"] | None = None
+    pre_check_results: PreCheckResults | None = None
+    diff_summary: DiffSummary | None = None
+    accepted_commands: list[str] | None = None
 
 
 class TaskCompletedPayload(BaseModel):
@@ -377,6 +437,13 @@ register("task.summary_emitted", "1.0.0", TaskSummaryEmittedPayload)
 register("task.summary_emitted", "1.0.1", TaskSummaryEmittedPayload)
 register("task.approval_requested", "1.0.0", TaskApprovalRequestedPayload)
 register("task.approval_requested", "1.0.1", TaskApprovalRequestedPayload)
+# Story 3.10 AC-1 / AC-11: additive 1.1.0 with optional FR14 fields. Same-model
+# contract — pre-3.10 events (no risk_class / pre_check_results / diff_summary /
+# accepted_commands) deserialize cleanly under 1.1.0 with the new fields
+# defaulting to None (NFR-M3 additive-only). Story 3.9 H7 carry-forward —
+# registration in event_types.py (NOT packages/events/.../schema_registry.py)
+# avoids the circular import the dev pass discovered.
+register("task.approval_requested", "1.1.0", TaskApprovalRequestedPayload)
 register("task.completed", "1.0.0", TaskCompletedPayload)
 register("task.completed", "1.0.1", TaskCompletedPayload)
 
@@ -415,6 +482,9 @@ register("telegram.rejected", "1.0.1", TelegramRejectedPayload)
 
 __all__ = [
     "TELEGRAM_REJECTED_SCHEMA_VERSION",
+    "DiffSummary",
+    "PreCheckOutcome",
+    "PreCheckResults",
     "SecretAccessedPayload",
     "ServiceCrashedPayload",
     "SessionHeartbeatTimeoutPayload",

@@ -46,7 +46,9 @@ import contextlib
 import html
 import re
 import time
+from collections.abc import Callable, Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import cachetools
@@ -55,6 +57,9 @@ import pydantic
 import structlog
 from events import EventEnvelope, from_canonical_json
 from pydantic import BaseModel, ConfigDict, Field
+from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
+    TaskApprovalRequestedPayload,
+)
 
 from clawhip_daemon.adapters.telegram_outbound import TelegramOutbound
 
@@ -293,18 +298,272 @@ async def _scan_all_files(
 
 
 # ---------------------------------------------------------------------------
-# Placeholder renderer (Stories 3.10–3.13 replace per-type entries)
+# Renderers (Story 3.10 — first message-template + dispatcher)
 # ---------------------------------------------------------------------------
 
+# Story 3.10 AC-6: length-safety caps for the approval-request renderer.
+_APPROVAL_BULLET_MAX_CHARS: int = 200
+_APPROVAL_MAX_COMMANDS: int = 10
+_APPROVAL_MESSAGE_MAX_CHARS: int = 3500
 
-def _render(task_id: str, event_type: str) -> str:
-    """Placeholder renderer: ``f"Task {task_id}: {event_type}"`` (HTML-escaped).
+# Story 3.10 AC-5: ordered pre-check field iteration (lint → types → unit →
+# integration). Field name → Capitalized display label.
+_PRE_CHECK_FIELDS: tuple[tuple[str, str], ...] = (
+    ("lint", "Lint"),
+    ("types", "Types"),
+    ("unit", "Unit"),
+    ("integration", "Integration"),
+)
 
-    Both fields are HTML-escaped so any future task_id / type string that
-    somehow contains ``<`` / ``>`` / ``&`` does not break Telegram's HTML
-    parser (Story 3.5 H5 carry-forward).
+
+def _extract_task_id(envelope: EventEnvelope) -> str | None:
+    """Best-effort extract of ``task_id`` from an envelope's payload.
+
+    Mirrors the inline extraction in ``_handle`` but is reusable from the
+    dispatcher fallback so the placeholder string preserves Story 3.9's
+    ``Task <id>: <type>`` shape even when no typed renderer is registered.
     """
-    return f"Task {html.escape(task_id)}: {html.escape(event_type)}"
+    payload = envelope.payload
+    if hasattr(payload, "task_id"):
+        raw = getattr(payload, "task_id", None)
+        return raw if isinstance(raw, str) else None
+    if isinstance(payload, dict):
+        v = payload.get("task_id")
+        return v if isinstance(v, str) else None
+    return None
+
+
+def _truncate(text: str, limit: int) -> str:
+    """Truncate ``text`` to ``limit`` chars, appending ``…`` when shortened."""
+    if len(text) <= limit:
+        return text
+    if limit <= 1:
+        return "…"
+    return text[: limit - 1] + "…"
+
+
+def _render_pre_check_block(
+    pre: TaskApprovalRequestedPayload, *, include_failed_suffix: bool
+) -> str | None:
+    """Render the pre-check block; return ``None`` if no pre-check is populated.
+
+    Iterates fields in the spec order (lint, types, unit, integration) and
+    skips ``None`` slots. The ``include_failed_suffix`` flag is the lever the
+    total-cap section-drop strategy pulls (AC-6) when the message is too long.
+    """
+    results = pre.pre_check_results
+    if results is None:
+        return None
+    lines: list[str] = []
+    for attr, label in _PRE_CHECK_FIELDS:
+        outcome = getattr(results, attr)
+        if outcome is None:
+            continue
+        emoji = "✅" if outcome.status == "pass" else "❌"
+        line = f"{emoji} {label}: {outcome.passed}/{outcome.total}"
+        if include_failed_suffix and outcome.status == "fail":
+            line += " (failed)"
+        lines.append(line)
+    if not lines:
+        return None
+    return "Pre-checks:\n" + "\n".join(lines)
+
+
+def _render_diff_summary(payload: TaskApprovalRequestedPayload) -> str | None:
+    """Render ``Diff: <files> files, +<I>, -<D>`` or ``None`` if absent."""
+    diff = payload.diff_summary
+    if diff is None:
+        return None
+    return f"Diff: {diff.files} files, +{diff.insertions}, -{diff.deletions}"
+
+
+def _render_accepted_commands(payload: TaskApprovalRequestedPayload) -> str | None:
+    """Render the accepted-commands bullet list, applying the 10-cmd / 200-char caps.
+
+    Returns ``None`` when the list is absent or empty (Story 3.10 AC-5: omit
+    the section in either case).
+    """
+    cmds = payload.accepted_commands
+    if cmds is None or len(cmds) == 0:
+        return None
+    visible = cmds[:_APPROVAL_MAX_COMMANDS]
+    omitted = len(cmds) - len(visible)
+    bullets: list[str] = []
+    for cmd in visible:
+        escaped = html.escape(cmd)
+        if len(escaped) > _APPROVAL_BULLET_MAX_CHARS:
+            escaped = _truncate(escaped, _APPROVAL_BULLET_MAX_CHARS)
+        bullets.append(f"  • {escaped}")
+    if omitted > 0:
+        bullets.append(f"  • … and {omitted} more")
+    return "Accepted commands:\n" + "\n".join(bullets)
+
+
+def _assemble_approval_sections(
+    payload: TaskApprovalRequestedPayload,
+    *,
+    include_failed_suffix: bool,
+    include_diff: bool,
+    commands_section: str | None,
+) -> str:
+    """Join the approval-request sections in spec order with ``\\n\\n`` separators.
+
+    Header / Action / Reason are mandatory; the other sections honor the
+    boolean / Optional levers the section-drop strategy in
+    :func:`_render_approval_request` flips on overflow.
+    """
+    task_id_esc = html.escape(payload.task_id)
+    action_esc = html.escape(payload.action)
+    justification_esc = html.escape(payload.justification)
+
+    sections: list[str] = [
+        f"🔒 Approval required — task {task_id_esc}",
+        f"Action: {action_esc}",
+        f"Reason: {justification_esc}",
+    ]
+    if payload.risk_class is not None:
+        sections.append(f"Risk: {payload.risk_class}")
+    pre_check_block = _render_pre_check_block(payload, include_failed_suffix=include_failed_suffix)
+    if pre_check_block is not None:
+        sections.append(pre_check_block)
+    if include_diff:
+        diff_section = _render_diff_summary(payload)
+        if diff_section is not None:
+            sections.append(diff_section)
+    if commands_section is not None:
+        sections.append(commands_section)
+    return "\n\n".join(sections)
+
+
+def _render_approval_request(envelope: EventEnvelope) -> str:
+    """Render the FR14 approval-request message — Story 3.10 AC-5/AC-6/AC-7.
+
+    Sections (in order, with optional ones omitted on ``None``):
+
+      1. Header — ``🔒 Approval required — task <task_id>``
+      2. Action — ``Action: <action>``
+      3. Reason — ``Reason: <justification>``
+      4. Risk — ``Risk: <low|medium|high>``  (omitted if ``risk_class is None``)
+      5. Pre-checks — multi-line block (omitted if ``pre_check_results is None``)
+      6. Diff — ``Diff: N files, +I, -D``  (omitted if ``diff_summary is None``)
+      7. Accepted commands — bullet list, 10-cmd cap with ``… and N more``
+         overflow line (omitted if list is None or empty)
+
+    HTML-escapes ``task_id``, ``action``, ``justification``, and each accepted
+    command (Story 3.5 H5 carry-forward).
+
+    Length safety (AC-6): per-bullet 200-char cap, total 3500-char cap. On
+    overflow, sections are dropped in this order: ``(failed)`` suffix → diff
+    summary → accepted commands. If even Header+Action+Reason exceeds 3500
+    chars, fall back to an emergency one-liner pointing at ``/logs <id>``.
+    """
+    payload = envelope.payload
+    if not isinstance(payload, TaskApprovalRequestedPayload):
+        # Defensive: dispatcher only routes here for task.approval_requested,
+        # but if the envelope was built from a raw dict (registration race),
+        # fall back to the placeholder shape.
+        task_id = _extract_task_id(envelope) or "<unknown>"
+        return f"Task {html.escape(task_id)}: {html.escape(envelope.type)}"
+
+    commands_section = _render_accepted_commands(payload)
+
+    # Fast path: assemble fully-populated message; if under cap, return it.
+    text = _assemble_approval_sections(
+        payload,
+        include_failed_suffix=True,
+        include_diff=True,
+        commands_section=commands_section,
+    )
+    if len(text) <= _APPROVAL_MESSAGE_MAX_CHARS:
+        return text
+
+    # AC-6 section-drop ladder.
+    # Step 1: drop the ` (failed)` suffix from pre-check lines.
+    text = _assemble_approval_sections(
+        payload,
+        include_failed_suffix=False,
+        include_diff=True,
+        commands_section=commands_section,
+    )
+    if len(text) <= _APPROVAL_MESSAGE_MAX_CHARS:
+        return text
+
+    # Step 2: drop the diff summary section.
+    text = _assemble_approval_sections(
+        payload,
+        include_failed_suffix=False,
+        include_diff=False,
+        commands_section=commands_section,
+    )
+    if len(text) <= _APPROVAL_MESSAGE_MAX_CHARS:
+        return text
+
+    # Step 3: progressively drop accepted-command entries from the bottom.
+    cmds = payload.accepted_commands or []
+    visible_count = min(len(cmds), _APPROVAL_MAX_COMMANDS)
+    while visible_count > 0:
+        visible_count -= 1
+        if visible_count == 0:
+            trimmed_section: str | None = None
+        else:
+            trimmed_cmds = cmds[:visible_count]
+            omitted = len(cmds) - visible_count
+            bullets = []
+            for cmd in trimmed_cmds:
+                escaped = html.escape(cmd)
+                if len(escaped) > _APPROVAL_BULLET_MAX_CHARS:
+                    escaped = _truncate(escaped, _APPROVAL_BULLET_MAX_CHARS)
+                bullets.append(f"  • {escaped}")
+            if omitted > 0:
+                bullets.append(f"  • … and {omitted} more")
+            trimmed_section = "Accepted commands:\n" + "\n".join(bullets)
+        text = _assemble_approval_sections(
+            payload,
+            include_failed_suffix=False,
+            include_diff=False,
+            commands_section=trimmed_section,
+        )
+        if len(text) <= _APPROVAL_MESSAGE_MAX_CHARS:
+            return text
+
+    # Step 4: emergency one-liner fallback — even Header+Action+Reason are too
+    # large (typically `justification` is enormous). Operator can `/logs <id>`.
+    task_id_esc = html.escape(payload.task_id)
+    return (
+        f"🔒 Approval required — task {task_id_esc}"
+        f"\n\n(message body too large; see /logs {task_id_esc})"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Renderer dispatcher (Story 3.10 AC-4)
+# ---------------------------------------------------------------------------
+
+_RenderFn = Callable[[EventEnvelope], str]
+
+# Story 3.10 AC-4 / AC-15: read-only dispatch table (MappingProxyType — Story
+# 3.6 review L1 + Story 3.7 H4 carry-forward). Stories 3.11/3.12/3.13 will
+# add task.blocker_raised, task.completed, task.self_recovered entries.
+_RENDERERS: Mapping[str, _RenderFn] = MappingProxyType(
+    {
+        "task.approval_requested": _render_approval_request,
+    }
+)
+
+
+def _render(envelope: EventEnvelope) -> str:
+    """Dispatch by event-type to the registered renderer; fall back to placeholder.
+
+    Story 3.10 AC-4 replaces Story 3.9's bare ``_render(task_id, event_type)``
+    with an envelope-typed dispatcher. Event types not yet templated (e.g.
+    ``task.execution.started``) preserve Story 3.9's placeholder shape
+    (``Task <id>: <type>`` HTML-escaped — Story 3.5 H5 carry-forward).
+    """
+    renderer = _RENDERERS.get(envelope.type)
+    if renderer is not None:
+        return renderer(envelope)
+    task_id = _extract_task_id(envelope) or "<unknown>"
+    return f"Task {html.escape(task_id)}: {html.escape(envelope.type)}"
 
 
 # ---------------------------------------------------------------------------
@@ -448,7 +707,7 @@ class TelegramSink:
             # Pre-3.9 task or non-Telegram task — skip silently.
             return
 
-        text = _render(task_id, envelope.type)
+        text = _render(envelope)
         await self._outbound.send_to_thread(
             chat_id=chat_id,
             reply_to_message_id=reply_to_message_id,
