@@ -35,7 +35,7 @@ is a no-op per Story 2.1's schema_registry.register contract).
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Literal
+from typing import Annotated, Literal
 
 from events.schema_registry import register
 from pydantic import (
@@ -149,13 +149,49 @@ class PreCheckOutcome(BaseModel):
     Story 3.10 AC-2: ``passed`` and ``total`` are non-negative integers (a 0/0
     result is technically valid — renders as ``0/0``). ``status`` is derived
     semantically by the emitter; the renderer just shows it.
+
+    Story 3.10 review-pass tightening:
+
+    * **H4** — cross-field invariant: ``passed <= total`` (a check cannot pass
+      more cases than it ran). Without this, the renderer would print
+      nonsense like ``999/3 (failed)``.
+    * **H5** — semantic invariant on ``status``: ``"pass"`` requires
+      ``passed == total``; ``"fail"`` requires ``passed < total``.
+      ``"skipped"`` and ``"error"`` (M13) are state-of-the-check values and
+      have no count constraint.
+    * **M13** — ``status`` widened to include ``"skipped"`` (env unavailable)
+      and ``"error"`` (the check itself crashed). Renderer maps
+      ``skipped → ⏭️``, ``error → ⚠️``.
     """
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
     passed: int = Field(ge=0)
     total: int = Field(ge=0)
-    status: Literal["pass", "fail"]
+    status: Literal["pass", "fail", "skipped", "error"]
+
+    @model_validator(mode="after")
+    def _check_passed_le_total(self) -> PreCheckOutcome:
+        if self.passed > self.total:
+            raise ValueError(f"passed ({self.passed}) cannot exceed total ({self.total})")
+        return self
+
+    @model_validator(mode="after")
+    def _check_status_count_consistency(self) -> PreCheckOutcome:
+        # H5: only enforce the count invariant for the binary pass/fail
+        # outcomes. "skipped" and "error" (M13) are check-state values that
+        # carry no count semantics.
+        if self.status == "pass" and self.passed != self.total:
+            raise ValueError(
+                f"status='pass' requires passed == total; got "
+                f"passed={self.passed}, total={self.total}"
+            )
+        if self.status == "fail" and self.passed >= self.total:
+            raise ValueError(
+                f"status='fail' requires passed < total; got "
+                f"passed={self.passed}, total={self.total}"
+            )
+        return self
 
 
 class PreCheckResults(BaseModel):
@@ -179,13 +215,25 @@ class DiffSummary(BaseModel):
     Renders as ``<files> files, +<insertions>, -<deletions>``. All three
     fields are required when ``DiffSummary`` is non-None — the emitter
     either populates the whole struct or leaves it ``None``.
+
+    Story 3.10 review-pass L9: per-field upper bound ``<= 10**9`` so a
+    buggy diff parser shipping ``insertions=2**63 - 1`` is rejected at the
+    payload boundary instead of rendering a 19-digit number.
     """
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
-    files: int = Field(ge=0)
-    insertions: int = Field(ge=0)
-    deletions: int = Field(ge=0)
+    files: int = Field(ge=0, le=10**9)
+    insertions: int = Field(ge=0, le=10**9)
+    deletions: int = Field(ge=0, le=10**9)
+
+
+#: Story 3.10 H6 — per-element bounds for entries in
+#: :attr:`TaskApprovalRequestedPayload.accepted_commands`. Each command must
+#: be a non-empty string of at most 200 chars (matches the renderer's
+#: per-bullet visual budget). Renderer keeps its own caps as
+#: defense-in-depth.
+AcceptedCommand = Annotated[str, Field(min_length=1, max_length=200)]
 
 
 class TaskApprovalRequestedPayload(BaseModel):
@@ -199,18 +247,31 @@ class TaskApprovalRequestedPayload(BaseModel):
     v1.0.0 events (Story 2.8 emit shape) deserialize cleanly. The single
     payload class is registered under both ``1.0.0`` and ``1.1.0``
     (additive-only NFR-M3).
+
+    Story 3.10 review-pass tightening:
+
+    * **H3** — ``task_id`` (1..64 chars), ``action`` (1..2000 chars), and
+      ``justification`` (1..10_000 chars) gain explicit ``min_length`` /
+      ``max_length`` validators. Caps reasonably above the renderer's
+      3500-char total cap so wire-level validation fails fast on bad
+      inputs from upstream emitters (Story 6.4).
+    * **H6** — ``accepted_commands`` gains model-level bounds: ``<= 20``
+      entries (renderer trims to 10 — model bound is intentionally looser
+      so future stories can negotiate without a schema bump), each entry
+      ``1..200`` chars via :data:`AcceptedCommand`. Defends consumers
+      beyond the renderer (audit log, registry-API echo).
     """
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
-    task_id: str
-    action: str
-    justification: str
+    task_id: str = Field(min_length=1, max_length=64)
+    action: str = Field(min_length=1, max_length=2000)
+    justification: str = Field(min_length=1, max_length=10_000)
     # Story 3.10 — optional FR14 fields (additive, schema 1.1.0).
     risk_class: Literal["low", "medium", "high"] | None = None
     pre_check_results: PreCheckResults | None = None
     diff_summary: DiffSummary | None = None
-    accepted_commands: list[str] | None = None
+    accepted_commands: list[AcceptedCommand] | None = Field(default=None, max_length=20)
 
 
 class TaskCompletedPayload(BaseModel):
@@ -482,6 +543,7 @@ register("telegram.rejected", "1.0.1", TelegramRejectedPayload)
 
 __all__ = [
     "TELEGRAM_REJECTED_SCHEMA_VERSION",
+    "AcceptedCommand",
     "DiffSummary",
     "PreCheckOutcome",
     "PreCheckResults",

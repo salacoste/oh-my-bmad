@@ -1,14 +1,26 @@
-"""Tests for registry_state.domain.event_types — Story 3.10 AC-10.
+"""Tests for registry_state.domain.event_types — Story 3.10 AC-10 + review pass.
 
-4 tests covering the additive Story 3.10 fields on
-:class:`TaskApprovalRequestedPayload` and the new :class:`PreCheckOutcome` /
-:class:`DiffSummary` models:
+Original AC-10 tests (4):
 
 1. v1.0.0 back-compat — old shape (task_id/action/justification only) parses
    cleanly with all four new optional fields defaulting to ``None``.
 2. ``PreCheckOutcome`` rejects negative ``passed`` / ``total`` (Field(ge=0)).
 3. ``DiffSummary`` rejects negative ``files`` / ``insertions`` / ``deletions``.
 4. ``risk_class`` Literal rejects values outside ``{"low","medium","high"}``.
+
+Story 3.10 review-pass additions (H3, H4, H5, H6, L9, M13, H12):
+
+* H3: ``task_id`` / ``action`` / ``justification`` length bounds (3 tests).
+* H4: ``PreCheckOutcome`` rejects ``passed > total`` + positive case
+  (covered by H12 below).
+* H5: ``status`` semantic invariant (``pass`` requires ``==``; ``fail``
+  requires ``<``).
+* H6: ``accepted_commands`` rejects empty-string entries, oversize entries,
+  and oversize lists.
+* L9: ``DiffSummary`` rejects per-field overflow (``> 10**9``).
+* M13: ``status`` widened to ``"skipped"`` / ``"error"``; both accepted.
+* H12: positive case ``passed == total`` accepted; negative ``passed >
+  total`` rejected with clear message.
 """
 
 from __future__ import annotations
@@ -84,3 +96,122 @@ def test_risk_class_literal_rejects_invalid_value() -> None:
             justification="why",
             risk_class="critical",  # type: ignore[arg-type]
         )
+
+
+# ---------------------------------------------------------------------------
+# Story 3.10 review-pass additions
+# ---------------------------------------------------------------------------
+
+
+_VALID_TASK_ID = "t-00000000-0000-7000-8000-000000000001"
+
+
+def test_task_approval_requested_payload_rejects_empty_task_id() -> None:
+    """H3: task_id min_length=1 — empty string rejected at the model boundary."""
+    with pytest.raises(ValidationError):
+        TaskApprovalRequestedPayload(task_id="", action="x", justification="y")
+
+
+def test_task_approval_requested_payload_rejects_oversize_action() -> None:
+    """H3: action max_length=2000 — 2001 chars rejected."""
+    with pytest.raises(ValidationError):
+        TaskApprovalRequestedPayload(task_id=_VALID_TASK_ID, action="a" * 2001, justification="y")
+
+
+def test_task_approval_requested_payload_rejects_oversize_justification() -> None:
+    """H3: justification max_length=10_000 — 10_001 chars rejected."""
+    with pytest.raises(ValidationError):
+        TaskApprovalRequestedPayload(
+            task_id=_VALID_TASK_ID,
+            action="x",
+            justification="z" * 10_001,
+        )
+
+
+def test_pre_check_outcome_accepts_passed_equal_total() -> None:
+    """H4 + H12 positive: passed == total is accepted (status='pass' invariant)."""
+    ok = PreCheckOutcome(passed=10, total=10, status="pass")
+    assert ok.passed == 10
+    assert ok.total == 10
+
+
+def test_pre_check_outcome_rejects_passed_gt_total() -> None:
+    """H4 + H12 negative: passed > total rejected with clear error message."""
+    with pytest.raises(ValidationError) as excinfo:
+        PreCheckOutcome(passed=11, total=10, status="pass")
+    msg = str(excinfo.value)
+    assert "passed" in msg
+    assert "total" in msg
+
+
+def test_pre_check_outcome_status_pass_requires_passed_eq_total() -> None:
+    """H5: status='pass' but passed < total → rejected (semantic invariant)."""
+    with pytest.raises(ValidationError) as excinfo:
+        PreCheckOutcome(passed=5, total=10, status="pass")
+    assert "status='pass'" in str(excinfo.value)
+
+
+def test_pre_check_outcome_status_fail_requires_passed_lt_total() -> None:
+    """H5: status='fail' but passed == total → rejected."""
+    with pytest.raises(ValidationError) as excinfo:
+        PreCheckOutcome(passed=10, total=10, status="fail")
+    assert "status='fail'" in str(excinfo.value)
+
+
+def test_pre_check_outcome_accepts_skipped_state() -> None:
+    """M13: status='skipped' accepted with arbitrary passed/total (no count constraint)."""
+    skipped = PreCheckOutcome(passed=0, total=0, status="skipped")
+    assert skipped.status == "skipped"
+    # Skipped allows passed/total mismatch — the check did not run.
+    skipped2 = PreCheckOutcome(passed=3, total=10, status="skipped")
+    assert skipped2.status == "skipped"
+
+
+def test_pre_check_outcome_accepts_error_state() -> None:
+    """M13: status='error' accepted (the check itself crashed)."""
+    err = PreCheckOutcome(passed=0, total=0, status="error")
+    assert err.status == "error"
+
+
+def test_accepted_commands_rejects_empty_string() -> None:
+    """H6: each command min_length=1 — empty-string entries rejected."""
+    with pytest.raises(ValidationError):
+        TaskApprovalRequestedPayload(
+            task_id=_VALID_TASK_ID,
+            action="x",
+            justification="y",
+            accepted_commands=[""],
+        )
+
+
+def test_accepted_commands_rejects_oversize_command() -> None:
+    """H6: each command max_length=200 — 201-char entry rejected."""
+    with pytest.raises(ValidationError):
+        TaskApprovalRequestedPayload(
+            task_id=_VALID_TASK_ID,
+            action="x",
+            justification="y",
+            accepted_commands=["a" * 201],
+        )
+
+
+def test_accepted_commands_rejects_oversize_list() -> None:
+    """H6: list max_length=20 — 21-entry list rejected at the model boundary."""
+    cmds = [f"/cmd-{i}" for i in range(21)]
+    with pytest.raises(ValidationError):
+        TaskApprovalRequestedPayload(
+            task_id=_VALID_TASK_ID,
+            action="x",
+            justification="y",
+            accepted_commands=cmds,
+        )
+
+
+def test_diff_summary_rejects_overflow_value() -> None:
+    """L9: per-field upper bound 10**9 — 10**9 + 1 rejected."""
+    with pytest.raises(ValidationError):
+        DiffSummary(files=10**9 + 1, insertions=0, deletions=0)
+    with pytest.raises(ValidationError):
+        DiffSummary(files=0, insertions=10**9 + 1, deletions=0)
+    with pytest.raises(ValidationError):
+        DiffSummary(files=0, insertions=0, deletions=10**9 + 1)

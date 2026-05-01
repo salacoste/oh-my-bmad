@@ -1,6 +1,6 @@
 # Story 3.10: Approval-request message template
 
-Status: review
+Status: done
 
 ## Story
 
@@ -263,6 +263,85 @@ Story 3.6 H3 introduced field-truncation for validation errors (single bullets c
 - Story 3.9 — renderer dispatcher placeholder + `_DELIVERABLE_EVENT_TYPES` allowlist.
 - Story 6.4 — future emitter of `task.approval_requested` with the rich payload.
 - Epic-2-retro AI #1 — independent gate verify.
+
+## Review Findings
+
+Three-layer adversarial review of commit `f7839e4` on 2026-05-01 (Blind / Edge / Auditor on Opus). User directive "fix all issues even minors" applies. After dedup: **12 High · 16 Medium · 19 Low = 47 patches**, **0 deferred**, **3 dismissed-as-noise**.
+
+### High severity
+
+- [x] [Review][Patch] **H1 — Section-drop ladder skips the pre-check block entirely** [Blind+Edge]: ladder is `(failed)`-suffix → diff → commands → emergency. There's no pre-check-drop step. A `justification` of ~3300 chars + populated pre-check block (~120 chars) + headers (~80 chars) overflows; after Step 1 (suffix shrunk ~9 chars/fail-line) and Step 2 (no diff to drop) and Step 3 (no commands to drop), we hit the emergency one-liner — losing actionable info that's recoverable. Add Step 3.5 / Step 4: drop `pre_check_results` block before emergency fallback. [telegram_sink.py:_assemble_approval_sections + section-drop ladder]
+- [x] [Review][Patch] **H2 — Emergency fallback is unbounded by `task_id`** [Blind#2]: `f"🔒 Approval required — task {task_id_esc}\n\n(message body too large; see /logs {task_id_esc})"` — no length check on `task_id_esc`. With H3 closing the `task_id: str` model gap, this is mostly defended at the model boundary; defense-in-depth: cap `task_id_esc` to 64 chars in the fallback specifically (real task IDs are `t-<uuid>` = 38 chars). [telegram_sink.py:emergency fallback]
+- [x] [Review][Patch] **H3 — `task_id`, `action`, `justification` lack `min_length`/`max_length` validators** [Blind#3]: empty `task_id` produces `🔒 Approval required — task ` and `/logs `. Arbitrarily long strings pass. Other Story 3.10 numeric fields use `Field(ge=0)` correctly — same pattern should apply: `task_id: str = Field(min_length=1, max_length=64)`, `action: str = Field(min_length=1, max_length=2000)`, `justification: str = Field(min_length=1, max_length=10_000)`. Caps reasonably above the renderer's 3500-char total cap so wire-level validation fails fast on bad inputs [event_types.py:TaskApprovalRequestedPayload]
+- [x] [Review][Patch] **H4 — `PreCheckOutcome` accepts `passed > total` (invariant violation)** [Blind#4, Edge#1.8]: independent `Field(ge=0)` validators on `passed` and `total` with no cross-field check. Renderer prints `999/3 (failed)` nonsense. Add Pydantic v2 `@model_validator(mode="after")`:
+  ```python
+  @model_validator(mode="after")
+  def _check_passed_le_total(self) -> "PreCheckOutcome":
+      if self.passed > self.total:
+          raise ValueError(f"passed ({self.passed}) cannot exceed total ({self.total})")
+      return self
+  ```
+  Add a positive + negative test [event_types.py:PreCheckOutcome]
+- [x] [Review][Patch] **H5 — `status` semantically inconsistent with counts** [Blind#5, Edge#1.9]: emitter can ship `passed=315, total=315, status="fail"` (renders ❌ Unit: 315/315 (failed)) or `passed=0, total=315, status="pass"`. Add a second model-validator: `status="pass"` requires `passed == total`; `status="fail"` requires `passed < total`. Document the contract [event_types.py:PreCheckOutcome]
+- [x] [Review][Patch] **H6 — `accepted_commands` has no model-level bounds** [Blind#6]: list-length and per-element string-length defended ONLY in the renderer. Other consumers (Story 6.4 emitter logic, audit log, registry-API echo) get no guard. Add `accepted_commands: list[str] | None = Field(default=None, max_length=20)` (model layer) AND apply per-element `Field(max_length=200)` via Annotated:
+  ```python
+  AcceptedCommand = Annotated[str, Field(min_length=1, max_length=200)]
+  accepted_commands: list[AcceptedCommand] | None = Field(default=None, max_length=20)
+  ```
+  Renderer keeps its own caps as defense-in-depth [event_types.py:TaskApprovalRequestedPayload]
+- [x] [Review][Patch] **H7 — Per-bullet 200-char cap math off-by-one** [Blind#7]: `_truncate(escaped, _APPROVAL_BULLET_MAX_CHARS)` produces up to 200 chars; bullet prefix `"  • "` (4 chars) is added unmeasured → effective 204. AC-6 says "command line capped at 200" — line includes prefix. Fix: `_truncate(escaped, _APPROVAL_BULLET_MAX_CHARS - len("  • "))` [telegram_sink.py:_render_accepted_commands]
+- [x] [Review][Patch] **H8 — Trim-loop bullet logic duplicated from `_render_accepted_commands`** [Edge#1.6]: Step 3 manually rebuilds bullets with the same 200-char + escape logic. If a future story tweaks bullet formatting (e.g. changes glyph), the trim loop diverges silently. Extract `_build_command_bullets(cmds: list[str], visible_count: int) -> list[str]` helper; both `_render_accepted_commands` and Step 3 call it [telegram_sink.py:section-drop ladder]
+- [x] [Review][Patch] **H9 — Type/payload mismatch in dispatcher silently degrades to placeholder with no operational signal** [Edge#2.1]: `if not isinstance(payload, TaskApprovalRequestedPayload): return placeholder`. SRE has no way to detect schema-registry registration race or version drift. Add `_log.warning("renderer.payload_type_mismatch", event_type=envelope.type, expected="TaskApprovalRequestedPayload", actual=type(payload).__name__)` before the fallback [telegram_sink.py:_render_approval_request]
+- [x] [Review][Patch] **H10 — Defensive `isinstance` fallback path is untested** [Edge#7.1, Auditor#L7]: the "registration race" branch never executes from any test. Coverage tool flags. Add a unit test that constructs `EventEnvelope` with a raw `dict` payload (bypassing Pydantic validation via direct attribute assignment, OR using `EventEnvelope.model_construct(...)`), assert placeholder string returned [test_telegram_sink.py]
+- [x] [Review][Patch] **H11 — Multi-line `justification` breaks visual structure** [Edge#1.13]: `html.escape` doesn't touch `\n`. A `justification = "Line 1\nLine 2"` renders mid-section newline that conflicts with the `\n\n` section separator. Tests don't cover this. Fix: in `_render_approval_request`, `justification_safe = html.escape(payload.justification.replace("\n", " "))` (collapse to single line), OR document the multi-line behavior explicitly. Recommend: collapse — Telegram messages are not the right surface for multi-line free-form text [telegram_sink.py:_assemble_approval_sections]
+- [x] [Review][Patch] **H12 — Tests don't cover `passed > total` rendering** [Edge#6.1, Blind#test gaps]: happy-path only. Add `test_pre_check_outcome_rejects_passed_gt_total` (validates the H4 model_validator) AND `test_pre_check_outcome_rejects_status_count_mismatch` (validates H5) [test_event_types.py]
+
+### Medium severity
+
+- [x] [Review][Patch] **M1 — UTF-16 surrogate-pair length issue (Story 3.8 L10 carry-forward)** [Blind#8, Edge#3.1]: `len()` measures codepoints; Telegram's 4096 limit is UTF-16 code units. 3500 emojis = 7000 UTF-16 units. The 596-char safety margin is wide but emoji-heavy commands could blow it. Either (a) use `len(text.encode("utf-16-le")) // 2` for the cap math, or (b) document the codepoint-vs-units gap and tighten `_APPROVAL_MESSAGE_MAX_CHARS = 2000` to be safe [telegram_sink.py + Story 3.8 L10 unfinished work]
+- [x] [Review][Patch] **M2 — `_RENDERERS` annotation `Mapping[...]` is wider than runtime `MappingProxyType`** [Blind#12]: tighten to `MappingProxyType[str, _RenderFn]` so mypy enforces immutability at type level. Or `Final[Mapping[str, _RenderFn]]` [telegram_sink.py:_RENDERERS]
+- [x] [Review][Patch] **M3 — Step-3 trim is O(N²) string concatenation** [Blind#13]: rebuilds full sections O(N) times = O(N²). With N=10 and ~3500 chars per assemble, ~35K chars allocated worst case. Use a top-down approach: compute budget once, find the largest `visible_count` that fits via a single-pass forward calculation (or `bisect`-style binary search) [telegram_sink.py:section-drop Step 3]
+- [x] [Review][Patch] **M4 — `_render_pre_check_block` over-couples to whole payload** [Blind#14, Edge#3.6]: signature takes `pre: TaskApprovalRequestedPayload` but only reads `pre.pre_check_results`. Refactor: `_render_pre_check_block(results: PreCheckResults | None, *, include_failed_suffix: bool = True) -> str | None`. Tests can construct `PreCheckResults` directly without building a full payload [telegram_sink.py:_render_pre_check_block]
+- [x] [Review][Patch] **M5 — HTML escape test uses fragile substring assertion** [Blind#15]: `assert "<x>" not in result.replace("&lt;x&gt;", "")` fails to detect partial escape (e.g. `&lt;x>` where `>` is unescaped). Replace with separate-character checks: `assert "<" not in result.replace("&lt;", "")` AND `assert ">" not in result.replace("&gt;", "")` [test_telegram_sink.py:html_escape test]
+- [x] [Review][Patch] **M6 — Total-cap test makes unreliable assumptions about command length** [Blind#16, Auditor#2]: 70-char commands × 10 + 3000-char justification + ~250 char fixed sections ≈ 3990 → over by 490. After diff drop (~25 chars) + suffix drop (~9 chars), still ~456 over. Test asserts `visible_bullets < 10` — barely meaningful. Tighten: assert specific drop ladder behavior step-by-step (size-just-right scenarios for each step). Plus split into multiple tests: one sized for diff-drop only, one for diff+commands, one for emergency [test_telegram_sink.py]
+- [x] [Review][Patch] **M7 — `_approval_envelope` helper accepts `str | None` for `risk_class` with `# type: ignore[arg-type]`** [Blind#17]: 3 ignores on legitimate Literal args. Replace with `risk_class: Literal["low","medium","high"] | None = None` and drop the ignores [test_telegram_sink.py:_approval_envelope]
+- [x] [Review][Patch] **M8 — `_reg` re-registers schema on every test helper invocation** [Blind#18]: helper called by 11+ tests. Wrap in `_ensure_registered_once()` module-level idempotent guard, or use `pytest.fixture(scope="module")` [test_telegram_sink.py]
+- [x] [Review][Patch] **M9 — Dispatcher fallback test uses wrong event-type spelling `task.execution.started` instead of `task.execution_started`** [Auditor#1, Blind#19]: spec AC-10 line 143 says `task.execution_started` (underscore); test uses `task.execution.started` (dot-separated). Story 3.9's canonical type per `_DELIVERABLE_EVENT_TYPES` uses underscore form. Rename in both the test and the `_render` docstring [test_telegram_sink.py + telegram_sink.py:_render docstring]
+- [x] [Review][Patch] **M10 — Total-cap test doesn't verify strict drop-order** [Auditor#2]: a regression where Step 2 (diff) is skipped and Step 3 (commands) runs first would still pass. Add a sized-just-right test: envelope sized to overflow ONLY enough to require diff-drop (no command trim), assert all 10 commands remain AND `Diff:` is gone [test_telegram_sink.py]
+- [x] [Review][Patch] **M11 — Renderer exceptions propagate (no try/except in `_handle` around `_render`)** [Edge#2.4]: an unexpected payload-shape exception (e.g. UTF surrogate edge case in `html.escape`) crashes the sink loop. Wrap `text = _render(envelope)` in `_handle` with try/except, log error, fall back to placeholder. Defensive design [telegram_sink.py:_handle]
+- [x] [Review][Patch] **M12 — `_RENDERERS ⊆ _DELIVERABLE_EVENT_TYPES` invariant unenforced** [Edge#9.1]: today Story 3.10 only registers `task.approval_requested` (already in allowlist). Stories 3.11/3.12/3.13 will add more — risk of drift. Add architectural test: `assert set(_RENDERERS.keys()).issubset(_DELIVERABLE_EVENT_TYPES)` [test_telegram_sink.py]
+- [x] [Review][Patch] **M13 — `Literal["pass","fail"]` too narrow** [Edge#8.1]: real-world pre-check semantics include `"skipped"` (env unavailable), `"error"` (check itself crashed). Story 6.4 (the emitter) hasn't shipped — narrowing later is a breaking change; widening NOW is cheap. Extend: `Literal["pass","fail","skipped","error"]`; renderer maps `skipped → ⏭️`, `error → ⚠️` [event_types.py:PreCheckOutcome + telegram_sink.py renderer]
+- [x] [Review][Patch] **M14 — `risk_class` HTML-escape comment is a future footgun** [Edge#1.16]: comment says "Literal-bound, no escape needed" — true today, fragile if model is later relaxed to bare `str`. Add `html.escape(payload.risk_class)` defensively (no-op for current Literals); renderer becomes drift-safe [telegram_sink.py:_assemble_approval_sections]
+- [x] [Review][Patch] **M15 — AC-12 spec text drift: `test_event_types.py` is NEW but AC-12 still names `test_materializer.py`** [Auditor#5]: spec line 162 grants permission for either path; implementation took the new-file route but didn't update AC-12 narrative. Update the AC-12 "Modified (4)" bullet to read `test_event_types.py (NEW)` [3-10 spec doc]
+- [x] [Review][Patch] **M16 — AC-12 missing sprint-status.yaml in modified count + status-machine intermediate states skipped** [Auditor#6]: the diff jumps `backlog → review` directly; AC-14/Task 5 enumerates 4 states (`ready-for-dev → in-progress → review → done`). Either flip through all 4 (advisory only — process drift) OR document the implicit-states convention. Update AC-12 to explicitly count sprint-status.yaml as a 5th modified file [3-10 spec doc + sprint-status process]
+
+### Low severity
+
+- [x] [Review][Patch] **L1 — `_render` placeholder fallback HTML-escapes `envelope.type` (registry-controlled string)** [Blind#9]: harmless defensive escape but signals threat-model confusion. Either drop the escape on `envelope.type` (registry guarantees its shape) OR document why the defense is intentional [telegram_sink.py:_render fallback]
+- [x] [Review][Patch] **L2 — `_extract_task_id` silent `None` return on non-string `task_id`** [Blind#11]: returns `None` without logging, leading to `<unknown>` placeholder. Add `_log.warning("renderer.task_id_non_string", payload_type=...)` [telegram_sink.py:_extract_task_id]
+- [x] [Review][Patch] **L3 — `_truncate(limit=0)` returns `"…"` (1 char, exceeds limit)** [Blind#28, Edge#3.2]: `if limit <= 1: return "…"` violates the limit when limit==0. Fix: `if limit <= 0: return ""` first; then `if limit == 1: return "…"`; then truncate [telegram_sink.py:_truncate]
+- [x] [Review][Patch] **L4 — Section-drop helper inconsistent style** [Blind#29]: Step 1/2 reuse the original `commands_section`; Step 3 builds trimmed sections from scratch. Extract `_build_commands_section(payload, visible_count)` so all four steps call it [telegram_sink.py]
+- [x] [Review][Patch] **L5 — Cross-service noqa cluster grows** [Blind#30]: 7 IMP001 noqas in this story; will multiply across 3.11/3.12/3.13. Document tracking issue: deferred refactor to move payload models to `packages/events/` (or `packages/event-payloads/`) [tracker]
+- [x] [Review][Patch] **L6 — Test count math in commit body inconsistent** [Blind#27]: commit says "887 → 902 visible (+16 net)"; dev notes say "886 → 902 (+16)". Reconcile: actual baseline pre-3.10 was 887; dev pass added +16. Update commit-message-style for L24-style accuracy [story file change-log line]
+- [x] [Review][Patch] **L7 — `from typing import Literal` decorative in test_event_types** [Blind#24]: only used for one tuple annotation. Acceptable but minor cleanup. Keep [test_event_types.py]
+- [x] [Review][Patch] **L8 — `result.index("Lint")` test fragile** [Blind#25]: would skew if "Lint"/"Types" appear elsewhere. Switch to line-number-based ordering: split result on `\n`, find lines starting with `✅ Lint:` etc. [test_telegram_sink.py:full_pre_checks test]
+- [x] [Review][Patch] **L9 — `DiffSummary` per-field upper bound missing** [Blind#26]: `Field(ge=0)` only. A buggy diff parser shipping `insertions=2**63 - 1` validates and renders 19-digit number. Add `Field(ge=0, le=10**9)` belt [event_types.py:DiffSummary]
+- [x] [Review][Patch] **L10 — Negative `max_chars` not handled in `_truncate`** [Edge#3.3]: defensive; covered by L3's `if limit <= 0: return ""` fix [telegram_sink.py:_truncate]
+- [x] [Review][Patch] **L11 — No test for `pre_check_results=PreCheckResults()` (object exists, all fields None)** [Edge#3.4]: spec-implied but not covered. Add test [test_telegram_sink.py]
+- [x] [Review][Patch] **L12 — Renderer placeholder fallback HTML-escape not test-covered** [Auditor#3]: deleted Story 3.9 test covered this exact case; "migrated coverage" claim is incorrect. Add a test exercising fallback path with `task_id`/`event_type` containing `<x>` [test_telegram_sink.py]
+- [x] [Review][Patch] **L13 — Spec AC-1 text out-of-date re: 1.0.1** [Auditor#4]: spec mentions only 1.0.0 + 1.1.0; registration includes 1.0.1 from prior story. Code-only acknowledgment in change log; spec text update for accuracy [3-10 spec doc AC-1]
+- [x] [Review][Patch] **L14 — Spec AC-2 forward-reference issue (PreCheckResults declared before PreCheckOutcome)** [Auditor#7]: spec snippet would not import as-written. Code declared in correct order. Reorder spec snippet [3-10 spec doc AC-2]
+- [x] [Review][Patch] **L15 — `__all__` ordering** [Blind#22, #23]: alphabetical ordering verified; pre-existing `TELEGRAM_REJECTED_SCHEMA_VERSION` non-alphabetical. Pre-existing; not introduced. Cosmetic [event_types.py:__all__]
+- [x] [Review][Patch] **L16 — `_render_accepted_commands` returns `None` when empty list** [Blind#29]: caller correctly handles. Trivial — could return `""` instead and let caller filter, but current pattern is consistent with section-omission semantics. Document the contract [telegram_sink.py:_render_accepted_commands]
+- [x] [Review][Patch] **L17 — Status-field could be widened to include `skipped`/`error`** — covered by M13 (medium-promoted; this is the same finding) [no-op, dedup]
+- [x] [Review][Patch] **L18 — `<unknown>` magic-sentinel collision** [Edge#2.3]: if a real `task_id` happens to equal the string `"<unknown>"`, behavior identical (both escape to `&lt;unknown&gt;`). Not a defect — note in test [test_telegram_sink.py]
+- [x] [Review][Patch] **L19 — Render fallback uses `_extract_task_id(envelope) or "<unknown>"` — defensive but no test** [Edge#2.2]: cover the `envelope.payload is None` path explicitly with a test [test_telegram_sink.py]
+
+### Dismissed (false positives / out-of-scope)
+
+- N1: `MappingProxyType` underlying-dict mutation — verified safe (inner dict is anonymous temp, no external handle). Defensive note only [Edge#10].
+- N2: `from typing import Literal` in test_event_types — used legitimately [Blind#24, withdrawn].
+- N3: `_render(envelope)` placeholder fallback HTML-escape on `envelope.type` — already covered by L1; tracking as one finding.
 
 ### Predicted File List
 
