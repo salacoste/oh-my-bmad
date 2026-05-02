@@ -144,7 +144,15 @@ async def test_task_thread_binding_end_to_end(tmp_path: Path) -> None:
     assert call_kwargs["reply_to_message_id"] == 42
     text: str = call_kwargs["text"]
     assert task_id in text
-    assert "task.completed" in text
-    # The text must match the placeholder pattern "Task t-...: task.completed"
-    assert text.startswith("Task t-")
-    assert text.endswith(": task.completed")
+    # Story 3.12 — task.completed now routes through _render_completed
+    # (FR9 typed renderer), replacing the Story 3.9 placeholder shape
+    # ``Task <id>: task.completed``. The new shape is
+    # ``✅ Task <id> complete.\n\n<summary>``.
+    #
+    # Story 3.12 review M6 — exact-shape assertion. The previous form
+    # (``startswith("✅ Task ")`` AND ``"complete." in text``) would also
+    # accept the emergency one-liner ``✅ Task <id> complete. (message body
+    # too large; ...)`` — vacuous against the typed-renderer regression
+    # the test is meant to defend. Strengthen to the precise minimal
+    # shape for this fixture (no PR/diff/tests/CI/blockers fields set).
+    assert text == f"✅ Task {task_id} complete.\n\nall done"

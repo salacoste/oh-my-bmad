@@ -27,3 +27,13 @@ A running log of issues that surfaced during code review but were not fixed at t
 - D5 — `task_id` whitespace `pattern=` validator (broader concern affecting approval renderer too; needs a uniform validator).
 - D6 — Module constants lack `Final` annotation (project convention follows `_APPROVAL_*` without `Final`; inconsistency would create style drift).
 - D7 — Header-overflow fail-fast (over-engineered; Step 5 emergency tier already handles pathological task_ids after H2 + H5 fixes).
+
+## Deferred from: code review of 3-12-completion-summary-template (2026-05-01)
+
+- D1 — `task_id` regex `pattern=` absent across all `Task*Payload` models — broader concern (uniform validator needed).
+- D2 — `_collapse_newlines` doesn't strip U+2028 LINE SEPARATOR / U+2029 PARAGRAPH SEPARATOR — affects all 3 renderers (3.10/3.11/3.12).
+- D3 — `pr_branch` accepts characters git ref-name disallows (`..`, `~`, `^`, `:`, `?`, `*`, `[`, control chars, leading `-`) — needs uniform git-ref-name pattern validator.
+- D4 — `pr_url` already-escaped `&amp;amp;` double-escape — operator-supplied input-sanitization concern; defer.
+- D5 — `_COMPLETED_REGISTERED` global mutable flag pattern — consistent with Story 3.10 M8 / 3.11 H11 across 4+ test helpers; consolidation refactor deferred.
+- D6 — `Random(312)` fixed seed — consistent with 3.10/3.11 (`Random(311)`, `Random(789)`); pytest single-threaded default.
+- D7 — `isinstance(payload, ...)` docstring clarity — docs sweep across 3 renderers.

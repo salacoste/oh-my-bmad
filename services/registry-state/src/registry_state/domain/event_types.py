@@ -306,13 +306,75 @@ class TaskApprovalRequestedPayload(BaseModel):
 
 
 class TaskCompletedPayload(BaseModel):
-    """Payload for the ``task.completed`` event."""
+    """Payload for the ``task.completed`` event.
+
+    Story 3.12 AC-1 — additive minor bump (1.0.x → 1.1.0): seven optional
+    FR9 fields plus tightened model-boundary validators on the existing
+    fields. The seven new fields (``pr_number``, ``pr_branch``,
+    ``files_changed``, ``lines_added``, ``lines_removed``, ``tests_added``,
+    ``ci_state``, ``blockers_count``) all default to ``None`` so legacy
+    v1.0.x events deserialize cleanly under v1.1.0 (NFR-M3 additive-only).
+
+    Story 3.10 H3 carry-forward — model-boundary string validators:
+    ``task_id`` (1..64 chars), ``summary`` (1..2000 chars), and ``pr_url``
+    (1..500 chars) gain explicit ``min_length`` / ``max_length`` validators
+    matching the cap pattern set on
+    :class:`TaskApprovalRequestedPayload` / :class:`TaskBlockerRaisedPayload`.
+
+    Story 3.10 review L9 carry-forward — per-field upper bounds on the new
+    integer counters defend against buggy diff-parser overflow:
+    ``pr_number``, ``lines_added``, ``lines_removed`` cap at ``10**9``;
+    ``files_changed``, ``tests_added``, ``blockers_count`` cap at ``10**6``
+    (more than enough for any reasonable PR; defends against integer-overflow
+    injection). ``pr_branch`` capped at 255 chars (git ref-name length limit).
+
+    Story 3.12 review M14 — counter-cap semantic distinction. The 1M cap on
+    file-level counters (``files_changed`` / ``tests_added`` / ``blockers_count``)
+    is intentional — even a monorepo-wide refactor rarely touches >1M files,
+    and tests-added / blockers-raised counts in a single ``task.completed``
+    are bounded by per-task scope. The 1B cap on line-level counters
+    (``lines_added`` / ``lines_removed`` / ``pr_number``) is the broader
+    defense-in-depth bound matching :class:`DiffSummary` (Story 3.10 L9).
+    A future story producing legitimate >1M-file events should bump the
+    file-level cap explicitly rather than relying on overflow.
+
+    Story 3.12 review M2 — ``pr_url`` constrained to ``http://`` /
+    ``https://`` schemes via ``pattern=r"^https?://"``. Defense against
+    operator-supplied / upstream-emitted ``javascript:`` / ``data:`` URLs
+    that Telegram link-affordance heuristics might surface as clickable
+    even after HTML escape.
+
+    Story 3.12 review L4 — schema-version registration ordering. Three
+    versions (1.0.0, 1.0.1, 1.1.0) of the same model are registered. The
+    ``schema_registry.register`` contract is "same model for same key is a
+    no-op idempotent op"; insertion order is irrelevant for the per-version
+    lookup. If a future ``1.0.2`` lands (e.g. a hot-fix forced into the v1.0
+    line) it must be registered explicitly with the THEN-CURRENT model — the
+    1.1.0 entry is unaffected. Versions form a partial map; there is no
+    "default-to-latest" behavior to worry about.
+    """
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
-    task_id: str
-    summary: str
-    pr_url: str | None = None
+    task_id: str = Field(min_length=1, max_length=64)
+    summary: str = Field(min_length=1, max_length=2000)
+    # Story 3.12 review M2: scheme-constrained — ``http(s)://`` only. Other
+    # schemes (``javascript:`` / ``data:`` / ``file:``) are rejected at the
+    # model boundary, not at the renderer.
+    pr_url: str | None = Field(default=None, min_length=1, max_length=500, pattern=r"^https?://")
+    # Story 3.12 — optional FR9 fields (additive, schema 1.1.0).
+    # Story 3.12 review L5: ``ge=1`` matches GitHub PR numbering (PRs start at
+    # 1). Other VCS systems (Gitea, Forgejo, GitLab MRs) also use ``>=1`` so
+    # this constraint is portable in practice; if a future host uses 0-based
+    # numbering, the cap can relax with an explicit migration comment.
+    pr_number: int | None = Field(default=None, ge=1, le=10**9)
+    pr_branch: str | None = Field(default=None, min_length=1, max_length=255)
+    files_changed: int | None = Field(default=None, ge=0, le=10**6)
+    lines_added: int | None = Field(default=None, ge=0, le=10**9)
+    lines_removed: int | None = Field(default=None, ge=0, le=10**9)
+    tests_added: int | None = Field(default=None, ge=0, le=10**6)
+    ci_state: Literal["green", "red", "unknown"] | None = None
+    blockers_count: int | None = Field(default=None, ge=0, le=10**6)
 
 
 # ---------------------------------------------------------------------------
@@ -545,6 +607,14 @@ register("task.approval_requested", "1.0.1", TaskApprovalRequestedPayload)
 register("task.approval_requested", "1.1.0", TaskApprovalRequestedPayload)
 register("task.completed", "1.0.0", TaskCompletedPayload)
 register("task.completed", "1.0.1", TaskCompletedPayload)
+# Story 3.12 AC-1 / AC-9: additive 1.1.0 with optional FR9 fields. Same-model
+# contract — pre-3.12 events (no pr_number / pr_branch / files_changed /
+# lines_added / lines_removed / tests_added / ci_state / blockers_count)
+# deserialize cleanly under 1.1.0 with the new fields defaulting to None
+# (NFR-M3 additive-only). Story 3.9 H7 carry-forward — registration in
+# event_types.py (NOT packages/events/.../schema_registry.py) avoids the
+# circular import the dev pass discovered.
+register("task.completed", "1.1.0", TaskCompletedPayload)
 
 # Story 2.10 — 4 failure-detection event types (FR24a, NFR-R5).
 register("service.crashed", "1.0.0", ServiceCrashedPayload)

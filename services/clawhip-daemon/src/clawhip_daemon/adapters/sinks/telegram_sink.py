@@ -66,6 +66,7 @@ from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC
     PreCheckResults,
     TaskApprovalRequestedPayload,
     TaskBlockerRaisedPayload,
+    TaskCompletedPayload,
 )
 
 from clawhip_daemon.adapters.telegram_outbound import TelegramOutbound
@@ -766,7 +767,15 @@ def _render_approval_request(envelope: EventEnvelope) -> str:
     # entity mid-token (e.g. 64 raw ``<`` chars escape to 64 × 5 = 320 chars
     # of ``&lt;``; slicing the escaped form at 64 lands inside ``&lt;`` and
     # produces invalid markup like ``...&lt;&lt;&l``).
-    task_id_capped = payload.task_id[:_EMERGENCY_TASK_ID_MAX_CHARS]
+    #
+    # Story 3.12 review H1 (retroactive 3.10/3.11/3.12 fix): collapse newlines
+    # BEFORE the slice + escape so a ``task_id`` containing ``\n`` cannot
+    # smuggle a real newline into the supposedly single-line emergency
+    # message. ``_collapse_newlines`` is idempotent on already-clean input.
+    # _EMERGENCY_TASK_ID_MAX_CHARS = 64 — Story 3.10 H2 carry-forward (matches
+    # the model-boundary ``max_length=64`` ceiling on ``task_id``).
+    task_id_safe = _collapse_newlines(payload.task_id)
+    task_id_capped = task_id_safe[:_EMERGENCY_TASK_ID_MAX_CHARS]
     task_id_for_fallback = html.escape(task_id_capped)
     result = (
         f"🔒 Approval required — task {task_id_for_fallback}"
@@ -980,7 +989,14 @@ def _render_blocker_raised(envelope: EventEnvelope) -> str:
     # the RAW ``task_id`` BEFORE ``html.escape`` so a 64-char raw ``<``
     # task_id (which escapes to 64 × 5 = 320 chars of ``&lt;``) cannot
     # split an HTML entity mid-token when sliced at 64.
-    task_id_capped = payload.task_id[:_EMERGENCY_TASK_ID_MAX_CHARS]
+    #
+    # Story 3.12 review H1 (retroactive 3.11 fix): collapse newlines BEFORE
+    # the slice + escape so a ``task_id`` containing ``\n`` cannot smuggle
+    # a real newline into the supposedly single-line emergency message.
+    # _EMERGENCY_TASK_ID_MAX_CHARS = 64 — Story 3.10 H2 carry-forward
+    # (matches the model-boundary ``max_length=64`` ceiling on ``task_id``).
+    task_id_safe = _collapse_newlines(payload.task_id)
+    task_id_capped = task_id_safe[:_EMERGENCY_TASK_ID_MAX_CHARS]
     task_id_for_fallback = html.escape(task_id_capped)
     result = (
         f"⛔ Task {task_id_for_fallback} blocked. "
@@ -996,14 +1012,383 @@ def _render_blocker_raised(envelope: EventEnvelope) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Renderer (Story 3.12 — completion-summary template, FR9)
+# ---------------------------------------------------------------------------
+
+#: Story 3.12 AC-5 — same codepoint cap as approvals / blockers (Story 3.10
+#: M1 + Story 3.11 H3 / L15 UTF-16 surrogate-pair safety carry-forward).
+#: **Parity invariant** — ``_APPROVAL_MESSAGE_MAX_CHARS`` /
+#: ``_BLOCKER_MESSAGE_MAX_CHARS`` / ``_COMPLETED_MESSAGE_MAX_CHARS`` MUST
+#: move together; future renderers (3.13) inherit the same value.
+_COMPLETED_MESSAGE_MAX_CHARS: int = 1900
+
+#: Story 3.12 AC-2 — ci_state → emoji map. Pattern matches
+#: :data:`_PRE_CHECK_STATUS_EMOJI` (Story 3.10 review M13). Defensive
+#: ``"❓"`` fallback covers any future status values that ship before this
+#: map is updated. ``MappingProxyType`` matches the read-only convention
+#: (Story 3.6 review L1 carry-forward).
+#:
+#: Story 3.12 review L8: the defensive fallback emoji is ``"❔"`` (white
+#: question mark ornament) — distinct from the explicit ``"unknown" → "❓"``
+#: (red question mark) entry. If a future Literal value is added without
+#: also updating this map, the visible emoji difference signals a drift
+#: (rendered ``CI: ❔ <value>``) and the ``ci_state_drift`` WARN below
+#: provides the SRE-actionable signal. Co-locating the structural map
+#: with the drift-detection log keeps the contract self-documenting.
+_CI_STATE_EMOJI: Mapping[str, str] = MappingProxyType(
+    {
+        "green": "✅",
+        "red": "❌",
+        "unknown": "❓",
+    }
+)
+_CI_STATE_FALLBACK_EMOJI: str = "❔"
+
+
+def _build_pr_line(payload: TaskCompletedPayload) -> str | None:
+    """Build the PR line — one of seven shapes based on which fields are present.
+
+    Returns ``None`` when ``pr_number``, ``pr_branch``, and ``pr_url`` are
+    all ``None``. Otherwise composes the most-informative shape per
+    Story 3.12 AC-2 spec table.
+
+    Story 3.12 AC-4: ``pr_branch`` and ``pr_url`` are HTML-escaped after
+    newline collapse (defense-in-depth — branch names should not contain
+    ``\\n`` per git ref-name rules, but if a buggy emitter slips one in,
+    defend); ``pr_number`` is integer (no escape).
+
+    Story 3.12 review M5: when ``pr_branch`` or ``pr_url`` collapses to a
+    whitespace-only string (e.g. ``"\\n\\n\\n"`` passes ``min_length=1``
+    on raw input but ``_collapse_newlines`` converts it to ``"   "``), the
+    field is treated as None-equivalent so the PR line doesn't render with
+    trailing whitespace gaps (e.g. ``"PR #42:    "``).
+    """
+    pr_number = payload.pr_number
+    pr_branch = payload.pr_branch
+    pr_url = payload.pr_url
+    if pr_number is None and pr_branch is None and pr_url is None:
+        return None
+    branch_esc: str | None = None
+    if pr_branch is not None:
+        collapsed = _collapse_newlines(pr_branch)
+        # M5: empty-after-collapse short-circuit so a newlines-only branch
+        # name (which slipped past ``min_length=1`` on raw input) doesn't
+        # render as a whitespace-only token.
+        if collapsed.strip() != "":
+            branch_esc = html.escape(collapsed)
+    url_esc: str | None = None
+    if pr_url is not None:
+        collapsed_url = _collapse_newlines(pr_url)
+        if collapsed_url.strip() != "":
+            url_esc = html.escape(collapsed_url)
+    # Recompute "all None" after collapse in case both string fields became
+    # whitespace-only — fall back to None when only pr_number is left, OR
+    # to the pr_number-only branch.
+    if pr_number is None and branch_esc is None and url_esc is None:
+        return None
+    if pr_number is not None and branch_esc is not None and url_esc is not None:
+        return f"PR #{pr_number}: {branch_esc} — {url_esc}"
+    if pr_number is not None and branch_esc is not None:
+        return f"PR #{pr_number}: {branch_esc}"
+    if pr_number is not None and url_esc is not None:
+        return f"PR #{pr_number}: {url_esc}"
+    if branch_esc is not None and url_esc is not None:
+        return f"{branch_esc} — {url_esc}"
+    if url_esc is not None:
+        return f"PR: {url_esc}"
+    if branch_esc is not None:
+        return f"Branch: {branch_esc}"
+    # Only pr_number remains. Story 3.12 review M13: the early-return guard
+    # above + the post-collapse recompute together guarantee ``pr_number is
+    # not None`` here. The assert documents the structural invariant so a
+    # future field addition cannot silently slip past the branch ladder.
+    assert pr_number is not None, "exhausted PR-line branches"
+    return f"PR: #{pr_number}"
+
+
+def _build_diff_stats_line(payload: TaskCompletedPayload) -> str | None:
+    """Build the diff-stats line, or ``None`` when no counters populated.
+
+    Composes one of seven shapes based on which combination of
+    ``files_changed`` / ``lines_added`` / ``lines_removed`` is present.
+
+    Story 3.12 review H2: explicit handling of the (fc+la-no-lr) and
+    (fc+lr-no-la) combinations — previously these fell through to the
+    ``fc-only`` branch causing silent data loss for the populated
+    line-counter.
+
+    Story 3.12 review M1: zero-counter omission — ``files_changed=0`` /
+    ``lines_added=0`` / ``lines_removed=0`` are treated as "no activity to
+    report" and the section is omitted (returns ``None`` if all populated
+    fields are zero). Distinguishes "field absent" from "zero activity"
+    cleanly while not rendering a misleading ``"0 files changed."`` line.
+    """
+    fc = payload.files_changed
+    la = payload.lines_added
+    lr = payload.lines_removed
+    # M1: treat 0 as "do not render" — collapse zero into None semantically.
+    fc_v = fc if fc is not None and fc > 0 else None
+    la_v = la if la is not None and la > 0 else None
+    lr_v = lr if lr is not None and lr > 0 else None
+    if fc_v is None and la_v is None and lr_v is None:
+        return None
+    if fc_v is not None and la_v is not None and lr_v is not None:
+        return f"{fc_v} files changed, {la_v}+ / {lr_v}- lines."
+    # H2: explicit (fc+la) and (fc+lr) branches before the fc-only fall-through.
+    if fc_v is not None and la_v is not None:
+        return f"{fc_v} files changed, {la_v}+ lines."
+    if fc_v is not None and lr_v is not None:
+        return f"{fc_v} files changed, {lr_v}- lines."
+    if fc_v is not None:
+        return f"{fc_v} files changed."
+    if la_v is not None and lr_v is not None:
+        return f"{la_v}+ / {lr_v}- lines."
+    if la_v is not None:
+        return f"{la_v} lines added."
+    # Only lines_removed.
+    return f"{lr_v} lines removed."
+
+
+def _assemble_completed_sections(
+    payload: TaskCompletedPayload,
+    *,
+    include_pr: bool,
+    include_diff_stats: bool,
+    include_tests: bool,
+    include_ci_state: bool,
+    include_blockers: bool,
+    include_summary: bool,
+) -> str:
+    """Join the completion sections in spec order with ``\\n\\n`` separators.
+
+    Header is mandatory; the optional sections honor boolean levers the
+    section-drop ladder in :func:`_render_completed` flips on overflow.
+
+    Story 3.12 AC-4: HTML-escape ``task_id`` and ``summary`` (after
+    newline collapse). PR line composition delegates to
+    :func:`_build_pr_line` which handles ``pr_branch`` / ``pr_url``
+    escaping. Integer counters need no escape; ``ci_state`` is bound by
+    ``Literal[...]`` but is HTML-escaped defensively (Story 3.10 review
+    M14 — no-op on current Literals, drift-safe).
+    """
+    task_id_esc = html.escape(payload.task_id)
+
+    sections: list[str] = [
+        f"✅ Task {task_id_esc} complete.",
+    ]
+    if include_pr:
+        pr_line = _build_pr_line(payload)
+        if pr_line is not None:
+            sections.append(pr_line)
+    if include_diff_stats:
+        diff_line = _build_diff_stats_line(payload)
+        if diff_line is not None:
+            sections.append(diff_line)
+    if include_tests and payload.tests_added is not None and payload.tests_added > 0:
+        # Story 3.12 review M1: ``tests_added=0`` is "no tests added in this
+        # change", semantically equivalent to "field absent" for renderer
+        # purposes. Omitting is more honest than rendering ``"0 tests added."``
+        # which conflates "no activity" with "field absent" / pre-3.12
+        # back-compat events.
+        sections.append(f"{payload.tests_added} tests added.")
+    if include_ci_state and payload.ci_state is not None:
+        # Story 3.10 review M14 carry-forward: defense-in-depth escape on
+        # the Literal-bound value (no-op for current values, drift-safe —
+        # Story 3.12 review L9: the runtime cost is intentionally retained
+        # so a model_construct-bypass payload carrying an unmapped string
+        # still renders safely without HTML-injection risk).
+        # Story 3.12 review M8: log a structured WARN when the runtime
+        # ``ci_state`` falls outside the Literal-bound set. Combined with the
+        # distinct ``_CI_STATE_FALLBACK_EMOJI`` (L8), SRE has both a visual
+        # signal and a log signal for schema-registry drift / pre-3.12
+        # emitters that ship a new state literal before this map updates.
+        if payload.ci_state not in _CI_STATE_EMOJI:
+            _log.warning(
+                "renderer.ci_state_drift",
+                value=payload.ci_state,
+                expected=list(_CI_STATE_EMOJI.keys()),
+            )
+        emoji = _CI_STATE_EMOJI.get(payload.ci_state, _CI_STATE_FALLBACK_EMOJI)
+        sections.append(f"CI: {emoji} {html.escape(payload.ci_state)}")
+    if include_blockers and payload.blockers_count is not None and payload.blockers_count > 0:
+        # Story 3.12 review M1: ``blockers_count=0`` is "no blockers raised",
+        # which is the *normal* completion path. Omitting the section is more
+        # informative than ``"0 blockers raised."``.
+        sections.append(f"{payload.blockers_count} blockers raised.")
+    if include_summary:
+        # H11 / L17 / M12 carry-forward: collapse newlines uniformly so the
+        # section separator (``\n\n``) stays unambiguous.
+        summary_esc = html.escape(_collapse_newlines(payload.summary))
+        sections.append(summary_esc)
+    return "\n\n".join(sections)
+
+
+def _render_completed(envelope: EventEnvelope) -> str:
+    """Render the FR9 completion-summary message — Story 3.12 AC-2/AC-4/AC-5.
+
+    Sections (in order, with optional ones omitted on ``None``):
+
+      1. Header (always) — ``✅ Task <task_id> complete.``
+      2. PR line (one of seven forms; omitted when all 3 PR fields ``None``).
+      3. Diff stats line (one of five forms; omitted when all 3 diff
+         counters ``None``).
+      4. Tests line — ``<N> tests added.`` (omitted if ``tests_added`` ``None``).
+      5. CI state line — ``CI: <emoji> <state>`` (omitted if ``ci_state`` ``None``).
+      6. Blockers line — ``<N> blockers raised.`` (omitted if
+         ``blockers_count`` ``None``).
+      7. Summary (always when present) — operator-supplied free-form text.
+
+    Length safety (AC-5) — section-drop ladder:
+
+      Step 1: full message — return if under cap.
+      Step 2: drop diff stats (longest counter line).
+      Step 3: drop blockers count.
+      Step 4: drop tests count.
+      Step 5: drop CI state.
+      Step 6: drop PR line.
+      Step 7: emergency one-liner —
+        ``✅ Task {task_id} complete. (message body too large; see /logs {task_id})``
+        with the summary dropped. Operator can recover via ``/logs <id>``.
+
+    The summary line is dropped LAST among optional fields because it's the
+    operator-supplied human-readable description — semantically the most
+    valuable field per FR9's intent.
+
+    Story 3.10 review H9 carry-forward: when the dispatcher routes here
+    but the runtime payload is not a typed
+    :class:`TaskCompletedPayload` (registration race / version drift),
+    a structured WARN is emitted before falling back to the placeholder.
+    """
+    payload = envelope.payload
+    if not isinstance(payload, TaskCompletedPayload):
+        # H9 carry-forward: structured warning so SRE can detect schema-
+        # registry registration races / version drift.
+        _log.warning(
+            "renderer.payload_type_mismatch",
+            event_type=envelope.type,
+            expected="TaskCompletedPayload",
+            actual=type(payload).__name__,
+        )
+        task_id = _extract_task_id(envelope) or "<unknown>"
+        return f"Task {html.escape(task_id)}: {html.escape(envelope.type)}"
+
+    # Step 1: full message.
+    text = _assemble_completed_sections(
+        payload,
+        include_pr=True,
+        include_diff_stats=True,
+        include_tests=True,
+        include_ci_state=True,
+        include_blockers=True,
+        include_summary=True,
+    )
+    if len(text) <= _COMPLETED_MESSAGE_MAX_CHARS:
+        return text
+
+    # Step 2: drop diff stats (typically the longest counter line).
+    text = _assemble_completed_sections(
+        payload,
+        include_pr=True,
+        include_diff_stats=False,
+        include_tests=True,
+        include_ci_state=True,
+        include_blockers=True,
+        include_summary=True,
+    )
+    if len(text) <= _COMPLETED_MESSAGE_MAX_CHARS:
+        return text
+
+    # Step 3: drop blockers count.
+    text = _assemble_completed_sections(
+        payload,
+        include_pr=True,
+        include_diff_stats=False,
+        include_tests=True,
+        include_ci_state=True,
+        include_blockers=False,
+        include_summary=True,
+    )
+    if len(text) <= _COMPLETED_MESSAGE_MAX_CHARS:
+        return text
+
+    # Step 4: drop tests count.
+    text = _assemble_completed_sections(
+        payload,
+        include_pr=True,
+        include_diff_stats=False,
+        include_tests=False,
+        include_ci_state=True,
+        include_blockers=False,
+        include_summary=True,
+    )
+    if len(text) <= _COMPLETED_MESSAGE_MAX_CHARS:
+        return text
+
+    # Step 5: drop CI state.
+    text = _assemble_completed_sections(
+        payload,
+        include_pr=True,
+        include_diff_stats=False,
+        include_tests=False,
+        include_ci_state=False,
+        include_blockers=False,
+        include_summary=True,
+    )
+    if len(text) <= _COMPLETED_MESSAGE_MAX_CHARS:
+        return text
+
+    # Step 6: drop PR line — header + summary only.
+    text = _assemble_completed_sections(
+        payload,
+        include_pr=False,
+        include_diff_stats=False,
+        include_tests=False,
+        include_ci_state=False,
+        include_blockers=False,
+        include_summary=True,
+    )
+    if len(text) <= _COMPLETED_MESSAGE_MAX_CHARS:
+        return text
+
+    # Step 7: emergency one-liner — even header + summary can't fit
+    # together (typically because ``summary`` is pathologically long).
+    # Operator can recover via /logs <id>.
+    # Story 3.10 review H2 / Story 3.11 review H2 carry-forward: cap on
+    # the RAW ``task_id`` BEFORE ``html.escape`` so a 64-char raw ``<``
+    # task_id (which escapes to 64 × 5 = 320 chars of ``&lt;``) cannot
+    # split an HTML entity mid-token when sliced at 64.
+    #
+    # Story 3.12 review H1: collapse newlines BEFORE the slice + escape so
+    # a ``task_id`` containing ``\n`` cannot smuggle a real newline into the
+    # supposedly single-line emergency message. ``_collapse_newlines`` is
+    # idempotent on already-clean input.
+    # _EMERGENCY_TASK_ID_MAX_CHARS = 64 — Story 3.10 H2 carry-forward (L14:
+    # matches the model-boundary ``max_length=64`` ceiling on ``task_id``).
+    task_id_safe = _collapse_newlines(payload.task_id)
+    task_id_capped = task_id_safe[:_EMERGENCY_TASK_ID_MAX_CHARS]
+    task_id_for_fallback = html.escape(task_id_capped)
+    result = (
+        f"✅ Task {task_id_for_fallback} complete. "
+        f"(message body too large; see /logs {task_id_for_fallback})"
+    )
+    # Story 3.11 review H5 carry-forward: defensive final length self-check.
+    # Header overhead + 64-char escaped ``task_id`` × 2 occurrences sits
+    # well under the cap in practice; the clamp guards against future
+    # header tweaks silently breaching the wire limit.
+    if len(result) > _COMPLETED_MESSAGE_MAX_CHARS:
+        result = result[:_COMPLETED_MESSAGE_MAX_CHARS]
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Renderer dispatcher (Story 3.10 AC-4)
 # ---------------------------------------------------------------------------
 
 _RenderFn = Callable[[EventEnvelope], str]
 
-# Story 3.10 AC-4 / AC-15 + Story 3.11 AC-3: read-only dispatch table
-# (MappingProxyType — Story 3.6 review L1 + Story 3.7 H4 carry-forward).
-# Stories 3.12/3.13 will add task.completed and task.self_recovered entries.
+# Story 3.10 AC-4 / AC-15 + Story 3.11 AC-3 + Story 3.12 AC-3: read-only
+# dispatch table (MappingProxyType — Story 3.6 review L1 + Story 3.7 H4
+# carry-forward). Story 3.13 will add the task.self_recovered entry.
 #
 # Story 3.10 review M2: annotation tightened from ``Mapping[...]`` to
 # ``MappingProxyType[...]`` so mypy enforces immutability at the type level
@@ -1016,6 +1401,7 @@ _RENDERERS: MappingProxyType[str, _RenderFn] = MappingProxyType(
     {
         "task.approval_requested": _render_approval_request,
         "task.blocker_raised": _render_blocker_raised,
+        "task.completed": _render_completed,
     }
 )
 

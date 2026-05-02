@@ -44,17 +44,23 @@ from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC
     PreCheckResults,
     TaskApprovalRequestedPayload,
     TaskBlockerRaisedPayload,
+    TaskCompletedPayload,
 )
 
 from clawhip_daemon.adapters.sinks.telegram_sink import (
     _APPROVAL_MESSAGE_MAX_CHARS,
     _BLOCKER_AVAILABLE_COMMANDS,
     _BLOCKER_MESSAGE_MAX_CHARS,
+    _COMPLETED_MESSAGE_MAX_CHARS,
     _DELIVERABLE_EVENT_TYPES,
+    _EMERGENCY_TASK_ID_MAX_CHARS,
     _RENDERERS,
     TelegramSink,
+    _build_diff_stats_line,
+    _build_pr_line,
     _render,
     _render_blocker_raised,
+    _render_completed,
 )
 
 # ---------------------------------------------------------------------------
@@ -216,7 +222,12 @@ async def test_sink_dispatches_on_task_event() -> None:
     assert call_kwargs["chat_id"] == -1001
     assert call_kwargs["reply_to_message_id"] == 42
     assert task_id in call_kwargs["text"]
-    assert "task.completed" in call_kwargs["text"]
+    # Story 3.12 — task.completed now routes through _render_completed
+    # (FR9 typed renderer), replacing the Story 3.9 placeholder shape
+    # ``Task <id>: task.completed``. The new shape is
+    # ``✅ Task <id> complete.\n\n<summary>``.
+    assert "✅ Task " in call_kwargs["text"]
+    assert "complete." in call_kwargs["text"]
 
 
 # ---------------------------------------------------------------------------
@@ -1524,3 +1535,1020 @@ def test_render_blocker_raised_emergency_clamps_to_cap_when_task_id_oversized() 
     # No truncated entity fragments (e.g. ``&l`` alone) remain.
     assert "&l" not in stripped
     assert "&g" not in stripped
+
+
+# ---------------------------------------------------------------------------
+# Story 3.12 — _render_completed renderer + dispatcher tests
+# ---------------------------------------------------------------------------
+
+
+# Story 3.10 M8 / Story 3.11 H11 carry-forward: idempotent guard so
+# repeat invocations of the test helper don't re-run the schema_registry
+# .register side-effect on every helper call.
+_COMPLETED_REGISTERED: bool = False
+
+
+def _ensure_completed_registered() -> None:
+    """Register task.completed 1.1.0 — idempotent (Story 3.10 M8 / 3.11 H11)."""
+    global _COMPLETED_REGISTERED
+    if _COMPLETED_REGISTERED:
+        return
+    _reg("task.completed", "1.1.0", TaskCompletedPayload)
+    _COMPLETED_REGISTERED = True
+
+
+def _completed_envelope(
+    *,
+    task_id: str = "t-00000000-0000-7000-8000-000000000003",
+    summary: str = "task complete",
+    pr_url: str | None = None,
+    pr_number: int | None = None,
+    pr_branch: str | None = None,
+    files_changed: int | None = None,
+    lines_added: int | None = None,
+    lines_removed: int | None = None,
+    tests_added: int | None = None,
+    ci_state: Literal["green", "red", "unknown"] | None = None,
+    blockers_count: int | None = None,
+    mono_ns: int = 12_000_000,
+) -> EventEnvelope:
+    """Build a task.completed envelope (schema 1.1.0).
+
+    Story 3.11 review M1 / M2 carry-forward: top-of-file
+    ``TaskCompletedPayload`` import (no inline import); schema
+    registration is idempotent via :func:`_ensure_completed_registered`
+    (Story 3.10 M8 / 3.11 H11 pattern).
+    """
+    _ensure_task_created_registered()
+    _ensure_completed_registered()
+
+    rng = Random(312)
+    clk = FrozenClock(mono_ns=mono_ns, now=FROZEN_EPOCH)
+    eid = new_event_id(clock=clk, rng=rng)
+    rid = new_uuid7(clock=clk, rng=rng)
+    payload = TaskCompletedPayload(
+        task_id=task_id,
+        summary=summary,
+        pr_url=pr_url,
+        pr_number=pr_number,
+        pr_branch=pr_branch,
+        files_changed=files_changed,
+        lines_added=lines_added,
+        lines_removed=lines_removed,
+        tests_added=tests_added,
+        ci_state=ci_state,
+        blockers_count=blockers_count,
+    )
+    return EventEnvelope.create(
+        event_id=eid,
+        schema_version="1.1.0",
+        type="task.completed",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=payload,
+        request_id=rid,
+    )
+
+
+def test_render_completed_minimal() -> None:
+    """AC-2: only required fields → header + summary; optional sections absent.
+
+    Story 3.12 review M10: structural assertions instead of fragile
+    ``split("complete.")`` slicing — the prior form depended on the
+    cardinality of ``"complete."`` substrings in the rendered output.
+    Story 3.12 review L3: assert ``isinstance(result, str)`` so a runtime
+    regression to ``None`` cannot silently break Telegram dispatch (the
+    type annotation is mypy-only).
+    """
+    env = _completed_envelope(
+        task_id="t-00000000-0000-7000-8000-000000000003",
+        summary="task complete",
+    )
+    result = _render(env)
+    # L3: runtime type guarantee (annotation alone is mypy-only).
+    assert isinstance(result, str)
+    # Header present.
+    assert "✅ Task t-00000000-0000-7000-8000-000000000003 complete." in result
+    # Summary present.
+    assert "task complete" in result
+    # M10: structural absence checks for each optional section. The
+    # tokens here are unique to their respective renderer branches and do
+    # not appear in the header or summary.
+    assert "PR #" not in result
+    assert "Branch:" not in result
+    assert "PR:" not in result
+    assert "files changed" not in result
+    assert "tests added" not in result
+    assert "CI:" not in result
+    assert "blockers raised" not in result
+    assert " — " not in result  # PR line / diff "fc+lr" separator
+
+
+def test_render_completed_with_pr_full() -> None:
+    """AC-2: pr_number + pr_branch + pr_url → ``PR #N: <branch> — <url>``."""
+    env = _completed_envelope(
+        pr_number=42,
+        pr_branch="feat/foo",
+        pr_url="https://github.com/example/repo/pull/42",
+    )
+    result = _render(env)
+    assert "PR #42: feat/foo — https://github.com/example/repo/pull/42" in result
+
+
+def test_render_completed_with_pr_partial() -> None:
+    """AC-2: only pr_number → ``PR: #42`` form."""
+    env = _completed_envelope(pr_number=42)
+    result = _render(env)
+    assert "PR: #42" in result
+    assert "feat/" not in result
+    assert "https://" not in result
+
+
+def test_render_completed_with_diff_stats_full() -> None:
+    """AC-2: full diff counters → ``5 files changed, 234+ / 89- lines.``."""
+    env = _completed_envelope(
+        files_changed=5,
+        lines_added=234,
+        lines_removed=89,
+    )
+    result = _render(env)
+    assert "5 files changed, 234+ / 89- lines." in result
+
+
+def test_render_completed_with_tests_added() -> None:
+    """AC-2: tests_added populated → ``12 tests added.`` line."""
+    env = _completed_envelope(tests_added=12)
+    result = _render(env)
+    assert "12 tests added." in result
+
+
+@pytest.mark.parametrize(
+    ("ci_state", "emoji"),
+    [
+        ("green", "✅"),
+        ("red", "❌"),
+        ("unknown", "❓"),
+    ],
+)
+def test_render_completed_with_ci_state(
+    ci_state: Literal["green", "red", "unknown"], emoji: str
+) -> None:
+    """AC-2: each ci_state Literal renders ``CI: <emoji> <state>``."""
+    env = _completed_envelope(ci_state=ci_state)
+    result = _render(env)
+    assert f"CI: {emoji} {ci_state}" in result
+
+
+def test_render_completed_with_blockers_count() -> None:
+    """AC-2: blockers_count populated → ``2 blockers raised.`` line."""
+    env = _completed_envelope(blockers_count=2)
+    result = _render(env)
+    assert "2 blockers raised." in result
+
+
+def test_render_completed_html_escapes_task_id_summary_pr_branch_pr_url() -> None:
+    """AC-4 / Story 3.5 H5 carry-forward: HTML-escape all operator-supplied strings.
+
+    Story 3.11 review M4 carry-forward: per-character invariants on the
+    escaped output so a future renderer drift cannot slip past.
+    """
+    env = _completed_envelope(
+        task_id="t-<x>",
+        summary="<b>done</b>",
+        pr_branch="feat/<foo>",
+        pr_url="https://example.com/?<x>=1",
+    )
+    result = _render(env)
+    # Sanity: no raw payload strings appear verbatim.
+    assert "<b>done</b>" not in result
+    assert "feat/<foo>" not in result
+    # Escaped forms appear.
+    assert "t-&lt;x&gt;" in result
+    assert "&lt;b&gt;done&lt;/b&gt;" in result
+    assert "feat/&lt;foo&gt;" in result
+    assert "https://example.com/?&lt;x&gt;=1" in result
+    # Story 3.11 review M4: per-character invariants — once ``&lt;`` /
+    # ``&gt;`` are removed, no raw ``<`` / ``>`` characters remain.
+    assert "<" not in result.replace("&lt;", "")
+    assert ">" not in result.replace("&gt;", "")
+    # Story 3.12 review M11: extend the per-character discipline to ``&``.
+    # After stripping every well-formed entity, no bare ``&`` may remain.
+    stripped = (
+        result.replace("&lt;", "")
+        .replace("&gt;", "")
+        .replace("&amp;", "")
+        .replace("&quot;", "")
+        .replace("&#x27;", "")
+    )
+    assert "&" not in stripped
+
+
+def test_render_completed_collapses_multiline_summary_and_pr_branch() -> None:
+    """AC-2 / Story 3.10 H11 + 3.11 H6 carry-forward: ``\\n`` collapsed to space.
+
+    Defense-in-depth — branch names should not contain ``\\n`` per git
+    ref-name rules, but if a buggy emitter slips one in, defend.
+    """
+    env = _completed_envelope(
+        summary="line1\nline2",
+        pr_branch="feat/foo\nbar",
+    )
+    result = _render(env)
+    # Newlines collapsed to spaces in operator-supplied content.
+    assert "line1 line2" in result
+    assert "feat/foo bar" in result
+    # No raw ``\n`` in the summary line itself (section separator
+    # ``\n\n`` is renderer-added and intact).
+    assert "line1\nline2" not in result
+    assert "feat/foo\nbar" not in result
+
+
+def test_render_completed_total_cap_drops_in_spec_order() -> None:
+    """AC-5: section-drop ladder Step 2 — diff stats dropped first when cap exceeded.
+
+    Sized so that the full message (with diff stats present) overflows
+    by an amount recoverable by dropping ONLY the diff stats line. All
+    other sections (PR / tests / CI / blockers / summary) stay present.
+
+    Story 3.11 review H12 carry-forward: sizing parametric on
+    ``_COMPLETED_MESSAGE_MAX_CHARS``.
+
+    Story 3.12 review M9: previous docstring carried hand-computed section
+    sizes (off by 2 chars for the 7-section / 6-separator count). Re-derive
+    the size programmatically from each candidate sub-message instead so a
+    future renderer tweak that shifts overhead by a few chars cannot
+    silently let the test pass for the wrong reason.
+    """
+    big_summary = "s" * (_COMPLETED_MESSAGE_MAX_CHARS - 150)
+    env = _completed_envelope(
+        summary=big_summary,
+        pr_number=42,
+        pr_branch="feat/foo",
+        files_changed=5,
+        lines_added=234,
+        lines_removed=89,
+        tests_added=12,
+        ci_state="green",
+        blockers_count=2,
+    )
+    result = _render(env)
+    # Cap honored.
+    assert len(result) <= _COMPLETED_MESSAGE_MAX_CHARS
+    # M9: structural sanity — the result is the Step-2 candidate exactly.
+    # Step 1 (full) must overflow; Step 2 (no diff stats) must fit.
+    from clawhip_daemon.adapters.sinks.telegram_sink import _assemble_completed_sections
+
+    payload = env.payload
+    assert isinstance(payload, TaskCompletedPayload)
+    full = _assemble_completed_sections(
+        payload,
+        include_pr=True,
+        include_diff_stats=True,
+        include_tests=True,
+        include_ci_state=True,
+        include_blockers=True,
+        include_summary=True,
+    )
+    no_diff = _assemble_completed_sections(
+        payload,
+        include_pr=True,
+        include_diff_stats=False,
+        include_tests=True,
+        include_ci_state=True,
+        include_blockers=True,
+        include_summary=True,
+    )
+    assert len(full) > _COMPLETED_MESSAGE_MAX_CHARS
+    assert len(no_diff) <= _COMPLETED_MESSAGE_MAX_CHARS
+    assert result == no_diff
+    # Mandatory header preserved.
+    assert "✅ Task " in result
+    # Summary preserved (semantically most valuable per FR9).
+    assert "complete." in result
+    assert big_summary in result
+    # Diff stats line dropped (Step 2).
+    assert "files changed" not in result
+    # Other optional sections preserved.
+    assert "PR #42: feat/foo" in result
+    assert "12 tests added." in result
+    assert "CI: ✅ green" in result
+    assert "2 blockers raised." in result
+
+
+def test_render_completed_emergency_fallback_when_summary_too_long() -> None:
+    """AC-5: section-drop ladder Step 7 — emergency one-liner; summary dropped.
+
+    When ``summary`` alone is large enough that even header + summary
+    can't fit together, the renderer falls back to the one-liner that
+    still embeds ``/logs <id>`` for recovery.
+
+    Story 3.11 review H12 carry-forward: ``summary`` size parametric on
+    the cap so future cap changes still route through Step 7.
+    ``cap + 90`` keeps size under the model boundary (max_length=2000)
+    when cap=1900 while guaranteeing Steps 1-6 all overflow.
+
+    Story 3.11 review H5 carry-forward: assert the final length is
+    under the cap (defensive self-clamp).
+    """
+    summary_size = _COMPLETED_MESSAGE_MAX_CHARS + 90
+    env = _completed_envelope(
+        task_id="t-00000000-0000-7000-8000-0000000000cc",
+        summary="X" * summary_size,
+    )
+    result = _render(env)
+    # One-liner shape from Step 7.
+    assert result == (
+        "✅ Task t-00000000-0000-7000-8000-0000000000cc complete. "
+        "(message body too large; see /logs t-00000000-0000-7000-8000-0000000000cc)"
+    )
+    # Story 3.11 review H5: defensive final-length self-check assertion.
+    assert len(result) <= _COMPLETED_MESSAGE_MAX_CHARS
+
+
+def test_render_completed_payload_type_mismatch_logs_and_falls_back() -> None:
+    """H9 + H10 carry-forward: WARN + placeholder when payload isn't a typed instance.
+
+    Constructs the envelope via :meth:`EventEnvelope.model_construct` to
+    bypass Pydantic validation and forcibly assigns a raw-dict payload
+    (the registration-race scenario).
+    """
+    import structlog.testing
+
+    rng = Random(789)
+    clk = FrozenClock(mono_ns=13_000_000, now=FROZEN_EPOCH)
+    eid = new_event_id(clock=clk, rng=rng)
+    rid = new_uuid7(clock=clk, rng=rng)
+    env = EventEnvelope.model_construct(
+        event_id=eid,
+        schema_version="1.1.0",
+        type="task.completed",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload={"task_id": "t-raw-dict-completed"},  # type: ignore[arg-type]
+        request_id=rid,
+    )
+    with structlog.testing.capture_logs() as captured:
+        result = _render(env)
+
+    # Placeholder shape returned (Story 3.9 carry-forward).
+    assert result == "Task t-raw-dict-completed: task.completed"
+    # H9: structured warning emitted with expected/actual fields.
+    assert any(
+        rec.get("event") == "renderer.payload_type_mismatch"
+        and rec.get("log_level") == "warning"
+        and rec.get("expected") == "TaskCompletedPayload"
+        and rec.get("actual") == "dict"
+        for rec in captured
+    )
+    # Story 3.11 review L7 carry-forward: assert the placeholder did
+    # NOT leak any completed-renderer-specific shape.
+    assert "✅" not in result
+    assert "complete." not in result
+
+
+def test_render_dispatcher_routes_completed_to_renderer() -> None:
+    """AC-3: _render(envelope) for task.completed invokes _render_completed.
+
+    Story 3.11 review M3 / M10 carry-forward: positive identity
+    assertion on the dispatcher entry — substring assertions pass
+    vacuously if the entry is removed but ``task.completed`` remains
+    in ``_DELIVERABLE_EVENT_TYPES``.
+
+    Story 3.12 review L2: tighten the substring shape — ``startswith("✅
+    Task ")`` rules in the typed renderer; ``not startswith("Task ")``
+    rules out the placeholder fallback shape (``Task <id>: <type>``)
+    that bare-``Task`` would also match.
+    """
+    env = _completed_envelope(summary="explicit dispatch check")
+    result = _render(env)
+    assert result.startswith("✅ Task ")
+    # L2: rule out the placeholder fallback shape ``Task <id>: <type>``.
+    assert not result.startswith("Task ")
+    assert "explicit dispatch check" in result
+    # Story 3.11 review M3 / M10: positive identity assertion on the
+    # dispatcher entry — confirms the new entry was actually added.
+    assert _RENDERERS["task.completed"] is _render_completed
+    # Sanity: task.completed is in the deliverable allowlist (Story 3.9 L15).
+    assert "task.completed" in _DELIVERABLE_EVENT_TYPES
+
+
+# ---------------------------------------------------------------------------
+# Story 3.12 review-pass additions (H1, H3-H10, M4-M12, L3, L7)
+# ---------------------------------------------------------------------------
+
+
+# H1 retroactive — emergency-tier task_id newline-collapse for all 3 renderers.
+
+
+def test_render_completed_emergency_collapses_newline_in_task_id() -> None:
+    """H1: emergency-tier ``task_id`` containing ``\\n`` does NOT smuggle a newline.
+
+    Slice-before-escape (Story 3.11 H2) operates on the RAW task_id; if
+    that raw string contained ``\\n``, the escaped output would still
+    embed the literal newline byte. ``_collapse_newlines`` runs FIRST
+    so the emergency one-liner stays a single line as advertised.
+    """
+    # task_id with embedded \n; max_length=64 so 6 chars + \n + 6 chars fits.
+    big_summary = "X" * (_COMPLETED_MESSAGE_MAX_CHARS + 90)
+    env = _completed_envelope(
+        task_id="t-aa\nbbcc",
+        summary=big_summary,
+    )
+    result = _render(env)
+    # Emergency one-liner shape — must be a single line (no embedded \n
+    # except the one between the two halves of the f-string... wait, the
+    # 3.12 emergency message uses a single space, not \n\n. Either way the
+    # task_id segment must not contain \n). The completed emergency form
+    # is: "✅ Task <id> complete. (message body too large; see /logs <id>)"
+    # — single-line by construction.
+    assert "\n" not in result
+    # The original task_id had \n collapsed to space.
+    assert "t-aa bbcc" in result
+    # Cap honored.
+    assert len(result) <= _COMPLETED_MESSAGE_MAX_CHARS
+
+
+def test_render_blocker_raised_emergency_collapses_newline_in_task_id() -> None:
+    """H1 retroactive 3.11: blocker emergency-tier collapses ``\\n`` in task_id."""
+    _ensure_task_created_registered()
+    _ensure_blocker_raised_registered()
+    rng = Random(311)
+    clk = FrozenClock(mono_ns=14_000_000, now=FROZEN_EPOCH)
+    eid = new_event_id(clock=clk, rng=rng)
+    rid = new_uuid7(clock=clk, rng=rng)
+    payload = TaskBlockerRaisedPayload(
+        task_id="t-aa\nbbcc",
+        reason="X" * (_BLOCKER_MESSAGE_MAX_CHARS + 90),
+    )
+    env = EventEnvelope.create(
+        event_id=eid,
+        schema_version="1.1.0",
+        type="task.blocker_raised",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=payload,
+        request_id=rid,
+    )
+    result = _render(env)
+    # Emergency one-liner is single-line by construction.
+    assert "\n" not in result
+    # Newline collapsed to space.
+    assert "t-aa bbcc" in result
+    assert len(result) <= _BLOCKER_MESSAGE_MAX_CHARS
+
+
+def test_render_approval_request_emergency_collapses_newline_in_task_id() -> None:
+    """H1 retroactive 3.10: approval emergency-tier collapses ``\\n`` in task_id.
+
+    Approval emergency message uses ``\\n\\n`` between header and the
+    "(message body too large...)" tail — assert the one-liner contains
+    exactly that single separator and no extra newlines from a smuggled
+    task_id.
+    """
+    env = _approval_envelope(
+        task_id="t-aa\nbbcc",
+        # justification long enough to overflow even after dropping all
+        # optional sections + pre_checks.
+        justification="J" * (_APPROVAL_MESSAGE_MAX_CHARS + 90),
+    )
+    result = _render(env)
+    # The approval emergency one-liner contains exactly ONE ``\n\n``
+    # separator added by the renderer. A smuggled \n in task_id would
+    # bump the count.
+    assert result.count("\n") == 2
+    assert "t-aa bbcc" in result
+    assert len(result) <= _APPROVAL_MESSAGE_MAX_CHARS
+
+
+# H3 — section-drop ladder Steps 3-6 boundary tests.
+
+
+def _completed_step_sizes(payload: TaskCompletedPayload) -> dict[int, int]:
+    """Compute the assembled length at each ladder step for a given payload.
+
+    Used by the H3/H4 boundary tests to size summaries dynamically so the
+    test stays correct under future renderer overhead changes.
+    """
+    from clawhip_daemon.adapters.sinks.telegram_sink import _assemble_completed_sections
+
+    flags = [
+        # (include_pr, include_diff, include_tests, include_ci, include_blockers, include_summary)
+        (True, True, True, True, True, True),  # Step 1: full
+        (True, False, True, True, True, True),  # Step 2: no diff
+        (True, False, True, True, False, True),  # Step 3: no blockers
+        (True, False, False, True, False, True),  # Step 4: no tests
+        (True, False, False, False, False, True),  # Step 5: no CI
+        (False, False, False, False, False, True),  # Step 6: no PR
+    ]
+    sizes: dict[int, int] = {}
+    for i, (pr, df, ts, ci, bl, sm) in enumerate(flags, start=1):
+        text = _assemble_completed_sections(
+            payload,
+            include_pr=pr,
+            include_diff_stats=df,
+            include_tests=ts,
+            include_ci_state=ci,
+            include_blockers=bl,
+            include_summary=sm,
+        )
+        sizes[i] = len(text)
+    return sizes
+
+
+def _build_step_boundary_payload(target_step: int) -> TaskCompletedPayload:
+    """Build a payload whose section-drop ladder lands exactly on *target_step*.
+
+    Iteratively increase the summary size until step (target_step - 1)
+    overflows AND step target_step fits.
+    """
+    cap = _COMPLETED_MESSAGE_MAX_CHARS
+    # Search summary length so step (target_step - 1) overflows by at
+    # least 1 char and step target_step is at most cap.
+    # Binary search range: 0 .. cap - 1.
+    base_kwargs = {
+        "task_id": "t-00000000-0000-7000-8000-000000000003",
+        "pr_number": 42,
+        "pr_branch": "feat/foo",
+        "files_changed": 5,
+        "lines_added": 234,
+        "lines_removed": 89,
+        "tests_added": 12,
+        "ci_state": "green" if target_step >= 5 else "green",
+        "blockers_count": 2,
+    }
+    # Brute search: find the smallest summary such that the renderer
+    # picks `target_step` (i.e. step `target_step - 1` overflows but step
+    # `target_step` fits).
+    for size in range(1, cap):
+        payload = TaskCompletedPayload(summary="s" * size, **base_kwargs)
+        sizes = _completed_step_sizes(payload)
+        prev = sizes.get(target_step - 1, cap + 1)
+        cur = sizes[target_step]
+        if prev > cap and cur <= cap:
+            return payload
+    raise RuntimeError(f"could not find boundary payload for step {target_step}")
+
+
+def test_render_completed_total_cap_drops_blockers_at_step_3() -> None:
+    """H3: Step 3 (drop blockers_count) — Steps 1+2 overflow; Step 3 fits."""
+    payload = _build_step_boundary_payload(target_step=3)
+    env = _completed_envelope(
+        task_id=payload.task_id,
+        summary=payload.summary,
+        pr_number=payload.pr_number,
+        pr_branch=payload.pr_branch,
+        files_changed=payload.files_changed,
+        lines_added=payload.lines_added,
+        lines_removed=payload.lines_removed,
+        tests_added=payload.tests_added,
+        ci_state=payload.ci_state,
+        blockers_count=payload.blockers_count,
+    )
+    result = _render(env)
+    assert len(result) <= _COMPLETED_MESSAGE_MAX_CHARS
+    # Step-3 candidate: header + PR + tests + CI + summary preserved;
+    # diff + blockers dropped.
+    assert "✅ Task " in result
+    assert payload.summary in result
+    assert "PR #42: feat/foo" in result
+    assert "12 tests added." in result
+    assert "CI: ✅ green" in result
+    assert "files changed" not in result
+    assert "blockers raised" not in result
+
+
+def test_render_completed_total_cap_drops_tests_at_step_4() -> None:
+    """H3: Step 4 (drop tests_added) — Steps 1-3 overflow; Step 4 fits."""
+    payload = _build_step_boundary_payload(target_step=4)
+    env = _completed_envelope(
+        task_id=payload.task_id,
+        summary=payload.summary,
+        pr_number=payload.pr_number,
+        pr_branch=payload.pr_branch,
+        files_changed=payload.files_changed,
+        lines_added=payload.lines_added,
+        lines_removed=payload.lines_removed,
+        tests_added=payload.tests_added,
+        ci_state=payload.ci_state,
+        blockers_count=payload.blockers_count,
+    )
+    result = _render(env)
+    assert len(result) <= _COMPLETED_MESSAGE_MAX_CHARS
+    assert "✅ Task " in result
+    assert payload.summary in result
+    assert "PR #42: feat/foo" in result
+    assert "CI: ✅ green" in result
+    assert "tests added" not in result
+    assert "files changed" not in result
+    assert "blockers raised" not in result
+
+
+def test_render_completed_total_cap_drops_ci_at_step_5() -> None:
+    """H3: Step 5 (drop ci_state) — Steps 1-4 overflow; Step 5 fits."""
+    payload = _build_step_boundary_payload(target_step=5)
+    env = _completed_envelope(
+        task_id=payload.task_id,
+        summary=payload.summary,
+        pr_number=payload.pr_number,
+        pr_branch=payload.pr_branch,
+        files_changed=payload.files_changed,
+        lines_added=payload.lines_added,
+        lines_removed=payload.lines_removed,
+        tests_added=payload.tests_added,
+        ci_state=payload.ci_state,
+        blockers_count=payload.blockers_count,
+    )
+    result = _render(env)
+    assert len(result) <= _COMPLETED_MESSAGE_MAX_CHARS
+    assert "✅ Task " in result
+    assert payload.summary in result
+    assert "PR #42: feat/foo" in result
+    assert "CI:" not in result
+    assert "tests added" not in result
+    assert "files changed" not in result
+    assert "blockers raised" not in result
+
+
+def test_render_completed_total_cap_drops_pr_at_step_6() -> None:
+    """H3: Step 6 (drop PR line) — Steps 1-5 overflow; Step 6 fits.
+
+    Header + summary survive; PR / CI / counts all dropped.
+    """
+    payload = _build_step_boundary_payload(target_step=6)
+    env = _completed_envelope(
+        task_id=payload.task_id,
+        summary=payload.summary,
+        pr_number=payload.pr_number,
+        pr_branch=payload.pr_branch,
+        files_changed=payload.files_changed,
+        lines_added=payload.lines_added,
+        lines_removed=payload.lines_removed,
+        tests_added=payload.tests_added,
+        ci_state=payload.ci_state,
+        blockers_count=payload.blockers_count,
+    )
+    result = _render(env)
+    assert len(result) <= _COMPLETED_MESSAGE_MAX_CHARS
+    assert "✅ Task " in result
+    assert payload.summary in result
+    # Step 6 drops PR — but header + summary still under cap.
+    assert "PR #" not in result
+    assert "CI:" not in result
+    assert "tests added" not in result
+    assert "files changed" not in result
+    assert "blockers raised" not in result
+    # Sanity: not the emergency one-liner.
+    assert "(message body too large" not in result
+
+
+# H4 — Step 6 → Step 7 boundary.
+
+
+def test_render_completed_step_6_fits_at_exact_threshold() -> None:
+    """H4: header + ``\\n\\n`` + summary == cap exactly takes Step 6, not Step 7.
+
+    Computes the exact summary size that makes Step 6 (header + summary)
+    land precisely at the cap, then verifies the renderer chose Step 6
+    (header + summary visible) and NOT Step 7 (emergency one-liner).
+    """
+    task_id = "t-00000000-0000-7000-8000-000000000003"
+    header = f"✅ Task {task_id} complete."
+    # header + "\n\n" + summary == cap → summary length = cap - len(header) - 2.
+    summary_len = _COMPLETED_MESSAGE_MAX_CHARS - len(header) - 2
+    summary = "s" * summary_len
+    env = _completed_envelope(task_id=task_id, summary=summary)
+    result = _render(env)
+    assert len(result) == _COMPLETED_MESSAGE_MAX_CHARS
+    assert result == f"{header}\n\n{summary}"
+    # NOT the emergency one-liner.
+    assert "(message body too large" not in result
+
+
+# H5 — UTF-16 surrogate-pair length safety.
+
+
+def test_render_completed_utf16_surrogate_pair_safety() -> None:
+    """H5: 4-byte UTF-8 emoji at the cap boundary stays under Telegram's UTF-16 limit.
+
+    Telegram counts message length in UTF-16 code units (cap = 4096).
+    Each 😀 (U+1F600) is one Python codepoint but TWO UTF-16 code units
+    (surrogate pair). The 1900-codepoint cap defends against pathological
+    emoji inputs by leaving headroom: 1900 codepoints × ≤2 UTF-16 units =
+    ≤ 3800 units, well under 4096.
+    """
+    summary = "😀" * (_COMPLETED_MESSAGE_MAX_CHARS // 2)
+    env = _completed_envelope(summary=summary)
+    result = _render(env)
+    assert len(result) <= _COMPLETED_MESSAGE_MAX_CHARS
+    # UTF-16 length under Telegram's 4096-code-unit limit.
+    utf16_units = len(result.encode("utf-16-le")) // 2
+    assert utf16_units <= 4096
+
+
+# H6 — emergency-clamp test for completed renderer.
+
+
+def test_render_completed_emergency_clamps_to_cap_when_task_id_oversized() -> None:
+    """H6: an oversized task_id passing through the emergency tier is clamped to cap.
+
+    Story 3.11 H5 carry-forward — defensive final-length self-check on
+    the emergency tier. Constructs a model_construct-bypass payload with
+    a 64-char ``<`` task_id (escapes to 64 × 5 = 320 chars per occurrence,
+    × 2 occurrences = 640 + header overhead). Final length must be ≤ cap
+    AND must not split mid-entity (no trailing ``&l`` / ``&lt`` / ``&am``).
+    """
+    # Build a payload via model_construct so we can inject a task_id that
+    # would otherwise hit max_length=64 — but our 64 raw ``<`` chars is
+    # exactly at the model boundary too.
+    rng = Random(312)
+    clk = FrozenClock(mono_ns=15_000_000, now=FROZEN_EPOCH)
+    eid = new_event_id(clock=clk, rng=rng)
+    rid = new_uuid7(clock=clk, rng=rng)
+    raw_task_id = "<" * _EMERGENCY_TASK_ID_MAX_CHARS  # 64 ``<``
+    payload = TaskCompletedPayload.model_construct(
+        task_id=raw_task_id,
+        summary="X" * (_COMPLETED_MESSAGE_MAX_CHARS + 90),
+    )
+    env = EventEnvelope.model_construct(
+        event_id=eid,
+        schema_version="1.1.0",
+        type="task.completed",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=payload,
+        request_id=rid,
+    )
+    result = _render(env)
+    # Final length under cap.
+    assert len(result) <= _COMPLETED_MESSAGE_MAX_CHARS
+    # Must not end mid-entity.
+    assert not result.endswith("&")
+    assert not result.endswith("&l")
+    assert not result.endswith("&lt")
+    assert not result.endswith("&am")
+    assert not result.endswith("&amp")
+
+
+# H8 — pure-def invariant.
+
+
+def test_render_completed_is_not_async() -> None:
+    """H8 / Story 3.11 L8 carry-forward: AC-6 — renderer is ``def``, not ``async def``."""
+    import inspect
+
+    assert inspect.iscoroutinefunction(_render_completed) is False
+
+
+# H9 — happy-path no-WARN assertion.
+
+
+def test_render_completed_minimal_emits_no_payload_type_mismatch_warn() -> None:
+    """H9 / Story 3.11 L11 carry-forward: typed payload happy-path emits no WARN.
+
+    Wraps a minimal ``_render_completed`` call with
+    ``structlog.testing.capture_logs()`` and asserts that no
+    ``renderer.payload_type_mismatch`` event was logged.
+    """
+    import structlog.testing
+
+    env = _completed_envelope(summary="task complete")
+    with structlog.testing.capture_logs() as captured:
+        result = _render(env)
+
+    assert "✅ Task " in result
+    assert not any(rec.get("event") == "renderer.payload_type_mismatch" for rec in captured)
+
+
+# H10 — parametrized PR-line forms (7) + diff-stats forms (7).
+
+
+@pytest.mark.parametrize(
+    ("pr_number", "pr_branch", "pr_url", "expected_substring"),
+    [
+        (
+            42,
+            "feat/foo",
+            "https://example.com/pr/42",
+            "PR #42: feat/foo — https://example.com/pr/42",
+        ),
+        (42, "feat/foo", None, "PR #42: feat/foo"),
+        (42, None, "https://example.com/pr/42", "PR #42: https://example.com/pr/42"),
+        (None, "feat/foo", "https://example.com/pr/42", "feat/foo — https://example.com/pr/42"),
+        (None, None, "https://example.com/pr/42", "PR: https://example.com/pr/42"),
+        (None, "feat/foo", None, "Branch: feat/foo"),
+        (42, None, None, "PR: #42"),
+    ],
+)
+def test_build_pr_line_forms(
+    pr_number: int | None,
+    pr_branch: str | None,
+    pr_url: str | None,
+    expected_substring: str,
+) -> None:
+    """H10: all 7 PR-line forms render correctly.
+
+    Story 3.11 review M3 carry-forward: parametrized over the full
+    branch table so a future field addition cannot silently change
+    one form's output without flagging.
+    """
+    payload = TaskCompletedPayload(
+        task_id="t-00000000-0000-7000-8000-000000000003",
+        summary="x",
+        pr_number=pr_number,
+        pr_branch=pr_branch,
+        pr_url=pr_url,
+    )
+    result = _build_pr_line(payload)
+    assert result == expected_substring
+
+
+def test_build_pr_line_returns_none_when_all_pr_fields_absent() -> None:
+    """H10: ``pr_number=pr_branch=pr_url=None`` yields ``None`` (no PR section)."""
+    payload = TaskCompletedPayload(
+        task_id="t-00000000-0000-7000-8000-000000000003",
+        summary="x",
+    )
+    assert _build_pr_line(payload) is None
+
+
+@pytest.mark.parametrize(
+    ("fc", "la", "lr", "expected"),
+    [
+        # All three.
+        (5, 234, 89, "5 files changed, 234+ / 89- lines."),
+        # H2: explicit fc+la branch (was silent data loss before).
+        (5, 234, None, "5 files changed, 234+ lines."),
+        # H2: explicit fc+lr branch (was silent data loss before).
+        (5, None, 89, "5 files changed, 89- lines."),
+        # fc only.
+        (5, None, None, "5 files changed."),
+        # la+lr.
+        (None, 234, 89, "234+ / 89- lines."),
+        # la only.
+        (None, 234, None, "234 lines added."),
+        # lr only.
+        (None, None, 89, "89 lines removed."),
+    ],
+)
+def test_build_diff_stats_line_forms(
+    fc: int | None, la: int | None, lr: int | None, expected: str
+) -> None:
+    """H10: all 7 diff-stats forms render correctly.
+
+    Story 3.12 review H2: previously the ``fc+la-no-lr`` and ``fc+lr-no-la``
+    combinations silently dropped the line counter and rendered as
+    ``fc files changed.`` only. The fix surfaces both data points.
+    """
+    payload = TaskCompletedPayload(
+        task_id="t-00000000-0000-7000-8000-000000000003",
+        summary="x",
+        files_changed=fc,
+        lines_added=la,
+        lines_removed=lr,
+    )
+    assert _build_diff_stats_line(payload) == expected
+
+
+def test_build_diff_stats_line_returns_none_when_all_counters_absent() -> None:
+    """H10: all-None counters → ``None`` (no diff section)."""
+    payload = TaskCompletedPayload(
+        task_id="t-00000000-0000-7000-8000-000000000003",
+        summary="x",
+    )
+    assert _build_diff_stats_line(payload) is None
+
+
+# M1 — zero-counter omission semantics.
+
+
+def test_render_completed_omits_zero_tests_added() -> None:
+    """M1: ``tests_added=0`` does NOT render ``"0 tests added."`` line."""
+    env = _completed_envelope(tests_added=0)
+    result = _render(env)
+    assert "tests added" not in result
+
+
+def test_render_completed_omits_zero_blockers_count() -> None:
+    """M1: ``blockers_count=0`` does NOT render ``"0 blockers raised."`` line."""
+    env = _completed_envelope(blockers_count=0)
+    result = _render(env)
+    assert "blockers raised" not in result
+
+
+def test_render_completed_omits_zero_diff_stats() -> None:
+    """M1: all-zero diff counters → diff stats line omitted entirely."""
+    env = _completed_envelope(files_changed=0, lines_added=0, lines_removed=0)
+    result = _render(env)
+    assert "files changed" not in result
+    assert "lines" not in result.replace("complete.", "")  # avoid matching "complete."'s 'l'
+
+
+# M4 — _collapse_newlines covers \r\n / \r.
+
+
+def test_render_completed_collapses_crlf_in_summary() -> None:
+    """M4: ``\\r\\n`` in summary collapses uniformly with ``\\n``."""
+    env = _completed_envelope(summary="line1\r\nline2")
+    result = _render(env)
+    # Newlines collapsed; separator preserved between sections only.
+    assert "line1\r\nline2" not in result
+    assert "line1" in result and "line2" in result
+    # No raw \r remains.
+    assert "\r" not in result
+
+
+def test_render_completed_collapses_bare_cr_in_summary() -> None:
+    """M4: bare ``\\r`` (legacy Mac line endings) collapses uniformly."""
+    env = _completed_envelope(summary="line1\rline2")
+    result = _render(env)
+    assert "line1\rline2" not in result
+    assert "\r" not in result
+    assert "line1" in result and "line2" in result
+
+
+# M5 — pr_branch / pr_url containing only newlines.
+
+
+def test_render_completed_omits_pr_line_when_pr_branch_collapses_to_empty() -> None:
+    """M5: ``pr_branch="\\n\\n\\n"`` collapses to whitespace → field treated as empty.
+
+    With only ``pr_branch`` populated and it being newlines-only, after
+    collapse there is no informative content. The renderer should NOT
+    render a malformed ``"Branch:    "`` line.
+    """
+    env = _completed_envelope(pr_branch="\n\n\n")
+    result = _render(env)
+    # No PR / Branch line should appear (collapsed-to-empty).
+    assert "Branch:" not in result
+    assert "PR:" not in result
+    assert "PR #" not in result
+
+
+# M7 already lives in test_event_types.py.
+
+
+# M11 covered by the per-character ``&`` invariant added inline above.
+
+
+# M12 — wire-format v1.0.0 back-compat E2E through dispatcher.
+
+
+def test_task_completed_v1_0_0_envelope_renders_through_dispatcher() -> None:
+    """M12: a v1.0.0-shaped raw envelope dict deserializes + dispatches cleanly.
+
+    Constructs an envelope with ``schema_version="1.0.0"`` and the
+    minimal v1.0 payload shape (``{task_id, summary, pr_url}``), routes
+    through ``_render(envelope)``, and asserts the typed renderer
+    produces a sensible output (header + summary + PR line).
+    """
+    _ensure_task_created_registered()
+    _ensure_completed_registered()
+    rng = Random(312)
+    clk = FrozenClock(mono_ns=16_000_000, now=FROZEN_EPOCH)
+    eid = new_event_id(clock=clk, rng=rng)
+    rid = new_uuid7(clock=clk, rng=rng)
+    # v1.0 payload shape — only the 3 original fields, no FR9 counters.
+    payload = TaskCompletedPayload(
+        task_id="t-00000000-0000-7000-8000-0000000000aa",
+        summary="back-compat ok",
+        pr_url="https://example.com/pr/1",
+    )
+    env = EventEnvelope.create(
+        event_id=eid,
+        schema_version="1.0.0",
+        type="task.completed",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=payload,
+        request_id=rid,
+    )
+    result = _render(env)
+    assert "✅ Task t-00000000-0000-7000-8000-0000000000aa complete." in result
+    assert "back-compat ok" in result
+    assert "PR: https://example.com/pr/1" in result
+
+
+# L7 — _DELIVERABLE_EVENT_TYPES pre-existence (Story 3.9 L15).
+
+
+def test_task_completed_already_in_deliverable_event_types_per_story_3_9() -> None:
+    """L7: ``task.completed`` is in ``_DELIVERABLE_EVENT_TYPES`` independent of dispatcher.
+
+    Story 3.9 L15 added ``task.completed`` to the allowlist; the
+    Story 3.10 / 3.11 / 3.12 dispatcher invariant
+    ``_RENDERERS ⊆ _DELIVERABLE_EVENT_TYPES`` becomes vacuous if the
+    allowlist is ever auto-derived from the dispatcher. This test
+    asserts the membership pre-exists.
+    """
+    assert "task.completed" in _DELIVERABLE_EVENT_TYPES
+    # Independent of whether the dispatcher routes it.
+    # (The Story 3.9 placeholder shape would also have this membership
+    # without any renderer registration.)
+
+
+# M6 strengthening lives in tests/integration/test_task_thread_binding.py.

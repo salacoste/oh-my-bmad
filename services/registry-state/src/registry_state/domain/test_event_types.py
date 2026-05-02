@@ -36,6 +36,7 @@ from registry_state.domain.event_types import (
     PreCheckOutcome,
     TaskApprovalRequestedPayload,
     TaskBlockerRaisedPayload,
+    TaskCompletedPayload,
 )
 
 
@@ -325,3 +326,219 @@ def test_task_blocker_raised_payload_rejects_naive_blocked_since() -> None:
             reason="worker crashed",
             blocked_since=naive,
         )
+
+
+# ---------------------------------------------------------------------------
+# Story 3.12 — TaskCompletedPayload v1.1.0 additive extension (4 tests)
+# ---------------------------------------------------------------------------
+
+
+def test_task_completed_payload_v1_0_back_compat() -> None:
+    """AC-1: Pre-3.12 v1.0.x shape deserializes cleanly under 1.1.0.
+
+    Old shape (task_id + summary + optional pr_url) parses; all eight
+    new optional FR9 fields default to None — additive-only NFR-M3.
+    """
+    payload = TaskCompletedPayload(
+        task_id=_VALID_TASK_ID,
+        summary="task complete",
+    )
+    assert payload.pr_url is None
+    assert payload.pr_number is None
+    assert payload.pr_branch is None
+    assert payload.files_changed is None
+    assert payload.lines_added is None
+    assert payload.lines_removed is None
+    assert payload.tests_added is None
+    assert payload.ci_state is None
+    assert payload.blockers_count is None
+
+
+def test_task_completed_payload_rejects_oversized_pr_branch() -> None:
+    """AC-1: pr_branch max_length=255 (git ref-name limit) — 256 chars rejected."""
+    with pytest.raises(ValidationError):
+        TaskCompletedPayload(
+            task_id=_VALID_TASK_ID,
+            summary="task complete",
+            pr_branch="b" * 256,
+        )
+
+
+def test_task_completed_payload_rejects_negative_counters() -> None:
+    """AC-1 / Story 3.10 L9 carry-forward: negative counter values rejected.
+
+    files_changed / lines_added / lines_removed / tests_added / blockers_count
+    all carry ge=0; pr_number carries ge=1 (so 0 is rejected).
+    """
+    with pytest.raises(ValidationError):
+        TaskCompletedPayload(task_id=_VALID_TASK_ID, summary="x", files_changed=-1)
+    with pytest.raises(ValidationError):
+        TaskCompletedPayload(task_id=_VALID_TASK_ID, summary="x", lines_added=-1)
+    with pytest.raises(ValidationError):
+        TaskCompletedPayload(task_id=_VALID_TASK_ID, summary="x", lines_removed=-1)
+    with pytest.raises(ValidationError):
+        TaskCompletedPayload(task_id=_VALID_TASK_ID, summary="x", tests_added=-1)
+    with pytest.raises(ValidationError):
+        TaskCompletedPayload(task_id=_VALID_TASK_ID, summary="x", blockers_count=-1)
+    # pr_number ge=1 — 0 rejected (real PR numbers start at 1).
+    with pytest.raises(ValidationError):
+        TaskCompletedPayload(task_id=_VALID_TASK_ID, summary="x", pr_number=0)
+
+
+def test_task_completed_payload_rejects_invalid_ci_state() -> None:
+    """AC-1: ci_state is Literal["green","red","unknown"]; other strings rejected.
+
+    Story 3.12 review L6: assert the specific Pydantic error code is
+    ``literal_error`` so a future Pydantic upgrade that renames or
+    splits the type cannot silently turn this test into a vacuous
+    "ValidationError raised somewhere" check.
+    """
+    # Sanity: each valid value parses.
+    valid_values: tuple[Literal["green", "red", "unknown"], ...] = ("green", "red", "unknown")
+    for valid in valid_values:
+        payload = TaskCompletedPayload(
+            task_id=_VALID_TASK_ID,
+            summary="task complete",
+            ci_state=valid,
+        )
+        assert payload.ci_state == valid
+
+    # Invalid value rejected with the specific literal_error code (L6).
+    with pytest.raises(ValidationError) as exc_info:
+        TaskCompletedPayload(
+            task_id=_VALID_TASK_ID,
+            summary="task complete",
+            ci_state="yellow",  # type: ignore[arg-type]
+        )
+    assert exc_info.value.errors()[0]["type"] == "literal_error"
+
+
+# ---------------------------------------------------------------------------
+# Story 3.12 review-pass additions (H7, M2, M3, M7, L4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("pr_number", 10**9 + 1),
+        ("lines_added", 10**9 + 1),
+        ("lines_removed", 10**9 + 1),
+        ("files_changed", 10**6 + 1),
+        ("tests_added", 10**6 + 1),
+        ("blockers_count", 10**6 + 1),
+    ],
+)
+def test_task_completed_payload_rejects_upper_bound_overflow(field_name: str, value: int) -> None:
+    """H7: per-field upper bounds reject overflow (Story 3.10 L9 carry-forward).
+
+    File-level counters cap at 10**6; line-level counters / pr_number cap
+    at 10**9. Story 3.12 honors the L9 discipline in code; this test
+    closes the coverage gap.
+    """
+    kwargs: dict[str, object] = {"task_id": _VALID_TASK_ID, "summary": "x"}
+    kwargs[field_name] = value
+    with pytest.raises(ValidationError):
+        TaskCompletedPayload(**kwargs)  # type: ignore[arg-type]
+
+
+def test_task_completed_payload_rejects_javascript_pr_url() -> None:
+    """M2: pr_url constrained to http(s):// — javascript: scheme rejected."""
+    with pytest.raises(ValidationError):
+        TaskCompletedPayload(
+            task_id=_VALID_TASK_ID,
+            summary="x",
+            pr_url="javascript:alert(1)",
+        )
+
+
+def test_task_completed_payload_rejects_data_pr_url() -> None:
+    """M2: pr_url constrained to http(s):// — data: scheme rejected."""
+    with pytest.raises(ValidationError):
+        TaskCompletedPayload(
+            task_id=_VALID_TASK_ID,
+            summary="x",
+            pr_url="data:text/html,<script>alert(1)</script>",
+        )
+
+
+def test_task_completed_payload_accepts_http_and_https_pr_url() -> None:
+    """M2 sanity: both http:// and https:// schemes accepted."""
+    p1 = TaskCompletedPayload(task_id=_VALID_TASK_ID, summary="x", pr_url="http://example.com/pr/1")
+    p2 = TaskCompletedPayload(
+        task_id=_VALID_TASK_ID, summary="x", pr_url="https://example.com/pr/2"
+    )
+    assert p1.pr_url == "http://example.com/pr/1"
+    assert p2.pr_url == "https://example.com/pr/2"
+
+
+def test_task_completed_payload_rejects_oversized_pr_url() -> None:
+    """M3: pr_url max_length=500 — 501 chars rejected."""
+    # 501 chars total; "https://" prefix (8) + 493 chars after.
+    with pytest.raises(ValidationError):
+        TaskCompletedPayload(
+            task_id=_VALID_TASK_ID,
+            summary="x",
+            pr_url="https://" + "x" * 493,
+        )
+
+
+def test_task_completed_payload_rejects_oversized_summary() -> None:
+    """M3: summary max_length=2000 — 2001 chars rejected."""
+    with pytest.raises(ValidationError):
+        TaskCompletedPayload(task_id=_VALID_TASK_ID, summary="x" * 2001)
+
+
+def test_task_completed_payload_rejects_empty_pr_branch() -> None:
+    """M3: pr_branch min_length=1 — empty string rejected."""
+    with pytest.raises(ValidationError):
+        TaskCompletedPayload(task_id=_VALID_TASK_ID, summary="x", pr_branch="")
+
+
+def test_task_completed_payload_rejects_empty_pr_url() -> None:
+    """M3: pr_url min_length=1 — empty string rejected (also fails pattern)."""
+    with pytest.raises(ValidationError):
+        TaskCompletedPayload(task_id=_VALID_TASK_ID, summary="x", pr_url="")
+
+
+def test_task_completed_payload_rejects_extra_field() -> None:
+    """M7: ConfigDict(extra="forbid") rejects unknown field names.
+
+    Defends against typos like ``pr_numbar=42`` silently passing through
+    to a renderer that would never see the value.
+    """
+    with pytest.raises(ValidationError):
+        TaskCompletedPayload(
+            task_id=_VALID_TASK_ID,
+            summary="x",
+            pr_numbar=42,  # type: ignore[call-arg]
+        )
+
+
+def test_task_completed_schema_versions_register_distinct_entries() -> None:
+    """L4: 1.0.0, 1.0.1, and 1.1.0 are all registered for task.completed.
+
+    Validates the same-model contract — registry holds three independent
+    (type, version) entries pointing at the same payload class. Insertion
+    order does not matter; per-version lookup is direct.
+
+    The ``packages/events`` test_schema_registry uses an autouse fixture
+    that calls ``unregister_all()`` between every test in *that* file —
+    when this module's test runs after that, the registry is empty. Re-
+    registering the three entries here (idempotent same-class no-op when
+    the canonical event_types module loaded first) makes the test
+    order-independent.
+    """
+    from events.schema_registry import REGISTRY, register
+
+    register("task.completed", "1.0.0", TaskCompletedPayload)
+    register("task.completed", "1.0.1", TaskCompletedPayload)
+    register("task.completed", "1.1.0", TaskCompletedPayload)
+
+    assert ("task.completed", "1.0.0") in REGISTRY
+    assert ("task.completed", "1.0.1") in REGISTRY
+    assert ("task.completed", "1.1.0") in REGISTRY
+    # All three resolve to the same payload class.
+    assert REGISTRY[("task.completed", "1.0.0")] is TaskCompletedPayload
+    assert REGISTRY[("task.completed", "1.0.1")] is TaskCompletedPayload
+    assert REGISTRY[("task.completed", "1.1.0")] is TaskCompletedPayload
