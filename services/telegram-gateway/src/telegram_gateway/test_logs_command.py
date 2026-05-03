@@ -271,9 +271,7 @@ async def test_handle_logs_truncated_true_with_large_digest_preserves_cli_comman
     assert len(reply_text) <= _MAX_REPLY_LEN, (
         f"Reply length {len(reply_text)} exceeds _MAX_REPLY_LEN {_MAX_REPLY_LEN}"
     )
-    assert "oh-my-bmad-cli events" in reply_text, (
-        "CLI escape hatch missing from truncated reply"
-    )
+    assert "oh-my-bmad-cli events" in reply_text, "CLI escape hatch missing from truncated reply"
     assert "truncated" in reply_text.lower()
 
 
