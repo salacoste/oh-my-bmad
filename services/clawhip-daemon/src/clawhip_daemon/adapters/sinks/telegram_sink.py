@@ -67,6 +67,7 @@ from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC
     TaskApprovalRequestedPayload,
     TaskBlockerRaisedPayload,
     TaskCompletedPayload,
+    TaskSelfRecoveredPayload,
 )
 
 from clawhip_daemon.adapters.telegram_outbound import TelegramOutbound
@@ -97,6 +98,7 @@ _DELIVERABLE_EVENT_TYPES: frozenset[str] = frozenset(
         "task.summary_emitted",
         "task.approval_requested",
         "task.completed",
+        "task.self_recovered",
     }
 )
 
@@ -1381,6 +1383,76 @@ def _render_completed(envelope: EventEnvelope) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Renderer (Story 3.13 — self-recovered-summary template, FR16)
+# ---------------------------------------------------------------------------
+
+#: Story 3.13 AC-6 — same codepoint cap as the other 3 renderers (Story 3.10
+#: M1 + Story 3.11 H3 / L15 carry-forward).
+#: **Parity invariant** — all four caps move together.
+#:
+#: Cap is in Python ``len()`` units (codepoints). 1900 codepoints × 2
+#: worst-case UTF-16 units = 3800 < 4096 Telegram wire limit.
+#:
+#: Unreachable for valid model-bound inputs (worst-case ~140 chars) but
+#: defends against ``model_construct`` bypass scenarios (Story 3.11 H5
+#: carry-forward — defensive final-length self-clamp).
+_SELF_RECOVERED_MESSAGE_MAX_CHARS: int = 1900
+
+
+def _render_self_recovered(envelope: EventEnvelope) -> str:
+    """Render the FR16 self-recovered summary — Story 3.13 AC-4/AC-5/AC-6.
+
+    Single-line message:
+
+      ``🛠️ Self-recovered from host restart at <recovered_at_iso>.
+      <events_replayed> events replayed in <replay_duration_ms> ms.
+      Zero intervention required.``
+
+    No section-drop ladder needed — the message has no optional sections;
+    all 4 payload fields are required and bounded by construction. The
+    defensive final-length self-clamp is included for parity with the
+    other 3 renderers but is unreachable for valid model-bound inputs.
+
+    Story 3.10 review H9 carry-forward: when the dispatcher routes here
+    but the runtime payload is not a typed
+    :class:`TaskSelfRecoveredPayload` (registration race / version drift),
+    a structured WARN is emitted before falling back to the placeholder.
+
+    Pluralization (Story 3.12 L1 carry-forward): ``"event" if N == 1
+    else "events"``. ``ms`` is fixed-form (no "millisecond/milliseconds"
+    alternation — ``ms`` is universal and avoids awkward phrasing).
+    """
+    payload = envelope.payload
+    if not isinstance(payload, TaskSelfRecoveredPayload):
+        _log.warning(
+            "renderer.payload_type_mismatch",
+            event_type=envelope.type,
+            expected="TaskSelfRecoveredPayload",
+            actual=type(payload).__name__,
+        )
+        # Story 3.12 review H1 carry-forward: collapse newlines before
+        # html.escape so a task_id containing ``\n`` cannot produce a
+        # multi-line fallback where a single-line message is expected.
+        task_id = _collapse_newlines(_extract_task_id(envelope) or "<unknown>")
+        return f"Task {html.escape(task_id)}: {html.escape(envelope.type)}"
+
+    recovered_at_iso = payload.recovered_at.isoformat(timespec="seconds")
+    events_word = "event" if payload.events_replayed == 1 else "events"
+    text = (
+        f"🛠️ Self-recovered from host restart at {recovered_at_iso}. "
+        f"{payload.events_replayed} {events_word} replayed in "
+        f"{payload.replay_duration_ms} ms. "
+        f"Zero intervention required."
+    )
+    # Story 3.11 H5 carry-forward: defensive final-length self-clamp.
+    # Unreachable for valid inputs (worst-case ~140 chars) but defends
+    # against model_construct bypass scenarios.
+    if len(text) > _SELF_RECOVERED_MESSAGE_MAX_CHARS:
+        text = text[:_SELF_RECOVERED_MESSAGE_MAX_CHARS]
+    return text
+
+
+# ---------------------------------------------------------------------------
 # Renderer dispatcher (Story 3.10 AC-4)
 # ---------------------------------------------------------------------------
 
@@ -1402,6 +1474,7 @@ _RENDERERS: MappingProxyType[str, _RenderFn] = MappingProxyType(
         "task.approval_requested": _render_approval_request,
         "task.blocker_raised": _render_blocker_raised,
         "task.completed": _render_completed,
+        "task.self_recovered": _render_self_recovered,
     }
 )
 

@@ -542,3 +542,92 @@ def test_task_completed_schema_versions_register_distinct_entries() -> None:
     assert REGISTRY[("task.completed", "1.0.0")] is TaskCompletedPayload
     assert REGISTRY[("task.completed", "1.0.1")] is TaskCompletedPayload
     assert REGISTRY[("task.completed", "1.1.0")] is TaskCompletedPayload
+
+
+# ---------------------------------------------------------------------------
+# Story 3.13 — TaskSelfRecoveredPayload (FR16, 5 tests)
+# ---------------------------------------------------------------------------
+
+
+def test_task_self_recovered_payload_minimal_round_trip() -> None:
+    """AC-1: construct with all 4 fields; round-trip via model_dump_json + model_validate_json."""
+    from registry_state.domain.event_types import TaskSelfRecoveredPayload
+
+    aware = datetime(2026, 5, 1, 3, 0, 0, tzinfo=UTC)
+    payload = TaskSelfRecoveredPayload(
+        task_id=_VALID_TASK_ID,
+        recovered_at=aware,
+        events_replayed=142,
+        replay_duration_ms=350,
+    )
+    raw = payload.model_dump_json()
+    restored = type(payload).model_validate_json(raw)
+    assert restored == payload
+    # Verify the ISO timestamp round-trips with tz info.
+    assert restored.recovered_at.utcoffset() is not None
+
+
+def test_task_self_recovered_payload_rejects_empty_task_id() -> None:
+    """AC-1: task_id min_length=1 — empty string rejected."""
+    from registry_state.domain.event_types import TaskSelfRecoveredPayload
+
+    with pytest.raises(ValidationError):
+        TaskSelfRecoveredPayload(
+            task_id="",
+            recovered_at=datetime(2026, 5, 1, 3, 0, 0, tzinfo=UTC),
+            events_replayed=0,
+            replay_duration_ms=0,
+        )
+
+
+def test_task_self_recovered_payload_rejects_oversized_task_id() -> None:
+    """AC-1: task_id max_length=64 — 65 chars rejected."""
+    from registry_state.domain.event_types import TaskSelfRecoveredPayload
+
+    with pytest.raises(ValidationError):
+        TaskSelfRecoveredPayload(
+            task_id="t" * 65,
+            recovered_at=datetime(2026, 5, 1, 3, 0, 0, tzinfo=UTC),
+            events_replayed=0,
+            replay_duration_ms=0,
+        )
+
+
+def test_task_self_recovered_payload_rejects_naive_recovered_at() -> None:
+    """AC-1: AwareDatetime — naive datetime (no tzinfo) raises ValidationError."""
+    from registry_state.domain.event_types import TaskSelfRecoveredPayload
+
+    naive = datetime(2026, 5, 1, 12, 0, 0)
+    with pytest.raises(ValidationError):
+        TaskSelfRecoveredPayload(
+            task_id=_VALID_TASK_ID,
+            recovered_at=naive,
+            events_replayed=0,
+            replay_duration_ms=0,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("events_replayed", -1),
+        ("events_replayed", 10**6 + 1),
+        ("replay_duration_ms", -1),
+        ("replay_duration_ms", 10**9 + 1),
+    ],
+)
+def test_task_self_recovered_payload_rejects_negative_counters_and_oversized(
+    field_name: str, value: int
+) -> None:
+    """AC-1: counter boundary validation — ge=0 / le=10**6 / le=10**9."""
+    from registry_state.domain.event_types import TaskSelfRecoveredPayload
+
+    kwargs: dict[str, object] = {
+        "task_id": _VALID_TASK_ID,
+        "recovered_at": datetime(2026, 5, 1, 3, 0, 0, tzinfo=UTC),
+        "events_replayed": 0,
+        "replay_duration_ms": 0,
+    }
+    kwargs[field_name] = value
+    with pytest.raises(ValidationError):
+        TaskSelfRecoveredPayload(**kwargs)  # type: ignore[arg-type]

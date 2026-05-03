@@ -37,3 +37,11 @@ A running log of issues that surfaced during code review but were not fixed at t
 - D5 — `_COMPLETED_REGISTERED` global mutable flag pattern — consistent with Story 3.10 M8 / 3.11 H11 across 4+ test helpers; consolidation refactor deferred.
 - D6 — `Random(312)` fixed seed — consistent with 3.10/3.11 (`Random(311)`, `Random(789)`); pytest single-threaded default.
 - D7 — `isinstance(payload, ...)` docstring clarity — docs sweep across 3 renderers.
+
+## Deferred from: code review of 3-13-self-recovered-summary-template (2026-05-03)
+
+- D1 — `import structlog.testing` inside test body inconsistent with project convention — pre-existing pattern in 7 test functions across multiple stories; module-level import in `test_middleware.py` but inline in `test_telegram_sink.py`. Consider promoting or documenting the intentional choice.
+- D2 — `_build_diff_stats_line` renders "1 files changed" (no singular form) — pre-existing UX polish gap in completion renderer (`telegram_sink.py:1148`). Low impact.
+- D3 — `assert` in `_build_pr_line` stripped under `python -O` — pre-existing defensive pattern in completion renderer (`telegram_sink.py:1151`). Project likely never runs under `-O`.
+- D4 — `_build_step_boundary_payload` linear scan could be binary search — pre-existing test utility (`test_telegram_sink.py:2088`). Acceptable at cap=1900.
+- D5 — Missing test for `pr_url` containing only newlines — pre-existing test coverage gap in completion renderer. Symmetrical to the `pr_branch` newline test already present.

@@ -494,6 +494,23 @@ class TaskStopRequestedPayload(BaseModel):
     actor_id: str = Field(min_length=1, max_length=128)
 
 
+class TaskSelfRecoveredPayload(BaseModel):
+    """Payload for the ``task.self_recovered`` event (FR16).
+
+    Synthesized by the clawhip-daemon proactive-summary code when a task's
+    event log contains a ``session.reconnecting`` + ``task.execution.resumed``
+    pair emitted overnight (between 00:00 and the morning completion summary).
+    Story 3.13 ships the model + renderer; the synthesis logic is Story 7.9.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    task_id: str = Field(min_length=1, max_length=64)
+    recovered_at: AwareDatetime
+    events_replayed: int = Field(ge=0, le=10**6)
+    replay_duration_ms: int = Field(ge=0, le=10**9)
+
+
 class SecretAccessedPayload(BaseModel):
     """Payload for the ``secret.accessed`` audit event (FR42 / NFR-S3).
 
@@ -649,6 +666,14 @@ register("secret.accessed", "1.0.1", SecretAccessedPayload)
 register("telegram.rejected", "1.0.0", TelegramRejectedPayload)
 register("telegram.rejected", "1.0.1", TelegramRejectedPayload)
 
+# Story 3.13 — register the task.self_recovered event payload (FR16).
+# One new bare type name (``EVENT_TYPES`` grows 14 → 15); one new
+# (type, version) entry. New event type registered at v1.0.0 only —
+# no prior version exists. Story 3.9 H7 carry-forward — registration in
+# event_types.py (NOT packages/events/.../schema_registry.py) avoids the
+# circular import the dev pass discovered.
+register("task.self_recovered", "1.0.0", TaskSelfRecoveredPayload)
+
 __all__ = [
     "TELEGRAM_REJECTED_SCHEMA_VERSION",
     "AcceptedCommand",
@@ -664,6 +689,7 @@ __all__ = [
     "TaskCompletedPayload",
     "TaskCreatedPayload",
     "TaskExecutionStartedPayload",
+    "TaskSelfRecoveredPayload",
     "TaskPlanReadyPayload",
     "TaskPlanningStartedPayload",
     "TaskStopRequestedPayload",

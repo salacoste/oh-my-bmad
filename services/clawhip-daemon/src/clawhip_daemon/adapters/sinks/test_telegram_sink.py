@@ -45,6 +45,7 @@ from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC
     TaskApprovalRequestedPayload,
     TaskBlockerRaisedPayload,
     TaskCompletedPayload,
+    TaskSelfRecoveredPayload,
 )
 
 from clawhip_daemon.adapters.sinks.telegram_sink import (
@@ -55,12 +56,14 @@ from clawhip_daemon.adapters.sinks.telegram_sink import (
     _DELIVERABLE_EVENT_TYPES,
     _EMERGENCY_TASK_ID_MAX_CHARS,
     _RENDERERS,
+    _SELF_RECOVERED_MESSAGE_MAX_CHARS,
     TelegramSink,
     _build_diff_stats_line,
     _build_pr_line,
     _render,
     _render_blocker_raised,
     _render_completed,
+    _render_self_recovered,
 )
 
 # ---------------------------------------------------------------------------
@@ -2552,3 +2555,228 @@ def test_task_completed_already_in_deliverable_event_types_per_story_3_9() -> No
 
 
 # M6 strengthening lives in tests/integration/test_task_thread_binding.py.
+
+
+# ---------------------------------------------------------------------------
+# Story 3.13 — _render_self_recovered renderer + dispatcher tests (8 tests)
+# ---------------------------------------------------------------------------
+
+
+# Story 3.10 M8 / Story 3.11 H11 / Story 3.12 carry-forward: idempotent
+# guard so repeat invocations of the test helper don't re-run the
+# schema_registry.register side-effect on every helper call.
+_SELF_RECOVERED_REGISTERED: bool = False
+
+
+def _ensure_self_recovered_registered() -> None:
+    """Register task.self_recovered 1.0.0 — idempotent (Story 3.11 H11 pattern)."""
+    global _SELF_RECOVERED_REGISTERED
+    if _SELF_RECOVERED_REGISTERED:
+        return
+    _reg("task.self_recovered", "1.0.0", TaskSelfRecoveredPayload)
+    _SELF_RECOVERED_REGISTERED = True
+
+
+def _self_recovered_envelope(
+    *,
+    task_id: str = "t-00000000-0000-7000-8000-000000000004",
+    recovered_at: datetime = datetime(2026, 5, 1, 3, 0, 0, tzinfo=UTC),
+    events_replayed: int = 142,
+    replay_duration_ms: int = 350,
+    mono_ns: int = 17_000_000,
+) -> EventEnvelope:
+    """Build a task.self_recovered envelope (schema 1.0.0)."""
+    _ensure_task_created_registered()
+    _ensure_self_recovered_registered()
+
+    rng = Random(313)
+    clk = FrozenClock(mono_ns=mono_ns, now=FROZEN_EPOCH)
+    eid = new_event_id(clock=clk, rng=rng)
+    rid = new_uuid7(clock=clk, rng=rng)
+    payload = TaskSelfRecoveredPayload(
+        task_id=task_id,
+        recovered_at=recovered_at,
+        events_replayed=events_replayed,
+        replay_duration_ms=replay_duration_ms,
+    )
+    return EventEnvelope.create(
+        event_id=eid,
+        schema_version="1.0.0",
+        type="task.self_recovered",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=payload,
+        request_id=rid,
+    )
+
+
+def test_render_self_recovered_minimal() -> None:
+    """AC-4: populated payload → exact single-line message shape."""
+    env = _self_recovered_envelope()
+    result = _render(env)
+    assert result == (
+        "🛠️ Self-recovered from host restart at 2026-05-01T03:00:00+00:00. "
+        "142 events replayed in 350 ms. "
+        "Zero intervention required."
+    )
+
+
+def test_render_self_recovered_uses_isoformat_seconds_precision() -> None:
+    """AC-4 / Story 3.12 M14 carry-forward: microseconds omitted via timespec='seconds'."""
+    aware = datetime(2026, 5, 1, 3, 0, 0, 123456, tzinfo=UTC)
+    env = _self_recovered_envelope(recovered_at=aware)
+    result = _render(env)
+    assert "2026-05-01T03:00:00+00:00" in result
+    assert ".123456" not in result
+
+
+@pytest.mark.parametrize(
+    ("events_replayed", "expected_word"),
+    [
+        (0, "0 events"),
+        (1, "1 event"),
+        (2, "2 events"),
+    ],
+)
+def test_render_self_recovered_pluralizes_events_correctly(
+    events_replayed: int, expected_word: str
+) -> None:
+    """AC-4 / Story 3.12 L1 carry-forward: singular 'event' when N==1, plural otherwise."""
+    env = _self_recovered_envelope(events_replayed=events_replayed)
+    result = _render(env)
+    assert expected_word in result
+
+
+def test_render_self_recovered_handles_zero_duration() -> None:
+    """AC-4 edge case: replay_duration_ms=0 renders '0 ms' (instant heartbeat restart)."""
+    env = _self_recovered_envelope(events_replayed=0, replay_duration_ms=0)
+    result = _render(env)
+    assert "0 events replayed in 0 ms." in result
+
+
+def test_render_self_recovered_payload_type_mismatch_logs_and_falls_back() -> None:
+    """H9 + H10 carry-forward: WARN + placeholder when payload isn't a typed instance."""
+    import structlog.testing
+
+    rng = Random(313)
+    clk = FrozenClock(mono_ns=18_000_000, now=FROZEN_EPOCH)
+    eid = new_event_id(clock=clk, rng=rng)
+    rid = new_uuid7(clock=clk, rng=rng)
+    env = EventEnvelope.model_construct(
+        event_id=eid,
+        schema_version="1.0.0",
+        type="task.self_recovered",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload={"task_id": "t-raw-dict-recovered"},  # type: ignore[arg-type]
+        request_id=rid,
+    )
+    with structlog.testing.capture_logs() as captured:
+        result = _render(env)
+
+    # Placeholder shape returned.
+    assert result == "Task t-raw-dict-recovered: task.self_recovered"
+    # H9: structured warning emitted.
+    assert any(
+        rec.get("event") == "renderer.payload_type_mismatch"
+        and rec.get("log_level") == "warning"
+        and rec.get("expected") == "TaskSelfRecoveredPayload"
+        and rec.get("actual") == "dict"
+        for rec in captured
+    )
+    # Placeholder did NOT leak renderer-specific shape.
+    assert "🛠️" not in result
+    assert "Self-recovered" not in result
+
+
+def test_render_self_recovered_emergency_clamp_unreachable_for_valid_inputs() -> None:
+    """AC-6: maximum-sized valid payload is well under the cap.
+
+    Story 3.11 H5 carry-forward: the defensive final-length self-clamp
+    cannot fire for valid model-bound inputs, but assert it so a future
+    template-text growth is caught.
+    """
+    env = _self_recovered_envelope(
+        task_id="t" * 64,
+        recovered_at=datetime(2026, 5, 1, 3, 0, 0, tzinfo=UTC),
+        events_replayed=10**6,
+        replay_duration_ms=10**9,
+    )
+    result = _render(env)
+    assert len(result) <= _SELF_RECOVERED_MESSAGE_MAX_CHARS
+    # Additional guard: worst-case is ~140 chars; assert well under 250.
+    assert len(result) < 250
+
+
+def test_render_dispatcher_routes_self_recovered_to_renderer() -> None:
+    """AC-3 + AC-2: dispatcher identity check + allowlist membership.
+
+    Story 3.11 M3 / M10 carry-forward: positive identity assertion on the
+    dispatcher entry — confirms the new entry was actually added. Also
+    asserts AC-2 allowlist membership.
+    """
+    # Identity check.
+    assert _RENDERERS["task.self_recovered"] is _render_self_recovered
+    # AC-2: task.self_recovered is in the deliverable allowlist.
+    assert "task.self_recovered" in _DELIVERABLE_EVENT_TYPES
+
+
+def test_renderers_subset_of_deliverable_event_types_after_3_13() -> None:
+    """Story 3.10 M12 / 3.11 M10 invariant — re-verified after AC-2 grew the allowlist.
+
+    AC-2 added ``task.self_recovered`` to ``_DELIVERABLE_EVENT_TYPES``; AC-3
+    added ``task.self_recovered`` to ``_RENDERERS``. The subset invariant
+    is preserved (renderer set grew by 1, allowlist set grew by 1).
+    """
+    assert set(_RENDERERS.keys()).issubset(_DELIVERABLE_EVENT_TYPES)
+
+
+def test_render_self_recovered_singular_with_max_fields() -> None:
+    """Boundary interaction: singular '1 event' form with max task_id + max duration.
+
+    Covers the untested combination where ``events_replayed=1`` triggers the
+    singular ``"event"`` branch while all other fields are at their model
+    boundary maximums.
+    """
+    env = _self_recovered_envelope(
+        task_id="t" * 64,
+        recovered_at=datetime(2026, 5, 1, 3, 0, 0, tzinfo=UTC),
+        events_replayed=1,
+        replay_duration_ms=10**9,
+    )
+    result = _render(env)
+    assert "1 event replayed in 1000000000 ms." in result
+    assert len(result) < 250
+
+
+def test_render_self_recovered_type_mismatch_collapses_newlines_in_task_id() -> None:
+    """Story 3.12 H1 carry-forward: newlines in task_id are collapsed in fallback.
+
+    When a ``model_construct`` bypass produces a raw-dict payload and the
+    extracted ``task_id`` contains ``\\n``, the fallback must produce a
+    single-line placeholder (no real newlines).
+    """
+    import structlog.testing
+
+    rng = Random(313)
+    clk = FrozenClock(mono_ns=19_000_000, now=FROZEN_EPOCH)
+    eid = new_event_id(clock=clk, rng=rng)
+    rid = new_uuid7(clock=clk, rng=rng)
+    env = EventEnvelope.model_construct(
+        event_id=eid,
+        schema_version="1.0.0",
+        type="task.self_recovered",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload={"task_id": "t-aa\nbb\ncc"},  # type: ignore[arg-type]
+        request_id=rid,
+    )
+    with structlog.testing.capture_logs():
+        result = _render(env)
+
+    # Newlines collapsed (not preserved as literal \n in output).
+    assert "\n" not in result
+    assert "t-aa bb cc" in result
