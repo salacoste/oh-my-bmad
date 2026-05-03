@@ -154,6 +154,28 @@ class TaskResponseLocal(BaseModel):
     reply_to_message_id: int | None = None
 
 
+class LogsDigestResponseLocal(BaseModel):
+    """Local mirror of registry-api's eventual logs/digest response (Story 3.15 AC-2).
+
+    Forward-compatible shape pinned by 3.15's mocked tests; Story 7.3 owns the
+    server-side endpoint. When 7.3 lands, review-time validation must align
+    field names with the actual serialised JSON keys.
+
+    Source-of-truth: services/registry-api/src/registry_api/adapters/llm_digest.py (Story 7.3).
+    Architecture note: local redefinition keeps cross-service contract as HTTP/JSON
+    (architecture.md:231) — same decision as CreateTaskResponseLocal (Story 3.3 AC-2).
+
+    TODO(story-7.3): verify field names match Story 7.3's serialised JSON keys.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    task_id: str = Field(min_length=1, max_length=128)
+    digest: str = Field(min_length=1, max_length=20_000)
+    truncated: bool = False
+    line_count: int = Field(ge=1, le=20)
+
+
 class RegistryResponseError(httpx.HTTPError):
     """Raised when registry-api returns a 2xx response with an unexpected/malformed body.
 
@@ -460,6 +482,55 @@ class RegistryAPIClient:
         except (_json.JSONDecodeError, KeyError, ValidationError, ValueError) as exc:
             raise RegistryResponseError(f"registry-api returned malformed body: {exc}") from exc
 
+    async def get_logs_digest(
+        self,
+        *,
+        task_id: str,
+        request_id: str | None = None,
+    ) -> LogsDigestResponseLocal:
+        """GET /v1/tasks/{task_id}/logs/digest and return a typed local response model.
+
+        No Idempotency-Key header — GET is idempotent by HTTP semantics
+        (same as get_platform_health and get_task).
+
+        Args:
+            task_id:     The "t-<uuidv7>" task identifier.
+            request_id:  UUIDv7 request correlation id. Forwarded as X-Request-ID.
+
+        Returns:
+            LogsDigestResponseLocal on HTTP 2xx.
+
+        Raises:
+            ValueError:           If ``task_id`` does not match TASK_ID_PATTERN.
+            httpx.HTTPStatusError: On non-2xx responses (e.g. 404 if endpoint
+                not deployed yet or task not found).
+            RegistryResponseError: On 2xx with malformed/unexpected body.
+            httpx.HTTPError:       On network / timeout errors.
+
+        Note:
+            GET /v1/tasks/{id}/logs/digest does NOT exist server-side yet.
+            Story 7.3 owns the implementation. Until then a live call returns
+            404. Tests mock the transport layer so they are runnable today.
+        """
+        if not TASK_ID_PATTERN.match(task_id):
+            raise ValueError(f"Invalid task_id (does not match TASK_ID_PATTERN): {task_id!r}")
+
+        headers: dict[str, str] = {}
+        if request_id is not None:
+            headers["X-Request-ID"] = request_id
+
+        response = await self._http_client.get(
+            f"/v1/tasks/{task_id}/logs/digest",
+            headers=headers,
+        )
+        response.raise_for_status()
+
+        try:
+            data = response.json()
+            return LogsDigestResponseLocal.model_validate(data)
+        except (_json.JSONDecodeError, KeyError, ValidationError, ValueError) as exc:
+            raise RegistryResponseError(f"registry-api returned malformed body: {exc}") from exc
+
 
 __all__ = [
     "ActorLocal",
@@ -467,6 +538,7 @@ __all__ = [
     "DecisionResponseLocal",
     "HealthResponseLocal",
     "LastEventLocal",
+    "LogsDigestResponseLocal",
     "RegistryAPIClient",
     "RegistryResponseError",
     "TaskResponseLocal",

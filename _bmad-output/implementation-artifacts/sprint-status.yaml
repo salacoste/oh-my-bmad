@@ -102,7 +102,7 @@ development_status:
   3-12-completion-summary-template: done
   3-13-self-recovered-summary-template: done
   3-14-status-command-telegram-surface: done
-  3-15-logs-command-telegram-surface: backlog
+  3-15-logs-command-telegram-surface: done
   3-16-stop-command: backlog
   3-17-reject-command: backlog
   3-18-retry-command-telegram-surface: backlog
