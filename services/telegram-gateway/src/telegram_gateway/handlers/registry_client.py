@@ -1,17 +1,18 @@
 """RegistryAPIClient — httpx-based client for registry-api endpoints (Story 3.3 AC-1, AC-2).
 
-Wraps POST /v1/tasks, POST /v1/tasks/{id}/decisions, and GET /v1/health.
+Wraps POST /v1/tasks, POST /v1/tasks/{id}/decisions, GET /v1/health, and
+GET /v1/tasks/{id}.
 The client holds a pre-built ``httpx.AsyncClient`` that is constructed ONCE at
 lifespan startup (Story 3.1 H4 cache-once pattern) and reused across all handler
 invocations. Never construct a new ``AsyncClient`` per-request.
 
 Architecture boundary
 ---------------------
-``CreateTaskResponseLocal``, ``DecisionResponseLocal``, and ``HealthResponseLocal``
-are redefined here rather than imported from ``registry_api.routes.*``.  This keeps
-the transport boundary clean: the cross-service contract is HTTP/JSON
-(architecture.md:231), not shared Python objects.  See AC-2 doc-comment for
-details.
+``CreateTaskResponseLocal``, ``DecisionResponseLocal``, ``HealthResponseLocal``,
+``TaskResponseLocal``, ``ActorLocal``, and ``LastEventLocal`` are redefined here
+rather than imported from ``registry_api.routes.*``.  This keeps the transport
+boundary clean: the cross-service contract is HTTP/JSON (architecture.md:231),
+not shared Python objects.  See AC-2 doc-comment for details.
 """
 
 from __future__ import annotations
@@ -103,6 +104,54 @@ class HealthResponseLocal(BaseModel):
     # M11: defensive upper bound prevents overlong version strings exceeding Telegram's
     # 4096-char message limit when combined with the rest of the reply.
     version: str = Field(min_length=1, max_length=200)  # e.g., "v1.2.3"
+
+
+class ActorLocal(BaseModel):
+    """Local mirror of registry-api's ActorOut (Story 3.14 AC-2).
+
+    Source-of-truth: services/registry-api/src/registry_api/routes/tasks.py ActorOut.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: str = Field(min_length=1, max_length=64)
+    id: str = Field(min_length=1, max_length=128)
+
+
+class LastEventLocal(BaseModel):
+    """Local mirror of registry-api's LastEventOut (Story 3.14 AC-2).
+
+    Source-of-truth: services/registry-api/src/registry_api/routes/tasks.py LastEventOut.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str = Field(min_length=1, max_length=128)
+    type: str = Field(min_length=1, max_length=128)
+    emitted_at: datetime
+
+
+class TaskResponseLocal(BaseModel):
+    """Local mirror of registry-api's TaskResponse (Story 3.14 AC-2).
+
+    Source-of-truth: services/registry-api/src/registry_api/routes/tasks.py TaskResponse.
+    Fields ``chat_id`` and ``reply_to_message_id`` are internal routing fields
+    persisted by registry-api (Story 3.9) — they are NOT rendered in the
+    Telegram /status reply but are carried here for potential future use.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    task_id: str = Field(min_length=1, max_length=128)
+    status: str = Field(min_length=1, max_length=64)
+    title: str | None = Field(default=None, max_length=2000)
+    created_at: datetime
+    updated_at: datetime
+    actor: ActorLocal
+    last_event: LastEventLocal | None = None
+    next_commands: list[str] = Field(max_length=20)
+    chat_id: int | None = None
+    reply_to_message_id: int | None = None
 
 
 class RegistryResponseError(httpx.HTTPError):
@@ -367,11 +416,58 @@ class RegistryAPIClient:
             # ValueError included for edge-cases (e.g. unexpected json type).
             raise RegistryResponseError(f"registry-api returned malformed body: {exc}") from exc
 
+    async def get_task(
+        self,
+        *,
+        task_id: str,
+        request_id: str | None = None,
+    ) -> TaskResponseLocal:
+        """GET /v1/tasks/{task_id} and return a typed local response model.
+
+        No Idempotency-Key header — GET is idempotent by HTTP semantics
+        (same as get_platform_health). Telegram retries safely re-fetch
+        without duplication concerns.
+
+        Args:
+            task_id:     The "t-<uuidv7>" task identifier.
+            request_id:  UUIDv7 request correlation id. Forwarded as X-Request-ID.
+
+        Returns:
+            TaskResponseLocal on HTTP 2xx.
+
+        Raises:
+            ValueError:           If ``task_id`` does not match TASK_ID_PATTERN.
+            httpx.HTTPStatusError: On non-2xx responses (e.g. 404 if task not found).
+            RegistryResponseError: On 2xx with malformed/unexpected body.
+            httpx.HTTPError:       On network / timeout errors.
+        """
+        if not TASK_ID_PATTERN.match(task_id):
+            raise ValueError(f"Invalid task_id (does not match TASK_ID_PATTERN): {task_id!r}")
+
+        headers: dict[str, str] = {}
+        if request_id is not None:
+            headers["X-Request-ID"] = request_id
+
+        response = await self._http_client.get(
+            f"/v1/tasks/{task_id}",
+            headers=headers,
+        )
+        response.raise_for_status()
+
+        try:
+            data = response.json()
+            return TaskResponseLocal.model_validate(data)
+        except (_json.JSONDecodeError, KeyError, ValidationError, ValueError) as exc:
+            raise RegistryResponseError(f"registry-api returned malformed body: {exc}") from exc
+
 
 __all__ = [
+    "ActorLocal",
     "CreateTaskResponseLocal",
     "DecisionResponseLocal",
     "HealthResponseLocal",
+    "LastEventLocal",
     "RegistryAPIClient",
     "RegistryResponseError",
+    "TaskResponseLocal",
 ]
