@@ -36,9 +36,7 @@ from collections.abc import Awaitable, Callable
 import httpx
 import structlog
 import tenacity
-from registry_state.domain.event_types import (  # noqa: IMP001 — services→services allowed per AC-16
-    SinkDeliveryFailedPayload,
-)
+from events import SinkDeliveryFailedPayload
 from secret_hygiene.audited_secret import AuditedSecret
 from tenacity import stop_after_attempt, wait_exponential, wait_random
 

@@ -44,6 +44,12 @@ import aiosqlite
 from events import (
     Actor,
     EventEnvelope,
+    TaskApprovalRequestedPayload,
+    TaskCreatedPayload,
+    TaskExecutionStartedPayload,
+    TaskPlanningStartedPayload,
+    TaskPlanReadyPayload,
+    TaskSummaryEmittedPayload,
     TickingClock,
     new_event_id,
     new_request_id,
@@ -51,14 +57,6 @@ from events import (
     to_canonical_json,
 )
 from pydantic import BaseModel
-from registry_state.domain.event_types import (
-    TaskApprovalRequestedPayload,
-    TaskCreatedPayload,
-    TaskExecutionStartedPayload,
-    TaskPlanningStartedPayload,
-    TaskPlanReadyPayload,
-    TaskSummaryEmittedPayload,
-)
 
 if TYPE_CHECKING:
     # ``tests/crash-injection`` has a hyphen in its directory name so it is

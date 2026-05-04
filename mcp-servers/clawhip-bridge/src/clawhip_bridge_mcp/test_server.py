@@ -22,11 +22,16 @@ from pathlib import Path
 from random import Random
 
 import pytest
-from events import (
+from events import (  # mcp-servers→services allowed per AC-7
     FROZEN_EPOCH,
     Actor,
     EventEnvelope,
     FrozenClock,
+    TaskApprovalRequestedPayload,
+    TaskBlockerRaisedPayload,
+    TaskCompletedPayload,
+    TaskCreatedPayload,
+    TaskSummaryEmittedPayload,
     TickingClock,
     new_event_id,
     new_request_id,
@@ -37,13 +42,6 @@ from mcp.server.fastmcp.resources.types import FunctionResource
 from registry_state.adapters.event_log import (  # noqa: IMP001 — mcp-servers→services allowed per AC-7
     current_day_path,
     read_log_lines,
-)
-from registry_state.domain.event_types import (  # noqa: IMP001 — mcp-servers→services allowed per AC-7
-    TaskApprovalRequestedPayload,
-    TaskBlockerRaisedPayload,
-    TaskCompletedPayload,
-    TaskCreatedPayload,
-    TaskSummaryEmittedPayload,
 )
 
 from clawhip_bridge_mcp.server import (  # noqa: IMP001 — test file in mcp-servers

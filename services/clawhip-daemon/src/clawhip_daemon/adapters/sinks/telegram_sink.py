@@ -55,20 +55,16 @@ import cachetools
 import httpx
 import pydantic
 import structlog
-from events import EventEnvelope, from_canonical_json
-from pydantic import BaseModel, ConfigDict, Field
-
-# TODO(packages/events refactor): cross-service IMP001 noqa cluster grows with
-# each renderer story (3.10, 3.11, 3.12, 3.13). Consider moving payload models
-# to packages/events/ in a future story to eliminate the noqa cluster (Story
-# 3.10 review L5).
-from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
+from events import (
+    EventEnvelope,
     PreCheckResults,
     TaskApprovalRequestedPayload,
     TaskBlockerRaisedPayload,
     TaskCompletedPayload,
     TaskSelfRecoveredPayload,
+    from_canonical_json,
 )
+from pydantic import BaseModel, ConfigDict, Field
 
 from clawhip_daemon.adapters.telegram_outbound import TelegramOutbound
 

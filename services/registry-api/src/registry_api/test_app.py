@@ -37,6 +37,7 @@ from asgi_lifespan import LifespanManager
 from events import (
     FROZEN_EPOCH,
     FrozenClock,
+    TaskCreatedPayload,
     new_event_id,
     new_request_id,
     new_task_id,
@@ -54,9 +55,6 @@ from registry_state.adapters.sqlite_store import (  # noqa: IMP001 — services�
 )
 from registry_state.adapters.sqlite_store import (  # noqa: IMP001 — services→services allowed per AC-16
     get_session,
-)
-from registry_state.domain.event_types import (  # noqa: IMP001 — services→services allowed per AC-16
-    TaskCreatedPayload,
 )
 from registry_state.schema import (  # noqa: IMP001 — services→services allowed per AC-16
     Base,

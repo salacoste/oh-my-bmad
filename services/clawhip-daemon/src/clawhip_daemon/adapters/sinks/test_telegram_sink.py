@@ -19,34 +19,32 @@ from typing import Literal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from events import (
-    FROZEN_EPOCH,
-    Actor,
-    EventEnvelope,
-    FrozenClock,
-    new_event_id,
-    new_task_id,
-    new_uuid7,
-)
-from events.schema_registry import register as _reg
 
-# Story 3.11 review M1 / M2: cross-service payload imports needed at module
-# scope — promoted from inline imports inside ``_approval_envelope`` /
-# ``_blocker_envelope``. The ``# noqa: IMP001`` matches the existing
-# cross-service exception (Story 2.9 AC-16); ``DiffSummary`` /
-# ``PreCheckResults`` are forward-ref-resolved here so ``_approval_envelope``
-# can use them in its signature without ``# noqa: UP037`` markers.
+# Story 3.11 review M1 / M2: payload imports promoted from inline imports
+# inside ``_approval_envelope`` / ``_blocker_envelope``. Originally from
+# ``registry_state.domain.event_types`` with ``# noqa: IMP001``; relocated to
+# ``events`` by Story 3.5.2. ``DiffSummary`` / ``PreCheckResults`` are
+# forward-ref-resolved here so ``_approval_envelope`` can use them in its
+# signature without ``# noqa: UP037`` markers.
 # (Other helpers — ``_task_created_envelope`` etc — keep their inline
 # imports per Story 2.9's pattern; promotion scope is limited to what M1 /
 # M2 explicitly call out.)
-from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
+from events import (  # Story 2.9 AC-16
+    FROZEN_EPOCH,
+    Actor,
     DiffSummary,
+    EventEnvelope,
+    FrozenClock,
     PreCheckResults,
     TaskApprovalRequestedPayload,
     TaskBlockerRaisedPayload,
     TaskCompletedPayload,
     TaskSelfRecoveredPayload,
+    new_event_id,
+    new_task_id,
+    new_uuid7,
 )
+from events.schema_registry import register as _reg
 
 from clawhip_daemon.adapters.sinks.telegram_sink import (
     _APPROVAL_MESSAGE_MAX_CHARS,
@@ -88,7 +86,7 @@ def _ensure_task_created_registered() -> None:
     global _REGISTERED
     if _REGISTERED:
         return
-    from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
+    from events import (  # Story 2.9 AC-16
         ServiceCrashedPayload,
         TaskCompletedPayload,
         TaskCreatedPayload,
@@ -104,7 +102,7 @@ def _ensure_task_created_registered() -> None:
 def _task_created_envelope(task_id: str, *, mono_ns: int = 1_000_000) -> EventEnvelope:
     """Build a task.created envelope."""
     _ensure_task_created_registered()
-    from registry_state.domain.event_types import TaskCreatedPayload  # noqa: IMP001, I001 — Story 2.9 AC-16, inline import
+    from events import TaskCreatedPayload  # noqa: I001 — Story 2.9 AC-16, inline import
 
     rng = Random(42)
     clk = FrozenClock(mono_ns=mono_ns, now=FROZEN_EPOCH)
@@ -125,7 +123,7 @@ def _task_created_envelope(task_id: str, *, mono_ns: int = 1_000_000) -> EventEn
 def _task_completed_envelope(task_id: str, *, mono_ns: int = 2_000_000) -> EventEnvelope:
     """Build a task.completed envelope."""
     _ensure_task_created_registered()
-    from registry_state.domain.event_types import TaskCompletedPayload  # noqa: IMP001, I001 — Story 2.9 AC-16, inline import
+    from events import TaskCompletedPayload  # noqa: I001 — Story 2.9 AC-16, inline import
 
     rng = Random(77)
     clk = FrozenClock(mono_ns=mono_ns, now=FROZEN_EPOCH)
@@ -146,7 +144,7 @@ def _task_completed_envelope(task_id: str, *, mono_ns: int = 2_000_000) -> Event
 def _service_crashed_envelope(*, mono_ns: int = 3_000_000) -> EventEnvelope:
     """Build a service.crashed envelope (non-task event)."""
     _ensure_task_created_registered()
-    from registry_state.domain.event_types import ServiceCrashedPayload  # noqa: IMP001, I001 — Story 2.9 AC-16, inline import
+    from events import ServiceCrashedPayload  # noqa: I001 — Story 2.9 AC-16, inline import
 
     rng = Random(11)
     clk = FrozenClock(mono_ns=mono_ns, now=FROZEN_EPOCH)
@@ -391,7 +389,7 @@ def test_render_approval_request_with_risk_class_high() -> None:
 
 def test_render_approval_request_with_full_pre_checks_all_pass() -> None:
     """AC-5: 4 pre-checks all-pass → 4 ✅ lines in spec order (Lint, Types, Unit, Integration)."""
-    from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
+    from events import (  # Story 2.9 AC-16
         PreCheckOutcome,
         PreCheckResults,
     )
@@ -423,7 +421,7 @@ def test_render_approval_request_with_full_pre_checks_all_pass() -> None:
 
 def test_render_approval_request_with_pre_check_one_fail() -> None:
     """AC-5: one ❌ check carries ' (failed)' suffix."""
-    from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
+    from events import (  # Story 2.9 AC-16
         PreCheckOutcome,
         PreCheckResults,
     )
@@ -440,7 +438,7 @@ def test_render_approval_request_with_pre_check_one_fail() -> None:
 
 def test_render_approval_request_with_partial_pre_checks() -> None:
     """AC-5: only 2 of 4 pre-check fields populated → exactly 2 lines rendered."""
-    from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
+    from events import (  # Story 2.9 AC-16
         PreCheckOutcome,
         PreCheckResults,
     )
@@ -464,7 +462,7 @@ def test_render_approval_request_with_partial_pre_checks() -> None:
 
 def test_render_approval_request_with_diff_summary() -> None:
     """AC-5: DiffSummary renders as 'Diff: N files, +I, -D'."""
-    from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
+    from events import (  # Story 2.9 AC-16
         DiffSummary,
     )
 
@@ -529,7 +527,7 @@ def test_render_approval_request_total_cap_drops_diff_only() -> None:
     brings it back under. Pad scales with the cap so future cap moves
     don't silently re-route through a different ladder step.
     """
-    from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
+    from events import (  # Story 2.9 AC-16
         DiffSummary,
     )
 
@@ -572,7 +570,7 @@ def test_render_approval_request_total_cap_drops_diff_and_commands() -> None:
     Pre-check block remains because Step 3.5 only fires when commands
     cannot recover the overflow alone.
     """
-    from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
+    from events import (  # Story 2.9 AC-16
         DiffSummary,
         PreCheckOutcome,
         PreCheckResults,
@@ -616,7 +614,7 @@ def test_render_approval_request_total_cap_drops_pre_checks_before_emergency() -
     but Header+Action+Reason alone fits — the only sufficient drop is the
     pre-check block. Verifies Step 3.5 fires in the ladder.
     """
-    from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
+    from events import (  # Story 2.9 AC-16
         PreCheckOutcome,
         PreCheckResults,
     )
@@ -691,7 +689,7 @@ def test_render_dispatcher_falls_back_to_placeholder_for_unknown_type() -> None:
     clk = FrozenClock(mono_ns=5_000_000, now=FROZEN_EPOCH)
     task_id = new_task_id(clock=clk, rng=rng)
     _ensure_task_created_registered()
-    from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
+    from events import (  # Story 2.9 AC-16
         TaskExecutionStartedPayload,
     )
 
@@ -833,7 +831,7 @@ def test_renderers_subset_of_deliverable_event_types() -> None:
 
 def test_render_approval_request_with_pre_check_results_all_none() -> None:
     """L11: ``PreCheckResults()`` (object exists, all fields None) → section omitted."""
-    from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
+    from events import (  # Story 2.9 AC-16
         PreCheckResults,
     )
 
@@ -855,7 +853,7 @@ def test_render_dispatcher_fallback_html_escapes_task_id() -> None:
     eid = new_event_id(clock=clk, rng=rng)
     rid = new_uuid7(clock=clk, rng=rng)
     _ensure_task_created_registered()
-    from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
+    from events import (  # Story 2.9 AC-16
         TaskExecutionStartedPayload,
     )
 
@@ -908,7 +906,7 @@ def test_render_dispatcher_fallback_when_payload_is_none() -> None:
 
 def test_render_approval_request_with_pre_check_skipped_status() -> None:
     """M13: ``status='skipped'`` → ⏭️ emoji rendered."""
-    from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
+    from events import (  # Story 2.9 AC-16
         PreCheckOutcome,
         PreCheckResults,
     )
@@ -923,7 +921,7 @@ def test_render_approval_request_with_pre_check_skipped_status() -> None:
 
 def test_render_approval_request_with_pre_check_error_status() -> None:
     """M13: ``status='error'`` → ⚠️ emoji rendered."""
-    from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
+    from events import (  # Story 2.9 AC-16
         PreCheckOutcome,
         PreCheckResults,
     )

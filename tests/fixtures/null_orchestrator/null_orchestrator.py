@@ -100,10 +100,14 @@ import signal
 import sys
 from pathlib import Path
 
-from events import (
+from events import (  # side-effect: register() calls
     Actor,
     EventEnvelope,
     SystemClock,
+    TaskCompletedPayload,
+    TaskExecutionStartedPayload,
+    TaskPlanningStartedPayload,
+    TaskPlanReadyPayload,
     new_request_id,
     new_session_id,
 )
@@ -113,13 +117,6 @@ from events.ids import new_event_id
 from registry_state.adapters.event_log import (
     EventLogWriter,
     read_log_lines,
-)
-from registry_state.domain.event_types import (  # noqa: F401 — side-effect: register() calls
-    TaskCompletedPayload,
-    TaskCreatedPayload,
-    TaskExecutionStartedPayload,
-    TaskPlanningStartedPayload,
-    TaskPlanReadyPayload,
 )
 
 log = logging.getLogger("null-orchestrator")

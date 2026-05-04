@@ -49,7 +49,12 @@ from unittest.mock import patch
 import pytest
 import pytest_asyncio
 from asgi_lifespan import LifespanManager
-from events import FROZEN_EPOCH, FrozenClock, new_idempotency_key
+from events import (  # services→services allowed per AC-16
+    FROZEN_EPOCH,
+    FrozenClock,
+    TaskCreatedPayload,
+    new_idempotency_key,
+)
 from events.clock import TickingClock
 from events.envelope import EventEnvelope
 from events.schema_registry import register as _reg
@@ -61,9 +66,6 @@ from registry_state.adapters.event_log import (  # noqa: IMP001 — services→s
 )
 from registry_state.adapters.sqlite_store import (  # noqa: IMP001 — services→services allowed per AC-16
     create_engine as _create_engine,
-)
-from registry_state.domain.event_types import (  # noqa: IMP001 — services→services allowed per AC-16
-    TaskCreatedPayload,
 )
 from registry_state.schema import Base  # noqa: IMP001 — services→services allowed per AC-16
 

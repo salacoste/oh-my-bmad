@@ -27,9 +27,14 @@ from events.ids import (
     new_uuid7,
     parse_prefix,
 )
+
+# Story 3.5.2 — re-export payload models so consumers can use
+# ``from events import TaskCreatedPayload`` instead of cross-service imports.
+from events.payloads import *  # noqa: F403 — intentional star re-export
+from events.payloads import __all__ as _payloads_all
 from events.schema_registry import REGISTRY, register
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 
 def __getattr__(name: str) -> object:
@@ -48,7 +53,7 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [
-    "EVENT_TYPES",
+    "EVENT_TYPES",  # noqa: F405 — resolved lazily via __getattr__
     "FROZEN_EPOCH",
     "REGISTRY",
     "Actor",
@@ -72,4 +77,5 @@ __all__ = [
     "parse_prefix",
     "register",
     "to_canonical_json",
+    *_payloads_all,
 ]

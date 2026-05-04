@@ -90,9 +90,9 @@ from events.clock import Clock
 from events.envelope import Actor
 from fastapi import FastAPI
 
-# TODO(architecture): relocate ``EventLogWriter`` + ``SecretAccessedPayload``
-# to ``packages/events/`` so the noqa cross-service import is no longer
-# required. Tracked separately; see Story 3.1 Review Findings M6.
+# TODO(architecture): relocate ``EventLogWriter`` to ``packages/events/``
+# so the noqa cross-service import is no longer required.
+# (SecretAccessedPayload already relocated by Story 3.5.2.)
 from registry_state.adapters.event_log import (  # noqa: IMP001 — services→services allowed per story 3.1 (mirrors registry_api/app.py:42); see TODO above
     EventLogWriter,
 )

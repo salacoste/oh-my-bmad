@@ -34,8 +34,8 @@ class CreateTaskResponseLocal(BaseModel):
     the cross-service contract as HTTP/JSON, not shared Python objects).
     Source-of-truth for field layout: services/registry-api/src/registry_api/routes/tasks.py
     class CreateTaskResponse. Review-time validation: field names must match registry-api's
-    serialised JSON keys. TODO(architecture): migrate shared models to packages/events/ if
-    the cross-service model count grows beyond 3.
+    serialised JSON keys. Payload models were migrated to packages/events/
+    by Story 3.5.2; response DTOs remain local until count justifies a shared module.
     """
 
     model_config = ConfigDict(frozen=True)

@@ -22,14 +22,10 @@ the ValueError raised by re-registering the same key).
 AC-12 noqa import allowlist note (review-fix M6)
 -------------------------------------------------
 
-``registry_state.adapters.event_log.EventLogWriter`` and
-``registry_state.domain.event_types.SecretAccessedPayload`` are imported
-via ``# noqa: IMP001``. The proper fix (relocating these to
+``registry_state.adapters.event_log.EventLogWriter`` is imported
+via ``# noqa: IMP001``. The proper fix (relocating to
 ``packages/events/``) is deferred to a separate tech-debt story.
-
-TODO(architecture): relocate ``EventLogWriter`` + ``SecretAccessedPayload``
-to ``packages/events/`` so the noqa cross-service import below is no
-longer required. Tracked separately; see Story 3.1 Review Findings M6.
+Payload model imports were relocated to ``events.payloads`` by Story 3.5.2.
 """
 
 from __future__ import annotations
@@ -40,12 +36,8 @@ from collections.abc import AsyncIterator, Iterator
 
 import pytest
 import pytest_asyncio
-from events import FROZEN_EPOCH, FrozenClock
+from events import FROZEN_EPOCH, FrozenClock, SecretAccessedPayload, TelegramRejectedPayload
 from events.schema_registry import register
-from registry_state.domain.event_types import (  # noqa: IMP001 — services→services allowed (mirror of registry_api/test_app.py:48); see TODO above
-    SecretAccessedPayload,
-    TelegramRejectedPayload,
-)
 from secret_hygiene.audited_secret import (
     _live_emission_tasks,  # noqa: PLC2701 — intentional private-name access for test drain fixture
 )

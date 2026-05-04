@@ -70,7 +70,11 @@ import pytest
 from aiogram import Bot
 from aiogram.types import Message, User
 from asgi_lifespan import LifespanManager
-from events import FROZEN_EPOCH, FrozenClock
+from events import (  # Story 2.9 AC-16
+    FROZEN_EPOCH,
+    FrozenClock,
+    TaskCreatedPayload,
+)
 from events.schema_registry import register as _register_event
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
@@ -80,9 +84,6 @@ from registry_state.adapters.event_log import (  # noqa: IMP001 — Story 2.9 AC
 )
 from registry_state.adapters.sqlite_store import (  # noqa: IMP001 — Story 2.9 AC-16
     create_engine as _create_engine,
-)
-from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
-    TaskCreatedPayload,
 )
 from registry_state.schema import Base  # noqa: IMP001 — Story 2.9 AC-16
 from telegram_gateway.handlers.registry_client import (  # noqa: IMP001 — Story 2.9 AC-16

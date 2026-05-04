@@ -1,6 +1,6 @@
 # Story 3.5.2: Refactor payload models to `packages/events/`
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -37,23 +37,23 @@ This is a tech-debt refactor story. During Epics 2-3, payload models were placed
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Create `events/payloads.py`** (AC: #1)
-  - [ ] Create `packages/events/src/events/payloads.py` containing all 15 payload classes, 3 supporting types, and the 2 ID regex patterns, copied verbatim from `registry_state/domain/event_types.py`.
-  - [ ] Imports within payloads.py: `from events.schema_registry import register` is NOT imported here (registrations stay service-side). Only pydantic imports and `from __future__ import annotations`.
-  - [ ] Add `__all__` export list.
+- [x] **Task 1: Create `events/payloads.py`** (AC: #1)
+  - [x] Create `packages/events/src/events/payloads.py` containing all 15 payload classes, 3 supporting types, and the 2 ID regex patterns, copied verbatim from `registry_state/domain/event_types.py`.
+  - [x] Imports within payloads.py: `from events.schema_registry import register` is NOT imported here (registrations stay service-side). Only pydantic imports and `from __future__ import annotations`.
+  - [x] Add `__all__` export list.
 
-- [ ] **Task 2: Update `events/__init__.py`** (AC: #5)
-  - [ ] Add `from events.payloads import *` (or explicit named imports) to `packages/events/src/events/__init__.py`.
-  - [ ] Bump `__version__` from `"0.3.0"` to `"0.4.0"` (minor: new public exports).
+- [x] **Task 2: Update `events/__init__.py`** (AC: #5)
+  - [x] Add `from events.payloads import *` (or explicit named imports) to `packages/events/src/events/__init__.py`.
+  - [x] Bump `__version__` from `"0.3.0"` to `"0.4.0"` (minor: new public exports).
 
-- [ ] **Task 3: Convert old `event_types.py` to re-export shim** (AC: #2, #3)
-  - [ ] Replace `registry_state/domain/event_types.py` with: imports from `events.payloads` for all symbols + the `register()` calls that remain. The file becomes ~100 lines (import re-exports + registration calls + comments explaining the circular-import constraint).
-  - [ ] Keep all existing `register()` calls exactly as they are.
-  - [ ] Keep the module docstring explaining the architecture decision.
+- [x] **Task 3: Convert old `event_types.py` to re-export shim** (AC: #2, #3)
+  - [x] Replace `registry_state/domain/event_types.py` with: imports from `events.payloads` for all symbols + the `register()` calls that remain. The file becomes ~100 lines (import re-exports + registration calls + comments explaining the circular-import constraint).
+  - [x] Keep all existing `register()` calls exactly as they are.
+  - [x] Keep the module docstring explaining the architecture decision.
 
-- [ ] **Task 4: Update consumer imports** (AC: #4, #6)
-  - [ ] For each file with `# noqa: IMP001` importing payload types, change to `from events import ...` or `from events.payloads import ...` and remove the noqa comment.
-  - [ ] Target files (ordered by service):
+- [x] **Task 4: Update consumer imports** (AC: #4, #6)
+  - [x] For each file with `# noqa: IMP001` importing payload types, change to `from events import ...` or `from events.payloads import ...` and remove the noqa comment.
+  - [x] Target files (ordered by service):
     1. `services/telegram-gateway/src/telegram_gateway/conftest.py` — `SecretAccessedPayload`, `TelegramRejectedPayload`
     2. `services/telegram-gateway/src/telegram_gateway/app/middleware.py` — `TelegramRejectedPayload`, `TELEGRAM_REJECTED_SCHEMA_VERSION`
     3. `services/telegram-gateway/src/telegram_gateway/test_allowlist.py` — `TelegramRejectedPayload`
@@ -68,15 +68,15 @@ This is a tech-debt refactor story. During Epics 2-3, payload models were placed
     12. `tests/idempotency/test_100x_replay.py` — `TaskCreatedPayload`
     13. `tests/crash-injection/_crash_events.py` — 5 symbol imports
     14. `tests/fixtures/null_orchestrator/null_orchestrator.py` — 5 symbol imports
-  - [ ] Leave `# noqa: IMP001` in files that import non-payload symbols (e.g., `EventLogWriter` from `registry_state.adapters.event_log` in `telegram-gateway/app/lifespan.py` — that's not a payload model).
+  - [x] Leave `# noqa: IMP001` in files that import non-payload symbols (e.g., `EventLogWriter` from `registry_state.adapters.event_log` in `telegram-gateway/app/lifespan.py` — that's not a payload model).
 
-- [ ] **Task 5: Remove TODO(architecture) comments** (AC: #4)
-  - [ ] Remove the `TODO(architecture)` comments in telegram-gateway conftest.py, middleware.py, and lifespan.py that reference this refactor.
+- [x] **Task 5: Remove TODO(architecture) comments** (AC: #4)
+  - [x] Remove the `TODO(architecture)` comments in telegram-gateway conftest.py, middleware.py, and lifespan.py that reference this refactor.
 
-- [ ] **Task 6: Verification + commit** (AC: #7, #8, #9)
-  - [ ] `just test` — all existing tests pass.
-  - [ ] `just lint` 9/9 green.
-  - [ ] Verify `grep -r "noqa.*IMP001" services/telegram-gateway/ services/clawhip-daemon/ mcp-servers/clawhip-bridge/` returns zero lines.
+- [x] **Task 6: Verification + commit** (AC: #7, #8, #9)
+  - [x] `just test` — all existing tests pass.
+  - [x] `just lint` 9/9 green.
+  - [x] Verify `grep -r "noqa.*IMP001" services/telegram-gateway/ services/clawhip-daemon/ mcp-servers/clawhip-bridge/` returns zero lines.
   - [ ] Atomic commit.
 
 ## Dev Notes
@@ -157,8 +157,39 @@ These files import non-payload symbols from registry-state and their `# noqa: IM
 
 ### Agent Model Used
 
+Claude Opus 4.7 (glm-5.1)
+
 ### Debug Log References
 
 ### Completion Notes List
 
+- Task 1: Created `packages/events/src/events/payloads.py` with all 15 payload classes + 3 supporting types + 2 ID regex patterns. No `register` import — pure data models.
+- Task 2: Updated `packages/events/src/events/__init__.py` — added star re-export from `events.payloads`, spread `_payloads_all` into `__all__`, bumped version to 0.4.0. Added `# noqa: F403` and `# noqa: F405` for ruff compliance.
+- Task 3: Converted `services/registry-state/src/registry_state/domain/event_types.py` to 117-line re-export shim. All symbols imported from `events.payloads`, registration calls unchanged, docstring explains the circular-import constraint.
+- Task 4: Updated 14 consumer files across 4 services + 4 test directories. All `from registry_state.domain.event_types import` changed to `from events import`. All associated `# noqa: IMP001` removed. Non-payload IMP001 lines (EventLogWriter, sqlite_store) left untouched.
+- Task 5: Updated 3 TODO(architecture) comments — conftest.py, middleware.py (removed), lifespan.py (narrowed to EventLogWriter only), registry_client.py (replaced with completion note).
+- Task 6: 1158 tests pass, lint 9/9 green. Zero payload-model IMP001 in telegram-gateway, clawhip-daemon, clawhip-bridge.
+
 ### File List
+
+- `packages/events/src/events/payloads.py` — NEW: all 15 payload models + supporting types
+- `packages/events/src/events/__init__.py` — added payload re-exports, version bump 0.3.0→0.4.0
+- `services/registry-state/src/registry_state/domain/event_types.py` — replaced with re-export shim + registrations
+- `services/telegram-gateway/src/telegram_gateway/conftest.py` — import from events, removed TODO
+- `services/telegram-gateway/src/telegram_gateway/app/middleware.py` — import from events, removed TODO
+- `services/telegram-gateway/src/telegram_gateway/app/lifespan.py` — narrowed TODO to EventLogWriter only
+- `services/telegram-gateway/src/telegram_gateway/test_allowlist.py` — import from events
+- `services/telegram-gateway/src/telegram_gateway/handlers/registry_client.py` — updated TODO comment
+- `services/registry-api/src/registry_api/routes/tasks.py` — import from events
+- `services/registry-api/src/registry_api/test_app.py` — import from events
+- `services/clawhip-daemon/src/clawhip_daemon/adapters/telegram_outbound.py` — import from events
+- `services/clawhip-daemon/src/clawhip_daemon/adapters/sinks/telegram_sink.py` — import from events, removed TODO
+- `services/clawhip-daemon/src/clawhip_daemon/adapters/sinks/test_telegram_sink.py` — 17 import blocks updated, comment updated
+- `mcp-servers/clawhip-bridge/src/clawhip_bridge_mcp/test_server.py` — import from events
+- `tests/integration/test_task_thread_binding.py` — import from events
+- `tests/integration/test_command_injection_fuzz.py` — import from events
+- `tests/idempotency/test_100x_replay.py` — import from events
+- `tests/crash-injection/_crash_events.py` — import from events
+- `tests/fixtures/null_orchestrator/null_orchestrator.py` — import from events
+- `_bmad-output/implementation-artifacts/3-5-2-payload-models-shared-package-refactor.md` — this file
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` — status flips

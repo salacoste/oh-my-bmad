@@ -27,15 +27,13 @@ from typing import Literal
 from urllib.parse import quote
 
 import cachetools
+from events import TaskCreatedPayload
 from events.envelope import Actor, EventEnvelope
 from events.ids import new_event_id, new_task_id
 from fastapi import APIRouter, Path, Request, Response
 from fastapi.exceptions import HTTPException
 from idempotency import IdempotencyCacheStore
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from registry_state.domain.event_types import (  # noqa: IMP001 — services→services allowed per AC-16
-    TaskCreatedPayload,
-)
 from registry_state.schema import Event, Task  # noqa: IMP001 — services→services allowed per AC-16
 from sqlalchemy import select
 

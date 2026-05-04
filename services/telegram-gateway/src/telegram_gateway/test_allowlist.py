@@ -14,8 +14,8 @@ Two integration-flavored tests exercise the lifespan path:
   middleware on a real :class:`aiogram.Dispatcher` and assert ordering
   via ``feed_update``.
 
-AC-12 noqa note: ``registry_state.domain.event_types`` is imported via
-``# noqa: IMP001`` per the same TODO as ``conftest.py``.
+Payload types imported from ``events`` package (relocated from
+``registry_state.domain.event_types``).
 """
 
 from __future__ import annotations
@@ -33,13 +33,10 @@ from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.types import TelegramObject, Update
 from asgi_lifespan import LifespanManager
-from events import FROZEN_EPOCH, FrozenClock
+from events import FROZEN_EPOCH, FrozenClock, TelegramRejectedPayload
 from events.envelope import Actor, EventEnvelope
 from events.schema_registry import REGISTRY
 from httpx import ASGITransport, AsyncClient
-from registry_state.domain.event_types import (  # noqa: IMP001 — see TODO(architecture) in conftest.py
-    TelegramRejectedPayload,
-)
 
 from telegram_gateway.app.config import TelegramSettings
 from telegram_gateway.app.lifespan import TELEGRAM_GATEWAY_ACTOR, _drain_dispatch_tasks

@@ -83,17 +83,10 @@ from typing import Any, Literal
 
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, Update
+from events import TELEGRAM_REJECTED_SCHEMA_VERSION, TelegramRejectedPayload
 from events.clock import Clock
 from events.envelope import Actor, EventEnvelope
 from events.ids import new_event_id, new_request_id
-
-# TODO(architecture): relocate ``TelegramRejectedPayload`` to
-# ``packages/events/`` so the noqa cross-service import is no longer
-# required. Tracked separately; mirror of Story 3.1 lifespan TODO.
-from registry_state.domain.event_types import (  # noqa: IMP001 — see TODO above
-    TELEGRAM_REJECTED_SCHEMA_VERSION,
-    TelegramRejectedPayload,
-)
 
 # Re-entrant emission guard — same ContextVar used by AuditedSecret._safe_emit.
 # Importing it here lets AllowlistMiddleware's _safe_emit skip nested emissions

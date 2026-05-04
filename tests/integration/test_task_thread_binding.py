@@ -40,7 +40,7 @@ from events.schema_registry import register as _reg
 
 def _ensure_event_types() -> None:
     """Register payload models needed for envelope creation."""
-    from registry_state.domain.event_types import (  # noqa: IMP001 — Story 2.9 AC-16
+    from events import (  # Story 2.9 AC-16
         TaskCompletedPayload,
         TaskCreatedPayload,
     )
@@ -82,8 +82,8 @@ async def test_task_thread_binding_end_to_end(tmp_path: Path) -> None:
     """
     _ensure_event_types()
 
-    from registry_state.domain.event_types import (
-        TaskCompletedPayload,  # noqa: IMP001 — Story 2.9 AC-16
+    from events import (
+        TaskCompletedPayload,  # Story 2.9 AC-16
     )
 
     # Generate a deterministic task_id.
