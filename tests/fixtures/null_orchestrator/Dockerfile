@@ -21,15 +21,16 @@ WORKDIR /build
 # resolution. ``--no-editable`` builds the workspace members as wheels so the
 # runtime stage can drop the source tree entirely.
 #
-# Story 2.15 code-review fix M3: ``COPY src/`` was removed (the repo-root
-# ``src/`` is an artifact directory, not a workspace source tree; the uv
-# workspace members live under packages/, services/, mcp-servers/ which
-# are already copied). The build resolves ``events`` + ``registry-state``
-# through those workspace paths.
+# ``COPY src/`` is required because ``uv sync --all-packages`` builds the
+# root ``oh-my-bmad`` package (defined in the root pyproject.toml) which
+# expects ``src/oh_my_bmad/__init__.py``. Without this copy, the build fails
+# with ``Expected a Python module at: src/oh_my_bmad/__init__.py``.
+# Story 3.5.4 AC-1: restored after Story 2.15 M3 removed it.
 COPY pyproject.toml uv.lock ./
 COPY packages/ ./packages/
 COPY services/ ./services/
 COPY mcp-servers/ ./mcp-servers/
+COPY src/ ./src/
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv
 RUN uv sync --frozen --no-dev --all-packages --no-editable
 

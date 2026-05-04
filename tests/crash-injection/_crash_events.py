@@ -41,6 +41,13 @@ from random import Random
 from typing import TYPE_CHECKING
 
 import aiosqlite
+
+# Side-effect import: populates the schema registry so EventEnvelope.create()
+# can validate against registered (type, schema_version) pairs. The crash-
+# injection test tree is the only test tree that calls EventEnvelope.create();
+# without this import the registry is empty and create() raises
+# EventSchemaUnknown.
+import registry_state.domain.event_types as _event_types  # noqa: F401
 from events import (
     Actor,
     EventEnvelope,

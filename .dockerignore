@@ -32,6 +32,9 @@ upstream/
 # Architecture §line-344 pattern). **/tests/ supersedes the root tests/ line
 # but both kept for belt-and-suspenders clarity.
 **/tests/
+# Exception: null-orchestrator fixture needed in Docker build context for
+# separability tests (Story 2.15 / 3.5.4).
+!tests/fixtures/null_orchestrator/
 **/test_*.py
 **/__pycache__/
 

@@ -1,6 +1,6 @@
 # Story 3.5.4: Resolve pre-existing test failures
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -109,10 +109,30 @@ The healthcheck in the compose file touches `/tmp/ready` after the subscriber ca
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+Claude Opus 4.7 (claude-opus-4-7)
 
 ### Debug Log References
 
+- Stale Docker base image with stub `__main__.py` required `docker build --no-cache` + deleting cached per-service images
+- Pydantic 2.12.5 regression: `dict[str, Any] | BaseModel` union serializes BaseModel as `{}` during `model_dump()`
+- Crash-injection `EventSchemaUnknown` root cause: `registry_state.domain.event_types` never imported by crash-injection test tree
+
 ### Completion Notes List
 
+- AC-1: Separability test fixed. Three root causes: `.dockerignore` exclusion, missing `COPY src/` in null-orchestrator Dockerfile (removed by Story 2.15 M3), and stale Docker base image.
+- AC-2: Crash-injection tests fixed. Original hypothesis (Docker Desktop macOS healthcheck timing) was wrong — actual root cause was empty schema registry. Fixed by importing `registry_state.domain.event_types` in `_crash_events.py`. All 8 tests pass (4 restart-recovery + 4 write-interrupt).
+- AC-3: `just test` unchanged at 1158 passed, 5 skipped, 14 deselected.
+- AC-4: `just lint` 9/9 green.
+- AC-5: `.dockerignore` has comment on exception line; `_crash_events.py` has comment on side-effect import; `envelope.py` has docstring on `_serialize_payload`.
+- AC-6: Atomic commit pending.
+
 ### File List
+
+| File | Change |
+|---|---|
+| `.dockerignore` | Added `!tests/fixtures/null_orchestrator/` exception with comment |
+| `tests/fixtures/null_orchestrator/Dockerfile` | Restored `COPY src/ ./src/` removed by Story 2.15 M3 |
+| `packages/events/src/events/envelope.py` | Added `@field_serializer("payload")` to fix Pydantic 2.12.5 union serialization |
+| `tests/crash-injection/_crash_events.py` | Added `import registry_state.domain.event_types` to populate schema registry |
+| `_bmad-output/implementation-artifacts/3-5-4-*.md` | This file (status → review) |
+| `_bmad-output/implementation-artifacts/sprint-status.yaml` | Status flip (pending commit) |

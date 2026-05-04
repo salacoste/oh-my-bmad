@@ -17,7 +17,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NoReturn
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 from events import schema_registry
 from events.errors import EventSchemaUnknown
@@ -268,6 +268,20 @@ class EventEnvelope(BaseModel):
         if isinstance(v, dict) and not isinstance(v, _FrozenDict):
             return _deep_freeze_mapping(v)
         return v
+
+    @field_serializer("payload")
+    @classmethod
+    def _serialize_payload(cls, v: dict[str, Any] | BaseModel) -> dict[str, Any]:
+        """Serialize BaseModel payloads to dict for JSON output.
+
+        Pydantic >=2.12 serializes ``dict[str, Any] | BaseModel`` unions
+        incorrectly when the value is a BaseModel — the ``dict[str, Any]``
+        branch produces ``{}`` instead of the model's fields. Explicit
+        serialization bypasses the union dispatch.
+        """
+        if isinstance(v, BaseModel):
+            return v.model_dump(mode="python")
+        return dict(v)
 
     @field_validator("extensions", mode="after")
     @classmethod
