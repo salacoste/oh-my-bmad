@@ -19,10 +19,10 @@ Multiple `uv sync` variants exist for different contexts:
 ### The `--no-dev` quirk
 
 `uv sync --no-dev` strips dev-only dependencies from the virtual environment.
-Several test dependencies (e.g. `asgi-lifespan`, `sniffio`) are in the
-`[dependency-groups.dev]` section of the root `pyproject.toml`. Running
-`uv sync --no-dev` removes them, causing `ImportError` in tests that import
-these packages.
+Test dependencies like `asgi-lifespan` (declared in service-level
+`pyproject.toml` files under `[project.optional-dependencies]`) and `sniffio`
+(a transitive dependency) are removed, causing `ImportError` in tests that
+import these packages.
 
 This was re-discovered in 10+ stories across Epics 1-3 before being documented
 here (Epic 3 retrospective, Challenge #2).
@@ -64,7 +64,7 @@ and secret-hygiene. All 9 must pass before merge.
 ```
 oh-my-bmad/
 ├── packages/           # Shared libraries (events, idempotency, secret-hygiene)
-├── services/           # Microservices (registry-state, registry-api, telegram-gateway, worker-wrapper)
+├── services/           # Microservices (registry-state, registry-api, telegram-gateway, clawhip-daemon, console-cli, orchestrator-adapter, worker-wrapper)
 ├── mcp-servers/        # MCP servers (clawhip-bridge)
 ├── src/                # Root package (oh-my-bmad)
 ├── tests/              # Cross-cutting integration tests

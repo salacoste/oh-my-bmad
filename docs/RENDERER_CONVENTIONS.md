@@ -77,8 +77,8 @@ Templates with optional sections implement progressive removal on overflow:
 3. Continue dropping sections in priority order.
 4. Emergency one-liner fallback when no sections can be dropped.
 
-The priority order is template-specific (see `docs/message-design.md` for each
-template's ladder).
+The priority order is template-specific (see [message-design.md](./message-design.md)
+for each template's ladder).
 
 ---
 
@@ -94,17 +94,19 @@ The `task_id` is processed in strict order: **collapse → slice → escape**.
 
 1. `_collapse_newlines(task_id)` — prevents newlines from smuggling content
    into a supposedly single-line message.
-2. `task_id_safe[:64]` — caps at the model-boundary `max_length=64`.
+2. `task_id_safe[:64]` → produces `task_id_capped` — caps at the
+   model-boundary `max_length=64`.
 3. `html.escape(task_id_capped)` — prevents HTML injection.
 
-Slicing the *escaped* string can split HTML entities mid-token (e.g. 64 raw
-`<` chars escape to 320 chars of `&lt;`; slicing at 64 produces `...&l`).
+This order is critical. Reversing it (escape → slice) would split HTML
+entities mid-token: 64 raw `<` chars escape to 320 chars of `&lt;`, and
+slicing at 64 would produce broken markup like `...&l`.
 
 A defensive final-length self-clamp exists as a safety net:
 
 ```python
-if len(result) > _MESSAGE_MAX_CHARS:
-    result = result[:_MESSAGE_MAX_CHARS]
+if len(result) > _APPROVAL_MESSAGE_MAX_CHARS:  # or equivalent per-template cap
+    result = result[:_APPROVAL_MESSAGE_MAX_CHARS]
 ```
 
 ---
