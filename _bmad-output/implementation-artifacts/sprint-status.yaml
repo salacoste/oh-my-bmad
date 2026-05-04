@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-04T04:00:00Z
+last_updated: 2026-05-04T06:00:00Z
 
 development_status:
   # =========================================================================
@@ -82,7 +82,7 @@ development_status:
   # Epic 3: Telegram Control Plane (20 stories)
   # First 3 stories (3-3, 3-4, 3-5) are the Bootstrap Minimum Subset
   # =========================================================================
-  epic-3: in-progress
+  epic-3: done
   3-1-aiogram-bootstrap-webhook: done
   3-2-allowlist-middleware: done
   3-3-task-command: done
@@ -103,7 +103,7 @@ development_status:
   3-17-reject-command: done
   3-18-retry-command-telegram-surface: done
   3-19-agent-command: done
-  3-20-message-design-docs: review
+  3-20-message-design-docs: done
   epic-3-retrospective: optional
 
   # =========================================================================

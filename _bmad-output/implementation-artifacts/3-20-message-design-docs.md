@@ -1,6 +1,6 @@
 # Story 3.20: Optional sidecar — `docs/message-design.md`
 
-Status: review
+Status: done
 
 ## Story
 
@@ -119,7 +119,7 @@ This is a documentation-only story. No production code changes. The existing `do
 - [x] **Task 2: Verification + atomic commit** (AC: #7, #8, #9)
   - [x] Confirm `just lint` 9/9 green (no code changed).
   - [x] Confirm no production files modified.
-  - [ ] Atomic commit.
+  - [x] Atomic commit.
 
 ## Dev Notes
 
