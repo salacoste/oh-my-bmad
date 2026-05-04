@@ -281,6 +281,8 @@ class EventEnvelope(BaseModel):
         """
         if isinstance(v, BaseModel):
             return v.model_dump(mode="python")
+        # dict(v) intentionally strips _FrozenDict wrapping — serialization
+        # output should be a plain mutable dict, not a frozen view.
         return dict(v)
 
     @field_validator("extensions", mode="after")

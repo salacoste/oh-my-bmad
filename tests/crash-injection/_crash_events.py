@@ -61,6 +61,7 @@ from events import (
     new_event_id,
     new_request_id,
     new_session_id,
+    schema_registry,
     to_canonical_json,
 )
 from pydantic import BaseModel
@@ -76,6 +77,12 @@ if TYPE_CHECKING:
     # Clock is type-only here — keeping it inside TYPE_CHECKING avoids a
     # circular-import risk and keeps the runtime import surface narrow.
     from events.clock import Clock
+
+# Fail fast if the side-effect import didn't populate the registry.
+assert schema_registry.REGISTRY, (
+    "schema_registry is empty after importing registry_state.domain.event_types; "
+    "the crash-injection harness requires registered event types"
+)
 
 
 # Synthesized events are emitted by a deterministic test actor — keeping the
@@ -188,35 +195,7 @@ def append_envelope(
         day = env.emitted_at.astimezone(UTC).date()
     target = log_dir / f"{day.isoformat()}.jsonl"
     target.parent.mkdir(parents=True, exist_ok=True)
-    # ``to_canonical_json`` calls ``model_dump(mode="python")`` on the outer
-    # envelope which returns ``{}`` for nested BaseModel payloads (Pydantic v2
-    # strict+union serialization edge-case: the payload union type is
-    # ``dict[str, Any] | BaseModel`` and Pydantic doesn't recurse into the
-    # foreign BaseModel's fields during outer-model serialization). Rebuild a
-    # dict-payload envelope before serializing so the JSONL line contains the
-    # correct field values (matching ``EventLogWriter``'s format).
-    payload_dict: dict[str, object]
-    if isinstance(env.payload, BaseModel):
-        payload_dict = env.payload.model_dump(mode="python")
-    else:
-        # Already a mapping (e.g. _FrozenDict) — copy via spread so both
-        # plain dicts and frozen mappings are handled without depending
-        # on the constructor accepting a non-Mapping iterable.
-        payload_dict = {**env.payload}
-    # Rebuild envelope with a dict payload so to_canonical_json serializes it.
-    dict_env = EventEnvelope(
-        event_id=env.event_id,
-        schema_version=env.schema_version,
-        type=env.type,
-        emitted_at=env.emitted_at,
-        emitted_at_monotonic_ns=env.emitted_at_monotonic_ns,
-        actor=env.actor,
-        payload=payload_dict,
-        parent_event_id=env.parent_event_id,
-        trace_id=env.trace_id,
-        request_id=env.request_id,
-    )
-    line = to_canonical_json(dict_env) + b"\n"
+    line = to_canonical_json(env) + b"\n"
     # `xb` would error if the file already exists; we want append.
     # ``open(..., "ab")`` is sync; ``EventLogWriter`` offloads to a thread
     # for asyncio responsiveness, but the harness is a sync test driver

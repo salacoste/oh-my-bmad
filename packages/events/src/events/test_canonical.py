@@ -246,3 +246,31 @@ class TestDatetimeNaiveErrorMessage:
 
         with pytest.raises(CanonicalSerializationError, match="naive"):
             _datetime_to_iso_z(datetime(2026, 4, 21, 10, 30, 0))
+
+
+class TestBaseModelPayloadSerialization:
+    """Story 3.5.4 — @field_serializer("payload") fixes Pydantic 2.12.5 union regression.
+
+    Pydantic >=2.12 serializes ``dict[str, Any] | BaseModel`` unions
+    incorrectly when the value is a BaseModel — the ``dict[str, Any]``
+    branch produces ``{}`` instead of the model's fields. The
+    ``_serialize_payload`` field serializer bypasses the union dispatch.
+    """
+
+    def test_basemodel_payload_fields_appear_in_output(self) -> None:
+        env = _make_envelope(payload=_SimplePayload(value="from-model"))
+        data = to_canonical_json(env)
+        text = data.decode("utf-8")
+        assert '"value":"from-model"' in text
+
+    def test_basemodel_payload_round_trips(self) -> None:
+        env = _make_envelope(payload=_SimplePayload(value="round-trip"))
+        data = to_canonical_json(env)
+        env2 = from_canonical_json(data)
+        assert env2.payload == {"value": "round-trip"}
+
+    def test_basemodel_payload_byte_stable(self) -> None:
+        env = _make_envelope(payload=_SimplePayload(value="stable"))
+        data1 = to_canonical_json(env)
+        data2 = to_canonical_json(env)
+        assert data1 == data2
