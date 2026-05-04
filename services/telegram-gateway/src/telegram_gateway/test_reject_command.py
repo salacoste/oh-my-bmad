@@ -1,6 +1,6 @@
 """Tests for /reject command handler (Story 3.17 AC-6).
 
-Coverage (>=13 tests):
+Coverage (>=17 tests):
 Handler tests (12):
 - test_handle_reject_success_renders_confirmation — success reply with @handle + timestamp
 - test_handle_reject_success_with_retry_deduped — idempotency_status="replayed" shows deduped
@@ -20,6 +20,14 @@ HTML security test (1):
 
 Router test (1):
 - test_make_reject_router_returns_fresh_routers — factory produces distinct instances
+
+Code-review fix tests (4):
+- test_handle_reject_reason_truncated_at_max_length — reason > MAX_REASON_LENGTH is truncated
+- test_handle_reject_unicode_reason_passes_through[emoji] — emoji reason passes through
+- test_handle_reject_unicode_reason_passes_through[rtl-override] — RTL override
+- test_handle_reject_unicode_reason_passes_through[newlines] — newlines in reason pass through
+- test_handle_reject_unicode_reason_passes_through[zwj] — zero-width joiner reason passes through
+- test_handle_reject_from_user_none_logs_chat_id — from_user=None logs chat_id correctly
 """
 
 from __future__ import annotations
@@ -326,3 +334,66 @@ def test_make_reject_router_returns_fresh_routers() -> None:
     r1 = make_reject_router()
     r2 = make_reject_router()
     assert r1 is not r2, "Router factory must return fresh instances"
+
+
+# ---------------------------------------------------------------------------
+# Code-review fix tests (3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_handle_reject_reason_truncated_at_max_length() -> None:
+    """Reason exceeding MAX_REASON_LENGTH is silently truncated."""
+    from telegram_gateway.handlers.reject_command import MAX_REASON_LENGTH
+
+    long_reason = "x" * (MAX_REASON_LENGTH + 50)
+    client = _make_registry_client_with_mock()
+    msg = _make_message(text=f"/reject {_TASK_ID} {long_reason}")
+
+    await handle_reject(msg, registry_client=client)
+
+    client.submit_decision.assert_called_once()
+    call_kwargs = client.submit_decision.call_args[1]
+    assert len(call_kwargs["hint"]) == MAX_REASON_LENGTH
+    assert call_kwargs["hint"] == "x" * MAX_REASON_LENGTH
+
+
+@pytest.mark.parametrize(
+    "reason_text",
+    [
+        "🔥 task is 🔥",  # emoji
+        "‮ reversed text",  # RTL override
+        "line1\nline2",  # newlines
+        "a‍b",  # zero-width joiner
+    ],
+    ids=["emoji", "rtl-override", "newlines", "zwj"],
+)
+@pytest.mark.asyncio
+async def test_handle_reject_unicode_reason_passes_through(reason_text: str) -> None:
+    """Unicode reason strings are passed as hint without corruption."""
+    client = _make_registry_client_with_mock()
+    msg = _make_message(text=f"/reject {_TASK_ID} {reason_text}")
+
+    await handle_reject(msg, registry_client=client)
+
+    client.submit_decision.assert_called_once()
+    call_kwargs = client.submit_decision.call_args[1]
+    assert call_kwargs["hint"] == reason_text
+
+
+@pytest.mark.asyncio
+async def test_handle_reject_from_user_none_logs_chat_id() -> None:
+    """from_user=None logs chat_id correctly (chat is always present on real messages)."""
+    client = _make_registry_client_with_mock()
+    msg = _make_message(text=f"/reject {_TASK_ID}", chat_id=777)
+    msg.from_user = None
+
+    await handle_reject(msg, registry_client=client)
+
+    client.submit_decision.assert_called_once()
+    call_kwargs = client.submit_decision.call_args[1]
+    assert call_kwargs["operator_actor_id"] == "unknown"
+    msg.reply.assert_called_once()
+    reply_text: str = msg.reply.call_args[0][0]
+    assert "@operator" in reply_text
+    assert "@@operator" not in reply_text

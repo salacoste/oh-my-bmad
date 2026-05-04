@@ -1,6 +1,6 @@
 # Story 3.17: `/reject` command
 
-Status: review
+Status: done
 
 ## Story
 
@@ -283,3 +283,28 @@ Claude Opus 4.7 (glm-5.1)
 - `services/telegram-gateway/src/telegram_gateway/test_reject_command.py` — New
 - `_bmad-output/implementation-artifacts/3-17-reject-command.md` — Modified
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` — Modified
+
+## Code Review Record
+
+### Review Agents
+
+Three parallel review agents ran on the initial implementation:
+
+1. **Blind Hunter** (code-reviewer) — 7 findings: 2 HIGH, 3 MEDIUM, 2 LOW
+2. **Edge Case Hunter** (code-reviewer) — 5 findings: 2 MEDIUM, 3 LOW
+3. **Acceptance Auditor** (verifier) — All 9 ACs PASS. APPROVE.
+
+### Fix Summary
+
+| # | Finding | Severity | Resolution |
+|---|---------|----------|------------|
+| 1 | Unbounded reason length — reason text passed to `submit_decision` with no cap | HIGH | Added `MAX_REASON_LENGTH = 1000` constant and `[:MAX_REASON_LENGTH]` slice on reason extraction |
+| 2 | `from_user=None` allows unauthenticated reject | HIGH | Dismissed — by-design. Allowlist middleware (Story 3.2) rejects non-allowlisted users before any handler runs. `from_user=None` is a defensive fallback for malformed Telegram updates, not an auth bypass. All handlers share this pattern. |
+| 3 | Missing test for Unicode reason strings (emoji, RTL, newlines, ZWJ) | LOW | Added parametrized `test_handle_reject_unicode_reason_passes_through` with 4 cases |
+| 4 | Missing test for `from_user=None` + `chat=None` edge case | LOW | Replaced with `test_handle_reject_from_user_none_logs_chat_id` — `chat=None` is not a valid Telegram state; test verifies `from_user=None` with valid chat still produces correct reply |
+| 5 | Divergent task-id parsing (uses `split(None, 2)` + inline regex vs `extract_task_id_from_message`) | LOW | Documented in code comments — `extract_task_id_from_message` uses `split(None, 1)` which appends reason text to task-id candidate and fails the regex. Inline validation is the correct approach for commands with trailing arguments. |
+| 6 | Reason text not HTML-escaped for persistence | MEDIUM | Dismissed — reason is passed as `hint` to `submit_decision` which sends it as JSON. No HTML rendering surface. The hint is stored in registry-api's DB, not rendered in Telegram. |
+
+### Post-Fix Test Count
+
+20 tests total (14 original + 6 code-review additions). All 303 telegram-gateway tests pass.

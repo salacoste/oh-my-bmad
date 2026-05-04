@@ -51,6 +51,8 @@ from telegram_gateway.handlers._errors import format_http_error
 from telegram_gateway.handlers._safe_reply import safe_reply as _safe_reply
 from telegram_gateway.handlers.registry_client import RegistryAPIClient, RegistryResponseError
 
+MAX_REASON_LENGTH = 1000
+
 _log = logging.getLogger("telegram_gateway.handlers.reject_command")
 
 
@@ -108,7 +110,7 @@ async def handle_reject(
             )
         return
 
-    reason = parts[2].strip() if len(parts) >= 3 else None
+    reason = parts[2].strip()[:MAX_REASON_LENGTH] if len(parts) >= 3 else None
 
     idempotency_key = _keys.idempotency_key_from_message(message)
     request_id = new_request_id()
