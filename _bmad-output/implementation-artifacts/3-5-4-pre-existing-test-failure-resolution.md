@@ -1,6 +1,6 @@
 # Story 3.5.4: Resolve pre-existing test failures
 
-Status: review
+Status: done
 
 ## Story
 
@@ -103,7 +103,15 @@ The healthcheck in the compose file touches `/tmp/ready` after the subscriber ca
 - `just lint` 9/9 is the gatekeeper — all 9 checks must pass.
 - Test changes should be minimal — no gratuitous rewrites.
 - Carry-forward: the three-layer review catches import inconsistencies.
-- This story touches `.dockerignore` and test files only — no production code.
+- This story touches `.dockerignore` and test files only — no production code. **Amended during review:** `envelope.py` was modified to fix a Pydantic 2.12.5 regression (`dict[str, Any] | BaseModel` union serializes BaseModel as `{}`). This is shared infrastructure, not business logic. The fix was kept because it's the correct model-level fix (the test workaround in `append_envelope` only covers the crash-injection path; production `EventLogWriter` and `to_canonical_json` need it too).
+
+### Review Findings
+
+- [x] [Review][Decision] `envelope.py` production code change — **Kept.** The `@field_serializer` fixes a genuine Pydantic 2.12.5 regression affecting all platform consumers. The test-only workaround in `append_envelope` doesn't cover production paths (`EventLogWriter`, `to_canonical_json`). Fix is minimal, targeted, and test-verified.
+- [x] [Review][Patch] Story plan self-contradicts on production code scope — **Fixed.** Updated line 106 to acknowledge the `envelope.py` change and explain why it was kept.
+- [x] [Review][Defer] `append_envelope` workaround now redundant with `_serialize_payload` [`_crash_events.py:191-218`] — deferred, pre-existing. The workaround produces identical output and is defensive; cleanup in a follow-up.
+- [x] [Review][Defer] Side-effect import fragile to refactoring [`_crash_events.py:50`] — deferred, pre-existing. The pattern is well-documented with comments.
+- [x] [Review][Defer] Missing unit test for `to_canonical_json` with `BaseModel` payload [`test_canonical.py`] — deferred, pre-existing. The serializer is verified via integration tests; dedicated unit test can land in a follow-up.
 
 ## Dev Agent Record
 

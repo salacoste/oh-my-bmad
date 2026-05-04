@@ -45,3 +45,9 @@ A running log of issues that surfaced during code review but were not fixed at t
 - D3 — `assert` in `_build_pr_line` stripped under `python -O` — pre-existing defensive pattern in completion renderer (`telegram_sink.py:1151`). Project likely never runs under `-O`.
 - D4 — `_build_step_boundary_payload` linear scan could be binary search — pre-existing test utility (`test_telegram_sink.py:2088`). Acceptable at cap=1900.
 - D5 — Missing test for `pr_url` containing only newlines — pre-existing test coverage gap in completion renderer. Symmetrical to the `pr_branch` newline test already present.
+
+## Deferred from: code review of 3-5-4-pre-existing-test-failure-resolution (2026-05-04)
+
+- D1 — `append_envelope` workaround in `_crash_events.py:191-218` now redundant with `_serialize_payload` field serializer — defensive rebuild produces identical output but carries stale comments describing the now-fixed Pydantic bug. Cleanup in a follow-up to simplify `append_envelope` to `line = to_canonical_json(env) + b"\n"`.
+- D2 — Side-effect import `import registry_state.domain.event_types` in `_crash_events.py:50` fragile to refactoring — if registrations move behind a function call, the import silently stops populating the registry. Consider adding an assertion after the import.
+- D3 — Missing unit test for `to_canonical_json` with `BaseModel` payload in `test_canonical.py` — all 15 existing tests use dict payloads; the `_serialize_payload` serializer is verified via integration tests but lacks a dedicated unit test.
