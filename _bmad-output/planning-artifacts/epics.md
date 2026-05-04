@@ -392,6 +392,18 @@ E5 (autonomous exec) ────→ E6 (approval & policy) ────→ E7 (
 
 ---
 
+### Epic 3.5: Tech-Debt Sweep (Epic 3 Retrospective)
+
+*Tech debt, bug backports, and process documentation accumulated during Epic 3 but deferred to keep story scope clean. Completing these before Epic 4 prevents debt propagation.*
+
+**FRs covered:** N/A (maintenance)
+**NFRs:** N/A
+**Additional:** Backport `approve_command.py` double-@ bug; refactor payload models to `packages/events/`; extract shared task-id helper; resolve pre-existing test failures; document dev-tooling quirks and architectural decisions; create handler template checklist; fix `check_imports.py` multi-tag noqa regex.
+
+*Standalone value: clean codebase for Epic 4; prevents console-cli from inheriting telegram-gateway bugs; eliminates accumulated `# noqa: IMP001` cluster.*
+
+---
+
 ### Epic 4: Console CLI Parity
 
 *Operator at the Mac can run `oh-my-bmad-cli task …` / `status` / `logs` / `approve` / `retry` / `stop` / `ping` / `agent` / `events --follow` with 1:1 parity to Telegram.*
