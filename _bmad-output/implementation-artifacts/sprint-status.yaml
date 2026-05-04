@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-04T07:00:00Z
+last_updated: 2026-05-04T08:00:00Z
 
 development_status:
   # =========================================================================
@@ -110,8 +110,8 @@ development_status:
   # Epic 3.5: Tech-Debt Sweep (Epic 3 Retrospective)
   # Bug backports, refactors, documentation — prevents debt propagation to E4
   # =========================================================================
-  epic-3-5: backlog
-  3-5-1-approve-command-double-at-backport: backlog       # HIGH — backport operator_handle fix from 3.16 into approve_command.py
+  epic-3-5: in-progress
+  3-5-1-approve-command-double-at-backport: ready-for-dev  # HIGH — backport operator_handle fix from 3.16 into approve_command.py
   3-5-2-payload-models-shared-package-refactor: backlog   # MEDIUM — move payload models to packages/events/; eliminate IMP001 noqa cluster
   3-5-3-shared-task-id-helper-extraction: backlog         # LOW — abstract split(None,2) + inline regex from /reject and /retry
   3-5-4-pre-existing-test-failure-resolution: backlog     # MEDIUM — fix or formally exclude crash-injection (4) + separability (1)
