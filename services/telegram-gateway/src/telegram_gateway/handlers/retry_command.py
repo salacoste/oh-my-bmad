@@ -90,17 +90,10 @@ async def handle_retry(
         operator_actor_id = "unknown"
         operator_handle = "operator"
 
-    raw_text = message.text or ""
-    parts = raw_text.split(None, 2)
-
-    # /retry accepts an optional hint after the task-id, so we split into
-    # max 3 parts: ["/retry", "<task-id>", "<hint>"]. We validate the
-    # second token directly against TASK_ID_PATTERN instead of using
-    # extract_task_id_from_message (which splits with maxsplit=1, causing
-    # the hint text to be appended to the candidate and fail the regex).
-    task_id = parts[1] if len(parts) >= 2 and _keys.TASK_ID_PATTERN.match(parts[1]) else None
+    task_id, hint_text = _keys.extract_task_id_with_trailing(message)
     if task_id is None:
-        if len(parts) < 2:
+        raw_parts = (message.text or "").split()
+        if len(raw_parts) < 2:
             await _safe_reply(message, "Usage: /retry <task-id> [hint]")
         else:
             await _safe_reply(
@@ -110,7 +103,7 @@ async def handle_retry(
             )
         return
 
-    hint = parts[2].strip()[:MAX_HINT_LENGTH] if len(parts) >= 3 else None
+    hint = hint_text[:MAX_HINT_LENGTH] if hint_text else None
 
     idempotency_key = _keys.idempotency_key_from_message(message)
     request_id = new_request_id()

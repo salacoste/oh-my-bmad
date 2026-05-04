@@ -90,17 +90,10 @@ async def handle_reject(
         operator_actor_id = "unknown"
         operator_handle = "operator"
 
-    raw_text = message.text or ""
-    parts = raw_text.split(None, 2)
-
-    # /reject accepts an optional reason after the task-id, so we split into
-    # max 3 parts: ["/reject", "<task-id>", "<reason>"]. We validate the
-    # second token directly against TASK_ID_PATTERN instead of using
-    # extract_task_id_from_message (which splits with maxsplit=1, causing
-    # the reason text to be appended to the candidate and fail the regex).
-    task_id = parts[1] if len(parts) >= 2 and _keys.TASK_ID_PATTERN.match(parts[1]) else None
+    task_id, reason_text = _keys.extract_task_id_with_trailing(message)
     if task_id is None:
-        if len(parts) < 2:
+        raw_parts = (message.text or "").split()
+        if len(raw_parts) < 2:
             await _safe_reply(message, "Usage: /reject <task-id> [reason]")
         else:
             await _safe_reply(
@@ -110,7 +103,7 @@ async def handle_reject(
             )
         return
 
-    reason = parts[2].strip()[:MAX_REASON_LENGTH] if len(parts) >= 3 else None
+    reason = reason_text[:MAX_REASON_LENGTH] if reason_text else None
 
     idempotency_key = _keys.idempotency_key_from_message(message)
     request_id = new_request_id()

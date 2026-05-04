@@ -108,9 +108,35 @@ def extract_task_id_from_message(message: Message) -> str | None:
     return candidate if TASK_ID_PATTERN.match(candidate) else None
 
 
+def extract_task_id_with_trailing(message: Message) -> tuple[str | None, str | None]:
+    """Parse a command message into a validated task-id plus optional trailing free-text.
+
+    Splits on whitespace with a maximum of 2 splits, producing up to
+    ``[command, task_id, trailing_text]``.  This is the 3-part variant
+    needed by ``/reject <task-id> [reason]`` and ``/retry <task-id> [hint]``
+    which accept optional free-text after the task-id.
+
+    Unlike :func:`extract_task_id_from_message` (which uses ``split(None, 1)``
+    to reject trailing garbage), this function *preserves* the trailing text
+    so the caller can apply its own policy (e.g. truncation, length limits).
+
+    Returns ``(task_id, trailing_text)`` where *trailing_text* is the
+    stripped remainder after the task-id, or ``None`` if absent.
+    Returns ``(None, None)`` when the task-id is missing or fails validation.
+    """
+    raw_text = message.text or ""
+    parts = raw_text.split(None, 2)
+    if len(parts) < 2 or not TASK_ID_PATTERN.match(parts[1]):
+        return (None, None)
+    task_id = parts[1]
+    trailing = parts[2].strip() if len(parts) >= 3 else None
+    return (task_id, trailing)
+
+
 __all__ = [
     "TASK_ID_PATTERN",
     "UUIDV7_BARE_RE",
     "extract_task_id_from_message",
+    "extract_task_id_with_trailing",
     "idempotency_key_from_message",
 ]
