@@ -1,6 +1,6 @@
 # Story 3.5.6: Verify check_imports multi-tag noqa regex
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -36,20 +36,20 @@ This is a verification/close-out story from the Epic 3 retrospective. The origin
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Verify existing regex and fixture** (AC: #1, #2)
-  - [ ] Read `scripts/checks/_common.py` — confirm `_NOQA_RE` captures comma-separated tags
-  - [ ] Read `scripts/checks/fixtures/imports/clean/multi_tag_noqa_service.py` — confirm it exercises the multi-tag path
-  - [ ] Run `uv run python scripts/check_imports.py --self-test` — confirm clean pass
+- [x] **Task 1: Verify existing regex and fixture** (AC: #1, #2)
+  - [x] Read `scripts/checks/_common.py` — confirm `_NOQA_RE` captures comma-separated tags
+  - [x] Read `scripts/checks/fixtures/imports/clean/multi_tag_noqa_service.py` — confirm it exercises the multi-tag path
+  - [x] Run `uv run python scripts/check_imports.py --self-test` — confirm clean pass
 
-- [ ] **Task 2: Check for existing unit tests** (AC: #3)
-  - [ ] Search for `test_common.py` or any test file covering `has_noqa()`
-  - [ ] If tests exist: verify coverage of single-tag, multi-tag, no-match, bare-noqa, case-insensitive
-  - [ ] If tests don't exist: create `scripts/checks/test_common.py` with the 5 required cases
+- [x] **Task 2: Check for existing unit tests** (AC: #3)
+  - [x] Search for `test_common.py` or any test file covering `has_noqa()`
+  - [x] If tests exist: verify coverage of single-tag, multi-tag, no-match, bare-noqa, case-insensitive
+  - [x] If tests don't exist: create `scripts/checks/test_common.py` with the 5 required cases
 
-- [ ] **Task 3: Verification + commit** (AC: #4, #5, #6)
-  - [ ] `just lint` 9/9 green
-  - [ ] `just test` — 1161 passed, 5 skipped, 14 deselected (unchanged unless new tests added, in which case count increases by the number of new tests)
-  - [ ] Atomic commit
+- [x] **Task 3: Verification + commit** (AC: #4, #5, #6)
+  - [x] `just lint` 9/9 green
+  - [x] `just test` — 1161 passed, 5 skipped, 14 deselected (unchanged unless new tests added, in which case count increases by the number of new tests)
+  - [x] Atomic commit
 
 ## Dev Notes
 
@@ -98,10 +98,23 @@ The Epic 3 retrospective identified this as a tech-debt item before the code-rev
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+Claude Opus 4.7 (claude-opus-4-7)
 
 ### Debug Log References
 
+None — verification/close-out story, no debug cycles needed.
+
 ### Completion Notes List
 
+- `_NOQA_RE` regex verified: correctly captures comma-separated tags in group 1, `_TAG_RE` extracts individual tags for `has_noqa()` matching.
+- Multi-tag fixture `multi_tag_noqa_service.py` passes clean (7 fixtures, 0 failures via `--self-test`).
+- No existing unit tests for `has_noqa()` found. Created `scripts/checks/test_common.py` with 11 tests covering: single-tag match, single-tag no-match, multi-tag match (both tags), multi-tag no-match, bare noqa without reason, bare noqa without tags, no noqa at all, case-insensitive NOQA keyword, case-insensitive mixed case, and tag identifier case sensitivity.
+- `just lint` 9/9 green. `just test` 1161 passed, 5 skipped, 14 deselected (unchanged — new tests in `scripts/` are outside pytest `testpaths`).
+
 ### File List
+
+| File | Change |
+|---|---|
+| `scripts/checks/test_common.py` | New — 11 unit tests for has_noqa() |
+| `_bmad-output/implementation-artifacts/3-5-6-check-imports-noqa-multi-tag-fix.md` | Status → review, tasks checked off, dev agent record filled |
+| `_bmad-output/implementation-artifacts/sprint-status.yaml` | Status → in-progress → review |
