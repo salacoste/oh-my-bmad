@@ -112,7 +112,7 @@ development_status:
   # =========================================================================
   epic-3-5: in-progress
   3-5-1-approve-command-double-at-backport: done  # HIGH — backport operator_handle fix from 3.16 into approve_command.py
-  3-5-2-payload-models-shared-package-refactor: backlog   # MEDIUM — move payload models to packages/events/; eliminate IMP001 noqa cluster
+  3-5-2-payload-models-shared-package-refactor: ready-for-dev   # MEDIUM — move payload models to packages/events/; eliminate IMP001 noqa cluster
   3-5-3-shared-task-id-helper-extraction: backlog         # LOW — abstract split(None,2) + inline regex from /reject and /retry
   3-5-4-pre-existing-test-failure-resolution: backlog     # MEDIUM — fix or formally exclude crash-injection (4) + separability (1)
   3-5-5-dev-tooling-and-architecture-documentation: backlog  # Process — uv sync quirk, from_user=None ADR, handler checklist, RENDERER_CONVENTIONS.md
