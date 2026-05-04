@@ -1,6 +1,6 @@
 # Story 3.18: `/retry` command (Telegram surface)
 
-Status: review
+Status: done
 
 ## Story
 
@@ -288,6 +288,41 @@ Claude Opus 4.7 (glm-5.1)
 - Code-review fix tests included from the start (hint truncation, Unicode passthrough, from_user=None with valid chat).
 - 20 new tests added, all passing (323 total telegram-gateway, 0 new failures).
 - Lint clean (ruff check all pass, ruff format clean).
+
+### Code Review Record
+
+#### Review Agents
+
+Three parallel review agents ran:
+
+1. **Blind Hunter** (code-reviewer) — 6 findings: 0 HIGH, 4 MEDIUM, 2 LOW
+2. **Edge Case Hunter** (code-reviewer) — 6 findings: 0 HIGH, 2 MEDIUM, 4 LOW
+3. **Acceptance Auditor** (verifier) — All 9 ACs PASS. APPROVE.
+
+#### Fix Summary
+
+| # | Finding | Severity | Resolution |
+|---|---------|----------|------------|
+| 1 | Missing test for `username=None, first_name="Alice"` fallback path | MEDIUM | Added `test_handle_retry_username_none_uses_first_name` |
+| 2 | Missing test for `username=None, first_name=None` → `@operator` fallback | MEDIUM | Added `test_handle_retry_no_username_no_first_name_uses_operator` |
+| 3 | Missing test for `first_name` HTML escaping path | MEDIUM | Added `test_handle_retry_html_chars_in_first_name_are_escaped` |
+| 4 | Unused `_VALID_DECISION_JSON` constant and `import json` | MEDIUM | Removed dead code |
+| 5 | Docstring test count understated (said ">=17", actually 20+) | MEDIUM | Updated docstring to ">=24 tests" with accurate breakdown |
+| 6 | Missing boundary test for hint exactly at MAX_HINT_LENGTH | LOW | Added `test_handle_retry_hint_exactly_at_max_length_passes` |
+
+#### Dismissed Findings
+
+| Finding | Reason |
+|---------|--------|
+| RTL override in hint passes unsanitized | Defense-in-depth for registry-api, not telegram-gateway. Same as /reject. |
+| Whitespace-only username renders invisible | Telegram enforces username format server-side. Shared pattern. |
+| `(retry deduped)` label semantically ambiguous | Shared UX issue across all handlers, not /retry-specific. |
+| Spec AC-6 hint text cosmetic mismatch | Test matches handler's usage example; specific words not a contract. |
+| `approve_command.py` double-@ inconsistency | Pre-existing bug in different story, out of scope. |
+
+#### Post-Fix Test Count
+
+24 tests total (20 original + 4 code-review additions). All 327 telegram-gateway tests pass.
 
 ### File List
 

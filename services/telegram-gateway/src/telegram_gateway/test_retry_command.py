@@ -1,6 +1,6 @@
 """Tests for /retry command handler (Story 3.18 AC-6).
 
-Coverage (>=17 tests):
+Coverage (>=24 tests):
 Handler tests (12):
 - test_handle_retry_success_renders_confirmation — success reply with @handle + timestamp
 - test_handle_retry_success_with_retry_deduped — idempotency_status="replayed" shows deduped
@@ -15,14 +15,20 @@ Handler tests (12):
 - test_handle_retry_unexpected_exception — RuntimeError backstop → "Internal error"
 - test_handle_retry_from_user_none_uses_unknown_actor — from_user None → unknown/@operator
 
-HTML security test (1):
+HTML security tests (2):
 - test_handle_retry_html_chars_in_username_are_escaped — HTML chars in username escaped
+- test_handle_retry_html_chars_in_first_name_are_escaped — HTML chars in first_name escaped
+
+Actor resolution tests (2):
+- test_handle_retry_username_none_uses_first_name — username=None falls back to first_name
+- test_handle_retry_no_username_no_first_name_uses_operator — both None → @operator
 
 Router test (1):
 - test_make_retry_router_returns_fresh_routers — factory produces distinct instances
 
-Code-review fix tests (4):
+Code-review fix tests (7):
 - test_handle_retry_hint_truncated_at_max_length — hint > MAX_HINT_LENGTH is truncated
+- test_handle_retry_hint_exactly_at_max_length_passes — hint == MAX_HINT_LENGTH passes through
 - test_handle_retry_unicode_hint_passes_through[emoji] — emoji hint passes through
 - test_handle_retry_unicode_hint_passes_through[rtl-override] — RTL override
 - test_handle_retry_unicode_hint_passes_through[newlines] — newlines in hint pass through
@@ -32,7 +38,6 @@ Code-review fix tests (4):
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
@@ -53,15 +58,6 @@ from telegram_gateway.handlers.retry_command import handle_retry, make_retry_rou
 _TASK_ID = "t-0192a1b5-1234-7abc-89de-f0123456789a"
 _DECISION_ID = "d-0192a1b5-1234-7abc-89de-f0123456789b"
 _DECIDED_AT = datetime(2024, 6, 1, 12, 0, 0, tzinfo=UTC)
-
-_VALID_DECISION_JSON = json.dumps(
-    {
-        "task_id": _TASK_ID,
-        "decision_id": _DECISION_ID,
-        "action": "retry",
-        "decided_at": _DECIDED_AT.isoformat(),
-    }
-)
 
 
 def _make_message(
@@ -397,3 +393,79 @@ async def test_handle_retry_from_user_none_logs_chat_id() -> None:
     reply_text: str = msg.reply.call_args[0][0]
     assert "@operator" in reply_text
     assert "@@operator" not in reply_text
+
+
+# ---------------------------------------------------------------------------
+# HTML security tests — first_name path (code-review addition)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_handle_retry_html_chars_in_first_name_are_escaped() -> None:
+    """first_name with HTML chars is escaped when username is None."""
+    client = _make_registry_client_with_mock()
+    msg = _make_message(
+        text=f"/retry {_TASK_ID}",
+        username=None,
+        first_name="<b>admin</b>",
+    )
+
+    await handle_retry(msg, registry_client=client)
+
+    msg.reply.assert_called_once()
+    reply_text: str = msg.reply.call_args[0][0]
+    assert "<b>" not in reply_text
+    assert "&lt;b&gt;admin&lt;/b&gt;" in reply_text
+
+
+# ---------------------------------------------------------------------------
+# Actor resolution tests (code-review addition)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_handle_retry_username_none_uses_first_name() -> None:
+    """username=None falls back to html.escape(first_name) in reply."""
+    client = _make_registry_client_with_mock()
+    msg = _make_message(text=f"/retry {_TASK_ID}", username=None, first_name="Alice")
+
+    await handle_retry(msg, registry_client=client)
+
+    msg.reply.assert_called_once()
+    reply_text: str = msg.reply.call_args[0][0]
+    assert "@Alice" in reply_text
+
+
+@pytest.mark.asyncio
+async def test_handle_retry_no_username_no_first_name_uses_operator() -> None:
+    """Both username and first_name are None → @operator (no double-@)."""
+    client = _make_registry_client_with_mock()
+    msg = _make_message(text=f"/retry {_TASK_ID}", username=None, first_name=None)
+
+    await handle_retry(msg, registry_client=client)
+
+    msg.reply.assert_called_once()
+    reply_text: str = msg.reply.call_args[0][0]
+    assert "@operator" in reply_text
+    assert "@@operator" not in reply_text
+
+
+# ---------------------------------------------------------------------------
+# Boundary test (code-review addition)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_handle_retry_hint_exactly_at_max_length_passes() -> None:
+    """Hint exactly at MAX_HINT_LENGTH is not truncated."""
+    from telegram_gateway.handlers.retry_command import MAX_HINT_LENGTH
+
+    hint = "a" * MAX_HINT_LENGTH
+    client = _make_registry_client_with_mock()
+    msg = _make_message(text=f"/retry {_TASK_ID} {hint}")
+
+    await handle_retry(msg, registry_client=client)
+
+    client.submit_decision.assert_called_once()
+    call_kwargs = client.submit_decision.call_args[1]
+    assert len(call_kwargs["hint"]) == MAX_HINT_LENGTH
