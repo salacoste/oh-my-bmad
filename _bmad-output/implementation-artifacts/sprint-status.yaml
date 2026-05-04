@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: 2026-05-04T03:45:00Z
+# last_updated: 2026-05-04T04:15:00Z
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,11 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-04T03:45:00Z
-project: oh-my-bmad
-project_key: NOKEY
-tracking_system: file-system
-story_location: _bmad-output/implementation-artifacts
+last_updated: 2026-05-04T04:00:00Z
 
 development_status:
   # =========================================================================
@@ -106,7 +102,7 @@ development_status:
   3-16-stop-command: done
   3-17-reject-command: done
   3-18-retry-command-telegram-surface: done
-  3-19-agent-command: backlog
+  3-19-agent-command: review
   3-20-message-design-docs: backlog
   epic-3-retrospective: optional
 
