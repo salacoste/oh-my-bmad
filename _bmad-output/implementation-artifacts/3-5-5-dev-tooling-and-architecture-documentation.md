@@ -1,6 +1,6 @@
 # Story 3.5.5: Dev tooling and architecture documentation
 
-Status: review
+Status: done
 
 ## Story
 
