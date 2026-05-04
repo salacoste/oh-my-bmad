@@ -1,6 +1,6 @@
 # Story 3.5.5: Dev tooling and architecture documentation
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -37,20 +37,20 @@ This is a tech-debt documentation story from the Epic 3 retrospective. During Ep
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Create `docs/development.md`** (AC: #1)
-  - [ ] Document `uv sync` variants: `--no-dev`, `--all-packages`, `--all-groups --all-packages`
-  - [ ] Document the quirk: `uv sync --no-dev` strips dev-only deps (e.g. `asgi-lifespan`, `sniffio`) that tests need; `--all-packages` restores them
-  - [ ] Add troubleshooting section: "tests fail with ImportError after uv sync" → run `uv sync --all-packages`
-  - [ ] Reference the `just fix-venv` recipe if it exists, or document the manual fix
+- [x] **Task 1: Create `docs/development.md`** (AC: #1)
+  - [x] Document `uv sync` variants: `--no-dev`, `--all-packages`, `--all-groups --all-packages`
+  - [x] Document the quirk: `uv sync --no-dev` strips dev-only deps (e.g. `asgi-lifespan`, `sniffio`) that tests need; `--all-packages` restores them
+  - [x] Add troubleshooting section: "tests fail with ImportError after uv sync" → run `uv sync --all-packages`
+  - [x] Reference the `just fix-venv` recipe if it exists, or document the manual fix
 
-- [ ] **Task 2: Create `docs/adr/0001-allowlist-middleware-auth.md`** (AC: #2)
-  - [ ] Record the decision: allowlist middleware (Story 3.2) is the single auth gate
-  - [ ] Document `from_user=None` handling: rejected with `user_id=0, reason="no_from_user"`
-  - [ ] Include context: why this was raised in 4 consecutive reviews (3.16-3.19) and why it's closed
-  - [ ] Reference the test: `test_event_without_from_user_rejected_with_sentinel` in `test_allowlist.py`
+- [x] **Task 2: Create `docs/adr/0001-allowlist-middleware-auth.md`** (AC: #2)
+  - [x] Record the decision: allowlist middleware (Story 3.2) is the single auth gate
+  - [x] Document `from_user=None` handling: rejected with `user_id=0, reason="no_from_user"`
+  - [x] Include context: why this was raised in 4 consecutive reviews (3.16-3.19) and why it's closed
+  - [x] Reference the test: `test_event_without_from_user_rejected_with_sentinel` in `test_allowlist.py`
 
-- [ ] **Task 3: Create `docs/RENDERER_CONVENTIONS.md`** (AC: #3)
-  - [ ] Consolidate these sections from Stories 3.10-3.13 carry-forward lists:
+- [x] **Task 3: Create `docs/RENDERER_CONVENTIONS.md`** (AC: #3)
+  - [x] Consolidate these sections from Stories 3.10-3.13 carry-forward lists:
     - HTML escape contract (escape exactly once, truncate before escaping, escape all operator-supplied strings)
     - Newline collapse (`_collapse_newlines` helper, known U+2028/U+2029 gap)
     - Character budget discipline (1900/4000/1000 tiers, parity invariant, UTF-16 safety)
@@ -64,16 +64,16 @@ This is a tech-debt documentation story from the Epic 3 retrospective. During Ep
     - Test conventions (idempotent registration guard, parametric cap-overflow, per-character HTML assertions)
     - Emoji discipline (fixed catalog from `message-design.md`)
     - Cross-service import pattern (`IMP001` noqa cluster, deferred refactor to `packages/events/`)
-  - [ ] Link to `docs/message-design.md` for template mockups and field lists
+  - [x] Link to `docs/message-design.md` for template mockups and field lists
 
-- [ ] **Task 4: Cross-reference `docs/message-design.md`** (AC: #4)
-  - [ ] Add a "Renderer conventions" section linking to `RENDERER_CONVENTIONS.md`
+- [x] **Task 4: Cross-reference `docs/message-design.md`** (AC: #4)
+  - [x] Add a "Renderer conventions" section linking to `RENDERER_CONVENTIONS.md`
 
-- [ ] **Task 5: Verification + commit** (AC: #5, #6, #7)
-  - [ ] `just lint` 9/9 green
-  - [ ] `just test` — 1161 passed, 5 skipped, 14 deselected (unchanged)
-  - [ ] Verify all 4 new/modified docs are well-formed markdown
-  - [ ] Atomic commit
+- [x] **Task 5: Verification + commit** (AC: #5, #6, #7)
+  - [x] `just lint` 9/9 green
+  - [x] `just test` — 1161 passed, 5 skipped, 14 deselected (unchanged)
+  - [x] Verify all 4 new/modified docs are well-formed markdown
+  - [x] Atomic commit
 
 ## Dev Notes
 
@@ -148,10 +148,28 @@ Accepted
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+Claude Opus 4.7 (claude-opus-4-7)
 
 ### Debug Log References
 
+None — documentation-only story, no debug cycles needed.
+
 ### Completion Notes List
 
+- `docs/development.md` covers uv sync variants, the `--no-dev` quirk, troubleshooting, project structure, and key conventions.
+- `docs/adr/0001-allowlist-middleware-auth.md` records the allowlist-as-single-auth-gate decision and closes the `from_user=None` review question permanently.
+- `docs/RENDERER_CONVENTIONS.md` consolidates 13 sections from Stories 3.10–3.13 carry-forward patterns into a single reference.
+- `docs/message-design.md` now has a "Renderer conventions" section linking to `RENDERER_CONVENTIONS.md` (bidirectional cross-reference).
+- `just lint` 9/9 green. `just test` 1161 passed, 5 skipped, 14 deselected (unchanged).
+- Note: `test_synthetic_1k_replay_under_500ms` is a known flaky performance test (500ms budget). Failed once on first run, passed on rerun. Not related to documentation changes.
+
 ### File List
+
+| File | Change |
+|---|---|
+| `docs/development.md` | New — uv sync variants, troubleshooting, project structure |
+| `docs/adr/0001-allowlist-middleware-auth.md` | New — ADR for allowlist auth decision |
+| `docs/RENDERER_CONVENTIONS.md` | New — consolidated renderer conventions |
+| `docs/message-design.md` | Modified — add cross-reference to RENDERER_CONVENTIONS.md |
+| `_bmad-output/implementation-artifacts/3-5-5-dev-tooling-and-architecture-documentation.md` | Status → review, tasks checked off, dev agent record filled |
+| `_bmad-output/implementation-artifacts/sprint-status.yaml` | Status → review |

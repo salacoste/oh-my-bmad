@@ -596,7 +596,19 @@ Error reply constants: `_VALIDATION_FIELD_CAP = 5`, `_VALIDATION_BULLET_MAX_CHAR
 
 ---
 
+## Renderer conventions
+
+Implementation-level patterns shared across all templates (HTML escape contract,
+newline collapse, section-drop ladder, emergency one-liner, renderer purity,
+model-boundary validators, test conventions) are documented in
+[RENDERER_CONVENTIONS.md](./RENDERER_CONVENTIONS.md). This file covers template
+design and field lists; RENDERER_CONVENTIONS covers the shared rendering
+machinery.
+
+---
+
 ## See also
 
+- [Renderer conventions](./RENDERER_CONVENTIONS.md) — shared rendering patterns.
 - [Operator runbook](./operator-runbook.md) — tunnel health + bot token rotation.
 - [Testing guide](./testing-guide.md) — contract-fixture recording for bot response templates.
