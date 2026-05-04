@@ -1,6 +1,6 @@
 # Story 3.5.1: Backport `approve_command.py` double-@ fix
 
-Status: review
+Status: done
 
 ## Story
 
@@ -49,7 +49,7 @@ This is a bug-backport story. Story 3.4 (`approve_command.py`) shipped with a do
 - [x] **Task 3: Verification + atomic commit** (AC: #5, #6, #7)
   - [x] `just test` — all existing tests pass (the tightened test now validates the fix).
   - [x] `just lint` 9/9 green.
-  - [ ] Atomic commit.
+  - [x] Atomic commit.
 
 ## Dev Notes
 
