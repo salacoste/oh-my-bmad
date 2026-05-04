@@ -1,6 +1,6 @@
 # Story 3.5.2: Refactor payload models to `packages/events/`
 
-Status: review
+Status: done
 
 ## Story
 
@@ -77,7 +77,7 @@ This is a tech-debt refactor story. During Epics 2-3, payload models were placed
   - [x] `just test` — all existing tests pass.
   - [x] `just lint` 9/9 green.
   - [x] Verify `grep -r "noqa.*IMP001" services/telegram-gateway/ services/clawhip-daemon/ mcp-servers/clawhip-bridge/` returns zero lines.
-  - [ ] Atomic commit.
+  - [x] Atomic commit.
 
 ## Dev Notes
 
