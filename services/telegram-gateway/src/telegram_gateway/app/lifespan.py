@@ -104,6 +104,7 @@ from telegram_gateway.handlers import (
     make_approve_router,
     make_logs_router,
     make_ping_router,
+    make_reject_router,
     make_status_router,
     make_stop_router,
     make_task_router,
@@ -316,6 +317,7 @@ def make_lifespan(
             dp.include_router(make_status_router())
             dp.include_router(make_logs_router())
             dp.include_router(make_stop_router())
+            dp.include_router(make_reject_router())
 
             # Assign app.state ONLY after set_webhook succeeds
             # (review-fix M8). If set_webhook raises, the stack unwinds
