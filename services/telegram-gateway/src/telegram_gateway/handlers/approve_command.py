@@ -97,7 +97,7 @@ async def handle_approve(
             getattr(message.chat, "id", "?") if message.chat else "?",
         )
         operator_actor_id = "unknown"
-        operator_handle = "@operator"
+        operator_handle = "operator"
 
     raw_text = message.text or ""
     parts = raw_text.split(None, 1)

@@ -31,6 +31,7 @@ Coverage (≥16 tests per AC-10):
 - test_submit_decision_idempotency_status_from_header — M3 header fallback
 - test_approve_handler_404_replies_task_not_found — L4
 - test_extract_task_id_rejects_trailing_garbage — M1
+- test_handle_approve_from_user_none_no_double_at — Story 3.5.1 regression
 """
 
 from __future__ import annotations
@@ -461,6 +462,7 @@ async def test_approve_handler_handles_no_username_no_first_name() -> None:
     msg.reply.assert_called_once()
     reply_text: str = msg.reply.call_args[0][0]
     assert "operator" in reply_text
+    assert "@@" not in reply_text, f"Double @ detected in reply: {reply_text!r}"
 
 
 @pytest.mark.asyncio
@@ -619,6 +621,42 @@ async def test_handle_approve_handles_null_from_user_with_valid_task_id() -> Non
     assert captured["actor"] == "unknown", f"Expected 'unknown', got {captured['actor']!r}"
     reply_text: str = msg.reply.call_args[0][0]
     assert "@operator" in reply_text
+    assert "@@operator" not in reply_text, f"Double @ detected: {reply_text!r}"
+
+
+# ---------------------------------------------------------------------------
+# Regression: double-@ backport (Story 3.5.1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_handle_approve_from_user_none_no_double_at() -> None:
+    """Story 3.5.1: from_user=None renders '@operator' not '@@operator'."""
+    captured: dict[str, str] = {}
+
+    async def _transport(request: httpx.Request) -> httpx.Response:
+        captured["actor"] = request.headers.get("x-actor-id", "")
+        return httpx.Response(
+            status_code=200,
+            content=_VALID_DECISION_RESPONSE_JSON.encode(),
+            request=request,
+        )
+
+    async with httpx.AsyncClient(
+        base_url="http://registry-api:8080",
+        transport=httpx.MockTransport(_transport),
+    ) as http_client:
+        client = RegistryAPIClient(http_client=http_client)
+        msg = _make_message()
+        msg.from_user = None
+
+        await handle_approve(msg, registry_client=client)
+
+    assert captured["actor"] == "unknown"
+    msg.reply.assert_called_once()
+    reply_text: str = msg.reply.call_args[0][0]
+    assert "@operator" in reply_text
+    assert "@@" not in reply_text, f"Double @ detected in reply: {reply_text!r}"
 
 
 # ---------------------------------------------------------------------------

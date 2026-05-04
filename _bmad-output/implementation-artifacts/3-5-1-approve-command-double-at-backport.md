@@ -1,6 +1,6 @@
 # Story 3.5.1: Backport `approve_command.py` double-@ fix
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -38,17 +38,17 @@ This is a bug-backport story. Story 3.4 (`approve_command.py`) shipped with a do
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Fix the production bug** (AC: #1, #4)
-  - [ ] In `approve_command.py`, change `operator_handle = "@operator"` to `operator_handle = "operator"` in the `else` branch (when `from_user is None`).
-  - [ ] Grep all other handlers to confirm they already use the correct pattern (no `@` prefix).
+- [x] **Task 1: Fix the production bug** (AC: #1, #4)
+  - [x] In `approve_command.py`, change `operator_handle = "@operator"` to `operator_handle = "operator"` in the `else` branch (when `from_user is None`).
+  - [x] Grep all other handlers to confirm they already use the correct pattern (no `@` prefix).
 
-- [ ] **Task 2: Tighten tests + add regression test** (AC: #2, #3)
-  - [ ] Add `assert "@@operator" not in reply_text` to `test_handle_approve_handles_null_from_user_with_valid_task_id`.
-  - [ ] Add new test `test_handle_approve_from_user_none_no_double_at` with explicit double-@ assertion and `operator_actor_id == "unknown"` check.
+- [x] **Task 2: Tighten tests + add regression test** (AC: #2, #3)
+  - [x] Add `assert "@@operator" not in reply_text` to `test_handle_approve_handles_null_from_user_with_valid_task_id`.
+  - [x] Add new test `test_handle_approve_from_user_none_no_double_at` with explicit double-@ assertion and `operator_actor_id == "unknown"` check.
 
-- [ ] **Task 3: Verification + atomic commit** (AC: #5, #6, #7)
-  - [ ] `just test` — all existing tests pass (the tightened test now validates the fix).
-  - [ ] `just lint` 9/9 green.
+- [x] **Task 3: Verification + atomic commit** (AC: #5, #6, #7)
+  - [x] `just test` — all existing tests pass (the tightened test now validates the fix).
+  - [x] `just lint` 9/9 green.
   - [ ] Atomic commit.
 
 ## Dev Notes
@@ -118,8 +118,19 @@ Only `approve_command.py` has the bug. All four subsequent handlers use the corr
 
 ### Agent Model Used
 
+Claude Opus 4.7 (glm-5.1)
+
 ### Debug Log References
 
 ### Completion Notes List
 
+- ✅ Task 1: Fixed `approve_command.py` line 100 — `"@operator"` → `"operator"`. Confirmed all other handlers (stop, reject, retry, agent) already use correct pattern.
+- ✅ Task 2: Tightened `test_handle_approve_handles_null_from_user_with_valid_task_id` with `assert "@@operator" not in reply_text`. Added new regression test `test_handle_approve_from_user_none_no_double_at` with double-@ and `operator_actor_id == "unknown"` assertions.
+- ✅ Task 3: 38 tests pass (1 new), `just lint` 9/9 green.
+
 ### File List
+
+- `services/telegram-gateway/src/telegram_gateway/handlers/approve_command.py` — 1-line fix: `"@operator"` → `"operator"`
+- `services/telegram-gateway/src/telegram_gateway/test_approve_command.py` — Tightened existing test + added 1 new regression test
+- `_bmad-output/implementation-artifacts/3-5-1-approve-command-double-at-backport.md` — This file
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` — Status flips
