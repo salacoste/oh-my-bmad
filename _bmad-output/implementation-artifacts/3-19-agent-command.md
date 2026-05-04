@@ -1,6 +1,6 @@
 # Story 3.19: `/agent` command
 
-Status: review
+Status: done
 
 ## Story
 
