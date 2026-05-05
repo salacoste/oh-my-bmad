@@ -226,6 +226,23 @@ None — straight implementation, no debug cycles.
 - Task 6: `check_imports.py` passes. `just lint` 9/9 green. `just test` 1176 passed (was 1161, +15 new), 5 skipped, 14 deselected. No regressions.
 - Note: `ConsoleSettings` uses plain `BaseSettings` (not `AuditedBaseSettings`) since console-cli has no audited secrets.
 
+### Code Review Results (2026-05-05)
+
+**Reviewers:** Blind Hunter, Edge Case Hunter, Acceptance Auditor
+**Outcome:** Changes Requested → All findings resolved
+
+| # | Sev | Finding | Resolution |
+|---|-----|---------|------------|
+| 1 | HIGH | Entry point `app` not `main` — structlog never configured via console_scripts | ✅ Fixed: `console_cli.__main__:main` |
+| 2 | HIGH | `monkeypatch: object` unused; raw `os.environ` manipulation | ✅ Fixed: use `pytest.MonkeyPatch` properly |
+| 3 | HIGH | `RegistryAPIClient._client()` resource leak + DRY default URL | ✅ Fixed: removed default, added lifecycle docs |
+| 4 | MEDIUM | `cache_logger_on_first_use` conflicts with sentinel guard | ✅ Fixed: set to `False` |
+| 5 | MEDIUM | `str` vs `HttpUrl` diverges from telegram-gateway | ✅ Documented: intentional for CLI flexibility |
+| 6 | LOW | `events` command name could collide with Typer attribute | ✅ Fixed: explicit `name="events"` |
+| - | — | `_STRUCTLOG_CONFIGURED` TOCTOU race (matches telegram-gateway) | Noted — accepted pattern for CLI context |
+| - | — | `print()` vs `typer.echo()` in stubs | Noted — architecture allows `print()` in console-cli |
+| - | — | `root_logger.handlers.clear()` latent hazard | Noted — safe because config deferred to `main()` |
+
 ### File List
 
 | File | Change |
