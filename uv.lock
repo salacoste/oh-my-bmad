@@ -381,7 +381,7 @@ wheels = [
 
 [[package]]
 name = "console-cli"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "services/console-cli" }
 dependencies = [
     { name = "events" },

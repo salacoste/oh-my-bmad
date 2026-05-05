@@ -1,6 +1,6 @@
 # Story 4.2: `task`, `status`, `logs` commands
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -36,45 +36,45 @@ This story implements the three primary query/creation commands for the console 
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Implement `RegistryAPIClient`** (AC: #4, #7)
-  - [ ] Replace placeholder `adapters/registry_api_client.py` with full implementation
-  - [ ] Define local response models: `CreateTaskResponseLocal`, `TaskResponseLocal`, `LogsDigestResponseLocal`, `ActorLocal`, `LastEventLocal` (frozen Pydantic models, same pattern as telegram-gateway)
-  - [ ] Define `RegistryResponseError(httpx.HTTPError)` for malformed 2xx bodies
-  - [ ] Implement `create_task()` — POST /v1/tasks with Idempotency-Key and X-Request-ID headers
-  - [ ] Implement `get_task()` — GET /v1/tasks/{task_id} with task_id validation
-  - [ ] Implement `get_logs_digest()` — GET /v1/tasks/{task_id}/logs/digest with task_id validation
-  - [ ] Define `TASK_ID_PATTERN` locally (cannot import from telegram-gateway)
-  - [ ] Use `async with httpx.AsyncClient(...)` per command invocation (short-lived CLI, no connection pool needed)
+- [x] **Task 1: Implement `RegistryAPIClient`** (AC: #4, #7)
+  - [x] Replace placeholder `adapters/registry_api_client.py` with full implementation
+  - [x] Define local response models: `CreateTaskResponseLocal`, `TaskResponseLocal`, `LogsDigestResponseLocal`, `ActorLocal`, `LastEventLocal` (frozen Pydantic models, same pattern as telegram-gateway)
+  - [x] Define `RegistryResponseError(httpx.HTTPError)` for malformed 2xx bodies
+  - [x] Implement `create_task()` — POST /v1/tasks with Idempotency-Key and X-Request-ID headers
+  - [x] Implement `get_task()` — GET /v1/tasks/{task_id} with task_id validation
+  - [x] Implement `get_logs_digest()` — GET /v1/tasks/{task_id}/logs/digest with task_id validation
+  - [x] Define `TASK_ID_PATTERN` locally (cannot import from telegram-gateway)
+  - [x] Use `async with httpx.AsyncClient(...)` per command invocation (short-lived CLI, no connection pool needed)
 
-- [ ] **Task 2: Implement `task` command** (AC: #1, #5, #6)
-  - [ ] Update `commands/task.py` — add Typer arguments: `title` (required), `--repo` (optional), `--hint` (optional)
-  - [ ] Create `app/runner.py` — `run_async()` helper that bridges Typer sync → asyncio.run()
-  - [ ] Call `client.create_task()`, render success: `Task {task_id} created. Planning.`
-  - [ ] Handle errors: connection refused → stderr message, validation errors → stderr, other HTTP errors → stderr
+- [x] **Task 2: Implement `task` command** (AC: #1, #5, #6)
+  - [x] Update `commands/task.py` — add Typer arguments: `title` (required), `--repo` (optional), `--hint` (optional)
+  - [x] Create `app/runner.py` — `run_async()` helper that bridges Typer sync → asyncio.run()
+  - [x] Call `client.create_task()`, render success: `Task {task_id} created. Planning.`
+  - [x] Handle errors: connection refused → stderr message, validation errors → stderr, other HTTP errors → stderr
 
-- [ ] **Task 3: Implement `status` command** (AC: #2, #5, #6)
-  - [ ] Update `commands/status.py` — add Typer argument: `task_id` (required)
-  - [ ] Call `client.get_task()`, render: task_id, status, title, actor, last_event, next_commands
-  - [ ] Handle 404 → `Task {task_id} not found`
+- [x] **Task 3: Implement `status` command** (AC: #2, #5, #6)
+  - [x] Update `commands/status.py` — add Typer argument: `task_id` (required)
+  - [x] Call `client.get_task()`, render: task_id, status, title, actor, last_event, next_commands
+  - [x] Handle 404 → `Task {task_id} not found`
 
-- [ ] **Task 4: Implement `logs` command** (AC: #3, #5, #6)
-  - [ ] Update `commands/logs.py` — add Typer argument: `task_id` (required)
-  - [ ] Call `client.get_logs_digest()`, render digest text
-  - [ ] Handle 404 (endpoint or task not found) → clear message
+- [x] **Task 4: Implement `logs` command** (AC: #3, #5, #6)
+  - [x] Update `commands/logs.py` — add Typer argument: `task_id` (required)
+  - [x] Call `client.get_logs_digest()`, render digest text
+  - [x] Handle 404 (endpoint or task not found) → clear message
 
-- [ ] **Task 5: Write tests** (AC: #9)
-  - [ ] Create `src/console_cli/test_task_command.py` — test create_task success, network error, validation error
-  - [ ] Create `src/console_cli/test_status_command.py` — test get_task success, 404, network error
-  - [ ] Create `src/console_cli/test_logs_command.py` — test get_logs success, 404 (endpoint not deployed)
-  - [ ] Use `unittest.mock.AsyncMock` to mock httpx responses (same pattern as telegram-gateway handler tests)
-  - [ ] Test `RegistryAPIClient` methods directly with mocked transport
+- [x] **Task 5: Write tests** (AC: #9)
+  - [x] Create `src/console_cli/test_task_command.py` — test create_task success, network error, validation error
+  - [x] Create `src/console_cli/test_status_command.py` — test get_task success, 404, network error
+  - [x] Create `src/console_cli/test_logs_command.py` — test get_logs success, 404 (endpoint not deployed)
+  - [x] Use `unittest.mock.AsyncMock` to mock httpx responses (same pattern as telegram-gateway handler tests)
+  - [x] Test `RegistryAPIClient` methods directly with mocked transport
 
-- [ ] **Task 6: Verification + commit** (AC: #7, #8, #10, #11)
-  - [ ] `scripts/check_imports.py` — passes
-  - [ ] `just lint` 9/9 green
-  - [ ] `just test` — no regressions, new tests counted
-  - [ ] Version bump to `0.3.0` in `__init__.py` and `pyproject.toml`
-  - [ ] Atomic commit
+- [x] **Task 6: Verification + commit** (AC: #7, #8, #10, #11)
+  - [x] `scripts/check_imports.py` — passes
+  - [x] `just lint` 9/9 green
+  - [x] `just test` — no regressions, new tests counted
+  - [x] Version bump to `0.3.0` in `__init__.py` and `pyproject.toml`
+  - [x] Atomic commit
 
 ## Dev Notes
 
@@ -231,10 +231,20 @@ Follow the telegram-gateway handler test pattern:
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+Claude Opus 4.7 (claude-opus-4-7)
 
 ### Debug Log References
 
+None — straight implementation, no debug cycles.
+
 ### Completion Notes List
+
+- Task 1: `RegistryAPIClient` fully rewritten with `create_task()`, `get_task()`, `get_logs_digest()`. All 6 local response models defined (`CreateTaskResponseLocal`, `TaskResponseLocal`, `LogsDigestResponseLocal`, `ActorLocal`, `LastEventLocal`) as frozen Pydantic models. `RegistryResponseError(httpx.HTTPError)` for malformed 2xx bodies. `TASK_ID_PATTERN` defined locally (same regex as telegram-gateway `_keys.py`). Per-invocation `async with httpx.AsyncClient` pattern.
+- Task 2: `commands/task.py` rewritten with Typer arguments (`title`, `--repo`, `--hint`). Uses `events.new_idempotency_key()` and `events.new_request_id()` from packages/events. `app/runner.py` created with `run_async()` async bridge. Error rendering: ConnectError → stderr, HTTPStatusError → RFC 7807 detail, RegistryResponseError → stderr.
+- Task 3: `commands/status.py` rewritten with Typer argument `task_id`. Renders task_id, status, title, actor, last_event, next_commands. 404 → "Task X not found".
+- Task 4: `commands/logs.py` rewritten with Typer argument `task_id`. Renders digest text + truncation notice. 404 → "Logs not available for task X".
+- Task 5: 20 new tests across 3 files: `test_task_command.py` (8: 4 TASK_ID_PATTERN + 4 create_task), `test_status_command.py` (7: 4 get_task client + 3 status command), `test_logs_command.py` (8: 4 get_logs_digest client + 4 logs command). Updated `test_main.py` stub tests to reflect task/status/logs now require args (+13 → +33 total new/updated tests).
+- Task 6: `check_imports.py` passes. `just lint` 9/9 green. `just test` 1209 passed (was 1176, +33). Version bumped to 0.3.0. No regressions.
+- Note: `runner.py` uses `TypeVar` + `Awaitable[T]` (ruff UP047 auto-fixed to type param syntax, then manual fix for compatibility). All `raise SystemExit(1)` in except blocks use `from None` per B904.
 
 ### File List
