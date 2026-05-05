@@ -1,6 +1,6 @@
 # Story 3.5.6: Verify check_imports multi-tag noqa regex
 
-Status: review
+Status: done
 
 ## Story
 
