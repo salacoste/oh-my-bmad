@@ -1,6 +1,6 @@
 # Story 4.1: Typer binary scaffold + entrypoint
 
-Status: review
+Status: done
 
 ## Story
 
