@@ -110,11 +110,12 @@ None — verification/close-out story, no debug cycles needed.
 - Multi-tag fixture `multi_tag_noqa_service.py` passes clean (7 fixtures, 0 failures via `--self-test`).
 - No existing unit tests for `has_noqa()` found. Created `scripts/checks/test_common.py` with 11 tests covering: single-tag match, single-tag no-match, multi-tag match (both tags), multi-tag no-match, bare noqa without reason, bare noqa without tags, no noqa at all, case-insensitive NOQA keyword, case-insensitive mixed case, and tag identifier case sensitivity.
 - `just lint` 9/9 green. `just test` 1161 passed, 5 skipped, 14 deselected (unchanged — new tests in `scripts/` are outside pytest `testpaths`).
+- Code review: 7 findings from Edge Case Hunter (all patch). Expanded test file from 11 to 18 tests: added three-tag coverage, reason-without-em-dash, trailing-whitespace strip, empty/whitespace-only input, double-noqa greedy capture documentation. Restructured into class-based groups with `sys.path` fixture for cleanup.
 
 ### File List
 
 | File | Change |
 |---|---|
-| `scripts/checks/test_common.py` | New — 11 unit tests for has_noqa() |
+| `scripts/checks/test_common.py` | New → expanded — 18 unit tests for has_noqa() (was 11) |
 | `_bmad-output/implementation-artifacts/3-5-6-check-imports-noqa-multi-tag-fix.md` | Status → review, tasks checked off, dev agent record filled |
 | `_bmad-output/implementation-artifacts/sprint-status.yaml` | Status → in-progress → review |
