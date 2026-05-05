@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-05T11:00:00Z
+last_updated: 2026-05-05T12:00:00Z
 
 development_status:
   # =========================================================================
@@ -123,8 +123,8 @@ development_status:
   # Epic 4: Console CLI Parity (6 stories)
   # Parallelizable with Epic 3 after Epic 2's registry-api exists
   # =========================================================================
-  epic-4: backlog
-  4-1-typer-binary-scaffold: backlog
+  epic-4: in-progress
+  4-1-typer-binary-scaffold: ready-for-dev
   4-2-task-status-logs-commands: backlog
   4-3-decision-and-health-commands: backlog
   4-4-events-follow-live-tail: backlog
