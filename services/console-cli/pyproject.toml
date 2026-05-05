@@ -1,6 +1,6 @@
 [project]
 name = "console-cli"
-version = "0.3.0"
+version = "0.4.0"
 description = "Local console CLI (Typer) for operator commands. Surface parity with Telegram per FR12."
 authors = [
     { name = "R2d2", email = "bad.vano23ru@gmail.com" },

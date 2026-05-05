@@ -94,6 +94,39 @@ class LogsDigestResponseLocal(BaseModel):
     line_count: int = Field(ge=1, le=20)
 
 
+class DecisionResponseLocal(BaseModel):
+    """Local mirror of registry-api's eventual DecisionResponse (Story 6.4).
+
+    Forward-compatible shape — Story 6.4 owns POST /v1/tasks/{id}/decisions.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    task_id: str
+    decision_id: str
+    action: Literal["approve", "reject", "stop", "retry"]
+    decided_at: datetime
+    idempotency_status: Literal["applied", "replayed"] = "applied"
+
+
+class HealthResponseLocal(BaseModel):
+    """Local mirror of registry-api's eventual GET /v1/health response.
+
+    FR17 fields: registry status, worker status, clawhip queue depth, version.
+    Forward-compatible shape — server endpoint not yet implemented.
+
+    Uses str fields rather than Literal because the server-side contract
+    is not finalised. ``extra="ignore"`` drops unknown future fields.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    registry_status: str = Field(min_length=1, max_length=64)
+    worker_status: str = Field(min_length=1, max_length=64)
+    clawhip_queue_depth: int = Field(ge=0, le=1_000_000)
+    version: str = Field(min_length=1, max_length=200)
+
+
 class RegistryResponseError(httpx.HTTPError):
     """Raised when registry-api returns a 2xx response with a malformed body."""
 
@@ -231,12 +264,106 @@ class RegistryAPIClient:
         ) as exc:
             raise RegistryResponseError(f"registry-api returned malformed body: {exc}") from exc
 
+    async def submit_decision(
+        self,
+        *,
+        task_id: str,
+        action: Literal["approve", "reject", "stop", "retry"],
+        idempotency_key: str,
+        actor_id: str = "console",
+        request_id: str | None = None,
+        hint: str | None = None,
+    ) -> DecisionResponseLocal:
+        """POST /v1/tasks/{task_id}/decisions — submit an operator decision.
+
+        Note: Server-side endpoint not yet implemented (Story 6.4).
+        Live calls return 404. Tests mock the transport layer.
+
+        Returns DecisionResponseLocal on HTTP 2xx.
+        Raises ValueError if task_id doesn't match TASK_ID_PATTERN.
+        """
+        if not TASK_ID_PATTERN.match(task_id):
+            raise ValueError(f"Invalid task_id (does not match TASK_ID_PATTERN): {task_id!r}")
+
+        headers: dict[str, str] = {
+            "Idempotency-Key": idempotency_key,
+            "X-Actor-Id": actor_id,
+        }
+        if request_id is not None:
+            headers["X-Request-ID"] = request_id
+
+        body: dict[str, str] = {"action": action}
+        if hint is not None:
+            body["hint"] = hint
+
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=_DEFAULT_TIMEOUT) as client:
+            response = await client.post(
+                f"/v1/tasks/{task_id}/decisions",
+                json=body,
+                headers=headers,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+        try:
+            raw_status = data.get("idempotency_status") or "applied"
+            idempotency_status: Literal["applied", "replayed"] = (
+                "replayed" if raw_status == "replayed" else "applied"
+            )
+            return DecisionResponseLocal(
+                task_id=data["task_id"],
+                decision_id=data["decision_id"],
+                action=data["action"],
+                decided_at=data["decided_at"],
+                idempotency_status=idempotency_status,
+            )
+        except (
+            _json.JSONDecodeError,
+            KeyError,
+            ValidationError,
+            ValueError,
+        ) as exc:
+            raise RegistryResponseError(f"registry-api returned malformed body: {exc}") from exc
+
+    async def get_platform_health(
+        self,
+        *,
+        request_id: str | None = None,
+    ) -> HealthResponseLocal:
+        """GET /v1/health — platform health summary.
+
+        No Idempotency-Key header — GET is idempotent by HTTP semantics.
+
+        Note: Server-side endpoint not yet implemented. Live calls return 404.
+        Tests mock the transport layer.
+
+        Returns HealthResponseLocal on HTTP 2xx.
+        """
+        headers: dict[str, str] = {}
+        if request_id is not None:
+            headers["X-Request-ID"] = request_id
+
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=_DEFAULT_TIMEOUT) as client:
+            response = await client.get("/v1/health", headers=headers)
+            response.raise_for_status()
+            data = response.json()
+
+        try:
+            return HealthResponseLocal.model_validate(data)
+        except (
+            _json.JSONDecodeError,
+            ValidationError,
+            ValueError,
+        ) as exc:
+            raise RegistryResponseError(f"registry-api returned malformed body: {exc}") from exc
+
 
 def parse_error_detail(exc: httpx.HTTPStatusError) -> str:
     """Extract human-readable detail from RFC 7807 problem+json or raw text."""
     try:
-        body = exc.response.json()
-        return body.get("detail", exc.response.text)
+        body: dict[str, object] = exc.response.json()
+        detail = body.get("detail")
+        return str(detail) if isinstance(detail, str) else exc.response.text
     except Exception:
         return exc.response.text
 
@@ -245,6 +372,8 @@ __all__ = [
     "CreateTaskResponseLocal",
     "TaskResponseLocal",
     "LogsDigestResponseLocal",
+    "DecisionResponseLocal",
+    "HealthResponseLocal",
     "ActorLocal",
     "LastEventLocal",
     "RegistryAPIClient",

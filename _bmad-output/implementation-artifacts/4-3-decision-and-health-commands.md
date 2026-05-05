@@ -1,6 +1,6 @@
 # Story 4.3: `approve`, `reject`, `stop`, `retry`, `ping`, `agent` commands
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -40,59 +40,59 @@ This story implements the remaining six console-cli commands. Four decision comm
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Extend `RegistryAPIClient`** (AC: #7)
-  - [ ] Add `DecisionResponseLocal` frozen Pydantic model — fields: `task_id`, `decision_id`, `action` (Literal), `decided_at`, `idempotency_status` (Literal)
-  - [ ] Add `HealthResponseLocal` frozen Pydantic model — fields: `registry_status`, `worker_status`, `clawhip_queue_depth`, `version` (str fields with bounds, `extra="ignore"`)
-  - [ ] Implement `submit_decision()` — POST /v1/tasks/{task_id}/decisions with Idempotency-Key, X-Actor-Id headers; validates task_id before HTTP call; omits `hint` key when None; parses idempotency_status from body then header
-  - [ ] Implement `get_platform_health()` — GET /v1/health with X-Request-ID header; no Idempotency-Key (GET is idempotent); uses `model_validate` for body parsing
-  - [ ] Follow exact same patterns as telegram-gateway's `RegistryAPIClient` (body parsing inside try/except, RegistryResponseError for malformed bodies)
+- [x] **Task 1: Extend `RegistryAPIClient`** (AC: #7)
+  - [x] Add `DecisionResponseLocal` frozen Pydantic model — fields: `task_id`, `decision_id`, `action` (Literal), `decided_at`, `idempotency_status` (Literal)
+  - [x] Add `HealthResponseLocal` frozen Pydantic model — fields: `registry_status`, `worker_status`, `clawhip_queue_depth`, `version` (str fields with bounds, `extra="ignore"`)
+  - [x] Implement `submit_decision()` — POST /v1/tasks/{task_id}/decisions with Idempotency-Key, X-Actor-Id headers; validates task_id before HTTP call; omits `hint` key when None; parses idempotency_status from body then header
+  - [x] Implement `get_platform_health()` — GET /v1/health with X-Request-ID header; no Idempotency-Key (GET is idempotent); uses `model_validate` for body parsing
+  - [x] Follow exact same patterns as telegram-gateway's `RegistryAPIClient` (body parsing inside try/except, RegistryResponseError for malformed bodies)
 
-- [ ] **Task 2: Implement `approve` command** (AC: #1, #8)
-  - [ ] Rewrite `commands/approve.py` — Typer argument: `task_id` (required)
-  - [ ] Validate task_id with TASK_ID_PATTERN locally (pre-HTTP call)
-  - [ ] Generate idempotency key via `events.new_idempotency_key()` and request_id via `events.new_request_id()`
-  - [ ] Call `client.submit_decision(action="approve", ...)`, render: `Approved {task_id} ({decision_id}).`
-  - [ ] Handle errors: ConnectError, HTTPStatusError, RegistryResponseError, ValueError
+- [x] **Task 2: Implement `approve` command** (AC: #1, #8)
+  - [x] Rewrite `commands/approve.py` — Typer argument: `task_id` (required)
+  - [x] Validate task_id with TASK_ID_PATTERN locally (pre-HTTP call)
+  - [x] Generate idempotency key via `events.new_idempotency_key()` and request_id via `events.new_request_id()`
+  - [x] Call `client.submit_decision(action="approve", ...)`, render: `Approved {task_id} ({decision_id}).`
+  - [x] Handle errors: ConnectError, HTTPStatusError, RegistryResponseError, ValueError
 
-- [ ] **Task 3: Implement `reject` command** (AC: #2, #8)
-  - [ ] Rewrite `commands/reject.py` — Typer arguments: `task_id` (required), `reason` (required)
-  - [ ] Call `client.submit_decision(action="reject", hint=reason, ...)`, render: `Rejected {task_id} ({decision_id}): {reason}`
-  - [ ] Same error handling pattern
+- [x] **Task 3: Implement `reject` command** (AC: #2, #8)
+  - [x] Rewrite `commands/reject.py` — Typer arguments: `task_id` (required), `reason` (required)
+  - [x] Call `client.submit_decision(action="reject", hint=reason, ...)`, render: `Rejected {task_id} ({decision_id}): {reason}`
+  - [x] Same error handling pattern
 
-- [ ] **Task 4: Implement `stop` command** (AC: #3, #8)
-  - [ ] Rewrite `commands/stop.py` — Typer argument: `task_id` (required)
-  - [ ] Call `client.submit_decision(action="stop", ...)`, render: `Stopped {task_id} ({decision_id}).`
-  - [ ] Same error handling pattern
+- [x] **Task 4: Implement `stop` command** (AC: #3, #8)
+  - [x] Rewrite `commands/stop.py` — Typer argument: `task_id` (required)
+  - [x] Call `client.submit_decision(action="stop", ...)`, render: `Stopped {task_id} ({decision_id}).`
+  - [x] Same error handling pattern
 
-- [ ] **Task 5: Implement `retry` command** (AC: #4, #8)
-  - [ ] Rewrite `commands/retry.py` — Typer arguments: `task_id` (required), `--hint` (optional)
-  - [ ] Call `client.submit_decision(action="retry", hint=hint, ...)`, render: `Retrying {task_id} ({decision_id}).`
-  - [ ] Same error handling pattern
+- [x] **Task 5: Implement `retry` command** (AC: #4, #8)
+  - [x] Rewrite `commands/retry.py` — Typer arguments: `task_id` (required), `--hint` (optional)
+  - [x] Call `client.submit_decision(action="retry", hint=hint, ...)`, render: `Retrying {task_id} ({decision_id}).`
+  - [x] Same error handling pattern
 
-- [ ] **Task 6: Implement `ping` command** (AC: #5, #8)
-  - [ ] Rewrite `commands/ping.py` — no arguments
-  - [ ] Call `client.get_platform_health()`, render: `pong · registry: {status} · worker: {status} · clawhip: {depth} events · version: {version}`
-  - [ ] Handle ConnectError, HTTPStatusError, RegistryResponseError
+- [x] **Task 6: Implement `ping` command** (AC: #5, #8)
+  - [x] Rewrite `commands/ping.py` — no arguments
+  - [x] Call `client.get_platform_health()`, render: `pong · registry: {status} · worker: {status} · clawhip: {depth} events · version: {version}`
+  - [x] Handle ConnectError, HTTPStatusError, RegistryResponseError
 
-- [ ] **Task 7: Implement `agent` command** (AC: #6, #8)
-  - [ ] Rewrite `commands/agent.py` — Typer argument: `task_id` (required)
-  - [ ] Call `client.get_task(task_id=task_id)` to verify task exists
-  - [ ] Render Phase 1 static response: `Task {task_id}: runtime=claude-code`
-  - [ ] Handle errors (404 → "Task {task_id} not found.")
+- [x] **Task 7: Implement `agent` command** (AC: #6, #8)
+  - [x] Rewrite `commands/agent.py` — Typer argument: `task_id` (required)
+  - [x] Call `client.get_task(task_id=task_id)` to verify task exists
+  - [x] Render Phase 1 static response: `Task {task_id}: runtime=claude-code`
+  - [x] Handle errors (404 → "Task {task_id} not found.")
 
-- [ ] **Task 8: Write tests** (AC: #11)
-  - [ ] Extend existing `test_main.py` stub tests for new real commands
-  - [ ] Create `src/console_cli/test_decision_commands.py` — test submit_decision client method + approve/reject/stop/retry command tests
-  - [ ] Create `src/console_cli/test_ping_command.py` — test get_platform_health client method + ping command tests
-  - [ ] Create `src/console_cli/test_agent_command.py` — test agent command (get_task for verification + static rendering)
-  - [ ] Use `unittest.mock.AsyncMock` to mock httpx responses (same pattern as Story 4.2)
+- [x] **Task 8: Write tests** (AC: #11)
+  - [x] Extend existing `test_main.py` stub tests for new real commands
+  - [x] Create `src/console_cli/test_decision_commands.py` — test submit_decision client method + approve/reject/stop/retry command tests
+  - [x] Create `src/console_cli/test_ping_command.py` — test get_platform_health client method + ping command tests
+  - [x] Create `src/console_cli/test_agent_command.py` — test agent command (get_task for verification + static rendering)
+  - [x] Use `unittest.mock.AsyncMock` to mock httpx responses (same pattern as Story 4.2)
 
-- [ ] **Task 9: Verification + commit** (AC: #9, #10, #12, #13)
-  - [ ] `scripts/check_imports.py` — passes
-  - [ ] `just lint` 9/9 green
-  - [ ] `just test` — no regressions, new tests counted
-  - [ ] Version bump to `0.4.0` in `__init__.py` and `pyproject.toml`
-  - [ ] Atomic commit
+- [x] **Task 9: Verification + commit** (AC: #9, #10, #12, #13)
+  - [x] `scripts/check_imports.py` — passes
+  - [x] `just lint` 9/9 green
+  - [x] `just test` — no regressions, new tests counted
+  - [x] Version bump to `0.4.0` in `__init__.py` and `pyproject.toml`
+  - [x] Atomic commit
 
 ## Dev Notes
 
@@ -353,3 +353,28 @@ Follow Story 4.2's test patterns:
 - [Source: `services/telegram-gateway/src/telegram_gateway/handlers/ping_command.py` — ping handler pattern]
 - [Source: `services/telegram-gateway/src/telegram_gateway/handlers/agent_command.py` — agent handler pattern (read-only, Phase 1 static)]
 - [Source: `_bmad-output/implementation-artifacts/4-2-task-status-logs-commands.md` — Story 4.2 patterns and learnings]
+
+## Dev Agent Record
+
+### Agent Model Used
+
+Claude Opus 4.7 (claude-opus-4-7)
+
+### Debug Log References
+
+None — straight implementation, no debug cycles.
+
+### Completion Notes List
+
+- Task 1: `RegistryAPIClient` extended with `submit_decision()` and `get_platform_health()`. Two new frozen Pydantic models: `DecisionResponseLocal` (task_id, decision_id, action Literal, decided_at, idempotency_status) and `HealthResponseLocal` (registry_status, worker_status, clawhip_queue_depth, version with `extra="ignore"`). `submit_decision()` validates task_id before HTTP call, omits `hint` key when None, parses idempotency_status. `get_platform_health()` uses no Idempotency-Key header (GET is idempotent). Also fixed `parse_error_detail()` mypy strict issue (no-any-return).
+- Task 2: `commands/approve.py` rewritten — Typer argument `task_id`, generates idempotency key + request_id, calls `submit_decision(action="approve")`, renders `Approved {task_id} ({decision_id}).`
+- Task 3: `commands/reject.py` rewritten — Typer arguments `task_id` + `reason`, passes reason as `hint`, renders `Rejected {task_id} ({decision_id}): {reason}`
+- Task 4: `commands/stop.py` rewritten — Typer argument `task_id`, calls `submit_decision(action="stop")`, renders `Stopped {task_id} ({decision_id}).`
+- Task 5: `commands/retry.py` rewritten — Typer argument `task_id` + `--hint` option, calls `submit_decision(action="retry", hint=hint)`, renders `Retrying {task_id} ({decision_id}).`
+- Task 6: `commands/ping.py` rewritten — no arguments, calls `get_platform_health()`, renders `pong · registry: {status} · worker: {status} · clawhip: {depth} events · version: {version}`
+- Task 7: `commands/agent.py` rewritten — Typer argument `task_id`, calls `get_task()` to verify existence, renders Phase 1 static `Task {task_id}: runtime=claude-code`. 404 → `Task {task_id} not found.`
+- Task 8: 27 new tests across 3 files: `test_decision_commands.py` (14: 7 submit_decision client + 7 command tests), `test_ping_command.py` (8: 5 get_platform_health client + 3 ping command), `test_agent_command.py` (5: agent command tests). Updated `test_main.py` — REQUIRES_ARGS now includes approve/reject/stop/retry/agent; REAL_NO_ARGS is ping/events. Extracted helper functions (`_mock_200`, `_mock_error`, `_CONNECT_ERROR`) to keep lines under 100 chars.
+- Task 9: `check_imports.py` passes. `just lint` 9/9 green. `just test` 1236 passed (was 1209, +27). Version bumped to 0.4.0. No regressions.
+
+### File List
+

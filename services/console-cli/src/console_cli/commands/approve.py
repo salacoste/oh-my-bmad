@@ -1,8 +1,61 @@
-"""Stub: approve command — Story 4.3 implements."""
+"""approve command — POST /v1/tasks/{task_id}/decisions action=approve (Story 4.3 AC-1)."""
 
 from __future__ import annotations
 
+import sys
 
-def approve() -> None:
+import httpx
+import typer
+
+from console_cli.adapters.registry_api_client import (
+    TASK_ID_PATTERN,
+    RegistryAPIClient,
+    RegistryResponseError,
+    parse_error_detail,
+)
+from console_cli.app.config import ConsoleSettings
+from console_cli.app.runner import run_async
+
+
+def approve(
+    task_id: str = typer.Argument(..., help="Task ID (t-<uuidv7>)"),
+) -> None:
     """Approve a pending decision."""
-    print("Not yet implemented — see Story 4.3")
+    if not TASK_ID_PATTERN.match(task_id):
+        print(f"Error: Invalid task ID format: {task_id!r}", file=sys.stderr)
+        raise SystemExit(1) from None
+
+    settings = ConsoleSettings()
+    client = RegistryAPIClient(base_url=settings.registry_api_base_url)
+
+    from events import new_idempotency_key, new_request_id
+
+    idempotency_key = new_idempotency_key()
+    request_id = new_request_id()
+
+    try:
+        result = run_async(
+            client.submit_decision(
+                task_id=task_id,
+                action="approve",
+                idempotency_key=idempotency_key,
+                request_id=request_id,
+            )
+        )
+    except httpx.ConnectError:
+        print(
+            "Error: Could not reach registry-api. Is docker compose up?",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from None
+    except httpx.HTTPStatusError as exc:
+        print(f"Error: {parse_error_detail(exc)}", file=sys.stderr)
+        raise SystemExit(1) from None
+    except RegistryResponseError as exc:
+        print(f"Error: Registry returned unexpected response: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
+
+    print(f"Approved {result.task_id} ({result.decision_id}).")

@@ -22,8 +22,11 @@ ALL_COMMANDS = [
     "events",
 ]
 
-# Commands that now require arguments (Story 4.2 replaced stubs).
-REQUIRES_ARGS = {"task", "status", "logs"}
+# Commands that now require arguments (Stories 4.2 + 4.3 replaced stubs).
+REQUIRES_ARGS = {"task", "status", "logs", "approve", "reject", "stop", "retry", "agent"}
+
+# Commands that are fully implemented and work bare (no args needed).
+REAL_NO_ARGS = {"ping", "events"}
 
 
 def test_import_app() -> None:
@@ -53,12 +56,13 @@ def test_command_requires_args(cmd: str) -> None:
     assert result.exit_code != 0
 
 
-@pytest.mark.parametrize("cmd", [c for c in ALL_COMMANDS if c not in REQUIRES_ARGS])
-def test_stub_command_still_runs(cmd: str) -> None:
-    """Remaining stub commands still print not-yet-implemented."""
+@pytest.mark.parametrize("cmd", REAL_NO_ARGS)
+def test_command_runs_bare(cmd: str) -> None:
+    """Fully implemented commands that accept no required args can be invoked."""
     result = runner.invoke(app, [cmd])
-    assert result.exit_code == 0
-    assert "Not yet implemented" in result.output
+    # ping/retry/events may fail at runtime (no server) but should not
+    # fail with a Typer "Missing argument" error.
+    assert "Missing argument" not in (result.output + (result.stderr or ""))
 
 
 def test_no_args_shows_help() -> None:
