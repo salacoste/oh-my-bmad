@@ -54,7 +54,7 @@ def _configure_structlog() -> None:
             structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),
-        cache_logger_on_first_use=True,
+        cache_logger_on_first_use=False,
     )
     _STRUCTLOG_CONFIGURED = True
 

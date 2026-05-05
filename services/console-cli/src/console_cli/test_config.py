@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from console_cli.app.config import ConsoleSettings
 
 
@@ -11,13 +13,8 @@ def test_default_registry_api_base_url() -> None:
     assert settings.registry_api_base_url == "http://registry-api:8080"
 
 
-def test_custom_registry_api_base_url(monkeypatch: object) -> None:
+def test_custom_registry_api_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
     """Env-var override works."""
-    import os
-
-    os.environ["REGISTRY_API_BASE_URL"] = "http://localhost:9999"
-    try:
-        settings = ConsoleSettings()
-        assert settings.registry_api_base_url == "http://localhost:9999"
-    finally:
-        del os.environ["REGISTRY_API_BASE_URL"]
+    monkeypatch.setenv("REGISTRY_API_BASE_URL", "http://localhost:9999")
+    settings = ConsoleSettings()
+    assert settings.registry_api_base_url == "http://localhost:9999"

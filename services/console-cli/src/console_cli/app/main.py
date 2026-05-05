@@ -32,7 +32,7 @@ app.command()(stop.stop)
 app.command()(retry.retry)
 app.command()(ping.ping)
 app.command()(agent.agent)
-app.command()(events.events)
+app.command(name="events")(events.events)
 
 
 __all__ = ["app"]
