@@ -10,6 +10,7 @@ import typer
 from console_cli.adapters.registry_api_client import (
     RegistryAPIClient,
     RegistryResponseError,
+    parse_error_detail,
 )
 from console_cli.app.config import ConsoleSettings
 from console_cli.app.runner import run_async
@@ -47,18 +48,8 @@ def task(
         )
         raise SystemExit(1) from None
     except httpx.HTTPStatusError as exc:
-        detail = _parse_error_detail(exc)
-        print(f"Error: {detail}", file=sys.stderr)
+        print(f"Error: {parse_error_detail(exc)}", file=sys.stderr)
         raise SystemExit(1) from None
     except RegistryResponseError as exc:
         print(f"Error: Registry returned unexpected response: {exc}", file=sys.stderr)
         raise SystemExit(1) from None
-
-
-def _parse_error_detail(exc: httpx.HTTPStatusError) -> str:
-    """Extract human-readable detail from RFC 7807 problem+json or raw text."""
-    try:
-        body = exc.response.json()
-        return body.get("detail", exc.response.text)
-    except Exception:
-        return exc.response.text

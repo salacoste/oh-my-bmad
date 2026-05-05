@@ -25,6 +25,9 @@ from typing import Literal
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+# Default timeout for CLI HTTP calls — prevents indefinite hangs on stalled connections.
+_DEFAULT_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
+
 # TASK_ID_PATTERN — local definition (cannot import from telegram-gateway).
 # Validates the "t-<uuidv7>" task-id format per architecture naming rules.
 TASK_ID_PATTERN: re.Pattern[str] = re.compile(
@@ -135,12 +138,12 @@ class RegistryAPIClient:
         if hint is not None:
             body["hint"] = hint
 
-        async with httpx.AsyncClient(base_url=self._base_url) as client:
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=_DEFAULT_TIMEOUT) as client:
             response = await client.post("/v1/tasks", json=body, headers=headers)
-        response.raise_for_status()
+            response.raise_for_status()
+            data = response.json()
 
         try:
-            data = response.json()
             raw_status = data.get("idempotency_status") or response.headers.get(
                 "X-Idempotency-Status", "applied"
             )
@@ -179,16 +182,15 @@ class RegistryAPIClient:
         if request_id is not None:
             headers["X-Request-ID"] = request_id
 
-        async with httpx.AsyncClient(base_url=self._base_url) as client:
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=_DEFAULT_TIMEOUT) as client:
             response = await client.get(f"/v1/tasks/{task_id}", headers=headers)
-        response.raise_for_status()
+            response.raise_for_status()
+            data = response.json()
 
         try:
-            data = response.json()
             return TaskResponseLocal.model_validate(data)
         except (
             _json.JSONDecodeError,
-            KeyError,
             ValidationError,
             ValueError,
         ) as exc:
@@ -215,20 +217,28 @@ class RegistryAPIClient:
         if request_id is not None:
             headers["X-Request-ID"] = request_id
 
-        async with httpx.AsyncClient(base_url=self._base_url) as client:
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=_DEFAULT_TIMEOUT) as client:
             response = await client.get(f"/v1/tasks/{task_id}/logs/digest", headers=headers)
-        response.raise_for_status()
+            response.raise_for_status()
+            data = response.json()
 
         try:
-            data = response.json()
             return LogsDigestResponseLocal.model_validate(data)
         except (
             _json.JSONDecodeError,
-            KeyError,
             ValidationError,
             ValueError,
         ) as exc:
             raise RegistryResponseError(f"registry-api returned malformed body: {exc}") from exc
+
+
+def parse_error_detail(exc: httpx.HTTPStatusError) -> str:
+    """Extract human-readable detail from RFC 7807 problem+json or raw text."""
+    try:
+        body = exc.response.json()
+        return body.get("detail", exc.response.text)
+    except Exception:
+        return exc.response.text
 
 
 __all__ = [
@@ -240,4 +250,5 @@ __all__ = [
     "RegistryAPIClient",
     "RegistryResponseError",
     "TASK_ID_PATTERN",
+    "parse_error_detail",
 ]

@@ -1,6 +1,6 @@
 # Story 4.2: `task`, `status`, `logs` commands
 
-Status: review
+Status: done
 
 ## Story
 
@@ -246,5 +246,20 @@ None — straight implementation, no debug cycles.
 - Task 5: 20 new tests across 3 files: `test_task_command.py` (8: 4 TASK_ID_PATTERN + 4 create_task), `test_status_command.py` (7: 4 get_task client + 3 status command), `test_logs_command.py` (8: 4 get_logs_digest client + 4 logs command). Updated `test_main.py` stub tests to reflect task/status/logs now require args (+13 → +33 total new/updated tests).
 - Task 6: `check_imports.py` passes. `just lint` 9/9 green. `just test` 1209 passed (was 1176, +33). Version bumped to 0.3.0. No regressions.
 - Note: `runner.py` uses `TypeVar` + `Awaitable[T]` (ruff UP047 auto-fixed to type param syntax, then manual fix for compatibility). All `raise SystemExit(1)` in except blocks use `from None` per B904.
+
+### Code Review Results (2026-05-06)
+
+**Reviewers:** Blind Hunter, Edge Case Hunter, Acceptance Auditor
+**Outcome:** Changes Requested → All findings resolved
+
+- [x] [Review][Patch] `raise_for_status()`/`response.json()` outside `async with` block — stream may be closed [registry_api_client.py:140,184,220]
+- [x] [Review][Patch] No HTTP timeout on AsyncClient — CLI hangs indefinitely [registry_api_client.py]
+- [x] [Review][Patch] 404 messages go to stdout instead of stderr [status.py:40, logs.py:40]
+- [x] [Review][Patch] `_parse_error_detail` copy-pasted 3x — extracted to shared utility [task.py, status.py, logs.py]
+- [x] [Review][Patch] ValueError from client unhandled in command try/except [status.py, logs.py]
+- [x] [Review][Patch] Dead TypeVar in runner.py [runner.py:7-9]
+- [x] [Review][Patch] Unreachable KeyError in except tuple [registry_api_client.py:189,225]
+- [x] [Review][Defer] RFC 7807 parsing shallow (only `detail`) — matches telegram-gateway, works for current server
+- [x] [Review][Defer] `line_count ge=1` forward-compat risk — matches telegram-gateway, Story 7.3 defines contract
 
 ### File List
