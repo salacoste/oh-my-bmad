@@ -1,4 +1,4 @@
-"""Session lifecycle — start / heartbeat / finish (Story 5.2).
+"""Session lifecycle — start / heartbeat / finish (Stories 5.2, 5.3).
 
 Coordinates session state with two MCP servers:
 
@@ -7,13 +7,15 @@ Coordinates session state with two MCP servers:
   ``session.heartbeat``, ``session.close``).  Currently a stub; calls
   are best-effort.
 
-All MCP tool calls are best-effort: failure logs a warning but does not
-crash the worker.
+Story 5.3 adds worktree lock acquisition (not best-effort — prevents
+worker start if worktree is locked) and release (best-effort during
+shutdown).
 """
 
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import structlog
 from events.payloads import (
@@ -25,6 +27,7 @@ from mcp import ClientSession
 
 from worker_wrapper.adapters.mcp_clients import MCPClientGroup
 from worker_wrapper.app.config import WorkerSettings
+from worker_wrapper.domain.worktree_lock import acquire_lock, release_lock
 
 _MCP_CALL_TIMEOUT: float = 10.0
 _CLAMP_FLOOR: float = 1.0
@@ -73,15 +76,15 @@ async def start_session(
     clients: MCPClientGroup,
     settings: WorkerSettings,
 ) -> tuple[str, str]:
-    """Emit ``session.started`` and call ``session.register`` (AC-1, AC-5).
+    """Emit ``session.started``, acquire worktree lock, call ``session.register``.
 
     Returns ``(session_id, worker_id)`` for use by the heartbeat loop and
     finish_session.
 
-    Note: a SIGTERM during this function may produce a zero-heartbeat
-    lifecycle (``session.started`` emitted but no heartbeats).  The
-    ``stop_event`` in ``__main__`` is checked immediately after this
-    returns, so the window is the duration of two MCP calls.
+    Order: session.register → acquire_lock → emit_event.
+    Lock acquisition raises :class:`WorktreeLockHeld` if the worktree is
+    already locked — this prevents the session from starting (by design,
+    FR27).
     """
     log = structlog.get_logger(__name__)
     session_id = settings.resolve_session_id()
@@ -94,8 +97,9 @@ async def start_session(
         task_id=task_id,
     )
 
-    # Register with session-registry BEFORE emitting the event so that
-    # the registry is aware of the session when the event arrives.
+    # Register with session-registry BEFORE acquiring the lock so that
+    # the registry is aware of the session before the worker claims a
+    # worktree.
     reg_args: dict[str, object] = {
         "session_id": session_id,
         "worker_id": worker_id,
@@ -108,6 +112,11 @@ async def start_session(
         reg_args,
         label="session_register",
     )
+
+    # Story 5.3 — acquire worktree lock (raises WorktreeLockHeld on
+    # contention; no-op if worktree_path is empty).
+    if settings.worktree_path:
+        acquire_lock(Path(settings.worktree_path), session_id, worker_id)
 
     await _call_tool_best_effort(
         clients.clawhip_bridge,
@@ -173,8 +182,12 @@ async def finish_session(
     clients: MCPClientGroup,
     session_id: str,
     worker_id: str,
+    worktree_path: str = "",
 ) -> None:
-    """Emit ``session.finished`` and call ``session.close`` (AC-3, AC-5)."""
+    """Emit ``session.finished``, release worktree lock, call ``session.close``.
+
+    Lock release is best-effort (catches ``Exception``, logs warning).
+    """
     log = structlog.get_logger(__name__)
 
     fin = SessionFinishedPayload(session_id=session_id)
@@ -184,6 +197,19 @@ async def finish_session(
         {"type": "session.finished", "payload": fin.model_dump()},
         label="emit_session_finished",
     )
+
+    # Story 5.3 — release worktree lock (best-effort).
+    if worktree_path:
+        try:
+            release_lock(Path(worktree_path), session_id)
+        except Exception:
+            log.warning(
+                "worktree_lock_release_failed",
+                worktree_path=worktree_path,
+                session_id=session_id,
+                exc_info=True,
+            )
+
     await _call_tool_best_effort(
         clients.session_registry,
         "session.close",

@@ -17,6 +17,7 @@ from events.errors import (
     EventSchemaUnknown,
     EventsError,
     EventValidationError,
+    WorktreeLockHeld,
 )
 from events.ids import (
     new_event_id,
@@ -64,6 +65,7 @@ __all__ = [
     "EventSchemaUnknown",
     "EventValidationError",
     "EventsError",
+    "WorktreeLockHeld",
     "FrozenClock",
     "SystemClock",
     "TickingClock",

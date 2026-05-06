@@ -52,3 +52,26 @@ class EventValidationError(EventsError):
 
 class CanonicalSerializationError(EventsError):
     """Raised when canonical serialization fails (NaN/Inf, non-serializable payload)."""
+
+
+class WorktreeLockHeld(EventsError):  # noqa: N818
+    """Raised when a worker attempts to lock a worktree already held by another session.
+
+    Attributes:
+        session_id: The session that currently holds the lock.
+        worktree_path: The worktree directory containing the lock file.
+    """
+
+    def __init__(self, session_id: str, worktree_path: str) -> None:
+        self.session_id = session_id
+        self.worktree_path = worktree_path
+        super().__init__(f"worktree lock held by session {session_id!r} at {worktree_path!r}")
+
+
+__all__ = [
+    "CanonicalSerializationError",
+    "EventSchemaUnknown",
+    "EventValidationError",
+    "EventsError",
+    "WorktreeLockHeld",
+]

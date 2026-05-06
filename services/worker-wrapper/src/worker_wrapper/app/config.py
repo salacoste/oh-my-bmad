@@ -40,6 +40,7 @@ class WorkerSettings(BaseSettings):
     session_id: str = ""
     worker_id: str = ""
     task_id: str = ""
+    worktree_path: str = ""
     heartbeat_interval_s: float = Field(default=30.0, gt=0)
 
     _resolved_session_id: str | None = None

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -51,12 +52,14 @@ def _settings(
     session_id: str = "",
     worker_id: str = "",
     task_id: str = "",
+    worktree_path: str = "",
     heartbeat_interval_s: float = 30.0,
 ) -> WorkerSettings:
     return WorkerSettings(
         session_id=session_id,
         worker_id=worker_id,
         task_id=task_id,
+        worktree_path=worktree_path,
         heartbeat_interval_s=heartbeat_interval_s,
     )
 
@@ -245,3 +248,68 @@ async def test_heartbeat_loop_best_effort_on_failure() -> None:
 
     await heartbeat_loop(clients, settings, new_session_id(), stop_event)
     assert tick_count == 3
+
+
+# ---------------------------------------------------------------------------
+# Worktree lock integration (Story 5.3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_start_session_acquires_worktree_lock(tmp_path: Path) -> None:
+    from worker_wrapper.domain.worktree_lock import is_lock_held
+
+    wt = tmp_path / "worktree"
+    wt.mkdir()
+    clients = _make_clients()
+    settings = _settings(worktree_path=str(wt))
+    session_id, worker_id = await start_session(clients, settings)
+    assert is_lock_held(wt)
+    lock = (wt / ".oh-my-bmad.lock").read_text()
+    assert session_id in lock
+
+
+@pytest.mark.asyncio
+async def test_start_session_no_lock_without_worktree() -> None:
+    clients = _make_clients()
+    settings = _settings()  # no worktree_path
+    session_id, worker_id = await start_session(clients, settings)
+    assert session_id.startswith("s-")
+
+
+@pytest.mark.asyncio
+async def test_start_session_raises_on_locked_worktree(tmp_path: Path) -> None:
+    from events.errors import WorktreeLockHeld
+
+    from worker_wrapper.domain.worktree_lock import acquire_lock
+
+    wt = tmp_path / "worktree"
+    wt.mkdir()
+    other_sid = new_session_id()
+    acquire_lock(wt, other_sid, new_worker_id())
+
+    clients = _make_clients()
+    settings = _settings(worktree_path=str(wt))
+    with pytest.raises(WorktreeLockHeld):
+        await start_session(clients, settings)
+
+
+@pytest.mark.asyncio
+async def test_finish_session_releases_worktree_lock(tmp_path: Path) -> None:
+    from worker_wrapper.domain.worktree_lock import acquire_lock, is_lock_held
+
+    wt = tmp_path / "worktree"
+    wt.mkdir()
+    sid = new_session_id()
+    wid = new_worker_id()
+    acquire_lock(wt, sid, wid)
+
+    clients = _make_clients()
+    await finish_session(clients, sid, wid, worktree_path=str(wt))
+    assert is_lock_held(wt) is False
+
+
+@pytest.mark.asyncio
+async def test_finish_session_no_lock_without_worktree() -> None:
+    clients = _make_clients()
+    await finish_session(clients, new_session_id(), new_worker_id())

@@ -116,7 +116,12 @@ async def _run() -> None:
             with contextlib.suppress(asyncio.CancelledError):
                 await heartbeat_task
 
-            await finish_session(clients, session_id, worker_id)
+            await finish_session(
+                clients,
+                session_id,
+                worker_id,
+                worktree_path=settings.worktree_path,
+            )
         finally:
             ready.unlink(missing_ok=True)
 
