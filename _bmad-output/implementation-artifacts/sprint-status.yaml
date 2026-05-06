@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-06T11:00:00Z
+last_updated: 2026-05-06T20:00:00Z
 
 development_status:
   # =========================================================================
@@ -123,14 +123,14 @@ development_status:
   # Epic 4: Console CLI Parity (6 stories)
   # Parallelizable with Epic 3 after Epic 2's registry-api exists
   # =========================================================================
-  epic-4: in-progress
+  epic-4: done
   4-1-typer-binary-scaffold: done
   4-2-task-status-logs-commands: done
-  4-3-decision-and-health-commands: review
-  4-4-events-follow-live-tail: backlog
-  4-5-error-rendering-cli: backlog
-  4-6-console-wrapper-symlink: backlog
-  epic-4-retrospective: optional
+  4-3-decision-and-health-commands: done
+  4-4-events-follow-live-tail: done
+  4-5-error-rendering-cli: done
+  4-6-console-wrapper-symlink: done
+  epic-4-retrospective: done
 
   # =========================================================================
   # Epic 5: Autonomous Task Execution (20 stories)
@@ -138,9 +138,9 @@ development_status:
   # (worker scaffold). Numeric ordering preserved for FR citation stability;
   # implementation order documented in epics.md Epic 5 ordering note.
   # =========================================================================
-  epic-5: backlog
-  5-1-worker-wrapper-scaffold: backlog
-  5-2-session-lifecycle-emission: backlog
+  epic-5: in-progress
+  5-1-worker-wrapper-scaffold: done
+  5-2-session-lifecycle-emission: done
   5-3-worktree-lock-acquisition: backlog
   5-4-claude-code-subprocess-supervision: backlog
   5-5-reasoning-breadcrumb-emission: backlog

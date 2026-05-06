@@ -381,7 +381,7 @@ wheels = [
 
 [[package]]
 name = "console-cli"
-version = "0.4.0"
+version = "0.7.0"
 source = { editable = "services/console-cli" }
 dependencies = [
     { name = "events" },
@@ -2220,8 +2220,36 @@ wheels = [
 
 [[package]]
 name = "worker-wrapper"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "services/worker-wrapper" }
+dependencies = [
+    { name = "events" },
+    { name = "mcp" },
+    { name = "pydantic-settings" },
+    { name = "secret-hygiene" },
+    { name = "structlog" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "events", editable = "packages/events" },
+    { name = "mcp", specifier = ">=1.0" },
+    { name = "pydantic-settings", specifier = ">=2.5,<3.0" },
+    { name = "secret-hygiene", editable = "packages/secret-hygiene" },
+    { name = "structlog", specifier = ">=24.1" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
 
 [[package]]
 name = "yarl"

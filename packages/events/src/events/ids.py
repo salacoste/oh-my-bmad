@@ -79,6 +79,15 @@ def new_session_id(
     return f"s-{new_uuid7(clock=clock, rng=rng)}"
 
 
+def new_worker_id(
+    *,
+    clock: Clock | None = None,
+    rng: Random | None = None,
+) -> str:
+    """Prefixed UUIDv7 for a Worker entity."""
+    return f"w-{new_uuid7(clock=clock, rng=rng)}"
+
+
 def new_event_id(
     *,
     clock: Clock | None = None,
@@ -109,7 +118,7 @@ def new_request_id(
 def parse_prefix(s: str) -> tuple[str, str] | None:
     """If ``s`` is ``"<prefix>-<uuidv7>"``, return (prefix, uuid_core); else None.
 
-    Only recognizes the canonical prefixes: ``t-``, ``s-``, ``e-``. The UUID
+    Only recognizes the canonical prefixes: ``t-``, ``s-``, ``e-``, ``w-``. The UUID
     core is validated against the canonical UUIDv7 regex — malformed UUIDs
     return ``None`` even when prefixed correctly.
 
@@ -120,7 +129,7 @@ def parse_prefix(s: str) -> tuple[str, str] | None:
     if len(s) < 2 or s[1] != "-":
         return None
     prefix = s[0]
-    if prefix not in {"t", "s", "e"}:
+    if prefix not in {"t", "s", "e", "w"}:
         return None
     rest = s[2:]
     if not _UUIDV7_BARE_RE.match(rest):
@@ -135,5 +144,6 @@ __all__ = [
     "new_session_id",
     "new_task_id",
     "new_uuid7",
+    "new_worker_id",
     "parse_prefix",
 ]

@@ -29,6 +29,7 @@ from pydantic import (
 
 _SESSION_ID_PATTERN = r"^s-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 _TASK_ID_PATTERN = r"^t-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+_WORKER_ID_PATTERN = r"^w-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 
 
 class TaskCreatedPayload(BaseModel):
@@ -502,6 +503,52 @@ class SecretAccessedPayload(BaseModel):
     scope: Literal["read"] = "read"
 
 
+# ---------------------------------------------------------------------------
+# Story 5.2 — session lifecycle payload models (FR24a).
+# ---------------------------------------------------------------------------
+
+
+class SessionStartedPayload(BaseModel):
+    """Payload for the ``session.started`` event.
+
+    Emitted when a worker starts and registers itself with the session registry.
+
+    Field rules:
+
+    * ``session_id``: must match ``^s-<uuidv7>$``.
+    * ``worker_id``: must match ``^w-<uuidv7>$``.
+    * ``task_id``: optional, must match ``^t-<uuidv7>$`` when present.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    session_id: str = Field(min_length=1, pattern=_SESSION_ID_PATTERN)
+    worker_id: str = Field(min_length=1, pattern=_WORKER_ID_PATTERN)
+    task_id: str | None = Field(default=None, min_length=1, pattern=_TASK_ID_PATTERN)
+
+
+class SessionHeartbeatPayload(BaseModel):
+    """Payload for the ``session.heartbeat`` event.
+
+    Emitted periodically while the worker is running (default every 30 s).
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    session_id: str = Field(min_length=1, pattern=_SESSION_ID_PATTERN)
+
+
+class SessionFinishedPayload(BaseModel):
+    """Payload for the ``session.finished`` event.
+
+    Emitted on graceful shutdown (SIGTERM/SIGINT) before the process exits.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    session_id: str = Field(min_length=1, pattern=_SESSION_ID_PATTERN)
+
+
 # Schema version constant for telegram.rejected — single source of truth
 # so middleware.py and future consumers don't hardcode the string.
 TELEGRAM_REJECTED_SCHEMA_VERSION = "1.0.0"
@@ -552,7 +599,10 @@ __all__ = [
     "PreCheckResults",
     "SecretAccessedPayload",
     "ServiceCrashedPayload",
+    "SessionFinishedPayload",
+    "SessionHeartbeatPayload",
     "SessionHeartbeatTimeoutPayload",
+    "SessionStartedPayload",
     "SinkDeliveryFailedPayload",
     "TaskApprovalRequestedPayload",
     "TaskBlockerRaisedPayload",

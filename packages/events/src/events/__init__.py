@@ -25,6 +25,7 @@ from events.ids import (
     new_session_id,
     new_task_id,
     new_uuid7,
+    new_worker_id,
     parse_prefix,
 )
 
@@ -74,6 +75,7 @@ __all__ = [
     "new_session_id",
     "new_task_id",
     "new_uuid7",
+    "new_worker_id",
     "parse_prefix",
     "register",
     "to_canonical_json",

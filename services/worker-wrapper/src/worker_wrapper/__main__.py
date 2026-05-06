@@ -1,41 +1,134 @@
-"""worker-wrapper hello-world entrypoint — Story 1.4 scaffold.
-
-Long-lived no-op so the compose container stays up, passes the
-`test -f /tmp/ready` healthcheck, and exits cleanly on SIGTERM/SIGINT.
-Real worker scaffold lands in Story 5.1 (worker scaffold).
-"""
+"""worker-wrapper entry point — structlog wiring + MCP client startup (Story 5.1)."""
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
+import os
 import signal
 import sys
 from pathlib import Path
-from types import FrameType
-from typing import NoReturn
+
+import structlog
+from secret_hygiene.sanitizer import redact_secrets
+
+from worker_wrapper.adapters.mcp_clients import MCPClientGroup, verify_connectivity
+from worker_wrapper.app.config import WorkerSettings
+from worker_wrapper.app.main import finish_session, heartbeat_loop, start_session
 
 _SERVICE = "worker-wrapper"
-_READY = Path("/tmp/ready")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-)
-log = logging.getLogger(_SERVICE)
+_STRUCTLOG_CONFIGURED: bool = False
 
 
-def _stop(signum: int, _frame: FrameType | None) -> NoReturn:
-    log.info("%s stopping (signal=%s)", _SERVICE, signum)
-    _READY.unlink(missing_ok=True)
-    sys.exit(0)
+def _configure_structlog() -> None:
+    """Wire structlog + bridge stdlib logging (idempotent)."""
+    global _STRUCTLOG_CONFIGURED
+    if _STRUCTLOG_CONFIGURED:
+        return
+
+    pre_chain: list[structlog.types.Processor] = [
+        structlog.contextvars.merge_contextvars,
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.add_logger_name,
+        structlog.stdlib.ExtraAdder(),
+        structlog.processors.TimeStamper(fmt="iso", utc=True),
+        redact_secrets,
+    ]
+
+    formatter = structlog.stdlib.ProcessorFormatter(
+        foreign_pre_chain=pre_chain,
+        processors=[
+            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            structlog.processors.JSONRenderer(),
+        ],
+    )
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(formatter)
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()
+    root_logger.addHandler(handler)
+    root_logger.setLevel(logging.INFO)
+
+    structlog.configure(
+        processors=[
+            *pre_chain,
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+        ],
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        cache_logger_on_first_use=False,
+    )
+    _STRUCTLOG_CONFIGURED = True
+
+
+async def _run() -> None:
+    log = structlog.get_logger(__name__)
+
+    settings = WorkerSettings()
+    ready = Path(
+        settings.ready_file_path or f"/tmp/worker-wrapper-ready-{os.getpid()}",
+    )
+    clients = MCPClientGroup(settings)
+
+    async with clients:
+        try:
+            results = await verify_connectivity(clients)
+            # Partial failure is intentional graceful degradation during
+            # the stub phase (task-registry/session-registry are stubs
+            # until Stories 5.8/5.9 land).  Clawhip-bridge is the only
+            # real server today.
+            if not results or not all(results.values()):
+                log.error("connectivity_check_failed_partial", results=results)
+
+            # Register signal handlers BEFORE session lifecycle so that
+            # SIGTERM during startup sets stop_event and the subsequent
+            # stop_event.wait() returns immediately, allowing graceful
+            # finish_session instead of a dangling session.started event.
+            stop_event = asyncio.Event()
+            loop = asyncio.get_running_loop()
+
+            def _handle_stop(signum: int) -> None:
+                log.info("stopping", signal=signum)
+                stop_event.set()
+
+            try:
+                for sig in (signal.SIGTERM, signal.SIGINT):
+                    loop.add_signal_handler(sig, _handle_stop, sig)
+            except (NotImplementedError, RuntimeError):
+                # Windows does not implement add_signal_handler; signals
+                # are still delivered but the loop will exit via
+                # KeyboardInterrupt.  Same fallback as registry-state
+                # and clawhip-daemon.
+                pass
+
+            # Story 5.2 — session lifecycle (AC-1, AC-2, AC-3, AC-5, AC-6).
+            session_id, worker_id = await start_session(clients, settings)
+
+            ready.touch()
+            log.info("ready", service=_SERVICE, session_id=session_id, worker_id=worker_id)
+
+            heartbeat_task = asyncio.create_task(
+                heartbeat_loop(clients, settings, session_id, stop_event),
+            )
+            await stop_event.wait()
+            heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat_task
+
+            await finish_session(clients, session_id, worker_id)
+        finally:
+            ready.unlink(missing_ok=True)
 
 
 def main() -> None:
-    signal.signal(signal.SIGTERM, _stop)
-    signal.signal(signal.SIGINT, _stop)
-    _READY.touch()
-    log.info("%s ready", _SERVICE)
-    signal.pause()
+    _configure_structlog()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(_run())
+    finally:
+        loop.close()
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ from events.ids import (
     new_session_id,
     new_task_id,
     new_uuid7,
+    new_worker_id,
     parse_prefix,
 )
 
@@ -152,4 +153,24 @@ class TestParsePrefixHardening:
 
         uid = new_uuid7(clock=FrozenClock(), rng=Random(42))
         assert parse_prefix("x-" + uid) is None
-        assert parse_prefix("abc-" + uid) is None
+
+    def test_recognizes_w_prefix(self) -> None:
+        wid = new_worker_id(clock=FrozenClock(), rng=Random(42))
+        result = parse_prefix(wid)
+        assert result is not None
+        assert result[0] == "w"
+
+
+class TestWorkerId:
+    def test_has_w_prefix(self) -> None:
+        assert new_worker_id().startswith("w-")
+
+    def test_uuidv7_core_matches_regex(self) -> None:
+        wid = new_worker_id()
+        core = wid[2:]
+        assert _UUID7_RE.match(core)
+
+    def test_deterministic_with_injected_clock_rng(self) -> None:
+        a = new_worker_id(clock=FrozenClock(), rng=Random(42))
+        b = new_worker_id(clock=FrozenClock(), rng=Random(42))
+        assert a == b

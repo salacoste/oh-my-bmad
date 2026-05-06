@@ -27,7 +27,10 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     PreCheckResults,
     SecretAccessedPayload,
     ServiceCrashedPayload,
+    SessionFinishedPayload,
+    SessionHeartbeatPayload,
     SessionHeartbeatTimeoutPayload,
+    SessionStartedPayload,
     SinkDeliveryFailedPayload,
     TaskApprovalRequestedPayload,
     TaskBlockerRaisedPayload,
@@ -51,7 +54,10 @@ __all__ = [
     "PreCheckResults",
     "SecretAccessedPayload",
     "ServiceCrashedPayload",
+    "SessionFinishedPayload",
+    "SessionHeartbeatPayload",
     "SessionHeartbeatTimeoutPayload",
+    "SessionStartedPayload",
     "SinkDeliveryFailedPayload",
     "TaskApprovalRequestedPayload",
     "TaskBlockerRaisedPayload",
@@ -115,3 +121,11 @@ register("telegram.rejected", "1.0.1", TelegramRejectedPayload)
 
 # Story 3.13 — task.self_recovered event payload (FR16).
 register("task.self_recovered", "1.0.0", TaskSelfRecoveredPayload)
+
+# Story 5.2 — session lifecycle event payloads (FR24a).
+register("session.started", "1.0.0", SessionStartedPayload)
+register("session.started", "1.0.1", SessionStartedPayload)
+register("session.heartbeat", "1.0.0", SessionHeartbeatPayload)
+register("session.heartbeat", "1.0.1", SessionHeartbeatPayload)
+register("session.finished", "1.0.0", SessionFinishedPayload)
+register("session.finished", "1.0.1", SessionFinishedPayload)

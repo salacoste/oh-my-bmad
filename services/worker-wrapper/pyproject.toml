@@ -1,13 +1,29 @@
 [project]
 name = "worker-wrapper"
-version = "0.2.0"
+version = "0.3.0"
 description = "Claude Code CLI subprocess supervision + typed-event extraction (no stdout parsing per NFR-O1)."
 authors = [
     { name = "R2d2", email = "bad.vano23ru@gmail.com" },
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "mcp>=1.0",
+    "structlog>=24.1",
+    "pydantic-settings>=2.5,<3.0",
+    "secret-hygiene",
+    "events",
+]
 
 [build-system]
 requires = ["uv_build>=0.11.0,<1.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+]
+
+[tool.uv.sources]
+secret-hygiene = { workspace = true }
+events = { workspace = true }
