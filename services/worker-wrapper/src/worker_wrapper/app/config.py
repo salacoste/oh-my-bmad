@@ -43,6 +43,13 @@ class WorkerSettings(BaseSettings):
     worktree_path: str = ""
     heartbeat_interval_s: float = Field(default=30.0, gt=0)
 
+    # Claude Code subprocess settings (Story 5.4).
+    claude_command: str = "claude"
+    claude_max_turns: int = 0  # 0 = unlimited
+    claude_timeout_s: float = 600.0
+    claude_output_format: str = "stream-json"
+    anthropic_api_key: str = ""  # WORKER_ANTHROPIC_API_KEY
+
     _resolved_session_id: str | None = None
     _resolved_worker_id: str | None = None
 

@@ -119,7 +119,10 @@ async def start_session(
     # avoid blocking the event loop on filesystem I/O.
     if settings.worktree_path:
         await asyncio.to_thread(
-            acquire_lock, Path(settings.worktree_path), session_id, worker_id,
+            acquire_lock,
+            Path(settings.worktree_path),
+            session_id,
+            worker_id,
         )
 
     try:
@@ -136,7 +139,9 @@ async def start_session(
         if settings.worktree_path:
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(
-                    release_lock, Path(settings.worktree_path), session_id,
+                    release_lock,
+                    Path(settings.worktree_path),
+                    session_id,
                 )
         raise
 
