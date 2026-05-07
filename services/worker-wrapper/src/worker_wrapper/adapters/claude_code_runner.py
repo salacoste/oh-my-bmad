@@ -2,8 +2,9 @@
 
 Spawns ``claude`` as a subprocess with ``--output-format stream-json``, reads
 structured JSON-lines from stdout, and extracts typed events from tool_use
-content blocks.  No regex-based stdout text parsing — only structured JSON
-deserialization (NFR-O1).
+content blocks and reasoning breadcrumbs from thinking/text blocks.
+No regex-based stdout text parsing — only structured JSON deserialization
+(NFR-O1).
 
 This is an adapter module — it manages an external process boundary.  Direct
 integration with the session lifecycle arrives in Story 5.12.
@@ -22,6 +23,10 @@ from typing import Any
 import structlog
 
 from worker_wrapper.app.config import WorkerSettings
+from worker_wrapper.domain.reasoning import (
+    ReasoningBreadcrumb,
+    extract_reasoning_from_content,
+)
 
 # Graceful shutdown: wait this many seconds after SIGTERM before SIGKILL.
 _GRACE_PERIOD_S: float = 5.0
@@ -59,6 +64,7 @@ class ClaudeCodeResult:
     num_turns: int = 0
     error: str | None = None
     events: list[ExtractedEvent] = field(default_factory=list)
+    reasoning: list[ReasoningBreadcrumb] = field(default_factory=list)
     stderr: str = ""
 
 
@@ -82,6 +88,7 @@ class ClaudeCodeRunner:
             )
         self._settings = settings
         self._events: list[ExtractedEvent] = []
+        self._reasoning: list[ReasoningBreadcrumb] = []
         self._session_id: str = ""
         self._result_msg: dict[str, Any] = {}
         self._process: asyncio.subprocess.Process | None = None
@@ -161,7 +168,11 @@ class ClaudeCodeRunner:
             self._result_msg = msg
 
     def _extract_events(self, msg: dict[str, Any]) -> None:
-        """Scan ``tool_use`` content blocks, map to event types."""
+        """Scan ``tool_use`` content blocks, map to event types.
+
+        Also extracts reasoning breadcrumbs from ``thinking`` and ``text``
+        blocks via the domain reasoning module (Story 5.5).
+        """
         content = msg.get("message", {}).get("content", [])
         if not isinstance(content, list):
             return
@@ -173,6 +184,9 @@ class ClaudeCodeRunner:
             event = self._classify_tool_use(tool_name, tool_input)
             if event is not None:
                 self._events.append(event)
+        # Extract reasoning breadcrumbs (Story 5.5).
+        breadcrumbs = extract_reasoning_from_content(content, self._session_id)
+        self._reasoning.extend(breadcrumbs)
 
     @staticmethod
     def _classify_tool_use(
@@ -223,6 +237,7 @@ class ClaudeCodeRunner:
             exit_code=exit_code,
             session_id=self._session_id,
             events=list(self._events),
+            reasoning=list(self._reasoning),
             stderr=stderr,
         )
         # Extract metadata from the final "result" message.
@@ -275,6 +290,7 @@ class ClaudeCodeRunner:
                 session_id=self._session_id,
                 error=f"Timed out after {self._settings.claude_timeout_s}s",
                 events=list(self._events),
+                reasoning=list(self._reasoning),
                 stderr=stderr,
             )
 
@@ -311,6 +327,7 @@ class ClaudeCodeRunner:
     async def run(self, prompt: str, worktree_path: Path) -> ClaudeCodeResult:
         """Run ``claude`` with the given prompt and return a structured result."""
         self._events = []
+        self._reasoning = []
         self._session_id = ""
         self._result_msg = {}
 
@@ -350,4 +367,5 @@ __all__ = [
     "ClaudeCodeResult",
     "ClaudeCodeRunner",
     "ExtractedEvent",
+    "ReasoningBreadcrumb",
 ]

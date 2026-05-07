@@ -4,6 +4,7 @@ from worker_wrapper.adapters.claude_code_runner import (
     ClaudeCodeResult,
     ClaudeCodeRunner,
     ExtractedEvent,
+    ReasoningBreadcrumb,
 )
 from worker_wrapper.adapters.mcp_clients import (
     MCPClientGroup,
@@ -15,5 +16,6 @@ __all__ = [
     "ClaudeCodeRunner",
     "ExtractedEvent",
     "MCPClientGroup",
+    "ReasoningBreadcrumb",
     "verify_connectivity",
 ]

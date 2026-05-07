@@ -591,9 +591,44 @@ class TelegramRejectedPayload(BaseModel):
         return self
 
 
+# ---------------------------------------------------------------------------
+# Story 5.5 — agent.reasoning.* breadcrumb payload (FR17b, NFR-O6).
+# ---------------------------------------------------------------------------
+
+
+class AgentReasoningBreadcrumbPayload(BaseModel):
+    """Payload for ``agent.reasoning.*`` breadcrumb events (FR17b, NFR-O6).
+
+    Emitted when the worker extracts reasoning content from Claude Code's
+    ``thinking`` or ``text`` content blocks in stream-json output.  All text
+    fields are sanitized through the secret-hygiene scanner before emission;
+    if secrets are detected the text is suppressed.
+
+    Field rules:
+
+    * ``session_id``: must match ``^s-<uuidv7>$``.
+    * ``subtype``: one of three classification literals.
+    * ``text``: sanitized reasoning text.  Empty string when suppressed.
+    * ``suppressed``: ``True`` when secret-hygiene scanner detected sensitive
+      content and the text was replaced.
+    * ``tool_name``: the tool_use name when subtype is ``tool_call_rationale``.
+    * ``raw_length``: original text length before sanitization (observability).
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    session_id: str = Field(min_length=1, pattern=_SESSION_ID_PATTERN)
+    subtype: Literal["plan_drafted", "tool_call_rationale", "step_summary"]
+    text: str = Field(max_length=50_000)
+    suppressed: bool = False
+    tool_name: str | None = Field(default=None, min_length=1, max_length=64)
+    raw_length: int = Field(ge=0)
+
+
 __all__ = [
     "TELEGRAM_REJECTED_SCHEMA_VERSION",
     "AcceptedCommand",
+    "AgentReasoningBreadcrumbPayload",
     "DiffSummary",
     "PreCheckOutcome",
     "PreCheckResults",

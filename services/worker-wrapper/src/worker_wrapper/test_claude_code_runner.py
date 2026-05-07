@@ -683,3 +683,154 @@ class TestPatterns:
 
     def test_commit_pattern_no_false_positive(self) -> None:
         assert _COMMIT_PATTERN.match("git log") is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: reasoning extraction in runner (Story 5.5)
+# ---------------------------------------------------------------------------
+
+
+class TestRunnerReasoningExtraction:
+    @pytest.mark.asyncio
+    async def test_thinking_block_extracts_reasoning(self) -> None:
+        runner = ClaudeCodeRunner(_settings())
+        msg = _make_msg(
+            "assistant",
+            message={
+                "content": [
+                    {"type": "thinking", "thinking": "Let me plan this out"},
+                    _tool_use_block("Write", {"file_path": "/tmp/a.py"}),
+                ],
+            },
+        )
+        runner._extract_events(msg)
+        assert len(runner._events) == 1  # tool_use
+        assert len(runner._reasoning) == 1
+        assert runner._reasoning[0].subtype == "plan_drafted"
+        assert runner._reasoning[0].text == "Let me plan this out"
+
+    @pytest.mark.asyncio
+    async def test_text_before_tool_use_is_rationale(self) -> None:
+        runner = ClaudeCodeRunner(_settings())
+        msg = _make_msg(
+            "assistant",
+            message={
+                "content": [
+                    _text_block("I'll edit the config file"),
+                    _tool_use_block("Edit"),
+                ],
+            },
+        )
+        runner._extract_events(msg)
+        assert len(runner._reasoning) == 1
+        assert runner._reasoning[0].subtype == "tool_call_rationale"
+        assert runner._reasoning[0].tool_name == "Edit"
+
+    @pytest.mark.asyncio
+    async def test_text_after_tool_result_is_step_summary(self) -> None:
+        runner = ClaudeCodeRunner(_settings())
+        msg = _make_msg(
+            "assistant",
+            message={
+                "content": [
+                    _tool_use_block("Bash"),
+                    {"type": "tool_result", "tool_use_id": "toolu_01", "content": "ok"},
+                    _text_block("Tests passed, continuing"),
+                ],
+            },
+        )
+        runner._extract_events(msg)
+        assert len(runner._reasoning) == 1
+        assert runner._reasoning[0].subtype == "step_summary"
+
+    @pytest.mark.asyncio
+    async def test_secret_in_thinking_suppressed(self) -> None:
+        runner = ClaudeCodeRunner(_settings())
+        msg = _make_msg(
+            "assistant",
+            message={
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "Key is sk-ant-api03-" + "A" * 36,
+                    },
+                ],
+            },
+        )
+        runner._extract_events(msg)
+        assert len(runner._reasoning) == 1
+        assert runner._reasoning[0].suppressed
+        assert runner._reasoning[0].text == ""
+
+    @pytest.mark.asyncio
+    async def test_reasoning_in_full_run(self) -> None:
+        settings = _settings()
+        runner = ClaudeCodeRunner(settings)
+        lines = [
+            json.dumps({"type": "system", "session_id": "s-r001"}).encode(),
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {"type": "thinking", "thinking": "Analyzing the task"},
+                            _text_block("I'll write a file"),
+                            _tool_use_block("Write", {"file_path": "/tmp/x.py"}),
+                        ],
+                    },
+                    "session_id": "s-r001",
+                }
+            ).encode(),
+            json.dumps(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "s-r001",
+                }
+            ).encode(),
+        ]
+        proc = await _mock_process(stdout_lines=lines, returncode=0)
+
+        with patch.object(runner, "_spawn", return_value=proc):
+            result = await runner.run("implement X", Path("/worktree"))
+
+        assert len(result.events) == 1  # tool_use
+        assert len(result.reasoning) == 2  # thinking + text
+        assert result.reasoning[0].subtype == "plan_drafted"
+        assert result.reasoning[1].subtype == "tool_call_rationale"
+        assert result.reasoning[1].tool_name == "Write"
+
+    @pytest.mark.asyncio
+    async def test_reasoning_reset_on_new_run(self) -> None:
+        settings = _settings()
+        runner = ClaudeCodeRunner(settings)
+
+        # First run with reasoning.
+        lines1 = [
+            json.dumps({"type": "system", "session_id": "s-r01"}).encode(),
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {"type": "thinking", "thinking": "Plan"},
+                        ],
+                    },
+                }
+            ).encode(),
+            json.dumps({"type": "result", "session_id": "s-r01"}).encode(),
+        ]
+        proc1 = await _mock_process(stdout_lines=lines1, returncode=0)
+        with patch.object(runner, "_spawn", return_value=proc1):
+            result1 = await runner.run("task 1", Path("/w"))
+        assert len(result1.reasoning) == 1
+
+        # Second run — reasoning should be fresh.
+        lines2 = [
+            json.dumps({"type": "system", "session_id": "s-r02"}).encode(),
+            json.dumps({"type": "result", "session_id": "s-r02"}).encode(),
+        ]
+        proc2 = await _mock_process(stdout_lines=lines2, returncode=0)
+        with patch.object(runner, "_spawn", return_value=proc2):
+            result2 = await runner.run("task 2", Path("/w"))
+        assert len(result2.reasoning) == 0

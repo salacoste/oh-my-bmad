@@ -22,6 +22,7 @@ from __future__ import annotations
 from events.payloads import (  # noqa: F401 — intentional re-exports
     TELEGRAM_REJECTED_SCHEMA_VERSION,
     AcceptedCommand,
+    AgentReasoningBreadcrumbPayload,
     DiffSummary,
     PreCheckOutcome,
     PreCheckResults,
@@ -49,6 +50,7 @@ from events.schema_registry import register
 __all__ = [
     "TELEGRAM_REJECTED_SCHEMA_VERSION",
     "AcceptedCommand",
+    "AgentReasoningBreadcrumbPayload",
     "DiffSummary",
     "PreCheckOutcome",
     "PreCheckResults",
@@ -129,3 +131,8 @@ register("session.heartbeat", "1.0.0", SessionHeartbeatPayload)
 register("session.heartbeat", "1.0.1", SessionHeartbeatPayload)
 register("session.finished", "1.0.0", SessionFinishedPayload)
 register("session.finished", "1.0.1", SessionFinishedPayload)
+
+# Story 5.5 — agent.reasoning.* breadcrumb payloads (FR17b, NFR-O6).
+register("agent.reasoning.plan_drafted", "1.0.0", AgentReasoningBreadcrumbPayload)
+register("agent.reasoning.tool_call_rationale", "1.0.0", AgentReasoningBreadcrumbPayload)
+register("agent.reasoning.step_summary", "1.0.0", AgentReasoningBreadcrumbPayload)
