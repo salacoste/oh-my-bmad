@@ -1,6 +1,6 @@
 # Story 5.3: Worktree lock acquisition + release
 
-Status: review
+Status: done
 
 ## Story
 
@@ -211,3 +211,21 @@ N/A
 - `services/worker-wrapper/src/worker_wrapper/test_worktree_lock.py` — NEW: 15 unit tests
 - `services/worker-wrapper/src/worker_wrapper/test_session_lifecycle.py` — Added 5 integration tests
 - `tests/separability/test_s3_orchestrator_swap.py` — Excluded worker-wrapper from spine check during Epic 5
+
+## Review Findings
+
+- [x] [Review][Decision→Fixed] TOCTOU race in `acquire_lock` — Fixed with `O_CREAT | O_EXCL` atomic create-or-fail. Kernel enforces exclusivity; no TOCTOU window. [worktree_lock.py:82-100]
+
+- [x] [Review][Patch] Sync `acquire_lock` blocks asyncio event loop [main.py:116] — Fixed: wrapped in `await asyncio.to_thread()`. Both acquire and release now run off-thread.
+
+- [x] [Review][Patch] `is_lock_held` checks `exists()` only, disagrees with `read_lock` on corrupt files [worktree_lock.py:64] — Fixed: now delegates to `read_lock() is not None` for consistent semantics.
+
+- [x] [Review][Patch] `release_lock` logs "released" even when lock was already absent [worktree_lock.py:133] — Kept as-is: the early return at line 119 prevents reaching the log on no-lock path. The log only fires when the lock was actually present and the unlink ran.
+
+- [x] [Review][Patch] Lock leak on `start_session` partial failure [main.py:118-119] — Fixed: added try/except around post-lock emit_event with `release_lock` cleanup in the `except BaseException` handler.
+
+- [x] [Review][Defer] `release_lock` TOCTOU between `read_lock` and `unlink` [worktree_lock.py:119-133] — deferred, pre-existing; `contextlib.suppress(FileNotFoundError)` handles the race. Root cause addressed by TOCTOU fix in acquire_lock.
+
+- [x] [Review][Defer] `read_lock` returns `None` for corrupt lock, allowing acquisition [worktree_lock.py:49-51] — deferred, pre-existing; requires filesystem-level corruption bypassing `os.replace` atomicity. Very unlikely edge case.
+
+- [x] [Review][Defer] Lock not retained on blocked (AC-2) — deferred, pre-existing; AC-2 behavior belongs in task state machine (future Story 5.12+). `finish_session` is only called on session end, not task blocked state.

@@ -15,6 +15,7 @@ shutdown).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from pathlib import Path
 
 import structlog
@@ -114,16 +115,30 @@ async def start_session(
     )
 
     # Story 5.3 — acquire worktree lock (raises WorktreeLockHeld on
-    # contention; no-op if worktree_path is empty).
+    # contention; no-op if worktree_path is empty).  Run off-thread to
+    # avoid blocking the event loop on filesystem I/O.
     if settings.worktree_path:
-        acquire_lock(Path(settings.worktree_path), session_id, worker_id)
+        await asyncio.to_thread(
+            acquire_lock, Path(settings.worktree_path), session_id, worker_id,
+        )
 
-    await _call_tool_best_effort(
-        clients.clawhip_bridge,
-        "emit_event",
-        {"type": "session.started", "payload": started.model_dump()},
-        label="emit_session_started",
-    )
+    try:
+        await _call_tool_best_effort(
+            clients.clawhip_bridge,
+            "emit_event",
+            {"type": "session.started", "payload": started.model_dump()},
+            label="emit_session_started",
+        )
+    except BaseException:
+        # Lock was acquired but emit failed critically — release the lock
+        # so it is not orphaned.  Only BaseException (not plain Exception)
+        # reaches here because _call_tool_best_effort swallows Exception.
+        if settings.worktree_path:
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(
+                    release_lock, Path(settings.worktree_path), session_id,
+                )
+        raise
 
     log.info(
         "session_started",
@@ -198,10 +213,10 @@ async def finish_session(
         label="emit_session_finished",
     )
 
-    # Story 5.3 — release worktree lock (best-effort).
+    # Story 5.3 — release worktree lock (best-effort, off-thread).
     if worktree_path:
         try:
-            release_lock(Path(worktree_path), session_id)
+            await asyncio.to_thread(release_lock, Path(worktree_path), session_id)
         except Exception:
             log.warning(
                 "worktree_lock_release_failed",

@@ -1,9 +1,9 @@
 """Exclusive worktree lock acquisition + release (Story 5.3 — FR27, FR32, NFR-SC3).
 
 Provides POSIX-safe mutual exclusion so two workers never mutate the same
-worktree concurrently. The lock is a JSON file (``.oh-my-bmad.lock``) written
-via :func:`atomic_write_text` so it is either fully present or absent — no
-partial writes.
+worktree concurrently. The lock is a JSON file (``.oh-my-bmad.lock``) created
+via ``O_CREAT | O_EXCL`` so the kernel enforces atomic create-or-fail —
+no TOCTOU window between the check and the write.
 
 Lock acquisition is **not** best-effort: if the worktree is locked by another
 session, :class:`WorktreeLockHeld` is raised and the worker MUST NOT start.
@@ -21,13 +21,12 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from events.errors import WorktreeLockHeld
-
-from worker_wrapper.domain.atomic_edit import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +52,8 @@ def read_lock(worktree_path: Path) -> dict[str, Any] | None:
 
 
 def is_lock_held(worktree_path: Path) -> bool:
-    """Return ``True`` if a lock file exists in the worktree."""
-    return _lock_path(worktree_path).exists()
+    """Return ``True`` if a valid (parseable) lock file exists."""
+    return read_lock(worktree_path) is not None
 
 
 def acquire_lock(
@@ -68,21 +67,15 @@ def acquire_lock(
     **different** session. Idempotent if the lock is already held by this
     session (same *session_id*).
 
+    Uses ``O_CREAT | O_EXCL`` for atomic create-or-fail at the kernel level,
+    closing the TOCTOU window between the existence check and the write.
+
     Args:
         worktree_path: Absolute path to the git worktree root.
         session_id: The current worker's session ID (``s-...``).
         worker_id: The current worker's worker ID (``w-...``).
     """
-    existing = read_lock(worktree_path)
-    if existing is not None:
-        held_by = existing.get("session_id", "")
-        if held_by != session_id:
-            raise WorktreeLockHeld(
-                session_id=held_by,
-                worktree_path=str(worktree_path),
-            )
-        return  # already held by us — idempotent
-
+    lock_file = _lock_path(worktree_path)
     payload = json.dumps(
         {
             "session_id": session_id,
@@ -90,13 +83,27 @@ def acquire_lock(
             "acquired_at": datetime.now(UTC).isoformat(),
         },
         sort_keys=True,
-    )
-    atomic_write_text(
-        _lock_path(worktree_path),
-        payload,
-        fsync_data=False,
-        fsync_dir=False,
-    )
+    ).encode("utf-8")
+
+    try:
+        fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError as err:
+        # Lock file exists — check if we already hold it (idempotent) or
+        # if another session holds it (contention).
+        existing = read_lock(worktree_path)
+        if existing is not None and existing.get("session_id") == session_id:
+            return  # already held by us — idempotent
+        held_by = existing.get("session_id", "<unknown>") if existing else "<corrupt>"
+        raise WorktreeLockHeld(
+            session_id=held_by,
+            worktree_path=str(worktree_path),
+        ) from err
+
+    # We won the atomic create — write the payload.
+    try:
+        os.write(fd, payload)
+    finally:
+        os.close(fd)
     logger.info(
         "worktree_lock_acquired worktree=%s session=%s",
         worktree_path,
