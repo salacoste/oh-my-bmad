@@ -12,6 +12,8 @@ dependencies = [
     "pydantic-settings>=2.5,<3.0",
     "secret-hygiene",
     "events",
+    "aiohttp>=3.9",
+    "tenacity>=8.2",
 ]
 
 [build-system]

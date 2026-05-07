@@ -2223,11 +2223,13 @@ name = "worker-wrapper"
 version = "0.3.0"
 source = { editable = "services/worker-wrapper" }
 dependencies = [
+    { name = "aiohttp" },
     { name = "events" },
     { name = "mcp" },
     { name = "pydantic-settings" },
     { name = "secret-hygiene" },
     { name = "structlog" },
+    { name = "tenacity" },
 ]
 
 [package.dev-dependencies]
@@ -2238,11 +2240,13 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.9" },
     { name = "events", editable = "packages/events" },
     { name = "mcp", specifier = ">=1.0" },
     { name = "pydantic-settings", specifier = ">=2.5,<3.0" },
     { name = "secret-hygiene", editable = "packages/secret-hygiene" },
     { name = "structlog", specifier = ">=24.1" },
+    { name = "tenacity", specifier = ">=8.2" },
 ]
 
 [package.metadata.requires-dev]

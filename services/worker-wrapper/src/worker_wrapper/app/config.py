@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from events.ids import new_session_id, new_worker_id
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -49,6 +49,11 @@ class WorkerSettings(BaseSettings):
     claude_timeout_s: float = 600.0
     claude_output_format: str = "stream-json"
     anthropic_api_key: str = ""  # WORKER_ANTHROPIC_API_KEY
+
+    # GitHub API settings (Story 5.7).
+    github_token: SecretStr = SecretStr("")
+    github_api_base_url: str = "https://api.github.com"
+    github_timeout_s: float = 10.0
 
     _resolved_session_id: str | None = None
     _resolved_worker_id: str | None = None
