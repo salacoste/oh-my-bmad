@@ -53,7 +53,7 @@ class WorkerSettings(BaseSettings):
     # GitHub API settings (Story 5.7).
     github_token: SecretStr = SecretStr("")
     github_api_base_url: str = "https://api.github.com"
-    github_timeout_s: float = 10.0
+    github_timeout_s: float = Field(default=10.0, gt=0)
 
     _resolved_session_id: str | None = None
     _resolved_worker_id: str | None = None

@@ -6,7 +6,6 @@ async-context-manager responses.  No live GitHub API calls.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -98,45 +97,11 @@ class _ErrorSession:
         pass
 
 
-class _SlowResponse:
-    """Response whose __aenter__ sleeps to simulate network latency."""
-
-    def __init__(self, delay: float = 10.0) -> None:
-        self._delay = delay
-        self.status = 200
-        self.request_info = MagicMock()
-        self.history: list[Any] = []
-
-    async def __aenter__(self) -> _SlowResponse:
-        await asyncio.sleep(self._delay)
-        return self
-
-    async def __aexit__(self, *exc: object) -> None:
-        pass
-
-    async def json(self, **kwargs: Any) -> dict[str, Any]:
-        return {}
-
-
-class _SlowSession:
-    """Mock session that returns slow responses."""
-
-    def __init__(self, delay: float = 10.0) -> None:
-        self._delay = delay
-        self.call_count = 0
-
-    def request(self, *a: Any, **kw: Any) -> _SlowResponse:
-        self.call_count += 1
-        return _SlowResponse(self._delay)
-
-    async def close(self) -> None:
-        pass
-
-
 def _client(settings: WorkerSettings, session: Any) -> GitHubClient:
-    """Create a GitHubClient with an injected mock session."""
+    """Create a GitHubClient with an injected mock session and token."""
     client = GitHubClient(settings)
     client._session = session
+    client._token = settings.github_token.get_secret_value()
     return client
 
 
@@ -184,7 +149,7 @@ class TestBranchCreation:
         client = _client(settings, session)
 
         result = await client.create_branch(
-            "owner", "repo", "refs/heads/feat-x", "abc123"
+            "owner", "repo", "refs/heads/feat-x", "abc123def456abc123def456abc123def456abcd"
         )
 
         assert isinstance(result, BranchResult)
@@ -313,12 +278,12 @@ class TestAuthAndToken:
 
 
 class TestTimeout:
-    """AC-2: Total timeout handling."""
+    """AC-2: Total timeout handling — per-request timeout triggers retry."""
 
     @pytest.mark.asyncio
     async def test_timeout_returns_error(self) -> None:
-        settings = _settings(github_timeout_s=0.01)
-        session = _SlowSession(delay=10.0)
+        settings = _settings(github_timeout_s=0.5)
+        session = _ErrorSession(TimeoutError())
         client = _client(settings, session)
 
         result = await client.create_pr_draft("o", "r", "T", "h", "main")
@@ -382,7 +347,10 @@ class TestAuthError:
         session = _MockSession([resp])
         client = _client(settings, session)
 
-        result = await client.create_branch("o", "r", "refs/heads/x", "abc")
+        result = await client.create_branch(
+            "o", "r", "refs/heads/x",
+            "abc123def456abc123def456abc123def456abcd",
+        )
 
         assert result.success is False
         assert "Bad credentials" in (result.error or "")
@@ -423,6 +391,18 @@ class TestConfigLoading:
         )
         assert settings.github_api_base_url == "https://github.enterprise.com/api/v3"
 
+    def test_timeout_must_be_positive(self) -> None:
+        from pydantic_core import ValidationError
+
+        with pytest.raises(ValidationError):
+            _settings(github_timeout_s=0.0)
+
+    def test_timeout_must_be_positive_negative(self) -> None:
+        from pydantic_core import ValidationError
+
+        with pytest.raises(ValidationError):
+            _settings(github_timeout_s=-1.0)
+
 
 class TestContextManager:
     """AC-3: Async context manager for session lifecycle."""
@@ -432,11 +412,76 @@ class TestContextManager:
         settings = _settings()
         async with GitHubClient(settings) as client:
             assert client._session is not None
+            assert client._token == _TOKEN
         assert client._session is None
+        assert client._closed is True
 
     @pytest.mark.asyncio
     async def test_request_without_context_manager_raises(self) -> None:
         settings = _settings()
         client = GitHubClient(settings)
         with pytest.raises(RuntimeError, match="async context manager"):
-            await client._request("GET", "/test", {})
+            await client._request("GET", "/test")
+
+
+class TestInputValidation:
+    """Input validation on owner, repo, ref, sha."""
+
+    @pytest.mark.asyncio
+    async def test_invalid_owner_with_slash(self) -> None:
+        settings = _settings()
+        client = _client(settings, None)
+        result = await client.create_pr_draft("bad/owner", "repo", "T", "h", "main")
+        assert result.success is False
+        assert "owner" in (result.error or "").lower()
+
+    @pytest.mark.asyncio
+    async def test_empty_repo(self) -> None:
+        settings = _settings()
+        client = _client(settings, None)
+        result = await client.create_pr_draft("owner", "", "T", "h", "main")
+        assert result.success is False
+        assert "repo" in (result.error or "").lower()
+
+    @pytest.mark.asyncio
+    async def test_invalid_ref_prefix(self) -> None:
+        settings = _settings()
+        client = _client(settings, None)
+        result = await client.create_branch("o", "r", "heads/x", "a" * 40)
+        assert result.success is False
+        assert "refs/" in (result.error or "")
+
+    @pytest.mark.asyncio
+    async def test_invalid_sha_format(self) -> None:
+        settings = _settings()
+        client = _client(settings, None)
+        result = await client.create_branch("o", "r", "refs/heads/x", "not-hex")
+        assert result.success is False
+        assert "sha" in (result.error or "").lower()
+
+
+class TestError422Shape:
+    """422 response with errors array."""
+
+    @pytest.mark.asyncio
+    async def test_422_with_errors_array(self) -> None:
+        settings = _settings()
+        resp = _FakeResponse(
+            status=422,
+            json_body={
+                "message": "Validation Failed",
+                "errors": [
+                    {"message": "Invalid branch name"},
+                    {"message": "SHA mismatch"},
+                ],
+            },
+        )
+        session = _MockSession([resp])
+        client = _client(settings, session)
+
+        result = await client.create_pr_draft("o", "r", "T", "h", "main")
+
+        assert result.success is False
+        assert "Invalid branch name" in (result.error or "")
+        assert "SHA mismatch" in (result.error or "")
+        assert session.call_count == 1
