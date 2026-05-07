@@ -35,6 +35,7 @@ class ReasoningBreadcrumb:
     *why* the agent acted, not *what* it did.
     """
 
+    session_id: str  # links breadcrumb to the session
     event_type: str  # "agent.reasoning.plan_drafted" etc.
     subtype: ReasoningSubtype
     text: str  # sanitized — may be empty if suppressed
@@ -66,11 +67,10 @@ def classify_reasoning_block(
 ) -> ReasoningSubtype | None:
     """Determine the reasoning subtype for a content block.
 
-    Classification rules:
-    - ``thinking`` block → ``plan_drafted`` (always)
-    - ``text`` block before a ``tool_use`` → ``plan_drafted``
-    - ``text`` block immediately before ``tool_use`` with rationale → ``tool_call_rationale``
-    - ``text`` block after a ``tool_result`` → ``step_summary``
+    Classification rules (priority order: tool_call_rationale > step_summary > plan_drafted):
+    - ``thinking`` block → ``plan_drafted`` (always, regardless of context)
+    - ``text`` block before a ``tool_use`` → ``tool_call_rationale``
+    - ``text`` block after a ``tool_result`` (and not before ``tool_use``) → ``step_summary``
     - Other text blocks → ``plan_drafted`` (default)
     """
     block_type = block.get("type")
@@ -95,9 +95,11 @@ def extract_reasoning_text(block: dict[str, Any]) -> str:
     """Extract raw reasoning text from a content block."""
     block_type = block.get("type")
     if block_type == "thinking":
-        return str(block.get("thinking", ""))
+        value = block.get("thinking", "")
+        return value if isinstance(value, str) else ""
     if block_type == "text":
-        return str(block.get("text", ""))
+        value = block.get("text", "")
+        return value if isinstance(value, str) else ""
     return ""
 
 
@@ -114,7 +116,8 @@ def build_reasoning_breadcrumb(
     is not a reasoning source (not ``thinking`` or ``text``) or if the text
     is empty after stripping.
     """
-    raw_text = extract_reasoning_text(block).strip()
+    raw = extract_reasoning_text(block)
+    raw_text = raw.strip()
     if not raw_text:
         return None
 
@@ -127,17 +130,20 @@ def build_reasoning_breadcrumb(
     # Determine tool_name for tool_call_rationale subtype.
     tool_name: str | None = None
     if subtype == "tool_call_rationale" and next_block is not None:
-        tool_name = next_block.get("name")
+        name = next_block.get("name")
+        if isinstance(name, str) and len(name) >= 1:
+            tool_name = name
 
     event_type = f"agent.reasoning.{subtype}"
 
     return ReasoningBreadcrumb(
+        session_id=session_id,
         event_type=event_type,
         subtype=subtype,
         text=sanitized,
         suppressed=suppressed,
         tool_name=tool_name,
-        raw_length=len(raw_text),
+        raw_length=len(raw),
     )
 
 
@@ -160,9 +166,19 @@ def extract_reasoning_from_content(
         if block_type not in ("thinking", "text"):
             continue
 
-        prev_block_type = content[i - 1].get("type") if i > 0 else None
-        next_block_type = content[i + 1].get("type") if i < len(content) - 1 else None
-        next_block = content[i + 1] if i < len(content) - 1 else None
+        prev_block_type = (
+            content[i - 1].get("type") if i > 0 and isinstance(content[i - 1], dict) else None
+        )
+        next_block_type = (
+            content[i + 1].get("type")
+            if i < len(content) - 1 and isinstance(content[i + 1], dict)
+            else None
+        )
+        next_block = (
+            content[i + 1]
+            if i < len(content) - 1 and isinstance(content[i + 1], dict)
+            else None
+        )
 
         breadcrumb = build_reasoning_breadcrumb(
             block=block,

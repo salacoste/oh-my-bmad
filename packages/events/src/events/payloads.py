@@ -624,6 +624,13 @@ class AgentReasoningBreadcrumbPayload(BaseModel):
     tool_name: str | None = Field(default=None, min_length=1, max_length=64)
     raw_length: int = Field(ge=0)
 
+    @model_validator(mode="after")
+    def _check_text_suppressed_consistency(self) -> AgentReasoningBreadcrumbPayload:
+        if not self.suppressed and self.text == "":
+            msg = "Non-suppressed breadcrumb must have non-empty text"
+            raise ValueError(msg)
+        return self
+
 
 __all__ = [
     "TELEGRAM_REJECTED_SCHEMA_VERSION",

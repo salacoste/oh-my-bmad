@@ -156,6 +156,12 @@ class TestExtractReasoningText:
     def test_missing_field(self) -> None:
         assert extract_reasoning_text({"type": "thinking"}) == ""
 
+    def test_non_string_thinking_value(self) -> None:
+        assert extract_reasoning_text({"type": "thinking", "thinking": None}) == ""
+
+    def test_non_string_text_value(self) -> None:
+        assert extract_reasoning_text({"type": "text", "text": 123}) == ""
+
 
 # ---------------------------------------------------------------------------
 # Tests: build_reasoning_breadcrumb
@@ -169,11 +175,21 @@ class TestBuildReasoningBreadcrumb:
             session_id=_SESSION_ID,
         )
         assert bc is not None
+        assert bc.session_id == _SESSION_ID
         assert bc.event_type == "agent.reasoning.plan_drafted"
         assert bc.subtype == "plan_drafted"
         assert bc.text == "Let me analyze"
         assert not bc.suppressed
         assert bc.raw_length == len("Let me analyze")
+
+    def test_raw_length_includes_whitespace(self) -> None:
+        bc = build_reasoning_breadcrumb(
+            _text_block("  hello  "),
+            session_id=_SESSION_ID,
+        )
+        assert bc is not None
+        assert bc.text == "hello"
+        assert bc.raw_length == 9  # pre-strip length
 
     def test_tool_call_rationale_with_tool_name(self) -> None:
         next_block = _tool_use_block("Write")
@@ -184,8 +200,20 @@ class TestBuildReasoningBreadcrumb:
             next_block=next_block,
         )
         assert bc is not None
+        assert bc.session_id == _SESSION_ID
         assert bc.subtype == "tool_call_rationale"
         assert bc.tool_name == "Write"
+
+    def test_tool_name_none_when_next_block_missing_name(self) -> None:
+        next_block: dict[str, Any] = {"type": "tool_use", "id": "x"}
+        bc = build_reasoning_breadcrumb(
+            _text_block("Doing stuff"),
+            session_id=_SESSION_ID,
+            next_block_type="tool_use",
+            next_block=next_block,
+        )
+        assert bc is not None
+        assert bc.tool_name is None
 
     def test_step_summary_after_tool_result(self) -> None:
         bc = build_reasoning_breadcrumb(
@@ -244,6 +272,7 @@ class TestExtractReasoningFromContent:
         breadcrumbs = extract_reasoning_from_content(content, _SESSION_ID)
         assert len(breadcrumbs) == 2
         assert breadcrumbs[0].subtype == "plan_drafted"
+        assert breadcrumbs[0].session_id == _SESSION_ID
         assert breadcrumbs[1].subtype == "tool_call_rationale"
         assert breadcrumbs[1].tool_name == "Write"
 
@@ -290,6 +319,12 @@ class TestExtractReasoningFromContent:
         content = [_text_block(""), _text_block("   ")]
         assert extract_reasoning_from_content(content, _SESSION_ID) == []
 
+    def test_non_dict_neighbors_skipped(self) -> None:
+        content: list[Any] = [None, _text_block("Planning"), _tool_use_block()]
+        breadcrumbs = extract_reasoning_from_content(content, _SESSION_ID)
+        assert len(breadcrumbs) == 1
+        assert breadcrumbs[0].subtype == "tool_call_rationale"
+
 
 # ---------------------------------------------------------------------------
 # Tests: NFR — domain layer has zero IO imports
@@ -325,6 +360,7 @@ class TestSchemaRegistry:
         import importlib
 
         import registry_state.domain.event_types as et_mod
+        # reload required: autouse fixture in test_schema_registry.py calls unregister_all()
         importlib.reload(et_mod)
         from events.schema_registry import REGISTRY
 
@@ -359,3 +395,15 @@ class TestSchemaRegistry:
         )
         assert payload.suppressed
         assert payload.tool_name == "Write"
+
+    def test_payload_rejects_empty_text_without_suppressed(self) -> None:
+        import pytest
+        from events.payloads import AgentReasoningBreadcrumbPayload
+
+        with pytest.raises(ValueError, match="Non-suppressed"):
+            AgentReasoningBreadcrumbPayload(
+                session_id=_SESSION_ID,
+                subtype="plan_drafted",
+                text="",
+                raw_length=0,
+            )

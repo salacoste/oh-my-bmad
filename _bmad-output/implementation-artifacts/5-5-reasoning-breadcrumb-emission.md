@@ -1,6 +1,6 @@
 # Story 5.5: `agent.reasoning.*` breadcrumb emission with sanitizer integration
 
-Status: review
+Status: done
 
 ## Story
 
@@ -14,7 +14,7 @@ So that `/logs` and `/status` can surface *why* the agent did what it did, not j
 
 2. **AC-2: Event types** — At least three `agent.reasoning.*` subtypes are classified: `agent.reasoning.plan_drafted` (planning rationale from text/thinking blocks), `agent.reasoning.tool_call_rationale` (reasoning preceding a tool_use), `agent.reasoning.step_summary` (reasoning after tool result). The subtype is determined by context position relative to tool_use blocks.
 
-3. **AC-3: Sanitizer integration** — When any reasoning breadcrumb is extracted, all text fields in the event payload pass through `secret_hygiene.sanitizer._redact_value()` before emission. If the sanitized output differs from the input (secrets detected), the payload text is replaced with `{reason: "sensitive_content_suppressed"}` and the event is STILL emitted (never dropped).
+3. **AC-3: Sanitizer integration** — When any reasoning breadcrumb is extracted, all text fields pass through `secret_hygiene.scanner.scan_text()` before emission. If secrets are detected, the text is replaced with an empty string and `suppressed=True` is set on the breadcrumb. The event is STILL emitted (never dropped). Full-text suppression is used because partial redaction of reasoning text could leave enough context to reconstruct the secret.
 
 4. **AC-4: Payload models registered** — New Pydantic payload models (`AgentReasoningBreadcrumbPayload` or per-subtype models) are defined in `packages/events/src/events/payloads.py` and registered in the schema registry via `register()` calls. `scripts/check_event_registry.py` exits 0.
 
@@ -213,3 +213,18 @@ Claude Opus 4.7
 - `services/worker-wrapper/src/worker_wrapper/adapters/__init__.py` — added `ReasoningBreadcrumb` export
 - `services/worker-wrapper/src/worker_wrapper/test_reasoning.py` — NEW: 37 domain tests
 - `services/worker-wrapper/src/worker_wrapper/test_claude_code_runner.py` — added 6 integration tests
+
+### Review Findings
+
+- [x] [Review][Patch] `session_id` accepted but never stored in `ReasoningBreadcrumb` [reasoning.py:38] — Added `session_id: str` field to dataclass and propagated from `build_reasoning_breadcrumb`
+- [x] [Review][Patch] Neighbor block access crashes on non-dict elements [reasoning.py:163-165] — Added `isinstance(block, dict)` guards for prev/next neighbor lookups
+- [x] [Review][Patch] `tool_name` from `next_block` not validated [reasoning.py:129-130] — Added isinstance + min_length guard to prevent None/empty tool_name
+- [x] [Review][Patch] Docstring contradicts classification logic [reasoning.py:69-76] — Updated docstring with priority order and accurate descriptions
+- [x] [Review][Patch] `str()` on non-string block values produces "None" [reasoning.py:98-100] — Changed to isinstance check, returns "" for non-string values
+- [x] [Review][Patch] `raw_length` records stripped length, not pre-strip [reasoning.py:117,140] — Now computes from pre-strip text
+- [x] [Review][Patch] AC-3 spec deviation: empty string vs structured suppression text — Updated AC-3 wording to match implementation (suppressed flag + empty text, pre-approved in Dev Notes)
+- [x] [Review][Patch] Classification priority undocumented [reasoning.py:83] — Added priority order to docstring
+- [x] [Review][Patch] Payload allows non-suppressed empty text [payloads.py:628] — Added `model_validator` enforcing `text != "" or suppressed == True`
+- [x] [Review][Patch] No test for non-dict neighbor [test_reasoning.py] — Added `test_non_dict_neighbors_skipped`
+- [x] [Review][Patch] `importlib.reload` comment missing [test_reasoning.py:1123] — Added comment explaining autouse fixture interaction
+- [x] [Review][Defer] No `truncated` indicator for consumers — deferred, schema evolution for future story
