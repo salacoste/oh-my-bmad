@@ -574,6 +574,24 @@ class TestValidateEdit:
         assert not result.valid
         assert "exceeds" in (result.error or "")
 
+    def test_old_string_exceeds_max_size(self) -> None:
+        from worker_wrapper.domain.atomic_edit import _MAX_EDIT_SIZE
+
+        result = validate_edit("content", "x" * (_MAX_EDIT_SIZE + 1), "replacement")
+        assert not result.valid
+        assert "exceeds" in (result.error or "")
+
+    def test_noop_edit_rejected(self) -> None:
+        result = validate_edit("hello world", "world", "world")
+        assert not result.valid
+        assert "no-op" in (result.error or "")
+
+    def test_overlapping_pattern_count(self) -> None:
+        # str.count counts non-overlapping occurrences, matching str.replace.
+        result = validate_edit("aaaa", "aa", "b", replace_all=True)
+        assert result.valid
+        assert result.match_count == 2
+
 
 # ---------------------------------------------------------------------------
 # TestApplyFileEdit — Story 5.6 (AC-1, AC-4)
@@ -589,7 +607,7 @@ class TestApplyFileEdit:
         assert result.target_path == str(target)
         assert target.read_text() == "hello earth"
         assert result.secrets_detected is False
-        assert result.secret_matches is None
+        assert result.secret_matches == []
         assert result.error is None
 
     def test_file_not_found(self, tmp_path: Path) -> None:
@@ -659,6 +677,22 @@ class TestApplyFileEdit:
         # Original file survives.
         assert target.read_text() == "hello world"
 
+    def test_binary_file_returns_error(self, tmp_path: Path) -> None:
+        target = tmp_path / "binary.bin"
+        target.write_bytes(b"\x80\x81\x82\xff")
+        result = apply_file_edit(target, "x", "y")
+        assert not result.success
+        assert "UTF-8" in (result.error or "")
+
+    def test_session_id_propagated(self, tmp_path: Path) -> None:
+        target = tmp_path / "edit.txt"
+        target.write_text("hello world")
+        result = apply_file_edit(
+            target, "world", "earth", session_id="s-0192abc0-0000-7000-8000-000000000001",
+        )
+        assert result.success
+        assert result.session_id == "s-0192abc0-0000-7000-8000-000000000001"
+
 
 # ---------------------------------------------------------------------------
 # TestApplyFileWrite — Story 5.6 (AC-2, AC-4)
@@ -672,6 +706,7 @@ class TestApplyFileWrite:
         assert result.success
         assert result.target_path == str(target)
         assert target.read_text() == "hello world"
+        assert result.secret_matches == []
 
     def test_parent_dir_creation(self, tmp_path: Path) -> None:
         target = tmp_path / "sub" / "dir" / "write.txt"
@@ -709,12 +744,31 @@ class TestApplyFileWrite:
         assert result.success
         assert target.read_text() == ""
 
+    @pytest.mark.slow
     def test_large_file(self, tmp_path: Path) -> None:
         target = tmp_path / "big.txt"
-        content = "x" * 1024 * 1024  # 1 MB
+        # Use 512 KB — safely under _MAX_EDIT_SIZE (1M chars).
+        content = "x" * (512 * 1024)
         result = apply_file_write(target, content)
         assert result.success
         assert target.read_text() == content
+
+    def test_content_exceeds_max_size(self, tmp_path: Path) -> None:
+        from worker_wrapper.domain.atomic_edit import _MAX_EDIT_SIZE
+
+        target = tmp_path / "huge.txt"
+        result = apply_file_write(target, "x" * (_MAX_EDIT_SIZE + 1))
+        assert not result.success
+        assert "exceeds" in (result.error or "")
+        assert not target.exists()
+
+    def test_session_id_propagated(self, tmp_path: Path) -> None:
+        target = tmp_path / "write.txt"
+        result = apply_file_write(
+            target, "content", session_id="s-0192abc0-0000-7000-8000-000000000002",
+        )
+        assert result.success
+        assert result.session_id == "s-0192abc0-0000-7000-8000-000000000002"
 
 
 # ---------------------------------------------------------------------------
@@ -762,7 +816,6 @@ class TestSchemaRegistry:
         assert payload.secrets_detected
 
     def test_file_edited_payload_rejects_invalid_tool(self) -> None:
-        import pytest
         from events.payloads import FileEditedPayload
 
         with pytest.raises(ValueError):

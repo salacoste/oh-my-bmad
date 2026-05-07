@@ -316,10 +316,17 @@ class EditValidation:
 
 @dataclass
 class FileEditResult:
-    """Result of an atomic file edit or write operation."""
+    """Result of an atomic file edit or write operation.
+
+    ``secret_matches`` tri-state semantics:
+      ``None``  — scan not reached (earlier error before secret check)
+      ``[]``    — scanned, clean
+      ``[...]`` — secrets detected, write aborted
+    """
 
     target_path: str
     success: bool
+    session_id: str = ""
     lines_added: int = 0
     lines_removed: int = 0
     secrets_detected: bool = False
@@ -338,14 +345,25 @@ def validate_edit(
 
     Checks that *old_string* is non-empty, present in *old_content*, and
     (when *replace_all* is ``False``) appears exactly once.  Also bounds-
-    checks *new_string* length to prevent unbounded replacements.
+    checks both *old_string* and *new_string* lengths to prevent unbounded
+    operations, and rejects no-op edits where *old_string* == *new_string*.
     """
     if not old_string:
         return EditValidation(valid=False, match_count=0, error="old_string must be non-empty")
+    if len(old_string) > _MAX_EDIT_SIZE:
+        return EditValidation(
+            valid=False, match_count=0,
+            error=f"old_string exceeds {_MAX_EDIT_SIZE} chars",
+        )
     if len(new_string) > _MAX_EDIT_SIZE:
         return EditValidation(
             valid=False, match_count=0,
             error=f"new_string exceeds {_MAX_EDIT_SIZE} chars",
+        )
+    if old_string == new_string:
+        return EditValidation(
+            valid=False, match_count=0,
+            error="old_string identical to new_string — no-op edit",
         )
     count = old_content.count(old_string)
     if count == 0:
@@ -371,6 +389,12 @@ def apply_file_edit(
     Scans the result for secrets before writing; aborts (does not write) if
     any are detected.  Returns a :class:`FileEditResult` describing the
     outcome.
+
+    .. note:: TOCTOU — callers must hold the worktree lock (Story 5.3)
+        before calling.  The read-validate-write sequence is NOT atomic;
+        a concurrent writer can modify the file between the read and the
+        rename.  Path validation (worktree confinement) is the caller's
+        responsibility.
     """
     target = Path(target)
     target_str = str(target)
@@ -380,12 +404,17 @@ def apply_file_edit(
         old_content = target.read_text(encoding="utf-8")
     except FileNotFoundError:
         return FileEditResult(
-            target_path=target_str, success=False,
+            target_path=target_str, success=False, session_id=session_id,
             error=f"file not found: {target}",
+        )
+    except UnicodeDecodeError as exc:
+        return FileEditResult(
+            target_path=target_str, success=False, session_id=session_id,
+            error=f"file is not valid UTF-8 text: {exc}",
         )
     except OSError as exc:
         return FileEditResult(
-            target_path=target_str, success=False,
+            target_path=target_str, success=False, session_id=session_id,
             error=f"cannot read file: {exc}",
         )
 
@@ -393,7 +422,7 @@ def apply_file_edit(
     validation = validate_edit(old_content, old_string, new_string, replace_all=replace_all)
     if not validation.valid:
         return FileEditResult(
-            target_path=target_str, success=False,
+            target_path=target_str, success=False, session_id=session_id,
             error=validation.error,
         )
 
@@ -404,10 +433,16 @@ def apply_file_edit(
         new_content = old_content.replace(old_string, new_string, 1)
 
     # Secret scanning — abort if secrets detected.
-    matches = scan_text(new_content)
+    try:
+        matches = scan_text(new_content)
+    except Exception as exc:
+        return FileEditResult(
+            target_path=target_str, success=False, session_id=session_id,
+            error=f"secret scan failed: {exc}",
+        )
     if matches:
         return FileEditResult(
-            target_path=target_str, success=False,
+            target_path=target_str, success=False, session_id=session_id,
             secrets_detected=True,
             secret_matches=[m.excerpt for m in matches],
             error="secret detected in edited content — write aborted",
@@ -423,14 +458,15 @@ def apply_file_edit(
     except (OSError, ValueError) as exc:
         logger.warning("apply_file_edit: write failed: %s (target=%s)", exc, target)
         return FileEditResult(
-            target_path=target_str, success=False,
+            target_path=target_str, success=False, session_id=session_id,
             error=f"atomic write failed: {exc}",
         )
 
     return FileEditResult(
-        target_path=target_str, success=True,
+        target_path=target_str, success=True, session_id=session_id,
         lines_added=max(0, new_lines - old_lines),
         lines_removed=max(0, old_lines - new_lines),
+        secret_matches=[],
     )
 
 
@@ -445,15 +481,31 @@ def apply_file_write(
     Scans *content* for secrets before writing; aborts (does not write) if
     any are detected.  Returns a :class:`FileEditResult` describing the
     outcome.
+
+    .. note:: Path validation (worktree confinement) is the caller's
+        responsibility (enforced at the call site in Story 5.12).
     """
     target = Path(target)
     target_str = str(target)
 
+    # Size guard — prevents unbounded memory/IO from pathological inputs.
+    if len(content) > _MAX_EDIT_SIZE:
+        return FileEditResult(
+            target_path=target_str, success=False, session_id=session_id,
+            error=f"content exceeds {_MAX_EDIT_SIZE} chars",
+        )
+
     # Secret scanning — abort if secrets detected.
-    matches = scan_text(content)
+    try:
+        matches = scan_text(content)
+    except Exception as exc:
+        return FileEditResult(
+            target_path=target_str, success=False, session_id=session_id,
+            error=f"secret scan failed: {exc}",
+        )
     if matches:
         return FileEditResult(
-            target_path=target_str, success=False,
+            target_path=target_str, success=False, session_id=session_id,
             secrets_detected=True,
             secret_matches=[m.excerpt for m in matches],
             error="secret detected in content — write aborted",
@@ -466,7 +518,7 @@ def apply_file_write(
             os.makedirs(parent, exist_ok=True)
         except OSError as exc:
             return FileEditResult(
-                target_path=target_str, success=False,
+                target_path=target_str, success=False, session_id=session_id,
                 error=f"cannot create parent directory: {exc}",
             )
 
@@ -475,6 +527,8 @@ def apply_file_write(
     try:
         old_content = target.read_text(encoding="utf-8")
         old_lines = len(old_content.splitlines())
+    except UnicodeDecodeError:
+        pass
     except (FileNotFoundError, OSError):
         pass
     new_lines = len(content.splitlines())
@@ -485,14 +539,15 @@ def apply_file_write(
     except (OSError, ValueError) as exc:
         logger.warning("apply_file_write: write failed: %s (target=%s)", exc, target)
         return FileEditResult(
-            target_path=target_str, success=False,
+            target_path=target_str, success=False, session_id=session_id,
             error=f"atomic write failed: {exc}",
         )
 
     return FileEditResult(
-        target_path=target_str, success=True,
+        target_path=target_str, success=True, session_id=session_id,
         lines_added=max(0, new_lines - old_lines),
         lines_removed=max(0, old_lines - new_lines),
+        secret_matches=[],
     )
 
 

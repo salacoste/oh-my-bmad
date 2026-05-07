@@ -141,3 +141,4 @@ register("agent.reasoning.step_summary", "1.0.0", AgentReasoningBreadcrumbPayloa
 
 # Story 5.6 — file.edited event payload (FR30, NFR-R2).
 register("file.edited", "1.0.0", FileEditedPayload)
+register("file.edited", "1.0.1", FileEditedPayload)

@@ -645,8 +645,8 @@ class FileEditedPayload(BaseModel):
     session_id: str = Field(min_length=1, pattern=_SESSION_ID_PATTERN)
     file_path: str = Field(min_length=1, max_length=4096)
     tool_name: Literal["Write", "Edit"]
-    lines_added: int = Field(ge=0)
-    lines_removed: int = Field(ge=0)
+    lines_added: int = Field(ge=0, le=10**9)
+    lines_removed: int = Field(ge=0, le=10**9)
     secrets_detected: bool = False
 
 
