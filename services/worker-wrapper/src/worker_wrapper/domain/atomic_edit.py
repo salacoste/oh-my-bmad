@@ -89,7 +89,10 @@ import errno
 import logging
 import os
 import secrets
+from dataclasses import dataclass
 from pathlib import Path
+
+from secret_hygiene.scanner import scan_text
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +100,7 @@ logger = logging.getLogger(__name__)
 # interrupt at fine-grained byte offsets; large enough that 10 MB
 # payloads don't spend disproportionate time in syscall overhead.
 _DEFAULT_CHUNK_SIZE = 64 * 1024
+_MAX_EDIT_SIZE: int = 1_000_000
 
 
 def _chunked_write(fd: int, data: bytes) -> None:
@@ -296,7 +300,208 @@ def atomic_write_text(
     )
 
 
+# ---------------------------------------------------------------------------
+# Higher-level edit/write primitives (Story 5.6 — FR30 / NFR-R2)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class EditValidation:
+    """Result of validating edit parameters against file content."""
+
+    valid: bool
+    match_count: int
+    error: str | None = None
+
+
+@dataclass
+class FileEditResult:
+    """Result of an atomic file edit or write operation."""
+
+    target_path: str
+    success: bool
+    lines_added: int = 0
+    lines_removed: int = 0
+    secrets_detected: bool = False
+    secret_matches: list[str] | None = None
+    error: str | None = None
+
+
+def validate_edit(
+    old_content: str,
+    old_string: str,
+    new_string: str,
+    *,
+    replace_all: bool = False,
+) -> EditValidation:
+    """Validate edit parameters without touching the filesystem.
+
+    Checks that *old_string* is non-empty, present in *old_content*, and
+    (when *replace_all* is ``False``) appears exactly once.  Also bounds-
+    checks *new_string* length to prevent unbounded replacements.
+    """
+    if not old_string:
+        return EditValidation(valid=False, match_count=0, error="old_string must be non-empty")
+    if len(new_string) > _MAX_EDIT_SIZE:
+        return EditValidation(
+            valid=False, match_count=0,
+            error=f"new_string exceeds {_MAX_EDIT_SIZE} chars",
+        )
+    count = old_content.count(old_string)
+    if count == 0:
+        return EditValidation(valid=False, match_count=0, error="old_string not found in content")
+    if not replace_all and count > 1:
+        return EditValidation(
+            valid=False, match_count=count,
+            error=f"old_string found {count} times; set replace_all=True",
+        )
+    return EditValidation(valid=True, match_count=count)
+
+
+def apply_file_edit(
+    target: Path | str,
+    old_string: str,
+    new_string: str,
+    *,
+    replace_all: bool = False,
+    session_id: str = "",
+) -> FileEditResult:
+    """Read *target*, apply ``old_string`` → ``new_string`` replacement, write atomically.
+
+    Scans the result for secrets before writing; aborts (does not write) if
+    any are detected.  Returns a :class:`FileEditResult` describing the
+    outcome.
+    """
+    target = Path(target)
+    target_str = str(target)
+
+    # Read existing content.
+    try:
+        old_content = target.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return FileEditResult(
+            target_path=target_str, success=False,
+            error=f"file not found: {target}",
+        )
+    except OSError as exc:
+        return FileEditResult(
+            target_path=target_str, success=False,
+            error=f"cannot read file: {exc}",
+        )
+
+    # Validate edit parameters.
+    validation = validate_edit(old_content, old_string, new_string, replace_all=replace_all)
+    if not validation.valid:
+        return FileEditResult(
+            target_path=target_str, success=False,
+            error=validation.error,
+        )
+
+    # Apply replacement.
+    if replace_all:
+        new_content = old_content.replace(old_string, new_string)
+    else:
+        new_content = old_content.replace(old_string, new_string, 1)
+
+    # Secret scanning — abort if secrets detected.
+    matches = scan_text(new_content)
+    if matches:
+        return FileEditResult(
+            target_path=target_str, success=False,
+            secrets_detected=True,
+            secret_matches=[m.excerpt for m in matches],
+            error="secret detected in edited content — write aborted",
+        )
+
+    # Line counts for observability.
+    old_lines = len(old_content.splitlines())
+    new_lines = len(new_content.splitlines())
+
+    # Atomic write.
+    try:
+        atomic_write_text(target, new_content)
+    except (OSError, ValueError) as exc:
+        logger.warning("apply_file_edit: write failed: %s (target=%s)", exc, target)
+        return FileEditResult(
+            target_path=target_str, success=False,
+            error=f"atomic write failed: {exc}",
+        )
+
+    return FileEditResult(
+        target_path=target_str, success=True,
+        lines_added=max(0, new_lines - old_lines),
+        lines_removed=max(0, old_lines - new_lines),
+    )
+
+
+def apply_file_write(
+    target: Path | str,
+    content: str,
+    *,
+    session_id: str = "",
+) -> FileEditResult:
+    """Write *content* to *target* atomically, creating parent dirs if needed.
+
+    Scans *content* for secrets before writing; aborts (does not write) if
+    any are detected.  Returns a :class:`FileEditResult` describing the
+    outcome.
+    """
+    target = Path(target)
+    target_str = str(target)
+
+    # Secret scanning — abort if secrets detected.
+    matches = scan_text(content)
+    if matches:
+        return FileEditResult(
+            target_path=target_str, success=False,
+            secrets_detected=True,
+            secret_matches=[m.excerpt for m in matches],
+            error="secret detected in content — write aborted",
+        )
+
+    # Create parent directories if needed.
+    parent = target.parent
+    if parent and parent != target:
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except OSError as exc:
+            return FileEditResult(
+                target_path=target_str, success=False,
+                error=f"cannot create parent directory: {exc}",
+            )
+
+    # Count lines for observability (compare with existing file if present).
+    old_lines = 0
+    try:
+        old_content = target.read_text(encoding="utf-8")
+        old_lines = len(old_content.splitlines())
+    except (FileNotFoundError, OSError):
+        pass
+    new_lines = len(content.splitlines())
+
+    # Atomic write.
+    try:
+        atomic_write_text(target, content)
+    except (OSError, ValueError) as exc:
+        logger.warning("apply_file_write: write failed: %s (target=%s)", exc, target)
+        return FileEditResult(
+            target_path=target_str, success=False,
+            error=f"atomic write failed: {exc}",
+        )
+
+    return FileEditResult(
+        target_path=target_str, success=True,
+        lines_added=max(0, new_lines - old_lines),
+        lines_removed=max(0, old_lines - new_lines),
+    )
+
+
 __all__ = [
+    "EditValidation",
+    "FileEditResult",
+    "apply_file_edit",
+    "apply_file_write",
     "atomic_write_bytes",
     "atomic_write_text",
+    "validate_edit",
 ]

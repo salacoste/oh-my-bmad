@@ -1,4 +1,5 @@
-"""Co-located unit tests for atomic_write_bytes / atomic_write_text (Story 2.12).
+"""Co-located unit tests for atomic_write_bytes / atomic_write_text (Story 2.12)
+and apply_file_edit / apply_file_write (Story 5.6).
 
 Test classes (per AC-7):
   - TestAtomicWriteBytes        — happy path + cleanup invariants (~7).
@@ -6,6 +7,10 @@ Test classes (per AC-7):
   - TestFsyncSemantics          — fsync_data / fsync_dir gating (~3).
   - TestCrossFilesystemDetection — EXDEV re-raise (~1).
   - TestErrorPathsAndEdgeCases  — defensive paths added in code-review fixes.
+  - TestValidateEdit            — edit parameter validation (Story 5.6).
+  - TestApplyFileEdit           — atomic file-edit with secret scanning (Story 5.6).
+  - TestApplyFileWrite          — atomic file-write with secret scanning (Story 5.6).
+  - TestSchemaRegistry          — file.edited payload registration (Story 5.6).
 
 Note on monkeypatch scope (Story 2.12 code-review M5/M6): pytest-internal
 machinery (capture, plugins, leak detectors) can invoke ``os.fsync`` /
@@ -26,8 +31,11 @@ from pathlib import Path
 import pytest
 
 from worker_wrapper.domain.atomic_edit import (
+    apply_file_edit,
+    apply_file_write,
     atomic_write_bytes,
     atomic_write_text,
+    validate_edit,
 )
 
 _AE_LOGGER_NAME = "worker_wrapper.domain.atomic_edit"
@@ -522,3 +530,246 @@ class TestErrorPathsAndEdgeCases:
         assert link.read_bytes() == b"new-content"
         # The original symlink target is untouched.
         assert real_target.read_bytes() == b"untouched"
+
+
+# ---------------------------------------------------------------------------
+# TestValidateEdit — Story 5.6 (AC-3)
+# ---------------------------------------------------------------------------
+
+
+class TestValidateEdit:
+    def test_valid_single_match(self) -> None:
+        result = validate_edit("hello world", "world", "earth")
+        assert result.valid
+        assert result.match_count == 1
+        assert result.error is None
+
+    def test_no_match(self) -> None:
+        result = validate_edit("hello world", "missing", "replacement")
+        assert not result.valid
+        assert result.match_count == 0
+        assert "not found" in (result.error or "")
+
+    def test_multiple_matches_without_replace_all(self) -> None:
+        result = validate_edit("aaa aaa aaa", "aaa", "bbb")
+        assert not result.valid
+        assert result.match_count == 3
+        assert "3 times" in (result.error or "")
+
+    def test_multiple_matches_with_replace_all(self) -> None:
+        result = validate_edit("aaa aaa aaa", "aaa", "bbb", replace_all=True)
+        assert result.valid
+        assert result.match_count == 3
+
+    def test_empty_old_string(self) -> None:
+        result = validate_edit("content", "", "new")
+        assert not result.valid
+        assert result.match_count == 0
+        assert "non-empty" in (result.error or "")
+
+    def test_new_string_exceeds_max_size(self) -> None:
+        from worker_wrapper.domain.atomic_edit import _MAX_EDIT_SIZE
+
+        result = validate_edit("old", "old", "x" * (_MAX_EDIT_SIZE + 1))
+        assert not result.valid
+        assert "exceeds" in (result.error or "")
+
+
+# ---------------------------------------------------------------------------
+# TestApplyFileEdit — Story 5.6 (AC-1, AC-4)
+# ---------------------------------------------------------------------------
+
+
+class TestApplyFileEdit:
+    def test_happy_path(self, tmp_path: Path) -> None:
+        target = tmp_path / "edit.txt"
+        target.write_text("hello world")
+        result = apply_file_edit(target, "world", "earth")
+        assert result.success
+        assert result.target_path == str(target)
+        assert target.read_text() == "hello earth"
+        assert result.secrets_detected is False
+        assert result.secret_matches is None
+        assert result.error is None
+
+    def test_file_not_found(self, tmp_path: Path) -> None:
+        target = tmp_path / "missing.txt"
+        result = apply_file_edit(target, "old", "new")
+        assert not result.success
+        assert "file not found" in (result.error or "")
+
+    def test_old_string_not_found(self, tmp_path: Path) -> None:
+        target = tmp_path / "edit.txt"
+        target.write_text("hello world")
+        result = apply_file_edit(target, "missing", "new")
+        assert not result.success
+        assert "not found" in (result.error or "")
+        # File unchanged.
+        assert target.read_text() == "hello world"
+
+    def test_multiple_matches_error(self, tmp_path: Path) -> None:
+        target = tmp_path / "edit.txt"
+        target.write_text("aaa bbb aaa ccc aaa")
+        result = apply_file_edit(target, "aaa", "ccc")
+        assert not result.success
+        assert "3 times" in (result.error or "")
+        assert target.read_text() == "aaa bbb aaa ccc aaa"
+
+    def test_replace_all(self, tmp_path: Path) -> None:
+        target = tmp_path / "edit.txt"
+        target.write_text("aaa bbb aaa")
+        result = apply_file_edit(target, "aaa", "ccc", replace_all=True)
+        assert result.success
+        assert target.read_text() == "ccc bbb ccc"
+
+    def test_secret_detection_aborts(self, tmp_path: Path) -> None:
+        target = tmp_path / "edit.txt"
+        target.write_text("push with placeholder")
+        result = apply_file_edit(target, "placeholder", "ghp_" + "A" * 36)
+        assert not result.success
+        assert result.secrets_detected is True
+        assert result.secret_matches is not None
+        assert len(result.secret_matches) > 0
+        # File unchanged.
+        assert target.read_text() == "push with placeholder"
+
+    def test_lines_added_removed(self, tmp_path: Path) -> None:
+        target = tmp_path / "edit.txt"
+        target.write_text("line1\nline2\n")
+        result = apply_file_edit(target, "line2", "new\nline3")
+        assert result.success
+        assert result.lines_added == 1
+        assert result.lines_removed == 0
+        assert target.read_text() == "line1\nnew\nline3\n"
+
+    def test_atomic_write_failure(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        target = tmp_path / "edit.txt"
+        target.write_text("hello world")
+
+        from worker_wrapper.domain import atomic_edit as ae_mod
+
+        def _boom(fd: int, data: bytes) -> None:  # noqa: ARG001
+            raise OSError(errno.EIO, "simulated I/O error")
+
+        monkeypatch.setattr(ae_mod, "_chunked_write", _boom)
+
+        result = apply_file_edit(target, "world", "earth")
+        assert not result.success
+        assert "atomic write failed" in (result.error or "")
+        # Original file survives.
+        assert target.read_text() == "hello world"
+
+
+# ---------------------------------------------------------------------------
+# TestApplyFileWrite — Story 5.6 (AC-2, AC-4)
+# ---------------------------------------------------------------------------
+
+
+class TestApplyFileWrite:
+    def test_happy_path(self, tmp_path: Path) -> None:
+        target = tmp_path / "write.txt"
+        result = apply_file_write(target, "hello world")
+        assert result.success
+        assert result.target_path == str(target)
+        assert target.read_text() == "hello world"
+
+    def test_parent_dir_creation(self, tmp_path: Path) -> None:
+        target = tmp_path / "sub" / "dir" / "write.txt"
+        result = apply_file_write(target, "nested content")
+        assert result.success
+        assert target.read_text() == "nested content"
+
+    def test_secret_detection_aborts(self, tmp_path: Path) -> None:
+        target = tmp_path / "write.txt"
+        result = apply_file_write(target, "key=sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+        assert not result.success
+        assert result.secrets_detected is True
+        assert result.secret_matches is not None
+        assert len(result.secret_matches) > 0
+        # File was NOT created.
+        assert not target.exists()
+
+    def test_overwrite_existing(self, tmp_path: Path) -> None:
+        target = tmp_path / "write.txt"
+        target.write_text("old content")
+        result = apply_file_write(target, "new content")
+        assert result.success
+        assert result.lines_removed == 0
+        assert target.read_text() == "new content"
+
+    def test_lines_added_for_new_file(self, tmp_path: Path) -> None:
+        target = tmp_path / "new.txt"
+        result = apply_file_write(target, "line1\nline2\nline3\n")
+        assert result.success
+        assert result.lines_added == 3
+
+    def test_empty_content(self, tmp_path: Path) -> None:
+        target = tmp_path / "empty.txt"
+        result = apply_file_write(target, "")
+        assert result.success
+        assert target.read_text() == ""
+
+    def test_large_file(self, tmp_path: Path) -> None:
+        target = tmp_path / "big.txt"
+        content = "x" * 1024 * 1024  # 1 MB
+        result = apply_file_write(target, content)
+        assert result.success
+        assert target.read_text() == content
+
+
+# ---------------------------------------------------------------------------
+# TestSchemaRegistry — Story 5.6 (AC-8)
+# ---------------------------------------------------------------------------
+
+
+class TestSchemaRegistry:
+    _session_id = "s-0192abc0-0000-7000-8000-000000000001"
+
+    def test_file_edited_registered(self) -> None:
+        from events.payloads import FileEditedPayload
+        from events.schema_registry import REGISTRY, register
+
+        # Register directly to verify the model + key work together.
+        # The canonical registration in registry_state.domain.event_types is
+        # verified by check_event_registry.py (CI gate).
+        register("file.edited", "1.0.0", FileEditedPayload)
+        assert ("file.edited", "1.0.0") in REGISTRY
+
+    def test_file_edited_payload_valid(self) -> None:
+        from events.payloads import FileEditedPayload
+
+        payload = FileEditedPayload(
+            session_id=self._session_id,
+            file_path="/tmp/test.py",
+            tool_name="Write",
+            lines_added=10,
+            lines_removed=0,
+        )
+        assert payload.tool_name == "Write"
+        assert not payload.secrets_detected
+
+    def test_file_edited_payload_with_secrets(self) -> None:
+        from events.payloads import FileEditedPayload
+
+        payload = FileEditedPayload(
+            session_id=self._session_id,
+            file_path="/tmp/test.py",
+            tool_name="Edit",
+            lines_added=0,
+            lines_removed=5,
+            secrets_detected=True,
+        )
+        assert payload.secrets_detected
+
+    def test_file_edited_payload_rejects_invalid_tool(self) -> None:
+        import pytest
+        from events.payloads import FileEditedPayload
+
+        with pytest.raises(ValueError):
+            FileEditedPayload(
+                session_id=self._session_id,
+                file_path="/tmp/test.py",
+                tool_name="Bash",  # type: ignore[arg-type]
+                lines_added=0,
+                lines_removed=0,
+            )

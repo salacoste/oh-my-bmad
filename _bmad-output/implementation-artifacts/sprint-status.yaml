@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-07T12:00:00Z
+last_updated: 2026-05-08T08:00:00Z
 
 development_status:
   # =========================================================================
@@ -144,7 +144,7 @@ development_status:
   5-3-worktree-lock-acquisition: done
   5-4-claude-code-subprocess-supervision: done
   5-5-reasoning-breadcrumb-emission: done
-  5-6-atomic-file-edit-primitive: backlog
+  5-6-atomic-file-edit-primitive: review
   5-7-github-api-adapter: backlog
   5-8-task-registry-mcp-server: backlog
   5-9-session-registry-mcp-server: backlog

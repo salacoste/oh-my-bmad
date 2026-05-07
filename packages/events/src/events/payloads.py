@@ -632,11 +632,30 @@ class AgentReasoningBreadcrumbPayload(BaseModel):
         return self
 
 
+class FileEditedPayload(BaseModel):
+    """Payload for ``file.edited`` events (FR30, NFR-R2).
+
+    Emitted when the worker performs an atomic file edit or write.  Captures
+    the file path, which Claude Code tool triggered the edit, line change
+    counts, and whether secrets were detected (which aborts the write).
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    session_id: str = Field(min_length=1, pattern=_SESSION_ID_PATTERN)
+    file_path: str = Field(min_length=1, max_length=4096)
+    tool_name: Literal["Write", "Edit"]
+    lines_added: int = Field(ge=0)
+    lines_removed: int = Field(ge=0)
+    secrets_detected: bool = False
+
+
 __all__ = [
     "TELEGRAM_REJECTED_SCHEMA_VERSION",
     "AcceptedCommand",
     "AgentReasoningBreadcrumbPayload",
     "DiffSummary",
+    "FileEditedPayload",
     "PreCheckOutcome",
     "PreCheckResults",
     "SecretAccessedPayload",

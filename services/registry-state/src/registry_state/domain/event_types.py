@@ -24,6 +24,7 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     AcceptedCommand,
     AgentReasoningBreadcrumbPayload,
     DiffSummary,
+    FileEditedPayload,
     PreCheckOutcome,
     PreCheckResults,
     SecretAccessedPayload,
@@ -52,6 +53,7 @@ __all__ = [
     "AcceptedCommand",
     "AgentReasoningBreadcrumbPayload",
     "DiffSummary",
+    "FileEditedPayload",
     "PreCheckOutcome",
     "PreCheckResults",
     "SecretAccessedPayload",
@@ -136,3 +138,6 @@ register("session.finished", "1.0.1", SessionFinishedPayload)
 register("agent.reasoning.plan_drafted", "1.0.0", AgentReasoningBreadcrumbPayload)
 register("agent.reasoning.tool_call_rationale", "1.0.0", AgentReasoningBreadcrumbPayload)
 register("agent.reasoning.step_summary", "1.0.0", AgentReasoningBreadcrumbPayload)
+
+# Story 5.6 — file.edited event payload (FR30, NFR-R2).
+register("file.edited", "1.0.0", FileEditedPayload)
