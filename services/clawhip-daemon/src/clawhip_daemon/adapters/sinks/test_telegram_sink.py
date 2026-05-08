@@ -2855,8 +2855,7 @@ def test_render_plan_ready_empty_steps() -> None:
     """No steps -> header only, no step lines."""
     env = _plan_ready_envelope(steps=(), estimated_steps=0)
     result = _render_plan_ready(env)
-    assert "Plan ready, 0 steps:" in result
-    assert ")" not in result.split("\n", 1)[1] if "\n" in result else True
+    assert result == "Plan ready, 0 steps:"
 
 
 def test_render_plan_ready_single_step() -> None:
@@ -2897,13 +2896,16 @@ def test_render_plan_ready_step_truncation_overflow() -> None:
 
 
 def test_render_plan_ready_emergency_one_liner() -> None:
-    """AC-5: very long task_id forces emergency one-liner fallback."""
-    # Use a task_id at the max allowed length so the emergency fallback triggers.
-    long_id = "t-" + "a" * 62  # 64 chars total (task_id max)
-    steps = tuple(PlanStep(step=i, description="X" * 500) for i in range(1, 6))
-    env = _plan_ready_envelope(task_id=long_id, steps=steps, estimated_steps=5)
+    """AC-5: extreme data forces section-drop ladder (Step 3: 4 steps + overflow)."""
+    # 30 steps with max-length descriptions force the ladder past
+    # Step 1 (20 visible → too long) and Step 2 (10 visible → too long),
+    # landing at Step 3 (4 visible + overflow indicator).
+    steps = tuple(PlanStep(step=i, description="Z" * 490) for i in range(1, 31))
+    env = _plan_ready_envelope(steps=steps, estimated_steps=30)
     result = _render_plan_ready(env)
-    # After the ladder, output must still be under the 1900-char cap.
+    # Step 3 produces header + 4 step lines + overflow.
+    assert "Plan ready, 30 steps:" in result
+    assert "… and 26 more" in result
     assert len(result) <= 1900
 
 
@@ -2926,10 +2928,14 @@ def test_render_plan_ready_payload_type_mismatch() -> None:
     )
     import structlog.testing
 
-    with structlog.testing.capture_logs():
+    with structlog.testing.capture_logs() as captured:
         result = _render_plan_ready(env)
     # Falls back to placeholder shape.
     assert "Task t-test: task.plan.ready" in result
+    # WARN log emitted for the type mismatch.
+    warns = [e for e in captured if e["event"] == "renderer.payload_type_mismatch"]
+    assert len(warns) == 1
+    assert warns[0]["expected"] == "TaskPlanReadyPayload"
 
 
 def test_render_plan_ready_dispatcher_routes() -> None:

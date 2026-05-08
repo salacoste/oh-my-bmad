@@ -1,8 +1,9 @@
-"""Task dispatch — translates between platform task model and OMC contract (Story 5.10).
+"""Task dispatch — translates between platform task model and OMC contract.
 
-Story 5.11 — structured plan parsing: ``parse_omc_plan_output`` now returns
-a ``PlanParseResult`` with both a flat ``summary`` string and a structured
-``steps`` list of ``PlanStep`` models.
+Story 5.10 — prompt building, OMC output parsing, typed event payloads.
+Story 5.11 — structured plan parsing: ``parse_omc_plan_output`` returns a
+``PlanParseResult`` with both a flat ``summary`` string and a structured
+``steps`` tuple of ``PlanStep`` models.
 """
 
 from __future__ import annotations

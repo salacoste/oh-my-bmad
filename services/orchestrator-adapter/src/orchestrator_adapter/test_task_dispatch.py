@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from orchestrator_adapter.domain.task_dispatch import (
@@ -107,7 +109,6 @@ def test_parse_step_description_capped() -> None:
 
 def test_plan_parse_result_frozen() -> None:
     result = PlanParseResult(summary="test", steps=())
-    import dataclasses
 
     with pytest.raises(dataclasses.FrozenInstanceError):
         result.summary = "changed"  # type: ignore[misc]
