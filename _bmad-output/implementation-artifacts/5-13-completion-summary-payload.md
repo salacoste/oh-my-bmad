@@ -1,6 +1,6 @@
 # Story 5.13: Completion summary payload emission (FR9)
 
-Status: review
+Status: done
 
 ## Story
 

@@ -293,17 +293,17 @@ def test_parse_metrics_tests_added_pattern() -> None:
 
 def test_parse_metrics_empty_outputs() -> None:
     metrics = parse_step_metrics({})
-    assert metrics.files_changed == 0
-    assert metrics.lines_added == 0
-    assert metrics.lines_removed == 0
-    assert metrics.tests_added == 0
+    assert metrics.files_changed is None
+    assert metrics.lines_added is None
+    assert metrics.lines_removed is None
+    assert metrics.tests_added is None
     assert metrics.ci_state == "unknown"
     assert metrics.blockers_count == 0
 
 
 def test_parse_metrics_malformed_output() -> None:
     metrics = parse_step_metrics({1: "random gibberish without patterns"})
-    assert metrics.files_changed == 0
+    assert metrics.files_changed is None
     assert metrics.ci_state == "unknown"
 
 
@@ -374,7 +374,7 @@ def test_build_completion_payload_without_metrics_backward_compat() -> None:
 
 def test_build_completion_payload_zero_metrics_are_none() -> None:
     plan_result = PlanParseResult(summary="test")
-    metrics = CompletionMetrics()  # all zeros, ci_state="unknown"
+    metrics = CompletionMetrics()  # all None, ci_state="unknown"
     payload = build_completion_payload("T-004", plan_result, {}, metrics)
     assert payload["files_changed"] is None
     assert payload["lines_added"] is None
@@ -389,7 +389,7 @@ def test_build_completion_payload_partial_metrics() -> None:
     metrics = CompletionMetrics(files_changed=5, ci_state="red")
     payload = build_completion_payload("T-005", plan_result, {}, metrics)
     assert payload["files_changed"] == 5
-    assert payload["lines_added"] is None  # 0 → None
+    assert payload["lines_added"] is None  # not extracted
     assert payload["ci_state"] == "red"
     assert payload["blockers_count"] is None
 
@@ -407,3 +407,70 @@ def test_parse_metrics_passed_zero_failed_is_green() -> None:
     metrics = parse_step_metrics({1: output})
     assert metrics.ci_state == "green"
     assert metrics.tests_added == 5
+
+
+def test_parse_metrics_duplicate_patterns_aggregated() -> None:
+    """findall captures every match within a single step output."""
+    output = "Suite A: 5 passed\nSuite B: 3 passed, 1 failed"
+    metrics = parse_step_metrics({1: output})
+    assert metrics.tests_added == 8  # 5 + 3
+    assert metrics.ci_state == "red"
+
+
+def test_parse_metrics_tests_added_and_passed_both_present() -> None:
+    """When both 'tests added' and 'passed' patterns match, 'tests added' wins."""
+    output = "5 tests added to the suite\n3 passed"
+    metrics = parse_step_metrics({1: output})
+    assert metrics.tests_added == 5
+
+
+def test_parse_metrics_zero_passed_zero_failed() -> None:
+    output = "0 passed, 0 failed"
+    metrics = parse_step_metrics({1: output})
+    assert metrics.ci_state == "green"
+    assert metrics.tests_added == 0
+
+
+def test_build_completion_payload_large_values_clamped() -> None:
+    plan_result = PlanParseResult(summary="test")
+    metrics = CompletionMetrics(files_changed=2_000_000, lines_added=3_000_000_000)
+    payload = build_completion_payload("T-001", plan_result, {}, metrics)
+    assert payload["files_changed"] == 1_000_000
+    assert payload["lines_added"] == 1_000_000_000
+
+
+# --- Story 5.14: PR field tests ---
+
+
+def test_build_completion_payload_with_pr_fields() -> None:
+    plan_result = PlanParseResult(summary="test")
+    metrics = CompletionMetrics(ci_state="green")
+    payload = build_completion_payload(
+        "T-100", plan_result, {}, metrics,
+        pr_url="https://github.com/o/r/pull/7",
+        pr_number=7,
+        pr_branch="task/T-100",
+    )
+    assert payload["pr_url"] == "https://github.com/o/r/pull/7"
+    assert payload["pr_number"] == 7
+    assert payload["pr_branch"] == "task/T-100"
+
+
+def test_build_completion_payload_without_pr_fields_backward_compat() -> None:
+    plan_result = PlanParseResult(summary="test")
+    payload = build_completion_payload("T-101", plan_result, {})
+    assert payload.get("pr_url") is None
+    assert payload.get("pr_number") is None
+    assert payload.get("pr_branch") is None
+
+
+def test_build_completion_payload_pr_fields_none_when_not_provided() -> None:
+    plan_result = PlanParseResult(summary="test")
+    metrics = CompletionMetrics(ci_state="green")
+    payload = build_completion_payload(
+        "T-102", plan_result, {}, metrics,
+        pr_url=None, pr_number=None, pr_branch=None,
+    )
+    assert payload.get("pr_url") is None
+    assert payload.get("pr_number") is None
+    assert payload.get("pr_branch") is None

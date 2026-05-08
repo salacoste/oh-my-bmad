@@ -1,11 +1,11 @@
-"""Orchestrator-adapter settings — MCP commands and OMC subprocess config (Story 5.10)."""
+"""Orchestrator-adapter settings — MCP commands, OMC subprocess, GitHub API (Stories 5.10, 5.14)."""
 
 from __future__ import annotations
 
 from typing import ClassVar
 
 from events.ids import new_worker_id
-from pydantic import Field, PrivateAttr
+from pydantic import Field, PrivateAttr, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -37,6 +37,12 @@ class OrchestratorSettings(BaseSettings):
     omc_path: str = "upstream/omc"
     omc_timeout_s: float = Field(default=120.0, gt=0)
     poll_interval_s: float = Field(default=5.0, gt=0)
+
+    # Story 5.14 — GitHub PR draft creation
+    github_token: SecretStr = SecretStr("")
+    github_api_base_url: str = "https://api.github.com"
+    github_timeout_s: float = Field(default=10.0, gt=0)
+    github_base_branch: str = "main"
 
     _resolved_actor_id: str | None = PrivateAttr(default=None)
 

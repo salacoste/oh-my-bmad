@@ -17,6 +17,7 @@ from pathlib import Path
 
 import structlog
 
+from orchestrator_adapter.adapters.github_adapter import GitHubAdapter, PRDraftResult
 from orchestrator_adapter.adapters.mcp_clients import MCPClientGroup
 from orchestrator_adapter.adapters.omc_runner import OMCRunner
 from orchestrator_adapter.app.config import OrchestratorSettings
@@ -110,6 +111,48 @@ async def _emit_event(
         {"type": event_type, "payload": payload},
         label=label,
     )
+
+
+async def _create_pr_draft(
+    settings: OrchestratorSettings,
+    task_id: str,
+    repo: str,
+    plan_summary: str,
+    title: str | None,
+) -> PRDraftResult | None:
+    """Attempt PR draft creation; return None on config/parse errors (non-blocking)."""
+    log = structlog.get_logger(__name__)
+    token = settings.github_token.get_secret_value()
+    if not token:
+        log.debug("github_pr_skipped_no_token", task_id=task_id)
+        return None
+    parts = repo.split("/", 1)
+    if len(parts) != 2:
+        log.warning("github_pr_skipped_bad_repo", task_id=task_id, repo=repo)
+        return None
+    owner, repo_name = parts
+    adapter = GitHubAdapter(
+        token=token,
+        base_url=settings.github_api_base_url,
+        timeout_s=settings.github_timeout_s,
+    )
+    head_branch = f"task/{task_id}"
+    pr_title = str(title) if title else f"Task {task_id}"
+    try:
+        result = await adapter.create_pr_draft(
+            owner=owner,
+            repo=repo_name,
+            title=pr_title,
+            head=head_branch,
+            base=settings.github_base_branch,
+            body=plan_summary[:1000],
+        )
+        if not result.success:
+            log.warning("github_pr_failed", task_id=task_id, error=result.error)
+        return result
+    except Exception:
+        log.warning("github_pr_error", task_id=task_id, exc_info=True)
+        return None
 
 
 async def process_task(
@@ -246,7 +289,28 @@ async def process_task(
     # Emit task.completed with synthesized summary and FR9 structured metrics.
     metrics = parse_step_metrics(step_outputs)
     metrics = dataclasses.replace(metrics, blockers_count=blockers_count)
-    completion_payload = build_completion_payload(task_id, plan_result, step_outputs, metrics)
+
+    # Story 5.14: PR draft auto-creation on green CI.
+    pr_url: str | None = None
+    pr_number: int | None = None
+    pr_branch: str | None = None
+    if (
+        metrics.ci_state == "green"
+        and repo
+        and plan_result.steps
+    ):
+        pr_result = await _create_pr_draft(
+            settings, task_id, str(repo), plan_result.summary, title,
+        )
+        if pr_result is not None and pr_result.success:
+            pr_url = pr_result.url
+            pr_number = pr_result.number
+            pr_branch = pr_result.branch
+
+    completion_payload = build_completion_payload(
+        task_id, plan_result, step_outputs, metrics,
+        pr_url=pr_url, pr_number=pr_number, pr_branch=pr_branch,
+    )
     await _emit_event(
         clients,
         "task.completed",

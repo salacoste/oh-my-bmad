@@ -42,12 +42,16 @@ _TESTS_ADDED_RE = re.compile(r"(\d+)\s+tests?\s+added", re.IGNORECASE)
 
 @dataclass(frozen=True)
 class CompletionMetrics:
-    """Aggregated execution metrics extracted from OMC step outputs (Story 5.13 / FR9)."""
+    """Aggregated execution metrics extracted from OMC step outputs (Story 5.13 / FR9).
 
-    files_changed: int = 0
-    lines_added: int = 0
-    lines_removed: int = 0
-    tests_added: int = 0
+    Fields are ``None`` when no matching pattern was found in OMC output, allowing
+    downstream consumers to distinguish "not extracted" from "extracted as zero".
+    """
+
+    files_changed: int | None = None
+    lines_added: int | None = None
+    lines_removed: int | None = None
+    tests_added: int | None = None
     ci_state: Literal["green", "red", "unknown"] = "unknown"
     blockers_count: int = 0
 
@@ -56,7 +60,10 @@ def parse_step_metrics(step_outputs: dict[int, str]) -> CompletionMetrics:
     """Extract structured metrics from OMC step stdout strings.
 
     Scans each step output for git-diff and pytest-style patterns and
-    aggregates them. Unparseable output is treated as zero-count.
+    aggregates across all steps. Uses ``findall`` to capture every match
+    within a single step output. Fields remain ``None`` when no matching
+    pattern is found; ``0`` when a pattern matched but the value is zero.
+    Unparseable output leaves all fields as ``None``.
     """
     total_files = 0
     total_insertions = 0
@@ -64,43 +71,59 @@ def parse_step_metrics(step_outputs: dict[int, str]) -> CompletionMetrics:
     total_passed = 0
     total_failed = 0
     total_tests_added = 0
-    has_test_output = False
+    found_files = False
+    found_insertions = False
+    found_deletions = False
+    found_passed = False
+    found_failed = False
+    found_tests_added = False
 
     for output in step_outputs.values():
         if not output:
             continue
 
-        m = _FILES_CHANGED_RE.search(output)
-        if m:
-            total_files += int(m.group(1))
-        m = _INSERTIONS_RE.search(output)
-        if m:
-            total_insertions += int(m.group(1))
-        m = _DELETIONS_RE.search(output)
-        if m:
-            total_deletions += int(m.group(1))
-        m = _TESTS_PASSED_RE.search(output)
-        if m:
-            total_passed += int(m.group(1))
-            has_test_output = True
-        m = _TESTS_FAILED_RE.search(output)
-        if m:
-            total_failed += int(m.group(1))
-            has_test_output = True
-        m = _TESTS_ADDED_RE.search(output)
-        if m:
-            total_tests_added += int(m.group(1))
+        matches = _FILES_CHANGED_RE.findall(output)
+        if matches:
+            total_files += sum(int(m) for m in matches)
+            found_files = True
+        matches = _INSERTIONS_RE.findall(output)
+        if matches:
+            total_insertions += sum(int(m) for m in matches)
+            found_insertions = True
+        matches = _DELETIONS_RE.findall(output)
+        if matches:
+            total_deletions += sum(int(m) for m in matches)
+            found_deletions = True
+        matches = _TESTS_PASSED_RE.findall(output)
+        if matches:
+            total_passed += sum(int(m) for m in matches)
+            found_passed = True
+        matches = _TESTS_FAILED_RE.findall(output)
+        if matches:
+            total_failed += sum(int(m) for m in matches)
+            found_failed = True
+        matches = _TESTS_ADDED_RE.findall(output)
+        if matches:
+            total_tests_added += sum(int(m) for m in matches)
+            found_tests_added = True
 
+    has_test_output = found_passed or found_failed
     if has_test_output:
         ci_state: Literal["green", "red", "unknown"] = "red" if total_failed > 0 else "green"
     else:
         ci_state = "unknown"
 
+    tests_added_value: int | None = None
+    if found_tests_added:
+        tests_added_value = total_tests_added
+    elif found_passed:
+        tests_added_value = total_passed
+
     return CompletionMetrics(
-        files_changed=total_files,
-        lines_added=total_insertions,
-        lines_removed=total_deletions,
-        tests_added=total_tests_added or total_passed,
+        files_changed=total_files if found_files else None,
+        lines_added=total_insertions if found_insertions else None,
+        lines_removed=total_deletions if found_deletions else None,
+        tests_added=tests_added_value,
         ci_state=ci_state,
     )
 
@@ -229,11 +252,26 @@ def build_step_completed_payload(
     ).model_dump()
 
 
+# Pydantic payload upper bounds (must match packages/events/payloads.py Field constraints).
+_MAX_COUNT: int = 10**6
+_MAX_LINES: int = 10**9
+
+
+def _clamp(value: int | None, upper: int) -> int | None:
+    if value is None:
+        return None
+    return min(value, upper)
+
+
 def build_completion_payload(
     task_id: str,
     plan_result: PlanParseResult,
     step_outputs: dict[int, str],
     metrics: CompletionMetrics | None = None,
+    *,
+    pr_url: str | None = None,
+    pr_number: int | None = None,
+    pr_branch: str | None = None,
 ) -> dict[str, object]:
     """Build a ``task.completed`` event payload dict with synthesized summary.
 
@@ -252,12 +290,21 @@ def build_completion_payload(
         "summary": summary[:2000],
     }
     if metrics is not None:
-        payload_kwargs["files_changed"] = metrics.files_changed or None
-        payload_kwargs["lines_added"] = metrics.lines_added or None
-        payload_kwargs["lines_removed"] = metrics.lines_removed or None
-        payload_kwargs["tests_added"] = metrics.tests_added or None
+        payload_kwargs["files_changed"] = _clamp(metrics.files_changed, _MAX_COUNT)
+        payload_kwargs["lines_added"] = _clamp(metrics.lines_added, _MAX_LINES)
+        payload_kwargs["lines_removed"] = _clamp(metrics.lines_removed, _MAX_LINES)
+        payload_kwargs["tests_added"] = _clamp(metrics.tests_added, _MAX_COUNT)
+        # ci_state="unknown" → None: cleaner Telegram rendering than showing "unknown".
         payload_kwargs["ci_state"] = metrics.ci_state if metrics.ci_state != "unknown" else None
+        # blockers_count is always 0 in current single-blocker-returns-early flow;
+        # forward-compatible for multi-blocker continuation (see Story 5.17).
         payload_kwargs["blockers_count"] = metrics.blockers_count or None
+    if pr_url is not None:
+        payload_kwargs["pr_url"] = pr_url
+    if pr_number is not None:
+        payload_kwargs["pr_number"] = pr_number
+    if pr_branch is not None:
+        payload_kwargs["pr_branch"] = pr_branch
     return TaskCompletedPayload(**payload_kwargs).model_dump()
 
 
