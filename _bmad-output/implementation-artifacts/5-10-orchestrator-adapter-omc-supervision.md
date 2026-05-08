@@ -1,6 +1,6 @@
 # Story 5.10: orchestrator-adapter: OMC subprocess supervision
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -56,74 +56,74 @@ So that OMC's orchestration logic drives platform tasks without leaking OMC spec
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Update dependencies** (AC: #10)
-  - [ ] Add `mcp>=1.0`, `events`, `structlog>=24.1`, `pydantic-settings>=2.5,<3.0` to `pyproject.toml`
-  - [ ] Bump version to `0.2.0`
-  - [ ] Run `uv sync` to verify resolution
+- [x] **Task 1: Update dependencies** (AC: #10)
+  - [x] Add `mcp>=1.0`, `events`, `structlog>=24.1`, `pydantic-settings>=2.5,<3.0` to `pyproject.toml`
+  - [x] Bump version to `0.2.0`
+  - [x] Run `uv sync` to verify resolution
 
-- [ ] **Task 2: Create directory structure** (AC: #8)
-  - [ ] Create `src/orchestrator_adapter/app/`, `adapters/`, `domain/` directories
-  - [ ] Create empty `__init__.py` files for each package
+- [x] **Task 2: Create directory structure** (AC: #8)
+  - [x] Create `src/orchestrator_adapter/app/`, `adapters/`, `domain/` directories
+  - [x] Create empty `__init__.py` files for each package
 
-- [ ] **Task 3: Discover OMC CLI contract** (AC: #1)
-  - [ ] Read `upstream/omc/README.md` — understand CLI subcommands
-  - [ ] Read `upstream/omc/CLAUDE.md` — understand orchestration capabilities
-  - [ ] Experiment: run `node bridge/cli.cjs --help` to discover available subcommands
-  - [ ] Document the invocation: which subcommand produces a plan, what arguments it takes, what output format it uses
-  - [ ] If OMC lacks a "plan-only" mode, design a contract that extracts plan from OMC's full output
+- [x] **Task 3: Discover OMC CLI contract** (AC: #1)
+  - [x] Read `upstream/omc/README.md` — understand CLI subcommands
+  - [x] Read `upstream/omc/CLAUDE.md` — understand orchestration capabilities
+  - [x] Experiment: run `node bridge/cli.cjs --help` to discover available subcommands
+  - [x] Document the invocation: which subcommand produces a plan, what arguments it takes, what output format it uses
+  - [x] If OMC lacks a "plan-only" mode, design a contract that extracts plan from OMC's full output
 
-- [ ] **Task 4: Implement `app/config.py`** (AC: #5)
-  - [ ] `OrchestratorSettings` with `env_prefix="ORCHESTRATOR_"`
-  - [ ] MCP server configs (clawhip_bridge_command/args, task_registry, session_registry)
-  - [ ] `omc_path: str` (default `"upstream/omc"`)
-  - [ ] `omc_timeout_s: int` (default 120)
-  - [ ] `actor_id: str` (auto-generate UUIDv7 if empty)
-  - [ ] `poll_interval_s: float` (default 5.0)
+- [x] **Task 4: Implement `app/config.py`** (AC: #5)
+  - [x] `OrchestratorSettings` with `env_prefix="ORCHESTRATOR_"`
+  - [x] MCP server configs (clawhip_bridge_command/args, task_registry, session_registry)
+  - [x] `omc_path: str` (default `"upstream/omc"`)
+  - [x] `omc_timeout_s: int` (default 120)
+  - [x] `actor_id: str` (auto-generate UUIDv7 if empty)
+  - [x] `poll_interval_s: float` (default 5.0)
 
-- [ ] **Task 5: Implement `adapters/omc_runner.py`** (AC: #1)
-  - [ ] `OMCResult` dataclass (exit_code, stdout, stderr, duration_ms)
-  - [ ] `OMCRunner` class with `run(prompt: str) -> OMCResult`
-  - [ ] Spawn `node bridge/cli.cjs` via `asyncio.create_subprocess_exec`
-  - [ ] Capture stdout + stderr concurrently (drain stderr in background task)
-  - [ ] Timeout enforcement via `asyncio.wait_for`
-  - [ ] Graceful shutdown: `terminate()` → 5s `wait()` → `kill()`
-  - [ ] Duration tracking
+- [x] **Task 5: Implement `adapters/omc_runner.py`** (AC: #1)
+  - [x] `OMCResult` dataclass (exit_code, stdout, stderr, duration_ms)
+  - [x] `OMCRunner` class with `run(prompt: str) -> OMCResult`
+  - [x] Spawn `node bridge/cli.cjs` via `asyncio.create_subprocess_exec`
+  - [x] Capture stdout + stderr concurrently (drain stderr in background task)
+  - [x] Timeout enforcement via `asyncio.wait_for`
+  - [x] Graceful shutdown: `terminate()` → 5s `wait()` → `kill()`
+  - [x] Duration tracking
 
-- [ ] **Task 6: Implement `domain/task_dispatch.py`** (AC: #2)
-  - [ ] `build_omc_prompt(task_id, title, hint, repo) -> str`
-  - [ ] `parse_omc_plan_output(raw_output: str) -> str` (extracts plan summary)
-  - [ ] `build_planning_started_payload(task_id) -> dict`
-  - [ ] `build_plan_ready_payload(task_id, plan_summary) -> dict`
-  - [ ] Use `events.payloads.TaskPlanningStartedPayload`, `TaskPlanReadyPayload`
+- [x] **Task 6: Implement `domain/task_dispatch.py`** (AC: #2)
+  - [x] `build_omc_prompt(task_id, title, hint, repo) -> str`
+  - [x] `parse_omc_plan_output(raw_output: str) -> str` (extracts plan summary)
+  - [x] `build_planning_started_payload(task_id) -> dict`
+  - [x] `build_plan_ready_payload(task_id, plan_summary) -> dict`
+  - [x] Use `events.payloads.TaskPlanningStartedPayload`, `TaskPlanReadyPayload`
 
-- [ ] **Task 7: Implement `adapters/mcp_clients.py`** (AC: #4)
-  - [ ] `MCPClientGroup` dataclass (same pattern as worker-wrapper)
-  - [ ] Async context manager with `AsyncExitStack`
-  - [ ] Connect to clawhip-bridge, task-registry, session-registry via stdio
-  - [ ] `verify_connectivity()` method
+- [x] **Task 7: Implement `adapters/mcp_clients.py`** (AC: #4)
+  - [x] `MCPClientGroup` dataclass (same pattern as worker-wrapper)
+  - [x] Async context manager with `AsyncExitStack`
+  - [x] Connect to clawhip-bridge, task-registry, session-registry via stdio
+  - [x] `verify_connectivity()` method
 
-- [ ] **Task 8: Implement `app/main.py`** (AC: #6)
-  - [ ] Main adapter loop: connect MCP → poll for tasks → drive OMC → emit events
-  - [ ] Task polling: read task-registry resource, find tasks needing planning
-  - [ ] Event emission: call clawhip-bridge `emit_event` tool
-  - [ ] Signal handling (SIGTERM/SIGINT)
-  - [ ] Ready-file healthcheck (`/tmp/ready`)
+- [x] **Task 8: Implement `app/main.py`** (AC: #6)
+  - [x] Main adapter loop: connect MCP → poll for tasks → drive OMC → emit events
+  - [x] Task polling: read task-registry resource, find tasks needing planning
+  - [x] Event emission: call clawhip-bridge `emit_event` tool
+  - [x] Signal handling (SIGTERM/SIGINT)
+  - [x] Ready-file healthcheck (`/tmp/ready`)
 
-- [ ] **Task 9: Update `__main__.py` and `__init__.py`** (AC: #8)
-  - [ ] Replace hello-world entrypoint with real lifecycle (structlog, settings, main loop)
-  - [ ] Update `__init__.py` to export `OMCRunner`, version `"0.2.0"`
+- [x] **Task 9: Update `__main__.py` and `__init__.py`** (AC: #8)
+  - [x] Replace hello-world entrypoint with real lifecycle (structlog, settings, main loop)
+  - [x] Update `__init__.py` to export `OMCRunner`, version `"0.2.0"`
 
-- [ ] **Task 10: Write tests** (AC: #9)
-  - [ ] `test_omc_runner.py` — subprocess mock, output capture, shutdown, timeout, SIGKILL fallback
-  - [ ] `test_task_dispatch.py` — prompt building, plan parsing, payload construction
-  - [ ] `test_config.py` — defaults, env vars, validation
-  - [ ] `test_mcp_clients.py` — connection lifecycle, verify_connectivity
+- [x] **Task 10: Write tests** (AC: #9)
+  - [x] `test_omc_runner.py` — subprocess mock, output capture, shutdown, timeout, SIGKILL fallback
+  - [x] `test_task_dispatch.py` — prompt building, plan parsing, payload construction
+  - [x] `test_config.py` — defaults, env vars, validation
+  - [x] `test_mcp_clients.py` — connection lifecycle, verify_connectivity
 
-- [ ] **Task 11: Verification + commit** (AC: #7, #11, #12, #13)
-  - [ ] `ruff check` clean
-  - [ ] `scripts/check_imports.py` exits 0
-  - [ ] `just test` — no regressions
-  - [ ] Atomic commit
+- [x] **Task 11: Verification + commit** (AC: #7, #11, #12, #13)
+  - [x] `ruff check` clean
+  - [x] `scripts/check_imports.py` exits 0
+  - [x] `just test` — no regressions
+  - [x] Atomic commit
 
 ## Dev Notes
 

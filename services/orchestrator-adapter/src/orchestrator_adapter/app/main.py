@@ -1,0 +1,222 @@
+"""Main adapter lifecycle — MCP connections, task polling, OMC driving (Story 5.10).
+
+Coordinates the orchestrator-adapter's main loop:
+
+1. Connect to MCP servers (task-registry, session-registry, clawhip-bridge).
+2. Poll task-registry for tasks needing planning.
+3. Drive OMC subprocess via ``OMCRunner``.
+4. Emit ``task.planning.started`` / ``task.plan.ready`` events via clawhip-bridge.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from pathlib import Path
+
+import structlog
+
+from orchestrator_adapter.adapters.mcp_clients import MCPClientGroup
+from orchestrator_adapter.adapters.omc_runner import OMCRunner
+from orchestrator_adapter.app.config import OrchestratorSettings
+from orchestrator_adapter.domain.task_dispatch import (
+    build_omc_prompt,
+    build_plan_ready_payload,
+    build_planning_started_payload,
+    parse_omc_plan_output,
+)
+
+_MCP_CALL_TIMEOUT: float = 10.0
+
+
+async def _call_tool(
+    session: object,
+    tool_name: str,
+    arguments: dict[str, object],
+    *,
+    label: str,
+    timeout: float = _MCP_CALL_TIMEOUT,
+) -> object | None:
+    """Call an MCP tool with timeout; log and return ``None`` on failure."""
+    from mcp import ClientSession
+
+    log = structlog.get_logger(__name__)
+    if session is None or not isinstance(session, ClientSession):
+        log.warning("mcp_tool_skipped_no_session", label=label, tool=tool_name)
+        return None
+    try:
+        result = await asyncio.wait_for(
+            session.call_tool(tool_name, arguments=arguments),
+            timeout=timeout,
+        )
+        return result
+    except TimeoutError:
+        log.error("mcp_tool_call_timeout", label=label, tool=tool_name, timeout=timeout)
+    except Exception:
+        log.warning("mcp_tool_call_failed", label=label, tool=tool_name, exc_info=True)
+    return None
+
+
+async def _read_task_list(clients: MCPClientGroup) -> list[dict[str, object]]:
+    """Read the task list from task-registry MCP resource ``task://list``."""
+    log = structlog.get_logger(__name__)
+    if clients.task_registry is None:
+        log.warning("task_registry_not_connected")
+        return []
+    try:
+        result = await clients.task_registry.read_resource("task://list")
+        # Resource results contain text content blocks.
+        text = ""
+        for content in result.contents:
+            if hasattr(content, "text"):
+                text += content.text
+        if not text:
+            return []
+        tasks = json.loads(text)
+        if isinstance(tasks, list):
+            return tasks
+        return []
+    except Exception:
+        log.warning("task_list_read_failed", exc_info=True)
+        return []
+
+
+def _tasks_needing_planning(tasks: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Filter tasks that need planning (status is ``pending`` or ``new``)."""
+    planning_statuses = {"pending", "new", "ready"}
+    return [t for t in tasks if t.get("status", "") in planning_statuses]
+
+
+async def _emit_event(
+    clients: MCPClientGroup,
+    event_type: str,
+    payload: dict[str, object],
+    *,
+    label: str,
+) -> None:
+    """Emit a typed event via clawhip-bridge ``emit_event`` tool."""
+    await _call_tool(
+        clients.clawhip_bridge,
+        "emit_event",
+        {"type": event_type, "payload": payload},
+        label=label,
+    )
+
+
+async def process_task(
+    clients: MCPClientGroup,
+    runner: OMCRunner,
+    settings: OrchestratorSettings,
+    task: dict[str, object],
+) -> None:
+    """Process a single task: emit planning.started, run OMC, emit plan.ready."""
+    log = structlog.get_logger(__name__)
+    task_id = str(task.get("id", ""))
+    title = task.get("title")
+    hint = task.get("hint")
+
+    # Emit task.planning.started.
+    started_payload = build_planning_started_payload(task_id)
+    await _emit_event(
+        clients,
+        "task.planning.started",
+        started_payload,
+        label=f"planning_started_{task_id}",
+    )
+    log.info("planning_started", task_id=task_id)
+
+    # Build prompt and drive OMC.
+    prompt = build_omc_prompt(
+        task_id=task_id,
+        title=str(title) if title else None,
+        hint=str(hint) if hint else None,
+    )
+    result = await runner.run(prompt)
+
+    if result.error:
+        log.error(
+            "omc_run_failed",
+            task_id=task_id,
+            error=result.error,
+            exit_code=result.exit_code,
+            duration_ms=result.duration_ms,
+        )
+        return
+
+    # Parse OMC output and emit task.plan.ready.
+    plan_summary = parse_omc_plan_output(result.stdout)
+    ready_payload = build_plan_ready_payload(task_id, plan_summary)
+    await _emit_event(
+        clients,
+        "task.plan.ready",
+        ready_payload,
+        label=f"plan_ready_{task_id}",
+    )
+    log.info(
+        "plan_ready",
+        task_id=task_id,
+        plan_len=len(plan_summary),
+        duration_ms=result.duration_ms,
+    )
+
+
+async def adapter_loop(
+    clients: MCPClientGroup,
+    settings: OrchestratorSettings,
+    stop_event: asyncio.Event,
+) -> None:
+    """Main polling loop — poll task-registry, process tasks, repeat."""
+    log = structlog.get_logger(__name__)
+    runner = OMCRunner(
+        omc_path=Path(settings.omc_path),
+        timeout_s=settings.omc_timeout_s,
+    )
+
+    log.info("adapter_loop_started", poll_interval=settings.poll_interval_s)
+
+    while not stop_event.is_set():
+        tasks = await _read_task_list(clients)
+        needing_planning = _tasks_needing_planning(tasks)
+
+        if needing_planning:
+            log.info(
+                "tasks_needing_planning",
+                count=len(needing_planning),
+                total=len(tasks),
+            )
+            for task in needing_planning:
+                if stop_event.is_set():
+                    break
+                await process_task(clients, runner, settings, task)
+        else:
+            log.debug("no_tasks_need_planning", total=len(tasks))
+
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=settings.poll_interval_s)
+            return  # stop_event was set
+        except TimeoutError:
+            pass  # poll interval elapsed — loop again
+
+    log.info("adapter_loop_stopped")
+
+
+async def run_adapter(settings: OrchestratorSettings, stop_event: asyncio.Event) -> None:
+    """Wire up MCP clients and run the adapter loop."""
+    log = structlog.get_logger(__name__)
+    ready = Path(settings.ready_file_path)
+    clients = MCPClientGroup(settings=settings)
+
+    async with clients:
+        try:
+            from orchestrator_adapter.adapters.mcp_clients import verify_connectivity
+
+            results = await verify_connectivity(clients)
+            if not results or not all(results.values()):
+                log.error("connectivity_check_failed_partial", results=results)
+
+            ready.touch()
+            log.info("orchestrator_adapter_ready", actor_id=settings.resolve_actor_id())
+
+            await adapter_loop(clients, settings, stop_event)
+        finally:
+            ready.unlink(missing_ok=True)

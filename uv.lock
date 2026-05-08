@@ -1217,8 +1217,22 @@ dev = [
 
 [[package]]
 name = "orchestrator-adapter"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "services/orchestrator-adapter" }
+dependencies = [
+    { name = "events" },
+    { name = "mcp" },
+    { name = "pydantic-settings" },
+    { name = "structlog" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "events", editable = "packages/events" },
+    { name = "mcp", specifier = ">=1.0" },
+    { name = "pydantic-settings", specifier = ">=2.5,<3.0" },
+    { name = "structlog", specifier = ">=24.1" },
+]
 
 [[package]]
 name = "packaging"
@@ -1820,8 +1834,22 @@ requires-dist = [
 
 [[package]]
 name = "session-registry-mcp"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "mcp-servers/session-registry" }
+dependencies = [
+    { name = "events" },
+    { name = "mcp" },
+    { name = "pydantic" },
+    { name = "registry-state" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "events", editable = "packages/events" },
+    { name = "mcp", specifier = ">=1.0" },
+    { name = "pydantic", specifier = ">=2.8" },
+    { name = "registry-state", editable = "services/registry-state" },
+]
 
 [[package]]
 name = "shellingham"
@@ -1940,6 +1968,20 @@ wheels = [
 name = "task-registry-mcp"
 version = "0.1.0"
 source = { editable = "mcp-servers/task-registry" }
+dependencies = [
+    { name = "events" },
+    { name = "mcp" },
+    { name = "pydantic" },
+    { name = "registry-state" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "events", editable = "packages/events" },
+    { name = "mcp", specifier = ">=1.0" },
+    { name = "pydantic", specifier = ">=2.8" },
+    { name = "registry-state", editable = "services/registry-state" },
+]
 
 [[package]]
 name = "telegram-gateway"
