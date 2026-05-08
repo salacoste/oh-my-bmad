@@ -3109,7 +3109,7 @@ def test_render_step_completed_dispatcher_routes() -> None:
     """task.step.completed is routed to _render_step_completed."""
     env = _step_completed_envelope(step=5, description="Deploy")
     result = _render(env)
-    assert "Step 5 done: Deploy" == result
+    assert result == "Step 5 done: Deploy"
 
 
 def test_render_step_completed_length_cap() -> None:

@@ -5,8 +5,8 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
-
 from events.payloads import PlanStep
+
 from orchestrator_adapter.domain.task_dispatch import (
     PlanParseResult,
     build_completion_payload,

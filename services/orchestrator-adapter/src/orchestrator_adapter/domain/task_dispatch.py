@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from events.payloads import (
     PlanStep,
+    TaskBlockerRaisedPayload,
     TaskCompletedPayload,
     TaskExecutionStartedPayload,
     TaskPlanningStartedPayload,
@@ -162,4 +163,12 @@ def build_completion_payload(
     return TaskCompletedPayload(
         task_id=task_id,
         summary=summary[:2000],
+    ).model_dump()
+
+
+def build_blocker_raised_payload(task_id: str, reason: str) -> dict[str, object]:
+    """Build a ``task.blocker_raised`` event payload dict."""
+    return TaskBlockerRaisedPayload(
+        task_id=task_id,
+        reason=reason[:2000],
     ).model_dump()

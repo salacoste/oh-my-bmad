@@ -21,6 +21,7 @@ from orchestrator_adapter.adapters.omc_runner import OMCRunner
 from orchestrator_adapter.app.config import OrchestratorSettings
 from orchestrator_adapter.domain.task_dispatch import (
     PlanParseResult,
+    build_blocker_raised_payload,
     build_completion_payload,
     build_execution_started_payload,
     build_omc_prompt,
@@ -179,7 +180,21 @@ async def process_task(
 
     # --- Story 5.12: execution loop ---
 
+    # Guard: skip execution when plan has no steps.
+    if not plan_result.steps:
+        log.info("no_steps_to_execute", task_id=task_id)
+        completion_payload = build_completion_payload(task_id, plan_result, {})
+        await _emit_event(
+            clients,
+            "task.completed",
+            completion_payload,
+            label=f"task_completed_{task_id}",
+        )
+        log.info("task_completed_no_steps", task_id=task_id)
+        return
+
     # Emit task.execution.started.
+    # TODO(5.17a): replace "s-placeholder" with real worker-wrapper session ID.
     exec_started_payload = build_execution_started_payload(task_id, "s-placeholder")
     await _emit_event(
         clients,
@@ -192,7 +207,7 @@ async def process_task(
     # Drive each step via OMC.
     step_outputs: dict[int, str] = {}
     for step in plan_result.steps:
-        step_prompt = build_omc_prompt(task_id, hint=step.description)
+        step_prompt = build_omc_prompt(task_id, hint=f"Step {step.step}: {step.description}")
         step_result = await runner.run(step_prompt)
 
         if step_result.error:
@@ -202,13 +217,12 @@ async def process_task(
                 step=step.step,
                 error=step_result.error,
             )
+            reason = f"Step {step.step} failed: {(step_result.error or 'unknown error')[:1980]}"
+            blocker_payload = build_blocker_raised_payload(task_id, reason)
             await _emit_event(
                 clients,
                 "task.blocker_raised",
-                {
-                    "task_id": task_id,
-                    "reason": f"Step {step.step} failed: {step_result.error[:2000]}",
-                },
+                blocker_payload,
                 label=f"step_blocker_{task_id}_{step.step}",
             )
             return
