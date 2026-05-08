@@ -390,6 +390,32 @@ class TestToolHandlers:
         assert result["ok"] is False
 
     @pytest.mark.asyncio
+    async def test_session_register_rejects_empty_worker_kind(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        mcp = _build(db_session_maker)
+        fn = mcp._tool_manager._tools["session_register"].fn
+        result = await fn(
+            task_id="t-00000001-0001-7000-8000-000000000001",
+            worker_kind="",
+            worktree_path="/tmp/wt",
+        )
+        assert result["ok"] is False
+
+    @pytest.mark.asyncio
+    async def test_session_register_accepts_empty_worktree_path(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        mcp = _build(db_session_maker)
+        fn = mcp._tool_manager._tools["session_register"].fn
+        result = await fn(
+            task_id="t-00000001-0001-7000-8000-000000000001",
+            worker_kind="claude-code",
+            worktree_path="",
+        )
+        assert result == {"ok": True}
+
+    @pytest.mark.asyncio
     async def test_session_heartbeat_succeeds(
         self, db_session_maker: async_sessionmaker[AsyncSession]
     ) -> None:
@@ -454,9 +480,9 @@ class TestToolHandlers:
 class TestTierEnforcement:
     """AC-3: Tier placeholder returns True (NO-OP)."""
 
-    def test_check_tier_returns_true(self) -> None:
-        assert tools_check_tier("worker", "session_register") is True
-        assert tools_check_tier("operator", "session_close") is True
+    @pytest.mark.parametrize("kind", ["operator", "orchestrator", "worker", "system"])
+    def test_check_tier_returns_true(self, kind: str) -> None:
+        assert tools_check_tier(kind, "session_register") is True
 
     @pytest.mark.asyncio
     async def test_tool_raises_permission_error_when_tier_denies(
@@ -486,7 +512,7 @@ class TestTierEnforcement:
 class TestEntryPoint:
     """AC-6 entry point env-var validation tests."""
 
-    def test_main_exits_2_on_missing_db_path(self, tmp_path: Path) -> None:
+    def test_main_exits_2_on_missing_db_path(self) -> None:
         env = {k: v for k, v in os.environ.items() if k != "SESSION_REGISTRY_DB_PATH"}
         env["SESSION_REGISTRY_ACTOR_KIND"] = "worker"
         env["SESSION_REGISTRY_ACTOR_ID"] = "test-id"
@@ -500,7 +526,7 @@ class TestEntryPoint:
         assert result.returncode == 2
         assert "SESSION_REGISTRY_DB_PATH" in result.stderr
 
-    def test_main_exits_2_on_missing_actor_kind(self, tmp_path: Path) -> None:
+    def test_main_exits_2_on_missing_actor_kind(self) -> None:
         env = {k: v for k, v in os.environ.items() if k != "SESSION_REGISTRY_ACTOR_KIND"}
         env["SESSION_REGISTRY_DB_PATH"] = "/tmp/test.db"
         env["SESSION_REGISTRY_ACTOR_ID"] = "test-id"
@@ -514,7 +540,7 @@ class TestEntryPoint:
         assert result.returncode == 2
         assert "SESSION_REGISTRY_ACTOR_KIND" in result.stderr
 
-    def test_main_exits_2_on_missing_actor_id(self, tmp_path: Path) -> None:
+    def test_main_exits_2_on_missing_actor_id(self) -> None:
         env = {k: v for k, v in os.environ.items() if k != "SESSION_REGISTRY_ACTOR_ID"}
         env["SESSION_REGISTRY_DB_PATH"] = "/tmp/test.db"
         env["SESSION_REGISTRY_ACTOR_KIND"] = "worker"
@@ -528,8 +554,8 @@ class TestEntryPoint:
         assert result.returncode == 2
         assert "SESSION_REGISTRY_ACTOR_ID" in result.stderr
 
-    def test_main_exits_2_on_invalid_actor_kind(self, tmp_path: Path) -> None:
-        env = dict(os.environ)
+    def test_main_exits_2_on_invalid_actor_kind(self) -> None:
+        env = {k: v for k, v in os.environ.items()}
         env["SESSION_REGISTRY_DB_PATH"] = "/tmp/test.db"
         env["SESSION_REGISTRY_ACTOR_KIND"] = "invalid_role"
         env["SESSION_REGISTRY_ACTOR_ID"] = "test-id"

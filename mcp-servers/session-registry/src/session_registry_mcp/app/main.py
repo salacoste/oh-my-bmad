@@ -72,6 +72,7 @@ def build_server(
     register_resources(mcp, session_maker, actor_kind)
     register_tools(mcp, session_maker, actor_kind, actor_id)
 
+    log.info("session-registry server built: actor_kind=%s actor_id=%s", actor_kind, actor_id)
     return mcp
 
 

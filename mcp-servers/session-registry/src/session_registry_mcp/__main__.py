@@ -27,10 +27,10 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Literal
+from typing import Literal, get_args
 
-_VALID_ACTOR_KINDS = {"operator", "orchestrator", "worker", "system"}
 ActorKind = Literal["operator", "orchestrator", "worker", "system"]
+_VALID_ACTOR_KINDS = set(get_args(ActorKind))
 
 
 def main() -> None:

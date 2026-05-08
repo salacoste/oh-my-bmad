@@ -23,18 +23,18 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-def _session_to_dict(session: Session) -> dict[str, object]:
+def _session_to_dict(sess: Session) -> dict[str, object]:
     """Serialize a Session ORM instance to a JSON-safe dict."""
     return {
-        "id": session.id,
-        "task_id": session.task_id,
-        "worker_kind": session.worker_kind,
-        "worktree_path": session.worktree_path,
-        "status": session.status,
-        "started_at": session.started_at.isoformat(),
-        "ended_at": session.ended_at.isoformat() if session.ended_at else None,
+        "id": sess.id,
+        "task_id": sess.task_id,
+        "worker_kind": sess.worker_kind,
+        "worktree_path": sess.worktree_path,
+        "status": sess.status,
+        "started_at": sess.started_at.isoformat(),
+        "ended_at": sess.ended_at.isoformat() if sess.ended_at else None,
         "last_heartbeat_at": (
-            session.last_heartbeat_at.isoformat() if session.last_heartbeat_at else None
+            sess.last_heartbeat_at.isoformat() if sess.last_heartbeat_at else None
         ),
     }
 

@@ -30,7 +30,7 @@ def _check_tier(actor_kind: str, tool_name: str) -> bool:
     Story 6.1-6.3 replaces this with real Tier 0/1/2/3 enforcement.
     """
     log.debug(
-        "tier-check (no-op): actor_kind=%s tool=%s — full enforcement in Story 6.1",
+        "tier-check (no-op): actor_kind=%s tool=%s — full enforcement in Stories 6.1-6.3",
         actor_kind,
         tool_name,
     )
