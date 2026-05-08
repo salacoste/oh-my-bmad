@@ -1,6 +1,6 @@
 # Story 5.11: Task plan emission (FR2)
 
-Status: review
+Status: done
 
 ## Story
 
