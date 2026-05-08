@@ -1,6 +1,6 @@
 # Story 5.12: Task execution driver (FR3 + FR31)
 
-Status: in-progress
+Status: review
 
 ## Story
 
@@ -173,8 +173,32 @@ The step-completed renderer should follow the established pattern (Stories 3.10-
 
 ### Agent Model Used
 
+Claude Opus 4.7
+
 ### Debug Log References
+
+N/A
 
 ### Completion Notes List
 
+- Added `TaskStepCompletedPayload` frozen Pydantic model to `packages/events/src/events/payloads.py` with `task_id`, `step`, `description`, `output_summary` fields
+- Registered `task.step.completed` v1.0.0 in `registry_state/domain/event_types.py`
+- Added `build_execution_started_payload`, `build_step_completed_payload`, `build_completion_payload` to `task_dispatch.py`
+- Wired execution loop into `process_task()` in `app/main.py`: emits execution.started, iterates steps driving OMC, emits step.completed per step, emits task.completed on completion, emits blocker_raised on step failure
+- Added `_render_step_completed()` renderer to `telegram_sink.py` with HTML escape, newline collapse, description truncation, length cap
+- Registered `"task.step.completed"` in `_RENDERERS` dispatch table and `_DELIVERABLE_EVENT_TYPES`
+- 16 new tests: 8 in orchestrator-adapter (payload builders, step iteration, completion synthesis, empty plan), 8 in clawhip-daemon (renderer output, HTML escape, newlines, truncation, type mismatch, dispatcher routing, length cap, deliverable types membership)
+- All 161 tests pass in target files; full suite 1188 passed (3 pre-existing crash-injection failures unrelated)
+- Ruff clean, check_event_registry exits 0, check_imports 1 pre-existing IMP001 (unrelated)
+
 ### File List
+
+- `packages/events/src/events/payloads.py` — added TaskStepCompletedPayload model
+- `services/registry-state/src/registry_state/domain/event_types.py` — added v1.0.0 registration
+- `services/orchestrator-adapter/src/orchestrator_adapter/domain/task_dispatch.py` — execution payload builders
+- `services/orchestrator-adapter/src/orchestrator_adapter/app/main.py` — execution loop in process_task
+- `services/orchestrator-adapter/src/orchestrator_adapter/test_task_dispatch.py` — 8 new tests
+- `services/clawhip-daemon/src/clawhip_daemon/adapters/sinks/telegram_sink.py` — _render_step_completed renderer + dispatch registration
+- `services/clawhip-daemon/src/clawhip_daemon/adapters/sinks/test_telegram_sink.py` — 8 new renderer tests
+- `_bmad-output/implementation-artifacts/5-12-task-execution-driver.md` — status → review
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` — 5-12 → review
