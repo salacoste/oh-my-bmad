@@ -35,10 +35,12 @@ from events import (  # Story 2.9 AC-16
     DiffSummary,
     EventEnvelope,
     FrozenClock,
+    PlanStep,
     PreCheckResults,
     TaskApprovalRequestedPayload,
     TaskBlockerRaisedPayload,
     TaskCompletedPayload,
+    TaskPlanReadyPayload,
     TaskSelfRecoveredPayload,
     new_event_id,
     new_task_id,
@@ -61,6 +63,7 @@ from clawhip_daemon.adapters.sinks.telegram_sink import (
     _render,
     _render_blocker_raised,
     _render_completed,
+    _render_plan_ready,
     _render_self_recovered,
 )
 
@@ -2778,3 +2781,166 @@ def test_render_self_recovered_type_mismatch_collapses_newlines_in_task_id() -> 
     # Newlines collapsed (not preserved as literal \n in output).
     assert "\n" not in result
     assert "t-aa bb cc" in result
+
+
+# ---------------------------------------------------------------------------
+# Renderer (Story 5.11 — plan-ready template, FR2)
+# ---------------------------------------------------------------------------
+
+
+_PLAN_READY_REGISTERED: bool = False
+
+
+def _ensure_plan_ready_registered() -> None:
+    """Register task.plan.ready 1.1.0 so EventEnvelope.create succeeds."""
+    global _PLAN_READY_REGISTERED
+    if _PLAN_READY_REGISTERED:
+        return
+    _reg("task.plan.ready", "1.0.0", TaskPlanReadyPayload)
+    _reg("task.plan.ready", "1.0.1", TaskPlanReadyPayload)
+    _reg("task.plan.ready", "1.1.0", TaskPlanReadyPayload)
+    _PLAN_READY_REGISTERED = True
+
+
+def _plan_ready_envelope(
+    *,
+    task_id: str = "t-00000000-0000-7000-8000-000000000010",
+    plan_summary: str = "Plan summary text",
+    steps: tuple[PlanStep, ...] = (),
+    estimated_steps: int = 0,
+    mono_ns: int = 10_000_000,
+) -> EventEnvelope:
+    """Build a task.plan.ready envelope (schema 1.1.0)."""
+    _ensure_task_created_registered()
+    _ensure_plan_ready_registered()
+
+    rng = Random(511)
+    clk = FrozenClock(mono_ns=mono_ns, now=FROZEN_EPOCH)
+    eid = new_event_id(clock=clk, rng=rng)
+    rid = new_uuid7(clock=clk, rng=rng)
+    payload = TaskPlanReadyPayload(
+        task_id=task_id,
+        plan_summary=plan_summary,
+        plan=steps,
+        estimated_steps=estimated_steps,
+    )
+    return EventEnvelope.create(
+        event_id=eid,
+        schema_version="1.1.0",
+        type="task.plan.ready",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=payload,
+        request_id=rid,
+    )
+
+
+def test_render_plan_ready_basic() -> None:
+    """AC-4: basic plan with 3 steps renders correctly."""
+    steps = (
+        PlanStep(step=1, description="Setup project"),
+        PlanStep(step=2, description="Write tests"),
+        PlanStep(step=3, description="Implement feature"),
+    )
+    env = _plan_ready_envelope(steps=steps, estimated_steps=3)
+    result = _render_plan_ready(env)
+    assert "Plan ready, 3 steps:" in result
+    assert "1) Setup project" in result
+    assert "2) Write tests" in result
+    assert "3) Implement feature" in result
+
+
+def test_render_plan_ready_empty_steps() -> None:
+    """No steps -> header only, no step lines."""
+    env = _plan_ready_envelope(steps=(), estimated_steps=0)
+    result = _render_plan_ready(env)
+    assert "Plan ready, 0 steps:" in result
+    assert ")" not in result.split("\n", 1)[1] if "\n" in result else True
+
+
+def test_render_plan_ready_single_step() -> None:
+    """Single step renders correctly."""
+    steps = (PlanStep(step=1, description="Do the thing"),)
+    env = _plan_ready_envelope(steps=steps, estimated_steps=1)
+    result = _render_plan_ready(env)
+    assert "Plan ready, 1 steps:" in result
+    assert "1) Do the thing" in result
+
+
+def test_render_plan_ready_html_escape() -> None:
+    """Step descriptions are HTML-escaped."""
+    steps = (PlanStep(step=1, description="<script>alert('xss')</script>"),)
+    env = _plan_ready_envelope(steps=steps, estimated_steps=1)
+    result = _render_plan_ready(env)
+    assert "<script>" not in result
+    assert "&lt;script&gt;" in result
+
+
+def test_render_plan_ready_newlines_collapsed() -> None:
+    """Newlines in step descriptions are collapsed to spaces."""
+    steps = (PlanStep(step=1, description="Line one\nLine two"),)
+    env = _plan_ready_envelope(steps=steps, estimated_steps=1)
+    result = _render_plan_ready(env)
+    assert "Line one\nLine two" not in result
+    assert "Line one Line two" in result
+
+
+def test_render_plan_ready_step_truncation_overflow() -> None:
+    """More than 20 steps triggers overflow indicator."""
+    steps = tuple(PlanStep(step=i, description=f"Step {i}") for i in range(1, 25))
+    env = _plan_ready_envelope(steps=steps, estimated_steps=24)
+    result = _render_plan_ready(env)
+    assert "and 4 more" in result
+    # Should not show step 25 (index 24).
+    assert "25)" not in result
+
+
+def test_render_plan_ready_emergency_one_liner() -> None:
+    """AC-5: very long task_id forces emergency one-liner fallback."""
+    # Use a task_id at the max allowed length so the emergency fallback triggers.
+    long_id = "t-" + "a" * 62  # 64 chars total (task_id max)
+    steps = tuple(PlanStep(step=i, description="X" * 500) for i in range(1, 6))
+    env = _plan_ready_envelope(task_id=long_id, steps=steps, estimated_steps=5)
+    result = _render_plan_ready(env)
+    # After the ladder, output must still be under the 1900-char cap.
+    assert len(result) <= 1900
+
+
+def test_render_plan_ready_payload_type_mismatch() -> None:
+    """H9 carry-forward: wrong payload type -> placeholder + WARN."""
+    # Build an envelope with a raw dict payload via model_construct to bypass
+    # schema validation, so isinstance check fails inside the renderer.
+    env = EventEnvelope.model_construct(
+        event_id="e-test",
+        schema_version="1.0.0",
+        type="task.plan.ready",
+        emitted_at=FROZEN_EPOCH,
+        emitted_at_monotonic_ns=10_000_000,
+        actor=_ACTOR,
+        payload={"task_id": "t-test", "plan_summary": "s"},
+        parent_event_id=None,
+        trace_id=None,
+        request_id="r-test",
+        extensions=None,
+    )
+    import structlog.testing
+
+    with structlog.testing.capture_logs():
+        result = _render_plan_ready(env)
+    # Falls back to placeholder shape.
+    assert "Task t-test: task.plan.ready" in result
+
+
+def test_render_plan_ready_dispatcher_routes() -> None:
+    """task.plan.ready is registered in _RENDERERS and dispatched correctly."""
+    assert "task.plan.ready" in _RENDERERS
+    assert _RENDERERS["task.plan.ready"] is _render_plan_ready
+
+
+def test_render_plan_ready_length_cap() -> None:
+    """AC-5: output respects the 1900-char cap."""
+    steps = tuple(PlanStep(step=i, description=f"Step {i}: " + "X" * 150) for i in range(1, 30))
+    env = _plan_ready_envelope(steps=steps, estimated_steps=29)
+    result = _render_plan_ready(env)
+    assert len(result) <= 1900

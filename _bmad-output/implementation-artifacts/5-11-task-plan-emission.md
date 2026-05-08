@@ -1,6 +1,6 @@
 # Story 5.11: Task plan emission (FR2)
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -48,41 +48,41 @@ So that I see what the agent intends to do before it acts.
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Add PlanStep model and extend TaskPlanReadyPayload** (AC: #1)
-  - [ ] Add `PlanStep` frozen Pydantic model (`step: int`, `description: str`) to `packages/events/src/events/payloads.py`
-  - [ ] Add `plan: list[PlanStep] = Field(default_factory=list)` and `estimated_steps: int = Field(default=0)` to `TaskPlanReadyPayload`
-  - [ ] Verify backward compatibility: existing events with only `task_id` + `plan_summary` deserialize with new fields defaulting
+- [x] **Task 1: Add PlanStep model and extend TaskPlanReadyPayload** (AC: #1)
+  - [x] Add `PlanStep` frozen Pydantic model (`step: int`, `description: str`) to `packages/events/src/events/payloads.py`
+  - [x] Add `plan: tuple[PlanStep, ...] = Field(default=())` and `estimated_steps: int = Field(default=0)` to `TaskPlanReadyPayload`
+  - [x] Verify backward compatibility: existing events with only `task_id` + `plan_summary` deserialize with new fields defaulting
 
-- [ ] **Task 2: Register plan events in schema registry** (AC: #6)
-  - [ ] Check `packages/events/src/events/schema_registry.py` for existing `task.plan.ready` / `task.planning.started` registrations
-  - [ ] Add registrations if missing, with correct payload models and schema version
-  - [ ] Run `scripts/check_event_registry.py` to verify
+- [x] **Task 2: Register plan events in schema registry** (AC: #6)
+  - [x] Check `packages/events/src/events/schema_registry.py` for existing `task.plan.ready` / `task.planning.started` registrations
+  - [x] Add v1.1.0 registration with `TaskPlanReadyPayload` in `registry_state/domain/event_types.py`
+  - [x] Run `scripts/check_event_registry.py` to verify
 
-- [ ] **Task 3: Update plan parsing in orchestrator-adapter** (AC: #2, #3)
-  - [ ] Create `PlanParseResult` dataclass in `domain/task_dispatch.py` with `steps: list[PlanStep]`, `summary: str`
-  - [ ] Update `parse_omc_plan_output()` to return `PlanParseResult` — extract numbered steps into `PlanStep` list, fall back to flat summary
-  - [ ] Update `build_plan_ready_payload()` to populate `plan`, `estimated_steps`, and `plan_summary`
-  - [ ] Update `app/main.py` `process_task()` to use the new return type
+- [x] **Task 3: Update plan parsing in orchestrator-adapter** (AC: #2, #3)
+  - [x] Create `PlanParseResult` frozen dataclass in `domain/task_dispatch.py` with `steps: tuple[PlanStep, ...]`, `summary: str`
+  - [x] Update `parse_omc_plan_output()` to return `PlanParseResult` — extract numbered steps into `PlanStep` list, fall back to flat summary
+  - [x] Update `build_plan_ready_payload()` to accept `PlanParseResult` and populate `plan`, `estimated_steps`, and `plan_summary`
+  - [x] Update `app/main.py` `process_task()` to use the new return type
 
-- [ ] **Task 4: Add plan-ready Telegram renderer** (AC: #4, #5)
-  - [ ] Add `_render_plan_ready()` function in `services/clawhip-daemon/src/clawhip_daemon/adapters/sinks/telegram_sink.py`
-  - [ ] Import `TaskPlanReadyPayload` from `events` (follow existing import pattern)
-  - [ ] Render format: `Plan ready, N steps:\n1) ...\n2) ...`
-  - [ ] Implement section-drop ladder: truncate steps list → emergency one-liner
-  - [ ] Add `_PLAN_READY_MESSAGE_MAX_CHARS: int = 1900` (parity with other renderers)
-  - [ ] Register in `_RENDERERS` dispatch table under `"task.plan.ready"`
+- [x] **Task 4: Add plan-ready Telegram renderer** (AC: #4, #5)
+  - [x] Add `_render_plan_ready()` function in `services/clawhip-daemon/src/clawhip_daemon/adapters/sinks/telegram_sink.py`
+  - [x] Import `TaskPlanReadyPayload` from `events` (follow existing import pattern)
+  - [x] Render format: `Plan ready, N steps:\n1) ...\n2) ...`
+  - [x] Implement section-drop ladder: 20 steps → 10 → 4 → emergency one-liner
+  - [x] Add `_PLAN_READY_MESSAGE_MAX_CHARS: int = 1900` (parity with other renderers)
+  - [x] Register in `_RENDERERS` dispatch table under `"task.plan.ready"`
 
-- [ ] **Task 5: Write tests** (AC: #8)
-  - [ ] `test_task_dispatch.py` — step extraction from numbered lists, markdown headings, fallback; payload construction with all fields
-  - [ ] `test_plan_ready_renderer.py` (new file in clawhip-daemon tests) — render output, length cap, step truncation, emergency fallback, empty plan
-  - [ ] Payload backward compatibility tests — old-format payload deserializes with default plan=[] and estimated_steps=0
+- [x] **Task 5: Write tests** (AC: #8)
+  - [x] `test_task_dispatch.py` — 16 tests: step extraction from numbered lists, markdown headings, fallback; payload construction with all fields; frozen dataclass
+  - [x] `test_telegram_sink.py` — 10 plan-ready renderer tests: basic, empty, single step, HTML escape, newline collapse, overflow, emergency, type mismatch, dispatcher routing, length cap
+  - [x] Backward compatibility verified: old-format payload deserializes with default plan=() and estimated_steps=0
 
-- [ ] **Task 6: Verification + commit** (AC: #7, #9, #10, #11)
-  - [ ] `ruff check` clean
-  - [ ] `scripts/check_imports.py` exits 0
-  - [ ] `scripts/check_event_registry.py` exits 0
-  - [ ] `just test` — no regressions
-  - [ ] Atomic commit
+- [x] **Task 6: Verification + commit** (AC: #7, #9, #10, #11)
+  - [x] `ruff check` clean on all modified files
+  - [x] `scripts/check_imports.py` exits 0 (pre-existing IMP001 unrelated)
+  - [x] `scripts/check_event_registry.py` exits 0
+  - [x] `just test` — 474 passed, 0 regressions
+  - [x] Atomic commit
 
 ## Dev Notes
 
@@ -172,3 +172,36 @@ Each `PlanStep.description` should be capped at ~200 chars to keep Telegram rend
 - [Source: `services/orchestrator-adapter/src/orchestrator_adapter/app/main.py` — current event emission]
 - [Source: `services/clawhip-daemon/src/clawhip_daemon/adapters/sinks/telegram_sink.py` — renderer pattern]
 - [Source: `_bmad-output/implementation-artifacts/5-10-orchestrator-adapter-omc-supervision.md` — Story 5.10 (previous)]
+
+## Dev Agent Record
+
+### Agent Model Used
+
+Claude Opus 4.7
+
+### Debug Log References
+
+N/A
+
+### Completion Notes List
+
+- Added `PlanStep` frozen Pydantic model to `packages/events/src/events/payloads.py` with `step: int` and `description: str` fields
+- Extended `TaskPlanReadyPayload` with `plan: tuple[PlanStep, ...]` and `estimated_steps: int` (additive-only, defaults for backward compat)
+- Registered `task.plan.ready` v1.1.0 in `registry_state/domain/event_types.py`
+- Refactored `parse_omc_plan_output()` to return `PlanParseResult` dataclass with structured steps + flat summary
+- Updated `build_plan_ready_payload()` signature to accept `PlanParseResult`
+- Updated `app/main.py process_task()` to use new return type
+- Added `_render_plan_ready()` renderer to `telegram_sink.py` with section-drop ladder (20->10->4->emergency)
+- Registered `"task.plan.ready"` in `_RENDERERS` dispatch table
+- 26 new tests: 16 in orchestrator-adapter, 10 in clawhip-daemon
+- All 474 tests pass, 0 regressions
+
+### File List
+
+- `packages/events/src/events/payloads.py` — added PlanStep model, extended TaskPlanReadyPayload
+- `services/registry-state/src/registry_state/domain/event_types.py` — added v1.1.0 registration
+- `services/orchestrator-adapter/src/orchestrator_adapter/domain/task_dispatch.py` — PlanParseResult, structured parsing, updated payload builder
+- `services/orchestrator-adapter/src/orchestrator_adapter/app/main.py` — updated process_task to use PlanParseResult
+- `services/orchestrator-adapter/src/orchestrator_adapter/test_task_dispatch.py` — 16 tests (updated + new)
+- `services/clawhip-daemon/src/clawhip_daemon/adapters/sinks/telegram_sink.py` — _render_plan_ready renderer + dispatch registration
+- `services/clawhip-daemon/src/clawhip_daemon/adapters/sinks/test_telegram_sink.py` — 10 plan-ready renderer tests

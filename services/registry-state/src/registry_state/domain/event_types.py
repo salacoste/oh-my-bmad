@@ -88,6 +88,7 @@ register("task.planning.started", "1.0.0", TaskPlanningStartedPayload)
 register("task.planning.started", "1.0.1", TaskPlanningStartedPayload)
 register("task.plan.ready", "1.0.0", TaskPlanReadyPayload)
 register("task.plan.ready", "1.0.1", TaskPlanReadyPayload)
+register("task.plan.ready", "1.1.0", TaskPlanReadyPayload)  # Story 5.11 — structured plan steps
 register("task.execution.started", "1.0.0", TaskExecutionStartedPayload)
 register("task.execution.started", "1.0.1", TaskExecutionStartedPayload)
 

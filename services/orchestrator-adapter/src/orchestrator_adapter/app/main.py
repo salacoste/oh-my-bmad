@@ -20,6 +20,7 @@ from orchestrator_adapter.adapters.mcp_clients import MCPClientGroup
 from orchestrator_adapter.adapters.omc_runner import OMCRunner
 from orchestrator_adapter.app.config import OrchestratorSettings
 from orchestrator_adapter.domain.task_dispatch import (
+    PlanParseResult,
     build_omc_prompt,
     build_plan_ready_payload,
     build_planning_started_payload,
@@ -157,8 +158,8 @@ async def process_task(
         return
 
     # Parse OMC output and emit task.plan.ready.
-    plan_summary = parse_omc_plan_output(result.stdout)
-    ready_payload = build_plan_ready_payload(task_id, plan_summary)
+    plan_result: PlanParseResult = parse_omc_plan_output(result.stdout)
+    ready_payload = build_plan_ready_payload(task_id, plan_result)
     await _emit_event(
         clients,
         "task.plan.ready",
@@ -168,7 +169,8 @@ async def process_task(
     log.info(
         "plan_ready",
         task_id=task_id,
-        plan_len=len(plan_summary),
+        plan_len=len(plan_result.summary),
+        step_count=plan_result.estimated_steps,
         duration_ms=result.duration_ms,
     )
 

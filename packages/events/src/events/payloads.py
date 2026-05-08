@@ -78,13 +78,30 @@ class TaskPlanningStartedPayload(BaseModel):
     task_id: str
 
 
+class PlanStep(BaseModel):
+    """A single step in a structured plan (Story 5.11 / FR2)."""
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    step: int = Field(ge=1)
+    description: str = Field(min_length=1, max_length=500)
+
+
 class TaskPlanReadyPayload(BaseModel):
-    """Payload for the ``task.plan.ready`` event."""
+    """Payload for the ``task.plan.ready`` event.
+
+    Story 5.11 — additive minor bump (1.0.x → 1.1.0): ``plan`` and
+    ``estimated_steps`` carry the structured step list so the Telegram
+    plan-ready renderer can show individual steps. Both default to empty/zero
+    so pre-5.11 events deserialize cleanly (NFR-M3 additive-only).
+    """
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
     task_id: str
     plan_summary: str
+    plan: tuple[PlanStep, ...] = Field(default=())
+    estimated_steps: int = Field(default=0, ge=0)
 
 
 class TaskExecutionStartedPayload(BaseModel):
@@ -656,6 +673,7 @@ __all__ = [
     "AgentReasoningBreadcrumbPayload",
     "DiffSummary",
     "FileEditedPayload",
+    "PlanStep",
     "PreCheckOutcome",
     "PreCheckResults",
     "SecretAccessedPayload",

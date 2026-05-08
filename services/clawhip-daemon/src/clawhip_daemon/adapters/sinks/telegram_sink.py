@@ -61,6 +61,7 @@ from events import (
     TaskApprovalRequestedPayload,
     TaskBlockerRaisedPayload,
     TaskCompletedPayload,
+    TaskPlanReadyPayload,
     TaskSelfRecoveredPayload,
     from_canonical_json,
 )
@@ -1449,6 +1450,109 @@ def _render_self_recovered(envelope: EventEnvelope) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Renderer (Story 5.11 — plan-ready template, FR2)
+# ---------------------------------------------------------------------------
+
+#: Story 5.11 AC-5 — same codepoint cap as the other renderers (Story 3.10
+#: M1 + Story 3.11 H3 / L15 carry-forward).
+#: **Parity invariant** — all renderer caps move together.
+_PLAN_READY_MESSAGE_MAX_CHARS: int = 1900
+
+#: Maximum number of individual step lines shown before truncating.
+_PLAN_READY_MAX_VISIBLE_STEPS: int = 20
+
+#: Per-step description cap (whole rendered line including prefix).
+_PLAN_READY_STEP_MAX_CHARS: int = 200
+
+
+def _render_plan_ready(envelope: EventEnvelope) -> str:
+    """Render the FR2 plan-ready message — Story 5.11 AC-4/AC-5.
+
+    Format::
+
+        Plan ready, N steps:
+        1) ...
+        2) ...
+        3) ...
+
+    Length safety (AC-5) — section-drop ladder:
+
+      Step 1: Full message with up to 20 steps.
+      Step 2: Truncate to 10 steps with ``… and M more`` overflow.
+      Step 3: Truncate to 4 steps with overflow.
+      Step 4: Emergency one-liner — ``Plan ready, N steps. (see /logs <id>)``
+
+    Story 3.10 review H9 carry-forward: when the dispatcher routes here
+    but the runtime payload is not a typed :class:`TaskPlanReadyPayload`
+    (registration race / version drift), a structured WARN is emitted
+    before falling back to the placeholder.
+    """
+    payload = envelope.payload
+    if not isinstance(payload, TaskPlanReadyPayload):
+        _log.warning(
+            "renderer.payload_type_mismatch",
+            event_type=envelope.type,
+            expected="TaskPlanReadyPayload",
+            actual=type(payload).__name__,
+        )
+        task_id = _collapse_newlines(_extract_task_id(envelope) or "<unknown>")
+        return f"Task {html.escape(task_id)}: {html.escape(envelope.type)}"
+
+    task_id_esc = html.escape(_collapse_newlines(payload.task_id)[:_EMERGENCY_TASK_ID_MAX_CHARS])
+    steps = payload.plan
+    step_count = payload.estimated_steps or len(steps)
+
+    # Step 1: full message with up to 20 steps.
+    text = _assemble_plan_sections(
+        task_id_esc, steps, step_count, max_steps=_PLAN_READY_MAX_VISIBLE_STEPS,
+    )
+    if len(text) <= _PLAN_READY_MESSAGE_MAX_CHARS:
+        return text
+
+    # Step 2: truncate to 10 steps.
+    text = _assemble_plan_sections(task_id_esc, steps, step_count, max_steps=10)
+    if len(text) <= _PLAN_READY_MESSAGE_MAX_CHARS:
+        return text
+
+    # Step 3: truncate to 4 steps.
+    text = _assemble_plan_sections(task_id_esc, steps, step_count, max_steps=4)
+    if len(text) <= _PLAN_READY_MESSAGE_MAX_CHARS:
+        return text
+
+    # Step 4: emergency one-liner.
+    result = f"Plan ready, {step_count} steps. (see /logs {task_id_esc})"
+    if len(result) > _PLAN_READY_MESSAGE_MAX_CHARS:
+        result = result[:_PLAN_READY_MESSAGE_MAX_CHARS]
+    return result
+
+
+def _assemble_plan_sections(
+    task_id_esc: str,
+    steps: tuple[object, ...],
+    step_count: int,
+    *,
+    max_steps: int,
+) -> str:
+    """Assemble the plan-ready message with up to *max_steps* step lines.
+
+    Each step line is ``N) <description>`` with HTML-escaped, collapsed,
+    truncated description text.
+    """
+    lines: list[str] = [f"Plan ready, {step_count} steps:"]
+    visible = steps[:max_steps]
+    for step_obj in visible:
+        num = getattr(step_obj, "step", 0)
+        desc = getattr(step_obj, "description", "")
+        desc_collapsed = _collapse_newlines(str(desc))
+        desc_esc = html.escape(desc_collapsed[:_PLAN_READY_STEP_MAX_CHARS])
+        lines.append(f"{num}) {desc_esc}")
+    omitted = len(steps) - max_steps
+    if omitted > 0:
+        lines.append(f"… and {omitted} more")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Renderer dispatcher (Story 3.10 AC-4)
 # ---------------------------------------------------------------------------
 
@@ -1470,6 +1574,7 @@ _RENDERERS: MappingProxyType[str, _RenderFn] = MappingProxyType(
         "task.approval_requested": _render_approval_request,
         "task.blocker_raised": _render_blocker_raised,
         "task.completed": _render_completed,
+        "task.plan.ready": _render_plan_ready,
         "task.self_recovered": _render_self_recovered,
     }
 )
