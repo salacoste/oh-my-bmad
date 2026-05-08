@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-08T19:00:00Z
+last_updated: 2026-05-08T21:00:00Z
 
 development_status:
   # =========================================================================
@@ -151,7 +151,7 @@ development_status:
   5-10-orchestrator-adapter-omc-supervision: done
   5-11-task-plan-emission: done
   5-12-task-execution-driver: done
-  5-13-completion-summary-payload: backlog
+  5-13-completion-summary-payload: review
   5-14-pr-draft-auto-creation: backlog
   5-15-per-task-budget-enforcement: backlog
   5-16-s1-cold-worker-swap-test: backlog

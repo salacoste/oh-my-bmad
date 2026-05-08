@@ -5,12 +5,14 @@ Story 5.11 — structured plan parsing: ``parse_omc_plan_output`` returns a
 ``PlanParseResult`` with both a flat ``summary`` string and a structured
 ``steps`` tuple of ``PlanStep`` models.
 Story 5.12 — execution-driving payload builders for step-by-step OMC driving.
+Story 5.13 — completion summary metrics extraction and FR9 field enrichment.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Literal
 
 from events.payloads import (
     PlanStep,
@@ -24,6 +26,83 @@ from events.payloads import (
 
 _STEP_DESC_CAP: int = 500
 _SUMMARY_CAP: int = 2000
+
+# ---------------------------------------------------------------------------
+# Story 5.13 — completion summary metrics (FR9)
+# ---------------------------------------------------------------------------
+
+# Regex patterns for extracting structured metrics from OMC step output.
+_FILES_CHANGED_RE = re.compile(r"(\d+)\s+files?\s+changed", re.IGNORECASE)
+_INSERTIONS_RE = re.compile(r"(\d+)\s+insertions?\(\+\)", re.IGNORECASE)
+_DELETIONS_RE = re.compile(r"(\d+)\s+deletions?\(-\)", re.IGNORECASE)
+_TESTS_PASSED_RE = re.compile(r"(\d+)\s+passed", re.IGNORECASE)
+_TESTS_FAILED_RE = re.compile(r"(\d+)\s+failed", re.IGNORECASE)
+_TESTS_ADDED_RE = re.compile(r"(\d+)\s+tests?\s+added", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class CompletionMetrics:
+    """Aggregated execution metrics extracted from OMC step outputs (Story 5.13 / FR9)."""
+
+    files_changed: int = 0
+    lines_added: int = 0
+    lines_removed: int = 0
+    tests_added: int = 0
+    ci_state: Literal["green", "red", "unknown"] = "unknown"
+    blockers_count: int = 0
+
+
+def parse_step_metrics(step_outputs: dict[int, str]) -> CompletionMetrics:
+    """Extract structured metrics from OMC step stdout strings.
+
+    Scans each step output for git-diff and pytest-style patterns and
+    aggregates them. Unparseable output is treated as zero-count.
+    """
+    total_files = 0
+    total_insertions = 0
+    total_deletions = 0
+    total_passed = 0
+    total_failed = 0
+    total_tests_added = 0
+    has_test_output = False
+
+    for output in step_outputs.values():
+        if not output:
+            continue
+
+        m = _FILES_CHANGED_RE.search(output)
+        if m:
+            total_files += int(m.group(1))
+        m = _INSERTIONS_RE.search(output)
+        if m:
+            total_insertions += int(m.group(1))
+        m = _DELETIONS_RE.search(output)
+        if m:
+            total_deletions += int(m.group(1))
+        m = _TESTS_PASSED_RE.search(output)
+        if m:
+            total_passed += int(m.group(1))
+            has_test_output = True
+        m = _TESTS_FAILED_RE.search(output)
+        if m:
+            total_failed += int(m.group(1))
+            has_test_output = True
+        m = _TESTS_ADDED_RE.search(output)
+        if m:
+            total_tests_added += int(m.group(1))
+
+    if has_test_output:
+        ci_state: Literal["green", "red", "unknown"] = "red" if total_failed > 0 else "green"
+    else:
+        ci_state = "unknown"
+
+    return CompletionMetrics(
+        files_changed=total_files,
+        lines_added=total_insertions,
+        lines_removed=total_deletions,
+        tests_added=total_tests_added or total_passed,
+        ci_state=ci_state,
+    )
 
 
 @dataclass(frozen=True)
@@ -151,19 +230,35 @@ def build_step_completed_payload(
 
 
 def build_completion_payload(
-    task_id: str, plan_result: PlanParseResult, step_outputs: dict[int, str],
+    task_id: str,
+    plan_result: PlanParseResult,
+    step_outputs: dict[int, str],
+    metrics: CompletionMetrics | None = None,
 ) -> dict[str, object]:
-    """Build a ``task.completed`` event payload dict with synthesized summary."""
+    """Build a ``task.completed`` event payload dict with synthesized summary.
+
+    When *metrics* is provided, the FR9 structured fields are populated
+    on ``TaskCompletedPayload``. When ``None`` (backward compat), all
+    FR9 fields remain ``None``.
+    """
     parts: list[str] = []
     for s in plan_result.steps:
         out = step_outputs.get(s.step, "")
         if out:
             parts.append(f"Step {s.step}: {out[:200]}")
     summary = "; ".join(parts) if parts else plan_result.summary or "Task completed."
-    return TaskCompletedPayload(
-        task_id=task_id,
-        summary=summary[:2000],
-    ).model_dump()
+    payload_kwargs: dict[str, object] = {
+        "task_id": task_id,
+        "summary": summary[:2000],
+    }
+    if metrics is not None:
+        payload_kwargs["files_changed"] = metrics.files_changed or None
+        payload_kwargs["lines_added"] = metrics.lines_added or None
+        payload_kwargs["lines_removed"] = metrics.lines_removed or None
+        payload_kwargs["tests_added"] = metrics.tests_added or None
+        payload_kwargs["ci_state"] = metrics.ci_state if metrics.ci_state != "unknown" else None
+        payload_kwargs["blockers_count"] = metrics.blockers_count or None
+    return TaskCompletedPayload(**payload_kwargs).model_dump()
 
 
 def build_blocker_raised_payload(task_id: str, reason: str) -> dict[str, object]:

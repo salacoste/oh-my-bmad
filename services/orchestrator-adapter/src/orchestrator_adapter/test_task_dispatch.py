@@ -1,4 +1,4 @@
-"""Tests for task_dispatch translation functions (Story 5.10 AC-9, Story 5.11, Story 5.12)."""
+"""Tests for task_dispatch functions (Stories 5.10, 5.11, 5.12, 5.13)."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import pytest
 from events.payloads import PlanStep
 
 from orchestrator_adapter.domain.task_dispatch import (
+    CompletionMetrics,
     PlanParseResult,
     build_completion_payload,
     build_execution_started_payload,
@@ -16,6 +17,7 @@ from orchestrator_adapter.domain.task_dispatch import (
     build_planning_started_payload,
     build_step_completed_payload,
     parse_omc_plan_output,
+    parse_step_metrics,
 )
 
 # --- build_omc_prompt ---
@@ -255,3 +257,153 @@ def test_step_completed_payload_preserves_step_number() -> None:
     step = PlanStep(step=7, description="Nth step")
     payload = build_step_completed_payload("T-005", step, "done")
     assert payload["step"] == 7
+
+
+# --- Story 5.13: parse_step_metrics and enriched build_completion_payload ---
+
+
+def test_parse_metrics_git_diff() -> None:
+    output = "3 files changed, 42 insertions(+), 10 deletions(-)"
+    metrics = parse_step_metrics({1: output})
+    assert metrics.files_changed == 3
+    assert metrics.lines_added == 42
+    assert metrics.lines_removed == 10
+    assert metrics.ci_state == "unknown"
+
+
+def test_parse_metrics_pytest_green() -> None:
+    output = "12 passed in 3.45s"
+    metrics = parse_step_metrics({1: output})
+    assert metrics.tests_added == 12
+    assert metrics.ci_state == "green"
+
+
+def test_parse_metrics_pytest_red() -> None:
+    output = "8 passed, 2 failed in 1.20s"
+    metrics = parse_step_metrics({1: output})
+    assert metrics.tests_added == 8  # counts passed, not total
+    assert metrics.ci_state == "red"
+
+
+def test_parse_metrics_tests_added_pattern() -> None:
+    output = "5 tests added to the suite"
+    metrics = parse_step_metrics({1: output})
+    assert metrics.tests_added == 5
+
+
+def test_parse_metrics_empty_outputs() -> None:
+    metrics = parse_step_metrics({})
+    assert metrics.files_changed == 0
+    assert metrics.lines_added == 0
+    assert metrics.lines_removed == 0
+    assert metrics.tests_added == 0
+    assert metrics.ci_state == "unknown"
+    assert metrics.blockers_count == 0
+
+
+def test_parse_metrics_malformed_output() -> None:
+    metrics = parse_step_metrics({1: "random gibberish without patterns"})
+    assert metrics.files_changed == 0
+    assert metrics.ci_state == "unknown"
+
+
+def test_parse_metrics_multi_step_aggregation() -> None:
+    outputs = {
+        1: "1 file changed, 20 insertions(+), 5 deletions(-)",
+        2: "2 files changed, 30 insertions(+), 15 deletions(-)\n4 passed",
+        3: "8 passed, 1 failed",
+    }
+    metrics = parse_step_metrics(outputs)
+    assert metrics.files_changed == 3
+    assert metrics.lines_added == 50
+    assert metrics.lines_removed == 20
+    assert metrics.tests_added == 12  # 4 passed (step 2) + 8 passed (step 3)
+    assert metrics.ci_state == "red"
+
+
+def test_parse_metrics_ci_state_unknown_when_no_tests() -> None:
+    output = "2 files changed, 10 insertions(+)"
+    metrics = parse_step_metrics({1: output})
+    assert metrics.ci_state == "unknown"
+
+
+def test_completion_metrics_frozen() -> None:
+    metrics = CompletionMetrics()
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        metrics.files_changed = 99  # type: ignore[misc]
+
+
+def test_build_completion_payload_with_metrics() -> None:
+    plan_result = PlanParseResult(
+        summary="Build feature",
+        steps=(PlanStep(step=1, description="Write code"),),
+    )
+    metrics = CompletionMetrics(
+        files_changed=3, lines_added=42, lines_removed=10,
+        tests_added=12, ci_state="green", blockers_count=0,
+    )
+    payload = build_completion_payload("T-001", plan_result, {1: "done"}, metrics)
+    assert payload["task_id"] == "T-001"
+    assert payload["files_changed"] == 3
+    assert payload["lines_added"] == 42
+    assert payload["lines_removed"] == 10
+    assert payload["tests_added"] == 12
+    assert payload["ci_state"] == "green"
+    assert payload["blockers_count"] is None  # 0 → None
+
+
+def test_build_completion_payload_with_blockers() -> None:
+    plan_result = PlanParseResult(summary="test")
+    metrics = CompletionMetrics(blockers_count=2)
+    payload = build_completion_payload("T-002", plan_result, {}, metrics)
+    assert payload["blockers_count"] == 2
+
+
+def test_build_completion_payload_without_metrics_backward_compat() -> None:
+    plan_result = PlanParseResult(
+        summary="Build feature",
+        steps=(PlanStep(step=1, description="Write code"),),
+    )
+    payload = build_completion_payload("T-003", plan_result, {1: "done"})
+    assert payload["task_id"] == "T-003"
+    assert payload["files_changed"] is None
+    assert payload["lines_added"] is None
+    assert payload["ci_state"] is None
+    assert payload["blockers_count"] is None
+
+
+def test_build_completion_payload_zero_metrics_are_none() -> None:
+    plan_result = PlanParseResult(summary="test")
+    metrics = CompletionMetrics()  # all zeros, ci_state="unknown"
+    payload = build_completion_payload("T-004", plan_result, {}, metrics)
+    assert payload["files_changed"] is None
+    assert payload["lines_added"] is None
+    assert payload["lines_removed"] is None
+    assert payload["tests_added"] is None
+    assert payload["ci_state"] is None
+    assert payload["blockers_count"] is None
+
+
+def test_build_completion_payload_partial_metrics() -> None:
+    plan_result = PlanParseResult(summary="test")
+    metrics = CompletionMetrics(files_changed=5, ci_state="red")
+    payload = build_completion_payload("T-005", plan_result, {}, metrics)
+    assert payload["files_changed"] == 5
+    assert payload["lines_added"] is None  # 0 → None
+    assert payload["ci_state"] == "red"
+    assert payload["blockers_count"] is None
+
+
+def test_parse_metrics_single_file_grammar() -> None:
+    output = "1 file changed, 1 insertion(+), 1 deletion(-)"
+    metrics = parse_step_metrics({1: output})
+    assert metrics.files_changed == 1
+    assert metrics.lines_added == 1
+    assert metrics.lines_removed == 1
+
+
+def test_parse_metrics_passed_zero_failed_is_green() -> None:
+    output = "5 passed, 0 failed"
+    metrics = parse_step_metrics({1: output})
+    assert metrics.ci_state == "green"
+    assert metrics.tests_added == 5

@@ -11,6 +11,7 @@ Coordinates the orchestrator-adapter's main loop:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from orchestrator_adapter.domain.task_dispatch import (
     build_planning_started_payload,
     build_step_completed_payload,
     parse_omc_plan_output,
+    parse_step_metrics,
 )
 
 _MCP_CALL_TIMEOUT: float = 10.0
@@ -206,6 +208,7 @@ async def process_task(
 
     # Drive each step via OMC.
     step_outputs: dict[int, str] = {}
+    blockers_count = 0
     for step in plan_result.steps:
         step_prompt = build_omc_prompt(task_id, hint=f"Step {step.step}: {step.description}")
         step_result = await runner.run(step_prompt)
@@ -225,6 +228,7 @@ async def process_task(
                 blocker_payload,
                 label=f"step_blocker_{task_id}_{step.step}",
             )
+            blockers_count += 1
             return
 
         output_summary = step_result.stdout[:2000] if step_result.stdout else ""
@@ -239,8 +243,10 @@ async def process_task(
         )
         log.info("step_completed", task_id=task_id, step=step.step)
 
-    # Emit task.completed with synthesized summary.
-    completion_payload = build_completion_payload(task_id, plan_result, step_outputs)
+    # Emit task.completed with synthesized summary and FR9 structured metrics.
+    metrics = parse_step_metrics(step_outputs)
+    metrics = dataclasses.replace(metrics, blockers_count=blockers_count)
+    completion_payload = build_completion_payload(task_id, plan_result, step_outputs, metrics)
     await _emit_event(
         clients,
         "task.completed",
