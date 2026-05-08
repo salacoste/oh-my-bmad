@@ -60,9 +60,12 @@ def _extract_numbered_steps(raw_output: str) -> list[PlanStep]:
     matches = _NUMBERED_STEP_RE.findall(raw_output)
     steps: list[PlanStep] = []
     for num_str, desc in matches:
+        step_num = int(num_str)
+        if step_num < 1:
+            continue
         desc_clean = desc.strip().replace("\n", " ")
         if desc_clean:
-            steps.append(PlanStep(step=int(num_str), description=desc_clean[:_STEP_DESC_CAP]))
+            steps.append(PlanStep(step=step_num, description=desc_clean[:_STEP_DESC_CAP]))
     return steps
 
 
@@ -74,12 +77,12 @@ def parse_omc_plan_output(raw_output: str) -> PlanParseResult:
     2. Global numbered list (``1. ... 2. ...``).
     3. Fallback: first non-empty content up to 500 chars as a single step.
     """
-    if not raw_output:
+    if not raw_output or not raw_output.strip():
         return PlanParseResult(summary="")
 
     # Try to find a "Plan" section heading and extract steps within it.
     plan_match = re.search(
-        r"(?:^|\n)(?:#+\s*(?:Plan|Implementation Plan|Steps).*?\n)(.*?)(?=(?:\n#+\s)|\Z)",
+        r"(?:^|\n)(?:#+\s*(?:Plan\b|Implementation Plan\b|Steps\b).*?\n)(.*?)(?=(?:\n#+\s)|\Z)",
         raw_output,
         re.DOTALL | re.IGNORECASE,
     )

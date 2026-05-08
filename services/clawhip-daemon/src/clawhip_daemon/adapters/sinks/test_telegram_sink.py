@@ -2906,6 +2906,7 @@ def test_render_plan_ready_emergency_one_liner() -> None:
     # Step 3 produces header + 4 step lines + overflow.
     assert "Plan ready, 30 steps:" in result
     assert "… and 26 more" in result
+    assert result.count(") ") == 4
     assert len(result) <= 1900
 
 
@@ -2950,3 +2951,54 @@ def test_render_plan_ready_length_cap() -> None:
     env = _plan_ready_envelope(steps=steps, estimated_steps=29)
     result = _render_plan_ready(env)
     assert len(result) <= 1900
+
+
+def test_render_plan_ready_step2_ladder_truncation() -> None:
+    """Section-drop Step 2: 15 steps with long descriptions truncate to 10."""
+    # 150-char descriptions: Step 1 (15 visible) ≈ 2333 > 1900, Step 2 (10 visible) ≈ 1569 < 1900.
+    steps = tuple(PlanStep(step=i, description="Y" * 150) for i in range(1, 16))
+    env = _plan_ready_envelope(steps=steps, estimated_steps=15)
+    result = _render_plan_ready(env)
+    assert "Plan ready, 15 steps:" in result
+    assert "… and 5 more" in result
+    assert result.count(") ") == 10
+
+
+def test_render_plan_ready_plan_summary_excluded() -> None:
+    """plan_summary field is intentionally excluded from rendered output."""
+    steps = (PlanStep(step=1, description="Do the thing"),)
+    env = _plan_ready_envelope(
+        plan_summary="A detailed summary that must NOT appear",
+        steps=steps,
+        estimated_steps=1,
+    )
+    result = _render_plan_ready(env)
+    assert "A detailed summary that must NOT appear" not in result
+    assert "Do the thing" in result
+
+
+def test_render_plan_ready_v1_0_0_backward_compat() -> None:
+    """v1.0.0 envelope (no plan/estimated_steps) renders through dispatcher."""
+    _ensure_plan_ready_registered()
+    rng = Random(511)
+    clk = FrozenClock(mono_ns=10_000_000, now=FROZEN_EPOCH)
+    eid = new_event_id(clock=clk, rng=rng)
+    rid = new_uuid7(clock=clk, rng=rng)
+    # Construct with only v1.0.0 fields — plan and estimated_steps default.
+    payload = TaskPlanReadyPayload(
+        task_id="t-00000000-0000-7000-8000-000000000011",
+        plan_summary="Some plan",
+    )
+    _ensure_task_created_registered()
+    env = EventEnvelope.create(
+        event_id=eid,
+        schema_version="1.0.0",
+        type="task.plan.ready",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=payload,
+        request_id=rid,
+    )
+    result = _render(env)
+    assert "Plan ready, 0 steps:" in result

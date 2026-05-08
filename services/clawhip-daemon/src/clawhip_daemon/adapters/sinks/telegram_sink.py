@@ -1504,18 +1504,18 @@ def _render_plan_ready(envelope: EventEnvelope) -> str:
 
     # Step 1: full message with up to 20 steps.
     text = _assemble_plan_sections(
-        task_id_esc, steps, step_count, max_steps=_PLAN_READY_MAX_VISIBLE_STEPS,
+        steps, step_count, max_steps=_PLAN_READY_MAX_VISIBLE_STEPS,
     )
     if len(text) <= _PLAN_READY_MESSAGE_MAX_CHARS:
         return text
 
     # Step 2: truncate to 10 steps.
-    text = _assemble_plan_sections(task_id_esc, steps, step_count, max_steps=10)
+    text = _assemble_plan_sections(steps, step_count, max_steps=10)
     if len(text) <= _PLAN_READY_MESSAGE_MAX_CHARS:
         return text
 
     # Step 3: truncate to 4 steps.
-    text = _assemble_plan_sections(task_id_esc, steps, step_count, max_steps=4)
+    text = _assemble_plan_sections(steps, step_count, max_steps=4)
     if len(text) <= _PLAN_READY_MESSAGE_MAX_CHARS:
         return text
 
@@ -1527,7 +1527,6 @@ def _render_plan_ready(envelope: EventEnvelope) -> str:
 
 
 def _assemble_plan_sections(
-    task_id_esc: str,
     steps: tuple[object, ...],
     step_count: int,
     *,

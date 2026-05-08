@@ -60,6 +60,7 @@ def test_parse_plan_heading_with_numbered_steps() -> None:
     assert result.steps[0].step == 1
     assert "Do X" in result.steps[0].description
     assert "Other Section" not in result.summary
+    assert "Do X" in result.summary
 
 
 def test_parse_numbered_list_fallback() -> None:
@@ -113,6 +114,9 @@ def test_plan_parse_result_frozen() -> None:
     with pytest.raises(dataclasses.FrozenInstanceError):
         result.summary = "changed"  # type: ignore[misc]
 
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        result.steps = ()  # type: ignore[misc]
+
 
 # --- payload builders ---
 
@@ -140,3 +144,39 @@ def test_plan_ready_payload_empty_result() -> None:
     assert payload["plan_summary"] == ""
     assert payload["estimated_steps"] == 0
     assert payload["plan"] == ()
+
+
+def test_parse_whitespace_only() -> None:
+    """Whitespace-only input treated like empty."""
+    result = parse_omc_plan_output("   \n\n   ")
+    assert result.summary == ""
+    assert result.steps == ()
+    assert result.estimated_steps == 0
+
+
+def test_parse_non_sequential_step_numbers() -> None:
+    """Non-sequential numbers preserved; estimated_steps is count, not max."""
+    raw = "5. Do X\n10. Do Y"
+    result = parse_omc_plan_output(raw)
+    assert result.estimated_steps == 2
+    assert result.steps[0].step == 5
+    assert result.steps[1].step == 10
+
+
+def test_parse_step_zero_skipped() -> None:
+    """Step number 0 is skipped (PlanStep requires ge=1)."""
+    raw = "0. Bad step\n1. Good step"
+    result = parse_omc_plan_output(raw)
+    assert result.estimated_steps == 1
+    assert result.steps[0].step == 1
+
+
+def test_plan_ready_payload_backward_compat() -> None:
+    """Old-format payload (task_id + plan_summary only) deserializes with defaults."""
+    from events.payloads import TaskPlanReadyPayload
+
+    payload = TaskPlanReadyPayload.model_validate(
+        {"task_id": "T-300", "plan_summary": "Build auth"}
+    )
+    assert payload.plan == ()
+    assert payload.estimated_steps == 0
