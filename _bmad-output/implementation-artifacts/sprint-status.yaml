@@ -150,7 +150,7 @@ development_status:
   5-9-session-registry-mcp-server: done
   5-10-orchestrator-adapter-omc-supervision: done
   5-11-task-plan-emission: done
-  5-12-task-execution-driver: backlog
+  5-12-task-execution-driver: ready-for-dev
   5-13-completion-summary-payload: backlog
   5-14-pr-draft-auto-creation: backlog
   5-15-per-task-budget-enforcement: backlog
