@@ -32,7 +32,6 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import StaticPool
 
-from task_registry_mcp.app.main import _check_tier as main_check_tier
 from task_registry_mcp.app.main import build_server
 from task_registry_mcp.handlers.tools import _check_tier as tools_check_tier
 
@@ -225,9 +224,7 @@ class TestResourceHandlers:
         mcp = _build(db_session_maker)
         tpl = mcp._resource_manager._templates["task://detail/{task_id}"]
         tid = "t-00000001-0001-7000-8000-000000000001"
-        res = await tpl.create_resource(
-            f"task://detail/{tid}", {"task_id": tid}
-        )
+        res = await tpl.create_resource(f"task://detail/{tid}", {"task_id": tid})
         raw = await res.read()
         text = raw if isinstance(raw, str) else raw.decode("utf-8")
         data = json.loads(text)
@@ -241,9 +238,7 @@ class TestResourceHandlers:
     ) -> None:
         mcp = _build(db_session_maker)
         tpl = mcp._resource_manager._templates["task://detail/{task_id}"]
-        res = await tpl.create_resource(
-            "task://detail/t-nonexistent", {"task_id": "t-nonexistent"}
-        )
+        res = await tpl.create_resource("task://detail/t-nonexistent", {"task_id": "t-nonexistent"})
         raw = await res.read()
         text = raw if isinstance(raw, str) else raw.decode("utf-8")
         assert text == ""
@@ -274,9 +269,38 @@ class TestResourceHandlers:
         assert data[0]["title"] == "Implement feature X"
 
     @pytest.mark.asyncio
-    async def test_approval_queue_empty_when_no_approval_events(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_blockers_empty_when_no_blocker_events(self, tmp_path: Path) -> None:
+        """With no blocker events, blockers returns empty list."""
+        engine = create_async_engine(
+            "sqlite+aiosqlite:///:memory:",
+            poolclass=StaticPool,
+            connect_args={"check_same_thread": False},
+        )
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        async with sm() as session:
+            session.add(
+                Task(
+                    id="t-solo-002",
+                    status="executing",
+                    created_at=_NOW,
+                    updated_at=_NOW,
+                    actor_kind="operator",
+                    actor_id="op-1",
+                    title="Solo task",
+                )
+            )
+            await session.commit()
+
+        mcp = _build(sm)
+        res_obj = mcp._resource_manager._resources["task://blockers"]
+        raw = await res_obj.read()
+        text = raw if isinstance(raw, str) else raw.decode("utf-8")
+        assert json.loads(text) == []
+
+    @pytest.mark.asyncio
+    async def test_approval_queue_empty_when_no_approval_events(self, tmp_path: Path) -> None:
         """With no approval events, approval-queue returns empty list."""
         engine = create_async_engine(
             "sqlite+aiosqlite:///:memory:",
@@ -287,15 +311,17 @@ class TestResourceHandlers:
             await conn.run_sync(Base.metadata.create_all)
         sm = async_sessionmaker(engine, expire_on_commit=False)
         async with sm() as session:
-            session.add(Task(
-                id="t-solo-001",
-                status="executing",
-                created_at=_NOW,
-                updated_at=_NOW,
-                actor_kind="operator",
-                actor_id="op-1",
-                title="Solo task",
-            ))
+            session.add(
+                Task(
+                    id="t-solo-001",
+                    status="executing",
+                    created_at=_NOW,
+                    updated_at=_NOW,
+                    actor_kind="operator",
+                    actor_id="op-1",
+                    title="Solo task",
+                )
+            )
             await session.commit()
 
         mcp = _build(sm)
@@ -372,6 +398,19 @@ class TestToolHandlers:
         assert "not found" in result["error"]
 
     @pytest.mark.asyncio
+    async def test_task_attach_artifact_rejects_empty_params(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        mcp = _build(db_session_maker)
+        fn = mcp._tool_manager._tools["task_attach_artifact"].fn
+        result = await fn(
+            task_id="",
+            artifact_url="https://example.com/f.txt",
+            artifact_type="text",
+        )
+        assert result["ok"] is False
+
+    @pytest.mark.asyncio
     async def test_task_emit_event_succeeds(
         self, db_session_maker: async_sessionmaker[AsyncSession]
     ) -> None:
@@ -397,6 +436,19 @@ class TestToolHandlers:
         )
         assert result["ok"] is False
 
+    @pytest.mark.asyncio
+    async def test_task_emit_event_rejects_empty_task_id(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        mcp = _build(db_session_maker)
+        fn = mcp._tool_manager._tools["task_emit_event"].fn
+        result = await fn(
+            task_id="",
+            event_type="task.note_added",
+            payload={},
+        )
+        assert result["ok"] is False
+
 
 # ---------------------------------------------------------------------------
 # TestTierEnforcement
@@ -407,28 +459,26 @@ class TestTierEnforcement:
     """AC-3: Tier placeholder returns True (NO-OP)."""
 
     def test_check_tier_returns_true(self) -> None:
-        assert main_check_tier("worker", "task_add_note") is True
+        assert tools_check_tier("worker", "task_add_note") is True
         assert tools_check_tier("operator", "task_emit_event") is True
 
     @pytest.mark.asyncio
     async def test_tool_raises_permission_error_when_tier_denies(
         self, db_session_maker: async_sessionmaker[AsyncSession]
     ) -> None:
-        """Monkeypatch _check_tier to return False and verify PermissionError."""
-        import task_registry_mcp.handlers.tools as tools_mod
+        """Patch _check_tier to return False and verify PermissionError."""
+        from unittest.mock import patch
 
-        original = tools_mod._check_tier
-        tools_mod._check_tier = lambda _ak, _tn: False
-        try:
-            mcp = _build(db_session_maker)
-            fn = mcp._tool_manager._tools["task_add_note"].fn
-            with pytest.raises(PermissionError, match="not authorized"):
-                await fn(
-                    task_id="t-00000001-0001-7000-8000-000000000001",
-                    note="test",
-                )
-        finally:
-            tools_mod._check_tier = original
+        mcp = _build(db_session_maker)
+        fn = mcp._tool_manager._tools["task_add_note"].fn
+        with (
+            patch("task_registry_mcp.handlers.tools._check_tier", return_value=False),
+            pytest.raises(PermissionError, match="not authorized"),
+        ):
+            await fn(
+                task_id="t-00000001-0001-7000-8000-000000000001",
+                note="test",
+            )
 
 
 # ---------------------------------------------------------------------------

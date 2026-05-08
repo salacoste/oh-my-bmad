@@ -40,9 +40,7 @@ async def _validate_task_exists(
 ) -> bool:
     """Return True if task exists in the materialized state."""
     async with session_maker() as session:
-        result = await session.execute(
-            select(Task).where(Task.id == task_id)
-        )
+        result = await session.execute(select(Task).where(Task.id == task_id))
         return result.scalar_one_or_none() is not None
 
 
@@ -66,9 +64,7 @@ def register_tools(
         Story 5.12 integration with the event spine.
         """
         if not _check_tier(actor_kind, "task.add_note"):
-            raise PermissionError(
-                f"actor_kind={actor_kind!r} not authorized for task.add_note"
-            )
+            raise PermissionError(f"actor_kind={actor_kind!r} not authorized for task.add_note")
         if not task_id or not note:
             return {"ok": False, "error": "task_id and note are required"}
         exists = await _validate_task_exists(session_maker, task_id)
@@ -125,9 +121,7 @@ def register_tools(
         — deferred to Story 5.12 integration.
         """
         if not _check_tier(actor_kind, "task.emit_event"):
-            raise PermissionError(
-                f"actor_kind={actor_kind!r} not authorized for task.emit_event"
-            )
+            raise PermissionError(f"actor_kind={actor_kind!r} not authorized for task.emit_event")
         if not task_id or not event_type:
             return {"ok": False, "error": "task_id and event_type are required"}
         exists = await _validate_task_exists(session_maker, task_id)

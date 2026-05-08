@@ -53,9 +53,7 @@ def register_resources(
     async def task_list() -> str:
         """Return all tasks ordered by updated_at desc as JSON."""
         async with session_maker() as session:
-            result = await session.execute(
-                select(Task).order_by(desc(Task.updated_at))
-            )
+            result = await session.execute(select(Task).order_by(desc(Task.updated_at)))
             tasks = list(result.scalars().all())
         return json.dumps([_task_to_dict(t) for t in tasks])
 
@@ -67,9 +65,7 @@ def register_resources(
     async def task_detail(task_id: str) -> str:
         """Return a single task by ID, or ``""`` if not found."""
         async with session_maker() as session:
-            result = await session.execute(
-                select(Task).where(Task.id == task_id)
-            )
+            result = await session.execute(select(Task).where(Task.id == task_id))
             task = result.scalar_one_or_none()
         if task is None:
             return ""
@@ -86,12 +82,10 @@ def register_resources(
             subq = (
                 select(distinct(Event.task_id))
                 .where(Event.type == "task.approval_requested")
-                .correlate(Task)
+                .where(Event.task_id.isnot(None))
             )
             result = await session.execute(
-                select(Task)
-                .where(Task.id.in_(subq))
-                .order_by(Task.updated_at.asc())
+                select(Task).where(Task.id.in_(subq)).order_by(Task.updated_at.asc())
             )
             tasks = list(result.scalars().all())
         return json.dumps([_task_to_dict(t) for t in tasks])
@@ -107,12 +101,10 @@ def register_resources(
             subq = (
                 select(distinct(Event.task_id))
                 .where(Event.type == "task.blocker_raised")
-                .correlate(Task)
+                .where(Event.task_id.isnot(None))
             )
             result = await session.execute(
-                select(Task)
-                .where(Task.id.in_(subq))
-                .order_by(desc(Task.updated_at))
+                select(Task).where(Task.id.in_(subq)).order_by(desc(Task.updated_at))
             )
             tasks = list(result.scalars().all())
         return json.dumps([_task_to_dict(t) for t in tasks])

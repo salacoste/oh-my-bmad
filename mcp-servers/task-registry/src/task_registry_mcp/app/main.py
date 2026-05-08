@@ -17,6 +17,7 @@ Architecture notes:
 
 from __future__ import annotations
 
+import atexit
 import logging
 from typing import TYPE_CHECKING
 
@@ -30,19 +31,6 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
 log = logging.getLogger(__name__)
-
-
-def _check_tier(actor_kind: str, tool_name: str) -> bool:
-    """NO-OP capability-tier gate (Phase 1 placeholder).
-
-    Story 6.1-6.3 replaces this with real Tier 0/1/2/3 enforcement.
-    """
-    log.debug(
-        "tier-check (no-op): actor_kind=%s tool=%s — full enforcement in Story 6.1",
-        actor_kind,
-        tool_name,
-    )
-    return True
 
 
 def build_server(
@@ -68,12 +56,16 @@ def build_server(
     from task_registry_mcp.handlers.resources import register_resources
     from task_registry_mcp.handlers.tools import register_tools
 
+    engine = None
     if _session_maker is not None:
         session_maker = _session_maker
     else:
+        if not db_path:
+            raise ValueError("db_path is required when _session_maker is not provided")
         db_url = f"sqlite+aiosqlite:///{db_path}"
         engine = create_engine(db_url, read_only=True)
         session_maker = get_session(engine)
+        atexit.register(engine.sync_engine.dispose)
 
     mcp = FastMCP("task-registry")
 
