@@ -1,6 +1,6 @@
 # Story 5.9: session-registry MCP server (read + bounded-write)
 
-Status: review
+Status: done
 
 ## Story
 
