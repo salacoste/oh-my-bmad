@@ -1,6 +1,7 @@
-"""session-registry-mcp — MCP server: active sessions / worker metadata / heartbeats (read) + lifecycle tools (session.heartbeat, session.register, session.close).
+"""session-registry MCP server package."""
 
-Story 1.2 ships only `__version__`. Real logic arrives in: Story 5.9 (session-registry MCP server read + bounded-write).
-"""
+from session_registry_mcp.app.main import build_server
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
+
+__all__ = ["build_server"]
