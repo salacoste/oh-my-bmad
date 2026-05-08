@@ -167,6 +167,7 @@ class OMCRunner:
                 duration_ms=result.duration_ms,
                 error=result.error,
             )
+            self._process = None
             return result
 
         except BaseException:

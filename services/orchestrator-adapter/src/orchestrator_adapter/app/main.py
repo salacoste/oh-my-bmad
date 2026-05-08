@@ -65,6 +65,8 @@ async def _read_task_list(clients: MCPClientGroup) -> list[dict[str, object]]:
         return []
     try:
         result = await clients.task_registry.read_resource("task://list")
+        if result is None or not hasattr(result, "contents"):
+            return []
         # Resource results contain text content blocks.
         text = ""
         for content in result.contents:
@@ -112,8 +114,12 @@ async def process_task(
     """Process a single task: emit planning.started, run OMC, emit plan.ready."""
     log = structlog.get_logger(__name__)
     task_id = str(task.get("id", ""))
+    if not task_id:
+        log.warning("task_missing_id, skipping")
+        return
     title = task.get("title")
-    hint = task.get("hint")
+    hint = task.get("hint")  # TODO: not yet materialized by task-registry
+    repo = task.get("repo")
 
     # Emit task.planning.started.
     started_payload = build_planning_started_payload(task_id)
@@ -130,6 +136,7 @@ async def process_task(
         task_id=task_id,
         title=str(title) if title else None,
         hint=str(hint) if hint else None,
+        repo=str(repo) if repo else None,
     )
     result = await runner.run(prompt)
 
@@ -140,6 +147,12 @@ async def process_task(
             error=result.error,
             exit_code=result.exit_code,
             duration_ms=result.duration_ms,
+        )
+        await _emit_event(
+            clients,
+            "task.planning.failed",
+            {"task_id": task_id, "error": result.error},
+            label=f"planning_failed_{task_id}",
         )
         return
 

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import re
 
+from events.payloads import TaskPlanningStartedPayload, TaskPlanReadyPayload
+
 
 def build_omc_prompt(
     task_id: str,
@@ -64,9 +66,9 @@ def parse_omc_plan_output(raw_output: str) -> str:
 
 def build_planning_started_payload(task_id: str) -> dict[str, object]:
     """Build a ``task.planning.started`` event payload dict."""
-    return {"task_id": task_id}
+    return TaskPlanningStartedPayload(task_id=task_id).model_dump()
 
 
 def build_plan_ready_payload(task_id: str, plan_summary: str) -> dict[str, object]:
     """Build a ``task.plan.ready`` event payload dict."""
-    return {"task_id": task_id, "plan_summary": plan_summary}
+    return TaskPlanReadyPayload(task_id=task_id, plan_summary=plan_summary).model_dump()

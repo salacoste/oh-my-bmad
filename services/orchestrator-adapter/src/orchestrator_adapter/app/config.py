@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from events.ids import new_worker_id
-from pydantic import Field
+from pydantic import Field, PrivateAttr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,7 +38,7 @@ class OrchestratorSettings(BaseSettings):
     omc_timeout_s: float = Field(default=120.0, gt=0)
     poll_interval_s: float = Field(default=5.0, gt=0)
 
-    _resolved_actor_id: str | None = None
+    _resolved_actor_id: str | None = PrivateAttr(default=None)
 
     def resolve_actor_id(self) -> str:
         """Return ``actor_id`` or generate a new UUIDv7 if empty (cached)."""

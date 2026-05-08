@@ -125,6 +125,19 @@ So that OMC's orchestration logic drives platform tasks without leaking OMC spec
   - [x] `just test` — no regressions
   - [x] Atomic commit
 
+### Review Findings
+
+- [x] [Review][Patch] Payload builders use typed Pydantic models from events.payloads [`domain/task_dispatch.py`]
+- [x] [Review][Patch] _resolved_actor_id uses PrivateAttr() [`app/config.py:41`]
+- [x] [Review][Patch] OMCRunner.run() clears _process on success path [`adapters/omc_runner.py:170`]
+- [x] [Review][Patch] process_task emits task.planning.failed on OMC error [`app/main.py:136-145`]
+- [x] [Review][Patch] _read_task_list null-checks result.contents [`app/main.py:69`]
+- [x] [Review][Patch] process_task validates empty task_id [`app/main.py:115`]
+- [x] [Review][Patch] repo parameter wired through in process_task [`app/main.py:131`]
+- [x] [Review][Patch] hint field TODO comment added (not materialized by task-registry) [`app/main.py:118`]
+- [x] [Review][Defer] Same task reprocessed indefinitely — no status update mechanism yet
+- [x] [Review][Defer] Connectivity failure doesn't prevent startup — same pattern as worker-wrapper
+
 ## Dev Notes
 
 ### What already exists
