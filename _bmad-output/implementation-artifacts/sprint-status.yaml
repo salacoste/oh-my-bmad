@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-08T14:00:00Z
+last_updated: 2026-05-08T16:00:00Z
 
 development_status:
   # =========================================================================
@@ -148,8 +148,8 @@ development_status:
   5-7-github-api-adapter: done
   5-8-task-registry-mcp-server: done
   5-9-session-registry-mcp-server: done
-  5-10-orchestrator-adapter-omc-supervision: ready-for-dev
-  5-11-task-plan-emission: backlog
+  5-10-orchestrator-adapter-omc-supervision: done
+  5-11-task-plan-emission: ready-for-dev
   5-12-task-execution-driver: backlog
   5-13-completion-summary-payload: backlog
   5-14-pr-draft-auto-creation: backlog
