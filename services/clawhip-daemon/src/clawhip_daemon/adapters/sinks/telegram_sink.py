@@ -63,6 +63,7 @@ from events import (
     TaskCompletedPayload,
     TaskPlanReadyPayload,
     TaskSelfRecoveredPayload,
+    TaskStepCompletedPayload,
     from_canonical_json,
 )
 from pydantic import BaseModel, ConfigDict, Field
@@ -91,6 +92,7 @@ _DELIVERABLE_EVENT_TYPES: frozenset[str] = frozenset(
         "task.planning.started",
         "task.plan.ready",
         "task.execution.started",
+        "task.step.completed",
         "task.blocker_raised",
         "task.summary_emitted",
         "task.approval_requested",
@@ -1552,6 +1554,49 @@ def _assemble_plan_sections(
 
 
 # ---------------------------------------------------------------------------
+# Renderer (Story 5.12 — step-completed template, FR3+FR31)
+# ---------------------------------------------------------------------------
+
+#: Story 5.12 AC-5 — same codepoint cap as other renderers.
+_STEP_COMPLETED_MESSAGE_MAX_CHARS: int = 1900
+
+#: Cap for the description portion of the step line.
+_STEP_COMPLETED_DESC_MAX_CHARS: int = 200
+
+
+def _render_step_completed(envelope: EventEnvelope) -> str:
+    """Render the FR3 step-completed message — Story 5.12 AC-5.
+
+    Format::
+
+        Step N/N done: <truncated description>
+
+    Length safety: 1900-codepoint cap, description truncation, emergency
+    one-liner fallback.
+
+    Story 3.10 review H9 carry-forward: structured WARN on payload type
+    mismatch.
+    """
+    payload = envelope.payload
+    if not isinstance(payload, TaskStepCompletedPayload):
+        _log.warning(
+            "renderer.payload_type_mismatch",
+            event_type=envelope.type,
+            expected="TaskStepCompletedPayload",
+            actual=type(payload).__name__,
+        )
+        task_id = _collapse_newlines(_extract_task_id(envelope) or "<unknown>")
+        return f"Task {html.escape(task_id)}: {html.escape(envelope.type)}"
+
+    desc_collapsed = _collapse_newlines(payload.description)
+    desc_esc = html.escape(desc_collapsed[:_STEP_COMPLETED_DESC_MAX_CHARS])
+    result = f"Step {payload.step} done: {desc_esc}"
+    if len(result) > _STEP_COMPLETED_MESSAGE_MAX_CHARS:
+        result = result[:_STEP_COMPLETED_MESSAGE_MAX_CHARS]
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Renderer dispatcher (Story 3.10 AC-4)
 # ---------------------------------------------------------------------------
 
@@ -1575,6 +1620,7 @@ _RENDERERS: MappingProxyType[str, _RenderFn] = MappingProxyType(
         "task.completed": _render_completed,
         "task.plan.ready": _render_plan_ready,
         "task.self_recovered": _render_self_recovered,
+        "task.step.completed": _render_step_completed,
     }
 )
 

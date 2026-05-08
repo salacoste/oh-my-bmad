@@ -1,6 +1,6 @@
 # Story 5.12: Task execution driver (FR3 + FR31)
 
-Status: ready-for-dev
+Status: in-progress
 
 ## Story
 

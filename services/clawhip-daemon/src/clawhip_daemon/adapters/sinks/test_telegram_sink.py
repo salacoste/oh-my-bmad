@@ -3002,3 +3002,125 @@ def test_render_plan_ready_v1_0_0_backward_compat() -> None:
     )
     result = _render(env)
     assert "Plan ready, 0 steps:" in result
+
+
+# ---------------------------------------------------------------------------
+# Story 5.12 — step-completed renderer tests
+# ---------------------------------------------------------------------------
+
+from events import TaskStepCompletedPayload  # noqa: E402
+
+_STEP_COMPLETED_REGISTERED: bool = False
+
+
+def _ensure_step_completed_registered() -> None:
+    """Register task.step.completed 1.0.0 so EventEnvelope.create succeeds."""
+    global _STEP_COMPLETED_REGISTERED
+    if _STEP_COMPLETED_REGISTERED:
+        return
+    _reg("task.step.completed", "1.0.0", TaskStepCompletedPayload)
+    _STEP_COMPLETED_REGISTERED = True
+
+
+def _step_completed_envelope(
+    *,
+    task_id: str = "t-00000000-0000-7000-8000-000000000020",
+    step: int = 1,
+    description: str = "Run tests",
+    output_summary: str = "All tests passed",
+    mono_ns: int = 11_000_000,
+) -> EventEnvelope:
+    """Build a task.step.completed envelope (schema 1.0.0)."""
+    _ensure_task_created_registered()
+    _ensure_step_completed_registered()
+
+    rng = Random(511)
+    clk = FrozenClock(mono_ns=mono_ns, now=FROZEN_EPOCH)
+    eid = new_event_id(clock=clk, rng=rng)
+    rid = new_uuid7(clock=clk, rng=rng)
+    payload = TaskStepCompletedPayload(
+        task_id=task_id,
+        step=step,
+        description=description,
+        output_summary=output_summary,
+    )
+    return EventEnvelope.create(
+        event_id=eid,
+        schema_version="1.0.0",
+        type="task.step.completed",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=payload,
+        request_id=rid,
+    )
+
+
+def test_render_step_completed_basic() -> None:
+    env = _step_completed_envelope(step=3, description="Write unit tests")
+    result = _render(env)
+    assert result == "Step 3 done: Write unit tests"
+
+
+def test_render_step_completed_html_escape() -> None:
+    env = _step_completed_envelope(description="Fix <bug> & ship")
+    result = _render(env)
+    assert "&lt;bug&gt;" in result
+    assert "&amp;" in result
+
+
+def test_render_step_completed_newlines_collapsed() -> None:
+    env = _step_completed_envelope(description="Do X\nthen Y\r\nthen Z")
+    result = _render(env)
+    assert "\n" not in result
+    assert "Do X" in result
+
+
+def test_render_step_completed_description_truncation() -> None:
+    long_desc = "A" * 500
+    env = _step_completed_envelope(description=long_desc)
+    result = _render(env)
+    # Description capped at 200 chars before escape.
+    assert len(result) < len(f"Step 1 done: {long_desc}")
+
+
+def test_render_step_completed_payload_type_mismatch() -> None:
+    """Wrong payload type → WARN logged, placeholder fallback."""
+    # Use model_construct to bypass schema validation so isinstance check fails.
+    env = EventEnvelope.model_construct(
+        event_id="e-test",
+        schema_version="1.0.0",
+        type="task.step.completed",
+        emitted_at=FROZEN_EPOCH,
+        emitted_at_monotonic_ns=1_000_000,
+        actor=_ACTOR,
+        payload={"task_id": "t-mismatch", "step": 1, "description": "x", "output_summary": "y"},
+        parent_event_id=None,
+        trace_id=None,
+        request_id="r-test",
+        extensions=None,
+    )
+    result = _render(env)
+    assert "Task" in result
+    assert "task.step.completed" in result
+
+
+def test_render_step_completed_dispatcher_routes() -> None:
+    """task.step.completed is routed to _render_step_completed."""
+    env = _step_completed_envelope(step=5, description="Deploy")
+    result = _render(env)
+    assert "Step 5 done: Deploy" == result
+
+
+def test_render_step_completed_length_cap() -> None:
+    """Even with max-length description, the result is under the cap."""
+    env = _step_completed_envelope(description="B" * 500)
+    result = _render(env)
+    assert len(result) <= 1900
+    # Renderer truncates description to 200 chars.
+    assert len(result) < len(f"Step 1 done: {'B' * 500}")
+
+
+def test_task_step_completed_in_deliverable_event_types() -> None:
+    """task.step.completed is in the deliverable set."""
+    assert "task.step.completed" in _DELIVERABLE_EVENT_TYPES

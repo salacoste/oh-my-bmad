@@ -4,6 +4,7 @@ Story 5.10 — prompt building, OMC output parsing, typed event payloads.
 Story 5.11 — structured plan parsing: ``parse_omc_plan_output`` returns a
 ``PlanParseResult`` with both a flat ``summary`` string and a structured
 ``steps`` tuple of ``PlanStep`` models.
+Story 5.12 — execution-driving payload builders for step-by-step OMC driving.
 """
 
 from __future__ import annotations
@@ -11,7 +12,14 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from events.payloads import PlanStep, TaskPlanningStartedPayload, TaskPlanReadyPayload
+from events.payloads import (
+    PlanStep,
+    TaskCompletedPayload,
+    TaskExecutionStartedPayload,
+    TaskPlanningStartedPayload,
+    TaskPlanReadyPayload,
+    TaskStepCompletedPayload,
+)
 
 _STEP_DESC_CAP: int = 500
 _SUMMARY_CAP: int = 2000
@@ -121,4 +129,37 @@ def build_plan_ready_payload(task_id: str, plan_result: PlanParseResult) -> dict
         plan_summary=plan_result.summary,
         plan=plan_result.steps,
         estimated_steps=plan_result.estimated_steps,
+    ).model_dump()
+
+
+def build_execution_started_payload(task_id: str, session_id: str) -> dict[str, object]:
+    """Build a ``task.execution.started`` event payload dict."""
+    return TaskExecutionStartedPayload(task_id=task_id, session_id=session_id).model_dump()
+
+
+def build_step_completed_payload(
+    task_id: str, step: PlanStep, output_summary: str,
+) -> dict[str, object]:
+    """Build a ``task.step.completed`` event payload dict."""
+    return TaskStepCompletedPayload(
+        task_id=task_id,
+        step=step.step,
+        description=step.description,
+        output_summary=output_summary[:2000],
+    ).model_dump()
+
+
+def build_completion_payload(
+    task_id: str, plan_result: PlanParseResult, step_outputs: dict[int, str],
+) -> dict[str, object]:
+    """Build a ``task.completed`` event payload dict with synthesized summary."""
+    parts: list[str] = []
+    for s in plan_result.steps:
+        out = step_outputs.get(s.step, "")
+        if out:
+            parts.append(f"Step {s.step}: {out[:200]}")
+    summary = "; ".join(parts) if parts else plan_result.summary or "Task completed."
+    return TaskCompletedPayload(
+        task_id=task_id,
+        summary=summary[:2000],
     ).model_dump()

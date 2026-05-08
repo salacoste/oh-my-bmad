@@ -113,6 +113,17 @@ class TaskExecutionStartedPayload(BaseModel):
     session_id: str
 
 
+class TaskStepCompletedPayload(BaseModel):
+    """Payload for the ``task.step.completed`` event (Story 5.12 / FR3+FR31)."""
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    task_id: str = Field(min_length=1, max_length=64)
+    step: int = Field(ge=1)
+    description: str = Field(min_length=1, max_length=500)
+    output_summary: str = Field(max_length=2000)
+
+
 class TaskBlockerRaisedPayload(BaseModel):
     """Payload for the ``task.blocker_raised`` event.
 
@@ -691,6 +702,7 @@ __all__ = [
     "TaskPlanReadyPayload",
     "TaskPlanningStartedPayload",
     "TaskSelfRecoveredPayload",
+    "TaskStepCompletedPayload",
     "TaskStopRequestedPayload",
     "TaskSummaryEmittedPayload",
     "TelegramRejectedPayload",

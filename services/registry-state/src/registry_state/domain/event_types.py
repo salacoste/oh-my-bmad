@@ -42,6 +42,7 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     TaskPlanningStartedPayload,
     TaskPlanReadyPayload,
     TaskSelfRecoveredPayload,
+    TaskStepCompletedPayload,
     TaskStopRequestedPayload,
     TaskSummaryEmittedPayload,
     TelegramRejectedPayload,
@@ -71,6 +72,7 @@ __all__ = [
     "TaskPlanReadyPayload",
     "TaskPlanningStartedPayload",
     "TaskSelfRecoveredPayload",
+    "TaskStepCompletedPayload",
     "TaskStopRequestedPayload",
     "TaskSummaryEmittedPayload",
     "TelegramRejectedPayload",
@@ -91,6 +93,7 @@ register("task.plan.ready", "1.0.1", TaskPlanReadyPayload)
 register("task.plan.ready", "1.1.0", TaskPlanReadyPayload)  # Story 5.11 — structured plan steps
 register("task.execution.started", "1.0.0", TaskExecutionStartedPayload)
 register("task.execution.started", "1.0.1", TaskExecutionStartedPayload)
+register("task.step.completed", "1.0.0", TaskStepCompletedPayload)
 
 # Story 2.8 — 4 new event types.
 register("task.blocker_raised", "1.0.0", TaskBlockerRaisedPayload)

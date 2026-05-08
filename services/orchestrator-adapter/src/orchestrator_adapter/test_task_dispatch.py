@@ -1,4 +1,4 @@
-"""Tests for task_dispatch translation functions (Story 5.10 AC-9, Story 5.11)."""
+"""Tests for task_dispatch translation functions (Story 5.10 AC-9, Story 5.11, Story 5.12)."""
 
 from __future__ import annotations
 
@@ -6,11 +6,15 @@ import dataclasses
 
 import pytest
 
+from events.payloads import PlanStep
 from orchestrator_adapter.domain.task_dispatch import (
     PlanParseResult,
+    build_completion_payload,
+    build_execution_started_payload,
     build_omc_prompt,
     build_plan_ready_payload,
     build_planning_started_payload,
+    build_step_completed_payload,
     parse_omc_plan_output,
 )
 
@@ -180,3 +184,74 @@ def test_plan_ready_payload_backward_compat() -> None:
     )
     assert payload.plan == ()
     assert payload.estimated_steps == 0
+
+
+# --- Story 5.12: execution-driving payload builders ---
+
+
+def test_execution_started_payload() -> None:
+    payload = build_execution_started_payload("T-001", "s-placeholder")
+    assert payload["task_id"] == "T-001"
+    assert payload["session_id"] == "s-placeholder"
+
+
+def test_step_completed_payload() -> None:
+    step = PlanStep(step=1, description="Do something")
+    payload = build_step_completed_payload("T-001", step, "output text")
+    assert payload["task_id"] == "T-001"
+    assert payload["step"] == 1
+    assert payload["description"] == "Do something"
+    assert payload["output_summary"] == "output text"
+
+
+def test_step_completed_payload_truncates_long_output() -> None:
+    step = PlanStep(step=3, description="Run tests")
+    long_output = "X" * 5000
+    payload = build_step_completed_payload("T-002", step, long_output)
+    assert len(payload["output_summary"]) == 2000
+
+
+def test_completion_payload_with_step_outputs() -> None:
+    plan_result = PlanParseResult(
+        summary="Build feature",
+        steps=(
+            PlanStep(step=1, description="Write code"),
+            PlanStep(step=2, description="Write tests"),
+        ),
+    )
+    step_outputs = {1: "Code written", 2: "Tests pass"}
+    payload = build_completion_payload("T-001", plan_result, step_outputs)
+    assert payload["task_id"] == "T-001"
+    assert "Step 1:" in payload["summary"]
+    assert "Step 2:" in payload["summary"]
+    assert "Code written" in payload["summary"]
+
+
+def test_completion_payload_empty_step_outputs_uses_plan_summary() -> None:
+    plan_result = PlanParseResult(
+        summary="Build feature",
+        steps=(PlanStep(step=1, description="Write code"),),
+    )
+    payload = build_completion_payload("T-002", plan_result, {})
+    assert payload["summary"] == "Build feature"
+
+
+def test_completion_payload_empty_plan() -> None:
+    plan_result = PlanParseResult(summary="")
+    payload = build_completion_payload("T-003", plan_result, {})
+    assert payload["task_id"] == "T-003"
+    assert payload["summary"] == "Task completed."
+
+
+def test_completion_payload_summary_capped_at_2000() -> None:
+    steps = tuple(PlanStep(step=i, description=f"Step {i}") for i in range(1, 51))
+    plan_result = PlanParseResult(summary="long plan", steps=steps)
+    step_outputs = {i: "Y" * 200 for i in range(1, 51)}
+    payload = build_completion_payload("T-004", plan_result, step_outputs)
+    assert len(payload["summary"]) <= 2000
+
+
+def test_step_completed_payload_preserves_step_number() -> None:
+    step = PlanStep(step=7, description="Nth step")
+    payload = build_step_completed_payload("T-005", step, "done")
+    assert payload["step"] == 7

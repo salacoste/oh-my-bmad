@@ -21,9 +21,12 @@ from orchestrator_adapter.adapters.omc_runner import OMCRunner
 from orchestrator_adapter.app.config import OrchestratorSettings
 from orchestrator_adapter.domain.task_dispatch import (
     PlanParseResult,
+    build_completion_payload,
+    build_execution_started_payload,
     build_omc_prompt,
     build_plan_ready_payload,
     build_planning_started_payload,
+    build_step_completed_payload,
     parse_omc_plan_output,
 )
 
@@ -112,7 +115,7 @@ async def process_task(
     settings: OrchestratorSettings,
     task: dict[str, object],
 ) -> None:
-    """Process a single task: emit planning.started, run OMC, emit plan.ready."""
+    """Process a single task: plan, then drive execution step-by-step."""
     log = structlog.get_logger(__name__)
     task_id = str(task.get("id", ""))
     if not task_id:
@@ -173,6 +176,64 @@ async def process_task(
         step_count=plan_result.estimated_steps,
         duration_ms=result.duration_ms,
     )
+
+    # --- Story 5.12: execution loop ---
+
+    # Emit task.execution.started.
+    exec_started_payload = build_execution_started_payload(task_id, "s-placeholder")
+    await _emit_event(
+        clients,
+        "task.execution.started",
+        exec_started_payload,
+        label=f"execution_started_{task_id}",
+    )
+    log.info("execution_started", task_id=task_id)
+
+    # Drive each step via OMC.
+    step_outputs: dict[int, str] = {}
+    for step in plan_result.steps:
+        step_prompt = build_omc_prompt(task_id, hint=step.description)
+        step_result = await runner.run(step_prompt)
+
+        if step_result.error:
+            log.error(
+                "step_omc_failed",
+                task_id=task_id,
+                step=step.step,
+                error=step_result.error,
+            )
+            await _emit_event(
+                clients,
+                "task.blocker_raised",
+                {
+                    "task_id": task_id,
+                    "reason": f"Step {step.step} failed: {step_result.error[:2000]}",
+                },
+                label=f"step_blocker_{task_id}_{step.step}",
+            )
+            return
+
+        output_summary = step_result.stdout[:2000] if step_result.stdout else ""
+        step_outputs[step.step] = output_summary
+
+        step_completed_payload = build_step_completed_payload(task_id, step, output_summary)
+        await _emit_event(
+            clients,
+            "task.step.completed",
+            step_completed_payload,
+            label=f"step_completed_{task_id}_{step.step}",
+        )
+        log.info("step_completed", task_id=task_id, step=step.step)
+
+    # Emit task.completed with synthesized summary.
+    completion_payload = build_completion_payload(task_id, plan_result, step_outputs)
+    await _emit_event(
+        clients,
+        "task.completed",
+        completion_payload,
+        label=f"task_completed_{task_id}",
+    )
+    log.info("task_completed", task_id=task_id, steps=len(step_outputs))
 
 
 async def adapter_loop(
