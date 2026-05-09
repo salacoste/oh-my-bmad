@@ -15,7 +15,7 @@ _PATCH_TARGET = "orchestrator_adapter.adapters.github_adapter.aiohttp.ClientSess
 _RETRY_TARGET = "orchestrator_adapter.adapters.github_adapter._make_retry"
 
 
-def _zero_wait_retry(_timeout_s: float = 0) -> tenacity.AsyncRetrying:
+def _zero_wait_retry(*args: object, **kwargs: object) -> tenacity.AsyncRetrying:
     """Retry with no wait between attempts — eliminates real delays in tests."""
     return tenacity.AsyncRetrying(
         stop=tenacity.stop_after_attempt(3),

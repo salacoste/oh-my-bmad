@@ -14,6 +14,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Literal
 
+from annotated_types import Le as _Le
 from events.payloads import (
     PlanStep,
     TaskBlockerRaisedPayload,
@@ -320,13 +321,17 @@ def build_step_completed_payload(
 
 # Pydantic payload upper bounds extracted from TaskCompletedPayload Field constraints.
 # Extracts the Le(…) bound from metadata to avoid duplicating magic numbers.
-from annotated_types import Le as _Le
 
 _TaskCompletedFields = TaskCompletedPayload.model_fields
 
 
 def _extract_le(field_name: str) -> int:
-    constraint = next(m for m in _TaskCompletedFields[field_name].metadata if isinstance(m, _Le))
+    constraint = next(
+        (m for m in _TaskCompletedFields[field_name].metadata if isinstance(m, _Le)),
+        None,
+    )
+    if constraint is None:
+        raise ValueError(f"No Le constraint on field {field_name!r}")
     return int(constraint.le)
 
 
