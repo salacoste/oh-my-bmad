@@ -1,0 +1,19 @@
+[project]
+name = "scripted-worker-stub"
+version = "0.1.0"
+description = "Scripted worker stub (test fixture). Connects to MCP servers, reads tasks, and emits canned lifecycle events. Used by the S-1 separability test (Story 5.16 / FR34 / NFR-M4) to prove the worker layer is swappable without spine source-code changes."
+authors = [
+    { name = "R2d2", email = "bad.vano23ru@gmail.com" },
+]
+requires-python = ">=3.12"
+dependencies = [
+    "events>=0.3.0",
+    "registry-state>=0.5.0",
+    "mcp>=1.0.0",
+    "structlog>=24.0.0",
+    "pydantic-settings>=2.0.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.0,<1.0"]
+build-backend = "uv_build"
