@@ -196,6 +196,78 @@ command arrives in Story 3.5. Real task execution arrives in Story 5.12.
 
 ---
 
+## Console CLI
+
+oh-my-bmad ships a local CLI (`oh-my-bmad-cli`) with full command-surface
+parity to the Telegram bot. It runs inside an ephemeral Docker container
+attached to the compose network, so the default `http://registry-api:8080`
+config works without overrides.
+
+Run it via the `just cli` recipe:
+
+```sh
+just cli task "build the auth module"
+just cli status t-0192a1b5-1234-7abc-89de-f0123456789a
+just cli logs t-0192a1b5-1234-7abc-89de-f0123456789a
+just cli events t-0192a1b5-1234-7abc-89de-f0123456789a --follow
+just cli ping
+just cli --help
+```
+
+Prerequisites: run `just build` (builds the console-cli image) and
+`just dev` (starts the stack) before using `just cli`.
+
+### Shell alias
+
+For terse desk-side use, add a shell alias:
+
+```sh
+# bash
+echo "alias bm='just cli'" >> ~/.bashrc
+
+# zsh (macOS default)
+echo "alias bm='just cli'" >> ~/.zshrc
+```
+
+Then reload:
+
+```sh
+source ~/.zshrc   # or: source ~/.bashrc
+```
+
+Now you can use:
+
+```sh
+bm task "build auth module"
+bm status t-0192a1b5-1234-7abc-89de-f0123456789a
+bm ping
+```
+
+### Exit codes
+
+The CLI maps HTTP errors to specific exit codes for scripting:
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | Generic error (network, server, unexpected) |
+| 2 | Validation error (HTTP 422) |
+| 4 | Not found (HTTP 404) |
+| 5 | Conflict (HTTP 409) |
+
+Example:
+
+```sh
+bm status t-nonexistent
+case $? in
+  0) echo "success" ;;
+  4) echo "task not found" ;;
+  *) echo "other error" ;;
+esac
+```
+
+---
+
 ## Troubleshooting
 
 ### 1. `mkdir: /Users/<user>/.oh-my-bmad: Permission denied`

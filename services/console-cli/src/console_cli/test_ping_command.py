@@ -158,6 +158,7 @@ def test_ping_command_network_error() -> None:
     ):
         result = runner.invoke(app, ["ping"])
     assert result.exit_code != 0
+    assert "Could not reach registry-api" in (result.output + (result.stderr or ""))
 
 
 def test_ping_command_http_error() -> None:

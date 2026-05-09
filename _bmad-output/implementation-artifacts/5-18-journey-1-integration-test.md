@@ -1,6 +1,6 @@
 # Story 5.18: Journey 1 integration test (MVP gate — Phase 1)
 
-Status: review
+Status: done
 
 ## Story
 

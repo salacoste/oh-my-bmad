@@ -85,6 +85,7 @@ def test_agent_command_task_not_found() -> None:
     ):
         result = runner.invoke(app, ["agent", _VALID_TASK_ID])
     assert result.exit_code != 0
+    assert "not found" in (result.output + (result.stderr or "")).lower()
 
 
 def test_agent_command_network_error() -> None:
@@ -100,6 +101,7 @@ def test_agent_command_network_error() -> None:
     ):
         result = runner.invoke(app, ["agent", _VALID_TASK_ID])
     assert result.exit_code != 0
+    assert "Could not reach registry-api" in (result.output + (result.stderr or ""))
 
 
 def test_agent_command_malformed_body() -> None:

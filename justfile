@@ -256,6 +256,24 @@ build: build-base
     docker compose -f docker-compose.yml build
     docker build -f services/console-cli/Dockerfile -t oh-my-bmad-console-cli:local .
 
+# Console CLI wrapper — runs oh-my-bmad-cli in an ephemeral container
+# attached to the compose network. Requires `just build` (for the image)
+# and `just dev` (for the stack). Example: just cli task "build auth module"
+cli *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    project=$(docker compose ls -q 2>/dev/null | grep -F "$(basename "$PWD")" | head -1 || true)
+    if [ -z "${project}" ]; then
+        echo "Error: stack not running. Run \`just dev\` first." >&2
+        exit 1
+    fi
+    network="${project}_oh-my-bmad-net"
+    if ! docker image inspect oh-my-bmad-console-cli:local >/dev/null 2>&1; then
+        echo "Error: console-cli image not found. Run \`just build\` first." >&2
+        exit 1
+    fi
+    exec docker run --rm --network "${network}" oh-my-bmad-console-cli:local {{ARGS}}
+
 # Print every oh-my-bmad-* docker image and its size. Operator sanity after
 # `just build` — each service image must stay ≤ 200 MB per Story 1.8 AC-7
 # (worker-wrapper is the documented exception at ~283 MB; see story 1.8 notes).

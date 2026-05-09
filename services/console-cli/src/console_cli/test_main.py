@@ -23,10 +23,10 @@ ALL_COMMANDS = [
 ]
 
 # Commands that now require arguments (Stories 4.2 + 4.3 replaced stubs).
-REQUIRES_ARGS = {"task", "status", "logs", "approve", "reject", "stop", "retry", "agent"}
+REQUIRES_ARGS = {"task", "status", "logs", "approve", "reject", "stop", "retry", "agent", "events"}
 
 # Commands that are fully implemented and work bare (no args needed).
-REAL_NO_ARGS = {"ping", "events"}
+REAL_NO_ARGS = {"ping"}
 
 
 def test_import_app() -> None:

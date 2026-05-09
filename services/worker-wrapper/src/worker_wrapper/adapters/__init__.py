@@ -11,6 +11,7 @@ from worker_wrapper.adapters.github_client import (
     GitHubClient,
     PRDraftResult,
 )
+from worker_wrapper.adapters.lifecycle_manager import LifecycleManager
 from worker_wrapper.adapters.mcp_clients import (
     MCPClientGroup,
     verify_connectivity,
@@ -22,6 +23,7 @@ __all__ = [
     "ClaudeCodeRunner",
     "ExtractedEvent",
     "GitHubClient",
+    "LifecycleManager",
     "MCPClientGroup",
     "PRDraftResult",
     "ReasoningBreadcrumb",

@@ -1,6 +1,6 @@
 # Story 5.16: S-1 separability test — cold worker swap (FR34 / NFR-M4)
 
-Status: review
+Status: done
 
 ## Story
 
@@ -125,9 +125,9 @@ The separate file approach is safer because it avoids affecting S-3's compose st
 
 ### Key design decisions
 
-1. **Separate compose file for S-1** — Using `docker-compose.s1.yml` avoids interfering with S-3's compose stack. The S-1 stack needs all 4 services (registry-state, registry-api, orchestrator-adapter, worker-wrapper) running together.
+1. **Separate compose file for S-1** — Using `docker-compose.s1.yml` avoids interfering with S-3's compose stack. The S-1 stack has 3 services (registry-state, registry-api, worker-wrapper). Orchestrator-adapter is omitted because the worker stub handles its own task lifecycle — the test proves the worker slot is swappable, not the orchestrator slot.
 
-2. **Scripted worker stub uses same env prefix as real worker** — The stub reads `WORKER_*` env vars for MCP server connection commands, matching the real worker's `WorkerSettings`. This proves FR34: a single `WORKER_IMAGE` env var swaps the implementation while all other config remains identical.
+2. **Scripted worker stub uses same env prefix as real worker** — The stub reads `WORKER_*` env vars for MCP server connection commands, matching the real worker's `WorkerSettings`. This proves FR34: a single `WORKER_IMAGE` env var swaps the implementation while all other config remains identical. The stub only connects to `clawhip-bridge` MCP (not all 3 servers) since that is the only MCP server needed for event emission. Task detection uses JSONL tailing (same proven pattern as null_orchestrator in S-3). No worktree lock is acquired since the stub replaces the real worker entirely with no contention.
 
 3. **Canned scenario via env var** — `SCRIPTED_WORKER_SCENARIO` env var names a predefined event sequence (e.g., `"simple_green"`, `"with_pr"`). The stub has a dict of canned scenarios. Default is `"simple_green"`: plan → execute 1 step → complete with green CI.
 
@@ -187,3 +187,9 @@ None — no blocking issues encountered.
 - `tests/separability/docker-compose.s1.yml` (NEW — 3-service compose overlay)
 - `tests/separability/test_s1_cold_worker_swap.py` (NEW — S-1 test file with 2 tests)
 - `_bmad-output/implementation-artifacts/5-16-s1-cold-worker-swap-test.md` (MODIFIED — status, tasks, dev record)
+
+### Review Findings
+
+- [x] [Review][Patch] Add `exc_info=True` to shutdown exception log in scripted_worker_stub.py
+- [x] [Review][Patch] Restore `@pytest.mark.separability` on sentinel test (AC-7)
+- [x] [Review][Dismiss] Partial line offset removal is correct (retries ensure completeness)

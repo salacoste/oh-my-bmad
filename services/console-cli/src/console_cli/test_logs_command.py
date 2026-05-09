@@ -148,7 +148,7 @@ class TestLogsCommand:
         assert "planning phase" in result.output
 
     def test_404_output(self) -> None:
-        """404 prints not-available message."""
+        """404 exits with code 4."""
         fake_response = _make_get_response(404, {"detail": "Not Found"})
 
         with patch("httpx.AsyncClient") as mock_cls:
@@ -160,8 +160,8 @@ class TestLogsCommand:
 
             result = runner.invoke(app, ["logs", _FAKE_TASK_ID])
 
-        assert result.exit_code == 1
-        assert "not available" in result.output
+        assert result.exit_code == 4
+        assert "Error:" in (result.output + (result.stderr or ""))
 
     def test_truncated_output(self) -> None:
         """Truncated digest shows truncation notice."""

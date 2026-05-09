@@ -6,10 +6,10 @@ import sys
 
 import httpx
 
+from console_cli.adapters.error_renderer import render_http_error
 from console_cli.adapters.registry_api_client import (
     RegistryAPIClient,
     RegistryResponseError,
-    parse_error_detail,
 )
 from console_cli.app.config import ConsoleSettings
 from console_cli.app.runner import run_async
@@ -32,11 +32,19 @@ def ping() -> None:
             file=sys.stderr,
         )
         raise SystemExit(1) from None
-    except httpx.HTTPStatusError as exc:
-        print(f"Error: {parse_error_detail(exc)}", file=sys.stderr)
+    except httpx.TimeoutException:
+        print(
+            "Error: registry-api timed out. Try again or increase timeout.",
+            file=sys.stderr,
+        )
         raise SystemExit(1) from None
+    except httpx.HTTPStatusError as exc:
+        render_http_error(exc)
     except RegistryResponseError as exc:
         print(f"Error: Registry returned unexpected response: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(1) from None
 
     print(

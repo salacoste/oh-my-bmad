@@ -18,6 +18,8 @@
 # publishes to GHCR; operators bump `${VERSION}` in .env and run
 # `docker compose pull && up -d` to upgrade.
 
+name: omb
+
 x-common-env: &common-env
   ENV: ${ENV:-development}
 
@@ -30,6 +32,7 @@ x-healthcheck: &healthcheck
 
 services:
   registry-api:
+    container_name: omb-registry-api
     build:
       context: .
       dockerfile: services/registry-api/Dockerfile
@@ -48,6 +51,7 @@ services:
     healthcheck: *healthcheck
 
   registry-state:
+    container_name: omb-registry-state
     build:
       context: .
       dockerfile: services/registry-state/Dockerfile
@@ -66,6 +70,7 @@ services:
     healthcheck: *healthcheck
 
   telegram-gateway:
+    container_name: omb-telegram-gateway
     build:
       context: .
       dockerfile: services/telegram-gateway/Dockerfile
@@ -83,6 +88,7 @@ services:
     healthcheck: *healthcheck
 
   orchestrator-adapter:
+    container_name: omb-orchestrator-adapter
     build:
       context: .
       dockerfile: services/orchestrator-adapter/Dockerfile
@@ -108,6 +114,7 @@ services:
     healthcheck: *healthcheck
 
   worker-wrapper:
+    container_name: omb-worker-wrapper
     build:
       context: .
       dockerfile: services/worker-wrapper/Dockerfile
@@ -128,6 +135,7 @@ services:
     healthcheck: *healthcheck
 
   clawhip-daemon:
+    container_name: omb-clawhip-daemon
     build:
       context: .
       dockerfile: services/clawhip-daemon/Dockerfile
@@ -155,6 +163,7 @@ services:
   # Mounts the same ``oh-my-bmad-data`` volume read-write — the migrator
   # writes the new log + archive in-place.
   migrator:
+    container_name: omb-migrator
     build:
       context: .
       dockerfile: scripts/migrator/Dockerfile

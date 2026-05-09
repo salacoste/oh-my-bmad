@@ -148,7 +148,7 @@ class TestStatusCommand:
         assert "approve" in result.output
 
     def test_404_output(self) -> None:
-        """404 prints not-found message."""
+        """404 prints not-found message and exits 4."""
         fake_response = _make_get_response(404, {"detail": f"Task {_FAKE_TASK_ID} not found"})
 
         with patch("httpx.AsyncClient") as mock_cls:
@@ -160,5 +160,5 @@ class TestStatusCommand:
 
             result = runner.invoke(app, ["status", _FAKE_TASK_ID])
 
-        assert result.exit_code == 1
-        assert "not found" in result.output
+        assert result.exit_code == 4
+        assert "Error:" in (result.output + (result.stderr or ""))

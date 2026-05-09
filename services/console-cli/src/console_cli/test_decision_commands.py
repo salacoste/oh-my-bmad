@@ -222,6 +222,26 @@ def test_approve_command_network_error() -> None:
     ):
         result = runner.invoke(app, ["approve", _VALID_TASK_ID])
     assert result.exit_code != 0
+    assert "Could not reach registry-api" in (result.output + (result.stderr or ""))
+
+
+def test_approve_command_task_not_found() -> None:
+    from typer.testing import CliRunner
+
+    from console_cli.app.main import app
+
+    runner = CliRunner()
+    with patch(
+        "httpx.AsyncClient.post",
+        new_callable=AsyncMock,
+        return_value=_mock_error(
+            404,
+            {"type": "about:blank", "title": "Not Found", "detail": "task not found"},
+        ),
+    ):
+        result = runner.invoke(app, ["approve", _VALID_TASK_ID])
+    assert result.exit_code != 0
+    assert "not found" in (result.output + (result.stderr or "")).lower()
 
 
 # --- reject command tests ---
@@ -245,6 +265,25 @@ def test_reject_command_success() -> None:
     assert "wrong branch" in result.output
 
 
+def test_reject_command_task_not_found() -> None:
+    from typer.testing import CliRunner
+
+    from console_cli.app.main import app
+
+    runner = CliRunner()
+    with patch(
+        "httpx.AsyncClient.post",
+        new_callable=AsyncMock,
+        return_value=_mock_error(
+            404,
+            {"type": "about:blank", "title": "Not Found", "detail": "task not found"},
+        ),
+    ):
+        result = runner.invoke(app, ["reject", _VALID_TASK_ID, "bad"])
+    assert result.exit_code != 0
+    assert "not found" in (result.output + (result.stderr or "")).lower()
+
+
 # --- stop command tests ---
 
 
@@ -263,6 +302,25 @@ def test_stop_command_success() -> None:
         result = runner.invoke(app, ["stop", _VALID_TASK_ID])
     assert result.exit_code == 0
     assert f"Stopped {_VALID_TASK_ID}" in result.output
+
+
+def test_stop_command_task_not_found() -> None:
+    from typer.testing import CliRunner
+
+    from console_cli.app.main import app
+
+    runner = CliRunner()
+    with patch(
+        "httpx.AsyncClient.post",
+        new_callable=AsyncMock,
+        return_value=_mock_error(
+            404,
+            {"type": "about:blank", "title": "Not Found", "detail": "task not found"},
+        ),
+    ):
+        result = runner.invoke(app, ["stop", _VALID_TASK_ID])
+    assert result.exit_code != 0
+    assert "not found" in (result.output + (result.stderr or "")).lower()
 
 
 # --- retry command tests ---
@@ -301,3 +359,22 @@ def test_retry_command_without_hint() -> None:
     assert result.exit_code == 0
     call_kwargs = mock_post.call_args
     assert "hint" not in call_kwargs[1]["json"]
+
+
+def test_retry_command_task_not_found() -> None:
+    from typer.testing import CliRunner
+
+    from console_cli.app.main import app
+
+    runner = CliRunner()
+    with patch(
+        "httpx.AsyncClient.post",
+        new_callable=AsyncMock,
+        return_value=_mock_error(
+            404,
+            {"type": "about:blank", "title": "Not Found", "detail": "task not found"},
+        ),
+    ):
+        result = runner.invoke(app, ["retry", _VALID_TASK_ID])
+    assert result.exit_code != 0
+    assert "not found" in (result.output + (result.stderr or "")).lower()

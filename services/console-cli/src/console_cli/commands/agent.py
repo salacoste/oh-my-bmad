@@ -7,11 +7,11 @@ import sys
 import httpx
 import typer
 
+from console_cli.adapters.error_renderer import render_http_error
 from console_cli.adapters.registry_api_client import (
     TASK_ID_PATTERN,
     RegistryAPIClient,
     RegistryResponseError,
-    parse_error_detail,
 )
 from console_cli.app.config import ConsoleSettings
 from console_cli.app.runner import run_async
@@ -35,19 +35,21 @@ def agent(
     request_id = new_request_id()
 
     try:
-        run_async(client.get_task(task_id=task_id, request_id=request_id))
+        result = run_async(client.get_task(task_id=task_id, request_id=request_id))
     except httpx.ConnectError:
         print(
             "Error: Could not reach registry-api. Is docker compose up?",
             file=sys.stderr,
         )
         raise SystemExit(1) from None
-    except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == 404:
-            print(f"Task {task_id} not found.", file=sys.stderr)
-            raise SystemExit(1) from None
-        print(f"Error: {parse_error_detail(exc)}", file=sys.stderr)
+    except httpx.TimeoutException:
+        print(
+            "Error: registry-api timed out. Try again or increase timeout.",
+            file=sys.stderr,
+        )
         raise SystemExit(1) from None
+    except httpx.HTTPStatusError as exc:
+        render_http_error(exc)
     except RegistryResponseError as exc:
         print(f"Error: Registry returned unexpected response: {exc}", file=sys.stderr)
         raise SystemExit(1) from None
@@ -55,4 +57,4 @@ def agent(
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(1) from None
 
-    print(f"Task {task_id}: runtime={_DEFAULT_RUNTIME}")
+    print(f"Task {task_id}: status={result.status} runtime={_DEFAULT_RUNTIME}")

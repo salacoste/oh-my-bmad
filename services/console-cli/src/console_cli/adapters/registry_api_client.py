@@ -1,7 +1,8 @@
-"""RegistryAPIClient — httpx-based client for registry-api endpoints (Story 4.2).
+"""RegistryAPIClient — httpx-based client for registry-api endpoints (Stories 4.2–4.4).
 
-Wraps POST /v1/tasks, GET /v1/tasks/{task_id}, and
-GET /v1/tasks/{task_id}/logs/digest.
+Wraps POST /v1/tasks, GET /v1/tasks/{task_id},
+GET /v1/tasks/{task_id}/logs/digest, POST /v1/tasks/{task_id}/decisions,
+GET /v1/health, and GET /v1/tasks/{task_id}/events.
 
 The client creates a fresh ``httpx.AsyncClient`` per method call via
 ``async with``. This is the CLI pattern: each invocation is short-lived,
@@ -125,6 +126,18 @@ class HealthResponseLocal(BaseModel):
     worker_status: str = Field(min_length=1, max_length=64)
     clawhip_queue_depth: int = Field(ge=0, le=1_000_000)
     version: str = Field(min_length=1, max_length=200)
+
+
+class TaskEventsResponseLocal(BaseModel):
+    """Local mirror of registry-api's eventual GET /v1/tasks/{id}/events response.
+
+    Forward-compatible shape — Story 7.5 owns the server-side endpoint.
+    Each event is a raw dict (JSON passthrough — no per-event validation).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    events: list[dict[str, object]] = Field(default_factory=list)
 
 
 class RegistryResponseError(httpx.HTTPError):
@@ -306,7 +319,9 @@ class RegistryAPIClient:
             data = response.json()
 
         try:
-            raw_status = data.get("idempotency_status") or "applied"
+            raw_status = data.get("idempotency_status") or response.headers.get(
+                "X-Idempotency-Status", "applied"
+            )
             idempotency_status: Literal["applied", "replayed"] = (
                 "replayed" if raw_status == "replayed" else "applied"
             )
@@ -357,15 +372,50 @@ class RegistryAPIClient:
         ) as exc:
             raise RegistryResponseError(f"registry-api returned malformed body: {exc}") from exc
 
+    async def get_task_events(
+        self,
+        *,
+        task_id: str,
+        since: str | None = None,
+        limit: int = 100,
+        request_id: str | None = None,
+    ) -> TaskEventsResponseLocal:
+        """GET /v1/tasks/{task_id}/events — raw event stream for debugging.
 
-def parse_error_detail(exc: httpx.HTTPStatusError) -> str:
-    """Extract human-readable detail from RFC 7807 problem+json or raw text."""
-    try:
-        body: dict[str, object] = exc.response.json()
-        detail = body.get("detail")
-        return str(detail) if isinstance(detail, str) else exc.response.text
-    except Exception:
-        return exc.response.text
+        Note: Server-side endpoint not yet implemented (Story 7.5).
+        Live calls return 404. Tests mock the transport layer.
+
+        Returns TaskEventsResponseLocal on HTTP 2xx.
+        Raises ValueError if task_id doesn't match TASK_ID_PATTERN.
+        """
+        if not TASK_ID_PATTERN.match(task_id):
+            raise ValueError(f"Invalid task_id (does not match TASK_ID_PATTERN): {task_id!r}")
+
+        params: dict[str, str | int] = {"limit": limit}
+        if since is not None:
+            params["since"] = since
+
+        headers: dict[str, str] = {}
+        if request_id is not None:
+            headers["X-Request-ID"] = request_id
+
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=_DEFAULT_TIMEOUT) as client:
+            response = await client.get(
+                f"/v1/tasks/{task_id}/events",
+                params=params,
+                headers=headers,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+        try:
+            return TaskEventsResponseLocal.model_validate({"events": data})
+        except (
+            _json.JSONDecodeError,
+            ValidationError,
+            ValueError,
+        ) as exc:
+            raise RegistryResponseError(f"malformed body: {exc}") from exc
 
 
 __all__ = [
@@ -374,10 +424,10 @@ __all__ = [
     "LogsDigestResponseLocal",
     "DecisionResponseLocal",
     "HealthResponseLocal",
+    "TaskEventsResponseLocal",
     "ActorLocal",
     "LastEventLocal",
     "RegistryAPIClient",
     "RegistryResponseError",
     "TASK_ID_PATTERN",
-    "parse_error_detail",
 ]

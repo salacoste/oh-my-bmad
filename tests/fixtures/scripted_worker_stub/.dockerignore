@@ -1,0 +1,14 @@
+# Build context is repo root; exclude everything not needed for the build.
+.git/
+.github/
+_bmad-output/
+.claude/
+.omc/
+docs/
+node_modules/
+*.pyc
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
