@@ -641,18 +641,30 @@ def test_task_self_recovered_payload_rejects_negative_counters_and_oversized(
 def test_agent_reasoning_types_registered_on_import() -> None:
     """Importing event_types auto-registers the three agent.reasoning.* schemas.
 
-    The worker-wrapper's test_reasoning.py cannot verify this wiring without a
-    cross-service import violation, so coverage lives here instead.
+    Validates the *wiring* — that the module-level ``register()`` calls in
+    ``event_types.py`` fire on import — not merely that ``register()`` works.
+    The keys must already be present from the initial import; no manual
+    registration is performed here.
     """
-    from events.schema_registry import REGISTRY, register
+    import importlib
+
+    from events.schema_registry import REGISTRY
 
     from registry_state.domain.event_types import AgentReasoningBreadcrumbPayload
 
-    # Re-register to make test order-independent (autouse fixtures may clear).
-    register("agent.reasoning.plan_drafted", "1.0.0", AgentReasoningBreadcrumbPayload)
-    register("agent.reasoning.tool_call_rationale", "1.0.0", AgentReasoningBreadcrumbPayload)
-    register("agent.reasoning.step_summary", "1.0.0", AgentReasoningBreadcrumbPayload)
+    keys = [
+        ("agent.reasoning.plan_drafted", "1.0.0"),
+        ("agent.reasoning.tool_call_rationale", "1.0.0"),
+        ("agent.reasoning.step_summary", "1.0.0"),
+    ]
+    # Remove entries so we can prove the reload re-adds them.
+    for k in keys:
+        REGISTRY.pop(k, None)
 
-    assert REGISTRY[("agent.reasoning.plan_drafted", "1.0.0")] is AgentReasoningBreadcrumbPayload
-    assert REGISTRY[("agent.reasoning.tool_call_rationale", "1.0.0")] is AgentReasoningBreadcrumbPayload
-    assert REGISTRY[("agent.reasoning.step_summary", "1.0.0")] is AgentReasoningBreadcrumbPayload
+    # Force re-import to trigger module-level register() calls.
+    import registry_state.domain.event_types as _et
+    importlib.reload(_et)
+
+    for k in keys:
+        assert k in REGISTRY, f"{k[0]} v{k[1]} not auto-registered on import"
+        assert REGISTRY[k] is AgentReasoningBreadcrumbPayload
