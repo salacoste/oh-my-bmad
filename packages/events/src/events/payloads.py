@@ -374,6 +374,8 @@ class TaskCompletedPayload(BaseModel):
     tests_added: int | None = Field(default=None, ge=0, le=10**6)
     ci_state: Literal["green", "red", "unknown"] | None = None
     blockers_count: int | None = Field(default=None, ge=0, le=10**6)
+    # Story 5.15 — cumulative token usage for observability (FR44).
+    token_usage: int | None = Field(default=None, ge=0)
 
 
 # ---------------------------------------------------------------------------
@@ -678,6 +680,22 @@ class FileEditedPayload(BaseModel):
     secrets_detected: bool = False
 
 
+class TaskBudgetExceededPayload(BaseModel):
+    """Payload for the ``task.budget_exceeded`` event (FR44 / NFR-P5).
+
+    Emitted when cumulative token usage for a task exceeds the configured
+    ``task_token_budget`` ceiling.  The task is blocked pending extension
+    approval — ``task.completed`` is NOT emitted in this path.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    task_id: str = Field(min_length=1, max_length=64)
+    token_limit: int = Field(gt=0)
+    tokens_used: int = Field(gt=0)
+    step: int = Field(ge=1)
+
+
 __all__ = [
     "TELEGRAM_REJECTED_SCHEMA_VERSION",
     "AcceptedCommand",
@@ -696,6 +714,7 @@ __all__ = [
     "SinkDeliveryFailedPayload",
     "TaskApprovalRequestedPayload",
     "TaskBlockerRaisedPayload",
+    "TaskBudgetExceededPayload",
     "TaskCompletedPayload",
     "TaskCreatedPayload",
     "TaskExecutionStartedPayload",

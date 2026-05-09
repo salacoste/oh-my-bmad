@@ -1,4 +1,4 @@
-"""Orchestrator-adapter settings — MCP commands, OMC subprocess, GitHub API (Stories 5.10, 5.14)."""
+"""Orchestrator-adapter settings — MCP, OMC, GitHub, budget (Stories 5.10, 5.14, 5.15)."""
 
 from __future__ import annotations
 
@@ -43,6 +43,9 @@ class OrchestratorSettings(BaseSettings):
     github_api_base_url: str = "https://api.github.com"
     github_timeout_s: float = Field(default=10.0, gt=0)
     github_base_branch: str = "main"
+
+    # Story 5.15 — Per-task budget enforcement (FR44). 0 disables enforcement.
+    task_token_budget: int = Field(default=50_000, ge=0)
 
     _resolved_actor_id: str | None = PrivateAttr(default=None)
 

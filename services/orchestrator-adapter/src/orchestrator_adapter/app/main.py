@@ -22,8 +22,10 @@ from orchestrator_adapter.adapters.mcp_clients import MCPClientGroup
 from orchestrator_adapter.adapters.omc_runner import OMCRunner
 from orchestrator_adapter.app.config import OrchestratorSettings
 from orchestrator_adapter.domain.task_dispatch import (
+    BudgetTracker,
     PlanParseResult,
     build_blocker_raised_payload,
+    build_budget_exceeded_payload,
     build_completion_payload,
     build_execution_started_payload,
     build_omc_prompt,
@@ -32,6 +34,7 @@ from orchestrator_adapter.domain.task_dispatch import (
     build_step_completed_payload,
     parse_omc_plan_output,
     parse_step_metrics,
+    parse_token_usage,
 )
 
 _MCP_CALL_TIMEOUT: float = 10.0
@@ -255,6 +258,8 @@ async def process_task(
     # Drive each step via OMC.
     step_outputs: dict[int, str] = {}
     blockers_count = 0
+    budget_limit = settings.task_token_budget
+    tracker = BudgetTracker(limit=budget_limit) if budget_limit > 0 else None
     for step in plan_result.steps:
         step_prompt = build_omc_prompt(task_id, hint=f"Step {step.step}: {step.description}")
         step_result = await runner.run(step_prompt)
@@ -279,6 +284,37 @@ async def process_task(
 
         output_summary = step_result.stdout[:2000] if step_result.stdout else ""
         step_outputs[step.step] = output_summary
+
+        # Story 5.15: accumulate token usage and check budget.
+        if tracker is not None:
+            tokens = parse_token_usage(step_result.stdout or "")
+            if tokens is not None:
+                tracker = tracker.consume(tokens)
+                if tracker.is_exceeded:
+                    overshoot_ratio = tracker.used / tracker.limit
+                    log.warning(
+                        "task_budget_exceeded",
+                        task_id=task_id,
+                        step=step.step,
+                        tokens_used=tracker.used,
+                        token_limit=tracker.limit,
+                        overshoot=f"{overshoot_ratio:.1%}",
+                    )
+                    if overshoot_ratio > 1.1:
+                        log.warning(
+                            "task_budget_overshoot_exceeded_10pct",
+                            task_id=task_id,
+                            tokens_used=tracker.used,
+                            token_limit=tracker.limit,
+                        )
+                    budget_payload = build_budget_exceeded_payload(task_id, tracker, step.step)
+                    await _emit_event(
+                        clients,
+                        "task.budget_exceeded",
+                        budget_payload,
+                        label=f"budget_exceeded_{task_id}",
+                    )
+                    return
 
         step_completed_payload = build_step_completed_payload(task_id, step, output_summary)
         await _emit_event(
@@ -318,6 +354,7 @@ async def process_task(
         pr_url=pr_url,
         pr_number=pr_number,
         pr_branch=pr_branch,
+        token_usage=tracker.used if tracker is not None else None,
     )
     await _emit_event(
         clients,

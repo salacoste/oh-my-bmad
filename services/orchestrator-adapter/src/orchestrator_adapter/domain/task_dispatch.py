@@ -17,6 +17,7 @@ from typing import Literal
 from events.payloads import (
     PlanStep,
     TaskBlockerRaisedPayload,
+    TaskBudgetExceededPayload,
     TaskCompletedPayload,
     TaskExecutionStartedPayload,
     TaskPlanningStartedPayload,
@@ -126,6 +127,61 @@ def parse_step_metrics(step_outputs: dict[int, str]) -> CompletionMetrics:
         tests_added=tests_added_value,
         ci_state=ci_state,
     )
+
+
+# ---------------------------------------------------------------------------
+# Story 5.15 — per-task budget enforcement (FR44 / NFR-P5)
+# ---------------------------------------------------------------------------
+
+_TOKEN_USAGE_RE = re.compile(r"(\d+)\s+tokens?", re.IGNORECASE)
+_TOKEN_USAGE_AFTER_RE = re.compile(r"tokens?\D*?(\d+)", re.IGNORECASE)
+
+
+def parse_token_usage(raw_output: str) -> int | None:
+    """Extract token count from OMC step stdout.
+
+    Matches patterns like ``"1234 tokens"``, ``"tokens: 500"``,
+    ``"Token usage: 500"``, ``"Total tokens: 999"``.
+    Returns ``None`` when no pattern matches.
+    """
+    if not raw_output:
+        return None
+    matches = _TOKEN_USAGE_RE.findall(raw_output)
+    if not matches:
+        matches = _TOKEN_USAGE_AFTER_RE.findall(raw_output)
+    if not matches:
+        return None
+    return sum(int(m) for m in matches)
+
+
+@dataclass(frozen=True)
+class BudgetTracker:
+    """Immutable tracker for cumulative token usage across task steps."""
+
+    limit: int
+    used: int = 0
+
+    def consume(self, tokens: int) -> BudgetTracker:
+        """Return a new tracker with *tokens* added to the cumulative total."""
+        return BudgetTracker(limit=self.limit, used=self.used + tokens)
+
+    @property
+    def is_exceeded(self) -> bool:
+        return self.used > self.limit if self.limit > 0 else False
+
+
+def build_budget_exceeded_payload(
+    task_id: str,
+    tracker: BudgetTracker,
+    step: int,
+) -> dict[str, object]:
+    """Build a ``task.budget_exceeded`` event payload dict."""
+    return TaskBudgetExceededPayload(
+        task_id=task_id,
+        token_limit=tracker.limit,
+        tokens_used=tracker.used,
+        step=step,
+    ).model_dump()
 
 
 @dataclass(frozen=True)
@@ -274,6 +330,7 @@ def build_completion_payload(
     pr_url: str | None = None,
     pr_number: int | None = None,
     pr_branch: str | None = None,
+    token_usage: int | None = None,
 ) -> dict[str, object]:
     """Build a ``task.completed`` event payload dict with synthesized summary.
 
@@ -307,6 +364,8 @@ def build_completion_payload(
         payload_kwargs["pr_number"] = pr_number
     if pr_branch is not None:
         payload_kwargs["pr_branch"] = pr_branch
+    if token_usage is not None:
+        payload_kwargs["token_usage"] = token_usage
     return TaskCompletedPayload(**payload_kwargs).model_dump()
 
 

@@ -68,7 +68,27 @@ class WorktreeLockHeld(EventsError):  # noqa: N818
         super().__init__(f"worktree lock held by session {session_id!r} at {worktree_path!r}")
 
 
+class BudgetExceeded(EventsError):  # noqa: N818
+    """Raised internally when a task's cumulative token usage exceeds its budget.
+
+    Used for signaling within the orchestrator-adapter. The public interface
+    is the ``task.budget_exceeded`` event — consumers should listen for the
+    event, not catch this exception.
+    """
+
+    def __init__(self, task_id: str, token_limit: int, tokens_used: int, step: int) -> None:
+        self.task_id = task_id
+        self.token_limit = token_limit
+        self.tokens_used = tokens_used
+        self.step = step
+        super().__init__(
+            f"task {task_id!r} exceeded token budget at step {step}: "
+            f"{tokens_used}/{token_limit} tokens"
+        )
+
+
 __all__ = [
+    "BudgetExceeded",
     "CanonicalSerializationError",
     "EventSchemaUnknown",
     "EventValidationError",

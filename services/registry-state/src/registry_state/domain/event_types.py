@@ -36,6 +36,7 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     SinkDeliveryFailedPayload,
     TaskApprovalRequestedPayload,
     TaskBlockerRaisedPayload,
+    TaskBudgetExceededPayload,
     TaskCompletedPayload,
     TaskCreatedPayload,
     TaskExecutionStartedPayload,
@@ -66,6 +67,7 @@ __all__ = [
     "SinkDeliveryFailedPayload",
     "TaskApprovalRequestedPayload",
     "TaskBlockerRaisedPayload",
+    "TaskBudgetExceededPayload",
     "TaskCompletedPayload",
     "TaskCreatedPayload",
     "TaskExecutionStartedPayload",
@@ -107,6 +109,7 @@ register("task.approval_requested", "1.1.0", TaskApprovalRequestedPayload)
 register("task.completed", "1.0.0", TaskCompletedPayload)
 register("task.completed", "1.0.1", TaskCompletedPayload)
 register("task.completed", "1.1.0", TaskCompletedPayload)
+register("task.completed", "1.2.0", TaskCompletedPayload)  # Story 5.15 — token_usage
 
 # Story 2.10 — 4 failure-detection event types (FR24a, NFR-R5).
 register("service.crashed", "1.0.0", ServiceCrashedPayload)
@@ -146,3 +149,6 @@ register("agent.reasoning.step_summary", "1.0.0", AgentReasoningBreadcrumbPayloa
 # Story 5.6 — file.edited event payload (FR30, NFR-R2).
 register("file.edited", "1.0.0", FileEditedPayload)
 register("file.edited", "1.0.1", FileEditedPayload)
+
+# Story 5.15 — task.budget_exceeded event payload (FR44 / NFR-P5).
+register("task.budget_exceeded", "1.0.0", TaskBudgetExceededPayload)

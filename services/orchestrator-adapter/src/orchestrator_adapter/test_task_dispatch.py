@@ -8,8 +8,10 @@ import pytest
 from events.payloads import PlanStep
 
 from orchestrator_adapter.domain.task_dispatch import (
+    BudgetTracker,
     CompletionMetrics,
     PlanParseResult,
+    build_budget_exceeded_payload,
     build_completion_payload,
     build_execution_started_payload,
     build_omc_prompt,
@@ -18,6 +20,7 @@ from orchestrator_adapter.domain.task_dispatch import (
     build_step_completed_payload,
     parse_omc_plan_output,
     parse_step_metrics,
+    parse_token_usage,
 )
 
 # --- build_omc_prompt ---
@@ -486,3 +489,94 @@ def test_build_completion_payload_pr_fields_none_when_not_provided() -> None:
     assert payload.get("pr_url") is None
     assert payload.get("pr_number") is None
     assert payload.get("pr_branch") is None
+
+
+# --- Story 5.15: parse_token_usage ---
+
+
+def test_parse_token_usage_standard() -> None:
+    assert parse_token_usage("1234 tokens used") == 1234
+
+
+def test_parse_token_usage_capitalized() -> None:
+    assert parse_token_usage("Token usage: 500") == 500
+
+
+def test_parse_token_usage_total() -> None:
+    assert parse_token_usage("Total tokens: 999") == 999
+
+
+def test_parse_token_usage_singular() -> None:
+    assert parse_token_usage("1 token used") == 1
+
+
+def test_parse_token_usage_multiple_matches() -> None:
+    assert parse_token_usage("Step 1: 100 tokens\nStep 2: 200 tokens") == 300
+
+
+def test_parse_token_usage_no_match() -> None:
+    assert parse_token_usage("random output without token info") is None
+
+
+def test_parse_token_usage_empty() -> None:
+    assert parse_token_usage("") is None
+
+
+# --- Story 5.15: BudgetTracker ---
+
+
+def test_budget_tracker_accumulate() -> None:
+    t = BudgetTracker(limit=100).consume(30).consume(20)
+    assert t.used == 50
+    assert not t.is_exceeded
+
+
+def test_budget_tracker_exceeded() -> None:
+    t = BudgetTracker(limit=100).consume(60).consume(50)
+    assert t.used == 110
+    assert t.is_exceeded
+
+
+def test_budget_tracker_frozen() -> None:
+    t = BudgetTracker(limit=100)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        t.used = 999  # type: ignore[misc]
+
+
+def test_budget_tracker_zero_limit_never_exceeded() -> None:
+    t = BudgetTracker(limit=0).consume(99999)
+    assert not t.is_exceeded
+
+
+def test_budget_tracker_consume_returns_new_instance() -> None:
+    t1 = BudgetTracker(limit=100)
+    t2 = t1.consume(50)
+    assert t1.used == 0
+    assert t2.used == 50
+
+
+# --- Story 5.15: build_budget_exceeded_payload ---
+
+
+def test_build_budget_exceeded_payload() -> None:
+    tracker = BudgetTracker(limit=500, used=600)
+    payload = build_budget_exceeded_payload("T-001", tracker, step=3)
+    assert payload["task_id"] == "T-001"
+    assert payload["token_limit"] == 500
+    assert payload["tokens_used"] == 600
+    assert payload["step"] == 3
+
+
+# --- Story 5.15: completion payload with token_usage ---
+
+
+def test_build_completion_payload_with_token_usage() -> None:
+    plan_result = PlanParseResult(summary="test")
+    payload = build_completion_payload("T-001", plan_result, {}, token_usage=12345)
+    assert payload["token_usage"] == 12345
+
+
+def test_build_completion_payload_token_usage_none_by_default() -> None:
+    plan_result = PlanParseResult(summary="test")
+    payload = build_completion_payload("T-002", plan_result, {})
+    assert payload.get("token_usage") is None

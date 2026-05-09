@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-09T10:00:00Z
+last_updated: 2026-05-09T14:00:00Z
 
 development_status:
   # =========================================================================
@@ -153,7 +153,7 @@ development_status:
   5-12-task-execution-driver: done
   5-13-completion-summary-payload: done
   5-14-pr-draft-auto-creation: done
-  5-15-per-task-budget-enforcement: ready-for-dev
+  5-15-per-task-budget-enforcement: review
   5-16-s1-cold-worker-swap-test: backlog
   5-17a-resume-after-approval-state-machine: backlog
   5-17b-cross-restart-approval-handling: backlog
