@@ -218,6 +218,22 @@ Claude Opus 4.7
 
 - Deferred `_build_auto_approval` / `_build_scripted_worker` imports inside `test_journey_1_overnight_pr` — pytest collects (imports) test modules before running conftest fixtures, so module-level imports of path-injected modules fail during collection when tests are marker-skipped (e.g. `just test` uses `-m "not slow"`).
 
+### Review Findings
+
+- [x] [Review][Patch] Blocking I/O on event loop in auto-approval stub [auto_approval_stub.py:151]
+- [x] [Review][Patch] Sentinel test `:!` pathspec magic silently ignored after `--` separator [test_journey_1_overnight.py:406-421]
+- [x] [Review][Patch] `asyncio.run()` in sync test — convert to synchronous sqlite3 polling [test_journey_1_overnight.py:384]
+- [x] [Review][Patch] Sentinel test's `CalledProcessError` fallback too broad [test_journey_1_overnight.py:424-433]
+- [x] [Review][Patch] `STUB_EVENTS` missing `approval.granted` for dedup check [test_journey_1_overnight.py:70]
+- [x] [Review][Patch] `JOURNEY_1_EVENTS` constant defined but never used [test_journey_1_overnight.py:56-67]
+- [x] [Review][Patch] `_read_new_lines` swallows JSONDecodeError silently [auto_approval_stub.py:73]
+- [x] [Review][Patch] Auto-approval stub crashes on MCP emit failure — no retry [auto_approval_stub.py:165]
+- [x] [Review][Patch] Inconsistent host: `localhost` vs `127.0.0.1` [test_journey_1_overnight.py:180,325]
+- [x] [Review][Patch] Unused deps in auto_approval_stub pyproject.toml [pyproject.toml:10-11]
+- [x] [Review][Defer] ~62 lines duplicated code between stubs (4 functions) — deferred, intentional fixture independence
+- [x] [Review][Defer] Incomplete JSONL line causes offset stall — deferred, pre-existing in worker stub
+- [x] [Review][Defer] Worker doesn't gate on approval before continuing — deferred, by-design Phase 1 per spec scope boundary
+
 ### Completion Notes List
 
 - All 6 tasks complete. ruff check/format clean, check_imports.py clean (pre-existing violation in worker-wrapper unrelated), just test no regressions (pre-existing asgi_lifespan errors unrelated).

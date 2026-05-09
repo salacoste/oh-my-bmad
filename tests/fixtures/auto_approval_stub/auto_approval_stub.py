@@ -70,8 +70,10 @@ def _read_new_lines(path: Path, offset: int) -> tuple[int, list[dict[str, Any]]]
             if not line:
                 new_offset += len(raw)
                 continue
-            with contextlib.suppress(json.JSONDecodeError):
+            try:
                 envelopes.append(json.loads(line))
+            except json.JSONDecodeError:
+                log.warning("jsonl_parse_error", raw=line[:200])
             new_offset += len(raw)
     return new_offset, envelopes
 
@@ -148,7 +150,7 @@ async def run_auto_approval(
             for path in sorted(base_dir.rglob("*.jsonl")):
                 offset_key = str(path.relative_to(base_dir))
                 prior = offsets.get(offset_key, 0)
-                new_offset, raw_envelopes = _read_new_lines(path, prior)
+                new_offset, raw_envelopes = await asyncio.to_thread(_read_new_lines, path, prior)
                 offsets[offset_key] = new_offset
 
                 for env_obj in raw_envelopes:
@@ -162,7 +164,11 @@ async def run_auto_approval(
                         continue
 
                     parent_event_id = env_obj.get("event_id")
-                    await _emit_approval(clawhip, task_id, parent_event_id=parent_event_id)
+                    try:
+                        await _emit_approval(clawhip, task_id, parent_event_id=parent_event_id)
+                    except Exception:
+                        log.warning("emit_approval_failed", task_id=task_id, exc_info=True)
+                        continue
                     approved_tasks.add(task_id)
                     log.info("auto_approved", task_id=task_id)
 

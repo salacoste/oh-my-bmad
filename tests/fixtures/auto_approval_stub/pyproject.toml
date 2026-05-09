@@ -7,8 +7,6 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "events>=0.3.0",
-    "registry-state>=0.5.0",
     "mcp>=1.0.0",
     "structlog>=24.0.0",
     "pydantic-settings>=2.0.0",

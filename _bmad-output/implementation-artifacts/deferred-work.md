@@ -57,3 +57,15 @@ A running log of issues that surfaced during code review but were not fixed at t
 - D1 — `release_lock` TOCTOU between `read_lock` and `unlink` (`worktree_lock.py:119-133`) — `contextlib.suppress(FileNotFoundError)` handles the missing-file race. Root cause is the same TOCTOU pattern as in `acquire_lock`; fixing acquire's TOCTOU (decision needed) would address both.
 - D2 — `read_lock` returns `None` for corrupt lock, allowing acquisition (`worktree_lock.py:49-51`) — Requires filesystem-level corruption that bypasses `os.replace` atomicity. Very unlikely; corrupt lock would require operator intervention regardless.
 - D3 — Lock not retained on blocked (AC-2) — AC-2 behavior belongs in the task state machine (future Story 5.12+). `finish_session` is only called on session end (SIGTERM/completion), not task blocked state. Out of scope for Story 5.3.
+
+## Deferred from: code review of 5-17a-resume-after-approval-state-machine (2026-05-09)
+
+- D1 — Transition log grows unboundedly for long-lived FSM instances (`lifecycle.py:136`) — by design for finite worker lifecycle (10-20 transitions per task). If FSM is reused across tasks, add `clear_log()` or cap size.
+- D2 — AC-2 "rejection is audited" — invalid transitions are NOT appended to internal log (`lifecycle.py:144-145`) — exception carries `current_state` + `event` attributes (auditable data), but FSM itself doesn't record it. Acceptable for pure domain module; Story 5.17b runtime layer should log the exception.
+- D3 — PAUSED cannot transition to AWAITING_APPROVAL directly, AWAITING_APPROVAL cannot receive TASK_PAUSED — by design: separate flow paths (pause/unpark vs. approval gate) that converge at RESUMED. If 5.17b runtime needs cross-path transitions, add them then.
+
+## Deferred from: code review of 5-18-journey-1-integration-test (2026-05-09)
+
+- D1 — ~62 lines duplicated code between auto_approval_stub and scripted_worker_stub (`_read_new_lines`, `_connect_mcp`, `_install_signal_handlers`, `main`) — intentional fixture independence per spec design; extracting shared code would cross fixture boundaries.
+- D2 — Incomplete JSONL line causes offset stall in `_read_new_lines` — pre-existing in scripted_worker_stub; only triggered by log rotation during test run.
+- D3 — Worker stub doesn't gate on `approval.granted` before emitting post-approval events — by-design Phase 1 per spec scope boundary ("Do NOT add a journey_1 scenario that gates on approval"). The 0.5s inter-event delay creates the timing window. Phase 2 (Epic 6) will add real approval gating.
