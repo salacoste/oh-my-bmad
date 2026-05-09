@@ -11,6 +11,7 @@ from orchestrator_adapter.domain.task_dispatch import (
     BudgetTracker,
     CompletionMetrics,
     PlanParseResult,
+    build_blocker_raised_payload,
     build_budget_exceeded_payload,
     build_completion_payload,
     build_execution_started_payload,
@@ -599,3 +600,18 @@ def test_build_completion_payload_token_usage_none_by_default() -> None:
     plan_result = PlanParseResult(summary="test")
     payload = build_completion_payload("T-002", plan_result, {})
     assert payload.get("token_usage") is None
+
+
+# --- build_blocker_raised_payload ---
+
+
+def test_build_blocker_raised_payload_shape() -> None:
+    payload = build_blocker_raised_payload("T-001", "Step 3 failed: timeout")
+    assert payload["task_id"] == "T-001"
+    assert payload["reason"] == "Step 3 failed: timeout"
+
+
+def test_build_blocker_raised_payload_truncates_long_reason() -> None:
+    long_reason = "X" * 5000
+    payload = build_blocker_raised_payload("T-002", long_reason)
+    assert len(payload["reason"]) <= 2000

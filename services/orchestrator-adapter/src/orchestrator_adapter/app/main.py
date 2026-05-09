@@ -271,7 +271,7 @@ async def process_task(
                 step=step.step,
                 error=step_result.error,
             )
-            reason = f"Step {step.step} failed: {(step_result.error or 'unknown error')[:1980]}"
+            reason = f"Step {step.step} failed: {step_result.error}"
             blocker_payload = build_blocker_raised_payload(task_id, reason)
             await _emit_event(
                 clients,
