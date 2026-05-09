@@ -324,7 +324,7 @@ async def process_task(
                         label=f"budget_exceeded_{task_id}",
                     )
                     break
-            if tokens is None:
+            else:
                 log.debug(
                     "budget_tracking_no_telemetry",
                     task_id=task_id,
