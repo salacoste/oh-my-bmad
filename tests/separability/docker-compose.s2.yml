@@ -22,7 +22,7 @@ services:
       REGISTRY_STATE_LOG_DIR: /var/lib/oh-my-bmad/registry/events
       REGISTRY_STATE_DB_URL: sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3
       REGISTRY_STATE_AUTO_CREATE_SCHEMA: "1"
-    user: "${OMB_S3_UID:-10002}:${OMB_S3_GID:-10000}"
+    user: "${OMB_CONTAINER_UID:-10002}:${OMB_CONTAINER_GID:-10000}"
     init: true
     restart: "no"
     networks: [oh-my-bmad-net]
@@ -46,7 +46,7 @@ services:
       REGISTRY_API_PORT: "8080"
       REGISTRY_API_LOG_DIR: /var/lib/oh-my-bmad/registry/events
       REGISTRY_API_DB_URL: sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3
-    user: "${OMB_S3_UID:-10002}:${OMB_S3_GID:-10000}"
+    user: "${OMB_CONTAINER_UID:-10002}:${OMB_CONTAINER_GID:-10000}"
     init: true
     restart: "no"
     networks: [oh-my-bmad-net]
@@ -85,7 +85,7 @@ services:
       CLAWHIP_BRIDGE_LOG_DIR: /var/lib/oh-my-bmad/registry/events
       CLAWHIP_BRIDGE_ACTOR_KIND: worker
       CLAWHIP_BRIDGE_ACTOR_ID: scripted-worker-stub
-    user: "${OMB_S3_UID:-10002}:${OMB_S3_GID:-10000}"
+    user: "${OMB_CONTAINER_UID:-10002}:${OMB_CONTAINER_GID:-10000}"
     init: true
     restart: "no"
     networks: [oh-my-bmad-net]

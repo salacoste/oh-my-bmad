@@ -64,8 +64,8 @@ def _compose_env(data_dir: Path) -> dict[str, str]:
     env = os.environ.copy()
     env["OMB_S2_DATA_DIR"] = str(data_dir)
     env["WORKER_IMAGE"] = _STUB_TAG
-    env.setdefault("OMB_S3_UID", str(_CONTAINER_UID))
-    env.setdefault("OMB_S3_GID", str(_CONTAINER_GID))
+    env.setdefault("OMB_CONTAINER_UID", str(_CONTAINER_UID))
+    env.setdefault("OMB_CONTAINER_GID", str(_CONTAINER_GID))
     return env
 
 

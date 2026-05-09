@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import os
@@ -360,7 +361,7 @@ def _dedupe_key(evt_type: str, payload: dict[str, Any] | object) -> str:
         step = payload.get("step") if isinstance(payload, dict) else getattr(payload, "step", None)
         if step is None:
             log.warning("dedupe_key_missing_step", evt_type=evt_type)
-            return f"{evt_type}._unknown_{hash(str(payload)) & 0xFFFF:x}"
+            return f"{evt_type}._unknown_{hashlib.sha256(str(payload).encode()).hexdigest()[:8]}"
         return f"{evt_type}.{step}"
     return evt_type
 
