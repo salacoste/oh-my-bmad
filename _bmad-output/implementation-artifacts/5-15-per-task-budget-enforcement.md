@@ -1,6 +1,6 @@
 # Story 5.15: Per-task budget enforcement (FR44)
 
-Status: review
+Status: done
 
 ## Story
 
