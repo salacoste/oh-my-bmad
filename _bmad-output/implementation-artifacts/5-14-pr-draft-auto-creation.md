@@ -1,6 +1,6 @@
 # Story 5.14: PR draft auto-creation on green tests (FR10)
 
-Status: review
+Status: done
 
 ## Story
 
