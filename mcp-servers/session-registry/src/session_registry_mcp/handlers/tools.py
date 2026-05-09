@@ -39,8 +39,10 @@ def _make_approval_lookup(
     """Return an async ``(task_id, action) -> bool`` callable.
 
     Queries the materialized ``Event`` table for ``approval.granted``
-    events matching *task_id*. Story 6.5 adds the emitter; this lookup
-    is ready for it.
+    events matching *task_id*. Approvals are currently task-scoped only
+    (the *action* parameter is accepted but unused — reserved for
+    future wildcard matching). Story 6.5 adds the emitter; this
+    lookup is ready for it.
     """
 
     async def _lookup(task_id: str, action: str) -> bool:  # noqa: ARG001 — action reserved for future wildcard matching

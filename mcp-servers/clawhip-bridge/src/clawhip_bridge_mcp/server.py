@@ -68,11 +68,15 @@ def _make_approval_lookup(
     """Return an async ``(task_id, action) -> bool`` callable.
 
     Scans today's JSONL event log for ``approval.granted`` events
-    matching *task_id*. Story 6.5 adds the emitter; this lookup
-    is ready for it.
+    matching *task_id*. Approvals are currently task-scoped only
+    (the *action* parameter is accepted but unused — reserved for
+    future wildcard matching). Story 6.5 adds the emitter; this
+    lookup is ready for it.
     """
 
     async def _lookup(task_id: str, action: str) -> bool:  # noqa: ARG001 — action reserved for future wildcard matching
+        # NOTE: O(n) linear scan of today's JSONL per check — acceptable for
+        # current scale, but cache or index if event volume grows.
         path = current_day_path(base_dir, clock.now())
         try:
             for envelope in read_log_lines(path):

@@ -59,7 +59,7 @@ def check_tier(
     caller: CallerContext,
     required_tier: Tier,
     *,
-    has_approval: bool = True,
+    has_approval: bool = False,
 ) -> CapabilityOk:
     """Check whether *caller* is authorized for *required_tier* on *action*.
 
@@ -112,7 +112,7 @@ async def check_tier_with_approval(
     awaits *approval_lookup(task_id, action)* — if it returns False, raises
     CapabilityDenied. Tier 0-2 skip the approval lookup entirely.
     """
-    check_tier(action, caller, required_tier)
+    check_tier(action, caller, required_tier, has_approval=True)
     if required_tier >= Tier.THREE and approval_lookup is not None:
         task_id = caller.task_id or ""
         approved = await approval_lookup(task_id, action)

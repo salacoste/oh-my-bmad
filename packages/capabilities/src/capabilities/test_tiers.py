@@ -99,7 +99,7 @@ class TestCheckTierAuthorized:
     )
     def test_returns_ok(self, actor_kind: str, required_tier: Tier) -> None:
         caller = CallerContext(actor_kind=actor_kind, actor_id="id-1", task_id="t-1")
-        result = check_tier("test_action", caller, required_tier)
+        result = check_tier("test_action", caller, required_tier, has_approval=True)
         assert isinstance(result, CapabilityOk)
         assert result.action == "test_action"
         assert result.caller is caller
@@ -172,7 +172,7 @@ class TestCheckTierApproval:
         result = check_tier("branch_create", caller, Tier.TWO, has_approval=False)
         assert isinstance(result, CapabilityOk)
 
-    def test_tier1_default_has_approval_true(self) -> None:
+    def test_tier1_ignores_has_approval_default(self) -> None:
         caller = CallerContext(actor_kind="worker", actor_id="w-1")
         result = check_tier("add_note", caller, Tier.ONE)
         assert isinstance(result, CapabilityOk)
