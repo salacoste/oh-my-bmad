@@ -45,6 +45,13 @@ class CapabilityOk:
     tier: Tier
 
 
+def _no_approval_reason(tier: Tier, action: str) -> str:
+    return (
+        f"no_matching_approval: Tier.{tier.value} action "
+        f"{action!r} requires an approval.granted event"
+    )
+
+
 _MAX_TIER_BY_ACTOR: dict[ActorKind, Tier] = {
     "operator": Tier.THREE,
     "system": Tier.THREE,
@@ -91,10 +98,7 @@ def check_tier(
             action=action,
             actor_kind=caller.actor_kind,
             required_tier=int(required_tier),
-            reason=(
-                f"no_matching_approval: Tier.{required_tier.value} action "
-                f"{action!r} requires an approval.granted event"
-            ),
+            reason=_no_approval_reason(required_tier, action),
         )
     return CapabilityOk(action=action, caller=caller, tier=required_tier)
 
@@ -121,9 +125,6 @@ async def check_tier_with_approval(
                 action=action,
                 actor_kind=caller.actor_kind,
                 required_tier=int(required_tier),
-                reason=(
-                    f"no_matching_approval: Tier.{required_tier.value} action "
-                    f"{action!r} requires an approval.granted event"
-                ),
+                reason=_no_approval_reason(required_tier, action),
             )
     return CapabilityOk(action=action, caller=caller, tier=required_tier)

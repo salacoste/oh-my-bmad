@@ -8,6 +8,7 @@ event spine via clawhip-bridge — deferred to Story 5.12 integration.
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from capabilities import CallerContext, Tier, check_tier
@@ -35,7 +36,7 @@ TIER_MAP: dict[str, Tier] = {
 
 def _make_approval_lookup(
     session_maker: async_sessionmaker[AsyncSession],
-) -> object:
+) -> Callable[[str, str], Awaitable[bool]]:
     """Return an async ``(task_id, action) -> bool`` callable.
 
     Queries the materialized ``Event`` table for ``approval.granted``
@@ -43,6 +44,11 @@ def _make_approval_lookup(
     (the *action* parameter is accepted but unused — reserved for
     future wildcard matching). Story 6.5 adds the emitter; this
     lookup is ready for it.
+
+    NOTE: Duplicated in task-registry — keep in sync. Extracting to a
+    shared package is blocked by the import-graph constraint (mcp-servers
+    cannot share code directly; shared helpers belong in packages/ or
+    services/).
     """
 
     async def _lookup(task_id: str, action: str) -> bool:  # noqa: ARG001 — action reserved for future wildcard matching
@@ -52,7 +58,7 @@ def _make_approval_lookup(
                 Event.task_id == task_id,
             )
             result = await session.execute(stmt)
-            return result.scalar_one_or_none() is not None
+            return result.scalars().first() is not None
 
     return _lookup
 

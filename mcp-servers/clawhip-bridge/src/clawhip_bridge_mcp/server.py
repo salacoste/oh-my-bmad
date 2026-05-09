@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from pathlib import Path
 
 from capabilities import CallerContext, Tier, check_tier  # noqa: IMP001 — packages/
@@ -64,7 +64,7 @@ TIER_MAP: dict[str, Tier] = {
 def _make_approval_lookup(
     base_dir: Path,
     clock: Clock,
-) -> object:
+) -> Callable[[str, str], Awaitable[bool]]:
     """Return an async ``(task_id, action) -> bool`` callable.
 
     Scans today's JSONL event log for ``approval.granted`` events
@@ -72,6 +72,11 @@ def _make_approval_lookup(
     (the *action* parameter is accepted but unused — reserved for
     future wildcard matching). Story 6.5 adds the emitter; this
     lookup is ready for it.
+
+    Phase-1 limitation: only scans today's JSONL log file. Cross-day
+    approvals (granted yesterday, used today) are not covered. This is
+    acceptable for the current scale and will be addressed when the
+    materialized Event table becomes the primary approval source.
     """
 
     async def _lookup(task_id: str, action: str) -> bool:  # noqa: ARG001 — action reserved for future wildcard matching

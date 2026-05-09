@@ -587,6 +587,43 @@ class TestApprovalLookup:
                 "git_push", caller, Tier.THREE, approval_lookup=lookup,
             )
 
+    @pytest.mark.asyncio
+    async def test_approval_lookup_with_multiple_events(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Multiple approval.granted rows — scalars().first() handles correctly."""
+        from task_registry_mcp.handlers.tools import _make_approval_lookup
+
+        task_id = "t-00000099-0002-7000-8000-000000000099"
+        async with db_session_maker() as session:
+            session.add(Task(
+                id=task_id,
+                status="executing",
+                created_at=_NOW,
+                updated_at=_NOW,
+                actor_kind="operator",
+                actor_id="op-1",
+            ))
+            await session.flush()
+            for i in range(3):
+                session.add(Event(
+                    id=f"evt-approval-multi-{i}",
+                    type="approval.granted",
+                    schema_version="1.0.0",
+                    emitted_at=_NOW,
+                    emitted_at_monotonic_ns=0,
+                    actor_kind="operator",
+                    actor_id="op-1",
+                    task_id=task_id,
+                    request_id=f"req-multi-{i}",
+                    payload_json='{"task_id":"' + task_id + '"}',
+                ))
+            await session.commit()
+
+        lookup = _make_approval_lookup(db_session_maker)
+        result = await lookup(task_id, "git_push")
+        assert result is True
+
 
 # ---------------------------------------------------------------------------
 # TestEntryPoint
