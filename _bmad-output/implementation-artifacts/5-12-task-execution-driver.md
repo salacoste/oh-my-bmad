@@ -18,7 +18,7 @@ So that a planned task actually runs end-to-end.
 
 4. **AC-4: Schema registry** — `task.execution.started` (v1.0.1 already registered) and `task.step.completed` (new v1.0.0) are registered in `packages/events/src/events/schema_registry.py` via `services/registry-state/src/registry_state/domain/event_types.py`. `scripts/check_event_registry.py` exits 0.
 
-5. **AC-5: Telegram rendering** — A `_render_step_completed()` renderer in `services/clawhip-daemon/src/clawhip_daemon/adapters/sinks/telegram_sink.py` produces `Step N/N done: <truncated description>`. Registered in `_RENDERERS` under `"task.step.completed"`. Follows established section-drop pattern: 1900-codepoint cap, HTML escape, emergency one-liner.
+5. **AC-5: Telegram rendering** — A `_render_step_completed()` renderer in `services/clawhip-daemon/src/clawhip_daemon/adapters/sinks/telegram_sink.py` produces `Step N done: <truncated description>`. Registered in `_RENDERERS` under `"task.step.completed"`. Follows established section-drop pattern: 1900-codepoint cap, HTML escape, emergency one-liner.
 
 6. **AC-6: Import discipline** — No new cross-service imports. `orchestrator-adapter` imports from `events` (allowed). `clawhip-daemon` imports from `events` (allowed). `scripts/check_imports.py` exits 0.
 
@@ -55,7 +55,7 @@ So that a planned task actually runs end-to-end.
 - [ ] **Task 4: Add step-completed Telegram renderer** (AC: #5)
   - [ ] Add `_render_step_completed()` in `services/clawhip-daemon/src/clawhip_daemon/adapters/sinks/telegram_sink.py`
   - [ ] Import `TaskStepCompletedPayload` from `events`
-  - [ ] Render format: `Step N/N done: <description>`
+  - [ ] Render format: `Step N done: <description>`
   - [ ] Implement length safety: 1900-char cap, description truncation, emergency one-liner
   - [ ] Register in `_RENDERERS` under `"task.step.completed"`
 
@@ -137,7 +137,7 @@ process_task():
 
 3. **Session ID placeholder** — The `task.execution.started` payload requires a `session_id`. Since the worker-wrapper session is not yet wired to orchestrator-adapter, use `"s-placeholder"`. This is explicitly called out and will be replaced in Story 5.17a.
 
-4. **Minimal task.completed payload** — Only `task_id` and `summary` are populated. Structured fields (files_changed, lines_added, etc.) are added by Story 5.13 (completion summary payload).
+4. **Minimal task.completed payload** — Only `task_id` and `summary` are populated. Structured fields (files_changed, lines_added, etc.) are added by Story 5.13 (completion summary payload). Verified: all structured fields on `TaskCompletedPayload` default to `None`, so `build_completion_payload` can safely omit them without validation errors.
 
 ### Telegram renderer pattern
 
@@ -145,7 +145,7 @@ The step-completed renderer should follow the established pattern (Stories 3.10-
 
 1. **Payload type guard**: `isinstance(payload, TaskStepCompletedPayload)` — log WARN on mismatch
 2. **HTML-escape** all user-controlled fields
-3. **Format**: `Step N: <description>` (single line per step)
+3. **Format**: `Step N done: <description>` (single line per step)
 4. **Length safety**: 1900-char cap, description truncation to 200 chars, emergency one-liner
 
 ### Downstream consumers
