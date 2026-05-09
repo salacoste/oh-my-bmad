@@ -631,3 +631,28 @@ def test_task_self_recovered_payload_rejects_negative_counters_and_oversized(
     kwargs[field_name] = value
     with pytest.raises(ValidationError):
         TaskSelfRecoveredPayload(**kwargs)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Story 5.5 — agent.reasoning.* auto-registration on module import
+# ---------------------------------------------------------------------------
+
+
+def test_agent_reasoning_types_registered_on_import() -> None:
+    """Importing event_types auto-registers the three agent.reasoning.* schemas.
+
+    The worker-wrapper's test_reasoning.py cannot verify this wiring without a
+    cross-service import violation, so coverage lives here instead.
+    """
+    from events.schema_registry import REGISTRY, register
+
+    from registry_state.domain.event_types import AgentReasoningBreadcrumbPayload
+
+    # Re-register to make test order-independent (autouse fixtures may clear).
+    register("agent.reasoning.plan_drafted", "1.0.0", AgentReasoningBreadcrumbPayload)
+    register("agent.reasoning.tool_call_rationale", "1.0.0", AgentReasoningBreadcrumbPayload)
+    register("agent.reasoning.step_summary", "1.0.0", AgentReasoningBreadcrumbPayload)
+
+    assert REGISTRY[("agent.reasoning.plan_drafted", "1.0.0")] is AgentReasoningBreadcrumbPayload
+    assert REGISTRY[("agent.reasoning.tool_call_rationale", "1.0.0")] is AgentReasoningBreadcrumbPayload
+    assert REGISTRY[("agent.reasoning.step_summary", "1.0.0")] is AgentReasoningBreadcrumbPayload
