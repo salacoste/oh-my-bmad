@@ -277,14 +277,14 @@ def test_parse_metrics_git_diff() -> None:
 def test_parse_metrics_pytest_green() -> None:
     output = "12 passed in 3.45s"
     metrics = parse_step_metrics({1: output})
-    assert metrics.tests_added == 12
+    assert metrics.tests_added is None
     assert metrics.ci_state == "green"
 
 
 def test_parse_metrics_pytest_red() -> None:
     output = "8 passed, 2 failed in 1.20s"
     metrics = parse_step_metrics({1: output})
-    assert metrics.tests_added == 8  # counts passed, not total
+    assert metrics.tests_added is None
     assert metrics.ci_state == "red"
 
 
@@ -320,7 +320,7 @@ def test_parse_metrics_multi_step_aggregation() -> None:
     assert metrics.files_changed == 3
     assert metrics.lines_added == 50
     assert metrics.lines_removed == 20
-    assert metrics.tests_added == 12  # 4 passed (step 2) + 8 passed (step 3)
+    assert metrics.tests_added is None
     assert metrics.ci_state == "red"
 
 
@@ -413,14 +413,14 @@ def test_parse_metrics_passed_zero_failed_is_green() -> None:
     output = "5 passed, 0 failed"
     metrics = parse_step_metrics({1: output})
     assert metrics.ci_state == "green"
-    assert metrics.tests_added == 5
+    assert metrics.tests_added is None
 
 
 def test_parse_metrics_duplicate_patterns_aggregated() -> None:
     """findall captures every match within a single step output."""
     output = "Suite A: 5 passed\nSuite B: 3 passed, 1 failed"
     metrics = parse_step_metrics({1: output})
-    assert metrics.tests_added == 8  # 5 + 3
+    assert metrics.tests_added is None
     assert metrics.ci_state == "red"
 
 
@@ -435,7 +435,7 @@ def test_parse_metrics_zero_passed_zero_failed() -> None:
     output = "0 passed, 0 failed"
     metrics = parse_step_metrics({1: output})
     assert metrics.ci_state == "green"
-    assert metrics.tests_added == 0
+    assert metrics.tests_added is None
 
 
 def test_build_completion_payload_large_values_clamped() -> None:

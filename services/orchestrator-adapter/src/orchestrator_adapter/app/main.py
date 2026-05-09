@@ -280,7 +280,7 @@ async def process_task(
                 label=f"step_blocker_{task_id}_{step.step}",
             )
             blockers_count += 1
-            return
+            break
 
         output_summary = step_result.stdout[:2000] if step_result.stdout else ""
         step_outputs[step.step] = output_summary
@@ -323,7 +323,7 @@ async def process_task(
                         budget_payload,
                         label=f"budget_exceeded_{task_id}",
                     )
-                    return
+                    break
             else:
                 log.debug(
                     "budget_tracking_no_telemetry",

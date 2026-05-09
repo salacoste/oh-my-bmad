@@ -36,7 +36,10 @@ _SUMMARY_CAP: int = 2000
 _FILES_CHANGED_RE = re.compile(r"(\d+)\s+files?\s+changed", re.IGNORECASE)
 _INSERTIONS_RE = re.compile(r"(\d+)\s+insertions?\(\+\)", re.IGNORECASE)
 _DELETIONS_RE = re.compile(r"(\d+)\s+deletions?\(-\)", re.IGNORECASE)
-_TESTS_PASSED_RE = re.compile(r"(\d+)\s+passed", re.IGNORECASE)
+_TESTS_PASSED_RE = re.compile(
+    r"(\d+)\s+passed(?:\s+in\s+[\d.]+s)?(?=\s*[,\n]|$)",
+    re.IGNORECASE | re.MULTILINE,
+)
 _TESTS_FAILED_RE = re.compile(r"(\d+)\s+failed", re.IGNORECASE)
 _TESTS_ADDED_RE = re.compile(r"(\d+)\s+tests?\s+added", re.IGNORECASE)
 
@@ -117,8 +120,6 @@ def parse_step_metrics(step_outputs: dict[int, str]) -> CompletionMetrics:
     tests_added_value: int | None = None
     if found_tests_added:
         tests_added_value = total_tests_added
-    elif found_passed:
-        tests_added_value = total_passed
 
     return CompletionMetrics(
         files_changed=total_files if found_files else None,
@@ -368,8 +369,8 @@ def build_completion_payload(
         payload_kwargs["tests_added"] = _clamp(metrics.tests_added, _MAX_COUNT)
         # ci_state="unknown" → None: cleaner Telegram rendering than showing "unknown".
         payload_kwargs["ci_state"] = metrics.ci_state if metrics.ci_state != "unknown" else None
-        # blockers_count is always 0 in current single-blocker-returns-early flow;
-        # forward-compatible for multi-blocker continuation (see Story 5.17).
+        # blockers_count reflects blocker/budget-exceeded exits that break out of
+        # the step loop; forward-compatible for multi-blocker continuation (Story 5.17).
         payload_kwargs["blockers_count"] = metrics.blockers_count or None
     if pr_url is not None:
         payload_kwargs["pr_url"] = pr_url
