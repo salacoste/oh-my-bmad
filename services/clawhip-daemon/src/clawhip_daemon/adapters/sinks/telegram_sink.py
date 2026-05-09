@@ -1569,7 +1569,7 @@ def _render_step_completed(envelope: EventEnvelope) -> str:
 
     Format::
 
-        Step N/N done: <truncated description>
+        Step N done: <truncated description>
 
     Length safety: 1900-codepoint cap, description truncation, emergency
     one-liner fallback.
