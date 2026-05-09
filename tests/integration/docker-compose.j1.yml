@@ -1,0 +1,133 @@
+# Story 5.18 — Journey 1 integration test compose overlay (FR31 / NFR-R6).
+#
+# Self-contained 4-service stack used by tests/integration/test_journey_1_overnight.py.
+# Mirrors docker-compose.s2.yml but adds auto-approval-stub and uses
+# SCRIPTED_WORKER_SCENARIO=journey_1 for the full "Overnight PR" lifecycle.
+#
+# Services:
+#   - registry-state      (JSONL → SQLite materializer; tasks projection)
+#   - registry-api        (POST /v1/tasks → emits task.created)
+#   - worker-wrapper      (scripted-worker-stub with journey_1 scenario)
+#   - auto-approval-stub  (monitors for task.awaiting_approval → emits approval.granted)
+
+services:
+  registry-state:
+    build:
+      context: ../..
+      dockerfile: services/registry-state/Dockerfile
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-registry-state:${OMB_VERSION:-dev}
+    environment:
+      ENV: test
+      REGISTRY_STATE_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+      REGISTRY_STATE_DB_URL: sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3
+      REGISTRY_STATE_AUTO_CREATE_SCHEMA: "1"
+    user: "${OMB_S3_UID:-10002}:${OMB_S3_GID:-10000}"
+    init: true
+    restart: "no"
+    networks: [oh-my-bmad-net]
+    volumes:
+      - ${OMB_J1_DATA_DIR:?OMB_J1_DATA_DIR must be exported by the harness}:/var/lib/oh-my-bmad
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+
+  registry-api:
+    build:
+      context: ../..
+      dockerfile: services/registry-api/Dockerfile
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-registry-api:${OMB_VERSION:-dev}
+    environment:
+      ENV: test
+      REGISTRY_API_HOST: 0.0.0.0
+      REGISTRY_API_PORT: "8080"
+      REGISTRY_API_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+      REGISTRY_API_DB_URL: sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3
+    user: "${OMB_S3_UID:-10002}:${OMB_S3_GID:-10000}"
+    init: true
+    restart: "no"
+    networks: [oh-my-bmad-net]
+    ports:
+      - "8080"
+    volumes:
+      - ${OMB_J1_DATA_DIR:?OMB_J1_DATA_DIR must be exported by the harness}:/var/lib/oh-my-bmad
+    depends_on:
+      registry-state:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket,sys; s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1', 8080)); s.close()"
+      interval: 1s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+
+  worker-wrapper:
+    image: ${WORKER_IMAGE:?WORKER_IMAGE must be set by the J-1 harness}
+    environment:
+      ENV: test
+      EVENT_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+      SCRIPTED_WORKER_SCENARIO: "journey_1"
+      SCRIPTED_WORKER_EVENT_DELAY_S: "0.5"
+      TASK_REGISTRY_DB_PATH: /var/lib/oh-my-bmad/registry/state.sqlite3
+      TASK_REGISTRY_ACTOR_KIND: worker
+      TASK_REGISTRY_ACTOR_ID: scripted-worker-stub
+      SESSION_REGISTRY_DB_PATH: /var/lib/oh-my-bmad/registry/state.sqlite3
+      SESSION_REGISTRY_ACTOR_KIND: worker
+      SESSION_REGISTRY_ACTOR_ID: scripted-worker-stub
+      CLAWHIP_BRIDGE_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+      CLAWHIP_BRIDGE_ACTOR_KIND: worker
+      CLAWHIP_BRIDGE_ACTOR_ID: scripted-worker-stub
+    user: "${OMB_S3_UID:-10002}:${OMB_S3_GID:-10000}"
+    init: true
+    restart: "no"
+    networks: [oh-my-bmad-net]
+    volumes:
+      - ${OMB_J1_DATA_DIR:?OMB_J1_DATA_DIR must be exported by the harness}:/var/lib/oh-my-bmad
+    depends_on:
+      registry-state:
+        condition: service_healthy
+      registry-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+
+  auto-approval-stub:
+    image: ${AUTO_APPROVAL_IMAGE:?AUTO_APPROVAL_IMAGE must be set by the J-1 harness}
+    environment:
+      ENV: test
+      EVENT_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+      APPROVAL_POLL_INTERVAL_S: "0.3"
+      CLAWHIP_BRIDGE_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+      CLAWHIP_BRIDGE_ACTOR_KIND: auto-approval
+      CLAWHIP_BRIDGE_ACTOR_ID: auto-approval-stub
+    user: "${OMB_S3_UID:-10002}:${OMB_S3_GID:-10000}"
+    init: true
+    restart: "no"
+    networks: [oh-my-bmad-net]
+    volumes:
+      - ${OMB_J1_DATA_DIR:?OMB_J1_DATA_DIR must be exported by the harness}:/var/lib/oh-my-bmad
+    depends_on:
+      registry-state:
+        condition: service_healthy
+      registry-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/auto-approval-ready"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+
+networks:
+  oh-my-bmad-net:
+    driver: bridge

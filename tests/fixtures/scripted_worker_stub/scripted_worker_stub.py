@@ -26,6 +26,7 @@ Canned scenarios:
 
 * ``simple_green`` — plan → execute 1 step → complete with green CI.
 * ``with_pr`` — plan → execute 2 steps → complete with PR URL.
+* ``journey_1`` — plan → execute 1 step → await approval → push → PR → complete (Journey 1 "Overnight PR").
 
 Resume capability (S-2 mid-flight swap):
 
@@ -73,6 +74,9 @@ STUB_EMITTED_TYPES: frozenset[str] = frozenset(
         "task.plan.ready",
         "task.execution.started",
         "task.step.completed",
+        "task.awaiting_approval",
+        "task.push.completed",
+        "task.pr.opened",
         "task.completed",
     }
 )
@@ -197,9 +201,84 @@ def _scenario_with_pr(task_id: str, session_id: str) -> list[dict[str, Any]]:
     return events
 
 
+def _scenario_journey_1(task_id: str, session_id: str) -> list[dict[str, Any]]:
+    """Plan → execute 1 step → await approval → push → PR → complete.
+
+    Journey 1 "Overnight PR" scenario: the full happy-path lifecycle including
+    the approval gate, push, and PR draft creation. Used by the J-1 integration
+    test to prove the end-to-end event flow.
+    """
+    steps = [PlanStep(step=1, description="Implement feature")]
+    return [
+        {"type": "task.planning.started", "payload": {"task_id": task_id}},
+        {
+            "type": "task.plan.ready",
+            "payload": {
+                "task_id": task_id,
+                "plan_summary": "scripted-worker-stub journey_1",
+                "plan": [s.model_dump() for s in steps],
+                "estimated_steps": 1,
+            },
+        },
+        {
+            "type": "task.execution.started",
+            "payload": {"task_id": task_id, "session_id": session_id},
+        },
+        {
+            "type": "task.step.completed",
+            "payload": {
+                "task_id": task_id,
+                "step": 1,
+                "description": "Implement feature",
+                "output_summary": "2 passed",
+            },
+        },
+        {
+            "type": "task.awaiting_approval",
+            "payload": {
+                "task_id": task_id,
+                "reason": "push_requires_approval",
+                "summary": "Ready to push and create PR",
+            },
+        },
+        {
+            "type": "task.push.completed",
+            "payload": {
+                "task_id": task_id,
+                "branch": "task/journey-1-test",
+                "commits_pushed": 1,
+            },
+        },
+        {
+            "type": "task.pr.opened",
+            "payload": {
+                "task_id": task_id,
+                "pr_url": "https://github.com/example/repo/pull/42",
+                "pr_number": 42,
+                "pr_branch": "task/journey-1-test",
+            },
+        },
+        {
+            "type": "task.completed",
+            "payload": {
+                "task_id": task_id,
+                "summary": "scripted-worker-stub completion (journey_1)",
+                "files_changed": 2,
+                "lines_added": 25,
+                "tests_added": 2,
+                "ci_state": "green",
+                "pr_url": "https://github.com/example/repo/pull/42",
+                "pr_number": 42,
+                "pr_branch": "task/journey-1-test",
+            },
+        },
+    ]
+
+
 SCENARIOS: dict[str, Callable[[str, str], list[dict[str, Any]]]] = {
     "simple_green": _scenario_simple_green,
     "with_pr": _scenario_with_pr,
+    "journey_1": _scenario_journey_1,
 }
 
 

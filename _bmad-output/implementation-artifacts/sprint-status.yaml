@@ -158,7 +158,7 @@ development_status:
   5-17a-resume-after-approval-state-machine: done
   5-17b-cross-restart-approval-handling: done
   5-17c-s2-midflight-worker-swap-test: done
-  5-18-journey-1-integration-test: backlog
+  5-18-journey-1-integration-test: review
   epic-5-retrospective: optional
 
   # =========================================================================
