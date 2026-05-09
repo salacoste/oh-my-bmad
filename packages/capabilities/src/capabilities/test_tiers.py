@@ -150,3 +150,89 @@ class TestCheckTierBoundary:
         caller = CallerContext(actor_kind="worker", actor_id="w-001")
         with pytest.raises(EventsError):
             check_tier("git_push", caller, Tier.THREE)
+
+
+class TestCheckTierApproval:
+    """Tier-3 approval gate via has_approval parameter (Story 6.2)."""
+
+    def test_tier3_denied_without_approval(self) -> None:
+        caller = CallerContext(actor_kind="operator", actor_id="op-1", task_id="t-1")
+        with pytest.raises(CapabilityDenied) as exc_info:
+            check_tier("git_push", caller, Tier.THREE, has_approval=False)
+        assert "no_matching_approval" in exc_info.value.reason
+
+    def test_tier3_allowed_with_approval(self) -> None:
+        caller = CallerContext(actor_kind="operator", actor_id="op-1", task_id="t-1")
+        result = check_tier("git_push", caller, Tier.THREE, has_approval=True)
+        assert isinstance(result, CapabilityOk)
+        assert result.tier == Tier.THREE
+
+    def test_tier2_ignores_has_approval_false(self) -> None:
+        caller = CallerContext(actor_kind="worker", actor_id="w-1")
+        result = check_tier("branch_create", caller, Tier.TWO, has_approval=False)
+        assert isinstance(result, CapabilityOk)
+
+    def test_tier1_default_has_approval_true(self) -> None:
+        caller = CallerContext(actor_kind="worker", actor_id="w-1")
+        result = check_tier("add_note", caller, Tier.ONE)
+        assert isinstance(result, CapabilityOk)
+
+
+class TestCheckTierWithApproval:
+    """check_tier_with_approval async wrapper (Story 6.2)."""
+
+    @pytest.mark.asyncio
+    async def test_tier3_denied_when_lookup_returns_false(self) -> None:
+        from unittest.mock import AsyncMock
+
+        from capabilities import check_tier_with_approval
+
+        caller = CallerContext(actor_kind="operator", actor_id="op-1", task_id="t-1")
+        lookup = AsyncMock(return_value=False)
+        with pytest.raises(CapabilityDenied, match="no_matching_approval"):
+            await check_tier_with_approval(
+                "git_push", caller, Tier.THREE, approval_lookup=lookup,
+            )
+        lookup.assert_awaited_once_with("t-1", "git_push")
+
+    @pytest.mark.asyncio
+    async def test_tier3_allowed_when_lookup_returns_true(self) -> None:
+        from unittest.mock import AsyncMock
+
+        from capabilities import check_tier_with_approval
+
+        caller = CallerContext(actor_kind="operator", actor_id="op-1", task_id="t-1")
+        lookup = AsyncMock(return_value=True)
+        result = await check_tier_with_approval(
+            "git_push", caller, Tier.THREE, approval_lookup=lookup,
+        )
+        assert isinstance(result, CapabilityOk)
+        assert result.tier == Tier.THREE
+
+    @pytest.mark.asyncio
+    async def test_tier1_skips_approval_lookup(self) -> None:
+        from unittest.mock import AsyncMock
+
+        from capabilities import check_tier_with_approval
+
+        caller = CallerContext(actor_kind="worker", actor_id="w-1")
+        lookup = AsyncMock(return_value=False)
+        result = await check_tier_with_approval(
+            "add_note", caller, Tier.ONE, approval_lookup=lookup,
+        )
+        assert isinstance(result, CapabilityOk)
+        lookup.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_actor_denied_before_approval_lookup(self) -> None:
+        from unittest.mock import AsyncMock
+
+        from capabilities import check_tier_with_approval
+
+        caller = CallerContext(actor_kind="worker", actor_id="w-1")
+        lookup = AsyncMock()
+        with pytest.raises(CapabilityDenied):
+            await check_tier_with_approval(
+                "git_push", caller, Tier.THREE, approval_lookup=lookup,
+            )
+        lookup.assert_not_awaited()

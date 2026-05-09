@@ -47,6 +47,7 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     TaskStopRequestedPayload,
     TaskSummaryEmittedPayload,
     TelegramRejectedPayload,
+    Tier3ActionAttemptedPayload,
 )
 from events.schema_registry import register
 
@@ -78,6 +79,7 @@ __all__ = [
     "TaskStopRequestedPayload",
     "TaskSummaryEmittedPayload",
     "TelegramRejectedPayload",
+    "Tier3ActionAttemptedPayload",
 ]
 
 # ---------------------------------------------------------------------------
@@ -152,3 +154,6 @@ register("file.edited", "1.0.1", FileEditedPayload)
 
 # Story 5.15 — task.budget_exceeded event payload (FR44 / NFR-P5).
 register("task.budget_exceeded", "1.0.0", TaskBudgetExceededPayload)
+
+# Story 6.2 — tier3.action_attempted audit event (FR38).
+register("tier3.action_attempted", "1.0.0", Tier3ActionAttemptedPayload)

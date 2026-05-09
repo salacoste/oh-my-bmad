@@ -24,7 +24,7 @@ import pytest
 import pytest_asyncio
 from capabilities import CallerContext, Tier, check_tier
 from events.errors import CapabilityDenied
-from registry_state.schema import Base, Session, Task  # noqa: IMP001 — test file
+from registry_state.schema import Base, Event, Session, Task  # noqa: IMP001 — test file
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -511,6 +511,71 @@ class TestTierEnforcement:
                 task_id="t-00000001-0001-7000-8000-000000000001",
                 worker_kind="claude-code",
                 worktree_path="/tmp/wt",
+            )
+
+
+class TestApprovalLookup:
+    """AC-5 / AC-6: _make_approval_lookup + Tier-3 approval gate (Story 6.2)."""
+
+    @pytest.mark.asyncio
+    async def test_approval_lookup_returns_false_when_no_event(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        from session_registry_mcp.handlers.tools import _make_approval_lookup
+
+        lookup = _make_approval_lookup(db_session_maker)
+        result = await lookup("t-nonexistent", "git_push")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_approval_lookup_returns_true_when_event_seeded(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        from session_registry_mcp.handlers.tools import _make_approval_lookup
+
+        task_id = "t-00000099-0001-7000-8000-000000000099"
+        async with db_session_maker() as session:
+            session.add(Task(
+                id=task_id,
+                status="executing",
+                created_at=_NOW,
+                updated_at=_NOW,
+                actor_kind="operator",
+                actor_id="op-1",
+            ))
+            await session.flush()
+            session.add(Event(
+                id="evt-approval-sr-001",
+                type="approval.granted",
+                schema_version="1.0.0",
+                emitted_at=_NOW,
+                emitted_at_monotonic_ns=0,
+                actor_kind="operator",
+                actor_id="op-1",
+                task_id=task_id,
+                request_id="req-sr-001",
+                payload_json='{"task_id":"' + task_id + '"}',
+            ))
+            await session.commit()
+
+        lookup = _make_approval_lookup(db_session_maker)
+        result = await lookup(task_id, "git_push")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_tier3_denied_via_check_tier_with_approval(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """AC-6: check_tier_with_approval denies Tier-3 without approval."""
+        from capabilities import check_tier_with_approval
+
+        from session_registry_mcp.handlers.tools import _make_approval_lookup
+
+        caller = CallerContext(actor_kind="operator", actor_id="op-1", task_id="t-none")
+        lookup = _make_approval_lookup(db_session_maker)
+        with pytest.raises(CapabilityDenied, match="no_matching_approval"):
+            await check_tier_with_approval(
+                "git_push", caller, Tier.THREE, approval_lookup=lookup,
             )
 
 

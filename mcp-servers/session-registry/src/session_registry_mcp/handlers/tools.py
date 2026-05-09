@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from capabilities import CallerContext, Tier, check_tier
 from events.envelope import ActorKind  # noqa: IMP001 — packages/
 from registry_state.schema import (  # noqa: IMP001 — mcp-servers→services allowed per AC-7/Arch
+    Event,
     Session,
     Task,
 )
@@ -30,6 +31,28 @@ TIER_MAP: dict[str, Tier] = {
     "session.heartbeat": Tier.ONE,
     "session.close": Tier.ONE,
 }
+
+
+def _make_approval_lookup(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> object:
+    """Return an async ``(task_id, action) -> bool`` callable.
+
+    Queries the materialized ``Event`` table for ``approval.granted``
+    events matching *task_id*. Story 6.5 adds the emitter; this lookup
+    is ready for it.
+    """
+
+    async def _lookup(task_id: str, action: str) -> bool:  # noqa: ARG001 — action reserved for future wildcard matching
+        async with session_maker() as session:
+            stmt = select(Event).where(
+                Event.type == "approval.granted",
+                Event.task_id == task_id,
+            )
+            result = await session.execute(stmt)
+            return result.scalar_one_or_none() is not None
+
+    return _lookup
 
 
 async def _validate_task_exists(

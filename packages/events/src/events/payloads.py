@@ -696,6 +696,21 @@ class TaskBudgetExceededPayload(BaseModel):
     step: int = Field(ge=1)
 
 
+class Tier3ActionAttemptedPayload(BaseModel):
+    """Payload for the ``tier3.action_attempted`` event (FR38 / Story 6.2).
+
+    Emitted when a Tier-3 capability check is performed.  Records whether
+    the action was accepted or denied, with a reason on denial.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    action: str = Field(min_length=1, max_length=2000)
+    task_id: str = Field(min_length=1, max_length=64)
+    accepted: bool
+    reason: str | None = Field(default=None, max_length=4096)
+
+
 __all__ = [
     "TELEGRAM_REJECTED_SCHEMA_VERSION",
     "AcceptedCommand",
@@ -725,4 +740,5 @@ __all__ = [
     "TaskStopRequestedPayload",
     "TaskSummaryEmittedPayload",
     "TelegramRejectedPayload",
+    "Tier3ActionAttemptedPayload",
 ]

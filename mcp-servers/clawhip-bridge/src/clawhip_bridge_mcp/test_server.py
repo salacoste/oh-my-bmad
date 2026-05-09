@@ -48,6 +48,7 @@ from registry_state.adapters.event_log import (  # noqa: IMP001 — mcp-servers�
 
 from clawhip_bridge_mcp.server import (  # noqa: IMP001 — test file in mcp-servers
     TIER_MAP,
+    _make_approval_lookup,
     _validate_limit,
     build_server,
 )
@@ -663,6 +664,81 @@ class TestTierEnforcement:
             await fn(
                 type="task.created",
                 payload={"task_id": _task_id(), "title": "test"},
+            )
+
+
+class TestApprovalLookup:
+    """AC-5 / AC-6: _make_approval_lookup for JSONL log (Story 6.2)."""
+
+    @pytest.mark.asyncio
+    async def test_approval_lookup_returns_false_when_no_events(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        lookup = _make_approval_lookup(tmp_path, fixed_clock)
+        result = await lookup("t-nonexistent", "git_push")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_approval_lookup_returns_false_when_no_matching_event(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """Non-approval events in the log don't match."""
+        mcp = build_server(
+            base_dir=tmp_path, clock=fixed_clock, actor_kind="worker", actor_id="w-1"
+        )
+        fn = mcp._tool_manager._tools["emit_event"].fn
+        tid = _task_id()
+        await fn(
+            type="task.created",
+            payload={"task_id": tid, "title": "test"},
+        )
+
+        lookup = _make_approval_lookup(tmp_path, fixed_clock)
+        result = await lookup(tid, "git_push")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_approval_lookup_returns_true_when_event_seeded(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """Approval.granted event in JSONL matches."""
+        from events.canonical import to_canonical_json
+        from events.payloads import Tier3ActionAttemptedPayload
+
+        # Register approval.granted with a minimal payload model for this test.
+        _reg("approval.granted", "1.0.0", Tier3ActionAttemptedPayload)
+
+        tid = _task_id(99)
+        envelope = EventEnvelope.create(
+            event_id=new_event_id(clock=fixed_clock),
+            schema_version="1.0.0",
+            type="approval.granted",
+            emitted_at=fixed_clock.now(),
+            emitted_at_monotonic_ns=fixed_clock.monotonic_ns(),
+            actor=Actor(kind="operator", id="op-1"),
+            payload={"task_id": tid, "action": "git_push", "accepted": True},
+            request_id=new_request_id(clock=fixed_clock),
+        )
+        day_path = current_day_path(tmp_path, fixed_clock.now())
+        day_path.parent.mkdir(parents=True, exist_ok=True)
+        day_path.write_bytes(to_canonical_json(envelope) + b"\n")
+
+        lookup = _make_approval_lookup(tmp_path, fixed_clock)
+        result = await lookup(tid, "git_push")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_tier3_denied_via_check_tier_with_approval(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """AC-6: check_tier_with_approval denies Tier-3 without approval."""
+        from capabilities import check_tier_with_approval
+
+        caller = CallerContext(actor_kind="operator", actor_id="op-1", task_id="t-none")
+        lookup = _make_approval_lookup(tmp_path, fixed_clock)
+        with pytest.raises(CapabilityDenied, match="no_matching_approval"):
+            await check_tier_with_approval(
+                "git_push", caller, Tier.THREE, approval_lookup=lookup,
             )
 
 

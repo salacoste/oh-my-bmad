@@ -10,6 +10,7 @@ Tier levels (from PRD lines 361-369):
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import IntEnum
 
@@ -57,10 +58,15 @@ def check_tier(
     action: str,
     caller: CallerContext,
     required_tier: Tier,
+    *,
+    has_approval: bool = True,
 ) -> CapabilityOk:
     """Check whether *caller* is authorized for *required_tier* on *action*.
 
     Returns CapabilityOk on success; raises CapabilityDenied otherwise.
+
+    For Tier-3 actions, *has_approval* must be True (indicating a matching
+    ``approval.granted`` event exists). Tier 0-2 ignore this parameter.
     """
     max_tier = _MAX_TIER_BY_ACTOR.get(caller.actor_kind)
     if max_tier is None:
@@ -80,4 +86,44 @@ def check_tier(
                 f"at most; action requires Tier.{required_tier.value}"
             ),
         )
+    if required_tier >= Tier.THREE and not has_approval:
+        raise CapabilityDenied(
+            action=action,
+            actor_kind=caller.actor_kind,
+            required_tier=int(required_tier),
+            reason=(
+                f"no_matching_approval: Tier.{required_tier.value} action "
+                f"{action!r} requires an approval.granted event"
+            ),
+        )
+    return CapabilityOk(action=action, caller=caller, tier=required_tier)
+
+
+async def check_tier_with_approval(
+    action: str,
+    caller: CallerContext,
+    required_tier: Tier,
+    *,
+    approval_lookup: Callable[[str, str], Awaitable[bool]] | None = None,
+) -> CapabilityOk:
+    """Two-layer tier check: actor-kind gate + Tier-3 approval lookup.
+
+    Calls ``check_tier`` first (actor-kind gate). For Tier-3 actions only,
+    awaits *approval_lookup(task_id, action)* — if it returns False, raises
+    CapabilityDenied. Tier 0-2 skip the approval lookup entirely.
+    """
+    check_tier(action, caller, required_tier)
+    if required_tier >= Tier.THREE and approval_lookup is not None:
+        task_id = caller.task_id or ""
+        approved = await approval_lookup(task_id, action)
+        if not approved:
+            raise CapabilityDenied(
+                action=action,
+                actor_kind=caller.actor_kind,
+                required_tier=int(required_tier),
+                reason=(
+                    f"no_matching_approval: Tier.{required_tier.value} action "
+                    f"{action!r} requires an approval.granted event"
+                ),
+            )
     return CapabilityOk(action=action, caller=caller, tier=required_tier)

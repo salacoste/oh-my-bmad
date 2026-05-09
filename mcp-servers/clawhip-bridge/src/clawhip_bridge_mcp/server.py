@@ -61,6 +61,33 @@ TIER_MAP: dict[str, Tier] = {
 }
 
 
+def _make_approval_lookup(
+    base_dir: Path,
+    clock: Clock,
+) -> object:
+    """Return an async ``(task_id, action) -> bool`` callable.
+
+    Scans today's JSONL event log for ``approval.granted`` events
+    matching *task_id*. Story 6.5 adds the emitter; this lookup
+    is ready for it.
+    """
+
+    async def _lookup(task_id: str, action: str) -> bool:  # noqa: ARG001 — action reserved for future wildcard matching
+        path = current_day_path(base_dir, clock.now())
+        try:
+            for envelope in read_log_lines(path):
+                if (
+                    envelope.type == "approval.granted"
+                    and envelope.payload.get("task_id") == task_id
+                ):
+                    return True
+        except FileNotFoundError:
+            pass
+        return False
+
+    return _lookup
+
+
 def _validate_limit(limit: int) -> None:
     """Validate ``limit`` is in the AC-9 range ``[1, 1000]``.
 
