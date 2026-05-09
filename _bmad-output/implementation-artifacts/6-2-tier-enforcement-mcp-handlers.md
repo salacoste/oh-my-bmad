@@ -1,6 +1,6 @@
 # Story 6.2: Tier enforcement at MCP handler boundaries
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
