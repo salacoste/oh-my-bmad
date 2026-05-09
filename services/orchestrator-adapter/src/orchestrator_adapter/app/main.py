@@ -285,6 +285,15 @@ async def process_task(
         output_summary = step_result.stdout[:2000] if step_result.stdout else ""
         step_outputs[step.step] = output_summary
 
+        step_completed_payload = build_step_completed_payload(task_id, step, output_summary)
+        await _emit_event(
+            clients,
+            "task.step.completed",
+            step_completed_payload,
+            label=f"step_completed_{task_id}_{step.step}",
+        )
+        log.info("step_completed", task_id=task_id, step=step.step)
+
         # Story 5.15: accumulate token usage and check budget.
         if tracker is not None:
             tokens = parse_token_usage(step_result.stdout or "")
@@ -315,15 +324,6 @@ async def process_task(
                         label=f"budget_exceeded_{task_id}",
                     )
                     return
-
-        step_completed_payload = build_step_completed_payload(task_id, step, output_summary)
-        await _emit_event(
-            clients,
-            "task.step.completed",
-            step_completed_payload,
-            label=f"step_completed_{task_id}_{step.step}",
-        )
-        log.info("step_completed", task_id=task_id, step=step.step)
 
     # Emit task.completed with synthesized summary and FR9 structured metrics.
     metrics = parse_step_metrics(step_outputs)

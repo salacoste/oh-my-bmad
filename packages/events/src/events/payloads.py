@@ -375,7 +375,7 @@ class TaskCompletedPayload(BaseModel):
     ci_state: Literal["green", "red", "unknown"] | None = None
     blockers_count: int | None = Field(default=None, ge=0, le=10**6)
     # Story 5.15 — cumulative token usage for observability (FR44).
-    token_usage: int | None = Field(default=None, ge=0)
+    token_usage: int | None = Field(default=None, ge=0, le=10**9)
 
 
 # ---------------------------------------------------------------------------

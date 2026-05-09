@@ -134,7 +134,7 @@ def parse_step_metrics(step_outputs: dict[int, str]) -> CompletionMetrics:
 # ---------------------------------------------------------------------------
 
 _TOKEN_USAGE_RE = re.compile(r"(\d+)\s+tokens?", re.IGNORECASE)
-_TOKEN_USAGE_AFTER_RE = re.compile(r"tokens?\D*?(\d+)", re.IGNORECASE)
+_TOKEN_USAGE_AFTER_RE = re.compile(r"\btoken(?!iz)\w*\D+(\d+)", re.IGNORECASE)
 
 
 def parse_token_usage(raw_output: str) -> int | None:
@@ -163,6 +163,8 @@ class BudgetTracker:
 
     def consume(self, tokens: int) -> BudgetTracker:
         """Return a new tracker with *tokens* added to the cumulative total."""
+        if tokens < 0:
+            raise ValueError(f"consume() requires non-negative tokens, got {tokens}")
         return BudgetTracker(limit=self.limit, used=self.used + tokens)
 
     @property

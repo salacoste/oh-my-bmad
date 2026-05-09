@@ -555,6 +555,11 @@ def test_budget_tracker_consume_returns_new_instance() -> None:
     assert t2.used == 50
 
 
+def test_budget_tracker_consume_rejects_negative() -> None:
+    with pytest.raises(ValueError, match="non-negative"):
+        BudgetTracker(limit=100).consume(-1)
+
+
 # --- Story 5.15: build_budget_exceeded_payload ---
 
 
