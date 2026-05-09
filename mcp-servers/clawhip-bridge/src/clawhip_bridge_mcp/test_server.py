@@ -22,6 +22,7 @@ from pathlib import Path
 from random import Random
 
 import pytest
+from capabilities import CallerContext, Tier, check_tier  # noqa: IMP001 — packages/
 from events import (  # mcp-servers→services allowed per AC-7
     FROZEN_EPOCH,
     Actor,
@@ -37,6 +38,7 @@ from events import (  # mcp-servers→services allowed per AC-7
     new_request_id,
     new_task_id,
 )
+from events.errors import CapabilityDenied
 from events.schema_registry import register as _reg
 from mcp.server.fastmcp.resources.types import FunctionResource
 from registry_state.adapters.event_log import (  # noqa: IMP001 — mcp-servers→services allowed per AC-7
@@ -45,6 +47,7 @@ from registry_state.adapters.event_log import (  # noqa: IMP001 — mcp-servers�
 )
 
 from clawhip_bridge_mcp.server import (  # noqa: IMP001 — test file in mcp-servers
+    TIER_MAP,
     _validate_limit,
     build_server,
 )
@@ -619,6 +622,48 @@ class TestFastMCPIntegration:
                     "emit_event",
                     {"type": "unregistered.type", "payload": {}},
                 )
+
+
+# ---------------------------------------------------------------------------
+# TestTierEnforcement
+# ---------------------------------------------------------------------------
+
+
+class TestTierEnforcement:
+    """AC-3: Real tier enforcement via capabilities.check_tier."""
+
+    @pytest.mark.parametrize("kind", ["operator", "orchestrator", "worker", "system", "clawhip"])
+    def test_check_tier_allows_valid_callers(self, kind: str) -> None:
+        for tool_name, tier in TIER_MAP.items():
+            caller = CallerContext(actor_kind=kind, actor_id="id-1")
+            result = check_tier(tool_name, caller, tier)
+            assert result.tier == tier
+
+    def test_tier_map_all_tier_one(self) -> None:
+        assert len(TIER_MAP) == 5
+        assert all(t == Tier.ONE for t in TIER_MAP.values())
+
+    @pytest.mark.asyncio
+    async def test_tool_raises_capability_denied_when_tier_denies(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """Verify CapabilityDenied propagates when a caller lacks tier."""
+        from unittest.mock import patch
+
+        mcp = build_server(
+            base_dir=tmp_path, clock=fixed_clock, actor_kind="worker", actor_id="w-1"
+        )
+        fn = mcp._tool_manager._tools["emit_event"].fn
+        with (
+            patch("clawhip_bridge_mcp.server.check_tier", side_effect=CapabilityDenied(
+                action="emit_event", actor_kind="unknown", required_tier=1, reason="test"
+            )),
+            pytest.raises(CapabilityDenied),
+        ):
+            await fn(
+                type="task.created",
+                payload={"task_id": _task_id(), "title": "test"},
+            )
 
 
 # ---------------------------------------------------------------------------

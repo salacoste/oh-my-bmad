@@ -14,6 +14,7 @@ from events.clock import FROZEN_EPOCH, Clock, FrozenClock, SystemClock, TickingC
 from events.envelope import Actor, EventEnvelope
 from events.errors import (
     CanonicalSerializationError,
+    CapabilityDenied,
     EventSchemaUnknown,
     EventsError,
     EventValidationError,
@@ -60,6 +61,7 @@ __all__ = [
     "REGISTRY",
     "Actor",
     "CanonicalSerializationError",
+    "CapabilityDenied",
     "Clock",
     "EventEnvelope",
     "EventSchemaUnknown",

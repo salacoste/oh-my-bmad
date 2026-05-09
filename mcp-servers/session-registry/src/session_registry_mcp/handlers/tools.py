@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from capabilities import CallerContext, Tier, check_tier
 from registry_state.schema import (  # noqa: IMP001 — mcp-servers→services allowed per AC-7/Arch
     Session,
     Task,
@@ -23,18 +24,11 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-
-def _check_tier(actor_kind: str, tool_name: str) -> bool:
-    """NO-OP capability-tier gate (Phase 1 placeholder).
-
-    Story 6.1-6.3 replaces this with real Tier 0/1/2/3 enforcement.
-    """
-    log.debug(
-        "tier-check (no-op): actor_kind=%s tool=%s — full enforcement in Stories 6.1-6.3",
-        actor_kind,
-        tool_name,
-    )
-    return True
+TIER_MAP: dict[str, Tier] = {
+    "session.register": Tier.ONE,
+    "session.heartbeat": Tier.ONE,
+    "session.close": Tier.ONE,
+}
 
 
 async def _validate_task_exists(
@@ -72,8 +66,11 @@ def register_tools(
         worktree_path: str,
     ) -> dict[str, object]:
         """Register a new session (Tier-1 bounded write, Phase 1 stub)."""
-        if not _check_tier(actor_kind, "session.register"):
-            raise PermissionError(f"actor_kind={actor_kind!r} not authorized for session.register")
+        check_tier(
+            "session.register",
+            CallerContext(actor_kind=actor_kind, actor_id=actor_id, task_id=task_id),
+            TIER_MAP["session.register"],
+        )
         if not task_id or not worker_kind:
             return {"ok": False, "error": "task_id and worker_kind are required"}
         exists = await _validate_task_exists(session_maker, task_id)
@@ -90,8 +87,11 @@ def register_tools(
     @mcp.tool()
     async def session_heartbeat(session_id: str) -> dict[str, object]:
         """Update session heartbeat timestamp (Tier-1 bounded write, Phase 1 stub)."""
-        if not _check_tier(actor_kind, "session.heartbeat"):
-            raise PermissionError(f"actor_kind={actor_kind!r} not authorized for session.heartbeat")
+        check_tier(
+            "session.heartbeat",
+            CallerContext(actor_kind=actor_kind, actor_id=actor_id),
+            TIER_MAP["session.heartbeat"],
+        )
         if not session_id:
             return {"ok": False, "error": "session_id is required"}
         exists = await _validate_session_exists(session_maker, session_id)
@@ -107,8 +107,11 @@ def register_tools(
     @mcp.tool()
     async def session_close(session_id: str) -> dict[str, object]:
         """Close a session (Tier-1 bounded write, Phase 1 stub)."""
-        if not _check_tier(actor_kind, "session.close"):
-            raise PermissionError(f"actor_kind={actor_kind!r} not authorized for session.close")
+        check_tier(
+            "session.close",
+            CallerContext(actor_kind=actor_kind, actor_id=actor_id),
+            TIER_MAP["session.close"],
+        )
         if not session_id:
             return {"ok": False, "error": "session_id is required"}
         exists = await _validate_session_exists(session_maker, session_id)

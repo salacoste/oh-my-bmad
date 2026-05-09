@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from capabilities import CallerContext, Tier, check_tier
 from registry_state.schema import Task  # noqa: IMP001 — mcp-servers→services allowed per AC-7/Arch
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,18 +21,11 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-
-def _check_tier(actor_kind: str, tool_name: str) -> bool:
-    """NO-OP capability-tier gate (Phase 1 placeholder).
-
-    Story 6.1-6.3 replaces this with real Tier 0/1/2/3 enforcement.
-    """
-    log.debug(
-        "tier-check (no-op): actor_kind=%s tool=%s — full enforcement in Story 6.1",
-        actor_kind,
-        tool_name,
-    )
-    return True
+TIER_MAP: dict[str, Tier] = {
+    "task.add_note": Tier.ONE,
+    "task.attach_artifact": Tier.ONE,
+    "task.emit_event": Tier.ONE,
+}
 
 
 async def _validate_task_exists(
@@ -63,8 +57,11 @@ def register_tools(
         Validates tier and task existence. Actual persistence deferred to
         Story 5.12 integration with the event spine.
         """
-        if not _check_tier(actor_kind, "task.add_note"):
-            raise PermissionError(f"actor_kind={actor_kind!r} not authorized for task.add_note")
+        check_tier(
+            "task.add_note",
+            CallerContext(actor_kind=actor_kind, actor_id=actor_id, task_id=task_id),
+            TIER_MAP["task.add_note"],
+        )
         if not task_id or not note:
             return {"ok": False, "error": "task_id and note are required"}
         exists = await _validate_task_exists(session_maker, task_id)
@@ -88,10 +85,11 @@ def register_tools(
         Validates tier and task existence. Actual persistence deferred to
         Story 5.12 integration with the event spine.
         """
-        if not _check_tier(actor_kind, "task.attach_artifact"):
-            raise PermissionError(
-                f"actor_kind={actor_kind!r} not authorized for task.attach_artifact"
-            )
+        check_tier(
+            "task.attach_artifact",
+            CallerContext(actor_kind=actor_kind, actor_id=actor_id, task_id=task_id),
+            TIER_MAP["task.attach_artifact"],
+        )
         if not task_id or not artifact_url or not artifact_type:
             return {"ok": False, "error": "task_id, artifact_url, and artifact_type are required"}
         exists = await _validate_task_exists(session_maker, task_id)
@@ -120,8 +118,11 @@ def register_tools(
         event emission routes through the event spine via clawhip-bridge
         — deferred to Story 5.12 integration.
         """
-        if not _check_tier(actor_kind, "task.emit_event"):
-            raise PermissionError(f"actor_kind={actor_kind!r} not authorized for task.emit_event")
+        check_tier(
+            "task.emit_event",
+            CallerContext(actor_kind=actor_kind, actor_id=actor_id, task_id=task_id),
+            TIER_MAP["task.emit_event"],
+        )
         if not task_id or not event_type:
             return {"ok": False, "error": "task_id and event_type are required"}
         exists = await _validate_task_exists(session_maker, task_id)

@@ -89,9 +89,37 @@ class BudgetExceeded(EventsError):  # noqa: N818
         )
 
 
+class CapabilityDenied(EventsError):  # noqa: N818
+    """Raised when a caller's actor kind is not authorized for the requested tier.
+
+    Attributes:
+        action: The action that was attempted.
+        actor_kind: The caller's actor kind.
+        required_tier: The tier required for this action (as int).
+        reason: Human-readable explanation.
+    """
+
+    def __init__(
+        self, action: str, actor_kind: str, required_tier: int, reason: str
+    ) -> None:
+        self.action = action
+        self.actor_kind = actor_kind
+        self.required_tier = required_tier
+        self.reason = reason
+        super().__init__(self._format())
+
+    def _format(self) -> str:
+        return (
+            f"capability denied: actor_kind={self.actor_kind!r} "
+            f"not authorized for Tier.{self.required_tier} "
+            f"action {self.action!r}: {self.reason}"
+        )
+
+
 __all__ = [
     "BudgetExceeded",
     "CanonicalSerializationError",
+    "CapabilityDenied",
     "EventSchemaUnknown",
     "EventValidationError",
     "EventsError",

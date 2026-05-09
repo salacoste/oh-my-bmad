@@ -8,6 +8,7 @@ resolution-markers = [
 
 [manifest]
 members = [
+    "capabilities",
     "clawhip-bridge-mcp",
     "clawhip-daemon",
     "console-cli",
@@ -240,6 +241,17 @@ sdist = { url = "https://files.pythonhosted.org/packages/76/7b/1755ed2c6bfabd1d9
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fe/c4/cf76242a5da1410917107ff14551764aa405a5fd10cd10cf9a5ca8fa77f4/cachetools-7.0.6-py3-none-any.whl", hash = "sha256:4e94956cfdd3086f12042cdd29318f5ced3893014f7d0d059bf3ead3f85b7f8b", size = 13976, upload-time = "2026-04-20T19:02:21.187Z" },
 ]
+
+[[package]]
+name = "capabilities"
+version = "0.1.0"
+source = { editable = "packages/capabilities" }
+dependencies = [
+    { name = "events" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "events", editable = "packages/events" }]
 
 [[package]]
 name = "certifi"
@@ -2283,6 +2295,7 @@ source = { editable = "services/worker-wrapper" }
 dependencies = [
     { name = "aiohttp" },
     { name = "events" },
+    { name = "idempotency" },
     { name = "mcp" },
     { name = "pydantic-settings" },
     { name = "secret-hygiene" },
@@ -2300,6 +2313,7 @@ dev = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.9" },
     { name = "events", editable = "packages/events" },
+    { name = "idempotency", editable = "packages/idempotency" },
     { name = "mcp", specifier = ">=1.0" },
     { name = "pydantic-settings", specifier = ">=2.5,<3.0" },
     { name = "secret-hygiene", editable = "packages/secret-hygiene" },

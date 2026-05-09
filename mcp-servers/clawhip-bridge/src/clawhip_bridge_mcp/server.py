@@ -9,10 +9,9 @@ Architecture notes:
   - ALL 5 tools are append-only — they call ``EventLogWriter.append()`` and
     return ``{"event_id": ..., "emitted_at": ...}``. No mutation or deletion
     path exists on this server (AC-2 / FR18b structural guarantee).
-  - Tier enforcement (AC-8) is a NO-OP placeholder; full tiers land in
-    Stories 6.1-6.3. The placeholder still returns ``True`` so behaviour is
-    unchanged today, but every emit-tool now ``raise PermissionError`` on
-    ``False`` so call sites are correctly structured for Story 6.1.
+  - Tier enforcement (AC-8) uses ``capabilities.check_tier`` — every emit
+    tool maps to Tier.ONE. ``check_tier`` returns ``CapabilityOk`` or raises
+    ``CapabilityDenied`` (Story 6.1).
   - ``recent_events`` resource (AC-1 / AC-9) reads JSONL via
     ``read_log_lines``; wraps ``FileNotFoundError`` → returns ``""`` so a
     missing day file is not an error. The ``limit`` is a real URI-template
@@ -33,6 +32,7 @@ import logging
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
+from capabilities import CallerContext, Tier, check_tier  # noqa: IMP001 — packages/
 from events import (  # noqa: IMP001 — events is packages/
     Actor,
     EventEnvelope,
@@ -52,24 +52,13 @@ from registry_state import (  # noqa: IMP001 — mcp-servers→services allowed 
 
 log = logging.getLogger(__name__)
 
-
-# ---------------------------------------------------------------------------
-# Capability-tier enforcement placeholder (AC-8)
-# TODO(story-6.1): tighten to actual tier enforcement
-# ---------------------------------------------------------------------------
-
-
-def _check_tier(actor_kind: ActorKind, tool_name: str) -> bool:
-    """NO-OP capability-tier gate (Phase 1 placeholder).
-
-    Story 6.1-6.3 replaces this with real Tier 0/1/2/3 enforcement.
-    """
-    log.debug(
-        "tier-check (no-op): actor_kind=%s tool=%s — full enforcement in Story 6.1",
-        actor_kind,
-        tool_name,
-    )
-    return True
+TIER_MAP: dict[str, Tier] = {
+    "emit_event": Tier.ONE,
+    "emit_blocker": Tier.ONE,
+    "emit_summary": Tier.ONE,
+    "emit_approval_request": Tier.ONE,
+    "emit_completion": Tier.ONE,
+}
 
 
 def _validate_limit(limit: int) -> None:
@@ -165,8 +154,11 @@ def build_server(
 
         Raises ``EventSchemaUnknown`` if ``type`` is not registered.
         """
-        if not _check_tier(actor_kind, "emit_event"):
-            raise PermissionError(f"actor_kind={actor_kind!r} not authorized for emit_event")
+        check_tier(
+            "emit_event",
+            CallerContext(actor_kind=actor_kind, actor_id=actor_id),
+            TIER_MAP["emit_event"],
+        )
         return await _emit(type, payload, parent_event_id)  # noqa: A002
 
     # ------------------------------------------------------------------
@@ -181,8 +173,11 @@ def build_server(
         parent_event_id: str | None = None,
     ) -> dict[str, str]:
         """Emit a ``task.blocker_raised`` event."""
-        if not _check_tier(actor_kind, "emit_blocker"):
-            raise PermissionError(f"actor_kind={actor_kind!r} not authorized for emit_blocker")
+        check_tier(
+            "emit_blocker",
+            CallerContext(actor_kind=actor_kind, actor_id=actor_id),
+            TIER_MAP["emit_blocker"],
+        )
         return await _emit(
             "task.blocker_raised",
             {"task_id": task_id, "reason": reason},
@@ -197,8 +192,11 @@ def build_server(
         parent_event_id: str | None = None,
     ) -> dict[str, str]:
         """Emit a ``task.summary_emitted`` event."""
-        if not _check_tier(actor_kind, "emit_summary"):
-            raise PermissionError(f"actor_kind={actor_kind!r} not authorized for emit_summary")
+        check_tier(
+            "emit_summary",
+            CallerContext(actor_kind=actor_kind, actor_id=actor_id),
+            TIER_MAP["emit_summary"],
+        )
         return await _emit(
             "task.summary_emitted",
             {"task_id": task_id, "summary": summary},
@@ -214,10 +212,11 @@ def build_server(
         parent_event_id: str | None = None,
     ) -> dict[str, str]:
         """Emit a ``task.approval_requested`` event."""
-        if not _check_tier(actor_kind, "emit_approval_request"):
-            raise PermissionError(
-                f"actor_kind={actor_kind!r} not authorized for emit_approval_request"
-            )
+        check_tier(
+            "emit_approval_request",
+            CallerContext(actor_kind=actor_kind, actor_id=actor_id),
+            TIER_MAP["emit_approval_request"],
+        )
         return await _emit(
             "task.approval_requested",
             {"task_id": task_id, "action": action, "justification": justification},
@@ -233,8 +232,11 @@ def build_server(
         parent_event_id: str | None = None,
     ) -> dict[str, str]:
         """Emit a ``task.completed`` event."""
-        if not _check_tier(actor_kind, "emit_completion"):
-            raise PermissionError(f"actor_kind={actor_kind!r} not authorized for emit_completion")
+        check_tier(
+            "emit_completion",
+            CallerContext(actor_kind=actor_kind, actor_id=actor_id),
+            TIER_MAP["emit_completion"],
+        )
         payload: dict[str, object] = {"task_id": task_id, "summary": summary}
         if pr_url is not None:
             payload["pr_url"] = pr_url

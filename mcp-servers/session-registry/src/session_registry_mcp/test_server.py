@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
+from capabilities import CallerContext, Tier, check_tier
+from events.errors import CapabilityDenied
 from registry_state.schema import Base, Session, Task  # noqa: IMP001 — test file
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
@@ -33,7 +35,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import StaticPool
 
 from session_registry_mcp.app.main import build_server
-from session_registry_mcp.handlers.tools import _check_tier as tools_check_tier
+from session_registry_mcp.handlers.tools import TIER_MAP
 
 # ---------------------------------------------------------------------------
 # Local fixtures (inlined — no conftest per project convention)
@@ -478,24 +480,32 @@ class TestToolHandlers:
 
 
 class TestTierEnforcement:
-    """AC-3: Tier placeholder returns True (NO-OP)."""
+    """AC-3: Real tier enforcement via capabilities.check_tier."""
 
     @pytest.mark.parametrize("kind", ["operator", "orchestrator", "worker", "system"])
-    def test_check_tier_returns_true(self, kind: str) -> None:
-        assert tools_check_tier(kind, "session_register") is True
+    def test_check_tier_allows_valid_callers(self, kind: str) -> None:
+        for tool_name, tier in TIER_MAP.items():
+            caller = CallerContext(actor_kind=kind, actor_id="id-1")
+            result = check_tier(tool_name, caller, tier)
+            assert result.tier == tier
+
+    def test_tier_map_all_tier_one(self) -> None:
+        assert all(t == Tier.ONE for t in TIER_MAP.values())
 
     @pytest.mark.asyncio
-    async def test_tool_raises_permission_error_when_tier_denies(
+    async def test_tool_raises_capability_denied_when_tier_denies(
         self, db_session_maker: async_sessionmaker[AsyncSession]
     ) -> None:
-        """Patch _check_tier to return False and verify PermissionError."""
+        """Verify CapabilityDenied propagates when a caller lacks tier."""
         from unittest.mock import patch
 
         mcp = _build(db_session_maker)
         fn = mcp._tool_manager._tools["session_register"].fn
         with (
-            patch("session_registry_mcp.handlers.tools._check_tier", return_value=False),
-            pytest.raises(PermissionError, match="not authorized"),
+            patch("session_registry_mcp.handlers.tools.check_tier", side_effect=CapabilityDenied(
+                action="session.register", actor_kind="unknown", required_tier=1, reason="test"
+            )),
+            pytest.raises(CapabilityDenied),
         ):
             await fn(
                 task_id="t-00000001-0001-7000-8000-000000000001",

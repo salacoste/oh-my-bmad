@@ -1,0 +1,15 @@
+[project]
+name = "capabilities"
+version = "0.1.0"
+description = "Capability-tier classification and enforcement helpers (Tier 0-3). Provides Tier enum, CallerContext, and check_tier for uniform access control at MCP handler and HTTP middleware boundaries (FR37, FR38)."
+authors = [
+    { name = "R2d2", email = "bad.vano23ru@gmail.com" },
+]
+requires-python = ">=3.12"
+dependencies = [
+    "events",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.0,<1.0"]
+build-backend = "uv_build"
