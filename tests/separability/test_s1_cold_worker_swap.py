@@ -345,6 +345,9 @@ def test_worker_facing_source_code_unchanged() -> None:
     and orchestrator-adapter paths. Changes to worker-wrapper source ARE
     allowed — the whole point is that the worker is swappable.
     """
+    # event_types.py is excluded because it defines shared enum literals that
+    # both spine and worker legitimately reference — it isn't "worker-facing
+    # source" in the architectural sense.
     SPINE_PATHS = list(_WORKER_FACING_PATHS) + [
         ":!services/registry-state/src/registry_state/domain/event_types.py",
     ]
