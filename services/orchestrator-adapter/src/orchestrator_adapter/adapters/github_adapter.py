@@ -128,7 +128,7 @@ class GitHubAdapter:
                             request_info=resp.request_info,
                             history=resp.history,
                             status=resp.status,
-                            message=body.get("message", "Server error"),
+                            message=str(body.get("message", "Server error")),
                         )
                     log.debug(
                         "github_client_error",

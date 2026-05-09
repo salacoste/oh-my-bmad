@@ -312,9 +312,20 @@ def build_step_completed_payload(
     ).model_dump()
 
 
-# Pydantic payload upper bounds (must match packages/events/payloads.py Field constraints).
-_MAX_COUNT: int = 10**6
-_MAX_LINES: int = 10**9
+# Pydantic payload upper bounds extracted from TaskCompletedPayload Field constraints.
+# Extracts the Le(…) bound from metadata to avoid duplicating magic numbers.
+from annotated_types import Le as _Le
+
+_TaskCompletedFields = TaskCompletedPayload.model_fields
+
+
+def _extract_le(field_name: str) -> int:
+    constraint = next(m for m in _TaskCompletedFields[field_name].metadata if isinstance(m, _Le))
+    return int(constraint.le)
+
+
+_MAX_COUNT: int = _extract_le("files_changed")
+_MAX_LINES: int = _extract_le("lines_added")
 
 
 def _clamp(value: int | None, upper: int) -> int | None:

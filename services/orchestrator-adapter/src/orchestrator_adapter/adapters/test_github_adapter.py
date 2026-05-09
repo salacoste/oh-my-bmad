@@ -7,10 +7,24 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
+import tenacity
 
 from orchestrator_adapter.adapters.github_adapter import GitHubAdapter
 
 _PATCH_TARGET = "orchestrator_adapter.adapters.github_adapter.aiohttp.ClientSession"
+_RETRY_TARGET = "orchestrator_adapter.adapters.github_adapter._make_retry"
+
+
+def _zero_wait_retry(_timeout_s: float = 0) -> tenacity.AsyncRetrying:
+    """Retry with no wait between attempts — eliminates real delays in tests."""
+    return tenacity.AsyncRetrying(
+        stop=tenacity.stop_after_attempt(3),
+        wait=tenacity.wait_none(),
+        retry=tenacity.retry_if_exception_type(
+            (aiohttp.ClientError, TimeoutError),
+        ),
+        reraise=True,
+    )
 
 
 def _adapter(token: str = "ghp_test123") -> GitHubAdapter:
@@ -106,7 +120,8 @@ async def test_create_pr_draft_retries_on_500() -> None:
                 return error_resp
             return success_resp
 
-    with patch(_PATCH_TARGET, return_value=FakeSession()):
+    with patch(_RETRY_TARGET, side_effect=_zero_wait_retry), \
+         patch(_PATCH_TARGET, return_value=FakeSession()):
         adapter = _adapter()
         result = await adapter.create_pr_draft(
             "owner",
@@ -165,7 +180,8 @@ async def test_create_pr_draft_timeout() -> None:
         def request(self, *a: object, **kw: object) -> MagicMock:
             raise TimeoutError()
 
-    with patch(_PATCH_TARGET, return_value=FakeSession()):
+    with patch(_RETRY_TARGET, side_effect=_zero_wait_retry), \
+         patch(_PATCH_TARGET, return_value=FakeSession()):
         adapter = _adapter()
         result = await adapter.create_pr_draft(
             "owner",
@@ -275,7 +291,8 @@ async def test_create_pr_draft_network_error() -> None:
         def request(self, *a: object, **kw: object) -> MagicMock:
             raise aiohttp.ClientError("Connection refused")
 
-    with patch(_PATCH_TARGET, return_value=FakeSession()):
+    with patch(_RETRY_TARGET, side_effect=_zero_wait_retry), \
+         patch(_PATCH_TARGET, return_value=FakeSession()):
         adapter = _adapter()
         result = await adapter.create_pr_draft(
             "owner",
