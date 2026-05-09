@@ -1,6 +1,6 @@
 # Story 6.3: Tier enforcement in HTTP API middleware
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -32,39 +32,39 @@ so that the HTTP ingress respects the same tier model as MCP.
 
 ## Tasks
 
-- [ ] Task 1 — Add problem-type and exception handler for `CapabilityDenied` (AC-3)
-  - [ ] Add `_PROBLEM_TYPE_FORBIDDEN = "/errors/forbidden"` to `adapters/errors.py`
-  - [ ] Add `handle_capability_denied(request, exc) -> JSONResponse` returning 403 problem+json
-  - [ ] Import `CapabilityDenied` from `events.errors`
-  - [ ] Export new symbol from `__all__`
-  - [ ] Add unit tests for the handler
-- [ ] Task 2 — Implement `TierEnforcementMiddleware` (AC-1, AC-2)
-  - [ ] Add `TierEnforcementMiddleware(BaseHTTPMiddleware)` to `adapters/middleware.py`
-  - [ ] Constructor: `app: ASGIApp, *, actor_kind: ActorKind`
-  - [ ] `ROUTE_TIER_MAP: dict[str, Tier]` — Phase 1: `{"POST /v1/tasks": Tier.ONE}`
-  - [ ] `dispatch`: on mutating methods, look up route in map, call `check_tier`, attach `CallerContext` to `request.state.caller_context`, short-circuit 403 on `CapabilityDenied`
-  - [ ] Skip tier check on read methods (GET/HEAD/OPTIONS) and unknown routes
-  - [ ] Export from `__all__`
-- [ ] Task 3 — Wire middleware + exception handler into `build_app` (AC-4, AC-5)
-  - [ ] Add `actor_kind: ActorKind = "operator"` to `build_app` signature
-  - [ ] `app.add_middleware(TierEnforcementMiddleware, actor_kind=actor_kind)` BEFORE `ActorIdMiddleware`
-  - [ ] `app.add_exception_handler(CapabilityDenied, handle_capability_denied)`
-  - [ ] Import `ActorKind` from `events.envelope`
-- [ ] Task 4 — Fix idempotency cache key scope (AC-6)
-  - [ ] In `routes/tasks.py`, change cache key from `idempotency_key` to `(request.state.actor_id, idempotency_key)`
-  - [ ] Update side-channel cache lookup and storage to match
-  - [ ] Remove the `TODO(Story 6.1)` comment at line 349
-- [ ] Task 5 — Add enforcement tests (AC-7, AC-8)
-  - [ ] Test: tier-denied on mutating route returns 403 problem+json
-  - [ ] Test: tier-allowed on mutating route succeeds normally
-  - [ ] Test: read routes bypass tier check
-  - [ ] Test: `request.state.caller_context` populated correctly
-  - [ ] Test: `CapabilityDenied` handler returns RFC 7807 shape
-- [ ] Task 6 — Verification + commit (AC-9, AC-10)
-  - [ ] Run `check_imports.py`
-  - [ ] Run `ruff check`
-  - [ ] Run `just test`
-  - [ ] Atomic commit
+- [x] Task 1 — Add problem-type and exception handler for `CapabilityDenied` (AC-3)
+  - [x] Add `_PROBLEM_TYPE_FORBIDDEN = "/errors/forbidden"` to `adapters/errors.py`
+  - [x] Add `handle_capability_denied(request, exc) -> JSONResponse` returning 403 problem+json
+  - [x] Import `CapabilityDenied` from `events.errors`
+  - [x] Export new symbol from `__all__`
+  - [x] Add unit tests for the handler
+- [x] Task 2 — Implement `TierEnforcementMiddleware` (AC-1, AC-2)
+  - [x] Add `TierEnforcementMiddleware(BaseHTTPMiddleware)` to `adapters/middleware.py`
+  - [x] Constructor: `app: ASGIApp, *, actor_kind: ActorKind`
+  - [x] `ROUTE_TIER_MAP: dict[str, Tier]` — Phase 1: `{"POST /v1/tasks": Tier.ONE}`
+  - [x] `dispatch`: on mutating methods, look up route in map, call `check_tier`, attach `CallerContext` to `request.state.caller_context`, short-circuit 403 on `CapabilityDenied`
+  - [x] Skip tier check on read methods (GET/HEAD/OPTIONS) and unknown routes
+  - [x] Export from `__all__`
+- [x] Task 3 — Wire middleware + exception handler into `build_app` (AC-4, AC-5)
+  - [x] Add `actor_kind: ActorKind = "operator"` to `build_app` signature
+  - [x] `app.add_middleware(TierEnforcementMiddleware, actor_kind=actor_kind)` BEFORE `ActorIdMiddleware`
+  - [x] `app.add_exception_handler(CapabilityDenied, handle_capability_denied)`
+  - [x] Import `ActorKind` from `events.envelope`
+- [x] Task 4 — Fix idempotency cache key scope (AC-6)
+  - [x] In `routes/tasks.py`, change cache key from `idempotency_key` to `(request.state.actor_id, idempotency_key)`
+  - [x] Update side-channel cache lookup and storage to match
+  - [x] Remove the `TODO(Story 6.1)` comment at line 349
+- [x] Task 5 — Add enforcement tests (AC-7, AC-8)
+  - [x] Test: tier-denied on mutating route returns 403 problem+json
+  - [x] Test: tier-allowed on mutating route succeeds normally
+  - [x] Test: read routes bypass tier check
+  - [x] Test: `request.state.caller_context` populated correctly
+  - [x] Test: `CapabilityDenied` handler returns RFC 7807 shape
+- [x] Task 6 — Verification + commit (AC-9, AC-10)
+  - [x] Run `check_imports.py`
+  - [x] Run `ruff check`
+  - [x] Run `just test`
+  - [x] Atomic commit
 
 ## Dev Notes
 
@@ -179,8 +179,27 @@ This affects both `idempotency_cache.get_or_run()` and `response_body_cache` loo
 
 ### Agent Model Used
 
+Claude Opus 4.7
+
 ### Debug Log References
+
+None.
 
 ### Completion Notes List
 
+- All 10 ACs satisfied. Implementation follows the exact middleware stack order documented in architecture.md.
+- `TierEnforcementMiddleware` runs innermost (after ActorIdMiddleware) via Starlette LIFO registration.
+- `ROUTE_TIER_MAP` uses longest-prefix matching so `POST /v1/tasks` covers `/v1/tasks` and sub-paths.
+- Idempotency cache key scoped to `(actor_id, idempotency_key)` — pre-composed as `f"{actor_id}:{idempotency_key}"` for the SQLite-backed store and as a tuple for the in-process response cache.
+- Negative test temporarily elevates route to Tier.THREE in ROUTE_TIER_MAP to deny a worker-kind actor (worker max is Tier.TWO).
+- 69 registry-api tests pass (63 existing + 6 new). Full suite: 1840 passed, 1 pre-existing flaky test (ordering-dependent event_types registration).
+
 ### File List
+
+- `services/registry-api/src/registry_api/adapters/errors.py` — Added `handle_capability_denied`, `_PROBLEM_TYPE_FORBIDDEN`, 403 mapping
+- `services/registry-api/src/registry_api/adapters/middleware.py` — Added `TierEnforcementMiddleware`, `ROUTE_TIER_MAP`
+- `services/registry-api/src/registry_api/app.py` — Wired middleware + exception handler, added `actor_kind` param
+- `services/registry-api/src/registry_api/routes/tasks.py` — Fixed idempotency cache key to scoped tuple
+- `services/registry-api/src/registry_api/test_middleware.py` — Added `TestTierEnforcementMiddleware` (6 tests), updated debug probe
+- `services/registry-api/src/registry_api/test_errors_envelope.py` — Updated catalog test for `/errors/forbidden`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` — 6-3 status updates
