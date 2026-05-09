@@ -1,7 +1,7 @@
-"""HTTP middleware stack for registry-api (Story 2.9 AC-4 + Story 3.6 AC-1/AC-2).
+"""HTTP middleware stack for registry-api (Story 2.9 AC-4 + Story 3.6 AC-1/AC-2 + Story 6.3).
 
 
-Three class-based middlewares (subclassing ``BaseHTTPMiddleware``):
+Four class-based middlewares (subclassing ``BaseHTTPMiddleware``):
 
 - ``RequestIdMiddleware``:      reads ``X-Request-ID`` header; validates against
                                 the bare-UUIDv7 regex; generates via
@@ -26,14 +26,23 @@ Three class-based middlewares (subclassing ``BaseHTTPMiddleware``):
 - ``ActorIdMiddleware``:        Phase 1 placeholder — hardcodes
                                 ``request.state.actor_id = "http-api"``.
                                 Real auth lands in Story 6.1+.
+- ``TierEnforcementMiddleware``: enforces capability tiers on mutating routes
+                                using ``check_tier`` from the capabilities
+                                package (Story 6.3). Builds a ``CallerContext``
+                                from the configured ``actor_kind`` and the
+                                ``request.state.actor_id`` set by
+                                ``ActorIdMiddleware``; attaches it to
+                                ``request.state.caller_context``; short-circuits
+                                with 403 on ``CapabilityDenied``.
 
 Middleware registration order in ``build_app`` (outermost → innermost in
 execution order; Starlette reverses the add_middleware call order):
-  app.add_middleware(ActorIdMiddleware)                      # added 1st → runs 3rd
-  app.add_middleware(IdempotencyKeyMiddleware, clock=clock)  # added 2nd → runs 2nd
-  app.add_middleware(RequestIdMiddleware, clock=clock)       # added 3rd → runs 1st
+  app.add_middleware(TierEnforcementMiddleware, ...)        # runs 4th (innermost)
+  app.add_middleware(ActorIdMiddleware)                      # runs 3rd
+  app.add_middleware(IdempotencyKeyMiddleware, clock=clock)  # runs 2nd
+  app.add_middleware(RequestIdMiddleware, clock=clock)       # runs 1st (outermost)
 
-So incoming request flows: RequestId → IdempotencyKey → ActorId → handler.
+So incoming request flows: RequestId → IdempotencyKey → ActorId → TierEnforcement → handler.
 """
 
 from __future__ import annotations
@@ -42,17 +51,21 @@ import logging
 import re
 
 import structlog
+from capabilities import CallerContext, Tier, check_tier  # noqa: IMP001 — services→packages allowed
 from events.clock import Clock
+from events.envelope import ActorKind  # noqa: IMP001 — services→packages allowed
+from events.errors import CapabilityDenied
 from events.ids import new_idempotency_key, new_request_id
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp
 
 # Story 3.6 M5: single source of truth for the mutation-method set, shared
 # with ``adapters/errors.py``. Importing keeps the constant in one place
 # rather than duplicating the literal in two files.
 from registry_api.adapters.errors import _MUTATING_METHODS as _MUTATING_METHODS
+from registry_api.adapters.errors import _PROBLEM_MEDIA_TYPE as _PROBLEM_MEDIA_TYPE
 
 # Bare UUIDv7 (no prefix) — matches new_request_id / new_idempotency_key output.
 # Version nibble = 7, variant = 8/9/a/b. Same shape used by events.ids.
@@ -184,8 +197,91 @@ class ActorIdMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+# Phase 1 route-to-tier mapping (Story 6.3). Story 6.4 adds Tier-2 entries
+# when the /decisions endpoint lands. Keys are ``"METHOD /path/prefix"`` —
+# matched via startswith so ``"POST /v1/tasks"`` covers both
+# ``/v1/tasks`` and ``/v1/tasks/{id}``.
+ROUTE_TIER_MAP: dict[str, Tier] = {
+    "POST /v1/tasks": Tier.ONE,
+}
+
+
+class TierEnforcementMiddleware(BaseHTTPMiddleware):
+    """Enforce capability tiers on mutating HTTP routes (Story 6.3).
+
+    For each incoming request:
+      1. Skip tier check on read methods (GET/HEAD/OPTIONS).
+      2. For mutating methods, look up the route in ``ROUTE_TIER_MAP``.
+      3. If a tier is required, build a ``CallerContext`` from the configured
+         ``actor_kind`` and ``request.state.actor_id``, then call
+         ``check_tier``.
+      4. On success, attach the ``CallerContext`` to
+         ``request.state.caller_context`` and delegate to the handler.
+      5. On ``CapabilityDenied``, short-circuit with RFC 7807 403.
+
+    Must run AFTER ``ActorIdMiddleware`` in the execution order so
+    ``request.state.actor_id`` is populated.
+    """
+
+    def __init__(self, app: ASGIApp, *, actor_kind: ActorKind) -> None:
+        super().__init__(app)
+        self._actor_kind = actor_kind
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        method = request.method.upper()
+
+        # Read-only methods bypass tier enforcement entirely.
+        if method not in _MUTATING_METHODS:
+            return await call_next(request)
+
+        # Look up required tier by route key (method + path prefix).
+        route_key = f"{method} {request.url.path}"
+        required_tier = self._resolve_tier(route_key)
+        if required_tier is None:
+            # Unmapped mutating route — allow through (Phase 1 default-open).
+            return await call_next(request)
+
+        actor_id = getattr(request.state, "actor_id", "unknown")
+        caller = CallerContext(
+            actor_kind=self._actor_kind,
+            actor_id=actor_id,
+        )
+        request.state.caller_context = caller
+
+        try:
+            check_tier(route_key, caller, required_tier)
+        except CapabilityDenied as exc:
+            _log.warning(
+                "tier enforcement denied",
+                extra={"route": route_key, "actor_id": actor_id, "reason": exc.reason},
+            )
+            return JSONResponse(
+                content={
+                    "type": "/errors/forbidden",
+                    "title": "Forbidden",
+                    "status": 403,
+                    "detail": exc.reason,
+                    "instance": str(request.url),
+                },
+                status_code=403,
+                media_type=_PROBLEM_MEDIA_TYPE,
+            )
+
+        return await call_next(request)
+
+    @staticmethod
+    def _resolve_tier(route_key: str) -> Tier | None:
+        """Match *route_key* against ``ROUTE_TIER_MAP`` by longest prefix."""
+        for prefix, tier in ROUTE_TIER_MAP.items():
+            if route_key == prefix or route_key.startswith(prefix + "/"):
+                return tier
+        return None
+
+
 __all__ = [
     "ActorIdMiddleware",
     "IdempotencyKeyMiddleware",
     "RequestIdMiddleware",
+    "ROUTE_TIER_MAP",
+    "TierEnforcementMiddleware",
 ]

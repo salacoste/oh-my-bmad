@@ -36,6 +36,8 @@ from pathlib import Path
 
 import cachetools
 from events.clock import Clock
+from events.envelope import ActorKind  # noqa: IMP001 — services→packages allowed
+from events.errors import CapabilityDenied
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from idempotency import IdempotencyCacheStore
@@ -49,6 +51,7 @@ from registry_state.adapters.sqlite_store import (  # noqa: IMP001 — services�
 from starlette.exceptions import HTTPException
 
 from registry_api.adapters.errors import (
+    handle_capability_denied,
     handle_http_exception,
     handle_internal_error,
     handle_validation_error,
@@ -57,6 +60,7 @@ from registry_api.adapters.middleware import (
     ActorIdMiddleware,
     IdempotencyKeyMiddleware,
     RequestIdMiddleware,
+    TierEnforcementMiddleware,
 )
 from registry_api.routes.tasks import (
     ResponseSlot,
@@ -85,7 +89,13 @@ _IDEMPOTENCY_TTL_SECONDS = 604800
 _RESPONSE_CACHE_MAX = 100_000
 
 
-def build_app(*, base_dir: Path, db_url: str, clock: Clock) -> FastAPI:
+def build_app(
+    *,
+    base_dir: Path,
+    db_url: str,
+    clock: Clock,
+    actor_kind: ActorKind = "operator",
+) -> FastAPI:
     """Build and return the wired-up FastAPI application.
 
     Args:
@@ -99,6 +109,8 @@ def build_app(*, base_dir: Path, db_url: str, clock: Clock) -> FastAPI:
                   nonsensical per Story 2.3's ``create_engine`` contract).
         clock:    Injectable clock (``SystemClock`` in production;
                   ``FrozenClock`` / ``TickingClock`` in tests).
+        actor_kind: Actor kind for tier enforcement (Story 6.3). Phase 1
+                  defaults to ``"operator"`` — the HTTP API is operator-facing.
 
     Returns:
         Fully configured ``FastAPI`` instance ready for ``uvicorn.run``.
@@ -207,13 +219,16 @@ def build_app(*, base_dir: Path, db_url: str, clock: Clock) -> FastAPI:
     )
 
     # Middlewares — Architecture line 213 order (request-id → idempotency-key
-    # → actor-id). Starlette reverses add_middleware call order so we add in
-    # reverse: last-added runs first.
+    # → actor-id → tier-enforcement). Starlette reverses add_middleware call
+    # order so we add in reverse: last-added runs first.
+    app.add_middleware(TierEnforcementMiddleware, actor_kind=actor_kind)
     app.add_middleware(ActorIdMiddleware)
     app.add_middleware(IdempotencyKeyMiddleware, clock=clock)
     app.add_middleware(RequestIdMiddleware, clock=clock)
 
     # Exception handlers — RFC 7807 problem+json for all 4xx/5xx responses.
+    # Story 6.3: CapabilityDenied → 403 Forbidden.
+    app.add_exception_handler(CapabilityDenied, handle_capability_denied)
     # F6: handler signatures take ``exc: Exception`` and runtime-narrow, so
     # these registrations type-check cleanly under mypy --strict (no
     # ``# type: ignore`` needed).

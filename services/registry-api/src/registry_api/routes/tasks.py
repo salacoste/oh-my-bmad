@@ -334,6 +334,12 @@ async def post_tasks(
 
     idempotency_key: str = request.state.idempotency_key
     request_id: str = request.state.request_id
+    actor_id: str = getattr(request.state, "actor_id", "http-api")
+
+    # Story 6.3 AC-6: scoped cache key prevents cross-actor cache leakage.
+    # Phase 1 hardcodes actor_id="http-api" so this is transparent, but the
+    # tuple form is correct for when real auth lands.
+    cache_key = (actor_id, idempotency_key)
 
     # Closure flag — distinguishes cache-miss (factory ran) from cache-hit
     # (factory skipped). ``IdempotencyCacheStore.get_or_run`` returns
@@ -345,11 +351,6 @@ async def post_tasks(
     # ``task_id`` is bytes for hashing-friendly storage; we decode once at
     # construction.
     captured_task_id: dict[str, str] = {}
-
-    # TODO(Story 6.1): cache key must be (actor_id, idempotency_key) once
-    # tier enforcement lands; otherwise actor B can see actor A's cached
-    # response. Phase 1 hardcodes actor_id="http-api" for every request,
-    # so the collapsed single-key form is safe TODAY.
 
     async def _factory() -> str:
         """Factory closure invoked by ``IdempotencyCacheStore.get_or_run``.
@@ -412,7 +413,7 @@ async def post_tasks(
         # Review M6: single key (no companion ``:task_id`` suffix) so a
         # malicious ``Idempotency-Key: foo:task_id`` cannot collide with the
         # entry for key ``foo``.
-        response_body_cache[idempotency_key] = ResponseSlot(
+        response_body_cache[cache_key] = ResponseSlot(
             body=body_bytes,
             task_id=task_id.encode("utf-8"),
         )
@@ -420,7 +421,7 @@ async def post_tasks(
         return event_id
 
     cache_hit, was_run = await idempotency_cache.get_or_run(
-        idempotency_key,
+        f"{actor_id}:{idempotency_key}",
         request_id=request_id,
         factory=_factory,
     )
@@ -434,7 +435,7 @@ async def post_tasks(
                 "get_or_run reported was_run=True but factory_called is False — "
                 "side-channel cache invariant violated"
             )
-        slot = response_body_cache[idempotency_key]
+        slot = response_body_cache[cache_key]
         body_bytes = slot.body
         task_id_str = captured_task_id["value"]
         status_value: IdempotencyStatus = "applied"
@@ -443,7 +444,7 @@ async def post_tasks(
         # within the same process); otherwise rebuild a minimal body from
         # the cached event_id (post-restart, body-cache empty — see Dev
         # Notes for the trade-off).
-        slot_or_none = response_body_cache.get(idempotency_key)
+        slot_or_none = response_body_cache.get(cache_key)
         if slot_or_none is None:
             # Post-restart fallback: rebuild a minimal body. The task_id
             # cannot be recovered without a JSONL replay, so this branch

@@ -331,6 +331,7 @@ async def process_task(
                     step=step.step,
                     tracker_used=tracker.used,
                     tracker_limit=tracker.limit,
+                    note="step output contained no parseable token usage",
                 )
 
     # Emit task.completed with synthesized summary and FR9 structured metrics.

@@ -715,6 +715,7 @@ class TestProblemTypeCatalog:
         whitelist of slug literals so a typo cannot slip through.
         """
         from registry_api.adapters.errors import (  # noqa: PLC0415
+            _PROBLEM_TYPE_FORBIDDEN,
             _PROBLEM_TYPE_IDEMPOTENCY_COLLISION,
             _PROBLEM_TYPE_INTERNAL,
             _PROBLEM_TYPE_NOT_FOUND,
@@ -735,6 +736,7 @@ class TestProblemTypeCatalog:
         # Review L9: catalog values must match the documented whitelist —
         # detects typos and unauthorized slugs.
         expected_slugs = {
+            "/errors/forbidden",
             "/errors/validation",
             "/errors/not-found",
             "/errors/idempotency-collision",
@@ -745,6 +747,7 @@ class TestProblemTypeCatalog:
         unexpected = catalog_values - expected_slugs
         assert not unexpected, f"unexpected slugs in catalog: {unexpected}"
         # Pin the slug values too — any rename must be deliberate.
+        assert _STATUS_TO_PROBLEM_TYPE[403] == _PROBLEM_TYPE_FORBIDDEN
         assert _STATUS_TO_PROBLEM_TYPE[404] == _PROBLEM_TYPE_NOT_FOUND
         assert _STATUS_TO_PROBLEM_TYPE[409] == _PROBLEM_TYPE_IDEMPOTENCY_COLLISION
         assert _STATUS_TO_PROBLEM_TYPE[422] == _PROBLEM_TYPE_VALIDATION

@@ -19,6 +19,7 @@ import logging
 from types import MappingProxyType
 from typing import Any
 
+from events.errors import CapabilityDenied  # noqa: IMP001 — services→packages allowed
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -38,6 +39,7 @@ _PROBLEM_TYPE_NOT_FOUND = "/errors/not-found"
 _PROBLEM_TYPE_IDEMPOTENCY_COLLISION = "/errors/idempotency-collision"
 _PROBLEM_TYPE_RATE_LIMITED = "/errors/rate-limited"
 _PROBLEM_TYPE_INTERNAL = "/errors/internal"
+_PROBLEM_TYPE_FORBIDDEN = "/errors/forbidden"
 _PROBLEM_TYPE_DEFAULT = "about:blank"
 
 # Story 3.7 AC-1/AC-2: status-code → problem-type mapping for
@@ -45,6 +47,7 @@ _PROBLEM_TYPE_DEFAULT = "about:blank"
 # pattern) so the module-level source-of-truth cannot be mutated by callers.
 _STATUS_TO_PROBLEM_TYPE: MappingProxyType[int, str] = MappingProxyType(
     {
+        403: _PROBLEM_TYPE_FORBIDDEN,
         404: _PROBLEM_TYPE_NOT_FOUND,
         409: _PROBLEM_TYPE_IDEMPOTENCY_COLLISION,
         422: _PROBLEM_TYPE_VALIDATION,
@@ -256,6 +259,30 @@ async def handle_validation_error(request: Request, exc: Exception) -> JSONRespo
     )
 
 
+async def handle_capability_denied(request: Request, exc: Exception) -> JSONResponse:
+    """Map ``CapabilityDenied`` to RFC 7807 problem+json 403 response (Story 6.3).
+
+    Registered via ``app.add_exception_handler(CapabilityDenied, ...)``.
+    The exception carries ``action``, ``actor_kind``, ``required_tier``, and
+    ``reason`` attributes from the tier enforcement layer.
+    """
+    if not isinstance(exc, CapabilityDenied):
+        raise TypeError(f"expected CapabilityDenied, got {type(exc).__name__}")
+    problem = ProblemDetails(
+        type=_PROBLEM_TYPE_FORBIDDEN,
+        title="Forbidden",
+        status=403,
+        detail=exc.reason,
+        instance=str(request.url),
+        extensions=_build_idempotency_extensions(request),
+    )
+    return JSONResponse(
+        content=problem.model_dump(exclude_none=True),
+        status_code=403,
+        media_type=_PROBLEM_MEDIA_TYPE,
+    )
+
+
 async def handle_internal_error(request: Request, exc: Exception) -> JSONResponse:
     """Map any unhandled exception → RFC 7807 problem+json 500 response.
 
@@ -292,12 +319,14 @@ async def handle_internal_error(request: Request, exc: Exception) -> JSONRespons
 __all__ = [
     "ProblemDetails",
     "_PROBLEM_TYPE_DEFAULT",
+    "_PROBLEM_TYPE_FORBIDDEN",
     "_PROBLEM_TYPE_IDEMPOTENCY_COLLISION",
     "_PROBLEM_TYPE_INTERNAL",
     "_PROBLEM_TYPE_NOT_FOUND",
     "_PROBLEM_TYPE_RATE_LIMITED",
     "_PROBLEM_TYPE_VALIDATION",
     "_STATUS_TO_PROBLEM_TYPE",
+    "handle_capability_denied",
     "handle_http_exception",
     "handle_internal_error",
     "handle_validation_error",
