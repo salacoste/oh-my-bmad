@@ -16,12 +16,13 @@ import tenacity
 from events.ids import new_idempotency_key
 
 
-def _make_retry(total_timeout_s: float) -> tenacity.AsyncRetrying:
+def _make_retry(per_request_timeout_s: float) -> tenacity.AsyncRetrying:
+    # Retry budget must exceed 3 × per-request timeout so slow requests don't
+    # exhaust the delay budget before all attempts are made.
+    total_budget_s = per_request_timeout_s * 3.5
     return tenacity.AsyncRetrying(
-        stop=tenacity.stop_after_attempt(3)
-        | tenacity.stop_after_delay(total_timeout_s),
-        wait=tenacity.wait_exponential(multiplier=0.5, max=5)
-        + tenacity.wait_random(0, 0.5),
+        stop=tenacity.stop_after_attempt(3) | tenacity.stop_after_delay(total_budget_s),
+        wait=tenacity.wait_exponential(multiplier=0.5, max=5) + tenacity.wait_random(0, 0.5),
         retry=tenacity.retry_if_exception_type(
             (aiohttp.ClientError, asyncio.TimeoutError),
         ),
@@ -95,6 +96,7 @@ class GitHubAdapter:
     ) -> tuple[int, dict[str, object]]:
         """Make an HTTP request with retries and per-attempt timeout."""
         log = structlog.get_logger(__name__)
+        # Key generated once OUTSIDE _do so retries reuse the same key.
         key = idempotency_key or new_idempotency_key()
         headers = self._headers(key)
         url = self._url(path)
@@ -114,12 +116,8 @@ class GitHubAdapter:
                 if resp.status >= 400:
                     if resp.status == 429:
                         log.warning("github_rate_limited", path=path)
-                        raise aiohttp.ClientResponseError(
-                            request_info=resp.request_info,
-                            history=resp.history,
-                            status=resp.status,
-                            message="Rate limited",
-                        )
+                        # Don't retry — rate limits need minutes to reset.
+                        return resp.status, body
                     if resp.status >= 500:
                         log.warning(
                             "github_server_error",
@@ -188,7 +186,7 @@ class GitHubAdapter:
             return PRDraftResult(
                 success=True,
                 url=str(url) if url is not None else None,
-                number=int(number) if number is not None else None,
+                number=int(number) if isinstance(number, int) and number >= 1 else None,
                 branch=str(branch) if branch is not None else None,
             )
 

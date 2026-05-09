@@ -10,14 +10,14 @@ import pytest
 
 from orchestrator_adapter.adapters.github_adapter import GitHubAdapter
 
-_PATCH_TARGET = (
-    "orchestrator_adapter.adapters.github_adapter.aiohttp.ClientSession"
-)
+_PATCH_TARGET = "orchestrator_adapter.adapters.github_adapter.aiohttp.ClientSession"
 
 
 def _adapter(token: str = "ghp_test123") -> GitHubAdapter:
     return GitHubAdapter(
-        token=token, base_url="https://api.github.com", timeout_s=5.0,
+        token=token,
+        base_url="https://api.github.com",
+        timeout_s=5.0,
     )
 
 
@@ -51,11 +51,14 @@ class _FakeSessionBase:
 
 @pytest.mark.asyncio
 async def test_create_pr_draft_success() -> None:
-    resp = _mock_response(201, {
-        "html_url": "https://github.com/owner/repo/pull/42",
-        "number": 42,
-        "head": {"ref": "task/T-001"},
-    })
+    resp = _mock_response(
+        201,
+        {
+            "html_url": "https://github.com/owner/repo/pull/42",
+            "number": 42,
+            "head": {"ref": "task/T-001"},
+        },
+    )
 
     class FakeSession(_FakeSessionBase):
         def request(self, *a: object, **kw: object) -> MagicMock:
@@ -64,7 +67,12 @@ async def test_create_pr_draft_success() -> None:
     with patch(_PATCH_TARGET, return_value=FakeSession()):
         adapter = _adapter()
         result = await adapter.create_pr_draft(
-            "owner", "repo", "Title", "task/T-001", "main", "Body",
+            "owner",
+            "repo",
+            "Title",
+            "task/T-001",
+            "main",
+            "Body",
         )
 
     assert result.success
@@ -79,11 +87,14 @@ async def test_create_pr_draft_success() -> None:
 @pytest.mark.asyncio
 async def test_create_pr_draft_retries_on_500() -> None:
     error_resp = _mock_response(500, {"message": "Internal Server Error"})
-    success_resp = _mock_response(201, {
-        "html_url": "https://github.com/owner/repo/pull/1",
-        "number": 1,
-        "head": {"ref": "task/T-001"},
-    })
+    success_resp = _mock_response(
+        201,
+        {
+            "html_url": "https://github.com/owner/repo/pull/1",
+            "number": 1,
+            "head": {"ref": "task/T-001"},
+        },
+    )
 
     call_count = 0
 
@@ -98,7 +109,11 @@ async def test_create_pr_draft_retries_on_500() -> None:
     with patch(_PATCH_TARGET, return_value=FakeSession()):
         adapter = _adapter()
         result = await adapter.create_pr_draft(
-            "owner", "repo", "Title", "task/T-001", "main",
+            "owner",
+            "repo",
+            "Title",
+            "task/T-001",
+            "main",
         )
 
     assert result.success
@@ -110,10 +125,13 @@ async def test_create_pr_draft_retries_on_500() -> None:
 
 @pytest.mark.asyncio
 async def test_create_pr_draft_no_retry_on_422() -> None:
-    resp = _mock_response(422, {
-        "message": "Validation Failed",
-        "errors": [{"message": "No commits between main and task/T-001"}],
-    })
+    resp = _mock_response(
+        422,
+        {
+            "message": "Validation Failed",
+            "errors": [{"message": "No commits between main and task/T-001"}],
+        },
+    )
 
     call_count = 0
 
@@ -126,7 +144,11 @@ async def test_create_pr_draft_no_retry_on_422() -> None:
     with patch(_PATCH_TARGET, return_value=FakeSession()):
         adapter = _adapter()
         result = await adapter.create_pr_draft(
-            "owner", "repo", "Title", "task/T-001", "main",
+            "owner",
+            "repo",
+            "Title",
+            "task/T-001",
+            "main",
         )
 
     assert not result.success
@@ -146,7 +168,11 @@ async def test_create_pr_draft_timeout() -> None:
     with patch(_PATCH_TARGET, return_value=FakeSession()):
         adapter = _adapter()
         result = await adapter.create_pr_draft(
-            "owner", "repo", "Title", "task/T-001", "main",
+            "owner",
+            "repo",
+            "Title",
+            "task/T-001",
+            "main",
         )
 
     assert not result.success
@@ -160,7 +186,11 @@ async def test_create_pr_draft_timeout() -> None:
 async def test_create_pr_draft_empty_token() -> None:
     adapter = _adapter(token="")
     result = await adapter.create_pr_draft(
-        "owner", "repo", "Title", "task/T-001", "main",
+        "owner",
+        "repo",
+        "Title",
+        "task/T-001",
+        "main",
     )
     assert not result.success
     assert "token" in (result.error or "").lower()
@@ -173,7 +203,11 @@ async def test_create_pr_draft_empty_token() -> None:
 async def test_create_pr_draft_invalid_owner() -> None:
     adapter = _adapter()
     result = await adapter.create_pr_draft(
-        "bad/owner", "repo", "Title", "task/T-001", "main",
+        "bad/owner",
+        "repo",
+        "Title",
+        "task/T-001",
+        "main",
     )
     assert not result.success
     assert "owner" in (result.error or "").lower()
@@ -183,7 +217,11 @@ async def test_create_pr_draft_invalid_owner() -> None:
 async def test_create_pr_draft_invalid_repo() -> None:
     adapter = _adapter()
     result = await adapter.create_pr_draft(
-        "owner", "", "Title", "task/T-001", "main",
+        "owner",
+        "",
+        "Title",
+        "task/T-001",
+        "main",
     )
     assert not result.success
     assert "repo" in (result.error or "").lower()
@@ -194,16 +232,22 @@ async def test_create_pr_draft_invalid_repo() -> None:
 
 @pytest.mark.asyncio
 async def test_create_pr_draft_includes_idempotency_key() -> None:
-    resp = _mock_response(201, {
-        "html_url": "https://github.com/o/r/pull/1",
-        "number": 1,
-        "head": {"ref": "task/T-001"},
-    })
+    resp = _mock_response(
+        201,
+        {
+            "html_url": "https://github.com/o/r/pull/1",
+            "number": 1,
+            "head": {"ref": "task/T-001"},
+        },
+    )
     captured_headers: dict[str, str] = {}
 
     class FakeSession(_FakeSessionBase):
         def request(
-            self, method: str, url: str, **kw: object,
+            self,
+            method: str,
+            url: str,
+            **kw: object,
         ) -> MagicMock:
             captured_headers.update(kw.get("headers", {}))  # type: ignore[arg-type]
             return resp
@@ -211,7 +255,11 @@ async def test_create_pr_draft_includes_idempotency_key() -> None:
     with patch(_PATCH_TARGET, return_value=FakeSession()):
         adapter = _adapter()
         await adapter.create_pr_draft(
-            "owner", "repo", "Title", "task/T-001", "main",
+            "owner",
+            "repo",
+            "Title",
+            "task/T-001",
+            "main",
         )
 
     assert "GitHub-Idempotency-Key" in captured_headers
@@ -230,8 +278,45 @@ async def test_create_pr_draft_network_error() -> None:
     with patch(_PATCH_TARGET, return_value=FakeSession()):
         adapter = _adapter()
         result = await adapter.create_pr_draft(
-            "owner", "repo", "Title", "task/T-001", "main",
+            "owner",
+            "repo",
+            "Title",
+            "task/T-001",
+            "main",
         )
 
     assert not result.success
     assert "Connection refused" in (result.error or "")
+
+
+# --- pr_number=0 guard ---
+
+
+@pytest.mark.asyncio
+async def test_create_pr_draft_number_zero_returns_none() -> None:
+    """GitHub returning number=0 must not crash Pydantic (ge=1 constraint)."""
+    resp = _mock_response(
+        201,
+        {
+            "html_url": "https://github.com/owner/repo/pull/0",
+            "number": 0,
+            "head": {"ref": "task/T-001"},
+        },
+    )
+
+    class FakeSession(_FakeSessionBase):
+        def request(self, *a: object, **kw: object) -> MagicMock:
+            return resp
+
+    with patch(_PATCH_TARGET, return_value=FakeSession()):
+        adapter = _adapter()
+        result = await adapter.create_pr_draft(
+            "owner",
+            "repo",
+            "Title",
+            "task/T-001",
+            "main",
+        )
+
+    assert result.success
+    assert result.number is None  # 0 filtered out

@@ -131,6 +131,9 @@ async def _create_pr_draft(
         log.warning("github_pr_skipped_bad_repo", task_id=task_id, repo=repo)
         return None
     owner, repo_name = parts
+    if not owner or not repo_name:
+        log.warning("github_pr_skipped_bad_repo", task_id=task_id, repo=repo)
+        return None
     adapter = GitHubAdapter(
         token=token,
         base_url=settings.github_api_base_url,
@@ -294,13 +297,13 @@ async def process_task(
     pr_url: str | None = None
     pr_number: int | None = None
     pr_branch: str | None = None
-    if (
-        metrics.ci_state == "green"
-        and repo
-        and plan_result.steps
-    ):
+    if metrics.ci_state == "green" and repo and plan_result.steps:
         pr_result = await _create_pr_draft(
-            settings, task_id, str(repo), plan_result.summary, title,
+            settings,
+            task_id,
+            str(repo),
+            plan_result.summary,
+            title,
         )
         if pr_result is not None and pr_result.success:
             pr_url = pr_result.url
@@ -308,8 +311,13 @@ async def process_task(
             pr_branch = pr_result.branch
 
     completion_payload = build_completion_payload(
-        task_id, plan_result, step_outputs, metrics,
-        pr_url=pr_url, pr_number=pr_number, pr_branch=pr_branch,
+        task_id,
+        plan_result,
+        step_outputs,
+        metrics,
+        pr_url=pr_url,
+        pr_number=pr_number,
+        pr_branch=pr_branch,
     )
     await _emit_event(
         clients,

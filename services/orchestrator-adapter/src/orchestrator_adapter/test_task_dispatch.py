@@ -339,8 +339,12 @@ def test_build_completion_payload_with_metrics() -> None:
         steps=(PlanStep(step=1, description="Write code"),),
     )
     metrics = CompletionMetrics(
-        files_changed=3, lines_added=42, lines_removed=10,
-        tests_added=12, ci_state="green", blockers_count=0,
+        files_changed=3,
+        lines_added=42,
+        lines_removed=10,
+        tests_added=12,
+        ci_state="green",
+        blockers_count=0,
     )
     payload = build_completion_payload("T-001", plan_result, {1: "done"}, metrics)
     assert payload["task_id"] == "T-001"
@@ -446,7 +450,10 @@ def test_build_completion_payload_with_pr_fields() -> None:
     plan_result = PlanParseResult(summary="test")
     metrics = CompletionMetrics(ci_state="green")
     payload = build_completion_payload(
-        "T-100", plan_result, {}, metrics,
+        "T-100",
+        plan_result,
+        {},
+        metrics,
         pr_url="https://github.com/o/r/pull/7",
         pr_number=7,
         pr_branch="task/T-100",
@@ -468,8 +475,13 @@ def test_build_completion_payload_pr_fields_none_when_not_provided() -> None:
     plan_result = PlanParseResult(summary="test")
     metrics = CompletionMetrics(ci_state="green")
     payload = build_completion_payload(
-        "T-102", plan_result, {}, metrics,
-        pr_url=None, pr_number=None, pr_branch=None,
+        "T-102",
+        plan_result,
+        {},
+        metrics,
+        pr_url=None,
+        pr_number=None,
+        pr_branch=None,
     )
     assert payload.get("pr_url") is None
     assert payload.get("pr_number") is None

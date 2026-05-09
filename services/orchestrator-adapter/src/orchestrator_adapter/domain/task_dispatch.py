@@ -241,7 +241,9 @@ def build_execution_started_payload(task_id: str, session_id: str) -> dict[str, 
 
 
 def build_step_completed_payload(
-    task_id: str, step: PlanStep, output_summary: str,
+    task_id: str,
+    step: PlanStep,
+    output_summary: str,
 ) -> dict[str, object]:
     """Build a ``task.step.completed`` event payload dict."""
     return TaskStepCompletedPayload(
@@ -260,7 +262,7 @@ _MAX_LINES: int = 10**9
 def _clamp(value: int | None, upper: int) -> int | None:
     if value is None:
         return None
-    return min(value, upper)
+    return max(0, min(value, upper))
 
 
 def build_completion_payload(
