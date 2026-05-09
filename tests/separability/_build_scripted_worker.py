@@ -22,6 +22,7 @@ _SOURCE_FILES: tuple[str, ...] = (
     "tests/fixtures/scripted_worker_stub/pyproject.toml",
     "tests/fixtures/scripted_worker_stub/__init__.py",
     "tests/fixtures/scripted_worker_stub/__main__.py",
+    "uv.lock",
 )
 
 
@@ -34,21 +35,26 @@ def _compute_source_sha() -> str:
     return h.hexdigest()[:16]
 
 
-def build_if_missing() -> None:
-    """Build the SHA-tagged image when missing; always (re)tag as ``:latest``."""
+def build_if_missing(*, force: bool = False) -> None:
+    """Build the SHA-tagged image when missing; always (re)tag as ``:latest``.
+
+    When *force* is ``True``, the SHA cache is bypassed so the image is
+    always rebuilt (picks up source changes even when the SHA is unchanged).
+    """
     sha = _compute_source_sha()
     sha_tag = f"scripted-worker-stub:sha-{sha}"
 
     try:
-        check = subprocess.run(
-            ["docker", "images", "-q", sha_tag],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        if check.stdout.strip():
-            subprocess.run(["docker", "tag", sha_tag, _LATEST_TAG], check=True)
-            return
+        if not force:
+            check = subprocess.run(
+                ["docker", "images", "-q", sha_tag],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            if check.stdout.strip():
+                subprocess.run(["docker", "tag", sha_tag, _LATEST_TAG], check=True)
+                return
 
         subprocess.run(
             ["docker", "build", "-t", sha_tag, "-f", str(_DOCKERFILE), str(_REPO_ROOT)],
@@ -65,7 +71,8 @@ def build_if_missing() -> None:
 
 
 def main() -> int:
-    build_if_missing()
+    force = "--force" in sys.argv
+    build_if_missing(force=force)
     return 0
 
 

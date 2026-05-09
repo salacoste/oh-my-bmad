@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-09T19:00:00Z
+last_updated: 2026-05-09T23:50:00Z
 
 development_status:
   # =========================================================================
@@ -154,10 +154,10 @@ development_status:
   5-13-completion-summary-payload: done
   5-14-pr-draft-auto-creation: done
   5-15-per-task-budget-enforcement: done
-  5-16-s1-cold-worker-swap-test: review
-  5-17a-resume-after-approval-state-machine: backlog
-  5-17b-cross-restart-approval-handling: backlog
-  5-17c-s2-midflight-worker-swap-test: backlog
+  5-16-s1-cold-worker-swap-test: done
+  5-17a-resume-after-approval-state-machine: done
+  5-17b-cross-restart-approval-handling: done
+  5-17c-s2-midflight-worker-swap-test: done
   5-18-journey-1-integration-test: backlog
   epic-5-retrospective: optional
 

@@ -1,0 +1,108 @@
+# Story 5.17c — S-2 separability harness compose overlay (FR34 / NFR-M4).
+#
+# Self-contained 3-service stack used by tests/separability/test_s2_midflight_swap.py.
+# Mirrors docker-compose.s1.yml (S-1) but adds SCRIPTED_WORKER_EVENT_DELAY_S
+# to give the test a reliable kill window mid-event-sequence.
+#
+# Services:
+#   - registry-state  (JSONL → SQLite materializer; tasks projection)
+#   - registry-api    (POST /v1/tasks → emits task.created)
+#   - worker-wrapper  (REPLACED by scripted-worker-stub:latest via the
+#                      WORKER_IMAGE env-var override — killed mid-task and
+#                      restarted to prove event-level dedupe resumes correctly).
+
+services:
+  registry-state:
+    build:
+      context: ../..
+      dockerfile: services/registry-state/Dockerfile
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-registry-state:${OMB_VERSION:-dev}
+    environment:
+      ENV: test
+      REGISTRY_STATE_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+      REGISTRY_STATE_DB_URL: sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3
+      REGISTRY_STATE_AUTO_CREATE_SCHEMA: "1"
+    user: "${OMB_S3_UID:-10002}:${OMB_S3_GID:-10000}"
+    init: true
+    restart: "no"
+    networks: [oh-my-bmad-net]
+    volumes:
+      - ${OMB_S2_DATA_DIR:?OMB_S2_DATA_DIR must be exported by the harness}:/var/lib/oh-my-bmad
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+
+  registry-api:
+    build:
+      context: ../..
+      dockerfile: services/registry-api/Dockerfile
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-registry-api:${OMB_VERSION:-dev}
+    environment:
+      ENV: test
+      REGISTRY_API_HOST: 0.0.0.0
+      REGISTRY_API_PORT: "8080"
+      REGISTRY_API_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+      REGISTRY_API_DB_URL: sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3
+    user: "${OMB_S3_UID:-10002}:${OMB_S3_GID:-10000}"
+    init: true
+    restart: "no"
+    networks: [oh-my-bmad-net]
+    ports:
+      - "8080"
+    volumes:
+      - ${OMB_S2_DATA_DIR:?OMB_S2_DATA_DIR must be exported by the harness}:/var/lib/oh-my-bmad
+    depends_on:
+      registry-state:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket,sys; s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1', 8080)); s.close()"
+      interval: 1s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+
+  worker-wrapper:
+    image: ${WORKER_IMAGE:?WORKER_IMAGE must be set by the S-2 harness}
+    environment:
+      ENV: test
+      EVENT_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+      SCRIPTED_WORKER_SCENARIO: "simple_green"
+      SCRIPTED_WORKER_EVENT_DELAY_S: "0.5"
+      # MCP server env vars required by task-registry and session-registry subprocesses.
+      TASK_REGISTRY_DB_PATH: /var/lib/oh-my-bmad/registry/state.sqlite3
+      TASK_REGISTRY_ACTOR_KIND: worker
+      TASK_REGISTRY_ACTOR_ID: scripted-worker-stub
+      SESSION_REGISTRY_DB_PATH: /var/lib/oh-my-bmad/registry/state.sqlite3
+      SESSION_REGISTRY_ACTOR_KIND: worker
+      SESSION_REGISTRY_ACTOR_ID: scripted-worker-stub
+      CLAWHIP_BRIDGE_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+      CLAWHIP_BRIDGE_ACTOR_KIND: worker
+      CLAWHIP_BRIDGE_ACTOR_ID: scripted-worker-stub
+    user: "${OMB_S3_UID:-10002}:${OMB_S3_GID:-10000}"
+    init: true
+    restart: "no"
+    networks: [oh-my-bmad-net]
+    volumes:
+      - ${OMB_S2_DATA_DIR:?OMB_S2_DATA_DIR must be exported by the harness}:/var/lib/oh-my-bmad
+    depends_on:
+      registry-state:
+        condition: service_healthy
+      registry-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+
+networks:
+  oh-my-bmad-net:
+    driver: bridge

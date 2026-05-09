@@ -270,12 +270,27 @@ def _read_new_lines(path: Path, offset: int) -> tuple[int, list[dict[str, Any]]]
     return new_offset, envelopes
 
 
+def _dedupe_key(evt_type: str, payload: dict[str, Any] | object) -> str:
+    """Composite dedupe key for event-level tracking.
+
+    ``task.step.completed`` events are keyed as ``task.step.completed.N``
+    (by step number) so that multi-step scenarios (e.g. ``with_pr``) emit
+    every step rather than skipping duplicates.
+    """
+    if evt_type == "task.step.completed":
+        step = payload.get("step") if isinstance(payload, dict) else getattr(payload, "step", None)
+        if step is None:
+            log.warning("dedupe_key_missing_step", evt_type=evt_type)
+            return f"{evt_type}._unknown_{hash(str(payload)) & 0xFFFF:x}"
+        return f"{evt_type}.{step}"
+    return evt_type
+
+
 def _scan_emitted_events(base_dir: Path) -> dict[str, set[str]]:
-    """Return per-task event types already emitted: ``{task_id: {event_type, ...}}``.
+    """Return per-task dedupe keys already emitted: ``{task_id: {key, ...}}``.
 
     Event-level deduplication allows the stub to resume mid-task after a
-    restart: only event types *not yet emitted* for a given task_id are
-    emitted on the next run.
+    restart: only events whose dedupe key is not yet present are emitted.
     """
     emitted: dict[str, set[str]] = {}
     if not base_dir.exists():
@@ -291,7 +306,8 @@ def _scan_emitted_events(base_dir: Path) -> dict[str, set[str]]:
                 else:
                     task_id = getattr(payload, "task_id", None)
                 if isinstance(task_id, str):
-                    emitted.setdefault(task_id, set()).add(env_obj.type)
+                    key = _dedupe_key(env_obj.type, payload)
+                    emitted.setdefault(task_id, set()).add(key)
         except FileNotFoundError:
             continue
     return emitted
@@ -312,7 +328,11 @@ async def run_scripted_worker(
     worker_id = settings.worker_id or new_worker_id(clock=clock)
     scenario_name = os.environ.get("SCRIPTED_WORKER_SCENARIO", "simple_green")
     scenario_fn = SCENARIOS.get(scenario_name, _scenario_simple_green)
-    event_delay_s = float(os.environ.get("SCRIPTED_WORKER_EVENT_DELAY_S", "0"))
+    try:
+        event_delay_s = max(0.0, float(os.environ.get("SCRIPTED_WORKER_EVENT_DELAY_S", "0")))
+    except (ValueError, TypeError):
+        log.warning("invalid_SCRIPTED_WORKER_EVENT_DELAY_S", fallback=0)
+        event_delay_s = 0.0
 
     # Event-level dedupe on restart: {task_id: {already-emitted event types}}.
     emitted: dict[str, set[str]] = await asyncio.to_thread(_scan_emitted_events, base_dir)
@@ -363,7 +383,7 @@ async def run_scripted_worker(
                         continue
 
                     # Skip tasks already driven to completion.
-                    task_events = emitted.get(task_id, set())
+                    task_events = emitted.setdefault(task_id, set())
                     if "task.completed" in task_events:
                         continue
 
@@ -372,8 +392,9 @@ async def run_scripted_worker(
                     # Emit only events not yet emitted for this task.
                     events = scenario_fn(task_id, session_id)
                     for evt in events:
-                        if evt["type"] in task_events:
-                            log.info("skipping_already_emitted", type=evt["type"], task_id=task_id)
+                        key = _dedupe_key(evt["type"], evt["payload"])
+                        if key in task_events:
+                            log.info("skipping_already_emitted", key=key, task_id=task_id)
                             continue
                         await _emit_via_clawhip(
                             clawhip,
@@ -381,10 +402,9 @@ async def run_scripted_worker(
                             evt["payload"],
                             parent_event_id=parent_event_id,
                         )
-                        task_events.add(evt["type"])
-                        emitted[task_id] = task_events
+                        task_events.add(key)
                         log.info("emitted", type=evt["type"], task_id=task_id)
-                        if event_delay_s > 0:
+                        if event_delay_s > 0 and evt is not events[-1]:
                             await asyncio.sleep(event_delay_s)
 
             with contextlib.suppress(TimeoutError):

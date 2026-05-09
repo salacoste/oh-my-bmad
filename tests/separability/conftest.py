@@ -1,4 +1,4 @@
-"""Tree-specific fixtures for the S-3 separability harness (Story 2.15).
+"""Shared fixtures for S-1/S-2/S-3 separability harnesses.
 
 Provides:
 
@@ -54,11 +54,11 @@ def skip_if_no_docker() -> None:
         )
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
         pytest.skip(
-            "Story 2.15 S-3 separability test requires Docker — install or "
+            "Separability test requires Docker — install or "
             f"run via CI (docker info failed: {exc!r})"
         )
     if proc.returncode != 0:
         pytest.skip(
-            "Story 2.15 S-3 separability test requires Docker — install or "
+            "Separability test requires Docker — install or "
             f"run via CI (docker info exit={proc.returncode})"
         )
