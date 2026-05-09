@@ -28,9 +28,11 @@ from __future__ import annotations
 import os
 import sys
 
+from typing import get_args
+
 from events.envelope import ActorKind  # noqa: IMP001 — packages/
 
-_VALID_ACTOR_KINDS = {"operator", "orchestrator", "worker", "system", "clawhip"}
+_VALID_ACTOR_KINDS = set(get_args(ActorKind))
 
 
 def main() -> None:

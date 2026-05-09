@@ -460,9 +460,10 @@ class TestToolHandlers:
 class TestTierEnforcement:
     """AC-3: Real tier enforcement via capabilities.check_tier."""
 
-    def test_check_tier_allows_valid_callers(self) -> None:
+    @pytest.mark.parametrize("kind", ["operator", "orchestrator", "worker", "system", "clawhip"])
+    def test_check_tier_allows_valid_callers(self, kind: str) -> None:
         for tool_name, tier in TIER_MAP.items():
-            caller = CallerContext(actor_kind="worker", actor_id="w-001")
+            caller = CallerContext(actor_kind=kind, actor_id="w-001")
             result = check_tier(tool_name, caller, tier)
             assert result.tier == tier
 
