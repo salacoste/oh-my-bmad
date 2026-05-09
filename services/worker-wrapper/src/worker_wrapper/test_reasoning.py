@@ -357,12 +357,12 @@ class TestDomainNoIO:
 
 class TestSchemaRegistry:
     def test_agent_reasoning_types_registered(self) -> None:
-        import importlib
+        from events.payloads import AgentReasoningBreadcrumbPayload
+        from events.schema_registry import REGISTRY, register
 
-        import registry_state.domain.event_types as et_mod
-        # reload required: autouse fixture in test_schema_registry.py calls unregister_all()
-        importlib.reload(et_mod)
-        from events.schema_registry import REGISTRY
+        register("agent.reasoning.plan_drafted", "1.0.0", AgentReasoningBreadcrumbPayload)
+        register("agent.reasoning.tool_call_rationale", "1.0.0", AgentReasoningBreadcrumbPayload)
+        register("agent.reasoning.step_summary", "1.0.0", AgentReasoningBreadcrumbPayload)
 
         keys = set(REGISTRY.keys())
         assert ("agent.reasoning.plan_drafted", "1.0.0") in keys
