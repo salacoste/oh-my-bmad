@@ -523,16 +523,26 @@ def test_parse_token_usage_empty() -> None:
     assert parse_token_usage("") is None
 
 
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnknownMarkWarning")
 def test_parse_token_usage_false_positive_incidental_text() -> None:
-    """Incidental text mentioning tokens is captured — documents known fragility."""
-    # "500 tokens in it" matches the fallback regex, so this returns 500.
-    # This test documents that behavior so regressions are caught if OMC output changes.
+    """KNOWN-FRAGILITY: Incidental text mentioning tokens is captured.
+
+    The fallback regex matches "500 tokens in it" and returns 500.
+    When the regex is hardened to filter incidental matches, this test
+    should be updated or removed.
+    """
     result = parse_token_usage("file has 500 tokens in it")
     assert result == 500
 
 
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnknownMarkWarning")
 def test_parse_token_usage_mixed_real_and_incidental() -> None:
-    """Real usage patterns and incidental mentions are summed together."""
+    """KNOWN-FRAGILITY: Real usage patterns and incidental mentions are summed together.
+
+    Both "Used 100 tokens" and "file has 500 tokens in it" contribute to
+    the total. Updating the regex to ignore incidental matches will change
+    the expected result.
+    """
     result = parse_token_usage("Used 100 tokens\nfile has 500 tokens in it")
     assert result == 600
 
