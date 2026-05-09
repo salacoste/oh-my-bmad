@@ -2845,7 +2845,7 @@ def test_render_plan_ready_basic() -> None:
     )
     env = _plan_ready_envelope(steps=steps, estimated_steps=3)
     result = _render_plan_ready(env)
-    assert "Plan ready, 3 steps:" in result
+    assert "Plan ready for t-00000000-0000-7000-8000-000000000010, 3 steps:" in result
     assert "1) Setup project" in result
     assert "2) Write tests" in result
     assert "3) Implement feature" in result
@@ -2855,7 +2855,7 @@ def test_render_plan_ready_empty_steps() -> None:
     """No steps -> header only, no step lines."""
     env = _plan_ready_envelope(steps=(), estimated_steps=0)
     result = _render_plan_ready(env)
-    assert result == "Plan ready, 0 steps:"
+    assert result == "Plan ready for t-00000000-0000-7000-8000-000000000010, 0 steps:"
 
 
 def test_render_plan_ready_single_step() -> None:
@@ -2863,7 +2863,7 @@ def test_render_plan_ready_single_step() -> None:
     steps = (PlanStep(step=1, description="Do the thing"),)
     env = _plan_ready_envelope(steps=steps, estimated_steps=1)
     result = _render_plan_ready(env)
-    assert "Plan ready, 1 steps:" in result
+    assert "Plan ready for t-00000000-0000-7000-8000-000000000010, 1 steps:" in result
     assert "1) Do the thing" in result
 
 
@@ -2904,7 +2904,7 @@ def test_render_plan_ready_emergency_one_liner() -> None:
     env = _plan_ready_envelope(steps=steps, estimated_steps=30)
     result = _render_plan_ready(env)
     # Step 3 produces header + 4 step lines + overflow.
-    assert "Plan ready, 30 steps:" in result
+    assert "Plan ready for t-00000000-0000-7000-8000-000000000010, 30 steps:" in result
     assert "… and 26 more" in result
     assert result.count(") ") == 4
     assert len(result) <= 1900
@@ -2959,7 +2959,7 @@ def test_render_plan_ready_step2_ladder_truncation() -> None:
     steps = tuple(PlanStep(step=i, description="Y" * 150) for i in range(1, 16))
     env = _plan_ready_envelope(steps=steps, estimated_steps=15)
     result = _render_plan_ready(env)
-    assert "Plan ready, 15 steps:" in result
+    assert "Plan ready for t-00000000-0000-7000-8000-000000000010, 15 steps:" in result
     assert "… and 5 more" in result
     assert result.count(") ") == 10
 
@@ -3001,7 +3001,7 @@ def test_render_plan_ready_v1_0_0_backward_compat() -> None:
         request_id=rid,
     )
     result = _render(env)
-    assert "Plan ready, 0 steps:" in result
+    assert "Plan ready for t-00000000-0000-7000-8000-000000000011, 0 steps:" in result
 
 
 # ---------------------------------------------------------------------------

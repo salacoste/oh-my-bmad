@@ -219,6 +219,11 @@ def build_omc_prompt(
     return "\n".join(parts)
 
 
+# DOTALL is intentional: ``(.+?)`` spans multi-line step descriptions so
+# ``desc.strip().replace("\\n", " ")`` can flatten them. The ``\\n`` anchor
+# inside the lookahead ``\\n\\s*\\d+[.)]`` ensures we only match the next
+# step number at the start of a new line — inline numbers like ``"Compare 2.0
+# vs 3.0"`` within a description won't trigger a false split.
 _NUMBERED_STEP_RE = re.compile(
     r"(?:^|\n)\s*(\d+)[.)]\s+(.+?)(?=(?:\n\s*\d+[.)])|\Z)",
     re.DOTALL,

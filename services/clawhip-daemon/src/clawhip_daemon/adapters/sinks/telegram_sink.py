@@ -1507,17 +1507,22 @@ def _render_plan_ready(envelope: EventEnvelope) -> str:
     # Step 1: full message with up to 20 steps.
     text = _assemble_plan_sections(
         steps, step_count, max_steps=_PLAN_READY_MAX_VISIBLE_STEPS,
+        task_id_esc=task_id_esc,
     )
     if len(text) <= _PLAN_READY_MESSAGE_MAX_CHARS:
         return text
 
     # Step 2: truncate to 10 steps.
-    text = _assemble_plan_sections(steps, step_count, max_steps=10)
+    text = _assemble_plan_sections(
+        steps, step_count, max_steps=10, task_id_esc=task_id_esc,
+    )
     if len(text) <= _PLAN_READY_MESSAGE_MAX_CHARS:
         return text
 
     # Step 3: truncate to 4 steps.
-    text = _assemble_plan_sections(steps, step_count, max_steps=4)
+    text = _assemble_plan_sections(
+        steps, step_count, max_steps=4, task_id_esc=task_id_esc,
+    )
     if len(text) <= _PLAN_READY_MESSAGE_MAX_CHARS:
         return text
 
@@ -1533,13 +1538,15 @@ def _assemble_plan_sections(
     step_count: int,
     *,
     max_steps: int,
+    task_id_esc: str,
 ) -> str:
     """Assemble the plan-ready message with up to *max_steps* step lines.
 
     Each step line is ``N) <description>`` with HTML-escaped, collapsed,
-    truncated description text.
+    truncated description text. The header includes the HTML-escaped task ID
+    so the operator can identify which task the plan belongs to.
     """
-    lines: list[str] = [f"Plan ready, {step_count} steps:"]
+    lines: list[str] = [f"Plan ready for {task_id_esc}, {step_count} steps:"]
     visible = steps[:max_steps]
     for step_obj in visible:
         num = getattr(step_obj, "step", 0)
