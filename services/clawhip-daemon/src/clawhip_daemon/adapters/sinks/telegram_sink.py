@@ -1546,7 +1546,7 @@ def _assemble_plan_sections(
     truncated description text. The header includes the HTML-escaped task ID
     so the operator can identify which task the plan belongs to.
     """
-    lines: list[str] = [f"Plan ready for {task_id_esc}, {step_count} steps:"]
+    lines: list[str] = [f"Plan ready ({task_id_esc}), {step_count} steps:"]
     visible = steps[:max_steps]
     for step_obj in visible:
         num = getattr(step_obj, "step", 0)
