@@ -25,7 +25,7 @@ So that every MCP handler and HTTP endpoint can enforce Tier 0–3 access unifor
 
    When a caller's tier is insufficient, `CapabilityDenied` is raised with `action`, `caller.actor_kind`, `required_tier`, and `reason` (e.g., "actor_kind 'worker' not authorized for Tier.THREE action 'git_push'").
 
-5. **AC-5: `CapabilityDenied` exception** — Added to `packages/events/src/events/errors.py` as a subclass of `EventsError`. Fields: `action: str`, `actor_kind: str`, `required_tier: Tier`, `reason: str`. Exported via `__all__`.
+5. **AC-5: `CapabilityDenied` exception** — Added to `packages/events/src/events/errors.py` as a subclass of `EventsError`. Fields: `action: str`, `actor_kind: str`, `required_tier: int` (int, not Tier, to avoid circular dep — capabilities depends on events, not vice versa), `reason: str`. Exported via `__all__`.
 
 6. **AC-6: Package scaffold** — `packages/capabilities/` follows the established pattern:
    - `pyproject.toml` with `name = "capabilities"`, `version = "0.1.0"`, `dependencies = ["events"]`, `requires-python = ">=3.12"`, build-backend `uv_build`

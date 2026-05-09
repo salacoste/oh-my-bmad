@@ -11,6 +11,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from capabilities import CallerContext, Tier, check_tier
+from events.envelope import ActorKind  # noqa: IMP001 — packages/
 from registry_state.schema import (  # noqa: IMP001 — mcp-servers→services allowed per AC-7/Arch
     Session,
     Task,
@@ -54,7 +55,7 @@ async def _validate_session_exists(
 def register_tools(
     mcp: FastMCP,
     session_maker: async_sessionmaker[AsyncSession],
-    actor_kind: str,
+    actor_kind: ActorKind,
     actor_id: str,
 ) -> None:
     """Register 3 bounded-write MCP tools on *mcp*."""

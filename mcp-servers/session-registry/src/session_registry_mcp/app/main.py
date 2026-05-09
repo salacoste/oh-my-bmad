@@ -21,6 +21,7 @@ import atexit
 import logging
 from typing import TYPE_CHECKING
 
+from events.envelope import ActorKind  # noqa: IMP001 — packages/
 from mcp.server.fastmcp import FastMCP
 from registry_state.adapters.sqlite_store import (  # noqa: IMP001 — mcp-servers→services allowed per AC-7/Arch
     create_engine,
@@ -36,7 +37,7 @@ log = logging.getLogger(__name__)
 def build_server(
     *,
     db_path: str = "",
-    actor_kind: str,
+    actor_kind: ActorKind,
     actor_id: str,
     _session_maker: async_sessionmaker | None = None,
 ) -> FastMCP:
@@ -46,7 +47,7 @@ def build_server(
 
     Args:
         db_path: Path to the SQLite database file (production).
-        actor_kind: One of ``operator|orchestrator|worker|system``.
+        actor_kind: One of ``operator|orchestrator|worker|system|clawhip``.
         actor_id: Non-empty string identifying the calling actor.
         _session_maker: Override session maker (for testing with in-memory DB).
 

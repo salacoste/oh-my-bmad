@@ -133,6 +133,11 @@ class TestCheckTierDenied:
 
 
 class TestCheckTierBoundary:
+    def test_unknown_actor_kind_raises_denied(self) -> None:
+        caller = CallerContext(actor_kind="bogus", actor_id="x")
+        with pytest.raises(CapabilityDenied, match="unknown actor_kind"):
+            check_tier("test_action", caller, Tier.ONE)
+
     def test_tier_zero_always_allowed(self) -> None:
         for kind in ("operator", "system", "clawhip", "orchestrator", "worker"):
             caller = CallerContext(actor_kind=kind, actor_id="id")

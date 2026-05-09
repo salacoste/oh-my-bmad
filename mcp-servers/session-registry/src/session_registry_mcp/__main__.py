@@ -10,7 +10,7 @@ SESSION_REGISTRY_DB_PATH  (REQUIRED)
     Missing or empty → exit code 2 with stderr message.
 
 SESSION_REGISTRY_ACTOR_KIND  (REQUIRED)
-    One of ``operator|orchestrator|worker|system``.
+    One of ``operator|orchestrator|worker|system|clawhip``.
     Missing or empty → exit code 2 with stderr message.
 
 SESSION_REGISTRY_ACTOR_ID  (REQUIRED)
@@ -27,10 +27,10 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Literal, get_args
 
-ActorKind = Literal["operator", "orchestrator", "worker", "system"]
-_VALID_ACTOR_KINDS = set(get_args(ActorKind))
+from events.envelope import ActorKind  # noqa: IMP001 — packages/
+
+_VALID_ACTOR_KINDS = {"operator", "orchestrator", "worker", "system", "clawhip"}
 
 
 def main() -> None:
@@ -49,7 +49,7 @@ def main() -> None:
     if not actor_kind_raw:
         print(
             "session-registry: SESSION_REGISTRY_ACTOR_KIND is required but not set or empty. "
-            "Set it to one of: operator|orchestrator|worker|system",
+            "Set it to one of: operator|orchestrator|worker|system|clawhip",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -62,6 +62,8 @@ def main() -> None:
         actor_kind = "worker"
     elif actor_kind_raw == "system":
         actor_kind = "system"
+    elif actor_kind_raw == "clawhip":
+        actor_kind = "clawhip"
     else:
         print(
             f"session-registry: SESSION_REGISTRY_ACTOR_KIND={actor_kind_raw!r} is invalid. "
