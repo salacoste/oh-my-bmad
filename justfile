@@ -266,6 +266,7 @@ cli *ARGS:
         echo "Error: stack not running. Run \`just dev\` first." >&2
         exit 1
     fi
+    # Must match name: in docker-compose.yml
     project="omb"
     network="${project}_oh-my-bmad-net"
     if ! docker image inspect oh-my-bmad-console-cli:local >/dev/null 2>&1; then

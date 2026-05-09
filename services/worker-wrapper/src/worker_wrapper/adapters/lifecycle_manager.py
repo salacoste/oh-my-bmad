@@ -132,12 +132,16 @@ class LifecycleManager:
         # APPROVAL_GRANTED is an invalid transition.
         if not was_new and self._fsm.current_state != WorkerState.COMPLETED:
             try:
+                transitioned = False
                 if self._fsm.current_state == WorkerState.AWAITING_APPROVAL:
                     self._fsm.transition(LifecycleEvent.APPROVAL_GRANTED)
+                    transitioned = True
                 if self._fsm.current_state in {WorkerState.RUNNING, WorkerState.RESUMED}:
                     self._fsm.transition(LifecycleEvent.TASK_COMPLETED)
-                self._gated_action_count += 1
-                self._persist_state()
+                    transitioned = True
+                if transitioned:
+                    self._gated_action_count += 1
+                    self._persist_state()
             except InvalidTransitionError:
                 logger.warning(
                     "fast_forward_skipped",
