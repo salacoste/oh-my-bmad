@@ -324,7 +324,7 @@ async def process_task(
                         label=f"budget_exceeded_{task_id}",
                     )
                     break
-            else:
+            if tokens is None:
                 log.debug(
                     "budget_tracking_no_telemetry",
                     task_id=task_id,
@@ -341,7 +341,13 @@ async def process_task(
     pr_url: str | None = None
     pr_number: int | None = None
     pr_branch: str | None = None
-    if metrics.ci_state == "green" and repo and plan_result.steps:
+    if (
+        metrics.ci_state == "green"
+        and repo
+        and plan_result.steps
+        and blockers_count == 0
+        and (tracker is None or not tracker.is_exceeded)
+    ):
         pr_result = await _create_pr_draft(
             settings,
             task_id,
