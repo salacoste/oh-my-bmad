@@ -324,6 +324,14 @@ async def process_task(
                         label=f"budget_exceeded_{task_id}",
                     )
                     return
+            else:
+                log.debug(
+                    "budget_tracking_no_telemetry",
+                    task_id=task_id,
+                    step=step.step,
+                    tracker_used=tracker.used,
+                    tracker_limit=tracker.limit,
+                )
 
     # Emit task.completed with synthesized summary and FR9 structured metrics.
     metrics = parse_step_metrics(step_outputs)

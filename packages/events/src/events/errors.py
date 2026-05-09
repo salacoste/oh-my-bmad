@@ -69,12 +69,13 @@ class WorktreeLockHeld(EventsError):  # noqa: N818
 
 
 class BudgetExceeded(EventsError):  # noqa: N818
-    """Exception for budget-exceeded signaling within the orchestrator-adapter.
+    """Reserved for future internal signaling of budget breaches.
 
-    Part of the typed exception hierarchy (AC-8). The public interface for
-    budget breaches is the ``task.budget_exceeded`` event — consumers should
-    listen for the event, not catch this exception. This class is available
-    for future internal signaling (e.g. Story 5.17a resume-after-approval).
+    The public interface for budget breaches is the ``task.budget_exceeded``
+    event — consumers should listen for the event, not catch this exception.
+    Planned for internal signaling in Story 5.17a (resume-after-approval).
+    Currently unused; the event-payload path (``TaskBudgetExceededPayload``)
+    is used exclusively.
     """
 
     def __init__(self, task_id: str, token_limit: int, tokens_used: int, step: int) -> None:

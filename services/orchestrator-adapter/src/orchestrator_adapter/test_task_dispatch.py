@@ -522,6 +522,20 @@ def test_parse_token_usage_empty() -> None:
     assert parse_token_usage("") is None
 
 
+def test_parse_token_usage_false_positive_incidental_text() -> None:
+    """Incidental text mentioning tokens is captured — documents known fragility."""
+    # "500 tokens in it" matches the fallback regex, so this returns 500.
+    # This test documents that behavior so regressions are caught if OMC output changes.
+    result = parse_token_usage("file has 500 tokens in it")
+    assert result == 500
+
+
+def test_parse_token_usage_mixed_real_and_incidental() -> None:
+    """Real usage patterns and incidental mentions are summed together."""
+    result = parse_token_usage("Used 100 tokens\nfile has 500 tokens in it")
+    assert result == 600
+
+
 # --- Story 5.15: BudgetTracker ---
 
 
