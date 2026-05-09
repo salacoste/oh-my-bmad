@@ -262,11 +262,11 @@ build: build-base
 cli *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
-    project=$(docker compose ls -q 2>/dev/null | grep -F "$(basename "$PWD")" | head -1 || true)
-    if [ -z "${project}" ]; then
+    if ! docker compose ps --quiet 2>/dev/null | head -1 | grep -q .; then
         echo "Error: stack not running. Run \`just dev\` first." >&2
         exit 1
     fi
+    project="omb"
     network="${project}_oh-my-bmad-net"
     if ! docker image inspect oh-my-bmad-console-cli:local >/dev/null 2>&1; then
         echo "Error: console-cli image not found. Run \`just build\` first." >&2

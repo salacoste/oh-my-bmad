@@ -126,11 +126,24 @@ class LifecycleManager:
             factory=self._execute_approval,
         )
         # Cache hit on a restored FSM that never reached COMPLETED — fast-forward.
+        # Guard: only apply APPROVAL_GRANTED if the FSM is in a state that
+        # accepts it (AWAITING_APPROVAL). If the sidecar was written before
+        # AWAITING_APPROVAL was persisted, the FSM might be in RUNNING where
+        # APPROVAL_GRANTED is an invalid transition.
         if not was_new and self._fsm.current_state != WorkerState.COMPLETED:
-            self._fsm.transition(LifecycleEvent.APPROVAL_GRANTED)
-            self._fsm.transition(LifecycleEvent.TASK_COMPLETED)
-            self._gated_action_count += 1
-            self._persist_state()
+            try:
+                if self._fsm.current_state == WorkerState.AWAITING_APPROVAL:
+                    self._fsm.transition(LifecycleEvent.APPROVAL_GRANTED)
+                if self._fsm.current_state in {WorkerState.RUNNING, WorkerState.RESUMED}:
+                    self._fsm.transition(LifecycleEvent.TASK_COMPLETED)
+                self._gated_action_count += 1
+                self._persist_state()
+            except InvalidTransitionError:
+                logger.warning(
+                    "fast_forward_skipped",
+                    task_id=self._task_id,
+                    current_state=self._fsm.current_state.value,
+                )
         logger.info("approval_processed", idem_key=idempotency_key, was_new=was_new)
         return self._fsm.current_state
 
