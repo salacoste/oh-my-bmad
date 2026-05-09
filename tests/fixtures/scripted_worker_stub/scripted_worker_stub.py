@@ -2,8 +2,8 @@
 
 Story 5.16 / FR34 / NFR-M4: this script proves that the platform's
 worker-wrapper layer is swappable via a single ``WORKER_IMAGE`` env-var
-override. It connects to the same three MCP servers as the real worker
-(``task-registry``, ``session-registry``, ``clawhip-bridge``), detects
+override. It connects to the ``clawhip-bridge`` MCP server (using the
+same ``StdioServerParameters`` pattern as the real worker), detects
 ``task.created`` events from the JSONL log, and emits the canonical task
 lifecycle events via ``clawhip-bridge``'s ``emit_event`` tool.
 
@@ -35,6 +35,7 @@ import logging
 import os
 import signal
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -192,7 +193,7 @@ def _scenario_with_pr(task_id: str, session_id: str) -> list[dict[str, Any]]:
     return events
 
 
-SCENARIOS: dict[str, type[...]] = {  # type: ignore[valid-type]
+SCENARIOS: dict[str, Callable[[str, str], list[dict[str, Any]]]] = {  # type: ignore[valid-type]
     "simple_green": _scenario_simple_green,
     "with_pr": _scenario_with_pr,
 }
@@ -234,6 +235,7 @@ async def _emit_via_clawhip(
     try:
         return json.loads(raw) if raw else {}
     except json.JSONDecodeError:
+        log.warning("emit_via_clawhip_non_json_response", raw=raw[:200])
         return {"raw": raw}
 
 
@@ -253,6 +255,9 @@ def _read_new_lines(path: Path, offset: int) -> tuple[int, list[dict[str, Any]]]
             if not raw:
                 break
             if not raw.endswith(b"\n"):
+                # Advance offset past partial line so next poll doesn't
+                # re-read it forever (will be re-read when complete).
+                new_offset += len(raw)
                 break
             line = raw.rstrip(b"\r\n").strip()
             if not line:

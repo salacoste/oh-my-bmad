@@ -39,21 +39,29 @@ def build_if_missing() -> None:
     sha = _compute_source_sha()
     sha_tag = f"scripted-worker-stub:sha-{sha}"
 
-    check = subprocess.run(
-        ["docker", "images", "-q", sha_tag],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    if check.stdout.strip():
-        subprocess.run(["docker", "tag", sha_tag, _LATEST_TAG], check=True)
-        return
+    try:
+        check = subprocess.run(
+            ["docker", "images", "-q", sha_tag],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        if check.stdout.strip():
+            subprocess.run(["docker", "tag", sha_tag, _LATEST_TAG], check=True)
+            return
 
-    subprocess.run(
-        ["docker", "build", "-t", sha_tag, "-f", str(_DOCKERFILE), str(_REPO_ROOT)],
-        check=True,
-    )
-    subprocess.run(["docker", "tag", sha_tag, _LATEST_TAG], check=True)
+        subprocess.run(
+            ["docker", "build", "-t", sha_tag, "-f", str(_DOCKERFILE), str(_REPO_ROOT)],
+            check=True,
+        )
+        subprocess.run(["docker", "tag", sha_tag, _LATEST_TAG], check=True)
+    except subprocess.CalledProcessError as exc:
+        print(
+            f"error: docker operation failed for scripted-worker-stub (rc={exc.returncode}). "
+            f"Is Docker running?\n  cmd: {exc.cmd}",
+            file=sys.stderr,
+        )
+        raise
 
 
 def main() -> int:
