@@ -34,6 +34,7 @@ from fastapi import APIRouter, Path, Request, Response
 from fastapi.exceptions import HTTPException
 from idempotency import IdempotencyCacheStore
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from registry_api.lifecycle import STATE_NEXT_COMMANDS
 from registry_state.schema import Event, Task  # noqa: IMP001 — services→services allowed per AC-16
 from sqlalchemy import select
 
@@ -80,18 +81,8 @@ ResponseSlotCache = cachetools.TTLCache[tuple[str, str], ResponseSlot]
 # UUIDv7 task-id pattern: t- prefix + standard UUIDv7 hex shape
 _TASK_ID_PATTERN = r"^t-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 
-# Phase 1 next-commands lookup. Full lifecycle logic in Stories 5.x / 6.x.
-_NEXT_COMMANDS: dict[str, list[str]] = {
-    "pending": ["stop"],
-    "planning": ["stop"],
-    "plan_ready": ["approve", "reject", "stop"],
-    "awaiting_approval": ["approve", "reject", "stop"],
-    "executing": ["stop"],
-    "completed": [],
-    "failed": ["retry"],
-    "stopped": [],
-    "blocked": ["retry", "stop"],
-}
+# Phase 1 next-commands lookup — derived from lifecycle.canonical map.
+_NEXT_COMMANDS = STATE_NEXT_COMMANDS
 
 
 def _next_commands_for(status: str) -> list[str]:
@@ -422,7 +413,7 @@ async def post_tasks(
         return event_id
 
     cache_hit, was_run = await idempotency_cache.get_or_run(
-        f"{actor_id}:{idempotency_key}",
+        f"{actor_id}\x00{idempotency_key}",
         request_id=request_id,
         factory=_factory,
     )

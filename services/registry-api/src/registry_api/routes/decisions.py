@@ -32,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from registry_state.schema import Task  # noqa: IMP001 — services→services allowed per AC-16
 from sqlalchemy import select
 
+from registry_api.lifecycle import ACTION_VALID_STATES
 from registry_api.routes.tasks import ResponseSlot, ResponseSlotCache
 
 log = logging.getLogger("registry_api.routes.decisions")
@@ -41,13 +42,8 @@ IdempotencyStatus = Literal["applied", "replayed"]
 # UUIDv7 task-id pattern: t- prefix + standard UUIDv7 hex shape
 _TASK_ID_PATTERN = r"^t-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 
-# State precondition rules (AC-3).
-_VALID_STATES: dict[str, set[str]] = {
-    "approve": {"plan_ready", "awaiting_approval"},
-    "reject": {"plan_ready", "awaiting_approval"},
-    "stop": {"pending", "planning", "plan_ready", "awaiting_approval", "executing", "blocked"},
-    "retry": {"blocked", "failed"},
-}
+# State precondition rules (AC-3) — derived from lifecycle.canonical map.
+_VALID_STATES = ACTION_VALID_STATES
 
 # Status code per action (AC-2): approve/reject → 202, stop/retry → 200.
 _STATUS_CODE_BY_ACTION: dict[str, int] = {
@@ -176,6 +172,12 @@ async def post_decision(
         await writer.append(envelope)
 
         # AC-8: license override branch — emit second audit event.
+        # Accepted risk: two sequential writer.append calls with no
+        # transactional boundary.  If the first succeeds but the second
+        # fails (e.g. I/O error), the approval is recorded without the
+        # required license-override audit event.  A future story should
+        # introduce a batch/atomic append on the writer, or a
+        # compensating reconciliation mechanism.
         if body.action == "approve" and body.override == "license":
             override_event_id = new_event_id(clock=clock)
             override_payload = LicenseOverridePayload(
