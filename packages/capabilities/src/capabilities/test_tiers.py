@@ -238,14 +238,13 @@ class TestCheckTierWithApproval:
         lookup.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_tier3_allowed_when_lookup_is_none(self) -> None:
-        """Tier-3 with approval_lookup=None — inner check_tier gets
-        has_approval=True, so only the actor-kind gate applies."""
+    async def test_tier3_raises_when_lookup_is_none(self) -> None:
+        """Tier-3 with approval_lookup=None raises ValueError — callers
+        must supply a lookup for Tier-3 actions."""
         from capabilities import check_tier_with_approval
 
         caller = CallerContext(actor_kind="operator", actor_id="op-1", task_id="t-1")
-        result = await check_tier_with_approval(
-            "git_push", caller, Tier.THREE, approval_lookup=None,
-        )
-        assert isinstance(result, CapabilityOk)
-        assert result.tier == Tier.THREE
+        with pytest.raises(ValueError, match="approval_lookup is required"):
+            await check_tier_with_approval(
+                "git_push", caller, Tier.THREE, approval_lookup=None,
+            )

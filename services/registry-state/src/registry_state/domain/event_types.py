@@ -164,6 +164,7 @@ register("file.edited", "1.0.1", FileEditedPayload)
 register("task.budget_exceeded", "1.0.0", TaskBudgetExceededPayload)
 
 # Story 6.2 — tier3.action_attempted audit event (FR38).
+# Emitter added in Story 6.5.
 register("tier3.action_attempted", "1.0.0", Tier3ActionAttemptedPayload)
 
 # Story 6.4 — operator decision event types (FR7, FR41).

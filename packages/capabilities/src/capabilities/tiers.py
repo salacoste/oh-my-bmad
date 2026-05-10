@@ -116,8 +116,10 @@ async def check_tier_with_approval(
     awaits *approval_lookup(task_id, action)* — if it returns False, raises
     CapabilityDenied. Tier 0-2 skip the approval lookup entirely.
     """
+    if required_tier >= Tier.THREE and approval_lookup is None:
+        raise ValueError("approval_lookup is required for Tier-3 actions")
     check_tier(action, caller, required_tier, has_approval=True)
-    if required_tier >= Tier.THREE and approval_lookup is not None:
+    if required_tier >= Tier.THREE:
         task_id = caller.task_id or ""
         approved = await approval_lookup(task_id, action)
         if not approved:

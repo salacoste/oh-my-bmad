@@ -703,10 +703,10 @@ class TestApprovalLookup:
     ) -> None:
         """Approval.granted event in JSONL matches."""
         from events.canonical import to_canonical_json
-        from events.payloads import Tier3ActionAttemptedPayload
+        from events.payloads import ApprovalGrantedPayload
 
-        # Register approval.granted with a minimal payload model for this test.
-        _reg("approval.granted", "1.0.0", Tier3ActionAttemptedPayload)
+        # Register approval.granted with its correct payload model.
+        _reg("approval.granted", "1.0.0", ApprovalGrantedPayload)
 
         tid = _task_id(99)
         envelope = EventEnvelope.create(
@@ -716,7 +716,7 @@ class TestApprovalLookup:
             emitted_at=fixed_clock.now(),
             emitted_at_monotonic_ns=fixed_clock.monotonic_ns(),
             actor=Actor(kind="operator", id="op-1"),
-            payload={"task_id": tid, "action": "git_push", "accepted": True},
+            payload={"task_id": tid, "decision_id": "d-1", "actor_id": "op-1"},
             request_id=new_request_id(clock=fixed_clock),
         )
         day_path = current_day_path(tmp_path, fixed_clock.now())
