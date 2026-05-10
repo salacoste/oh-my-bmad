@@ -710,6 +710,12 @@ class Tier3ActionAttemptedPayload(BaseModel):
     accepted: bool
     reason: str | None = Field(default=None, min_length=1, max_length=4096)
 
+    @model_validator(mode="after")
+    def _reason_required_on_denial(self) -> Tier3ActionAttemptedPayload:
+        if not self.accepted and self.reason is None:
+            raise ValueError("reason is required when accepted=False")
+        return self
+
 
 class Tier3ActionPerformedPayload(BaseModel):
     """Payload for the ``tier3.action_performed`` event (FR38 / Story 6.6).
@@ -726,6 +732,12 @@ class Tier3ActionPerformedPayload(BaseModel):
     accepted: bool
     approval_event_id: str | None = Field(default=None, min_length=1, max_length=128)
     reason: str | None = Field(default=None, min_length=1, max_length=4096)
+
+    @model_validator(mode="after")
+    def _reason_required_on_denial(self) -> Tier3ActionPerformedPayload:
+        if not self.accepted and self.reason is None:
+            raise ValueError("reason is required when accepted=False")
+        return self
 
 
 # ---------------------------------------------------------------------------

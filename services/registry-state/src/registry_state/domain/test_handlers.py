@@ -1019,6 +1019,7 @@ async def test_story66_handlers_raise_materializer_error_on_missing_task(
         actor=_ACTOR,
         payload=Tier3ActionAttemptedPayload(
             action="git_push", task_id=missing_id, accepted=False,
+            reason="denied",
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
     )
