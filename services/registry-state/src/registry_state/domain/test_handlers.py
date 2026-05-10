@@ -29,6 +29,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from registry_state.adapters.sqlite_store import get_session
 from registry_state.domain.errors import MaterializerError
 from registry_state.domain.event_types import (
+    ApprovalGrantedPayload,
+    ApprovalRejectedPayload,
     TaskApprovalRequestedPayload,
     TaskBlockerRaisedPayload,
     TaskCompletedPayload,
@@ -36,9 +38,13 @@ from registry_state.domain.event_types import (
     TaskExecutionStartedPayload,
     TaskPlanningStartedPayload,
     TaskPlanReadyPayload,
+    TaskRetryRequestedPayload,
+    TaskStopRequestedPayload,
     TaskSummaryEmittedPayload,
 )
 from registry_state.domain.handlers import (
+    handle_approval_granted,
+    handle_approval_rejected,
     handle_task_approval_requested,
     handle_task_blocker_raised,
     handle_task_completed,
@@ -46,6 +52,8 @@ from registry_state.domain.handlers import (
     handle_task_execution_started,
     handle_task_plan_ready,
     handle_task_planning_started,
+    handle_task_retry_requested,
+    handle_task_stop_requested,
     handle_task_summary_emitted,
 )
 from registry_state.schema import Base, Task
@@ -90,6 +98,11 @@ def _ensure_event_types_registered() -> None:
     _reg("task.summary_emitted", "1.0.0", TaskSummaryEmittedPayload)
     _reg("task.approval_requested", "1.0.0", TaskApprovalRequestedPayload)
     _reg("task.completed", "1.0.0", TaskCompletedPayload)
+    # Story 6.5 — decision audit event types.
+    _reg("approval.granted", "1.0.0", ApprovalGrantedPayload)
+    _reg("approval.rejected", "1.0.0", ApprovalRejectedPayload)
+    _reg("task.stop_requested", "1.0.0", TaskStopRequestedPayload)
+    _reg("task.retry_requested", "1.0.0", TaskRetryRequestedPayload)
 
 
 @pytest.fixture
@@ -547,3 +560,237 @@ async def test_story28_handlers_raise_materializer_error_on_missing_task(
     )
     with pytest.raises(MaterializerError):
         await handle_task_completed(db_session, env_c)
+
+
+# ===========================================================================
+# Story 6.5 — Decision audit event handler tests (AC-1 through AC-5)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_approval_granted_updates_last_event_id(
+    db_session: AsyncSession,
+) -> None:
+    """handle_approval_granted updates last_event_id + updated_at; status unchanged (AC-1)."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=101)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng = Random(301)
+    clk = FrozenClock(mono_ns=10_000_000, now=FROZEN_EPOCH)
+    env_grant = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="approval.granted",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=ApprovalGrantedPayload(
+            task_id=task_id, decision_id="d-aaa", actor_id="op-1",
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    await handle_approval_granted(db_session, env_grant)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.last_event_id == env_grant.event_id
+    assert task.updated_at == env_grant.emitted_at
+    assert task.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_approval_rejected_updates_last_event_id(
+    db_session: AsyncSession,
+) -> None:
+    """handle_approval_rejected updates last_event_id + updated_at; status unchanged (AC-2)."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=102)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng = Random(302)
+    clk = FrozenClock(mono_ns=11_000_000, now=FROZEN_EPOCH)
+    env_reject = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="approval.rejected",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=ApprovalRejectedPayload(
+            task_id=task_id, decision_id="d-bbb", actor_id="op-1", reason="bad plan",
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    await handle_approval_rejected(db_session, env_reject)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.last_event_id == env_reject.event_id
+    assert task.updated_at == env_reject.emitted_at
+    assert task.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_task_stop_requested_sets_status_stopped(
+    db_session: AsyncSession,
+) -> None:
+    """handle_task_stop_requested sets status='stopped' (AC-3)."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=103)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng = Random(303)
+    clk = FrozenClock(mono_ns=12_000_000, now=FROZEN_EPOCH)
+    env_stop = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.stop_requested",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskStopRequestedPayload(
+            task_id=task_id, actor_id="op-1",
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    await handle_task_stop_requested(db_session, env_stop)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.status == "stopped"
+    assert task.last_event_id == env_stop.event_id
+    assert task.updated_at == env_stop.emitted_at
+
+
+@pytest.mark.asyncio
+async def test_task_retry_requested_updates_last_event_id(
+    db_session: AsyncSession,
+) -> None:
+    """handle_task_retry_requested updates last_event_id + updated_at; status unchanged (AC-4)."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=104)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng = Random(304)
+    clk = FrozenClock(mono_ns=13_000_000, now=FROZEN_EPOCH)
+    env_retry = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.retry_requested",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskRetryRequestedPayload(
+            task_id=task_id, decision_id="d-ccc", actor_id="op-1", hint="focus on X",
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    await handle_task_retry_requested(db_session, env_retry)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.last_event_id == env_retry.event_id
+    assert task.updated_at == env_retry.emitted_at
+    assert task.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_story65_handlers_raise_materializer_error_on_missing_task(
+    db_session: AsyncSession,
+) -> None:
+    """All 4 Story 6.5 handlers raise MaterializerError when task is missing."""
+    rng = Random(9999)
+    clk = FrozenClock(mono_ns=20_000_000, now=FROZEN_EPOCH)
+    missing_id = new_task_id(clock=clk, rng=rng)
+
+    env_grant = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="approval.granted",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=ApprovalGrantedPayload(
+            task_id=missing_id, decision_id="d-x1", actor_id="op-1",
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    with pytest.raises(MaterializerError):
+        await handle_approval_granted(db_session, env_grant)
+
+    env_reject = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="approval.rejected",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=ApprovalRejectedPayload(
+            task_id=missing_id, decision_id="d-x2", actor_id="op-1",
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    with pytest.raises(MaterializerError):
+        await handle_approval_rejected(db_session, env_reject)
+
+    env_stop = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.stop_requested",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskStopRequestedPayload(
+            task_id=missing_id, actor_id="op-1",
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    with pytest.raises(MaterializerError):
+        await handle_task_stop_requested(db_session, env_stop)
+
+    env_retry = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.retry_requested",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskRetryRequestedPayload(
+            task_id=missing_id, decision_id="d-x3", actor_id="op-1",
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    with pytest.raises(MaterializerError):
+        await handle_task_retry_requested(db_session, env_retry)
+
+
+@pytest.mark.asyncio
+async def test_story65_audit_fields_in_envelope(db_session: AsyncSession) -> None:
+    """AC-5: Envelope carries NFR-S3 audit fields (actor, emitted_at, request_id, payload)."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=105)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng = Random(305)
+    clk = FrozenClock(mono_ns=14_000_000, now=FROZEN_EPOCH)
+    envelope = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="approval.granted",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=ApprovalGrantedPayload(
+            task_id=task_id, decision_id="d-audit", actor_id="op-1",
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    assert envelope.actor.kind == "system"
+    assert envelope.actor.id == "test-handlers"
+    assert envelope.emitted_at is not None
+    assert envelope.request_id is not None
+    assert isinstance(envelope.payload, ApprovalGrantedPayload)
+    assert envelope.payload.task_id == task_id
+    assert envelope.payload.decision_id == "d-audit"

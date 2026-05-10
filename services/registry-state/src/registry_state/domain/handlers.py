@@ -32,6 +32,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_state.domain.errors import MaterializerError
 from registry_state.domain.event_types import (
+    ApprovalGrantedPayload,
+    ApprovalRejectedPayload,
     TaskApprovalRequestedPayload,
     TaskBlockerRaisedPayload,
     TaskCompletedPayload,
@@ -39,6 +41,8 @@ from registry_state.domain.event_types import (
     TaskExecutionStartedPayload,
     TaskPlanningStartedPayload,
     TaskPlanReadyPayload,
+    TaskRetryRequestedPayload,
+    TaskStopRequestedPayload,
     TaskSummaryEmittedPayload,
 )
 from registry_state.schema import Session as SessionRow
@@ -308,8 +312,123 @@ async def handle_task_completed(session: AsyncSession, envelope: EventEnvelope) 
         )
 
 
+# ---------------------------------------------------------------------------
+# Story 6.5 — Decision audit event handlers (AC-1 through AC-4)
+# ---------------------------------------------------------------------------
+
+
+async def handle_approval_granted(session: AsyncSession, envelope: EventEnvelope) -> None:
+    """Update ``updated_at`` + ``last_event_id`` for ``approval.granted``.
+
+    Does NOT change task status — the worker lifecycle FSM (Story 6.7) owns
+    the executing/planning transition. Premature status change would break
+    the FSM contract.
+
+    Raises ``MaterializerError`` if the task row does not exist.
+    """
+    payload = _hydrate(envelope.payload, ApprovalGrantedPayload)
+    assert isinstance(payload, ApprovalGrantedPayload)
+    stmt = (
+        update(Task)
+        .where(Task.id == payload.task_id)
+        .values(
+            last_event_id=envelope.event_id,
+            updated_at=envelope.emitted_at,
+        )
+    )
+    result = cast(CursorResult[tuple[()]], await session.execute(stmt))
+    if result.rowcount != 1:
+        raise MaterializerError(
+            event_id=envelope.event_id,
+            event_type=envelope.type,
+            reason=f"task {payload.task_id!r} not found — out-of-order replay?",
+        )
+
+
+async def handle_approval_rejected(session: AsyncSession, envelope: EventEnvelope) -> None:
+    """Update ``updated_at`` + ``last_event_id`` for ``approval.rejected``.
+
+    Does NOT change task status — rejection is a decision, not a lifecycle
+    transition. The task stays in its current status.
+
+    Raises ``MaterializerError`` if the task row does not exist.
+    """
+    payload = _hydrate(envelope.payload, ApprovalRejectedPayload)
+    assert isinstance(payload, ApprovalRejectedPayload)
+    stmt = (
+        update(Task)
+        .where(Task.id == payload.task_id)
+        .values(
+            last_event_id=envelope.event_id,
+            updated_at=envelope.emitted_at,
+        )
+    )
+    result = cast(CursorResult[tuple[()]], await session.execute(stmt))
+    if result.rowcount != 1:
+        raise MaterializerError(
+            event_id=envelope.event_id,
+            event_type=envelope.type,
+            reason=f"task {payload.task_id!r} not found — out-of-order replay?",
+        )
+
+
+async def handle_task_stop_requested(session: AsyncSession, envelope: EventEnvelope) -> None:
+    """Set task status to ``"stopped"`` for ``task.stop_requested``.
+
+    Stop is a terminal state — no FSM coupling needed. The operator's stop
+    decision is the final word.
+
+    Raises ``MaterializerError`` if the task row does not exist.
+    """
+    payload = _hydrate(envelope.payload, TaskStopRequestedPayload)
+    assert isinstance(payload, TaskStopRequestedPayload)
+    stmt = (
+        update(Task)
+        .where(Task.id == payload.task_id)
+        .values(
+            status="stopped",
+            last_event_id=envelope.event_id,
+            updated_at=envelope.emitted_at,
+        )
+    )
+    result = cast(CursorResult[tuple[()]], await session.execute(stmt))
+    if result.rowcount != 1:
+        raise MaterializerError(
+            event_id=envelope.event_id,
+            event_type=envelope.type,
+            reason=f"task {payload.task_id!r} not found — out-of-order replay?",
+        )
+
+
+async def handle_task_retry_requested(session: AsyncSession, envelope: EventEnvelope) -> None:
+    """Update ``updated_at`` + ``last_event_id`` for ``task.retry_requested``.
+
+    Does NOT change task status — retry triggers re-planning via the worker
+    lifecycle; the materializer does not own that transition.
+
+    Raises ``MaterializerError`` if the task row does not exist.
+    """
+    payload = _hydrate(envelope.payload, TaskRetryRequestedPayload)
+    assert isinstance(payload, TaskRetryRequestedPayload)
+    stmt = (
+        update(Task)
+        .where(Task.id == payload.task_id)
+        .values(
+            last_event_id=envelope.event_id,
+            updated_at=envelope.emitted_at,
+        )
+    )
+    result = cast(CursorResult[tuple[()]], await session.execute(stmt))
+    if result.rowcount != 1:
+        raise MaterializerError(
+            event_id=envelope.event_id,
+            event_type=envelope.type,
+            reason=f"task {payload.task_id!r} not found — out-of-order replay?",
+        )
+
+
 def register_default_handlers(materializer: object) -> None:
-    """Register all 4 task-event handlers onto *materializer*.
+    """Register all 12 task-event handlers onto *materializer*.
 
     Accepts ``object`` to avoid a circular import with ``materializer.py``
     at the type level; the runtime type is ``Materializer``.  Callers
@@ -337,9 +456,16 @@ def register_default_handlers(materializer: object) -> None:
     materializer.register_handler("task.summary_emitted", handle_task_summary_emitted)
     materializer.register_handler("task.approval_requested", handle_task_approval_requested)
     materializer.register_handler("task.completed", handle_task_completed)
+    # Story 6.5 — 4 decision audit event handlers.
+    materializer.register_handler("approval.granted", handle_approval_granted)
+    materializer.register_handler("approval.rejected", handle_approval_rejected)
+    materializer.register_handler("task.stop_requested", handle_task_stop_requested)
+    materializer.register_handler("task.retry_requested", handle_task_retry_requested)
 
 
 __all__ = [
+    "handle_approval_granted",
+    "handle_approval_rejected",
     "handle_task_approval_requested",
     "handle_task_blocker_raised",
     "handle_task_completed",
@@ -347,6 +473,8 @@ __all__ = [
     "handle_task_execution_started",
     "handle_task_plan_ready",
     "handle_task_planning_started",
+    "handle_task_retry_requested",
+    "handle_task_stop_requested",
     "handle_task_summary_emitted",
     "register_default_handlers",
 ]

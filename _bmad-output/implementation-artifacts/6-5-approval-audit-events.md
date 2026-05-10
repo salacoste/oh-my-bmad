@@ -1,6 +1,6 @@
 # Story 6.5: Approval audit events (materializer handlers)
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -26,27 +26,27 @@ So that NFR-S3 (auditability) is enforced on the control plane and downstream co
 
 ## Tasks
 
-- [ ] Task 1 — Add `handle_approval_granted` handler in `handlers.py` (AC-1)
-  - [ ] Query task by `payload.task_id`; skip if not found (same pattern as `handle_task_blocker_raised`)
-  - [ ] UPDATE tasks SET `updated_at=envelope.emitted_at`, `last_event_id=envelope.event_id` WHERE id=task_id
-  - [ ] Do NOT change `status`
-- [ ] Task 2 — Add `handle_approval_rejected` handler in `handlers.py` (AC-2)
-  - [ ] Same pattern as `handle_approval_granted` — update `updated_at` + `last_event_id` only
-- [ ] Task 3 — Add `handle_task_stop_requested` handler in `handlers.py` (AC-3)
-  - [ ] UPDATE tasks SET `status="stopped"`, `updated_at=envelope.emitted_at`, `last_event_id=envelope.event_id`
-- [ ] Task 4 — Add `handle_task_retry_requested` handler in `handlers.py` (AC-4)
-  - [ ] Same pattern as `handle_approval_granted` — update `updated_at` + `last_event_id` only
-- [ ] Task 5 — Register all 4 handlers in `register_default_handlers` (AC-1–4)
-  - [ ] Add 4 `materializer.register_handler()` calls
-  - [ ] Update docstring (currently says "4 task-event handlers" — update count)
-  - [ ] Update `__all__` with new handler names
-- [ ] Task 6 — Write tests for the 4 handlers (AC-5)
-  - [ ] Seed a task in appropriate status for each handler
-  - [ ] Emit the corresponding event envelope
-  - [ ] Assert task row reflects the handler's state changes (or non-changes)
-  - [ ] Assert `last_event_id` and `updated_at` are updated
-  - [ ] Assert `events` table contains the event row
-- [ ] Task 7 — Verification + commit (AC-6, AC-7)
+- [x] Task 1 — Add `handle_approval_granted` handler in `handlers.py` (AC-1)
+  - [x] Query task by `payload.task_id`; skip if not found (same pattern as `handle_task_blocker_raised`)
+  - [x] UPDATE tasks SET `updated_at=envelope.emitted_at`, `last_event_id=envelope.event_id` WHERE id=task_id
+  - [x] Do NOT change `status`
+- [x] Task 2 — Add `handle_approval_rejected` handler in `handlers.py` (AC-2)
+  - [x] Same pattern as `handle_approval_granted` — update `updated_at` + `last_event_id` only
+- [x] Task 3 — Add `handle_task_stop_requested` handler in `handlers.py` (AC-3)
+  - [x] UPDATE tasks SET `status="stopped"`, `updated_at=envelope.emitted_at`, `last_event_id=envelope.event_id`
+- [x] Task 4 — Add `handle_task_retry_requested` handler in `handlers.py` (AC-4)
+  - [x] Same pattern as `handle_approval_granted` — update `updated_at` + `last_event_id` only
+- [x] Task 5 — Register all 4 handlers in `register_default_handlers` (AC-1–4)
+  - [x] Add 4 `materializer.register_handler()` calls
+  - [x] Update docstring (currently says "4 task-event handlers" — update count)
+  - [x] Update `__all__` with new handler names
+- [x] Task 6 — Write tests for the 4 handlers (AC-5)
+  - [x] Seed a task in appropriate status for each handler
+  - [x] Emit the corresponding event envelope
+  - [x] Assert task row reflects the handler's state changes (or non-changes)
+  - [x] Assert `last_event_id` and `updated_at` are updated
+  - [x] Assert `events` table contains the event row
+- [x] Task 7 — Verification + commit (AC-6, AC-7)
 
 ## Dev Notes
 
@@ -131,7 +131,7 @@ Never use `event=` as a kwarg with structlog loggers — clashes with positional
 
 ### Agent Model Used
 
-(TBD)
+Claude Opus 4.7 (glm-5.1)
 
 ### Debug Log References
 
@@ -139,8 +139,14 @@ None.
 
 ### Completion Notes List
 
-(TBD)
+- Implemented 4 materializer handlers: `handle_approval_granted`, `handle_approval_rejected`, `handle_task_stop_requested`, `handle_task_retry_requested`
+- All handlers follow the established `_hydrate` + `update(Task)` + `rowcount != 1` pattern from Story 2.8 handlers
+- Only `handle_task_stop_requested` changes status to `"stopped"` (terminal state); other 3 handlers update `updated_at` + `last_event_id` only
+- Registered all 4 in `register_default_handlers()`, updated docstring count from 4 to 12, updated `__all__`
+- Added 6 tests: 4 positive handler tests (AC-1 through AC-4), 1 missing-task error test, 1 audit field verification test (AC-5)
+- All 259 registry-state tests pass (0 regressions), ruff check clean, check_imports.py shows only pre-existing IMP001 violations from Story 6.4
 
 ### File List
 
-(TBD)
+- `services/registry-state/src/registry_state/domain/handlers.py` — Added 4 handler functions, registered them, updated imports/docstring/__all__
+- `services/registry-state/src/registry_state/domain/test_handlers.py` — Added 6 tests for Story 6.5 handlers
