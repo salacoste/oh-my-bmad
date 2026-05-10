@@ -711,6 +711,23 @@ class Tier3ActionAttemptedPayload(BaseModel):
     reason: str | None = Field(default=None, max_length=4096)
 
 
+class Tier3ActionPerformedPayload(BaseModel):
+    """Payload for the ``tier3.action_performed`` event (FR38 / Story 6.6).
+
+    Emitted when a Tier-3 action is actually executed after approval.
+    ``actor`` is carried on the envelope, not duplicated here.
+    ``performed_at`` is ``envelope.emitted_at`` — not duplicated.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    task_id: str = Field(min_length=1, max_length=64)
+    action: str = Field(min_length=1, max_length=2000)
+    accepted: bool
+    approval_event_id: str | None = Field(default=None, min_length=1, max_length=128)
+    reason: str | None = Field(default=None, max_length=4096)
+
+
 # ---------------------------------------------------------------------------
 # Story 6.4 — operator decision payload models (FR7, FR41).
 # ---------------------------------------------------------------------------
@@ -809,4 +826,5 @@ __all__ = [
     "TaskSummaryEmittedPayload",
     "TelegramRejectedPayload",
     "Tier3ActionAttemptedPayload",
+    "Tier3ActionPerformedPayload",
 ]

@@ -31,6 +31,7 @@ from registry_state.domain.errors import MaterializerError
 from registry_state.domain.event_types import (
     ApprovalGrantedPayload,
     ApprovalRejectedPayload,
+    LicenseOverridePayload,
     TaskApprovalRequestedPayload,
     TaskBlockerRaisedPayload,
     TaskCompletedPayload,
@@ -41,6 +42,8 @@ from registry_state.domain.event_types import (
     TaskRetryRequestedPayload,
     TaskStopRequestedPayload,
     TaskSummaryEmittedPayload,
+    Tier3ActionAttemptedPayload,
+    Tier3ActionPerformedPayload,
 )
 from registry_state.domain.handlers import (
     handle_approval_granted,
@@ -55,6 +58,9 @@ from registry_state.domain.handlers import (
     handle_task_retry_requested,
     handle_task_stop_requested,
     handle_task_summary_emitted,
+    handle_tier3_action_attempted,
+    handle_tier3_action_performed,
+    handle_tier3_license_override,
 )
 from registry_state.schema import Base, Task
 from registry_state.schema import Session as SessionRow
@@ -103,6 +109,10 @@ def _ensure_event_types_registered() -> None:
     _reg("approval.rejected", "1.0.0", ApprovalRejectedPayload)
     _reg("task.stop_requested", "1.0.0", TaskStopRequestedPayload)
     _reg("task.retry_requested", "1.0.0", TaskRetryRequestedPayload)
+    # Story 6.6 — tier-3 audit event types.
+    _reg("tier3.action_attempted", "1.0.0", Tier3ActionAttemptedPayload)
+    _reg("tier3.action_performed", "1.0.0", Tier3ActionPerformedPayload)
+    _reg("tier3.license_override", "1.0.0", LicenseOverridePayload)
 
 
 @pytest.fixture
@@ -887,3 +897,224 @@ async def test_task_stop_requested_is_idempotent(db_session: AsyncSession) -> No
     assert task is not None
     assert task.status == "stopped"
     assert task.last_event_id == env_stop2.event_id
+
+
+# ===========================================================================
+# Story 6.6 — Tier-3 audit event handler tests (AC-1 through AC-6)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_tier3_action_attempted_updates_last_event_id(
+    db_session: AsyncSession,
+) -> None:
+    """handle_tier3_action_attempted updates last_event_id + updated_at; status unchanged (AC-1)."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=201)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng = Random(501)
+    clk = FrozenClock(mono_ns=30_000_000, now=FROZEN_EPOCH)
+    env = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="tier3.action_attempted",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=Tier3ActionAttemptedPayload(
+            action="git_push", task_id=task_id, accepted=True,
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    await handle_tier3_action_attempted(db_session, env)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.last_event_id == env.event_id
+    assert task.updated_at == env.emitted_at
+    assert task.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_tier3_action_performed_updates_last_event_id(
+    db_session: AsyncSession,
+) -> None:
+    """handle_tier3_action_performed updates last_event_id + updated_at; status unchanged (AC-2)."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=202)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng = Random(502)
+    clk = FrozenClock(mono_ns=31_000_000, now=FROZEN_EPOCH)
+    env = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="tier3.action_performed",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=Tier3ActionPerformedPayload(
+            task_id=task_id, action="git_push", accepted=True,
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    await handle_tier3_action_performed(db_session, env)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.last_event_id == env.event_id
+    assert task.updated_at == env.emitted_at
+    assert task.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_tier3_license_override_updates_last_event_id(
+    db_session: AsyncSession,
+) -> None:
+    """handle_tier3_license_override updates last_event_id + updated_at; status unchanged (AC-3)."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=203)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng = Random(503)
+    clk = FrozenClock(mono_ns=32_000_000, now=FROZEN_EPOCH)
+    env = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="tier3.license_override",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=LicenseOverridePayload(
+            task_id=task_id, decision_id="d-lic", actor_id="op-1",
+            reason="operator_license_override",
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    await handle_tier3_license_override(db_session, env)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.last_event_id == env.event_id
+    assert task.updated_at == env.emitted_at
+    assert task.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_story66_handlers_raise_materializer_error_on_missing_task(
+    db_session: AsyncSession,
+) -> None:
+    """All 3 Story 6.6 handlers raise MaterializerError when task is missing."""
+    rng = Random(9998)
+    clk = FrozenClock(mono_ns=40_000_000, now=FROZEN_EPOCH)
+    missing_id = new_task_id(clock=clk, rng=rng)
+
+    env_attempt = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="tier3.action_attempted",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=Tier3ActionAttemptedPayload(
+            action="git_push", task_id=missing_id, accepted=False,
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    with pytest.raises(MaterializerError):
+        await handle_tier3_action_attempted(db_session, env_attempt)
+
+    env_performed = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="tier3.action_performed",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=Tier3ActionPerformedPayload(
+            task_id=missing_id, action="git_push", accepted=True,
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    with pytest.raises(MaterializerError):
+        await handle_tier3_action_performed(db_session, env_performed)
+
+    env_override = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="tier3.license_override",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=LicenseOverridePayload(
+            task_id=missing_id, decision_id="d-x", actor_id="op-1",
+            reason="test",
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    with pytest.raises(MaterializerError):
+        await handle_tier3_license_override(db_session, env_override)
+
+
+@pytest.mark.asyncio
+async def test_story66_audit_fields_in_envelope(db_session: AsyncSession) -> None:
+    """AC-6: Envelopes carry NFR-S3 audit fields for all 3 tier-3 event types."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=204)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+    rng = Random(504)
+    clk = FrozenClock(mono_ns=33_000_000, now=FROZEN_EPOCH)
+
+    # tier3.action_attempted
+    env_a = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="tier3.action_attempted",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=Tier3ActionAttemptedPayload(
+            action="git_push", task_id=task_id, accepted=True,
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    assert env_a.actor.kind == "system"
+    assert env_a.emitted_at is not None
+    assert env_a.request_id is not None
+    assert isinstance(env_a.payload, Tier3ActionAttemptedPayload)
+    assert env_a.payload.task_id == task_id
+
+    # tier3.action_performed
+    env_p = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="tier3.action_performed",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=Tier3ActionPerformedPayload(
+            task_id=task_id, action="git_push", accepted=True,
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    assert isinstance(env_p.payload, Tier3ActionPerformedPayload)
+    assert env_p.payload.task_id == task_id
+
+    # tier3.license_override
+    env_l = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="tier3.license_override",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=LicenseOverridePayload(
+            task_id=task_id, decision_id="d-a", actor_id="op-1",
+            reason="override",
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    assert isinstance(env_l.payload, LicenseOverridePayload)
+    assert env_l.payload.task_id == task_id

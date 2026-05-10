@@ -1,6 +1,6 @@
 # Story 6.6: Tier-3 audit events (materializer handlers)
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -28,38 +28,38 @@ So that an audit reviewer can reconstruct every sensitive operation and the task
 
 ## Tasks
 
-- [ ] Task 1 — Add `Tier3ActionPerformedPayload` model in `payloads.py` (AC-5)
-  - [ ] Add model with fields: `task_id`, `action`, `accepted` (bool), `approval_event_id` (str | None), `reason` (str | None)
-  - [ ] Add to `__all__` in payloads.py
-  - [ ] Add re-export in `event_types.py`
-  - [ ] Register `("tier3.action_performed", "1.0.0", Tier3ActionPerformedPayload)` in `event_types.py`
-  - [ ] Add to `__all__` in `event_types.py`
-- [ ] Task 2 — Extend `_extract_ids` in `materializer.py` for `tier3.*` prefix (AC-4)
-  - [ ] Change `env.type.startswith(("task.", "approval."))` to `env.type.startswith(("task.", "approval.", "tier3."))`
-- [ ] Task 3 — Add `handle_tier3_action_attempted` handler in `handlers.py` (AC-1)
-  - [ ] Import `Tier3ActionAttemptedPayload` from event_types
-  - [ ] Use `_hydrate` + `_touch_task(session, payload.task_id, envelope)` pattern
-  - [ ] Does NOT change status
-- [ ] Task 4 — Add `handle_tier3_action_performed` handler in `handlers.py` (AC-2)
-  - [ ] Import `Tier3ActionPerformedPayload` from event_types
-  - [ ] Use `_hydrate` + `_touch_task(session, payload.task_id, envelope)` pattern
-  - [ ] Does NOT change status
-- [ ] Task 5 — Add `handle_tier3_license_override` handler in `handlers.py` (AC-3)
-  - [ ] Import `LicenseOverridePayload` from event_types
-  - [ ] Use `_hydrate` + `_touch_task(session, payload.task_id, envelope)` pattern
-  - [ ] Does NOT change status
-- [ ] Task 6 — Register all 3 handlers in `register_default_handlers` (AC-1–3)
-  - [ ] Add 3 `materializer.register_handler()` calls
-  - [ ] Update `__all__` with new handler names
-  - [ ] Update section comment count
-- [ ] Task 7 — Write tests for the 3 handlers + audit field verification (AC-6, AC-7)
-  - [ ] Seed a task, emit `tier3.action_attempted`, assert `last_event_id` updated, status unchanged
-  - [ ] Seed a task, emit `tier3.action_performed`, assert `last_event_id` updated, status unchanged
-  - [ ] Seed a task, emit `tier3.license_override`, assert `last_event_id` updated, status unchanged
-  - [ ] Test all 3 handlers raise `MaterializerError` on missing task
-  - [ ] Test audit fields on envelopes (actor, emitted_at, request_id, payload.task_id)
-  - [ ] Register tier3 event types in the autouse fixture
-- [ ] Task 8 — Verification + commit (AC-7, AC-8)
+- [x] Task 1 — Add `Tier3ActionPerformedPayload` model in `payloads.py` (AC-5)
+  - [x] Add model with fields: `task_id`, `action`, `accepted` (bool), `approval_event_id` (str | None), `reason` (str | None)
+  - [x] Add to `__all__` in payloads.py
+  - [x] Add re-export in `event_types.py`
+  - [x] Register `("tier3.action_performed", "1.0.0", Tier3ActionPerformedPayload)` in `event_types.py`
+  - [x] Add to `__all__` in `event_types.py`
+- [x] Task 2 — Extend `_extract_ids` in `materializer.py` for `tier3.*` prefix (AC-4)
+  - [x] Change `env.type.startswith(("task.", "approval."))` to `env.type.startswith(("task.", "approval.", "tier3."))`
+- [x] Task 3 — Add `handle_tier3_action_attempted` handler in `handlers.py` (AC-1)
+  - [x] Import `Tier3ActionAttemptedPayload` from event_types
+  - [x] Use `_hydrate` + `_touch_task(session, payload.task_id, envelope)` pattern
+  - [x] Does NOT change status
+- [x] Task 4 — Add `handle_tier3_action_performed` handler in `handlers.py` (AC-2)
+  - [x] Import `Tier3ActionPerformedPayload` from event_types
+  - [x] Use `_hydrate` + `_touch_task(session, payload.task_id, envelope)` pattern
+  - [x] Does NOT change status
+- [x] Task 5 — Add `handle_tier3_license_override` handler in `handlers.py` (AC-3)
+  - [x] Import `LicenseOverridePayload` from event_types
+  - [x] Use `_hydrate` + `_touch_task(session, payload.task_id, envelope)` pattern
+  - [x] Does NOT change status
+- [x] Task 6 — Register all 3 handlers in `register_default_handlers` (AC-1–3)
+  - [x] Add 3 `materializer.register_handler()` calls
+  - [x] Update `__all__` with new handler names
+  - [x] Update section comment count
+- [x] Task 7 — Write tests for the 3 handlers + audit field verification (AC-6, AC-7)
+  - [x] Seed a task, emit `tier3.action_attempted`, assert `last_event_id` updated, status unchanged
+  - [x] Seed a task, emit `tier3.action_performed`, assert `last_event_id` updated, status unchanged
+  - [x] Seed a task, emit `tier3.license_override`, assert `last_event_id` updated, status unchanged
+  - [x] Test all 3 handlers raise `MaterializerError` on missing task
+  - [x] Test audit fields on envelopes (actor, emitted_at, request_id, payload.task_id)
+  - [x] Register tier3 event types in the autouse fixture
+- [x] Task 8 — Verification + commit (AC-7, AC-8)
 
 ## Dev Notes
 
@@ -201,7 +201,7 @@ Never use `event=` as a kwarg with structlog loggers -- clashes with positional 
 
 ### Agent Model Used
 
-(TBD)
+Claude Opus 4.7 (claude-opus-4-7)
 
 ### Debug Log References
 
@@ -209,8 +209,16 @@ None.
 
 ### Completion Notes List
 
-(TBD)
+- All 3 handlers follow the `_hydrate` + `_touch_task` pattern extracted in Story 6.5 review. No status changes — audit facts only.
+- `Tier3ActionPerformedPayload` model added with `accepted: bool` (always True) to match the FR38 contract. `actor` and `performed_at` intentionally omitted (carried on envelope).
+- `_extract_ids` extended with `"tier3."` prefix so events table `task_id` FK is populated for all tier-3 events.
+- 5 new tests: 3 happy-path (one per handler), 1 missing-task error case, 1 audit-field verification. All 265 registry-state tests pass.
+- No emitter-side changes — those belong to Story 6.7 (worker approval-wait state).
 
 ### File List
 
-(TBD)
+- `packages/events/src/events/payloads.py` — Added `Tier3ActionPerformedPayload` model + `__all__`
+- `services/registry-state/src/registry_state/domain/event_types.py` — Re-export + register `"tier3.action_performed"` + `__all__`
+- `services/registry-state/src/registry_state/domain/materializer.py` — Extended `_extract_ids` prefix tuple with `"tier3."`
+- `services/registry-state/src/registry_state/domain/handlers.py` — 3 new handlers + imports + registrations + `__all__`
+- `services/registry-state/src/registry_state/domain/test_handlers.py` — 5 new tests + fixture registrations

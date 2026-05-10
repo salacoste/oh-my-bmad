@@ -34,6 +34,7 @@ from registry_state.domain.errors import MaterializerError
 from registry_state.domain.event_types import (
     ApprovalGrantedPayload,
     ApprovalRejectedPayload,
+    LicenseOverridePayload,
     TaskApprovalRequestedPayload,
     TaskBlockerRaisedPayload,
     TaskCompletedPayload,
@@ -44,6 +45,8 @@ from registry_state.domain.event_types import (
     TaskRetryRequestedPayload,
     TaskStopRequestedPayload,
     TaskSummaryEmittedPayload,
+    Tier3ActionAttemptedPayload,
+    Tier3ActionPerformedPayload,
 )
 from registry_state.schema import Session as SessionRow
 from registry_state.schema import Task
@@ -296,6 +299,50 @@ async def handle_task_retry_requested(session: AsyncSession, envelope: EventEnve
     await _touch_task(session, payload.task_id, envelope)
 
 
+# ---------------------------------------------------------------------------
+# Story 6.6 — Tier-3 audit event handlers (AC-1 through AC-3)
+# ---------------------------------------------------------------------------
+
+
+async def handle_tier3_action_attempted(session: AsyncSession, envelope: EventEnvelope) -> None:
+    """Update ``updated_at`` + ``last_event_id`` for ``tier3.action_attempted``.
+
+    Does NOT change task status — the attempt is an audit fact, not a lifecycle
+    transition.
+
+    Raises ``MaterializerError`` if the task row does not exist.
+    """
+    payload = _hydrate(envelope.payload, Tier3ActionAttemptedPayload)
+    assert isinstance(payload, Tier3ActionAttemptedPayload)
+    await _touch_task(session, payload.task_id, envelope)
+
+
+async def handle_tier3_action_performed(session: AsyncSession, envelope: EventEnvelope) -> None:
+    """Update ``updated_at`` + ``last_event_id`` for ``tier3.action_performed``.
+
+    Does NOT change task status — the performance is an audit fact; the worker
+    lifecycle FSM owns downstream transitions.
+
+    Raises ``MaterializerError`` if the task row does not exist.
+    """
+    payload = _hydrate(envelope.payload, Tier3ActionPerformedPayload)
+    assert isinstance(payload, Tier3ActionPerformedPayload)
+    await _touch_task(session, payload.task_id, envelope)
+
+
+async def handle_tier3_license_override(session: AsyncSession, envelope: EventEnvelope) -> None:
+    """Update ``updated_at`` + ``last_event_id`` for ``tier3.license_override``.
+
+    Does NOT change task status — the override is an audit fact recorded
+    alongside ``approval.granted``.
+
+    Raises ``MaterializerError`` if the task row does not exist.
+    """
+    payload = _hydrate(envelope.payload, LicenseOverridePayload)
+    assert isinstance(payload, LicenseOverridePayload)
+    await _touch_task(session, payload.task_id, envelope)
+
+
 def register_default_handlers(materializer: object) -> None:
     """Register all built-in task-event handlers onto *materializer*.
 
@@ -330,6 +377,10 @@ def register_default_handlers(materializer: object) -> None:
     materializer.register_handler("approval.rejected", handle_approval_rejected)
     materializer.register_handler("task.stop_requested", handle_task_stop_requested)
     materializer.register_handler("task.retry_requested", handle_task_retry_requested)
+    # Story 6.6 — 3 tier-3 audit event handlers.
+    materializer.register_handler("tier3.action_attempted", handle_tier3_action_attempted)
+    materializer.register_handler("tier3.action_performed", handle_tier3_action_performed)
+    materializer.register_handler("tier3.license_override", handle_tier3_license_override)
 
 
 __all__ = [
@@ -345,5 +396,8 @@ __all__ = [
     "handle_task_retry_requested",
     "handle_task_stop_requested",
     "handle_task_summary_emitted",
+    "handle_tier3_action_attempted",
+    "handle_tier3_action_performed",
+    "handle_tier3_license_override",
     "register_default_handlers",
 ]

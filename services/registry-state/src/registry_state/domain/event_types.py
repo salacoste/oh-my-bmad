@@ -52,6 +52,7 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     TaskSummaryEmittedPayload,
     TelegramRejectedPayload,
     Tier3ActionAttemptedPayload,
+    Tier3ActionPerformedPayload,
 )
 from events.schema_registry import register
 
@@ -88,6 +89,7 @@ __all__ = [
     "TaskSummaryEmittedPayload",
     "TelegramRejectedPayload",
     "Tier3ActionAttemptedPayload",
+    "Tier3ActionPerformedPayload",
 ]
 
 # ---------------------------------------------------------------------------
@@ -166,6 +168,9 @@ register("task.budget_exceeded", "1.0.0", TaskBudgetExceededPayload)
 # Story 6.2 — tier3.action_attempted audit event (FR38).
 # Emitter added in Story 6.5.
 register("tier3.action_attempted", "1.0.0", Tier3ActionAttemptedPayload)
+
+# Story 6.6 — tier3.action_performed audit event (FR38).
+register("tier3.action_performed", "1.0.0", Tier3ActionPerformedPayload)
 
 # Story 6.4 — operator decision event types (FR7, FR41).
 register("approval.granted", "1.0.0", ApprovalGrantedPayload)
