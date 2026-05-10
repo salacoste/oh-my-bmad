@@ -1,6 +1,6 @@
 # Story 6.3: Tier enforcement in HTTP API middleware
 
-Status: review
+Status: done
 
 ## Story
 
