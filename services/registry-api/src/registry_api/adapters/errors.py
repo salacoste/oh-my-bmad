@@ -268,6 +268,10 @@ async def handle_capability_denied(request: Request, exc: Exception) -> JSONResp
     """
     if not isinstance(exc, CapabilityDenied):
         raise TypeError(f"expected CapabilityDenied, got {type(exc).__name__}")
+    _log.warning(
+        "tier_enforcement_denied",
+        extra={"action": exc.action, "actor_kind": exc.actor_kind, "reason": exc.reason},
+    )
     problem = ProblemDetails(
         type=_PROBLEM_TYPE_FORBIDDEN,
         title="Forbidden",

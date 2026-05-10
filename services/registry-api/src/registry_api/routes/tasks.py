@@ -75,7 +75,7 @@ class ResponseSlot:
 # Type alias for the side-channel cache. Kept here (not in app.py) to avoid
 # a circular import (app.py imports the tasks router; the router needs the
 # slot type for its handler-internal annotations).
-ResponseSlotCache = cachetools.TTLCache[str, ResponseSlot]
+ResponseSlotCache = cachetools.TTLCache[tuple[str, str], ResponseSlot]
 
 # UUIDv7 task-id pattern: t- prefix + standard UUIDv7 hex shape
 _TASK_ID_PATTERN = r"^t-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"

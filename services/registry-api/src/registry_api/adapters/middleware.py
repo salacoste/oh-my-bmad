@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import logging
 import re
+from types import MappingProxyType
 
 import structlog
 from capabilities import CallerContext, Tier, check_tier  # noqa: IMP001 — services→packages allowed
@@ -66,6 +67,7 @@ from starlette.types import ASGIApp
 # rather than duplicating the literal in two files.
 from registry_api.adapters.errors import _MUTATING_METHODS as _MUTATING_METHODS
 from registry_api.adapters.errors import _PROBLEM_MEDIA_TYPE as _PROBLEM_MEDIA_TYPE
+from registry_api.adapters.errors import _build_idempotency_extensions
 
 # Bare UUIDv7 (no prefix) — matches new_request_id / new_idempotency_key output.
 # Version nibble = 7, variant = 8/9/a/b. Same shape used by events.ids.
@@ -200,10 +202,11 @@ class ActorIdMiddleware(BaseHTTPMiddleware):
 # Phase 1 route-to-tier mapping (Story 6.3). Story 6.4 adds Tier-2 entries
 # when the /decisions endpoint lands. Keys are ``"METHOD /path/prefix"`` —
 # matched via startswith so ``"POST /v1/tasks"`` covers both
-# ``/v1/tasks`` and ``/v1/tasks/{id}``.
-ROUTE_TIER_MAP: dict[str, Tier] = {
+# ``/v1/tasks`` and ``/v1/tasks/{id}``.  Frozen via MappingProxyType so
+# tests cannot accidentally leak mutations between runs.
+ROUTE_TIER_MAP: MappingProxyType[str, Tier] = MappingProxyType({
     "POST /v1/tasks": Tier.ONE,
-}
+})
 
 
 class TierEnforcementMiddleware(BaseHTTPMiddleware):
@@ -252,7 +255,7 @@ class TierEnforcementMiddleware(BaseHTTPMiddleware):
             check_tier(route_key, caller, required_tier)
         except CapabilityDenied as exc:
             _log.warning(
-                "tier enforcement denied",
+                "tier_enforcement_denied",
                 extra={"route": route_key, "actor_id": actor_id, "reason": exc.reason},
             )
             return JSONResponse(
@@ -262,6 +265,7 @@ class TierEnforcementMiddleware(BaseHTTPMiddleware):
                     "status": 403,
                     "detail": exc.reason,
                     "instance": str(request.url),
+                    "extensions": _build_idempotency_extensions(request),
                 },
                 status_code=403,
                 media_type=_PROBLEM_MEDIA_TYPE,
@@ -272,7 +276,7 @@ class TierEnforcementMiddleware(BaseHTTPMiddleware):
     @staticmethod
     def _resolve_tier(route_key: str) -> Tier | None:
         """Match *route_key* against ``ROUTE_TIER_MAP`` by longest prefix."""
-        for prefix, tier in ROUTE_TIER_MAP.items():
+        for prefix, tier in sorted(ROUTE_TIER_MAP.items(), key=lambda kv: len(kv[0]), reverse=True):
             if route_key == prefix or route_key.startswith(prefix + "/"):
                 return tier
         return None

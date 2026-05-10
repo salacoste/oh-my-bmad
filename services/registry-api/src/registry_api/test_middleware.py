@@ -362,9 +362,9 @@ class TestTierEnforcementMiddleware:
         self, tmp_path: Path
     ) -> None:
         """AC-7: worker-kind caller denied on a Tier-2 route returns 403."""
-        from capabilities import Tier
+        from unittest.mock import patch
 
-        from registry_api.adapters.middleware import ROUTE_TIER_MAP
+        from capabilities import Tier
 
         db_path = tmp_path / "state.sqlite3"
         db_url_str = _db_url(db_path)
@@ -373,10 +373,12 @@ class TestTierEnforcementMiddleware:
         clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
 
         # Temporarily elevate POST /v1/tasks to Tier.THREE so a worker gets denied
-        # (worker max tier is Tier.TWO).
-        original_tier = ROUTE_TIER_MAP.get("POST /v1/tasks")
-        ROUTE_TIER_MAP["POST /v1/tasks"] = Tier.THREE
-        try:
+        # (worker max tier is Tier.TWO).  ROUTE_TIER_MAP is frozen, so patch
+        # the module attribute with a temporary mutable dict.
+        with patch(
+            "registry_api.adapters.middleware.ROUTE_TIER_MAP",
+            {"POST /v1/tasks": Tier.THREE},
+        ):
             app = build_app(
                 base_dir=events_dir,
                 db_url=db_url_str,
@@ -397,11 +399,6 @@ class TestTierEnforcementMiddleware:
                 assert body["title"] == "Forbidden"
                 assert body["status"] == 403
                 assert "no_matching_approval" in body["detail"] or "allows Tier" in body["detail"]
-        finally:
-            if original_tier is not None:
-                ROUTE_TIER_MAP["POST /v1/tasks"] = original_tier
-            else:
-                ROUTE_TIER_MAP.pop("POST /v1/tasks", None)
 
     @pytest.mark.asyncio
     async def test_unmapped_mutation_route_passes_through(
