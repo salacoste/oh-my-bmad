@@ -50,6 +50,11 @@ class WorkerSettings(BaseSettings):
     claude_output_format: str = "stream-json"
     anthropic_api_key: str = ""  # WORKER_ANTHROPIC_API_KEY
 
+    # Approval gate settings (Story 6.7).
+    approval_poll_interval_s: float = Field(default=2.0, gt=0)
+    approval_timeout_s: float = Field(default=3600.0, gt=0)
+    event_log_dir: str = ""
+
     # GitHub API settings (Story 5.7).
     github_token: SecretStr = SecretStr("")
     github_api_base_url: str = "https://api.github.com"
