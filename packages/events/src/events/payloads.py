@@ -742,7 +742,7 @@ class ApprovalRejectedPayload(BaseModel):
     task_id: str = Field(min_length=1, max_length=64)
     decision_id: str = Field(min_length=1, max_length=64)
     actor_id: str = Field(min_length=1, max_length=128)
-    reason: str | None = Field(default=None, max_length=4096)
+    reason: str | None = Field(default=None, min_length=1, max_length=4096)
 
 
 class TaskRetryRequestedPayload(BaseModel):
@@ -757,7 +757,7 @@ class TaskRetryRequestedPayload(BaseModel):
     task_id: str = Field(min_length=1, max_length=64)
     decision_id: str = Field(min_length=1, max_length=64)
     actor_id: str = Field(min_length=1, max_length=128)
-    hint: str | None = Field(default=None, max_length=4096)
+    hint: str | None = Field(default=None, min_length=1, max_length=4096)
 
 
 class LicenseOverridePayload(BaseModel):

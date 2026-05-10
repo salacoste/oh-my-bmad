@@ -11,6 +11,7 @@ and the side-channel ``ResponseSlotCache`` preserves byte-identical replays.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from typing import Literal
@@ -119,6 +120,8 @@ async def post_decision(
     response_body_cache: ResponseSlotCache = app.state.idempotency_response_cache
 
     request_id: str = request.state.request_id
+    # Phase 1: actor_id hardcoded by middleware. TODO(Story 6.1+): enforce
+    # ownership/role before allowing decision on task.
     actor_id: str = getattr(request.state, "actor_id", "http-api")
     idempotency_key: str = request.state.idempotency_key
 
@@ -241,12 +244,10 @@ async def post_decision(
                 idempotency_status="replayed",
             )
             body_bytes = fallback.model_dump_json().encode("utf-8")
-            status_code = 202
+            status_code = _STATUS_CODE_BY_ACTION.get(body.action, 202)
         else:
             # Rebuild the response with idempotency_status="replayed" instead
             # of returning the stored bytes verbatim (which have "applied").
-            import json
-
             stored = json.loads(slot_or_none.body)
             status_code = _STATUS_CODE_BY_ACTION.get(stored.get("action", ""), 202)
             replay_body = DecisionResponse(
@@ -269,12 +270,20 @@ async def post_decision(
     )
 
 
+_DecisionPayload = (
+    ApprovalGrantedPayload
+    | ApprovalRejectedPayload
+    | TaskStopRequestedPayload
+    | TaskRetryRequestedPayload
+)
+
+
 def _build_event(
     body: DecisionRequest,
     task_id: str,
     decision_id: str,
     actor_id: str,
-) -> tuple[str, object]:
+) -> tuple[str, _DecisionPayload]:
     """Return ``(event_type, payload_model)`` for the given action."""
     if body.action == "approve":
         return (

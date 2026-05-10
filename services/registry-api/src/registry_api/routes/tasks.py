@@ -88,7 +88,7 @@ _NEXT_COMMANDS: dict[str, list[str]] = {
     "awaiting_approval": ["approve", "reject", "stop"],
     "executing": ["stop"],
     "completed": [],
-    "failed": [],
+    "failed": ["retry"],
     "stopped": [],
     "blocked": ["retry", "stop"],
 }

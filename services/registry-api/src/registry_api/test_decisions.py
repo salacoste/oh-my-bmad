@@ -7,21 +7,20 @@ Negative tests (AC-12): 404, 409 state mismatch, 422 validation.
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from pathlib import Path
+from random import Random
 
 import pytest
 import pytest_asyncio
 from asgi_lifespan import LifespanManager
 from events import FROZEN_EPOCH, FrozenClock
-from random import Random
-
-from events.ids import new_idempotency_key, new_request_id
+from events.ids import new_request_id
 from httpx import ASGITransport, AsyncClient
 from registry_state.adapters.sqlite_store import create_engine  # noqa: IMP001
-from registry_state.schema import Base, Event, Task  # noqa: IMP001
-from sqlalchemy import select
+from registry_state.schema import Base, Task  # noqa: IMP001
 
 from registry_api.app import build_app
 
@@ -54,28 +53,18 @@ async def _seed_tables_with_tasks(db_url: str) -> None:
         await conn.run_sync(Base.metadata.create_all)
 
         now = datetime(2026, 1, 1, tzinfo=UTC)
-        tasks = [
-            Task(id=_TID_PLAN_READY, status="plan_ready", created_at=now, updated_at=now, actor_kind="operator", actor_id="test-op", title="Plan ready task"),
-            Task(id=_TID_AWAITING, status="awaiting_approval", created_at=now, updated_at=now, actor_kind="operator", actor_id="test-op", title="Awaiting task"),
-            Task(id=_TID_EXECUTING, status="executing", created_at=now, updated_at=now, actor_kind="operator", actor_id="test-op", title="Executing task"),
-            Task(id=_TID_BLOCKED, status="blocked", created_at=now, updated_at=now, actor_kind="operator", actor_id="test-op", title="Blocked task"),
-            Task(id=_TID_COMPLETED, status="completed", created_at=now, updated_at=now, actor_kind="operator", actor_id="test-op", title="Completed task"),
-            Task(id=_TID_FAILED, status="failed", created_at=now, updated_at=now, actor_kind="operator", actor_id="test-op", title="Failed task"),
-            Task(id=_TID_PENDING, status="pending", created_at=now, updated_at=now, actor_kind="operator", actor_id="test-op", title="Pending task"),
+        op = {"actor_kind": "operator", "actor_id": "test-op", "created_at": now, "updated_at": now}
+        task_rows = [
+            {"id": _TID_PLAN_READY, "status": "plan_ready", "title": "Plan ready task", **op},
+            {"id": _TID_AWAITING, "status": "awaiting_approval", "title": "Awaiting task", **op},
+            {"id": _TID_EXECUTING, "status": "executing", "title": "Executing task", **op},
+            {"id": _TID_BLOCKED, "status": "blocked", "title": "Blocked task", **op},
+            {"id": _TID_COMPLETED, "status": "completed", "title": "Completed task", **op},
+            {"id": _TID_FAILED, "status": "failed", "title": "Failed task", **op},
+            {"id": _TID_PENDING, "status": "pending", "title": "Pending task", **op},
         ]
-        for t in tasks:
-            await conn.execute(
-                Task.__table__.insert(),
-                {
-                    "id": t.id,
-                    "status": t.status,
-                    "created_at": t.created_at,
-                    "updated_at": t.updated_at,
-                    "actor_kind": t.actor_kind,
-                    "actor_id": t.actor_id,
-                    "title": t.title,
-                },
-            )
+        for row in task_rows:
+            await conn.execute(Task.__table__.insert(), row)
     await engine.dispose()
 
 
@@ -180,7 +169,9 @@ class TestDecisionsPositive:
         assert r2.headers["x-idempotency-status"] == "replayed"
 
     @pytest.mark.asyncio
-    async def test_license_override_dual_event(self, app_client: AsyncClient, tmp_path: Path) -> None:
+    async def test_license_override_dual_event(
+        self, app_client: AsyncClient, tmp_path: Path,
+    ) -> None:
         """AC-8/AC-11: approve with license override emits both events."""
         r = await app_client.post(
             f"/v1/tasks/{_TID_AWAITING}/decisions",
@@ -198,9 +189,7 @@ class TestDecisionsPositive:
         for f in event_files:
             lines.extend(f.read_text().splitlines())
         assert len(lines) == 2
-        import json
-
-        types = [json.loads(l)["type"] for l in lines]
+        types = [json.loads(line)["type"] for line in lines]
         assert "approval.granted" in types
         assert "tier3.license_override" in types
 
