@@ -62,6 +62,9 @@ from registry_api.adapters.middleware import (
     RequestIdMiddleware,
     TierEnforcementMiddleware,
 )
+from registry_api.routes.decisions import (
+    router as decisions_router,
+)
 from registry_api.routes.tasks import (
     ResponseSlot,
     ResponseSlotCache,
@@ -240,6 +243,8 @@ def build_app(
 
     # Routes — /v1 prefix applied here; handlers declare /tasks and /tasks/{id}.
     app.include_router(tasks_router, prefix="/v1")
+    # Story 6.4 — decisions sub-resource on tasks.
+    app.include_router(decisions_router, prefix="/v1")
 
     return app
 

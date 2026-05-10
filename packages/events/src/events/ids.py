@@ -115,6 +115,15 @@ def new_request_id(
     return new_uuid7(clock=clock, rng=rng)
 
 
+def new_decision_id(
+    *,
+    clock: Clock | None = None,
+    rng: Random | None = None,
+) -> str:
+    """Prefixed UUIDv7 for an operator decision (Story 6.4 / FR7)."""
+    return f"d-{new_uuid7(clock=clock, rng=rng)}"
+
+
 def parse_prefix(s: str) -> tuple[str, str] | None:
     """If ``s`` is ``"<prefix>-<uuidv7>"``, return (prefix, uuid_core); else None.
 
@@ -138,6 +147,7 @@ def parse_prefix(s: str) -> tuple[str, str] | None:
 
 
 __all__ = [
+    "new_decision_id",
     "new_event_id",
     "new_idempotency_key",
     "new_request_id",

@@ -711,12 +711,79 @@ class Tier3ActionAttemptedPayload(BaseModel):
     reason: str | None = Field(default=None, max_length=4096)
 
 
+# ---------------------------------------------------------------------------
+# Story 6.4 — operator decision payload models (FR7, FR41).
+# ---------------------------------------------------------------------------
+
+
+class ApprovalGrantedPayload(BaseModel):
+    """Payload for the ``approval.granted`` event (FR7 / Story 6.4).
+
+    Emitted when an operator approves a task (via Telegram ``/approve``,
+    console CLI, or direct POST to ``/v1/tasks/{id}/decisions``).
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    task_id: str = Field(min_length=1, max_length=64)
+    decision_id: str = Field(min_length=1, max_length=64)
+    actor_id: str = Field(min_length=1, max_length=128)
+    override: str | None = Field(default=None, max_length=64)
+
+
+class ApprovalRejectedPayload(BaseModel):
+    """Payload for the ``approval.rejected`` event (FR7 / Story 6.4).
+
+    Emitted when an operator rejects a task.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    task_id: str = Field(min_length=1, max_length=64)
+    decision_id: str = Field(min_length=1, max_length=64)
+    actor_id: str = Field(min_length=1, max_length=128)
+    reason: str | None = Field(default=None, max_length=4096)
+
+
+class TaskRetryRequestedPayload(BaseModel):
+    """Payload for the ``task.retry_requested`` event (FR7 / Story 6.4).
+
+    Emitted when an operator retries a blocked/failed task, optionally
+    injecting a clarifying hint into the orchestrator's next planning pass.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    task_id: str = Field(min_length=1, max_length=64)
+    decision_id: str = Field(min_length=1, max_length=64)
+    actor_id: str = Field(min_length=1, max_length=128)
+    hint: str | None = Field(default=None, max_length=4096)
+
+
+class LicenseOverridePayload(BaseModel):
+    """Payload for the ``tier3.license_override`` event (FR41 / Story 6.4).
+
+    Emitted alongside ``approval.granted`` when the operator explicitly
+    overrides a license flag with ``override: "license"``.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    task_id: str = Field(min_length=1, max_length=64)
+    decision_id: str = Field(min_length=1, max_length=64)
+    actor_id: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=4096)
+
+
 __all__ = [
     "TELEGRAM_REJECTED_SCHEMA_VERSION",
     "AcceptedCommand",
     "AgentReasoningBreadcrumbPayload",
+    "ApprovalGrantedPayload",
+    "ApprovalRejectedPayload",
     "DiffSummary",
     "FileEditedPayload",
+    "LicenseOverridePayload",
     "PlanStep",
     "PreCheckOutcome",
     "PreCheckResults",
@@ -735,6 +802,7 @@ __all__ = [
     "TaskExecutionStartedPayload",
     "TaskPlanReadyPayload",
     "TaskPlanningStartedPayload",
+    "TaskRetryRequestedPayload",
     "TaskSelfRecoveredPayload",
     "TaskStepCompletedPayload",
     "TaskStopRequestedPayload",

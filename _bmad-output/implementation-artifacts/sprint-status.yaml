@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-09T12:00:00Z
+last_updated: 2026-05-10T12:00:00Z
 
 development_status:
   # =========================================================================
@@ -168,7 +168,7 @@ development_status:
   6-1-capability-tier-enforcement-helpers: done
   6-2-tier-enforcement-mcp-handlers: done
   6-3-tier-enforcement-http-middleware: done
-  6-4-decisions-handler: backlog
+  6-4-decisions-handler: in-progress
   6-5-approval-audit-events: backlog
   6-6-tier3-audit-events: backlog
   6-7-worker-approval-wait-state: backlog

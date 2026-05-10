@@ -21,6 +21,7 @@ from events.errors import (
     WorktreeLockHeld,
 )
 from events.ids import (
+    new_decision_id,
     new_event_id,
     new_idempotency_key,
     new_request_id,
@@ -73,6 +74,7 @@ __all__ = [
     "TickingClock",
     "__version__",
     "from_canonical_json",
+    "new_decision_id",
     "new_event_id",
     "new_idempotency_key",
     "new_request_id",

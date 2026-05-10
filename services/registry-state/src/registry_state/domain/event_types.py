@@ -23,8 +23,11 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     TELEGRAM_REJECTED_SCHEMA_VERSION,
     AcceptedCommand,
     AgentReasoningBreadcrumbPayload,
+    ApprovalGrantedPayload,
+    ApprovalRejectedPayload,
     DiffSummary,
     FileEditedPayload,
+    LicenseOverridePayload,
     PreCheckOutcome,
     PreCheckResults,
     SecretAccessedPayload,
@@ -42,6 +45,7 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     TaskExecutionStartedPayload,
     TaskPlanningStartedPayload,
     TaskPlanReadyPayload,
+    TaskRetryRequestedPayload,
     TaskSelfRecoveredPayload,
     TaskStepCompletedPayload,
     TaskStopRequestedPayload,
@@ -55,8 +59,11 @@ __all__ = [
     "TELEGRAM_REJECTED_SCHEMA_VERSION",
     "AcceptedCommand",
     "AgentReasoningBreadcrumbPayload",
+    "ApprovalGrantedPayload",
+    "ApprovalRejectedPayload",
     "DiffSummary",
     "FileEditedPayload",
+    "LicenseOverridePayload",
     "PreCheckOutcome",
     "PreCheckResults",
     "SecretAccessedPayload",
@@ -74,6 +81,7 @@ __all__ = [
     "TaskExecutionStartedPayload",
     "TaskPlanReadyPayload",
     "TaskPlanningStartedPayload",
+    "TaskRetryRequestedPayload",
     "TaskSelfRecoveredPayload",
     "TaskStepCompletedPayload",
     "TaskStopRequestedPayload",
@@ -157,3 +165,9 @@ register("task.budget_exceeded", "1.0.0", TaskBudgetExceededPayload)
 
 # Story 6.2 — tier3.action_attempted audit event (FR38).
 register("tier3.action_attempted", "1.0.0", Tier3ActionAttemptedPayload)
+
+# Story 6.4 — operator decision event types (FR7, FR41).
+register("approval.granted", "1.0.0", ApprovalGrantedPayload)
+register("approval.rejected", "1.0.0", ApprovalRejectedPayload)
+register("task.retry_requested", "1.0.0", TaskRetryRequestedPayload)
+register("tier3.license_override", "1.0.0", LicenseOverridePayload)
