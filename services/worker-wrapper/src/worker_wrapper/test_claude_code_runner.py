@@ -18,6 +18,7 @@ import pytest
 
 from worker_wrapper.adapters.claude_code_runner import (
     _COMMIT_PATTERN,
+    _GIT_PUSH_PATTERN,
     _TEST_PATTERN,
     ClaudeCodeRunner,
     ExtractedEvent,
@@ -201,6 +202,56 @@ class TestClassifyToolUse:
     def test_bash_command_not_string(self) -> None:
         event = ClaudeCodeRunner._classify_tool_use("Bash", {"command": 42})
         assert event is None
+
+    def test_bash_git_push_maps_to_git_push(self) -> None:
+        event = ClaudeCodeRunner._classify_tool_use(
+            "Bash",
+            {"command": "git push origin main"},
+        )
+        assert event is not None
+        assert event.event_type == "git.push"
+        assert event.tool_name == "Bash"
+
+    def test_bash_git_push_force_maps_to_git_push(self) -> None:
+        event = ClaudeCodeRunner._classify_tool_use(
+            "Bash",
+            {"command": "git push --force origin feature-branch"},
+        )
+        assert event is not None
+        assert event.event_type == "git.push"
+
+    def test_bash_git_push_leading_whitespace(self) -> None:
+        event = ClaudeCodeRunner._classify_tool_use(
+            "Bash",
+            {"command": "  git push"},
+        )
+        assert event is not None
+        assert event.event_type == "git.push"
+
+    def test_bash_git_push_not_confused_with_git_pull(self) -> None:
+        event = ClaudeCodeRunner._classify_tool_use(
+            "Bash",
+            {"command": "git pull origin main"},
+        )
+        assert event is None
+
+    def test_bash_git_push_takes_priority_over_test_in_chain(self) -> None:
+        """git push && pytest should classify as git.push, not test.run."""
+        event = ClaudeCodeRunner._classify_tool_use(
+            "Bash",
+            {"command": "git push origin main && pytest"},
+        )
+        assert event is not None
+        assert event.event_type == "git.push"
+
+    def test_bash_git_commit_takes_priority_over_test_in_chain(self) -> None:
+        """git commit && pytest should classify as commit.created."""
+        event = ClaudeCodeRunner._classify_tool_use(
+            "Bash",
+            {"command": "git commit -m 'x' && pytest"},
+        )
+        assert event is not None
+        assert event.event_type == "commit.created"
 
 
 # ---------------------------------------------------------------------------
@@ -683,6 +734,18 @@ class TestPatterns:
 
     def test_commit_pattern_no_false_positive(self) -> None:
         assert _COMMIT_PATTERN.match("git log") is None
+
+    def test_push_pattern_matches_git_push(self) -> None:
+        assert _GIT_PUSH_PATTERN.match("git push origin main")
+
+    def test_push_pattern_matches_leading_whitespace(self) -> None:
+        assert _GIT_PUSH_PATTERN.match("  git push")
+
+    def test_push_pattern_no_false_positive_on_pull(self) -> None:
+        assert _GIT_PUSH_PATTERN.match("git pull") is None
+
+    def test_push_pattern_no_false_positive_on_pushd(self) -> None:
+        assert _GIT_PUSH_PATTERN.match("pushd /tmp") is None
 
 
 # ---------------------------------------------------------------------------
