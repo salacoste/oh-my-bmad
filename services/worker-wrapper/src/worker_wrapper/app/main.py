@@ -10,6 +10,10 @@ Coordinates session state with two MCP servers:
 Story 5.3 adds worktree lock acquisition (not best-effort — prevents
 worker start if worktree is locked) and release (best-effort during
 shutdown).
+
+Story 6.7 adds ``run_task`` — the approval-gated task execution driver
+that wires LifecycleManager, ApprovalWaiter, and event emission into
+the session lifecycle.
 """
 
 from __future__ import annotations
@@ -19,15 +23,23 @@ import contextlib
 from pathlib import Path
 
 import structlog
+from events.clock import SystemClock
 from events.payloads import (
     SessionFinishedPayload,
     SessionHeartbeatPayload,
     SessionStartedPayload,
+    TaskApprovalRequestedPayload,
+    Tier3ActionPerformedPayload,
 )
 from mcp import ClientSession
 
+from worker_wrapper.adapters.approval_waiter import ApprovalWaiter
+from worker_wrapper.adapters.claude_code_runner import ClaudeCodeRunner
+from worker_wrapper.adapters.lifecycle_manager import LifecycleManager
 from worker_wrapper.adapters.mcp_clients import MCPClientGroup
 from worker_wrapper.app.config import WorkerSettings
+from worker_wrapper.domain.approval_gate import needs_approval
+from worker_wrapper.domain.lifecycle import LifecycleEvent, LifecycleFSM, WorkerState
 from worker_wrapper.domain.worktree_lock import acquire_lock, release_lock
 
 _MCP_CALL_TIMEOUT: float = 10.0
@@ -238,3 +250,207 @@ async def finish_session(
     )
 
     log.info("session_finished", session_id=session_id, worker_id=worker_id)
+
+
+async def run_task(
+    clients: MCPClientGroup,
+    settings: WorkerSettings,
+    prompt: str,
+    worktree_path: Path,
+) -> None:
+    """Approval-gated task execution driver (Story 6.7, AC-2 through AC-6).
+
+    Runs Claude Code, detects Tier-3 actions (git push), enters the
+    approval-wait state, and resumes on approval or fails on rejection.
+    Emits ``task.approval_requested``, ``tier3.action_performed`` as needed.
+    """
+    log = structlog.get_logger(__name__)
+    task_id = settings.resolve_task_id()
+    if task_id is None:
+        raise ValueError("task_id is required for run_task")
+
+    state_path = worktree_path / ".lifecycle-state.json"
+
+    async def _emit_event(event_type: str, payload: dict) -> str:
+        try:
+            result = await clients.clawhip_bridge.call_tool(
+                "emit_event",
+                {"type": event_type, "payload": payload},
+            )
+            return str(result)
+        except Exception:
+            log.warning(
+                "emit_event_failed",
+                emit_type=event_type,
+                exc_info=True,
+            )
+            return ""
+
+    async def _gated_action() -> None:
+        """Execute git push + PR draft (Tier-3 gated action).
+
+        The actual git push was already attempted by Claude Code — the
+        gated action here is a placeholder for PR draft creation. In
+        production, this would use GitHubClient.create_pr_draft with
+        owner/repo/branch resolved from the worktree's git state.
+
+        # TODO(future-story): implement real PR draft creation via
+        # GitHubClient, resolving owner/repo/head from worktree git state.
+        """
+        log.info("gated_action_executing", task_id=task_id)
+
+    # Try to restore from a previous run (restart recovery, 5.17b).
+    mgr = LifecycleManager.restore_from(
+        state_path=state_path,
+        emit_event=_emit_event,
+        gated_action=_gated_action,
+    )
+    if mgr is not None and mgr.current_state == WorkerState.AWAITING_APPROVAL:
+        # Approval may have arrived during downtime — check immediately.
+        log.info("restored_awaiting_approval", task_id=task_id)
+        await _handle_pending_approval(
+            mgr, clients, settings, task_id,
+        )
+        return
+    if mgr is not None:
+        log.warning(
+            "restored_terminal_state",
+            task_id=task_id,
+            state=mgr.current_state.value,
+        )
+        return
+
+    # Fresh run — create LifecycleManager and run Claude Code.
+    # TODO(future-story): instantiate IdempotencyCacheStore and pass
+    # idempotency_cache= below for AC-5 exactly-once enforcement.
+    mgr = LifecycleManager(
+        fsm=LifecycleFSM(),
+        state_path=state_path,
+        task_id=task_id,
+        emit_event=_emit_event,
+        gated_action=_gated_action,
+    )
+
+    runner = ClaudeCodeRunner(settings)
+    result = await runner.run(prompt, worktree_path)
+
+    push_event = needs_approval(result.events)
+    if push_event is None:
+        # Normal completion — no Tier-3 actions detected.
+        await mgr.handle_event(LifecycleEvent.TASK_COMPLETED)
+        log.info(
+            "task_completed_no_approval",
+            task_id=task_id,
+            events=len(result.events),
+        )
+        return
+
+    # Tier-3 action detected — enter approval gate.
+    log.info("tier3_detected", task_id=task_id, event_type=push_event.event_type)
+    await mgr.handle_event(LifecycleEvent.TASK_AWAITING_APPROVAL)
+
+    # Emit task.approval_requested (AC-2).
+    # TODO(future-story): populate diff_summary from git diff --stat for
+    # richer operator context in the Telegram approval renderer.
+    approval_payload = TaskApprovalRequestedPayload(
+        task_id=task_id,
+        action="git_push",
+        justification=f"Claude Code attempted: {push_event.tool_input.get('command', 'git push')}",
+    )
+    await _emit_event(
+        "task.approval_requested",
+        approval_payload.model_dump(),
+    )
+
+    # Wait for approval (AC-3).
+    await _handle_pending_approval(
+        mgr, clients, settings, task_id,
+    )
+
+
+async def _handle_pending_approval(
+    mgr: LifecycleManager,
+    clients: MCPClientGroup,
+    settings: WorkerSettings,
+    task_id: str,
+) -> None:
+    """Poll for approval, then execute or fail the gated action."""
+    log = structlog.get_logger(__name__)
+
+    if mgr.current_state != WorkerState.AWAITING_APPROVAL:
+        log.warning(
+            "handle_approval_wrong_state",
+            task_id=task_id,
+            state=mgr.current_state.value,
+        )
+        return
+
+    event_log_dir = Path(settings.event_log_dir) if settings.event_log_dir else None
+    if event_log_dir is None:
+        log.error("event_log_dir_not_configured", task_id=task_id)
+        await mgr.handle_event(LifecycleEvent.TASK_FAILED)
+        await _emit_tier3_performed(
+            clients, task_id, accepted=False,
+            reason="event_log_dir not configured",
+        )
+        return
+
+    waiter = ApprovalWaiter(
+        event_log_dir=event_log_dir,
+        clock=SystemClock(),
+        poll_interval_s=settings.approval_poll_interval_s,
+        timeout_s=settings.approval_timeout_s,
+    )
+
+    try:
+        approval = await waiter.wait_for_approval(task_id)
+    except TimeoutError:
+        await mgr.handle_event(LifecycleEvent.TASK_FAILED)
+        await _emit_tier3_performed(
+            clients, task_id, accepted=False,
+            reason=f"Approval timed out after {settings.approval_timeout_s}s",
+        )
+        log.error("approval_timeout", task_id=task_id)
+        return
+
+    if not approval.granted:
+        # Rejection path (AC-3).
+        await mgr.handle_event(LifecycleEvent.APPROVAL_REJECTED)
+        await _emit_tier3_performed(
+            clients, task_id, accepted=False,
+            reason=approval.reason or "operator rejected",
+        )
+        log.info("approval_rejected", task_id=task_id)
+        return
+
+    # Approval granted — execute gated action (AC-5).
+    await mgr.handle_approval(idempotency_key=approval.idempotency_key or task_id)
+    await _emit_tier3_performed(
+        clients, task_id, accepted=True,
+        approval_event_id=approval.event_id,
+    )
+    log.info("tier3_action_performed", task_id=task_id)
+
+
+async def _emit_tier3_performed(
+    clients: MCPClientGroup,
+    task_id: str,
+    *,
+    accepted: bool,
+    approval_event_id: str = "",
+    reason: str = "",
+) -> None:
+    """Emit ``tier3.action_performed`` via clawhip-bridge (AC-6)."""
+    payload = Tier3ActionPerformedPayload(
+        task_id=task_id,
+        action="git_push",
+        accepted=accepted,
+        approval_event_id=approval_event_id or None,
+        reason=reason or None,
+    )
+    await _call_tool_best_effort(
+        clients.clawhip_bridge,
+        "emit_event",
+        {"type": "tier3.action_performed", "payload": payload.model_dump()},
+        label="emit_tier3_action_performed",
+    )
