@@ -74,6 +74,16 @@ async def app_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None]:
             }
         )
 
+    # POST probe for verifying caller_context on mutating routes.
+    @app.post("/debug/mutation-state")
+    async def _mutation_probe(request: Request) -> JSONResponse:
+        return JSONResponse(
+            {
+                "actor_id": getattr(request.state, "actor_id", None),
+                "caller_context": repr(getattr(request.state, "caller_context", None)),
+            }
+        )
+
     async with (
         LifespanManager(app) as manager,
         AsyncClient(
@@ -350,12 +360,23 @@ class TestTierEnforcementMiddleware:
         self, app_client: AsyncClient
     ) -> None:
         """AC-8: request.state.caller_context is set on mutating routes."""
-        r = await app_client.post("/v1/tasks", json={"title": "ctx-check"})
-        assert r.status_code == 201
-        # Verify via the debug probe — POST /v1/tasks doesn't return state,
-        # but GET /debug/state after a mutation would show it. Instead, test
-        # indirectly: the mutation succeeded → check_tier was called and passed.
-        # Direct test via a POST probe route in the constrained_client fixture.
+        from unittest.mock import patch
+
+        from capabilities import Tier
+
+        # Patch the tier map to include the debug probe so the middleware
+        # actually processes it as a tiered route and sets caller_context.
+        with patch(
+            "registry_api.adapters.middleware.ROUTE_TIER_MAP",
+            {"POST /v1/tasks": Tier.ONE, "POST /debug/mutation-state": Tier.ONE},
+        ):
+            r = await app_client.post("/debug/mutation-state")
+        assert r.status_code == 200
+        body = r.json()
+        caller_ctx = body["caller_context"]
+        assert caller_ctx != "None"
+        assert "operator" in caller_ctx
+        assert "http-api" in caller_ctx
 
     @pytest.mark.asyncio
     async def test_tier_denied_returns_403_problem_json(

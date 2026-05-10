@@ -59,15 +59,14 @@ from events.errors import CapabilityDenied
 from events.ids import new_idempotency_key, new_request_id
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import Response
 from starlette.types import ASGIApp
 
 # Story 3.6 M5: single source of truth for the mutation-method set, shared
 # with ``adapters/errors.py``. Importing keeps the constant in one place
 # rather than duplicating the literal in two files.
 from registry_api.adapters.errors import _MUTATING_METHODS as _MUTATING_METHODS
-from registry_api.adapters.errors import _PROBLEM_MEDIA_TYPE as _PROBLEM_MEDIA_TYPE
-from registry_api.adapters.errors import _build_idempotency_extensions
+from registry_api.adapters.errors import _build_capability_denied_response
 
 # Bare UUIDv7 (no prefix) — matches new_request_id / new_idempotency_key output.
 # Version nibble = 7, variant = 8/9/a/b. Same shape used by events.ids.
@@ -258,18 +257,7 @@ class TierEnforcementMiddleware(BaseHTTPMiddleware):
                 "tier_enforcement_denied",
                 extra={"route": route_key, "actor_id": actor_id, "reason": exc.reason},
             )
-            return JSONResponse(
-                content={
-                    "type": "/errors/forbidden",
-                    "title": "Forbidden",
-                    "status": 403,
-                    "detail": exc.reason,
-                    "instance": str(request.url),
-                    "extensions": _build_idempotency_extensions(request),
-                },
-                status_code=403,
-                media_type=_PROBLEM_MEDIA_TYPE,
-            )
+            return _build_capability_denied_response(request, exc)
 
         return await call_next(request)
 

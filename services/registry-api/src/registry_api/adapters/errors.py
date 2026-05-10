@@ -259,19 +259,13 @@ async def handle_validation_error(request: Request, exc: Exception) -> JSONRespo
     )
 
 
-async def handle_capability_denied(request: Request, exc: Exception) -> JSONResponse:
-    """Map ``CapabilityDenied`` to RFC 7807 problem+json 403 response (Story 6.3).
+def _build_capability_denied_response(request: Request, exc: CapabilityDenied) -> JSONResponse:
+    """Build an RFC 7807 403 response for ``CapabilityDenied``.
 
-    Registered via ``app.add_exception_handler(CapabilityDenied, ...)``.
-    The exception carries ``action``, ``actor_kind``, ``required_tier``, and
-    ``reason`` attributes from the tier enforcement layer.
+    Shared by both ``handle_capability_denied`` (exception handler) and
+    ``TierEnforcementMiddleware`` so the two code paths always produce
+    structurally identical responses.
     """
-    if not isinstance(exc, CapabilityDenied):
-        raise TypeError(f"expected CapabilityDenied, got {type(exc).__name__}")
-    _log.warning(
-        "tier_enforcement_denied",
-        extra={"action": exc.action, "actor_kind": exc.actor_kind, "reason": exc.reason},
-    )
     problem = ProblemDetails(
         type=_PROBLEM_TYPE_FORBIDDEN,
         title="Forbidden",
@@ -285,6 +279,22 @@ async def handle_capability_denied(request: Request, exc: Exception) -> JSONResp
         status_code=403,
         media_type=_PROBLEM_MEDIA_TYPE,
     )
+
+
+async def handle_capability_denied(request: Request, exc: Exception) -> JSONResponse:
+    """Map ``CapabilityDenied`` to RFC 7807 problem+json 403 response (Story 6.3).
+
+    Registered via ``app.add_exception_handler(CapabilityDenied, ...)``.
+    The exception carries ``action``, ``actor_kind``, ``required_tier``, and
+    ``reason`` attributes from the tier enforcement layer.
+    """
+    if not isinstance(exc, CapabilityDenied):
+        raise TypeError(f"expected CapabilityDenied, got {type(exc).__name__}")
+    _log.warning(
+        "tier_enforcement_denied",
+        extra={"action": exc.action, "actor_kind": exc.actor_kind, "reason": exc.reason},
+    )
+    return _build_capability_denied_response(request, exc)
 
 
 async def handle_internal_error(request: Request, exc: Exception) -> JSONResponse:
