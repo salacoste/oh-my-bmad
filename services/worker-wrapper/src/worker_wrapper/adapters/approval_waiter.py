@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +61,7 @@ class ApprovalWaiter:
         self._poll_interval_s = poll_interval_s
         self._timeout_s = timeout_s
         self._scan_offset: int = 0
+        self._last_path: Path | None = None
 
     async def wait_for_approval(self, task_id: str) -> ApprovalResult:
         """Poll until ``approval.granted`` or ``approval.rejected`` is found.
@@ -69,6 +70,8 @@ class ApprovalWaiter:
         Raises ``TimeoutError`` if no decision arrives within ``timeout_s``.
         """
         deadline = time.monotonic() + self._timeout_s
+        self._scan_offset = 0
+        self._last_path = None
         while True:
             result = await asyncio.to_thread(self._scan_today, task_id)
             if result is not None:
@@ -94,6 +97,9 @@ class ApprovalWaiter:
         polls skip previously-processed lines (O(new) instead of O(n)).
         """
         path = current_day_path(self._event_log_dir, self._clock.now())
+        if path != self._last_path:
+            self._scan_offset = 0
+            self._last_path = path
         try:
             idx = 0
             for envelope in read_log_lines(path):
