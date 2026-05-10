@@ -171,7 +171,7 @@ development_status:
   6-4-decisions-handler: done
   6-5-approval-audit-events: done
   6-6-tier3-audit-events: done
-  6-7-worker-approval-wait-state: ready-for-dev
+  6-7-worker-approval-wait-state: done
   6-8-precommit-validation-hook: backlog
   6-9-license-scan-integration: backlog
   6-10-license-flagged-event-override: backlog
