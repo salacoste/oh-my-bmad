@@ -169,7 +169,7 @@ development_status:
   6-2-tier-enforcement-mcp-handlers: done
   6-3-tier-enforcement-http-middleware: done
   6-4-decisions-handler: done
-  6-5-approval-audit-events: review
+  6-5-approval-audit-events: done
   6-6-tier3-audit-events: backlog
   6-7-worker-approval-wait-state: backlog
   6-8-precommit-validation-hook: backlog

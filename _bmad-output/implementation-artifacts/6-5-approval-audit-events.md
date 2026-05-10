@@ -1,6 +1,6 @@
 # Story 6.5: Approval audit events (materializer handlers)
 
-Status: review
+Status: done
 
 ## Story
 
