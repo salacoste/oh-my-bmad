@@ -300,7 +300,9 @@ async def handle_task_retry_requested(session: AsyncSession, envelope: EventEnve
 
 
 # ---------------------------------------------------------------------------
-# Story 6.6 — Tier-3 audit event handlers (AC-1 through AC-3)
+# Story 6.6 — Tier-3 audit event materializer handlers (AC-1 through AC-3).
+# ``tier3.action_attempted`` was defined in Story 6.2 and emitted in Story 6.5;
+# this story adds the materializer handler belatedly.
 # ---------------------------------------------------------------------------
 
 

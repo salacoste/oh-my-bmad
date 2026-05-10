@@ -708,7 +708,7 @@ class Tier3ActionAttemptedPayload(BaseModel):
     action: str = Field(min_length=1, max_length=2000)
     task_id: str = Field(min_length=1, max_length=64)
     accepted: bool
-    reason: str | None = Field(default=None, max_length=4096)
+    reason: str | None = Field(default=None, min_length=1, max_length=4096)
 
 
 class Tier3ActionPerformedPayload(BaseModel):
@@ -725,7 +725,7 @@ class Tier3ActionPerformedPayload(BaseModel):
     action: str = Field(min_length=1, max_length=2000)
     accepted: bool
     approval_event_id: str | None = Field(default=None, min_length=1, max_length=128)
-    reason: str | None = Field(default=None, max_length=4096)
+    reason: str | None = Field(default=None, min_length=1, max_length=4096)
 
 
 # ---------------------------------------------------------------------------

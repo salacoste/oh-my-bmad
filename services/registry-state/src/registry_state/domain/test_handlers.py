@@ -1081,6 +1081,7 @@ async def test_story66_audit_fields_in_envelope(db_session: AsyncSession) -> Non
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     assert env_a.actor.kind == "system"
+    assert env_a.actor.id is not None
     assert env_a.emitted_at is not None
     assert env_a.request_id is not None
     assert isinstance(env_a.payload, Tier3ActionAttemptedPayload)
@@ -1118,3 +1119,75 @@ async def test_story66_audit_fields_in_envelope(db_session: AsyncSession) -> Non
     )
     assert isinstance(env_l.payload, LicenseOverridePayload)
     assert env_l.payload.task_id == task_id
+
+
+@pytest.mark.asyncio
+async def test_tier3_action_performed_with_optional_fields(
+    db_session: AsyncSession,
+) -> None:
+    """Tier3ActionPerformedPayload round-trips with approval_event_id and reason."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=205)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng = Random(505)
+    clk = FrozenClock(mono_ns=34_000_000, now=FROZEN_EPOCH)
+    approval_id = new_event_id(clock=clk, rng=rng)
+    env = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="tier3.action_performed",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=Tier3ActionPerformedPayload(
+            task_id=task_id,
+            action="git_push",
+            accepted=True,
+            approval_event_id=approval_id,
+            reason="manual operator approval",
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    assert isinstance(env.payload, Tier3ActionPerformedPayload)
+    assert env.payload.approval_event_id == approval_id
+    assert env.payload.reason == "manual operator approval"
+    await handle_tier3_action_performed(db_session, env)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.last_event_id == env.event_id
+    assert task.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_tier3_action_attempted_accepted_false_updates_last_event_id(
+    db_session: AsyncSession,
+) -> None:
+    """handle_tier3_action_attempted with accepted=False still updates last_event_id."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=206)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng = Random(506)
+    clk = FrozenClock(mono_ns=35_000_000, now=FROZEN_EPOCH)
+    env = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="tier3.action_attempted",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=Tier3ActionAttemptedPayload(
+            action="git_push", task_id=task_id, accepted=False,
+            reason="tier-3 capability denied",
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    await handle_tier3_action_attempted(db_session, env)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.last_event_id == env.event_id
+    assert task.updated_at == env.emitted_at
+    assert task.status == "pending"
