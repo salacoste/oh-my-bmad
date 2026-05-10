@@ -1,6 +1,6 @@
 # Story 6.6: Tier-3 audit events (materializer handlers)
 
-Status: review
+Status: done
 
 ## Story
 
