@@ -158,7 +158,10 @@ class LifecycleManager:
                 await self._gated_action()
                 self._gated_action_count += 1
         except Exception:
-            await self.handle_event(LifecycleEvent.TASK_FAILED)
+            try:
+                await self.handle_event(LifecycleEvent.TASK_FAILED)
+            except Exception:
+                logger.exception("failed to transition FSM to TASK_FAILED")
             raise
         await self.handle_event(LifecycleEvent.TASK_COMPLETED)
         logger.info("gated_action_executed")

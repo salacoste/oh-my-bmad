@@ -22,6 +22,15 @@ _POLL_INTERVAL = 0.5
 _MAX_RETRIES = 5
 
 
+def _exit_transport_error() -> None:
+    """Handle ``httpx.ConnectError`` / ``TimeoutException`` / ``TransportError``."""
+    print(
+        "Error: Connection to registry-api lost. Is docker compose up?",
+        file=sys.stderr,
+    )
+    raise SystemExit(1) from None
+
+
 async def _poll_events(task_id: str) -> None:
     """Long-lived polling loop for --follow mode.
 
@@ -111,11 +120,7 @@ def events(
             )
             raise SystemExit(1) from None
         except httpx.TransportError:
-            print(
-                "Error: Connection to registry-api lost. Is docker compose up?",
-                file=sys.stderr,
-            )
-            raise SystemExit(1) from None
+            _exit_transport_error()
         except httpx.HTTPStatusError as exc:
             render_http_error(exc)
         except RegistryResponseError as exc:
@@ -152,11 +157,7 @@ def events(
         )
         raise SystemExit(1) from None
     except httpx.TransportError:
-        print(
-            "Error: Connection to registry-api lost. Is docker compose up?",
-            file=sys.stderr,
-        )
-        raise SystemExit(1) from None
+        _exit_transport_error()
     except httpx.HTTPStatusError as exc:
         render_http_error(exc)
     except RegistryResponseError as exc:
