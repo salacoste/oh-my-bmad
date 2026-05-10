@@ -70,7 +70,9 @@ def _extract_ids(env: EventEnvelope) -> tuple[str | None, str | None]:
     # ``data.get(...)`` returns ``object | None``; narrow via isinstance so
     # we keep the contract that ``task_id`` / ``session_id`` are ``str | None``
     # without leaning on ``Any``.
-    task_id_raw: object | None = data.get("task_id") if env.type.startswith("task.") else None
+    task_id_raw: object | None = (
+        data.get("task_id") if env.type.startswith(("task.", "approval.")) else None
+    )
     task_id: str | None = task_id_raw if isinstance(task_id_raw, str) else None
     session_id_raw: object | None = (
         data.get("session_id") if env.type == "task.execution.started" else None

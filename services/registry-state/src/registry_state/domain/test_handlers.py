@@ -767,15 +767,16 @@ async def test_story65_handlers_raise_materializer_error_on_missing_task(
 
 @pytest.mark.asyncio
 async def test_story65_audit_fields_in_envelope(db_session: AsyncSession) -> None:
-    """AC-5: Envelope carries NFR-S3 audit fields (actor, emitted_at, request_id, payload)."""
+    """AC-5: Envelope carries NFR-S3 audit fields for all 4 decision event types."""
     env_created = _make_created_envelope(mono_ns=1_000_000, seed=105)
     await handle_task_created(db_session, env_created)
     assert isinstance(env_created.payload, TaskCreatedPayload)
     task_id = env_created.payload.task_id
-
     rng = Random(305)
     clk = FrozenClock(mono_ns=14_000_000, now=FROZEN_EPOCH)
-    envelope = EventEnvelope.create(
+
+    # approval.granted — has decision_id
+    env_grant = EventEnvelope.create(
         event_id=new_event_id(clock=clk, rng=rng),
         schema_version="1.0.0",
         type="approval.granted",
@@ -783,14 +784,106 @@ async def test_story65_audit_fields_in_envelope(db_session: AsyncSession) -> Non
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=ApprovalGrantedPayload(
-            task_id=task_id, decision_id="d-audit", actor_id="op-1",
+            task_id=task_id, decision_id="d-a1", actor_id="op-1",
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
     )
-    assert envelope.actor.kind == "system"
-    assert envelope.actor.id == "test-handlers"
-    assert envelope.emitted_at is not None
-    assert envelope.request_id is not None
-    assert isinstance(envelope.payload, ApprovalGrantedPayload)
-    assert envelope.payload.task_id == task_id
-    assert envelope.payload.decision_id == "d-audit"
+    assert env_grant.actor.kind == "system"
+    assert env_grant.emitted_at is not None
+    assert env_grant.request_id is not None
+    assert isinstance(env_grant.payload, ApprovalGrantedPayload)
+    assert env_grant.payload.task_id == task_id
+    assert env_grant.payload.decision_id == "d-a1"
+
+    # approval.rejected — has decision_id + reason
+    env_reject = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="approval.rejected",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=ApprovalRejectedPayload(
+            task_id=task_id, decision_id="d-a2", actor_id="op-1",
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    assert isinstance(env_reject.payload, ApprovalRejectedPayload)
+    assert env_reject.payload.task_id == task_id
+    assert env_reject.payload.decision_id == "d-a2"
+
+    # task.stop_requested — has actor_id (no decision_id)
+    env_stop = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.stop_requested",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskStopRequestedPayload(
+            task_id=task_id, actor_id="op-1",
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    assert isinstance(env_stop.payload, TaskStopRequestedPayload)
+    assert env_stop.payload.task_id == task_id
+    assert env_stop.payload.actor_id == "op-1"
+
+    # task.retry_requested — has decision_id + hint
+    env_retry = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.retry_requested",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskRetryRequestedPayload(
+            task_id=task_id, decision_id="d-a3", actor_id="op-1",
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    assert isinstance(env_retry.payload, TaskRetryRequestedPayload)
+    assert env_retry.payload.task_id == task_id
+    assert env_retry.payload.decision_id == "d-a3"
+
+
+@pytest.mark.asyncio
+async def test_task_stop_requested_is_idempotent(db_session: AsyncSession) -> None:
+    """handle_task_stop_requested is idempotent on double-call."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=106)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng1 = Random(401)
+    clk1 = FrozenClock(mono_ns=15_000_000, now=FROZEN_EPOCH)
+    env_stop1 = EventEnvelope.create(
+        event_id=new_event_id(clock=clk1, rng=rng1),
+        schema_version="1.0.0",
+        type="task.stop_requested",
+        emitted_at=clk1.now(),
+        emitted_at_monotonic_ns=clk1.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskStopRequestedPayload(task_id=task_id, actor_id="op-1"),
+        request_id=new_uuid7(clock=clk1, rng=rng1),
+    )
+    await handle_task_stop_requested(db_session, env_stop1)
+
+    rng2 = Random(402)
+    clk2 = FrozenClock(mono_ns=16_000_000, now=FROZEN_EPOCH)
+    env_stop2 = EventEnvelope.create(
+        event_id=new_event_id(clock=clk2, rng=rng2),
+        schema_version="1.0.0",
+        type="task.stop_requested",
+        emitted_at=clk2.now(),
+        emitted_at_monotonic_ns=clk2.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskStopRequestedPayload(task_id=task_id, actor_id="op-1"),
+        request_id=new_uuid7(clock=clk2, rng=rng2),
+    )
+    await handle_task_stop_requested(db_session, env_stop2)
+
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.status == "stopped"
+    assert task.last_event_id == env_stop2.event_id

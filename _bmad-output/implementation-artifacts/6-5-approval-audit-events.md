@@ -83,7 +83,7 @@ The `handle_task_stop_requested` handler adds `status="stopped"` to the `.values
 From `handlers.py`:
 - Each handler is an `async def` taking `(session: AsyncSession, envelope: EventEnvelope)`
 - Payload is validated via `PayloadModel.model_validate(envelope.payload)`
-- Unknown-task case is logged but not raised (out-of-order replay is acceptable)
+- Unknown-task case raises MaterializerError (consistent with Story 2.8 handlers; rowcount guard catches out-of-order replay)
 - All handlers are registered in `register_default_handlers()`
 - All handler names are exported in `__all__`
 
