@@ -1,5 +1,6 @@
 """worker-wrapper adapter layer — external process / API boundaries."""
 
+from worker_wrapper.adapters.approval_waiter import ApprovalResult, ApprovalWaiter
 from worker_wrapper.adapters.claude_code_runner import (
     ClaudeCodeResult,
     ClaudeCodeRunner,
@@ -18,6 +19,8 @@ from worker_wrapper.adapters.mcp_clients import (
 )
 
 __all__ = [
+    "ApprovalResult",
+    "ApprovalWaiter",
     "BranchResult",
     "ClaudeCodeResult",
     "ClaudeCodeRunner",

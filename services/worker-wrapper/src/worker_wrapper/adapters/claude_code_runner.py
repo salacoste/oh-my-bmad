@@ -39,6 +39,7 @@ _TEST_PATTERN: re.Pattern[str] = re.compile(
     r"\b(pytest|npm test|cargo test|go test|just test|make test|jest|mocha)\b",
 )
 _COMMIT_PATTERN: re.Pattern[str] = re.compile(r"^\s*git\s+commit\b")
+_GIT_PUSH_PATTERN: re.Pattern[str] = re.compile(r"^\s*git\s+push\b")
 
 # Maximum prompt length included in spawn log (prevents sensitive data leaks).
 _LOG_PROMPT_PREVIEW_LEN: int = 80
@@ -203,15 +204,21 @@ class ClaudeCodeRunner:
         if tool_name == "Bash":
             command = tool_input.get("command", "")
             if isinstance(command, str):
-                if _TEST_PATTERN.search(command):
-                    return ExtractedEvent(
-                        event_type="test.run",
-                        tool_name=tool_name,
-                        tool_input=tool_input,
-                    )
                 if _COMMIT_PATTERN.match(command):
                     return ExtractedEvent(
                         event_type="commit.created",
+                        tool_name=tool_name,
+                        tool_input=tool_input,
+                    )
+                if _GIT_PUSH_PATTERN.match(command):
+                    return ExtractedEvent(
+                        event_type="git.push",
+                        tool_name=tool_name,
+                        tool_input=tool_input,
+                    )
+                if _TEST_PATTERN.search(command):
+                    return ExtractedEvent(
+                        event_type="test.run",
                         tool_name=tool_name,
                         tool_input=tool_input,
                     )
