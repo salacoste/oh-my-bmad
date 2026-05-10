@@ -110,6 +110,12 @@ def events(
                 file=sys.stderr,
             )
             raise SystemExit(1) from None
+        except httpx.TransportError:
+            print(
+                "Error: Connection to registry-api lost. Is docker compose up?",
+                file=sys.stderr,
+            )
+            raise SystemExit(1) from None
         except httpx.HTTPStatusError as exc:
             render_http_error(exc)
         except RegistryResponseError as exc:
@@ -142,6 +148,12 @@ def events(
     except httpx.TimeoutException:
         print(
             "Error: registry-api timed out. Try again or increase timeout.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from None
+    except httpx.TransportError:
+        print(
+            "Error: Connection to registry-api lost. Is docker compose up?",
             file=sys.stderr,
         )
         raise SystemExit(1) from None

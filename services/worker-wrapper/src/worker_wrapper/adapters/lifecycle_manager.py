@@ -153,9 +153,13 @@ class LifecycleManager:
 
     async def resume_gated_action(self) -> None:
         """Execute the gated action (git push + PR draft) exactly once."""
-        if self._gated_action is not None:
-            await self._gated_action()
-            self._gated_action_count += 1
+        try:
+            if self._gated_action is not None:
+                await self._gated_action()
+                self._gated_action_count += 1
+        except Exception:
+            await self.handle_event(LifecycleEvent.TASK_FAILED)
+            raise
         await self.handle_event(LifecycleEvent.TASK_COMPLETED)
         logger.info("gated_action_executed")
 
