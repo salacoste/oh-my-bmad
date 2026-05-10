@@ -297,7 +297,11 @@ async def run_task(
         # TODO(future-story): implement real PR draft creation via
         # GitHubClient, resolving owner/repo/head from worktree git state.
         """
-        log.info("gated_action_executing", task_id=task_id)
+        log.warning(
+            "gated_action_placeholder",
+            task_id=task_id,
+            _hint="gated action is a no-op placeholder — PR draft creation not yet implemented",
+        )
 
     # Try to restore from a previous run (restart recovery, 5.17b).
     mgr = LifecycleManager.restore_from(
@@ -313,11 +317,17 @@ async def run_task(
         )
         return
     if mgr is not None:
+        # Non-terminal state found on restart — the previous run crashed.
+        # Transition to TASK_FAILED and remove stale sidecar so a fresh run
+        # can proceed (otherwise subsequent run_task calls hit this path and
+        # return immediately, orphaning the task permanently).
         log.warning(
-            "restored_terminal_state",
+            "restored_non_awaiting_state",
             task_id=task_id,
             state=mgr.current_state.value,
         )
+        await mgr.handle_event(LifecycleEvent.TASK_FAILED)
+        state_path.unlink(missing_ok=True)
         return
 
     # Fresh run — create LifecycleManager and run Claude Code.
@@ -345,6 +355,13 @@ async def run_task(
         )
         return
 
+    # Validate event_log_dir BEFORE entering approval state — if it's not
+    # configured the task cannot complete the approval workflow.
+    if not settings.event_log_dir:
+        log.error("event_log_dir_not_configured_pre_check", task_id=task_id)
+        await mgr.handle_event(LifecycleEvent.TASK_FAILED)
+        return
+
     # Tier-3 action detected — enter approval gate.
     log.info("tier3_detected", task_id=task_id, event_type=push_event.event_type)
     await mgr.handle_event(LifecycleEvent.TASK_AWAITING_APPROVAL)
@@ -357,10 +374,17 @@ async def run_task(
         action="git_push",
         justification=f"Claude Code attempted: {push_event.tool_input.get('command', 'git push')}",
     )
-    await _emit_event(
+    emit_result = await _emit_event(
         "task.approval_requested",
         approval_payload.model_dump(),
     )
+    if not emit_result:
+        # Emission failed — operator will never see the request, so the
+        # approval workflow cannot complete.  Fail the task immediately
+        # rather than polling for an approval that will never arrive.
+        log.error("approval_request_emission_failed", task_id=task_id)
+        await mgr.handle_event(LifecycleEvent.TASK_FAILED)
+        return
 
     # Wait for approval (AC-3).
     await _handle_pending_approval(
@@ -424,7 +448,16 @@ async def _handle_pending_approval(
         return
 
     # Approval granted — execute gated action (AC-5).
-    await mgr.handle_approval(idempotency_key=approval.idempotency_key or task_id)
+    try:
+        await mgr.handle_approval(idempotency_key=approval.idempotency_key or task_id)
+    except Exception:
+        log.exception("handle_approval_failed", task_id=task_id)
+        await _emit_tier3_performed(
+            clients, task_id, accepted=False,
+            approval_event_id=approval.event_id,
+            reason="gated action execution failed",
+        )
+        return
     await _emit_tier3_performed(
         clients, task_id, accepted=True,
         approval_event_id=approval.event_id,
