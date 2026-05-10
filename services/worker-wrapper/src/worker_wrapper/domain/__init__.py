@@ -9,6 +9,7 @@ Story 5.17a adds: :mod:`worker_wrapper.domain.lifecycle` (FR36 — resume-after-
 
 from __future__ import annotations
 
+from worker_wrapper.domain.approval_gate import needs_approval
 from worker_wrapper.domain.atomic_edit import atomic_write_bytes, atomic_write_text
 from worker_wrapper.domain.lifecycle import (
     InvalidTransitionError,
@@ -27,6 +28,7 @@ from worker_wrapper.domain.worktree_lock import (
 
 __all__ = [
     "InvalidTransitionError",
+    "needs_approval",
     "LifecycleEvent",
     "LifecycleFSM",
     "TransitionLogEntry",
