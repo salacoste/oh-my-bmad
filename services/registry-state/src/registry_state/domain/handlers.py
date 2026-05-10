@@ -64,6 +64,41 @@ def _hydrate(payload: dict[str, object] | BaseModel, model: type[BaseModel]) -> 
     return model.model_validate(dict(payload))
 
 
+async def _touch_task(
+    session: AsyncSession,
+    task_id: str,
+    envelope: EventEnvelope,
+    extra_values: dict[str, object] | None = None,
+) -> None:
+    """UPDATE tasks SET last_event_id/updated_at (+ *extra_values*) WHERE id = *task_id*.
+
+    Raises ``MaterializerError`` if the task row does not exist (out-of-order
+    replay guard).  ``rowcount != 1`` covers the missing-row case (0), the
+    dialect-cannot-determine case (-1), and the "should never happen with a
+    PK WHERE" case (>1).  Single-row UPDATE on aiosqlite normally returns
+    0 or 1; this is defence in depth.
+    """
+    values: dict[str, object] = {
+        "last_event_id": envelope.event_id,
+        "updated_at": envelope.emitted_at,
+    }
+    if extra_values:
+        values.update(extra_values)
+    stmt = update(Task).where(Task.id == task_id).values(**values)
+    result = cast(CursorResult[tuple[()]], await session.execute(stmt))
+    if result.rowcount != 1:
+        raise MaterializerError(
+            event_id=envelope.event_id,
+            event_type=envelope.type,
+            reason=f"task {task_id!r} not found — out-of-order replay?",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Task lifecycle handlers
+# ---------------------------------------------------------------------------
+
+
 async def handle_task_created(session: AsyncSession, envelope: EventEnvelope) -> None:
     """Upsert a Task row with ``status="pending"``.
 
@@ -113,26 +148,7 @@ async def handle_task_planning_started(session: AsyncSession, envelope: EventEnv
     """
     payload = _hydrate(envelope.payload, TaskPlanningStartedPayload)
     assert isinstance(payload, TaskPlanningStartedPayload)
-    stmt = (
-        update(Task)
-        .where(Task.id == payload.task_id)
-        .values(
-            status="planning",
-            last_event_id=envelope.event_id,
-            updated_at=envelope.emitted_at,
-        )
-    )
-    result = cast(CursorResult[tuple[()]], await session.execute(stmt))
-    # ``rowcount != 1`` covers the missing-row case (rowcount == 0), the
-    # dialect-cannot-determine case (rowcount == -1) and the "should never
-    # happen with a PK WHERE" case (rowcount > 1).  Single-row UPDATE on
-    # aiosqlite normally returns 0 or 1; this is defence in depth.
-    if result.rowcount != 1:
-        raise MaterializerError(
-            event_id=envelope.event_id,
-            event_type=envelope.type,
-            reason=f"task {payload.task_id!r} not found — out-of-order replay?",
-        )
+    await _touch_task(session, payload.task_id, envelope, {"status": "planning"})
 
 
 async def handle_task_plan_ready(session: AsyncSession, envelope: EventEnvelope) -> None:
@@ -142,26 +158,7 @@ async def handle_task_plan_ready(session: AsyncSession, envelope: EventEnvelope)
     """
     payload = _hydrate(envelope.payload, TaskPlanReadyPayload)
     assert isinstance(payload, TaskPlanReadyPayload)
-    stmt = (
-        update(Task)
-        .where(Task.id == payload.task_id)
-        .values(
-            status="plan_ready",
-            last_event_id=envelope.event_id,
-            updated_at=envelope.emitted_at,
-        )
-    )
-    result = cast(CursorResult[tuple[()]], await session.execute(stmt))
-    # ``rowcount != 1`` covers the missing-row case (rowcount == 0), the
-    # dialect-cannot-determine case (rowcount == -1) and the "should never
-    # happen with a PK WHERE" case (rowcount > 1).  Single-row UPDATE on
-    # aiosqlite normally returns 0 or 1; this is defence in depth.
-    if result.rowcount != 1:
-        raise MaterializerError(
-            event_id=envelope.event_id,
-            event_type=envelope.type,
-            reason=f"task {payload.task_id!r} not found — out-of-order replay?",
-        )
+    await _touch_task(session, payload.task_id, envelope, {"status": "plan_ready"})
 
 
 async def handle_task_execution_started(session: AsyncSession, envelope: EventEnvelope) -> None:
@@ -175,26 +172,7 @@ async def handle_task_execution_started(session: AsyncSession, envelope: EventEn
     """
     payload = _hydrate(envelope.payload, TaskExecutionStartedPayload)
     assert isinstance(payload, TaskExecutionStartedPayload)
-    stmt = (
-        update(Task)
-        .where(Task.id == payload.task_id)
-        .values(
-            status="executing",
-            last_event_id=envelope.event_id,
-            updated_at=envelope.emitted_at,
-        )
-    )
-    result = cast(CursorResult[tuple[()]], await session.execute(stmt))
-    # ``rowcount != 1`` covers the missing-row case (rowcount == 0), the
-    # dialect-cannot-determine case (rowcount == -1) and the "should never
-    # happen with a PK WHERE" case (rowcount > 1).  Single-row UPDATE on
-    # aiosqlite normally returns 0 or 1; this is defence in depth.
-    if result.rowcount != 1:
-        raise MaterializerError(
-            event_id=envelope.event_id,
-            event_type=envelope.type,
-            reason=f"task {payload.task_id!r} not found — out-of-order replay?",
-        )
+    await _touch_task(session, payload.task_id, envelope, {"status": "executing"})
     session_stmt = (
         sqlite_insert(SessionRow)
         .values(
@@ -209,6 +187,11 @@ async def handle_task_execution_started(session: AsyncSession, envelope: EventEn
     await session.execute(session_stmt)
 
 
+# ---------------------------------------------------------------------------
+# Story 2.8 — Additional task-event handlers
+# ---------------------------------------------------------------------------
+
+
 async def handle_task_blocker_raised(session: AsyncSession, envelope: EventEnvelope) -> None:
     """Update last_event_id + updated_at for ``task.blocker_raised``.
 
@@ -218,21 +201,7 @@ async def handle_task_blocker_raised(session: AsyncSession, envelope: EventEnvel
     """
     payload = _hydrate(envelope.payload, TaskBlockerRaisedPayload)
     assert isinstance(payload, TaskBlockerRaisedPayload)
-    stmt = (
-        update(Task)
-        .where(Task.id == payload.task_id)
-        .values(
-            last_event_id=envelope.event_id,
-            updated_at=envelope.emitted_at,
-        )
-    )
-    result = cast(CursorResult[tuple[()]], await session.execute(stmt))
-    if result.rowcount != 1:
-        raise MaterializerError(
-            event_id=envelope.event_id,
-            event_type=envelope.type,
-            reason=f"task {payload.task_id!r} not found — out-of-order replay?",
-        )
+    await _touch_task(session, payload.task_id, envelope)
 
 
 async def handle_task_summary_emitted(session: AsyncSession, envelope: EventEnvelope) -> None:
@@ -242,21 +211,7 @@ async def handle_task_summary_emitted(session: AsyncSession, envelope: EventEnve
     """
     payload = _hydrate(envelope.payload, TaskSummaryEmittedPayload)
     assert isinstance(payload, TaskSummaryEmittedPayload)
-    stmt = (
-        update(Task)
-        .where(Task.id == payload.task_id)
-        .values(
-            last_event_id=envelope.event_id,
-            updated_at=envelope.emitted_at,
-        )
-    )
-    result = cast(CursorResult[tuple[()]], await session.execute(stmt))
-    if result.rowcount != 1:
-        raise MaterializerError(
-            event_id=envelope.event_id,
-            event_type=envelope.type,
-            reason=f"task {payload.task_id!r} not found — out-of-order replay?",
-        )
+    await _touch_task(session, payload.task_id, envelope)
 
 
 async def handle_task_approval_requested(session: AsyncSession, envelope: EventEnvelope) -> None:
@@ -266,21 +221,7 @@ async def handle_task_approval_requested(session: AsyncSession, envelope: EventE
     """
     payload = _hydrate(envelope.payload, TaskApprovalRequestedPayload)
     assert isinstance(payload, TaskApprovalRequestedPayload)
-    stmt = (
-        update(Task)
-        .where(Task.id == payload.task_id)
-        .values(
-            last_event_id=envelope.event_id,
-            updated_at=envelope.emitted_at,
-        )
-    )
-    result = cast(CursorResult[tuple[()]], await session.execute(stmt))
-    if result.rowcount != 1:
-        raise MaterializerError(
-            event_id=envelope.event_id,
-            event_type=envelope.type,
-            reason=f"task {payload.task_id!r} not found — out-of-order replay?",
-        )
+    await _touch_task(session, payload.task_id, envelope)
 
 
 async def handle_task_completed(session: AsyncSession, envelope: EventEnvelope) -> None:
@@ -294,22 +235,7 @@ async def handle_task_completed(session: AsyncSession, envelope: EventEnvelope) 
     """
     payload = _hydrate(envelope.payload, TaskCompletedPayload)
     assert isinstance(payload, TaskCompletedPayload)
-    stmt = (
-        update(Task)
-        .where(Task.id == payload.task_id)
-        .values(
-            status="completed",
-            last_event_id=envelope.event_id,
-            updated_at=envelope.emitted_at,
-        )
-    )
-    result = cast(CursorResult[tuple[()]], await session.execute(stmt))
-    if result.rowcount != 1:
-        raise MaterializerError(
-            event_id=envelope.event_id,
-            event_type=envelope.type,
-            reason=f"task {payload.task_id!r} not found — out-of-order replay?",
-        )
+    await _touch_task(session, payload.task_id, envelope, {"status": "completed"})
 
 
 # ---------------------------------------------------------------------------
@@ -328,21 +254,7 @@ async def handle_approval_granted(session: AsyncSession, envelope: EventEnvelope
     """
     payload = _hydrate(envelope.payload, ApprovalGrantedPayload)
     assert isinstance(payload, ApprovalGrantedPayload)
-    stmt = (
-        update(Task)
-        .where(Task.id == payload.task_id)
-        .values(
-            last_event_id=envelope.event_id,
-            updated_at=envelope.emitted_at,
-        )
-    )
-    result = cast(CursorResult[tuple[()]], await session.execute(stmt))
-    if result.rowcount != 1:
-        raise MaterializerError(
-            event_id=envelope.event_id,
-            event_type=envelope.type,
-            reason=f"task {payload.task_id!r} not found — out-of-order replay?",
-        )
+    await _touch_task(session, payload.task_id, envelope)
 
 
 async def handle_approval_rejected(session: AsyncSession, envelope: EventEnvelope) -> None:
@@ -355,21 +267,7 @@ async def handle_approval_rejected(session: AsyncSession, envelope: EventEnvelop
     """
     payload = _hydrate(envelope.payload, ApprovalRejectedPayload)
     assert isinstance(payload, ApprovalRejectedPayload)
-    stmt = (
-        update(Task)
-        .where(Task.id == payload.task_id)
-        .values(
-            last_event_id=envelope.event_id,
-            updated_at=envelope.emitted_at,
-        )
-    )
-    result = cast(CursorResult[tuple[()]], await session.execute(stmt))
-    if result.rowcount != 1:
-        raise MaterializerError(
-            event_id=envelope.event_id,
-            event_type=envelope.type,
-            reason=f"task {payload.task_id!r} not found — out-of-order replay?",
-        )
+    await _touch_task(session, payload.task_id, envelope)
 
 
 async def handle_task_stop_requested(session: AsyncSession, envelope: EventEnvelope) -> None:
@@ -382,22 +280,7 @@ async def handle_task_stop_requested(session: AsyncSession, envelope: EventEnvel
     """
     payload = _hydrate(envelope.payload, TaskStopRequestedPayload)
     assert isinstance(payload, TaskStopRequestedPayload)
-    stmt = (
-        update(Task)
-        .where(Task.id == payload.task_id)
-        .values(
-            status="stopped",
-            last_event_id=envelope.event_id,
-            updated_at=envelope.emitted_at,
-        )
-    )
-    result = cast(CursorResult[tuple[()]], await session.execute(stmt))
-    if result.rowcount != 1:
-        raise MaterializerError(
-            event_id=envelope.event_id,
-            event_type=envelope.type,
-            reason=f"task {payload.task_id!r} not found — out-of-order replay?",
-        )
+    await _touch_task(session, payload.task_id, envelope, {"status": "stopped"})
 
 
 async def handle_task_retry_requested(session: AsyncSession, envelope: EventEnvelope) -> None:
@@ -410,25 +293,11 @@ async def handle_task_retry_requested(session: AsyncSession, envelope: EventEnve
     """
     payload = _hydrate(envelope.payload, TaskRetryRequestedPayload)
     assert isinstance(payload, TaskRetryRequestedPayload)
-    stmt = (
-        update(Task)
-        .where(Task.id == payload.task_id)
-        .values(
-            last_event_id=envelope.event_id,
-            updated_at=envelope.emitted_at,
-        )
-    )
-    result = cast(CursorResult[tuple[()]], await session.execute(stmt))
-    if result.rowcount != 1:
-        raise MaterializerError(
-            event_id=envelope.event_id,
-            event_type=envelope.type,
-            reason=f"task {payload.task_id!r} not found — out-of-order replay?",
-        )
+    await _touch_task(session, payload.task_id, envelope)
 
 
 def register_default_handlers(materializer: object) -> None:
-    """Register all 12 task-event handlers onto *materializer*.
+    """Register all built-in task-event handlers onto *materializer*.
 
     Accepts ``object`` to avoid a circular import with ``materializer.py``
     at the type level; the runtime type is ``Materializer``.  Callers
