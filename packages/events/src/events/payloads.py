@@ -30,6 +30,9 @@ from pydantic import (
 _SESSION_ID_PATTERN = r"^s-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 _TASK_ID_PATTERN = r"^t-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 _WORKER_ID_PATTERN = r"^w-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+# Git ref-name character-level validation. Sequence rules (.., //, /., .lock)
+# enforced by @field_validator on TaskCompletedPayload.
+_PR_BRANCH_PATTERN = r"^[A-Za-z0-9](?:[A-Za-z0-9/_.-]*[A-Za-z0-9_-])?$"
 
 
 class TaskCreatedPayload(BaseModel):
@@ -52,10 +55,10 @@ class TaskCreatedPayload(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
-    task_id: str
+    task_id: str = Field(pattern=_TASK_ID_PATTERN)
     title: str | None = Field(default=None, max_length=512)
     repo: str | None = Field(default=None, max_length=2048)
-    hint: str | None = Field(default=None, max_length=4096)
+    hint: str | None = Field(default=None, min_length=1, max_length=4096)
     # Story 3.9: Telegram thread binding (FR13).
     # M13: chat_id=0 rejected; L20: explicit BigInteger bounds.
     chat_id: int | None = Field(default=None, ge=-(2**63), le=(2**63) - 1)
@@ -75,7 +78,7 @@ class TaskPlanningStartedPayload(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
-    task_id: str
+    task_id: str = Field(pattern=_TASK_ID_PATTERN)
 
 
 class PlanStep(BaseModel):
@@ -98,7 +101,7 @@ class TaskPlanReadyPayload(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
-    task_id: str
+    task_id: str = Field(pattern=_TASK_ID_PATTERN)
     plan_summary: str
     plan: tuple[PlanStep, ...] = Field(default=())
     estimated_steps: int = Field(default=0, ge=0)
@@ -109,7 +112,7 @@ class TaskExecutionStartedPayload(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
-    task_id: str
+    task_id: str = Field(pattern=_TASK_ID_PATTERN)
     session_id: str
 
 
@@ -118,7 +121,7 @@ class TaskStepCompletedPayload(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
-    task_id: str = Field(min_length=1, max_length=64)
+    task_id: str = Field(min_length=1, max_length=64, pattern=_TASK_ID_PATTERN)
     step: int = Field(ge=1)
     description: str = Field(min_length=1, max_length=500)
     output_summary: str = Field(max_length=2000)
@@ -154,7 +157,7 @@ class TaskBlockerRaisedPayload(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
-    task_id: str = Field(min_length=1, max_length=64)
+    task_id: str = Field(min_length=1, max_length=64, pattern=_TASK_ID_PATTERN)
     reason: str = Field(min_length=1, max_length=2000)
     # Story 3.11 — optional FR15 fields (additive, schema 1.1.0).
     # H8: AwareDatetime — naive datetimes rejected at the model boundary.
@@ -169,7 +172,7 @@ class TaskSummaryEmittedPayload(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
-    task_id: str
+    task_id: str = Field(pattern=_TASK_ID_PATTERN)
     summary: str
 
 
@@ -294,7 +297,7 @@ class TaskApprovalRequestedPayload(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
-    task_id: str = Field(min_length=1, max_length=64)
+    task_id: str = Field(min_length=1, max_length=64, pattern=_TASK_ID_PATTERN)
     action: str = Field(min_length=1, max_length=2000)
     justification: str = Field(min_length=1, max_length=10_000)
     # Story 3.10 — optional FR14 fields (additive, schema 1.1.0).
@@ -355,7 +358,7 @@ class TaskCompletedPayload(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
-    task_id: str = Field(min_length=1, max_length=64)
+    task_id: str = Field(min_length=1, max_length=64, pattern=_TASK_ID_PATTERN)
     summary: str = Field(min_length=1, max_length=2000)
     # Story 3.12 review M2: scheme-constrained — ``http(s)://`` only. Other
     # schemes (``javascript:`` / ``data:`` / ``file:``) are rejected at the
@@ -367,7 +370,29 @@ class TaskCompletedPayload(BaseModel):
     # this constraint is portable in practice; if a future host uses 0-based
     # numbering, the cap can relax with an explicit migration comment.
     pr_number: int | None = Field(default=None, ge=1, le=10**9)
-    pr_branch: str | None = Field(default=None, min_length=1, max_length=255)
+    pr_branch: str | None = Field(
+        default=None, min_length=1, max_length=255, pattern=_PR_BRANCH_PATTERN
+    )
+
+    @field_validator("pr_branch")
+    @classmethod
+    def _validate_git_ref_name(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        if ".." in v:
+            msg = "pr_branch must not contain '..'"
+            raise ValueError(msg)
+        if "//" in v:
+            msg = "pr_branch must not contain consecutive slashes"
+            raise ValueError(msg)
+        if "/." in v:
+            msg = "pr_branch must not contain '/.'"
+            raise ValueError(msg)
+        if v.endswith(".lock"):
+            msg = "pr_branch must not end with '.lock'"
+            raise ValueError(msg)
+        return v
+
     files_changed: int | None = Field(default=None, ge=0, le=10**6)
     lines_added: int | None = Field(default=None, ge=0, le=10**9)
     lines_removed: int | None = Field(default=None, ge=0, le=10**9)
@@ -500,7 +525,7 @@ class TaskSelfRecoveredPayload(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
-    task_id: str = Field(min_length=1, max_length=64)
+    task_id: str = Field(min_length=1, max_length=64, pattern=_TASK_ID_PATTERN)
     recovered_at: AwareDatetime
     events_replayed: int = Field(ge=0, le=10**6)
     replay_duration_ms: int = Field(ge=0, le=10**9)
@@ -577,6 +602,36 @@ class SessionFinishedPayload(BaseModel):
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
     session_id: str = Field(min_length=1, pattern=_SESSION_ID_PATTERN)
+
+
+class SessionReconnectingPayload(BaseModel):
+    """Payload for the ``session.reconnecting`` event (FR29 / Story 7.8).
+
+    Emitted when a worker reconnects to an existing session after a host
+    restart.  Paired with ``task.execution.resumed`` to signal the
+    restart-recovery window.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    session_id: str = Field(min_length=1, pattern=_SESSION_ID_PATTERN)
+    task_id: str = Field(min_length=1, pattern=_TASK_ID_PATTERN)
+    reason: str = Field(min_length=1, max_length=256)
+
+
+class TaskExecutionResumedPayload(BaseModel):
+    """Payload for the ``task.execution.resumed`` event (FR29 / Story 7.8).
+
+    Emitted after ``session.reconnecting`` when the worker has replayed
+    events from the journal and resumed task execution.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    task_id: str = Field(min_length=1, pattern=_TASK_ID_PATTERN)
+    session_id: str = Field(min_length=1, pattern=_SESSION_ID_PATTERN)
+    events_replayed: int = Field(ge=0, le=10**6)
+    replay_duration_ms: int = Field(ge=0, le=10**9)
 
 
 # Schema version constant for telegram.rejected — single source of truth
@@ -690,7 +745,7 @@ class TaskBudgetExceededPayload(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
-    task_id: str = Field(min_length=1, max_length=64)
+    task_id: str = Field(min_length=1, max_length=64, pattern=_TASK_ID_PATTERN)
     token_limit: int = Field(gt=0)
     tokens_used: int = Field(gt=0)
     step: int = Field(ge=1)
@@ -706,7 +761,7 @@ class Tier3ActionAttemptedPayload(BaseModel):
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
     action: str = Field(min_length=1, max_length=2000)
-    task_id: str = Field(min_length=1, max_length=64)
+    task_id: str = Field(min_length=1, max_length=64, pattern=_TASK_ID_PATTERN)
     accepted: bool
     reason: str | None = Field(default=None, min_length=1, max_length=4096)
 
@@ -727,7 +782,7 @@ class Tier3ActionPerformedPayload(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
-    task_id: str = Field(min_length=1, max_length=64)
+    task_id: str = Field(min_length=1, max_length=64, pattern=_TASK_ID_PATTERN)
     action: str = Field(min_length=1, max_length=2000)
     accepted: bool
     approval_event_id: str | None = Field(default=None, min_length=1, max_length=128)
@@ -754,7 +809,7 @@ class ApprovalGrantedPayload(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
-    task_id: str = Field(min_length=1, max_length=64)
+    task_id: str = Field(min_length=1, max_length=64, pattern=_TASK_ID_PATTERN)
     decision_id: str = Field(min_length=1, max_length=64)
     actor_id: str = Field(min_length=1, max_length=128)
     override: str | None = Field(default=None, max_length=64)
@@ -768,7 +823,7 @@ class ApprovalRejectedPayload(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
-    task_id: str = Field(min_length=1, max_length=64)
+    task_id: str = Field(min_length=1, max_length=64, pattern=_TASK_ID_PATTERN)
     decision_id: str = Field(min_length=1, max_length=64)
     actor_id: str = Field(min_length=1, max_length=128)
     reason: str | None = Field(default=None, min_length=1, max_length=4096)
@@ -783,7 +838,7 @@ class TaskRetryRequestedPayload(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
-    task_id: str = Field(min_length=1, max_length=64)
+    task_id: str = Field(min_length=1, max_length=64, pattern=_TASK_ID_PATTERN)
     decision_id: str = Field(min_length=1, max_length=64)
     actor_id: str = Field(min_length=1, max_length=128)
     hint: str | None = Field(default=None, min_length=1, max_length=4096)
@@ -798,10 +853,48 @@ class LicenseOverridePayload(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
-    task_id: str = Field(min_length=1, max_length=64)
+    task_id: str = Field(min_length=1, max_length=64, pattern=_TASK_ID_PATTERN)
     decision_id: str = Field(min_length=1, max_length=64)
     actor_id: str = Field(min_length=1, max_length=128)
     reason: str = Field(min_length=1, max_length=4096)
+
+
+class BudgetOverridePayload(BaseModel):
+    """Payload for the ``tier3.budget_override`` event (FR44 / Story 6.11).
+
+    Emitted alongside ``approval.granted`` when the operator explicitly
+    overrides a budget-exceeded block with ``override: "budget"``.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    task_id: str = Field(min_length=1, max_length=64, pattern=_TASK_ID_PATTERN)
+    decision_id: str = Field(min_length=1, max_length=64)
+    actor_id: str = Field(min_length=1, max_length=128)
+    old_limit: int = Field(gt=0)
+    new_limit: int = Field(gt=0, le=1_000_000_000)
+
+    @model_validator(mode="after")
+    def _new_limit_exceeds_old(self) -> BudgetOverridePayload:
+        if self.new_limit <= self.old_limit:
+            raise ValueError("new_limit must exceed old_limit")
+        return self
+
+
+class TaskLicenseFlaggedPayload(BaseModel):
+    """Payload for the ``task.license_flagged`` event (FR40 / Story 6.10).
+
+    Emitted when the license scan detects an incompatible license in files
+    staged for push.  Carries structured finding data so the approval gate
+    can block and the operator can review details.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    task_id: str = Field(min_length=1, max_length=64, pattern=_TASK_ID_PATTERN)
+    reason_code: str = Field(min_length=1, max_length=64)
+    file_list: list[str] = Field(min_length=1, max_length=100)
+    detected_licenses: list[str] = Field(min_length=1, max_length=100)
 
 
 __all__ = [
@@ -809,6 +902,7 @@ __all__ = [
     "AcceptedCommand",
     "AgentReasoningBreadcrumbPayload",
     "ApprovalGrantedPayload",
+    "BudgetOverridePayload",
     "ApprovalRejectedPayload",
     "DiffSummary",
     "FileEditedPayload",
@@ -821,13 +915,16 @@ __all__ = [
     "SessionFinishedPayload",
     "SessionHeartbeatPayload",
     "SessionHeartbeatTimeoutPayload",
+    "SessionReconnectingPayload",
     "SessionStartedPayload",
     "SinkDeliveryFailedPayload",
     "TaskApprovalRequestedPayload",
     "TaskBlockerRaisedPayload",
     "TaskBudgetExceededPayload",
     "TaskCompletedPayload",
+    "TaskLicenseFlaggedPayload",
     "TaskCreatedPayload",
+    "TaskExecutionResumedPayload",
     "TaskExecutionStartedPayload",
     "TaskPlanReadyPayload",
     "TaskPlanningStartedPayload",

@@ -31,7 +31,7 @@ def _make_settings(
     event_log_dir: str = "",
 ) -> WorkerSettings:
     return WorkerSettings(
-        task_id="task-abc",
+        task_id="t-00000000-0000-7000-8000-000000000001",
         worktree_path=str(tmp_path),
         event_log_dir=event_log_dir,
     )
@@ -238,7 +238,7 @@ class TestRunTaskRestartRecovery:
         state_file = tmp_path / ".lifecycle-state.json"
         state_file.write_text(json.dumps({
             "state": "awaiting_approval",
-            "task_id": "task-abc",
+            "task_id": "t-00000000-0000-7000-8000-000000000001",
         }))
 
         settings = _make_settings(

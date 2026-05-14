@@ -47,6 +47,7 @@ import html
 import re
 import time
 from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -65,6 +66,8 @@ from events import (
     TaskSelfRecoveredPayload,
     TaskStepCompletedPayload,
     from_canonical_json,
+    new_event_id,
+    new_uuid7,
 )
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -211,8 +214,23 @@ class RegistryAPIReadClient:
                 task_id=task_id,
             )
             return None, None
-
         return binding.chat_id, binding.reply_to_message_id
+
+    async def get_task_events(
+        self, task_id: str, *, limit: int = 1000
+    ) -> list[dict]:
+        """GET /v1/tasks/{task_id}/events and return event envelope dicts."""
+        resp = await self._http_client.get(
+            f"{self._base_url}/v1/tasks/{task_id}/events",
+            params={"limit": limit},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if not isinstance(data, list):
+            raise TypeError(
+                f"Expected list from /v1/tasks/{task_id}/events, got {type(data).__name__}"
+            )
+        return data
 
 
 # ---------------------------------------------------------------------------
@@ -401,7 +419,10 @@ def _truncate(text: str, limit: int) -> str:
 
 
 def _collapse_newlines(text: str) -> str:
-    """Collapse all line-break sequences (``\\r\\n``, ``\\r``, ``\\n``) to single spaces.
+    """Collapse all line-break sequences to single spaces.
+
+    Handles ``\\r\\n``, ``\\r``, ``\\n``, U+2028 (LINE SEPARATOR),
+    and U+2029 (PARAGRAPH SEPARATOR).
 
     Story 3.11 review H6 / L17 / M12: extracted helper so renderers don't
     diverge stylistically (``"\\n"`` vs ``chr(10)``). Order matters:
@@ -410,12 +431,22 @@ def _collapse_newlines(text: str) -> str:
     legacy Mac line endings don't leak into HTML-escaped output. Finally
     bare ``\\n`` (the common case) is collapsed.
 
+    Story 7.5.8: U+2028 (LINE SEPARATOR) and U+2029 (PARAGRAPH SEPARATOR)
+    are also collapsed — Unicode line breaks that cause rendering artifacts
+    in some sinks.
+
     The function is total — call sites do not pre-validate. Used on both
     operator-supplied free-form text (``reason``, ``last_action``) and
     registry-controlled strings (``last_event``, defense-in-depth) before
     HTML-escaping.
     """
-    return text.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    return (
+        text.replace("\r\n", " ")
+        .replace("\r", " ")
+        .replace("\n", " ")
+        .replace(" ", " ")
+        .replace(" ", " ")
+    )
 
 
 # Story 3.10 review M13: status → emoji map. Widened from binary
@@ -1655,6 +1686,48 @@ def _render(envelope: EventEnvelope) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Restart detection (Story 7.8 / FR16)
+# ---------------------------------------------------------------------------
+
+
+def detect_overnight_restart(
+    events: list[dict], *, task_id: str
+) -> dict[str, Any] | None:
+    """Scan event history for a ``session.reconnecting`` → ``task.execution.resumed`` pair.
+
+    Returns ``{"recovered_at": <datetime>, "events_replayed": <int>, "replay_duration_ms": <int>}``
+    extracted from the ``task.execution.resumed`` payload, or ``None`` if no pair found.
+
+    The pair must belong to *task_id* — both events' ``payload.task_id`` are checked.
+    """
+    reconnecting_found = False
+    for evt in events:
+        if evt is None:
+            continue
+        if evt.get("type") == "session.reconnecting":
+            payload = evt.get("payload", {})
+            if payload.get("task_id") == task_id:
+                reconnecting_found = True
+            continue
+        if reconnecting_found and evt.get("type") == "task.execution.resumed":
+            payload = evt.get("payload", {})
+            if payload.get("task_id") != task_id:
+                continue
+            emitted_at_str = evt.get("emitted_at")
+            if emitted_at_str is None:
+                continue
+            recovered_at = datetime.fromisoformat(emitted_at_str)
+            if recovered_at.tzinfo is None:
+                recovered_at = recovered_at.replace(tzinfo=UTC)
+            return {
+                "recovered_at": recovered_at,
+                "events_replayed": payload.get("events_replayed", 0),
+                "replay_duration_ms": payload.get("replay_duration_ms", 0),
+            }
+    return None
+
+
+# ---------------------------------------------------------------------------
 # TelegramSink
 # ---------------------------------------------------------------------------
 
@@ -1816,6 +1889,14 @@ class TelegramSink:
             text=text,
         )
 
+        # Story 7.8 / FR16: after task.completed, check for overnight restart.
+        if envelope.type == "task.completed":
+            await self._maybe_send_self_recovered(
+                task_id=task_id,
+                chat_id=chat_id,
+                reply_to_message_id=reply_to_message_id,
+            )
+
     async def _lookup_binding(
         self,
         task_id: str,
@@ -1868,6 +1949,58 @@ class TelegramSink:
                 "registry-api may be unreachable",
                 threshold=_LOOKUP_FAILURE_WARN_THRESHOLD,
                 consecutive_lookup_failures=self._consecutive_lookup_failures,
+            )
+
+    async def _fetch_task_events(self, task_id: str) -> list[dict]:
+        """Fetch task event history from registry-api (Story 7.8 / FR16).
+
+        Delegates to ``RegistryAPIReadClient.get_task_events`` which calls
+        ``GET /v1/tasks/{task_id}/events?limit=1000``.
+        """
+        return await self._registry_client.get_task_events(task_id)
+
+    async def _maybe_send_self_recovered(
+        self,
+        *,
+        task_id: str,
+        chat_id: int,
+        reply_to_message_id: int,
+    ) -> None:
+        """Check for overnight restart and deliver self-recovered message (Story 7.8).
+
+        Best-effort: logs and returns on any failure so the sink loop never crashes.
+        """
+        try:
+            events = await self._fetch_task_events(task_id)
+            recovery = detect_overnight_restart(events, task_id=task_id)
+            if recovery is None:
+                return
+            synthetic_env = EventEnvelope.create(
+                event_id=new_event_id(),
+                schema_version="1.0.0",
+                type="task.self_recovered",
+                emitted_at=recovery["recovered_at"],
+                emitted_at_monotonic_ns=time.monotonic_ns(),
+                actor={"kind": "system", "id": "clawhip-daemon"},
+                payload=TaskSelfRecoveredPayload(
+                    task_id=task_id,
+                    recovered_at=recovery["recovered_at"],
+                    events_replayed=recovery["events_replayed"],
+                    replay_duration_ms=recovery["replay_duration_ms"],
+                ),
+                request_id=new_uuid7(),
+            )
+            text = _render(synthetic_env)
+            await self._outbound.send_to_thread(
+                chat_id=chat_id,
+                reply_to_message_id=reply_to_message_id,
+                text=text,
+            )
+        except Exception:  # noqa: BLE001 — best-effort, never crash the sink loop
+            _log.warning(
+                "telegram_sink: self-recovered synthesis failed",
+                task_id=task_id,
+                exc_info=True,
             )
 
 

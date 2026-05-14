@@ -20,7 +20,7 @@ from events import FROZEN_EPOCH, FrozenClock
 from events.ids import new_request_id
 from httpx import ASGITransport, AsyncClient
 from registry_state.adapters.sqlite_store import create_engine  # noqa: IMP001
-from registry_state.schema import Base, Task  # noqa: IMP001
+from registry_state.schema import Base, Event, Task  # noqa: IMP001
 
 from registry_api.app import build_app
 
@@ -291,3 +291,388 @@ class TestDecisionsNegative:
             json={"action": "approve"},
         )
         assert r.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# License gate tests (Story 6.10, AC-1)
+# ---------------------------------------------------------------------------
+
+
+async def _seed_license_flagged_event(db_url: str, task_id: str) -> None:
+    """Insert a task.license_flagged event row for the given task."""
+    engine = create_engine(db_url)
+    async with engine.begin() as conn:
+        await conn.execute(Event.__table__.insert(), {
+            "id": "e-license-flag-000000000000000000",
+            "type": "task.license_flagged",
+            "schema_version": "1.0.0",
+            "emitted_at": FROZEN_EPOCH,
+            "emitted_at_monotonic_ns": _FROZEN_MONO_NS,
+            "actor_kind": "worker",
+            "actor_id": "test-worker",
+            "task_id": task_id,
+            "session_id": None,
+            "parent_event_id": None,
+            "request_id": "req-license-flag-test",
+            "payload_json": json.dumps({
+                "task_id": task_id,
+                "reason_code": "copyleft-incompatible",
+                "file_list": ["src/gpl_code.py"],
+                "detected_licenses": ["gpl-2.0"],
+            }),
+        })
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def flagged_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None]:
+    """Client with a plan_ready task that has a license_flagged event."""
+    db_path = tmp_path / "state.sqlite3"
+    db_url = _db_url(db_path)
+    await _seed_tables_with_tasks(db_url)
+    await _seed_license_flagged_event(db_url, _TID_PLAN_READY)
+
+    events_dir = tmp_path / "events"
+    clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
+    app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+
+    async with (
+        LifespanManager(app) as manager,
+        AsyncClient(
+            transport=ASGITransport(app=manager.app), base_url="http://testserver"
+        ) as client,
+    ):
+        yield client
+
+
+class TestLicenseGate:
+    """Story 6.10 AC-1: approve blocked when license-flagged."""
+
+    @pytest.mark.asyncio
+    async def test_approve_blocked_when_flagged(
+        self, flagged_client: AsyncClient,
+    ) -> None:
+        """Default approve returns 409 when license_flagged event exists."""
+        r = await flagged_client.post(
+            f"/v1/tasks/{_TID_PLAN_READY}/decisions",
+            json={"action": "approve"},
+        )
+        assert r.status_code == 409
+        body = r.json()
+        assert body["type"] == "approval_blocked_by"
+        assert body["extensions"]["reason"] == "license_flag"
+        assert "license flag" in body["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_approve_allowed_with_override(
+        self, flagged_client: AsyncClient,
+    ) -> None:
+        """Approve with override=license succeeds despite license flag."""
+        r = await flagged_client.post(
+            f"/v1/tasks/{_TID_PLAN_READY}/decisions",
+            json={"action": "approve", "override": "license"},
+        )
+        assert r.status_code == 202
+        assert r.json()["action"] == "approve"
+
+    @pytest.mark.asyncio
+    async def test_approve_allowed_when_no_flag(
+        self, app_client: AsyncClient,
+    ) -> None:
+        """Approve succeeds normally when no license_flagged event exists."""
+        r = await app_client.post(
+            f"/v1/tasks/{_TID_PLAN_READY}/decisions",
+            json={"action": "approve"},
+        )
+        assert r.status_code == 202
+
+    @pytest.mark.asyncio
+    async def test_reject_not_blocked_by_license_flag(
+        self, flagged_client: AsyncClient,
+    ) -> None:
+        """Reject is not blocked by license flag (only approve is gated)."""
+        r = await flagged_client.post(
+            f"/v1/tasks/{_TID_AWAITING}/decisions",
+            json={"action": "reject", "reason": "bad license"},
+        )
+        assert r.status_code == 202
+
+    @pytest.mark.asyncio
+    async def test_license_gate_does_not_burn_idempotency_slot(
+        self, flagged_client: AsyncClient,
+    ) -> None:
+        """A blocked approve doesn't consume an idempotency slot."""
+        idem_key = new_request_id(clock=_FROZEN_CLOCK, rng=Random(42))
+        headers = {"Idempotency-Key": idem_key}
+
+        # First request: blocked by license gate
+        r1 = await flagged_client.post(
+            f"/v1/tasks/{_TID_PLAN_READY}/decisions",
+            json={"action": "approve"},
+            headers=headers,
+        )
+        assert r1.status_code == 409
+
+        # Second request with override: succeeds (not replayed)
+        r2 = await flagged_client.post(
+            f"/v1/tasks/{_TID_PLAN_READY}/decisions",
+            json={"action": "approve", "override": "license"},
+            headers=headers,
+        )
+        assert r2.status_code == 202
+        assert r2.json()["idempotency_status"] == "applied"
+
+    @pytest.mark.asyncio
+    async def test_override_on_non_approve_rejected(
+        self, app_client: AsyncClient,
+    ) -> None:
+        """override=license on a reject action is rejected by Pydantic validation."""
+        r = await app_client.post(
+            f"/v1/tasks/{_TID_AWAITING}/decisions",
+            json={"action": "reject", "override": "license"},
+        )
+        assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Budget gate tests (Story 6.11, AC-2)
+# ---------------------------------------------------------------------------
+
+
+async def _seed_budget_exceeded_event(db_url: str, task_id: str) -> None:
+    """Insert a task.budget_exceeded event row and transition task to blocked."""
+    engine = create_engine(db_url)
+    async with engine.begin() as conn:
+        await conn.execute(Event.__table__.insert(), {
+            "id": "e-budget-exceeded-0000000000000000",
+            "type": "task.budget_exceeded",
+            "schema_version": "1.0.0",
+            "emitted_at": FROZEN_EPOCH,
+            "emitted_at_monotonic_ns": _FROZEN_MONO_NS,
+            "actor_kind": "worker",
+            "actor_id": "test-worker",
+            "task_id": task_id,
+            "session_id": None,
+            "parent_event_id": None,
+            "request_id": "req-budget-test",
+            "payload_json": json.dumps({
+                "task_id": task_id,
+                "token_limit": 50_000,
+                "tokens_used": 52_340,
+                "step": 3,
+            }),
+        })
+        from sqlalchemy import update as sa_update
+        await conn.execute(
+            sa_update(Task).where(Task.id == task_id).values(
+                status="blocked",
+                blocker_reason="budget_exceeded",
+            )
+        )
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def budget_blocked_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None]:
+    """Client with a plan_ready task that has a budget_exceeded event."""
+    db_path = tmp_path / "state.sqlite3"
+    db_url = _db_url(db_path)
+    await _seed_tables_with_tasks(db_url)
+    await _seed_budget_exceeded_event(db_url, _TID_PLAN_READY)
+
+    events_dir = tmp_path / "events"
+    clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
+    app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+
+    async with (
+        LifespanManager(app) as manager,
+        AsyncClient(
+            transport=ASGITransport(app=manager.app), base_url="http://testserver"
+        ) as client,
+    ):
+        yield client
+
+
+class TestBudgetGate:
+    """Story 6.11 AC-2: approve blocked when budget exceeded."""
+
+    @pytest.mark.asyncio
+    async def test_approve_blocked_when_budget_exceeded(
+        self, budget_blocked_client: AsyncClient,
+    ) -> None:
+        """Default approve returns 409 when budget_exceeded event exists."""
+        r = await budget_blocked_client.post(
+            f"/v1/tasks/{_TID_PLAN_READY}/decisions",
+            json={"action": "approve"},
+        )
+        assert r.status_code == 409
+        body = r.json()
+        assert body["type"] == "approval_blocked_by"
+        assert body["extensions"]["reason"] == "budget_exceeded"
+        assert "budget" in body["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_approve_allowed_with_budget_override(
+        self, budget_blocked_client: AsyncClient,
+    ) -> None:
+        """Approve with override=budget succeeds despite budget exceeded."""
+        r = await budget_blocked_client.post(
+            f"/v1/tasks/{_TID_PLAN_READY}/decisions",
+            json={"action": "approve", "override": "budget"},
+        )
+        assert r.status_code == 202
+        assert r.json()["action"] == "approve"
+
+    @pytest.mark.asyncio
+    async def test_approve_allowed_when_no_budget_event(
+        self, app_client: AsyncClient,
+    ) -> None:
+        """Approve succeeds normally when no budget_exceeded event exists."""
+        r = await app_client.post(
+            f"/v1/tasks/{_TID_PLAN_READY}/decisions",
+            json={"action": "approve"},
+        )
+        assert r.status_code == 202
+
+    @pytest.mark.asyncio
+    async def test_budget_gate_does_not_burn_idempotency_slot(
+        self, budget_blocked_client: AsyncClient,
+    ) -> None:
+        """A blocked approve doesn't consume an idempotency slot."""
+        idem_key = new_request_id(clock=_FROZEN_CLOCK, rng=Random(99))
+        headers = {"Idempotency-Key": idem_key}
+
+        r1 = await budget_blocked_client.post(
+            f"/v1/tasks/{_TID_PLAN_READY}/decisions",
+            json={"action": "approve"},
+            headers=headers,
+        )
+        assert r1.status_code == 409
+
+        r2 = await budget_blocked_client.post(
+            f"/v1/tasks/{_TID_PLAN_READY}/decisions",
+            json={"action": "approve", "override": "budget"},
+            headers=headers,
+        )
+        assert r2.status_code == 202
+        assert r2.json()["idempotency_status"] == "applied"
+
+    @pytest.mark.asyncio
+    async def test_override_budget_on_non_approve_rejected(
+        self, app_client: AsyncClient,
+    ) -> None:
+        """override=budget on a reject action is rejected by Pydantic validation."""
+        r = await app_client.post(
+            f"/v1/tasks/{_TID_AWAITING}/decisions",
+            json={"action": "reject", "override": "budget"},
+        )
+        assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Dual-gate tests (both license + budget flags, code-review gap fix)
+# ---------------------------------------------------------------------------
+
+
+async def _seed_dual_flags(db_url: str, task_id: str) -> None:
+    """Insert both license_flagged and budget_exceeded events, set blocked."""
+    engine = create_engine(db_url)
+    async with engine.begin() as conn:
+        await conn.execute(Event.__table__.insert(), {
+            "id": "e-dual-license-00000000000000000",
+            "type": "task.license_flagged",
+            "schema_version": "1.0.0",
+            "emitted_at": FROZEN_EPOCH,
+            "emitted_at_monotonic_ns": _FROZEN_MONO_NS,
+            "actor_kind": "worker",
+            "actor_id": "test-worker",
+            "task_id": task_id,
+            "session_id": None,
+            "parent_event_id": None,
+            "request_id": "req-dual-test",
+            "payload_json": json.dumps({
+                "task_id": task_id,
+                "reason_code": "copyleft-incompatible",
+                "file_list": ["src/gpl_code.py"],
+                "detected_licenses": ["gpl-2.0"],
+            }),
+        })
+        await conn.execute(Event.__table__.insert(), {
+            "id": "e-dual-budget-00000000000000000",
+            "type": "task.budget_exceeded",
+            "schema_version": "1.0.0",
+            "emitted_at": FROZEN_EPOCH,
+            "emitted_at_monotonic_ns": _FROZEN_MONO_NS + 1,
+            "actor_kind": "worker",
+            "actor_id": "test-worker",
+            "task_id": task_id,
+            "session_id": None,
+            "parent_event_id": None,
+            "request_id": "req-dual-budget",
+            "payload_json": json.dumps({
+                "task_id": task_id,
+                "token_limit": 50_000,
+                "tokens_used": 52_340,
+                "step": 3,
+            }),
+        })
+        from sqlalchemy import update as sa_update
+        await conn.execute(
+            sa_update(Task).where(Task.id == task_id).values(
+                status="blocked",
+                blocker_reason="budget_exceeded",
+            )
+        )
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def dual_blocked_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None]:
+    """Client with a task that has BOTH license and budget flags."""
+    db_path = tmp_path / "state.sqlite3"
+    db_url = _db_url(db_path)
+    await _seed_tables_with_tasks(db_url)
+    await _seed_dual_flags(db_url, _TID_PLAN_READY)
+
+    events_dir = tmp_path / "events"
+    clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
+    app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+
+    async with (
+        LifespanManager(app) as manager,
+        AsyncClient(
+            transport=ASGITransport(app=manager.app), base_url="http://testserver"
+        ) as client,
+    ):
+        yield client
+
+
+class TestDualGate:
+    """Both license_flagged and budget_exceeded — gate ordering and override interaction."""
+
+    @pytest.mark.asyncio
+    async def test_approve_blocked_by_license_gate_first(
+        self, dual_blocked_client: AsyncClient,
+    ) -> None:
+        """Default approve returns 409 from the license gate (checked first)."""
+        r = await dual_blocked_client.post(
+            f"/v1/tasks/{_TID_PLAN_READY}/decisions",
+            json={"action": "approve"},
+        )
+        assert r.status_code == 409
+        body = r.json()
+        assert body["type"] == "approval_blocked_by"
+        assert body["extensions"]["reason"] == "license_flag"
+
+    @pytest.mark.asyncio
+    async def test_override_budget_still_hits_license_gate(
+        self, dual_blocked_client: AsyncClient,
+    ) -> None:
+        """override=budget skips budget gate but license gate still blocks."""
+        r = await dual_blocked_client.post(
+            f"/v1/tasks/{_TID_PLAN_READY}/decisions",
+            json={"action": "approve", "override": "budget"},
+        )
+        assert r.status_code == 409
+        body = r.json()
+        assert body["extensions"]["reason"] == "license_flag"

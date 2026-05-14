@@ -65,6 +65,7 @@ from clawhip_daemon.adapters.sinks.telegram_sink import (
     _render_completed,
     _render_plan_ready,
     _render_self_recovered,
+    detect_overnight_restart,
 )
 
 # ---------------------------------------------------------------------------
@@ -497,11 +498,25 @@ def test_render_approval_request_html_escapes_task_id_action_justification_comma
     escape regression (e.g. ``&lt;x>`` where only ``<`` is escaped) is
     caught — the prior ``"<x>" not in ...`` substring test would not.
     """
-    env = _approval_envelope(
+    _ensure_task_created_registered()
+    _reg("task.approval_requested", "1.1.0", TaskApprovalRequestedPayload)
+    rng = Random(494)
+    clk = FrozenClock(mono_ns=4_100_000, now=FROZEN_EPOCH)
+    payload = TaskApprovalRequestedPayload.model_construct(
         task_id="t-<x>",
         action="rm -rf <foo>",
         justification="<b>bold</b>",
         accepted_commands=["/cmd <x>"],
+    )
+    env = EventEnvelope.model_construct(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.1.0",
+        type="task.approval_requested",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=payload,
+        request_id=new_uuid7(clock=clk, rng=rng),
     )
     result = _render(env)
     # M5: separate-character checks. Once all ``&lt;`` are stripped, no
@@ -1073,11 +1088,26 @@ def test_render_blocker_raised_html_escapes_task_id_reason_last_event_last_actio
     escapes (e.g. ``&lt;b>boom``). Add per-character invariants on the
     escaped output so a future renderer drift can't slip past.
     """
-    env = _blocker_envelope(
+    _ensure_task_created_registered()
+    _ensure_blocker_raised_registered()
+    payload = TaskBlockerRaisedPayload.model_construct(
         task_id="t-<x>",
         reason="<b>boom</b>",
         last_event="evt<>",
         last_action="rm -rf <foo>",
+        blocked_since=None,
+    )
+    rng = Random(1067)
+    clk = FrozenClock(mono_ns=7_100_000, now=FROZEN_EPOCH)
+    env = EventEnvelope.model_construct(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.1.0",
+        type="task.blocker_raised",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=payload,
+        request_id=new_uuid7(clock=clk, rng=rng),
     )
     result = _render(env)
     # Sanity: no raw payload strings appear verbatim.
@@ -1717,11 +1747,25 @@ def test_render_completed_html_escapes_task_id_summary_pr_branch_pr_url() -> Non
     Story 3.11 review M4 carry-forward: per-character invariants on the
     escaped output so a future renderer drift cannot slip past.
     """
-    env = _completed_envelope(
+    _ensure_task_created_registered()
+    _ensure_completed_registered()
+    payload = TaskCompletedPayload.model_construct(
         task_id="t-<x>",
         summary="<b>done</b>",
         pr_branch="feat/<foo>",
         pr_url="https://example.com/?<x>=1",
+    )
+    rng = Random(1715)
+    clk = FrozenClock(mono_ns=12_100_000, now=FROZEN_EPOCH)
+    env = EventEnvelope.model_construct(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.1.0",
+        type="task.completed",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=payload,
+        request_id=new_uuid7(clock=clk, rng=rng),
     )
     result = _render(env)
     # Sanity: no raw payload strings appear verbatim.
@@ -1754,9 +1798,24 @@ def test_render_completed_collapses_multiline_summary_and_pr_branch() -> None:
     Defense-in-depth — branch names should not contain ``\\n`` per git
     ref-name rules, but if a buggy emitter slips one in, defend.
     """
-    env = _completed_envelope(
+    _ensure_task_created_registered()
+    _ensure_completed_registered()
+    payload = TaskCompletedPayload.model_construct(
+        task_id="t-00000000-0000-7000-8000-000000000003",
         summary="line1\nline2",
         pr_branch="feat/foo\nbar",
+    )
+    rng = Random(1752)
+    clk = FrozenClock(mono_ns=12_200_000, now=FROZEN_EPOCH)
+    env = EventEnvelope.model_construct(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.1.0",
+        type="task.completed",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=payload,
+        request_id=new_uuid7(clock=clk, rng=rng),
     )
     result = _render(env)
     # Newlines collapsed to spaces in operator-supplied content.
@@ -1956,9 +2015,23 @@ def test_render_completed_emergency_collapses_newline_in_task_id() -> None:
     """
     # task_id with embedded \n; max_length=64 so 6 chars + \n + 6 chars fits.
     big_summary = "X" * (_COMPLETED_MESSAGE_MAX_CHARS + 90)
-    env = _completed_envelope(
+    _ensure_task_created_registered()
+    _ensure_completed_registered()
+    payload = TaskCompletedPayload.model_construct(
         task_id="t-aa\nbbcc",
         summary=big_summary,
+    )
+    rng = Random(1950)
+    clk = FrozenClock(mono_ns=16_100_000, now=FROZEN_EPOCH)
+    env = EventEnvelope.model_construct(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.1.0",
+        type="task.completed",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=payload,
+        request_id=new_uuid7(clock=clk, rng=rng),
     )
     result = _render(env)
     # Emergency one-liner shape — must be a single line (no embedded \n
@@ -1982,9 +2055,12 @@ def test_render_blocker_raised_emergency_collapses_newline_in_task_id() -> None:
     clk = FrozenClock(mono_ns=14_000_000, now=FROZEN_EPOCH)
     eid = new_event_id(clock=clk, rng=rng)
     rid = new_uuid7(clock=clk, rng=rng)
-    payload = TaskBlockerRaisedPayload(
+    payload = TaskBlockerRaisedPayload.model_construct(
         task_id="t-aa\nbbcc",
         reason="X" * (_BLOCKER_MESSAGE_MAX_CHARS + 90),
+        blocked_since=None,
+        last_event=None,
+        last_action=None,
     )
     env = EventEnvelope.create(
         event_id=eid,
@@ -2012,11 +2088,24 @@ def test_render_approval_request_emergency_collapses_newline_in_task_id() -> Non
     exactly that single separator and no extra newlines from a smuggled
     task_id.
     """
-    env = _approval_envelope(
+    _ensure_task_created_registered()
+    _reg("task.approval_requested", "1.1.0", TaskApprovalRequestedPayload)
+    payload = TaskApprovalRequestedPayload.model_construct(
         task_id="t-aa\nbbcc",
-        # justification long enough to overflow even after dropping all
-        # optional sections + pre_checks.
+        action="merge PR #42",
         justification="J" * (_APPROVAL_MESSAGE_MAX_CHARS + 90),
+    )
+    rng = Random(2008)
+    clk = FrozenClock(mono_ns=4_200_000, now=FROZEN_EPOCH)
+    env = EventEnvelope.model_construct(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.1.0",
+        type="task.approval_requested",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=payload,
+        request_id=new_uuid7(clock=clk, rng=rng),
     )
     result = _render(env)
     # The approval emergency one-liner contains exactly ONE ``\n\n``
@@ -2484,7 +2573,25 @@ def test_render_completed_omits_pr_line_when_pr_branch_collapses_to_empty() -> N
     collapse there is no informative content. The renderer should NOT
     render a malformed ``"Branch:    "`` line.
     """
-    env = _completed_envelope(pr_branch="\n\n\n")
+    _ensure_task_created_registered()
+    _ensure_completed_registered()
+    payload = TaskCompletedPayload.model_construct(
+        task_id="t-00000000-0000-7000-8000-000000000003",
+        summary="task complete",
+        pr_branch="\n\n\n",
+    )
+    rng = Random(2481)
+    clk = FrozenClock(mono_ns=12_300_000, now=FROZEN_EPOCH)
+    env = EventEnvelope.model_construct(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.1.0",
+        type="task.completed",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=payload,
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
     result = _render(env)
     # No PR / Branch line should appear (collapsed-to-empty).
     assert "Branch:" not in result
@@ -2700,7 +2807,7 @@ def test_render_self_recovered_emergency_clamp_unreachable_for_valid_inputs() ->
     template-text growth is caught.
     """
     env = _self_recovered_envelope(
-        task_id="t" * 64,
+        task_id="t-00000000-0000-7000-8000-000000000004",
         recovered_at=datetime(2026, 5, 1, 3, 0, 0, tzinfo=UTC),
         events_replayed=10**6,
         replay_duration_ms=10**9,
@@ -2742,7 +2849,7 @@ def test_render_self_recovered_singular_with_max_fields() -> None:
     boundary maximums.
     """
     env = _self_recovered_envelope(
-        task_id="t" * 64,
+        task_id="t-00000000-0000-7000-8000-000000000004",
         recovered_at=datetime(2026, 5, 1, 3, 0, 0, tzinfo=UTC),
         events_replayed=1,
         replay_duration_ms=10**9,
@@ -3124,3 +3231,270 @@ def test_render_step_completed_length_cap() -> None:
 def test_task_step_completed_in_deliverable_event_types() -> None:
     """task.step.completed is in the deliverable set."""
     assert "task.step.completed" in _DELIVERABLE_EVENT_TYPES
+
+
+# ---------------------------------------------------------------------------
+# Story 7.8 — detect_overnight_restart tests
+# ---------------------------------------------------------------------------
+
+
+def test_detect_overnight_restart_finds_pair() -> None:
+    """Returns recovery info when session.reconnecting + task.execution.resumed pair exists."""
+    events = [
+        {"type": "task.created", "emitted_at": "2026-05-12T08:00:00+00:00",
+         "payload": {}},
+        {"type": "session.reconnecting", "emitted_at": "2026-05-12T03:02:00+00:00",
+         "payload": {"task_id": "t-1"}},
+        {"type": "task.execution.resumed", "emitted_at": "2026-05-12T03:02:14+00:00",
+         "payload": {
+             "task_id": "t-1", "events_replayed": 134, "replay_duration_ms": 2800,
+         }},
+        {"type": "task.completed", "emitted_at": "2026-05-12T09:00:00+00:00",
+         "payload": {}},
+    ]
+    result = detect_overnight_restart(events, task_id="t-1")
+    assert result is not None
+    assert result["events_replayed"] == 134
+    assert result["replay_duration_ms"] == 2800
+    assert result["recovered_at"].year == 2026
+
+
+def test_detect_overnight_restart_no_pair_returns_none() -> None:
+    """Returns None when no restart events exist."""
+    events = [
+        {"type": "task.created", "emitted_at": "2026-05-12T08:00:00+00:00", "payload": {}},
+        {"type": "task.completed", "emitted_at": "2026-05-12T09:00:00+00:00", "payload": {}},
+    ]
+    assert detect_overnight_restart(events, task_id="t-1") is None
+
+
+def test_detect_overnight_restart_uses_resumed_payload_fields() -> None:
+    """Extracts recovered_at, events_replayed, replay_duration_ms from the resumed event."""
+    events = [
+        {"type": "session.reconnecting", "emitted_at": "2026-05-12T03:00:00+00:00",
+         "payload": {"task_id": "t-1"}},
+        {"type": "task.execution.resumed", "emitted_at": "2026-05-12T03:02:14+00:00",
+         "payload": {
+             "task_id": "t-1", "events_replayed": 500, "replay_duration_ms": 4200,
+         }},
+    ]
+    result = detect_overnight_restart(events, task_id="t-1")
+    assert result is not None
+    assert result["recovered_at"] == datetime(2026, 5, 12, 3, 2, 14, tzinfo=UTC)
+    assert result["events_replayed"] == 500
+    assert result["replay_duration_ms"] == 4200
+
+
+def test_detect_overnight_restart_pair_out_of_order_returns_none() -> None:
+    """Returns None when task.execution.resumed appears before session.reconnecting."""
+    events = [
+        {"type": "task.execution.resumed", "emitted_at": "2026-05-12T03:02:14+00:00",
+         "payload": {
+             "task_id": "t-1", "events_replayed": 10, "replay_duration_ms": 100,
+         }},
+        {"type": "session.reconnecting", "emitted_at": "2026-05-12T03:03:00+00:00",
+         "payload": {"task_id": "t-1"}},
+    ]
+    assert detect_overnight_restart(events, task_id="t-1") is None
+
+
+def test_detect_overnight_restart_empty_list_returns_none() -> None:
+    """Returns None for an empty event list."""
+    assert detect_overnight_restart([], task_id="t-1") is None
+
+
+def test_detect_overnight_restart_ignores_mismatched_task_id() -> None:
+    """Returns None when pair exists but task_ids don't match."""
+    events = [
+        {"type": "session.reconnecting", "emitted_at": "2026-05-12T03:00:00+00:00",
+         "payload": {"task_id": "t-other"}},
+        {"type": "task.execution.resumed", "emitted_at": "2026-05-12T03:02:14+00:00",
+         "payload": {
+             "task_id": "t-other", "events_replayed": 10, "replay_duration_ms": 100,
+         }},
+    ]
+    assert detect_overnight_restart(events, task_id="t-1") is None
+
+
+def test_detect_overnight_restart_handles_naive_datetime() -> None:
+    """Treats naive emitted_at as UTC."""
+    events = [
+        {"type": "session.reconnecting", "emitted_at": "2026-05-12T03:00:00",
+         "payload": {"task_id": "t-1"}},
+        {"type": "task.execution.resumed", "emitted_at": "2026-05-12T03:02:14",
+         "payload": {
+             "task_id": "t-1", "events_replayed": 10, "replay_duration_ms": 100,
+         }},
+    ]
+    result = detect_overnight_restart(events, task_id="t-1")
+    assert result is not None
+    assert result["recovered_at"].tzinfo is not None
+
+
+def test_detect_overnight_restart_skips_none_entries() -> None:
+    """Returns correct result even when events list contains None entries."""
+    events: list[dict | None] = [
+        None,
+        {"type": "session.reconnecting", "emitted_at": "2026-05-12T03:00:00+00:00",
+         "payload": {"task_id": "t-1"}},
+        None,
+        {"type": "task.execution.resumed", "emitted_at": "2026-05-12T03:02:14+00:00",
+         "payload": {
+             "task_id": "t-1", "events_replayed": 5, "replay_duration_ms": 50,
+         }},
+    ]
+    result = detect_overnight_restart(events, task_id="t-1")  # type: ignore[arg-type]
+    assert result is not None
+    assert result["events_replayed"] == 5
+
+
+# ---------------------------------------------------------------------------
+# Story 7.8 — proactive synthesis integration tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_handle_completed_with_overnight_restart_sends_self_recovered() -> None:
+    """After task.completed, if restart pair found, sends self-recovered message."""
+    import httpx
+
+    # Ensure task.self_recovered is registered for EventEnvelope.create.
+    _reg("task.self_recovered", "1.0.0", TaskSelfRecoveredPayload)
+
+    task_id = "t-00000000-0000-7000-8000-000000000099"
+    restart_events = [
+        {"type": "session.reconnecting", "emitted_at": "2026-05-12T03:00:00+00:00",
+         "payload": {"task_id": task_id}},
+        {"type": "task.execution.resumed", "emitted_at": "2026-05-12T03:02:14+00:00",
+         "payload": {
+             "task_id": task_id, "events_replayed": 134, "replay_duration_ms": 2800,
+         }},
+    ]
+
+    async def _mock_get(url: str, **kwargs: object) -> httpx.Response:
+        req = httpx.Request("GET", url)
+        if "/events" in url:
+            return httpx.Response(status_code=200, json=restart_events, request=req)
+        return httpx.Response(
+            status_code=200,
+            json={"chat_id": -1001, "reply_to_message_id": 42},
+            request=req,
+        )
+
+    http_client = MagicMock(spec=httpx.AsyncClient)
+    http_client.get = AsyncMock(side_effect=_mock_get)
+    outbound_mock = MagicMock()
+    outbound_mock.send_to_thread = AsyncMock()
+    sink = TelegramSink(
+        base_dir=Path("/nonexistent"),
+        registry_api_url="http://registry-api:8080",
+        http_client=http_client,
+        outbound=outbound_mock,
+    )
+
+    env = _completed_envelope(task_id=task_id)
+    await sink._handle(env)
+
+    assert outbound_mock.send_to_thread.call_count == 2
+    second_text = outbound_mock.send_to_thread.call_args_list[1].kwargs["text"]
+    assert "Self-recovered" in second_text
+    assert "134" in second_text
+
+
+@pytest.mark.asyncio
+async def test_handle_completed_without_restart_only_sends_completed() -> None:
+    """After task.completed with no restart pair, only the completion message is sent."""
+    import httpx
+
+    task_id = "t-00000000-0000-7000-8000-000000000100"
+
+    async def _mock_get(url: str, **kwargs: object) -> httpx.Response:
+        req = httpx.Request("GET", url)
+        if "/events" in url:
+            return httpx.Response(status_code=200, json=[], request=req)
+        return httpx.Response(
+            status_code=200,
+            json={"chat_id": -1001, "reply_to_message_id": 42},
+            request=req,
+        )
+
+    http_client = MagicMock(spec=httpx.AsyncClient)
+    http_client.get = AsyncMock(side_effect=_mock_get)
+    outbound_mock = MagicMock()
+    outbound_mock.send_to_thread = AsyncMock()
+    sink = TelegramSink(
+        base_dir=Path("/nonexistent"),
+        registry_api_url="http://registry-api:8080",
+        http_client=http_client,
+        outbound=outbound_mock,
+    )
+
+    env = _completed_envelope(task_id=task_id)
+    await sink._handle(env)
+
+    assert outbound_mock.send_to_thread.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_handle_completed_with_fetch_failure_only_sends_completed() -> None:
+    """After task.completed, if events fetch fails, only the completion message is sent."""
+    import httpx
+
+    _reg("task.self_recovered", "1.0.0", TaskSelfRecoveredPayload)
+
+    task_id = "t-00000000-0000-7000-8000-000000000101"
+
+    async def _mock_get(url: str, **kwargs: object) -> httpx.Response:
+        req = httpx.Request("GET", url)
+        if "/events" in url:
+            return httpx.Response(status_code=500, request=req)
+        return httpx.Response(
+            status_code=200,
+            json={"chat_id": -1001, "reply_to_message_id": 42},
+            request=req,
+        )
+
+    http_client = MagicMock(spec=httpx.AsyncClient)
+    http_client.get = AsyncMock(side_effect=_mock_get)
+    outbound_mock = MagicMock()
+    outbound_mock.send_to_thread = AsyncMock()
+    sink = TelegramSink(
+        base_dir=Path("/nonexistent"),
+        registry_api_url="http://registry-api:8080",
+        http_client=http_client,
+        outbound=outbound_mock,
+    )
+
+    env = _completed_envelope(task_id=task_id)
+    await sink._handle(env)
+
+    assert outbound_mock.send_to_thread.call_count == 1
+
+
+class TestCollapseNewlinesUnicode:
+    """Story 7.5.8 AC-3: _collapse_newlines strips U+2028 and U+2029."""
+
+    def test_strips_line_separator(self) -> None:
+        from clawhip_daemon.adapters.sinks.telegram_sink import _collapse_newlines
+
+        assert _collapse_newlines("hello world") == "hello world"
+
+    def test_strips_paragraph_separator(self) -> None:
+        from clawhip_daemon.adapters.sinks.telegram_sink import _collapse_newlines
+
+        assert _collapse_newlines("hello world") == "hello world"
+
+    def test_strips_mixed_unicode_and_ascii_newlines(self) -> None:
+        from clawhip_daemon.adapters.sinks.telegram_sink import _collapse_newlines
+
+        assert _collapse_newlines("a\nb c\r\nd e") == "a b c d e"
+
+    def test_strips_consecutive_unicode_separators(self) -> None:
+        from clawhip_daemon.adapters.sinks.telegram_sink import _collapse_newlines
+
+        assert _collapse_newlines("a  b") == "a  b"
+
+    def test_preserves_plain_text(self) -> None:
+        from clawhip_daemon.adapters.sinks.telegram_sink import _collapse_newlines
+
+        assert _collapse_newlines("hello world") == "hello world"

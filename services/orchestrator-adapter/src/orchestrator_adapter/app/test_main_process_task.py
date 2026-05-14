@@ -10,6 +10,12 @@ from orchestrator_adapter.adapters.github_adapter import PRDraftResult
 from orchestrator_adapter.app.config import OrchestratorSettings
 from orchestrator_adapter.app.main import process_task
 
+# Valid UUIDv7-format task IDs matching payload pattern constraints.
+_T1 = "t-01234567-89ab-7def-8abc-0123456789ab"
+_T2 = "t-aaaaaaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee"
+_T3 = "t-11111111-2222-7333-8444-555555555555"
+_T4 = "t-ffffffff-0000-7000-a000-000000000000"
+
 
 def _make_settings(**overrides: object) -> OrchestratorSettings:
     return OrchestratorSettings(**overrides)
@@ -71,7 +77,7 @@ async def test_empty_plan_emits_completed_without_execution_started() -> None:
 
     runner = _make_runner(stdout="")
     settings = _make_settings()
-    task = {"id": "T-001", "title": "Do nothing"}
+    task = {"id": _T1, "title": "Do nothing"}
 
     with patch("orchestrator_adapter.app.main._emit_event", side_effect=fake_emit):
         await process_task(AsyncMock(), runner, settings, task)
@@ -109,7 +115,11 @@ async def test_pr_not_created_when_blockers_exist() -> None:
         ],
     )
     settings = _make_settings()
-    task = {"id": "T-BLOCK", "title": "Blocked task", "repo": "owner/repo"}
+    task = {
+        "id": _T2,
+        "title": "Blocked task",
+        "repo": "owner/repo",
+    }
 
     with (
         patch("orchestrator_adapter.app.main._emit_event", side_effect=_fake_emit),
@@ -124,7 +134,7 @@ async def test_pr_not_created_when_budget_exceeded() -> None:
     """PR auto-creation must be suppressed when token budget is exceeded.
 
     Single-step plan with low budget (50).  Step output reports 100 tokens used
-    and passing tests.  Budget exceeded → break, PR guard rejects.
+    and passing tests.  Budget exceeded -> break, PR guard rejects.
     """
     runner = _make_sequential_runner(
         plan_stdout="1. Implement feature",
@@ -133,7 +143,11 @@ async def test_pr_not_created_when_budget_exceeded() -> None:
         ],
     )
     settings = _make_settings(task_token_budget=50)
-    task = {"id": "T-EXCEEDED", "title": "Over budget", "repo": "owner/repo"}
+    task = {
+        "id": _T3,
+        "title": "Over budget",
+        "repo": "owner/repo",
+    }
 
     with (
         patch("orchestrator_adapter.app.main._emit_event", side_effect=_fake_emit),
@@ -152,15 +166,26 @@ async def test_pr_created_when_all_guards_pass() -> None:
             {"stdout": "5 passed in 1.2s", "error": None},
         ],
     )
-    # task_token_budget=0 disables budget tracking → tracker is None → guard passes.
+    # task_token_budget=0 disables budget tracking -> tracker is None -> guard passes.
     settings = _make_settings(task_token_budget=0)
-    task = {"id": "T-GREEN", "title": "Green task", "repo": "owner/repo"}
+    task = {
+        "id": _T4,
+        "title": "Green task",
+        "repo": "owner/repo",
+    }
+
+    pr_result = PRDraftResult(
+        success=True,
+        url="https://pr/1",
+        number=1,
+        branch=f"task/{_T4}",
+    )
 
     with (
         patch("orchestrator_adapter.app.main._emit_event", side_effect=_fake_emit),
         patch(
             "orchestrator_adapter.app.main._create_pr_draft",
-            return_value=PRDraftResult(success=True, url="https://pr/1", number=1, branch="task/T-GREEN"),
+            return_value=pr_result,
         ) as mock_pr,
     ):
         await process_task(AsyncMock(), runner, settings, task)

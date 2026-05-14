@@ -467,6 +467,15 @@ class TestGetTaskById:
         assert set(body["next_commands"]) == {"approve", "reject", "stop"}
 
     @pytest.mark.asyncio
+    async def test_get_task_includes_hint_field(self, get_client: AsyncClient) -> None:
+        """Story 7.6: GET task response includes hint field (null when no retry hint)."""
+        r = await get_client.get(f"/v1/tasks/{_SEEDED_TASK_ID}")
+        assert r.status_code == 200
+        body = r.json()
+        assert "hint" in body
+        assert body["hint"] is None
+
+    @pytest.mark.asyncio
     async def test_get_task_with_uppercase_id_returns_422(self, get_client: AsyncClient) -> None:
         """F17: uppercase task_id is rejected by the path regex → 422 problem+json."""
         # Generate a valid bare UUIDv7, then build a fake t- prefix with uppercase
