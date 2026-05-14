@@ -1,12 +1,17 @@
-# Pre-commit hook config — secret-hygiene scanner.
+# Pre-commit hook config — secret-hygiene scanner + path/message checks.
 # Operator wires via `uv run pre-commit install` once after clone.
 # CI runs the same scanner as a workflow step (.github/workflows/ci.yml).
 repos:
   - repo: local
     hooks:
       - id: secret-hygiene-precommit
-        name: secret-hygiene secret-pattern scan
+        name: secret-hygiene secret-pattern + sensitive-path + worktree-boundary scan
         entry: uv run secret-hygiene-precommit
         language: system
         types: [text]
         exclude: ^(\.venv/|upstream/|_bmad/|_bmad-output/|.*\.lock$|\.env\.example$|uv\.lock$|packages/secret-hygiene/src/secret_hygiene/test_.*\.py$)
+      - id: secret-hygiene-commit-msg
+        name: secret-hygiene commit-message injection check
+        entry: uv run secret-hygiene-commit-msg
+        language: system
+        stages: [commit-msg]

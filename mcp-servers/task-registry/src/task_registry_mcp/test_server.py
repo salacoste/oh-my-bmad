@@ -271,6 +271,55 @@ class TestResourceHandlers:
         assert data[0]["title"] == "Implement feature X"
 
     @pytest.mark.asyncio
+    async def test_task_to_dict_includes_hint_field(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Story 7.6: _task_to_dict includes hint (null when not set)."""
+        mcp = _build(db_session_maker)
+        tpl = mcp._resource_manager._templates["task://detail/{task_id}"]
+        tid = "t-00000001-0001-7000-8000-000000000001"
+        res = await tpl.create_resource(f"task://detail/{tid}", {"task_id": tid})
+        raw = await res.read()
+        text = raw if isinstance(raw, str) else raw.decode("utf-8")
+        data = json.loads(text)
+        assert "hint" in data
+        assert data["hint"] is None
+
+    @pytest.mark.asyncio
+    async def test_task_to_dict_includes_hint_when_set(
+        self, tmp_path: Path
+    ) -> None:
+        """Story 7.6: _task_to_dict returns hint value when set on Task."""
+        engine = create_async_engine(
+            "sqlite+aiosqlite:///:memory:",
+            poolclass=StaticPool,
+            connect_args={"check_same_thread": False},
+        )
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        async with sm() as session:
+            session.add(Task(
+                id="t-hint-001",
+                status="pending",
+                created_at=_NOW,
+                updated_at=_NOW,
+                actor_kind="operator",
+                actor_id="op-1",
+                title="Hinted task",
+                hint="focus on rate limiting",
+            ))
+            await session.commit()
+
+        mcp = _build(sm)
+        tpl = mcp._resource_manager._templates["task://detail/{task_id}"]
+        res = await tpl.create_resource("task://detail/t-hint-001", {"task_id": "t-hint-001"})
+        raw = await res.read()
+        text = raw if isinstance(raw, str) else raw.decode("utf-8")
+        data = json.loads(text)
+        assert data["hint"] == "focus on rate limiting"
+
+    @pytest.mark.asyncio
     async def test_blockers_empty_when_no_blocker_events(self, tmp_path: Path) -> None:
         """With no blocker events, blockers returns empty list."""
         engine = create_async_engine(

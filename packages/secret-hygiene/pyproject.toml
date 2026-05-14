@@ -12,8 +12,13 @@ dependencies = [
     "pydantic-settings>=2.5,<3.0",
 ]
 
+[project.optional-dependencies]
+license-scan = ["scancode-toolkit>=32.0.0"]
+
 [project.scripts]
 secret-hygiene-precommit = "secret_hygiene.precommit_hook:main"
+secret-hygiene-commit-msg = "secret_hygiene.precommit_hook:commit_msg_main"
+secret-hygiene-license-scan = "secret_hygiene.license_scan:license_scan_main"
 
 [build-system]
 requires = ["uv_build>=0.11.0,<1.0"]

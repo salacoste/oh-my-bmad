@@ -35,6 +35,11 @@ def _task_to_dict(task: Task) -> dict[str, object]:
         "actor_id": task.actor_id,
         "title": task.title,
         "last_event_id": task.last_event_id,
+        "blocker_reason": task.blocker_reason,
+        "current_step": task.current_step,
+        "total_steps": task.total_steps,
+        "last_agent_action": task.last_agent_action,
+        "hint": task.hint,
     }
 
 

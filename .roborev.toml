@@ -1,0 +1,49 @@
+agent = "claude-code"
+
+review_guidelines = """
+This is a Python project — self-hosted personal development OS for autonomous
+software engineering. Tech stack: Python 3.12+, uv, FastAPI/Starlette, SQLite,
+Telegram Bot API, Docker Compose, just (task runner).
+
+Key review priorities:
+
+1. **Async correctness**: All I/O must be async (asyncio/aiohttp). No blocking
+   calls in event loop. Use asyncio.to_thread() for unavoidable sync operations.
+   Check for missing await, fire-and-forget tasks without error handling.
+
+2. **Task registry persistence**: SQLite operations must be transactional.
+   Schema migrations must not drop data. Check for race conditions in task
+   state transitions (pending → running → done/failed).
+
+3. **Event bus integrity**: Typed events must be exhaustive — no unhandled
+   event types. Event handlers must not silently swallow exceptions. Check
+   that event serialization/deserialization is lossless.
+
+4. **Telegram bot security**: Webhook endpoints must validate request authenticity
+   (secret_token). No user input in command handlers without sanitization.
+   Rate limit command processing.
+
+5. **DockerCompose orchestration**: Health checks must be meaningful. Service
+   dependencies (depends_on + condition) must match actual startup order.
+   Check for hardcoded ports, missing resource limits.
+
+6. **Python typing**: Full type annotations required. No Any without justification.
+   Pydantic models for all API boundaries. Use type guards where needed.
+
+7. **Secrets management**: No secrets in code or docker-compose.yml.
+   All secrets via .env or Docker secrets. Check for logged secrets.
+"""
+
+exclude_patterns = [
+    "node_modules/**",
+    "__pycache__/**",
+    ".venv/**",
+    "*.md",
+    "docs/**",
+    "_bmad-output/**",
+    "tests/**",
+    ".omc/**",
+]
+
+auto_close_passing_reviews = true
+hide_closed_by_default = true

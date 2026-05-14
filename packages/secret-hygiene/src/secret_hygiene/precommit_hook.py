@@ -28,6 +28,13 @@ import sys
 from fnmatch import fnmatchcase
 from pathlib import Path
 
+from .license_scan import REPO_LICENSE, scan_files_for_licenses
+from .path_checks import (
+    Violation,
+    check_commit_message,
+    check_sensitive_paths,
+    check_worktree_boundary,
+)
 from .scanner import scan_file
 
 # ---------------------------------------------------------------------------
@@ -161,10 +168,25 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--worktree-root",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Root of the assigned worktree. Files resolved outside this root "
+            "are flagged as boundary violations. Defaults to cwd."
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
         help="Print a summary line when no secrets are found.",
+    )
+    parser.add_argument(
+        "--repo-license",
+        metavar="SPDX",
+        default=REPO_LICENSE,
+        help=f"Repository's declared license for compatibility checks (default: {REPO_LICENSE}).",
     )
 
     args = parser.parse_args(argv)
@@ -201,13 +223,51 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
 
-    if found_any:
+    # --- Path-based checks (Story 6.8, FR39) ---
+
+    violations: list[Violation] = []
+
+    violations.extend(check_sensitive_paths(args.files))
+
+    worktree_root = Path(args.worktree_root) if args.worktree_root else Path.cwd()
+    violations.extend(check_worktree_boundary(args.files, worktree_root))
+
+    for v in violations:
+        print(v.message, file=sys.stderr)
+
+    # --- License compatibility scan (Story 6.10, FR40) ---
+
+    license_findings = scan_files_for_licenses(args.files, args.repo_license)
+    for lf in license_findings:
+        print(
+            f"LICENSE {lf.reason_code}: {lf.file_path} ({lf.license_detected})",
+            file=sys.stderr,
+        )
+
+    if found_any or violations or license_findings:
         return 1
 
     if args.verbose:
         print(f"OK: secret-hygiene ({scanned} files scanned, 0 matches)")
 
     return 0
+
+
+def commit_msg_main(argv: list[str] | None = None) -> int:
+    """Entrypoint for the ``commit-msg`` hook (Story 6.8).
+
+    Checks the commit message file for injection patterns.
+    Git passes the message file path as the first positional argument.
+    """
+    if argv is None:
+        argv = sys.argv[1:]
+    if not argv:
+        return 0
+    msg_path = Path(argv[0])
+    violations = check_commit_message(msg_path)
+    for v in violations:
+        print(v.message, file=sys.stderr)
+    return 1 if violations else 0
 
 
 if __name__ == "__main__":

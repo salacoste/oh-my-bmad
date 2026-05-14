@@ -174,7 +174,7 @@ async def process_task(
         log.warning("task_missing_id, skipping")
         return
     title = task.get("title")
-    hint = task.get("hint")  # TODO: not yet materialized by task-registry
+    hint = task.get("hint")
     repo = task.get("repo")
 
     # Emit task.planning.started.

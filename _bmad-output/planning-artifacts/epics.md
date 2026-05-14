@@ -2182,6 +2182,18 @@ So that Journey 6 acceptance is continuously verified.
 
 ---
 
+### Epic 7.5: Tech-Debt Sweep (Epic 7 Retrospective)
+
+*Tech debt, bug fixes, and process improvements accumulated across Epics 3–7 but deferred to keep story scope clean. Completing these prevents debt growth and resolves the 3-retro integration test harness deferral.*
+
+**FRs covered:** N/A (maintenance)
+**NFRs:** N/A
+**Additional:** Rate-limiter allowlist layering fix; session bulk close + compound index; rate-limiter contract documentation + dynamic Retry-After; configurable Anthropic model + digest hardening; worktree lock TOCTOU fix; events endpoint truncation + trace_id; integration test harness decision; cross-renderer validator consistency.
+
+*Standalone value: addresses all HIGH/MEDIUM deferred items from 7 stories; resolves the integration test harness duplication flagged in 3 consecutive retros; hardens the rate-limiter and session lifecycle for production load.*
+
+---
+
 ## MVP Ship-Blocker Checklist
 
 The tests and stories below must be green/complete before Phase 1 can be claimed as shipped. Journey gates are user-observable; separability + harness tests are architectural-claim proofs; docs are maintenance prerequisites.

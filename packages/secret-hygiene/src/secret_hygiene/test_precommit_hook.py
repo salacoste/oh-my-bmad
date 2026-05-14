@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from .precommit_hook import _find_default_allowlist, _glob_match, main
+from .precommit_hook import _find_default_allowlist, _glob_match, commit_msg_main, main
 
 # ---------------------------------------------------------------------------
 # Clean file → exit 0
@@ -20,15 +21,18 @@ class TestCleanFile:
     ) -> None:
         clean = tmp_path / "clean.py"
         clean.write_text("x = 1\nprint(x)\n", encoding="utf-8")
-        exit_code = main([str(clean)])
+        exit_code = main([str(clean), "--worktree-root", str(tmp_path)])
         assert exit_code == 0
 
     def test_clean_file_no_stderr(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         clean = tmp_path / "clean.py"
         clean.write_text("x = 1\n", encoding="utf-8")
-        main([str(clean)])
+        main([str(clean), "--worktree-root", str(tmp_path)])
         captured = capsys.readouterr()
-        assert captured.err == ""
+        # scancode-toolkit warning is expected when not installed (graceful degradation).
+        lines = [ln for ln in captured.err.strip().splitlines()
+                 if "scancode-toolkit" not in ln]
+        assert lines == []
 
     def test_no_files_exits_zero(self, capsys: pytest.CaptureFixture[str]) -> None:
         assert main([]) == 0
@@ -105,7 +109,10 @@ class TestAllowlist:
         allowlist = tmp_path / "allowlist.txt"
         allowlist.write_text("**/secret.txt\n", encoding="utf-8")
 
-        exit_code = main([str(secret_file), "--allowlist-file", str(allowlist)])
+        exit_code = main([
+            str(secret_file), "--allowlist-file", str(allowlist),
+            "--worktree-root", str(tmp_path),
+        ])
         assert exit_code == 0
 
     def test_allowlist_with_comments_and_blanks(self, tmp_path: Path) -> None:
@@ -119,7 +126,10 @@ class TestAllowlist:
             "# This is a comment\n\n**/myfile.txt\n",
             encoding="utf-8",
         )
-        assert main([str(secret_file), "--allowlist-file", str(allowlist)]) == 0
+        assert main([
+            str(secret_file), "--allowlist-file", str(allowlist),
+            "--worktree-root", str(tmp_path),
+        ]) == 0
 
     def test_non_allowlisted_dirty_file_still_caught(self, tmp_path: Path) -> None:
         dirty = tmp_path / "dirty.env"
@@ -227,7 +237,7 @@ class TestVerboseFlag:
     ) -> None:
         clean = tmp_path / "clean.py"
         clean.write_text("x = 1\n", encoding="utf-8")
-        main([str(clean), "--verbose"])
+        main([str(clean), "--verbose", "--worktree-root", str(tmp_path)])
         captured = capsys.readouterr()
         assert "secret-hygiene" in captured.out
         assert "OK" in captured.out
@@ -237,7 +247,7 @@ class TestVerboseFlag:
     ) -> None:
         clean = tmp_path / "clean.py"
         clean.write_text("x = 1\n", encoding="utf-8")
-        main([str(clean), "--verbose"])
+        main([str(clean), "--verbose", "--worktree-root", str(tmp_path)])
         captured = capsys.readouterr()
         assert "1 files scanned" in captured.out
 
@@ -246,7 +256,7 @@ class TestVerboseFlag:
     ) -> None:
         clean = tmp_path / "clean.py"
         clean.write_text("x = 1\n", encoding="utf-8")
-        main([str(clean)])
+        main([str(clean), "--worktree-root", str(tmp_path)])
         captured = capsys.readouterr()
         assert captured.out == ""
         # stderr may contain auto-discovery notice if a .secret-hygiene-ignore exists
@@ -255,7 +265,238 @@ class TestVerboseFlag:
     def test_short_flag_v(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         clean = tmp_path / "clean.py"
         clean.write_text("x = 1\n", encoding="utf-8")
-        main([str(clean), "-v"])
+        main([str(clean), "-v", "--worktree-root", str(tmp_path)])
         captured = capsys.readouterr()
         assert "secret-hygiene" in captured.out
         assert "OK" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# Sensitive path integration (Story 6.8)
+# ---------------------------------------------------------------------------
+
+
+class TestSensitivePathIntegration:
+    """main() blocks sensitive paths via check_sensitive_paths."""
+
+    def test_dotenv_blocked_by_main(self, tmp_path: Path) -> None:
+        env_file = tmp_path / ".env"
+        env_file.write_text("KEY=val\n", encoding="utf-8")
+        assert main([str(env_file), "--worktree-root", str(tmp_path)]) == 1
+
+    def test_pem_blocked_by_main(self, tmp_path: Path) -> None:
+        pem = tmp_path / "server.pem"
+        pem.write_text("-----BEGIN CERTIFICATE-----\n", encoding="utf-8")
+        assert main([str(pem), "--worktree-root", str(tmp_path)]) == 1
+
+    def test_clean_file_not_blocked_by_path_check(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        clean = tmp_path / "main.py"
+        clean.write_text("x = 1\n", encoding="utf-8")
+        assert main([str(clean), "--worktree-root", str(tmp_path)]) == 0
+
+    def test_allowlisted_sensitive_path_still_blocked(self, tmp_path: Path) -> None:
+        """Allowlist skips content scan but sensitive-path check still fires."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("KEY=val\n", encoding="utf-8")
+        allowlist = tmp_path / "allowlist.txt"
+        allowlist.write_text(".env\n", encoding="utf-8")
+        exit_code = main([
+            str(env_file), "--allowlist-file", str(allowlist),
+            "--worktree-root", str(tmp_path),
+        ])
+        assert exit_code == 1
+
+    def test_content_dirty_and_path_sensitive_both_reported(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "ANTHROPIC_API_KEY=sk-ant-abcdef1234567890XYZABC\n",
+            encoding="utf-8",
+        )
+        main([str(env_file), "--worktree-root", str(tmp_path)])
+        captured = capsys.readouterr()
+        assert "[ANTHROPIC_API_KEY]" in captured.err
+        assert "sensitive path" in captured.err.lower()
+
+
+# ---------------------------------------------------------------------------
+# Worktree boundary integration (Story 6.8)
+# ---------------------------------------------------------------------------
+
+
+class TestWorktreeBoundaryIntegration:
+    """main() blocks files outside the assigned worktree."""
+
+    def test_outside_worktree_blocked(self, tmp_path: Path) -> None:
+        worktree = tmp_path / "worktree"
+        worktree.mkdir()
+        outside = tmp_path / "outside.py"
+        outside.write_text("x = 1")
+        assert main([str(outside), "--worktree-root", str(worktree)]) == 1
+
+    def test_worktree_root_default_cwd(self, tmp_path: Path) -> None:
+        inside = tmp_path / "file.py"
+        inside.write_text("x = 1")
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            assert main(["file.py"]) == 0
+        finally:
+            os.chdir(old_cwd)
+
+    def test_symlink_escape_blocked(self, tmp_path: Path) -> None:
+        outside = tmp_path / "real_outside.py"
+        outside.write_text("x = 1")
+        link = tmp_path / "link.py"
+        link.symlink_to(outside)
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+        # link is inside worktree but points outside
+        link2 = worktree / "link.py"
+        link2.symlink_to(outside)
+        assert main([str(link2), "--worktree-root", str(worktree)]) == 1
+
+    def test_nonexistent_file_skipped(self, tmp_path: Path) -> None:
+        ghost = tmp_path / "does_not_exist.py"
+        assert main([str(ghost), "--worktree-root", str(tmp_path)]) == 0
+
+
+# ---------------------------------------------------------------------------
+# commit-msg entrypoint (Story 6.8)
+# ---------------------------------------------------------------------------
+
+
+class TestCommitMsgMain:
+    """commit_msg_main checks commit messages for injection patterns."""
+
+    def test_clean_message_passes(self, tmp_path: Path) -> None:
+        msg = tmp_path / "msg"
+        msg.write_text("feat: add feature\n")
+        assert commit_msg_main([str(msg)]) == 0
+
+    def test_null_byte_blocked(self, tmp_path: Path) -> None:
+        msg = tmp_path / "msg"
+        msg.write_text("bad\x00msg")
+        assert commit_msg_main([str(msg)]) == 1
+
+    def test_command_sub_blocked(self, tmp_path: Path) -> None:
+        msg = tmp_path / "msg"
+        msg.write_text("fix: $(whoami)")
+        assert commit_msg_main([str(msg)]) == 1
+
+    def test_no_args_passes(self) -> None:
+        assert commit_msg_main([]) == 0
+
+    def test_nonexistent_msg_file_passes(self, tmp_path: Path) -> None:
+        assert commit_msg_main([str(tmp_path / "no_such_file")]) == 0
+
+    def test_backtick_markdown_passes(self, tmp_path: Path) -> None:
+        msg = tmp_path / "msg"
+        msg.write_text("fix: update `README.md` and `docs/api`")
+        assert commit_msg_main([str(msg)]) == 0
+
+
+# ---------------------------------------------------------------------------
+# License scan integration (Story 6.10)
+# ---------------------------------------------------------------------------
+
+
+def _patch_scancode(mock_get: MagicMock):
+    """Return a patch.dict that injects a mock scancode.api.get_licenses."""
+    modules = {
+        "scancode": MagicMock(),
+        "scancode.api": MagicMock(get_licenses=mock_get),
+    }
+    return patch.dict("sys.modules", modules)
+
+
+class TestLicenseScanInHook:
+    """License scan is wired into the pre-commit hook (Story 6.10, FR40)."""
+
+    def test_gpl_file_blocks(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        gpl = tmp_path / "gpl.py"
+        gpl.write_text("# GPL code\nx = 1\n", encoding="utf-8")
+        mock_result = {
+            "detected_license_expression": "gpl-2.0",
+            "license_detections": [],
+            "license_clues": [],
+            "percentage_of_license_text": 50.0,
+        }
+        with _patch_scancode(MagicMock(return_value=mock_result)):
+            exit_code = main([str(gpl), "--worktree-root", str(tmp_path)])
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        assert "LICENSE" in captured.err
+        assert "gpl-2.0" in captured.err
+
+    def test_mit_file_passes(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        mit = tmp_path / "mit.py"
+        mit.write_text("# MIT code\nx = 1\n", encoding="utf-8")
+        mock_result = {
+            "detected_license_expression": "mit",
+            "license_detections": [],
+            "license_clues": [],
+            "percentage_of_license_text": 10.0,
+        }
+        with _patch_scancode(MagicMock(return_value=mock_result)):
+            exit_code = main([str(mit), "--worktree-root", str(tmp_path)])
+        assert exit_code == 0
+
+    def test_no_license_passes(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        clean = tmp_path / "clean.py"
+        clean.write_text("x = 1\n", encoding="utf-8")
+        mock_result = {
+            "detected_license_expression": None,
+            "license_detections": [],
+            "license_clues": [],
+            "percentage_of_license_text": 0.0,
+        }
+        with _patch_scancode(MagicMock(return_value=mock_result)):
+            exit_code = main([str(clean), "--worktree-root", str(tmp_path)])
+        assert exit_code == 0
+
+    def test_repo_license_flag(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        gpl = tmp_path / "gpl.py"
+        gpl.write_text("# GPL\n", encoding="utf-8")
+        mock_result = {
+            "detected_license_expression": "gpl-2.0",
+            "license_detections": [],
+            "license_clues": [],
+            "percentage_of_license_text": 50.0,
+        }
+        with _patch_scancode(MagicMock(return_value=mock_result)):
+            exit_code = main(
+                [str(gpl), "--worktree-root", str(tmp_path), "--repo-license", "MIT"]
+            )
+        assert exit_code == 1
+
+    def test_binary_skipped(self, tmp_path: Path) -> None:
+        img = tmp_path / "logo.png"
+        img.write_bytes(b"\x89PNG\r\n")
+        exit_code = main([str(img), "--worktree-root", str(tmp_path)])
+        assert exit_code == 0
+
+    def test_scancode_missing_graceful(self, tmp_path: Path) -> None:
+        src = tmp_path / "code.py"
+        src.write_text("x = 1\n", encoding="utf-8")
+        with patch.dict("sys.modules", {}):
+            exit_code = main([str(src), "--worktree-root", str(tmp_path)])
+        assert exit_code == 0

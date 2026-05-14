@@ -27,6 +27,8 @@ Canned scenarios:
 * ``simple_green`` — plan → execute 1 step → complete with green CI.
 * ``with_pr`` — plan → execute 2 steps → complete with PR URL.
 * ``journey_1`` — plan → execute 1 step → await approval → push → PR → complete (Journey 1 "Overnight PR").
+* ``journey_3`` — plan → execute started → [restart] → reconnect → resumed → step → complete (Journey 3 restart-recovery).
+* ``journey_6`` — plan → execute → step → blocker_raised → [kill] → [restart] → remaining steps → complete (Journey 6 stale-blocker).
 
 Resume capability (S-2 mid-flight swap):
 
@@ -69,6 +71,8 @@ _MCP_INIT_TIMEOUT: float = 30.0
 _READY_FILE = Path("/tmp/ready")  # noqa: S108
 
 # Event types the stub itself emits (for dedupe on restart).
+# NOTE: ``task.retry_requested`` is intentionally excluded — it is emitted by
+# the registry-api decisions endpoint, not by the worker stub.
 STUB_EMITTED_TYPES: frozenset[str] = frozenset(
     {
         "task.planning.started",
@@ -79,6 +83,9 @@ STUB_EMITTED_TYPES: frozenset[str] = frozenset(
         "task.push.completed",
         "task.pr.opened",
         "task.completed",
+        "session.reconnecting",
+        "task.execution.resumed",
+        "task.blocker_raised",
     }
 )
 
@@ -276,10 +283,183 @@ def _scenario_journey_1(task_id: str, session_id: str) -> list[dict[str, Any]]:
     ]
 
 
-SCENARIOS: dict[str, Callable[[str, str], list[dict[str, Any]]]] = {
+def _scenario_journey_3(
+    task_id: str, session_id: str, *, emitted: set[str] | None = None
+) -> list[dict[str, Any]]:
+    """Journey 3 restart-recovery scenario (two-phase with reconnect pair).
+
+    Phase 1 (pre-kill): planning.started → plan.ready → execution.started.
+    Reconnect pair: session.reconnecting → task.execution.resumed (restart only).
+    Phase 2 (post-restart): step.completed → completed.
+
+    On cold start (``emitted`` is empty/None), the reconnect pair is omitted —
+    the stub emits Phase 1 then Phase 2 directly.  On restart (Phase 1 dedupe
+    keys found in ``emitted``), the reconnect pair is injected between Phase 1
+    and Phase 2, which the dedupe mechanism will then emit before Phase 2 events.
+    """
+    phase1: list[dict[str, Any]] = [
+        {"type": "task.planning.started", "payload": {"task_id": task_id}},
+        {
+            "type": "task.plan.ready",
+            "payload": {
+                "task_id": task_id,
+                "plan_summary": "scripted-worker-stub journey_3",
+                "plan": [{"step": 1, "description": "Implement recovery"}],
+                "estimated_steps": 1,
+            },
+        },
+        {
+            "type": "task.execution.started",
+            "payload": {"task_id": task_id, "session_id": session_id},
+        },
+    ]
+    reconnect_pair: list[dict[str, Any]] = [
+        {
+            "type": "session.reconnecting",
+            "payload": {
+                "session_id": session_id,
+                "task_id": task_id,
+                "reason": "host_restart",
+            },
+        },
+        {
+            "type": "task.execution.resumed",
+            "payload": {
+                "task_id": task_id,
+                "session_id": session_id,
+                "events_replayed": 3,
+                "replay_duration_ms": 2800,
+            },
+        },
+    ]
+    phase2: list[dict[str, Any]] = [
+        {
+            "type": "task.step.completed",
+            "payload": {
+                "task_id": task_id,
+                "step": 1,
+                "description": "Implement recovery",
+                "output_summary": "Recovery verified",
+            },
+        },
+        {
+            "type": "task.completed",
+            "payload": {
+                "task_id": task_id,
+                "summary": "Journey 3 task completed after restart",
+                "files_changed": 1,
+                "lines_added": 5,
+                "tests_added": 1,
+                "ci_state": "green",
+            },
+        },
+    ]
+
+    # Emit reconnect pair only when Phase 1 events are already present (restart).
+    phase1_keys = {
+        _dedupe_key(e["type"], e["payload"])
+        for e in phase1  # noqa: SLF001
+    }
+    is_restart = emitted is not None and bool(phase1_keys & emitted)
+    if is_restart:
+        return phase1 + reconnect_pair + phase2
+    return phase1 + phase2
+
+
+def _scenario_journey_6(
+    task_id: str, session_id: str, *, emitted: set[str] | None = None
+) -> list[dict[str, Any]]:
+    """Journey 6 stale-blocker scenario (flat list, dedupe handles split).
+
+    The test kills the worker after ``task.blocker_raised`` appears.  On
+    restart, dedupe skips Phase 1 (already emitted) and emits Phase 2
+    automatically because ``task.step.completed`` dedupe keys are
+    step-number-qualified (``task.step.completed.2``, ``task.step.completed.3``).
+
+    The ``emitted`` kwarg is accepted for API consistency with other scenarios
+    (e.g. ``journey_3``) and for defense-in-depth, but is not used — the
+    flat-list design relies entirely on step-number-qualified dedupe keys.
+
+    Phase 1: planning.started → plan.ready → execution.started
+             → step.completed(1) → blocker_raised
+    Phase 2: step.completed(2) → step.completed(3) → completed
+    """
+    steps = [
+        PlanStep(step=1, description="Implement rate limiting"),
+        PlanStep(step=2, description="Add per-user rate limit"),
+        PlanStep(step=3, description="Fix remaining test failures"),
+    ]
+    return [
+        {"type": "task.planning.started", "payload": {"task_id": task_id}},
+        {
+            "type": "task.plan.ready",
+            "payload": {
+                "task_id": task_id,
+                "plan_summary": "scripted-worker-stub journey_6",
+                "plan": [s.model_dump() for s in steps],
+                "estimated_steps": 3,
+            },
+        },
+        {
+            "type": "task.execution.started",
+            "payload": {"task_id": task_id, "session_id": session_id},
+        },
+        {
+            "type": "task.step.completed",
+            "payload": {
+                "task_id": task_id,
+                "step": 1,
+                "description": "Implement rate limiting",
+                "output_summary": "Rate limiting middleware added",
+            },
+        },
+        {
+            "type": "task.blocker_raised",
+            "payload": {
+                "task_id": task_id,
+                "reason": "test failure: 2 assertions failed in middleware_rate_limit_test.py",
+                "last_event": "task.step.completed",
+                "last_action": "Edit middleware/rate_limit.py:87",
+            },
+        },
+        {
+            "type": "task.step.completed",
+            "payload": {
+                "task_id": task_id,
+                "step": 2,
+                "description": "Add per-user rate limit",
+                "output_summary": "Per-user rate limiting implemented",
+            },
+        },
+        {
+            "type": "task.step.completed",
+            "payload": {
+                "task_id": task_id,
+                "step": 3,
+                "description": "Fix remaining test failures",
+                "output_summary": "All tests passing",
+            },
+        },
+        {
+            "type": "task.completed",
+            "payload": {
+                "task_id": task_id,
+                "summary": "Journey 6 task completed after retry",
+                "files_changed": 2,
+                "lines_added": 15,
+                "tests_added": 2,
+                "ci_state": "green",
+            },
+        },
+    ]
+
+
+SCENARIOS: dict[str, Callable[..., list[dict[str, Any]]]] = {
     "simple_green": _scenario_simple_green,
     "with_pr": _scenario_with_pr,
     "journey_1": _scenario_journey_1,
+    "journey_3": _scenario_journey_3,
+    "journey_6": _scenario_journey_6,
 }
 
 
@@ -470,8 +650,15 @@ async def run_scripted_worker(
                     parent_event_id = env_obj.get("event_id")
 
                     # Emit only events not yet emitted for this task.
-                    events = scenario_fn(task_id, session_id)
+                    try:
+                        events = scenario_fn(task_id, session_id, emitted=task_events)
+                    except TypeError as exc:
+                        if "emitted" not in str(exc):
+                            raise
+                        events = scenario_fn(task_id, session_id)
                     for evt in events:
+                        if stop_event.is_set():
+                            break
                         key = _dedupe_key(evt["type"], evt["payload"])
                         if key in task_events:
                             log.info("skipping_already_emitted", key=key, task_id=task_id)

@@ -69,3 +69,58 @@ A running log of issues that surfaced during code review but were not fixed at t
 - D1 — ~62 lines duplicated code between auto_approval_stub and scripted_worker_stub (`_read_new_lines`, `_connect_mcp`, `_install_signal_handlers`, `main`) — intentional fixture independence per spec design; extracting shared code would cross fixture boundaries.
 - D2 — Incomplete JSONL line causes offset stall in `_read_new_lines` — pre-existing in scripted_worker_stub; only triggered by log rotation during test run.
 - D3 — Worker stub doesn't gate on `approval.granted` before emitting post-approval events — by-design Phase 1 per spec scope boundary ("Do NOT add a journey_1 scenario that gates on approval"). The 0.5s inter-event delay creates the timing window. Phase 2 (Epic 6) will add real approval gating.
+
+## Deferred from: code review of 6-14-tier3-negative-test (2026-05-11)
+
+- D1 — Event loop leak if `_build_harness` crashes before returning — same pre-existing pattern as test_license_scan.py and test_decision_interleaving.py. The manual `asyncio.new_event_loop()` + `asyncio.set_event_loop()` pattern doesn't restore the previous loop on failure within `_build_harness`. Consistent with existing codebase; fix should be applied to all 3 test files together.
+- D2 — Read bypass test only covers GET, not HEAD/OPTIONS — all three methods use the same `_MUTATING_METHODS` check in middleware. GET is the primary read method and sufficient for integration coverage.
+- D3 — No test for unmapped mutating routes (Phase-1 default-open path) — the middleware allows unmapped routes through. This is a separate concern from Tier-3 negative testing; could be a dedicated story.
+
+## Deferred from: code review of 7-7-worktree-lock-blocker-persistence (2026-05-12)
+
+- D1 — `_close_active_session_for_task` only closes ONE session when multiples may exist (Blind Hunter + Edge Case Hunter) — uses `.limit(1)` so stale sessions leak if multiple active sessions exist. System enforces single-session-per-task via `handle_task_execution_started`. Future refactor to bulk `UPDATE ... WHERE task_id=... AND status IN (...)` would close all and is more efficient.
+- D2 — Missing compound index on `(sessions.task_id, sessions.status)` (Blind Hunter) — the `_close_active_session_for_task` query filters on both columns but only `ix_sessions_task_id` exists. SQLite post-filters by status. Low urgency given typical workload.
+- D3 — ORM attribute mutation vs bulk UPDATE in `_close_active_session_for_task` (Blind Hunter + Edge Case Hunter) — helper loads ORM object, mutates 3 attributes, flushes. A bulk `update(SessionRow).where(...).values(...)` would be more efficient and also solve D1. Style/performance choice, not a bug.
+
+## Deferred from: code review of 7-8-self-recovered-summary (2026-05-12)
+
+- D1 — No "overnight" time-of-day filter in `detect_overnight_restart` (Acceptance Auditor) — spec says "timestamped overnight" but function detects ANY restart pair regardless of time. The word "overnight" describes the task context (the task ran overnight), not a filter condition. Adding a time-of-day check would narrow the feature incorrectly (midday restarts also deserve visibility).
+- D2 — ASC+limit=1000 may truncate restart pair for long-running tasks (Edge Case Hunter) — events endpoint returns `emitted_at ASC` with limit 1000. For tasks with >1000 events, the restart pair (near the end) could be truncated. Rare in practice; fix requires API pagination or a specialized endpoint filtering by event type.
+- D3 — No deduplication for daemon restart replay (Edge Case Hunter) — if clawhip-daemon restarts and replays the JSONL event log, it could send duplicate self-recovered messages. Architectural concern beyond story scope; best-effort synthesis is acceptable for now.
+
+## Deferred from: code review of 7-9-journey-3-integration-test (2026-05-12)
+
+(All findings were fixed during the review pass — no deferred items.)
+
+## Deferred from: code review of 7-5-2-session-bulk-close-and-index (2026-05-13)
+
+- **D1 — `assert isinstance` stripped in Python -O mode** (Blind Hunter, handlers.py:296,343): All handlers use `assert isinstance(payload, ...)` which is stripped by `python -O`. Pre-existing pattern not introduced by this story. Consider a runtime guard that survives optimization in a future cleanup pass.
+
+## Deferred from: code review of 7-5-5-worktree-lock-release-touctou (2026-05-14)
+
+- **D1 — No coverage for PermissionError or other OSError subclasses on unlink** (Edge Case Hunter, worktree_lock.py:139-144): The `try/except FileNotFoundError` block only catches FNFE. Any other `OSError` (e.g., `PermissionError`) will propagate up. Pre-existing design choice; the caller (`main.py:237-245`) has a broad `except Exception` wrapper. Consider documenting whether PermissionError is expected or widening the catch.
+- **D2 — release_lock session_id mismatch does not check for missing key in corrupt lock** (Edge Case Hunter, worktree_lock.py:130): `existing.get("session_id")` returns `None` when the lock file is valid JSON but missing the `session_id` key. A corrupt/partial lock file will never be released by any session. Pre-existing, by design ("stale lock recovery is a manual procedure"). Consider documenting this edge case.
+
+## Deferred from: code review of 7-5-6-events-endpoint-truncation-and-trace-id (2026-05-14)
+
+- **D1 — Missing DB index for `after` cursor filter** (Edge Case Hunter, events.py:80): `ix_events_task_id_emitted_at` covers `(task_id, emitted_at)` but not `emitted_at_monotonic_ns`. The `after` filter causes a post-filter scan. Low urgency at current scale; requires Alembic migration. Add `ix_events_task_id_mono_ns` in Phase 2.
+- **D2 — `since` uses inclusive `>=` creating potential duplicates on re-poll** (Blind Hunter, events.py:78): If two events share the same `emitted_at` timestamp and a client re-polls with `since=<timestamp>`, both events are returned again. Pre-existing behavior; changing to strict `>` would break backward compat. Documented in endpoint docstring.
+- **D3 — No auth check on events endpoint** (Blind Hunter, events.py:48-51): Endpoint is unauthenticated. By design for CLI use; auth is handled at the infrastructure layer (API gateway). Defer to infrastructure hardening.
+- **D4 — `trace_id: None` in wire contract** (Blind Hunter, events.py:43): Hardcoded None with Phase 2 dependency documented. Not a defect — ORM column + migration + materializer required. Tracked in AC-2.
+- **D5 — `_TASK_ID_PATTERN` coupling between routes** (Blind Hunter, events.py:24): Pattern shared between `events.py` and `tasks.py`. Pre-existing pattern; extract to shared module if it changes again.
+- **D6 — `list[dict]` return type lacks Pydantic response model** (Blind Hunter, events.py:61): No `response_model` annotation on the endpoint. Pre-existing pattern; adding a model would break the bare-array wire contract unless using `response_model=list[EventEnvelopeResponse]`.
+
+## Deferred from: code review of 7-5-7-integration-test-harness-decision (2026-05-14)
+
+- **D1 — Journey 1 not migrated to use shared `_compose_helpers.py`** (Code Reviewer): AC-2 says "at least 2 test files" and 2 were done (j3, j6). Module docstring names j1 as source but j1 still has local copies. Migrate in next test-harness pass.
+- **D2 — `_wait_for_socket`, `_read_jsonl_envelopes`, `_poll_for_event`, `_wait_for_container_exit` still copy-pasted across j3/j6** (Code Reviewer): ADR decision #1 scoped extraction to compose helpers. These event-polling helpers are candidates for future extraction to `_compose_helpers.py` or a new `_event_helpers.py`.
+- **D3 — `wait_for_all_healthy` silently loops on `docker compose ps` failure** (Code Reviewer, _compose_helpers.py:103): Pre-existing behavior preserved by extraction. Accumulate stderr on failure for diagnostic value.
+- **D4 — `wait_for_all_healthy` doesn't distinguish unhealthy vs not-started** (Code Reviewer, _compose_helpers.py:130): Pre-existing behavior. Include per-service health summary in timeout message.
+- **D5 — ADR-0002 adds `Rationale` section not in ADR-0001** (Code Reviewer): Style divergence. ADR-0001 has no Rationale section. Low priority — merge into Context or update ADR-0001 convention.
+
+## Deferred from: code review of 7-5-8-renderer-validator-consistency (2026-05-14)
+
+- **D1 — `_collapse_newlines` doesn't handle NEL (U+0085), VT (U+000B), FF (U+000C)** (Blind Hunter + Edge Case Hunter, telegram_sink.py): Spec (AC-3) specifically names U+2028/U+2029. These additional Unicode line breaks recognized by Python's `str.splitlines()` were not in scope. Consider using `re.sub(r"[\r\n  \x0b\x0c]+", " ", text)` for comprehensive coverage in a future pass.
+- **D2 — Sequential `.replace()` produces multi-space for consecutive mixed separators** (Blind Hunter, telegram_sink.py): `_collapse_newlines` replaces each separator independently, so `\n ` produces two spaces. Consistent with pre-existing ASCII newline behavior. Consider normalizing all to one separator first, then collapsing, in a future pass.
+- **D3 — `TaskExecutionResumedPayload` not covered in validator tests** (Acceptance Auditor, test_payload_validators.py): This model already had `pattern=_TASK_ID_PATTERN` before this story. The test file covers the 14 explicitly-named models in scope. Add coverage if model-specific validation behavior diverges.
+- **D4 — `hint` min_length=1 allows whitespace-only strings** (Blind Hunter + Edge Case Hunter, payloads.py:60): Standard Pydantic pattern. No evidence of real issues. Consider a whitespace-stripping validator if semantic emptiness becomes a concern.

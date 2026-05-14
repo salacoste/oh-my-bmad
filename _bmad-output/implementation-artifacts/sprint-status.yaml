@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-10T20:00:00Z
+last_updated: 2026-05-14T14:00:00Z
 
 development_status:
   # =========================================================================
@@ -164,7 +164,7 @@ development_status:
   # =========================================================================
   # Epic 6: Approval & Policy Gate (14 stories)
   # =========================================================================
-  epic-6: in-progress
+  epic-6: done
   6-1-capability-tier-enforcement-helpers: done
   6-2-tier-enforcement-mcp-handlers: done
   6-3-tier-enforcement-http-middleware: done
@@ -172,27 +172,42 @@ development_status:
   6-5-approval-audit-events: done
   6-6-tier3-audit-events: done
   6-7-worker-approval-wait-state: done
-  6-8-precommit-validation-hook: backlog
-  6-9-license-scan-integration: backlog
-  6-10-license-flagged-event-override: backlog
-  6-11-budget-exceeded-enforcement: backlog
-  6-12-decision-interleaving-property-test: backlog
-  6-13-license-scan-integration-test: backlog
-  6-14-tier3-negative-test: backlog
-  epic-6-retrospective: optional
+  6-8-precommit-validation-hook: done
+  6-9-license-scan-integration: done
+  6-10-license-flagged-event-override: done
+  6-11-budget-exceeded-enforcement: done
+  6-12-decision-interleaving-property-test: done
+  6-13-license-scan-integration-test: done
+  6-14-tier3-negative-test: done
+  epic-6-retrospective: done
 
   # =========================================================================
   # Epic 7: Reconnaissance & Recovery UX (10 stories)
   # =========================================================================
-  epic-7: backlog
-  7-1-reconstituted-state-handler: backlog
-  7-2-telegram-status-business-logic: backlog
-  7-3-logs-digest-llm-adapter: backlog
-  7-4-telegram-logs-business-logic: backlog
-  7-5-events-raw-tail-endpoint: backlog
-  7-6-retry-hint-injection: backlog
-  7-7-worktree-lock-blocker-persistence: backlog
-  7-8-self-recovered-summary: backlog
-  7-9-journey-3-integration-test: backlog
-  7-10-journey-6-integration-test: backlog
-  epic-7-retrospective: optional
+  epic-7: done
+  7-1-reconstituted-state-handler: done
+  7-2-telegram-status-business-logic: done
+  7-3-logs-digest-llm-adapter: done
+  7-4-telegram-logs-business-logic: done
+  7-5-events-raw-tail-endpoint: done
+  7-6-retry-hint-injection: done
+  7-7-worktree-lock-blocker-persistence: done
+  7-8-self-recovered-summary: done
+  7-9-journey-3-integration-test: done
+  7-10-journey-6-integration-test: done
+  epic-7-retrospective: done
+
+  # =========================================================================
+  # Epic 7.5: Tech-Debt Sweep (Epic 7 Retrospective)
+  # HIGH/MEDIUM deferred items from across the roadmap — prevents debt growth
+  # =========================================================================
+  epic-7-5: in-progress
+  7-5-1-rate-limiter-allowlist-layering: done  # HIGH — allowlist bypass drains rate-limiter bucket for legit actors
+  7-5-2-session-bulk-close-and-index: done  # HIGH — bulk close sessions + add compound index
+  7-5-3-rate-limiter-semantics-and-retry-after: done  # MEDIUM — document charge-on-attempt contract + dynamic Retry-After
+  7-5-4-configurable-llm-model-and-digest-hardening: done  # MEDIUM — env-var model name + malformed ISO handling
+  7-5-5-worktree-lock-release-touctou: done  # MEDIUM — read_lock → unlink race condition
+  7-5-6-events-endpoint-truncation-and-trace-id: done  # MEDIUM — limit truncation fix + trace_id propagation
+  7-5-7-integration-test-harness-decision: done  # Process — resolve 3-retro deferral on harness duplication
+  7-5-8-renderer-validator-consistency: done  # LOW — uniform task_id, pr_branch, newline validators across renderers
+  epic-7-5-retrospective: done
