@@ -29,37 +29,50 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from registry_state.adapters.sqlite_store import get_session
 from registry_state.domain.errors import MaterializerError
 from registry_state.domain.event_types import (
+    AgentReasoningBreadcrumbPayload,
     ApprovalGrantedPayload,
     ApprovalRejectedPayload,
+    BudgetOverridePayload,
+    FileEditedPayload,
     LicenseOverridePayload,
     TaskApprovalRequestedPayload,
     TaskBlockerRaisedPayload,
+    TaskBudgetExceededPayload,
     TaskCompletedPayload,
     TaskCreatedPayload,
     TaskExecutionStartedPayload,
+    TaskLicenseFlaggedPayload,
     TaskPlanningStartedPayload,
     TaskPlanReadyPayload,
     TaskRetryRequestedPayload,
+    TaskStepCompletedPayload,
     TaskStopRequestedPayload,
     TaskSummaryEmittedPayload,
     Tier3ActionAttemptedPayload,
     Tier3ActionPerformedPayload,
 )
 from registry_state.domain.handlers import (
+    _close_active_session_for_task,
+    handle_agent_reasoning_breadcrumb,
     handle_approval_granted,
     handle_approval_rejected,
+    handle_file_edited,
     handle_task_approval_requested,
     handle_task_blocker_raised,
+    handle_task_budget_exceeded,
     handle_task_completed,
     handle_task_created,
     handle_task_execution_started,
+    handle_task_license_flagged,
     handle_task_plan_ready,
     handle_task_planning_started,
     handle_task_retry_requested,
+    handle_task_step_completed,
     handle_task_stop_requested,
     handle_task_summary_emitted,
     handle_tier3_action_attempted,
     handle_tier3_action_performed,
+    handle_tier3_budget_override,
     handle_tier3_license_override,
 )
 from registry_state.schema import Base, Task
@@ -113,6 +126,17 @@ def _ensure_event_types_registered() -> None:
     _reg("tier3.action_attempted", "1.0.0", Tier3ActionAttemptedPayload)
     _reg("tier3.action_performed", "1.0.0", Tier3ActionPerformedPayload)
     _reg("tier3.license_override", "1.0.0", LicenseOverridePayload)
+    # Story 6.10 — license flag event type.
+    _reg("task.license_flagged", "1.0.0", TaskLicenseFlaggedPayload)
+    # Story 6.11 — budget enforcement event types.
+    _reg("task.budget_exceeded", "1.0.0", TaskBudgetExceededPayload)
+    _reg("tier3.budget_override", "1.0.0", BudgetOverridePayload)
+    # Story 7.1 — reconstituted-state event types.
+    _reg("task.step.completed", "1.0.0", TaskStepCompletedPayload)
+    _reg("file.edited", "1.0.0", FileEditedPayload)
+    _reg("agent.reasoning.plan_drafted", "1.0.0", AgentReasoningBreadcrumbPayload)
+    _reg("agent.reasoning.tool_call_rationale", "1.0.0", AgentReasoningBreadcrumbPayload)
+    _reg("agent.reasoning.step_summary", "1.0.0", AgentReasoningBreadcrumbPayload)
 
 
 @pytest.fixture
@@ -239,6 +263,44 @@ async def test_task_planning_started_updates_status(db_session: AsyncSession) ->
     assert task is not None
     assert task.status == "planning"
     assert task.last_event_id == env_planning.event_id
+
+
+@pytest.mark.asyncio
+async def test_task_planning_started_clears_hint(db_session: AsyncSession) -> None:
+    """handle_task_planning_started clears the hint field."""
+    rng = Random(77)
+    clk = FrozenClock(mono_ns=1_000_000, now=FROZEN_EPOCH)
+    env_created = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.created",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskCreatedPayload(task_id=new_task_id(clock=clk, rng=rng), hint="focus on X"),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.hint == "focus on X"
+
+    clk2 = FrozenClock(mono_ns=2_000_000, now=FROZEN_EPOCH)
+    env_planning = EventEnvelope.create(
+        event_id=new_event_id(clock=clk2, rng=rng),
+        schema_version="1.0.0",
+        type="task.planning.started",
+        emitted_at=clk2.now(),
+        emitted_at_monotonic_ns=clk2.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskPlanningStartedPayload(task_id=task_id),
+        request_id=new_uuid7(clock=clk2, rng=rng),
+    )
+    await handle_task_planning_started(db_session, env_planning)
+    await db_session.refresh(task)
+    assert task.hint is None
 
 
 @pytest.mark.asyncio
@@ -391,7 +453,7 @@ async def test_execution_started_on_missing_task_raises_materializer_error(
 async def test_task_blocker_raised_updates_last_event_id(
     db_session: AsyncSession,
 ) -> None:
-    """handle_task_blocker_raised updates last_event_id + updated_at; status unchanged."""
+    """handle_task_blocker_raised transitions to blocked and sets blocker_reason (Story 7.7)."""
     env_created = _make_created_envelope(mono_ns=1_000_000)
     await handle_task_created(db_session, env_created)
     assert isinstance(env_created.payload, TaskCreatedPayload)
@@ -413,8 +475,36 @@ async def test_task_blocker_raised_updates_last_event_id(
     task = await db_session.get(Task, task_id)
     assert task is not None
     assert task.last_event_id == env_blocker.event_id
-    # Status must NOT change — lifecycle for blockers lands in Stories 5.x/6.x
-    assert task.status == "pending"
+    assert task.status == "blocked"
+    assert task.blocker_reason == "CI red"
+
+
+@pytest.mark.asyncio
+async def test_task_blocker_raised_truncates_long_reason(db_session: AsyncSession) -> None:
+    """handle_task_blocker_raised truncates blocker_reason to 64 chars."""
+    env_created = _make_created_envelope(mono_ns=1_000_000)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    long_reason = "x" * 200
+    rng = Random(88)
+    clk = FrozenClock(mono_ns=2_000_000, now=FROZEN_EPOCH)
+    env_blocker = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.blocker_raised",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskBlockerRaisedPayload(task_id=task_id, reason=long_reason),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    await handle_task_blocker_raised(db_session, env_blocker)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.status == "blocked"
+    assert task.blocker_reason == "x" * 64
 
 
 @pytest.mark.asyncio
@@ -674,10 +764,94 @@ async def test_task_stop_requested_sets_status_stopped(
 
 
 @pytest.mark.asyncio
+async def test_task_stop_requested_closes_active_session(
+    db_session: AsyncSession,
+) -> None:
+    """handle_task_stop_requested closes the active session (Story 7.7 AC-2)."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=501)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    # Seed an active session with worktree_path.
+    rng_sid = Random(502)
+    clk_sid = FrozenClock(mono_ns=2_000_000, now=FROZEN_EPOCH)
+    session_row = SessionRow(
+        id=new_session_id(clock=clk_sid, rng=rng_sid),
+        task_id=task_id,
+        worker_kind="claude-code",
+        status="active",
+        started_at=FROZEN_EPOCH,
+        worktree_path="/tmp/worktree-abc",
+    )
+    db_session.add(session_row)
+    await db_session.flush()
+
+    rng = Random(503)
+    clk = FrozenClock(mono_ns=12_000_000, now=FROZEN_EPOCH)
+    env_stop = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.stop_requested",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskStopRequestedPayload(task_id=task_id, actor_id="op-1"),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    await handle_task_stop_requested(db_session, env_stop)
+    await db_session.refresh(session_row)
+    assert session_row.status == "closed"
+    assert session_row.worktree_path is None
+    assert session_row.ended_at == env_stop.emitted_at
+
+
+@pytest.mark.asyncio
+async def test_task_completed_closes_active_session(
+    db_session: AsyncSession,
+) -> None:
+    """handle_task_completed closes the active session (Story 7.7 data hygiene)."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=504)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng_sid = Random(505)
+    clk_sid = FrozenClock(mono_ns=2_000_000, now=FROZEN_EPOCH)
+    session_row = SessionRow(
+        id=new_session_id(clock=clk_sid, rng=rng_sid),
+        task_id=task_id,
+        worker_kind="claude-code",
+        status="active",
+        started_at=FROZEN_EPOCH,
+        worktree_path="/tmp/worktree-def",
+    )
+    db_session.add(session_row)
+    await db_session.flush()
+
+    rng = Random(506)
+    clk = FrozenClock(mono_ns=14_000_000, now=FROZEN_EPOCH)
+    env_complete = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.completed",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskCompletedPayload(task_id=task_id, summary="done"),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    await handle_task_completed(db_session, env_complete)
+    await db_session.refresh(session_row)
+    assert session_row.status == "closed"
+    assert session_row.worktree_path is None
+
+
+@pytest.mark.asyncio
 async def test_task_retry_requested_updates_last_event_id(
     db_session: AsyncSession,
 ) -> None:
-    """handle_task_retry_requested updates last_event_id + updated_at; status unchanged (AC-4)."""
+    """handle_task_retry_requested transitions to pending and persists hint (Story 7.6 AC-1)."""
     env_created = _make_created_envelope(mono_ns=1_000_000, seed=104)
     await handle_task_created(db_session, env_created)
     assert isinstance(env_created.payload, TaskCreatedPayload)
@@ -703,6 +877,130 @@ async def test_task_retry_requested_updates_last_event_id(
     assert task.last_event_id == env_retry.event_id
     assert task.updated_at == env_retry.emitted_at
     assert task.status == "pending"
+    assert task.hint == "focus on X"
+
+
+@pytest.mark.asyncio
+async def test_task_retry_without_hint_clears_existing_hint(
+    db_session: AsyncSession,
+) -> None:
+    """Retrying without hint clears a previously persisted hint (Story 7.6 AC-3)."""
+    rng = Random(401)
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=401)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    # First retry with hint.
+    clk2 = FrozenClock(mono_ns=5_000_000, now=FROZEN_EPOCH)
+    env_retry1 = EventEnvelope.create(
+        event_id=new_event_id(clock=clk2, rng=rng),
+        schema_version="1.0.0",
+        type="task.retry_requested",
+        emitted_at=clk2.now(),
+        emitted_at_monotonic_ns=clk2.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskRetryRequestedPayload(
+            task_id=task_id, decision_id="d-aaa", actor_id="op-1", hint="first hint",
+        ),
+        request_id=new_uuid7(clock=clk2, rng=rng),
+    )
+    await handle_task_retry_requested(db_session, env_retry1)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.hint == "first hint"
+
+    # Second retry without hint — should clear.
+    clk3 = FrozenClock(mono_ns=9_000_000, now=FROZEN_EPOCH)
+    env_retry2 = EventEnvelope.create(
+        event_id=new_event_id(clock=clk3, rng=rng),
+        schema_version="1.0.0",
+        type="task.retry_requested",
+        emitted_at=clk3.now(),
+        emitted_at_monotonic_ns=clk3.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskRetryRequestedPayload(
+            task_id=task_id, decision_id="d-bbb", actor_id="op-1", hint=None,
+        ),
+        request_id=new_uuid7(clock=clk3, rng=rng),
+    )
+    await handle_task_retry_requested(db_session, env_retry2)
+    await db_session.refresh(task)
+    assert task.hint is None
+    assert task.status == "pending"
+    assert task.blocker_reason is None
+
+
+@pytest.mark.asyncio
+async def test_task_retry_requested_transitions_to_pending(
+    db_session: AsyncSession,
+) -> None:
+    """Retry transitions task from blocked to pending (Story 7.6 AC-1)."""
+    rng = Random(402)
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=402)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    # Manually set status to blocked (simulating prior blocker_raised event).
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    task.status = "blocked"
+    await db_session.flush()
+
+    clk2 = FrozenClock(mono_ns=5_000_000, now=FROZEN_EPOCH)
+    env_retry = EventEnvelope.create(
+        event_id=new_event_id(clock=clk2, rng=rng),
+        schema_version="1.0.0",
+        type="task.retry_requested",
+        emitted_at=clk2.now(),
+        emitted_at_monotonic_ns=clk2.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskRetryRequestedPayload(
+            task_id=task_id, decision_id="d-ddd", actor_id="op-1", hint="unblock it",
+        ),
+        request_id=new_uuid7(clock=clk2, rng=rng),
+    )
+    await handle_task_retry_requested(db_session, env_retry)
+    await db_session.refresh(task)
+    assert task.status == "pending"
+    assert task.hint == "unblock it"
+
+
+@pytest.mark.asyncio
+async def test_task_retry_from_failed_transitions_to_pending(
+    db_session: AsyncSession,
+) -> None:
+    """Retry transitions task from failed to pending (lifecycle allows retry from failed)."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=403)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    # Manually set status to failed.
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    task.status = "failed"
+    await db_session.flush()
+
+    clk2 = FrozenClock(mono_ns=5_000_000, now=FROZEN_EPOCH)
+    env_retry = EventEnvelope.create(
+        event_id=new_event_id(clock=clk2, rng=Random(403)),
+        schema_version="1.0.0",
+        type="task.retry_requested",
+        emitted_at=clk2.now(),
+        emitted_at_monotonic_ns=clk2.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskRetryRequestedPayload(
+            task_id=task_id, decision_id="d-eee", actor_id="op-1", hint="try again",
+        ),
+        request_id=new_uuid7(clock=clk2, rng=Random(403)),
+    )
+    await handle_task_retry_requested(db_session, env_retry)
+    await db_session.refresh(task)
+    assert task.status == "pending"
+    assert task.hint == "try again"
+    assert task.blocker_reason is None
 
 
 @pytest.mark.asyncio
@@ -1192,3 +1490,670 @@ async def test_tier3_action_attempted_accepted_false_updates_last_event_id(
     assert task.last_event_id == env.event_id
     assert task.updated_at == env.emitted_at
     assert task.status == "pending"
+
+
+# ---------------------------------------------------------------------------
+# Story 6.11 — budget-exceeded enforcement handler tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_budget_exceeded_sets_blocked_status(
+    db_session: AsyncSession,
+) -> None:
+    """handle_task_budget_exceeded transitions task to blocked."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=301)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng = Random(601)
+    clk = FrozenClock(mono_ns=10_000_000, now=FROZEN_EPOCH)
+    env = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.budget_exceeded",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskBudgetExceededPayload(
+            task_id=task_id, token_limit=50_000, tokens_used=52_000, step=3,
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    await handle_task_budget_exceeded(db_session, env)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.status == "blocked"
+    assert task.blocker_reason == "budget_exceeded"
+    assert task.last_event_id == env.event_id
+
+
+@pytest.mark.asyncio
+async def test_budget_exceeded_raises_on_missing_task(
+    db_session: AsyncSession,
+) -> None:
+    """handle_task_budget_exceeded raises MaterializerError for missing task."""
+    rng = Random(602)
+    clk = FrozenClock(mono_ns=10_000_000, now=FROZEN_EPOCH)
+    env = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.budget_exceeded",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskBudgetExceededPayload(
+            task_id="t-00000000-0000-7000-8000-000000009999",
+            token_limit=50_000, tokens_used=52_000, step=1,
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    with pytest.raises(MaterializerError):
+        await handle_task_budget_exceeded(db_session, env)
+
+
+@pytest.mark.asyncio
+async def test_budget_override_resumes_to_executing(
+    db_session: AsyncSession,
+) -> None:
+    """handle_tier3_budget_override transitions blocked task back to executing."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=303)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    # First block it
+    rng_block = Random(603)
+    clk_block = FrozenClock(mono_ns=10_000_000, now=FROZEN_EPOCH)
+    env_block = EventEnvelope.create(
+        event_id=new_event_id(clock=clk_block, rng=rng_block),
+        schema_version="1.0.0",
+        type="task.budget_exceeded",
+        emitted_at=clk_block.now(),
+        emitted_at_monotonic_ns=clk_block.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskBudgetExceededPayload(
+            task_id=task_id, token_limit=50_000, tokens_used=52_000, step=3,
+        ),
+        request_id=new_uuid7(clock=clk_block, rng=rng_block),
+    )
+    await handle_task_budget_exceeded(db_session, env_block)
+
+    # Now override
+    rng_ov = Random(604)
+    clk_ov = FrozenClock(mono_ns=20_000_000, now=FROZEN_EPOCH)
+    env_ov = EventEnvelope.create(
+        event_id=new_event_id(clock=clk_ov, rng=rng_ov),
+        schema_version="1.0.0",
+        type="tier3.budget_override",
+        emitted_at=clk_ov.now(),
+        emitted_at_monotonic_ns=clk_ov.monotonic_ns(),
+        actor=_ACTOR,
+        payload=BudgetOverridePayload(
+            task_id=task_id,
+            decision_id="d-budget-override-0000000000",
+            actor_id="operator-1",
+            old_limit=50_000,
+            new_limit=100_000,
+        ),
+        request_id=new_uuid7(clock=clk_ov, rng=rng_ov),
+    )
+    await handle_tier3_budget_override(db_session, env_ov)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.status == "executing"
+    assert task.blocker_reason is None
+    assert task.last_event_id == env_ov.event_id
+
+
+@pytest.mark.asyncio
+async def test_budget_override_raises_on_missing_task(
+    db_session: AsyncSession,
+) -> None:
+    """handle_tier3_budget_override raises MaterializerError for missing task."""
+    rng = Random(605)
+    clk = FrozenClock(mono_ns=10_000_000, now=FROZEN_EPOCH)
+    env = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="tier3.budget_override",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=BudgetOverridePayload(
+            task_id="t-00000000-0000-7000-8000-000000009999",
+            decision_id="d-budget-override-0000000000",
+            actor_id="operator-1",
+            old_limit=50_000,
+            new_limit=100_000,
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    with pytest.raises(MaterializerError):
+        await handle_tier3_budget_override(db_session, env)
+
+
+# ---------------------------------------------------------------------------
+# Story 6.10 — license-flagged handler test (code-review gap fix)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_license_flagged_updates_last_event_id(
+    db_session: AsyncSession,
+) -> None:
+    """handle_task_license_flagged updates last_event_id without changing status."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=401)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng = Random(701)
+    clk = FrozenClock(mono_ns=40_000_000, now=FROZEN_EPOCH)
+    env = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.license_flagged",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskLicenseFlaggedPayload(
+            task_id=task_id,
+            reason_code="copyleft-incompatible",
+            file_list=["src/gpl_code.py"],
+            detected_licenses=["gpl-2.0"],
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    await handle_task_license_flagged(db_session, env)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.last_event_id == env.event_id
+    assert task.status == "pending"
+
+
+# ---------------------------------------------------------------------------
+# Story 7.1 — Reconstituted-state handler tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_step_completed_updates_current_step(
+    db_session: AsyncSession,
+) -> None:
+    """handle_task_step_completed sets current_step on the task row."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=801)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng = Random(801)
+    clk = FrozenClock(mono_ns=10_000_000, now=FROZEN_EPOCH)
+    env = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.step.completed",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskStepCompletedPayload(
+            task_id=task_id, step=3, description="Refactor module",
+            output_summary="Renamed helper functions",
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    await handle_task_step_completed(db_session, env)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.current_step == 3
+    assert task.last_event_id == env.event_id
+
+
+@pytest.mark.asyncio
+async def test_step_completed_raises_on_missing_task(
+    db_session: AsyncSession,
+) -> None:
+    """handle_task_step_completed raises MaterializerError for missing task."""
+    rng = Random(802)
+    clk = FrozenClock(mono_ns=10_000_000, now=FROZEN_EPOCH)
+    env = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="task.step.completed",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskStepCompletedPayload(
+            task_id="t-00000000-0000-7000-8000-000000009999",
+            step=1, description="x", output_summary="",
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    with pytest.raises(MaterializerError):
+        await handle_task_step_completed(db_session, env)
+
+
+@pytest.mark.asyncio
+async def test_file_edited_updates_last_agent_action(
+    db_session: AsyncSession,
+) -> None:
+    """handle_file_edited sets last_agent_action via session lookup."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=811)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    # Insert a session row so _task_id_for_session can resolve it.
+    rng_sid = Random(811)
+    clk_sid = FrozenClock(mono_ns=2_000_000, now=FROZEN_EPOCH)
+    session_id = new_session_id(clock=clk_sid, rng=rng_sid)
+    session_row = SessionRow(
+        id=session_id,
+        task_id=task_id,
+        worker_kind="claude-code",
+        status="active",
+        started_at=FROZEN_EPOCH,
+    )
+    db_session.add(session_row)
+    await db_session.flush()
+
+    rng = Random(812)
+    clk = FrozenClock(mono_ns=10_000_000, now=FROZEN_EPOCH)
+    env = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="file.edited",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=FileEditedPayload(
+            session_id=session_id,
+            file_path="src/server/middleware.py",
+            tool_name="Edit",
+            lines_added=5,
+            lines_removed=2,
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    await handle_file_edited(db_session, env)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.last_agent_action == "Edit src/server/middleware.py"
+    assert task.last_event_id == env.event_id
+
+
+@pytest.mark.asyncio
+async def test_file_edited_noop_on_missing_session(
+    db_session: AsyncSession,
+) -> None:
+    """handle_file_edited silently skips when session row is missing."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=821)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng_sid = Random(821)
+    clk_sid = FrozenClock(mono_ns=2_000_000, now=FROZEN_EPOCH)
+    phantom_session_id = new_session_id(clock=clk_sid, rng=rng_sid)
+
+    rng = Random(822)
+    clk = FrozenClock(mono_ns=10_000_000, now=FROZEN_EPOCH)
+    env = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="file.edited",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=FileEditedPayload(
+            session_id=phantom_session_id,
+            file_path="src/main.py",
+            tool_name="Write",
+            lines_added=10,
+            lines_removed=0,
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    # Should not raise — no-op.
+    await handle_file_edited(db_session, env)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.last_agent_action is None
+
+
+@pytest.mark.asyncio
+async def test_reasoning_breadcrumb_updates_last_agent_action(
+    db_session: AsyncSession,
+) -> None:
+    """handle_agent_reasoning_breadcrumb sets last_agent_action for non-suppressed breadcrumbs."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=831)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng_sid = Random(831)
+    clk_sid = FrozenClock(mono_ns=2_000_000, now=FROZEN_EPOCH)
+    session_id = new_session_id(clock=clk_sid, rng=rng_sid)
+    session_row = SessionRow(
+        id=session_id,
+        task_id=task_id,
+        worker_kind="claude-code",
+        status="active",
+        started_at=FROZEN_EPOCH,
+    )
+    db_session.add(session_row)
+    await db_session.flush()
+
+    rng = Random(832)
+    clk = FrozenClock(mono_ns=10_000_000, now=FROZEN_EPOCH)
+    env = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="agent.reasoning.step_summary",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=AgentReasoningBreadcrumbPayload(
+            session_id=session_id,
+            subtype="step_summary",
+            text="Step 2 complete: refactored auth module",
+            suppressed=False,
+            raw_length=38,
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    await handle_agent_reasoning_breadcrumb(db_session, env)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.last_agent_action == "Step 2 complete: refactored auth module"
+
+
+@pytest.mark.asyncio
+async def test_reasoning_breadcrumb_suppressed_is_noop(
+    db_session: AsyncSession,
+) -> None:
+    """handle_agent_reasoning_breadcrumb skips suppressed breadcrumbs."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=841)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng_sid = Random(841)
+    clk_sid = FrozenClock(mono_ns=2_000_000, now=FROZEN_EPOCH)
+    session_id = new_session_id(clock=clk_sid, rng=rng_sid)
+    session_row = SessionRow(
+        id=session_id,
+        task_id=task_id,
+        worker_kind="claude-code",
+        status="active",
+        started_at=FROZEN_EPOCH,
+    )
+    db_session.add(session_row)
+    await db_session.flush()
+
+    rng = Random(842)
+    clk = FrozenClock(mono_ns=10_000_000, now=FROZEN_EPOCH)
+    env = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="agent.reasoning.plan_drafted",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=AgentReasoningBreadcrumbPayload(
+            session_id=session_id,
+            subtype="plan_drafted",
+            text="",
+            suppressed=True,
+            raw_length=100,
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    await handle_agent_reasoning_breadcrumb(db_session, env)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.last_agent_action is None
+
+
+@pytest.mark.asyncio
+async def test_reasoning_breadcrumb_noop_on_missing_session(
+    db_session: AsyncSession,
+) -> None:
+    """handle_agent_reasoning_breadcrumb silently skips when session row is missing."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=851)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    rng_sid = Random(851)
+    clk_sid = FrozenClock(mono_ns=2_000_000, now=FROZEN_EPOCH)
+    phantom_session_id = new_session_id(clock=clk_sid, rng=rng_sid)
+
+    rng = Random(852)
+    clk = FrozenClock(mono_ns=10_000_000, now=FROZEN_EPOCH)
+    env = EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.0.0",
+        type="agent.reasoning.tool_call_rationale",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=AgentReasoningBreadcrumbPayload(
+            session_id=phantom_session_id,
+            subtype="tool_call_rationale",
+            text="Running tests to verify changes",
+            suppressed=False,
+            raw_length=30,
+        ),
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+    await handle_agent_reasoning_breadcrumb(db_session, env)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.last_agent_action is None
+
+
+# ---------------------------------------------------------------------------
+# Story 7.5.2 — Bulk session close + compound index tests
+# ---------------------------------------------------------------------------
+
+
+async def _seed_task_with_sessions(
+    db_session: AsyncSession,
+    *,
+    task_seed: int,
+    num_sessions: int,
+    status: str = "active",
+    worktree_path: str | None = "/tmp/worktree-abc",
+) -> tuple[str, list[SessionRow]]:
+    """Create a task + N session rows with the given status. Returns (task_id, sessions)."""
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=task_seed)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    sessions: list[SessionRow] = []
+    for i in range(num_sessions):
+        rng_sid = Random(task_seed * 100 + i)
+        clk_sid = FrozenClock(mono_ns=2_000_000 + i * 1_000_000, now=FROZEN_EPOCH)
+        row = SessionRow(
+            id=new_session_id(clock=clk_sid, rng=rng_sid),
+            task_id=task_id,
+            worker_kind="claude-code",
+            status=status,
+            started_at=FROZEN_EPOCH,
+            worktree_path=worktree_path,
+        )
+        db_session.add(row)
+        sessions.append(row)
+    await db_session.flush()
+    return task_id, sessions
+
+
+@pytest.mark.asyncio
+async def test_close_active_session_for_task_closes_all_sessions(
+    db_session: AsyncSession,
+) -> None:
+    """Story 7.5.2 AC-1: bulk UPDATE closes ALL active sessions for a task."""
+    task_id, sessions = await _seed_task_with_sessions(
+        db_session, task_seed=901, num_sessions=3, status="active",
+    )
+
+    await _close_active_session_for_task(db_session, task_id, FROZEN_EPOCH)
+
+    for row in sessions:
+        await db_session.refresh(row)
+        assert row.status == "closed"
+        assert row.worktree_path is None
+        assert row.ended_at == FROZEN_EPOCH
+
+
+@pytest.mark.asyncio
+async def test_close_active_session_closes_idle_sessions(
+    db_session: AsyncSession,
+) -> None:
+    """Story 7.5.2 AC-1: bulk UPDATE closes idle sessions with full field assertions."""
+    task_id, sessions = await _seed_task_with_sessions(
+        db_session, task_seed=902, num_sessions=2, status="idle",
+    )
+
+    await _close_active_session_for_task(db_session, task_id, FROZEN_EPOCH)
+
+    for row in sessions:
+        await db_session.refresh(row)
+        assert row.status == "closed"
+        assert row.worktree_path is None
+        assert row.ended_at == FROZEN_EPOCH
+
+
+@pytest.mark.asyncio
+async def test_close_active_session_is_noop_when_none_exist(
+    db_session: AsyncSession,
+) -> None:
+    """Story 7.5.2: closing a task with no active sessions is a no-op (replay safety)."""
+    # Create task but no sessions.
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=903)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    # Should not raise.
+    await _close_active_session_for_task(db_session, task_id, FROZEN_EPOCH)
+
+    # Task unchanged.
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_close_does_not_affect_already_closed_sessions(
+    db_session: AsyncSession,
+) -> None:
+    """Story 7.5.2: already-closed sessions are not touched by the bulk close."""
+    task_id, sessions = await _seed_task_with_sessions(
+        db_session, task_seed=904, num_sessions=2, status="active",
+    )
+    # Manually close the first session with a distinct ended_at.
+    _pre_closed_at = FROZEN_EPOCH.replace(year=2024)
+    sessions[0].status = "closed"
+    sessions[0].ended_at = _pre_closed_at
+    await db_session.flush()
+
+    await _close_active_session_for_task(db_session, task_id, FROZEN_EPOCH)
+
+    await db_session.refresh(sessions[0])
+    await db_session.refresh(sessions[1])
+    # First was already closed — ended_at and worktree_path stay as original.
+    assert sessions[0].status == "closed"
+    assert sessions[0].ended_at == _pre_closed_at
+    assert sessions[0].worktree_path == "/tmp/worktree-abc"
+    # Second was active — now closed by the bulk UPDATE.
+    assert sessions[1].status == "closed"
+    assert sessions[1].worktree_path is None
+    assert sessions[1].ended_at == FROZEN_EPOCH
+
+
+@pytest.mark.asyncio
+async def test_close_does_not_affect_other_tasks(
+    db_session: AsyncSession,
+) -> None:
+    """Story 7.5.2: bulk close for one task leaves another task's sessions untouched."""
+    task_a, sessions_a = await _seed_task_with_sessions(
+        db_session, task_seed=905, num_sessions=2, status="active",
+    )
+    task_b, sessions_b = await _seed_task_with_sessions(
+        db_session, task_seed=906, num_sessions=2, status="active",
+    )
+
+    await _close_active_session_for_task(db_session, task_a, FROZEN_EPOCH)
+
+    # Task A sessions closed.
+    for row in sessions_a:
+        await db_session.refresh(row)
+        assert row.status == "closed"
+    # Task B sessions untouched.
+    for row in sessions_b:
+        await db_session.refresh(row)
+        assert row.status == "active"
+        assert row.worktree_path == "/tmp/worktree-abc"
+        assert row.ended_at is None
+
+
+@pytest.mark.asyncio
+async def test_close_mixed_active_and_idle_sessions(
+    db_session: AsyncSession,
+) -> None:
+    """Story 7.5.2: bulk close handles a mix of active AND idle sessions on one task."""
+    task_id, active_sessions = await _seed_task_with_sessions(
+        db_session, task_seed=907, num_sessions=2, status="active",
+    )
+    # Seed idle sessions on the same task — use separate rng seeds to avoid ID collision.
+    idle_sessions: list[SessionRow] = []
+    for i in range(2):
+        rng_idle = Random(90750 + i)
+        clk = FrozenClock(mono_ns=5_000_000 + i * 1_000_000, now=FROZEN_EPOCH)
+        row = SessionRow(
+            id=new_session_id(clock=clk, rng=rng_idle),
+            task_id=task_id,
+            worker_kind="claude-code",
+            status="idle",
+            started_at=FROZEN_EPOCH,
+            worktree_path="/tmp/worktree-idle",
+        )
+        db_session.add(row)
+        idle_sessions.append(row)
+    await db_session.flush()
+
+    await _close_active_session_for_task(db_session, task_id, FROZEN_EPOCH)
+
+    for row in active_sessions + idle_sessions:
+        await db_session.refresh(row)
+        assert row.status == "closed"
+        assert row.worktree_path is None
+        assert row.ended_at == FROZEN_EPOCH
+
+
+@pytest.mark.asyncio
+async def test_close_is_noop_for_nonexistent_task(
+    db_session: AsyncSession,
+) -> None:
+    """Story 7.5.2: bulk close with a non-existent task_id is a no-op (no raise)."""
+    # No task or session created — pure non-existent task_id.
+    phantom_id = new_task_id(
+        clock=FrozenClock(mono_ns=9_000_000, now=FROZEN_EPOCH),
+        rng=Random(999),
+    )
+    await _close_active_session_for_task(db_session, phantom_id, FROZEN_EPOCH)
+    # No assertion needed — the contract is "does not raise".
+
+
+@pytest.mark.asyncio
+async def test_compound_index_exists(
+    db_session: AsyncSession,
+) -> None:
+    """Story 7.5.2 AC-2: compound index ix_sessions_task_id_status exists in metadata."""
+    index_names = {idx.name for idx in SessionRow.__table__.indexes}
+    assert "ix_sessions_task_id_status" in index_names
+    assert "ix_sessions_task_id" not in index_names

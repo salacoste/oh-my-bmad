@@ -25,6 +25,7 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     AgentReasoningBreadcrumbPayload,
     ApprovalGrantedPayload,
     ApprovalRejectedPayload,
+    BudgetOverridePayload,
     DiffSummary,
     FileEditedPayload,
     LicenseOverridePayload,
@@ -35,6 +36,7 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     SessionFinishedPayload,
     SessionHeartbeatPayload,
     SessionHeartbeatTimeoutPayload,
+    SessionReconnectingPayload,
     SessionStartedPayload,
     SinkDeliveryFailedPayload,
     TaskApprovalRequestedPayload,
@@ -42,7 +44,9 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     TaskBudgetExceededPayload,
     TaskCompletedPayload,
     TaskCreatedPayload,
+    TaskExecutionResumedPayload,
     TaskExecutionStartedPayload,
+    TaskLicenseFlaggedPayload,
     TaskPlanningStartedPayload,
     TaskPlanReadyPayload,
     TaskRetryRequestedPayload,
@@ -62,6 +66,7 @@ __all__ = [
     "AgentReasoningBreadcrumbPayload",
     "ApprovalGrantedPayload",
     "ApprovalRejectedPayload",
+    "BudgetOverridePayload",
     "DiffSummary",
     "FileEditedPayload",
     "LicenseOverridePayload",
@@ -72,6 +77,7 @@ __all__ = [
     "SessionFinishedPayload",
     "SessionHeartbeatPayload",
     "SessionHeartbeatTimeoutPayload",
+    "SessionReconnectingPayload",
     "SessionStartedPayload",
     "SinkDeliveryFailedPayload",
     "TaskApprovalRequestedPayload",
@@ -79,6 +85,7 @@ __all__ = [
     "TaskBudgetExceededPayload",
     "TaskCompletedPayload",
     "TaskCreatedPayload",
+    "TaskExecutionResumedPayload",
     "TaskExecutionStartedPayload",
     "TaskPlanReadyPayload",
     "TaskPlanningStartedPayload",
@@ -152,6 +159,9 @@ register("session.heartbeat", "1.0.0", SessionHeartbeatPayload)
 register("session.heartbeat", "1.0.1", SessionHeartbeatPayload)
 register("session.finished", "1.0.0", SessionFinishedPayload)
 register("session.finished", "1.0.1", SessionFinishedPayload)
+# Story 7.8 — restart-recovery event payloads (FR29 models, FR16 synthesis).
+register("session.reconnecting", "1.0.0", SessionReconnectingPayload)
+register("task.execution.resumed", "1.0.0", TaskExecutionResumedPayload)
 
 # Story 5.5 — agent.reasoning.* breadcrumb payloads (FR17b, NFR-O6).
 register("agent.reasoning.plan_drafted", "1.0.0", AgentReasoningBreadcrumbPayload)
@@ -177,3 +187,9 @@ register("approval.granted", "1.0.0", ApprovalGrantedPayload)
 register("approval.rejected", "1.0.0", ApprovalRejectedPayload)
 register("task.retry_requested", "1.0.0", TaskRetryRequestedPayload)
 register("tier3.license_override", "1.0.0", LicenseOverridePayload)
+
+# Story 6.10 — task.license_flagged event payload (FR40).
+register("task.license_flagged", "1.0.0", TaskLicenseFlaggedPayload)
+
+# Story 6.11 — tier3.budget_override audit event (FR44).
+register("tier3.budget_override", "1.0.0", BudgetOverridePayload)

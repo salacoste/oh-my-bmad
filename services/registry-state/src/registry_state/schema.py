@@ -32,6 +32,7 @@ from sqlalchemy import (  # noqa: F401 — DateTime used by UTCDateTime impl
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
 )
@@ -115,6 +116,15 @@ class Task(Base):
     # Story 3.9: Telegram thread binding (FR13).
     chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     reply_to_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Story 6.11: blocker reason when status="blocked" (FR44).
+    blocker_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Story 7.1: reconstituted-state fields (FR4). Additive columns — existing
+    # rows get NULL; populated by materializer handlers.
+    current_step: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    total_steps: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    last_agent_action: Mapped[str | None] = mapped_column(String(2000), nullable=True, default=None)
+    # Story 7.6: retry hint injection (FR7). Populated by materializer on task.retry_requested.
+    hint: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
 
 
 class Session(Base):
@@ -217,8 +227,9 @@ Index("ix_events_session_id_emitted_at", Event.session_id, Event.emitted_at)
 # Audit/debug: filter events by type.
 Index("ix_events_type_emitted_at", Event.type, Event.emitted_at)
 
-# List all sessions for a task.
-Index("ix_sessions_task_id", Session.task_id)
+# Story 7.5.2: compound index covering both task_id-only queries (left-prefix)
+# and _close_active_session_for_task (WHERE task_id = ? AND status IN (...)).
+Index("ix_sessions_task_id_status", Session.task_id, Session.status)
 
 # TTL-sweep scan (Story 2.7 will use this).
 Index("ix_idempotency_cache_expires_at", IdempotencyCache.expires_at)
