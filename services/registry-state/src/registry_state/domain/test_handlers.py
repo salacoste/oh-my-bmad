@@ -327,6 +327,8 @@ async def test_task_plan_ready_updates_status(db_session: AsyncSession) -> None:
     task = await db_session.get(Task, task_id)
     assert task is not None
     assert task.status == "plan_ready"
+    assert task.total_steps == 0  # estimated_steps defaults to 0
+    assert task.current_step == 0
 
 
 @pytest.mark.asyncio

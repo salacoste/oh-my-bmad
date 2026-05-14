@@ -461,13 +461,24 @@ async def handle_tier3_budget_override(session: AsyncSession, envelope: EventEnv
     """
     payload = _hydrate(envelope.payload, BudgetOverridePayload)
     assert isinstance(payload, BudgetOverridePayload)
-    task = await session.get(Task, payload.task_id)
-    if task is not None and task.status == "blocked" and task.blocker_reason == "budget_exceeded":
-        await _touch_task(session, payload.task_id, envelope, {
-            "status": "executing",
-            "blocker_reason": None,
-        })
-    else:
+    stmt = (
+        update(Task)
+        .where(
+            Task.id == payload.task_id,
+            Task.status == "blocked",
+            Task.blocker_reason == "budget_exceeded",
+        )
+        .values(
+            status="executing",
+            blocker_reason=None,
+            last_event_id=envelope.event_id,
+            updated_at=envelope.emitted_at,
+        )
+    )
+    result = cast(CursorResult[tuple[()]], await session.execute(stmt))
+    if result.rowcount == 0:
+        # Task is not in budget-blocked state — fall back to touch-only
+        # (replay safety: re-running the same override is a no-op).
         await _touch_task(session, payload.task_id, envelope)
 
 
