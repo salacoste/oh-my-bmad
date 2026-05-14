@@ -129,6 +129,25 @@ docker compose ps                  # expect 6/6 Up (healthy) within 60s
 
 **Full deployment guides:** [VPS (Linux)](docs/deployment/vps.md) · [macOS host](docs/deployment/macos.md) · [Deployment entry point](docs/deployment-guide.md)
 
+## How this project gets built — the BMad workflow
+
+This codebase was produced by — and continues to follow — the **BMad** structured development workflow: a 4-phase lifecycle (analysis → planning → solutioning → implementation) where each phase has explicit inputs, outputs, and gates. Every artifact in [`_bmad-output/`](_bmad-output/) is a real document produced by a real skill in that workflow.
+
+```
+Phase 1 — Analysis           → product-brief / PRFAQ + research
+Phase 2 — Planning           → PRD + UX design
+Phase 3 — Solutioning        → architecture + epics & stories + test framework + CI
+Phase 4 — Implementation     → sprint plan → (create-story → validate → atdd →
+                                              dev-story → code-review → trace → nfr) ×N
+                              → retrospective at every epic boundary
+```
+
+Phase 1 took **10 epics / 88 stories**, with retrospective + deferred-work governance at every epic boundary. The full per-phase walkthrough, skill catalog, and "how a new feature enters the workflow" decision tree is documented separately:
+
+➡️ **[`docs/bmad-workflow.md`](docs/bmad-workflow.md)** — the complete workflow this project follows.
+
+If you're an AI agent picking up new work on this codebase, that file is the **process** companion to [`_bmad-output/project-context.md`](_bmad-output/project-context.md) (the **rules** digest) — read both before writing code.
+
 ## Documentation map
 
 This repo documents itself in three layers, by audience.
@@ -140,6 +159,7 @@ This repo documents itself in three layers, by audience.
 ### For humans
 
 - 🧭 [`docs/index.md`](docs/index.md) — master entry point with reading-order recommendations per role.
+- 🔄 [`docs/bmad-workflow.md`](docs/bmad-workflow.md) — the BMad workflow this project follows (process companion to the rule digest).
 - 🗺️ [`docs/architecture.md`](docs/architecture.md) — runtime view + invariants + data flow.
 - 🌳 [`docs/source-tree-analysis.md`](docs/source-tree-analysis.md) — annotated directory layout.
 - 🧩 [`docs/component-inventory.md`](docs/component-inventory.md) — the 14 workspace members.
