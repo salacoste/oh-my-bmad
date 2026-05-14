@@ -187,10 +187,15 @@ class TestReleaseLockTOCTOU:
         sid, wid = _sid(), _wid()
         acquire_lock(tmp_path, sid, wid)
 
-        def _raise_fnfe(self_path, *args, **kwargs):
-            raise FileNotFoundError("simulated TOCTOU race")
+        lock_file = tmp_path / ".oh-my-bmad.lock"
 
-        with patch.object(Path, "unlink", _raise_fnfe):
+        def _unlink_only_lock(self_path, *args, **kwargs):
+            if self_path == lock_file:
+                raise FileNotFoundError("simulated TOCTOU race")
+            return original_unlink(self_path, *args, **kwargs)
+
+        original_unlink = Path.unlink
+        with patch.object(Path, "unlink", _unlink_only_lock):
             release_lock(tmp_path, sid)  # no raise
 
     def test_concurrent_release_both_succeed(self, tmp_path: Path) -> None:
@@ -210,11 +215,16 @@ class TestReleaseLockTOCTOU:
         sid, wid = _sid(), _wid()
         acquire_lock(tmp_path, sid, wid)
 
-        def _raise_fnfe(self_path, *args, **kwargs):
-            raise FileNotFoundError("simulated TOCTOU race")
+        lock_file = tmp_path / ".oh-my-bmad.lock"
 
+        def _unlink_only_lock(self_path, *args, **kwargs):
+            if self_path == lock_file:
+                raise FileNotFoundError("simulated TOCTOU race")
+            return original_unlink(self_path, *args, **kwargs)
+
+        original_unlink = Path.unlink
         with (
-            patch.object(Path, "unlink", _raise_fnfe),
+            patch.object(Path, "unlink", _unlink_only_lock),
             caplog.at_level(logging.DEBUG, logger="worker_wrapper.domain.worktree_lock"),
         ):
             release_lock(tmp_path, sid)

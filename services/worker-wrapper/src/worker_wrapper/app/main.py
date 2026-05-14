@@ -370,12 +370,16 @@ async def run_task(
 
     # --- License scan pre-check (Story 6.10, FR40) ---
     try:
-        changed_files = [
-            str(p.relative_to(worktree_path))
+        all_files = [
+            str(p)
             for p in worktree_path.rglob("*")
             if p.is_file() and not p.name.startswith(".")
         ]
-        license_findings = scan_files_for_licenses(changed_files)
+
+        def _sync_scan() -> list:
+            return scan_files_for_licenses(all_files)
+
+        license_findings = await asyncio.to_thread(_sync_scan)
         if license_findings:
             await _emit_event("task.license_flagged", TaskLicenseFlaggedPayload(
                 task_id=task_id,
@@ -390,7 +394,7 @@ async def run_task(
                 task_id=task_id,
                 findings=len(license_findings),
             )
-    except Exception:
+    except (OSError, ValueError):
         log.warning("license_scan_failed", task_id=task_id, exc_info=True)
 
     # Emit task.approval_requested (AC-2).
