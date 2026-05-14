@@ -201,7 +201,7 @@ development_status:
   # Epic 7.5: Tech-Debt Sweep (Epic 7 Retrospective)
   # HIGH/MEDIUM deferred items from across the roadmap — prevents debt growth
   # =========================================================================
-  epic-7-5: in-progress
+  epic-7-5: done
   7-5-1-rate-limiter-allowlist-layering: done  # HIGH — allowlist bypass drains rate-limiter bucket for legit actors
   7-5-2-session-bulk-close-and-index: done  # HIGH — bulk close sessions + add compound index
   7-5-3-rate-limiter-semantics-and-retry-after: done  # MEDIUM — document charge-on-attempt contract + dynamic Retry-After
