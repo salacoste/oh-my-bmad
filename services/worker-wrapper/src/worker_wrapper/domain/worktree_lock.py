@@ -18,7 +18,6 @@ session is failed.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import os
@@ -123,11 +122,12 @@ def release_lock(worktree_path: Path, session_id: str) -> None:
         session_id: The current worker's session ID (``s-...``).
     """
     lock_file = _lock_path(worktree_path)
-    if not lock_file.exists():
-        return
 
     existing = read_lock(worktree_path)
-    if existing is not None and existing.get("session_id") != session_id:
+    if existing is None:
+        return  # no lock file — idempotent no-op
+
+    if existing.get("session_id") != session_id:
         logger.warning(
             "worktree_lock_release_mismatch worktree=%s expected=%s found=%s",
             worktree_path,
@@ -136,8 +136,17 @@ def release_lock(worktree_path: Path, session_id: str) -> None:
         )
         return  # do not remove a lock we don't own
 
-    with contextlib.suppress(FileNotFoundError):
+    try:  # noqa: SIM105 — explicit handler documents the TOCTOU acceptance
         lock_file.unlink()
+    except FileNotFoundError:
+        # Another process removed the lock between read_lock and unlink.
+        # Safe — the lock is gone, which is the desired end state.
+        logger.info(
+            "worktree_lock_already_released worktree=%s session=%s",
+            worktree_path,
+            session_id,
+        )
+        return
     logger.info(
         "worktree_lock_released worktree=%s session=%s",
         worktree_path,

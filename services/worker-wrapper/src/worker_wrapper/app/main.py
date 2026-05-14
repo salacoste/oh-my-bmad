@@ -29,9 +29,11 @@ from events.payloads import (
     SessionHeartbeatPayload,
     SessionStartedPayload,
     TaskApprovalRequestedPayload,
+    TaskLicenseFlaggedPayload,
     Tier3ActionPerformedPayload,
 )
 from mcp import ClientSession
+from secret_hygiene.license_scan import scan_files_for_licenses
 
 from worker_wrapper.adapters.approval_waiter import ApprovalWaiter
 from worker_wrapper.adapters.claude_code_runner import ClaudeCodeRunner
@@ -365,6 +367,31 @@ async def run_task(
     # Tier-3 action detected — enter approval gate.
     log.info("tier3_detected", task_id=task_id, event_type=push_event.event_type)
     await mgr.handle_event(LifecycleEvent.TASK_AWAITING_APPROVAL)
+
+    # --- License scan pre-check (Story 6.10, FR40) ---
+    try:
+        changed_files = [
+            str(p.relative_to(worktree_path))
+            for p in worktree_path.rglob("*")
+            if p.is_file() and not p.name.startswith(".")
+        ]
+        license_findings = scan_files_for_licenses(changed_files)
+        if license_findings:
+            await _emit_event("task.license_flagged", TaskLicenseFlaggedPayload(
+                task_id=task_id,
+                reason_code=license_findings[0].reason_code,
+                file_list=[f.file_path for f in license_findings],
+                detected_licenses=list(dict.fromkeys(
+                    f.license_detected for f in license_findings
+                )),
+            ).model_dump())
+            log.warning(
+                "license_flagged",
+                task_id=task_id,
+                findings=len(license_findings),
+            )
+    except Exception:
+        log.warning("license_scan_failed", task_id=task_id, exc_info=True)
 
     # Emit task.approval_requested (AC-2).
     # TODO(future-story): populate diff_summary from git diff --stat for

@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from events.errors import WorktreeLockHeld
@@ -160,3 +161,63 @@ class TestLockCycle:
         sid2, wid2 = _sid(), _wid()
         with pytest.raises(WorktreeLockHeld):
             acquire_lock(tmp_path, sid2, wid2)
+
+
+# ---------------------------------------------------------------------------
+# Story 7.5.5: TOCTOU regression tests for release_lock
+# ---------------------------------------------------------------------------
+
+
+class TestReleaseLockTOCTOU:
+    """AC-2: release_lock safe when lock file vanishes between read and unlink."""
+
+    def test_release_no_raise_when_file_deleted_by_another_process(
+        self, tmp_path: Path
+    ) -> None:
+        """File vanishes before read_lock: another process deletes it."""
+        sid, wid = _sid(), _wid()
+        acquire_lock(tmp_path, sid, wid)
+        (tmp_path / ".oh-my-bmad.lock").unlink()
+
+        release_lock(tmp_path, sid)  # no raise
+        assert is_lock_held(tmp_path) is False
+
+    def test_release_handles_fnfe_on_unlink(self, tmp_path: Path) -> None:
+        """File vanishes between read_lock and unlink: FNFE during unlink."""
+        sid, wid = _sid(), _wid()
+        acquire_lock(tmp_path, sid, wid)
+
+        def _raise_fnfe(self_path, *args, **kwargs):
+            raise FileNotFoundError("simulated TOCTOU race")
+
+        with patch.object(Path, "unlink", _raise_fnfe):
+            release_lock(tmp_path, sid)  # no raise
+
+    def test_concurrent_release_both_succeed(self, tmp_path: Path) -> None:
+        """Same session releases lock twice: second call is idempotent no-op."""
+        sid, wid = _sid(), _wid()
+        acquire_lock(tmp_path, sid, wid)
+
+        release_lock(tmp_path, sid)
+        release_lock(tmp_path, sid)
+
+        assert is_lock_held(tmp_path) is False
+
+    def test_release_no_error_log_on_vanished_file(self, tmp_path: Path, caplog) -> None:
+        """FNFE on unlink produces no ERROR-level logs."""
+        import logging
+
+        sid, wid = _sid(), _wid()
+        acquire_lock(tmp_path, sid, wid)
+
+        def _raise_fnfe(self_path, *args, **kwargs):
+            raise FileNotFoundError("simulated TOCTOU race")
+
+        with (
+            patch.object(Path, "unlink", _raise_fnfe),
+            caplog.at_level(logging.DEBUG, logger="worker_wrapper.domain.worktree_lock"),
+        ):
+            release_lock(tmp_path, sid)
+
+        error_logs = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert len(error_logs) == 0
