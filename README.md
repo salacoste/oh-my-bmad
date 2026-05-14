@@ -1,175 +1,194 @@
-# oh-my-bmad
+<div align="center">
 
-> **A self-hosted personal development OS for autonomous software engineering.**
->
-> Telegram + local console drive a Claude Code worker through a typed event bus, backed by a persistent task registry that survives restarts. Architected so additional CLI agents (Codex, Gemini, GLM) and a dedicated browser automation plane can be added later without changing the spine.
+```
+   ___  _              _ __  __    _                 _
+  / _ \| |__          / |  \/  |  | |__   _ __ ___  | |_ __ _  __| |
+ | | | | '_ \   ___  | | |\/| |  | '_ \ | '_ ` _ \ | __/ _` |/ _` |
+ | |_| | | | | |___| | | |  | |  | |_) || | | | | || || (_| | (_| |
+  \___/|_| |_|        |_|_|  |_|  |_.__/ |_| |_| |_| \__\__,_|\__,_|
+```
 
-This repo is the **Phase 1 implementation**. Planning artifacts (product brief, PRD, architecture, epics, sprint status) live under `_bmad-output/`. See `_bmad-output/planning-artifacts/architecture.md` for the full system design.
+# **oh-my-bmad**
+
+### A self-hosted, autonomous-development platform for one operator.
+
+*Telegram and a console drive a Claude Code worker through a typed, event-sourced spine — so a single person can run an agent loop they can trust, observe, and recover.*
+
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue?logo=python&logoColor=white)](https://www.python.org/downloads/release/python-3120/)
+[![uv workspace](https://img.shields.io/badge/uv-workspace-261230?logo=uv&logoColor=white)](https://docs.astral.sh/uv/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-async-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![aiogram v3](https://img.shields.io/badge/aiogram-v3-2CA5E0?logo=telegram&logoColor=white)](https://docs.aiogram.dev/)
+[![MCP](https://img.shields.io/badge/MCP-stdio-7F52B5)](https://modelcontextprotocol.io/)
+[![mypy strict](https://img.shields.io/badge/mypy-strict-1f5082)](https://mypy.readthedocs.io/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+[![Phase 1 — shipped](https://img.shields.io/badge/Phase%201-shipped-success)](_bmad-output/planning-artifacts/epics.md)
+
+</div>
 
 ---
+
+## What this is
+
+A platform that turns Telegram and a local console into the control surfaces for a **Claude Code** worker. Commands you send become typed events on an append-only log. A **single-writer** materializer turns the log into queryable SQLite state. **Capability tiers** gate every privileged action; **operator approval events** gate the high-risk ones. Crash the process and it rebuilds itself from the log on next start.
+
+It's deliberately **boring** infrastructure — Python 3.12, FastAPI, aiogram, SQLite WAL, Docker Compose, stdio MCP. The novelty is in how the boring pieces compose, not in any one piece.
+
+> **Phase 1 is shipped — 10 epics, 88 stories — and fully documented.** See [`docs/index.md`](docs/index.md) for the master entry point.
+
+## How it works (at a glance)
+
+```mermaid
+flowchart LR
+    subgraph operator [Operator surfaces]
+        TG[Telegram bot]
+        CLI[console CLI]
+    end
+
+    subgraph api [HTTP API]
+        RA[registry-api<br/>FastAPI · /v1/tasks]
+    end
+
+    subgraph spine [Event spine]
+        LOG[(append-only JSONL log<br/>byte-stable canonical JSON)]
+        STATE[registry-state<br/>SINGLE WRITER<br/>materializer + idempotency cache]
+        DB[(SQLite WAL<br/>tasks · sessions · events<br/>idempotency · snapshots)]
+    end
+
+    subgraph mcp [MCP servers · stdio · capability-tier gated]
+        TR[task-registry]
+        SR[session-registry]
+        CB[clawhip-bridge<br/>sole emission surface]
+    end
+
+    subgraph worker [Worker plane]
+        WW[worker-wrapper<br/>Claude Code CLI subprocess]
+    end
+
+    TG --> RA
+    CLI --> RA
+    RA --> LOG
+    LOG --> STATE --> DB
+    LOG -.read-only tail.-> TG
+    LOG -.read-only tail.-> CLI
+    WW --> CB
+    WW --> TR
+    WW --> SR
+    TR & SR & CB --> LOG
+    DB --> RA
+```
+
+Three properties hold the whole thing together: **only one writer**, **only-ever-append**, and **the bytes on disk are byte-stable**. The rest of the rules in [`_bmad-output/project-context.md`](_bmad-output/project-context.md) exist to protect them.
+
+## Engineering highlights
+
+- **Event-sourced spine, byte-stable canonical JSON.** Two identical envelopes serialize to byte-identical output. Replay-determinism is a property of the encoder, not a hopeful claim. ([deep-dive →](docs/explanations/event-spine.md))
+- **Single-writer invariant (FR26), statically enforced.** `services.<A>` cannot import `services.<B>`. `EventLogWriter` is the only opener-for-write on the log. A CI gate (`scripts/checks/check_imports.py`) rejects PRs that drift this boundary.
+- **Idempotency by UUIDv7.** Every command threads the triggering UUIDv7 through a per-key `asyncio.Lock` → cachetools TTLCache → SQLite write-through with a 7-day retention contract. **100 concurrent retries for the same key invoke the factory exactly once.** ([deep-dive →](docs/explanations/idempotency-flow.md))
+- **Crash-injection tested.** A real Docker stack gets shot at deterministic emission points; recovery is asserted to produce **byte-for-byte equivalent state**. Partial writes are detected and rejected by a poison-pill mechanism in the writer. ([deep-dive →](docs/explanations/recovery-and-crash-injection.md))
+- **Capability tiers with mandatory deny-path tests.** Four tiers (read / bounded-write / repo-mutation / high-risk-with-approval). Three tests **mandatory per MCP tool boundary**: deny-path, default-deny, escalation. `@pytest.mark.security` is non-skippable. ([deep-dive →](docs/explanations/capability-tiers.md))
+- **`mypy --strict` everywhere, `ruff` for lint *and* format.** No half-on rule families. Per-file ignores live in `ruff.toml`, not sprinkled. Bandit-`S` rules gate the obvious vulnerability classes (eval, pickle, yaml.load, subprocess shell=True, weak hashes).
+- **AI-agent rule digest as injected context.** [`_bmad-output/project-context.md`](_bmad-output/project-context.md) — 386 rules across 7 categories, hand-built with multi-agent review to capture the **load-bearing constraints that aren't obvious from the code alone**.
+- **Upstream forks behind adapter shims.** `upstream/omc` + `upstream/clawhip` vendored at pinned SHAs; direct imports of vendored internals are rejected by static analysis. Contract tests gate semantic drift.
+- **Three-layer secret hygiene.** Pre-commit scanner + structlog sanitizer wired *before* the renderer + `secret.accessed` audit events. F-string interpolation of tokens / request bodies / PII is a banned anti-pattern in code review.
+
+## Tech stack
+
+| Layer | Choice |
+|---|---|
+| Runtime | Python 3.12 · Node.js (only inside the Claude Code worker subprocess) |
+| Build / workspace | `uv ≥ 0.5` (workspace, 14 members) · `just ≥ 1.14` (operator recipes) |
+| HTTP API | FastAPI (only on `registry-api`) |
+| Telegram | aiogram v3 (webhook + outer-middleware allowlist, [ADR-0001](docs/adr/0001-allowlist-middleware-auth.md)) |
+| Storage | SQLite + WAL · `aiosqlite` · Alembic (additive-only within a major) |
+| Event log | append-only JSONL, canonical JSON, `fdatasync` |
+| MCP | stdio transport only · 3 servers (`task-registry`, `session-registry`, `clawhip-bridge`) |
+| Worker | Claude Code CLI subprocess, supervised |
+| Logging | `structlog` (JSON) + sanitizer in the processor chain |
+| Tests | pytest · pytest-asyncio (strict) · hypothesis · contract fixtures · crash-injection harness |
+| Tooling | ruff (E F I UP B SIM N + S) · mypy `--strict` · pre-commit · pytest-randomly |
+| Deploy | Docker Engine ≥ 24 · Docker Compose v2.24+ |
+
+Exact versions live in `uv.lock`. The platform doesn't ship a secret manager in Phase 1; secrets are operator-provisioned via `.env`.
 
 ## Quickstart
 
 ```sh
-# Prereqs: Docker Engine ≥ 24 + Docker Compose v2.24+ + uv ≥ 0.5 + just ≥ 1.14
-#   brew install uv just                                  # macOS
-#   curl -LsSf https://astral.sh/uv/install.sh | sh       # Linux (uv)
-git clone <this-repo-url> oh-my-bmad && cd oh-my-bmad
-uv sync --dev
+# Prereqs: Docker Engine ≥ 24, Docker Compose v2.24+, uv ≥ 0.5, just ≥ 1.14
+#   brew install uv just                              # macOS
+#   curl -LsSf https://astral.sh/uv/install.sh | sh   # Linux (uv)
+
+git clone https://github.com/salacoste/oh-my-bmad && cd oh-my-bmad
+uv sync --frozen --all-packages    # NOT --no-dev — strips test deps
 uv run pre-commit install
-just bootstrap-verify
+just bootstrap-verify              # 13 workspace imports must be green
 cp .env.example .env
-$EDITOR .env                                             # fill in secrets + tunnel choice
-just dev                                                 # macOS: overlay; Linux: base compose
-docker compose ps                                        # expect 6/6 Up (healthy) within 60 s
+$EDITOR .env                       # secrets + tunnel choice
+just dev                           # macOS overlay; Linux base compose
+docker compose ps                  # expect 6/6 Up (healthy) within 60s
 ```
 
-**For detailed deployment guides:** [`docs/deployment/vps.md`](docs/deployment/vps.md) · [`docs/deployment/macos.md`](docs/deployment/macos.md).
+**Full deployment guides:** [VPS (Linux)](docs/deployment/vps.md) · [macOS host](docs/deployment/macos.md) · [Deployment entry point](docs/deployment-guide.md)
 
----
+## Documentation map
 
-## Full operator documentation
+This repo documents itself in three layers, by audience.
 
-- [Operator runbook](docs/operator-runbook.md) — paging conditions + per-service recovery playbooks.
-- [Schema evolution](docs/schema-evolution.md) — add an event type + ship a migrator + roll-back procedure.
-- [Exceptions](docs/exceptions.md) — documented naming-rule + convention exceptions.
-- [Testing guide](docs/testing-guide.md) — test-tree layout + harness usage + contract-fixture recording workflow.
-- [Backup / restore](docs/backup-restore.md) — volume snapshot + off-host rsync + fresh-host restore.
-- [Message design](docs/message-design.md) — Telegram template catalog + character budgets.
+### For AI agents (read first if you're an agent)
 
----
+- 🤖 [`_bmad-output/project-context.md`](_bmad-output/project-context.md) — **the rule digest** (386 rules across 7 categories). Treat as injected context for the duration of your session.
 
-## Directory structure
+### For humans
 
-| Folder | Purpose |
-|---|---|
-| `services/` | Deployable backend processes (registry-api, registry-state, telegram-gateway, console-cli, orchestrator-adapter, worker-wrapper, clawhip-daemon). All 7 scaffolded as of Story 1.2. |
-| `mcp-servers/` | MCP servers exposing tool/resource contracts to agents. Distinct from `services/` because they have an MCP protocol surface, not an HTTP surface. All 3 scaffolded as of Story 1.2. |
-| `packages/` | Shared libraries imported by multiple services and MCP servers (`events`, `secret-hygiene`, `idempotency`). All 3 scaffolded as of Story 1.2. |
-| `upstream/` | Vendored upstream-fork source trees (`omc/`, `clawhip/`), synced via `just sync-upstream <name>`. Empty until Story 1.3 (upstream vendoring). |
-| `tests/` | Cross-service test trees: `separability/`, `crash-injection/`, `idempotency/`, `integration/`, `contract/`, `migrator/`. Empty until Story 1.5 (test tree + CI skeleton). |
-| `docs/` | Operator documentation: [deployment guides](docs/deployment/) (Story 1.10a), [runbook](docs/operator-runbook.md) + [schema evolution](docs/schema-evolution.md) + [exceptions](docs/exceptions.md) + [testing guide](docs/testing-guide.md) + [backup-restore](docs/backup-restore.md) + [message design](docs/message-design.md) (Story 1.10b). |
-| `_bmad-output/` | Planning artifacts (product brief, PRD, architecture, epics, sprint status). Authoritative source of design decisions. |
-| `_bmad/`, `.claude/`, `.cursor/`, `.gemini/`, `.opencode/`, `.pi/`, `.agent/`, `.agents/`, `.omc/` | BMad framework + IDE/skill integration files (kept for ongoing planning amendments). |
+- 🧭 [`docs/index.md`](docs/index.md) — master entry point with reading-order recommendations per role.
+- 🗺️ [`docs/architecture.md`](docs/architecture.md) — runtime view + invariants + data flow.
+- 🌳 [`docs/source-tree-analysis.md`](docs/source-tree-analysis.md) — annotated directory layout.
+- 🧩 [`docs/component-inventory.md`](docs/component-inventory.md) — the 14 workspace members.
+- 🔌 [`docs/api-contracts.md`](docs/api-contracts.md) — HTTP endpoints + MCP tools + Telegram surface.
+- 📚 [`docs/data-models.md`](docs/data-models.md) — event envelope + payload catalog + DB schema.
+- 🛠️ [`docs/development-guide.md`](docs/development-guide.md) · [`docs/deployment-guide.md`](docs/deployment-guide.md) · [`docs/operator-runbook.md`](docs/operator-runbook.md)
 
-### MCP-server naming convention
+### Deep-dives on load-bearing concepts
 
-MCP servers use three names — directory, project, module — that intentionally differ. This is not a typo; it's an accommodation for `uv_build`'s kebab→snake module derivation plus architectural convention.
+- 🎯 [`docs/explanations/event-spine.md`](docs/explanations/event-spine.md) — envelope → writer → JSONL → materializer → SQLite.
+- 🎯 [`docs/explanations/idempotency-flow.md`](docs/explanations/idempotency-flow.md) — UUIDv7 key journey + 7-day cache + 100× replay.
+- 🎯 [`docs/explanations/recovery-and-crash-injection.md`](docs/explanations/recovery-and-crash-injection.md) — snapshot ↔ recovery cursor + poison-pill + NFR-R2.
+- 🎯 [`docs/explanations/capability-tiers.md`](docs/explanations/capability-tiers.md) — 4-tier model + deny / default-deny / escalation contract.
 
-| Directory (group-scoped) | Project (in `pyproject.toml`) | Python module |
-|---|---|---|
-| `mcp-servers/task-registry/` | `task-registry-mcp` | `task_registry_mcp` |
-| `mcp-servers/session-registry/` | `session-registry-mcp` | `session_registry_mcp` |
-| `mcp-servers/clawhip-bridge/` | `clawhip-bridge-mcp` | `clawhip_bridge_mcp` |
+### Planning artifacts (for the *why*)
 
-**Rule:** when you see one form, the other two are derivable:
-- Directory = unsuffixed kebab (parent `mcp-servers/` folder already names the contract type).
-- Project name = directory name with `-mcp` suffix.
-- Python module = project name with `-` → `_` (so `task-registry-mcp` → `task_registry_mcp`).
+- 📋 [`_bmad-output/planning-artifacts/`](_bmad-output/planning-artifacts/) — product-brief, PRD, full architecture decision document, epics + ship-blocker checklist.
+- 📊 [`_bmad-output/implementation-artifacts/sprint-status.yaml`](_bmad-output/implementation-artifacts/sprint-status.yaml) — current state.
+- 🗂️ [`docs/adr/`](docs/adr/) — accepted ADRs.
 
-Services and packages follow the simpler 1:1 kebab ↔ snake convention (e.g., `secret-hygiene` ↔ `secret_hygiene`).
+## What's interesting about this codebase
 
----
+A few things worth a look even if you don't intend to run it:
 
-## Deployment checklist
+- **The AI-agent rule digest** ([`_bmad-output/project-context.md`](_bmad-output/project-context.md)). A 7-category, 386-rule reference designed to be injected into the context window of a coding agent. Built collaboratively with multi-perspective review; explicitly distinguishes *enforced* rules (CI gates) from *discipline* rules.
+- **The deep-dive explanations** ([`docs/explanations/`](docs/explanations/)). Each one walks a load-bearing concept (event spine, idempotency, recovery, capability tiers) end-to-end with Mermaid diagrams and source-grounded code samples.
+- **The single-writer enforcement** (`scripts/checks/check_imports.py`). Service separability isn't a doc rule; it's a CI gate that statically rejects PRs that drift the boundary.
+- **The crash-injection test tree** (`tests/crash-injection/`). Real Docker stack, deterministic kill points, byte-for-byte state equivalence as the assertion.
 
-Full deployment guides live at [`docs/deployment/vps.md`](docs/deployment/vps.md) + [`docs/deployment/macos.md`](docs/deployment/macos.md). The 6-step summary:
+## Built with
 
-### VPS (Linux)
-
-- [ ] Provision a VPS (Ubuntu 24.04 LTS recommended, ≥ 2 GB RAM, public IPv4).
-- [ ] Install Docker Engine ≥ 24 + Docker Compose v2.24+ + git + `uv ≥ 0.5` + `just ≥ 1.14`.
-- [ ] Choose a tunnel for the Telegram webhook ingress: Cloudflare Tunnel (default), ngrok, or BYO reverse proxy.
-- [ ] `git clone` + `cp .env.example .env` + edit secrets (Telegram bot token, Anthropic API key, GitHub PAT, allowlisted user IDs).
-- [ ] `just deploy-vps` → wait for 6/6 healthy.
-- [ ] Verify `/v1/health` (arrives in Story 2.9) + send `/ping` to the Telegram bot (arrives in Story 3.5).
-
-### Local macOS
-
-- [ ] Install Docker Desktop (or Colima ≥ 0.6) + git + `uv ≥ 0.5` + `just ≥ 1.14`.
-- [ ] Same `.env` setup as VPS.
-- [ ] `just deploy-macos` → wait for 6/6 healthy.
-- [ ] Same verification.
-
----
-
-## Backup / restore
-
-`just backup` snapshots the `oh-my-bmad-data` named volume to a local `.tgz`
-via a throwaway `alpine` container (works identically on Linux and macOS):
-
-    just backup              # oh-my-bmad-backup-<utc-ts>.tgz
-    just backup pre-upgrade  # oh-my-bmad-backup-<utc-ts>-pre-upgrade.tgz
-
-The optional suffix must match `[A-Za-z0-9._-]+` (safe filename chars only).
-
-The recipe stops the stack, tars the volume contents, then brings the stack
-back up (even if tar fails — the restart runs in an `EXIT` trap).
-
-To restore, extract into a fresh volume before first `compose up`:
-
-    docker volume create oh-my-bmad_oh-my-bmad-data
-    docker run --rm -v oh-my-bmad_oh-my-bmad-data:/dest -v "$PWD:/src" alpine:3 \
-        tar -xzf "/src/oh-my-bmad-backup-<timestamp>.tgz" -C /dest
-
-Then `just dev` (or `just deploy-vps` / `just deploy-macos`).
-
----
-
-## Upgrading
-
-Released images live on GHCR (`ghcr.io/<owner>/oh-my-bmad-<service>`).
-To upgrade a running deployment:
-
-1. Edit `.env`:
-
-       OMB_IMAGE_REGISTRY=ghcr.io/<owner>
-       OMB_VERSION=0.2.0                  # or whichever tag you want
-
-2. Pull + restart:
-
-       docker compose pull
-       docker compose up -d
-
-Compose stops each service, pulls the new tag, and starts it with preserved
-volumes. Persistent data (registry DB, event log, artifacts) survives the
-upgrade.
-
-Notes:
-
-- **`console-cli` is published but not in compose.** The image
-  (`ghcr.io/<owner>/oh-my-bmad-console-cli:<version>`) can be pulled ad-hoc
-  (`docker pull ghcr.io/<owner>/oh-my-bmad-console-cli:<version>`) but isn't
-  brought up by `docker compose up -d`. Story 4.6 will wire a host shim that
-  ties `oh-my-bmad console <cmd>` to the image.
-- **`:latest` only advances on stable semver tags.** Prerelease tags (e.g.
-  `v0.2.0-rc1`, containing a `-`) publish the versioned tag but do NOT move
-  `:latest` — a fork to `v0.2.0-rc1` requires setting `OMB_VERSION=0.2.0-rc1`
-  explicitly.
-
-Phase 1 uses tag-based versioning; digest-pinning + signed-image verification
-land in a Phase 2 hardening story.
-
----
-
-## Schema evolution / event-log migrator
-
-The event log uses a versioned schema (`schema_version` field on every event envelope). Within a major version, only **additive** changes are permitted. Breaking changes require a one-shot migrator container:
-
-```sh
-docker compose run --rm migrator <from-version>-to-<to-version>
-```
-
-The migrator scaffold lands in Story 1.3; the full runbook lives at `docs/schema-evolution.md` (Story 1.10b).
-
----
+[![uv](https://img.shields.io/badge/uv-workspace-261230?logo=uv&logoColor=white)](https://docs.astral.sh/uv/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![aiogram v3](https://img.shields.io/badge/aiogram-2CA5E0?logo=telegram&logoColor=white)](https://docs.aiogram.dev/)
+[![Pydantic v2](https://img.shields.io/badge/Pydantic-v2-E92063?logo=pydantic&logoColor=white)](https://docs.pydantic.dev/)
+[![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-async-d71f00?logo=sqlalchemy&logoColor=white)](https://www.sqlalchemy.org/)
+[![SQLite](https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
+[![structlog](https://img.shields.io/badge/structlog-25.x-blue)](https://www.structlog.org/)
+[![Hypothesis](https://img.shields.io/badge/Hypothesis-fuzz-9333ea)](https://hypothesis.readthedocs.io/)
+[![ruff](https://img.shields.io/badge/ruff-lint%20%2B%20format-d7ff64?logo=ruff&logoColor=black)](https://docs.astral.sh/ruff/)
+[![mypy](https://img.shields.io/badge/mypy-strict-1f5082)](https://mypy.readthedocs.io/)
+[![Claude Code](https://img.shields.io/badge/Claude%20Code-CLI-d97757)](https://docs.claude.com/en/docs/claude-code/overview)
 
 ## License
 
-MIT. See `LICENSE`.
+[MIT](./LICENSE). Use freely; attribution welcome; no warranty.
 
----
+## Status
 
-## Status: scaffold (Story 1.1 of Epic 1)
+**Phase 1** baseline shipped (2026-05). Phase-2 hooks are deliberate placeholders — see [`docs/architecture.md`](docs/architecture.md) §"Phase-2 hooks" for the deferred-by-design list (metrics + tracing, browser-automation plane, additional CLI agents, remote-MCP transports, digest-pinning + signed images). Phase-2 work has not started.
 
-This README and the workspace skeleton are the entirety of Story 1.1. The platform itself ships incrementally across 7 epics / 98 stories — see `_bmad-output/planning-artifacts/epics.md` for the full backlog and `_bmad-output/implementation-artifacts/sprint-status.yaml` for current state. The MVP Ship-Blocker Checklist at the bottom of `epics.md` is the definitive "Phase 1 shipped" criterion.
+Issues and discussion welcome — security reports per [`SECURITY.md`](./SECURITY.md).
