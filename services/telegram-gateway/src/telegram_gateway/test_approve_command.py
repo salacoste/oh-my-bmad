@@ -929,7 +929,7 @@ async def test_no_override_when_flag_absent() -> None:
 
 @pytest.mark.asyncio
 async def test_invalid_override_ignored() -> None:
-    """--override unknown is silently ignored (no override in POST body)."""
+    """--override unknown shows error reply and does not submit to registry (no POST made)."""
     captured_body: dict[str, object] = {}
 
     async def _transport(request: httpx.Request) -> httpx.Response:
@@ -1203,8 +1203,8 @@ async def test_budget_exceeded_409_shows_hint() -> None:
 
 
 @pytest.mark.asyncio
-async def test_override_budget_uppercase_not_matched() -> None:
-    """--override BUDGET (uppercase) is not matched — value check is case-sensitive."""
+async def test_override_budget_uppercase_is_lowercased_and_matched() -> None:
+    """--override BUDGET (uppercase) is lowercased and matched — value check is case-insensitive."""
     captured_body: dict[str, object] = {}
 
     async def _transport(request: httpx.Request) -> httpx.Response:
