@@ -239,3 +239,57 @@ before `fixed_clock` lands.
 
 - [Exceptions](./exceptions.md) — suppression-tag reference + noqa conventions.
 - [Operator runbook](./operator-runbook.md) — running the full regression suite after a production incident.
+- [ADR-0002: Integration test harness sharing](./adr/0002-integration-test-harness.md) — shared helper strategy.
+
+---
+
+## Integration test harness conventions
+
+Shared Docker Compose and ASGI harness helpers live in dedicated modules.
+New integration tests should import from these modules rather than copy-pasting
+boilerplate from existing tests. See [ADR-0002](./adr/0002-integration-test-harness.md) for the full decision context.
+
+### Docker Compose journey tests
+
+Import from `tests/integration/_compose_helpers.py`:
+
+| Helper | Purpose |
+|--------|---------|
+| `compose_env` | Build the `os.environ` dict with journey-specific env vars (accepts `data_dir_key` kwarg, e.g. `"OMB_J1_DATA_DIR"`) |
+| `compose_cmd` | Build a `docker compose` command line |
+| `wait_for_all_healthy` | Poll `docker compose ps` until all services report healthy |
+| `resolve_registry_api_port` | Resolve the host port for the registry-api service |
+
+Each test file wraps these with thin closures that bind the module-level
+constants (`_COMPOSE_FILE`, `_WORKER_TAG`, etc.). Example:
+
+```python
+from tests.integration._compose_helpers import compose_cmd as _shared_compose_cmd
+
+_COMPOSE_FILE = Path(__file__).parent / "docker-compose.j3.yml"
+
+def _compose_cmd(project: str, *args: str) -> list[str]:
+    return _shared_compose_cmd(project, _COMPOSE_FILE, *args)
+```
+
+### ASGI harness tests
+
+The ASGI + LifespanManager + ASGITransport wiring pattern is stable across
+test files, but the `_Harness` class is actively diverging (different fields
+per test). Import base utilities (`_db_url`, `_seed_tables`, event loop
+management) from `tests/integration/_asgi_harness.py` when extracting. Keep
+`_Harness` classes per-file — they are test-specific.
+
+### Stub fixture helpers
+
+`_install_signal_handlers` and `_connect_mcp` are identical across stub files
+and should be imported from `tests/fixtures/_stub_helpers.py` once extracted.
+`_read_new_lines` is intentionally per-file because `null_orchestrator` returns
+typed `EventEnvelope` objects while other stubs return raw dicts.
+
+### When to keep code self-contained
+
+A test file should keep helper code local (not shared) when:
+- The helper returns a different type or has diverged semantics
+- The test needs per-file customization that would require complex parameterization
+- The helper is used by only one test file
