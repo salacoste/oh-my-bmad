@@ -1,23 +1,21 @@
-<div align="center">
+<h1 align="center">
+  <img src="docs/assets/banner.svg" alt="oh-my-bmad — a self-hosted autonomous-development platform for one operator" width="100%" />
+</h1>
 
-# oh-my-bmad
+<p align="center">
+  <i>Telegram and a console drive a Claude Code worker through a typed, event-sourced spine — so a single person can run an agent loop they can trust, observe, and recover.</i>
+</p>
 
-### A self-hosted, autonomous-development platform for one operator.
-
-*Telegram and a console drive a Claude Code worker through a typed, event-sourced spine — so a single person can run an agent loop they can trust, observe, and recover.*
-
-<br/>
-
-[![Python 3.12](https://img.shields.io/badge/python-3.12-blue?logo=python&logoColor=white)](https://www.python.org/downloads/release/python-3120/)
-[![uv workspace](https://img.shields.io/badge/uv-workspace-261230?logo=uv&logoColor=white)](https://docs.astral.sh/uv/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-async-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![aiogram v3](https://img.shields.io/badge/aiogram-v3-2CA5E0?logo=telegram&logoColor=white)](https://docs.aiogram.dev/)
-[![MCP](https://img.shields.io/badge/MCP-stdio-7F52B5)](https://modelcontextprotocol.io/)
-[![mypy strict](https://img.shields.io/badge/mypy-strict-1f5082)](https://mypy.readthedocs.io/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
-[![Phase 1 — shipped](https://img.shields.io/badge/Phase%201-shipped-success)](_bmad-output/planning-artifacts/epics.md)
-
-</div>
+<p align="center">
+  <a href="https://www.python.org/downloads/release/python-3120/"><img src="https://img.shields.io/badge/python-3.12-blue?logo=python&logoColor=white" alt="Python 3.12"/></a>
+  <a href="https://docs.astral.sh/uv/"><img src="https://img.shields.io/badge/uv-workspace-261230?logo=uv&logoColor=white" alt="uv workspace"/></a>
+  <a href="https://fastapi.tiangolo.com/"><img src="https://img.shields.io/badge/FastAPI-async-009688?logo=fastapi&logoColor=white" alt="FastAPI"/></a>
+  <a href="https://docs.aiogram.dev/"><img src="https://img.shields.io/badge/aiogram-v3-2CA5E0?logo=telegram&logoColor=white" alt="aiogram v3"/></a>
+  <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-stdio-7F52B5" alt="MCP"/></a>
+  <a href="https://mypy.readthedocs.io/"><img src="https://img.shields.io/badge/mypy-strict-1f5082" alt="mypy strict"/></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"/></a>
+  <a href="_bmad-output/planning-artifacts/epics.md"><img src="https://img.shields.io/badge/Phase%201-shipped-success" alt="Phase 1 — shipped"/></a>
+</p>
 
 ---
 
