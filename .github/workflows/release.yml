@@ -8,11 +8,10 @@ name: release
 # override the base reference via buildx `--build-context base=...` during
 # per-service builds.
 #
-# Third-party actions are pinned to major version (e.g. actions/checkout@v4).
-# Consider SHA-pinning when Dependabot is adopted — matches the stricter
-# convention used in ci.yml comments. Only non-prerelease tags (no `-` in
-# version) advance the `:latest` tag; prerelease tags (e.g. v0.2.0-rc1) publish
-# the versioned tag only.
+# Third-party actions are pinned by commit SHA with version tag in comment.
+# Update SHA + comment together when bumping versions. Only non-prerelease
+# tags (no `-` in version) advance the `:latest` tag; prerelease tags
+# (e.g. v0.2.0-rc1) publish the versioned tag only.
 
 on:
   push:
@@ -43,7 +42,7 @@ jobs:
       latest_tags: ${{ steps.ver.outputs.latest_tags }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Extract + validate version from tag
         id: ver
@@ -69,21 +68,21 @@ jobs:
           fi
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
 
       - name: Build + push base (multi-arch)
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
         with:
           context: .
           file: Dockerfile.base
@@ -126,24 +125,24 @@ jobs:
           - console-cli
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
 
       - name: Build + push ${{ matrix.service }} (multi-arch)
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
         with:
           context: .
           file: services/${{ matrix.service }}/Dockerfile

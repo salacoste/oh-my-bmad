@@ -36,6 +36,13 @@ htmlcov/
 # any future repo-local var/ symlink or accidental commit.)
 /var/
 
+# Private key files (defense-in-depth — none in repo today)
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+
 # OS artifacts
 .DS_Store
 Thumbs.db
