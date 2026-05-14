@@ -20,6 +20,7 @@ in Stories 5.x (worker lifecycle) and 6.x (approval gate).
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -34,9 +35,14 @@ from fastapi import APIRouter, Path, Request, Response
 from fastapi.exceptions import HTTPException
 from idempotency import IdempotencyCacheStore
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from registry_api.lifecycle import STATE_NEXT_COMMANDS
-from registry_state.schema import Event, Task  # noqa: IMP001 — services→services allowed per AC-16
+from registry_state.schema import (  # noqa: IMP001 — services→services allowed per AC-16
+    Event,
+    Session,
+    Task,
+)
 from sqlalchemy import select
+
+from registry_api.lifecycle import STATE_NEXT_COMMANDS
 
 log = logging.getLogger("registry_api.routes.tasks")
 
@@ -126,7 +132,7 @@ class CreateTaskRequest(BaseModel):
 
     title: str = Field(min_length=1, max_length=512)
     repo: str | None = Field(default=None, max_length=2048)
-    hint: str | None = Field(default=None, max_length=4096)
+    hint: str | None = Field(default=None, min_length=1, max_length=4096)
     # Story 3.9: Telegram thread binding (FR13).
     # M13: chat_id=0 is rejected (Telegram never uses 0; returns 400 chat not found).
     # L20: explicit BigInteger bounds guard against attacker-supplied oversized ints.
@@ -169,18 +175,25 @@ class LastEventOut(BaseModel):
     id: str
     type: str
     emitted_at: datetime
+    summary: str | None = None
+
+
+class WorktreeLockOut(BaseModel):
+    """Nested worktree-lock state in TaskResponse (Story 7.1 / FR4)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    held: bool
+    by_session_id: str | None = None
+    acquired_at: datetime | None = None
 
 
 class TaskResponse(BaseModel):
     """200 OK response body for GET /v1/tasks/{task_id}.
 
-    Story 3.9 AC-3: ``chat_id`` + ``reply_to_message_id`` surface the
-    Telegram-thread binding so outbound sinks (clawhip-daemon's
-    TelegramSink) can dispatch progress events to the originating thread
-    via HTTP — see Story 3.6 review N7 (HTTP-only cross-service contract).
-
-    L19: ``strict=True`` aligns with ``CreateTaskRequest`` — prevents silent
-    type coercion on round-trip serialization tests.
+    Story 7.1: enriched with ``state_since``, ``current_step``, ``total_steps``,
+    ``last_agent_action``, ``worktree_lock``, and ``available_commands`` to
+    support full state reconstitution in a single response (FR4).
     """
 
     model_config = ConfigDict(frozen=True, strict=True)
@@ -190,13 +203,19 @@ class TaskResponse(BaseModel):
     title: str | None
     created_at: datetime
     updated_at: datetime
+    state_since: datetime
     actor: ActorOut
     last_event: LastEventOut | None
-    next_commands: list[str]
+    current_step: int | None = None
+    total_steps: int | None = None
+    last_agent_action: str | None = None
+    worktree_lock: WorktreeLockOut
+    available_commands: list[str]
+    next_commands: list[str]  # deprecated — use available_commands instead
     # Story 3.9: Telegram thread binding (FR13).
-    # L20: BigInteger bounds; M13: 0 rejected via validator below.
     chat_id: int | None = Field(default=None, ge=-(2**63), le=(2**63) - 1)
     reply_to_message_id: int | None = Field(default=None, gt=0)
+    hint: str | None = None
 
     @field_validator("chat_id")
     @classmethod
@@ -488,15 +507,15 @@ async def get_task_by_id(
     request: Request,
     task_id: str = Path(..., pattern=_TASK_ID_PATTERN),
 ) -> TaskResponse:
-    """GET /v1/tasks/{task_id} — return full materialized state from read-only SQLite.
+    """GET /v1/tasks/{task_id} — return full reconstituted state (FR4).
 
     Returns 200 with ``TaskResponse`` on success, 404 (problem+json) if the
     task does not exist. The engine is read-only (Story 2.3 ``create_engine``
     with ``read_only=True``) — write attempts raise ``OperationalError``.
 
-    F10: ``session_maker`` is constructed once on ``app.state`` during lifespan
-    startup and reused per-request — avoids the per-request allocation of an
-    ``async_sessionmaker`` on the hot read path.
+    Story 7.1: enriched response includes ``state_since``, ``current_step``,
+    ``total_steps``, ``last_agent_action``, ``worktree_lock``, and
+    ``available_commands`` for full state reconstitution.
     """
     session_maker = request.app.state.session_maker
 
@@ -507,6 +526,7 @@ async def get_task_by_id(
         if task is None:
             raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
 
+        # Last event with optional summary.
         last_event: LastEventOut | None = None
         if task.last_event_id is not None:
             event_result = await session.execute(
@@ -514,11 +534,49 @@ async def get_task_by_id(
             )
             event_row = event_result.scalar_one_or_none()
             if event_row is not None:
+                payload_summary: str | None = None
+                try:
+                    payload_data = json.loads(event_row.payload_json)
+                    if isinstance(payload_data, dict):
+                        payload_summary = payload_data.get("reason")
+                        if payload_summary is None:
+                            payload_summary = payload_data.get("description")
+                except (json.JSONDecodeError, AttributeError):
+                    log.debug(
+                        "Failed to extract summary from event %s",
+                        event_row.id,
+                        exc_info=True,
+                    )
                 last_event = LastEventOut(
                     id=event_row.id,
                     type=event_row.type,
                     emitted_at=event_row.emitted_at,
+                    summary=payload_summary,
                 )
+
+        # Worktree lock state derived from sessions table.
+        # Skip query for statuses that never have active sessions.
+        latest_session = None
+        if task.status in ("executing", "blocked", "idle", "active"):
+            session_result = await session.execute(
+                select(Session)
+                .where(Session.task_id == task_id)
+                .order_by(Session.started_at.desc())
+                .limit(1)
+            )
+            latest_session = session_result.scalar_one_or_none()
+        lock_held = (
+            latest_session is not None
+            and latest_session.status in ("active", "idle")
+            and latest_session.worktree_path is not None
+        )
+        worktree_lock = WorktreeLockOut(
+            held=lock_held,
+            by_session_id=latest_session.id if lock_held else None,
+            acquired_at=latest_session.started_at if lock_held else None,
+        )
+
+        commands = _next_commands_for(task.status)
 
     return TaskResponse(
         task_id=task.id,
@@ -526,11 +584,18 @@ async def get_task_by_id(
         title=task.title,
         created_at=task.created_at,
         updated_at=task.updated_at,
+        state_since=task.updated_at,
         actor=ActorOut(kind=task.actor_kind, id=task.actor_id),
         last_event=last_event,
-        next_commands=_next_commands_for(task.status),
+        current_step=task.current_step,
+        total_steps=task.total_steps,
+        last_agent_action=task.last_agent_action,
+        worktree_lock=worktree_lock,
+        available_commands=commands,
+        next_commands=commands,  # deprecated: use available_commands (Story 7.1)
         chat_id=task.chat_id,
         reply_to_message_id=task.reply_to_message_id,
+        hint=task.hint,
     )
 
 
@@ -540,5 +605,6 @@ __all__ = [
     "CreateTaskResponse",
     "LastEventOut",
     "TaskResponse",
+    "WorktreeLockOut",
     "router",
 ]

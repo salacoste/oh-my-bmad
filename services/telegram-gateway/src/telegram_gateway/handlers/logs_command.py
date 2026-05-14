@@ -5,12 +5,9 @@ renders the LLM-digest response as a single Telegram message.
 
 Placeholder behavior
 --------------------
-GET /v1/tasks/{id}/logs/digest does NOT exist yet (Story 7.3 owns the
-server-side endpoint). Until 7.3 lands, the HTTPStatusError catch for 404
-returns a placeholder message telling the operator to use the CLI for raw
-events. When 7.3 ships, this handler automatically renders real digests
-without code changes — the Telegram surface just calls the endpoint and
-renders whatever comes back.
+When the registry-api digest endpoint returns 404 (task has no events or
+endpoint not deployed), the handler shows a placeholder message directing
+the operator to the CLI for raw events. On success, renders the LLM digest.
 
 No audit-event emission
 -----------------------

@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import html
 import logging
+from datetime import UTC
 
 import httpx
 from aiogram import Router
@@ -48,13 +49,94 @@ from events.ids import new_request_id
 from telegram_gateway.handlers import _keys
 from telegram_gateway.handlers._errors import format_http_error
 from telegram_gateway.handlers._safe_reply import safe_reply as _safe_reply
-from telegram_gateway.handlers.registry_client import RegistryAPIClient, RegistryResponseError
+from telegram_gateway.handlers.registry_client import (
+    RegistryAPIClient,
+    RegistryResponseError,
+    TaskResponseLocal,
+)
 
 _log = logging.getLogger("telegram_gateway.handlers.status_command")
 
 # Telegram's sendMessage limit is 4096 chars; leave headroom for the truncation
 # notice itself. Matches the cap strategy in _errors.py.
 _MAX_REPLY_LEN = 4000
+
+
+def _render_status_reply(task: TaskResponseLocal) -> str:
+    """Render a state-aware status reply for Telegram.
+
+    Produces compact, context-dependent formatting:
+    - blocked/executing/idle: operational view — since HH:MM, step, event,
+      agent, lock, commands (blocked omits title per Journey 6 spec)
+    - completed/stopped: terminal view — title, timestamps, actor
+    - pending/planning/plan_ready: early-stage — title, actor, commands
+    """
+    tid = html.escape(task.task_id)
+    status = html.escape(task.status)
+    lines: list[str] = [f"📋 Task <code>{tid}</code>"]
+
+    if task.status in ("completed", "stopped"):
+        lines.append(f"Status: {status}")
+        if task.title is not None:
+            lines.append(f"Title: {html.escape(task.title)}")
+        lines.append(f"Created: {task.created_at.isoformat(timespec='seconds')}")
+        lines.append(f"Updated: {task.updated_at.isoformat(timespec='seconds')}")
+        actor = f"{html.escape(task.actor.kind)}/{html.escape(task.actor.id)}"
+        lines.append(f"Actor: {actor}")
+    elif task.status in ("blocked", "executing", "idle"):
+        if task.state_since is not None:
+            hhmm = task.state_since.astimezone(UTC).strftime("%H:%M")
+            lines.append(f"Status: {status} (since {hhmm})")
+        else:
+            lines.append(f"Status: {status}")
+
+        if task.status != "blocked" and task.title is not None:
+            lines.append(f"Title: {html.escape(task.title)}")
+
+        if task.current_step is not None and task.total_steps is not None:
+            lines.append(f"Step: {task.current_step}/{task.total_steps}")
+
+        if task.last_event is not None:
+            ev = task.last_event
+            ev_line = html.escape(ev.type)
+            if ev.summary:
+                ev_line += f" — {html.escape(ev.summary[:200])}"
+            lines.append(f"Last event: {ev_line}")
+
+        if task.last_agent_action:
+            lines.append(f"Last agent: {html.escape(task.last_agent_action[:80])}")
+
+        if task.worktree_lock is not None:
+            lines.append(
+                "Worktree: held" if task.worktree_lock.held else "Worktree: not held"
+            )
+
+        # prefer available_commands; fall back to next_commands (deprecated)
+        commands = task.available_commands or task.next_commands
+        if commands:
+            cmds = ", ".join(f"/{html.escape(cmd)}" for cmd in commands)
+            lines.append(f"Available: {cmds}")
+    else:
+        lines.append(f"Status: {status}")
+        if task.title is not None:
+            lines.append(f"Title: {html.escape(task.title)}")
+        actor = f"{html.escape(task.actor.kind)}/{html.escape(task.actor.id)}"
+        lines.append(f"Actor: {actor}")
+
+        commands = task.available_commands or task.next_commands
+        if commands:
+            cmds = ", ".join(f"/{html.escape(cmd)}" for cmd in commands)
+            lines.append(f"Available: {cmds}")
+
+    reply = "\n".join(lines)
+
+    if len(reply) > _MAX_REPLY_LEN:
+        cut = reply.rfind("\n", 0, _MAX_REPLY_LEN)
+        if cut == -1:
+            cut = _MAX_REPLY_LEN
+        reply = reply[:cut] + "\n… (truncated)"
+
+    return reply
 
 
 async def handle_status(
@@ -141,38 +223,7 @@ async def handle_status(
         await _safe_reply(message, "⚠️ Unexpected error. Please try again later.")
         return
 
-    # AC-4: render all operator-visible fields.
-    task_id_safe = html.escape(task.task_id)
-    status_safe = html.escape(task.status)
-    title_display = html.escape(task.title) if task.title is not None else "(none)"
-    created_display = task.created_at.isoformat(timespec="seconds")
-    updated_display = task.updated_at.isoformat(timespec="seconds")
-    actor_display = f"{html.escape(task.actor.kind)}/{html.escape(task.actor.id)}"
-    if task.last_event is not None:
-        ev = task.last_event
-        last_event_display = (
-            f"{html.escape(ev.type)} at {ev.emitted_at.isoformat(timespec='seconds')}"
-        )
-    else:
-        last_event_display = "(none)"
-    if task.next_commands:
-        commands_display = ", ".join(f"/{html.escape(cmd)}" for cmd in task.next_commands)
-    else:
-        commands_display = "(none)"
-
-    reply_text = (
-        f"📋 Task <code>{task_id_safe}</code>\n"
-        f"Status: {status_safe}\n"
-        f"Title: {title_display}\n"
-        f"Created: {created_display}\n"
-        f"Updated: {updated_display}\n"
-        f"Actor: {actor_display}\n"
-        f"Last event: {last_event_display}\n"
-        f"Available: {commands_display}"
-    )
-
-    if len(reply_text) > _MAX_REPLY_LEN:
-        reply_text = reply_text[:_MAX_REPLY_LEN] + "\n… (truncated)"
+    reply_text = _render_status_reply(task)
 
     await _safe_reply(message, reply_text)
 

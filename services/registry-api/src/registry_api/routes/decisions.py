@@ -19,19 +19,24 @@ from typing import Literal
 from events import (
     ApprovalGrantedPayload,
     ApprovalRejectedPayload,
+    BudgetOverridePayload,
     LicenseOverridePayload,
     TaskRetryRequestedPayload,
     TaskStopRequestedPayload,
 )
+from events.budget_policy import calculate_new_limit
 from events.envelope import Actor, EventEnvelope
 from events.ids import new_decision_id, new_event_id
 from fastapi import APIRouter, Path, Request, Response
 from fastapi.exceptions import HTTPException
+from fastapi.responses import JSONResponse
 from idempotency import IdempotencyCacheStore
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from registry_state.schema import Task  # noqa: IMP001 — services→services allowed per AC-16
-from sqlalchemy import select
+from registry_state.schema import Event, Task  # noqa: IMP001 — services→services allowed per AC-16
+from sqlalchemy import desc, select
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from registry_api.adapters.errors import ProblemDetails
 from registry_api.lifecycle import ACTION_VALID_STATES
 from registry_api.routes.tasks import ResponseSlot, ResponseSlotCache
 
@@ -44,6 +49,8 @@ _TASK_ID_PATTERN = r"^t-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[
 
 # State precondition rules (AC-3) — derived from lifecycle.canonical map.
 _VALID_STATES = ACTION_VALID_STATES
+
+_DEFAULT_TOKEN_LIMIT = 50_000
 
 # Status code per action (AC-2): approve/reject → 202, stop/retry → 200.
 _STATUS_CODE_BY_ACTION: dict[str, int] = {
@@ -66,8 +73,8 @@ class DecisionRequest(BaseModel):
 
     action: Literal["approve", "reject", "stop", "retry"]
     reason: str | None = Field(default=None, max_length=4096)
-    hint: str | None = Field(default=None, max_length=4096)
-    override: Literal["license"] | None = None
+    hint: str | None = Field(default=None, min_length=1, max_length=4096)
+    override: Literal["license", "budget"] | None = None
 
     @model_validator(mode="after")
     def _override_only_on_approve(self) -> DecisionRequest:
@@ -86,6 +93,66 @@ class DecisionResponse(BaseModel):
     action: Literal["approve", "reject", "stop", "retry"]
     decided_at: datetime
     idempotency_status: IdempotencyStatus
+
+
+# ---------------------------------------------------------------------------
+# License gate helper (Story 6.10)
+# ---------------------------------------------------------------------------
+
+
+async def _check_license_gate(
+    task_id: str,
+    session_maker: async_sessionmaker,
+) -> bool:
+    """Return True if a ``task.license_flagged`` event exists for this task.
+
+    TOCTOU note: the event log is materialized asynchronously from JSONL by
+    the subscriber/materializer pipeline.  A ``task.license_flagged`` event
+    emitted moments earlier may not yet be present in the SQL table when this
+    query runs.  This is an accepted risk — the precommit hook provides a
+    synchronous first layer of defense, and the materialization lag is
+    typically <1 s.  A future story could query the JSONL directly for
+    zero-gap coverage.
+    """
+    if not isinstance(session_maker, async_sessionmaker):
+        raise TypeError(
+            f"session_maker must be an async_sessionmaker, got {type(session_maker).__name__}"
+        )
+    async with session_maker() as session:
+        result = await session.execute(
+            select(Event.id).where(
+                Event.task_id == task_id,
+                Event.type == "task.license_flagged",
+            ).limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
+
+# ---------------------------------------------------------------------------
+# Budget gate helper (Story 6.11)
+# ---------------------------------------------------------------------------
+
+
+async def _check_budget_gate(
+    task_id: str,
+    session_maker: async_sessionmaker,
+) -> bool:
+    """Return True if a ``task.budget_exceeded`` event exists for this task.
+
+    TOCTOU note: same accepted risk as _check_license_gate.
+    """
+    if not isinstance(session_maker, async_sessionmaker):
+        raise TypeError(
+            f"session_maker must be an async_sessionmaker, got {type(session_maker).__name__}"
+        )
+    async with session_maker() as session:
+        result = await session.execute(
+            select(Event.id).where(
+                Event.task_id == task_id,
+                Event.type == "task.budget_exceeded",
+            ).limit(1)
+        )
+        return result.scalar_one_or_none() is not None
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +207,42 @@ async def post_decision(
                 f"status '{current_status}'; requires one of {sorted(valid_states)}"
             ),
         )
+
+    # Story 6.10 AC-1: license gate — block default approve when flagged.
+    if body.action == "approve" and body.override != "license":
+        license_blocked = await _check_license_gate(task_id, session_maker)
+        if license_blocked:
+            problem = ProblemDetails(
+                type="approval_blocked_by",
+                title="Approval Blocked",
+                status=409,
+                detail="License flag active. Use --override license to proceed.",
+                instance=str(request.url),
+                extensions={"reason": "license_flag"},
+            )
+            return JSONResponse(
+                content=problem.model_dump(exclude_none=True),
+                status_code=409,
+                media_type="application/problem+json",
+            )
+
+    # Story 6.11 AC-2: budget gate — block default approve when budget exceeded.
+    if body.action == "approve" and body.override != "budget":
+        budget_blocked = await _check_budget_gate(task_id, session_maker)
+        if budget_blocked:
+            problem = ProblemDetails(
+                type="approval_blocked_by",
+                title="Approval Blocked",
+                status=409,
+                detail="Budget exceeded. Use --override budget to extend and resume.",
+                instance=str(request.url),
+                extensions={"reason": "budget_exceeded"},
+            )
+            return JSONResponse(
+                content=problem.model_dump(exclude_none=True),
+                status_code=409,
+                media_type="application/problem+json",
+            )
 
     # AC-6: scoped cache key.
     cache_key = (actor_id, idempotency_key)
@@ -198,6 +301,52 @@ async def post_decision(
                 parent_event_id=event_id,
             )
             await writer.append(override_envelope)
+
+        # Story 6.11 AC-2: budget override branch — emit audit event.
+        # Same accepted risk as license override (sequential appends).
+        if body.action == "approve" and body.override == "budget":
+            override_event_id = new_event_id(clock=clock)
+            async with session_maker() as q_session:
+                be_result = await q_session.execute(
+                    select(Event.payload_json).where(
+                        Event.task_id == task_id,
+                        Event.type == "task.budget_exceeded",
+                    ).order_by(desc(Event.emitted_at_monotonic_ns)).limit(1)
+                )
+                be_row = be_result.scalar_one_or_none()
+            if be_row is not None:
+                try:
+                    be_data = json.loads(be_row)
+                    old_limit = be_data.get("token_limit", _DEFAULT_TOKEN_LIMIT)
+                except (json.JSONDecodeError, TypeError):
+                    log.warning(
+                        "Malformed payload_json for budget_exceeded event, "
+                        "using default limit (task_id=%s)",
+                        task_id,
+                    )
+                    old_limit = _DEFAULT_TOKEN_LIMIT
+            else:
+                old_limit = _DEFAULT_TOKEN_LIMIT
+            new_limit = calculate_new_limit(old_limit)
+            budget_override_payload = BudgetOverridePayload(
+                task_id=task_id,
+                decision_id=decision_id,
+                actor_id=actor_id,
+                old_limit=old_limit,
+                new_limit=new_limit,
+            )
+            budget_override_envelope = EventEnvelope.create(
+                event_id=override_event_id,
+                type="tier3.budget_override",
+                schema_version="1.0.0",
+                emitted_at=decided_at,
+                emitted_at_monotonic_ns=clock.monotonic_ns(),
+                actor=actor,
+                payload=budget_override_payload,
+                request_id=request_id,
+                parent_event_id=event_id,
+            )
+            await writer.append(budget_override_envelope)
 
         # Build and cache the response.
         status_code = _STATUS_CODE_BY_ACTION[body.action]

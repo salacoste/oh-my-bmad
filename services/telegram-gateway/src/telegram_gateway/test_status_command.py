@@ -32,17 +32,25 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 
 from telegram_gateway.handlers.registry_client import (
+    ActorLocal,
+    LastEventLocal,
     RegistryAPIClient,
     RegistryResponseError,
     TaskResponseLocal,
+    WorktreeLockLocal,
 )
-from telegram_gateway.handlers.status_command import handle_status, make_status_router
+from telegram_gateway.handlers.status_command import (
+    _render_status_reply,
+    handle_status,
+    make_status_router,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers / constants
@@ -234,10 +242,7 @@ async def test_handle_status_success_renders_all_fields() -> None:
     )
     assert "executing" in reply_text, f"status missing from reply: {reply_text!r}"
     assert "Deploy staging" in reply_text, f"title missing from reply: {reply_text!r}"
-    assert "Created: 2026-05-01" in reply_text, f"Created label/date missing: {reply_text!r}"
-    assert "Updated: 2026-05-01" in reply_text, f"Updated label/date missing: {reply_text!r}"
-    assert "operator/12345" in reply_text, f"actor missing from reply: {reply_text!r}"
-    assert "task.started at 2026-05-01" in reply_text, f"last_event missing: {reply_text!r}"
+    assert "Last event: task.started" in reply_text, f"last_event missing: {reply_text!r}"
     assert "/stop" in reply_text, f"next_commands missing: {reply_text!r}"
 
 
@@ -264,7 +269,7 @@ async def test_handle_status_no_title_shows_none() -> None:
 
     msg.reply.assert_called_once()
     reply_text: str = msg.reply.call_args[0][0]
-    assert "Title: (none)" in reply_text, f"Expected 'Title: (none)', got: {reply_text!r}"
+    assert "Title:" not in reply_text, f"Title should be omitted when None, got: {reply_text!r}"
 
 
 @pytest.mark.asyncio
@@ -290,7 +295,9 @@ async def test_handle_status_no_last_event_shows_none() -> None:
 
     msg.reply.assert_called_once()
     reply_text: str = msg.reply.call_args[0][0]
-    assert "Last event: (none)" in reply_text, f"Expected 'Last event: (none)', got: {reply_text!r}"
+    assert "Last event:" not in reply_text, (
+        f"Last event should be omitted for pending, got: {reply_text!r}"
+    )
 
 
 @pytest.mark.asyncio
@@ -320,7 +327,9 @@ async def test_handle_status_empty_next_commands_shows_none() -> None:
 
     msg.reply.assert_called_once()
     reply_text: str = msg.reply.call_args[0][0]
-    assert "Available: (none)" in reply_text, f"Expected 'Available: (none)', got: {reply_text!r}"
+    assert "Available:" not in reply_text, (
+        f"Available should be omitted for completed, got: {reply_text!r}"
+    )
 
 
 @pytest.mark.asyncio
@@ -515,3 +524,196 @@ def test_make_status_router_returns_fresh_routers() -> None:
     r1 = make_status_router()
     r2 = make_status_router()
     assert r1 is not r2, "Router factory must return fresh instances"
+
+
+# ---------------------------------------------------------------------------
+# State-aware rendering tests (Story 7.2 AC #1–#5)
+# ---------------------------------------------------------------------------
+
+
+def _make_task(
+    *,
+    status: str = "executing",
+    title: str | None = "Deploy staging",
+    state_since: datetime | None = None,
+    current_step: int | None = None,
+    total_steps: int | None = None,
+    last_agent_action: str | None = None,
+    worktree_lock: WorktreeLockLocal | None = None,
+    last_event: LastEventLocal | None = None,
+    available_commands: list[str] | None = None,
+    next_commands: list[str] | None = None,
+) -> TaskResponseLocal:
+    """Build a TaskResponseLocal for renderer tests."""
+    return TaskResponseLocal(
+        task_id=_TASK_ID,
+        status=status,
+        title=title,
+        created_at=datetime(2026, 5, 11, 10, 0, 0, tzinfo=UTC),
+        updated_at=datetime(2026, 5, 11, 10, 41, 0, tzinfo=UTC),
+        state_since=state_since,
+        actor=ActorLocal(kind="operator", id="12345"),
+        last_event=last_event,
+        current_step=current_step,
+        total_steps=total_steps,
+        last_agent_action=last_agent_action,
+        worktree_lock=worktree_lock,
+        available_commands=available_commands or [],
+        next_commands=next_commands or [],
+    )
+
+
+def test_blocked_state_renders_compact_format() -> None:
+    """AC #1: blocked task renders Journey 6 compact format."""
+    task = _make_task(
+        status="blocked",
+        title="Fix failing tests",
+        state_since=datetime(2026, 5, 11, 10, 41, 0, tzinfo=UTC),
+        current_step=3,
+        total_steps=5,
+        last_agent_action="Edit server/middleware/rate.py:87",
+        worktree_lock=WorktreeLockLocal(held=True, by_session_id="s-0192session"),
+        last_event=LastEventLocal(
+            id="e-abc123",
+            type="task.blocker_raised",
+            emitted_at=datetime(2026, 5, 11, 10, 41, 0, tzinfo=UTC),
+            summary="2 unit tests failed (middleware_rate_limit_test.py)",
+        ),
+        available_commands=["logs", "retry", "stop"],
+    )
+    reply = _render_status_reply(task)
+
+    assert "blocked" in reply
+    assert "since 10:41" in reply
+    assert "Step: 3/5" in reply
+    assert "task.blocker_raised" in reply
+    assert "2 unit tests failed" in reply
+    assert "Edit server/middleware/rate.py:87" in reply
+    assert "Worktree: held" in reply
+    assert "/logs, /retry, /stop" in reply
+    assert "Title:" not in reply
+    assert "Created:" not in reply
+
+
+def test_executing_state_renders_progress() -> None:
+    """AC #2: executing state emphasizes step progress and agent action."""
+    task = _make_task(
+        status="executing",
+        title="Deploy staging",
+        state_since=datetime(2026, 5, 11, 9, 15, 0, tzinfo=UTC),
+        current_step=2,
+        total_steps=4,
+        last_agent_action="Write src/main.py",
+        worktree_lock=WorktreeLockLocal(held=True, by_session_id="s-active"),
+        available_commands=["stop"],
+    )
+    reply = _render_status_reply(task)
+
+    assert "executing" in reply
+    assert "since 09:15" in reply
+    assert "Deploy staging" in reply
+    assert "Step: 2/4" in reply
+    assert "Write src/main.py" in reply
+    assert "Worktree: held" in reply
+    assert "/stop" in reply
+    assert "blocked" not in reply
+
+
+def test_completed_state_renders_terminal_format() -> None:
+    """AC #3: completed/stopped omit step, lock, and agent fields."""
+    for terminal_status in ("completed", "stopped"):
+        task = _make_task(
+            status=terminal_status,
+            title="Deploy staging",
+            current_step=3,
+            total_steps=5,
+            last_agent_action="Edit file.py",
+            worktree_lock=WorktreeLockLocal(held=True),
+        )
+        reply = _render_status_reply(task)
+
+        assert terminal_status in reply
+        assert "Title: Deploy staging" in reply
+        assert "Created:" in reply
+        assert "Updated:" in reply
+        assert "Actor: operator/12345" in reply
+        assert "Step:" not in reply
+        assert "Worktree:" not in reply
+        assert "Last agent:" not in reply
+
+
+def test_null_enriched_fields_produce_clean_output() -> None:
+    """AC #5: all enriched fields None → no 'None' artifacts in output."""
+    task = _make_task(
+        status="executing",
+        title=None,
+        state_since=None,
+        current_step=None,
+        total_steps=None,
+        last_agent_action=None,
+        worktree_lock=None,
+        last_event=None,
+    )
+    reply = _render_status_reply(task)
+
+    assert "None" not in reply
+    assert "Step:" not in reply
+    assert "Last event:" not in reply
+    assert "Last agent:" not in reply
+    assert "Worktree:" not in reply
+    assert "since" not in reply
+    assert "Title:" not in reply
+
+
+def test_blocked_state_message_fits_in_4096_chars() -> None:
+    """AC #4: worst-case executing task (long title) stays under Telegram limit."""
+    task = _make_task(
+        status="executing",
+        title="T" * 2000,
+        state_since=datetime(2026, 5, 11, 10, 41, 0, tzinfo=UTC),
+        current_step=99,
+        total_steps=100,
+        last_agent_action="A" * 80,
+        worktree_lock=WorktreeLockLocal(held=True, by_session_id="s-" + "x" * 40),
+        last_event=LastEventLocal(
+            id="e-" + "y" * 120,
+            type="task.blocker_raised",
+            emitted_at=datetime(2026, 5, 11, 10, 41, 0, tzinfo=UTC),
+            summary="S" * 200,
+        ),
+        available_commands=["logs", "retry", "stop"],
+    )
+    reply = _render_status_reply(task)
+
+    assert len(reply) <= 4000 + len("\n… (truncated)"), (
+        f"Reply too long: {len(reply)} chars"
+    )
+
+
+def test_idle_state_renders_like_executing() -> None:
+    """idle shares the operational branch with executing — renders title and commands."""
+    task = _make_task(
+        status="idle",
+        title="Waiting for approval",
+        state_since=datetime(2026, 5, 11, 11, 0, 0, tzinfo=UTC),
+        available_commands=["stop"],
+    )
+    reply = _render_status_reply(task)
+
+    assert "idle" in reply
+    assert "since 11:00" in reply
+    assert "Waiting for approval" in reply
+    assert "/stop" in reply
+
+
+def test_available_commands_fallback_to_next_commands() -> None:
+    """When available_commands is empty, next_commands is used as fallback."""
+    task = _make_task(
+        status="plan_ready",
+        title="Plan review",
+        available_commands=[],
+        next_commands=["approve", "reject", "stop"],
+    )
+    reply = _render_status_reply(task)
+
+    assert "/approve, /reject, /stop" in reply

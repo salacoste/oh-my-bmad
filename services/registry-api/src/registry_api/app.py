@@ -30,10 +30,12 @@ Design notes:
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
+import anthropic
 import cachetools
 from events.clock import Clock
 from events.envelope import ActorKind  # noqa: IMP001 — services→packages allowed
@@ -64,6 +66,12 @@ from registry_api.adapters.middleware import (
 )
 from registry_api.routes.decisions import (
     router as decisions_router,
+)
+from registry_api.routes.digest import (
+    router as digest_router,
+)
+from registry_api.routes.events import (
+    router as events_router,
 )
 from registry_api.routes.tasks import (
     ResponseSlot,
@@ -213,6 +221,17 @@ def build_app(
             stack.push_async_callback(writer.close)
             app.state.writer = writer
 
+            # Story 7.3: Anthropic client for LLM-powered event digests (FR5).
+            # Graceful degradation: if no key, client is None and the digest
+            # endpoint returns a raw-event fallback instead of calling the LLM.
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            if api_key:
+                llm_client = anthropic.AsyncAnthropic(api_key=api_key)
+                stack.push_async_callback(llm_client.close)
+                app.state.anthropic_client = llm_client
+            else:
+                app.state.anthropic_client = None
+
             yield
 
     app = FastAPI(
@@ -243,6 +262,10 @@ def build_app(
 
     # Routes — /v1 prefix applied here; handlers declare /tasks and /tasks/{id}.
     app.include_router(tasks_router, prefix="/v1")
+    # Story 7.3 — LLM digest endpoint for task events (FR5).
+    app.include_router(digest_router, prefix="/v1")
+    # Story 7.5 — raw event tail for debugging (FR6).
+    app.include_router(events_router, prefix="/v1")
     # Story 6.4 — decisions sub-resource on tasks.
     app.include_router(decisions_router, prefix="/v1")
 

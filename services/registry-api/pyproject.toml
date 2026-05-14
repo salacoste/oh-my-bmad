@@ -26,6 +26,8 @@ dependencies = [
     "structlog>=24.1",
     # Story 3.6 AC-4 — log sanitizer is a structlog processor.
     "secret-hygiene",
+    # Story 7.3 — Anthropic SDK for LLM-powered task event digests (FR5).
+    "anthropic>=0.100",
 ]
 
 [build-system]

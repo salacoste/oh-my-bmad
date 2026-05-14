@@ -10,7 +10,7 @@ from __future__ import annotations
 # Canonical mapping: action → set of valid states.
 # This is the single source of truth — derive other lookups from it.
 ACTION_VALID_STATES: dict[str, set[str]] = {
-    "approve": {"plan_ready", "awaiting_approval"},
+    "approve": {"plan_ready", "awaiting_approval", "blocked"},
     "reject": {"plan_ready", "awaiting_approval"},
     "stop": {"pending", "planning", "plan_ready", "awaiting_approval", "executing", "blocked"},
     "retry": {"blocked", "failed"},

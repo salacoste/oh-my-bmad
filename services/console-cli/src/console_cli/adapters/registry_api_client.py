@@ -382,9 +382,6 @@ class RegistryAPIClient:
     ) -> TaskEventsResponseLocal:
         """GET /v1/tasks/{task_id}/events — raw event stream for debugging.
 
-        Note: Server-side endpoint not yet implemented (Story 7.5).
-        Live calls return 404. Tests mock the transport layer.
-
         Returns TaskEventsResponseLocal on HTTP 2xx.
         Raises ValueError if task_id doesn't match TASK_ID_PATTERN.
         """
