@@ -44,6 +44,8 @@ from __future__ import annotations
 
 import html
 import logging
+import re
+from typing import Literal
 
 import httpx
 from aiogram import Router
@@ -58,9 +60,9 @@ from telegram_gateway.handlers.registry_client import RegistryAPIClient, Registr
 
 _log = logging.getLogger("telegram_gateway.handlers.approve_command")
 
-# L2: _extract_task_id promoted to _keys.extract_task_id_from_message.
-# Private alias kept for any callers that imported the old name directly.
-_extract_task_id = _keys.extract_task_id_from_message
+# L2: _extract_task_id promoted to _keys.extract_task_id_with_trailing
+# (Story 6.10: switched from extract_task_id_from_message to support trailing --override).
+_extract_task_id = _keys.extract_task_id_with_trailing
 
 
 async def handle_approve(
@@ -100,12 +102,11 @@ async def handle_approve(
         operator_handle = "operator"
 
     raw_text = message.text or ""
-    parts = raw_text.split(None, 1)
 
-    # L2: use extract_task_id_from_message from _keys (M1: uses split(None, 1)
-    # so trailing garbage correctly causes regex failure).
-    task_id = _keys.extract_task_id_from_message(message)
+    # Story 6.10: use extract_task_id_with_trailing to get task_id + trailing text.
+    task_id, trailing = _extract_task_id(message)
     if task_id is None:
+        parts = raw_text.split(None, 1)
         # Distinguish "no arg" from "invalid arg" for UX clarity (AC-4).
         if len(parts) < 2:
             await _safe_reply(message, "Usage: /approve <task-id>")
@@ -120,6 +121,24 @@ async def handle_approve(
     idempotency_key = _keys.idempotency_key_from_message(message)
     request_id = new_request_id()
 
+    # Story 6.10/6.11: parse --override license|budget from trailing text.
+    # Regex ensures --override is a standalone flag (not --overridelicense)
+    # and supports both "--override license" and "--override=license".
+    override: Literal["license", "budget"] | None = None
+    if trailing:
+        m = re.search(r"(?:^|\s)--override(?:=|\s+)(\S+)", trailing, re.IGNORECASE)
+        if m:
+            val = m.group(1).lower()
+            if val in ("license", "budget"):
+                override = val
+            else:
+                await _safe_reply(
+                    message,
+                    f"⚠️ Unknown override: {html.escape(m.group(1))}. "
+                    "Supported: license, budget.",
+                )
+                return
+
     try:
         response = await registry_client.submit_decision(
             task_id=task_id,
@@ -127,6 +146,7 @@ async def handle_approve(
             idempotency_key=idempotency_key,
             operator_actor_id=operator_actor_id,
             request_id=request_id,
+            override=override,
         )
     except httpx.TooManyRedirects:
         # M3: TooManyRedirects is an httpx.HTTPError subclass but indicates
@@ -134,6 +154,28 @@ async def handle_approve(
         await _safe_reply(message, "⚠️ Registry misconfigured: too many redirects.")
         return
     except httpx.HTTPStatusError as exc:
+        # Story 6.10: detect license-gate 409 and show override hint.
+        if exc.response.status_code == 409:
+            try:
+                body = exc.response.json()
+            except Exception:
+                body = {}
+            if isinstance(body, dict) and body.get("type") == "approval_blocked_by":
+                reason = (body.get("extensions") or {}).get("reason", "")
+                if reason == "license_flag":
+                    await _safe_reply(
+                        message,
+                        "⚠️ License flag active. Use "
+                        "/approve <task-id> --override license to override.",
+                    )
+                    return
+                if reason == "budget_exceeded":
+                    await _safe_reply(
+                        message,
+                        "⚠️ Budget exceeded. Use "
+                        "/approve <task-id> --override budget to extend and resume.",
+                    )
+                    return
         reply = format_http_error(exc)
         _log.warning(
             "registry-api HTTP error for /approve (status=%s request_id=%s): %s",

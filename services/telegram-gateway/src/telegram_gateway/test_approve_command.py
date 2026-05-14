@@ -872,3 +872,370 @@ async def test_approve_handler_latency_under_p95_budget() -> None:
         f"NFR-P2: p95 latency {p95:.3f} s exceeds 0.200 s budget "
         f"(max={latencies[-1]:.3f} s, min={latencies[0]:.3f} s)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Story 6.10: --override license parsing and 409 license-block handling
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_override_license_parsed_and_sent() -> None:
+    """--override license in message → override='license' in POST body."""
+    captured_body: dict[str, object] = {}
+
+    async def _transport(request: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(request.content))
+        return httpx.Response(
+            status_code=200,
+            content=_VALID_DECISION_RESPONSE_JSON.encode(),
+            request=request,
+        )
+
+    async with httpx.AsyncClient(
+        base_url="http://registry-api:8080",
+        transport=httpx.MockTransport(_transport),
+    ) as http_client:
+        client = RegistryAPIClient(http_client=http_client)
+        msg = _make_message(text=f"/approve {_FAKE_TASK_ID} --override license")
+        await handle_approve(msg, registry_client=client)
+
+    assert captured_body.get("override") == "license"
+
+
+@pytest.mark.asyncio
+async def test_no_override_when_flag_absent() -> None:
+    """No --override in message → 'override' key absent from POST body."""
+    captured_body: dict[str, object] = {}
+
+    async def _transport(request: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(request.content))
+        return httpx.Response(
+            status_code=200,
+            content=_VALID_DECISION_RESPONSE_JSON.encode(),
+            request=request,
+        )
+
+    async with httpx.AsyncClient(
+        base_url="http://registry-api:8080",
+        transport=httpx.MockTransport(_transport),
+    ) as http_client:
+        client = RegistryAPIClient(http_client=http_client)
+        msg = _make_message(text=f"/approve {_FAKE_TASK_ID}")
+        await handle_approve(msg, registry_client=client)
+
+    assert "override" not in captured_body
+
+
+@pytest.mark.asyncio
+async def test_invalid_override_ignored() -> None:
+    """--override unknown is silently ignored (no override in POST body)."""
+    captured_body: dict[str, object] = {}
+
+    async def _transport(request: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(request.content))
+        return httpx.Response(
+            status_code=200,
+            content=_VALID_DECISION_RESPONSE_JSON.encode(),
+            request=request,
+        )
+
+    async with httpx.AsyncClient(
+        base_url="http://registry-api:8080",
+        transport=httpx.MockTransport(_transport),
+    ) as http_client:
+        client = RegistryAPIClient(http_client=http_client)
+        msg = _make_message(text=f"/approve {_FAKE_TASK_ID} --override unknown")
+        await handle_approve(msg, registry_client=client)
+
+    assert "override" not in captured_body
+
+
+@pytest.mark.asyncio
+async def test_409_license_block_shows_override_hint() -> None:
+    """409 with approval_blocked_by/license_flag → override hint reply."""
+    client = _make_registry_client(
+        status_code=409,
+        body=json.dumps({
+            "type": "approval_blocked_by",
+            "title": "Approval Blocked",
+            "status": 409,
+            "detail": "License flag active.",
+            "extensions": {"reason": "license_flag"},
+        }),
+        headers={"content-type": "application/problem+json"},
+    )
+    msg = _make_message()
+    await handle_approve(msg, registry_client=client)
+
+    msg.reply.assert_called_once()
+    reply_text: str = msg.reply.call_args[0][0]
+    assert "--override license" in reply_text
+    assert "License flag" in reply_text
+
+
+@pytest.mark.asyncio
+async def test_409_generic_not_intercepted() -> None:
+    """409 without approval_blocked_by type → falls through to format_http_error."""
+    client = _make_registry_client(
+        status_code=409,
+        body=json.dumps({
+            "type": "about:blank",
+            "title": "Conflict",
+            "status": 409,
+            "detail": "some other conflict",
+        }),
+        headers={"content-type": "application/problem+json"},
+    )
+    msg = _make_message()
+    await handle_approve(msg, registry_client=client)
+
+    msg.reply.assert_called_once()
+    reply_text: str = msg.reply.call_args[0][0]
+    # Should NOT contain the license override hint
+    assert "--override license" not in reply_text
+
+
+@pytest.mark.asyncio
+async def test_submit_decision_includes_override_when_license() -> None:
+    """submit_decision with override='license' includes it in POST body."""
+    captured_body: dict[str, object] = {}
+
+    async def _transport(request: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(request.content))
+        return httpx.Response(
+            status_code=200,
+            content=_VALID_DECISION_RESPONSE_JSON.encode(),
+            request=request,
+        )
+
+    async with httpx.AsyncClient(
+        base_url="http://registry-api:8080",
+        transport=httpx.MockTransport(_transport),
+    ) as http_client:
+        client = RegistryAPIClient(http_client=http_client)
+        await client.submit_decision(
+            task_id=_FAKE_TASK_ID,
+            action="approve",
+            idempotency_key="00000000-0000-7000-8000-000000000001",
+            operator_actor_id="999",
+            override="license",
+        )
+
+    assert captured_body.get("override") == "license"
+
+
+@pytest.mark.asyncio
+async def test_submit_decision_omits_override_when_none() -> None:
+    """submit_decision with override=None omits 'override' from POST body."""
+    captured_body: dict[str, object] = {}
+
+    async def _transport(request: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(request.content))
+        return httpx.Response(
+            status_code=200,
+            content=_VALID_DECISION_RESPONSE_JSON.encode(),
+            request=request,
+        )
+
+    async with httpx.AsyncClient(
+        base_url="http://registry-api:8080",
+        transport=httpx.MockTransport(_transport),
+    ) as http_client:
+        client = RegistryAPIClient(http_client=http_client)
+        await client.submit_decision(
+            task_id=_FAKE_TASK_ID,
+            action="approve",
+            idempotency_key="00000000-0000-7000-8000-000000000001",
+            operator_actor_id="999",
+            override=None,
+        )
+
+    assert "override" not in captured_body
+
+
+@pytest.mark.asyncio
+async def test_override_equals_syntax() -> None:
+    """--override=license (equals syntax) is accepted."""
+    captured_body: dict[str, object] = {}
+
+    async def _transport(request: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(request.content))
+        return httpx.Response(
+            status_code=200,
+            content=_VALID_DECISION_RESPONSE_JSON.encode(),
+            request=request,
+        )
+
+    async with httpx.AsyncClient(
+        base_url="http://registry-api:8080",
+        transport=httpx.MockTransport(_transport),
+    ) as http_client:
+        client = RegistryAPIClient(http_client=http_client)
+        msg = _make_message(text=f"/approve {_FAKE_TASK_ID} --override=license")
+        await handle_approve(msg, registry_client=client)
+
+    assert captured_body.get("override") == "license"
+
+
+@pytest.mark.asyncio
+async def test_override_prefix_no_false_match() -> None:
+    """--override licensefoo does NOT match (word-boundary enforced)."""
+    captured_body: dict[str, object] = {}
+
+    async def _transport(request: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(request.content))
+        return httpx.Response(
+            status_code=200,
+            content=_VALID_DECISION_RESPONSE_JSON.encode(),
+            request=request,
+        )
+
+    async with httpx.AsyncClient(
+        base_url="http://registry-api:8080",
+        transport=httpx.MockTransport(_transport),
+    ) as http_client:
+        client = RegistryAPIClient(http_client=http_client)
+        msg = _make_message(text=f"/approve {_FAKE_TASK_ID} --override licensefoo")
+        await handle_approve(msg, registry_client=client)
+
+    assert "override" not in captured_body
+
+
+@pytest.mark.asyncio
+async def test_override_no_space_no_false_match() -> None:
+    """--overridelicense (no separator) does NOT match."""
+    captured_body: dict[str, object] = {}
+
+    async def _transport(request: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(request.content))
+        return httpx.Response(
+            status_code=200,
+            content=_VALID_DECISION_RESPONSE_JSON.encode(),
+            request=request,
+        )
+
+    async with httpx.AsyncClient(
+        base_url="http://registry-api:8080",
+        transport=httpx.MockTransport(_transport),
+    ) as http_client:
+        client = RegistryAPIClient(http_client=http_client)
+        msg = _make_message(text=f"/approve {_FAKE_TASK_ID} --overridelicense")
+        await handle_approve(msg, registry_client=client)
+
+    assert "override" not in captured_body
+
+
+# ---------------------------------------------------------------------------
+# Story 6.11: --override budget parsing and 409 budget-block handling
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_override_budget_parsed_and_sent() -> None:
+    """--override budget in message → override='budget' in POST body."""
+    captured_body: dict[str, object] = {}
+
+    async def _transport(request: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(request.content))
+        return httpx.Response(
+            status_code=200,
+            content=_VALID_DECISION_RESPONSE_JSON.encode(),
+            request=request,
+        )
+
+    async with httpx.AsyncClient(
+        base_url="http://registry-api:8080",
+        transport=httpx.MockTransport(_transport),
+    ) as http_client:
+        client = RegistryAPIClient(http_client=http_client)
+        msg = _make_message(text=f"/approve {_FAKE_TASK_ID} --override budget")
+        await handle_approve(msg, registry_client=client)
+
+    assert captured_body.get("override") == "budget"
+
+
+@pytest.mark.asyncio
+async def test_override_budget_with_equals_syntax() -> None:
+    """--override=budget (equals syntax) is parsed correctly."""
+    captured_body: dict[str, object] = {}
+
+    async def _transport(request: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(request.content))
+        return httpx.Response(
+            status_code=200,
+            content=_VALID_DECISION_RESPONSE_JSON.encode(),
+            request=request,
+        )
+
+    async with httpx.AsyncClient(
+        base_url="http://registry-api:8080",
+        transport=httpx.MockTransport(_transport),
+    ) as http_client:
+        client = RegistryAPIClient(http_client=http_client)
+        msg = _make_message(text=f"/approve {_FAKE_TASK_ID} --override=budget")
+        await handle_approve(msg, registry_client=client)
+
+    assert captured_body.get("override") == "budget"
+
+
+@pytest.mark.asyncio
+async def test_budget_exceeded_409_shows_hint() -> None:
+    """409 with reason=budget_exceeded shows override hint."""
+    client = _make_registry_client(
+        status_code=409,
+        body=json.dumps({
+            "type": "approval_blocked_by",
+            "title": "Approval Blocked",
+            "status": 409,
+            "detail": "Budget exceeded.",
+            "extensions": {"reason": "budget_exceeded"},
+        }),
+        headers={"content-type": "application/problem+json"},
+    )
+    msg = _make_message(text=f"/approve {_FAKE_TASK_ID}")
+    await handle_approve(msg, registry_client=client)
+
+    msg.reply.assert_called_once()
+    reply_text: str = msg.reply.call_args[0][0]
+    assert "--override budget" in reply_text
+    assert "Budget exceeded" in reply_text
+
+
+@pytest.mark.asyncio
+async def test_override_budget_uppercase_not_matched() -> None:
+    """--override BUDGET (uppercase) is not matched — value check is case-sensitive."""
+    captured_body: dict[str, object] = {}
+
+    async def _transport(request: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(request.content))
+        return httpx.Response(
+            status_code=200,
+            content=_VALID_DECISION_RESPONSE_JSON.encode(),
+            request=request,
+        )
+
+    async with httpx.AsyncClient(
+        base_url="http://registry-api:8080",
+        transport=httpx.MockTransport(_transport),
+    ) as http_client:
+        client = RegistryAPIClient(http_client=http_client)
+        msg = _make_message(text=f"/approve {_FAKE_TASK_ID} --override BUDGET")
+        await handle_approve(msg, registry_client=client)
+
+    # Case-insensitive: BUDGET is lowercased to "budget" and matched.
+    assert captured_body.get("override") == "budget"
+
+
+@pytest.mark.asyncio
+async def test_unknown_override_value_shows_hint() -> None:
+    """--override unknown shows error reply, does not submit."""
+    client = _make_registry_client()
+    msg = _make_message(text=f"/approve {_FAKE_TASK_ID} --override unknown")
+    await handle_approve(msg, registry_client=client)
+
+    msg.reply.assert_called_once()
+    reply_text: str = msg.reply.call_args[0][0]
+    assert "Unknown override" in reply_text
+    assert "license" in reply_text
+    assert "budget" in reply_text

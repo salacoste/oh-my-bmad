@@ -1,12 +1,48 @@
-"""Token-bucket rate limiter for the Telegram webhook (Story 3.6 AC-5/6/7).
+"""Token-bucket rate limiter for the Telegram webhook (Story 3.6 AC-5/6/7)
++ per-actor aiogram rate limiter (Story 7.5.1).
 
-Capacity = 20 (burst), refill = 10 tokens/s — locked by architecture.md
-line 215. Continuous (fractional) refill: at 0.5 s after a full burst-out
-the bucket holds 5 tokens (10 req/s × 0.5 s = 5).
+Two-layer rate-limit architecture
+---------------------------------
 
-Scoped to ``settings.webhook_path`` only; all other routes (notably
-``/v1/health``) pass through. Internal HTTP API stays un-rate-limited per
-NFR-S7.
+Layer 1: FastAPI ``WebhookRateLimitMiddleware`` (this module)
+    Coarse HTTP-level token-bucket scoped to ``webhook_path``. All
+    requests — regardless of Telegram sender identity — share a single
+    bucket (capacity=20, refill=10/s). Protects the webhook endpoint
+    from unauthenticated HTTP-level floods.
+
+Layer 2: Aiogram ``PerActorRateLimitMiddleware`` (this module)
+    Fine-grained per-sender token-bucket registered as aiogram outer
+    middleware AFTER the ``AllowlistMiddleware``. Only allowlisted
+    updates reach this layer (non-allowlisted updates are silently
+    dropped by the allowlist). Each sender gets an independent bucket
+    keyed by their Telegram user id.
+
+Why Layer 2 must run AFTER the allowlist
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+If Layer 2 ran before (or alongside) the allowlist, a non-allowlisted
+attacker hitting the webhook URL rapidly would consume per-actor tokens
+for their own bucket. While that seems harmless (the attacker's bucket
+fills independently), the HTTP-level bucket (Layer 1) is shared — the
+attacker drains IT first, causing 429 responses for legitimate actors
+within the same refill window. Layer 2 prevents this by only accepting
+updates that have already passed the allowlist check, ensuring
+non-allowlisted traffic never reaches the aiogram dispatch chain.
+
+Request flow::
+
+    HTTP POST → Layer 1 (FastAPI shared bucket)
+        → 429 if shared bucket empty
+        → webhook handler → aiogram dispatch
+            → AllowlistMiddleware (outer)
+                → None if not allowlisted (no further processing)
+                → PerActorRateLimitMiddleware (outer, after allowlist)
+                    → None if actor's bucket empty
+                    → handler (inner chain → command handler)
+
+Capacity = 20 (burst), refill = 10 tokens/s for the shared bucket —
+locked by architecture.md line 215. Per-actor defaults are set at
+construction time.
 
 # TODO(Phase 2): operator-tunable thresholds via env-vars (e.g.
 # TG_WEBHOOK_RATE_LIMIT_CAPACITY) when the platform supports multiple
@@ -16,7 +52,13 @@ NFR-S7.
 from __future__ import annotations
 
 import asyncio
+import logging
+import math
+from collections.abc import Awaitable, Callable
+from typing import Any
 
+from aiogram import BaseMiddleware
+from aiogram.types import TelegramObject, Update
 from events.clock import Clock
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -39,6 +81,18 @@ class WebhookRateLimitMiddleware(BaseHTTPMiddleware):
     ``clock`` is injected rather than calling ``time.monotonic()`` directly so
     tests can control bucket behaviour deterministically via ``TickingClock``
     (architecture.md line 215 / Story 3.1 H4 cache-once pattern).
+
+    Token consumption contract
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    The token decrement (``_tokens -= 1.0``) runs BEFORE ``call_next`` —
+    this is **charge-on-attempt**, not charge-on-success. Tokens are NOT
+    refunded if ``call_next`` raises (handler exception,
+    ``asyncio.CancelledError`` on client disconnect). This is the correct
+    DoS-protection trade-off: a failing handler must still consume a token
+    so an attacker cannot bypass the limiter by triggering handler errors.
+    A future maintainer should NOT move the decrement after ``call_next``,
+    as that would silently disable rate-limiting for failing handlers.
     """
 
     def __init__(
@@ -113,15 +167,142 @@ class WebhookRateLimitMiddleware(BaseHTTPMiddleware):
                     content=body,
                     status_code=429,
                     media_type="application/problem+json",
-                    headers={"Retry-After": "1"},
+                    headers={
+                        "Retry-After": str(
+                            min(3600, math.ceil((1.0 - self._tokens) / self._refill_per_second))
+                        ),
+                    },
                 )
 
             # Consume + advance the refill clock together (M6 consumed-time
             # advance: ``_last_refill_ns`` only moves on a successful consume).
+            # Charge-on-attempt: consume BEFORE call_next (see class docstring).
             self._tokens -= 1.0
             self._last_refill_ns = now_ns
 
         return await call_next(request)
 
 
-__all__ = ["WebhookRateLimitMiddleware"]
+_log = logging.getLogger("telegram_gateway.rate_limit")
+
+
+class PerActorRateLimitMiddleware(BaseMiddleware):
+    """Per-sender token-bucket rate limiter (Story 7.5.1 AC-1).
+
+    Registered as aiogram outer middleware AFTER
+    :class:`AllowlistMiddleware` so only allowlisted updates consume
+    per-actor tokens. Each sender gets an independent bucket keyed by
+    their Telegram user id.
+
+    Updates without a ``from_user`` / ``user`` field (bot-only events
+    like ``message_reaction_count``) pass through without rate limiting
+    — they carry no per-user identity to key a bucket on.
+    """
+
+    def __init__(
+        self,
+        *,
+        capacity: int,
+        refill_per_second: float,
+        clock: Clock,
+    ) -> None:
+        if capacity < 1:
+            raise ValueError(
+                f"PerActorRateLimitMiddleware: capacity must be >= 1, got {capacity!r}"
+            )
+        if refill_per_second <= 0:
+            raise ValueError(
+                f"PerActorRateLimitMiddleware: refill_per_second must be > 0,"
+                f" got {refill_per_second!r}"
+            )
+        self._capacity = capacity
+        self._refill_per_second = refill_per_second
+        self._clock = clock
+        # TODO(Phase 2): bounded LRU or TTL eviction — currently unbounded because
+        # the allowlist is small (operator-controlled), so the dict cannot grow
+        # beyond |allowlist| entries in practice. If multi-tenant or dynamic
+        # allowlists are introduced, add eviction to prevent unbounded growth.
+        self._buckets: dict[int, tuple[float, int]] = {}  # user_id → (tokens, last_refill_ns)
+        # Single global lock is sufficient — asyncio is single-threaded, so
+        # the lock prevents inter-task reordering at await points without
+        # contention from parallel threads.
+        self._lock = asyncio.Lock()
+
+    def _extract_user_id(self, event: TelegramObject) -> int | None:
+        """Extract sender user id from an aiogram Update (or direct event).
+
+        Reuses the same child-field walk as
+        :meth:`AllowlistMiddleware._extract_user_id`.
+        """
+        direct_from_user = getattr(event, "from_user", None)
+        if direct_from_user is not None:
+            uid = getattr(direct_from_user, "id", None)
+            if isinstance(uid, int) and not isinstance(uid, bool):
+                return uid
+        if isinstance(event, Update):
+            child_fields = (
+                ("message", "from_user"),
+                ("edited_message", "from_user"),
+                ("channel_post", "from_user"),
+                ("edited_channel_post", "from_user"),
+                ("business_message", "from_user"),
+                ("edited_business_message", "from_user"),
+                ("business_connection", "user"),
+                ("callback_query", "from_user"),
+                ("inline_query", "from_user"),
+                ("chosen_inline_result", "from_user"),
+                ("shipping_query", "from_user"),
+                ("pre_checkout_query", "from_user"),
+                ("my_chat_member", "from_user"),
+                ("chat_member", "from_user"),
+                ("chat_join_request", "from_user"),
+                ("poll_answer", "user"),
+                ("message_reaction", "user"),
+                ("purchased_paid_media", "from_user"),
+            )
+            for field, user_attr in child_fields:
+                child = getattr(event, field, None)
+                if child is None:
+                    continue
+                user_obj = getattr(child, user_attr, None)
+                if user_obj is None:
+                    continue
+                uid = getattr(user_obj, "id", None)
+                if isinstance(uid, int) and not isinstance(uid, bool):
+                    return uid
+        return None
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        """Rate-limit per sender. Returns None when the actor's bucket is empty."""
+        user_id = self._extract_user_id(event)
+        if user_id is None:
+            return await handler(event, data)
+
+        async with self._lock:
+            now_ns = self._clock.monotonic_ns()
+            tokens, last_ns = self._buckets.get(user_id, (float(self._capacity), now_ns))
+            elapsed_s = max(0.0, (now_ns - last_ns) / 1e9)
+            tokens = min(float(self._capacity), tokens + elapsed_s * self._refill_per_second)
+
+            if tokens < 1.0:
+                self._buckets[user_id] = (tokens, last_ns)
+                _log.warning(
+                    "per-actor rate limit: user %d bucket empty (%.2f tokens, refill=%.1f/s)",
+                    user_id,
+                    tokens,
+                    self._refill_per_second,
+                )
+                return None
+
+            tokens -= 1.0
+            self._buckets[user_id] = (tokens, now_ns)
+
+        return await handler(event, data)
+
+
+__all__ = ["WebhookRateLimitMiddleware", "PerActorRateLimitMiddleware"]

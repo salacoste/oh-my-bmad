@@ -100,6 +100,7 @@ from secret_hygiene import flush_pending_emissions
 
 from telegram_gateway.app.config import TelegramSettings
 from telegram_gateway.app.middleware import AllowlistMiddleware
+from telegram_gateway.app.rate_limit import PerActorRateLimitMiddleware
 from telegram_gateway.handlers import (
     make_agent_router,
     make_approve_router,
@@ -241,6 +242,22 @@ def make_lifespan(
                     allowlist=audited.tg_allowlist_user_ids,
                     emit=writer.append,
                     actor=TELEGRAM_GATEWAY_ACTOR,
+                    clock=clock,
+                )
+            )
+
+            # Story 7.5.1 AC-1: per-actor rate limiter registered AFTER
+            # AllowlistMiddleware so only allowlisted updates consume
+            # per-actor tokens. Non-allowlisted updates are silently
+            # dropped by the allowlist before reaching this middleware.
+            dp.update.outer_middleware.register(
+                PerActorRateLimitMiddleware(
+                    # capacity=10 allows a burst of 10 messages before throttling;
+                    # refill=5.0/s restores the bucket quickly for interactive use.
+                    # Single-operator deployment — these can be env-var tuned in
+                    # Phase 2 if multi-actor scenarios emerge.
+                    capacity=10,
+                    refill_per_second=5.0,
                     clock=clock,
                 )
             )

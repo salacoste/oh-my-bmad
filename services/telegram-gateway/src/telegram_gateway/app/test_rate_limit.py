@@ -23,6 +23,7 @@ from aiogram import Bot
 from aiogram.client.session.aiohttp import AiohttpSession
 from asgi_lifespan import LifespanManager
 from events import FROZEN_EPOCH, FrozenClock, TickingClock
+from fastapi.responses import JSONResponse
 from httpx import ASGITransport, AsyncClient
 
 from telegram_gateway.app.config import TelegramSettings
@@ -899,4 +900,191 @@ class TestRateLimitProblemTypeContract:
         assert pattern.search(registry_src), (
             f"registry-api errors.py does not declare {constant_name}={expected_slug!r}; "
             f"the wire contract has drifted."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Story 7.5.3: Charge-on-attempt contract + dynamic Retry-After
+# ---------------------------------------------------------------------------
+
+
+class TestChargeOnAttempt:
+    """Story 7.5.3 AC-1/AC-2: token consumed BEFORE call_next, even on failure."""
+
+    @pytest.mark.asyncio
+    async def test_token_consumed_even_when_handler_raises(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Token is consumed from the bucket even when call_next raises.
+
+        Pins the charge-on-attempt contract: the decrement runs BEFORE
+        call_next, so a failing handler cannot bypass rate limiting.
+        """
+        from starlette.applications import Starlette  # noqa: PLC0415
+
+        clock = TickingClock(start_ns=0, tick_ns=1)
+        dummy_app = Starlette()
+
+        mw = WebhookRateLimitMiddleware(
+            dummy_app,
+            webhook_path="/hook",
+            capacity=5,
+            refill_per_second=10.0,
+            clock=clock,
+        )
+
+        # Build a Starlette scope for POST /hook.
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/hook",
+            "query_string": b"",
+            "headers": [],
+            "server": ("testserver", 80),
+        }
+
+        from starlette.requests import Request  # noqa: PLC0415
+
+        request = Request(scope)
+
+        async def _raising_call_next(req: object) -> object:
+            raise RuntimeError("handler exploded")
+
+        tokens_before = mw._tokens
+
+        with pytest.raises(RuntimeError, match="handler exploded"):
+            await mw.dispatch(request, _raising_call_next)
+
+        assert mw._tokens == tokens_before - 1.0, (
+            f"Charge-on-attempt contract violated: expected {tokens_before - 1.0} tokens, "
+            f"got {mw._tokens} (token NOT consumed on handler error)"
+        )
+
+
+class TestDynamicRetryAfter:
+    """Story 7.5.3 AC-3: Retry-After computed from bucket deficit."""
+
+    @staticmethod
+    def _make_mw(
+        capacity: int, refill_per_second: float, clock: Any
+    ) -> WebhookRateLimitMiddleware:
+        from starlette.applications import Starlette  # noqa: PLC0415
+
+        return WebhookRateLimitMiddleware(
+            Starlette(),
+            webhook_path="/hook",
+            capacity=capacity,
+            refill_per_second=refill_per_second,
+            clock=clock,
+        )
+
+    @pytest.mark.asyncio
+    async def test_retry_after_computed_from_bucket_deficit(self) -> None:
+        """Retry-After reflects refill rate, not a hardcoded 1.
+
+        With capacity=2, refill_per_second=0.5, the bucket exhausts after 2
+        requests. The deficit is 1.0 token; ceil(1.0 / 0.5) = 2 seconds.
+        """
+        clock = TickingClock(start_ns=0, tick_ns=1)
+        mw = self._make_mw(capacity=2, refill_per_second=0.5, clock=clock)
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/hook",
+            "query_string": b"",
+            "headers": [],
+            "server": ("testserver", 80),
+        }
+        from starlette.requests import Request  # noqa: PLC0415
+
+        request = Request(scope)
+
+        async def _noop_call_next(req: object) -> object:
+            return JSONResponse(content={}, status_code=200)
+
+        # Drain 2 tokens.
+        await mw.dispatch(request, _noop_call_next)
+        await mw.dispatch(request, _noop_call_next)
+
+        # 3rd request should be 429 with Retry-After: 2 (not 1).
+        resp = await mw.dispatch(request, _noop_call_next)
+        assert isinstance(resp, JSONResponse)
+        assert resp.status_code == 429
+        assert resp.headers.get("retry-after") == "2", (
+            f"Expected Retry-After: 2 for deficit=1.0 / refill=0.5, "
+            f"got {resp.headers.get('retry-after')}"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tokens_frac", "refill", "expected_retry_after"),
+        [
+            (0.0, 0.5, "2"),  # ceil(1.0 / 0.5) = 2
+            (0.4, 0.5, "2"),  # ceil(0.6 / 0.5) = 2
+            (0.9, 10.0, "1"),  # ceil(0.1 / 10.0) = 1
+            (0.0, 1.0, "1"),  # ceil(1.0 / 1.0) = 1
+            (0.5, 1.0, "1"),  # ceil(0.5 / 1.0) = 1
+        ],
+    )
+    async def test_retry_after_partial_refill_boundary(
+        self, tokens_frac: float, refill: float, expected_retry_after: str
+    ) -> None:
+        """Retry-After is correct for partial refill states."""
+        clock = TickingClock(start_ns=0, tick_ns=1)
+        mw = self._make_mw(capacity=5, refill_per_second=refill, clock=clock)
+        mw._tokens = tokens_frac
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/hook",
+            "query_string": b"",
+            "headers": [],
+            "server": ("testserver", 80),
+        }
+        from starlette.requests import Request  # noqa: PLC0415
+
+        request = Request(scope)
+
+        async def _noop_call_next(req: object) -> object:
+            return JSONResponse(content={}, status_code=200)
+
+        resp = await mw.dispatch(request, _noop_call_next)
+        assert isinstance(resp, JSONResponse)
+        assert resp.status_code == 429
+        assert resp.headers.get("retry-after") == expected_retry_after, (
+            f"tokens={tokens_frac}, refill={refill}: "
+            f"expected Retry-After {expected_retry_after}, "
+            f"got {resp.headers.get('retry-after')}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_retry_after_capped_at_3600(self) -> None:
+        """Retry-After is capped at 3600 seconds for degenerate refill rates."""
+        clock = TickingClock(start_ns=0, tick_ns=1)
+        mw = self._make_mw(capacity=1, refill_per_second=1e-6, clock=clock)
+        # Exhaust the single token.
+        mw._tokens = 0.0
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/hook",
+            "query_string": b"",
+            "headers": [],
+            "server": ("testserver", 80),
+        }
+        from starlette.requests import Request  # noqa: PLC0415
+
+        request = Request(scope)
+
+        async def _noop_call_next(req: object) -> object:
+            return JSONResponse(content={}, status_code=200)
+
+        resp = await mw.dispatch(request, _noop_call_next)
+        assert isinstance(resp, JSONResponse)
+        assert resp.status_code == 429
+        assert resp.headers.get("retry-after") == "3600", (
+            f"Expected Retry-After capped at 3600, got {resp.headers.get('retry-after')}"
         )
