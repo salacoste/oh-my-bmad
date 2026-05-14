@@ -1,18 +1,12 @@
 <div align="center">
 
-```
-   ___  _              _ __  __    _                 _
-  / _ \| |__          / |  \/  |  | |__   _ __ ___  | |_ __ _  __| |
- | | | | '_ \   ___  | | |\/| |  | '_ \ | '_ ` _ \ | __/ _` |/ _` |
- | |_| | | | | |___| | | |  | |  | |_) || | | | | || || (_| | (_| |
-  \___/|_| |_|        |_|_|  |_|  |_.__/ |_| |_| |_| \__\__,_|\__,_|
-```
-
-# **oh-my-bmad**
+# oh-my-bmad
 
 ### A self-hosted, autonomous-development platform for one operator.
 
 *Telegram and a console drive a Claude Code worker through a typed, event-sourced spine — so a single person can run an agent loop they can trust, observe, and recover.*
+
+<br/>
 
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue?logo=python&logoColor=white)](https://www.python.org/downloads/release/python-3120/)
 [![uv workspace](https://img.shields.io/badge/uv-workspace-261230?logo=uv&logoColor=white)](https://docs.astral.sh/uv/)
