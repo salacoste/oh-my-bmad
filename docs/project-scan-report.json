@@ -7,15 +7,15 @@
   },
   "mode": "initial_scan",
   "scan_level": "deep",
-  "project_root": "/Users/r2d2/Documents/Code_Projects/00_mcp/oh-my-bmad",
-  "project_knowledge": "/Users/r2d2/Documents/Code_Projects/00_mcp/oh-my-bmad/docs",
+  "project_root": ".",
+  "project_knowledge": "./docs",
   "repository_type": "monolith",
   "project_parts": [
     {
       "part_id": "platform",
       "project_type_id": "backend",
       "display_name": "oh-my-bmad backend platform",
-      "root_path": "/Users/r2d2/Documents/Code_Projects/00_mcp/oh-my-bmad"
+      "root_path": "."
     }
   ],
   "completed_steps": [
