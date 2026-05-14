@@ -1,0 +1,65 @@
+{
+  "workflow_version": "1.2.0",
+  "timestamps": {
+    "started": "2026-05-15T00:00:00Z",
+    "last_updated": "2026-05-15T00:00:00Z",
+    "completed": "2026-05-15T00:00:00Z"
+  },
+  "mode": "initial_scan",
+  "scan_level": "deep",
+  "project_root": "/Users/r2d2/Documents/Code_Projects/00_mcp/oh-my-bmad",
+  "project_knowledge": "/Users/r2d2/Documents/Code_Projects/00_mcp/oh-my-bmad/docs",
+  "repository_type": "monolith",
+  "project_parts": [
+    {
+      "part_id": "platform",
+      "project_type_id": "backend",
+      "display_name": "oh-my-bmad backend platform",
+      "root_path": "/Users/r2d2/Documents/Code_Projects/00_mcp/oh-my-bmad"
+    }
+  ],
+  "completed_steps": [
+    {"step": "step_1", "status": "completed", "timestamp": "2026-05-15T00:00:00Z", "summary": "Classified as monolith with 1 unified-backend part (14 uv-workspace members)"},
+    {"step": "step_2", "status": "completed", "timestamp": "2026-05-15T00:00:00Z", "summary": "Inventoried existing docs (8 .md files + 2 ADRs + 2 deployment runbooks)"},
+    {"step": "step_3", "status": "completed", "timestamp": "2026-05-15T00:00:00Z", "summary": "Tech stack: Python 3.12 + FastAPI + aiogram v3 + SQLAlchemy async + MCP stdio"},
+    {"step": "step_4", "status": "completed", "timestamp": "2026-05-15T00:00:00Z", "summary": "Conditional analysis: 5 HTTP endpoints, 11 MCP tools, 5 DB tables, 32+ event types"},
+    {"step": "step_5", "status": "completed", "timestamp": "2026-05-15T00:00:00Z", "summary": "Source tree analysis written (source-tree-analysis.md)"},
+    {"step": "step_6", "status": "completed", "timestamp": "2026-05-15T00:00:00Z", "summary": "Dev + deployment guides written (development-guide.md, deployment-guide.md)"},
+    {"step": "step_8", "status": "completed", "timestamp": "2026-05-15T00:00:00Z", "summary": "Architecture document written (architecture.md)"},
+    {"step": "step_9", "status": "completed", "timestamp": "2026-05-15T00:00:00Z", "summary": "Supporting documentation written (project-overview, component-inventory, api-contracts, data-models)"},
+    {"step": "step_10", "status": "completed", "timestamp": "2026-05-15T00:00:00Z", "summary": "Master index generated (index.md)"},
+    {"step": "step_11", "status": "completed", "timestamp": "2026-05-15T00:00:00Z", "summary": "Validation: no _(To be generated)_ markers detected"},
+    {"step": "step_12", "status": "completed", "timestamp": "2026-05-15T00:00:00Z", "summary": "Workflow complete"}
+  ],
+  "current_step": "completed",
+  "findings": {
+    "project_classification": "monorepo treated as single unified backend platform (14 uv-workspace members; user opted against per-group split)",
+    "technology_stack": {
+      "platform": "Python 3.12 + uv workspace; FastAPI on registry-api; aiogram v3 on telegram-gateway; SQLAlchemy 2.0 async + Alembic on registry-state; MCP stdio (3 servers); structlog; hypothesis; ruff/mypy --strict"
+    },
+    "workspace_members": {
+      "services": ["clawhip-daemon", "console-cli", "orchestrator-adapter", "registry-api", "registry-state", "telegram-gateway", "worker-wrapper"],
+      "packages": ["capabilities", "events", "idempotency", "secret-hygiene"],
+      "mcp_servers": ["clawhip-bridge", "session-registry", "task-registry"]
+    },
+    "http_endpoint_count": 5,
+    "mcp_tool_count": 11,
+    "event_type_count": 32,
+    "db_table_count": 5,
+    "adr_count": 2,
+    "existing_doc_count": 10
+  },
+  "outputs_generated": [
+    "docs/index.md",
+    "docs/project-overview.md",
+    "docs/source-tree-analysis.md",
+    "docs/architecture.md",
+    "docs/component-inventory.md",
+    "docs/api-contracts.md",
+    "docs/data-models.md",
+    "docs/development-guide.md",
+    "docs/deployment-guide.md",
+    "docs/project-scan-report.json"
+  ],
+  "resume_instructions": "Workflow complete. To re-scan, choose option 1 (Re-scan entire project) when prompted. To deep-dive a specific area, choose option 2."
+}
