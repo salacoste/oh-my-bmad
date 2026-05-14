@@ -4,7 +4,7 @@ A running log of issues that surfaced during code review but were not fixed at t
 
 ## Deferred from: code review of story-3.6 (2026-04-30)
 
-- **D1 — Allowlist-vs-rate-limiter layering on telegram-gateway** (Edge Case Hunter, commit `8125cc3`): The aiogram `AllowlistMiddleware` (dispatcher outer middleware) runs AFTER the FastAPI `WebhookRateLimitMiddleware` (HTTP-level), so a non-allowlisted attacker who reaches the webhook URL can drain the bucket and 429 legitimate-actor updates within the same window. Architectural — out of scope for Story 3.6's hardening pass. Candidate fix: add a per-actor secondary limiter inside the aiogram outer_middleware AFTER allowlist passes. Consider as part of Story 3.9 (task-thread-binding) or a new Story 3.x.
+- **D1 — Allowlist-vs-rate-limiter layering on telegram-gateway** ~~(RESOLVED by Story 7.5.1 — `PerActorRateLimitMiddleware` added as aiogram inner middleware)~~
 - **D2 — Token-bucket charge-on-attempt semantics undocumented** (Edge Case Hunter): `self._tokens -= 1.0` runs BEFORE `await call_next(request)`. If `call_next` raises (handler exception, asyncio.CancelledError on client disconnect), the token is permanently consumed. Acceptable as deliberate DoS-protection trade-off but neither the docstring nor a test pins the choice — a future maintainer could "fix" this by moving the decrement after `call_next` and silently disable rate-limiting for failing handlers. Document the contract in `rate_limit.py:74-102` and add a regression test.
 - **D3 — HEAD/OPTIONS to webhook are rate-limited** (Edge Case Hunter): The path predicate ignores method, so HEAD/OPTIONS/CORS-preflight probes consume bucket tokens before FastAPI returns 405. Either restrict to POST (`if request.method != "POST" or request.url.path != self._webhook_path`) or document the all-methods accounting choice. Low real-world impact (Telegram only POSTs).
 - **D4 — Streaming responses lose `request_id` during body iteration** (Edge Case Hunter): `BaseHTTPMiddleware.dispatch` returns when `call_next` produces headers, but for `StreamingResponse` the body iterator runs AFTER. The `try/finally: unbind_contextvars` fires too early. Today registry-api has no streaming endpoints; the docstring promise "downstream stdlib log records carry the `request_id` field" silently breaks for streaming. Document or migrate to a response wrapper.
@@ -13,7 +13,7 @@ A running log of issues that surfaced during code review but were not fixed at t
 - **D7 — Empty-string `X-Request-ID` / `Idempotency-Key` regen is silent** (Edge Case Hunter): A misbehaving upstream sending `X-Request-ID:\r\n` (empty) regenerates silently with no warning log — the `if incoming:` guard at `middleware.py:80` skips empty strings. Operator visibility lost. Add `_log.debug(...)` at the empty-string branch (apply to both `RequestIdMiddleware` and `IdempotencyKeyMiddleware`).
 - **D8 — `unbind_contextvars` clobber** (Edge Case Hunter): `unbind_contextvars("request_id")` does unconditional reset, not save-and-restore. A future middleware/handler that binds `request_id` to a different value (e.g. for a child task) would have its bind erased. No current binders. Pin the invariant via comment + regression test when the second binder lands. Idiomatic save/restore (`bound_contextvars` context manager) avoids the issue entirely.
 - **D9 — Multiple `Idempotency-Key` / `X-Request-ID` headers ignored silently** (Edge Case Hunter): `request.headers.get(...)` returns the first if a client sends duplicates. RFC 7230 §3.2.2 forbids duplicate single-value headers but clients violate it. Either log a warning when `getlist(...)` length > 1, or accept first-wins with a comment.
-- **D10 — `Retry-After: 1` lies under Phase 2 slow refill** (Edge Case Hunter): Today `refill_per_second` is locked at 10/s so the 1-second hint is approximately correct. Phase 2 makes the value operator-tunable; a slow refill (e.g. 0.0001/s) renders the hint a lie. Compute `math.ceil((1.0 - self._tokens) / self._refill_per_second)` when the TODO lands.
+- **D10 — `Retry-After: 1` lies under Phase 2 slow refill** ~~(RESOLVED by Story 7.5.3 — dynamic `math.ceil()` computation)~~
 - **D11 — `model_dump(exclude_none=True)` may drop legitimate `None` for Story 3.7** (Blind Hunter): The behavior change from `model_dump()` to `model_dump(exclude_none=True)` is a subtle contract shift. Story 3.7's Telegram renderer is the consumer of `extensions` and may have legitimate need to send `null` values. Document the contract before 3.7 lands.
 - **D12 — `_ManualClock` test fixture protocol drift risk** (Edge Case Hunter): Lacks the full `events.clock.Clock` Protocol surface; `# type: ignore[arg-type]` masks future Protocol additions (e.g. `time_ns()`). Use a real `FrozenClock`/`TickingClock` test double or extend the Protocol with a test seam.
 - **D13 — Spec text vs API mismatch: `now_monotonic_ns()` vs `monotonic_ns()`** (Acceptance Auditor): Story 3.6 spec text in AC-5 + Task 5 says `clock.now_monotonic_ns()`; the actual `events.clock.Clock` Protocol method is `monotonic_ns()`. Implementation correctly uses the real method. Patch the spec text in a follow-up doc-PR (not a code defect).
@@ -24,15 +24,15 @@ A running log of issues that surfaced during code review but were not fixed at t
 - D2 — Footer hardcoded English; no i18n hook (whole project is English-only Phase 1; i18n is out of MVP scope).
 - D3 — `_extract_task_id` `<unknown>` sentinel; uniform fix across renderers belongs in a separate cross-cutting story.
 - D4 — Sprint-status state-machine skipped intermediate states (process drift; Story 3.10 M16 carry-forward — same defer direction).
-- D5 — `task_id` whitespace `pattern=` validator (broader concern affecting approval renderer too; needs a uniform validator).
+- D5 — `task_id` whitespace `pattern=` validator ~~(RESOLVED by Story 7.5.8 — pattern applied to all 18 task_id fields)~~
 - D6 — Module constants lack `Final` annotation (project convention follows `_APPROVAL_*` without `Final`; inconsistency would create style drift).
 - D7 — Header-overflow fail-fast (over-engineered; Step 5 emergency tier already handles pathological task_ids after H2 + H5 fixes).
 
 ## Deferred from: code review of 3-12-completion-summary-template (2026-05-01)
 
-- D1 — `task_id` regex `pattern=` absent across all `Task*Payload` models — broader concern (uniform validator needed).
-- D2 — `_collapse_newlines` doesn't strip U+2028 LINE SEPARATOR / U+2029 PARAGRAPH SEPARATOR — affects all 3 renderers (3.10/3.11/3.12).
-- D3 — `pr_branch` accepts characters git ref-name disallows (`..`, `~`, `^`, `:`, `?`, `*`, `[`, control chars, leading `-`) — needs uniform git-ref-name pattern validator.
+- D1 — `task_id` regex `pattern=` absent across all `Task*Payload` models ~~(RESOLVED by Story 7.5.8 — pattern applied to all 18 fields)~~
+- D2 — `_collapse_newlines` doesn't strip U+2028 LINE SEPARATOR / U+2029 PARAGRAPH SEPARATOR ~~(RESOLVED by Story 7.5.8 — Unicode fix applied)~~
+- D3 — `pr_branch` accepts characters git ref-name disallows ~~(RESOLVED by Story 7.5.8 — pattern + @field_validator)~~
 - D4 — `pr_url` already-escaped `&amp;amp;` double-escape — operator-supplied input-sanitization concern; defer.
 - D5 — `_COMPLETED_REGISTERED` global mutable flag pattern — consistent with Story 3.10 M8 / 3.11 H11 across 4+ test helpers; consolidation refactor deferred.
 - D6 — `Random(312)` fixed seed — consistent with 3.10/3.11 (`Random(311)`, `Random(789)`); pytest single-threaded default.
@@ -78,14 +78,14 @@ A running log of issues that surfaced during code review but were not fixed at t
 
 ## Deferred from: code review of 7-7-worktree-lock-blocker-persistence (2026-05-12)
 
-- D1 — `_close_active_session_for_task` only closes ONE session when multiples may exist (Blind Hunter + Edge Case Hunter) — uses `.limit(1)` so stale sessions leak if multiple active sessions exist. System enforces single-session-per-task via `handle_task_execution_started`. Future refactor to bulk `UPDATE ... WHERE task_id=... AND status IN (...)` would close all and is more efficient.
-- D2 — Missing compound index on `(sessions.task_id, sessions.status)` (Blind Hunter) — the `_close_active_session_for_task` query filters on both columns but only `ix_sessions_task_id` exists. SQLite post-filters by status. Low urgency given typical workload.
-- D3 — ORM attribute mutation vs bulk UPDATE in `_close_active_session_for_task` (Blind Hunter + Edge Case Hunter) — helper loads ORM object, mutates 3 attributes, flushes. A bulk `update(SessionRow).where(...).values(...)` would be more efficient and also solve D1. Style/performance choice, not a bug.
+- D1 — `_close_active_session_for_task` only closes ONE session when multiples may exist ~~(RESOLVED by Story 7.5.2 — bulk UPDATE replaces single-session close)~~
+- D2 — Missing compound index on `(sessions.task_id, sessions.status)` ~~(RESOLVED by Story 7.5.2 — Alembic migration 0003)~~
+- D3 — ORM attribute mutation vs bulk UPDATE in `_close_active_session_for_task` ~~(RESOLVED by Story 7.5.2 — switched to bulk UPDATE)~~
 
 ## Deferred from: code review of 7-8-self-recovered-summary (2026-05-12)
 
 - D1 — No "overnight" time-of-day filter in `detect_overnight_restart` (Acceptance Auditor) — spec says "timestamped overnight" but function detects ANY restart pair regardless of time. The word "overnight" describes the task context (the task ran overnight), not a filter condition. Adding a time-of-day check would narrow the feature incorrectly (midday restarts also deserve visibility).
-- D2 — ASC+limit=1000 may truncate restart pair for long-running tasks (Edge Case Hunter) — events endpoint returns `emitted_at ASC` with limit 1000. For tasks with >1000 events, the restart pair (near the end) could be truncated. Rare in practice; fix requires API pagination or a specialized endpoint filtering by event type.
+- D2 — ASC+limit=1000 may truncate restart pair for long-running tasks ~~(MITIGATED by Story 7.5.6 — `after` cursor param enables pagination without truncation)~~
 - D3 — No deduplication for daemon restart replay (Edge Case Hunter) — if clawhip-daemon restarts and replays the JSONL event log, it could send duplicate self-recovered messages. Architectural concern beyond story scope; best-effort synthesis is acceptable for now.
 
 ## Deferred from: code review of 7-9-journey-3-integration-test (2026-05-12)
