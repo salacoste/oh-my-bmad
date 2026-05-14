@@ -286,7 +286,7 @@ class TestRunTaskNoTaskId:
 
 
 class TestRunTaskEventLogDirNotConfigured:
-    """When event_log_dir is empty, task fails with tier3 emission."""
+    """When event_log_dir is empty, task fails before reaching tier3."""
 
     @pytest.mark.asyncio
     async def test_fails_without_event_log_dir(self, tmp_path: Path) -> None:
@@ -317,7 +317,8 @@ class TestRunTaskEventLogDirNotConfigured:
             mock_runner.return_value.run = AsyncMock(return_value=result)
             await run_task(clients, settings, "implement Z", tmp_path)
 
-        assert mock_tier3.call_args.kwargs["accepted"] is False
+        # Early return at event_log_dir check — tier3 never reached.
+        assert mock_tier3.call_args is None
 
         state_file = tmp_path / ".lifecycle-state.json"
         data = json.loads(state_file.read_text())

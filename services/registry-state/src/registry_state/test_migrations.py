@@ -33,14 +33,14 @@ _EXPECTED_INDEXES = frozenset(
         "ix_events_task_id_emitted_at",
         "ix_events_session_id_emitted_at",
         "ix_events_type_emitted_at",
-        "ix_sessions_task_id",
+        "ix_sessions_task_id_status",
         "ix_idempotency_cache_expires_at",
         "ix_tasks_status_updated_at",
     ]
 )
-# Story 3.9: bumped to 0002 (add_task_thread_binding).
+# Story 7.5.2: bumped to 0003 (session compound index replaced ix_sessions_task_id).
 # The expected head revision tracks the latest migration version.
-_REVISION = "0002"
+_REVISION = "0003"
 _INI_PATH = str(Path(__file__).parent.parent.parent / "alembic.ini")
 
 
