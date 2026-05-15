@@ -297,6 +297,93 @@ deploy-macos: build-base
     docker compose -f docker-compose.yml -f docker-compose.macos.yml build
     docker compose -f docker-compose.yml -f docker-compose.macos.yml up -d
 
+# Story 8.5 (Phase 2 Epic 8): Verify cosign signature + SLSA L2 + CycloneDX SBOM
+# attestations for every Platform-published image before deploy. Operator runs
+# this BEFORE `docker compose pull` to enforce the supply-chain triumvirate at
+# the deploy boundary (FR56a, NFR-S9).
+#
+# Requirements:
+#   - cosign binary installed locally (brew install cosign | apt install cosign |
+#     download from sigstore/cosign releases). See docs/deployment-guide.md
+#     §"Verifying releases" for installation guidance.
+#   - .env populated with OMB_GHCR_OWNER + OMB_IMAGE_DIGEST_<service> entries
+#     (one per image). Digests are listed in the GitHub release notes.
+#
+# Failure modes (mapped to owning story per ADR-0008 §F12 8-state table):
+#   - cosign verify fails → Story 8.3 signature gate (re-tag or fix-forward).
+#   - cosign verify-attestation --type slsaprovenance fails → Story 8.2 SLSA
+#     gate (re-tag, typically Sigstore Fulcio outage).
+#   - cosign verify-attestation --type cyclonedx fails → Story 8.4 SBOM-attest
+#     gate (cosign attest re-runnable independently from local cosign).
+#
+# Exit codes: 0 = all 8 images verified all 3 attestations; 1 = any failure.
+verify-images:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v cosign >/dev/null 2>&1; then
+        echo "::error::cosign binary not found; install via brew/apt or sigstore releases. See docs/deployment-guide.md §Verifying releases."
+        exit 1
+    fi
+    if [ ! -f .env ]; then
+        echo "::error::.env file missing; copy .env.example to .env and populate OMB_IMAGE_DIGEST_<service> entries."
+        exit 1
+    fi
+    # shellcheck disable=SC1091
+    set -a
+    source .env
+    set +a
+    : "${OMB_GHCR_OWNER:?OMB_GHCR_OWNER must be set in .env (typically the GitHub repository owner)}"
+    REGISTRY="ghcr.io"
+    SERVICES=("base" "registry-api" "registry-state" "telegram-gateway" "orchestrator-adapter" "worker-wrapper" "clawhip-daemon" "console-cli")
+    # Anchored cert-identity-regexp (F1 lesson from Story 8.2 review):
+    # prevents fork-attestation spoofing; matches only canonical workflow.
+    CERT_ID="^https://github.com/${OMB_GHCR_OWNER}/oh-my-bmad/\.github/workflows/release\.yml@refs/tags/v[0-9].*"
+    CERT_ISSUER="https://token.actions.githubusercontent.com"
+    failures=()
+    for svc in "${SERVICES[@]}"; do
+        digest_var="OMB_IMAGE_DIGEST_${svc//-/_}"
+        digest="${!digest_var:-}"
+        if [ -z "$digest" ]; then
+            failures+=("$svc: $digest_var not set in .env")
+            continue
+        fi
+        image="${REGISTRY}/${OMB_GHCR_OWNER}/oh-my-bmad-${svc}@${digest}"
+        echo "→ verifying $svc @ $digest"
+        # 1. cosign signature (Story 8.3)
+        if ! cosign verify \
+            --certificate-identity-regexp "$CERT_ID" \
+            --certificate-oidc-issuer "$CERT_ISSUER" \
+            "$image" >/dev/null 2>&1; then
+            failures+=("$svc: cosign verify (signature) FAILED — owned by Story 8.3")
+        fi
+        # 2. SLSA L2 provenance attestation (Story 8.2)
+        if ! cosign verify-attestation --type slsaprovenance \
+            --certificate-identity-regexp "$CERT_ID" \
+            --certificate-oidc-issuer "$CERT_ISSUER" \
+            "$image" >/dev/null 2>&1; then
+            failures+=("$svc: cosign verify-attestation slsaprovenance FAILED — owned by Story 8.2")
+        fi
+        # 3. CycloneDX SBOM attestation (Story 8.4)
+        if ! cosign verify-attestation --type cyclonedx \
+            --certificate-identity-regexp "$CERT_ID" \
+            --certificate-oidc-issuer "$CERT_ISSUER" \
+            "$image" >/dev/null 2>&1; then
+            failures+=("$svc: cosign verify-attestation cyclonedx FAILED — owned by Story 8.4")
+        fi
+    done
+    if [ ${#failures[@]} -ne 0 ]; then
+        echo
+        echo "::error::Supply-chain verification FAILED for ${#failures[@]} item(s):"
+        for f in "${failures[@]}"; do echo "  - $f"; done
+        echo
+        echo "Triage: see docs/deployment-guide.md §Verifying releases for fix-forward procedures."
+        echo "Do NOT run docker compose pull until all verifications pass."
+        exit 1
+    fi
+    echo
+    echo "✓ All 8 images verified (signature + SLSA L2 + CycloneDX SBOM)."
+    echo "  Safe to proceed: docker compose pull && docker compose up -d"
+
 # Build base + one representative service multi-arch locally via buildx
 # (no push). Diagnostic hook — exercises the release.yml hand-off
 # (`--build-context oh-my-bmad-base:local=...`) to catch shape bugs before

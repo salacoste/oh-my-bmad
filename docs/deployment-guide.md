@@ -64,6 +64,80 @@ Bind mounts to host paths are permitted **only** in `docker-compose.macos.yml`. 
 
 See [`_bmad-output/project-context.md`](../_bmad-output/project-context.md) Cat 3 for the full docker-compose ruleset.
 
+## Verifying releases
+
+Phase 2 Epic 8 (supply-chain hardening, Stories 8.1–8.5) ships every Platform image with **three independent cryptographic attestations**: cosign keyless signature, SLSA L2 build provenance, and CycloneDX SBOM. Before every `docker compose pull`, the operator runs `just verify-images` to enforce all three at the deploy boundary. **Pulling without verification is a supply-chain regression**; the gates are cheap (~3s per image) and document-driven (recoverable error messages).
+
+### One-time setup: install cosign
+
+`just verify-images` requires the `cosign` binary locally. Install one of:
+
+```sh
+# macOS (Homebrew)
+brew install cosign
+
+# Ubuntu / Debian (PPA may be needed on older distros)
+apt install cosign
+
+# Generic Linux / fallback (download signed binary from sigstore releases)
+curl -L https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64 -o cosign
+chmod +x cosign && sudo mv cosign /usr/local/bin/
+```
+
+Verify the install: `cosign version` should print v2.x.
+
+### Per-release workflow
+
+1. **Find the release digests.** Every release published to GHCR includes `<image>@sha256:...` references in the GitHub release notes. Copy the digest for each of the 8 images.
+2. **Update `.env`.** Populate `OMB_IMAGE_DIGEST_<service>` for all 8 services (base + 7 from the matrix):
+
+   ```sh
+   OMB_GHCR_OWNER=salacoste                          # override only if you forked + re-published
+   OMB_IMAGE_DIGEST_base=sha256:abc123...
+   OMB_IMAGE_DIGEST_registry-api=sha256:def456...
+   OMB_IMAGE_DIGEST_registry-state=sha256:...
+   OMB_IMAGE_DIGEST_telegram-gateway=sha256:...
+   OMB_IMAGE_DIGEST_orchestrator-adapter=sha256:...
+   OMB_IMAGE_DIGEST_worker-wrapper=sha256:...
+   OMB_IMAGE_DIGEST_clawhip-daemon=sha256:...
+   OMB_IMAGE_DIGEST_console-cli=sha256:...
+   ```
+
+3. **Run verification.** `just verify-images` iterates over the 8 images and runs three cosign checks per image:
+
+   ```sh
+   just verify-images
+   ```
+
+   - Exit 0 = green: safe to proceed with `docker compose pull`.
+   - Exit 1 = any verification failed: **do NOT pull**. Triage per the failure-mode table below.
+
+4. **On green, deploy.**
+
+   ```sh
+   docker compose pull
+   docker compose up -d
+   ```
+
+### Failure-mode triage
+
+If `just verify-images` reports any failure, the recipe identifies **which image** and **which attestation type** failed. Map to the owning Phase 2 story:
+
+| Failure type | Owning story | Likely cause | Fix-forward |
+|---|---|---|---|
+| `cosign verify (signature) FAILED` | Story 8.3 | Image not signed at all (release published before Story 8.3 landed), OR signature certificate identity doesn't match canonical workflow (fork-spoofing attempt, or repo rename) | Re-tag a release on the canonical repo; for spoofing attempts, do not deploy |
+| `cosign verify-attestation slsaprovenance FAILED` | Story 8.2 | SLSA attestation missing (Sigstore Fulcio outage during release), or attestation cert identity doesn't match canonical workflow | Re-tag once Sigstore recovers (https://status.sigstore.dev); rerun is independent of signing |
+| `cosign verify-attestation cyclonedx FAILED` | Story 8.4 | SBOM attestation missing (Sigstore outage, or `cosign attest` step failed mid-release), or empty SBOM file caused signed-but-empty attestation | Re-run cosign attest step independently against the published image digest from a local cosign install (cosign attest is digest-bound, not workflow-bound) |
+| `OMB_IMAGE_DIGEST_<service> not set in .env` | (operator config) | Operator hasn't populated digest entries for the current release | Update `.env` per the release-notes digest list and re-run |
+
+For the 8 possible terminal states across `{signature} × {SLSA} × {SBOM-attest}`, see [`docs/adr/0008-cosign-slsa-sbom.md`](./adr/0008-cosign-slsa-sbom.md) §"Failure asymmetry across the supply-chain triumvirate (F12)" — every state has a documented operator action.
+
+### Sigstore outage policy
+
+If Sigstore Fulcio (cert minting) or Rekor (transparency log) is unreachable, `just verify-images` fails for the affected attestation type. **This is intentional, not a gap** — silently shipping unverified images would defeat the entire supply-chain triumvirate. Monitor https://status.sigstore.dev during stuck releases; verification typically resumes once Sigstore recovers (usually <1 hour for transient outages).
+
+See [`docs/adr/0008-cosign-slsa-sbom.md`](./adr/0008-cosign-slsa-sbom.md) §"Operational policy notes" for the full outage + tag-retry + duplicate-attestation policy.
+
 ## Upgrading
 
 ```sh
