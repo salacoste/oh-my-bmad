@@ -40,7 +40,7 @@ def test_extra_fields_rejected() -> None:
             actor_id="operator-1",
             old_limit=50_000,
             new_limit=100_000,
-            unexpected="field",
+            unexpected="field",  # type: ignore[call-arg]  # extra="forbid" rejects at runtime; testing exactly that
         )
 
 

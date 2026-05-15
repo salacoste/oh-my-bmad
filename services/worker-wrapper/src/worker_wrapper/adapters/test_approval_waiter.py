@@ -5,17 +5,17 @@ Uses mock envelopes and a FrozenClock so no real file I/O or time passes.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 from unittest.mock import patch
 
 import pytest
-
 from events.clock import FrozenClock
+
 from worker_wrapper.adapters.approval_waiter import (
-    ApprovalResult,
     ApprovalWaiter,
     _safe_payload,
 )
@@ -276,6 +276,6 @@ class TestWaitForApproval:
                 "worker_wrapper.adapters.approval_waiter.current_day_path",
                 return_value=Path("/tmp/fake-logs/2026-05-10.jsonl"),
             ),
+            pytest.raises(TimeoutError, match="timed out"),
         ):
-            with pytest.raises(TimeoutError, match="timed out"):
-                await waiter.wait_for_approval("t-1")
+            await waiter.wait_for_approval("t-1")

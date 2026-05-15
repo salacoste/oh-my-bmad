@@ -22,10 +22,14 @@ import pytest_asyncio
 from asgi_lifespan import LifespanManager
 from events import FROZEN_EPOCH, FrozenClock
 from httpx import ASGITransport, AsyncClient
-from registry_state.adapters.sqlite_store import (  # noqa: IMP001
+from registry_state.adapters.sqlite_store import (  # noqa: IMP001 test fixture builds in-memory SQLite via registry-state's schema; no prod cross-service coupling
     create_engine,
 )
-from registry_state.schema import Base, Event, Task  # noqa: IMP001
+from registry_state.schema import (  # noqa: IMP001 test fixture imports tables for Base.metadata.create_all seeding
+    Base,
+    Event,
+    Task,
+)
 
 from registry_api.app import build_app
 

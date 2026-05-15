@@ -19,7 +19,10 @@ from typing import Any
 
 import structlog
 from events.clock import Clock
-from registry_state import current_day_path, read_log_lines
+from registry_state import (  # noqa: IMP001 event-log tail reader needs registry-state's JSONL-path + line-reader utilities; relocation to packages/events deferred to Phase 3 (Epic 8.7 tech-debt sweep documented this)
+    current_day_path,
+    read_log_lines,
+)
 
 logger = structlog.get_logger(__name__)
 

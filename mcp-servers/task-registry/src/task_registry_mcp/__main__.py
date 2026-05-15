@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import os
 import sys
-
 from typing import get_args
 
 from events.envelope import ActorKind  # noqa: IMP001 — packages/

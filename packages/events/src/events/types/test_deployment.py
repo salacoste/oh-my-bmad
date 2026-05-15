@@ -161,7 +161,7 @@ class TestExtraForbid:
         with pytest.raises(ValidationError) as exc_info:
             DeploymentSignatureRejectedPayload(
                 **_VALID_KWARGS,
-                unexpected="value",
+                unexpected="value",  # type: ignore[call-arg]  # extra="forbid" rejects at runtime; testing exactly that
             )
         assert "extra" in str(exc_info.value).lower()
 
@@ -330,10 +330,10 @@ class TestFrozenStrict:
         payload = DeploymentSignatureRejectedPayload(**_VALID_KWARGS)
         with pytest.raises(ValidationError):
             # Pydantic raises ValidationError on frozen-instance attribute set.
-            payload.image = "ghcr.io/other/oh-my-bmad-registry-api"  # type: ignore[misc]
+            payload.image = "ghcr.io/other/oh-my-bmad-registry-api"
 
     def test_string_coercion_rejected_under_strict(self) -> None:
         # ``strict=True`` rejects type-coercion: int-as-string fails.
         kwargs = cast(dict[str, object], {**_VALID_KWARGS, "image": 12345})
         with pytest.raises(ValidationError):
-            DeploymentSignatureRejectedPayload(**kwargs)
+            DeploymentSignatureRejectedPayload(**kwargs)  # type: ignore[arg-type]  # cast to dict[str, object] for strict-rejection test; pydantic validates at runtime

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
-
 import pytest
 
 from orchestrator_adapter.app.main import _create_pr_draft
