@@ -656,9 +656,12 @@ class TestTierEnforcement:
         )
         fn = mcp._tool_manager._tools["emit_event"].fn
         with (
-            patch("clawhip_bridge_mcp.server.check_tier", side_effect=CapabilityDenied(
-                action="emit_event", actor_kind="unknown", required_tier=1, reason="test"
-            )),
+            patch(
+                "clawhip_bridge_mcp.server.check_tier",
+                side_effect=CapabilityDenied(
+                    action="emit_event", actor_kind="unknown", required_tier=1, reason="test"
+                ),
+            ),
             pytest.raises(CapabilityDenied),
         ):
             await fn(
@@ -738,7 +741,10 @@ class TestApprovalLookup:
         lookup = _make_approval_lookup(tmp_path, fixed_clock)
         with pytest.raises(CapabilityDenied, match="no_matching_approval"):
             await check_tier_with_approval(
-                "git_push", caller, Tier.THREE, approval_lookup=lookup,
+                "git_push",
+                caller,
+                Tier.THREE,
+                approval_lookup=lookup,
             )
 
 

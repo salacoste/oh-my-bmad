@@ -171,9 +171,7 @@ class TestLockCycle:
 class TestReleaseLockTOCTOU:
     """AC-2: release_lock safe when lock file vanishes between read and unlink."""
 
-    def test_release_no_raise_when_file_deleted_by_another_process(
-        self, tmp_path: Path
-    ) -> None:
+    def test_release_no_raise_when_file_deleted_by_another_process(self, tmp_path: Path) -> None:
         """File vanishes before read_lock: another process deletes it."""
         sid, wid = _sid(), _wid()
         acquire_lock(tmp_path, sid, wid)

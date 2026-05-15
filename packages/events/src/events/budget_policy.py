@@ -30,8 +30,6 @@ def calculate_new_limit(
         new_limit = min(old_limit * 2, old_limit + 50_000)
 
     if new_limit <= old_limit:
-        raise ValueError(
-            f"new_limit ({new_limit}) must exceed old_limit ({old_limit})"
-        )
+        raise ValueError(f"new_limit ({new_limit}) must exceed old_limit ({old_limit})")
 
     return new_limit

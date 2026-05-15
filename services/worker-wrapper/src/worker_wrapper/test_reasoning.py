@@ -80,9 +80,7 @@ class TestSanitizeReasoningText:
         assert suppressed
 
     def test_github_token_suppresses(self) -> None:
-        text, suppressed = sanitize_reasoning_text(
-            "Push with ghp_" + "A" * 36
-        )
+        text, suppressed = sanitize_reasoning_text("Push with ghp_" + "A" * 36)
         assert text == ""
         assert suppressed
 

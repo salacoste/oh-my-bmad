@@ -688,7 +688,10 @@ class TestApplyFileEdit:
         target = tmp_path / "edit.txt"
         target.write_text("hello world")
         result = apply_file_edit(
-            target, "world", "earth", session_id="s-0192abc0-0000-7000-8000-000000000001",
+            target,
+            "world",
+            "earth",
+            session_id="s-0192abc0-0000-7000-8000-000000000001",
         )
         assert result.success
         assert result.session_id == "s-0192abc0-0000-7000-8000-000000000001"
@@ -765,7 +768,9 @@ class TestApplyFileWrite:
     def test_session_id_propagated(self, tmp_path: Path) -> None:
         target = tmp_path / "write.txt"
         result = apply_file_write(
-            target, "content", session_id="s-0192abc0-0000-7000-8000-000000000002",
+            target,
+            "content",
+            session_id="s-0192abc0-0000-7000-8000-000000000002",
         )
         assert result.success
         assert result.session_id == "s-0192abc0-0000-7000-8000-000000000002"

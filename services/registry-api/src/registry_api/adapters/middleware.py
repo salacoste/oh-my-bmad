@@ -203,9 +203,11 @@ class ActorIdMiddleware(BaseHTTPMiddleware):
 # matched via startswith so ``"POST /v1/tasks"`` covers both
 # ``/v1/tasks`` and ``/v1/tasks/{id}``.  Frozen via MappingProxyType so
 # tests cannot accidentally leak mutations between runs.
-ROUTE_TIER_MAP: MappingProxyType[str, Tier] = MappingProxyType({
-    "POST /v1/tasks": Tier.ONE,
-})
+ROUTE_TIER_MAP: MappingProxyType[str, Tier] = MappingProxyType(
+    {
+        "POST /v1/tasks": Tier.ONE,
+    }
+)
 
 
 class TierEnforcementMiddleware(BaseHTTPMiddleware):

@@ -689,7 +689,9 @@ async def test_approval_granted_updates_last_event_id(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=ApprovalGrantedPayload(
-            task_id=task_id, decision_id="d-aaa", actor_id="op-1",
+            task_id=task_id,
+            decision_id="d-aaa",
+            actor_id="op-1",
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
     )
@@ -721,7 +723,10 @@ async def test_approval_rejected_updates_last_event_id(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=ApprovalRejectedPayload(
-            task_id=task_id, decision_id="d-bbb", actor_id="op-1", reason="bad plan",
+            task_id=task_id,
+            decision_id="d-bbb",
+            actor_id="op-1",
+            reason="bad plan",
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
     )
@@ -753,7 +758,8 @@ async def test_task_stop_requested_sets_status_stopped(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskStopRequestedPayload(
-            task_id=task_id, actor_id="op-1",
+            task_id=task_id,
+            actor_id="op-1",
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
     )
@@ -869,7 +875,10 @@ async def test_task_retry_requested_updates_last_event_id(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskRetryRequestedPayload(
-            task_id=task_id, decision_id="d-ccc", actor_id="op-1", hint="focus on X",
+            task_id=task_id,
+            decision_id="d-ccc",
+            actor_id="op-1",
+            hint="focus on X",
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
     )
@@ -903,7 +912,10 @@ async def test_task_retry_without_hint_clears_existing_hint(
         emitted_at_monotonic_ns=clk2.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskRetryRequestedPayload(
-            task_id=task_id, decision_id="d-aaa", actor_id="op-1", hint="first hint",
+            task_id=task_id,
+            decision_id="d-aaa",
+            actor_id="op-1",
+            hint="first hint",
         ),
         request_id=new_uuid7(clock=clk2, rng=rng),
     )
@@ -922,7 +934,10 @@ async def test_task_retry_without_hint_clears_existing_hint(
         emitted_at_monotonic_ns=clk3.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskRetryRequestedPayload(
-            task_id=task_id, decision_id="d-bbb", actor_id="op-1", hint=None,
+            task_id=task_id,
+            decision_id="d-bbb",
+            actor_id="op-1",
+            hint=None,
         ),
         request_id=new_uuid7(clock=clk3, rng=rng),
     )
@@ -959,7 +974,10 @@ async def test_task_retry_requested_transitions_to_pending(
         emitted_at_monotonic_ns=clk2.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskRetryRequestedPayload(
-            task_id=task_id, decision_id="d-ddd", actor_id="op-1", hint="unblock it",
+            task_id=task_id,
+            decision_id="d-ddd",
+            actor_id="op-1",
+            hint="unblock it",
         ),
         request_id=new_uuid7(clock=clk2, rng=rng),
     )
@@ -994,7 +1012,10 @@ async def test_task_retry_from_failed_transitions_to_pending(
         emitted_at_monotonic_ns=clk2.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskRetryRequestedPayload(
-            task_id=task_id, decision_id="d-eee", actor_id="op-1", hint="try again",
+            task_id=task_id,
+            decision_id="d-eee",
+            actor_id="op-1",
+            hint="try again",
         ),
         request_id=new_uuid7(clock=clk2, rng=Random(403)),
     )
@@ -1022,7 +1043,9 @@ async def test_story65_handlers_raise_materializer_error_on_missing_task(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=ApprovalGrantedPayload(
-            task_id=missing_id, decision_id="d-x1", actor_id="op-1",
+            task_id=missing_id,
+            decision_id="d-x1",
+            actor_id="op-1",
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
     )
@@ -1037,7 +1060,9 @@ async def test_story65_handlers_raise_materializer_error_on_missing_task(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=ApprovalRejectedPayload(
-            task_id=missing_id, decision_id="d-x2", actor_id="op-1",
+            task_id=missing_id,
+            decision_id="d-x2",
+            actor_id="op-1",
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
     )
@@ -1052,7 +1077,8 @@ async def test_story65_handlers_raise_materializer_error_on_missing_task(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskStopRequestedPayload(
-            task_id=missing_id, actor_id="op-1",
+            task_id=missing_id,
+            actor_id="op-1",
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
     )
@@ -1067,7 +1093,9 @@ async def test_story65_handlers_raise_materializer_error_on_missing_task(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskRetryRequestedPayload(
-            task_id=missing_id, decision_id="d-x3", actor_id="op-1",
+            task_id=missing_id,
+            decision_id="d-x3",
+            actor_id="op-1",
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
     )
@@ -1094,7 +1122,9 @@ async def test_story65_audit_fields_in_envelope(db_session: AsyncSession) -> Non
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=ApprovalGrantedPayload(
-            task_id=task_id, decision_id="d-a1", actor_id="op-1",
+            task_id=task_id,
+            decision_id="d-a1",
+            actor_id="op-1",
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
     )
@@ -1114,7 +1144,9 @@ async def test_story65_audit_fields_in_envelope(db_session: AsyncSession) -> Non
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=ApprovalRejectedPayload(
-            task_id=task_id, decision_id="d-a2", actor_id="op-1",
+            task_id=task_id,
+            decision_id="d-a2",
+            actor_id="op-1",
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
     )
@@ -1131,7 +1163,8 @@ async def test_story65_audit_fields_in_envelope(db_session: AsyncSession) -> Non
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskStopRequestedPayload(
-            task_id=task_id, actor_id="op-1",
+            task_id=task_id,
+            actor_id="op-1",
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
     )
@@ -1148,7 +1181,9 @@ async def test_story65_audit_fields_in_envelope(db_session: AsyncSession) -> Non
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskRetryRequestedPayload(
-            task_id=task_id, decision_id="d-a3", actor_id="op-1",
+            task_id=task_id,
+            decision_id="d-a3",
+            actor_id="op-1",
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
     )
@@ -1224,7 +1259,9 @@ async def test_tier3_action_attempted_updates_last_event_id(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=Tier3ActionAttemptedPayload(
-            action="git_push", task_id=task_id, accepted=True,
+            action="git_push",
+            task_id=task_id,
+            accepted=True,
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
     )
@@ -1256,7 +1293,9 @@ async def test_tier3_action_performed_updates_last_event_id(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=Tier3ActionPerformedPayload(
-            task_id=task_id, action="git_push", accepted=True,
+            task_id=task_id,
+            action="git_push",
+            accepted=True,
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
     )
@@ -1288,7 +1327,9 @@ async def test_tier3_license_override_updates_last_event_id(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=LicenseOverridePayload(
-            task_id=task_id, decision_id="d-lic", actor_id="op-1",
+            task_id=task_id,
+            decision_id="d-lic",
+            actor_id="op-1",
             reason="operator_license_override",
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
@@ -1318,7 +1359,9 @@ async def test_story66_handlers_raise_materializer_error_on_missing_task(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=Tier3ActionAttemptedPayload(
-            action="git_push", task_id=missing_id, accepted=False,
+            action="git_push",
+            task_id=missing_id,
+            accepted=False,
             reason="denied",
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
@@ -1334,7 +1377,9 @@ async def test_story66_handlers_raise_materializer_error_on_missing_task(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=Tier3ActionPerformedPayload(
-            task_id=missing_id, action="git_push", accepted=True,
+            task_id=missing_id,
+            action="git_push",
+            accepted=True,
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
     )
@@ -1349,7 +1394,9 @@ async def test_story66_handlers_raise_materializer_error_on_missing_task(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=LicenseOverridePayload(
-            task_id=missing_id, decision_id="d-x", actor_id="op-1",
+            task_id=missing_id,
+            decision_id="d-x",
+            actor_id="op-1",
             reason="test",
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
@@ -1377,7 +1424,9 @@ async def test_story66_audit_fields_in_envelope(db_session: AsyncSession) -> Non
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=Tier3ActionAttemptedPayload(
-            action="git_push", task_id=task_id, accepted=True,
+            action="git_push",
+            task_id=task_id,
+            accepted=True,
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
     )
@@ -1397,7 +1446,9 @@ async def test_story66_audit_fields_in_envelope(db_session: AsyncSession) -> Non
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=Tier3ActionPerformedPayload(
-            task_id=task_id, action="git_push", accepted=True,
+            task_id=task_id,
+            action="git_push",
+            accepted=True,
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
     )
@@ -1413,7 +1464,9 @@ async def test_story66_audit_fields_in_envelope(db_session: AsyncSession) -> Non
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=LicenseOverridePayload(
-            task_id=task_id, decision_id="d-a", actor_id="op-1",
+            task_id=task_id,
+            decision_id="d-a",
+            actor_id="op-1",
             reason="override",
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
@@ -1481,7 +1534,9 @@ async def test_tier3_action_attempted_accepted_false_updates_last_event_id(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=Tier3ActionAttemptedPayload(
-            action="git_push", task_id=task_id, accepted=False,
+            action="git_push",
+            task_id=task_id,
+            accepted=False,
             reason="tier-3 capability denied",
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
@@ -1519,7 +1574,10 @@ async def test_budget_exceeded_sets_blocked_status(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskBudgetExceededPayload(
-            task_id=task_id, token_limit=50_000, tokens_used=52_000, step=3,
+            task_id=task_id,
+            token_limit=50_000,
+            tokens_used=52_000,
+            step=3,
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
     )
@@ -1547,7 +1605,9 @@ async def test_budget_exceeded_raises_on_missing_task(
         actor=_ACTOR,
         payload=TaskBudgetExceededPayload(
             task_id="t-00000000-0000-7000-8000-000000009999",
-            token_limit=50_000, tokens_used=52_000, step=1,
+            token_limit=50_000,
+            tokens_used=52_000,
+            step=1,
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
     )
@@ -1576,7 +1636,10 @@ async def test_budget_override_resumes_to_executing(
         emitted_at_monotonic_ns=clk_block.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskBudgetExceededPayload(
-            task_id=task_id, token_limit=50_000, tokens_used=52_000, step=3,
+            task_id=task_id,
+            token_limit=50_000,
+            tokens_used=52_000,
+            step=3,
         ),
         request_id=new_uuid7(clock=clk_block, rng=rng_block),
     )
@@ -1700,7 +1763,9 @@ async def test_step_completed_updates_current_step(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskStepCompletedPayload(
-            task_id=task_id, step=3, description="Refactor module",
+            task_id=task_id,
+            step=3,
+            description="Refactor module",
             output_summary="Renamed helper functions",
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
@@ -1728,7 +1793,9 @@ async def test_step_completed_raises_on_missing_task(
         actor=_ACTOR,
         payload=TaskStepCompletedPayload(
             task_id="t-00000000-0000-7000-8000-000000009999",
-            step=1, description="x", output_summary="",
+            step=1,
+            description="x",
+            output_summary="",
         ),
         request_id=new_uuid7(clock=clk, rng=rng),
     )
@@ -1999,7 +2066,10 @@ async def test_close_active_session_for_task_closes_all_sessions(
 ) -> None:
     """Story 7.5.2 AC-1: bulk UPDATE closes ALL active sessions for a task."""
     task_id, sessions = await _seed_task_with_sessions(
-        db_session, task_seed=901, num_sessions=3, status="active",
+        db_session,
+        task_seed=901,
+        num_sessions=3,
+        status="active",
     )
 
     await _close_active_session_for_task(db_session, task_id, FROZEN_EPOCH)
@@ -2017,7 +2087,10 @@ async def test_close_active_session_closes_idle_sessions(
 ) -> None:
     """Story 7.5.2 AC-1: bulk UPDATE closes idle sessions with full field assertions."""
     task_id, sessions = await _seed_task_with_sessions(
-        db_session, task_seed=902, num_sessions=2, status="idle",
+        db_session,
+        task_seed=902,
+        num_sessions=2,
+        status="idle",
     )
 
     await _close_active_session_for_task(db_session, task_id, FROZEN_EPOCH)
@@ -2055,7 +2128,10 @@ async def test_close_does_not_affect_already_closed_sessions(
 ) -> None:
     """Story 7.5.2: already-closed sessions are not touched by the bulk close."""
     task_id, sessions = await _seed_task_with_sessions(
-        db_session, task_seed=904, num_sessions=2, status="active",
+        db_session,
+        task_seed=904,
+        num_sessions=2,
+        status="active",
     )
     # Manually close the first session with a distinct ended_at.
     _pre_closed_at = FROZEN_EPOCH.replace(year=2024)
@@ -2083,10 +2159,16 @@ async def test_close_does_not_affect_other_tasks(
 ) -> None:
     """Story 7.5.2: bulk close for one task leaves another task's sessions untouched."""
     task_a, sessions_a = await _seed_task_with_sessions(
-        db_session, task_seed=905, num_sessions=2, status="active",
+        db_session,
+        task_seed=905,
+        num_sessions=2,
+        status="active",
     )
     task_b, sessions_b = await _seed_task_with_sessions(
-        db_session, task_seed=906, num_sessions=2, status="active",
+        db_session,
+        task_seed=906,
+        num_sessions=2,
+        status="active",
     )
 
     await _close_active_session_for_task(db_session, task_a, FROZEN_EPOCH)
@@ -2109,7 +2191,10 @@ async def test_close_mixed_active_and_idle_sessions(
 ) -> None:
     """Story 7.5.2: bulk close handles a mix of active AND idle sessions on one task."""
     task_id, active_sessions = await _seed_task_with_sessions(
-        db_session, task_seed=907, num_sessions=2, status="active",
+        db_session,
+        task_seed=907,
+        num_sessions=2,
+        status="active",
     )
     # Seed idle sessions on the same task — use separate rng seeds to avoid ID collision.
     idle_sessions: list[SessionRow] = []

@@ -120,10 +120,12 @@ async def _check_license_gate(
         )
     async with session_maker() as session:
         result = await session.execute(
-            select(Event.id).where(
+            select(Event.id)
+            .where(
                 Event.task_id == task_id,
                 Event.type == "task.license_flagged",
-            ).limit(1)
+            )
+            .limit(1)
         )
         return result.scalar_one_or_none() is not None
 
@@ -147,10 +149,12 @@ async def _check_budget_gate(
         )
     async with session_maker() as session:
         result = await session.execute(
-            select(Event.id).where(
+            select(Event.id)
+            .where(
                 Event.task_id == task_id,
                 Event.type == "task.budget_exceeded",
-            ).limit(1)
+            )
+            .limit(1)
         )
         return result.scalar_one_or_none() is not None
 
@@ -308,10 +312,13 @@ async def post_decision(
             override_event_id = new_event_id(clock=clock)
             async with session_maker() as q_session:
                 be_result = await q_session.execute(
-                    select(Event.payload_json).where(
+                    select(Event.payload_json)
+                    .where(
                         Event.task_id == task_id,
                         Event.type == "task.budget_exceeded",
-                    ).order_by(desc(Event.emitted_at_monotonic_ns)).limit(1)
+                    )
+                    .order_by(desc(Event.emitted_at_monotonic_ns))
+                    .limit(1)
                 )
                 be_row = be_result.scalar_one_or_none()
             if be_row is not None:
@@ -375,9 +382,7 @@ async def post_decision(
 
     if was_run:
         if not factory_called:
-            raise RuntimeError(
-                "get_or_run reported was_run=True but factory_called is False"
-            )
+            raise RuntimeError("get_or_run reported was_run=True but factory_called is False")
         slot = response_body_cache[cache_key]
         body_bytes = slot.body
         status_value: IdempotencyStatus = "applied"

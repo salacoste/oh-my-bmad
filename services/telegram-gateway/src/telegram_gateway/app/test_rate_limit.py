@@ -965,9 +965,7 @@ class TestDynamicRetryAfter:
     """Story 7.5.3 AC-3: Retry-After computed from bucket deficit."""
 
     @staticmethod
-    def _make_mw(
-        capacity: int, refill_per_second: float, clock: Any
-    ) -> WebhookRateLimitMiddleware:
+    def _make_mw(capacity: int, refill_per_second: float, clock: Any) -> WebhookRateLimitMiddleware:
         from starlette.applications import Starlette  # noqa: PLC0415
 
         return WebhookRateLimitMiddleware(

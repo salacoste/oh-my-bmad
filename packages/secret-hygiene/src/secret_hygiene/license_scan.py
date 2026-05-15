@@ -29,35 +29,39 @@ from pathlib import Path
 # License policy
 # ---------------------------------------------------------------------------
 
-PERMISSIVE_LICENSES: frozenset[str] = frozenset({
-    "mit",
-    "apache-2.0",
-    "bsd-2-clause",
-    "bsd-3-clause",
-    "isc",
-    "0bsd",
-    "unlicense",
-    "cc0-1.0",
-    "python-2.0",
-    "psf-2.0",
-    "artistic-2.0",
-    "zlib",
-    "mit-0",
-    "boost-1.0",
-})
+PERMISSIVE_LICENSES: frozenset[str] = frozenset(
+    {
+        "mit",
+        "apache-2.0",
+        "bsd-2-clause",
+        "bsd-3-clause",
+        "isc",
+        "0bsd",
+        "unlicense",
+        "cc0-1.0",
+        "python-2.0",
+        "psf-2.0",
+        "artistic-2.0",
+        "zlib",
+        "mit-0",
+        "boost-1.0",
+    }
+)
 
-COPYLEFT_INDICATORS: frozenset[str] = frozenset({
-    "gpl",
-    "agpl",
-    "lgpl",
-    "mpl",
-    "cpal",
-    "eupl",
-    "sspl",
-    "copyleft",
-    "proprietary",
-    "cecill",
-})
+COPYLEFT_INDICATORS: frozenset[str] = frozenset(
+    {
+        "gpl",
+        "agpl",
+        "lgpl",
+        "mpl",
+        "cpal",
+        "eupl",
+        "sspl",
+        "copyleft",
+        "proprietary",
+        "cecill",
+    }
+)
 
 REPO_LICENSE: str = "mit"
 
@@ -90,10 +94,7 @@ def is_compatible(detected: str, repo_license: str = REPO_LICENSE) -> bool:
         or_tokens = re.split(r"\s+or\s+", group)
         if len(or_tokens) > 1:
             # OR group: compatible if ANY branch is ok
-            if not any(
-                _token_ok(t.strip("() "), repo_license)
-                for t in or_tokens
-            ):
+            if not any(_token_ok(t.strip("() "), repo_license) for t in or_tokens):
                 return False
         else:
             if not _token_ok(group, repo_license):
@@ -152,13 +153,39 @@ _EXCLUDE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\.(png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|so|dylib|dll|exe|o|pyc|pyd)$"),
 ]
 
-_BINARY_EXTENSIONS: frozenset[str] = frozenset({
-    ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg",
-    ".woff", ".woff2", ".ttf", ".eot",
-    ".so", ".dylib", ".dll", ".exe", ".o",
-    ".pyc", ".pyd", ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z",
-    ".mp3", ".mp4", ".wav", ".avi", ".mov", ".pdf",
-})
+_BINARY_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".ico",
+        ".svg",
+        ".woff",
+        ".woff2",
+        ".ttf",
+        ".eot",
+        ".so",
+        ".dylib",
+        ".dll",
+        ".exe",
+        ".o",
+        ".pyc",
+        ".pyd",
+        ".zip",
+        ".tar",
+        ".gz",
+        ".bz2",
+        ".xz",
+        ".7z",
+        ".mp3",
+        ".mp4",
+        ".wav",
+        ".avi",
+        ".mov",
+        ".pdf",
+    }
+)
 
 
 def _should_skip(path_str: str) -> bool:
@@ -196,15 +223,13 @@ def scan_file_licenses(
         from scancode.api import get_licenses  # type: ignore[import-untyped]
     except ImportError:
         print(
-            "warning: secret-hygiene: scancode-toolkit not installed; "
-            "license scan skipped",
+            "warning: secret-hygiene: scancode-toolkit not installed; license scan skipped",
             file=sys.stderr,
         )
         return []
     except Exception as exc:  # noqa: BLE001
         print(
-            f"warning: secret-hygiene: cannot import scancode: {exc}; "
-            "license scan skipped",
+            f"warning: secret-hygiene: cannot import scancode: {exc}; license scan skipped",
             file=sys.stderr,
         )
         return []
@@ -237,11 +262,8 @@ def scan_file_licenses(
 
     # Also check individual detections for composite expressions.
     for detection in result.get("license_detections", []):
-        expr = (
-            detection.get("license_expression")
-            or detection.get("matched_rule", {}).get(
-                "license_expression"
-            )
+        expr = detection.get("license_expression") or detection.get("matched_rule", {}).get(
+            "license_expression"
         )
         if not expr:
             continue

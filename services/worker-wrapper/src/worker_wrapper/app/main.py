@@ -315,7 +315,10 @@ async def run_task(
         # Approval may have arrived during downtime — check immediately.
         log.info("restored_awaiting_approval", task_id=task_id)
         await _handle_pending_approval(
-            mgr, clients, settings, task_id,
+            mgr,
+            clients,
+            settings,
+            task_id,
         )
         return
     if mgr is not None:
@@ -371,9 +374,7 @@ async def run_task(
     # --- License scan pre-check (Story 6.10, FR40) ---
     try:
         all_files = [
-            str(p)
-            for p in worktree_path.rglob("*")
-            if p.is_file() and not p.name.startswith(".")
+            str(p) for p in worktree_path.rglob("*") if p.is_file() and not p.name.startswith(".")
         ]
 
         def _sync_scan() -> list:
@@ -381,14 +382,17 @@ async def run_task(
 
         license_findings = await asyncio.to_thread(_sync_scan)
         if license_findings:
-            await _emit_event("task.license_flagged", TaskLicenseFlaggedPayload(
-                task_id=task_id,
-                reason_code=license_findings[0].reason_code,
-                file_list=[f.file_path for f in license_findings],
-                detected_licenses=list(dict.fromkeys(
-                    f.license_detected for f in license_findings
-                )),
-            ).model_dump())
+            await _emit_event(
+                "task.license_flagged",
+                TaskLicenseFlaggedPayload(
+                    task_id=task_id,
+                    reason_code=license_findings[0].reason_code,
+                    file_list=[f.file_path for f in license_findings],
+                    detected_licenses=list(
+                        dict.fromkeys(f.license_detected for f in license_findings)
+                    ),
+                ).model_dump(),
+            )
             log.warning(
                 "license_flagged",
                 task_id=task_id,
@@ -419,7 +423,10 @@ async def run_task(
 
     # Wait for approval (AC-3).
     await _handle_pending_approval(
-        mgr, clients, settings, task_id,
+        mgr,
+        clients,
+        settings,
+        task_id,
     )
 
 
@@ -445,7 +452,9 @@ async def _handle_pending_approval(
         log.error("event_log_dir_not_configured", task_id=task_id)
         await mgr.handle_event(LifecycleEvent.TASK_FAILED)
         await _emit_tier3_performed(
-            clients, task_id, accepted=False,
+            clients,
+            task_id,
+            accepted=False,
             reason="event_log_dir not configured",
         )
         return
@@ -462,7 +471,9 @@ async def _handle_pending_approval(
     except TimeoutError:
         await mgr.handle_event(LifecycleEvent.TASK_FAILED)
         await _emit_tier3_performed(
-            clients, task_id, accepted=False,
+            clients,
+            task_id,
+            accepted=False,
             reason=f"Approval timed out after {settings.approval_timeout_s}s",
         )
         log.error("approval_timeout", task_id=task_id)
@@ -472,7 +483,9 @@ async def _handle_pending_approval(
         # Rejection path (AC-3).
         await mgr.handle_event(LifecycleEvent.APPROVAL_REJECTED)
         await _emit_tier3_performed(
-            clients, task_id, accepted=False,
+            clients,
+            task_id,
+            accepted=False,
             reason=approval.reason or "operator rejected",
         )
         log.info("approval_rejected", task_id=task_id)
@@ -484,13 +497,17 @@ async def _handle_pending_approval(
     except Exception:
         log.exception("handle_approval_failed", task_id=task_id)
         await _emit_tier3_performed(
-            clients, task_id, accepted=False,
+            clients,
+            task_id,
+            accepted=False,
             approval_event_id=approval.event_id,
             reason="gated action execution failed",
         )
         return
     await _emit_tier3_performed(
-        clients, task_id, accepted=True,
+        clients,
+        task_id,
+        accepted=True,
         approval_event_id=approval.event_id,
     )
     log.info("tier3_action_performed", task_id=task_id)

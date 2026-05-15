@@ -159,6 +159,7 @@ def harness(tmp_path) -> _Harness:
         h.lifespan, h.client = loop.run_until_complete(_setup())
         yield h
     finally:
+
         async def _teardown() -> None:
             if h.client is not None:
                 await h.client.aclose()
@@ -306,9 +307,7 @@ async def _count_jsonl_events(events_dir, task_id: str) -> int:
     return count
 
 
-async def _count_jsonl_events_by_type(
-    events_dir, task_id: str, event_type: str
-) -> int:
+async def _count_jsonl_events_by_type(events_dir, task_id: str, event_type: str) -> int:
     """Count JSONL event lines for a task, filtered by envelope ``type``."""
     log_path = current_day_path(events_dir, FROZEN_EPOCH)
     if not log_path.exists():
@@ -362,9 +361,7 @@ def test_license_flag_blocks_approval(harness: _Harness) -> None:
     assert body.get("type") == "approval_blocked_by", (
         f"expected type='approval_blocked_by', got {body.get('type')}"
     )
-    assert body.get("status") == 409, (
-        f"expected status=409, got {body.get('status')}"
-    )
+    assert body.get("status") == 409, f"expected status=409, got {body.get('status')}"
     assert body.get("extensions", {}).get("reason") == "license_flag", (
         f"expected reason='license_flag', got {body.get('extensions', {}).get('reason')}"
     )
@@ -387,9 +384,7 @@ def test_license_override_approve(harness: _Harness) -> None:
         task_id = await _seed_task(h.writable_session, h.clock)
         await _seed_license_flagged_event(h.writable_session, h.clock, task_id, rng)
         key = new_idempotency_key(rng=rng)
-        resp = await _submit_decision(
-            h.client, task_id, "approve", key, rng, override="license"
-        )
+        resp = await _submit_decision(h.client, task_id, "approve", key, rng, override="license")
         return resp, task_id
 
     resp, task_id = h.loop.run_until_complete(_run())
@@ -405,12 +400,8 @@ def test_license_override_approve(harness: _Harness) -> None:
     override_count = h.loop.run_until_complete(
         _count_jsonl_events_by_type(h.events_dir, task_id, "tier3.license_override")
     )
-    assert approval_count == 1, (
-        f"expected 1 approval.granted event, got {approval_count}"
-    )
-    assert override_count == 1, (
-        f"expected 1 tier3.license_override event, got {override_count}"
-    )
+    assert approval_count == 1, f"expected 1 approval.granted event, got {approval_count}"
+    assert override_count == 1, f"expected 1 tier3.license_override event, got {override_count}"
 
 
 # ---------------------------------------------------------------------------
@@ -442,9 +433,7 @@ def test_approve_without_license_flag(harness: _Harness) -> None:
     approval_count = h.loop.run_until_complete(
         _count_jsonl_events_by_type(h.events_dir, task_id, "approval.granted")
     )
-    assert approval_count == 1, (
-        f"expected exactly 1 approval.granted event, got {approval_count}"
-    )
+    assert approval_count == 1, f"expected exactly 1 approval.granted event, got {approval_count}"
 
 
 # ---------------------------------------------------------------------------
@@ -465,16 +454,12 @@ def test_license_flag_does_not_block_reject_or_stop(harness: _Harness) -> None:
         task_id_1 = await _seed_task(h.writable_session, h.clock)
         await _seed_license_flagged_event(h.writable_session, h.clock, task_id_1, rng)
         key_1 = new_idempotency_key(rng=rng)
-        resp_reject = await _submit_decision(
-            h.client, task_id_1, "reject", key_1, rng
-        )
+        resp_reject = await _submit_decision(h.client, task_id_1, "reject", key_1, rng)
 
         task_id_2 = await _seed_task(h.writable_session, h.clock)
         await _seed_license_flagged_event(h.writable_session, h.clock, task_id_2, rng)
         key_2 = new_idempotency_key(rng=rng)
-        resp_stop = await _submit_decision(
-            h.client, task_id_2, "stop", key_2, rng
-        )
+        resp_stop = await _submit_decision(h.client, task_id_2, "stop", key_2, rng)
 
         return resp_reject, resp_stop
 

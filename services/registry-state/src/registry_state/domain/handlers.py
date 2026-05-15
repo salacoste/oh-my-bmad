@@ -112,9 +112,7 @@ async def _task_id_for_session(
     session_id: str,
 ) -> str | None:
     """Look up the ``task_id`` for a session row. Returns ``None`` if not found."""
-    result = await session.execute(
-        select(SessionRow.task_id).where(SessionRow.id == session_id)
-    )
+    result = await session.execute(select(SessionRow.task_id).where(SessionRow.id == session_id))
     return result.scalar_one_or_none()
 
 
@@ -208,11 +206,16 @@ async def handle_task_plan_ready(session: AsyncSession, envelope: EventEnvelope)
     """
     payload = _hydrate(envelope.payload, TaskPlanReadyPayload)
     assert isinstance(payload, TaskPlanReadyPayload)
-    await _touch_task(session, payload.task_id, envelope, {
-        "status": "plan_ready",
-        "total_steps": payload.estimated_steps,
-        "current_step": 0,
-    })
+    await _touch_task(
+        session,
+        payload.task_id,
+        envelope,
+        {
+            "status": "plan_ready",
+            "total_steps": payload.estimated_steps,
+            "current_step": 0,
+        },
+    )
 
 
 async def handle_task_execution_started(session: AsyncSession, envelope: EventEnvelope) -> None:
@@ -258,12 +261,20 @@ async def handle_task_blocker_raised(session: AsyncSession, envelope: EventEnvel
     payload = _hydrate(envelope.payload, TaskBlockerRaisedPayload)
     assert isinstance(payload, TaskBlockerRaisedPayload)
     if len(payload.reason) > 64:
-        _log.warning("blocker_reason truncated from %d to 64 chars for task %s",
-                     len(payload.reason), payload.task_id)
-    await _touch_task(session, payload.task_id, envelope, {
-        "status": "blocked",
-        "blocker_reason": payload.reason[:64],
-    })
+        _log.warning(
+            "blocker_reason truncated from %d to 64 chars for task %s",
+            len(payload.reason),
+            payload.task_id,
+        )
+    await _touch_task(
+        session,
+        payload.task_id,
+        envelope,
+        {
+            "status": "blocked",
+            "blocker_reason": payload.reason[:64],
+        },
+    )
 
 
 async def handle_task_summary_emitted(session: AsyncSession, envelope: EventEnvelope) -> None:
@@ -440,10 +451,15 @@ async def handle_task_budget_exceeded(session: AsyncSession, envelope: EventEnve
     """
     payload = _hydrate(envelope.payload, TaskBudgetExceededPayload)
     assert isinstance(payload, TaskBudgetExceededPayload)
-    await _touch_task(session, payload.task_id, envelope, {
-        "status": "blocked",
-        "blocker_reason": "budget_exceeded",
-    })
+    await _touch_task(
+        session,
+        payload.task_id,
+        envelope,
+        {
+            "status": "blocked",
+            "blocker_reason": "budget_exceeded",
+        },
+    )
 
 
 async def handle_tier3_budget_override(session: AsyncSession, envelope: EventEnvelope) -> None:
@@ -497,9 +513,14 @@ async def handle_task_step_completed(session: AsyncSession, envelope: EventEnvel
     """
     payload = _hydrate(envelope.payload, TaskStepCompletedPayload)
     assert isinstance(payload, TaskStepCompletedPayload)
-    await _touch_task(session, payload.task_id, envelope, {
-        "current_step": payload.step,
-    })
+    await _touch_task(
+        session,
+        payload.task_id,
+        envelope,
+        {
+            "current_step": payload.step,
+        },
+    )
 
 
 async def handle_file_edited(session: AsyncSession, envelope: EventEnvelope) -> None:
@@ -518,13 +539,19 @@ async def handle_file_edited(session: AsyncSession, envelope: EventEnvelope) -> 
         _log.warning("session_id %s not found; skipping file.edited event", payload.session_id)
         return
     action = f"{payload.tool_name} {payload.file_path}"
-    await _touch_task(session, task_id, envelope, {
-        "last_agent_action": action[:2000],
-    })
+    await _touch_task(
+        session,
+        task_id,
+        envelope,
+        {
+            "last_agent_action": action[:2000],
+        },
+    )
 
 
 async def handle_agent_reasoning_breadcrumb(
-    session: AsyncSession, envelope: EventEnvelope,
+    session: AsyncSession,
+    envelope: EventEnvelope,
 ) -> None:
     """Update ``last_agent_action`` for ``agent.reasoning.*`` breadcrumbs.
 
@@ -546,9 +573,14 @@ async def handle_agent_reasoning_breadcrumb(
             envelope.type,
         )
         return
-    await _touch_task(session, task_id, envelope, {
-        "last_agent_action": payload.text[:2000],
-    })
+    await _touch_task(
+        session,
+        task_id,
+        envelope,
+        {
+            "last_agent_action": payload.text[:2000],
+        },
+    )
 
 
 def register_default_handlers(materializer: object) -> None:
@@ -598,13 +630,16 @@ def register_default_handlers(materializer: object) -> None:
     materializer.register_handler("task.step.completed", handle_task_step_completed)
     materializer.register_handler("file.edited", handle_file_edited)
     materializer.register_handler(
-        "agent.reasoning.plan_drafted", handle_agent_reasoning_breadcrumb,
+        "agent.reasoning.plan_drafted",
+        handle_agent_reasoning_breadcrumb,
     )
     materializer.register_handler(
-        "agent.reasoning.tool_call_rationale", handle_agent_reasoning_breadcrumb,
+        "agent.reasoning.tool_call_rationale",
+        handle_agent_reasoning_breadcrumb,
     )
     materializer.register_handler(
-        "agent.reasoning.step_summary", handle_agent_reasoning_breadcrumb,
+        "agent.reasoning.step_summary",
+        handle_agent_reasoning_breadcrumb,
     )
 
 

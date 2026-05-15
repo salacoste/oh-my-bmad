@@ -23,10 +23,8 @@ _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 def _make_retry(total_timeout_s: float) -> tenacity.AsyncRetrying:
     return tenacity.AsyncRetrying(
-        stop=tenacity.stop_after_attempt(3)
-        | tenacity.stop_after_delay(total_timeout_s),
-        wait=tenacity.wait_exponential(multiplier=0.5, max=5)
-        + tenacity.wait_random(0, 0.5),
+        stop=tenacity.stop_after_attempt(3) | tenacity.stop_after_delay(total_timeout_s),
+        wait=tenacity.wait_exponential(multiplier=0.5, max=5) + tenacity.wait_random(0, 0.5),
         retry=tenacity.retry_if_exception_type(
             (aiohttp.ClientError, asyncio.TimeoutError),
         ),

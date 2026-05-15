@@ -22,6 +22,7 @@ from .license_scan import (
 # Helper — patch scancode.api.get_licenses with a mock
 # ---------------------------------------------------------------------------
 
+
 def _patch_scancode(mock_get: MagicMock):
     """Return a patch.dict that injects a mock scancode.api.get_licenses."""
     modules = {
@@ -254,13 +255,12 @@ class TestScanFileLicenses:
         assert "scancode-toolkit not installed" in captured.err
 
     def test_scan_exception_returns_empty(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         src = tmp_path / "code.py"
         src.write_text("x = 1\n", encoding="utf-8")
-        mock_get = MagicMock(
-            side_effect=RuntimeError("scan crashed")
-        )
+        mock_get = MagicMock(side_effect=RuntimeError("scan crashed"))
         with _patch_scancode(mock_get):
             findings = scan_file_licenses(src)
         assert findings == []
@@ -307,7 +307,8 @@ class TestScanFileLicenses:
         assert findings == []
 
     def test_gpl_incompatible_with_repo_mit(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         src = tmp_path / "gpl.py"
         src.write_text("# GPL\n", encoding="utf-8")
@@ -323,7 +324,8 @@ class TestScanFileLicenses:
         assert findings[0].incompatible_with_repo_license == "mit"
 
     def test_noassertion_passes_as_no_license(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         src = tmp_path / "unclear.py"
         src.write_text("x = 1\n", encoding="utf-8")
@@ -338,7 +340,8 @@ class TestScanFileLicenses:
         assert findings == []
 
     def test_none_sentinel_passes_as_no_license(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         src = tmp_path / "none.py"
         src.write_text("x = 1\n", encoding="utf-8")
@@ -371,7 +374,8 @@ class TestScanFilesForLicenses:
         assert scan_files_for_licenses(["upstream/omc/README.md"]) == []
 
     def test_mixed_files(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         clean = tmp_path / "clean.py"
@@ -396,16 +400,12 @@ class TestScanFilesForLicenses:
 
         mock_get = MagicMock(side_effect=mock_get_licenses)
         with _patch_scancode(mock_get):
-            findings = scan_files_for_licenses(
-                [str(clean), str(gpl)]
-            )
+            findings = scan_files_for_licenses([str(clean), str(gpl)])
         assert len(findings) == 1
         assert "gpl" in findings[0].file_path
 
     def test_nonexistent_files_skipped(self) -> None:
-        findings = scan_files_for_licenses(
-            ["/tmp/no_such_file_abc123.py"]
-        )
+        findings = scan_files_for_licenses(["/tmp/no_such_file_abc123.py"])
         assert findings == []
 
 
@@ -468,12 +468,7 @@ class TestLicenseScanMain:
             "percentage_of_license_text": 50.0,
         }
         with _patch_scancode(MagicMock(return_value=mock_result)):
-            assert (
-                license_scan_main(
-                    [str(gpl), "--repo-license", "MIT"]
-                )
-                == 1
-            )
+            assert license_scan_main([str(gpl), "--repo-license", "MIT"]) == 1
 
     def test_missing_scancode_returns_zero(
         self,

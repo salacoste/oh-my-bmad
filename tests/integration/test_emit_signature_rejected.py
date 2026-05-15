@@ -25,12 +25,18 @@ from events.canonical import from_canonical_json
 _HELPER_PATH = Path(__file__).resolve().parents[2] / "scripts" / "emit_signature_rejected.py"
 _VALID_DIGEST = "sha256:" + ("a" * 64)
 _DEFAULT_ARGS = [
-    "--image", "ghcr.io/salacoste/oh-my-bmad-registry-api",
-    "--digest", _VALID_DIGEST,
-    "--attestation-type", "signature",
-    "--error-message", "no matching signatures: cert subject doesn't match",
-    "--omb-version", "v0.1.5-rc1",
-    "--ghcr-owner", "salacoste",
+    "--image",
+    "ghcr.io/salacoste/oh-my-bmad-registry-api",
+    "--digest",
+    _VALID_DIGEST,
+    "--attestation-type",
+    "signature",
+    "--error-message",
+    "no matching signatures: cert subject doesn't match",
+    "--omb-version",
+    "v0.1.5-rc1",
+    "--ghcr-owner",
+    "salacoste",
 ]
 
 
@@ -175,7 +181,11 @@ class TestArgumentValidation:
 
     def test_missing_required_arg_exits_2(self, tmp_path: Path) -> None:
         # Drop --image
-        partial = [a for a in _DEFAULT_ARGS if a not in ("--image", "ghcr.io/salacoste/oh-my-bmad-registry-api")]
+        partial = [
+            a
+            for a in _DEFAULT_ARGS
+            if a not in ("--image", "ghcr.io/salacoste/oh-my-bmad-registry-api")
+        ]
         result = _invoke_helper(args=partial, event_log_dir=tmp_path)
         assert result.returncode == 2
         assert "--image" in result.stderr
@@ -227,8 +237,7 @@ class TestLockContention:
                 fcntl.flock(held.fileno(), fcntl.LOCK_UN)
 
         assert result.returncode == 3, (
-            f"expected exit 3 on lock contention; got {result.returncode}, "
-            f"stderr={result.stderr!r}"
+            f"expected exit 3 on lock contention; got {result.returncode}, stderr={result.stderr!r}"
         )
         # FR26 single-writer message present (substring match).
         assert "FR26 single-writer" in result.stderr

@@ -211,6 +211,7 @@ def harness(tmp_path) -> _Harness:
         h.lifespan, h.client = loop.run_until_complete(_setup())
         yield h
     finally:
+
         async def _teardown() -> None:
             if h.client is not None:
                 await h.client.aclose()
@@ -300,9 +301,7 @@ async def _submit_decision(
 async def _read_task_status(session_maker, task_id: str) -> str | None:
     """Query the Task table for current status."""
     async with session_maker() as session:
-        result = await session.execute(
-            select(Task.status).where(Task.id == task_id)
-        )
+        result = await session.execute(select(Task.status).where(Task.id == task_id))
         return result.scalar_one_or_none()
 
 
@@ -464,10 +463,7 @@ def test_concurrent_decisions_no_duplicate_events(
     assert event_count >= 1, f"expected >=1 event, got {event_count}"
 
     # Event count should not exceed number of actions.
-    assert event_count <= len(actions), (
-        f"expected <= {len(actions)} events, "
-        f"got {event_count}"
-    )
+    assert event_count <= len(actions), f"expected <= {len(actions)} events, got {event_count}"
 
 
 # ---------------------------------------------------------------------------
@@ -528,8 +524,7 @@ def test_idempotency_dedup_same_key(
     # Exactly one event emitted.
     event_count = h.loop.run_until_complete(_count_events(h.events_dir, task_id))
     assert event_count == 1, (
-        f"expected exactly 1 event for {len(responses)} deduplicated submissions, "
-        f"got {event_count}"
+        f"expected exactly 1 event for {len(responses)} deduplicated submissions, got {event_count}"
     )
 
 
@@ -570,10 +565,7 @@ def test_concurrent_dedup_same_key(
     shared_key = new_idempotency_key(rng=rng)
 
     async def _concurrent_dedup() -> list[httpx.Response]:
-        coros = [
-            _submit_decision(h.client, task_id, action, shared_key, rng)
-            for _ in range(n)
-        ]
+        coros = [_submit_decision(h.client, task_id, action, shared_key, rng) for _ in range(n)]
         return list(await asyncio.gather(*coros))
 
     responses = h.loop.run_until_complete(_concurrent_dedup())

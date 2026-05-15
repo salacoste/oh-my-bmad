@@ -134,8 +134,7 @@ async def handle_approve(
             else:
                 await _safe_reply(
                     message,
-                    f"⚠️ Unknown override: {html.escape(m.group(1))}. "
-                    "Supported: license, budget.",
+                    f"⚠️ Unknown override: {html.escape(m.group(1))}. Supported: license, budget.",
                 )
                 return
 

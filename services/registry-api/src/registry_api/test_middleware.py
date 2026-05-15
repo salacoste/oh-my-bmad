@@ -312,7 +312,10 @@ async def constrained_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None
     events_dir = tmp_path / "events"
     clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
     app = build_app(
-        base_dir=events_dir, db_url=db_url_str, clock=clock, actor_kind="worker",
+        base_dir=events_dir,
+        db_url=db_url_str,
+        clock=clock,
+        actor_kind="worker",
     )
 
     @app.get("/debug/state")
@@ -337,17 +340,13 @@ class TestTierEnforcementMiddleware:
     """AC-7/AC-8: Tier enforcement middleware (Story 6.3)."""
 
     @pytest.mark.asyncio
-    async def test_tier_allowed_on_matching_route(
-        self, app_client: AsyncClient
-    ) -> None:
+    async def test_tier_allowed_on_matching_route(self, app_client: AsyncClient) -> None:
         """AC-8: operator (default) can POST /v1/tasks (Tier.ONE)."""
         r = await app_client.post("/v1/tasks", json={"title": "tier-ok"})
         assert r.status_code == 201
 
     @pytest.mark.asyncio
-    async def test_read_routes_bypass_tier_check(
-        self, app_client: AsyncClient
-    ) -> None:
+    async def test_read_routes_bypass_tier_check(self, app_client: AsyncClient) -> None:
         """GET routes skip tier enforcement entirely."""
         r = await app_client.get("/debug/state")
         assert r.status_code == 200
@@ -356,9 +355,7 @@ class TestTierEnforcementMiddleware:
         assert body["caller_context"] == "None"
 
     @pytest.mark.asyncio
-    async def test_caller_context_populated_on_mutation(
-        self, app_client: AsyncClient
-    ) -> None:
+    async def test_caller_context_populated_on_mutation(self, app_client: AsyncClient) -> None:
         """AC-8: request.state.caller_context is set on mutating routes."""
         from unittest.mock import patch
 
@@ -379,9 +376,7 @@ class TestTierEnforcementMiddleware:
         assert "http-api" in caller_ctx
 
     @pytest.mark.asyncio
-    async def test_tier_denied_returns_403_problem_json(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_tier_denied_returns_403_problem_json(self, tmp_path: Path) -> None:
         """AC-7: worker-kind caller denied on a Tier-2 route returns 403."""
         from unittest.mock import patch
 
@@ -422,18 +417,14 @@ class TestTierEnforcementMiddleware:
                 assert "no_matching_approval" in body["detail"] or "allows Tier" in body["detail"]
 
     @pytest.mark.asyncio
-    async def test_unmapped_mutation_route_passes_through(
-        self, app_client: AsyncClient
-    ) -> None:
+    async def test_unmapped_mutation_route_passes_through(self, app_client: AsyncClient) -> None:
         """Unmapped mutating routes default-open (Phase 1)."""
         r = await app_client.delete("/v1/tasks/nonexistent")
         # 405 or 404 from the router — NOT 403 from tier enforcement.
         assert r.status_code in (404, 405)
 
     @pytest.mark.asyncio
-    async def test_worker_can_access_tier_one_route(
-        self, constrained_client: AsyncClient
-    ) -> None:
+    async def test_worker_can_access_tier_one_route(self, constrained_client: AsyncClient) -> None:
         """Worker actor_kind can still POST /v1/tasks (Tier.ONE)."""
         r = await constrained_client.post("/v1/tasks", json={"title": "worker-ok"})
         assert r.status_code == 201

@@ -60,9 +60,7 @@ async def get_logs_digest(
     to a raw-event summary if the Anthropic API is unavailable.
     """
     session_maker = request.app.state.session_maker
-    client: anthropic.AsyncAnthropic | None = getattr(
-        request.app.state, "anthropic_client", None
-    )
+    client: anthropic.AsyncAnthropic | None = getattr(request.app.state, "anthropic_client", None)
 
     async with session_maker() as session:
         result = await session.execute(

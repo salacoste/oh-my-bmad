@@ -130,11 +130,7 @@ def check_commit_message(msg_path: Path) -> list[Violation]:
             key = f"{rule}:{m.start()}"
             if key not in seen:
                 seen.add(key)
-                label = (
-                    "null byte"
-                    if rule == "null-byte"
-                    else "command substitution"
-                )
+                label = "null byte" if rule == "null-byte" else "command substitution"
                 violations.append(
                     Violation(
                         file_path=str(msg_path),

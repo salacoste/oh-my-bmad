@@ -112,12 +112,15 @@ class TestScanToday:
     def test_granted_event_found(self) -> None:
         envelopes = [_granted_envelope()]
         waiter = self._waiter()
-        with patch(
-            "worker_wrapper.adapters.approval_waiter.read_log_lines",
-            return_value=iter(envelopes),
-        ), patch(
-            "worker_wrapper.adapters.approval_waiter.current_day_path",
-            return_value=Path("/tmp/fake-logs/2026-05-10.jsonl"),
+        with (
+            patch(
+                "worker_wrapper.adapters.approval_waiter.read_log_lines",
+                return_value=iter(envelopes),
+            ),
+            patch(
+                "worker_wrapper.adapters.approval_waiter.current_day_path",
+                return_value=Path("/tmp/fake-logs/2026-05-10.jsonl"),
+            ),
         ):
             result = waiter._scan_today("t-1")
 
@@ -130,12 +133,15 @@ class TestScanToday:
     def test_rejected_event_found(self) -> None:
         envelopes = [_rejected_envelope()]
         waiter = self._waiter()
-        with patch(
-            "worker_wrapper.adapters.approval_waiter.read_log_lines",
-            return_value=iter(envelopes),
-        ), patch(
-            "worker_wrapper.adapters.approval_waiter.current_day_path",
-            return_value=Path("/tmp/fake-logs/2026-05-10.jsonl"),
+        with (
+            patch(
+                "worker_wrapper.adapters.approval_waiter.read_log_lines",
+                return_value=iter(envelopes),
+            ),
+            patch(
+                "worker_wrapper.adapters.approval_waiter.current_day_path",
+                return_value=Path("/tmp/fake-logs/2026-05-10.jsonl"),
+            ),
         ):
             result = waiter._scan_today("t-1")
 
@@ -147,36 +153,45 @@ class TestScanToday:
     def test_wrong_task_id_skipped(self) -> None:
         envelopes = [_granted_envelope(task_id="other-task")]
         waiter = self._waiter()
-        with patch(
-            "worker_wrapper.adapters.approval_waiter.read_log_lines",
-            return_value=iter(envelopes),
-        ), patch(
-            "worker_wrapper.adapters.approval_waiter.current_day_path",
-            return_value=Path("/tmp/fake-logs/2026-05-10.jsonl"),
+        with (
+            patch(
+                "worker_wrapper.adapters.approval_waiter.read_log_lines",
+                return_value=iter(envelopes),
+            ),
+            patch(
+                "worker_wrapper.adapters.approval_waiter.current_day_path",
+                return_value=Path("/tmp/fake-logs/2026-05-10.jsonl"),
+            ),
         ):
             result = waiter._scan_today("t-1")
         assert result is None
 
     def test_file_not_found_returns_none(self) -> None:
         waiter = self._waiter()
-        with patch(
-            "worker_wrapper.adapters.approval_waiter.read_log_lines",
-            side_effect=FileNotFoundError,
-        ), patch(
-            "worker_wrapper.adapters.approval_waiter.current_day_path",
-            return_value=Path("/tmp/fake-logs/2026-05-10.jsonl"),
+        with (
+            patch(
+                "worker_wrapper.adapters.approval_waiter.read_log_lines",
+                side_effect=FileNotFoundError,
+            ),
+            patch(
+                "worker_wrapper.adapters.approval_waiter.current_day_path",
+                return_value=Path("/tmp/fake-logs/2026-05-10.jsonl"),
+            ),
         ):
             result = waiter._scan_today("t-1")
         assert result is None
 
     def test_empty_log_returns_none(self) -> None:
         waiter = self._waiter()
-        with patch(
-            "worker_wrapper.adapters.approval_waiter.read_log_lines",
-            return_value=iter([]),
-        ), patch(
-            "worker_wrapper.adapters.approval_waiter.current_day_path",
-            return_value=Path("/tmp/fake-logs/2026-05-10.jsonl"),
+        with (
+            patch(
+                "worker_wrapper.adapters.approval_waiter.read_log_lines",
+                return_value=iter([]),
+            ),
+            patch(
+                "worker_wrapper.adapters.approval_waiter.current_day_path",
+                return_value=Path("/tmp/fake-logs/2026-05-10.jsonl"),
+            ),
         ):
             result = waiter._scan_today("t-1")
         assert result is None
@@ -196,12 +211,15 @@ class TestScanToday:
             call_count += 1
             return iter(irrelevant + [granted])
 
-        with patch(
-            "worker_wrapper.adapters.approval_waiter.read_log_lines",
-            side_effect=fake_read_lines,
-        ), patch(
-            "worker_wrapper.adapters.approval_waiter.current_day_path",
-            return_value=Path("/tmp/fake-logs/2026-05-10.jsonl"),
+        with (
+            patch(
+                "worker_wrapper.adapters.approval_waiter.read_log_lines",
+                side_effect=fake_read_lines,
+            ),
+            patch(
+                "worker_wrapper.adapters.approval_waiter.current_day_path",
+                return_value=Path("/tmp/fake-logs/2026-05-10.jsonl"),
+            ),
         ):
             result1 = waiter._scan_today("t-1")
             assert result1 is not None
@@ -227,12 +245,15 @@ class TestWaitForApproval:
             poll_interval_s=0.01,
             timeout_s=2.0,
         )
-        with patch(
-            "worker_wrapper.adapters.approval_waiter.read_log_lines",
-            return_value=iter([_granted_envelope()]),
-        ), patch(
-            "worker_wrapper.adapters.approval_waiter.current_day_path",
-            return_value=Path("/tmp/fake-logs/2026-05-10.jsonl"),
+        with (
+            patch(
+                "worker_wrapper.adapters.approval_waiter.read_log_lines",
+                return_value=iter([_granted_envelope()]),
+            ),
+            patch(
+                "worker_wrapper.adapters.approval_waiter.current_day_path",
+                return_value=Path("/tmp/fake-logs/2026-05-10.jsonl"),
+            ),
         ):
             result = await waiter.wait_for_approval("t-1")
 
@@ -246,12 +267,15 @@ class TestWaitForApproval:
             poll_interval_s=0.01,
             timeout_s=0.05,
         )
-        with patch(
-            "worker_wrapper.adapters.approval_waiter.read_log_lines",
-            return_value=iter([]),
-        ), patch(
-            "worker_wrapper.adapters.approval_waiter.current_day_path",
-            return_value=Path("/tmp/fake-logs/2026-05-10.jsonl"),
+        with (
+            patch(
+                "worker_wrapper.adapters.approval_waiter.read_log_lines",
+                return_value=iter([]),
+            ),
+            patch(
+                "worker_wrapper.adapters.approval_waiter.current_day_path",
+                return_value=Path("/tmp/fake-logs/2026-05-10.jsonl"),
+            ),
         ):
             with pytest.raises(TimeoutError, match="timed out"):
                 await waiter.wait_for_approval("t-1")

@@ -99,9 +99,7 @@ class CapabilityDenied(EventsError):  # noqa: N818
         reason: Human-readable explanation.
     """
 
-    def __init__(
-        self, action: str, actor_kind: str, required_tier: int, reason: str
-    ) -> None:
+    def __init__(self, action: str, actor_kind: str, required_tier: int, reason: str) -> None:
         self.action = action
         self.actor_kind = actor_kind
         self.required_tier = required_tier

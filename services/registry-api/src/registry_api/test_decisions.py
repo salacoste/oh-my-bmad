@@ -170,7 +170,9 @@ class TestDecisionsPositive:
 
     @pytest.mark.asyncio
     async def test_license_override_dual_event(
-        self, app_client: AsyncClient, tmp_path: Path,
+        self,
+        app_client: AsyncClient,
+        tmp_path: Path,
     ) -> None:
         """AC-8/AC-11: approve with license override emits both events."""
         r = await app_client.post(
@@ -302,25 +304,30 @@ async def _seed_license_flagged_event(db_url: str, task_id: str) -> None:
     """Insert a task.license_flagged event row for the given task."""
     engine = create_engine(db_url)
     async with engine.begin() as conn:
-        await conn.execute(Event.__table__.insert(), {
-            "id": "e-license-flag-000000000000000000",
-            "type": "task.license_flagged",
-            "schema_version": "1.0.0",
-            "emitted_at": FROZEN_EPOCH,
-            "emitted_at_monotonic_ns": _FROZEN_MONO_NS,
-            "actor_kind": "worker",
-            "actor_id": "test-worker",
-            "task_id": task_id,
-            "session_id": None,
-            "parent_event_id": None,
-            "request_id": "req-license-flag-test",
-            "payload_json": json.dumps({
+        await conn.execute(
+            Event.__table__.insert(),
+            {
+                "id": "e-license-flag-000000000000000000",
+                "type": "task.license_flagged",
+                "schema_version": "1.0.0",
+                "emitted_at": FROZEN_EPOCH,
+                "emitted_at_monotonic_ns": _FROZEN_MONO_NS,
+                "actor_kind": "worker",
+                "actor_id": "test-worker",
                 "task_id": task_id,
-                "reason_code": "copyleft-incompatible",
-                "file_list": ["src/gpl_code.py"],
-                "detected_licenses": ["gpl-2.0"],
-            }),
-        })
+                "session_id": None,
+                "parent_event_id": None,
+                "request_id": "req-license-flag-test",
+                "payload_json": json.dumps(
+                    {
+                        "task_id": task_id,
+                        "reason_code": "copyleft-incompatible",
+                        "file_list": ["src/gpl_code.py"],
+                        "detected_licenses": ["gpl-2.0"],
+                    }
+                ),
+            },
+        )
     await engine.dispose()
 
 
@@ -350,7 +357,8 @@ class TestLicenseGate:
 
     @pytest.mark.asyncio
     async def test_approve_blocked_when_flagged(
-        self, flagged_client: AsyncClient,
+        self,
+        flagged_client: AsyncClient,
     ) -> None:
         """Default approve returns 409 when license_flagged event exists."""
         r = await flagged_client.post(
@@ -365,7 +373,8 @@ class TestLicenseGate:
 
     @pytest.mark.asyncio
     async def test_approve_allowed_with_override(
-        self, flagged_client: AsyncClient,
+        self,
+        flagged_client: AsyncClient,
     ) -> None:
         """Approve with override=license succeeds despite license flag."""
         r = await flagged_client.post(
@@ -377,7 +386,8 @@ class TestLicenseGate:
 
     @pytest.mark.asyncio
     async def test_approve_allowed_when_no_flag(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         """Approve succeeds normally when no license_flagged event exists."""
         r = await app_client.post(
@@ -388,7 +398,8 @@ class TestLicenseGate:
 
     @pytest.mark.asyncio
     async def test_reject_not_blocked_by_license_flag(
-        self, flagged_client: AsyncClient,
+        self,
+        flagged_client: AsyncClient,
     ) -> None:
         """Reject is not blocked by license flag (only approve is gated)."""
         r = await flagged_client.post(
@@ -399,7 +410,8 @@ class TestLicenseGate:
 
     @pytest.mark.asyncio
     async def test_license_gate_does_not_burn_idempotency_slot(
-        self, flagged_client: AsyncClient,
+        self,
+        flagged_client: AsyncClient,
     ) -> None:
         """A blocked approve doesn't consume an idempotency slot."""
         idem_key = new_request_id(clock=_FROZEN_CLOCK, rng=Random(42))
@@ -424,7 +436,8 @@ class TestLicenseGate:
 
     @pytest.mark.asyncio
     async def test_override_on_non_approve_rejected(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         """override=license on a reject action is rejected by Pydantic validation."""
         r = await app_client.post(
@@ -443,28 +456,36 @@ async def _seed_budget_exceeded_event(db_url: str, task_id: str) -> None:
     """Insert a task.budget_exceeded event row and transition task to blocked."""
     engine = create_engine(db_url)
     async with engine.begin() as conn:
-        await conn.execute(Event.__table__.insert(), {
-            "id": "e-budget-exceeded-0000000000000000",
-            "type": "task.budget_exceeded",
-            "schema_version": "1.0.0",
-            "emitted_at": FROZEN_EPOCH,
-            "emitted_at_monotonic_ns": _FROZEN_MONO_NS,
-            "actor_kind": "worker",
-            "actor_id": "test-worker",
-            "task_id": task_id,
-            "session_id": None,
-            "parent_event_id": None,
-            "request_id": "req-budget-test",
-            "payload_json": json.dumps({
-                "task_id": task_id,
-                "token_limit": 50_000,
-                "tokens_used": 52_340,
-                "step": 3,
-            }),
-        })
-        from sqlalchemy import update as sa_update
         await conn.execute(
-            sa_update(Task).where(Task.id == task_id).values(
+            Event.__table__.insert(),
+            {
+                "id": "e-budget-exceeded-0000000000000000",
+                "type": "task.budget_exceeded",
+                "schema_version": "1.0.0",
+                "emitted_at": FROZEN_EPOCH,
+                "emitted_at_monotonic_ns": _FROZEN_MONO_NS,
+                "actor_kind": "worker",
+                "actor_id": "test-worker",
+                "task_id": task_id,
+                "session_id": None,
+                "parent_event_id": None,
+                "request_id": "req-budget-test",
+                "payload_json": json.dumps(
+                    {
+                        "task_id": task_id,
+                        "token_limit": 50_000,
+                        "tokens_used": 52_340,
+                        "step": 3,
+                    }
+                ),
+            },
+        )
+        from sqlalchemy import update as sa_update
+
+        await conn.execute(
+            sa_update(Task)
+            .where(Task.id == task_id)
+            .values(
                 status="blocked",
                 blocker_reason="budget_exceeded",
             )
@@ -498,7 +519,8 @@ class TestBudgetGate:
 
     @pytest.mark.asyncio
     async def test_approve_blocked_when_budget_exceeded(
-        self, budget_blocked_client: AsyncClient,
+        self,
+        budget_blocked_client: AsyncClient,
     ) -> None:
         """Default approve returns 409 when budget_exceeded event exists."""
         r = await budget_blocked_client.post(
@@ -513,7 +535,8 @@ class TestBudgetGate:
 
     @pytest.mark.asyncio
     async def test_approve_allowed_with_budget_override(
-        self, budget_blocked_client: AsyncClient,
+        self,
+        budget_blocked_client: AsyncClient,
     ) -> None:
         """Approve with override=budget succeeds despite budget exceeded."""
         r = await budget_blocked_client.post(
@@ -525,7 +548,8 @@ class TestBudgetGate:
 
     @pytest.mark.asyncio
     async def test_approve_allowed_when_no_budget_event(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         """Approve succeeds normally when no budget_exceeded event exists."""
         r = await app_client.post(
@@ -536,7 +560,8 @@ class TestBudgetGate:
 
     @pytest.mark.asyncio
     async def test_budget_gate_does_not_burn_idempotency_slot(
-        self, budget_blocked_client: AsyncClient,
+        self,
+        budget_blocked_client: AsyncClient,
     ) -> None:
         """A blocked approve doesn't consume an idempotency slot."""
         idem_key = new_request_id(clock=_FROZEN_CLOCK, rng=Random(99))
@@ -559,7 +584,8 @@ class TestBudgetGate:
 
     @pytest.mark.asyncio
     async def test_override_budget_on_non_approve_rejected(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         """override=budget on a reject action is rejected by Pydantic validation."""
         r = await app_client.post(
@@ -578,47 +604,60 @@ async def _seed_dual_flags(db_url: str, task_id: str) -> None:
     """Insert both license_flagged and budget_exceeded events, set blocked."""
     engine = create_engine(db_url)
     async with engine.begin() as conn:
-        await conn.execute(Event.__table__.insert(), {
-            "id": "e-dual-license-00000000000000000",
-            "type": "task.license_flagged",
-            "schema_version": "1.0.0",
-            "emitted_at": FROZEN_EPOCH,
-            "emitted_at_monotonic_ns": _FROZEN_MONO_NS,
-            "actor_kind": "worker",
-            "actor_id": "test-worker",
-            "task_id": task_id,
-            "session_id": None,
-            "parent_event_id": None,
-            "request_id": "req-dual-test",
-            "payload_json": json.dumps({
-                "task_id": task_id,
-                "reason_code": "copyleft-incompatible",
-                "file_list": ["src/gpl_code.py"],
-                "detected_licenses": ["gpl-2.0"],
-            }),
-        })
-        await conn.execute(Event.__table__.insert(), {
-            "id": "e-dual-budget-00000000000000000",
-            "type": "task.budget_exceeded",
-            "schema_version": "1.0.0",
-            "emitted_at": FROZEN_EPOCH,
-            "emitted_at_monotonic_ns": _FROZEN_MONO_NS + 1,
-            "actor_kind": "worker",
-            "actor_id": "test-worker",
-            "task_id": task_id,
-            "session_id": None,
-            "parent_event_id": None,
-            "request_id": "req-dual-budget",
-            "payload_json": json.dumps({
-                "task_id": task_id,
-                "token_limit": 50_000,
-                "tokens_used": 52_340,
-                "step": 3,
-            }),
-        })
-        from sqlalchemy import update as sa_update
         await conn.execute(
-            sa_update(Task).where(Task.id == task_id).values(
+            Event.__table__.insert(),
+            {
+                "id": "e-dual-license-00000000000000000",
+                "type": "task.license_flagged",
+                "schema_version": "1.0.0",
+                "emitted_at": FROZEN_EPOCH,
+                "emitted_at_monotonic_ns": _FROZEN_MONO_NS,
+                "actor_kind": "worker",
+                "actor_id": "test-worker",
+                "task_id": task_id,
+                "session_id": None,
+                "parent_event_id": None,
+                "request_id": "req-dual-test",
+                "payload_json": json.dumps(
+                    {
+                        "task_id": task_id,
+                        "reason_code": "copyleft-incompatible",
+                        "file_list": ["src/gpl_code.py"],
+                        "detected_licenses": ["gpl-2.0"],
+                    }
+                ),
+            },
+        )
+        await conn.execute(
+            Event.__table__.insert(),
+            {
+                "id": "e-dual-budget-00000000000000000",
+                "type": "task.budget_exceeded",
+                "schema_version": "1.0.0",
+                "emitted_at": FROZEN_EPOCH,
+                "emitted_at_monotonic_ns": _FROZEN_MONO_NS + 1,
+                "actor_kind": "worker",
+                "actor_id": "test-worker",
+                "task_id": task_id,
+                "session_id": None,
+                "parent_event_id": None,
+                "request_id": "req-dual-budget",
+                "payload_json": json.dumps(
+                    {
+                        "task_id": task_id,
+                        "token_limit": 50_000,
+                        "tokens_used": 52_340,
+                        "step": 3,
+                    }
+                ),
+            },
+        )
+        from sqlalchemy import update as sa_update
+
+        await conn.execute(
+            sa_update(Task)
+            .where(Task.id == task_id)
+            .values(
                 status="blocked",
                 blocker_reason="budget_exceeded",
             )
@@ -652,7 +691,8 @@ class TestDualGate:
 
     @pytest.mark.asyncio
     async def test_approve_blocked_by_license_gate_first(
-        self, dual_blocked_client: AsyncClient,
+        self,
+        dual_blocked_client: AsyncClient,
     ) -> None:
         """Default approve returns 409 from the license gate (checked first)."""
         r = await dual_blocked_client.post(
@@ -666,7 +706,8 @@ class TestDualGate:
 
     @pytest.mark.asyncio
     async def test_override_budget_still_hits_license_gate(
-        self, dual_blocked_client: AsyncClient,
+        self,
+        dual_blocked_client: AsyncClient,
     ) -> None:
         """override=budget skips budget gate but license gate still blocks."""
         r = await dual_blocked_client.post(

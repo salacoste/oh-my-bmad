@@ -956,13 +956,15 @@ async def test_409_license_block_shows_override_hint() -> None:
     """409 with approval_blocked_by/license_flag → override hint reply."""
     client = _make_registry_client(
         status_code=409,
-        body=json.dumps({
-            "type": "approval_blocked_by",
-            "title": "Approval Blocked",
-            "status": 409,
-            "detail": "License flag active.",
-            "extensions": {"reason": "license_flag"},
-        }),
+        body=json.dumps(
+            {
+                "type": "approval_blocked_by",
+                "title": "Approval Blocked",
+                "status": 409,
+                "detail": "License flag active.",
+                "extensions": {"reason": "license_flag"},
+            }
+        ),
         headers={"content-type": "application/problem+json"},
     )
     msg = _make_message()
@@ -979,12 +981,14 @@ async def test_409_generic_not_intercepted() -> None:
     """409 without approval_blocked_by type → falls through to format_http_error."""
     client = _make_registry_client(
         status_code=409,
-        body=json.dumps({
-            "type": "about:blank",
-            "title": "Conflict",
-            "status": 409,
-            "detail": "some other conflict",
-        }),
+        body=json.dumps(
+            {
+                "type": "about:blank",
+                "title": "Conflict",
+                "status": 409,
+                "detail": "some other conflict",
+            }
+        ),
         headers={"content-type": "application/problem+json"},
     )
     msg = _make_message()
@@ -1184,13 +1188,15 @@ async def test_budget_exceeded_409_shows_hint() -> None:
     """409 with reason=budget_exceeded shows override hint."""
     client = _make_registry_client(
         status_code=409,
-        body=json.dumps({
-            "type": "approval_blocked_by",
-            "title": "Approval Blocked",
-            "status": 409,
-            "detail": "Budget exceeded.",
-            "extensions": {"reason": "budget_exceeded"},
-        }),
+        body=json.dumps(
+            {
+                "type": "approval_blocked_by",
+                "title": "Approval Blocked",
+                "status": 409,
+                "detail": "Budget exceeded.",
+                "extensions": {"reason": "budget_exceeded"},
+            }
+        ),
         headers={"content-type": "application/problem+json"},
     )
     msg = _make_message(text=f"/approve {_FAKE_TASK_ID}")

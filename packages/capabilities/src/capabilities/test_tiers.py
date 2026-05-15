@@ -191,7 +191,10 @@ class TestCheckTierWithApproval:
         lookup = AsyncMock(return_value=False)
         with pytest.raises(CapabilityDenied, match="no_matching_approval"):
             await check_tier_with_approval(
-                "git_push", caller, Tier.THREE, approval_lookup=lookup,
+                "git_push",
+                caller,
+                Tier.THREE,
+                approval_lookup=lookup,
             )
         lookup.assert_awaited_once_with("t-1", "git_push")
 
@@ -204,7 +207,10 @@ class TestCheckTierWithApproval:
         caller = CallerContext(actor_kind="operator", actor_id="op-1", task_id="t-1")
         lookup = AsyncMock(return_value=True)
         result = await check_tier_with_approval(
-            "git_push", caller, Tier.THREE, approval_lookup=lookup,
+            "git_push",
+            caller,
+            Tier.THREE,
+            approval_lookup=lookup,
         )
         assert isinstance(result, CapabilityOk)
         assert result.tier == Tier.THREE
@@ -218,7 +224,10 @@ class TestCheckTierWithApproval:
         caller = CallerContext(actor_kind="worker", actor_id="w-1")
         lookup = AsyncMock(return_value=False)
         result = await check_tier_with_approval(
-            "add_note", caller, Tier.ONE, approval_lookup=lookup,
+            "add_note",
+            caller,
+            Tier.ONE,
+            approval_lookup=lookup,
         )
         assert isinstance(result, CapabilityOk)
         lookup.assert_not_awaited()
@@ -233,7 +242,10 @@ class TestCheckTierWithApproval:
         lookup = AsyncMock()
         with pytest.raises(CapabilityDenied):
             await check_tier_with_approval(
-                "git_push", caller, Tier.THREE, approval_lookup=lookup,
+                "git_push",
+                caller,
+                Tier.THREE,
+                approval_lookup=lookup,
             )
         lookup.assert_not_awaited()
 
@@ -246,5 +258,8 @@ class TestCheckTierWithApproval:
         caller = CallerContext(actor_kind="operator", actor_id="op-1", task_id="t-1")
         with pytest.raises(ValueError, match="approval_lookup is required"):
             await check_tier_with_approval(
-                "git_push", caller, Tier.THREE, approval_lookup=None,
+                "git_push",
+                caller,
+                Tier.THREE,
+                approval_lookup=None,
             )

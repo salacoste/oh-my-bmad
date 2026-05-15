@@ -165,9 +165,7 @@ class TestRetryBehavior:
     @pytest.mark.asyncio
     async def test_retries_on_500_then_succeeds(self) -> None:
         settings = _settings()
-        error_500 = _FakeResponse(
-            status=500, json_body={"message": "Internal Server Error"}
-        )
+        error_500 = _FakeResponse(status=500, json_body={"message": "Internal Server Error"})
         success = _FakeResponse(
             status=201,
             json_body={
@@ -178,9 +176,7 @@ class TestRetryBehavior:
         session = _MockSession([error_500, success])
         client = _client(settings, session)
 
-        result = await client.create_pr_draft(
-            "owner", "repo", "Title", "head", "main"
-        )
+        result = await client.create_pr_draft("owner", "repo", "Title", "head", "main")
 
         assert result.success is True
         assert session.call_count == 2
@@ -192,9 +188,7 @@ class TestRetryBehavior:
         session = _MockSession([resp])
         client = _client(settings, session)
 
-        result = await client.create_pr_draft(
-            "owner", "repo", "Title", "head", "main"
-        )
+        result = await client.create_pr_draft("owner", "repo", "Title", "head", "main")
 
         assert result.success is False
         assert session.call_count == 1
@@ -206,9 +200,7 @@ class TestRetryBehavior:
         session = _MockSession([resp])
         client = _client(settings, session)
 
-        result = await client.create_pr_draft(
-            "owner", "repo", "Title", "head", "main"
-        )
+        result = await client.create_pr_draft("owner", "repo", "Title", "head", "main")
 
         assert result.success is False
         assert "Not Found" in (result.error or "")
@@ -217,15 +209,11 @@ class TestRetryBehavior:
     @pytest.mark.asyncio
     async def test_no_retry_on_422(self) -> None:
         settings = _settings()
-        resp = _FakeResponse(
-            status=422, json_body={"message": "Validation Failed"}
-        )
+        resp = _FakeResponse(status=422, json_body={"message": "Validation Failed"})
         session = _MockSession([resp])
         client = _client(settings, session)
 
-        result = await client.create_pr_draft(
-            "owner", "repo", "Title", "head", "main"
-        )
+        result = await client.create_pr_draft("owner", "repo", "Title", "head", "main")
 
         assert result.success is False
         assert session.call_count == 1
@@ -237,9 +225,7 @@ class TestRateLimit:
     @pytest.mark.asyncio
     async def test_retries_on_429(self) -> None:
         settings = _settings()
-        rate_limited = _FakeResponse(
-            status=429, json_body={"message": "Rate limited"}
-        )
+        rate_limited = _FakeResponse(status=429, json_body={"message": "Rate limited"})
         success = _FakeResponse(
             status=201,
             json_body={"html_url": "https://github.com/o/r/pull/5", "number": 5},
@@ -348,7 +334,9 @@ class TestAuthError:
         client = _client(settings, session)
 
         result = await client.create_branch(
-            "o", "r", "refs/heads/x",
+            "o",
+            "r",
+            "refs/heads/x",
             "abc123def456abc123def456abc123def456abcd",
         )
 
@@ -386,9 +374,7 @@ class TestConfigLoading:
         assert s.github_token.get_secret_value() == ""
 
     def test_custom_base_url(self) -> None:
-        settings = _settings(
-            github_api_base_url="https://github.enterprise.com/api/v3"
-        )
+        settings = _settings(github_api_base_url="https://github.enterprise.com/api/v3")
         assert settings.github_api_base_url == "https://github.enterprise.com/api/v3"
 
     def test_timeout_must_be_positive(self) -> None:

@@ -502,9 +502,12 @@ class TestTierEnforcement:
         mcp = _build(db_session_maker)
         fn = mcp._tool_manager._tools["session_register"].fn
         with (
-            patch("session_registry_mcp.handlers.tools.check_tier", side_effect=CapabilityDenied(
-                action="session.register", actor_kind="unknown", required_tier=1, reason="test"
-            )),
+            patch(
+                "session_registry_mcp.handlers.tools.check_tier",
+                side_effect=CapabilityDenied(
+                    action="session.register", actor_kind="unknown", required_tier=1, reason="test"
+                ),
+            ),
             pytest.raises(CapabilityDenied),
         ):
             await fn(
@@ -535,27 +538,31 @@ class TestApprovalLookup:
 
         task_id = "t-00000099-0001-7000-8000-000000000099"
         async with db_session_maker() as session:
-            session.add(Task(
-                id=task_id,
-                status="executing",
-                created_at=_NOW,
-                updated_at=_NOW,
-                actor_kind="operator",
-                actor_id="op-1",
-            ))
+            session.add(
+                Task(
+                    id=task_id,
+                    status="executing",
+                    created_at=_NOW,
+                    updated_at=_NOW,
+                    actor_kind="operator",
+                    actor_id="op-1",
+                )
+            )
             await session.flush()
-            session.add(Event(
-                id="evt-approval-sr-001",
-                type="approval.granted",
-                schema_version="1.0.0",
-                emitted_at=_NOW,
-                emitted_at_monotonic_ns=0,
-                actor_kind="operator",
-                actor_id="op-1",
-                task_id=task_id,
-                request_id="req-sr-001",
-                payload_json='{"task_id":"' + task_id + '"}',
-            ))
+            session.add(
+                Event(
+                    id="evt-approval-sr-001",
+                    type="approval.granted",
+                    schema_version="1.0.0",
+                    emitted_at=_NOW,
+                    emitted_at_monotonic_ns=0,
+                    actor_kind="operator",
+                    actor_id="op-1",
+                    task_id=task_id,
+                    request_id="req-sr-001",
+                    payload_json='{"task_id":"' + task_id + '"}',
+                )
+            )
             await session.commit()
 
         lookup = _make_approval_lookup(db_session_maker)
@@ -575,7 +582,10 @@ class TestApprovalLookup:
         lookup = _make_approval_lookup(db_session_maker)
         with pytest.raises(CapabilityDenied, match="no_matching_approval"):
             await check_tier_with_approval(
-                "git_push", caller, Tier.THREE, approval_lookup=lookup,
+                "git_push",
+                caller,
+                Tier.THREE,
+                approval_lookup=lookup,
             )
 
 

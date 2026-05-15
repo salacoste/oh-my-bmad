@@ -84,8 +84,7 @@ class ApprovalWaiter:
                     timeout=self._timeout_s,
                 )
                 raise TimeoutError(
-                    f"Approval wait timed out after "
-                    f"{self._timeout_s}s for task {task_id}"
+                    f"Approval wait timed out after {self._timeout_s}s for task {task_id}"
                 )
 
             await asyncio.sleep(self._poll_interval_s)
@@ -118,7 +117,8 @@ class ApprovalWaiter:
                         granted=True,
                         event_id=getattr(envelope, "event_id", ""),
                         idempotency_key=payload.get(
-                            "idempotency_key", "",
+                            "idempotency_key",
+                            "",
                         ),
                         reason=payload.get("reason", ""),
                     )

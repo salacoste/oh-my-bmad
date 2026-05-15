@@ -30,8 +30,7 @@ class TestCleanFile:
         main([str(clean), "--worktree-root", str(tmp_path)])
         captured = capsys.readouterr()
         # scancode-toolkit warning is expected when not installed (graceful degradation).
-        lines = [ln for ln in captured.err.strip().splitlines()
-                 if "scancode-toolkit" not in ln]
+        lines = [ln for ln in captured.err.strip().splitlines() if "scancode-toolkit" not in ln]
         assert lines == []
 
     def test_no_files_exits_zero(self, capsys: pytest.CaptureFixture[str]) -> None:
@@ -109,10 +108,15 @@ class TestAllowlist:
         allowlist = tmp_path / "allowlist.txt"
         allowlist.write_text("**/secret.txt\n", encoding="utf-8")
 
-        exit_code = main([
-            str(secret_file), "--allowlist-file", str(allowlist),
-            "--worktree-root", str(tmp_path),
-        ])
+        exit_code = main(
+            [
+                str(secret_file),
+                "--allowlist-file",
+                str(allowlist),
+                "--worktree-root",
+                str(tmp_path),
+            ]
+        )
         assert exit_code == 0
 
     def test_allowlist_with_comments_and_blanks(self, tmp_path: Path) -> None:
@@ -126,10 +130,18 @@ class TestAllowlist:
             "# This is a comment\n\n**/myfile.txt\n",
             encoding="utf-8",
         )
-        assert main([
-            str(secret_file), "--allowlist-file", str(allowlist),
-            "--worktree-root", str(tmp_path),
-        ]) == 0
+        assert (
+            main(
+                [
+                    str(secret_file),
+                    "--allowlist-file",
+                    str(allowlist),
+                    "--worktree-root",
+                    str(tmp_path),
+                ]
+            )
+            == 0
+        )
 
     def test_non_allowlisted_dirty_file_still_caught(self, tmp_path: Path) -> None:
         dirty = tmp_path / "dirty.env"
@@ -302,10 +314,15 @@ class TestSensitivePathIntegration:
         env_file.write_text("KEY=val\n", encoding="utf-8")
         allowlist = tmp_path / "allowlist.txt"
         allowlist.write_text(".env\n", encoding="utf-8")
-        exit_code = main([
-            str(env_file), "--allowlist-file", str(allowlist),
-            "--worktree-root", str(tmp_path),
-        ])
+        exit_code = main(
+            [
+                str(env_file),
+                "--allowlist-file",
+                str(allowlist),
+                "--worktree-root",
+                str(tmp_path),
+            ]
+        )
         assert exit_code == 1
 
     def test_content_dirty_and_path_sensitive_both_reported(
@@ -483,9 +500,7 @@ class TestLicenseScanInHook:
             "percentage_of_license_text": 50.0,
         }
         with _patch_scancode(MagicMock(return_value=mock_result)):
-            exit_code = main(
-                [str(gpl), "--worktree-root", str(tmp_path), "--repo-license", "MIT"]
-            )
+            exit_code = main([str(gpl), "--worktree-root", str(tmp_path), "--repo-license", "MIT"])
         assert exit_code == 1
 
     def test_binary_skipped(self, tmp_path: Path) -> None:

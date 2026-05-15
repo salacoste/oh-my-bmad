@@ -17,25 +17,19 @@ _TID = "t-01234567-89ab-7def-8000-000000000002"
 
 
 def test_session_reconnecting_valid() -> None:
-    p = SessionReconnectingPayload(
-        session_id=_SID, task_id=_TID, reason="host_restart"
-    )
+    p = SessionReconnectingPayload(session_id=_SID, task_id=_TID, reason="host_restart")
     assert p.reason == "host_restart"
 
 
 def test_session_reconnecting_frozen() -> None:
-    p = SessionReconnectingPayload(
-        session_id=_SID, task_id=_TID, reason="host_restart"
-    )
+    p = SessionReconnectingPayload(session_id=_SID, task_id=_TID, reason="host_restart")
     with pytest.raises(ValidationError):
         p.reason = "oom"
 
 
 def test_session_reconnecting_rejects_invalid_session_id() -> None:
     with pytest.raises(ValidationError):
-        SessionReconnectingPayload(
-            session_id="bad-id", task_id=_TID, reason="host_restart"
-        )
+        SessionReconnectingPayload(session_id="bad-id", task_id=_TID, reason="host_restart")
 
 
 def test_session_reconnecting_rejects_empty_reason() -> None:

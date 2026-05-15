@@ -103,8 +103,11 @@ class TestApprovalWaiterGranted:
         )
         granted = _granted_event("t-1")
 
-        with _patch_day_path(), _patch_read_log_lines(
-            return_value=[granted],
+        with (
+            _patch_day_path(),
+            _patch_read_log_lines(
+                return_value=[granted],
+            ),
         ):
             result = await waiter.wait_for_approval("t-1")
 
@@ -127,8 +130,11 @@ class TestApprovalWaiterRejected:
         )
         rejected = _rejected_event("t-2")
 
-        with _patch_day_path(), _patch_read_log_lines(
-            return_value=[rejected],
+        with (
+            _patch_day_path(),
+            _patch_read_log_lines(
+                return_value=[rejected],
+            ),
         ):
             result = await waiter.wait_for_approval("t-2")
 
@@ -158,8 +164,11 @@ class TestApprovalWaiterPolling:
                 return []
             return [granted]
 
-        with _patch_day_path(), _patch_read_log_lines(
-            side_effect=lambda p: _scan_sequence(p),
+        with (
+            _patch_day_path(),
+            _patch_read_log_lines(
+                side_effect=lambda p: _scan_sequence(p),
+            ),
         ):
             result = await waiter.wait_for_approval("t-3")
 

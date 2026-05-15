@@ -286,9 +286,7 @@ class TestResourceHandlers:
         assert data["hint"] is None
 
     @pytest.mark.asyncio
-    async def test_task_to_dict_includes_hint_when_set(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_task_to_dict_includes_hint_when_set(self, tmp_path: Path) -> None:
         """Story 7.6: _task_to_dict returns hint value when set on Task."""
         engine = create_async_engine(
             "sqlite+aiosqlite:///:memory:",
@@ -299,16 +297,18 @@ class TestResourceHandlers:
             await conn.run_sync(Base.metadata.create_all)
         sm = async_sessionmaker(engine, expire_on_commit=False)
         async with sm() as session:
-            session.add(Task(
-                id="t-hint-001",
-                status="pending",
-                created_at=_NOW,
-                updated_at=_NOW,
-                actor_kind="operator",
-                actor_id="op-1",
-                title="Hinted task",
-                hint="focus on rate limiting",
-            ))
+            session.add(
+                Task(
+                    id="t-hint-001",
+                    status="pending",
+                    created_at=_NOW,
+                    updated_at=_NOW,
+                    actor_kind="operator",
+                    actor_id="op-1",
+                    title="Hinted task",
+                    hint="focus on rate limiting",
+                )
+            )
             await session.commit()
 
         mcp = _build(sm)
@@ -529,9 +529,12 @@ class TestTierEnforcement:
         mcp = _build(db_session_maker)
         fn = mcp._tool_manager._tools["task_add_note"].fn
         with (
-            patch("task_registry_mcp.handlers.tools.check_tier", side_effect=CapabilityDenied(
-                action="task.add_note", actor_kind="unknown", required_tier=1, reason="test"
-            )),
+            patch(
+                "task_registry_mcp.handlers.tools.check_tier",
+                side_effect=CapabilityDenied(
+                    action="task.add_note", actor_kind="unknown", required_tier=1, reason="test"
+                ),
+            ),
             pytest.raises(CapabilityDenied),
         ):
             await fn(
@@ -593,27 +596,31 @@ class TestApprovalLookup:
 
         task_id = "t-00000099-0001-7000-8000-000000000099"
         async with db_session_maker() as session:
-            session.add(Task(
-                id=task_id,
-                status="executing",
-                created_at=_NOW,
-                updated_at=_NOW,
-                actor_kind="operator",
-                actor_id="op-1",
-            ))
+            session.add(
+                Task(
+                    id=task_id,
+                    status="executing",
+                    created_at=_NOW,
+                    updated_at=_NOW,
+                    actor_kind="operator",
+                    actor_id="op-1",
+                )
+            )
             await session.flush()
-            session.add(Event(
-                id="evt-approval-001",
-                type="approval.granted",
-                schema_version="1.0.0",
-                emitted_at=_NOW,
-                emitted_at_monotonic_ns=0,
-                actor_kind="operator",
-                actor_id="op-1",
-                task_id=task_id,
-                request_id="req-001",
-                payload_json='{"task_id":"' + task_id + '"}',
-            ))
+            session.add(
+                Event(
+                    id="evt-approval-001",
+                    type="approval.granted",
+                    schema_version="1.0.0",
+                    emitted_at=_NOW,
+                    emitted_at_monotonic_ns=0,
+                    actor_kind="operator",
+                    actor_id="op-1",
+                    task_id=task_id,
+                    request_id="req-001",
+                    payload_json='{"task_id":"' + task_id + '"}',
+                )
+            )
             await session.commit()
 
         lookup = _make_approval_lookup(db_session_maker)
@@ -633,7 +640,10 @@ class TestApprovalLookup:
         lookup = _make_approval_lookup(db_session_maker)
         with pytest.raises(CapabilityDenied, match="no_matching_approval"):
             await check_tier_with_approval(
-                "git_push", caller, Tier.THREE, approval_lookup=lookup,
+                "git_push",
+                caller,
+                Tier.THREE,
+                approval_lookup=lookup,
             )
 
     @pytest.mark.asyncio
@@ -645,28 +655,32 @@ class TestApprovalLookup:
 
         task_id = "t-00000099-0002-7000-8000-000000000099"
         async with db_session_maker() as session:
-            session.add(Task(
-                id=task_id,
-                status="executing",
-                created_at=_NOW,
-                updated_at=_NOW,
-                actor_kind="operator",
-                actor_id="op-1",
-            ))
-            await session.flush()
-            for i in range(3):
-                session.add(Event(
-                    id=f"evt-approval-multi-{i}",
-                    type="approval.granted",
-                    schema_version="1.0.0",
-                    emitted_at=_NOW,
-                    emitted_at_monotonic_ns=0,
+            session.add(
+                Task(
+                    id=task_id,
+                    status="executing",
+                    created_at=_NOW,
+                    updated_at=_NOW,
                     actor_kind="operator",
                     actor_id="op-1",
-                    task_id=task_id,
-                    request_id=f"req-multi-{i}",
-                    payload_json='{"task_id":"' + task_id + '"}',
-                ))
+                )
+            )
+            await session.flush()
+            for i in range(3):
+                session.add(
+                    Event(
+                        id=f"evt-approval-multi-{i}",
+                        type="approval.granted",
+                        schema_version="1.0.0",
+                        emitted_at=_NOW,
+                        emitted_at_monotonic_ns=0,
+                        actor_kind="operator",
+                        actor_id="op-1",
+                        task_id=task_id,
+                        request_id=f"req-multi-{i}",
+                        payload_json='{"task_id":"' + task_id + '"}',
+                    )
+                )
             await session.commit()
 
         lookup = _make_approval_lookup(db_session_maker)

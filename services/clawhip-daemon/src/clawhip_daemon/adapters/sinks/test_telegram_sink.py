@@ -3241,16 +3241,22 @@ def test_task_step_completed_in_deliverable_event_types() -> None:
 def test_detect_overnight_restart_finds_pair() -> None:
     """Returns recovery info when session.reconnecting + task.execution.resumed pair exists."""
     events = [
-        {"type": "task.created", "emitted_at": "2026-05-12T08:00:00+00:00",
-         "payload": {}},
-        {"type": "session.reconnecting", "emitted_at": "2026-05-12T03:02:00+00:00",
-         "payload": {"task_id": "t-1"}},
-        {"type": "task.execution.resumed", "emitted_at": "2026-05-12T03:02:14+00:00",
-         "payload": {
-             "task_id": "t-1", "events_replayed": 134, "replay_duration_ms": 2800,
-         }},
-        {"type": "task.completed", "emitted_at": "2026-05-12T09:00:00+00:00",
-         "payload": {}},
+        {"type": "task.created", "emitted_at": "2026-05-12T08:00:00+00:00", "payload": {}},
+        {
+            "type": "session.reconnecting",
+            "emitted_at": "2026-05-12T03:02:00+00:00",
+            "payload": {"task_id": "t-1"},
+        },
+        {
+            "type": "task.execution.resumed",
+            "emitted_at": "2026-05-12T03:02:14+00:00",
+            "payload": {
+                "task_id": "t-1",
+                "events_replayed": 134,
+                "replay_duration_ms": 2800,
+            },
+        },
+        {"type": "task.completed", "emitted_at": "2026-05-12T09:00:00+00:00", "payload": {}},
     ]
     result = detect_overnight_restart(events, task_id="t-1")
     assert result is not None
@@ -3271,12 +3277,20 @@ def test_detect_overnight_restart_no_pair_returns_none() -> None:
 def test_detect_overnight_restart_uses_resumed_payload_fields() -> None:
     """Extracts recovered_at, events_replayed, replay_duration_ms from the resumed event."""
     events = [
-        {"type": "session.reconnecting", "emitted_at": "2026-05-12T03:00:00+00:00",
-         "payload": {"task_id": "t-1"}},
-        {"type": "task.execution.resumed", "emitted_at": "2026-05-12T03:02:14+00:00",
-         "payload": {
-             "task_id": "t-1", "events_replayed": 500, "replay_duration_ms": 4200,
-         }},
+        {
+            "type": "session.reconnecting",
+            "emitted_at": "2026-05-12T03:00:00+00:00",
+            "payload": {"task_id": "t-1"},
+        },
+        {
+            "type": "task.execution.resumed",
+            "emitted_at": "2026-05-12T03:02:14+00:00",
+            "payload": {
+                "task_id": "t-1",
+                "events_replayed": 500,
+                "replay_duration_ms": 4200,
+            },
+        },
     ]
     result = detect_overnight_restart(events, task_id="t-1")
     assert result is not None
@@ -3288,12 +3302,20 @@ def test_detect_overnight_restart_uses_resumed_payload_fields() -> None:
 def test_detect_overnight_restart_pair_out_of_order_returns_none() -> None:
     """Returns None when task.execution.resumed appears before session.reconnecting."""
     events = [
-        {"type": "task.execution.resumed", "emitted_at": "2026-05-12T03:02:14+00:00",
-         "payload": {
-             "task_id": "t-1", "events_replayed": 10, "replay_duration_ms": 100,
-         }},
-        {"type": "session.reconnecting", "emitted_at": "2026-05-12T03:03:00+00:00",
-         "payload": {"task_id": "t-1"}},
+        {
+            "type": "task.execution.resumed",
+            "emitted_at": "2026-05-12T03:02:14+00:00",
+            "payload": {
+                "task_id": "t-1",
+                "events_replayed": 10,
+                "replay_duration_ms": 100,
+            },
+        },
+        {
+            "type": "session.reconnecting",
+            "emitted_at": "2026-05-12T03:03:00+00:00",
+            "payload": {"task_id": "t-1"},
+        },
     ]
     assert detect_overnight_restart(events, task_id="t-1") is None
 
@@ -3306,12 +3328,20 @@ def test_detect_overnight_restart_empty_list_returns_none() -> None:
 def test_detect_overnight_restart_ignores_mismatched_task_id() -> None:
     """Returns None when pair exists but task_ids don't match."""
     events = [
-        {"type": "session.reconnecting", "emitted_at": "2026-05-12T03:00:00+00:00",
-         "payload": {"task_id": "t-other"}},
-        {"type": "task.execution.resumed", "emitted_at": "2026-05-12T03:02:14+00:00",
-         "payload": {
-             "task_id": "t-other", "events_replayed": 10, "replay_duration_ms": 100,
-         }},
+        {
+            "type": "session.reconnecting",
+            "emitted_at": "2026-05-12T03:00:00+00:00",
+            "payload": {"task_id": "t-other"},
+        },
+        {
+            "type": "task.execution.resumed",
+            "emitted_at": "2026-05-12T03:02:14+00:00",
+            "payload": {
+                "task_id": "t-other",
+                "events_replayed": 10,
+                "replay_duration_ms": 100,
+            },
+        },
     ]
     assert detect_overnight_restart(events, task_id="t-1") is None
 
@@ -3319,12 +3349,20 @@ def test_detect_overnight_restart_ignores_mismatched_task_id() -> None:
 def test_detect_overnight_restart_handles_naive_datetime() -> None:
     """Treats naive emitted_at as UTC."""
     events = [
-        {"type": "session.reconnecting", "emitted_at": "2026-05-12T03:00:00",
-         "payload": {"task_id": "t-1"}},
-        {"type": "task.execution.resumed", "emitted_at": "2026-05-12T03:02:14",
-         "payload": {
-             "task_id": "t-1", "events_replayed": 10, "replay_duration_ms": 100,
-         }},
+        {
+            "type": "session.reconnecting",
+            "emitted_at": "2026-05-12T03:00:00",
+            "payload": {"task_id": "t-1"},
+        },
+        {
+            "type": "task.execution.resumed",
+            "emitted_at": "2026-05-12T03:02:14",
+            "payload": {
+                "task_id": "t-1",
+                "events_replayed": 10,
+                "replay_duration_ms": 100,
+            },
+        },
     ]
     result = detect_overnight_restart(events, task_id="t-1")
     assert result is not None
@@ -3335,13 +3373,21 @@ def test_detect_overnight_restart_skips_none_entries() -> None:
     """Returns correct result even when events list contains None entries."""
     events: list[dict | None] = [
         None,
-        {"type": "session.reconnecting", "emitted_at": "2026-05-12T03:00:00+00:00",
-         "payload": {"task_id": "t-1"}},
+        {
+            "type": "session.reconnecting",
+            "emitted_at": "2026-05-12T03:00:00+00:00",
+            "payload": {"task_id": "t-1"},
+        },
         None,
-        {"type": "task.execution.resumed", "emitted_at": "2026-05-12T03:02:14+00:00",
-         "payload": {
-             "task_id": "t-1", "events_replayed": 5, "replay_duration_ms": 50,
-         }},
+        {
+            "type": "task.execution.resumed",
+            "emitted_at": "2026-05-12T03:02:14+00:00",
+            "payload": {
+                "task_id": "t-1",
+                "events_replayed": 5,
+                "replay_duration_ms": 50,
+            },
+        },
     ]
     result = detect_overnight_restart(events, task_id="t-1")  # type: ignore[arg-type]
     assert result is not None
@@ -3363,12 +3409,20 @@ async def test_handle_completed_with_overnight_restart_sends_self_recovered() ->
 
     task_id = "t-00000000-0000-7000-8000-000000000099"
     restart_events = [
-        {"type": "session.reconnecting", "emitted_at": "2026-05-12T03:00:00+00:00",
-         "payload": {"task_id": task_id}},
-        {"type": "task.execution.resumed", "emitted_at": "2026-05-12T03:02:14+00:00",
-         "payload": {
-             "task_id": task_id, "events_replayed": 134, "replay_duration_ms": 2800,
-         }},
+        {
+            "type": "session.reconnecting",
+            "emitted_at": "2026-05-12T03:00:00+00:00",
+            "payload": {"task_id": task_id},
+        },
+        {
+            "type": "task.execution.resumed",
+            "emitted_at": "2026-05-12T03:02:14+00:00",
+            "payload": {
+                "task_id": task_id,
+                "events_replayed": 134,
+                "replay_duration_ms": 2800,
+            },
+        },
     ]
 
     async def _mock_get(url: str, **kwargs: object) -> httpx.Response:

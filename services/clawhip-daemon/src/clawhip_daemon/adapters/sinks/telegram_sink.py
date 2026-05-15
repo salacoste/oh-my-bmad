@@ -216,9 +216,7 @@ class RegistryAPIReadClient:
             return None, None
         return binding.chat_id, binding.reply_to_message_id
 
-    async def get_task_events(
-        self, task_id: str, *, limit: int = 1000
-    ) -> list[dict]:
+    async def get_task_events(self, task_id: str, *, limit: int = 1000) -> list[dict]:
         """GET /v1/tasks/{task_id}/events and return event envelope dicts."""
         resp = await self._http_client.get(
             f"{self._base_url}/v1/tasks/{task_id}/events",
@@ -1537,7 +1535,9 @@ def _render_plan_ready(envelope: EventEnvelope) -> str:
 
     # Step 1: full message with up to 20 steps.
     text = _assemble_plan_sections(
-        steps, step_count, max_steps=_PLAN_READY_MAX_VISIBLE_STEPS,
+        steps,
+        step_count,
+        max_steps=_PLAN_READY_MAX_VISIBLE_STEPS,
         task_id_esc=task_id_esc,
     )
     if len(text) <= _PLAN_READY_MESSAGE_MAX_CHARS:
@@ -1545,14 +1545,20 @@ def _render_plan_ready(envelope: EventEnvelope) -> str:
 
     # Step 2: truncate to 10 steps.
     text = _assemble_plan_sections(
-        steps, step_count, max_steps=10, task_id_esc=task_id_esc,
+        steps,
+        step_count,
+        max_steps=10,
+        task_id_esc=task_id_esc,
     )
     if len(text) <= _PLAN_READY_MESSAGE_MAX_CHARS:
         return text
 
     # Step 3: truncate to 4 steps.
     text = _assemble_plan_sections(
-        steps, step_count, max_steps=4, task_id_esc=task_id_esc,
+        steps,
+        step_count,
+        max_steps=4,
+        task_id_esc=task_id_esc,
     )
     if len(text) <= _PLAN_READY_MESSAGE_MAX_CHARS:
         return text
@@ -1690,9 +1696,7 @@ def _render(envelope: EventEnvelope) -> str:
 # ---------------------------------------------------------------------------
 
 
-def detect_overnight_restart(
-    events: list[dict], *, task_id: str
-) -> dict[str, Any] | None:
+def detect_overnight_restart(events: list[dict], *, task_id: str) -> dict[str, Any] | None:
     """Scan event history for a ``session.reconnecting`` → ``task.execution.resumed`` pair.
 
     Returns ``{"recovered_at": <datetime>, "events_replayed": <int>, "replay_duration_ms": <int>}``

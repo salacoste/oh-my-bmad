@@ -59,12 +59,7 @@ def _format_event(ev: EventRow) -> str:
     try:
         data: Any = json.loads(ev.payload_json)
         if isinstance(data, dict):
-            summary = (
-                data.get("reason")
-                or data.get("description")
-                or data.get("summary")
-                or ""
-            )
+            summary = data.get("reason") or data.get("description") or data.get("summary") or ""
     except (json.JSONDecodeError, AttributeError):
         pass
 
@@ -143,11 +138,7 @@ async def summarize_events(
             messages=[{"role": "user", "content": user_message}],
         )
         # Extract text from the response content blocks.
-        text_parts = [
-            block.text
-            for block in response.content
-            if block.type == "text"
-        ]
+        text_parts = [block.text for block in response.content if block.type == "text"]
         digest = "\n".join(text_parts).strip()
         if not digest:
             return (_build_fallback_digest(formatted, truncated), truncated)

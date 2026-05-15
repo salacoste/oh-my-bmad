@@ -87,9 +87,7 @@ async def _seed_task_and_events(
                 Event.__table__.insert(),
                 {
                     "id": eid,
-                    "type": (
-                        "task.blocker_raised" if i % 5 == 0 else "file.edited"
-                    ),
+                    "type": ("task.blocker_raised" if i % 5 == 0 else "file.edited"),
                     "schema_version": "1.0.0",
                     "emitted_at": emitted,
                     "emitted_at_monotonic_ns": _FROZEN_MONO_NS + i * 1000,
@@ -190,10 +188,7 @@ async def digest_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None]:
     )
     # Inject mock Anthropic client.
     mock_client = _make_mock_anthropic_client(
-        "Summary of key events:\n"
-        "- Task started\n"
-        "- Blocker raised at 10:00\n"
-        "- File edited at 10:04"
+        "Summary of key events:\n- Task started\n- Blocker raised at 10:00\n- File edited at 10:04"
     )
 
     async with (
@@ -323,9 +318,7 @@ async def no_client_configured(
 
 class TestDigestHappyPath:
     @pytest.mark.asyncio
-    async def test_digest_returns_summary_with_events(
-        self, digest_client: AsyncClient
-    ) -> None:
+    async def test_digest_returns_summary_with_events(self, digest_client: AsyncClient) -> None:
         """AC #1: digest endpoint returns summary with line_count >= 1."""
         r = await digest_client.get(f"/v1/tasks/{_TID}/logs/digest")
         assert r.status_code == 200
@@ -338,9 +331,7 @@ class TestDigestHappyPath:
 
 class TestDigestTruncation:
     @pytest.mark.asyncio
-    async def test_digest_truncates_on_large_input(
-        self, large_digest_client: AsyncClient
-    ) -> None:
+    async def test_digest_truncates_on_large_input(self, large_digest_client: AsyncClient) -> None:
         """AC #2: 100+ events → truncated=True."""
         r = await large_digest_client.get(f"/v1/tasks/{_TID}/logs/digest")
         assert r.status_code == 200
@@ -350,21 +341,15 @@ class TestDigestTruncation:
 
 class TestDigestNotFound:
     @pytest.mark.asyncio
-    async def test_digest_404_when_no_events(
-        self, no_events_client: AsyncClient
-    ) -> None:
+    async def test_digest_404_when_no_events(self, no_events_client: AsyncClient) -> None:
         """AC: no events for task → 404 with RFC 7807 envelope."""
-        r = await no_events_client.get(
-            f"/v1/tasks/{_TID_NO_EVENTS}/logs/digest"
-        )
+        r = await no_events_client.get(f"/v1/tasks/{_TID_NO_EVENTS}/logs/digest")
         assert r.status_code == 404
 
 
 class TestDigestFallback:
     @pytest.mark.asyncio
-    async def test_digest_fallback_on_anthropic_error(
-        self, fallback_client: AsyncClient
-    ) -> None:
+    async def test_digest_fallback_on_anthropic_error(self, fallback_client: AsyncClient) -> None:
         """AC #2: Anthropic APIError → fallback digest (no crash)."""
         r = await fallback_client.get(f"/v1/tasks/{_TID}/logs/digest")
         assert r.status_code == 200
@@ -374,9 +359,7 @@ class TestDigestFallback:
         assert body["line_count"] >= 1
 
     @pytest.mark.asyncio
-    async def test_digest_fallback_when_no_client(
-        self, no_client_configured: AsyncClient
-    ) -> None:
+    async def test_digest_fallback_when_no_client(self, no_client_configured: AsyncClient) -> None:
         """No Anthropic client (no API key) → fallback digest."""
         r = await no_client_configured.get(f"/v1/tasks/{_TID}/logs/digest")
         assert r.status_code == 200
@@ -386,9 +369,7 @@ class TestDigestFallback:
 
 class TestWireContract:
     @pytest.mark.asyncio
-    async def test_wire_contract_matches_local_model(
-        self, digest_client: AsyncClient
-    ) -> None:
+    async def test_wire_contract_matches_local_model(self, digest_client: AsyncClient) -> None:
         """Response JSON keys must match LogsDigestResponseLocal fields."""
         r = await digest_client.get(f"/v1/tasks/{_TID}/logs/digest")
         assert r.status_code == 200
@@ -410,9 +391,7 @@ class TestWireContract:
 
 class TestLineCountBoundary:
     @pytest.mark.asyncio
-    async def test_llm_returns_over_20_lines_clamped(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_llm_returns_over_20_lines_clamped(self, tmp_path: Path) -> None:
         """LLM returning >20 lines → response clamped to line_count <= 20."""
         db_path = tmp_path / "state.sqlite3"
         db_url = _db_url(db_path)
@@ -420,11 +399,11 @@ class TestLineCountBoundary:
 
         events_dir = tmp_path / "events"
         app = build_app(
-            base_dir=events_dir, db_url=db_url, clock=_FROZEN_CLOCK,
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=_FROZEN_CLOCK,
         )
-        mock_client = _make_mock_anthropic_client(
-            "\n".join(f"Line {i}" for i in range(25))
-        )
+        mock_client = _make_mock_anthropic_client("\n".join(f"Line {i}" for i in range(25)))
 
         async with (
             LifespanManager(app) as manager,
@@ -493,14 +472,14 @@ class TestMalformedTimestampSentinel:
     def test_format_event_empty_timestamp(self, _ev) -> None:
         from registry_api.adapters.llm_digest import _format_event
 
-        ev = _ev(type="task.blocker_raised", emitted_at_iso="", payload_json='{}')
+        ev = _ev(type="task.blocker_raised", emitted_at_iso="", payload_json="{}")
         result = _format_event(ev)
         assert result.startswith("[invalid-timestamp]")
 
     def test_format_event_truncated_timestamp(self, _ev) -> None:
         from registry_api.adapters.llm_digest import _format_event
 
-        ev = _ev(type="task.blocker_raised", emitted_at_iso="2026-01-01T10", payload_json='{}')
+        ev = _ev(type="task.blocker_raised", emitted_at_iso="2026-01-01T10", payload_json="{}")
         result = _format_event(ev)
         assert result.startswith("[invalid-timestamp]")
 

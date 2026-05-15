@@ -81,12 +81,16 @@ _FROZEN_MONO_NS = 1_000_000
 _INITIAL_STATUS = "plan_ready"
 
 # Route tier map patches for testing.
-_TIER3_ROUTE_MAP = MappingProxyType({
-    "POST /v1/tasks": Tier.THREE,
-})
-_TIER2_ROUTE_MAP = MappingProxyType({
-    "POST /v1/tasks": Tier.TWO,
-})
+_TIER3_ROUTE_MAP = MappingProxyType(
+    {
+        "POST /v1/tasks": Tier.THREE,
+    }
+)
+_TIER2_ROUTE_MAP = MappingProxyType(
+    {
+        "POST /v1/tasks": Tier.TWO,
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +187,9 @@ def _build_harness(tmp_path: Path, actor_kind: str) -> _Harness:
 
     async def _setup() -> tuple[LifespanManager, httpx.AsyncClient]:
         app = build_app(
-            base_dir=events_dir, db_url=db_url, clock=clock,
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=clock,
             actor_kind=actor_kind,
         )
         mgr = LifespanManager(app, startup_timeout=30, shutdown_timeout=30)
@@ -238,8 +244,6 @@ def operator_harness(tmp_path) -> _Harness:
         yield h
     finally:
         _teardown_harness(h)
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -338,9 +342,7 @@ def test_tier3_denied_without_approval(worker_harness: _Harness) -> None:
     async def _run() -> tuple[httpx.Response, str]:
         task_id = await _seed_task(h.writable_session, h.clock)
         key = new_idempotency_key(rng=rng)
-        with patch(
-            "registry_api.adapters.middleware.ROUTE_TIER_MAP", _TIER3_ROUTE_MAP
-        ):
+        with patch("registry_api.adapters.middleware.ROUTE_TIER_MAP", _TIER3_ROUTE_MAP):
             resp = await _submit_decision(h.client, task_id, "approve", key, rng)
             return resp, task_id
 
@@ -356,23 +358,13 @@ def test_tier3_denied_without_approval(worker_harness: _Harness) -> None:
     assert body.get("type") == "/errors/forbidden", (
         f"expected type='/errors/forbidden', got {body.get('type')}"
     )
-    assert body.get("status") == 403, (
-        f"expected status=403, got {body.get('status')}"
-    )
-    assert body.get("title") is not None, (
-        "expected RFC 7807 'title' field"
-    )
-    assert body.get("detail") is not None, (
-        "expected RFC 7807 'detail' field with denial reason"
-    )
+    assert body.get("status") == 403, f"expected status=403, got {body.get('status')}"
+    assert body.get("title") is not None, "expected RFC 7807 'title' field"
+    assert body.get("detail") is not None, "expected RFC 7807 'detail' field with denial reason"
 
     # AC #2: assert no side-effects — no events written to JSONL log.
-    event_count = h.loop.run_until_complete(
-        _count_jsonl_events(h.events_dir, task_id)
-    )
-    assert event_count == 0, (
-        f"expected 0 events after tier denial, got {event_count}"
-    )
+    event_count = h.loop.run_until_complete(_count_jsonl_events(h.events_dir, task_id))
+    assert event_count == 0, f"expected 0 events after tier denial, got {event_count}"
 
 
 # ---------------------------------------------------------------------------
@@ -395,9 +387,7 @@ def test_tier2_succeeds_with_worker(worker_harness: _Harness) -> None:
     async def _run() -> httpx.Response:
         task_id = await _seed_task(h.writable_session, h.clock)
         key = new_idempotency_key(rng=rng)
-        with patch(
-            "registry_api.adapters.middleware.ROUTE_TIER_MAP", _TIER2_ROUTE_MAP
-        ):
+        with patch("registry_api.adapters.middleware.ROUTE_TIER_MAP", _TIER2_ROUTE_MAP):
             return await _submit_decision(h.client, task_id, "approve", key, rng)
 
     resp = h.loop.run_until_complete(_run())
@@ -434,16 +424,13 @@ def test_operator_denied_tier3_without_approval(operator_harness: _Harness) -> N
     async def _run() -> httpx.Response:
         task_id = await _seed_task(h.writable_session, h.clock)
         key = new_idempotency_key(rng=rng)
-        with patch(
-            "registry_api.adapters.middleware.ROUTE_TIER_MAP", _TIER3_ROUTE_MAP
-        ):
+        with patch("registry_api.adapters.middleware.ROUTE_TIER_MAP", _TIER3_ROUTE_MAP):
             return await _submit_decision(h.client, task_id, "approve", key, rng)
 
     resp = h.loop.run_until_complete(_run())
 
     assert resp.status_code == 403, (
-        f"expected 403 (operator denied Tier-3 approval gate), got "
-        f"{resp.status_code}: {resp.text}"
+        f"expected 403 (operator denied Tier-3 approval gate), got {resp.status_code}: {resp.text}"
     )
     body = resp.json()
     assert body.get("type") == "/errors/forbidden", (
@@ -452,9 +439,7 @@ def test_operator_denied_tier3_without_approval(operator_harness: _Harness) -> N
     # Operator passes the actor-kind gate (max_tier=THREE) but fails
     # the approval gate — verify the reason mentions "approval".
     detail = body.get("detail", "")
-    assert "approval" in detail.lower(), (
-        f"expected approval-gate denial reason, got: {detail}"
-    )
+    assert "approval" in detail.lower(), f"expected approval-gate denial reason, got: {detail}"
 
 
 # ---------------------------------------------------------------------------
@@ -471,14 +456,11 @@ def test_read_methods_bypass_tier_enforcement(worker_harness: _Harness) -> None:
     async def _run() -> tuple[httpx.Response, str]:
         # Seed a task so GET /v1/tasks/{id} returns 200 instead of 404.
         task_id = await _seed_task(h.writable_session, h.clock)
-        with patch(
-            "registry_api.adapters.middleware.ROUTE_TIER_MAP", _TIER3_ROUTE_MAP
-        ):
+        with patch("registry_api.adapters.middleware.ROUTE_TIER_MAP", _TIER3_ROUTE_MAP):
             return await h.client.get(f"/v1/tasks/{task_id}"), task_id
 
     resp, task_id = h.loop.run_until_complete(_run())
 
     assert resp.status_code == 200, (
-        f"expected 200 (GET bypasses tier enforcement), got {resp.status_code}: "
-        f"{resp.text}"
+        f"expected 200 (GET bypasses tier enforcement), got {resp.status_code}: {resp.text}"
     )

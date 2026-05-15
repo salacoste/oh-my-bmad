@@ -167,7 +167,8 @@ class TaskResponseLocal(BaseModel):
     worktree_lock: WorktreeLockLocal | None = None
     available_commands: list[str] = Field(default_factory=list, max_length=20)
     next_commands: list[str] = Field(
-        default_factory=list, max_length=20,
+        default_factory=list,
+        max_length=20,
     )  # deprecated — use available_commands
     chat_id: int | None = None
     reply_to_message_id: int | None = None

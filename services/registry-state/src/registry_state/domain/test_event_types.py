@@ -663,6 +663,7 @@ def test_agent_reasoning_types_registered_on_import() -> None:
 
     # Force re-import to trigger module-level register() calls.
     import registry_state.domain.event_types as _et
+
     importlib.reload(_et)
 
     for k in keys:

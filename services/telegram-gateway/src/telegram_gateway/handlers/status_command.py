@@ -107,9 +107,7 @@ def _render_status_reply(task: TaskResponseLocal) -> str:
             lines.append(f"Last agent: {html.escape(task.last_agent_action[:80])}")
 
         if task.worktree_lock is not None:
-            lines.append(
-                "Worktree: held" if task.worktree_lock.held else "Worktree: not held"
-            )
+            lines.append("Worktree: held" if task.worktree_lock.held else "Worktree: not held")
 
         # prefer available_commands; fall back to next_commands (deprecated)
         commands = task.available_commands or task.next_commands

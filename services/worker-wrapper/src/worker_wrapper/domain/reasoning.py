@@ -175,9 +175,7 @@ def extract_reasoning_from_content(
             else None
         )
         next_block = (
-            content[i + 1]
-            if i < len(content) - 1 and isinstance(content[i + 1], dict)
-            else None
+            content[i + 1] if i < len(content) - 1 and isinstance(content[i + 1], dict) else None
         )
 
         breadcrumb = build_reasoning_breadcrumb(

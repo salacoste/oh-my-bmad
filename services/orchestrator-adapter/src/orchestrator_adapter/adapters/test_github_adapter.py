@@ -120,8 +120,10 @@ async def test_create_pr_draft_retries_on_500() -> None:
                 return error_resp
             return success_resp
 
-    with patch(_RETRY_TARGET, side_effect=_zero_wait_retry), \
-         patch(_PATCH_TARGET, return_value=FakeSession()):
+    with (
+        patch(_RETRY_TARGET, side_effect=_zero_wait_retry),
+        patch(_PATCH_TARGET, return_value=FakeSession()),
+    ):
         adapter = _adapter()
         result = await adapter.create_pr_draft(
             "owner",
@@ -180,8 +182,10 @@ async def test_create_pr_draft_timeout() -> None:
         def request(self, *a: object, **kw: object) -> MagicMock:
             raise TimeoutError()
 
-    with patch(_RETRY_TARGET, side_effect=_zero_wait_retry), \
-         patch(_PATCH_TARGET, return_value=FakeSession()):
+    with (
+        patch(_RETRY_TARGET, side_effect=_zero_wait_retry),
+        patch(_PATCH_TARGET, return_value=FakeSession()),
+    ):
         adapter = _adapter()
         result = await adapter.create_pr_draft(
             "owner",
@@ -291,8 +295,10 @@ async def test_create_pr_draft_network_error() -> None:
         def request(self, *a: object, **kw: object) -> MagicMock:
             raise aiohttp.ClientError("Connection refused")
 
-    with patch(_RETRY_TARGET, side_effect=_zero_wait_retry), \
-         patch(_PATCH_TARGET, return_value=FakeSession()):
+    with (
+        patch(_RETRY_TARGET, side_effect=_zero_wait_retry),
+        patch(_PATCH_TARGET, return_value=FakeSession()),
+    ):
         adapter = _adapter()
         result = await adapter.create_pr_draft(
             "owner",

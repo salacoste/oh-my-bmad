@@ -196,9 +196,7 @@ def test_plan_ready_payload_backward_compat() -> None:
     """Old-format payload (task_id + plan_summary only) deserializes with defaults."""
     from events.payloads import TaskPlanReadyPayload
 
-    payload = TaskPlanReadyPayload.model_validate(
-        {"task_id": _T3, "plan_summary": "Build auth"}
-    )
+    payload = TaskPlanReadyPayload.model_validate({"task_id": _T3, "plan_summary": "Build auth"})
     assert payload.plan == ()
     assert payload.estimated_steps == 0
 
@@ -261,9 +259,7 @@ def test_completion_payload_empty_plan() -> None:
 
 
 def test_completion_payload_summary_capped_at_2000() -> None:
-    steps = tuple(
-        PlanStep(step=i, description=f"Step {i}") for i in range(1, 51)
-    )
+    steps = tuple(PlanStep(step=i, description=f"Step {i}") for i in range(1, 51))
     plan_result = PlanParseResult(summary="long plan", steps=steps)
     step_outputs = {i: "Y" * 200 for i in range(1, 51)}
     payload = build_completion_payload(_T4, plan_result, step_outputs)
@@ -363,9 +359,7 @@ def test_build_completion_payload_with_metrics() -> None:
         ci_state="green",
         blockers_count=0,
     )
-    payload = build_completion_payload(
-        _T1, plan_result, {1: "done"}, metrics
-    )
+    payload = build_completion_payload(_T1, plan_result, {1: "done"}, metrics)
     assert payload["task_id"] == _T1
     assert payload["files_changed"] == 3
     assert payload["lines_added"] == 42
@@ -387,9 +381,7 @@ def test_build_completion_payload_without_metrics_backward_compat() -> None:
         summary="Build feature",
         steps=(PlanStep(step=1, description="Write code"),),
     )
-    payload = build_completion_payload(
-        _T3, plan_result, {1: "done"}
-    )
+    payload = build_completion_payload(_T3, plan_result, {1: "done"})
     assert payload["task_id"] == _T3
     assert payload["files_changed"] is None
     assert payload["lines_added"] is None
@@ -400,9 +392,7 @@ def test_build_completion_payload_without_metrics_backward_compat() -> None:
 def test_build_completion_payload_zero_metrics_are_none() -> None:
     plan_result = PlanParseResult(summary="test")
     metrics = CompletionMetrics()  # all None, ci_state="unknown"
-    payload = build_completion_payload(
-        _T4, plan_result, {}, metrics
-    )
+    payload = build_completion_payload(_T4, plan_result, {}, metrics)
     assert payload["files_changed"] is None
     assert payload["lines_added"] is None
     assert payload["lines_removed"] is None
@@ -414,9 +404,7 @@ def test_build_completion_payload_zero_metrics_are_none() -> None:
 def test_build_completion_payload_partial_metrics() -> None:
     plan_result = PlanParseResult(summary="test")
     metrics = CompletionMetrics(files_changed=5, ci_state="red")
-    payload = build_completion_payload(
-        _T5, plan_result, {}, metrics
-    )
+    payload = build_completion_payload(_T5, plan_result, {}, metrics)
     assert payload["files_changed"] == 5
     assert payload["lines_added"] is None  # not extracted
     assert payload["ci_state"] == "red"
@@ -462,9 +450,7 @@ def test_parse_metrics_zero_passed_zero_failed() -> None:
 
 def test_build_completion_payload_large_values_clamped() -> None:
     plan_result = PlanParseResult(summary="test")
-    metrics = CompletionMetrics(
-        files_changed=2_000_000, lines_added=3_000_000_000
-    )
+    metrics = CompletionMetrics(files_changed=2_000_000, lines_added=3_000_000_000)
     payload = build_completion_payload(_T1, plan_result, {}, metrics)
     assert payload["files_changed"] == 1_000_000
     assert payload["lines_added"] == 1_000_000_000
@@ -625,9 +611,7 @@ def test_build_budget_exceeded_payload() -> None:
 
 def test_build_completion_payload_with_token_usage() -> None:
     plan_result = PlanParseResult(summary="test")
-    payload = build_completion_payload(
-        _T1, plan_result, {}, token_usage=12345
-    )
+    payload = build_completion_payload(_T1, plan_result, {}, token_usage=12345)
     assert payload["token_usage"] == 12345
 
 
@@ -641,9 +625,7 @@ def test_build_completion_payload_token_usage_none_by_default() -> None:
 
 
 def test_build_blocker_raised_payload_shape() -> None:
-    payload = build_blocker_raised_payload(
-        _T1, "Step 3 failed: timeout"
-    )
+    payload = build_blocker_raised_payload(_T1, "Step 3 failed: timeout")
     assert payload["task_id"] == _T1
     assert payload["reason"] == "Step 3 failed: timeout"
 

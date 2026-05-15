@@ -88,14 +88,10 @@ class TestTaskIdPatternValid:
         TaskBudgetExceededPayload(task_id=task_id, token_limit=1000, tokens_used=1500, step=5)
 
     def test_approval_requested(self, task_id: str) -> None:
-        TaskApprovalRequestedPayload(
-            task_id=task_id, action="approve", justification="looks good"
-        )
+        TaskApprovalRequestedPayload(task_id=task_id, action="approve", justification="looks good")
 
     def test_retry_requested(self, task_id: str) -> None:
-        TaskRetryRequestedPayload(
-            task_id=task_id, decision_id="d-0", actor_id="console"
-        )
+        TaskRetryRequestedPayload(task_id=task_id, decision_id="d-0", actor_id="console")
 
     def test_license_flagged(self, task_id: str) -> None:
         TaskLicenseFlaggedPayload(

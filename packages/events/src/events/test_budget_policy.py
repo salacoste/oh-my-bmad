@@ -30,10 +30,7 @@ class TestMinOfBothPolicy:
 
     def test_min_of_both_chooses_plus50k_when_lower(self) -> None:
         # old_limit=1_000_000: double=2_000_000, plus50k=1_050_000 → min=1_050_000
-        assert (
-            calculate_new_limit(1_000_000, policy=BudgetExtendPolicy.MIN_OF_BOTH)
-            == 1_050_000
-        )
+        assert calculate_new_limit(1_000_000, policy=BudgetExtendPolicy.MIN_OF_BOTH) == 1_050_000
 
     def test_min_of_both_equal_when_same(self) -> None:
         # old_limit=50_000: double=100_000, plus50k=100_000 → equal

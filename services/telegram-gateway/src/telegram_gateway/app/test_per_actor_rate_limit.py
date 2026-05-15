@@ -321,9 +321,7 @@ class TestPerActorRateLimitIntegration:
             # AllowlistMiddleware drops all of these; PerActorRateLimitMiddleware
             # never sees them.
             for i in range(50):
-                update = Update.model_validate(
-                    _make_update(_NON_ALLOWLISTED_USER, update_id=i + 1)
-                )
+                update = Update.model_validate(_make_update(_NON_ALLOWLISTED_USER, update_id=i + 1))
                 await dp.feed_update(bot, update)
 
             # All 50 were rejected by allowlist — handler never ran.
@@ -338,9 +336,7 @@ class TestPerActorRateLimitIntegration:
             # Phase 2: legitimate allowlisted actor sends requests.
             # Per-actor bucket should be FULL (untouched by non-allowlisted burst).
             for i in range(3):
-                update = Update.model_validate(
-                    _make_update(_ALLOWLISTED_USER, update_id=100 + i)
-                )
+                update = Update.model_validate(_make_update(_ALLOWLISTED_USER, update_id=100 + i))
                 await dp.feed_update(bot, update)
 
             # All 3 should have passed through — per-actor bucket was not drained.
@@ -379,9 +375,7 @@ class TestPerActorRateLimitIntegration:
 
             # Allowlisted user sends 4 requests with capacity=2.
             for i in range(4):
-                update = Update.model_validate(
-                    _make_update(_ALLOWLISTED_USER, update_id=i + 1)
-                )
+                update = Update.model_validate(_make_update(_ALLOWLISTED_USER, update_id=i + 1))
                 await dp.feed_update(bot, update)
 
             # Only first 2 should reach the handler; last 2 dropped by per-actor limiter.
@@ -409,13 +403,9 @@ class TestPerActorRateLimitDocs:
         assert "layer 1" in doc_lower, "docstring must describe Layer 1"
         assert "layer 2" in doc_lower, "docstring must describe Layer 2"
         assert "per-actor" in doc_lower or "per_actor" in doc_lower
-        assert "allowlist" in doc_lower, (
-            "docstring must explain relationship to allowlist"
-        )
+        assert "allowlist" in doc_lower, "docstring must explain relationship to allowlist"
         # Must include the request flow diagram.
-        assert "allowlistmiddleware" in doc_lower, (
-            "docstring must show AllowlistMiddleware in flow"
-        )
+        assert "allowlistmiddleware" in doc_lower, "docstring must show AllowlistMiddleware in flow"
 
     @pytest.mark.asyncio
     async def test_per_actor_middleware_registered_after_allowlist(

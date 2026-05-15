@@ -236,10 +236,14 @@ class TestRunTaskRestartRecovery:
     async def test_reuses_sidecar_state(self, tmp_path: Path) -> None:
         # Pre-create sidecar with AWAITING_APPROVAL state.
         state_file = tmp_path / ".lifecycle-state.json"
-        state_file.write_text(json.dumps({
-            "state": "awaiting_approval",
-            "task_id": "t-00000000-0000-7000-8000-000000000001",
-        }))
+        state_file.write_text(
+            json.dumps(
+                {
+                    "state": "awaiting_approval",
+                    "task_id": "t-00000000-0000-7000-8000-000000000001",
+                }
+            )
+        )
 
         settings = _make_settings(
             tmp_path,

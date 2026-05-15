@@ -114,9 +114,7 @@ class TestRegistration:
             is DeploymentSignatureRejectedPayload
         )
 
-    def test_register_different_model_at_same_key_rejected(
-        self, _isolated_registry: None
-    ) -> None:
+    def test_register_different_model_at_same_key_rejected(self, _isolated_registry: None) -> None:
         class _Imposter(BaseModel):
             x: int
 
@@ -230,9 +228,7 @@ class TestAttestationTypeLiteral:
         with pytest.raises(ValidationError):
             DeploymentSignatureRejectedPayload(**kwargs)
 
-    @pytest.mark.parametrize(
-        "good_type", ["signature", "slsaprovenance", "cyclonedx"]
-    )
+    @pytest.mark.parametrize("good_type", ["signature", "slsaprovenance", "cyclonedx"])
     def test_three_known_attestation_types_accepted(self, good_type: str) -> None:
         kwargs = {**_VALID_KWARGS, "attestation_type": good_type}
         # Should not raise.

@@ -352,17 +352,20 @@ def validate_edit(
         return EditValidation(valid=False, match_count=0, error="old_string must be non-empty")
     if len(old_string) > _MAX_EDIT_SIZE:
         return EditValidation(
-            valid=False, match_count=0,
+            valid=False,
+            match_count=0,
             error=f"old_string exceeds {_MAX_EDIT_SIZE} chars",
         )
     if len(new_string) > _MAX_EDIT_SIZE:
         return EditValidation(
-            valid=False, match_count=0,
+            valid=False,
+            match_count=0,
             error=f"new_string exceeds {_MAX_EDIT_SIZE} chars",
         )
     if old_string == new_string:
         return EditValidation(
-            valid=False, match_count=0,
+            valid=False,
+            match_count=0,
             error="old_string identical to new_string — no-op edit",
         )
     count = old_content.count(old_string)
@@ -370,7 +373,8 @@ def validate_edit(
         return EditValidation(valid=False, match_count=0, error="old_string not found in content")
     if not replace_all and count > 1:
         return EditValidation(
-            valid=False, match_count=count,
+            valid=False,
+            match_count=count,
             error=f"old_string found {count} times; set replace_all=True",
         )
     return EditValidation(valid=True, match_count=count)
@@ -404,17 +408,23 @@ def apply_file_edit(
         old_content = target.read_text(encoding="utf-8")
     except FileNotFoundError:
         return FileEditResult(
-            target_path=target_str, success=False, session_id=session_id,
+            target_path=target_str,
+            success=False,
+            session_id=session_id,
             error=f"file not found: {target}",
         )
     except UnicodeDecodeError as exc:
         return FileEditResult(
-            target_path=target_str, success=False, session_id=session_id,
+            target_path=target_str,
+            success=False,
+            session_id=session_id,
             error=f"file is not valid UTF-8 text: {exc}",
         )
     except OSError as exc:
         return FileEditResult(
-            target_path=target_str, success=False, session_id=session_id,
+            target_path=target_str,
+            success=False,
+            session_id=session_id,
             error=f"cannot read file: {exc}",
         )
 
@@ -422,7 +432,9 @@ def apply_file_edit(
     validation = validate_edit(old_content, old_string, new_string, replace_all=replace_all)
     if not validation.valid:
         return FileEditResult(
-            target_path=target_str, success=False, session_id=session_id,
+            target_path=target_str,
+            success=False,
+            session_id=session_id,
             error=validation.error,
         )
 
@@ -437,12 +449,16 @@ def apply_file_edit(
         matches = scan_text(new_content)
     except Exception as exc:
         return FileEditResult(
-            target_path=target_str, success=False, session_id=session_id,
+            target_path=target_str,
+            success=False,
+            session_id=session_id,
             error=f"secret scan failed: {exc}",
         )
     if matches:
         return FileEditResult(
-            target_path=target_str, success=False, session_id=session_id,
+            target_path=target_str,
+            success=False,
+            session_id=session_id,
             secrets_detected=True,
             secret_matches=[m.excerpt for m in matches],
             error="secret detected in edited content — write aborted",
@@ -458,12 +474,16 @@ def apply_file_edit(
     except (OSError, ValueError) as exc:
         logger.warning("apply_file_edit: write failed: %s (target=%s)", exc, target)
         return FileEditResult(
-            target_path=target_str, success=False, session_id=session_id,
+            target_path=target_str,
+            success=False,
+            session_id=session_id,
             error=f"atomic write failed: {exc}",
         )
 
     return FileEditResult(
-        target_path=target_str, success=True, session_id=session_id,
+        target_path=target_str,
+        success=True,
+        session_id=session_id,
         lines_added=max(0, new_lines - old_lines),
         lines_removed=max(0, old_lines - new_lines),
         secret_matches=[],
@@ -491,7 +511,9 @@ def apply_file_write(
     # Size guard — prevents unbounded memory/IO from pathological inputs.
     if len(content) > _MAX_EDIT_SIZE:
         return FileEditResult(
-            target_path=target_str, success=False, session_id=session_id,
+            target_path=target_str,
+            success=False,
+            session_id=session_id,
             error=f"content exceeds {_MAX_EDIT_SIZE} chars",
         )
 
@@ -500,12 +522,16 @@ def apply_file_write(
         matches = scan_text(content)
     except Exception as exc:
         return FileEditResult(
-            target_path=target_str, success=False, session_id=session_id,
+            target_path=target_str,
+            success=False,
+            session_id=session_id,
             error=f"secret scan failed: {exc}",
         )
     if matches:
         return FileEditResult(
-            target_path=target_str, success=False, session_id=session_id,
+            target_path=target_str,
+            success=False,
+            session_id=session_id,
             secrets_detected=True,
             secret_matches=[m.excerpt for m in matches],
             error="secret detected in content — write aborted",
@@ -518,7 +544,9 @@ def apply_file_write(
             os.makedirs(parent, exist_ok=True)
         except OSError as exc:
             return FileEditResult(
-                target_path=target_str, success=False, session_id=session_id,
+                target_path=target_str,
+                success=False,
+                session_id=session_id,
                 error=f"cannot create parent directory: {exc}",
             )
 
@@ -539,12 +567,16 @@ def apply_file_write(
     except (OSError, ValueError) as exc:
         logger.warning("apply_file_write: write failed: %s (target=%s)", exc, target)
         return FileEditResult(
-            target_path=target_str, success=False, session_id=session_id,
+            target_path=target_str,
+            success=False,
+            session_id=session_id,
             error=f"atomic write failed: {exc}",
         )
 
     return FileEditResult(
-        target_path=target_str, success=True, session_id=session_id,
+        target_path=target_str,
+        success=True,
+        session_id=session_id,
         lines_added=max(0, new_lines - old_lines),
         lines_removed=max(0, old_lines - new_lines),
         secret_matches=[],

@@ -44,11 +44,13 @@ class TestCheckSensitivePaths:
         assert len(violations) == 1
 
     def test_clean_files_pass(self) -> None:
-        violations = check_sensitive_paths([
-            "src/main.py",
-            "README.md",
-            "config.yaml",
-        ])
+        violations = check_sensitive_paths(
+            [
+                "src/main.py",
+                "README.md",
+                "config.yaml",
+            ]
+        )
         assert violations == []
 
     def test_multiple_violations(self) -> None:

@@ -685,9 +685,7 @@ def test_blocked_state_message_fits_in_4096_chars() -> None:
     )
     reply = _render_status_reply(task)
 
-    assert len(reply) <= 4000 + len("\n… (truncated)"), (
-        f"Reply too long: {len(reply)} chars"
-    )
+    assert len(reply) <= 4000 + len("\n… (truncated)"), f"Reply too long: {len(reply)} chars"
 
 
 def test_idle_state_renders_like_executing() -> None:

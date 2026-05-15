@@ -87,9 +87,7 @@ async def _seed_task_and_events(
                 Event.__table__.insert(),
                 {
                     "id": eid,
-                    "type": (
-                        "task.blocker_raised" if i % 5 == 0 else "file.edited"
-                    ),
+                    "type": ("task.blocker_raised" if i % 5 == 0 else "file.edited"),
                     "schema_version": "1.0.0",
                     "emitted_at": emitted,
                     "emitted_at_monotonic_ns": _FROZEN_MONO_NS + i * 1000,
@@ -250,9 +248,7 @@ class TestEventsHappyPath:
 
 class TestEventsFiltering:
     @pytest.mark.asyncio
-    async def test_events_filters_by_since(
-        self, events_client: AsyncClient
-    ) -> None:
+    async def test_events_filters_by_since(self, events_client: AsyncClient) -> None:
         """AC #1: since parameter filters out older events."""
         # Events are at 10:00, 10:01, 10:02, 10:03, 10:04.
         # since=10:02 should return events at 10:02, 10:03, 10:04.
@@ -268,9 +264,7 @@ class TestEventsFiltering:
 
 class TestEventsLimit:
     @pytest.mark.asyncio
-    async def test_events_respects_limit(
-        self, many_events_client: AsyncClient
-    ) -> None:
+    async def test_events_respects_limit(self, many_events_client: AsyncClient) -> None:
         """AC #1: limit=3 returns at most 3 events."""
         r = await many_events_client.get(
             f"/v1/tasks/{_TID}/events",
@@ -281,9 +275,7 @@ class TestEventsLimit:
         assert len(body) == 3
 
     @pytest.mark.asyncio
-    async def test_events_default_limit_is_100(
-        self, events_client: AsyncClient
-    ) -> None:
+    async def test_events_default_limit_is_100(self, events_client: AsyncClient) -> None:
         """Default limit of 100 returns all events when count < 100."""
         r = await events_client.get(f"/v1/tasks/{_TID}/events")
         assert r.status_code == 200
@@ -305,9 +297,7 @@ class TestEventsEmptyResult:
 
 class TestEventsValidation:
     @pytest.mark.asyncio
-    async def test_events_rejects_invalid_task_id(
-        self, events_client: AsyncClient
-    ) -> None:
+    async def test_events_rejects_invalid_task_id(self, events_client: AsyncClient) -> None:
         """Malformed task_id returns 422."""
         r = await events_client.get("/v1/tasks/invalid/events")
         assert r.status_code == 422
@@ -315,9 +305,7 @@ class TestEventsValidation:
 
 class TestSameTimestampOrdering:
     @pytest.mark.asyncio
-    async def test_events_deterministic_order_for_same_timestamp(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_events_deterministic_order_for_same_timestamp(self, tmp_path: Path) -> None:
         """Events with the same emitted_at are ordered by monotonic_ns."""
         db_path = tmp_path / "state.sqlite3"
         db_url = _db_url(db_path)
@@ -442,9 +430,7 @@ class TestEventsCursorPagination:
         assert page1_ids.isdisjoint(page2_ids)
 
     @pytest.mark.asyncio
-    async def test_after_cursor_empty_when_past_end(
-        self, many_events_client: AsyncClient
-    ) -> None:
+    async def test_after_cursor_empty_when_past_end(self, many_events_client: AsyncClient) -> None:
         """after=mono_ns_of_last_event returns empty array."""
         # Get all events first to find the last monotonic_ns
         r_all = await many_events_client.get(
@@ -462,9 +448,7 @@ class TestEventsCursorPagination:
         assert r.json() == []
 
     @pytest.mark.asyncio
-    async def test_since_and_after_combine_correctly(
-        self, many_events_client: AsyncClient
-    ) -> None:
+    async def test_since_and_after_combine_correctly(self, many_events_client: AsyncClient) -> None:
         """since + after both filter: events must match both conditions."""
         # Events at 10:00, 10:01, ..., 10:09
         # since=10:03 → events 3-9, after=mono_ns_of_5 → events 6-9
@@ -487,9 +471,7 @@ class TestTraceIdDocumentation:
     """AC-2: trace_id is None, documented as Phase 2 dependency."""
 
     @pytest.mark.asyncio
-    async def test_trace_id_is_none_awaiting_phase_2(
-        self, events_client: AsyncClient
-    ) -> None:
+    async def test_trace_id_is_none_awaiting_phase_2(self, events_client: AsyncClient) -> None:
         """trace_id remains None until Phase 2 ORM column + migration lands."""
         r = await events_client.get(f"/v1/tasks/{_TID}/events")
         assert r.status_code == 200
@@ -502,9 +484,7 @@ class TestCorruptPayloadDefense:
     """Review patch: corrupt payload_json does not crash the endpoint."""
 
     @pytest.mark.asyncio
-    async def test_corrupt_payload_json_returns_raw_fallback(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_corrupt_payload_json_returns_raw_fallback(self, tmp_path: Path) -> None:
         """Invalid JSON in payload_json returns {\"_raw\": ...} instead of 500."""
         db_path = tmp_path / "state.sqlite3"
         db_url = _db_url(db_path)
@@ -543,9 +523,7 @@ class TestCorruptPayloadDefense:
                 },
             )
             await conn.execute(
-                Task.__table__.update()
-                .where(Task.__table__.c.id == _TID)
-                .values(last_event_id=eid)
+                Task.__table__.update().where(Task.__table__.c.id == _TID).values(last_event_id=eid)
             )
         await engine.dispose()
 
@@ -575,9 +553,7 @@ class TestAfterParameterValidation:
     """Review patch: negative after values are rejected."""
 
     @pytest.mark.asyncio
-    async def test_negative_after_returns_422(
-        self, events_client: AsyncClient
-    ) -> None:
+    async def test_negative_after_returns_422(self, events_client: AsyncClient) -> None:
         """after=-1 returns 422 validation error."""
         r = await events_client.get(
             f"/v1/tasks/{_TID}/events",
