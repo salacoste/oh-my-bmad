@@ -1364,19 +1364,28 @@ jobs:
 ```sh
 # justfile additions
 
+# SHIPPED (Stories 8.1–8.5) — actual recipe at justfile:320+ uses bash with
+# trap cleanup, OMB_GHCR_OWNER format validation, and per-digest sha256 regex
+# validation. The simplified sketch below is for architectural orientation
+# only; see the live justfile for the production-grade implementation.
+#
+# Code-review pass-2 F8: regexp is anchored on BOTH ends and matches only
+# semver tags (prevents fork-spoofing AND suffix-injection); service list
+# now matches the shipped 8-entry array (base + 7 services including
+# console-cli, NOT the placeholder metrics-subscriber).
 verify-images:
-    @for svc in registry-api registry-state telegram-gateway \
-                worker-wrapper orchestrator-adapter clawhip-daemon \
-                metrics-subscriber; do \
+    @for svc in base registry-api registry-state telegram-gateway \
+                orchestrator-adapter worker-wrapper clawhip-daemon \
+                console-cli; do \
         digest=$$(grep "OMB_IMAGE_DIGEST_$$svc" .env | cut -d= -f2); \
         echo "→ verifying $$svc @ $$digest"; \
         cosign verify \
-            --certificate-identity-regexp "https://github.com/${OMB_GHCR_OWNER}/.*" \
+            --certificate-identity-regexp "^https://github.com/${OMB_GHCR_OWNER}/oh-my-bmad/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$$" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             ghcr.io/${OMB_GHCR_OWNER}/oh-my-bmad-$$svc@$$digest; \
         cosign verify-attestation \
             --type slsaprovenance \
-            --certificate-identity-regexp "https://github.com/${OMB_GHCR_OWNER}/.*" \
+            --certificate-identity-regexp "^https://github.com/${OMB_GHCR_OWNER}/oh-my-bmad/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$$" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             ghcr.io/${OMB_GHCR_OWNER}/oh-my-bmad-$$svc@$$digest; \
     done

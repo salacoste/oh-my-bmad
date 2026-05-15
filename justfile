@@ -320,6 +320,15 @@ deploy-macos: build-base
 verify-images:
     #!/usr/bin/env bash
     set -euo pipefail
+    # Code-review pass-2 F13: trap cleanup ensures tempfiles created via
+    # mktemp are removed on SIGINT/SIGTERM, not just normal exit.
+    _omb_tmpfiles=()
+    cleanup_tmpfiles() {
+        if [ ${#_omb_tmpfiles[@]} -gt 0 ]; then
+            rm -f "${_omb_tmpfiles[@]}" 2>/dev/null || true
+        fi
+    }
+    trap cleanup_tmpfiles EXIT INT TERM
     if ! command -v cosign >/dev/null 2>&1; then
         echo "::error::cosign binary not found; install via brew/apt or sigstore releases. See docs/deployment-guide.md §Verifying releases."
         exit 1
@@ -333,12 +342,34 @@ verify-images:
     source .env
     set +a
     : "${OMB_GHCR_OWNER:?OMB_GHCR_OWNER must be set in .env (typically the GitHub repository owner)}"
+    # Code-review pass-2 F4: warn when OMB_GHCR_OWNER differs from the canonical
+    # upstream owner. The cert-identity regexp interpolates this value, so an
+    # operator who sets OMB_GHCR_OWNER to a fork would trust attestations from
+    # that fork's workflow. Hard-fail only if the value is malformed; warn (do
+    # not block) when it differs from the canonical, since legitimate forks
+    # exist. Operator can suppress the warning by setting OMB_ACK_CUSTOM_OWNER=1.
+    OMB_CANONICAL_OWNER="salacoste"
+    if ! printf '%s' "${OMB_GHCR_OWNER}" | grep -qE '^[a-z0-9](-?[a-z0-9])*$'; then
+        echo "::error::OMB_GHCR_OWNER='${OMB_GHCR_OWNER}' has invalid GitHub-username format (lowercase alphanumeric + hyphens, no trailing hyphen)."
+        exit 1
+    fi
+    if [ "${OMB_GHCR_OWNER}" != "${OMB_CANONICAL_OWNER}" ] && [ "${OMB_ACK_CUSTOM_OWNER:-0}" != "1" ]; then
+        echo "::warning::OMB_GHCR_OWNER='${OMB_GHCR_OWNER}' is NOT the canonical upstream owner '${OMB_CANONICAL_OWNER}'."
+        echo "::warning::All cosign verifies will trust attestations signed by ${OMB_GHCR_OWNER}'s workflow runs."
+        echo "::warning::Only proceed if you operate a legitimate fork. Set OMB_ACK_CUSTOM_OWNER=1 in .env to suppress this warning."
+    fi
     REGISTRY="ghcr.io"
     SERVICES=("base" "registry-api" "registry-state" "telegram-gateway" "orchestrator-adapter" "worker-wrapper" "clawhip-daemon" "console-cli")
-    # Anchored cert-identity-regexp (F1 lesson from Story 8.2 review):
-    # prevents fork-attestation spoofing; matches only canonical workflow.
-    CERT_ID="^https://github.com/${OMB_GHCR_OWNER}/oh-my-bmad/\.github/workflows/release\.yml@refs/tags/v[0-9].*"
+    # Anchored cert-identity-regexp (F1 lesson from Story 8.2 review +
+    # F3 end-anchor + semver tightening from pass-2): prevents fork-attestation
+    # spoofing AND suffix-injection. Matches only canonical workflow at a
+    # well-formed semver tag (including pre-release identifiers).
+    CERT_ID="^https://github.com/${OMB_GHCR_OWNER}/oh-my-bmad/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$"
     CERT_ISSUER="https://token.actions.githubusercontent.com"
+    # Code-review pass-2 F6: validate digest format before passing to cosign.
+    # `cosign` would reject a malformed digest, but failing early gives the
+    # operator a clearer error message naming the .env variable to fix.
+    digest_re='^sha256:[a-f0-9]{64}$'
     failures=()
     for svc in "${SERVICES[@]}"; do
         digest_var="OMB_IMAGE_DIGEST_${svc//-/_}"
@@ -347,10 +378,15 @@ verify-images:
             failures+=("$svc: $digest_var not set in .env")
             continue
         fi
+        if ! printf '%s' "$digest" | grep -qE "$digest_re"; then
+            failures+=("$svc: $digest_var='$digest' has invalid format (expected sha256:<64 hex chars>)")
+            continue
+        fi
         image="${REGISTRY}/${OMB_GHCR_OWNER}/oh-my-bmad-${svc}@${digest}"
         echo "→ verifying $svc @ $digest"
         # 1. cosign signature (Story 8.3)
         errfile=$(mktemp)
+        _omb_tmpfiles+=("$errfile")
         if ! cosign verify \
             --certificate-identity-regexp "$CERT_ID" \
             --certificate-oidc-issuer "$CERT_ISSUER" \
@@ -361,6 +397,7 @@ verify-images:
         rm -f "$errfile"
         # 2. SLSA L2 provenance attestation (Story 8.2)
         errfile=$(mktemp)
+        _omb_tmpfiles+=("$errfile")
         if ! cosign verify-attestation --type slsaprovenance \
             --certificate-identity-regexp "$CERT_ID" \
             --certificate-oidc-issuer "$CERT_ISSUER" \
@@ -371,6 +408,7 @@ verify-images:
         rm -f "$errfile"
         # 3. CycloneDX SBOM attestation (Story 8.4)
         errfile=$(mktemp)
+        _omb_tmpfiles+=("$errfile")
         if ! cosign verify-attestation --type cyclonedx \
             --certificate-identity-regexp "$CERT_ID" \
             --certificate-oidc-issuer "$CERT_ISSUER" \
