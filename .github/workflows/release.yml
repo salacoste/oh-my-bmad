@@ -163,6 +163,38 @@ jobs:
           output-file: sbom-base.cyclonedx.json
           artifact-name: sbom-base
 
+      # ---------------------------------------------------------------------
+      # Story 8.3 (Phase 2 Epic 8): cosign keyless signing — third + outermost
+      # gate of the supply-chain triumvirate. The signature wraps an image
+      # whose SLSA L2 attestation (Story 8.2) + CycloneDX SBOM (Story 8.1)
+      # are already published.
+      #
+      # Keyless mode: signing cert is minted by Sigstore Fulcio per call from
+      # the workflow's OIDC token (`id-token: write` permission, added by
+      # Story 8.2 prep-staging). No long-lived signing key.
+      #
+      # Operator verifies deploy-side. Canonical command lives in
+      # docs/deployment-guide.md (Story 8.5 owns the `just verify-images`
+      # recipe). Anchored verify-command template (F1-corrected):
+      #   cosign verify \
+      #     --certificate-identity-regexp "^https://github.com/${OWNER}/oh-my-bmad/\.github/workflows/release\.yml@refs/tags/v[0-9].*" \
+      #     --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+      #     <image>@<digest>
+      #
+      # Sigstore Fulcio/Rekor outage = hard release block (intentional per
+      # ADR-0008 §"Operational policy notes"). `fail-fast: false` (matrix
+      # only) preserves sibling isolation under transient signing failures.
+      # ---------------------------------------------------------------------
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+
+      - name: Cosign keyless sign (base)
+        if: steps.build.outputs.digest != ''  # F6 lesson: fail loudly on empty digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cosign sign --yes "${{ env.REGISTRY }}/${{ env.OWNER }}/oh-my-bmad-base@${DIGEST}"
+
       - name: Upload base SBOM as workflow artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
@@ -263,6 +295,21 @@ jobs:
           format: cyclonedx-json
           output-file: sbom-${{ matrix.service }}.cyclonedx.json
           artifact-name: sbom-${{ matrix.service }}
+
+      # ---------------------------------------------------------------------
+      # Story 8.3 (Phase 2 Epic 8): cosign keyless signing per service image.
+      # Same pattern + same policy as the base-job sign step (see comment
+      # block above the base step for verify-command + outage policy).
+      # ---------------------------------------------------------------------
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+
+      - name: Cosign keyless sign (${{ matrix.service }})
+        if: steps.build.outputs.digest != ''
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cosign sign --yes "${{ env.REGISTRY }}/${{ env.OWNER }}/oh-my-bmad-${{ matrix.service }}@${DIGEST}"
 
       - name: Upload ${{ matrix.service }} SBOM as workflow artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
