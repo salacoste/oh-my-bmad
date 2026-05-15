@@ -228,7 +228,7 @@ development_status:
   # FR53–FR56a · NFR-S9, NFR-S11 · ADR-0008
   # =========================================================================
   epic-8: in-progress
-  8-1-sbom-anchore-sbom-action: ready-for-dev  # phase: 2 · FR55 · first implementation
+  8-1-sbom-anchore-sbom-action: review  # phase: 2 · FR55 · awaiting operator SHA-pin + CI verification
   8-2-slsa-l2-provenance-attestation: backlog  # phase: 2 · FR54
   8-3-cosign-keyless-signing: backlog  # phase: 2 · FR53
   8-4-attach-sbom-cosign-attestation: backlog  # phase: 2 · FR55, NFR-S11

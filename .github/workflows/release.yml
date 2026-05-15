@@ -107,6 +107,31 @@ jobs:
         run: |
           docker buildx imagetools create -t "${DST}" "${SRC}"
 
+      # ---------------------------------------------------------------------
+      # Story 8.1 (Phase 2 Epic 8): CycloneDX SBOM generation for base image.
+      # See ADR-0008 for the supply-chain triumvirate rationale.
+      # This step produces the SBOM as a workflow artifact. Story 8.4
+      # attaches it as a cosign attestation; Story 8.5 verifies it deploy-side.
+      # ---------------------------------------------------------------------
+      - name: Generate CycloneDX SBOM (base)
+        # TODO Story 8.1 operator review: replace tag with SHA-pin before merge.
+        # Lookup: https://github.com/anchore/sbom-action/releases — pin to the
+        # latest stable release's commit SHA, follow the existing convention
+        # `<owner>/<repo>@<40-char-sha>  # vX.Y`.
+        uses: anchore/sbom-action@v0.18.0  # vX.Y — SHA-PIN REQUIRED BEFORE MERGE
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.OWNER }}/oh-my-bmad-base:${{ steps.ver.outputs.version }}
+          format: cyclonedx-json
+          output-file: sbom-base.cyclonedx.json
+          artifact-name: sbom-base
+
+      - name: Upload base SBOM as workflow artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882  # v4 — verify SHA via gh-actions release notes if updating
+        with:
+          name: sbom-base-${{ steps.ver.outputs.version }}
+          path: sbom-base.cyclonedx.json
+          retention-days: 90
+
   build-and-push-services:
     name: Build + push ${{ matrix.service }}
     needs: build-and-push-base
@@ -167,3 +192,27 @@ jobs:
           DST: ${{ env.REGISTRY }}/${{ env.OWNER }}/oh-my-bmad-${{ matrix.service }}:latest
         run: |
           docker buildx imagetools create -t "${DST}" "${SRC}"
+
+      # ---------------------------------------------------------------------
+      # Story 8.1 (Phase 2 Epic 8): CycloneDX SBOM per service image.
+      # See ADR-0008. Stories 8.2-8.4 chain SLSA + cosign sign + attest;
+      # Story 8.5 verifies deploy-side. CI fails if SBOM generation fails
+      # (fail-fast matrix; one service's SBOM-failure does not block the
+      # rest of the matrix per `fail-fast: false`).
+      # ---------------------------------------------------------------------
+      - name: Generate CycloneDX SBOM (${{ matrix.service }})
+        # TODO Story 8.1 operator review: replace tag with SHA-pin before merge.
+        # Same lookup pattern as the base SBOM step.
+        uses: anchore/sbom-action@v0.18.0  # vX.Y — SHA-PIN REQUIRED BEFORE MERGE
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.OWNER }}/oh-my-bmad-${{ matrix.service }}:${{ needs.build-and-push-base.outputs.version }}
+          format: cyclonedx-json
+          output-file: sbom-${{ matrix.service }}.cyclonedx.json
+          artifact-name: sbom-${{ matrix.service }}
+
+      - name: Upload ${{ matrix.service }} SBOM as workflow artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882  # v4 — verify SHA via gh-actions release notes if updating
+        with:
+          name: sbom-${{ matrix.service }}-${{ needs.build-and-push-base.outputs.version }}
+          path: sbom-${{ matrix.service }}.cyclonedx.json
+          retention-days: 90
