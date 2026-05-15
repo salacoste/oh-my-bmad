@@ -16,12 +16,11 @@ from __future__ import annotations
 import fcntl
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from events.canonical import from_canonical_json
-from events.envelope import EventEnvelope
 
 _HELPER_PATH = Path(__file__).resolve().parents[2] / "scripts" / "emit_signature_rejected.py"
 _VALID_DIGEST = "sha256:" + ("a" * 64)
@@ -77,7 +76,7 @@ class TestHappyPath:
         log_path = jsonl_files[0]
 
         # Filename matches today's UTC date (AC6).
-        today_utc = datetime.now(timezone.utc).date().isoformat()
+        today_utc = datetime.now(UTC).date().isoformat()
         assert log_path.name == f"{today_utc}.jsonl"
 
         # Stdout is the new event_id (AC3 contract).
@@ -215,7 +214,7 @@ class TestLockContention:
 
     def test_lock_held_returns_exit_3(self, tmp_path: Path) -> None:
         # Pre-create today's daily file, then hold LOCK_EX on it.
-        today_utc = datetime.now(timezone.utc).date().isoformat()
+        today_utc = datetime.now(UTC).date().isoformat()
         log_path = tmp_path / f"{today_utc}.jsonl"
         log_path.touch()
         size_before = log_path.stat().st_size

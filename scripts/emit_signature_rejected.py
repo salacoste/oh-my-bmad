@@ -39,8 +39,6 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from pydantic import ValidationError
-
 from events import (
     Actor,
     DeploymentSignatureRejectedPayload,
@@ -50,6 +48,7 @@ from events import (
     new_request_id,
 )
 from events.canonical import to_canonical_json
+from pydantic import ValidationError
 
 _DEFAULT_EVENT_LOG_DIR = Path("/var/lib/oh-my-bmad/events")
 _ERROR_MESSAGE_MAX = 4096
