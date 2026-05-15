@@ -38,6 +38,21 @@ from events.payloads import *  # noqa: F403 — intentional star re-export
 from events.payloads import __all__ as _payloads_all
 from events.schema_registry import REGISTRY, register
 
+# Story 8.6 — side-effect import: registers operator-side event types
+# (``deployment.signature_rejected`` and future Epic-11/13 additions). See
+# ``events/types/__init__.py`` for the pattern rationale.
+#
+# Code-review fix F14: the explicit ``from events.types import deployment``
+# below is RETAINED as defense-in-depth even though ``events.types.__init__``
+# already triggers the side-effect on its own. Both paths register
+# idempotently (``schema_registry.py:80`` no-op for same-model re-register),
+# and the redundancy guards against future refactors that might import
+# ``events.types.deployment`` directly without going through
+# ``events.types``. Tracker: review during Epic 11 when more
+# ``events/types/<X>.py`` files arrive.
+from events.types import deployment as _types_deployment  # noqa: F401
+from events.types.deployment import DeploymentSignatureRejectedPayload
+
 __version__ = "0.4.0"
 
 
@@ -64,6 +79,7 @@ __all__ = [
     "CanonicalSerializationError",
     "CapabilityDenied",
     "Clock",
+    "DeploymentSignatureRejectedPayload",
     "EventEnvelope",
     "EventSchemaUnknown",
     "EventValidationError",

@@ -101,3 +101,11 @@ def unregister_all() -> None:
 # when ``registry_state.adapters.event_log`` runs ``from events import
 # EventEnvelope``). The service-side registration is the single source of
 # truth; this module exposes only the registry primitive.
+#
+# Story 8.6 / FR56a NOTE: ``deployment.signature_rejected`` (and future
+# operator-side event types in Phase 2 — Epic 11 ``task.approval_signed``,
+# Epic 13 ``replication.lagging``) register from the
+# ``packages/events/src/events/types/<domain>.py`` submodules instead. No
+# circular-import cycle there: operator-side events have no service-layer
+# emitter, so the registration site stays inside ``packages/events``. See
+# ``events/types/__init__.py`` for the rationale.

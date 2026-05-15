@@ -132,6 +132,26 @@ If `just verify-images` reports any failure, the recipe identifies **which image
 
 For the 8 possible terminal states across `{signature} × {SLSA} × {SBOM-attest}`, see [`docs/adr/0008-cosign-slsa-sbom.md`](./adr/0008-cosign-slsa-sbom.md) §"Failure asymmetry across the supply-chain triumvirate (F12)" — every state has a documented operator action.
 
+### Recording a verification failure
+
+When `just verify-images` reports a failure (Story 8.5), append a structured `deployment.signature_rejected` event to the audit trail BEFORE re-running verification. Epic 11's `just verify-approval` (a future capability) will replay these events to compute supply-chain rejection history; emitting the event now means later audits can see what the operator caught and acted on.
+
+```sh
+# Replace the digest below with the actual sha256 value from your release
+# notes (64 hex chars including the `sha256:` prefix).
+uv run python scripts/emit_signature_rejected.py \
+  --image ghcr.io/salacoste/oh-my-bmad-registry-api \
+  --digest sha256:0000000000000000000000000000000000000000000000000000000000000000 \
+  --attestation-type signature \
+  --error-message "no matching signatures: cert subject doesn't match" \
+  --omb-version v0.1.5 \
+  --ghcr-owner salacoste
+```
+
+The helper writes a single envelope to today's daily-log file (`${EVENT_LOG_DIR}/<YYYY-MM-DD>.jsonl`, defaults to `/var/lib/oh-my-bmad/events`) and prints the new event-id on stdout. All 6 args are required; `--attestation-type` accepts `signature | slsaprovenance | cyclonedx` matching the three triage rows above. `--operator-id` is optional (reserved for Epic 11's HMAC-keyed non-repudiation).
+
+**Live-stack invocation refuses.** If `registry-state` is the live writer (Platform stack is running), the helper acquires an exclusive `flock` on the daily-log file with `LOCK_NB` — contention causes the helper to abort with exit code 3 and a recoverable message naming the held path. This is defense-in-depth for FR26 single-writer; the expected workflow runs the helper while the stack is down (operator runs `verify-images` BEFORE `docker compose up`).
+
 ### Sigstore outage policy
 
 If Sigstore Fulcio (cert minting) or Rekor (transparency log) is unreachable, `just verify-images` fails for the affected attestation type. **This is intentional, not a gap** — silently shipping unverified images would defeat the entire supply-chain triumvirate. Monitor https://status.sigstore.dev during stuck releases; verification typically resumes once Sigstore recovers (usually <1 hour for transient outages).
