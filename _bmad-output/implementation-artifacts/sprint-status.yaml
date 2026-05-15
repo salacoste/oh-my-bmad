@@ -35,7 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-14T14:00:00Z
+last_updated: 2026-05-15T03:00:00Z
+current_phase: 2  # Phase 2 opened by ADR-0003 (docs/adr/0003-phase-2-gate.md), 2026-05-15
 
 development_status:
   # =========================================================================
@@ -211,3 +212,92 @@ development_status:
   7-5-7-integration-test-harness-decision: done  # Process — resolve 3-retro deferral on harness duplication
   7-5-8-renderer-validator-consistency: done  # LOW — uniform task_id, pr_branch, newline validators across renderers
   epic-7-5-retrospective: done
+
+  # =========================================================================
+  # PHASE 2 — Observability Phase (opened by ADR-0003, 2026-05-15)
+  # Scope: FR53–FR71a from prd.md §"Phase 2 Scope Extension"
+  # Selected via: phase-2-brainstorming.md (Narrative I)
+  # Estimated effort: 6–8 weeks of solo-operator work
+  # All stories below carry phase: 2; cannot merge to main without
+  # ADR-0003 accepted (which it is, as of 2026-05-15).
+  # =========================================================================
+
+  # =========================================================================
+  # Epic 8: γ Supply-chain hardening (6 stories, ~3 days)
+  # phase: 2 · lands first to harden every later release
+  # FR53–FR56a · NFR-S9, NFR-S11 · ADR-0008
+  # =========================================================================
+  epic-8: in-progress
+  8-1-sbom-anchore-sbom-action: ready-for-dev  # phase: 2 · FR55 · first implementation
+  8-2-slsa-l2-provenance-attestation: backlog  # phase: 2 · FR54
+  8-3-cosign-keyless-signing: backlog  # phase: 2 · FR53
+  8-4-attach-sbom-cosign-attestation: backlog  # phase: 2 · FR55, NFR-S11
+  8-5-just-verify-images-recipe: backlog  # phase: 2 · FR56a, NFR-S9
+  8-6-deployment-signature-rejected-event: backlog  # phase: 2 · FR56a · new event type
+  epic-8-retrospective: optional
+
+  # =========================================================================
+  # Epic 9: α trace_id propagation kernel (7 stories, ~1 week)
+  # phase: 2 · unblocks every later epic · ADR-0004
+  # FR57–FR59a · NFR-O7
+  # =========================================================================
+  epic-9: backlog
+  9-1-trace-id-optional-envelope: backlog  # phase: 2 · FR57 · partial (optional phase)
+  9-2-registry-api-x-trace-id-middleware: backlog  # phase: 2 · FR58 (HTTP)
+  9-3-telegram-gateway-tg-update-id-derivation: backlog  # phase: 2 · FR58 (Telegram)
+  9-4-console-cli-trace-id-mint: backlog  # phase: 2 · FR58 (console)
+  9-5-mcp-caller-trace-id-input: backlog  # phase: 2 · FR58 (MCP)
+  9-6-worker-wrapper-trace-id-cli-flag: backlog  # phase: 2 · FR59
+  9-7-schema-bump-1-1-0-plus-backfill-plus-trace-query: backlog  # phase: 2 · FR57, FR59a · schema 1.0.0 → 1.1.0
+  epic-9-retrospective: optional
+
+  # =========================================================================
+  # Epic 10: β metrics-subscriber service (6 stories, ~1 week)
+  # phase: 2 · new workspace member · ADR-0005
+  # FR60–FR62a · NFR-O8, NFR-O10
+  # =========================================================================
+  epic-10: backlog
+  10-1-scaffold-metrics-subscriber-workspace-member: backlog  # phase: 2 · FR60
+  10-2-tail-loop-cursor-persistence: backlog  # phase: 2 · FR60
+  10-3-fastapi-metrics-endpoint: backlog  # phase: 2 · FR61
+  10-4-core-counter-gauge-histogram-set: backlog  # phase: 2 · FR62
+  10-5-cardinality-discipline-regression-test: backlog  # phase: 2 · FR62, NFR-O8
+  10-6-separability-test-s4-plus-compose-entry: backlog  # phase: 2 · FR62a
+  epic-10-retrospective: optional
+
+  # =========================================================================
+  # Epic 11: ξ Approval inbox + HMAC signature (5 stories, ~1 week)
+  # phase: 2 · ADR-0006
+  # FR63–FR65a · NFR-S10
+  # =========================================================================
+  epic-11: backlog
+  11-1-hmac-signing-decisions-handler: backlog  # phase: 2 · FR64
+  11-2-register-approval-signed-key-rotated-events: backlog  # phase: 2 · FR64, FR65a · new event types
+  11-3-approvals-pinned-thread-handler: backlog  # phase: 2 · FR63
+  11-4-just-verify-approval-offline-recipe: backlog  # phase: 2 · FR65
+  11-5-key-rotation-flow-key-rotated-event: backlog  # phase: 2 · FR65a · new event type
+  epic-11-retrospective: optional
+
+  # =========================================================================
+  # Epic 12: κ Per-task budget enforcement (4 stories, ~1 week)
+  # phase: 2 · composes with Epic 10
+  # FR66–FR68a · NFR-R8
+  # =========================================================================
+  epic-12: backlog
+  12-1-budget-supervisor-worker-wrapper: backlog  # phase: 2 · FR66
+  12-2-budget-enforcement-triggered-event: backlog  # phase: 2 · FR67 · new event type
+  12-3-approve-override-budget-event: backlog  # phase: 2 · FR68 · new event type
+  12-4-per-task-budget-policy-storage: backlog  # phase: 2 · FR68a
+  epic-12-retrospective: optional
+
+  # =========================================================================
+  # Epic 13: δ litestream WAL replication (4 stories, ~3 days)
+  # phase: 2 · orthogonal · ADR-0007
+  # FR69–FR71a · NFR-R7
+  # =========================================================================
+  epic-13: backlog
+  13-1-litestream-sidecar-compose: backlog  # phase: 2 · FR69
+  13-2-litestream-config-template-docs: backlog  # phase: 2 · FR70
+  13-3-just-restore-from-litestream-recipe: backlog  # phase: 2 · FR71
+  13-4-litestream-lag-check-replication-lagging-event: backlog  # phase: 2 · NFR-R7 · new event type
+  epic-13-retrospective: optional
