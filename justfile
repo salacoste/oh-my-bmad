@@ -350,26 +350,35 @@ verify-images:
         image="${REGISTRY}/${OMB_GHCR_OWNER}/oh-my-bmad-${svc}@${digest}"
         echo "→ verifying $svc @ $digest"
         # 1. cosign signature (Story 8.3)
+        errfile=$(mktemp)
         if ! cosign verify \
             --certificate-identity-regexp "$CERT_ID" \
             --certificate-oidc-issuer "$CERT_ISSUER" \
-            "$image" >/dev/null 2>&1; then
-            failures+=("$svc: cosign verify (signature) FAILED — owned by Story 8.3")
+            "$image" >/dev/null 2>"$errfile"; then
+            errtail=$(tail -5 "$errfile" 2>/dev/null || true)
+            failures+=("$svc: cosign verify (signature) FAILED — owned by Story 8.3"$'\n'"    $errtail")
         fi
+        rm -f "$errfile"
         # 2. SLSA L2 provenance attestation (Story 8.2)
+        errfile=$(mktemp)
         if ! cosign verify-attestation --type slsaprovenance \
             --certificate-identity-regexp "$CERT_ID" \
             --certificate-oidc-issuer "$CERT_ISSUER" \
-            "$image" >/dev/null 2>&1; then
-            failures+=("$svc: cosign verify-attestation slsaprovenance FAILED — owned by Story 8.2")
+            "$image" >/dev/null 2>"$errfile"; then
+            errtail=$(tail -5 "$errfile" 2>/dev/null || true)
+            failures+=("$svc: cosign verify-attestation slsaprovenance FAILED — owned by Story 8.2"$'\n'"    $errtail")
         fi
+        rm -f "$errfile"
         # 3. CycloneDX SBOM attestation (Story 8.4)
+        errfile=$(mktemp)
         if ! cosign verify-attestation --type cyclonedx \
             --certificate-identity-regexp "$CERT_ID" \
             --certificate-oidc-issuer "$CERT_ISSUER" \
-            "$image" >/dev/null 2>&1; then
-            failures+=("$svc: cosign verify-attestation cyclonedx FAILED — owned by Story 8.4")
+            "$image" >/dev/null 2>"$errfile"; then
+            errtail=$(tail -5 "$errfile" 2>/dev/null || true)
+            failures+=("$svc: cosign verify-attestation cyclonedx FAILED — owned by Story 8.4"$'\n'"    $errtail")
         fi
+        rm -f "$errfile"
     done
     if [ ${#failures[@]} -ne 0 ]; then
         echo
