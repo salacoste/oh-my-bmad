@@ -2228,3 +2228,327 @@ The tests and stories below must be green/complete before Phase 1 can be claimed
 ### Principle
 
 If any item above is not green/complete, Phase 1 has not shipped. The three architectural commitments (snapshot / single-writer / idempotency) and the three separability tests are the spine; their absence from green CI invalidates the MVP claim regardless of what else is complete.
+
+---
+
+## Phase 2 Epics — Observability Phase
+
+> **Amendment added:** 2026-05-15. Decomposes FR53–FR71a from [`prd.md`](./prd.md) §"Phase 2 Scope Extension" into six epics, aligned with the architecture amendment in [`architecture.md`](./architecture.md) §"Phase 2 Architecture Extension".
+>
+> **Selected via:** [`phase-2-brainstorming.md`](./phase-2-brainstorming.md) (Narrative I — Observability Phase).
+>
+> **Phase label:** every story below carries `phase: 2` in `sprint-status.yaml`; cannot merge to `main` until ADR-0003 (Phase 2 gate) is `accepted`.
+
+### Phase 2 Epic Summary
+
+| Epic | Item | FRs | Stories | Effort | Order |
+|---|---|---|---|---|---|
+| **Epic 8** | γ Supply-chain hardening | FR53–FR56a | 6 | ~3 days | 1 — lands first to harden every later release |
+| **Epic 9** | α `trace_id` propagation kernel | FR57–FR59a | 7 | ~1 week | 2 — unblocks every later epic |
+| **Epic 10** | β `metrics-subscriber` service | FR60–FR62a | 6 | ~1 week | 3 — consumes α's trace_id |
+| **Epic 11** | ξ Approval inbox + HMAC signature | FR63–FR65a | 5 | ~1 week | 4 — compounds with α |
+| **Epic 12** | κ Per-task budget enforcement | FR66–FR68a | 4 | ~1 week | 5 — composes with β |
+| **Epic 13** | δ litestream WAL replication | FR69–FR71a | 4 | ~3 days | 6 — orthogonal; ships in parallel with 11/12 if convenient |
+
+**Total: ~32 stories, 6–8 weeks of solo-operator work.**
+
+---
+
+## Epic 8: Supply-chain hardening (γ)
+
+**Goal.** Every Platform-published Docker image is verifiable end-to-end: cosign keyless signature against GitHub OIDC + SLSA L2 provenance attestation + CycloneDX SBOM attestation. Operator deploys refuse to pull unverified images. (FR53–FR56a, NFR-S9, NFR-S11.)
+
+**Why first.** Cheapest by far (~3 days), lands before any other Phase 2 epic so that *every* later release ships through the hardened pipeline.
+
+**Dependencies.** Phase 1's release.yml + GHCR setup (already in place from Story 1.9).
+
+### Story 8.1: SBOM generation via anchore/sbom-action in release.yml
+- **FR:** FR55. Generates CycloneDX SBOM for every published image.
+- **Scope:** Add `anchore/sbom-action` step to the matrix build in `.github/workflows/release.yml`. SHA-pin the action.
+- **AC:** SBOM artifact present for every service in a published release; contains direct + transitive deps with SPDX license identifiers; CI fails if SBOM generation fails.
+
+### Story 8.2: SLSA L2 provenance attestation
+- **FR:** FR54.
+- **Scope:** `actions/attest-build-provenance` with `push-to-registry: true`. Verifies via `cosign verify-attestation --type slsaprovenance`.
+- **AC:** `cosign verify-attestation --type slsaprovenance` succeeds for every published image; attestation traceable to specific commit SHA + workflow run ID.
+
+### Story 8.3: Cosign keyless signing of every published image
+- **FR:** FR53.
+- **Scope:** `sigstore/cosign-installer` + `cosign sign --yes` against the published image digest. Configure workflow with `permissions: id-token: write` for OIDC. SHA-pin all sigstore actions.
+- **AC:** `cosign verify` succeeds for every released image; signature certificate identity matches the GitHub Actions OIDC issuer.
+
+### Story 8.4: Attach SBOM as cosign attestation
+- **FR:** FR55, NFR-S11.
+- **Scope:** `cosign attest --yes --predicate sbom-<service>.cyclonedx.json --type cyclonedx <image>@<digest>`.
+- **AC:** `cosign verify-attestation --type cyclonedx <image>@<digest>` returns the SBOM matching Story 8.1's artifact.
+
+### Story 8.5: Operator-side `just verify-images` recipe
+- **FR:** FR56a, NFR-S9.
+- **Scope:** New `justfile` recipe iterating `OMB_IMAGE_DIGEST_<service>` env vars, running `cosign verify` + `cosign verify-attestation --type slsaprovenance` for each. Failure refuses `docker compose pull`.
+- **AC:** `just verify-images` exits non-zero on any mismatch; deploy procedure in `docs/deployment-guide.md` updated to require it before `docker compose pull`.
+
+### Story 8.6: `deployment.signature_rejected` event + one-shot CLI helper
+- **FR:** FR56a; new event type.
+- **Scope:** Register `deployment.signature_rejected` at schema_version 1.1.0. Add `scripts/emit_signature_rejected.py` operator runs after verify failure to append the rejection to the event log even when the Platform stack is not running.
+- **AC:** Helper writes a well-formed envelope to the JSONL log; `just verify-approval` (Epic 11) can read it in the audit trail.
+
+### Epic 8 acceptance gate
+- All Phase 2 baseline images carry valid cosign + SLSA + SBOM attestations.
+- `just verify-images` against the latest release passes; against a tampered image fails with a specific reason.
+- ADR-0008 (`docs/adr/0008-cosign-slsa-sbom.md`) authored and `accepted`.
+
+---
+
+## Epic 9: trace_id propagation kernel (α)
+
+**Goal.** Every event emitted in Phase 2+ carries a `trace_id: UUIDv7` that correlates the complete causal chain of a single operator command across every service. (FR57–FR59a, NFR-O7.)
+
+**Why second.** Every downstream Phase 2 epic depends on this being live.
+
+**Dependencies.** Phase 1's envelope (`packages/events`), schema registry, `EventLogReader`/`EventLogWriter`. Epic 8.
+
+### Story 9.1: Add `trace_id` as optional on the envelope
+- **FR:** FR57 (partial — optional phase).
+- **Scope:** `packages/events/src/events/envelope.py` — add `trace_id: str | None = None` with a deprecation warning if absent. Schema registry retains `1.0.0` as canonical.
+- **AC:** Existing envelopes still parse; new envelopes with `trace_id` round-trip via canonical JSON.
+
+### Story 9.2: registry-api middleware pulls `X-Trace-Id` header
+- **FR:** FR58 (HTTP).
+- **Scope:** Extend `IdempotencyMiddleware` (or sibling `TraceIdMiddleware`) in `services/registry-api/src/registry_api/adapters/middleware.py`. Mint `new_uuid7(clock=...)` if absent; log at WARNING.
+- **AC:** Every `request.state` has `trace_id` set before any handler runs; response echoes `X-Trace-Id` header.
+
+### Story 9.3: telegram-gateway AllowlistMiddleware derives `tg:{update_id}`
+- **FR:** FR58 (Telegram).
+- **Scope:** Extend `AllowlistMiddleware` to bind `trace_id = f"tg:{update.update_id}"` to structlog context before any handler.
+- **AC:** Replaying the same Telegram `update_id` produces the same `trace_id` (deterministic); composes with FR28 idempotency.
+
+### Story 9.4: console-cli mints at command entry
+- **FR:** FR58 (console).
+- **Scope:** `services/console-cli/src/console_cli/app/` command-entry hook mints `new_request_id(clock=...)` and threads as `X-Trace-Id` in the command envelope.
+- **AC:** Every console command carries an explicit `trace_id`; `oh-my-bmad trace <trace-id>` returns at least one event per command.
+
+### Story 9.5: MCP tool handlers take `caller_trace_id` as explicit input
+- **FR:** FR58 (MCP).
+- **Scope:** Extend Pydantic input models in `mcp-servers/{task-registry,session-registry,clawhip-bridge}` to take `caller_trace_id: str`. Tools propagate to downstream client calls. Schema round-trip tests in `tests/contract/` updated.
+- **AC:** Tool invocations without `caller_trace_id` fail validation; with it, value appears in every event the tool emits.
+
+### Story 9.6: worker-wrapper passes `--trace-id` CLI flag to Claude Code
+- **FR:** FR59.
+- **Scope:** `services/worker-wrapper/src/worker_wrapper/app/` adds `--trace-id <uuid>` to subprocess argv. Worker emits via `clawhip-bridge.emit_*` tools which now require `caller_trace_id` (Story 9.5).
+- **AC:** Every event emitted by the worker for a task carries the same `trace_id` as the inbound operator command.
+
+### Story 9.7: Schema bump 1.0.0 → 1.1.0 + migrator backfill + `/trace` operator query
+- **FRs:** FR57 (completion), FR59a, NFR-O7.
+- **Scope:** Flip envelope to `trace_id: str` (non-optional). Bump `schema_version` to `1.1.0`. Add `events.trace_id` column + non-unique index to `registry-state` schema. Backfill historical events via migrator container per ADR-0004. Add `/trace <trace-id>` to Telegram and `oh-my-bmad trace <trace-id>` to console; both query `events` by `trace_id`. CI gate (`scripts/checks/check_trace_id_required.py`) AST-scans every `EventEnvelope.create(...)` callsite.
+- **AC:** Every new event has `trace_id` populated; `tests/replay/` still passes against migrated log; `/trace <trace-id>` returns chronologically-ordered causal chain across all services.
+
+### Epic 9 acceptance gate
+- Every new event in CI carries `trace_id`.
+- `EventLogReader` accepts both 1.0.0 and 1.1.0 envelopes during 1-month consumer-compat window.
+- `tests/separability/`, `tests/crash-injection/`, `tests/idempotency/`, `tests/contract/` all green.
+- ADR-0004 authored and `accepted`.
+
+---
+
+## Epic 10: metrics-subscriber service (β)
+
+**Goal.** A new workspace member that tails the JSONL event log read-only and computes Prometheus-format metrics — without injecting instrumentation into any existing service. (FR60–FR62a, NFR-O8, NFR-O10.)
+
+**Why third.** Consumes Epic 9's `trace_id`. Establishes the "derived metrics, not parallel instrumentation" pattern that preserves Phase 1's NFR-O1.
+
+**Dependencies.** Epic 8, Epic 9.
+
+### Story 10.1: Scaffold `services/metrics-subscriber/` workspace member
+- **FR:** FR60 (scaffold).
+- **Scope:** uv-workspace member; `pyproject.toml` with `name = "metrics-subscriber"`; standard `src/metrics_subscriber/` layout; `py.typed`; scaffold `__main__.py`. Add to root `pyproject.toml` `[tool.uv.sources]` + `[project.dependencies]`. Update `just bootstrap-verify` (14 → 15 imports).
+- **AC:** `just bootstrap-verify` green; `python -m metrics_subscriber` succeeds with the scaffold pattern.
+
+### Story 10.2: Tail loop + cursor persistence
+- **FR:** FR60 (tail).
+- **Scope:** Lifespan task opens JSONL via `EventLogReader`, persists cursor to `oh-my-bmad-data/metrics-subscriber/cursor.json` every 1000 events, resumes from cursor on restart.
+- **AC:** Restart-recovery test confirms subscriber resumes from last persisted cursor; no events processed twice; lag observable.
+
+### Story 10.3: FastAPI `/metrics` endpoint (Prometheus exposition)
+- **FR:** FR61.
+- **Scope:** `prometheus_client` exposition; reachable on docker-compose-network only (no public ingress). Lifespan wires the tail task. NFR-O8 latency target (<100ms p95) verified by CI benchmark on fixed runner.
+- **AC:** `curl http://metrics-subscriber:9090/metrics` returns valid Prometheus text format.
+
+### Story 10.4: Core counter + gauge + histogram set
+- **FR:** FR62.
+- **Scope:** Implement the metrics enumerated in FR62: task counters by status, session counters by phase, idempotency-cache hit rate, capability-tier deny counts, `secret.accessed` counts, event-log append rate (1m/5m/1h), per-task token-spend gauges.
+- **AC:** Each metric verified by integration test emitting controlled events and asserting resulting metric values.
+
+### Story 10.5: Cardinality discipline + regression test
+- **FR:** FR62 (labels); NFR-O8 (cardinality bound).
+- **Scope:** Restrict labels to bounded enums. Add `tests/integration/test_metrics_cardinality.py` — emit 10K events with varied task_ids, assert label-set cardinality stays bounded. Fails CI if high-cardinality label sneaks in.
+- **AC:** Cardinality test passes for baseline metric set; deliberately violating in fixture fails CI.
+
+### Story 10.6: Separability test S-4 + add to compose stack
+- **FRs:** FR62a; NFR-M4/M5 discipline.
+- **Scope:** Add `metrics-subscriber` to `docker-compose.yml` with `condition: service_healthy` on registry-state. Add `tests/separability/test_metrics_subscriber_optional.py` — spin up with `OMB_METRICS_DISABLED=1`, assert rest of stack starts + serves identically.
+- **AC:** Stack reaches 8/8 healthy with subscriber enabled; 7/7 with it disabled; both pass `bootstrap-verify`.
+
+### Epic 10 acceptance gate
+- `/metrics` returns documented metric set.
+- NFR-O8 benchmark (<100ms p95) verified in CI on fixed runner.
+- Separability test S-4 green.
+- ADR-0005 authored and `accepted`.
+
+---
+
+## Epic 11: Approval-request inbox + HMAC signature (ξ)
+
+**Goal.** Operator approvals are non-repudiable — every `approval.granted` event carries an HMAC-SHA256 signed locally with `OPERATOR_HMAC_KEY`, offline-verifiable forever. Approval-request notifications consolidate into a pinned Telegram thread. (FR63–FR65a, NFR-S10.)
+
+**Why fourth.** Composes with Epic 9 (`trace_id` correlates inbox messages back to originating task). Most operator-visible Phase 2 win.
+
+**Dependencies.** Epic 9, Epic 10.
+
+### Story 11.1: HMAC signing inside `/v1/tasks/<id>/decisions` handler
+- **FR:** FR64.
+- **Scope:** Load `OPERATOR_HMAC_KEY` from `.env` at startup via `pydantic-settings`. On every `approval.granted` emission, compute `HMAC-SHA256(key, task_id || action || timestamp || actor_id)` and emit sibling `task.approval_signed` event with the HMAC.
+- **AC:** Every test approval produces a paired `task.approval_signed` event; HMAC value reproducible against the key.
+
+### Story 11.2: Register `task.approval_signed` + `key.rotated` event types
+- **FR:** FR64, FR65a; new event types.
+- **Scope:** Register both at `schema_version=1.1.0` in `packages/events/src/events/schema_registry.py`. Add Pydantic payload classes with `frozen=True, strict=True`. Contract-fixture forward-compat pair added.
+- **AC:** Schema-registry tests pass; payload validates with HMAC as 64-char hex.
+
+### Story 11.3: `/approvals` Telegram command opens pinned thread
+- **FR:** FR63.
+- **Scope:** New `/approvals` handler in `services/telegram-gateway/.../handlers/`. Pinned-thread state stored in registry-state (one row per operator). Subsequent `task.approval_requested` events deliver to pinned thread with link-back to originating task thread.
+- **AC:** Replay test: 10 approval requests for 10 different tasks arrive in pinned thread; each has a working link back to original.
+
+### Story 11.4: `just verify-approval` offline recipe
+- **FR:** FR65.
+- **Scope:** Recipe reads single event by `event_id` from JSONL log, recomputes HMAC using operator's local `OPERATOR_HMAC_KEY`, prints structured match/mismatch. Works against frozen log copy with Platform stack not running.
+- **AC:** Verifies fresh approval; deliberately corrupting HMAC produces clear mismatch with reason pointing to next investigation step.
+
+### Story 11.5: Key rotation flow + `key.rotated` emission
+- **FR:** FR65a.
+- **Scope:** Operator updates `OPERATOR_HMAC_KEY` in `.env`, restarts stack. registry-api detects change (compares key fingerprint with last-known) and emits `key.rotated`. Pre-rotation approvals verifiable only against prior key (operator retains it for audit duration).
+- **AC:** Rotation emits exactly one `key.rotated` per actual rotation; post-rotation approvals verify against new key only.
+
+### Epic 11 acceptance gate
+- Offline `just verify-approval` works against simulated 1-month-old approval.
+- `OPERATOR_HMAC_KEY` grep-checked to never appear in any event/log/snapshot (`tests/integration/test_hmac_key_isolation.py`).
+- ADR-0006 authored and `accepted`.
+
+---
+
+## Epic 12: Per-task budget enforcement loop (κ)
+
+**Goal.** When `task.budget_exceeded` fires, `worker-wrapper` SIGTERMs the Claude Code subprocess within 5 seconds, emits `task.budget_enforcement_triggered`, transitions task per operator-declared policy. (FR66–FR68a, NFR-R8.)
+
+**Why fifth.** Composes with Epic 10 — without metrics-subscriber observing enforcement frequency, operator has no signal for tuning policy.
+
+**Dependencies.** Epic 9, Epic 10. `task.budget_exceeded` exists from Phase 1 (FR44).
+
+### Story 12.1: Budget supervisor module in worker-wrapper
+- **FR:** FR66.
+- **Scope:** New `services/worker-wrapper/src/worker_wrapper/domain/budget_supervisor.py` — lifespan task subscribed to `task.budget_exceeded` for active task. On receipt: `subprocess.terminate()` → wait ≤5s → `subprocess.kill()` if still alive.
+- **AC:** Integration test: emit a `task.budget_exceeded` event; supervisor terminates subprocess; total time from event-emit to subprocess-exit < 5s p99 (NFR-R8).
+
+### Story 12.2: Emit `task.budget_enforcement_triggered` event
+- **FR:** FR67; new event type.
+- **Scope:** Register at `schema_version=1.1.0`. After subprocess termination, supervisor emits event with: budget_threshold, actual_spend, action_taken, post_trigger_transition (from per-task policy).
+- **AC:** Event present in log after every enforcement; metrics-subscriber counts it.
+
+### Story 12.3: `/approve --override budget` + `budget.override` event
+- **FR:** FR68; new event type.
+- **Scope:** Extend `/approve` Telegram handler (and console-cli equivalent) to accept `--override budget`. Emit `budget.override` audit event with the budget-delta granted. Update task's budget envelope.
+- **AC:** Override before 5-second grace extends budget and prevents enforcement; override after termination requires `/retry` (documented sharp edge).
+
+### Story 12.4: Per-task budget policy storage + default policy in `.env`
+- **FR:** FR68a.
+- **Scope:** Store per-task budget (token-ceiling, dollar-ceiling, action-on-exceed) on `task` row at submission. Add `OMB_DEFAULT_TASK_BUDGET_TOKENS` and `OMB_DEFAULT_TASK_BUDGET_ACTION` to `.env.example`. Update `pydantic-settings` model.
+- **AC:** Tasks without explicit budget inherit defaults; tasks with explicit budget override defaults; `tests/integration/test_budget_policy_inheritance.py` verifies both paths.
+
+### Epic 12 acceptance gate
+- NFR-R8 latency verified by integration test on fixed runner.
+- metrics-subscriber exposes `task_budget_enforcement_triggered_total` and `budget_override_total` counters.
+- Budget policy documented in `docs/operator-runbook.md`.
+
+---
+
+## Epic 13: litestream WAL replication (δ)
+
+**Goal.** Optional sidecar replicates SQLite WAL stream to operator-configured S3-compatible endpoint, enabling cross-host disaster recovery. **Replication ≠ HA** — explicitly framed in ADR. (FR69–FR71a, NFR-R7.)
+
+**Why sixth (orthogonal).** Doesn't depend on any other Phase 2 epic; can ship in parallel with Epic 11 or 12.
+
+**Dependencies.** Phase 1's compose stack + named volume + `just backup`.
+
+### Story 13.1: litestream sidecar in docker-compose
+- **FR:** FR69.
+- **Scope:** Add `litestream` service to `docker-compose.yml` mounting `oh-my-bmad-data` shared-read. Sidecar **disabled by default**; activated only when `OMB_LITESTREAM_CONFIG_PATH` is set.
+- **AC:** Stack starts to 6/6 (or 7/7 with metrics) healthy without sidecar; 7/7 (or 8/8) with sidecar enabled.
+
+### Story 13.2: litestream config template + S3-compatible target docs
+- **FR:** FR70.
+- **Scope:** Ship `litestream.yml.example` with one config per supported target (S3, B2, R2, MinIO). Add `OMB_LITESTREAM_CONFIG_PATH` to `.env.example` with explicit credential-placement comment. Operator-runbook section added.
+- **AC:** Operator can copy `litestream.yml.example` → `litestream.yml`, fill credentials, sidecar replicates within 1 minute of start.
+
+### Story 13.3: `just restore-from-litestream <bucket>/<key>` recipe
+- **FR:** FR71.
+- **Scope:** Recipe: stop stack → recreate volume → `litestream restore` → start stack → `just bootstrap-verify`. Documented in `docs/backup-restore.md`.
+- **AC:** End-to-end restore drill on fresh host produces a `bootstrap-verify`-passing volume. Drill runs in `nightly.yml`.
+
+### Story 13.4: `just litestream-lag-check` recipe + `replication.lagging` event
+- **FR:** NFR-R7; new event type.
+- **Scope:** Recipe queries litestream's `/metrics` for replication lag. Emits `replication.lagging` (registered at schema_version=1.1.0) if lag exceeds 30s for >5 minutes.
+- **AC:** Synthetic-delay test: blocking outbound S3 for 6 minutes produces exactly one `replication.lagging` event; restoring connectivity stops further emissions.
+
+### Epic 13 acceptance gate
+- Nightly restore drill in `nightly.yml` green.
+- NFR-R7 verified manually + by recipe.
+- ADR-0007 authored and `accepted` — must include the explicit "replication ≠ HA" framing.
+
+---
+
+## Phase 2 Ship-Blocker Checklist
+
+Mirrors Phase 1 checklist. **Phase 2 has not shipped until every item below is green.**
+
+### Architectural commitments (P2-I1–P2-I6, per architecture.md amendment)
+- [ ] FR26 single-writer unchanged (every Phase 2 addition is read-only subscriber).
+- [ ] Envelope `schema_version` bumped 1.0.0 → 1.1.0 additively; v1.0.0 envelopes still parseable for 1 month post-Epic 9.
+- [ ] No instrumentation added to `services/*` — metrics-subscriber is the only metrics surface.
+- [ ] MCP transport stdio-only (no `mcp.server.sse` / `streamable_http` imports anywhere).
+- [ ] No new public-network ingress.
+- [ ] Cosign + SLSA L2 + CycloneDX SBOM verified on every Phase 2 release.
+
+### Per-epic gates
+- [ ] **Epic 8** — `just verify-images` green against tagged Phase 2 release.
+- [ ] **Epic 9** — Every new event in CI carries `trace_id`; `/trace <id>` returns coherent chains.
+- [ ] **Epic 10** — `/metrics` p95 <100ms; cardinality test green; separability S-4 green.
+- [ ] **Epic 11** — `just verify-approval` works offline against 1-month-old approval; HMAC key isolation test green.
+- [ ] **Epic 12** — Budget enforcement p99 <5s on fixed runner; counters exposed.
+- [ ] **Epic 13** — Nightly restore drill green; replication lag <30s p95.
+
+### Phase 1 invariants regression-free
+- [ ] `tests/separability/` (S-1 through S-4) all green at every Phase 2 epic boundary.
+- [ ] `tests/crash-injection/` all green.
+- [ ] `tests/idempotency/` all green (100× concurrent retry test for trace_id-extended envelope).
+- [ ] `tests/contract/` all green incl. forward-compat fixtures for the 6 new event types.
+- [ ] `tests/arch/` (single-writer, separability, transport, no-anthropic-outside-worker) all green.
+- [ ] `tests/replay/` byte-for-byte equivalence holds after `trace_id` migration.
+
+### New ADRs accepted
+- [ ] **ADR-0003** — Phase 2 gate (formally opens `phase: 2` for `main`).
+- [ ] **ADR-0004** — `trace_id` propagation policy + cutover plan.
+- [ ] **ADR-0005** — metrics-subscriber as derived projection (forecloses OTel-everywhere).
+- [ ] **ADR-0006** — operator HMAC non-repudiation + key rotation.
+- [ ] **ADR-0007** — litestream WAL replication (read-only sidecar; replication ≠ HA).
+- [ ] **ADR-0008** — cosign keyless + SLSA L2 + CycloneDX SBOM triumvirate.
+
+### Documentation
+- [ ] `docs/operator-runbook.md` extended with metrics scraping + litestream restore drill + budget tuning + HMAC verification recipes.
+- [ ] `docs/explanations/` gains 1-2 new deep-dives (likely: trace-id propagation OR supply-chain pipeline OR HMAC signing flow).
+- [ ] `_bmad-output/project-context.md` updated with Phase 2 additions to Cat 3 (litestream + metrics-subscriber framework rules) and Cat 7 (2-3 new high-frequency gotchas from Phase 2 retros).
+
+### Principle
+
+If any item above is not green/complete, **Phase 2 has not shipped**. The Phase 2 architectural invariants (P2-I1–P2-I6) and the `trace_id` correlation contract (NFR-O7) are the spine; their absence from green CI invalidates the Phase 2 claim regardless of what else is complete.
+
+— *Amendment by R2d2, 2026-05-15, via the BMad `bmad-create-epics-and-stories` workflow (extension mode).*
