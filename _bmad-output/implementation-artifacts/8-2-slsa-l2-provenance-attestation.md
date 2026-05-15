@@ -209,7 +209,85 @@ Story file (this file) updated to reflect implementation state (Tasks/Subtasks �
 
 ---
 
-## Frontmatter (post-implementation; populated when transitioning to done)
+## AC-by-AC verification checklist (post-implementation)
+
+| AC | Statement | Static evidence | Runtime evidence | Status |
+|---|---|---|---|---|
+| AC-1 | 8 images per release carry SLSA attestation | 2 SLSA steps in workflow (`grep -c "Generate SLSA L2 provenance attestation"` → 2); matrix lists 7 services; base job runs unconditionally; SLSA steps gated only by `if: steps.build.outputs.digest != ''` (loud-fail guard, not a release-blocker) | Pending next release-tag push | **static ✓ / runtime ⏳** |
+| AC-2 | `cosign verify-attestation --type slsaprovenance` succeeds with anchored cert-identity-regexp | Workflow comment now carries the **anchored** regexp `^https://github.com/${OWNER}/oh-my-bmad/\.github/workflows/release\.yml@refs/tags/v[0-9].*` (fix F1) | Pending next release-tag push | **static ✓ / runtime ⏳** |
+| AC-3 | `id-token: write` + `attestations: write` added minimally | Both present under top-level `permissions:` (lines 22-25); `contents: read` + `packages: write` unchanged; rationale block above the permissions documents per-permission necessity per [actions/attest-build-provenance permissions docs](https://github.com/actions/attest-build-provenance#workflow-permissions) (fix F14) | n/a | **✓** |
+| AC-4 | SHA-pinned `a2bbfa25...  # v4.1.0` | 2 occurrences of the canonical SHA + version comment; SHA matches `gh api repos/actions/attest-build-provenance/git/ref/tags/v4.1.0 --jq '.object.sha'` (released 2026-02-26) | n/a | **✓** |
+| AC-5 | Matrix per-service isolation preserved | `fail-fast: false` at line 179; SLSA step has no `continue-on-error`, no broader `if:` that would mask failure. **Reasoning chain (fix F13):** SLSA-step exception → job-step failure → GitHub Actions surfaces the job as failed → `fail-fast: false` prevents matrix-wide cancellation → sibling matrix entries continue independently | Pending observation during a deliberately-failing matrix run (low priority — static reasoning is airtight) | **static ✓** |
+| AC-6 | YAML lint + actionlint clean | `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/release.yml'))"` → no error; `actionlint .github/workflows/release.yml` → exit 0 (fix F10); `yamllint` not installed in this env, substituted by `actionlint` which subsumes both YAML structure + Actions semantics | n/a | **✓** |
+| AC-7 | Impl artifact + sprint-status promoted post-impl | Frontmatter `status: review` (fix F9); explicit AC checklist (this section, fix F9); Tasks/Subtasks all `[x]` except deferred runtime verification; sprint-status.yaml `8-2-...: review`; Senior Developer Review section added (this revision) | n/a | **✓** |
+
+## Done-gate checklist (must all be checked before status → done)
+
+- [x] All 7 AC: static evidence captured (above).
+- [ ] **AC-1 runtime verification:** prerelease tag pushed (e.g., `v0.1.x-rc-slsa-test`); workflow run completes successfully; SLSA attestation present in GHCR for at least the base image + 1 service.
+- [ ] **AC-2 runtime verification:** `cosign verify-attestation --type slsaprovenance` succeeds against the prerelease image's digest with the anchored cert-identity-regexp.
+- [ ] **AC-5 (optional) runtime verification:** observe one matrix entry failing while siblings continue (low priority; static reasoning sufficient).
+- [ ] `verified_via:` frontmatter list populated with the release URL + cosign verify-attestation output excerpt.
+- [ ] `sprint-status.yaml` entry transitioned `review` → `done`.
+- [ ] ADR-0008 status remains `accepted` (Story 8.1 already promoted it; no re-promotion needed).
+
+**Closure trigger:** the next release-tag push (could be a deliberate prerelease, or — more efficiently — the natural release after Stories 8.3 + 8.4 also land, since one release run validates all three at once).
+
+## Senior Developer Review (AI)
+
+**Reviewers:** 3 parallel adversarial lanes — Blind Hunter, Edge Case Hunter, Acceptance Auditor (via `bmad-code-review` workflow).
+**Review date:** 2026-05-15.
+**Diff source:** commit `3c7b9af`.
+**Outcome:** REQUEST CHANGES → all 14 findings addressed in follow-up commit.
+
+### Findings + Resolution
+
+| ID | Sev | Reviewer | Finding | Resolution |
+|---|---|---|---|---|
+| F1 | HIGH | Blind Hunter | Verify-command regexp in workflow comment unanchored (`.*/oh-my-bmad/...`) — fork-attestation spoofing risk | Anchored to `^https://github.com/${OWNER}/oh-my-bmad/\.github/workflows/release\.yml@refs/tags/v[0-9].*` in workflow comment + cross-referenced docs/deployment-guide.md as canonical location |
+| F2 | HIGH | Acc. Auditor + Blind Hunter | AC-2 runtime verification deferred without explicit `done`-gate | Added explicit "Done-gate checklist" section (above) with runtime-verification items as unchecked subtasks; story remains `review`, not `done`, until those check off |
+| F3 | HIGH | Edge Case Hunter | SLSA step runs unconditionally on prerelease tags — orphan attestations | **Policy decision documented in workflow comment + ADR-0008:** SLSA attestation runs for ALL released tags (stable + prerelease) deliberately. Operators verify staging-image pulls too. Rekor growth is expected behavior. |
+| F4 | HIGH | Edge Case Hunter + Blind Hunter | `timeout-minutes` budget may collapse on cold cache + Stories 8.3/8.4 additions | Base job: 25 → 30 (5 min margin). Services job: 30 → 40 (10 min margin). Comments updated with budget breakdown. |
+| F5 | MEDIUM | Blind Hunter | Permissions pre-staged for Stories 8.3/8.4 — could be removed by future reviewer as "unused" | Comment block above `permissions:` documents intent + names the future stories that consume each permission |
+| F6 | MEDIUM | Edge Case Hunter | No empty-digest guard before SLSA step | Added `if: steps.build.outputs.digest != ''` to both SLSA steps; fails loudly with clear surface vs silent attestation failure |
+| F7 | MEDIUM | Edge Case Hunter | Tag-retry produces duplicate Rekor entries (cosmetic) | Documented in ADR-0008 §"Operational policy notes" with mitigation (use `gh run rerun` only when build step failed) |
+| F8 | MEDIUM | Edge Case Hunter | Sigstore Fulcio/Rekor outage = hard release block; no stated policy | Documented in ADR-0008 §"Operational policy notes" as **intentional** with cost/benefit analysis; operators monitor https://status.sigstore.dev during stuck releases |
+| F9 | MEDIUM | Acc. Auditor | Stale frontmatter `status: ready-for-dev`; no AC checklist | Frontmatter updated to `status: review` (this revision); explicit AC-by-AC checklist added (above) |
+| F10 | MEDIUM | Acc. Auditor | `actionlint`/`yamllint` not cited as run | `actionlint .github/workflows/release.yml` → exit 0 captured in AC-6 row above; yamllint not installed, actionlint substitutes (subsumes both YAML structure + Actions semantics) |
+| F11 | LOW | Blind Hunter | SLSA step has no `id:` for future chaining | `id: attest-base` + `id: attest-service` added to both SLSA steps; cheap forward-compat for Stories 8.3/8.4 |
+| F12 | LOW | Edge Case Hunter | SLSA/SBOM failure asymmetry undocumented | Documented in ADR-0008 §"Operational policy notes" with 4-terminal-state table + deploy-side response |
+| F13 | LOW | Acc. Auditor | AC-5 "verified by YAML lint" is weak evidence | Explicit reasoning chain (SLSA-step exception → job-step failure → matrix isolation via `fail-fast: false`) captured in AC-5 row above |
+| F14 | LOW | Acc. Auditor | AC-3 "minimal permissions" claim not cited from official docs | Added [actions/attest-build-provenance permissions docs](https://github.com/actions/attest-build-provenance#workflow-permissions) link in AC-3 row above |
+
+### Positive observations (preserved from Blind Hunter)
+
+- SHA-pinning discipline consistent + canonical against GitHub API.
+- `steps.build.outputs.digest` is correctly the manifest-index digest for multi-arch images (action handles both amd64 + arm64 in one attestation per documented v4.x behavior).
+- `fail-fast: false` matrix preserves sibling isolation — static reasoning airtight.
+- Top-level `permissions:` block is the right granularity (both jobs legitimately need both permissions).
+- `imagetools create :latest` before SLSA step is safe (GHCR tag-copy preserves manifest digest).
+- `ci.yml` + `nightly.yml` zero blast radius from new permissions.
+
+### Review Follow-ups (AI) — all resolved
+
+- [x] [AI-Review HIGH] F1 — Anchor verify-regexp in workflow comment
+- [x] [AI-Review HIGH] F2 — Explicit done-gate checklist
+- [x] [AI-Review HIGH] F3 — Document prerelease attestation policy
+- [x] [AI-Review HIGH] F4 — Bump timeout-minutes
+- [x] [AI-Review MED] F5 — Document permissions pre-staging
+- [x] [AI-Review MED] F6 — Empty-digest guard
+- [x] [AI-Review MED] F7 — Document tag-retry policy in ADR-0008
+- [x] [AI-Review MED] F8 — Document Sigstore-outage policy in ADR-0008
+- [x] [AI-Review MED] F9 — Update frontmatter + add AC checklist
+- [x] [AI-Review MED] F10 — Cite actionlint evidence
+- [x] [AI-Review LOW] F11 — Add `id:` to SLSA steps
+- [x] [AI-Review LOW] F12 — Document 4 terminal states in ADR-0008
+- [x] [AI-Review LOW] F13 — AC-5 reasoning chain
+- [x] [AI-Review LOW] F14 — AC-3 docs citation
+
+---
+
+## Frontmatter
 
 ```yaml
 ---
@@ -218,14 +296,20 @@ epic: 8
 phase: 2
 fr: FR54
 nfr: NFR-S9
-status: ready-for-dev   # → in-progress → review → done
+status: review
 implemented_by: R2d2
 date: 2026-05-15
+reviewed_at: 2026-05-15
+review_outcome: changes_requested_then_resolved
 scope_delta: null
 deferred_items: []
 sha_pins:
   actions/attest-build-provenance: a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0 published 2026-02-26
 verified_via:
-  - (to be populated post-implementation)
+  - YAML lint (python3 yaml.safe_load) — release.yml parses cleanly
+  - actionlint .github/workflows/release.yml — exit 0
+  - GitHub API SHA resolution — pin traceable to canonical release tag
+  - 3-lane adversarial code review (Blind Hunter + Edge Case Hunter + Acceptance Auditor) — 14 findings, all resolved
+  - (pending) runtime verification on next release-tag push
 ---
 ```

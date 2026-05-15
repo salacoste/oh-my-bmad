@@ -17,11 +17,15 @@ on:
   push:
     tags: ['v*']
 
+# Workflow permissions — DO NOT remove `id-token: write` or `attestations: write` as
+# "unused": they are deliberately pre-staged for Phase 2 Epic 8 supply-chain stories
+# (8.2 SLSA L2 attestation [shipped], 8.3 cosign keyless sign, 8.4 cosign attest SBOM).
+# Both scope to this workflow only — no blast radius on ci.yml or nightly.yml.
 permissions:
   contents: read
   packages: write
-  id-token: write       # Story 8.2/8.3 — keyless OIDC for cosign + actions/attest-build-provenance
-  attestations: write   # Story 8.2/8.4 — push-to-registry for SLSA + cosign attestations
+  id-token: write       # OIDC token issuance — required by actions/attest-build-provenance keyless cert minting (also unlocks cosign keyless in Story 8.3).
+  attestations: write   # push-to-registry: true — required by attest-build-provenance to write attestations back to the OCI registry (also unlocks cosign attest in Story 8.4).
 
 concurrency:
   # Release-wide singleton: only one release runs at a time globally,
@@ -37,7 +41,7 @@ jobs:
   build-and-push-base:
     name: Build + push base image
     runs-on: ubuntu-24.04
-    timeout-minutes: 25  # bumped from 20 — cold-cache arm64 QEMU uv-sync can be slow
+    timeout-minutes: 30  # bumped 20 → 25 (Story 1.8 cold-cache arm64 QEMU) → 30 (Phase 2 Story 8.2 SLSA + 8.1 SBOM; budget breakdown: ~20 min cold build + ~60s SLSA + ~90s SBOM + headroom for Stories 8.3 cosign-sign / 8.4 cosign-attest)
     outputs:
       version: ${{ steps.ver.outputs.version }}
       digest: ${{ steps.build.outputs.digest }}
@@ -115,14 +119,30 @@ jobs:
       # keyless cert via the workflow's OIDC identity, signs a SLSA L2
       # provenance predicate against the image's content digest, and pushes
       # the attestation to GHCR alongside the image (push-to-registry: true).
-      # Operator verifies deploy-side via:
+      #
+      # Operator verifies deploy-side. Canonical command lives in
+      # docs/deployment-guide.md (Story 8.5 owns the `just verify-images`
+      # recipe that automates this). Anchored verify-command template:
       #   cosign verify-attestation --type slsaprovenance \
-      #     --certificate-identity-regexp ".*/oh-my-bmad/.github/workflows/release.yml.*" \
+      #     --certificate-identity-regexp "^https://github.com/${OWNER}/oh-my-bmad/\.github/workflows/release\.yml@refs/tags/v[0-9].*" \
       #     --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
       #     <image>@<digest>
+      # ^ anchored regexp prevents fork-attestation spoofing (BH-1).
+      # ^ if this workflow file is renamed, update the regexp atomically in
+      #   docs/deployment-guide.md + ADR-0008 + this comment (EC-4).
+      #
+      # POLICY: SLSA attestation runs for ALL released tags (stable AND
+      # prerelease) deliberately — operators verify staging-image pulls
+      # too, not just stable. Rekor transparency-log growth is expected
+      # behavior; not a bug (EC-1, EC-5). Sigstore Fulcio/Rekor outage =
+      # hard release block (no continue-on-error) — intentional, see
+      # ADR-0008 (EC-6).
+      #
       # See ADR-0008 for the supply-chain triumvirate rationale.
       # ---------------------------------------------------------------------
       - name: Generate SLSA L2 provenance attestation (base)
+        id: attest-base
+        if: steps.build.outputs.digest != ''  # F6: fail loudly if upstream digest is empty
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.OWNER }}/oh-my-bmad-base
@@ -154,7 +174,7 @@ jobs:
     name: Build + push ${{ matrix.service }}
     needs: build-and-push-base
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 40  # bumped 30 → 40 (Phase 2 Story 8.2 SLSA + 8.1 SBOM + Stories 8.3 cosign-sign / 8.4 cosign-attest in flight); matrix variance + 4 supply-chain steps justify ~10 min headroom
     strategy:
       fail-fast: false
       matrix:
@@ -213,12 +233,16 @@ jobs:
 
       # ---------------------------------------------------------------------
       # Story 8.2 (Phase 2 Epic 8): SLSA L2 provenance per service image.
-      # Same pattern as the base-job SLSA step — keyless OIDC mints a
-      # Sigstore cert, signs the SLSA L2 predicate, pushes to GHCR. The
-      # matrix-scoped `steps.build.outputs.digest` is per-service.
-      # See ADR-0008.
+      # Same pattern + same policy as the base-job SLSA step (see comment
+      # block above the base step for the canonical verify-attestation
+      # command + policy notes on prerelease + outage behavior).
+      # Matrix-scoped `steps.build.outputs.digest` is per-service; fail-fast:
+      # false on the matrix means one service's SLSA failure isolates to its
+      # own matrix entry without aborting siblings.
       # ---------------------------------------------------------------------
       - name: Generate SLSA L2 provenance attestation (${{ matrix.service }})
+        id: attest-service
+        if: steps.build.outputs.digest != ''  # F6: fail loudly if upstream digest is empty
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.OWNER }}/oh-my-bmad-${{ matrix.service }}

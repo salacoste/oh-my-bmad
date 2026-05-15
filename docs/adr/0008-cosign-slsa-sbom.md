@@ -75,6 +75,40 @@ Each mechanism is independently useful. Bundling all three is what we're committ
 - Phase 3 hardening (when scoped): Sigstore private-CA + Rekor private instance for organizational use; Notary v2 for runtime image-pull policy enforcement; image-signing key rotation procedure.
 - Phase 4+: SBOM-based vulnerability scanning in nightly CI (against an offline CVE database) producing automated update PRs.
 
+## Operational policy notes (added per Story 8.2 code review)
+
+### Tag-retry duplicate attestations (F7)
+
+If a release-tag push is retried (operator re-pushes the same `v*` tag, GH Actions runner failure mid-job, or `gh run rerun` after partial failure), the SLSA attestation step runs again against the same image digest. Because Sigstore Fulcio mints a new cert per invocation and Rekor's transparency log is append-only, this produces **two attestation entries for the same `(subject-name, subject-digest)` pair**.
+
+This is **cosmetic, not a security issue.** Both attestations are valid; `cosign verify-attestation` returns the first matching one. The duplicate is auditor-visible in Rekor but does not produce a verification failure.
+
+**Mitigation:** Use `gh run rerun` only when the build step itself failed (in which case the attestation never ran on the first attempt). If the attestation succeeded and a downstream step failed, prefer fixing the downstream step in a follow-up commit + new tag rather than re-running the entire release.
+
+### Sigstore Fulcio / Rekor outage = hard release block (F8)
+
+`actions/attest-build-provenance` does not include retry or graceful-degradation logic. If Sigstore's Fulcio (cert minting) or Rekor (transparency log) is unreachable, the step fails and the entire matrix entry (or base job) fails. **This is intentional, not a gap.**
+
+The trade-off:
+- **Pros of hard-block:** every released image is provably attested; operator never deploys an unattested image. Matches the security-first stance of the supply-chain triumvirate.
+- **Cons of hard-block:** Sigstore outage = release pipeline outage. Operator cannot ship a fix-forward until Sigstore recovers.
+- **Cons of soft-fail (rejected):** silently shipping unattested images defeats the entire AC-2 gate. Operators have no signal that the image they're pulling lacks an attestation.
+
+**Operational consequence:** during a Sigstore outage, releases pause. Monitor https://status.sigstore.dev (or the Sigstore Slack #status channel) when troubleshooting a stuck release. No code change required to "fix" — the outage will resolve.
+
+### Failure asymmetry between SLSA and SBOM steps (F12)
+
+Story 8.2 ships SLSA attestation; Story 8.1 ships SBOM generation. They run in sequence after the image push. Four terminal states are possible per service per release:
+
+| State | SLSA | SBOM | Operator action |
+|---|---|---|---|
+| **Green** | ✓ | ✓ | Deploy normally. `just verify-images` (Story 8.5) passes. |
+| **SLSA-only** | ✓ | ✗ | Image is provably attested but has no machine-readable SBOM. Acceptable for runtime; missing for license/CVE audit. Rerun the SBOM step (when Story 8.4 lands the attestation form, also re-runnable independently). |
+| **SBOM-only** | ✗ | ✓ | Image has an SBOM but no provenance proof. **Do not deploy** — operator can't verify the image was built by the canonical pipeline. Investigate the SLSA failure; re-tag or fix-forward. |
+| **Both-fail** | ✗ | ✗ | Build succeeded but no supply-chain artifacts attached. **Do not deploy.** Investigate root cause (typically: Sigstore outage). Wait for Sigstore recovery, then re-tag. |
+
+The supply-chain triumvirate is **all-or-nothing for deployment safety**. `just verify-images` (Story 8.5) is the deploy-side gate that enforces this — refuses `docker compose pull` if any attestation is missing.
+
 ## Alternatives considered
 
 - **Sigstore-private-CA + Notary v2 in Phase 2.** Rejected — solo-operator threat model does not justify a second trust root + the operational overhead of a private Rekor instance. Defer to Phase 4+ if multi-operator scope materializes.
