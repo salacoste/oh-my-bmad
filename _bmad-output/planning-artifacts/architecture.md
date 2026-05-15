@@ -1066,3 +1066,433 @@ These files couple multiple FRs/NFRs and deserve extra care (pair review with th
 6. `services/worker-wrapper/` — Claude Code lifecycle + approval-gated `git push`.
 
 The other 5 components (`services/console-cli/`, full OMC integration in `services/orchestrator-adapter/`, full sink fleet in `services/clawhip-daemon/`, `mcp-servers/task-registry/`, `mcp-servers/session-registry/`) are required for MVP but not strictly required for Bootstrap; they can land after the Bootstrap Milestone is hit. This preserves the JTBD bet that the fastest validation loop comes from dogfooding the platform as soon as it can execute one real task end-to-end.
+
+---
+
+## Phase 2 Architecture Extension — Observability Phase
+
+> **Amendment added:** 2026-05-15.
+>
+> **Companion documents:**
+> - PRD amendment: see [`prd.md`](./prd.md) §"Phase 2 Scope Extension" (FR53–FR71a + NFR-O7–O10, NFR-S9–S11, NFR-R7–R8).
+> - Selection rationale: see [`phase-2-brainstorming.md`](./phase-2-brainstorming.md) — 78 ideas, scored, sequenced, Narrative I ("Observability Phase") selected.
+
+### Phase 2 Architectural Invariants (delta from Phase 1)
+
+All Phase 1 invariants stand. Phase 2 adds the following discipline rules on top:
+
+| # | Invariant | Why |
+|---|---|---|
+| **P2-I1** | **Read-only-subscriber rule.** Every Phase 2 service / sidecar / supervisor is a *read-only consumer* of the JSONL event log or the registry-state DB. `registry-state` remains the sole writer of persisted state (FR26 unchanged). | Adding writers multiplies the consistency proofs we have to maintain. The metrics-subscriber, litestream sidecar, and worker-wrapper budget supervisor are all designed to *observe* state, not mutate it. |
+| **P2-I2** | **Envelope `schema_version` bumps once for the whole phase: 1.0.0 → 1.1.0.** The single delta is the addition of a non-optional `trace_id: UUIDv7` field. No other envelope fields change. | Bundling all Phase 2 envelope changes into one version bump avoids a cascade of partial migrations across epics. The bump is additive — consumers at 1.0.0 can still parse 1.1.0 envelopes (ignoring the unknown field) for the duration of the cutover window. |
+| **P2-I3** | **Metrics + traces are *derived projections* of the event log, not parallel instrumentation paths.** No new code paths in `services/*` emit metrics. The `metrics-subscriber` tails the log and computes what it needs. | Phase 1's NFR-O1 ("zero stdout-parsing regex; typed events are primary") is preserved by this rule. Parallel instrumentation paths would create two sources of truth — exactly the anti-pattern Phase 1 was designed to avoid. |
+| **P2-I4** | **MCP transport remains stdio-only.** Remote-MCP (HTTP/SSE) is deferred to Phase 3. | Phase 2 changes nothing about the trust boundary between the orchestrator and the MCP servers. |
+| **P2-I5** | **No new public-network ingress.** The `metrics-subscriber`'s `/metrics` endpoint is reachable only inside the docker-compose network; operator scrapes via SSH-tunneled curl or a co-located Prometheus instance. The litestream sidecar makes outbound connections only (to S3/B2/R2/MinIO); no inbound listener. | Telegram webhook + SSH remain the only external ingress (NFR-S7 unchanged). |
+| **P2-I6** | **Image-pull gate.** Operator deployment paths refuse to pull any Platform-published image that does not verify against the cosign keyless signature + SLSA-L2 provenance attestation + CycloneDX SBOM attestation. | Phase 1 had `tag-immutability` as the only line; Phase 2 hardens this with end-to-end cryptographic verification. |
+
+### Envelope schema migration: 1.0.0 → 1.1.0
+
+The single Phase 2 schema bump. **Additive only** — no fields removed, renamed, or type-changed.
+
+```python
+# Schematic — packages/events/src/events/envelope.py
+
+class EventEnvelope(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    # Phase 1 fields (unchanged)
+    event_id: str
+    type: str
+    schema_version: str          # bumps "1.0.0" → "1.1.0" — pinned per envelope at emit time
+    emitted_at: datetime
+    emitted_at_monotonic_ns: int
+    actor: Actor
+    payload: _FrozenDict
+    parent_event_id: str | None = None
+
+    # Phase 2 addition — was reserved in Phase 1 architecture, now bound
+    trace_id: str                # UUIDv7; non-optional starting at schema_version=1.1.0
+```
+
+**Cutover plan:**
+
+1. **Story 9.1 (early in Epic 9):** add `trace_id` as **optional** in the envelope Pydantic model (`Optional[str] = None`) with a deprecation warning if absent. Schema registry retains 1.0.0 as the canonical version during this transition.
+2. **Story 9.2–9.5:** wire all emitters to populate `trace_id`. CI gate (`scripts/checks/check_trace_id_required.py`) parses every `EventEnvelope.create(...)` callsite via AST and asserts `trace_id=` is supplied.
+3. **Story 9.6 (end of Epic 9):** flip the envelope to **non-optional** (`trace_id: str`) and bump `schema_version` to `1.1.0`. Run the migrator container against the existing event log to backfill `trace_id` on historical events (synthetic per-event UUIDv7 with a `legacy=true` tag in a sibling field, OR a single shared "pre-trace-id" UUIDv7 for all historical events — operator decision recorded in ADR-0004).
+4. **No breaking change to read consumers.** `EventLogReader` is updated in the same epic but accepts both 1.0.0 (without `trace_id`) and 1.1.0 (with `trace_id`) envelopes for one calendar month after Epic 9 ships, then drops 1.0.0 support in a follow-up cleanup story.
+
+The migrator container is the canonical breaking-change tool (NFR-M3); Phase 2 deliberately avoids one by making the bump additive.
+
+### `trace_id` propagation wiring
+
+```mermaid
+flowchart LR
+    subgraph ingress [Ingress surfaces]
+        TG[Telegram update<br/>update_id]
+        CLI[Console CLI<br/>command entry]
+        API[HTTP X-Trace-Id<br/>header]
+    end
+
+    subgraph derivation [trace_id derivation]
+        D1[tg:&#123;update_id&#125;<br/>AllowlistMiddleware]
+        D2[new_request_id<br/>at command entry]
+        D3[header value<br/>or mint UUIDv7<br/>+ log WARNING]
+    end
+
+    subgraph spine [Event spine]
+        ENV[EventEnvelope<br/>schema_version=1.1.0<br/>trace_id field bound]
+        LOG[(JSONL log)]
+    end
+
+    subgraph downstream [Downstream consumers]
+        STATE[registry-state<br/>materializer +<br/>indexed in events table]
+        MCP[MCP tool handlers<br/>caller_trace_id input]
+        WW[worker-wrapper<br/>--trace-id CLI flag]
+        WORKER[Claude Code subprocess<br/>emits via MCP bridge<br/>with same trace_id]
+        METRICS[metrics-subscriber<br/>labels metrics by trace_id<br/>for high-cardinality slice]
+    end
+
+    TG --> D1
+    CLI --> D2
+    API --> D3
+    D1 & D2 & D3 --> ENV --> LOG
+    LOG --> STATE
+    STATE -.indexed.-> MCP
+    MCP --> WW --> WORKER --> ENV
+    LOG --> METRICS
+```
+
+Key invariants:
+
+- **Derivation is layer-specific.** Telegram derives deterministically from `update_id` (so retries of the same Telegram update produce the same `trace_id` — composes with FR28 idempotency). HTTP pulls from header or mints. Console mints. MCP tool calls take `caller_trace_id` as an explicit input argument (not ambient), so a mis-wired client can never spoof a different actor's trace context.
+- **Propagation is explicit, not ambient.** Worker subprocess receives `--trace-id <uuid>` as a CLI flag and threads it into every event it emits via the `clawhip-bridge` MCP. The flag is the contract; no environment-variable backchannel.
+- **Indexing.** `registry-state`'s `events` table gains a `trace_id` column (additive migration) + a non-unique index on it. The `/trace <trace-id>` operator query (FR59a) becomes a simple `SELECT * FROM events WHERE trace_id = ? ORDER BY emitted_at_monotonic_ns`.
+
+**New ADR placeholder:** `docs/adr/0004-trace-id-propagation.md` — captures the per-layer derivation policy + the cutover plan above.
+
+### `metrics-subscriber` topology
+
+New workspace member: `services/metrics-subscriber/` (Python 3.12, FastAPI, structlog — same stack as `registry-api`).
+
+**Position in the topology:** identical to `telegram-gateway` and `console-cli` — a read-only event-log tailer. It opens the JSONL log via `EventLogReader`, never via `EventLogWriter`. It joins the canonical service topology as service #8 in the docker-compose stack.
+
+```
+docker-compose stack (Phase 2):
+  registry-api          # HTTP API
+  registry-state        # single writer
+  telegram-gateway      # Telegram ingress + tail-reader for outbound
+  worker-wrapper        # Claude Code supervisor
+  orchestrator-adapter  # OMC subprocess supervisor
+  clawhip-daemon        # outbound sink rendering (Story 7.8)
+  metrics-subscriber    # NEW (Phase 2 Epic 10)
+  + litestream sidecar  # NEW (Phase 2 Epic 13, optional)
+```
+
+**Internals (schematic):**
+
+```python
+# services/metrics-subscriber/src/metrics_subscriber/
+
+# tail loop runs as the app's lifespan task
+async def metrics_tail():
+    cursor = await load_cursor()
+    async for envelope in log_reader.tail_from(cursor):
+        update_counters(envelope)
+        update_gauges(envelope)
+        update_histograms(envelope)
+        if envelope_count % 1000 == 0:
+            await persist_cursor(envelope.emitted_at_monotonic_ns)
+
+# /metrics endpoint serves prometheus_client.exposition format
+@app.get("/metrics")
+async def metrics() -> Response:
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+```
+
+**Cursor durability.** The subscriber persists its log cursor to a small JSON file in the named volume (`oh-my-bmad-data/metrics-subscriber/cursor.json`) so a restart resumes from the correct point. Cursor lag is itself a derivable metric (`metrics_subscriber_lag_seconds`).
+
+**Cardinality discipline.** Labels are bounded to enums (task status, session phase, capability tier, actor kind). High-cardinality labels (raw task_id, raw event_id, free-text breadcrumbs) are **banned** at the Prometheus label level — they appear only in the underlying events, not in metric labels. Cardinality regression test in `tests/integration/`.
+
+**Separability impact.** Adding a new subscriber is the first since Phase 1's design. The recovery cursor calculation in `registry-state.domain.recovery` is unaffected (the new subscriber owns its own cursor file), but `tests/separability/` gains test S-4: spin up the stack without `metrics-subscriber` and assert every other service still starts + serves traffic identically.
+
+**New ADR placeholder:** `docs/adr/0005-metrics-subscriber-derived-projection.md` — documents *why* metrics are derived from the event log rather than instrumented in-process. Forecloses the "OTel everywhere" anti-pattern with an explicit decision record.
+
+### HMAC signing flow for approvals
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant OP as Operator
+    participant TG as telegram-gateway
+    participant API as registry-api
+    participant ST as registry-state
+    participant LOG as event log
+    participant V as just verify-approval
+
+    OP->>TG: /approve <task-id>
+    TG->>API: POST /v1/tasks/<id>/decisions {decision: approve}
+    Note over API: load OPERATOR_HMAC_KEY from .env<br/>(NEVER persisted in events/logs)
+    Note over API: hmac = HMAC-SHA256(<br/>  key,<br/>  task_id || action || timestamp || actor_id<br/>)
+    API->>ST: emit task.approval_signed {hmac, ...}
+    API->>ST: emit approval.granted {...}
+    ST->>LOG: append both envelopes
+    LOG-->>OP: (via telegram-gateway tail-reader)<br/>"✓ Approved, HMAC verified"
+
+    Note over OP, V: Offline forensic verification later
+    OP->>V: just verify-approval <event-id>
+    V->>LOG: read event by id
+    V->>V: recompute HMAC<br/>using OPERATOR_HMAC_KEY
+    V-->>OP: ✓ match  |  ✗ mismatch + reason
+```
+
+**Key isolation properties:**
+
+- `OPERATOR_HMAC_KEY` lives only in `.env` and in the running process environment.
+- It is **never** persisted in events, logs, snapshots, or the registry DB.
+- It is **never** transmitted over any network boundary (lives on the same host as registry-api).
+- HMAC verification is offline-capable: `just verify-approval` works against a frozen event-log copy + the operator's local key, with the Platform stack not running.
+
+**Key-rotation discipline.** Rotating the key emits a `key.rotated` audit event. Pre-rotation approvals remain verifiable only via the prior key; operator's responsibility to retain old keys for the audit-window duration (recommended: 1 year for personal use, per applicable legal requirements for autonomous-development audit trails).
+
+**New ADR placeholder:** `docs/adr/0006-operator-hmac-non-repudiation.md` — captures the offline-verifiability requirement + the key-rotation policy.
+
+### litestream sidecar topology
+
+```mermaid
+flowchart LR
+    subgraph host [Operator host]
+        WRITER[registry-state<br/>SQLite WAL writer]
+        VOL[(named volume<br/>oh-my-bmad-data)]
+        LS[litestream<br/>sidecar container<br/>OMB_LITESTREAM_CONFIG_PATH]
+    end
+
+    subgraph remote [Operator-configured remote]
+        S3[(S3 / B2 / R2 / MinIO<br/>object store)]
+    end
+
+    WRITER -- WAL writes --> VOL
+    LS -- shared-read open --> VOL
+    LS -- streaming replication --> S3
+```
+
+**Discipline:**
+
+- The sidecar opens the WAL file in **shared-read mode** (`O_RDONLY`). The single-writer invariant (FR26) is preserved at the OS level — only `registry-state` ever has a write fd.
+- Replication is **operator-opt-in**: absent `OMB_LITESTREAM_CONFIG_PATH`, the sidecar is not started; no error, no warning, the stack runs without it.
+- Replication credentials (S3 key/secret) live in `.env` and are surfaced to the sidecar via a separate `litestream.yml` config file mounted into the container. The credentials are NOT logged at startup (NFR-S1 still applies to the sidecar's structlog).
+- Restore recipe (`just restore-from-litestream <bucket>/<key>`) is the canonical operator workflow: stops the stack, recreates the volume, runs `litestream restore`, brings the stack back up, runs `just bootstrap-verify` as a sanity check.
+
+**Replication lag is a derived metric.** `metrics-subscriber` does NOT compute it (it tails the log, not the litestream sidecar); the lag metric is exposed by litestream's own `/metrics` endpoint, scraped separately if desired. NFR-R7 (lag <30s p95) is verified via the `just litestream-lag-check` recipe, which queries litestream directly.
+
+**New ADR placeholder:** `docs/adr/0007-litestream-wal-replication.md` — captures the read-only-sidecar policy + the explicit "replication ≠ HA" framing + restore drill cadence.
+
+### Per-task budget enforcement supervisor
+
+Lives inside `services/worker-wrapper/`. **No new workspace member** — the budget supervisor is a lifespan task in worker-wrapper alongside the Claude Code subprocess.
+
+```python
+# Schematic — services/worker-wrapper/src/worker_wrapper/domain/budget_supervisor.py
+
+async def supervise_budget(task_id: str, subprocess: asyncio.subprocess.Process):
+    async for envelope in event_log_reader.subscribe(task_id=task_id):
+        if envelope.type == "task.budget_exceeded":
+            log.warning("budget exceeded — terminating subprocess", task_id=task_id, ...)
+            subprocess.terminate()  # SIGTERM
+            try:
+                await asyncio.wait_for(subprocess.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                subprocess.kill()   # SIGKILL after 5s grace
+            await emit_event(TaskBudgetEnforcementTriggered(
+                task_id=task_id,
+                budget_threshold=envelope.payload.threshold,
+                actual_spend=envelope.payload.actual,
+                action_taken="subprocess_terminated",
+                post_trigger_transition="awaiting_approval",  # or "failed", per policy
+            ))
+            return
+```
+
+**Composition with metrics-subscriber:** the supervisor's emissions are observable through `metrics-subscriber`'s counters (`task_budget_enforcement_triggered_total` by task + threshold). Without metrics, enforcement is a black box; with metrics, the operator can tune budget policies based on actual enforcement frequency.
+
+**No new event-log writer.** The supervisor *emits* `task.budget_enforcement_triggered` via the `clawhip-bridge` MCP — the existing emission surface, unchanged. FR26 preserved.
+
+**Budget policy storage.** Per-task budget (token-ceiling, dollar-ceiling, action-on-exceed) is declared in the task envelope at submission and stored on the `task` row. Default policy is operator-configurable via `.env` (`OMB_DEFAULT_TASK_BUDGET_TOKENS=...`, `OMB_DEFAULT_TASK_BUDGET_ACTION=awaiting_approval`).
+
+### Supply-chain pipeline (γ — Epic 8)
+
+Changes are concentrated in `.github/workflows/release.yml` and the deploy-side recipe. No changes to `services/*` code.
+
+**release.yml additions:**
+
+```yaml
+# Schematic — additions to .github/workflows/release.yml
+
+jobs:
+  build-and-push:
+    permissions:
+      contents: read
+      packages: write
+      id-token: write    # required for cosign keyless OIDC
+      attestations: write
+    steps:
+      # … existing build + push steps …
+      - name: Generate SBOM (CycloneDX)
+        uses: anchore/sbom-action@<sha-pinned>
+        with:
+          format: cyclonedx-json
+          output-file: sbom-${{ matrix.service }}.cyclonedx.json
+          artifact-name: sbom-${{ matrix.service }}
+
+      - name: Generate SLSA L2 attestation
+        uses: actions/attest-build-provenance@<sha-pinned>
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/oh-my-bmad-${{ matrix.service }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Cosign keyless sign
+        uses: sigstore/cosign-installer@<sha-pinned>
+        # … followed by cosign sign --yes ghcr.io/...@<digest>
+
+      - name: Attach SBOM attestation
+        run: cosign attest --yes --predicate sbom-${{ matrix.service }}.cyclonedx.json \
+             --type cyclonedx ghcr.io/${{ github.repository_owner }}/oh-my-bmad-${{ matrix.service }}@${{ steps.push.outputs.digest }}
+```
+
+**Operator deploy-side recipe:**
+
+```sh
+# justfile additions
+
+verify-images:
+    @for svc in registry-api registry-state telegram-gateway \
+                worker-wrapper orchestrator-adapter clawhip-daemon \
+                metrics-subscriber; do \
+        digest=$$(grep "OMB_IMAGE_DIGEST_$$svc" .env | cut -d= -f2); \
+        echo "→ verifying $$svc @ $$digest"; \
+        cosign verify \
+            --certificate-identity-regexp "https://github.com/${OMB_GHCR_OWNER}/.*" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            ghcr.io/${OMB_GHCR_OWNER}/oh-my-bmad-$$svc@$$digest; \
+        cosign verify-attestation \
+            --type slsaprovenance \
+            --certificate-identity-regexp "https://github.com/${OMB_GHCR_OWNER}/.*" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            ghcr.io/${OMB_GHCR_OWNER}/oh-my-bmad-$$svc@$$digest; \
+    done
+```
+
+**Verification failure path.** If `cosign verify` returns non-zero for any image, the deploy recipe refuses to run `docker compose pull`; the operator must investigate before proceeding. A `deployment.signature_rejected` event is emitted (via a one-shot CLI helper) to record the rejection in the audit log even though the Platform isn't running.
+
+**New ADR placeholder:** `docs/adr/0008-cosign-slsa-sbom.md` — locks in cosign keyless + SLSA L2 + CycloneDX SBOM as the supply-chain triumvirate; defers Sigstore-private-CA + Notary-v2 to Phase 4+.
+
+### Dependency direction (Phase 2 additions)
+
+```
+mcp-servers/* ───────┐
+services/* ──────────┤
+metrics-subscriber ──┤   all import → packages/*
+                     │   (events, capabilities, idempotency,
+                     │    secret-hygiene)
+litestream sidecar ──┘   reads → named volume (no Python imports)
+                          writes → external S3-compatible store
+```
+
+- `metrics-subscriber` imports `packages/events` (envelope parsing) and `packages/secret-hygiene` (sanitizer in structlog chain). No imports from any `services/*` member; no imports from `mcp-servers/*`.
+- `worker-wrapper` (already exists) gains a new internal `domain/budget_supervisor.py`; no new external imports.
+- `registry-api` (already exists) gains HMAC signing inside the `/v1/tasks/<id>/decisions` handler; imports `hmac` + `hashlib` from stdlib only.
+- The litestream sidecar is a binary; no Python import surface.
+
+**Service-separability invariant preserved.** `scripts/checks/check_imports.py` is updated to include `metrics-subscriber` in the allowed-imports graph; the existing rules (no service-to-service imports) hold unchanged.
+
+### New event types added in Phase 2
+
+| Event type | Schema version | Emitted by | Phase 2 epic |
+|---|---|---|---|
+| `task.approval_signed` | 1.1.0 | `registry-api` (HMAC computed locally) | Epic 11 (ξ) |
+| `task.budget_enforcement_triggered` | 1.1.0 | `worker-wrapper` budget supervisor | Epic 12 (κ) |
+| `budget.override` | 1.1.0 | `registry-api` on `/approve --override budget` | Epic 12 (κ) |
+| `key.rotated` | 1.1.0 | `registry-api` on HMAC key rotation | Epic 11 (ξ) |
+| `deployment.signature_rejected` | 1.1.0 | one-shot CLI helper (not a running service) | Epic 8 (γ) |
+| `replication.lagging` | 1.1.0 | a lightweight lag-checker recipe | Epic 13 (δ) |
+
+All entries register in the schema registry (`packages/events/src/events/schema_registry.py`) before their owning epic ships. Contract fixtures (`tests/contract/fixtures/`) gain a forward-compatibility pair for each new type (consumer at v1.0.0 reads v1.1.0 → ignores unknown field gracefully).
+
+### CI gate additions
+
+| Gate | Owner | Failure mode |
+|---|---|---|
+| `cosign verify` on every published image | `release.yml` | Release fails; image not promoted to `latest` |
+| Image-signature verification on operator deploy | `just verify-images` | `docker compose pull` refused |
+| `trace_id`-required AST check (`check_trace_id_required.py`) | `ci.yml` | PR fails if a callsite omits `trace_id=` after Story 9.6 |
+| Schema-version-1.1.0-everywhere AST check | `ci.yml` | PR fails if a callsite hardcodes `schema_version="1.0.0"` post-cutover |
+| Cardinality regression test for metrics-subscriber | `tests/integration/` | Test fails if a high-cardinality label sneaks into a metric |
+| HMAC offline-verify test | `tests/integration/` | Test fails if `just verify-approval` cannot verify a fresh approval |
+| Litestream restore drill | `nightly.yml` | Drill fails if `just restore-from-litestream` does not produce a `bootstrap-verify`-passing volume |
+| `metrics-subscriber` separability test S-4 | `tests/separability/` | Test fails if the rest of the stack does not function without the subscriber |
+
+### Phase 2 dependency-graph delta
+
+```
+Phase 1 components (11):
+    services × 7  +  mcp-servers × 3  +  packages × 4 (with capabilities)
+
+Phase 2 components (+2):
+    + services/metrics-subscriber/
+    + litestream sidecar (binary, no Python import surface)
+
+Phase 2 event-type registry delta:
+    + 6 new (event_type, schema_version=1.1.0) registrations
+
+Phase 2 envelope schema delta:
+    1 additive field (trace_id), schema_version bumps 1.0.0 → 1.1.0
+```
+
+### Phase 2 risk register
+
+| Risk | Likelihood | Impact | Mitigation |
+|---|---|---|---|
+| Cosign keyless OIDC verification fails on a GHCR change | Medium | High (deploy blocked) | ADR-0008 documents fallback to digest-pinning without cosign as a manual operator override; auditable via a deliberate `signature.override` event. |
+| `trace_id` cutover leaves orphan v1.0.0 envelopes consumers can't parse | Low | Medium | Story 9.6 includes a one-month-grace consumer-compatibility window before dropping v1.0.0 support. |
+| `metrics-subscriber` cursor falls behind under load | Low | Low | Cursor lag is itself a metric; ops can scale the subscriber separately (it's stateless beyond the cursor file). |
+| HMAC key leak via `.env` copy | Low | High | NFR-S10 mandates `.env` is never persisted into events/logs; documented in operator runbook; key rotation is one-line. |
+| litestream replication lag exceeds 30s under continuous load | Medium | Low | Lag is observable; NFR-R7 is an SLO, not a hard gate; degraded replication ≠ stack failure. |
+| Supply-chain hardening adds 5+ minutes to release builds | High | Low | Documented; matches Phase 1's "boring infrastructure" trade-off. |
+| Phase 2 introduces a new bug class via the `trace_id` field (e.g., propagation skipped on a fast-path) | Medium | High | CI gate `check_trace_id_required.py` AST-scans every `EventEnvelope.create(...)` callsite for explicit `trace_id=` argument. |
+
+### Implementation handoff for Phase 2
+
+When Phase 2 implementation begins (after this amendment + `bmad-create-epics-and-stories` for Phase 2 + `bmad-check-implementation-readiness` for Phase 2 all pass):
+
+1. **Epic 8 lands first** — supply-chain hardening. The recipe is straightforward and unblocks every later epic by hardening their release pipeline. ~3 days.
+2. **Epic 9 lands second** — `trace_id` propagation kernel. The schema migration is the critical path; Stories 9.1–9.6 walk it through optional → required + backfill. ~1 week.
+3. **Epic 10 lands third** — `metrics-subscriber`. First new subscriber since Phase 1; exercises the separability fixtures. Will likely surface 1-2 unforeseen test-isolation issues per the typical Phase 1 cadence. ~1 week.
+4. **Epic 11 lands fourth** — approval inbox + HMAC. UX-visible, composes with Epic 9's `trace_id` for clean inbox-thread correlation. ~1 week.
+5. **Epic 12 lands fifth** — budget enforcement. Composes with Epic 10's metrics for tunable policy. ~1 week.
+6. **Epic 13 lands sixth** — litestream sidecar. Orthogonal; can actually ship in parallel with Epics 11–12 if convenient. ~3 days.
+
+**Total: 6–8 weeks of solo-operator work**, with explicit deferrable boundaries between each epic.
+
+### Phase 3 forward-references (deliberate non-decisions)
+
+These remain Phase-3 territory and Phase 2 explicitly does not pre-decide them:
+
+- **Remote MCP transport** (HTTP/SSE) — when a remote-worker use case emerges. Will likely require new authentication + rate-limiting layers.
+- **Browser-automation plane** — as either a 4th operator surface (web UI) or a 4th worker tool (Playwright/Patchright subprocess). Phase 3 ADR to decide which.
+- **Second CLI agent** (Codex / Gemini / GLM) — Phase 2's `trace_id` kernel + metrics-subscriber make head-to-head agent comparison feasible; Phase 3 picks the first additional agent based on whatever the operator's actual second-runtime need is.
+- **Replay mode** — historical task replay in a sandboxed worker. Beautiful idea; high engineering cost; defer until Phase 2's observability makes the replay's *value* obvious in production data.
+- **Mutation-testing nightly gate** — Cat 4 recommended; Phase 2's metrics-subscriber will surface whether it's worth the runtime. Defer to Phase 3.
+
+### Phase 2 readiness gate exit criteria
+
+`bmad-check-implementation-readiness` for Phase 2 must verify all of the following before Phase 2 sprint planning starts:
+
+- [ ] PRD amendment (this file's companion in `prd.md`) accepted; FR53–FR71a + new NFRs all present.
+- [ ] Architecture amendment (this section) accepted; P2-I1 through P2-I6 invariants explicitly stated.
+- [ ] `bmad-create-epics-and-stories` has decomposed FR53–FR71a into Epic 8–13 stories.
+- [ ] Each Phase 2 epic has its `phase: 2` label set in `sprint-status.yaml`.
+- [ ] ADR-0003 (`docs/adr/0003-phase-2-gate.md`) authored and `status: accepted` — formally opens Phase 2 for `main`-branch merges.
+- [ ] ADR-0004 through ADR-0008 (one per substantive Phase 2 architectural decision) drafted as `status: proposed`, ready to be accepted as their owning epic begins.
+- [ ] `deferred-work.md` reviewed; any items now superseded by Phase 2 marked `killed: superseded_by_phase_2_epic_<n>`.
+
+— *Amendment by R2d2, 2026-05-15, via the BMad `bmad-create-architecture` workflow (extension mode).*
