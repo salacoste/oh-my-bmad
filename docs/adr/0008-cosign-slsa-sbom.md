@@ -70,6 +70,11 @@ Each mechanism is independently useful. Bundling all three is what we're committ
 - Phase 2 implementation cycle for Epic 8 (Stories 8.1–8.6) takes ~3 days of solo-operator work. Story 8.1 ships SBOM generation first (no signing yet — proves the pipeline produces valid SBOMs). Stories 8.2 (SLSA) + 8.3 (cosign sign) + 8.4 (SBOM attached as attestation) land sequentially. Story 8.5 (`just verify-images`) closes the deploy-side loop. Story 8.6 (the `deployment.signature_rejected` event) closes the audit-trail loop.
 - Any Phase 2 epic's release (Epic 9–13) ships through the new pipeline once Epic 8 is `done`. **Epic 8 is a hard prerequisite for any other Phase 2 epic merging to `main`.**
 
+**Known limitations (documented for transparency; not blocking deployment):**
+
+- **Multi-arch SBOM represents amd64 only.** All Platform images are multi-arch (`linux/amd64,linux/arm64`). `anchore/sbom-action` pulls the image from GHCR using the GitHub Actions runner's native architecture (`ubuntu-24.04` = amd64) and scans only that platform. The resulting CycloneDX SBOM is attached as an attestation against the manifest-index digest (which covers both arches). An arm64 operator pulling the attestation therefore receives an **amd64-derived** SBOM. The dependency graph is identical across arches in practice (Python wheels are largely arch-agnostic) but the runtime-resolved layer hashes differ. Per-arch SBOM generation is deferred to Phase 3+ (requires a matrix-over-arch SBOM step + multiple attestations per image — non-trivial workflow change).
+- **`cosign attest --type cyclonedx` alias resolution.** The `cyclonedx` alias resolves to the in-toto predicate type URI `https://cyclonedx.org/bom`. cosign verify-attestation accepts the alias consistently, so round-trip verification works end-to-end. However, **Dependency-Track v4.11+** introduced strict spec-version matching (`https://cyclonedx.org/bom/v1.4` vs `v1.5` vs `v1.6`). Operators pointing DT at the GHCR attestations may need to configure DT to accept the version-agnostic URI explicitly. Other CycloneDX consumers (OSV-Scanner, Trivy, syft) accept the version-agnostic URI without configuration. Documented limitation; not a defect.
+
 **Future:**
 
 - Phase 3 hardening (when scoped): Sigstore private-CA + Rekor private instance for organizational use; Notary v2 for runtime image-pull policy enforcement; image-signing key rotation procedure.
@@ -79,11 +84,17 @@ Each mechanism is independently useful. Bundling all three is what we're committ
 
 ### Tag-retry duplicate attestations (F7)
 
-If a release-tag push is retried (operator re-pushes the same `v*` tag, GH Actions runner failure mid-job, or `gh run rerun` after partial failure), the SLSA attestation step runs again against the same image digest. Because Sigstore Fulcio mints a new cert per invocation and Rekor's transparency log is append-only, this produces **two attestation entries for the same `(subject-name, subject-digest)` pair**.
+If a release-tag push is retried (operator re-pushes the same `v*` tag, GH Actions runner failure mid-job, or `gh run rerun` after partial failure), **all three Sigstore-bound steps** run again against the same image digest:
 
-This is **cosmetic, not a security issue.** Both attestations are valid; `cosign verify-attestation` returns the first matching one. The duplicate is auditor-visible in Rekor but does not produce a verification failure.
+1. `actions/attest-build-provenance` (SLSA L2 — Story 8.2) → new Rekor entry for the SLSA predicate.
+2. `cosign sign` (Story 8.3) → new Rekor entry for the signature.
+3. `cosign attest --type cyclonedx` (Story 8.4) → new Rekor entry for the SBOM predicate.
 
-**Mitigation:** Use `gh run rerun` only when the build step itself failed (in which case the attestation never ran on the first attempt). If the attestation succeeded and a downstream step failed, prefer fixing the downstream step in a follow-up commit + new tag rather than re-running the entire release.
+Because Sigstore Fulcio mints a new cert per invocation and Rekor's transparency log is append-only, this produces **three new attestation entries** per retry for the same `(subject-name, subject-digest)` triple.
+
+This is **cosmetic, not a security issue.** All entries are valid; `cosign verify` / `cosign verify-attestation` return the first matching one. The duplicates are auditor-visible in Rekor but do not produce verification failures.
+
+**Mitigation:** Use `gh run rerun` only when the build step itself failed (in which case none of the three attestations ran on the first attempt). If any Sigstore-bound step succeeded and a downstream step failed, prefer fixing the downstream step in a follow-up commit + new tag rather than re-running the entire release.
 
 ### Sigstore Fulcio / Rekor outage = hard release block (F8)
 
@@ -96,18 +107,26 @@ The trade-off:
 
 **Operational consequence:** during a Sigstore outage, releases pause. Monitor https://status.sigstore.dev (or the Sigstore Slack #status channel) when troubleshooting a stuck release. No code change required to "fix" — the outage will resolve.
 
-### Failure asymmetry between SLSA and SBOM steps (F12)
+### Failure asymmetry across the supply-chain triumvirate (F12)
 
-Story 8.2 ships SLSA attestation; Story 8.1 ships SBOM generation. They run in sequence after the image push. Four terminal states are possible per service per release:
+The release pipeline runs **three independent Sigstore-bound steps** per image per release: SLSA L2 attestation (Story 8.2), cosign keyless sign (Story 8.3), cosign attest SBOM (Story 8.4). Each can succeed or fail independently. The SBOM-gen step (Story 8.1 — local file, not Sigstore-bound) is the upstream precondition for Story 8.4 only.
 
-| State | SLSA | SBOM | Operator action |
-|---|---|---|---|
-| **Green** | ✓ | ✓ | Deploy normally. `just verify-images` (Story 8.5) passes. |
-| **SLSA-only** | ✓ | ✗ | Image is provably attested but has no machine-readable SBOM. Acceptable for runtime; missing for license/CVE audit. Rerun the SBOM step (when Story 8.4 lands the attestation form, also re-runnable independently). |
-| **SBOM-only** | ✗ | ✓ | Image has an SBOM but no provenance proof. **Do not deploy** — operator can't verify the image was built by the canonical pipeline. Investigate the SLSA failure; re-tag or fix-forward. |
-| **Both-fail** | ✗ | ✗ | Build succeeded but no supply-chain artifacts attached. **Do not deploy.** Investigate root cause (typically: Sigstore outage). Wait for Sigstore recovery, then re-tag. |
+This produces **eight terminal states** per service per release (using `S` = success, `F` = failure):
 
-The supply-chain triumvirate is **all-or-nothing for deployment safety**. `just verify-images` (Story 8.5) is the deploy-side gate that enforces this — refuses `docker compose pull` if any attestation is missing.
+| State | SLSA | Sign | SBOM-attest | Operator action |
+|---|---|---|---|---|
+| **All-green** | ✓ | ✓ | ✓ | Deploy normally. `just verify-images` (Story 8.5) passes all three gates. |
+| **SLSA-only** | ✓ | ✗ | ✗ | **Do not deploy.** No signature → cannot verify image provenance via `cosign verify`. Re-tag or fix-forward. |
+| **Sign-only** | ✗ | ✓ | ✗ | **Do not deploy.** Signature lacks SLSA backing; missing SBOM attestation. Investigate Sigstore outage; re-tag. |
+| **Attest-only** | ✗ | ✗ | ✓ | **Do not deploy.** SBOM is present in registry but image is unsigned and unattested for provenance. Re-tag. |
+| **SLSA + sign, no SBOM-attest** | ✓ | ✓ | ✗ | **Do not deploy.** Image is provably built + signed but lacks the registry-resident SBOM attestation. Story 8.1's 90-day workflow-artifact SBOM may still exist, but `just verify-images` checks for the OCI attestation specifically and will refuse. Re-run cosign attest step (Story 8.4) independently, or re-tag. |
+| **SLSA + SBOM-attest, no sign** | ✓ | ✗ | ✓ | **Do not deploy.** Image has provenance + bill of materials but no signature. Re-run cosign sign (Story 8.3) independently, or re-tag. |
+| **Sign + SBOM-attest, no SLSA** | ✗ | ✓ | ✓ | **Do not deploy.** Image is signed + has SBOM but lacks the SLSA L2 provenance attestation. Re-tag (SLSA failures typically indicate Sigstore Fulcio outage). |
+| **All-fail** | ✗ | ✗ | ✗ | **Do not deploy.** Build succeeded but no supply-chain artifacts. Investigate Sigstore outage; wait for recovery, then re-tag. |
+
+The supply-chain triumvirate is **all-or-nothing for deployment safety**. `just verify-images` (Story 8.5) is the deploy-side gate that enforces this — refuses `docker compose pull` if any of the three attestations is missing.
+
+**Note on partial-rerun:** cosign sign (Story 8.3) and cosign attest SBOM (Story 8.4) are independently re-runnable against an existing image digest from a local cosign installation — operator does not need to re-tag the release for these two. SLSA attestation re-run requires re-running the GitHub Actions workflow (only the action has the OIDC token issuance pathway). Document the operator-side rerun procedure in `docs/deployment-guide.md` when Story 8.5 lands.
 
 ## Alternatives considered
 

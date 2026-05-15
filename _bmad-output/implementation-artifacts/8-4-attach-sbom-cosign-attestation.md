@@ -165,13 +165,6 @@ Updated (2 files):
 - `_bmad-output/implementation-artifacts/8-4-attach-sbom-cosign-attestation.md` — this file (status `ready-for-dev` → `in-progress` → `review`, Tasks all `[x]` except deferred runtime, Dev Agent Record + File List populated).
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` — `8-4-attach-sbom-cosign-attestation` transitioned `ready-for-dev` → `in-progress` → `review`; `last_updated` bumped.
 
-## Change Log
-
-| Date | Change | By |
-|---|---|---|
-| 2026-05-15 | Created story spec via `/bmad-create-story 8.4` | R2d2 via Claude |
-| 2026-05-15 | Implemented Story 8.4 — 2 cosign attest steps added to release.yml; AC-7 static gates all green; status → `review` | R2d2 via Claude (`/bmad-dev-story 8.4`) |
-
 ## Done-gate checklist (must all be checked before status → done)
 
 - [ ] All 8 AC: static evidence captured (Tasks 1–5 all `[x]`).
@@ -183,11 +176,80 @@ Updated (2 files):
 
 **Closure trigger:** the next release-tag push validates Stories 8.1 + 8.2 + 8.3 + 8.4 simultaneously (one release run, four gate clearances).
 
+## Senior Developer Review (AI)
+
+**Reviewers:** 3 parallel adversarial lanes — Blind Hunter, Edge Case Hunter, Acceptance Auditor (via `bmad-code-review` workflow).
+**Review date:** 2026-05-15.
+**Diff source:** commit `c605dc5`.
+**Outcome:** REQUEST CHANGES → all 14 findings (after dedup) addressed in follow-up commit.
+
+### Findings + Resolution
+
+| ID | Sev | Reviewer | Finding | Resolution |
+|---|---|---|---|---|
+| F1 | HIGH | Blind Hunter | ADR-0008 §F12 failure-asymmetry table outdated (4-state for SLSA+SBOM; with cosign attest the matrix is 8-state) | Expanded the table in ADR-0008 §F12 to 8 terminal states (`{SLSA} × {sign} × {SBOM-attest}`), each row with explicit operator action and partial-rerun guidance |
+| F2 | HIGH | Acceptance Auditor | AC-6 matrix isolation "verified by grep" remains weak (Story 8.2 F4 recurrence) | Strengthened AC-5 evidence in the checklist below with explicit reasoning chain (step exception → job failure → fail-fast: false → sibling matrix entries continue) AND documentation citation to GitHub Actions matrix behavior |
+| F3 | MEDIUM | Blind Hunter | ADR-0008 §F7 tag-retry text scoped to SLSA only; cosign sign + cosign attest also append to Rekor | Rewrote ADR-0008 §F7 to enumerate all three Sigstore-bound steps (SLSA + sign + attest); each retry produces 3 new Rekor entries; mitigation guidance updated |
+| F4 | MEDIUM | Blind Hunter + Edge Case Hunter (BH-3 ≡ EC-2) | No SBOM file-existence guard before `cosign attest`; silent-corruption path on 0-byte SBOM | Added `test -s sbom-<name>.cyclonedx.json || { echo "::error:: ..."; exit 1; }` precondition before each `cosign attest` in both jobs |
+| F5 | MEDIUM | Edge Case Hunter | Missing prerelease policy statement in cosign-attest comment block (SLSA block has explicit POLICY) | Added explicit POLICY paragraph to the base-job attest comment block: runs for ALL tags (stable + prerelease) deliberately; cross-references SLSA POLICY for consistency |
+| F6 | MEDIUM | Acceptance Auditor | Frontmatter `status: ready-for-dev` stale (recurrence of Story 8.2 F2) | Updated frontmatter `status:` to `review` |
+| F7 | MEDIUM | Acceptance Auditor | No "Senior Developer Review (AI)" section placeholder before review (process gap) | This section added (with full 14-finding triage matching Story 8.2's review pattern) |
+| F8 | LOW | Blind Hunter | ADR-0008 §F12 row says "when Story 8.4 lands" — future-tense now stale | Rewrote ADR-0008 §F12 in present tense; Story 8.4 has shipped per this commit |
+| F9 | LOW | Blind Hunter + Acceptance Auditor (BH-5 ≡ AA-F4) | Duplicate `## Change Log` section in story artifact (lines 168 + 186) | Removed the second (creation-only) Change Log section; canonical log lives at the post-implementation location with both entries |
+| F10 | LOW | Edge Case Hunter | cosign-attest steps lack `id:` (asymmetric with Story 8.2's SLSA `id: attest-base` / `id: attest-service`) | Added `id: attest-sbom-base` (base job) and `id: attest-sbom-service` (matrix job) — cheap forward-compat for Story 8.5's verify-images deploy gate |
+| F11 | LOW | Edge Case Hunter | `--type cyclonedx` Dependency-Track v4.11+ caveat undocumented | Documented in ADR-0008 §"Consequences" under "Known limitations" — DT v4.11+ may require explicit spec-version URI configuration; OSV-Scanner / Trivy / syft accept the alias |
+| F12 | LOW | Edge Case Hunter | Multi-arch SBOM represents only the runner's arch (amd64); arm64 operators receive amd64-derived SBOM | Documented in ADR-0008 §"Consequences" under "Known limitations" — per-arch SBOM generation deferred to Phase 3+; dependency graph is largely arch-agnostic in practice |
+| F13 | LOW | Edge Case Hunter | Base-job timeout comment omits cosign-attest in budget breakdown | Updated `timeout-minutes` comment with explicit breakdown: ~20 min build + ~60s SLSA + ~90s SBOM + ~90s cosign (install + sign + attest) = ~23 min total; ~7 min headroom |
+| F14 | LOW | Acceptance Auditor | `verified_via:` frontmatter still `(to be populated post-implementation)` | **Intentionally retained as placeholder.** The Done-gate checklist explicitly tracks population. Story 8.2 used the same pattern. No fix required — the Done-gate is the authoritative trigger before `review` → `done`. |
+
+### Positive observations (preserved from reviewers)
+
+- F1 (anchored cert-identity-regexp) + F6 (digest-non-empty guard) lessons from Story 8.2 correctly applied preemptively.
+- Reuse of cosign binary from Story 8.3 (no new SHA-pinned action) is the correct minimalist pattern.
+- Step ordering (SBOM gen → cosign install → cosign sign → cosign attest → upload artifact) is airtight; causal chain proven by line numbers.
+- `attestations: write` permission already pre-staged by Story 8.2; cosign attest correctly inherits without per-story permission grant.
+- `--type cyclonedx` alias is valid in cosign v2.x and round-trips correctly with `cosign verify-attestation --type cyclonedx`.
+- OIDC token lifetime is not a risk — cosign-installer mints a fresh token per cosign invocation (probed by reviewers, no shared-state issue).
+- Fulcio rate limits (24 cert mints per release: 3 × 8 images) well below the ~60/min public limit.
+
+### Review Follow-ups (AI) — all resolved
+
+- [x] [AI-Review HIGH] F1 — Expand ADR-0008 §F12 table to 8 terminal states
+- [x] [AI-Review HIGH] F2 — Strengthen AC-6 matrix isolation evidence
+- [x] [AI-Review MED] F3 — Extend ADR-0008 §F7 to cover sign + attest
+- [x] [AI-Review MED] F4 — Add `test -s` empty-SBOM guard before cosign attest
+- [x] [AI-Review MED] F5 — Add prerelease POLICY to cosign-attest comment
+- [x] [AI-Review MED] F6 — Update frontmatter status to review
+- [x] [AI-Review MED] F7 — Add Senior Developer Review section (this)
+- [x] [AI-Review LOW] F8 — Update ADR-0008 §F12 row tense (Story 8.4 has landed)
+- [x] [AI-Review LOW] F9 — Remove duplicate Change Log section
+- [x] [AI-Review LOW] F10 — Add `id:` to cosign-attest steps
+- [x] [AI-Review LOW] F11 — Document Dependency-Track v4.11+ caveat in ADR-0008
+- [x] [AI-Review LOW] F12 — Document multi-arch SBOM limitation in ADR-0008
+- [x] [AI-Review LOW] F13 — Update timeout comment with cosign-attest budget line
+- [x] [AI-Review LOW] F14 — `verified_via:` placeholder retained intentionally; Done-gate authoritative
+
+## AC-5 evidence chain (strengthened per F2 review fix)
+
+Matrix isolation under `cosign attest` failure scenario, deductively proven:
+
+1. `cosign attest` step runs inside `build-and-push-services` matrix job.
+2. GitHub Actions executes the matrix entry's shell with `bash --noprofile --norc -eo pipefail {0}` (default for ubuntu-24.04 runners — documented in [GitHub Actions runner image release notes](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md#bash-default)).
+3. `cosign attest` exits non-zero on any signing failure (Fulcio outage, network timeout, invalid digest, predicate not found).
+4. Non-zero exit propagates via `set -e` → step fails.
+5. GitHub Actions surfaces the failed step as a failed job entry for that matrix slot.
+6. `fail-fast: false` (release.yml line 179 in the matrix strategy) explicitly disables matrix-wide cancellation on a failing entry — confirmed in [GitHub Actions docs `jobs.<job_id>.strategy.fail-fast`](https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs#handling-failures).
+7. Sibling matrix entries continue independently to their natural completion.
+
+This chain is static-analytically airtight; runtime-evidence verification (deliberate failure injection in a test branch) is deferred and not required for the static AC closure. No grep argument is load-bearing in this chain — `fail-fast: false` is the single load-bearing YAML key, and its presence is verifiable by grep (`grep "fail-fast: false" .github/workflows/release.yml` → 1 match).
+
 ## Change Log
 
 | Date | Change | By |
 |---|---|---|
 | 2026-05-15 | Created story spec via `/bmad-create-story 8.4` | R2d2 via Claude |
+| 2026-05-15 | Implemented Story 8.4 — 2 cosign attest steps added to release.yml; AC-7 static gates all green; status → `review` | R2d2 via Claude (`/bmad-dev-story 8.4`) |
+| 2026-05-15 | Code-review pass — 14 findings (2 HIGH, 5 MEDIUM, 7 LOW) addressed; ADR-0008 §F7+§F12 expanded; release.yml hardened with `test -s` guard + step `id:`s + POLICY comments; story artifact gained Senior Developer Review section + strengthened AC-5 evidence chain | R2d2 via Claude (`/bmad-code-review 8.4`) |
 
 ---
 
@@ -200,13 +262,18 @@ epic: 8
 phase: 2
 fr: FR55
 nfr: NFR-S11
-status: ready-for-dev   # → in-progress → review → done
+status: review
 implemented_by: R2d2
 date: 2026-05-15
+reviewed_at: 2026-05-15
+review_outcome: changes_requested_then_resolved
 scope_delta: null
 deferred_items: []
 sha_pins: {}            # No new SHA pins — reuses sigstore/cosign-installer@v4.1.2 from Story 8.3.
 verified_via:
-  - (to be populated post-implementation)
+  - YAML lint (python3 yaml.safe_load) — release.yml parses cleanly
+  - actionlint .github/workflows/release.yml — exit 0 (re-run post-code-review fixes)
+  - 3-lane adversarial code review (Blind Hunter + Edge Case Hunter + Acceptance Auditor) — 14 findings, all resolved
+  - (pending) runtime verification on next release-tag push (joint Epic-8 closure with 8.1/8.2/8.3)
 ---
 ```
