@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-15T04:00:00Z
+last_updated: 2026-05-15T05:00:00Z
 current_phase: 2  # Phase 2 opened by ADR-0003 (docs/adr/0003-phase-2-gate.md), 2026-05-15
 
 development_status:
@@ -229,7 +229,7 @@ development_status:
   # =========================================================================
   epic-8: in-progress
   8-1-sbom-anchore-sbom-action: done  # phase: 2 · FR55 · SHA-pinned anchore/sbom-action@e22c389 v0.24.0 + upload-artifact@ea165f8 v4.6.2
-  8-2-slsa-l2-provenance-attestation: ready-for-dev  # phase: 2 · FR54 · story file created 2026-05-15
+  8-2-slsa-l2-provenance-attestation: review  # phase: 2 · FR54 · YAML + grep gates green · awaiting runtime verification on next release tag
   8-3-cosign-keyless-signing: backlog  # phase: 2 · FR53
   8-4-attach-sbom-cosign-attestation: backlog  # phase: 2 · FR55, NFR-S11
   8-5-just-verify-images-recipe: backlog  # phase: 2 · FR56a, NFR-S9

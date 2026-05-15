@@ -20,6 +20,8 @@ on:
 permissions:
   contents: read
   packages: write
+  id-token: write       # Story 8.2/8.3 — keyless OIDC for cosign + actions/attest-build-provenance
+  attestations: write   # Story 8.2/8.4 — push-to-registry for SLSA + cosign attestations
 
 concurrency:
   # Release-wide singleton: only one release runs at a time globally,
@@ -108,6 +110,26 @@ jobs:
           docker buildx imagetools create -t "${DST}" "${SRC}"
 
       # ---------------------------------------------------------------------
+      # Story 8.2 (Phase 2 Epic 8): SLSA Build Level 2 provenance attestation.
+      # GitHub-first-party `actions/attest-build-provenance` mints a Sigstore
+      # keyless cert via the workflow's OIDC identity, signs a SLSA L2
+      # provenance predicate against the image's content digest, and pushes
+      # the attestation to GHCR alongside the image (push-to-registry: true).
+      # Operator verifies deploy-side via:
+      #   cosign verify-attestation --type slsaprovenance \
+      #     --certificate-identity-regexp ".*/oh-my-bmad/.github/workflows/release.yml.*" \
+      #     --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+      #     <image>@<digest>
+      # See ADR-0008 for the supply-chain triumvirate rationale.
+      # ---------------------------------------------------------------------
+      - name: Generate SLSA L2 provenance attestation (base)
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.OWNER }}/oh-my-bmad-base
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      # ---------------------------------------------------------------------
       # Story 8.1 (Phase 2 Epic 8): CycloneDX SBOM generation for base image.
       # See ADR-0008 for the supply-chain triumvirate rationale.
       # This step produces the SBOM as a workflow artifact. Story 8.4
@@ -188,6 +210,20 @@ jobs:
           DST: ${{ env.REGISTRY }}/${{ env.OWNER }}/oh-my-bmad-${{ matrix.service }}:latest
         run: |
           docker buildx imagetools create -t "${DST}" "${SRC}"
+
+      # ---------------------------------------------------------------------
+      # Story 8.2 (Phase 2 Epic 8): SLSA L2 provenance per service image.
+      # Same pattern as the base-job SLSA step — keyless OIDC mints a
+      # Sigstore cert, signs the SLSA L2 predicate, pushes to GHCR. The
+      # matrix-scoped `steps.build.outputs.digest` is per-service.
+      # See ADR-0008.
+      # ---------------------------------------------------------------------
+      - name: Generate SLSA L2 provenance attestation (${{ matrix.service }})
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.OWNER }}/oh-my-bmad-${{ matrix.service }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
 
       # ---------------------------------------------------------------------
       # Story 8.1 (Phase 2 Epic 8): CycloneDX SBOM per service image.
