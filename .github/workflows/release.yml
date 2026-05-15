@@ -250,7 +250,7 @@ jobs:
           # SHA — guards against silent v2→v3 CLI drift if upstream releases
           # a major bump. Bump deliberately when the verify-images recipe is
           # validated against the new version.
-          cosign-release: 'v2.4.1'
+          cosign-release: 'v3.0.6'
 
       - name: Cosign keyless sign (base)
         id: sign-base  # F12: forward-compat for post-sign verification or structured logging
@@ -440,7 +440,7 @@ jobs:
         if: steps.build.outputs.digest != ''  # F8: matches SLSA/SBOM guard pattern; primary contract is validate-digest-service
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
         with:
-          cosign-release: 'v2.4.1'  # F10: pin cosign binary version
+          cosign-release: 'v3.0.6'  # F10: pin cosign binary version
 
       - name: Cosign keyless sign (${{ matrix.service }})
         id: sign-service  # F12: forward-compat for post-sign verification

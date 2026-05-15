@@ -84,7 +84,9 @@ curl -L https://github.com/sigstore/cosign/releases/latest/download/cosign-linux
 chmod +x cosign && sudo mv cosign /usr/local/bin/
 ```
 
-Verify the install: `cosign version` should print v2.x.
+Verify the install: `cosign version` should print **v2.4+ or v3.x** (cosign v3 is recommended — it defaults to OCI 1.1 referrer storage which the recipe assumes; cosign v2.4+ works with the explicit predicate URIs the recipe uses, but writes SBOM attestations to the legacy `.att` tag location that cosign v3 verify-attestation doesn't search).
+
+**Background (Story 8.4 runtime finding):** The release pipeline pins `sigstore/cosign-installer` to cosign v3.0.6 so attestations land in OCI 1.1 referrers (matching the default lookup location of modern cosign verify-attestation). Operators running older cosign (<v2.4) cannot verify the SBOM attestation. Operators running cosign v2.4+ but <v3 can verify everything via explicit predicate URIs (which the `just verify-images` recipe uses).
 
 ### Per-release workflow
 

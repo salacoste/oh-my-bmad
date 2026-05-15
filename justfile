@@ -398,7 +398,12 @@ verify-images:
         # 2. SLSA L2 provenance attestation (Story 8.2)
         errfile=$(mktemp)
         _omb_tmpfiles+=("$errfile")
-        if ! cosign verify-attestation --type slsaprovenance \
+        # Story 8.2 pass-3 fix: use explicit predicate URI instead of the
+        # ``slsaprovenance`` alias. cosign aliases assume SLSA v0.2 (deprecated);
+        # `actions/attest-build-provenance@v4.1.0` publishes SLSA v1.0
+        # (`https://slsa.dev/provenance/v1`). Bypassing the alias works on both
+        # cosign v2 and v3.
+        if ! cosign verify-attestation --type "https://slsa.dev/provenance/v1" \
             --certificate-identity-regexp "$CERT_ID" \
             --certificate-oidc-issuer "$CERT_ISSUER" \
             "$image" >/dev/null 2>"$errfile"; then
@@ -407,9 +412,13 @@ verify-images:
         fi
         rm -f "$errfile"
         # 3. CycloneDX SBOM attestation (Story 8.4)
+        # Story 8.4 pass-3 fix: explicit predicate URI matches both cosign
+        # v2 (legacy `.att`) and cosign v3 (OCI 1.1 referrers, the default for
+        # cosign attest >=v3.0). Requires CI to run cosign v3 (workflow's
+        # cosign-release pin) so the attestation lands in OCI referrers.
         errfile=$(mktemp)
         _omb_tmpfiles+=("$errfile")
-        if ! cosign verify-attestation --type cyclonedx \
+        if ! cosign verify-attestation --type "https://cyclonedx.org/bom" \
             --certificate-identity-regexp "$CERT_ID" \
             --certificate-oidc-issuer "$CERT_ISSUER" \
             "$image" >/dev/null 2>"$errfile"; then
