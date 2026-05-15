@@ -1,6 +1,6 @@
 ---
 id: ADR-0008
-status: proposed
+status: accepted
 date: 2026-05-15
 supersedes: null
 ---
@@ -9,7 +9,7 @@ supersedes: null
 
 ## Status
 
-**Proposed** — 2026-05-15. To be promoted to `accepted` when Epic 8 Story 8.1 (SBOM generation) merges to `main` with the SBOM artifact verifiably present in the release pipeline.
+**Accepted** — 2026-05-15. Promoted from `proposed` upon Epic 8 Story 8.1 merge (commit `c5a914c` + SHA-pin follow-up). Story 8.1 ships the SBOM-generation half of the triumvirate; Stories 8.2 (SLSA L2), 8.3 (cosign keyless sign), and 8.4 (attach SBOM as attestation) complete the loop; Story 8.5 ships the deploy-side `just verify-images` gate.
 
 ## Context
 

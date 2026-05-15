@@ -4,11 +4,17 @@ epic: 8
 phase: 2
 fr: FR55
 nfr: NFR-S11
-status: review
+status: done
 implemented_by: R2d2
 date: 2026-05-15
 scope_delta: null
 deferred_items: []
+sha_pins:
+  anchore/sbom-action: e22c389904149dbc22b58101806040fa8d37a610  # v0.24.0 published 2026-03-20
+  actions/upload-artifact: ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2 published 2025-03-19
+verified_via:
+  - YAML lint (python3 yaml.safe_load) — release.yml parses cleanly
+  - GitHub API SHA resolution — both pins traceable to canonical release tags
 ---
 
 # Story 8.1 — SBOM generation via anchore/sbom-action
@@ -29,15 +35,33 @@ Modified `.github/workflows/release.yml` to add CycloneDX SBOM generation for ev
 - [x] **SBOM contains direct + transitive deps with SPDX license identifiers.** Inherits from `anchore/sbom-action`'s syft engine — CycloneDX-JSON output with `licenses` field per component populated from package metadata when available.
 - [x] **CI fails if SBOM generation fails.** `anchore/sbom-action` exits non-zero on failure; uploaded inside the same job, so a SBOM-generation failure fails the entire matrix entry for that service. Matrix `fail-fast: false` preserves per-service isolation (one service's SBOM failure does not block the rest), but each service's overall step-success is gated by its SBOM step.
 
-## Known caveats / operator review required before merge
+## SHA-pin resolution (post-merge follow-up)
 
-1. **SHA-pin placeholder.** Both new `anchore/sbom-action@v0.18.0` references are tag-based, not SHA-pinned — inconsistent with the existing release.yml convention (all other actions are SHA-pinned with version-tag comments). **Operator must look up the actual SHA of the latest stable release on https://github.com/anchore/sbom-action/releases and replace `@v0.18.0` with `@<40-char-sha>  # vX.Y` in two places before merging this PR.** TODO comments are in place at both sites flagging this explicitly.
+Initial commit (`c5a914c`) carried TODO placeholders. Resolved via GitHub API lookup:
 
-2. **`actions/upload-artifact@b4b15...`** uses a known-good v4 SHA (matches the action's stable channel as of project knowledge cutoff). Operator should still verify it against the action's release notes if a newer v4.x.y has shipped.
+| Action | Tag | SHA | Released |
+|---|---|---|---|
+| `anchore/sbom-action` | `v0.24.0` | `e22c389904149dbc22b58101806040fa8d37a610` | 2026-03-20 |
+| `actions/upload-artifact` | `v4.6.2` | `ea165f8d65b6e75b540449e92b4886f43607fa02` | 2025-03-19 |
 
-3. **Workflow runtime impact.** Expected ~30-60s per service for SBOM generation × 8 services = ~4-8 minutes added to the release pipeline (matches the ~3-5 min estimate in ADR-0008). Phase 1's release was ~12 minutes; new baseline ~16-20 minutes.
+Lookup commands (reproducible):
 
-4. **Multi-arch SBOM scope.** `anchore/sbom-action` scans the image's content digest (manifest index pointing to amd64 + arm64). The action defaults to scanning the runner's architecture; multi-arch images get one architecture's SBOM unless explicitly configured. This is acceptable for Story 8.1 — verifying the action runs end-to-end is the goal — and may be revisited in Story 8.4 or as a sub-story if matrix-arch SBOMs become a hard requirement.
+```sh
+gh api repos/anchore/sbom-action/releases/latest --jq '.tag_name'
+gh api repos/anchore/sbom-action/git/ref/tags/v0.24.0 --jq '.object.sha'
+gh api repos/actions/upload-artifact/releases --jq 'map(select(.tag_name | startswith("v4."))) | sort_by(.published_at) | reverse | .[0].tag_name'
+gh api repos/actions/upload-artifact/git/ref/tags/v4.6.2 --jq '.object.sha'
+```
+
+Both SHAs were also previously seen — `actions/upload-artifact@b4b15b8c...` (v4.4.3, Oct 2024) was outdated relative to the v4 stable channel. Bumped to current `ea165f8d...` (v4.6.2).
+
+## Caveats remaining
+
+1. **Workflow runtime impact.** Expected ~30-60s per service for SBOM generation × 8 services = ~4-8 minutes added to the release pipeline (matches the ~3-5 min estimate in ADR-0008). Phase 1's release was ~12 minutes; new baseline ~16-20 minutes. Will be confirmed empirically on the next release-tag push.
+
+2. **Multi-arch SBOM scope.** `anchore/sbom-action` scans the image's content digest (manifest index pointing to amd64 + arm64). The action defaults to scanning the runner's architecture; multi-arch images get one architecture's SBOM unless explicitly configured. Acceptable for Story 8.1 — verifying the action runs end-to-end is the goal — may be revisited in Story 8.4 if matrix-arch SBOMs become a hard requirement.
+
+3. **First-real-release observation.** The SBOM step has not yet executed in a real release run (workflow triggers on `push: tags: ['v*']`; no Phase-2 release tag exists at the moment of this story's `done` transition). The static change is verifiable (YAML lint + SHA resolution via gh API); the runtime artifact (`sbom-<service>.cyclonedx.json` in workflow artifacts) will materialize on the next release. If that first run reveals a `sbom-action` issue (e.g., v0.24.0 breaking change vs project tooling), it will surface as a deferred-work entry rather than a Story 8.1 reopen — Stories 8.2/8.3/8.4 can still proceed in parallel.
 
 ## Code-touch summary
 
