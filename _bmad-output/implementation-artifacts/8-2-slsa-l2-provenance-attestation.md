@@ -1,6 +1,6 @@
 # Story 8.2: SLSA L2 build-provenance attestation
 
-Status: review
+Status: **done**
 
 <!-- Created by bmad-create-story 2026-05-15 for Phase 2 Epic 8 (γ Supply-chain hardening). -->
 <!-- Companion stories: 8.1 (SBOM) shipped at cc16996; 8.3 (cosign sign) and 8.4 (attach SBOM) follow. -->
@@ -339,7 +339,7 @@ epic: 8
 phase: 2
 fr: FR54
 nfr: NFR-S9
-status: review
+status: done
 implemented_by: R2d2
 date: 2026-05-15
 reviewed_at: 2026-05-15
@@ -357,3 +357,24 @@ verified_via:
   - (pending) runtime verification on next release-tag push (will validate end-to-end with shipping Stories 8.3-8.6)
 ---
 ```
+
+
+## Runtime closure — Joint Epic-8 validation (2026-05-15T17:40Z)
+
+**Tag:** `v0.1.0-rc-supply-chain-test-v2`
+**CI run:** [25931950880](https://github.com/salacoste/oh-my-bmad/actions/runs/25931950880) — all 8 jobs green
+**Verification:** `just verify-images` → **24/24 cosign checks green** (8 signatures + 8 SLSA L2 + 8 CycloneDX SBOM)
+**Released digests** (8 images, multi-arch amd64+arm64):
+
+| Image | Digest |
+|---|---|
+| oh-my-bmad-base | `sha256:7b172e4b60f4e958258f0f760b69e84485bae0ebf09aacca7c0da83ee5dbc349` |
+| oh-my-bmad-registry-api | `sha256:c8abd3705490f0ade46014bc972bc8fe673c74aa46ccdacb3faea8d4554c5e46` |
+| oh-my-bmad-registry-state | `sha256:1dbb4e2ec0b2aa569e376e3c5a08c9e1ce6453ea923405cd221240406e0f368d` |
+| oh-my-bmad-telegram-gateway | `sha256:74ff9b2bac177b573c47994e5b69a977a5ad7528909a562cdfeec9abeb5c069a` |
+| oh-my-bmad-orchestrator-adapter | `sha256:c9f574fe06c47d2c6d18b457773b859f6cde16588ab83d06de2831e4b927168e` |
+| oh-my-bmad-worker-wrapper | `sha256:17964d9b5d427f138894e86a69843ced9543ced8b3429c332bf4df203a5a2b06` |
+| oh-my-bmad-clawhip-daemon | `sha256:30828c1046751e71f3182776ca0285c2159ad60bcf00f673a391b26dae31f43d` |
+| oh-my-bmad-console-cli | `sha256:53d22513601449fa43cb3dff3e9fa6aa8392d360d04d82fa7052bc3cfee0531e` |
+
+**Status:** `review` → `done`. Epic 8 closes atomically alongside Stories 8.2–8.6.
