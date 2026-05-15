@@ -195,6 +195,33 @@ jobs:
         run: |
           cosign sign --yes "${{ env.REGISTRY }}/${{ env.OWNER }}/oh-my-bmad-base@${DIGEST}"
 
+      # ---------------------------------------------------------------------
+      # Story 8.4 (Phase 2 Epic 8): attach the CycloneDX SBOM as a cosign
+      # attestation. Story 8.1 ships the SBOM as a 90-day workflow artifact;
+      # this step also attaches it to the image's content digest in GHCR as
+      # an unbounded OCI attestation. Together they provide both short-term
+      # operator convenience (artifact) and long-term registry-resident
+      # discoverability (attestation).
+      #
+      # Operator verifies the attestation deploy-side:
+      #   cosign verify-attestation --type cyclonedx \
+      #     --certificate-identity-regexp "^https://github.com/${OWNER}/oh-my-bmad/\.github/workflows/release\.yml@refs/tags/v[0-9].*" \
+      #     --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+      #     <image>@<digest>
+      #
+      # The decoded `predicate` field matches the local sbom-base.cyclonedx.json
+      # bytes byte-for-byte. See ADR-0008 §"Decision" items 1+6.
+      # ---------------------------------------------------------------------
+      - name: Cosign attest SBOM (base)
+        if: steps.build.outputs.digest != ''  # F6 lesson
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cosign attest --yes \
+            --predicate sbom-base.cyclonedx.json \
+            --type cyclonedx \
+            "${{ env.REGISTRY }}/${{ env.OWNER }}/oh-my-bmad-base@${DIGEST}"
+
       - name: Upload base SBOM as workflow artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
@@ -310,6 +337,22 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           cosign sign --yes "${{ env.REGISTRY }}/${{ env.OWNER }}/oh-my-bmad-${{ matrix.service }}@${DIGEST}"
+
+      # ---------------------------------------------------------------------
+      # Story 8.4 (Phase 2 Epic 8): attach the CycloneDX SBOM as a cosign
+      # attestation per service image. Same pattern + same policy as the
+      # base-job attest step (see comment block above the base step for the
+      # canonical verify-attestation command + ADR-0008 references).
+      # ---------------------------------------------------------------------
+      - name: Cosign attest SBOM (${{ matrix.service }})
+        if: steps.build.outputs.digest != ''
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cosign attest --yes \
+            --predicate sbom-${{ matrix.service }}.cyclonedx.json \
+            --type cyclonedx \
+            "${{ env.REGISTRY }}/${{ env.OWNER }}/oh-my-bmad-${{ matrix.service }}@${DIGEST}"
 
       - name: Upload ${{ matrix.service }} SBOM as workflow artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
