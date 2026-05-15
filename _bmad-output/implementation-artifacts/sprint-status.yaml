@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-15T17:40:00Z
+last_updated: 2026-05-15T18:00:00Z
 current_phase: 2  # Phase 2 opened by ADR-0003 (docs/adr/0003-phase-2-gate.md), 2026-05-15
 
 development_status:
@@ -234,7 +234,7 @@ development_status:
   8-4-attach-sbom-cosign-attestation: done  # phase: 2 · FR55, NFR-S11 · 14 pass-1 findings resolved · runtime VERIFIED on v0.1.0-rc-supply-chain-test-v2 (CycloneDX via cosign v3 OCI 1.1 referrer)
   8-5-just-verify-images-recipe: done  # phase: 2 · FR56a, NFR-S9 · runtime VERIFIED 24/24 cosign verify checks green on v0.1.0-rc-supply-chain-test-v2
   8-6-deployment-signature-rejected-event: done  # phase: 2 · FR56a · 78 tests green + 14 pass-1 findings resolved + pioneers packages/events/types/ pattern (no runtime verification needed — story is event-spine + helper, not workflow)
-  epic-8-retrospective: optional  # recommended — Phase 2's first epic closed; lessons re cosign v2/v3 storage split worth capturing
+  epic-8-retrospective: done  # 2026-05-15 — see epic-8-retro-2026-05-15.md · 4 lessons (L1-L4) + 5 action items + 4 debt items carried forward
 
   # =========================================================================
   # Epic 9: α trace_id propagation kernel (7 stories, ~1 week)
