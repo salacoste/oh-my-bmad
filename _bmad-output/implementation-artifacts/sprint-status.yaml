@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-15T18:30:00Z
+last_updated: 2026-05-16T00:00:00Z
 current_phase: 2  # Phase 2 opened by ADR-0003 (docs/adr/0003-phase-2-gate.md), 2026-05-15
 
 development_status:
@@ -241,11 +241,12 @@ development_status:
   # phase: 2 · clean up pre-existing CI debt before Epic 9 / Epic 11
   # Surfaced 2026-05-15 during Epic 8 retrospective CI status check
   # =========================================================================
-  epic-8-7: backlog  # phase: 2 · CI gate hygiene sweep before Epic 11
-  8-7-1-ruff-format-sweep: backlog  # phase: 2 · 53 files need `ruff format` reflow (test files mostly) — low-risk auto-apply
-  8-7-2-mypy-strict-fix: backlog  # phase: 2 · 58 mypy --strict errors in 16 files (no-untyped-def in tests, SQLAlchemy attr-defined skew on FromClause.insert)
-  8-7-3-check-imports-noqa-markers: backlog  # phase: 2 · 7 IMP001 cross-service violations in test files — likely need `# noqa: IMP001` markers
-  8-7-4-node-24-sha-pins: backlog  # phase: 2 · 6 GHA actions on deprecated Node 20 (deadline 2026-06-02) — bump to Node 24 versions
+  epic-8-7: done  # phase: 2 · CI gate hygiene sweep — all four sub-stories closed 2026-05-16
+  8-7-1-ruff-format-sweep: done  # phase: 2 · 53 files reformatted via `ruff format` (commit 6f1fc3c)
+  8-7-2-mypy-strict-fix: done  # phase: 2 · 58→0 mypy --strict errors across 97 source files (commit 461a01e)
+  8-7-3-check-imports-noqa-markers: done  # phase: 2 · 7 IMP001 cross-service violations annotated (commit f948387)
+  8-7-4-node-24-sha-pins: done  # phase: 2 · 21 GHA action refs bumped to Node 24 versions (commit 8028380)
+  8-7-5-test-isolation-cascade: backlog  # phase: 2 · 11 cross-file collection errors from `secret.accessed` double-registration — Epic 8 retro debt item #3
   epic-8-7-retrospective: optional
 
   # =========================================================================
