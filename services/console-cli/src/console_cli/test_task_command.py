@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import re
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+from typer.testing import CliRunner
 
+from console_cli._test_fixtures import FAKE_TRACE_ID_UUIDV7, UUIDV7_BARE_RE_PATTERN
 from console_cli.adapters.registry_api_client import (
     TASK_ID_PATTERN,
     CreateTaskResponseLocal,
     RegistryAPIClient,
     RegistryResponseError,
 )
+from console_cli.app.main import app
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -158,8 +162,6 @@ class TestCreateTask:
 class TestCreateTaskTraceIdHeader:
     """Verify ``create_task`` propagates ``trace_id`` as ``X-Trace-Id`` header."""
 
-    _FAKE_TRACE_ID = "01917e5c-a7d1-7000-8abc-0123456789ab"
-
     @pytest.mark.asyncio
     async def test_sends_x_trace_id_header_when_provided(self) -> None:
         """AC6 #4 — explicit trace_id reaches the outbound httpx request."""
@@ -177,10 +179,10 @@ class TestCreateTaskTraceIdHeader:
             await client.create_task(
                 title="trace test",
                 idempotency_key="019abcde-f012-7abc-8def-0123456789ab",
-                trace_id=self._FAKE_TRACE_ID,
+                trace_id=FAKE_TRACE_ID_UUIDV7,
             )
         headers = mock_post.call_args[1]["headers"]
-        assert headers["X-Trace-Id"] == self._FAKE_TRACE_ID
+        assert headers["X-Trace-Id"] == FAKE_TRACE_ID_UUIDV7
 
     @pytest.mark.asyncio
     async def test_omits_x_trace_id_header_when_none(self) -> None:
@@ -227,19 +229,106 @@ class TestCreateTaskTraceIdHeader:
         assert "X-Trace-Id" not in headers
 
 
+# ---------------------------------------------------------------------------
+# R11 — per-method X-Trace-Id propagation unit tests for the 3 client methods
+# that lacked dedicated coverage (get_task / get_logs_digest /
+# get_platform_health).
+# ---------------------------------------------------------------------------
+
+
+def _task_body_for_get() -> dict:
+    return {
+        "task_id": _FAKE_TASK_ID,
+        "status": "planning",
+        "title": "trace test",
+        "created_at": "2026-05-05T12:00:00Z",
+        "updated_at": "2026-05-05T12:01:00Z",
+        "actor": {"kind": "operator", "id": "console"},
+        "last_event": None,
+        "next_commands": [],
+    }
+
+
+def _logs_digest_body_for_get() -> dict:
+    return {
+        "task_id": _FAKE_TASK_ID,
+        "digest": "fixture digest",
+        "truncated": False,
+        "line_count": 1,
+    }
+
+
+def _health_body_for_get() -> dict:
+    return {
+        "registry_status": "healthy",
+        "worker_status": "idle",
+        "clawhip_queue_depth": 0,
+        "version": "v0.1.0",
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_task_sends_x_trace_id_header_when_provided() -> None:
+    """R11 — ``get_task`` propagates trace_id as X-Trace-Id."""
+    client = RegistryAPIClient(base_url=_FAKE_BASE_URL)
+    with patch(
+        "httpx.AsyncClient.get",
+        new_callable=AsyncMock,
+        return_value=httpx.Response(
+            200,
+            json=_task_body_for_get(),
+            request=httpx.Request("GET", f"{_FAKE_BASE_URL}/v1/tasks/{_FAKE_TASK_ID}"),
+        ),
+    ) as mock_get:
+        await client.get_task(task_id=_FAKE_TASK_ID, trace_id=FAKE_TRACE_ID_UUIDV7)
+    headers = mock_get.call_args[1]["headers"]
+    assert headers["X-Trace-Id"] == FAKE_TRACE_ID_UUIDV7
+
+
+@pytest.mark.asyncio
+async def test_get_logs_digest_sends_x_trace_id_header_when_provided() -> None:
+    """R11 — ``get_logs_digest`` propagates trace_id as X-Trace-Id."""
+    client = RegistryAPIClient(base_url=_FAKE_BASE_URL)
+    with patch(
+        "httpx.AsyncClient.get",
+        new_callable=AsyncMock,
+        return_value=httpx.Response(
+            200,
+            json=_logs_digest_body_for_get(),
+            request=httpx.Request(
+                "GET",
+                f"{_FAKE_BASE_URL}/v1/tasks/{_FAKE_TASK_ID}/logs/digest",
+            ),
+        ),
+    ) as mock_get:
+        await client.get_logs_digest(task_id=_FAKE_TASK_ID, trace_id=FAKE_TRACE_ID_UUIDV7)
+    headers = mock_get.call_args[1]["headers"]
+    assert headers["X-Trace-Id"] == FAKE_TRACE_ID_UUIDV7
+
+
+@pytest.mark.asyncio
+async def test_get_platform_health_sends_x_trace_id_header_when_provided() -> None:
+    """R11 — ``get_platform_health`` propagates trace_id as X-Trace-Id."""
+    client = RegistryAPIClient(base_url=_FAKE_BASE_URL)
+    with patch(
+        "httpx.AsyncClient.get",
+        new_callable=AsyncMock,
+        return_value=httpx.Response(
+            200,
+            json=_health_body_for_get(),
+            request=httpx.Request("GET", f"{_FAKE_BASE_URL}/v1/health"),
+        ),
+    ) as mock_get:
+        await client.get_platform_health(trace_id=FAKE_TRACE_ID_UUIDV7)
+    headers = mock_get.call_args[1]["headers"]
+    assert headers["X-Trace-Id"] == FAKE_TRACE_ID_UUIDV7
+
+
 class TestTaskCliRunnerTraceIdPropagation:
     """AC9 — end-to-end CliRunner test asserting ``X-Trace-Id`` reaches the wire."""
 
-    _UUIDV7_BARE_RE = r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-
     def test_task_command_propagates_trace_id_to_registry_api(self) -> None:
         """AC9 — ``oh-my-bmad-cli task <title>`` outbound X-Trace-Id is bare UUIDv7."""
-        import re
-
-        from typer.testing import CliRunner
-
-        from console_cli.app.main import app
-
         body = {
             "task_id": _FAKE_TASK_ID,
             "event_id": "e-019abcde-f012-7abc-8def-0123456789ab",
@@ -256,7 +345,7 @@ class TestTaskCliRunnerTraceIdPropagation:
         assert result.exit_code == 0, result.output
         headers = mock_post.call_args[1]["headers"]
         assert "X-Trace-Id" in headers
-        assert re.match(self._UUIDV7_BARE_RE, headers["X-Trace-Id"]), (
+        assert re.match(UUIDV7_BARE_RE_PATTERN, headers["X-Trace-Id"]), (
             f"X-Trace-Id {headers['X-Trace-Id']!r} must be bare UUIDv7"
         )
         # Sanity: X-Request-ID is still set (AC5 — existing semantics unchanged).

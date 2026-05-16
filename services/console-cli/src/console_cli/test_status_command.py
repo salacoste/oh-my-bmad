@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 from typer.testing import CliRunner
 
+from console_cli._test_fixtures import UUIDV7_BARE_RE_PATTERN
 from console_cli.adapters.registry_api_client import (
     RegistryAPIClient,
     RegistryResponseError,
@@ -162,3 +164,53 @@ class TestStatusCommand:
 
         assert result.exit_code == 4
         assert "Error:" in (result.output + (result.stderr or ""))
+
+
+# ---------------------------------------------------------------------------
+# Story 9.4 — X-Trace-Id / X-Request-ID propagation tests (R5 + R7)
+# ---------------------------------------------------------------------------
+
+
+def test_status_command_propagates_x_trace_id_to_registry_api() -> None:
+    """R5 — ``oh-my-bmad-cli status`` mints + forwards bare UUIDv7 trace_id.
+
+    R5: status.py was one of the 4 commands that lacked dedicated CliRunner
+    coverage for X-Trace-Id propagation. This test mirrors the
+    test_task_command equivalent: capture outbound headers, assert the
+    trace_id is a bare UUIDv7 and is distinct from the X-Request-ID.
+    """
+    with patch(
+        "httpx.AsyncClient.get",
+        new_callable=AsyncMock,
+        return_value=_make_get_response(200, _task_response_body()),
+    ) as mock_get:
+        result = runner.invoke(app, ["status", _FAKE_TASK_ID])
+
+    assert result.exit_code == 0, result.output
+    headers = mock_get.call_args[1]["headers"]
+    assert "X-Trace-Id" in headers
+    assert re.match(UUIDV7_BARE_RE_PATTERN, headers["X-Trace-Id"]), headers["X-Trace-Id"]
+    assert "X-Request-ID" in headers
+    assert headers["X-Request-ID"] != headers["X-Trace-Id"]
+
+
+def test_status_command_sends_x_request_id_header() -> None:
+    """R7 — ``status`` now backfills the X-Request-ID header (pre-9.4 it omitted it).
+
+    Story 9.4 closed a pre-existing gap: ``status`` previously called
+    ``RegistryAPIClient.get_task`` without any ``request_id`` argument, so
+    no ``X-Request-ID`` header reached the wire. This test pins the
+    backfilled invariant — registry-api's ``RequestIdMiddleware`` should
+    accept the now-present id as a bare UUIDv7.
+    """
+    with patch(
+        "httpx.AsyncClient.get",
+        new_callable=AsyncMock,
+        return_value=_make_get_response(200, _task_response_body()),
+    ) as mock_get:
+        result = runner.invoke(app, ["status", _FAKE_TASK_ID])
+
+    assert result.exit_code == 0, result.output
+    headers = mock_get.call_args[1]["headers"]
+    assert "X-Request-ID" in headers
+    assert re.match(UUIDV7_BARE_RE_PATTERN, headers["X-Request-ID"]), headers["X-Request-ID"]

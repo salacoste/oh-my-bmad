@@ -4,17 +4,24 @@ from __future__ import annotations
 
 import re
 from dataclasses import FrozenInstanceError
+from datetime import UTC, datetime
+from random import Random
 
 import pytest
+from events.clock import FrozenClock
 from events.envelope import is_valid_trace_id
 
-from console_cli.app.metadata import CommandMetadata, mint_command_metadata
+from console_cli._test_fixtures import FAKE_TRACE_ID_UUIDV7, UUIDV7_BARE_RE_PATTERN
+from console_cli.app.metadata import (
+    CommandMetadata,
+    mint_command_metadata,
+    mint_poll_request_id,
+)
 
 # Bare UUIDv7 regex — must match the (non-`tg:`) branch of is_valid_trace_id.
-# Mirrors AC9's literal pattern verbatim so any drift fails this test.
-_UUIDV7_BARE_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-)
+# Sourced from the shared test-fixtures module (R15) so any drift in the
+# canonical pattern fails ALL tests at once rather than divergently.
+_UUIDV7_BARE_RE = re.compile(UUIDV7_BARE_RE_PATTERN)
 
 
 def test_mint_command_metadata_returns_uuidv7_trace_id() -> None:
@@ -48,9 +55,15 @@ def test_mint_command_metadata_returns_distinct_values_per_call() -> None:
 
 
 def test_command_metadata_is_frozen() -> None:
-    """AC6 — CommandMetadata is a frozen dataclass; mutation raises."""
+    """AC6 — CommandMetadata is a frozen dataclass; mutation raises.
+
+    R4: tighten to ``FrozenInstanceError`` only — accepting ``AttributeError``
+    would silently green-light a refactor that swapped ``frozen=True`` for
+    ``__slots__`` (which raises ``AttributeError`` on attribute set rather
+    than enforcing immutability semantically).
+    """
     metadata = mint_command_metadata()
-    with pytest.raises((FrozenInstanceError, AttributeError)):
+    with pytest.raises(FrozenInstanceError):
         metadata.trace_id = "tampered"  # type: ignore[misc]
 
 
@@ -59,8 +72,42 @@ def test_command_metadata_explicit_construction() -> None:
     metadata = CommandMetadata(
         request_id="r-fixture",
         idempotency_key="ik-fixture",
-        trace_id="01917e5c-a7d1-7000-8abc-0123456789ab",
+        trace_id=FAKE_TRACE_ID_UUIDV7,
     )
     assert metadata.request_id == "r-fixture"
     assert metadata.idempotency_key == "ik-fixture"
-    assert metadata.trace_id == "01917e5c-a7d1-7000-8abc-0123456789ab"
+    assert metadata.trace_id == FAKE_TRACE_ID_UUIDV7
+
+
+def test_mint_command_metadata_deterministic_under_frozen_clock() -> None:
+    """R3 — clock+rng injection produces reproducible identifiers.
+
+    Two calls to ``mint_command_metadata`` with the same ``FrozenClock`` +
+    seeded ``Random`` must return byte-identical triples. This locks the
+    injection contract: future refactors that drop the kwargs will break
+    this test before they reach review.
+    """
+    fixed_now = datetime(2026, 5, 17, 12, 0, 0, tzinfo=UTC)
+    clock_a = FrozenClock(0, now=fixed_now)
+    rng_a = Random(0xC0FFEE)
+    first = mint_command_metadata(clock=clock_a, rng=rng_a)
+
+    clock_b = FrozenClock(0, now=fixed_now)
+    rng_b = Random(0xC0FFEE)
+    second = mint_command_metadata(clock=clock_b, rng=rng_b)
+
+    assert first.request_id == second.request_id
+    assert first.idempotency_key == second.idempotency_key
+    assert first.trace_id == second.trace_id
+    # Shape sanity — the deterministic value still validates as bare UUIDv7.
+    assert _UUIDV7_BARE_RE.match(first.trace_id), first.trace_id
+
+
+def test_mint_poll_request_id_deterministic_under_frozen_clock() -> None:
+    """R9 — the per-poll helper accepts the same clock/rng injection contract."""
+    fixed_now = datetime(2026, 5, 17, 12, 0, 0, tzinfo=UTC)
+    seed = 0xBADCAFE
+    first = mint_poll_request_id(clock=FrozenClock(0, now=fixed_now), rng=Random(seed))
+    second = mint_poll_request_id(clock=FrozenClock(0, now=fixed_now), rng=Random(seed))
+    assert first == second
+    assert _UUIDV7_BARE_RE.match(first), first

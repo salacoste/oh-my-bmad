@@ -66,7 +66,8 @@ In `services/console-cli/src/console_cli/adapters/registry_api_client.py`, exten
 - `get_task` (GET /v1/tasks/{id})
 - `get_logs_digest` (GET /v1/tasks/{id}/logs/digest)
 - `submit_decision` (POST /v1/tasks/{id}/decisions)
-- `get_events` / `stream_events` (GET /v1/tasks/{id}/events)
+- `get_task_events` (GET /v1/tasks/{id}/events) — R18: real method name is `get_task_events`; spec earlier wording referenced `get_events`/`stream_events` placeholders that never materialised
+- `get_platform_health` (GET /v1/health)
 - Any other methods discovered by `grep "async def " services/console-cli/src/console_cli/adapters/registry_api_client.py`
 
 Add `trace_id: str | None = None` parameter (consistent with the existing `request_id: str | None = None` convention). Inside each method, after constructing the headers dict:
@@ -323,6 +324,7 @@ If you find yourself editing `events.envelope.py`, registry-api routes, the sche
 | Pass-2 reviewers historically catch tautological tests (Story 9.3 P5/P11). Make sure the X-Trace-Id assertions actually inspect the OUTBOUND request, not just the input arg. | AC6 #4-#11 explicitly says "capture the outbound httpx request" — use `pytest_httpx`'s `httpx_mock.get_requests()` or similar. |
 | Empty-string `trace_id` from a future caller (e.g., env var with whitespace) should NOT set the header. | AC3 + Q9 pattern: `if trace_id is not None and trace_id != "":`. |
 | `agent.py` may be a Typer subcommand group (not a single function) — different shape than `task.py`. | Handle the subcommand-group case in AC2 by adding the mint call to each leaf subcommand, OR add a Typer callback at the group level. Verify during dev. |
+| **R6 — Idempotency replay trace_id divergence**: second invocation of the same command mints a fresh `trace_id` (B). If registry-api's idempotency cache returns a cached response (from the original invocation whose `trace_id` was A), the persisted envelope carries A ≠ B. An operator running `oh-my-bmad-cli trace B` (Story 9.7) will find zero events for the replay call. | Documented in `mint_command_metadata()` docstring and in `CommandMetadata` class docstring. Story 9.7's `/trace` query should support an `--idempotency-key` lookup mode OR `--include-idempotency-replay` flag as a sibling path. Tracked as Epic 9 follow-up; Story 9.4 owns documentation only. |
 
 ---
 
@@ -394,11 +396,17 @@ Steady — no measurable local drop. This is **the expected SHAPE** per AC7's ca
 3. **No `# noqa: IMP001`** on the `from events import …` / `from events.ids import new_uuid7` lines in `metadata.py` — the existing console-cli command modules already use unsuppressed `from events import …` (services → packages is allowed by `scripts/check_imports.py`), and adding noqa would produce inconsistent style. The spec sketch (line 233-234) showed the suppression but the codebase's actual rule does not require it.
 4. **Empty-string filter on `events.py --follow`** — the trace_id passed into `_poll_events` is always non-empty (minted by `mint_command_metadata()`), so the `if trace_id != "":` guard is defensive belt-and-braces. Kept for symmetry with the `RegistryAPIClient` boundary.
 
+### AC10 — `oh-my-bmad-cli trace <id>` deferred to Story 9.7
+
+Story 9.4 deliberately does NOT implement the `oh-my-bmad-cli trace <trace-id>` operator query subcommand. That command requires the `events.trace_id` ORM column (schema bump to 1.1.0) and a materializer backfill — both owned by Story 9.7. Story 9.4 closes the **inbound** side of the contract: every console command now mints and forwards a `trace_id`, so the event spine will carry the value. Story 9.7 closes the **outbound** query side. Reviewers should not flag AC10 as missing from this story.
+
+See "Follow-up TODOs" below and the Out-of-scope risk flags table's R6 row for the idempotency-replay caveat that Story 9.7's query must handle.
+
 ### Follow-up TODOs surfaced for Epic 9
 
 - **Story 9.5 (MCP `caller_trace_id`)**: same shape applies — MCP server adapter should accept optional `caller_trace_id` parameter and propagate downstream. Reuse `mint_command_metadata()`'s pattern.
 - **Story 9.6 (worker-wrapper `--trace-id` CLI flag)**: same shape — accept flag, default to `new_uuid7()` if missing, thread through outbound calls.
-- **Story 9.7 (`oh-my-bmad-cli trace <trace-id>` operator query)**: now unblocked — every console-originated command emits an event with a trace_id; the `trace` subcommand can filter on `events.trace_id` once the schema column lands.
+- **Story 9.7 (`oh-my-bmad-cli trace <trace-id>` operator query)**: now unblocked — every console-originated command emits an event with a trace_id; the `trace` subcommand can filter on `events.trace_id` once the schema column lands. NOTE: Story 9.7's query must handle the idempotency-replay divergence documented in the R6 risk flag — a second call's `trace_id` won't match the cached envelope's; Story 9.7 should support `--idempotency-key` lookup as a fallback.
 - **CI scope expansion gate**: keep `services/console-cli` OUT of the `mypy --strict packages/ services/registry-api services/registry-state` baseline as planned. 97-source-files baseline preserved.
 
 ---
@@ -428,3 +436,32 @@ created: 2026-05-16
 created_by: bmad-create-story skill
 ---
 ```
+
+---
+
+## Review Findings
+
+### Pass-1 review (adversarial 3-lane) — 2026-05-17
+
+Three-lane review (Blind Hunter / Edge Case Hunter / Acceptance Auditor) surfaced 18 unique findings. All 18 applied in a single follow-up commit (`fix(story-9.4): pass-1 review — 18 patches batch-applied`). Resolution table below.
+
+| ID | Severity | Lane | Finding | Resolution |
+|---|---|---|---|---|
+| R1 | HIGH | Blind+Edge | Type-unsafe `X-Trace-Id` guard (`!= ""` allows `bytes`/`int 0`/`list` through). 6 sites in `RegistryAPIClient` + 1 in `events.py`. | Tightened all 7 sites to `isinstance(trace_id, str) and trace_id`. |
+| R2 | HIGH | Blind+Edge | `_poll_events(trace_id: str)` filter was `if trace_id != "":`; inconsistent with R1 tightening. No entry assertion. | Updated filter to match R1 idiom; added `assert trace_id, "..."` at function entry; documented per-command semantic in docstring. |
+| R3 | HIGH | Blind+Edge | `mint_command_metadata()` had no clock/RNG injection — tests needing determinism must monkey-patch at the wrong layer. | Added `clock: Clock | None = None` + `rng: Random | None = None` kwargs; threads through to all three `new_*` calls. Added deterministic test `test_mint_command_metadata_deterministic_under_frozen_clock`. |
+| R4 | HIGH | Blind+Edge | `test_command_metadata_is_frozen` accepted `(FrozenInstanceError, AttributeError)` — would silently green-light a future `__slots__` refactor. | Tightened to `pytest.raises(FrozenInstanceError)` only. |
+| R5 | HIGH | Edge | `status.py`, `logs.py`, `agent.py`, `ping.py` had zero `X-Trace-Id` CliRunner integration tests. | Added 4 CliRunner tests (one per command file) asserting `X-Trace-Id` is bare UUIDv7 and distinct from `X-Request-ID`. |
+| R6 | HIGH | Edge | Idempotency replay `trace_id` correlation gap — a retry's `trace_id` (B) won't match the cached envelope's `trace_id` (A); Story 9.7 operator search finds zero events for B. | Documented in `mint_command_metadata()` and `CommandMetadata` docstrings; added row to Out-of-scope risk flags table; noted Story 9.7 must add `--idempotency-key` lookup mode. |
+| R7 | HIGH | Blind+Edge | `status.py`/`logs.py` backfill (pre-9.4 omitted `X-Request-ID`) had no regression tests. | Added `test_status_command_sends_x_request_id_header` and `test_logs_command_sends_x_request_id_header` asserting bare-UUIDv7 shape. |
+| R8 | MED | Blind | `test_approve_command_propagates_x_trace_id` only asserted shape; didn't check that X-Request-ID, Idempotency-Key, X-Trace-Id are three distinct values. | Added pairwise distinct-mint assertion to the approve CliRunner test. |
+| R9 | MED | Blind | `_poll_events` built `X-Request-ID` inline (`_new_request_id()` imported locally), bypassing the centralised helper. | Extracted `mint_poll_request_id()` in `app/metadata.py`; `events.py` now imports + calls it. |
+| R10 | MED | Blind | `CommandMetadata` had no documented validation contract — silent about whether it validates values. | Added explicit prose to class docstring: transport-only carrier, no `__post_init__` validation, callers going through `mint_command_metadata()` get shape by construction. |
+| R11 | MED | Auditor | `get_task`, `get_logs_digest`, `get_platform_health` had no per-method `X-Trace-Id` unit tests at the `RegistryAPIClient` boundary. | Added 3 `@pytest.mark.asyncio` unit tests in `test_task_command.py`. |
+| R12 | LOW | Blind | Agent CliRunner test missing (duplicate of R5). | Resolved by R5. |
+| R13 | LOW | Blind | `"X-Trace-Id"` / `"X-Request-ID"` magic strings duplicated across 6+1 sites. | Added module-level `TRACE_ID_HEADER` / `REQUEST_ID_HEADER` constants in `registry_api_client.py` (public, exported in `__all__`); all 6 client sites and `events.py` use the constants. |
+| R14 | LOW | Blind | Inline `import re`, `from typer.testing import CliRunner`, `from console_cli.app.main import app` inside test methods in `test_decision_commands.py`, `test_task_command.py`, `test_ping_command.py`, `test_agent_command.py`. | Promoted all to module-top imports in all 4 files. |
+| R15 | LOW | Blind | `"01917e5c-a7d1-7000-8abc-0123456789ab"` literal duplicated across 3 test files; UUIDv7 regex duplicated across 2 test files. | Created `console_cli/_test_fixtures.py` with `FAKE_TRACE_ID_UUIDV7` and `UUIDV7_BARE_RE_PATTERN` constants; all 5 duplicate sites updated to import from it. |
+| R16 | LOW | Edge | `_poll_events` retry-loop per-poll `request_id` minting lacked comment explaining the per-poll vs per-command semantics asymmetry. | Added inline comment block and updated function docstring. |
+| R17 | LOW | Auditor | AC10 deferment was only a Follow-up TODO bullet in Dev Agent Record, not a dedicated subheading. | Added `### AC10 — ... deferred to Story 9.7` subheading with explanatory paragraph above the Follow-up TODOs section. |
+| R18 | LOW | Auditor | Spec AC3 method list referenced `get_events`/`stream_events` (placeholder names that never materialised); real method is `get_task_events`. | Updated AC3 to list `get_task_events` with the corrected method name and a note. |

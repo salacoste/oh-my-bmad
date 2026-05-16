@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
+from console_cli._test_fixtures import FAKE_TRACE_ID_UUIDV7
 from console_cli.adapters.registry_api_client import (
     RegistryAPIClient,
     TaskEventsResponseLocal,
@@ -313,9 +314,6 @@ def test_events_follow_cursor_uses_since() -> None:
 # ---------------------------------------------------------------------------
 
 
-_FAKE_TRACE_ID = "01917e5c-a7d1-7000-8abc-0123456789ab"
-
-
 @pytest.mark.asyncio
 async def test_get_task_events_sends_x_trace_id_header_when_provided() -> None:
     """AC6 #10 — get_task_events propagates explicit trace_id as X-Trace-Id."""
@@ -325,9 +323,9 @@ async def test_get_task_events_sends_x_trace_id_header_when_provided() -> None:
         new_callable=AsyncMock,
         return_value=_mock_events_200(),
     ) as mock_get:
-        await client.get_task_events(task_id=_VALID_TASK_ID, trace_id=_FAKE_TRACE_ID)
+        await client.get_task_events(task_id=_VALID_TASK_ID, trace_id=FAKE_TRACE_ID_UUIDV7)
     headers = mock_get.call_args[1]["headers"]
-    assert headers["X-Trace-Id"] == _FAKE_TRACE_ID
+    assert headers["X-Trace-Id"] == FAKE_TRACE_ID_UUIDV7
 
 
 @pytest.mark.asyncio

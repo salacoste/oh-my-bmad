@@ -10,19 +10,45 @@ a future identifier joins the triple, only this helper changes.
 
 The `trace_id` is a **bare UUIDv7** per Story 9.1's shape contract. The
 ``tg:<update_id>`` form is reserved for the Telegram ingress (Story 9.3).
+
+Idempotency replay caveat
+-------------------------
+Every invocation of ``mint_command_metadata`` returns fresh identifiers.
+If registry-api's idempotency cache (Story 6.4) returns a cached response
+for a duplicate request (same ``Idempotency-Key``), the persisted envelope's
+``trace_id`` reflects the **original** invocation, not the current retry.
+An operator searching by the retry's ``trace_id`` via Story 9.7's
+``oh-my-bmad-cli trace <id>`` query will find zero events for the replayed
+call; the lookup must fall back to the shared ``idempotency_key``.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from random import Random
+from typing import TYPE_CHECKING
 
 from events import new_idempotency_key, new_request_id
 from events.ids import new_uuid7
+
+if TYPE_CHECKING:
+    from events.clock import Clock
 
 
 @dataclass(frozen=True)
 class CommandMetadata:
     """Per-invocation correlation identifiers minted at command entry.
+
+    Validation contract
+    -------------------
+    ``CommandMetadata`` is a **transport-only carrier with no value
+    validation**. Callers that construct it via :func:`mint_command_metadata`
+    receive bare-UUIDv7 strings validated by construction; tests that
+    instantiate the dataclass directly are responsible for shape
+    conformance themselves. Runtime validation in ``__post_init__``
+    would add overhead to every command invocation, so the design
+    accepts the trade-off: production callsites always go through the
+    helper, and the helper is the single source of truth for shape.
 
     Attributes:
         request_id: Per-call request correlation id (UUIDv7), forwarded
@@ -39,18 +65,57 @@ class CommandMetadata:
     trace_id: str
 
 
-def mint_command_metadata() -> CommandMetadata:
+def mint_command_metadata(
+    *,
+    clock: Clock | None = None,
+    rng: Random | None = None,
+) -> CommandMetadata:
     """Mint a fresh ``(request_id, idempotency_key, trace_id)`` triple.
 
     Called once per command invocation by every console-cli command module.
     All three fields are independent bare-UUIDv7 strings; the ``trace_id``
     validates against the UUIDv7 branch of ``events.envelope.is_valid_trace_id``.
+
+    Args:
+        clock: Optional ``Clock`` to inject for deterministic minting
+            (e.g. ``FrozenClock`` in tests). When ``None``, the default
+            wall clock is used.
+        rng: Optional ``random.Random`` instance to inject for deterministic
+            byte generation. When ``None``, the default RNG is used.
+
+    Idempotency caveat:
+        If registry-api dedupes a duplicate write via the
+        ``Idempotency-Key`` cache, the persisted envelope's ``trace_id``
+        reflects the **original** invocation, not the current retry.
+        Story 9.7's ``oh-my-bmad-cli trace`` query should fall back to
+        ``idempotency_key`` lookup when reconciling retried events.
     """
     return CommandMetadata(
-        request_id=new_request_id(),
-        idempotency_key=new_idempotency_key(),
-        trace_id=new_uuid7(),
+        request_id=new_request_id(clock=clock, rng=rng),
+        idempotency_key=new_idempotency_key(clock=clock, rng=rng),
+        trace_id=new_uuid7(clock=clock, rng=rng),
     )
 
 
-__all__ = ["CommandMetadata", "mint_command_metadata"]
+def mint_poll_request_id(
+    *,
+    clock: Clock | None = None,
+    rng: Random | None = None,
+) -> str:
+    """Mint a fresh ``request_id`` for a per-iteration poll within a command.
+
+    Separate from :func:`mint_command_metadata` — the polling loop in
+    ``events.py --follow`` reuses the parent ``trace_id`` (per-command
+    correlation) but mints a fresh ``request_id`` per HTTP attempt
+    (per-call correlation). Splitting this off keeps the mint surface
+    centralised here so future identifiers joining the per-poll triple
+    don't require touching command modules.
+
+    Args:
+        clock: Optional ``Clock`` for deterministic minting.
+        rng: Optional ``random.Random`` for deterministic minting.
+    """
+    return new_request_id(clock=clock, rng=rng)
+
+
+__all__ = ["CommandMetadata", "mint_command_metadata", "mint_poll_request_id"]

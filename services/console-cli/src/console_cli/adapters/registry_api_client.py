@@ -29,6 +29,14 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 # Default timeout for CLI HTTP calls — prevents indefinite hangs on stalled connections.
 _DEFAULT_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 
+# Header names — exported as module-level constants so callers (notably
+# ``console_cli.commands.events._poll_events``, which constructs its own
+# ``httpx.AsyncClient`` rather than going through this client class) can
+# reuse the literal strings without duplicating magic strings. Public-API
+# (no leading underscore) because they cross the module boundary.
+REQUEST_ID_HEADER = "X-Request-ID"
+TRACE_ID_HEADER = "X-Trace-Id"
+
 # TASK_ID_PATTERN — local definition (cannot import from telegram-gateway).
 # Validates the "t-<uuidv7>" task-id format per architecture naming rules.
 TASK_ID_PATTERN: re.Pattern[str] = re.compile(
@@ -177,9 +185,12 @@ class RegistryAPIClient:
             "X-Actor-Id": actor_id,
         }
         if request_id is not None:
-            headers["X-Request-ID"] = request_id
-        if trace_id is not None and trace_id != "":
-            headers["X-Trace-Id"] = trace_id
+            headers[REQUEST_ID_HEADER] = request_id
+        # R1: type-safe guard — accept ``str`` truthy values only.
+        # Rejects ``bytes``, ``int``, ``list``, ``None``, "" before httpx
+        # raises TypeError at request time.
+        if isinstance(trace_id, str) and trace_id:
+            headers[TRACE_ID_HEADER] = trace_id
 
         body: dict[str, str] = {"title": title}
         if repo is not None:
@@ -230,9 +241,9 @@ class RegistryAPIClient:
 
         headers: dict[str, str] = {}
         if request_id is not None:
-            headers["X-Request-ID"] = request_id
-        if trace_id is not None and trace_id != "":
-            headers["X-Trace-Id"] = trace_id
+            headers[REQUEST_ID_HEADER] = request_id
+        if isinstance(trace_id, str) and trace_id:
+            headers[TRACE_ID_HEADER] = trace_id
 
         async with httpx.AsyncClient(base_url=self._base_url, timeout=_DEFAULT_TIMEOUT) as client:
             response = await client.get(f"/v1/tasks/{task_id}", headers=headers)
@@ -268,9 +279,9 @@ class RegistryAPIClient:
 
         headers: dict[str, str] = {}
         if request_id is not None:
-            headers["X-Request-ID"] = request_id
-        if trace_id is not None and trace_id != "":
-            headers["X-Trace-Id"] = trace_id
+            headers[REQUEST_ID_HEADER] = request_id
+        if isinstance(trace_id, str) and trace_id:
+            headers[TRACE_ID_HEADER] = trace_id
 
         async with httpx.AsyncClient(base_url=self._base_url, timeout=_DEFAULT_TIMEOUT) as client:
             response = await client.get(f"/v1/tasks/{task_id}/logs/digest", headers=headers)
@@ -313,9 +324,9 @@ class RegistryAPIClient:
             "X-Actor-Id": actor_id,
         }
         if request_id is not None:
-            headers["X-Request-ID"] = request_id
-        if trace_id is not None and trace_id != "":
-            headers["X-Trace-Id"] = trace_id
+            headers[REQUEST_ID_HEADER] = request_id
+        if isinstance(trace_id, str) and trace_id:
+            headers[TRACE_ID_HEADER] = trace_id
 
         body: dict[str, str] = {"action": action}
         if hint is not None:
@@ -369,9 +380,9 @@ class RegistryAPIClient:
         """
         headers: dict[str, str] = {}
         if request_id is not None:
-            headers["X-Request-ID"] = request_id
-        if trace_id is not None and trace_id != "":
-            headers["X-Trace-Id"] = trace_id
+            headers[REQUEST_ID_HEADER] = request_id
+        if isinstance(trace_id, str) and trace_id:
+            headers[TRACE_ID_HEADER] = trace_id
 
         async with httpx.AsyncClient(base_url=self._base_url, timeout=_DEFAULT_TIMEOUT) as client:
             response = await client.get("/v1/health", headers=headers)
@@ -410,9 +421,9 @@ class RegistryAPIClient:
 
         headers: dict[str, str] = {}
         if request_id is not None:
-            headers["X-Request-ID"] = request_id
-        if trace_id is not None and trace_id != "":
-            headers["X-Trace-Id"] = trace_id
+            headers[REQUEST_ID_HEADER] = request_id
+        if isinstance(trace_id, str) and trace_id:
+            headers[TRACE_ID_HEADER] = trace_id
 
         async with httpx.AsyncClient(base_url=self._base_url, timeout=_DEFAULT_TIMEOUT) as client:
             response = await client.get(
@@ -444,5 +455,7 @@ __all__ = [
     "LastEventLocal",
     "RegistryAPIClient",
     "RegistryResponseError",
+    "REQUEST_ID_HEADER",
     "TASK_ID_PATTERN",
+    "TRACE_ID_HEADER",
 ]

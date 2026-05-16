@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import re
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+from typer.testing import CliRunner
 
+from console_cli._test_fixtures import FAKE_TRACE_ID_UUIDV7, UUIDV7_BARE_RE_PATTERN
 from console_cli.adapters.registry_api_client import (
     DecisionResponseLocal,
     RegistryAPIClient,
     RegistryResponseError,
 )
+from console_cli.app.main import app
 
 _VALID_TASK_ID = "t-0192a1b5-1234-7abc-89de-f0123456789a"
 _DECISION_RESPONSE_BODY = {
@@ -385,9 +389,6 @@ def test_retry_command_task_not_found() -> None:
 # ---------------------------------------------------------------------------
 
 
-_FAKE_TRACE_ID = "01917e5c-a7d1-7000-8abc-0123456789ab"
-
-
 @pytest.mark.asyncio
 async def test_submit_decision_sends_x_trace_id_header_when_provided() -> None:
     """AC6 #7 — explicit trace_id propagates to outbound POST decisions."""
@@ -401,10 +402,10 @@ async def test_submit_decision_sends_x_trace_id_header_when_provided() -> None:
             task_id=_VALID_TASK_ID,
             action="approve",
             idempotency_key="ik-123",
-            trace_id=_FAKE_TRACE_ID,
+            trace_id=FAKE_TRACE_ID_UUIDV7,
         )
     headers = mock_post.call_args[1]["headers"]
-    assert headers["X-Trace-Id"] == _FAKE_TRACE_ID
+    assert headers["X-Trace-Id"] == FAKE_TRACE_ID_UUIDV7
 
 
 @pytest.mark.asyncio
@@ -446,13 +447,12 @@ async def test_submit_decision_omits_x_trace_id_header_when_empty_string() -> No
 
 
 def test_approve_command_propagates_x_trace_id_to_outbound_request() -> None:
-    """End-to-end CliRunner — ``approve`` mints + forwards bare UUIDv7 trace_id."""
-    import re
+    """End-to-end CliRunner — ``approve`` mints + forwards bare UUIDv7 trace_id.
 
-    from typer.testing import CliRunner
-
-    from console_cli.app.main import app
-
+    R8: also asserts the three distinct mints (X-Request-ID, Idempotency-Key,
+    X-Trace-Id) are pairwise distinct values — defends against a regression
+    where a single id is accidentally reused across all three headers.
+    """
     runner = CliRunner()
     with patch(
         "httpx.AsyncClient.post",
@@ -463,5 +463,10 @@ def test_approve_command_propagates_x_trace_id_to_outbound_request() -> None:
     assert result.exit_code == 0
     headers = mock_post.call_args[1]["headers"]
     assert "X-Trace-Id" in headers
-    uuidv7_bare_re = r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-    assert re.match(uuidv7_bare_re, headers["X-Trace-Id"]), headers["X-Trace-Id"]
+    assert re.match(UUIDV7_BARE_RE_PATTERN, headers["X-Trace-Id"]), headers["X-Trace-Id"]
+    # R8 — distinct-mint sanity (mirrors test_task_command's invariant).
+    assert "X-Request-ID" in headers
+    assert "Idempotency-Key" in headers
+    assert headers["X-Request-ID"] != headers["X-Trace-Id"]
+    assert headers["X-Request-ID"] != headers["Idempotency-Key"]
+    assert headers["Idempotency-Key"] != headers["X-Trace-Id"]

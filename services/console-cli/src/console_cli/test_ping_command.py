@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import re
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+from typer.testing import CliRunner
 
+from console_cli._test_fixtures import UUIDV7_BARE_RE_PATTERN
 from console_cli.adapters.registry_api_client import (
     HealthResponseLocal,
     RegistryAPIClient,
     RegistryResponseError,
 )
+from console_cli.app.main import app
 
 _HEALTH_RESPONSE_BODY = {
     "registry_status": "healthy",
@@ -126,10 +130,6 @@ async def test_get_platform_health_ignores_extra_fields() -> None:
 
 
 def test_ping_command_success() -> None:
-    from typer.testing import CliRunner
-
-    from console_cli.app.main import app
-
     runner = CliRunner()
     with patch(
         "httpx.AsyncClient.get",
@@ -146,10 +146,6 @@ def test_ping_command_success() -> None:
 
 
 def test_ping_command_network_error() -> None:
-    from typer.testing import CliRunner
-
-    from console_cli.app.main import app
-
     runner = CliRunner()
     with patch(
         "httpx.AsyncClient.get",
@@ -162,10 +158,6 @@ def test_ping_command_network_error() -> None:
 
 
 def test_ping_command_http_error() -> None:
-    from typer.testing import CliRunner
-
-    from console_cli.app.main import app
-
     runner = CliRunner()
     with patch(
         "httpx.AsyncClient.get",
@@ -174,3 +166,26 @@ def test_ping_command_http_error() -> None:
     ):
         result = runner.invoke(app, ["ping"])
     assert result.exit_code != 0
+
+
+# ---------------------------------------------------------------------------
+# Story 9.4 — X-Trace-Id propagation test (R5)
+# ---------------------------------------------------------------------------
+
+
+def test_ping_command_propagates_x_trace_id_to_registry_api() -> None:
+    """R5 — ``oh-my-bmad-cli ping`` mints + forwards bare UUIDv7 trace_id."""
+    runner = CliRunner()
+    with patch(
+        "httpx.AsyncClient.get",
+        new_callable=AsyncMock,
+        return_value=_mock_health_200(),
+    ) as mock_get:
+        result = runner.invoke(app, ["ping"])
+
+    assert result.exit_code == 0, result.output
+    headers = mock_get.call_args[1]["headers"]
+    assert "X-Trace-Id" in headers
+    assert re.match(UUIDV7_BARE_RE_PATTERN, headers["X-Trace-Id"]), headers["X-Trace-Id"]
+    assert "X-Request-ID" in headers
+    assert headers["X-Request-ID"] != headers["X-Trace-Id"]

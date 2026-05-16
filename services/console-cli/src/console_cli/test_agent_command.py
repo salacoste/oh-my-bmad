@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from unittest.mock import AsyncMock, patch
 
 import httpx
+from typer.testing import CliRunner
+
+from console_cli._test_fixtures import UUIDV7_BARE_RE_PATTERN
+from console_cli.app.main import app
 
 _VALID_TASK_ID = "t-0192a1b5-1234-7abc-89de-f0123456789a"
 
@@ -45,10 +50,6 @@ def _mock_task_error(
 
 
 def test_agent_command_success() -> None:
-    from typer.testing import CliRunner
-
-    from console_cli.app.main import app
-
     runner = CliRunner()
     with patch(
         "httpx.AsyncClient.get",
@@ -62,10 +63,6 @@ def test_agent_command_success() -> None:
 
 
 def test_agent_command_invalid_task_id() -> None:
-    from typer.testing import CliRunner
-
-    from console_cli.app.main import app
-
     runner = CliRunner()
     result = runner.invoke(app, ["agent", "bad-id"])
     assert result.exit_code != 0
@@ -73,10 +70,6 @@ def test_agent_command_invalid_task_id() -> None:
 
 
 def test_agent_command_task_not_found() -> None:
-    from typer.testing import CliRunner
-
-    from console_cli.app.main import app
-
     runner = CliRunner()
     with patch(
         "httpx.AsyncClient.get",
@@ -89,10 +82,6 @@ def test_agent_command_task_not_found() -> None:
 
 
 def test_agent_command_network_error() -> None:
-    from typer.testing import CliRunner
-
-    from console_cli.app.main import app
-
     runner = CliRunner()
     with patch(
         "httpx.AsyncClient.get",
@@ -105,10 +94,6 @@ def test_agent_command_network_error() -> None:
 
 
 def test_agent_command_malformed_body() -> None:
-    from typer.testing import CliRunner
-
-    from console_cli.app.main import app
-
     runner = CliRunner()
     with patch(
         "httpx.AsyncClient.get",
@@ -117,3 +102,26 @@ def test_agent_command_malformed_body() -> None:
     ):
         result = runner.invoke(app, ["agent", _VALID_TASK_ID])
     assert result.exit_code != 0
+
+
+# ---------------------------------------------------------------------------
+# Story 9.4 — X-Trace-Id propagation test (R5)
+# ---------------------------------------------------------------------------
+
+
+def test_agent_command_propagates_x_trace_id_to_registry_api() -> None:
+    """R5 — ``oh-my-bmad-cli agent`` mints + forwards bare UUIDv7 trace_id."""
+    runner = CliRunner()
+    with patch(
+        "httpx.AsyncClient.get",
+        new_callable=AsyncMock,
+        return_value=_mock_task_200(),
+    ) as mock_get:
+        result = runner.invoke(app, ["agent", _VALID_TASK_ID])
+
+    assert result.exit_code == 0, result.output
+    headers = mock_get.call_args[1]["headers"]
+    assert "X-Trace-Id" in headers
+    assert re.match(UUIDV7_BARE_RE_PATTERN, headers["X-Trace-Id"]), headers["X-Trace-Id"]
+    assert "X-Request-ID" in headers
+    assert headers["X-Request-ID"] != headers["X-Trace-Id"]

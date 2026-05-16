@@ -11,12 +11,14 @@ import typer
 
 from console_cli.adapters.error_renderer import render_http_error
 from console_cli.adapters.registry_api_client import (
+    REQUEST_ID_HEADER,
     TASK_ID_PATTERN,
+    TRACE_ID_HEADER,
     RegistryAPIClient,
     RegistryResponseError,
 )
 from console_cli.app.config import ConsoleSettings
-from console_cli.app.metadata import mint_command_metadata
+from console_cli.app.metadata import mint_command_metadata, mint_poll_request_id
 from console_cli.app.runner import run_async
 
 _POLL_INTERVAL = 0.5
@@ -36,14 +38,30 @@ async def _poll_events(task_id: str, trace_id: str) -> None:
     """Long-lived polling loop for --follow mode.
 
     Uses a single AsyncClient for the polling duration to avoid
-    creating a new TCP connection every 0.5 s. ``trace_id`` is the
-    per-invocation bare-UUIDv7 minted by ``mint_command_metadata`` —
-    constant across all polls of a single follow session.
+    creating a new TCP connection every 0.5 s.
+
+    Per-command vs. per-poll semantics:
+
+    * ``trace_id`` is the **per-command** bare-UUIDv7 minted once by
+      ``mint_command_metadata`` and reused across every poll of a
+      single ``--follow`` session. Operators correlating by trace_id
+      find **all** retry attempts of the same command.
+    * ``X-Request-ID`` is minted **per HTTP attempt** via
+      ``mint_poll_request_id``. Operators correlating by request_id
+      find a single attempt.
+
+    The trace_id parameter is required and must be non-empty — the
+    sole caller (``events()``) always passes
+    ``mint_command_metadata().trace_id`` which is a freshly minted
+    bare UUIDv7.
     """
+    # R2: per-command trace_id must be present at function entry.
+    # ``mint_command_metadata()`` always returns a non-empty UUIDv7;
+    # any empty value here would indicate caller misuse.
+    assert trace_id, "_poll_events requires non-empty trace_id"
+
     settings = ConsoleSettings()
     base_url = settings.registry_api_base_url
-
-    from events import new_request_id as _new_request_id
 
     since: str | None = None
     retries = 0
@@ -57,9 +75,16 @@ async def _poll_events(task_id: str, trace_id: str) -> None:
             if since is not None:
                 params["since"] = since
 
-            headers: dict[str, str] = {"X-Request-ID": _new_request_id()}
-            if trace_id != "":
-                headers["X-Trace-Id"] = trace_id
+            # R16: each retry iteration mints a fresh request_id
+            # (per-HTTP-attempt correlation), while trace_id is
+            # preserved across retries (per-command correlation).
+            # Intentional asymmetry — see function docstring.
+            headers: dict[str, str] = {REQUEST_ID_HEADER: mint_poll_request_id()}
+            # R1/R2: type-safe guard mirrors RegistryAPIClient. The
+            # assert above already rules out empty/None for the documented
+            # contract; this is defense-in-depth at the httpx boundary.
+            if isinstance(trace_id, str) and trace_id:
+                headers[TRACE_ID_HEADER] = trace_id
 
             try:
                 response = await client.get(
