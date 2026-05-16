@@ -572,8 +572,8 @@ async def get_task_by_id(
         )
         worktree_lock = WorktreeLockOut(
             held=lock_held,
-            by_session_id=latest_session.id if lock_held else None,
-            acquired_at=latest_session.started_at if lock_held else None,
+            by_session_id=latest_session.id if lock_held else None,  # type: ignore[union-attr]  # None case unreachable; FastAPI dependency guarantees presence
+            acquired_at=latest_session.started_at if lock_held else None,  # type: ignore[union-attr]  # None case unreachable; FastAPI dependency guarantees presence
         )
 
         commands = _next_commands_for(task.status)

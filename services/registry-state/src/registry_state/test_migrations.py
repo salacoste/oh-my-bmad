@@ -38,9 +38,10 @@ _EXPECTED_INDEXES = frozenset(
         "ix_tasks_status_updated_at",
     ]
 )
-# Story 7.5.2: bumped to 0003 (session compound index replaced ix_sessions_task_id).
-# The expected head revision tracks the latest migration version.
-_REVISION = "0003"
+# Tracks the latest alembic head revision. Bump when a new migration is added.
+# History: 0001 initial → 0002 task thread binding → 0003 session compound index
+# → 0004 add task state columns (Story 8.x).
+_REVISION = "0004"
 _INI_PATH = str(Path(__file__).parent.parent.parent / "alembic.ini")
 
 

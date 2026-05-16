@@ -2241,6 +2241,6 @@ async def test_compound_index_exists(
     db_session: AsyncSession,
 ) -> None:
     """Story 7.5.2 AC-2: compound index ix_sessions_task_id_status exists in metadata."""
-    index_names = {idx.name for idx in SessionRow.__table__.indexes}
+    index_names = {idx.name for idx in SessionRow.__table__.indexes}  # type: ignore[attr-defined]  # SQLAlchemy stubs return FromClause; Table.__table__ resolves at runtime
     assert "ix_sessions_task_id_status" in index_names
     assert "ix_sessions_task_id" not in index_names

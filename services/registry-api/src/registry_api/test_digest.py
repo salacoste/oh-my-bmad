@@ -64,7 +64,7 @@ async def _seed_task_and_events(
 
         now = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
         await conn.execute(
-            Task.__table__.insert(),
+            Task.__table__.insert(),  # type: ignore[attr-defined]  # SQLAlchemy stubs return FromClause; Table.__table__ resolves at runtime
             {
                 "id": task_id,
                 "status": "blocked",
@@ -88,7 +88,7 @@ async def _seed_task_and_events(
                 }
             )
             await conn.execute(
-                Event.__table__.insert(),
+                Event.__table__.insert(),  # type: ignore[attr-defined]  # SQLAlchemy stubs return FromClause; Table.__table__ resolves at runtime
                 {
                     "id": eid,
                     "type": ("task.blocker_raised" if i % 5 == 0 else "file.edited"),
@@ -107,7 +107,7 @@ async def _seed_task_and_events(
 
         # Update task last_event_id
         await conn.execute(
-            Task.__table__.update()
+            Task.__table__.update()  # type: ignore[attr-defined]  # SQLAlchemy stubs return FromClause; Table.__table__ resolves at runtime
             .where(Task.__table__.c.id == task_id)
             .values(last_event_id=event_ids[-1])
         )
@@ -123,7 +123,7 @@ async def _seed_task_only(db_url: str, task_id: str) -> None:
         await conn.run_sync(Base.metadata.create_all)
         now = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
         await conn.execute(
-            Task.__table__.insert(),
+            Task.__table__.insert(),  # type: ignore[attr-defined]  # SQLAlchemy stubs return FromClause; Table.__table__ resolves at runtime
             {
                 "id": task_id,
                 "status": "pending",
@@ -142,7 +142,7 @@ async def _seed_task_only(db_url: str, task_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_mock_anthropic_client(response_text: str = "Line 1\nLine 2\nLine 3"):
+def _make_mock_anthropic_client(response_text: str = "Line 1\nLine 2\nLine 3") -> AsyncMock:
     """Build a mock AsyncAnthropic that returns canned text."""
     mock_client = AsyncMock()
 
@@ -157,7 +157,7 @@ def _make_mock_anthropic_client(response_text: str = "Line 1\nLine 2\nLine 3"):
     return mock_client
 
 
-def _make_failing_anthropic_client():
+def _make_failing_anthropic_client() -> AsyncMock:
     """Build a mock AsyncAnthropic that raises APIError."""
     import anthropic
 
@@ -468,26 +468,26 @@ class TestMalformedTimestampSentinel:
     """AC-2: malformed ISO timestamps produce [invalid-timestamp]."""
 
     @pytest.fixture()
-    def _ev(self):
+    def _ev(self) -> type:
         from registry_api.adapters.llm_digest import EventRow
 
         return EventRow
 
-    def test_format_event_empty_timestamp(self, _ev) -> None:
+    def test_format_event_empty_timestamp(self, _ev: type) -> None:
         from registry_api.adapters.llm_digest import _format_event
 
         ev = _ev(type="task.blocker_raised", emitted_at_iso="", payload_json="{}")
         result = _format_event(ev)
         assert result.startswith("[invalid-timestamp]")
 
-    def test_format_event_truncated_timestamp(self, _ev) -> None:
+    def test_format_event_truncated_timestamp(self, _ev: type) -> None:
         from registry_api.adapters.llm_digest import _format_event
 
         ev = _ev(type="task.blocker_raised", emitted_at_iso="2026-01-01T10", payload_json="{}")
         result = _format_event(ev)
         assert result.startswith("[invalid-timestamp]")
 
-    def test_format_event_valid_timestamp(self, _ev) -> None:
+    def test_format_event_valid_timestamp(self, _ev: type) -> None:
         from registry_api.adapters.llm_digest import _format_event
 
         ev = _ev(

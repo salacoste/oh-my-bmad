@@ -4,6 +4,7 @@ scanner, batch scanner, and CLI entrypoint (Story 6.9, FR40)."""
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,7 +24,7 @@ from .license_scan import (
 # ---------------------------------------------------------------------------
 
 
-def _patch_scancode(mock_get: MagicMock):
+def _patch_scancode(mock_get: MagicMock) -> Any:
     """Return a patch.dict that injects a mock scancode.api.get_licenses."""
     modules = {
         "scancode": MagicMock(),
@@ -222,7 +223,7 @@ class TestScanFileLicenses:
     def test_no_license_passes(self, tmp_path: Path) -> None:
         clean = tmp_path / "clean.py"
         clean.write_text("x = 1\n", encoding="utf-8")
-        mock_result = {
+        mock_result: dict[str, Any] = {
             "detected_license_expression": None,
             "license_detections": [],
             "license_clues": [],
@@ -383,7 +384,7 @@ class TestScanFilesForLicenses:
         gpl = tmp_path / "gpl.py"
         gpl.write_text("# GPL\n", encoding="utf-8")
 
-        def mock_get_licenses(location: str) -> dict:
+        def mock_get_licenses(location: str) -> dict[str, Any]:
             if "gpl" in location:
                 return {
                     "detected_license_expression": "gpl-2.0",

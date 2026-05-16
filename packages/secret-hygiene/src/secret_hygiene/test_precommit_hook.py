@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -421,7 +422,7 @@ class TestCommitMsgMain:
 # ---------------------------------------------------------------------------
 
 
-def _patch_scancode(mock_get: MagicMock):
+def _patch_scancode(mock_get: MagicMock) -> Any:
     """Return a patch.dict that injects a mock scancode.api.get_licenses."""
     modules = {
         "scancode": MagicMock(),
@@ -476,7 +477,7 @@ class TestLicenseScanInHook:
     ) -> None:
         clean = tmp_path / "clean.py"
         clean.write_text("x = 1\n", encoding="utf-8")
-        mock_result = {
+        mock_result: dict[str, Any] = {
             "detected_license_expression": None,
             "license_detections": [],
             "license_clues": [],

@@ -70,7 +70,7 @@ async def _seed_tables_with_tasks(db_url: str) -> None:
             {"id": _TID_PENDING, "status": "pending", "title": "Pending task", **op},
         ]
         for row in task_rows:
-            await conn.execute(Task.__table__.insert(), row)
+            await conn.execute(Task.__table__.insert(), row)  # type: ignore[attr-defined]  # SQLAlchemy stubs return FromClause; Table.__table__ resolves at runtime
     await engine.dispose()
 
 
@@ -311,7 +311,7 @@ async def _seed_license_flagged_event(db_url: str, task_id: str) -> None:
     engine = create_engine(db_url)
     async with engine.begin() as conn:
         await conn.execute(
-            Event.__table__.insert(),
+            Event.__table__.insert(),  # type: ignore[attr-defined]  # SQLAlchemy stubs return FromClause; Table.__table__ resolves at runtime
             {
                 "id": "e-license-flag-000000000000000000",
                 "type": "task.license_flagged",
@@ -463,7 +463,7 @@ async def _seed_budget_exceeded_event(db_url: str, task_id: str) -> None:
     engine = create_engine(db_url)
     async with engine.begin() as conn:
         await conn.execute(
-            Event.__table__.insert(),
+            Event.__table__.insert(),  # type: ignore[attr-defined]  # SQLAlchemy stubs return FromClause; Table.__table__ resolves at runtime
             {
                 "id": "e-budget-exceeded-0000000000000000",
                 "type": "task.budget_exceeded",
@@ -611,7 +611,7 @@ async def _seed_dual_flags(db_url: str, task_id: str) -> None:
     engine = create_engine(db_url)
     async with engine.begin() as conn:
         await conn.execute(
-            Event.__table__.insert(),
+            Event.__table__.insert(),  # type: ignore[attr-defined]  # SQLAlchemy stubs return FromClause; Table.__table__ resolves at runtime
             {
                 "id": "e-dual-license-00000000000000000",
                 "type": "task.license_flagged",
@@ -635,7 +635,7 @@ async def _seed_dual_flags(db_url: str, task_id: str) -> None:
             },
         )
         await conn.execute(
-            Event.__table__.insert(),
+            Event.__table__.insert(),  # type: ignore[attr-defined]  # SQLAlchemy stubs return FromClause; Table.__table__ resolves at runtime
             {
                 "id": "e-dual-budget-00000000000000000",
                 "type": "task.budget_exceeded",

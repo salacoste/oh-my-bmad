@@ -63,7 +63,7 @@ async def _seed_task_and_events(
 
         now = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
         await conn.execute(
-            Task.__table__.insert(),
+            Task.__table__.insert(),  # type: ignore[attr-defined]  # SQLAlchemy stubs return FromClause; Table.__table__ resolves at runtime
             {
                 "id": task_id,
                 "status": "blocked",
@@ -88,7 +88,7 @@ async def _seed_task_and_events(
                 }
             )
             await conn.execute(
-                Event.__table__.insert(),
+                Event.__table__.insert(),  # type: ignore[attr-defined]  # SQLAlchemy stubs return FromClause; Table.__table__ resolves at runtime
                 {
                     "id": eid,
                     "type": ("task.blocker_raised" if i % 5 == 0 else "file.edited"),
@@ -107,7 +107,7 @@ async def _seed_task_and_events(
 
         # Update task last_event_id
         await conn.execute(
-            Task.__table__.update()
+            Task.__table__.update()  # type: ignore[attr-defined]  # SQLAlchemy stubs return FromClause; Table.__table__ resolves at runtime
             .where(Task.__table__.c.id == task_id)
             .values(last_event_id=event_ids[-1])
         )
@@ -123,7 +123,7 @@ async def _seed_task_only(db_url: str, task_id: str) -> None:
         await conn.run_sync(Base.metadata.create_all)
         now = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
         await conn.execute(
-            Task.__table__.insert(),
+            Task.__table__.insert(),  # type: ignore[attr-defined]  # SQLAlchemy stubs return FromClause; Table.__table__ resolves at runtime
             {
                 "id": task_id,
                 "status": "pending",
@@ -319,7 +319,7 @@ class TestSameTimestampOrdering:
             await conn.run_sync(Base.metadata.create_all)
             now = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
             await conn.execute(
-                Task.__table__.insert(),
+                Task.__table__.insert(),  # type: ignore[attr-defined]  # SQLAlchemy stubs return FromClause; Table.__table__ resolves at runtime
                 {
                     "id": _TID,
                     "status": "blocked",
@@ -334,7 +334,7 @@ class TestSameTimestampOrdering:
             for i in range(2):
                 eid = f"e-00000000000{i}-0000-7000-8000-00000000000{i}"
                 await conn.execute(
-                    Event.__table__.insert(),
+                    Event.__table__.insert(),  # type: ignore[attr-defined]  # SQLAlchemy stubs return FromClause; Table.__table__ resolves at runtime
                     {
                         "id": eid,
                         "type": "file.edited",
@@ -351,7 +351,7 @@ class TestSameTimestampOrdering:
                     },
                 )
             await conn.execute(
-                Task.__table__.update()
+                Task.__table__.update()  # type: ignore[attr-defined]  # SQLAlchemy stubs return FromClause; Table.__table__ resolves at runtime
                 .where(Task.__table__.c.id == _TID)
                 .values(last_event_id="e-000000000001-0000-7000-8000-000000000001")
             )
@@ -497,7 +497,7 @@ class TestCorruptPayloadDefense:
             await conn.run_sync(Base.metadata.create_all)
             now = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
             await conn.execute(
-                Task.__table__.insert(),
+                Task.__table__.insert(),  # type: ignore[attr-defined]  # SQLAlchemy stubs return FromClause; Table.__table__ resolves at runtime
                 {
                     "id": _TID,
                     "status": "blocked",
@@ -510,7 +510,7 @@ class TestCorruptPayloadDefense:
             )
             eid = "e-000000000000-0000-7000-8000-000000000099"
             await conn.execute(
-                Event.__table__.insert(),
+                Event.__table__.insert(),  # type: ignore[attr-defined]  # SQLAlchemy stubs return FromClause; Table.__table__ resolves at runtime
                 {
                     "id": eid,
                     "type": "file.edited",
@@ -527,7 +527,7 @@ class TestCorruptPayloadDefense:
                 },
             )
             await conn.execute(
-                Task.__table__.update().where(Task.__table__.c.id == _TID).values(last_event_id=eid)
+                Task.__table__.update().where(Task.__table__.c.id == _TID).values(last_event_id=eid)  # type: ignore[attr-defined]  # SQLAlchemy stubs return FromClause; Table.__table__ resolves at runtime
             )
         await engine.dispose()
 

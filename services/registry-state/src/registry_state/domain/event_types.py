@@ -87,6 +87,7 @@ __all__ = [
     "TaskCreatedPayload",
     "TaskExecutionResumedPayload",
     "TaskExecutionStartedPayload",
+    "TaskLicenseFlaggedPayload",
     "TaskPlanReadyPayload",
     "TaskPlanningStartedPayload",
     "TaskRetryRequestedPayload",

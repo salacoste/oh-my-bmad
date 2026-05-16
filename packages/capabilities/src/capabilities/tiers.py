@@ -120,6 +120,8 @@ async def check_tier_with_approval(
         raise ValueError("approval_lookup is required for Tier-3 actions")
     check_tier(action, caller, required_tier, has_approval=True)
     if required_tier >= Tier.THREE:
+        # Guarded above: required_tier >= Tier.THREE => approval_lookup is not None
+        assert approval_lookup is not None  # noqa: S101 — type narrowing for mypy --strict
         task_id = caller.task_id or ""
         approved = await approval_lookup(task_id, action)
         if not approved:
@@ -130,3 +132,13 @@ async def check_tier_with_approval(
                 reason=_no_approval_reason(required_tier, action),
             )
     return CapabilityOk(action=action, caller=caller, tier=required_tier)
+
+
+__all__ = [
+    "CallerContext",
+    "CapabilityDenied",
+    "CapabilityOk",
+    "Tier",
+    "check_tier",
+    "check_tier_with_approval",
+]

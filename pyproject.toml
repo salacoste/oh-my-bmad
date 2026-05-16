@@ -92,6 +92,8 @@ norecursedirs = [
     ".opencode",
     ".pi",
     ".omc",
-    # Fixture payloads for CI-gate check scripts — not pytest tests.
+    # Fixture payloads for CI-gate check scripts -- not pytest tests.
     "scripts/checks/fixtures",
 ]
+# NOTE: mypy configuration lives in mypy.ini at repo root (canonical).
+# scancode.* import suppression is configured there via [mypy-scancode.*].

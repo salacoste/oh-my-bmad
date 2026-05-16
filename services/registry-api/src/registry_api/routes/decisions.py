@@ -34,7 +34,7 @@ from idempotency import IdempotencyCacheStore
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from registry_state.schema import Event, Task  # noqa: IMP001 — services→services allowed per AC-16
 from sqlalchemy import desc, select
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from registry_api.adapters.errors import ProblemDetails
 from registry_api.lifecycle import ACTION_VALID_STATES
@@ -102,7 +102,7 @@ class DecisionResponse(BaseModel):
 
 async def _check_license_gate(
     task_id: str,
-    session_maker: async_sessionmaker,
+    session_maker: async_sessionmaker[AsyncSession],
 ) -> bool:
     """Return True if a ``task.license_flagged`` event exists for this task.
 
@@ -137,7 +137,7 @@ async def _check_license_gate(
 
 async def _check_budget_gate(
     task_id: str,
-    session_maker: async_sessionmaker,
+    session_maker: async_sessionmaker[AsyncSession],
 ) -> bool:
     """Return True if a ``task.budget_exceeded`` event exists for this task.
 

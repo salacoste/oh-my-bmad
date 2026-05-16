@@ -19,10 +19,10 @@ from capabilities import (
 
 class TestTier:
     def test_values(self) -> None:
-        assert Tier.ZERO == 0
-        assert Tier.ONE == 1
-        assert Tier.TWO == 2
-        assert Tier.THREE == 3
+        assert Tier.ZERO == 0  # type: ignore[comparison-overlap]  # IntEnum value equals its int at runtime
+        assert Tier.ONE == 1  # type: ignore[comparison-overlap]  # IntEnum value equals its int at runtime
+        assert Tier.TWO == 2  # type: ignore[comparison-overlap]  # IntEnum value equals its int at runtime
+        assert Tier.THREE == 3  # type: ignore[comparison-overlap]  # IntEnum value equals its int at runtime
 
     def test_ordering(self) -> None:
         assert Tier.ZERO < Tier.ONE < Tier.TWO < Tier.THREE
@@ -54,7 +54,7 @@ class TestCallerContext:
 
     @pytest.mark.parametrize("kind", ["operator", "orchestrator", "worker", "system", "clawhip"])
     def test_valid_actor_kinds(self, kind: str) -> None:
-        ctx = CallerContext(actor_kind=kind, actor_id="id")
+        ctx = CallerContext(actor_kind=kind, actor_id="id")  # type: ignore[arg-type]  # str narrowed to Literal at runtime by CallerContext validator
         assert ctx.actor_kind == kind
 
 
@@ -98,7 +98,7 @@ class TestCheckTierAuthorized:
         ids=[f"{a}-T{t.value}" for a, t in _AUTHORIZED],
     )
     def test_returns_ok(self, actor_kind: str, required_tier: Tier) -> None:
-        caller = CallerContext(actor_kind=actor_kind, actor_id="id-1", task_id="t-1")
+        caller = CallerContext(actor_kind=actor_kind, actor_id="id-1", task_id="t-1")  # type: ignore[arg-type]  # str narrowed to Literal at runtime by CallerContext validator
         result = check_tier("test_action", caller, required_tier, has_approval=True)
         assert isinstance(result, CapabilityOk)
         assert result.action == "test_action"
@@ -113,7 +113,7 @@ class TestCheckTierDenied:
         ids=[f"{a}-T{t.value}" for a, t in _DENIED],
     )
     def test_raises_denied(self, actor_kind: str, required_tier: Tier) -> None:
-        caller = CallerContext(actor_kind=actor_kind, actor_id="id-1")
+        caller = CallerContext(actor_kind=actor_kind, actor_id="id-1")  # type: ignore[arg-type]  # str narrowed to Literal at runtime by CallerContext validator
         with pytest.raises(CapabilityDenied) as exc_info:
             check_tier("git_push", caller, required_tier)
         err = exc_info.value
@@ -134,7 +134,7 @@ class TestCheckTierDenied:
 
 class TestCheckTierBoundary:
     def test_unknown_actor_kind_raises_denied(self) -> None:
-        caller = CallerContext(actor_kind="bogus", actor_id="x")
+        caller = CallerContext(actor_kind="bogus", actor_id="x")  # type: ignore[arg-type]  # str narrowed to Literal at runtime by CallerContext validator
         with pytest.raises(CapabilityDenied, match="unknown actor_kind"):
             check_tier("test_action", caller, Tier.ONE)
 

@@ -220,7 +220,9 @@ def scan_file_licenses(
 
     # Lazy import — scancode-toolkit is optional.
     try:
-        from scancode.api import get_licenses  # type: ignore[import-untyped]
+        # scancode-toolkit is an OPTIONAL runtime dep; ImportError caught below.
+        # Module-level ignore in pyproject.toml [[tool.mypy.overrides]] for scancode.*
+        from scancode.api import get_licenses
     except ImportError:
         print(
             "warning: secret-hygiene: scancode-toolkit not installed; license scan skipped",

@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Path, Query, Request
 from registry_state.schema import (  # noqa: IMP001 — services→services allowed per AC-16
@@ -28,7 +29,7 @@ _log = logging.getLogger("registry_api.routes.events")
 router = APIRouter()
 
 
-def _row_to_envelope(row: Event) -> dict:
+def _row_to_envelope(row: Event) -> dict[str, Any]:
     """Map an Event ORM row to an envelope dict matching the wire contract."""
     try:
         payload = json.loads(row.payload_json)
@@ -64,7 +65,7 @@ async def get_task_events(
         description="Cursor: emitted_at_monotonic_ns of last event from previous page",
     ),  # noqa: B008
     limit: int = Query(100, ge=1, le=1000),  # noqa: B008
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """GET /v1/tasks/{task_id}/events — raw typed event stream (FR6).
 
     Returns a JSON array of event envelope objects ordered by
