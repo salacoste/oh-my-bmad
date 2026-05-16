@@ -164,7 +164,15 @@ def is_valid_trace_id(value: str) -> bool:
       - bare UUIDv7 (e.g. ``01917e5c-a7d1-7000-8abc-...``)
       - Telegram-derived form ``tg:<update_id>`` where update_id is a positive
         decimal integer in ``[1, 2**63 − 1]`` with no leading zeros.
+
+    Story 9.2 pass-2 review N13: defensive ``isinstance(value, str)`` guard
+    so future downstream callers (Stories 9.3-9.6 — MCP / worker / console)
+    that may pass user-decoded ``bytes`` or numeric values get ``False``
+    instead of a ``TypeError`` from ``_UUIDV7_BARE_RE.match()``. This matches
+    the ``parse_prefix`` defensive non-str gate in ``events.ids``.
     """
+    if not isinstance(value, str):
+        return False
     if _UUIDV7_BARE_RE.match(value):
         return True
     m = _TRACE_ID_TELEGRAM_RE.match(value)

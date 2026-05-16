@@ -25,8 +25,15 @@ from events.clock import Clock
 
 _UNIX_EPOCH: datetime = datetime(1970, 1, 1, tzinfo=UTC)
 _ONE_MILLISECOND: timedelta = timedelta(milliseconds=1)
+# Story 9.2 pass-2 review N4 (mirror-update L2 discipline): anchors
+# tightened from ``^...$`` to ``\A...\Z`` to close the same trailing-newline
+# bypass class as Story 9.1 F1 (envelope-side) and Story 9.2 B3
+# (telegram-gateway ``_keys.py``). Python's ``re.match`` only anchors start;
+# ``$`` matches before a trailing ``\n`` so a hostile value of
+# ``t-<valid-uuid>\n<garbage>`` could previously pass ``parse_prefix``.
+# ``\A``/``\Z`` anchor strictly to the absolute start/end of the input.
 _UUIDV7_BARE_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    r"\A[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z"
 )
 
 

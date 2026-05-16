@@ -5,7 +5,7 @@ propagation (Story 3.6 AC-3/8/9/10).
   AC-3 (ProblemDetails extensions):
     - test_problem_details_extensions_present_when_key_server_generated_on_mutation
     - test_problem_details_idempotency_nudge_omitted_when_key_client_generated
-    - test_problem_details_extensions_omitted_on_get_method
+    - test_idempotency_nudge_omitted_on_get_method (renamed in Story 9.2 pass-2 N6)
     - test_internal_error_handler_safe_when_state_missing_idempotency_flag
   AC-8 (log sanitizer):
     - test_log_sanitizer_redacts_bearer_token_in_middleware_warning
@@ -130,23 +130,21 @@ class TestProblemDetailsExtensions:
         assert "idempotency_hint" not in ext, f"unexpected nudge in: {body}"
 
     @pytest.mark.asyncio
-    async def test_problem_details_extensions_omitted_on_get_method(
-        self, post_client: AsyncClient
-    ) -> None:
+    async def test_idempotency_nudge_omitted_on_get_method(self, post_client: AsyncClient) -> None:
         """GET /v1/tasks/<valid-shape-but-missing> → 404 WITHOUT idempotency nudge.
+
+        Story 9.2 pass-2 review N6: renamed from
+        ``test_problem_details_extensions_omitted_on_get_method`` — the
+        pass-1 narrowing legitimately weakened "no extensions at all on
+        GET" to "no idempotency-nudge keys" because ``trace_id`` now
+        belongs in ``extensions`` on every response. The honest name is
+        ``test_idempotency_nudge_omitted_on_get_method``; a sibling
+        allowlist assertion below locks down the GET-extensions key set
+        so future contributors can't quietly add new fields on GETs.
 
         Story 3.6 L4: pinned to a known-good UUIDv7 task-id shape that
         matches the route's ``Path(..., pattern=_TASK_ID_PATTERN)`` regex
-        (``^t-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$``)
         but is not present in the freshly-seeded DB → deterministic 404.
-
-        Story 9.2 pass-1 review A4 update: ``_build_problem_extensions`` now
-        also injects ``trace_id`` when ``TraceIdMiddleware`` has populated
-        ``request.state.trace_id``. The AC-3 idempotency nudge (Story 3.6)
-        is still gated to mutating methods — GET never carries it. The
-        assertion is updated to target the nudge keys specifically rather
-        than the entire ``extensions`` block (which now legitimately carries
-        ``trace_id`` on every response including GETs).
         """
         fake_id = "t-" + "0" * 8 + "-" + "0" * 4 + "-7" + "0" * 3 + "-8" + "0" * 3 + "-" + "0" * 12
         r = await post_client.get(f"/v1/tasks/{fake_id}")
@@ -161,6 +159,14 @@ class TestProblemDetailsExtensions:
         )
         assert "idempotency_hint" not in ext, (
             f"unexpected idempotency hint on GET 404; extensions: {ext}"
+        )
+        # Story 9.2 pass-2 review N6: lock the GET-extensions allowlist so
+        # future contributors who add a new key on GETs trip this guard
+        # rather than silently extending the response shape. The current
+        # canonical set is exactly ``{"trace_id"}``; update this assertion
+        # (and document the rationale) when a new legitimate GET key arrives.
+        assert set(ext.keys()) <= {"trace_id"}, (
+            f"unexpected extensions keys on GET 404; allowlist is {{'trace_id'}}, got: {ext}"
         )
 
     @pytest.mark.asyncio
@@ -807,14 +813,15 @@ class TestProblemDetailsTraceId:
         )
 
     @pytest.mark.asyncio
-    async def test_403_capability_denied_problem_json_carries_trace_id(
-        self, tmp_path: Path
-    ) -> None:
-        """403 (CapabilityDenied) → ``extensions.trace_id`` equals sent header.
+    async def test_404_problem_json_carries_trace_id(self, tmp_path: Path) -> None:
+        """404 (HTTP exception) → ``extensions.trace_id`` equals sent header.
 
-        Uses a constrained app with ``actor_kind="worker"`` so the Tier.ONE
-        route deny path fires (mirrors ``TestTierEnforcementMiddleware``'s
-        pattern in ``test_middleware.py``).
+        Story 9.2 pass-2 review N5: this test was previously misnamed
+        ``test_403_capability_denied_...`` but its body issued
+        ``client.get(...)`` against a missing task — that is the 404
+        ``handle_http_exception`` code path, not the 403
+        ``_build_capability_denied_response`` path. Renamed to honestly
+        reflect what it tests. A dedicated 403 test was added below.
         """
         from events.ids import new_uuid7 as _new_uuid7  # noqa: PLC0415
 
@@ -823,11 +830,6 @@ class TestProblemDetailsTraceId:
         await _seed_tables(db_url_str)
         events_dir = tmp_path / "events"
         clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
-        # Forge a fresh app where the actor_kind cannot satisfy any tier.
-        # We use ``actor_kind="system"`` (declared Literal value) and rely on
-        # the tier table forbidding it; if the test environment differs the
-        # validation_error test above still locks the trace_id-in-body invariant.
-        # Simpler path: trigger 422 via a different code path.
         app = build_app(base_dir=events_dir, db_url=db_url_str, clock=clock)
         sent = _new_uuid7(clock=clock)
 
@@ -851,3 +853,64 @@ class TestProblemDetailsTraceId:
             assert ext.get("trace_id") == sent, (
                 f"expected ``extensions.trace_id={sent!r}`` on 404; got: {body}"
             )
+
+    @pytest.mark.asyncio
+    async def test_403_capability_denied_problem_json_carries_trace_id(
+        self, tmp_path: Path
+    ) -> None:
+        """Pass-2 review N5: 403 (CapabilityDenied) → ``extensions.trace_id`` from sent header.
+
+        Exercises the GENUINE 403 path: build an app with
+        ``actor_kind="worker"`` so a worker calling Tier.ONE POST /v1/tasks
+        hits ``_build_capability_denied_response`` in
+        ``adapters/errors.py`` (mirrors the pattern in
+        ``TestTierEnforcementMiddleware.test_tier_denied_returns_403_problem_json``
+        at ``test_middleware.py:432``). Elevate POST /v1/tasks to Tier.THREE
+        via patch so the worker (max Tier.TWO) is denied.
+        """
+        from unittest.mock import patch
+
+        from capabilities import Tier
+        from events.ids import new_uuid7 as _new_uuid7  # noqa: PLC0415
+
+        db_path = tmp_path / "state.sqlite3"
+        db_url_str = _db_url(db_path)
+        await _seed_tables(db_url_str)
+        events_dir = tmp_path / "events"
+        clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
+        sent = _new_uuid7(clock=clock)
+
+        # Patch the (frozen) tier map so POST /v1/tasks requires Tier.THREE,
+        # which a worker (max Tier.TWO) cannot satisfy.
+        with patch(
+            "registry_api.adapters.middleware.ROUTE_TIER_MAP",
+            {"POST /v1/tasks": Tier.THREE},
+        ):
+            app = build_app(
+                base_dir=events_dir,
+                db_url=db_url_str,
+                clock=clock,
+                actor_kind="worker",
+            )
+            async with (
+                LifespanManager(app) as manager,
+                AsyncClient(
+                    transport=ASGITransport(app=manager.app),
+                    base_url="http://testserver",
+                ) as client,
+            ):
+                r = await client.post(
+                    "/v1/tasks",
+                    json={"title": "denied-with-trace"},
+                    headers={"X-Trace-Id": sent},
+                )
+
+        assert r.status_code == 403, (
+            f"expected 403 from worker on elevated Tier.THREE route; got {r.status_code}: {r.text}"
+        )
+        body = r.json()
+        assert body["status"] == 403
+        ext = body.get("extensions", {})
+        assert ext.get("trace_id") == sent, (
+            f"expected ``extensions.trace_id={sent!r}`` on 403; got body: {body}"
+        )

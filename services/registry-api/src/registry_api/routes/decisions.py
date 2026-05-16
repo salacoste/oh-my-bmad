@@ -187,11 +187,20 @@ async def post_decision(
     response_body_cache: ResponseSlotCache = app.state.idempotency_response_cache
 
     request_id: str = request.state.request_id
-    # Story 9.2 pass-1 review A2: defensive ``getattr`` mirrors the pattern
-    # already used for ``actor_id`` so a misconfigured middleware stack
-    # cannot crash the handler with ``AttributeError`` before producing a
-    # diagnostic envelope.
-    trace_id: str = getattr(request.state, "trace_id", new_uuid7(clock=clock))
+    # Story 9.2 pass-2 review N1: explicit conditional avoids Python's eager
+    # default-arg evaluation in ``getattr(obj, name, default)`` — the prior
+    # ``getattr(request.state, "trace_id", new_uuid7(clock=clock))`` would
+    # mint a fresh UUID on EVERY request even when ``trace_id`` was already
+    # set (wasted work + clock churn). It also silently masked the genuine
+    # bug class "TraceIdMiddleware accidentally omitted from build_app".
+    # We now emit an ERROR log when the fallback fires so the misconfig is
+    # surfaced loudly instead of being papered over.
+    trace_id_val = getattr(request.state, "trace_id", None)
+    if trace_id_val is None:
+        log.error("TraceIdMiddleware missing from stack — minting standalone trace_id")
+        trace_id: str = new_uuid7(clock=clock)
+    else:
+        trace_id = trace_id_val
     # Phase 1: actor_id hardcoded by middleware. TODO(Story 6.1+): enforce
     # ownership/role before allowing decision on task.
     actor_id: str = getattr(request.state, "actor_id", "http-api")

@@ -163,7 +163,7 @@ No new deps.
 
 | File | Change |
 |---|---|
-| `services/registry-api/src/registry_api/adapters/middleware.py` | Add `TraceIdMiddleware` class + optional `_validate_trace_id` module helper. Update `__all__`. Update docstring at `:38-46`. |
+| `services/registry-api/src/registry_api/adapters/middleware.py` | Add `TraceIdMiddleware` class; use public `is_valid_trace_id` from `events.envelope` (promoted in pass-1 A1 — pass-2 review N16 corrected this row from the pre-promotion description). Update `__all__`. Update docstring at `:38-46`. |
 | `services/registry-api/src/registry_api/app.py` | Add `app.add_middleware(TraceIdMiddleware, clock=clock)` line 250 (after `RequestIdMiddleware`). Update the comment block above the middleware stack. |
 | `services/registry-api/src/registry_api/routes/tasks.py` | Add `trace_id=request.state.trace_id` to every `EventEnvelope.create(...)` callsite (lines ~405, ~436 + others). |
 | `services/registry-api/src/registry_api/routes/decisions.py` | Add `trace_id=request.state.trace_id` to every `EventEnvelope.create(...)` callsite (lines ~276, ~304, ~353, ~379). |
@@ -377,13 +377,13 @@ The headline drop is smaller than the spec's "~10-15" estimate because pytest's 
 
 2. **Spec said 4 callsites in `decisions.py`; actual count is 3.** The "task.stop_requested / task.retry_requested" mentions in spec line 75 are *event types* dispatched dynamically by `_build_event(...)` from inside the same `EventEnvelope.create(...)` call at line 268 — they share an envelope-construction site. So the actual `EventEnvelope.create(...)` count in `decisions.py` is 3 (base + license override + budget override), all wired.
 
-3. **Pre-existing `.gitignore` modification observed in `git status` (`marketing/` exclusion).** Not from Story 9.2 — left untouched.
+3. **Pre-existing `.gitignore` modification observed in `git status` (`marketing/` exclusion).** Not from Story 9.2 — left untouched. *(Pass-2 review N10: this entry landed in the pass-1 commit via scope drift — revert not worth it; documented here for the record.)*
 
 4. **`_state_probe` debug endpoint extension is more than the spec mandated** — it now returns `structlog_trace_id` (live `get_merged_contextvars()` value inside the handler) in addition to `request.state.trace_id`. This is necessary to satisfy AC6 #8 (the structlog binding assertion) without needing a separate probe endpoint or `caplog`-based capture; mirrors the existing pattern for the request_id structlog tests but consolidates the bind-during-request observation into a single probe.
 
 ### Follow-up TODOs surfaced for Epic 9
 
-- **Story 9.3 (telegram-gateway):** `AllowlistMiddleware` needs the parallel structlog-bind + `request.state.trace_id` plumbing. The `_is_valid_trace_id` helper currently lives in `registry_api.adapters.middleware`; consider promoting it to `events.envelope` as a public `validate_trace_id_shape(value)` helper before Story 9.3 lands so we don't end up with two copies (registry-api + telegram-gateway). Spec AC2's "Alternative" option becomes more attractive once a second ingress shows up.
+- **Story 9.3 (telegram-gateway):** `AllowlistMiddleware` needs the parallel structlog-bind + `request.state.trace_id` plumbing. The promotion of `is_valid_trace_id` to `events.envelope` (pass-1 A1) already gives 9.3 a single source of truth — no local copy needed. *(Pass-2 review N16: the original wording here described `_is_valid_trace_id` as living in `registry_api.adapters.middleware`, which was true before pass-1 A1 promoted it. Updated to reflect the post-A1 state.)*
 - **Story 9.4 (console CLI):** same `validate-or-mint` discipline but at process-start (no HTTP). The CLI should read `X-Trace-Id` (or `OMB_TRACE_ID` env var) and bind structlog once at top of `cli.main`.
 - **Story 9.5 (MCP tool handlers):** the MCP transport doesn't have HTTP headers; the structlog bind needs to happen per-tool-invocation. Consider a `with trace_scope(trace_id):` context manager exported from `events.contextvars`.
 - **Story 9.6 (worker subprocess):** spawn-side propagation via env var or CLI flag; receive-side bind in `worker_wrapper.main`.
@@ -407,7 +407,7 @@ All 19 `patch` findings resolved in a single follow-up commit on top of `047e3d7
 |---|---|---|---|---|---|
 | A1 | HIGH | BH#1 + ECH#3 + AA AC2 | Promote validator + regex to public `events.envelope` helper | `is_valid_trace_id()` + `TRACE_ID_TELEGRAM_RE` + `INT64_MAX_UPDATE_ID` added to `envelope.py` + `__all__`; `middleware.py` local symbols removed; imports consolidated. | `envelope.py`, `middleware.py` |
 | A2 | HIGH | BH#2 | Defensive `request.state.trace_id` access in routes | `trace_id = getattr(request.state, "trace_id", new_uuid7(clock=clock))` in `tasks.py` + `decisions.py`; `new_uuid7` import added to both. | `tasks.py`, `decisions.py` |
-| A3 | HIGH | ECH#1 | Echo `X-Trace-Id` on 5xx + 422 error responses | Investigation confirmed Starlette's `ExceptionMiddleware` synthesises 500 from caught exceptions and returns to `call_next` normally — existing structure already echoes correctly. Added regression tests `test_trace_id_echoed_on_500_error_response` + `test_trace_id_echoed_on_422_validation_error_response` to pin the behaviour. | `test_middleware.py` |
+| A3 | HIGH | ECH#1 | Echo `X-Trace-Id` on error responses — dual contract | Investigation revealed Starlette's `BaseHTTPMiddleware.call_next` RE-RAISES from handlers on raw 500s, so the echo line after `await call_next` never executes on that path — `X-Trace-Id` is NOT echoed on raw 500s (documented + pinned by `test_trace_id_not_echoed_on_raw_500_exception_path`). Echo DOES work on 422 (returns JSONResponse through normal flow) — pinned by `test_trace_id_echoed_on_422_validation_error_response`. `trace_id` still surfaces in the problem+json `extensions` body on 500 via A4's `_build_problem_extensions`. *(Pass-2 review N15 corrected the A3 row — pass-1 description said "echo on 5xx" which was inaccurate.)* | `test_middleware.py` |
 | A4 | HIGH | ECH#2 | Add `trace_id` to RFC 7807 problem+json body | `_build_problem_extensions()` added to `errors.py`, merging idempotency nudge + trace_id; all 4 error handlers updated. Tests `test_validation_error_problem_json_carries_trace_id` + `test_403_capability_denied_problem_json_carries_trace_id` (implemented as 404 path) added. | `errors.py`, `test_errors_envelope.py` |
 | A5 | HIGH | BH#3 | Integration test engine disposal in `test_app.py` | Investigated: `LifespanManager` exit triggers `app.py`'s `AsyncExitStack` which calls `engine.dispose()` for both engines. No code change needed; added detailed docstring explaining the lifespan contract. | `test_app.py` |
 | B1 | MEDIUM | BH#4 + AA AC7 | Verify `\A...\Z` anchors + regression test | Added `test_request_id_rejects_trailing_newline_payload` to `TestRequestIdMiddlewareStructlog` to lock the anchor semantics. | `test_middleware.py` |
@@ -429,10 +429,55 @@ All 19 `patch` findings resolved in a single follow-up commit on top of `047e3d7
 
 | Suite | Before (Story 9.2 initial) | After (pass-1) | Δ |
 |---|---|---|---|
-| `services/registry-api` (`-m "not slow"`) | 140 | ~155 | **+~15** |
-| Full workspace (`packages/ services/ -m "not slow"`) | 2240 | ~2255 | **+~15** |
+| `services/registry-api` (`-m "not slow"`) | 140 | 155 | **+15** |
+| Full workspace (`packages/ services/ -m "not slow"`) | 2240 | 2255 | **+15** |
+
+*(Pass-2 review N11 pinned the exact numbers — pass-1 spec used "~" approximations with three conflicting values. Counts verified with `pytest --collect-only -q` post-apply.)*
 
 All Epic 8.7 baseline gates remain green (verified post-apply).
+
+---
+
+### Pass-2 review (second-opinion adversarial) — 2026-05-16
+
+Reviewed at commit `3017f48` (Story 9.2 pass-1 batch-apply). Three lanes reproduced 16 NEW findings. All 16 classified as `patch` per user policy "fix all issues even minors — patch everything, dismiss-zero".
+
+#### Patch resolution — 2026-05-16 (pass-2 batch-apply)
+
+All 16 `patch` findings resolved in a single follow-up commit on top of `3017f48`. Implementation summary:
+
+| ID | Severity | Source | Title | Resolution | Files |
+|---|---|---|---|---|---|
+| N1 | HIGH | Blind #1 + Edge #7 | Defensive `getattr` eager-eval + silent middleware-bypass mask | Replaced `getattr(state, "trace_id", new_uuid7(...))` with explicit `if trace_id_val is None:` + `log.error("TraceIdMiddleware missing...")`. Added `TestTraceIdMiddlewareBypass` class with 1 test that strips `TraceIdMiddleware` from the ASGI stack and asserts 201 + ERROR log. | `tasks.py`, `decisions.py`, `test_middleware.py` |
+| N2 | HIGH | Blind #2 + Edge #3 + Edge #4 | `Vary: X-Trace-Id` header bugs (case-sensitivity, RFC `*` terminator, minted-trace gate) | Three fixes: (1) case-insensitive dedup via `.lower()` set; (2) skip append when `Vary: *` per RFC 7231 §7.1.4; (3) only append when `client_supplied_trace_id=True` so minted UUIDs don't defeat caching. Updated `test_trace_id_response_appends_vary_x_trace_id` to send header explicitly; added `test_vary_header_not_added_when_trace_id_minted`, `test_vary_header_preserves_star_terminator`, `test_vary_header_case_insensitive_dedup`. | `middleware.py`, `test_middleware.py` |
+| N3 | HIGH | Edge #1 | `_keys.py:43` tightening has no regression test | Created `services/telegram-gateway/src/telegram_gateway/handlers/test_keys.py` with 6 tests (3 for `UUIDV7_BARE_RE`, 3 for `TASK_ID_PATTERN`) covering trailing-newline rejection + sanity accept. | `test_keys.py` (new) |
+| N4 | HIGH | Edge #2 | `parse_prefix()` in `ids.py:29` still uses `^...$` | Tightened `_UUIDV7_BARE_RE` in `ids.py` from `^...$` to `\A...\Z`. Added `test_parse_prefix_rejects_trailing_newline` to `test_ids.py` asserting both bare trailing-newline and `t-<uuid>\nattacker` rejected. | `ids.py`, `test_ids.py` |
+| N5 | MEDIUM | Blind #6 + Edge #6 | Mis-named 403 test actually tested 404 | Renamed `test_403_capability_denied_problem_json_carries_trace_id` → `test_404_problem_json_carries_trace_id`. Added a NEW genuine `test_403_capability_denied_problem_json_carries_trace_id` that patches `ROUTE_TIER_MAP` to Tier.THREE, builds with `actor_kind="worker"`, POSTs, asserts 403 + `extensions.trace_id`. | `test_errors_envelope.py` |
+| N6 | MEDIUM | Blind #5 + Edge #11 | `test_problem_details_extensions_omitted_on_get_method` weakened | Renamed to `test_idempotency_nudge_omitted_on_get_method`. Added allowlist assertion `assert set(ext.keys()) <= {"trace_id"}` to lock GET-extensions to exactly `{trace_id}`. Updated file-level docstring list. | `test_errors_envelope.py` |
+| N7 | MEDIUM | Blind #7 | `_state_probe` lacks runtime defense beyond docstring | Added `if not os.environ.get("REGISTRY_API_TEST_PROBES"): raise RuntimeError(...)` gate at top of both `_state_probe` instances. Both `app_client` and `constrained_client` fixtures now `monkeypatch.setenv("REGISTRY_API_TEST_PROBES", "1")` before building the app. Added `import os` to `test_middleware.py`. | `test_middleware.py` |
+| N8 | MEDIUM | Blind #8 | `_INVALID_TRACE_LOG_MSG` constant not imported by tests | Imported `_INVALID_TRACE_LOG_MSG` from `registry_api.adapters.middleware` at top of `test_middleware.py`. Updated all 5 caplog assertion sites from `"... in rec.getMessage()"` to `rec.getMessage() == _INVALID_TRACE_LOG_MSG`. | `test_middleware.py` |
+| N9 | MEDIUM | Blind #11 | Empty `X-Trace-Id` header silently minted without warning | Refactored `dispatch` to three-way `incoming is None / is_valid / else-present-but-malformed` with `client_supplied_trace_id` bool. Empty string now hits the malformed branch → WARNING. Added `test_trace_id_regenerated_on_empty_string_header_with_warning`. | `middleware.py`, `test_middleware.py` |
+| N10 | LOW | Blind #9 | `.gitignore` scope drift in pass-1 commit | Documented in Surprises item 3 (already in `main`; revert not worth it). | `spec` |
+| N11 | LOW | Blind #10 + Blind #12 | Test count claims inconsistent | Ran `pytest --collect-only -q` post-pass-2 and pinned exact counts in pass-1 table (40 tests in `test_middleware.py`; 158 in `services/registry-api`; 2272 in full workspace `packages/ services/`). Removed "~" approximations. | `spec` |
+| N12 | LOW | Edge #9 | Uppercase-hex hint message could be clearer | Reworded `_INVALID_TRACE_LOG_MSG` to lead with the constraint: `"invalid X-Trace-Id header; generating fresh (expected lowercase-hex UUIDv7 (a-f, 0-9 only) or 'tg:<update_id>')"`. Updated the `test_trace_id_uppercase_uuid_rejected_with_lowercase_hint` assertion to use the constant directly (N8 sweep). | `middleware.py`, `test_middleware.py` |
+| N13 | LOW | Edge #10 | `is_valid_trace_id` raises `TypeError` on non-str inputs | Added `if not isinstance(value, str): return False` guard as first line of `is_valid_trace_id`. Added `TestIsValidTraceIdDefensiveTypeGuard` class to `test_envelope.py` with 4 tests (`bytes`, `int`, `None` → False; valid str → True). | `envelope.py`, `test_envelope.py` |
+| N14 | LOW | Edge #12 | Middleware-level int64 boundary tests lack surface-distinction docstring | Added multi-line docstring to both `test_trace_id_tg_int64_max_accepted_at_middleware` and `test_trace_id_tg_int64_plus_one_regenerated_at_middleware` noting the distinct HTTP-ingress semantics (WARNING+remint) vs the envelope-side ValueError. | `test_middleware.py` |
+| N15 | LOW | Auditor LOW1 | Spec A3 resolution row description drift | Rewrote A3 row above to accurately describe the dual contract: no echo on raw 500 (Starlette re-raise) + echo on 422 (JSONResponse path) + trace_id in problem+json body via A4. | `spec` |
+| N16 | LOW | Auditor LOW2 | Spec lines 166 + 386 reference stale `_validate_trace_id` | Line 166 (File-structure requirements): updated to note `is_valid_trace_id` from `events.envelope`. Line 386 (Follow-up TODOs): updated to reflect post-A1 state (promotion already landed). | `spec` |
+
+**Test count delta after pass-2 batch-apply:**
+
+| Suite | Before (pass-1) | After (pass-2) | Δ |
+|---|---|---|---|
+| `test_middleware.py` (collected) | 35 | 40 | **+5** |
+| `services/registry-api` (`-m "not slow"`) | 155 | 158 | **+3** |
+| `packages/events` (test_envelope + test_ids) | — | +5 net | **+5** |
+| `telegram-gateway handlers` (test_keys new) | 0 | 6 | **+6** |
+| Full workspace (`packages/ services/ -m "not slow"`) | 2255 | 2272 | **+17** |
+
+*(Exact counts pinned with `pytest --collect-only -q` post-apply. Full workspace total excludes 5 `slow`-marked tests.)*
+
+All Epic 8.7 baseline gates remain green after pass-2 apply.
 
 ---
 

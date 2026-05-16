@@ -160,6 +160,24 @@ class TestParsePrefixHardening:
         assert result is not None
         assert result[0] == "w"
 
+    def test_parse_prefix_rejects_trailing_newline(self) -> None:
+        """Pass-2 review N4: ``\\A``/``\\Z`` anchors close the trailing-newline bypass.
+
+        Python's ``$`` anchor matches before a trailing ``\\n``; ``\\Z`` does
+        not. The pass-1 envelope-side F1 fix tightened ``packages/events/src/
+        events/envelope.py``; pass-2 N4 mirrors the discipline to
+        ``packages/events/src/events/ids.py``'s ``_UUIDV7_BARE_RE`` so a
+        hostile ``t-<valid-uuid>\\n<garbage>`` never round-trips through
+        ``parse_prefix`` as if it were valid.
+        """
+        valid_uuid = "01917e5c-a7d1-7000-8000-000000000000"
+        # Trailing garbage after a real newline must NOT be parseable.
+        assert parse_prefix(f"t-{valid_uuid}\nattacker") is None
+        # Even a bare trailing newline must not match (closes ``$`` quirk).
+        assert parse_prefix(f"t-{valid_uuid}\n") is None
+        # Sanity: a clean t-<uuidv7> still parses.
+        assert parse_prefix(f"t-{valid_uuid}") == ("t", valid_uuid)
+
 
 class TestWorkerId:
     def test_has_w_prefix(self) -> None:

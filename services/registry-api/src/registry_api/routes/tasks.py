@@ -345,11 +345,20 @@ async def post_tasks(
 
     idempotency_key: str = request.state.idempotency_key
     request_id: str = request.state.request_id
-    # Story 9.2 pass-1 review A2: defensive ``getattr`` so a misconfigured
-    # middleware stack (e.g. ``TraceIdMiddleware`` accidentally omitted from
-    # ``build_app``) does not raise ``AttributeError`` mid-handler. Mirrors
-    # the same pattern used for ``actor_id`` below.
-    trace_id: str = getattr(request.state, "trace_id", new_uuid7(clock=clock))
+    # Story 9.2 pass-2 review N1: explicit conditional avoids Python's eager
+    # default-arg evaluation in ``getattr(obj, name, default)`` — the prior
+    # ``getattr(request.state, "trace_id", new_uuid7(clock=clock))`` would
+    # mint a fresh UUID on EVERY request even when ``trace_id`` was already
+    # set (wasted work + clock churn). It also silently masked the genuine
+    # bug class "TraceIdMiddleware accidentally omitted from build_app".
+    # We now emit an ERROR log when the fallback fires so the misconfig is
+    # surfaced loudly instead of being papered over.
+    trace_id_val = getattr(request.state, "trace_id", None)
+    if trace_id_val is None:
+        log.error("TraceIdMiddleware missing from stack — minting standalone trace_id")
+        trace_id: str = new_uuid7(clock=clock)
+    else:
+        trace_id = trace_id_val
     actor_id: str = getattr(request.state, "actor_id", "http-api")
 
     # Story 6.3 AC-6: scoped cache key prevents cross-actor cache leakage.

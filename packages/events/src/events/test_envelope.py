@@ -236,6 +236,41 @@ class TestTraceIdShape:
             _make_envelope(trace_id="01917e5c-a7d1-7000-8abc-00000000\n0777")
 
 
+# Story 9.2 pass-2 review N13 — defensive type guard on the public helper.
+class TestIsValidTraceIdDefensiveTypeGuard:
+    """``is_valid_trace_id`` must return False (not raise) on non-str inputs.
+
+    Story 9.2 pass-2 review N13: future downstream callers (Stories 9.3-9.6
+    — MCP / worker / console ingresses) may pass user-decoded ``bytes`` or
+    raw numeric values. Without the ``isinstance(value, str)`` gate, the
+    helper would crash with ``TypeError`` inside ``re.match``. Defensive
+    return-False mirrors ``parse_prefix``'s discipline.
+    """
+
+    def test_bytes_input_returns_false(self) -> None:
+        from events.envelope import is_valid_trace_id
+
+        # Bytes look like a valid trace_id but are NOT a str.
+        assert is_valid_trace_id(b"tg:42") is False  # type: ignore[arg-type]
+
+    def test_int_input_returns_false(self) -> None:
+        from events.envelope import is_valid_trace_id
+
+        assert is_valid_trace_id(42) is False  # type: ignore[arg-type]
+
+    def test_none_input_returns_false(self) -> None:
+        from events.envelope import is_valid_trace_id
+
+        assert is_valid_trace_id(None) is False  # type: ignore[arg-type]
+
+    def test_valid_str_still_accepted(self) -> None:
+        # Sanity: the defensive gate doesn't break the str path.
+        from events.envelope import is_valid_trace_id
+
+        assert is_valid_trace_id("tg:42") is True
+        assert is_valid_trace_id("01917e5c-a7d1-7000-8000-000000000000") is True
+
+
 # Story 9.1 — DeprecationWarning emitted from create() when trace_id absent.
 class TestTraceIdDeprecationWarning:
     def test_warning_fires_when_trace_id_absent(self) -> None:

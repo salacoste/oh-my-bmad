@@ -14,6 +14,7 @@ Coverage:
 from __future__ import annotations
 
 import logging
+import os
 import re
 from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
@@ -32,6 +33,11 @@ from httpx import ASGITransport, AsyncClient
 from registry_state.adapters.sqlite_store import create_engine  # noqa: IMP001 — Story 2.9 AC-16
 from registry_state.schema import Base  # noqa: IMP001 — Story 2.9 AC-16
 
+# Story 9.2 pass-2 review N8: import the canonical WARNING message constant
+# so caplog assertions use ``== _INVALID_TRACE_LOG_MSG`` rather than
+# substring matches. If the constant text changes, the assertion fails
+# loudly instead of silently passing because the substring still matches.
+from registry_api.adapters.middleware import _INVALID_TRACE_LOG_MSG
 from registry_api.app import build_app
 
 # ---------------------------------------------------------------------------
@@ -55,8 +61,18 @@ async def _seed_tables(db_url: str) -> None:
 
 
 @pytest_asyncio.fixture
-async def app_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None]:
-    """Minimal ASGI client wired to build_app with a fresh DB."""
+async def app_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> AsyncGenerator[AsyncClient, None]:
+    """Minimal ASGI client wired to build_app with a fresh DB.
+
+    Story 9.2 pass-2 review N7: sets ``REGISTRY_API_TEST_PROBES=1`` before
+    the app builds so the ``_state_probe`` runtime gate accepts requests.
+    A non-test caller (e.g. dev-mode startup script) that copy-pasted the
+    probe wiring would hit the ``RuntimeError`` and fail loudly instead of
+    leaking ``actor_id`` / ``caller_context`` to the network.
+    """
+    monkeypatch.setenv("REGISTRY_API_TEST_PROBES", "1")
     db_path = tmp_path / "state.sqlite3"
     db_url = _db_url(db_path)
     await _seed_tables(db_url)
@@ -66,12 +82,16 @@ async def app_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None]:
 
     # Probe endpoint that echoes request.state fields for middleware assertions.
     #
-    # Story 9.2 pass-1 review C3: TEST-ONLY probe — NEVER register this in
-    # ``build_app``. The endpoint surfaces ``request.state`` fields directly
-    # which would be an information-disclosure hazard in production. The
-    # ``/debug/`` path prefix is conventional for test-only routes in this
-    # codebase but the load-bearing constraint is "never wired into
-    # build_app", not the URL shape.
+    # Story 9.2 pass-1 review C3 + pass-2 review N7: TEST-ONLY probe —
+    # NEVER register this in ``build_app``. The endpoint surfaces
+    # ``request.state`` fields directly which would be an information-
+    # disclosure hazard in production. Pass-2 review N7 added a runtime
+    # gate (``REGISTRY_API_TEST_PROBES`` env-var) so a copy-paste into a
+    # dev-mode startup helper would crash on first request instead of
+    # silently leaking internal state. The ``/debug/`` path prefix is
+    # conventional for test-only routes in this codebase but the
+    # load-bearing constraint is "never wired into build_app", not the
+    # URL shape.
     @app.get("/debug/state")
     async def _state_probe(request: Request) -> JSONResponse:
         """TEST-ONLY probe — never register in ``build_app()``.
@@ -81,7 +101,18 @@ async def app_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None]:
         from a handler. Story 9.2 added ``trace_id`` + ``structlog_trace_id``
         for the FR58 HTTP-ingress assertions; Story 6.3 + 3.6 introduced the
         rest. Do NOT wire this into ``build_app`` — it leaks internal state.
+
+        Story 9.2 pass-2 review N7: runtime gate. The probe refuses to run
+        unless ``REGISTRY_API_TEST_PROBES=1`` is set; the test fixture sets
+        it before the app is built. A dev-mode startup helper that copy-
+        pasted this wiring would crash on first hit instead of silently
+        exposing ``actor_id`` / ``caller_context``.
         """
+        if not os.environ.get("REGISTRY_API_TEST_PROBES"):
+            raise RuntimeError(
+                "probe wiring requires test env (REGISTRY_API_TEST_PROBES=1) — "
+                "never register this route in build_app()"
+            )
         # Story 9.2: include trace_id + the live structlog contextvars
         # snapshot so the TraceIdMiddleware tests can assert binding/
         # unbinding semantics directly from a probe handler.
@@ -358,8 +389,16 @@ class TestIdempotencyKeyMiddleware:
 
 
 @pytest_asyncio.fixture
-async def constrained_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None]:
-    """ASGI client with actor_kind="worker" so Tier-2+ routes are denied."""
+async def constrained_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> AsyncGenerator[AsyncClient, None]:
+    """ASGI client with actor_kind="worker" so Tier-2+ routes are denied.
+
+    Story 9.2 pass-2 review N7: sets ``REGISTRY_API_TEST_PROBES=1`` for the
+    same reason ``app_client`` does — the ``/debug/state`` probe enforces
+    the env-var gate so accidental production wiring fails loudly.
+    """
+    monkeypatch.setenv("REGISTRY_API_TEST_PROBES", "1")
     db_path = tmp_path / "state.sqlite3"
     db_url_str = _db_url(db_path)
     await _seed_tables(db_url_str)
@@ -374,6 +413,12 @@ async def constrained_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None
 
     @app.get("/debug/state")
     async def _state_probe(request: Request) -> JSONResponse:
+        # Story 9.2 pass-2 review N7: runtime gate mirrors the primary probe.
+        if not os.environ.get("REGISTRY_API_TEST_PROBES"):
+            raise RuntimeError(
+                "probe wiring requires test env (REGISTRY_API_TEST_PROBES=1) — "
+                "never register this route in build_app()"
+            )
         return JSONResponse(
             {
                 "actor_id": getattr(request.state, "actor_id", None),
@@ -552,9 +597,8 @@ class TestTraceIdMiddleware:
         assert echoed != "bad-value"
         assert re.match(_TRACE_UUID_RE, echoed)
         # Warning log fired with the (truncated) received payload.
-        warnings = [
-            rec for rec in caplog.records if "invalid X-Trace-Id header" in rec.getMessage()
-        ]
+        # Story 9.2 pass-2 review N8: assert against the canonical constant.
+        warnings = [rec for rec in caplog.records if rec.getMessage() == _INVALID_TRACE_LOG_MSG]
         assert warnings, "expected a WARNING log for the malformed X-Trace-Id header"
 
     @pytest.mark.asyncio
@@ -569,7 +613,8 @@ class TestTraceIdMiddleware:
         assert echoed is not None
         assert echoed != "tg:0"
         assert re.match(_TRACE_UUID_RE, echoed)
-        assert any("invalid X-Trace-Id header" in rec.getMessage() for rec in caplog.records)
+        # Story 9.2 pass-2 review N8: assert against the canonical constant.
+        assert any(rec.getMessage() == _INVALID_TRACE_LOG_MSG for rec in caplog.records)
 
     @pytest.mark.asyncio
     async def test_trace_id_regenerated_on_int64_overflow_header(
@@ -584,7 +629,8 @@ class TestTraceIdMiddleware:
         assert echoed is not None
         assert echoed != overflow
         assert re.match(_TRACE_UUID_RE, echoed)
-        assert any("invalid X-Trace-Id header" in rec.getMessage() for rec in caplog.records)
+        # Story 9.2 pass-2 review N8: assert against the canonical constant.
+        assert any(rec.getMessage() == _INVALID_TRACE_LOG_MSG for rec in caplog.records)
 
     @pytest.mark.asyncio
     async def test_trace_id_attached_to_request_state(self, app_client: AsyncClient) -> None:
@@ -667,9 +713,8 @@ class TestTraceIdMiddleware:
         assert r.status_code == 200
 
         # Find the warning record and assert the ``received`` extra is ≤80 chars.
-        warnings = [
-            rec for rec in caplog.records if "invalid X-Trace-Id header" in rec.getMessage()
-        ]
+        # Story 9.2 pass-2 review N8: assert against the canonical constant.
+        warnings = [rec for rec in caplog.records if rec.getMessage() == _INVALID_TRACE_LOG_MSG]
         assert warnings, "expected a WARNING log for the malformed X-Trace-Id header"
         rec = warnings[0]
         received = getattr(rec, "received", None)
@@ -800,14 +845,15 @@ class TestTraceIdMiddleware:
         assert echoed != uppercase
         assert re.match(_TRACE_UUID_RE, echoed)
         # WARNING fired AND carries the lowercase hint.
-        warnings = [
-            rec for rec in caplog.records if "invalid X-Trace-Id header" in rec.getMessage()
-        ]
-        assert warnings, "expected a WARNING log for the uppercase X-Trace-Id"
-        assert any(
-            "lowercase UUIDv7" in rec.getMessage() and "tg:<update_id>" in rec.getMessage()
-            for rec in warnings
-        ), "WARNING message should hint at the lowercase + tg: shape constraints"
+        # Story 9.2 pass-2 review N8: assert against the module-level constant
+        # so future wording tweaks fail one specific assertion rather than
+        # silently passing because the substring still matches.
+        warnings = [rec for rec in caplog.records if rec.getMessage() == _INVALID_TRACE_LOG_MSG]
+        assert warnings, "expected a WARNING log with the canonical message text"
+        # And the canonical text surfaces the two acceptable shapes for
+        # operators reading the log (pass-2 review N12 reworded the hint).
+        assert "lowercase-hex UUIDv7" in _INVALID_TRACE_LOG_MSG
+        assert "tg:<update_id>" in _INVALID_TRACE_LOG_MSG
 
     @pytest.mark.asyncio
     async def test_trace_id_and_request_id_both_bound_during_handler(
@@ -850,6 +896,13 @@ class TestTraceIdMiddleware:
         Boundary test mirroring the envelope-side coverage. The 19-digit
         regex cap admits up to ~9.99e18; the post-match int check enforces
         the int64 ceiling at exactly ``9_223_372_036_854_775_807``.
+
+        Story 9.2 pass-2 review N14: distinct from the envelope-side boundary
+        tests in ``packages/events/src/events/test_envelope.py`` — those pin
+        ``EventEnvelope.create()`` raising ``ValueError`` on out-of-range
+        values, whereas this middleware-level test pins the HTTP-ingress
+        contract "accept and echo unchanged". Both surfaces share the same
+        ``is_valid_trace_id`` helper but have different failure semantics.
         """
         int64_max = "tg:9223372036854775807"
         r = await app_client.get("/debug/state", headers={"X-Trace-Id": int64_max})
@@ -866,6 +919,13 @@ class TestTraceIdMiddleware:
         Sibling boundary test. The value matches the 19-digit regex but
         exceeds int64 max — the post-match numeric check must reject it and
         trigger remint + WARNING.
+
+        Story 9.2 pass-2 review N14: distinct surface vs the envelope-side
+        boundary tests. Middleware behaviour on overflow is "log WARNING +
+        remint a fresh UUIDv7" — the envelope's behaviour on the same input
+        is "raise ``ValueError`` from ``EventEnvelope.create()``". This
+        asymmetry is intentional: the middleware never propagates malformed
+        correlation hints into the event log.
         """
         overflow = "tg:9223372036854775808"  # int64 max + 1
         with caplog.at_level(logging.WARNING, logger="registry_api.adapters.middleware"):
@@ -875,16 +935,21 @@ class TestTraceIdMiddleware:
         assert echoed is not None
         assert echoed != overflow
         assert re.match(_TRACE_UUID_RE, echoed)
-        assert any("invalid X-Trace-Id header" in rec.getMessage() for rec in caplog.records)
+        # Story 9.2 pass-2 review N8: assert against the canonical constant.
+        assert any(rec.getMessage() == _INVALID_TRACE_LOG_MSG for rec in caplog.records)
 
     @pytest.mark.asyncio
     async def test_trace_id_response_appends_vary_x_trace_id(self, app_client: AsyncClient) -> None:
-        """Pass-1 C4: response carries ``Vary: X-Trace-Id`` so caches do not serve stale traces.
+        """Pass-1 C4 + pass-2 N2: ``Vary: X-Trace-Id`` is appended ONLY when client-supplied.
 
         Without ``Vary``, an upstream cache could serve a response with the
         wrong echoed trace_id to a request that carried a different
-        ``X-Trace-Id`` header — silently corrupting correlation. The
-        middleware appends the token (or no-ops if already present).
+        ``X-Trace-Id`` header — silently corrupting correlation. Pass-2
+        review N2 narrowed the trigger condition: the Vary token is only
+        added when the client actually sent ``X-Trace-Id``. When the
+        middleware mints a fresh value, every request has a unique UUID so
+        ``Vary`` would effectively disable downstream caching for no win.
+        This test sends the header to exercise the trigger.
         """
         sent = new_uuid7(clock=_FROZEN_CLOCK)
         r = await app_client.get("/debug/state", headers={"X-Trace-Id": sent})
@@ -893,4 +958,230 @@ class TestTraceIdMiddleware:
         vary_tokens = [p.strip() for p in vary_header.split(",") if p.strip()]
         assert "X-Trace-Id" in vary_tokens, (
             f"expected 'X-Trace-Id' token in Vary header, got: {vary_header!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_vary_header_not_added_when_trace_id_minted(
+        self, app_client: AsyncClient
+    ) -> None:
+        """Pass-2 review N2: when the middleware MINTS the trace_id, no Vary token is added.
+
+        Rationale: every minted UUIDv7 is unique-per-request so adding
+        ``Vary: X-Trace-Id`` would defeat any downstream caching for no
+        correlation gain. Only client-supplied trace_ids benefit from Vary.
+        """
+        # No X-Trace-Id header sent → middleware mints a fresh UUIDv7.
+        r = await app_client.get("/debug/state")
+        assert r.status_code == 200
+        # The minted trace_id is still echoed on the response.
+        assert r.headers.get("X-Trace-Id") is not None
+        # But Vary must NOT carry X-Trace-Id (case-insensitive check).
+        vary_header = r.headers.get("Vary", "")
+        vary_tokens_lower = {p.strip().lower() for p in vary_header.split(",") if p.strip()}
+        assert "x-trace-id" not in vary_tokens_lower, (
+            f"Vary should not carry X-Trace-Id when minted; got: {vary_header!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_vary_header_preserves_star_terminator(self, tmp_path: Path) -> None:
+        """Pass-2 review N2: ``Vary: *`` is a RFC 7231 §7.1.4 terminator — never appended to.
+
+        A downstream handler that sets ``Vary: *`` is signalling "this
+        response varies on factors not enumerable in headers" — the spec
+        forbids combining it with token lists. The middleware must leave
+        the star untouched.
+        """
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+        events_dir = tmp_path / "events"
+        clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
+        app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+
+        @app.get("/debug/vary-star")
+        async def _vary_star(request: Request) -> JSONResponse:
+            return JSONResponse({"ok": True}, headers={"Vary": "*"})
+
+        sent = new_uuid7(clock=clock)
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://testserver"
+            ) as client,
+        ):
+            r = await client.get("/debug/vary-star", headers={"X-Trace-Id": sent})
+
+        assert r.status_code == 200
+        # The star MUST remain the sole Vary token.
+        assert r.headers.get("Vary", "").strip() == "*", (
+            f"Vary: * must be preserved unchanged; got: {r.headers.get('Vary')!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_vary_header_case_insensitive_dedup(self, tmp_path: Path) -> None:
+        """Pass-2 review N2: dedup of existing ``Vary`` tokens is case-insensitive.
+
+        HTTP header field names are case-insensitive per RFC 7230 §3.2. A
+        downstream handler that already set ``Vary: x-trace-id`` (lowercase)
+        must not get a duplicate ``, X-Trace-Id`` appended.
+        """
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+        events_dir = tmp_path / "events"
+        clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
+        app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+
+        @app.get("/debug/vary-lower")
+        async def _vary_lower(request: Request) -> JSONResponse:
+            # Downstream handler set the same token but lowercase.
+            return JSONResponse({"ok": True}, headers={"Vary": "x-trace-id"})
+
+        sent = new_uuid7(clock=clock)
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://testserver"
+            ) as client,
+        ):
+            r = await client.get("/debug/vary-lower", headers={"X-Trace-Id": sent})
+
+        assert r.status_code == 200
+        vary_header = r.headers.get("Vary", "")
+        vary_tokens_lower = [p.strip().lower() for p in vary_header.split(",") if p.strip()]
+        # Exactly one occurrence (case-insensitive).
+        assert vary_tokens_lower.count("x-trace-id") == 1, (
+            f"expected single x-trace-id token; got: {vary_header!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_trace_id_regenerated_on_empty_string_header_with_warning(
+        self, app_client: AsyncClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Pass-2 review N9: empty ``X-Trace-Id`` header → WARNING + fresh UUIDv7.
+
+        Distinguish "header absent" from "header present-but-empty". The
+        latter is almost always a misconfigured upstream proxy stripping the
+        value — silently accepting it (as the pass-1 ``if incoming and ...``
+        guard did) would hide that bug class. The middleware now emits the
+        canonical WARNING for empty strings just like any other malformed
+        value.
+        """
+        with caplog.at_level(logging.WARNING, logger="registry_api.adapters.middleware"):
+            r = await app_client.get("/debug/state", headers={"X-Trace-Id": ""})
+        assert r.status_code == 200
+        echoed = r.headers.get("X-Trace-Id")
+        assert echoed is not None
+        assert echoed != ""
+        assert re.match(_TRACE_UUID_RE, echoed), (
+            f"expected fresh UUIDv7 on empty header; got: {echoed!r}"
+        )
+        # WARNING fired with the canonical message.
+        warnings = [rec for rec in caplog.records if rec.getMessage() == _INVALID_TRACE_LOG_MSG]
+        assert warnings, "expected a WARNING log on empty X-Trace-Id header"
+
+
+class TestTraceIdMiddlewareBypass:
+    """Pass-2 review N1: defensive route-handler fallback when TraceIdMiddleware is missing.
+
+    Distinct from ``TestTraceIdMiddleware`` (which exercises the middleware
+    itself) — this class builds a degraded ASGI stack WITHOUT the
+    ``TraceIdMiddleware`` and asserts that:
+
+      1. The route handler still produces a 2xx (defensive fallback).
+      2. An ERROR log is emitted naming the missing-middleware misconfig
+         so an operator running with stderr captured will see the bug
+         instead of debugging a flaky correlation field.
+
+    The pass-1 implementation used ``getattr(state, "trace_id", new_uuid7(...))``
+    which both eagerly evaluated the default arg on every request AND
+    silently masked the missing-middleware bug class. Pass-2's explicit
+    conditional + ERROR log surfaces the bug loudly.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_structlog_contextvars(self) -> Generator[None, None, None]:
+        structlog.contextvars.clear_contextvars()
+        yield
+        structlog.contextvars.clear_contextvars()
+
+    @pytest.mark.asyncio
+    async def test_route_handler_logs_error_when_trace_id_middleware_missing(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """N1: POST /v1/tasks without TraceIdMiddleware → 201 + ERROR log fires."""
+        from starlette.middleware import Middleware
+
+        from registry_api.adapters.middleware import (
+            ActorIdMiddleware,
+            IdempotencyKeyMiddleware,
+            RequestIdMiddleware,
+            TierEnforcementMiddleware,
+        )
+
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+        events_dir = tmp_path / "events"
+        clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
+
+        # Build app via ``build_app`` then peel off the outermost
+        # TraceIdMiddleware from the user_middleware stack. Starlette stores
+        # middleware in reverse-registration order; the OUTERMOST (last
+        # registered) is at index 0. ``TraceIdMiddleware`` is registered
+        # last in ``build_app`` so we remove the entry whose ``cls`` is it.
+        app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+        # mypy: ``mw.cls`` has type ``_MiddlewareFactory[P]`` (a Protocol),
+        # which is not a subtype of ``type[TraceIdMiddleware]``, so identity
+        # comparison via ``is`` raises a mypy comparison-overlap error.
+        # Compare by ``__name__`` (a string attr common to all callables)
+        # to avoid the type-checker complaint while still being correct at
+        # runtime — the class name is unique within this codebase.
+        _TM_NAME = "TraceIdMiddleware"
+        app.user_middleware = [
+            mw for mw in app.user_middleware if getattr(mw.cls, "__name__", "") != _TM_NAME
+        ]
+        # FastAPI / Starlette caches the middleware stack — clear it so the
+        # next request rebuilds without ``TraceIdMiddleware``.
+        app.middleware_stack = None
+        # Sanity-check the stack truly lacks TraceIdMiddleware now.
+        remaining = [getattr(mw.cls, "__name__", "") for mw in app.user_middleware]
+        assert _TM_NAME not in remaining, (
+            f"failed to strip TraceIdMiddleware; remaining: {remaining}"
+        )
+        # The route-handler defensive fallback must still be exercised; the
+        # remaining stack covers RequestId / Idempotency / Actor / Tier.
+        _ = (
+            ActorIdMiddleware,
+            IdempotencyKeyMiddleware,
+            Middleware,
+            RequestIdMiddleware,
+            TierEnforcementMiddleware,
+        )  # noqa: PLW0641 — referenced for type-checker visibility
+
+        with caplog.at_level(logging.ERROR, logger="registry_api.routes.tasks"):
+            async with (
+                LifespanManager(app) as manager,
+                AsyncClient(
+                    transport=ASGITransport(app=manager.app),
+                    base_url="http://testserver",
+                ) as client,
+            ):
+                r = await client.post("/v1/tasks", json={"title": "no-trace-id-mw"})
+
+        assert r.status_code == 201, (
+            f"expected defensive fallback to produce 201; got {r.status_code}: {r.text}"
+        )
+        # ERROR log naming the misconfig MUST have fired.
+        errors = [
+            rec
+            for rec in caplog.records
+            if rec.levelno == logging.ERROR
+            and "TraceIdMiddleware missing from stack" in rec.getMessage()
+        ]
+        assert errors, (
+            f"expected an ERROR log on missing TraceIdMiddleware; got records: "
+            f"{[(r.levelno, r.name, r.getMessage()) for r in caplog.records]}"
         )

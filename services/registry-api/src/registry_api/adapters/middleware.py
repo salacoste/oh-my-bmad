@@ -117,13 +117,16 @@ _UUIDV7_BARE_RE = re.compile(
 # discipline; Epic 9 retro candidate). Telegram-gateway / console / MCP /
 # worker ingresses (Stories 9.3-9.6) will reuse the same helper.
 
-# Story 9.2 pass-1 review B4 + C2: shared WARNING log message constant. Pulled
-# out so the middleware emit-site and ``test_middleware.py`` caplog assertions
-# stay in lock-step. The "(expected ...)" hint documents the lowercase-hex
-# constraint (Story 9.1 contract uses lowercase UUIDv7 + ``tg:<update_id>``)
-# so operators reading the log understand why a value was regenerated.
+# Story 9.2 pass-1 review B4 + C2 + pass-2 review N12: shared WARNING log
+# message constant. Pulled out so the middleware emit-site and
+# ``test_middleware.py`` caplog assertions stay in lock-step. The hint leads
+# with the constraint "lowercase-hex UUIDv7 (a-f, 0-9 only)" so operators
+# reading the log see the rule first — pass-1 wording buried "lowercase"
+# mid-sentence and operators reported scanning past it. The Telegram
+# ``tg:<update_id>`` alternate form is also surfaced explicitly.
 _INVALID_TRACE_LOG_MSG = (
-    "invalid X-Trace-Id header; generating fresh (expected lowercase UUIDv7 or 'tg:<update_id>')"
+    "invalid X-Trace-Id header; generating fresh "
+    "(expected lowercase-hex UUIDv7 (a-f, 0-9 only) or 'tg:<update_id>')"
 )
 
 _log = logging.getLogger("registry_api.adapters.middleware")
@@ -171,22 +174,32 @@ class TraceIdMiddleware(BaseHTTPMiddleware):
         # ``events.envelope`` so HTTP-side validation stays symmetric with the
         # envelope-side validator. Single source of truth for the Story 9.1
         # contract.
+        #
+        # Story 9.2 pass-2 review N9: distinguish "header absent" (silent mint)
+        # from "header present but malformed" (WARNING + mint). Empty string
+        # (``X-Trace-Id: ``) falls into the malformed branch because it is
+        # almost always a misconfigured proxy stripping the value — silently
+        # accepting it would hide that bug class.
         incoming = request.headers.get("X-Trace-Id")
-        if incoming and is_valid_trace_id(incoming):
-            trace_id = incoming
-        else:
-            if incoming:
-                # Malformed — log + regenerate. Truncate the received value to
-                # 80 chars in the log to bound the size of malformed payloads
-                # (mirrors RequestIdMiddleware's truncation discipline).
-                # Story 9.2 pass-1 review B4 + C2: WARNING message lives in
-                # the ``_INVALID_TRACE_LOG_MSG`` module constant so test
-                # ``caplog`` assertions and the emit-site stay in lock-step.
-                _log.warning(
-                    _INVALID_TRACE_LOG_MSG,
-                    extra={"received": incoming[:80]},
-                )
+        if incoming is None:
             trace_id = new_uuid7(clock=self._clock)
+            client_supplied_trace_id = False
+        elif is_valid_trace_id(incoming):
+            trace_id = incoming
+            client_supplied_trace_id = True
+        else:
+            # Present but malformed (includes empty string). Truncate the
+            # received value to 80 chars in the log to bound the size of
+            # malformed payloads (mirrors RequestIdMiddleware's truncation
+            # discipline). Story 9.2 pass-1 review B4 + C2: WARNING message
+            # lives in the ``_INVALID_TRACE_LOG_MSG`` module constant so test
+            # ``caplog`` assertions and the emit-site stay in lock-step.
+            _log.warning(
+                _INVALID_TRACE_LOG_MSG,
+                extra={"received": incoming[:80]},
+            )
+            trace_id = new_uuid7(clock=self._clock)
+            client_supplied_trace_id = False
         request.state.trace_id = trace_id
         # Bind into structlog contextvars so every downstream log record
         # carries ``trace_id``. The unbind in the ``try/finally`` is
@@ -199,17 +212,31 @@ class TraceIdMiddleware(BaseHTTPMiddleware):
         finally:
             structlog.contextvars.unbind_contextvars("trace_id")
         response.headers["X-Trace-Id"] = trace_id
-        # Story 9.2 pass-1 review C4: append ``X-Trace-Id`` to the ``Vary``
-        # response header so cache layers (Varnish / CDNs / browser HTTP
-        # cache) do not serve a response with the wrong echoed trace_id to
-        # a request that carried a different ``X-Trace-Id``. Preserves any
-        # pre-existing ``Vary`` tokens (e.g. ``Accept-Encoding``) and avoids
-        # duplicate entries.
-        existing_vary = response.headers.get("Vary", "")
-        vary_parts = [p.strip() for p in existing_vary.split(",") if p.strip()]
-        if "X-Trace-Id" not in vary_parts:
-            vary_parts.append("X-Trace-Id")
-            response.headers["Vary"] = ", ".join(vary_parts)
+        # Story 9.2 pass-1 review C4 + pass-2 review N2: append ``X-Trace-Id``
+        # to the ``Vary`` response header so cache layers (Varnish / CDNs /
+        # browser HTTP cache) do not serve a response with the wrong echoed
+        # trace_id to a request that carried a different ``X-Trace-Id``.
+        #
+        # Three pass-2 fixes vs the pass-1 implementation:
+        #   1. Case-insensitive dedup — HTTP header tokens are case-insensitive
+        #      per RFC 7230 §3.2 so ``vary: x-trace-id`` already covers us.
+        #   2. ``Vary: *`` is a TERMINATOR per RFC 7231 §7.1.4 — never append
+        #      tokens to it; the star already disables caching downstream.
+        #   3. Gate on ``client_supplied_trace_id``: when the middleware MINTED
+        #      a fresh UUID, every request has a unique value so ``Vary`` would
+        #      effectively disable caching of any cacheable downstream endpoint.
+        #      We only need ``Vary`` when a client actively varied the header.
+        if client_supplied_trace_id:
+            existing_vary = response.headers.get("Vary", "").strip()
+            if existing_vary == "*":
+                # ``Vary: *`` is a RFC 7231 §7.1.4 terminator — leave untouched.
+                pass
+            else:
+                existing_tokens = [p.strip() for p in existing_vary.split(",") if p.strip()]
+                existing_lower = {t.lower() for t in existing_tokens}
+                if "x-trace-id" not in existing_lower:
+                    existing_tokens.append("X-Trace-Id")
+                    response.headers["Vary"] = ", ".join(existing_tokens)
         return response
 
 
