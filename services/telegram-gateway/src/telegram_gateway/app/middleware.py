@@ -23,10 +23,24 @@ preserve rather than re-mint).
 The derivation is **deterministic**: replaying the same ``update_id``
 (FR28 idempotency-cache hit path; webhook redelivery) produces the same
 ``trace_id``, so the original event and the replay envelope share the
-same correlation id. For malformed BotAPI payloads (``update_id`` ≤ 0,
-impossible per docs but defensive), the middleware logs a WARNING and
-mints a UUIDv7 fallback. The unbind runs in a ``try/finally`` so a
-dispatcher reused across updates never observes a prior update's trace.
+same correlation id. For malformed payloads (``update_id`` outside the
+``[1, 2^63-1]`` band, treated as malformed regardless of BotAPI
+guarantees), the middleware logs a WARNING and mints a UUIDv7 fallback.
+The unbind runs in a ``try/finally`` so a dispatcher reused across
+updates never observes a prior update's trace.
+
+.. note::
+   **AC2 deterministic-replay carve-out (Story 9.3 pass-1 M4):** the
+   determinism invariant applies ONLY to BotAPI-conformant updates
+   (``update_id ≥ 1``). Malformed updates (``update_id=0``, negative,
+   non-Update events) fall back to ``new_uuid7()``, which is
+   NON-deterministic by design — the fallback is a defense-in-depth
+   net for inputs that should never reach production. A deterministic
+   fallback (e.g., ``f"tg:invalid:{update_id}"``) is NOT viable because
+   it would fail ``is_valid_trace_id`` and break envelope construction
+   downstream. Operators correlating replayed malformed updates MUST
+   use ``request_id`` or the JSONL ``emitted_at`` window rather than
+   the per-attempt ``trace_id``.
 
 Why outer_middleware (not inner)
 --------------------------------
@@ -184,6 +198,13 @@ class AllowlistMiddleware(BaseMiddleware):
     the trace_id, and the unbind is in a ``try/finally`` so reuse of the
     dispatcher across updates never leaks contextvars.
 
+    AC2 deterministic-replay carve-out (Story 9.3 pass-1 M4):
+        The determinism invariant applies ONLY to BotAPI-conformant
+        updates (``update_id ≥ 1``). Malformed updates (``update_id=0``,
+        negative, non-Update events) fall back to ``new_uuid7()`` —
+        NON-deterministic by design. See the module docstring for the
+        rationale.
+
     Args:
         allowlist: ``frozenset[int]`` of allowed Telegram user ids. An
                    empty set rejects every inbound update (closed-by-
@@ -257,8 +278,10 @@ class AllowlistMiddleware(BaseMiddleware):
                 trace_id = new_uuid7(clock=self._clock)
         else:
             # Edge cases: event is not an Update (impossible given outer-
-            # middleware-on-update wiring) or update_id is 0 / negative
-            # (impossible per BotAPI but defended).
+            # middleware-on-update wiring) or update_id falls outside the
+            # valid [1, 2^63-1] band (treated as malformed regardless of
+            # BotAPI guarantees — L6: BotAPI docs do not make absolute
+            # claims about future bounds, so we defend rather than assume).
             _log.warning(
                 "AllowlistMiddleware received non-Update event or invalid "
                 "update_id; minting fallback trace_id (event_type=%s)",
@@ -266,10 +289,25 @@ class AllowlistMiddleware(BaseMiddleware):
             )
             trace_id = new_uuid7(clock=self._clock)
 
-        structlog.contextvars.bind_contextvars(trace_id=trace_id)
-        data["trace_id"] = trace_id
-
+        # Story 9.3 pass-1 review H1: move bind_contextvars AND data assignment
+        # INSIDE the try/finally so a failure on the data["trace_id"] = ... line
+        # (e.g., a read-only MappingProxyType-backed data passed by a test
+        # harness) still triggers the unbind. Without this, the trace_id would
+        # remain bound in contextvars across requests (process-global leak).
+        # L3: warn on pre-existing trace_id overwrite by an upstream middleware.
         try:
+            structlog.contextvars.bind_contextvars(trace_id=trace_id)
+            if isinstance(data, dict):
+                existing = data.get("trace_id")
+                if existing is not None and existing != trace_id:
+                    _log.warning(
+                        "AllowlistMiddleware overwrote existing data['trace_id']=%r "
+                        "with derived %r",
+                        existing,
+                        trace_id,
+                    )
+                data["trace_id"] = trace_id
+
             # Carry forward the inbound request_id when Story 3.6's request-id
             # middleware has already injected it into ``data``. Falls back to a
             # fresh ID until 3.6 lands (M6 — documented in module docstring).
@@ -280,8 +318,8 @@ class AllowlistMiddleware(BaseMiddleware):
                 await self._emit_rejection(
                     user_id=0,
                     reason="no_from_user",
-                    request_id=inbound_request_id,
                     trace_id=trace_id,
+                    request_id=inbound_request_id,
                 )
                 return None
             if user_id in self._allowlist:
@@ -289,8 +327,8 @@ class AllowlistMiddleware(BaseMiddleware):
             await self._emit_rejection(
                 user_id=user_id,
                 reason="not_in_allowlist",
-                request_id=inbound_request_id,
                 trace_id=trace_id,
+                request_id=inbound_request_id,
             )
             return None
         finally:
@@ -346,8 +384,8 @@ class AllowlistMiddleware(BaseMiddleware):
         *,
         user_id: int,
         reason: Literal["not_in_allowlist", "no_from_user"],
-        request_id: str | None = None,
         trace_id: str,
+        request_id: str | None = None,
     ) -> None:
         """Build + dispatch a ``telegram.rejected`` envelope.
 

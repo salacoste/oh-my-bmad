@@ -80,6 +80,11 @@ async def handle_ping(
     Telegram reply so Telegram never retries the webhook delivery
     (Story 3.1 M3 contract).
     """
+    # Story 9.3 pass-1 review H5: surface silent correlation loss.
+    if trace_id is None:
+        _log.warning(
+            "/ping invoked without trace_id (AllowlistMiddleware bypassed?); correlation will break"
+        )
     request_id = new_request_id()
 
     try:

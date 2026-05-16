@@ -53,6 +53,16 @@ async def handle_agent(
     ``/approve``, ``/stop``, ``/reject``, ``/retry``, this handler does
     NOT call ``submit_decision``.
     """
+    # Story 9.3 pass-1 review H5: surface silent correlation loss. The
+    # AllowlistMiddleware ALWAYS injects ``data["trace_id"]``; aiogram's
+    # DI resolves it into this parameter. A None value means the middleware
+    # was bypassed (test harness, misconfiguration) and the downstream
+    # registry-api call will mint a fresh UUID — correlation broken.
+    if trace_id is None:
+        _log.warning(
+            "/agent invoked without trace_id "
+            "(AllowlistMiddleware bypassed?); correlation will break"
+        )
     task_id = _keys.extract_task_id_from_message(message)
     if task_id is None:
         raw_text = message.text or ""

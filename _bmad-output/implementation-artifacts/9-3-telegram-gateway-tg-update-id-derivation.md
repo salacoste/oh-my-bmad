@@ -341,6 +341,50 @@ The drop is smaller than the spec's predicted ~4-6 because **every telegram-gate
 
 ---
 
+## Review Findings
+
+### Adversarial 3-lane code review — 2026-05-16 (pass-1)
+
+Reviewed at commit `7861ba7` (Story 9.3 initial implementation) + `0e6c844` (sprint-status closure). Three lanes (Blind Hunter / Edge-Case Hunter / Acceptance Auditor) produced 19 unique patch items. All 19 classified as `patch` per user policy "fix all issues even minors — patch everything, dismiss-zero". Mirrors the Epic 8.x cadence.
+
+#### Patch resolution — 2026-05-16 (pass-1 batch-apply)
+
+All 19 `patch` findings resolved in a single follow-up commit on top of `0e6c844`. Implementation summary:
+
+| ID | Severity | Title | Resolution | Files |
+|---|---|---|---|---|
+| H1 | HIGH | Move `data["trace_id"] = trace_id` INSIDE the try block | `bind_contextvars` + the `data["trace_id"] = ...` assignment moved INSIDE the `try/finally` so a read-only `data` mapping cannot leak the contextvar across requests. Guarded the assignment with `isinstance(data, dict)`. | `middleware.py` |
+| H2 | HIGH | Add AC10 integration test (JSONL log read + trace_id assertion) | Extended `test_rejected_user_receives_no_outbound_message` to assert `record["trace_id"] == "tg:1"` after reading the JSONL log (`_make_update` defaults to `update_id=1`). Lowest-cost path; no new Dispatcher harness needed. | `test_allowlist.py` |
+| H3 | HIGH | Fix logger name mismatch in tests | Investigated: middleware.py uses an EXPLICIT logger name `"telegram_gateway.middleware"` (line 148: `_log = logging.getLogger("telegram_gateway.middleware")`) — NOT `__name__`. The existing tests filtering on `r.name == "telegram_gateway.middleware"` are CORRECT. The review finding was based on a misreading; no code change required. The L7 test for multi-value `X-Trace-Id` was added to registry-api side (different file). | (no-op; documented) |
+| H4 | HIGH | Empty-string trace_id check at httpx boundary | Changed all 5 sites in `registry_client.py` from `if trace_id is not None` to `if trace_id` so an empty string never produces an `X-Trace-Id: ` header that registry-api would log a WARNING about + mint over. | `registry_client.py` |
+| H5 | HIGH | Handler signature `trace_id: str | None = None` silently degrades correlation | Added `if trace_id is None: _log.warning(...)` at the top of all 9 command handlers (`/agent`, `/approve`, `/logs`, `/ping`, `/reject`, `/retry`, `/status`, `/stop`, `/task`). Intentional noise that surfaces misconfiguration in production logs. | 9 × `handlers/*_command.py` |
+| M1 | MEDIUM | Add `test_trace_id_minimum_update_id_one_accepted` (AC3 lower bound) | New test in `TestStory93TraceIdDerivation` covering `update_id=1 → tg:1` (lowest valid value). Fills the AC3 lower-edge gap. | `test_allowlist.py` |
+| M2 | MEDIUM | Regression test for `PerActorRateLimitMiddleware` preserving `data["trace_id"]` | New `TestStory93TraceIdRateLimitChain` class with one test that runs `AllowlistMiddleware → PerActorRateLimit → stub_handler` and asserts `data["trace_id"]` survives the chain unchanged. | `test_allowlist.py` |
+| M3 | MEDIUM | Replace tautological `test_handler_can_read_trace_id_from_data` with aiogram-DI integration test | Added `test_handler_receives_trace_id_via_aiogram_di` that registers a stub handler with `trace_id: str | None = None` and dispatches through a full `Dispatcher.feed_update` — exercises aiogram's DI end-to-end. Kept the original test in place as a unit-level sanity-check. | `test_allowlist.py` |
+| M4 | MEDIUM | Document AC2 deterministic-replay carve-out for fallback path | Added an `.. note::` block to the file-top docstring AND the `AllowlistMiddleware` class docstring explaining that determinism applies only to `update_id ≥ 1` and that `new_uuid7()` fallback is non-deterministic by design. | `middleware.py` |
+| M5 | MEDIUM | Add DeprecationWarning-free envelope-build test (AC7 #12 spec restoration) | New `test_handler_builds_envelope_with_propagated_trace_id_no_deprecation_warning` that reads `data["trace_id"]`, builds an `EventEnvelope.create(..., trace_id=...)` inside `warnings.catch_warnings(simplefilter="error", DeprecationWarning)`, and asserts no DeprecationWarning fires. | `test_allowlist.py` |
+| M6 | MEDIUM | `_emit_rejection` kwarg ordering footgun | Reordered the keyword-only parameters of `_emit_rejection` so `trace_id` (required) appears BEFORE `request_id` (defaulted). Updated both call sites in `__call__`. | `middleware.py` |
+| M7 | MEDIUM | Pydantic `update_id` str coercion ambiguity | New `test_update_id_string_coercion_produces_canonical_trace_id` that posts `{"update_id": "42"}` and `{"update_id": 42}` and asserts both produce the same canonical `tg:42` — locks the wire-form lossy collapse behaviour. `pytest.skip` guards against future Pydantic strict-mode flips. | `test_allowlist.py` |
+| L1 | LOW | Promote `_clear_structlog_contextvars` to module-level autouse | Added `_clear_structlog_contextvars_module` fixture at module level (autouse) so ALL tests in the file get the hygiene, not only those in `TestStory93TraceIdDerivation`. Class-scoped fixture retained as belt-and-braces. | `test_allowlist.py` |
+| L2 | LOW | Assert trace_id in `test_rejected_user_receives_no_outbound_message` JSONL read | Implemented as part of H2 — single batched JSONL assertion covers both. | `test_allowlist.py` |
+| L3 | LOW | Warn on `data["trace_id"]` overwrite | Added `if existing is not None and existing != trace_id: _log.warning(...)` guard in `AllowlistMiddleware.__call__` so a future upstream middleware that pre-sets `data["trace_id"]` surfaces the unexpected double-write. | `middleware.py` |
+| L4 | LOW | `new_uuid7` test regex: case-insensitive | Added `re.IGNORECASE` to `_UUIDV7_RE` in `test_allowlist.py`. Defense-in-depth — `events.ids.new_uuid7` returns lowercase but future emitters might not. | `test_allowlist.py` |
+| L5 | LOW | Add `tg:int64_max+1` overflow test in rejection envelope context | New `test_rejection_envelope_overflow_update_id_uuid_fallback` — non-allowlisted user with `update_id = int64_max + 1` exercises BOTH middleware fallback AND envelope trace_id assignment; asserts UUIDv7 fallback (not raw `tg:<overflow>`) lands on the rejection envelope. | `test_allowlist.py` |
+| L6 | LOW | Update docstring: soften "impossible per BotAPI" claim | Changed file-top docstring + inline edge-case comment to say "values outside `[1, 2^63-1]` are treated as malformed regardless of BotAPI guarantees" — avoids over-claiming what BotAPI docs guarantee. | `middleware.py` |
+| L7 | LOW | Multi-value `X-Trace-Id` warning at registry-api boundary | Added `header_values = request.headers.getlist("X-Trace-Id")` + `if len(header_values) > 1: _log.warning(...)` in `TraceIdMiddleware.dispatch`. New `TestTraceIdMiddlewareMultiValueHeader` test class with `test_multi_value_x_trace_id_logs_warning_and_uses_first`. | `registry-api/adapters/middleware.py`, `registry-api/test_middleware.py` |
+
+**Test count delta after pass-1 batch-apply:**
+
+| Suite | Before (Story 9.3 initial) | After (pass-1) | Δ |
+|---|---|---|---|
+| `services/telegram-gateway` (`-m "not slow"`) | 402 | 408 | **+6** (M1, M2, M3, M5, M7, L5) |
+| `services/registry-api` (`-m "not slow"`) | 158 | 159 | **+1** (L7) |
+| Full workspace (`packages/ services/ -m "not slow"`) | 2283 | 2290 | **+7** |
+
+Test count verified with `pytest -q -m "not slow"` post-apply. All Epic 8.7 baseline gates remain green (ruff check, ruff format, mypy --strict, check_imports, check_single_writer, secret-hygiene-precommit).
+
+---
+
 ## Frontmatter
 
 ```yaml

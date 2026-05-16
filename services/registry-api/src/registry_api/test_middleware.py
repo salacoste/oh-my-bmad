@@ -1185,3 +1185,60 @@ class TestTraceIdMiddlewareBypass:
             f"expected an ERROR log on missing TraceIdMiddleware; got records: "
             f"{[(r.levelno, r.name, r.getMessage()) for r in caplog.records]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Story 9.3 pass-1 review L7: multi-value X-Trace-Id WARNING
+# ---------------------------------------------------------------------------
+
+
+class TestTraceIdMiddlewareMultiValueHeader:
+    """L7: defense-in-depth against proxy duplication (some Cloudflare / nginx
+    configs inject ``X-Trace-Id`` twice). ``request.headers.get(...)`` returns
+    only the first per RFC 7230; we emit a WARNING when duplication is
+    observed so operators can spot the misconfigured proxy.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_structlog_contextvars(self) -> Generator[None, None, None]:
+        structlog.contextvars.clear_contextvars()
+        yield
+        structlog.contextvars.clear_contextvars()
+
+    @pytest.mark.asyncio
+    async def test_multi_value_x_trace_id_logs_warning_and_uses_first(
+        self, app_client: AsyncClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """L7: two ``X-Trace-Id`` headers on the same request emit a WARNING
+        and the middleware uses the first (matching ``Headers.get`` semantics)."""
+        valid_uuid_first = "0192a1b5-1234-7abc-89de-f0123456789a"
+        valid_uuid_second = "0192a1b5-1234-7abc-89de-f0123456789b"
+
+        with caplog.at_level(logging.WARNING, logger="registry_api.adapters.middleware"):
+            # httpx accepts a list of tuples to emit duplicate headers; the
+            # standard ``headers={...}`` dict can only carry one value per key.
+            r = await app_client.get(
+                "/debug/state",
+                headers=[
+                    ("X-Trace-Id", valid_uuid_first),
+                    ("X-Trace-Id", valid_uuid_second),
+                ],
+            )
+
+        # The echoed value should be the first valid one supplied (ASGI's
+        # ``get`` returns first occurrence per RFC 7230).
+        echoed = r.headers.get("X-Trace-Id")
+        assert echoed == valid_uuid_first, (
+            f"expected first X-Trace-Id to be used; got echo={echoed!r}"
+        )
+
+        matching = [
+            rec
+            for rec in caplog.records
+            if "multi-value X-Trace-Id received" in rec.getMessage()
+            and rec.levelno == logging.WARNING
+        ]
+        assert len(matching) >= 1, (
+            f"expected a WARNING on multi-value X-Trace-Id; "
+            f"got {[(r.levelname, r.name, r.getMessage()) for r in caplog.records]!r}"
+        )

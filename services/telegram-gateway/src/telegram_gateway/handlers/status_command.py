@@ -154,6 +154,12 @@ async def handle_status(
     Telegram reply so Telegram never retries the webhook delivery
     (Story 3.1 M3 contract).
     """
+    # Story 9.3 pass-1 review H5: surface silent correlation loss.
+    if trace_id is None:
+        _log.warning(
+            "/status invoked without trace_id "
+            "(AllowlistMiddleware bypassed?); correlation will break"
+        )
     task_id = _keys.extract_task_id_from_message(message)
     if task_id is None:
         raw_text = message.text or ""

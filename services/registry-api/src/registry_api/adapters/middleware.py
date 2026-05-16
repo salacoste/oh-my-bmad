@@ -180,6 +180,19 @@ class TraceIdMiddleware(BaseHTTPMiddleware):
         # (``X-Trace-Id: ``) falls into the malformed branch because it is
         # almost always a misconfigured proxy stripping the value — silently
         # accepting it would hide that bug class.
+        #
+        # Story 9.3 pass-1 review L7: defense-in-depth against proxy duplication
+        # (some Cloudflare / nginx configs inject ``X-Trace-Id`` twice). Starlette
+        # exposes both values via ``Headers.getlist``; ``.get(...)`` returns only
+        # the first per RFC 7230. We log a WARNING when we observe multi-value
+        # input so operators can spot the misconfigured proxy, then use the
+        # first value (the same behaviour as ``.get(...)``).
+        header_values = request.headers.getlist("X-Trace-Id")
+        if len(header_values) > 1:
+            _log.warning(
+                "multi-value X-Trace-Id received (proxy duplication?); using first",
+                extra={"received_count": len(header_values)},
+            )
         incoming = request.headers.get("X-Trace-Id")
         if incoming is None:
             trace_id = new_uuid7(clock=self._clock)

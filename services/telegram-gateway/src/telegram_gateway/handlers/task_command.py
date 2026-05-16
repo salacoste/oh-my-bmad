@@ -124,6 +124,11 @@ async def handle_task(
     This handler ALWAYS returns normally — exceptions are surfaced as a Telegram
     reply so Telegram never retries the webhook delivery (Story 3.1 M3 contract).
     """
+    # Story 9.3 pass-1 review H5: surface silent correlation loss.
+    if trace_id is None:
+        _log.warning(
+            "/task invoked without trace_id (AllowlistMiddleware bypassed?); correlation will break"
+        )
     # Strip the command prefix; split on any whitespace (M10) handles both
     # "/task description" (space) and "/task\ndescription" (newline).
     # aiogram's Command("task") filter already strips "/task" and "@botname"

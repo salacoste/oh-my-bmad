@@ -284,7 +284,11 @@ class RegistryAPIClient:
             headers["X-Request-ID"] = request_id
         # Story 9.3 (FR58): forward derived trace_id so registry-api's
         # TraceIdMiddleware (Story 9.2) preserves rather than re-mints.
-        if trace_id is not None:
+        # Pass-1 review H4: truthy check (not ``is not None``) — an empty
+        # string would send ``X-Trace-Id: `` to registry-api, which logs
+        # WARNING + mints a fresh UUIDv7 (correlation broken). Treat ``""``
+        # and ``None`` identically: do not set the header at all.
+        if trace_id:
             headers["X-Trace-Id"] = trace_id
 
         # Story 3.9 AC-5: omit chat_id / reply_to_message_id from the JSON
@@ -382,7 +386,11 @@ class RegistryAPIClient:
             headers["X-Request-ID"] = request_id
         # Story 9.3 (FR58): forward derived trace_id so registry-api's
         # TraceIdMiddleware (Story 9.2) preserves rather than re-mints.
-        if trace_id is not None:
+        # Pass-1 review H4: truthy check (not ``is not None``) — an empty
+        # string would send ``X-Trace-Id: `` to registry-api, which logs
+        # WARNING + mints a fresh UUIDv7 (correlation broken). Treat ``""``
+        # and ``None`` identically: do not set the header at all.
+        if trace_id:
             headers["X-Trace-Id"] = trace_id
 
         # Omit hint key entirely when None (forward-compat with Story 3.18).
@@ -454,7 +462,8 @@ class RegistryAPIClient:
         if request_id is not None:
             headers["X-Request-ID"] = request_id
         # Story 9.3 (FR58): forward derived trace_id through to registry-api.
-        if trace_id is not None:
+        # Pass-1 review H4: truthy check — empty string would break correlation.
+        if trace_id:
             headers["X-Trace-Id"] = trace_id
 
         response = await self._http_client.get(
@@ -507,7 +516,8 @@ class RegistryAPIClient:
         if request_id is not None:
             headers["X-Request-ID"] = request_id
         # Story 9.3 (FR58): forward derived trace_id through to registry-api.
-        if trace_id is not None:
+        # Pass-1 review H4: truthy check — empty string would break correlation.
+        if trace_id:
             headers["X-Trace-Id"] = trace_id
 
         response = await self._http_client.get(
@@ -560,7 +570,8 @@ class RegistryAPIClient:
         if request_id is not None:
             headers["X-Request-ID"] = request_id
         # Story 9.3 (FR58): forward derived trace_id through to registry-api.
-        if trace_id is not None:
+        # Pass-1 review H4: truthy check — empty string would break correlation.
+        if trace_id:
             headers["X-Trace-Id"] = trace_id
 
         response = await self._http_client.get(

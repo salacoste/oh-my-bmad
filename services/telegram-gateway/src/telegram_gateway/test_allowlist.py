@@ -46,7 +46,13 @@ from telegram_gateway.app.main import build_app
 from telegram_gateway.app.middleware import AllowlistMiddleware
 
 # Story 9.3: shape of a bare UUIDv7 (fallback path output).
-_UUIDV7_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+# Pass-1 review L4: case-insensitive flag for defense-in-depth — the canonical
+# UUIDv7 emitter ``events.ids.new_uuid7`` returns lowercase hex, but a future
+# change or a test stub could produce uppercase; the test should not flake.
+_UUIDV7_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 _BOT_TOKEN = "1234:fake-bot-token"
 _WEBHOOK_SECRET = "fake-webhook-secret-1234"
@@ -102,6 +108,26 @@ def _build_middleware(
         actor=actor,
         clock=_make_clock(),
     )
+
+
+# ---------------------------------------------------------------------------
+# Story 9.3 pass-1 review L1: module-level autouse contextvars hygiene
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clear_structlog_contextvars_module() -> Generator[None, None, None]:
+    """Module-level autouse hygiene: clear structlog contextvars around EVERY test.
+
+    Previously this hygiene was class-scoped on
+    :class:`TestStory93TraceIdDerivation`, leaving pre-existing tests (e.g.
+    ``test_allowlist_middleware_is_first_in_chain``) exposed to contextvar
+    leaks from sibling tests that raised before their ``try/finally``
+    unbind. Promoting the fixture to the module level is belt-and-braces.
+    """
+    structlog.contextvars.clear_contextvars()
+    yield
+    structlog.contextvars.clear_contextvars()
 
 
 # ---------------------------------------------------------------------------
@@ -874,9 +900,26 @@ async def test_rejected_user_receives_no_outbound_message(
         all_lines: list[str] = []
         for f in jsonl_files:
             all_lines.extend(line for line in f.read_text().splitlines() if line.strip())
-        all_types = [json.loads(ln).get("type") for ln in all_lines]
+        records = [json.loads(ln) for ln in all_lines]
+        all_types = [r.get("type") for r in records]
         assert any(t == "telegram.rejected" for t in all_types), (
             f"expected telegram.rejected envelope in JSONL; got types: {all_types!r}"
+        )
+
+        # Story 9.3 pass-1 review H2 + L2: assert the JSONL envelope's
+        # trace_id matches the canonical ``tg:<update_id>`` derivation
+        # for the synthetic update (update_id=1 → tg:1). This is the
+        # AC10 integration check the initial implementation deferred —
+        # extending the existing test rather than building a fresh
+        # Dispatcher harness is the lowest-cost path.
+        rejected_records = [r for r in records if r.get("type") == "telegram.rejected"]
+        assert len(rejected_records) == 1, (
+            f"expected exactly one telegram.rejected envelope; got {len(rejected_records)}"
+        )
+        # ``_make_update`` defaults to update_id=1 → trace_id "tg:1".
+        assert rejected_records[0].get("trace_id") == "tg:1", (
+            f"expected trace_id='tg:1' on rejection envelope; "
+            f"got trace_id={rejected_records[0].get('trace_id')!r}"
         )
 
 
@@ -1150,3 +1193,230 @@ class TestStory93TraceIdDerivation:
         await mw(handler, update, {})
 
         assert observed_trace_ids == ["tg:789"]
+
+    # -- Pass-1 review M1 (AC3 lower-bound) --------------------------------
+
+    @pytest.mark.asyncio
+    async def test_trace_id_minimum_update_id_one_accepted(self) -> None:
+        """AC3 lower bound: ``update_id=1`` → ``tg:1`` (lowest valid value).
+
+        Pass-1 review M1: AC3 explicitly listed ``update_id=1`` as valid but
+        no test covered it. The other AC3 tests cover ``int64_max`` (upper),
+        ``0`` (fallback), and ``-1`` (fallback) — this fills the lower-edge
+        gap.
+        """
+        _, emit = _make_recording_emit()
+        _, handler = _make_handler()
+        mw = _build_middleware(allowlist=frozenset({12345}), emit=emit)
+
+        update = Update.model_validate(_make_update(12345, update_id=1))
+        data: dict[str, Any] = {}
+        await mw(handler, update, data)
+
+        assert data["trace_id"] == "tg:1"
+
+    # -- Pass-1 review M3 (aiogram-DI integration test) --------------------
+
+    @pytest.mark.asyncio
+    async def test_handler_receives_trace_id_via_aiogram_di(self) -> None:
+        """M3: replace tautological data-read with real aiogram DI dispatch.
+
+        The original ``test_handler_can_read_trace_id_from_data`` reads
+        ``data["trace_id"]`` immediately after the middleware writes it —
+        tautological. This test registers a stub handler whose signature
+        contains ``trace_id: str | None = None`` and dispatches through a
+        full :class:`aiogram.Dispatcher`. aiogram's DI is responsible for
+        resolving ``data["trace_id"]`` into the handler parameter; this
+        test locks that contract end-to-end.
+        """
+        observed: list[str | None] = []
+
+        async with Bot(token=_BOT_TOKEN) as bot:
+            dp = Dispatcher()
+            _, emit = _make_recording_emit()
+            dp.update.outer_middleware.register(
+                _build_middleware(allowlist=frozenset({12345}), emit=emit)
+            )
+
+            @dp.message()
+            async def stub_handler(_message: Any, trace_id: str | None = None) -> None:
+                observed.append(trace_id)
+
+            allowed = Update.model_validate(_make_update(12345, update_id=909))
+            await dp.feed_update(bot, allowed)
+
+        assert observed == ["tg:909"], (
+            f"expected aiogram DI to resolve data['trace_id'] into the "
+            f"handler parameter; got {observed!r}"
+        )
+
+    # -- Pass-1 review M5 (no DeprecationWarning on envelope build) --------
+
+    @pytest.mark.asyncio
+    async def test_handler_builds_envelope_with_propagated_trace_id_no_deprecation_warning(
+        self,
+    ) -> None:
+        """AC7 spec test #12 (restored): handler reads ``data['trace_id']``,
+        builds an :class:`EventEnvelope` using that trace_id, and asserts NO
+        :class:`DeprecationWarning` fires (the Story 9.7 trace_id callsite-
+        warning baseline drops further when a callsite passes ``trace_id``
+        explicitly)."""
+        import warnings as _warnings
+
+        from events import FROZEN_EPOCH, FrozenClock, TelegramRejectedPayload
+        from events.envelope import EventEnvelope
+        from events.ids import new_event_id, new_request_id
+
+        captured_envelope: list[EventEnvelope] = []
+
+        async def handler(_event: Any, data: dict[str, Any]) -> Any:
+            trace_id = data["trace_id"]
+            clock = FrozenClock(mono_ns=0, now=FROZEN_EPOCH)
+            env = EventEnvelope.create(
+                event_id=new_event_id(clock=clock),
+                schema_version="1.0.0",
+                type="telegram.rejected",
+                emitted_at=clock.now(),
+                emitted_at_monotonic_ns=clock.monotonic_ns(),
+                actor=TELEGRAM_GATEWAY_ACTOR,
+                payload=TelegramRejectedPayload(user_id=12345, reason="not_in_allowlist"),
+                request_id=new_request_id(clock=clock),
+                trace_id=trace_id,
+            )
+            captured_envelope.append(env)
+            return None
+
+        _, emit = _make_recording_emit()
+        mw = _build_middleware(allowlist=frozenset({12345}), emit=emit)
+
+        update = Update.model_validate(_make_update(12345, update_id=314))
+
+        with _warnings.catch_warnings():
+            _warnings.simplefilter("error", DeprecationWarning)
+            await mw(handler, update, {})
+
+        assert len(captured_envelope) == 1
+        assert captured_envelope[0].trace_id == "tg:314"
+
+    # -- Pass-1 review M7 (Pydantic int coercion canonicalization) ----------
+
+    @pytest.mark.asyncio
+    async def test_update_id_string_coercion_produces_canonical_trace_id(self) -> None:
+        """M7: a hostile webhook posting ``{"update_id": "42"}`` should be
+        coerced by Pydantic to the integer 42, yielding the same canonical
+        ``trace_id`` as a native-int payload. Locks the wire-form-lossy
+        collapse behaviour into a test so any future Pydantic strictness
+        flip is caught.
+        """
+        _, emit = _make_recording_emit()
+        _, handler = _make_handler()
+        mw = _build_middleware(allowlist=frozenset({12345}), emit=emit)
+
+        raw_int = _make_update(12345, update_id=42)
+        # Build a string-form copy.
+        raw_str: dict[str, Any] = dict(raw_int)
+        raw_str["update_id"] = "42"
+
+        update_int = Update.model_validate(raw_int)
+        try:
+            update_str = Update.model_validate(raw_str)
+        except Exception:
+            pytest.skip("Pydantic strict-mode rejected string update_id — canonicalization moot")
+
+        d_int: dict[str, Any] = {}
+        d_str: dict[str, Any] = {}
+        await mw(handler, update_int, d_int)
+        await mw(handler, update_str, d_str)
+
+        assert d_int["trace_id"] == "tg:42"
+        assert d_str["trace_id"] == "tg:42"
+        assert d_int["trace_id"] == d_str["trace_id"]
+
+    # -- Pass-1 review L5 (rejection-envelope int64+1 overflow) -------------
+
+    @pytest.mark.asyncio
+    async def test_rejection_envelope_overflow_update_id_uuid_fallback(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """L5: non-allowlisted user with ``update_id = int64_max + 1`` exercises
+        BOTH the middleware fallback path AND the rejection envelope's
+        ``trace_id`` field. The envelope should carry the UUIDv7 fallback
+        (NOT the raw ``tg:<int64_max+1>`` string that would fail
+        ``is_valid_trace_id``).
+        """
+        captured, emit = _make_recording_emit()
+        _, handler = _make_handler()
+        mw = _build_middleware(allowlist=frozenset({12345}), emit=emit)
+
+        overflow = 9_223_372_036_854_775_808  # int64_max + 1
+        update = Update.model_validate(_make_update(99999, update_id=overflow))
+
+        with caplog.at_level(logging.WARNING, logger="telegram_gateway.middleware"):
+            await mw(handler, update, {})
+
+        assert len(captured) == 1
+        env = captured[0]
+        # NOT the literal "tg:<overflow>" — that would fail is_valid_trace_id.
+        assert env.trace_id is not None
+        assert env.trace_id != f"tg:{overflow}", (
+            f"expected UUIDv7 fallback (not raw overflow tg:string); got trace_id={env.trace_id!r}"
+        )
+        assert _UUIDV7_RE.match(env.trace_id), (
+            f"expected UUIDv7 fallback on rejection envelope; got {env.trace_id!r}"
+        )
+
+        matching = [
+            r
+            for r in caplog.records
+            if "telegram_gateway.middleware" in r.name
+            and r.levelno == logging.WARNING
+            and "minting fallback" in r.getMessage()
+        ]
+        assert len(matching) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Story 9.3 pass-1 review M2: PerActorRateLimitMiddleware preserves trace_id
+# ---------------------------------------------------------------------------
+
+
+class TestStory93TraceIdRateLimitChain:
+    """M2: lock the invariant ``PerActorRateLimit`` does not mutate
+    ``data["trace_id"]`` set by the upstream :class:`AllowlistMiddleware`.
+    Catches any future change to ``rate_limit.py`` that mutates the dict.
+    """
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_preserves_trace_id_in_data(self) -> None:
+        from telegram_gateway.app.rate_limit import PerActorRateLimitMiddleware
+
+        allowlist_mw = _build_middleware(
+            allowlist=frozenset({12345}), emit=_make_recording_emit()[1]
+        )
+        rate_limit_mw = PerActorRateLimitMiddleware(
+            capacity=10,
+            refill_per_second=1.0,
+            clock=_make_clock(),
+        )
+
+        observed_after_chain: list[str] = []
+
+        async def stub_handler(_event: Any, data: dict[str, Any]) -> Any:
+            observed_after_chain.append(data["trace_id"])
+            return None
+
+        async def rate_limit_step(event: TelegramObject, data: dict[str, Any]) -> Any:
+            # Capture trace_id BEFORE rate limit, AFTER allowlist.
+            assert data["trace_id"] == "tg:555", (
+                f"AllowlistMiddleware did not inject trace_id; got {data.get('trace_id')!r}"
+            )
+            return await rate_limit_mw(stub_handler, event, data)
+
+        update = Update.model_validate(_make_update(12345, update_id=555))
+        await allowlist_mw(rate_limit_step, update, {})
+
+        # After the full chain, the handler observed the SAME trace_id.
+        assert observed_after_chain == ["tg:555"], (
+            f"PerActorRateLimitMiddleware must not mutate data['trace_id']; "
+            f"handler observed {observed_after_chain!r}"
+        )

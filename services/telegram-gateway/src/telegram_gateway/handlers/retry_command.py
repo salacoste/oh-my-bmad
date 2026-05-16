@@ -74,6 +74,12 @@ async def handle_retry(
     Telegram reply so Telegram never retries the webhook delivery
     (Story 3.1 M3 contract).
     """
+    # Story 9.3 pass-1 review H5: surface silent correlation loss.
+    if trace_id is None:
+        _log.warning(
+            "/retry invoked without trace_id "
+            "(AllowlistMiddleware bypassed?); correlation will break"
+        )
     if message.from_user:
         operator_actor_id = str(message.from_user.id)
         if message.from_user.username:
