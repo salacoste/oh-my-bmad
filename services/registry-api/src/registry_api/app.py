@@ -5,8 +5,11 @@
     startup; tears them down on shutdown via ``AsyncExitStack`` so each
     cleanup runs independently regardless of others' exceptions; stores
     everything on ``app.state``.
-  - Middleware stack: ``RequestIdMiddleware`` → ``IdempotencyKeyMiddleware``
-    → ``ActorIdMiddleware`` (Architecture line 213 order).
+  - Middleware stack: ``TraceIdMiddleware`` → ``RequestIdMiddleware`` →
+    ``IdempotencyKeyMiddleware`` → ``ActorIdMiddleware`` →
+    ``TierEnforcementMiddleware`` (Architecture line 213 order extended by
+    Story 9.2 — ``TraceIdMiddleware`` is outermost so ``trace_id`` binds to
+    the structlog context before any inner middleware runs).
   - Exception handlers: RFC 7807 problem+json for ``HTTPException``,
     ``RequestValidationError``, and any unhandled ``Exception``.
   - Routes: ``/v1/tasks`` (POST + GET) via ``tasks_router``.
@@ -63,6 +66,7 @@ from registry_api.adapters.middleware import (
     IdempotencyKeyMiddleware,
     RequestIdMiddleware,
     TierEnforcementMiddleware,
+    TraceIdMiddleware,
 )
 from registry_api.routes.decisions import (
     router as decisions_router,
@@ -240,13 +244,19 @@ def build_app(
         lifespan=lifespan,
     )
 
-    # Middlewares — Architecture line 213 order (request-id → idempotency-key
-    # → actor-id → tier-enforcement). Starlette reverses add_middleware call
-    # order so we add in reverse: last-added runs first.
+    # Middlewares — Architecture line 213 order extended by Story 9.2:
+    # trace-id → request-id → idempotency-key → actor-id → tier-enforcement.
+    # Starlette reverses add_middleware call order so we add in reverse:
+    # last-added runs FIRST in execution flow (outermost). ``TraceIdMiddleware``
+    # is OUTERMOST so the structlog ``trace_id`` bind is established before
+    # ``RequestIdMiddleware`` runs — every inner log record + every emitted
+    # ``EventEnvelope`` then carries the parent ``trace_id`` correlation
+    # alongside the per-request ``request_id`` (FR58 HTTP ingress).
     app.add_middleware(TierEnforcementMiddleware, actor_kind=actor_kind)
     app.add_middleware(ActorIdMiddleware)
     app.add_middleware(IdempotencyKeyMiddleware, clock=clock)
     app.add_middleware(RequestIdMiddleware, clock=clock)
+    app.add_middleware(TraceIdMiddleware, clock=clock)
 
     # Exception handlers — RFC 7807 problem+json for all 4xx/5xx responses.
     # Story 6.3: CapabilityDenied → 403 Forbidden.

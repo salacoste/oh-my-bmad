@@ -290,6 +290,53 @@ class TestPostTasks:
         assert env.event_id == r.json()["event_id"]
 
     @pytest.mark.asyncio
+    async def test_post_tasks_envelope_carries_trace_id_from_header(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """Story 9.2 AC10 / FR58: POST /v1/tasks with X-Trace-Id propagates into envelope.
+
+        End-to-end check: send an X-Trace-Id header on POST /v1/tasks, then
+        read the JSONL event log and assert the emitted ``task.created``
+        envelope's ``trace_id`` field equals the value sent on the request.
+        This is the FR58 literal-compliance gate for the HTTP ingress.
+        """
+        from events.ids import new_uuid7 as _new_uuid7
+
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+
+        events_dir = tmp_path / "events"
+        app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+
+        sent_trace = _new_uuid7(clock=fixed_clock)
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://testserver"
+            ) as client,
+        ):
+            r = await client.post(
+                "/v1/tasks",
+                json={"title": "trace-id propagation"},
+                headers={"X-Trace-Id": sent_trace},
+            )
+            assert r.status_code == 201
+            # Response echoes the trace_id on the outbound header.
+            assert r.headers.get("X-Trace-Id") == sent_trace
+
+        # After lifespan exits the writer is closed; read the log.
+        log_path = current_day_path(events_dir, FROZEN_EPOCH)
+        envelopes = list(read_log_lines(log_path))
+        assert len(envelopes) == 1
+        env = envelopes[0]
+        assert env.type == "task.created"
+        # The load-bearing assertion: the emitted envelope carries the
+        # inbound X-Trace-Id (closing the FR58 HTTP ingress).
+        assert env.trace_id == sent_trace
+
+    @pytest.mark.asyncio
     async def test_post_tasks_uses_request_id_from_header_when_provided(
         self, post_client: AsyncClient
     ) -> None:

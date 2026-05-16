@@ -46,7 +46,7 @@ def _row_to_envelope(row: Event) -> dict[str, Any]:
         "session_id": row.session_id,
         "payload": payload,
         "parent_event_id": row.parent_event_id,
-        "trace_id": None,  # noqa: ERA001 — Phase 2: requires Event ORM column + migration + materializer update
+        "trace_id": None,  # noqa: ERA001 — Story 9.7: ORM column + materializer update
         "request_id": row.request_id,
     }
 

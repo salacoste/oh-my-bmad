@@ -1,15 +1,20 @@
-"""Tests for RequestIdMiddleware and IdempotencyKeyMiddleware (Story 3.6 AC-1/2/10).
+"""Tests for RequestIdMiddleware, IdempotencyKeyMiddleware, TraceIdMiddleware (Story 3.6 / 9.2).
 
-8 tests covering:
-- AC-1: structlog bind/unbind in try/finally (2 tests)
-- AC-1 variant: generated request-id + structlog assertion (1 test)
-- AC-2: origin flag on request.state (2 tests)
-- AC-2: X-Idempotency-Generated response header (2 tests)
-- AC-2: legacy X-Idempotency-Status removal regression pin (1 test)
+Coverage:
+- AC-1 / Story 3.6: RequestIdMiddleware structlog bind/unbind in try/finally
+  (3 tests).
+- AC-2 / Story 3.6: IdempotencyKeyMiddleware origin flag + response header +
+  legacy-header regression pin (6 tests).
+- AC-7/AC-8 / Story 6.3: TierEnforcementMiddleware tier gate tests.
+- AC1-AC6 / Story 9.2: TraceIdMiddleware validate-or-mint, structlog
+  bind/unbind, malformed-header truncation, route-level propagation
+  (12 tests in TestTraceIdMiddleware).
 """
 
 from __future__ import annotations
 
+import logging
+import re
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
@@ -20,7 +25,7 @@ import structlog.contextvars
 import structlog.testing
 from asgi_lifespan import LifespanManager
 from events import FROZEN_EPOCH, FrozenClock
-from events.ids import new_idempotency_key, new_request_id
+from events.ids import new_idempotency_key, new_request_id, new_uuid7
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from httpx import ASGITransport, AsyncClient
@@ -62,6 +67,12 @@ async def app_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None]:
     # Probe endpoint that echoes request.state fields for middleware assertions.
     @app.get("/debug/state")
     async def _state_probe(request: Request) -> JSONResponse:
+        # Story 9.2: include trace_id + the live structlog contextvars
+        # snapshot so the TraceIdMiddleware tests can assert binding/
+        # unbinding semantics directly from a probe handler.
+        ctx_trace_id = structlog.contextvars.get_merged_contextvars(structlog.get_logger()).get(
+            "trace_id"
+        )
         return JSONResponse(
             {
                 "request_id": getattr(request.state, "request_id", None),
@@ -71,6 +82,8 @@ async def app_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None]:
                 ),
                 "actor_id": getattr(request.state, "actor_id", None),
                 "caller_context": repr(getattr(request.state, "caller_context", None)),
+                "trace_id": getattr(request.state, "trace_id", None),
+                "structlog_trace_id": ctx_trace_id,
             }
         )
 
@@ -428,3 +441,200 @@ class TestTierEnforcementMiddleware:
         """Worker actor_kind can still POST /v1/tasks (Tier.ONE)."""
         r = await constrained_client.post("/v1/tasks", json={"title": "worker-ok"})
         assert r.status_code == 201
+
+
+# ---------------------------------------------------------------------------
+# TraceIdMiddleware — Story 9.2 (FR58 HTTP ingress) tests
+# ---------------------------------------------------------------------------
+
+
+_TRACE_UUID_RE = r"\A[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z"
+
+
+class TestTraceIdMiddleware:
+    """Story 9.2 AC1-AC6 + AC10: TraceIdMiddleware validate-or-mint + propagation."""
+
+    @pytest.mark.asyncio
+    async def test_trace_id_minted_on_missing_header(self, app_client: AsyncClient) -> None:
+        """AC1 #4 + AC6 #1: no X-Trace-Id → server mints a bare UUIDv7."""
+        r = await app_client.get("/debug/state")
+        assert r.status_code == 200
+        trace_id = r.headers.get("X-Trace-Id")
+        assert trace_id is not None
+        assert re.match(_TRACE_UUID_RE, trace_id), (
+            f"minted X-Trace-Id does not match UUIDv7 shape: {trace_id!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_trace_id_preserved_on_valid_uuidv7_header(self, app_client: AsyncClient) -> None:
+        """AC1 #2 + AC6 #2: valid bare UUIDv7 header echoes unchanged."""
+        sent = new_uuid7(clock=_FROZEN_CLOCK)
+        r = await app_client.get("/debug/state", headers={"X-Trace-Id": sent})
+        assert r.status_code == 200
+        assert r.headers.get("X-Trace-Id") == sent
+        assert r.json()["trace_id"] == sent
+
+    @pytest.mark.asyncio
+    async def test_trace_id_preserved_on_valid_telegram_form_header(
+        self, app_client: AsyncClient
+    ) -> None:
+        """AC2 + AC6 #3: ``tg:<update_id>`` form accepted (per Story 9.1 contract)."""
+        r = await app_client.get("/debug/state", headers={"X-Trace-Id": "tg:42"})
+        assert r.status_code == 200
+        assert r.headers.get("X-Trace-Id") == "tg:42"
+        assert r.json()["trace_id"] == "tg:42"
+
+    @pytest.mark.asyncio
+    async def test_trace_id_regenerated_on_malformed_header(
+        self, app_client: AsyncClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """AC1 #3 + AC6 #4: malformed header → WARNING + fresh UUIDv7 (not the bad value)."""
+        with caplog.at_level(logging.WARNING, logger="registry_api.adapters.middleware"):
+            r = await app_client.get("/debug/state", headers={"X-Trace-Id": "bad-value"})
+        assert r.status_code == 200
+        echoed = r.headers.get("X-Trace-Id")
+        assert echoed is not None
+        assert echoed != "bad-value"
+        assert re.match(_TRACE_UUID_RE, echoed)
+        # Warning log fired with the (truncated) received payload.
+        warnings = [
+            rec for rec in caplog.records if "invalid X-Trace-Id header" in rec.getMessage()
+        ]
+        assert warnings, "expected a WARNING log for the malformed X-Trace-Id header"
+
+    @pytest.mark.asyncio
+    async def test_trace_id_regenerated_on_tg_zero_header(
+        self, app_client: AsyncClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """AC6 #5: ``tg:0`` is rejected (Story 9.1 leading-zero / zero-update_id rule)."""
+        with caplog.at_level(logging.WARNING, logger="registry_api.adapters.middleware"):
+            r = await app_client.get("/debug/state", headers={"X-Trace-Id": "tg:0"})
+        assert r.status_code == 200
+        echoed = r.headers.get("X-Trace-Id")
+        assert echoed is not None
+        assert echoed != "tg:0"
+        assert re.match(_TRACE_UUID_RE, echoed)
+        assert any("invalid X-Trace-Id header" in rec.getMessage() for rec in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_trace_id_regenerated_on_int64_overflow_header(
+        self, app_client: AsyncClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """AC6 #6: ``tg:<n>`` above int64-max is rejected even though it matches the regex."""
+        overflow = "tg:9999999999999999999"  # 19 digits > int64 max
+        with caplog.at_level(logging.WARNING, logger="registry_api.adapters.middleware"):
+            r = await app_client.get("/debug/state", headers={"X-Trace-Id": overflow})
+        assert r.status_code == 200
+        echoed = r.headers.get("X-Trace-Id")
+        assert echoed is not None
+        assert echoed != overflow
+        assert re.match(_TRACE_UUID_RE, echoed)
+        assert any("invalid X-Trace-Id header" in rec.getMessage() for rec in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_trace_id_attached_to_request_state(self, app_client: AsyncClient) -> None:
+        """AC1 #5 + AC6 #7: handler observes ``request.state.trace_id`` == response header."""
+        sent = new_uuid7(clock=_FROZEN_CLOCK)
+        r = await app_client.get("/debug/state", headers={"X-Trace-Id": sent})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["trace_id"] == sent
+        assert r.headers["X-Trace-Id"] == sent
+
+    @pytest.mark.asyncio
+    async def test_trace_id_bound_to_structlog_context_during_request(
+        self, app_client: AsyncClient
+    ) -> None:
+        """AC1 #6 + AC6 #8: ``structlog.contextvars`` carries trace_id inside the handler."""
+        sent = new_uuid7(clock=_FROZEN_CLOCK)
+        r = await app_client.get("/debug/state", headers={"X-Trace-Id": sent})
+        assert r.status_code == 200
+        # The probe captures get_merged_contextvars() FROM INSIDE the handler.
+        assert r.json()["structlog_trace_id"] == sent
+
+    @pytest.mark.asyncio
+    async def test_trace_id_unbound_from_structlog_context_after_request(
+        self, app_client: AsyncClient
+    ) -> None:
+        """AC1 #7 + AC6 #9: ``try/finally`` unbind protects worker reuse (success path)."""
+        # Verify clean slate first.
+        before = structlog.contextvars.get_merged_contextvars(structlog.get_logger())
+        assert "trace_id" not in before
+
+        sent = new_uuid7(clock=_FROZEN_CLOCK)
+        r = await app_client.get("/debug/state", headers={"X-Trace-Id": sent})
+        assert r.status_code == 200
+
+        # After the response, the contextvars must be unbound. Worker reuse
+        # would otherwise leak the prior trace_id into the next request until
+        # the next TraceIdMiddleware rebinds.
+        after = structlog.contextvars.get_merged_contextvars(structlog.get_logger())
+        assert "trace_id" not in after
+
+    @pytest.mark.asyncio
+    async def test_trace_id_unbound_even_when_handler_raises(self, tmp_path: Path) -> None:
+        """AC1 #7 + AC6 #10: ``try/finally`` unbind fires even when the handler raises."""
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+        events_dir = tmp_path / "events"
+        clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
+        app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+
+        @app.get("/debug/boom-trace")
+        async def _boom(request: Request) -> JSONResponse:
+            raise RuntimeError("synthetic boom for trace_id unbind test")
+
+        sent = new_uuid7(clock=clock)
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app, raise_app_exceptions=False),
+                base_url="http://testserver",
+            ) as client,
+        ):
+            r = await client.get("/debug/boom-trace", headers={"X-Trace-Id": sent})
+
+        assert r.status_code == 500
+        # The unbind must have run even though the handler raised.
+        after = structlog.contextvars.get_merged_contextvars(structlog.get_logger())
+        assert "trace_id" not in after
+
+    @pytest.mark.asyncio
+    async def test_trace_id_truncated_in_log_for_malformed_header(
+        self, app_client: AsyncClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """AC6 #11: malformed-header WARNING log truncates ``received`` to ≤80 chars."""
+        overlong = "Z" * 500  # 500 chars of garbage; matches no shape
+        with caplog.at_level(logging.WARNING, logger="registry_api.adapters.middleware"):
+            r = await app_client.get("/debug/state", headers={"X-Trace-Id": overlong})
+        assert r.status_code == 200
+
+        # Find the warning record and assert the ``received`` extra is ≤80 chars.
+        warnings = [
+            rec for rec in caplog.records if "invalid X-Trace-Id header" in rec.getMessage()
+        ]
+        assert warnings, "expected a WARNING log for the malformed X-Trace-Id header"
+        rec = warnings[0]
+        received = getattr(rec, "received", None)
+        assert received is not None, "warning record missing 'received' field"
+        assert len(received) <= 80, f"received not truncated to ≤80 chars: len={len(received)}"
+
+    @pytest.mark.asyncio
+    async def test_response_carries_both_x_request_id_and_x_trace_id(
+        self, app_client: AsyncClient
+    ) -> None:
+        """AC7: response carries both X-Request-ID and X-Trace-Id."""
+        sent_trace = new_uuid7(clock=_FROZEN_CLOCK)
+        sent_request = new_request_id(clock=_FROZEN_CLOCK)
+        r = await app_client.get(
+            "/debug/state",
+            headers={"X-Trace-Id": sent_trace, "X-Request-ID": sent_request},
+        )
+        assert r.status_code == 200
+        assert r.headers.get("X-Trace-Id") == sent_trace
+        assert r.headers.get("X-Request-ID") == sent_request
+        body = r.json()
+        assert body["trace_id"] == sent_trace
+        assert body["request_id"] == sent_request

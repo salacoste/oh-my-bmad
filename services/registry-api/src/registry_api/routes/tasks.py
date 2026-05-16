@@ -345,6 +345,7 @@ async def post_tasks(
 
     idempotency_key: str = request.state.idempotency_key
     request_id: str = request.state.request_id
+    trace_id: str = request.state.trace_id
     actor_id: str = getattr(request.state, "actor_id", "http-api")
 
     # Story 6.3 AC-6: scoped cache key prevents cross-actor cache leakage.
@@ -403,6 +404,7 @@ async def post_tasks(
             actor=actor,
             payload=payload,
             request_id=request_id,
+            trace_id=trace_id,
             parent_event_id=None,
         )
 

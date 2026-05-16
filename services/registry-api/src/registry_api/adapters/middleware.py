@@ -1,8 +1,23 @@
-"""HTTP middleware stack for registry-api (Story 2.9 AC-4 + Story 3.6 AC-1/AC-2 + Story 6.3).
+"""HTTP middleware stack for registry-api (Stories 2.9 / 3.6 / 6.3 / 9.2).
 
 
-Four class-based middlewares (subclassing ``BaseHTTPMiddleware``):
+Five class-based middlewares (subclassing ``BaseHTTPMiddleware``):
 
+- ``TraceIdMiddleware``:        reads ``X-Trace-Id`` header (Story 9.2 / FR58);
+                                validates against the Story 9.1 contract
+                                (bare UUIDv7 OR ``\\Atg:[1-9][0-9]{0,18}\\Z``
+                                with int64 ceiling); generates via
+                                ``new_uuid7(clock=clock)`` if absent or
+                                malformed; attaches to
+                                ``request.state.trace_id``; binds into
+                                structlog contextvars so every downstream log
+                                record (including the inner ``request_id``
+                                bind) carries ``trace_id``; unbinds in a
+                                ``try/finally`` so a uvicorn worker reused
+                                for the next request never observes the
+                                prior request's trace; echoes on response.
+                                This is the HTTP ingress for Epic 9's α
+                                ``trace_id`` propagation kernel.
 - ``RequestIdMiddleware``:      reads ``X-Request-ID`` header; validates against
                                 the bare-UUIDv7 regex; generates via
                                 ``new_request_id(clock=clock)`` if absent or
@@ -37,12 +52,20 @@ Four class-based middlewares (subclassing ``BaseHTTPMiddleware``):
 
 Middleware registration order in ``build_app`` (outermost → innermost in
 execution order; Starlette reverses the add_middleware call order):
-  app.add_middleware(TierEnforcementMiddleware, ...)        # runs 4th (innermost)
-  app.add_middleware(ActorIdMiddleware)                      # runs 3rd
-  app.add_middleware(IdempotencyKeyMiddleware, clock=clock)  # runs 2nd
-  app.add_middleware(RequestIdMiddleware, clock=clock)       # runs 1st (outermost)
+  app.add_middleware(TierEnforcementMiddleware, ...)        # runs 5th (innermost)
+  app.add_middleware(ActorIdMiddleware)                      # runs 4th
+  app.add_middleware(IdempotencyKeyMiddleware, clock=clock)  # runs 3rd
+  app.add_middleware(RequestIdMiddleware, clock=clock)       # runs 2nd
+  app.add_middleware(TraceIdMiddleware, clock=clock)         # runs 1st (outermost)
 
-So incoming request flows: RequestId → IdempotencyKey → ActorId → TierEnforcement → handler.
+So incoming request flows:
+  TraceId → RequestId → IdempotencyKey → ActorId → TierEnforcement → handler.
+
+``TraceIdMiddleware`` runs OUTERMOST so the ``trace_id`` structlog binding is
+established before any inner middleware (including ``RequestIdMiddleware``)
+emits a log record — every log line and every emitted ``EventEnvelope``
+carries the parent ``trace_id`` correlation alongside the per-request
+``request_id``.
 """
 
 from __future__ import annotations
@@ -56,7 +79,7 @@ from capabilities import CallerContext, Tier, check_tier  # noqa: IMP001 — ser
 from events.clock import Clock
 from events.envelope import ActorKind  # noqa: IMP001 — services→packages allowed
 from events.errors import CapabilityDenied
-from events.ids import new_idempotency_key, new_request_id
+from events.ids import new_idempotency_key, new_request_id, new_uuid7
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import Response
@@ -70,11 +93,102 @@ from registry_api.adapters.errors import _build_capability_denied_response
 
 # Bare UUIDv7 (no prefix) — matches new_request_id / new_idempotency_key output.
 # Version nibble = 7, variant = 8/9/a/b. Same shape used by events.ids.
+#
+# Story 9.2 carry-fix (Epic 8.7 L2 mirror-update discipline): tightened the
+# anchors from ``^...$`` to ``\A...\Z`` to match the envelope-side validator
+# in ``packages/events/src/events/envelope.py:134``. ``^/$`` match at line
+# boundaries — a hostile ``X-Request-ID`` of ``<valid-uuid>\n<garbage>`` would
+# previously slip past ``^...$`` validation. ``\A/\Z`` anchor only to the
+# absolute start/end of the input.
 _UUIDV7_BARE_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    r"\A[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z"
 )
 
+# Story 9.2: trace_id Telegram form (mirrors envelope.py:143 / Story 9.1).
+# Telegram update_id is a positive signed 64-bit int (1 ≤ update_id ≤ int64-max).
+# The leading-digit constraint ``[1-9]`` rejects ``tg:0`` and leading-zero
+# aliases (``tg:01``, ``tg:007``) so two distinct strings can never refer to
+# the same update_id. The int64 ceiling is enforced post-match because the
+# 19-digit cap alone admits up to ~9.99e18 > int64 max ~9.22e18.
+_TRACE_ID_TELEGRAM_RE = re.compile(r"\Atg:[1-9][0-9]{0,18}\Z")
+_INT64_MAX = 9_223_372_036_854_775_807
+
+
+def _is_valid_trace_id(value: str) -> bool:
+    """Return True if *value* matches the Story 9.1 ``trace_id`` shape contract.
+
+    Accepted shapes:
+      - bare UUIDv7 (e.g. ``01917e5c-a7d1-7000-8abc-...``)
+      - Telegram-derived form ``tg:<update_id>`` where update_id is a positive
+        decimal integer in ``[1, 2**63 − 1]`` with no leading zeros.
+
+    This MUST stay symmetric with ``events.envelope._trace_id_shape`` — if the
+    two diverge a malformed value could land in ``request.state.trace_id``
+    and trigger a ``ValidationError`` mid-request when the route handler
+    calls ``EventEnvelope.create(trace_id=...)``.
+    """
+    if _UUIDV7_BARE_RE.match(value):
+        return True
+    if _TRACE_ID_TELEGRAM_RE.match(value):
+        return int(value[3:]) <= _INT64_MAX
+    return False
+
+
 _log = logging.getLogger("registry_api.adapters.middleware")
+
+
+class TraceIdMiddleware(BaseHTTPMiddleware):
+    """Read ``X-Trace-Id`` header; validate per Story 9.1 contract; generate if absent/malformed.
+
+    The validated/minted value is attached to ``request.state.trace_id`` AND
+    bound into structlog ``contextvars`` for the duration of the request, so
+    every log record emitted from inside the request (including the inner
+    ``RequestIdMiddleware`` and every route handler) carries ``trace_id``.
+    The value is echoed back as ``X-Trace-Id`` on the response.
+
+    This is the HTTP ingress for Epic 9's α ``trace_id`` propagation kernel
+    (FR58). Stories 9.3-9.6 implement the Telegram / console / MCP / worker
+    ingresses; Story 9.7 makes ``trace_id`` mandatory at the envelope level.
+
+    Order rationale: this middleware runs OUTERMOST in execution flow (added
+    LAST in ``build_app`` since Starlette reverses ``add_middleware`` order).
+    That guarantees the structlog ``trace_id`` bind is established before
+    ``RequestIdMiddleware`` runs — log records emitted from inside any inner
+    middleware or handler carry BOTH ``trace_id`` (parent correlation) AND
+    ``request_id`` (per-request).
+    """
+
+    def __init__(self, app: ASGIApp, *, clock: Clock) -> None:
+        super().__init__(app)
+        self._clock = clock
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        incoming = request.headers.get("X-Trace-Id")
+        if incoming and _is_valid_trace_id(incoming):
+            trace_id = incoming
+        else:
+            if incoming:
+                # Malformed — log + regenerate. Truncate the received value to
+                # 80 chars in the log to bound the size of malformed payloads
+                # (mirrors RequestIdMiddleware's truncation discipline).
+                _log.warning(
+                    "invalid X-Trace-Id header; generating fresh",
+                    extra={"received": incoming[:80]},
+                )
+            trace_id = new_uuid7(clock=self._clock)
+        request.state.trace_id = trace_id
+        # Bind into structlog contextvars so every downstream log record
+        # carries ``trace_id``. The unbind in the ``try/finally`` is
+        # load-bearing: without it, a uvicorn worker reused for the next
+        # request would observe the prior request's trace_id until its own
+        # TraceIdMiddleware rebound it. Mirrors RequestIdMiddleware:115-119.
+        structlog.contextvars.bind_contextvars(trace_id=trace_id)
+        try:
+            response = await call_next(request)
+        finally:
+            structlog.contextvars.unbind_contextvars("trace_id")
+        response.headers["X-Trace-Id"] = trace_id
+        return response
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
@@ -278,4 +392,5 @@ __all__ = [
     "RequestIdMiddleware",
     "ROUTE_TIER_MAP",
     "TierEnforcementMiddleware",
+    "TraceIdMiddleware",
 ]

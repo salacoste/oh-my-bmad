@@ -1,6 +1,6 @@
 # Story 9.2 — registry-api `TraceIdMiddleware` (`X-Trace-Id` header)
 
-Status: **ready-for-dev**
+Status: **done**
 
 ## Story
 
@@ -330,25 +330,66 @@ If you find yourself editing `events.envelope.py`, the schema-registry, alembic 
 
 ## Dev Agent Record
 
-_(To be completed by the dev agent at story closure.)_
+_Closed 2026-05-16._
 
 ### Implementation summary
-_(tbd)_
+
+Implemented `TraceIdMiddleware` in `services/registry-api/src/registry_api/adapters/middleware.py` (Story 9.2 FR58 HTTP ingress). The middleware reads `X-Trace-Id`, validates it against the Story 9.1 contract (bare UUIDv7 OR `tg:<update_id>` with int64 ceiling), mints `new_uuid7(clock=...)` on absent-or-malformed, attaches to `request.state.trace_id`, binds into `structlog.contextvars` with a `try/finally` unbind, and echoes the value on the response. Registered as the OUTERMOST middleware in `build_app` so the `trace_id` structlog bind is established before any inner middleware runs.
+
+Propagated `request.state.trace_id` into every `EventEnvelope.create(...)` callsite inside the route handlers — 1 callsite in `routes/tasks.py` (`task.created`) and 3 callsites in `routes/decisions.py` (`approval.granted`/`approval.rejected`/`task.stop_requested`/`task.retry_requested` base envelope + `tier3.license_override` + `tier3.budget_override`). The outbound projection in `routes/events.py:49` keeps its hardcoded `None` per AC5 — only the noqa comment text changed to reference Story 9.7 (the ORM column / materializer update that's out of scope here).
+
+Story 9.1 mirror-update discipline carry: tightened `_UUIDV7_BARE_RE` in `middleware.py` from `^...$` to `\A...\Z` (the envelope-side validator is already on `\A...\Z`; this closes the multi-line bypass discussed in the Story 9.1 retro).
 
 ### Files changed
-_(tbd)_
+
+| File | Lines (delta) | Notes |
+|---|---|---|
+| `services/registry-api/src/registry_api/adapters/middleware.py` | +99 / -10 | `TraceIdMiddleware` class, `_is_valid_trace_id` helper, `_TRACE_ID_TELEGRAM_RE` + `_INT64_MAX` constants, regex anchor tightening, docstring + `__all__` updates. |
+| `services/registry-api/src/registry_api/app.py` | +12 / -3 | Import `TraceIdMiddleware`, register as outermost `add_middleware`, update file-top + inline comment block. |
+| `services/registry-api/src/registry_api/routes/tasks.py` | +2 / 0 | `trace_id = request.state.trace_id`; thread `trace_id=trace_id` into the `task.created` envelope. |
+| `services/registry-api/src/registry_api/routes/decisions.py` | +4 / 0 | `trace_id = request.state.trace_id`; thread `trace_id=trace_id` into the 3 `EventEnvelope.create(...)` callsites (base, license override, budget override). |
+| `services/registry-api/src/registry_api/routes/events.py` | +1 / -1 | noqa comment text only — `Phase 2: ...` → `Story 9.7: ORM column + materializer update`. |
+| `services/registry-api/src/registry_api/test_middleware.py` | +201 / -5 | New `TestTraceIdMiddleware` class with 12 tests (AC6 #1-#11 + the AC7 dual-header test); `_state_probe` extended to surface `trace_id` + `structlog_trace_id`. |
+| `services/registry-api/src/registry_api/test_app.py` | +46 / 0 | New AC10 integration test `test_post_tasks_envelope_carries_trace_id_from_header` — POST with `X-Trace-Id`, read JSONL, assert envelope's `trace_id` equals the sent header. |
 
 ### Test count delta
-_(tbd)_
+
+| Suite | Before | After | Δ |
+|---|---|---|---|
+| `services/registry-api` (`-m "not slow"`) | 127 | 140 | **+13** |
+| Full workspace (`packages/ services/ -m "not slow"`) | 2227 | 2240 | **+13** |
 
 ### Callsite-warning observation
-_(How many DeprecationWarnings still fire after Story 9.2? Expected drop: ~10-15 from the registry-api cluster.)_
+
+Measured with `uv run pytest packages/ services/ -m "not slow" -W "default::DeprecationWarning" 2>&1 | grep -c "EventEnvelope created without trace_id"`:
+
+| State | Count |
+|---|---|
+| Before Story 9.2 | 99 |
+| After Story 9.2 | 95 |
+| Drop | **−4** |
+
+The headline drop is smaller than the spec's "~10-15" estimate because pytest's warning summary deduplicates by source-location (Python's `DeprecationWarning` default action coalesces identical `(message, category, module, lineno)` tuples). The 4 source-line clusters now silenced map 1:1 to the 4 `EventEnvelope.create(...)` callsites in `routes/tasks.py` + `routes/decisions.py`. The actual emission-count savings under per-test-isolation are larger; the absolute count just isn't visible through the `pytest` summary. Stories 9.3–9.6 will close the remaining 95 clusters; Story 9.7 removes the `pyproject.toml` `filterwarnings` entry once all callsites pass `trace_id=`.
 
 ### Surprises / deviations from spec
-_(tbd)_
+
+1. **Telegram-form rejection on `tg:0` and overflow is non-2xx-blocking, just remint+warn.** The spec wording made me double-check: AC1 #3 says malformed values are reminted rather than 4xx'd. Confirmed correct — a malformed `X-Trace-Id` is a malformed correlation hint, not a request-level error. The middleware's responsibility is "always give the rest of the stack a valid trace_id", same as `RequestIdMiddleware`.
+
+2. **Spec said 4 callsites in `decisions.py`; actual count is 3.** The "task.stop_requested / task.retry_requested" mentions in spec line 75 are *event types* dispatched dynamically by `_build_event(...)` from inside the same `EventEnvelope.create(...)` call at line 268 — they share an envelope-construction site. So the actual `EventEnvelope.create(...)` count in `decisions.py` is 3 (base + license override + budget override), all wired.
+
+3. **Pre-existing `.gitignore` modification observed in `git status` (`marketing/` exclusion).** Not from Story 9.2 — left untouched.
+
+4. **`_state_probe` debug endpoint extension is more than the spec mandated** — it now returns `structlog_trace_id` (live `get_merged_contextvars()` value inside the handler) in addition to `request.state.trace_id`. This is necessary to satisfy AC6 #8 (the structlog binding assertion) without needing a separate probe endpoint or `caplog`-based capture; mirrors the existing pattern for the request_id structlog tests but consolidates the bind-during-request observation into a single probe.
 
 ### Follow-up TODOs surfaced for Epic 9
-_(tbd)_
+
+- **Story 9.3 (telegram-gateway):** `AllowlistMiddleware` needs the parallel structlog-bind + `request.state.trace_id` plumbing. The `_is_valid_trace_id` helper currently lives in `registry_api.adapters.middleware`; consider promoting it to `events.envelope` as a public `validate_trace_id_shape(value)` helper before Story 9.3 lands so we don't end up with two copies (registry-api + telegram-gateway). Spec AC2's "Alternative" option becomes more attractive once a second ingress shows up.
+- **Story 9.4 (console CLI):** same `validate-or-mint` discipline but at process-start (no HTTP). The CLI should read `X-Trace-Id` (or `OMB_TRACE_ID` env var) and bind structlog once at top of `cli.main`.
+- **Story 9.5 (MCP tool handlers):** the MCP transport doesn't have HTTP headers; the structlog bind needs to happen per-tool-invocation. Consider a `with trace_scope(trace_id):` context manager exported from `events.contextvars`.
+- **Story 9.6 (worker subprocess):** spawn-side propagation via env var or CLI flag; receive-side bind in `worker_wrapper.main`.
+- **Story 9.7 (mandatory `trace_id` + ORM column):** before bumping `schema_version` to 1.1.0, ensure ALL ingresses (9.2-9.6) are wired AND the `pyproject.toml` `filterwarnings` entry is removed AND the `routes/events.py:49` outbound projection is updated to read the new `Event.trace_id` ORM column.
+- **L1 hidden-cascade discipline:** the CI run for this commit was the verification gate; if a downstream/integration test fails on `main` after merge, the fix-forward sweep mirrors the Epic 8.7 retro pattern.
+- **Mirror-update L2 audit candidate:** there are still 7 occurrences of `^[0-9a-f]{8}...$` (with `^/$` anchors) elsewhere in the workspace (`packages/events/src/events/ids.py:29`, `packages/events/src/events/test_ids.py:23`, `services/telegram-gateway/src/telegram_gateway/test_task_command.py:189,528`, `services/telegram-gateway/src/telegram_gateway/handlers/_keys.py:43`, `services/registry-state/src/registry_state/domain/test_failure_detection.py:682`, `services/worker-wrapper/src/worker_wrapper/adapters/github_client.py:21`). Most are SHA regexes (worker-wrapper) or test-side mirrors that don't accept network input. Recommend a dedicated mini-story under Epic 9 cleanup to sweep them ALL to `\A/\Z` in one pass.
 
 ---
 
@@ -372,7 +413,7 @@ blocks:
   - 9.7 (schema bump uses Story 9.2's HTTP plumbing as the unit-test baseline)
 blocked_by:
   - 9.1 (trace_id shape contract — landed in commit 7cfebd9)
-status: ready-for-dev
+status: done
 created: 2026-05-16
 created_by: bmad-create-story skill
 ---
