@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-16T00:00:00Z
+last_updated: 2026-05-16T10:51:39Z
 current_phase: 2  # Phase 2 opened by ADR-0003 (docs/adr/0003-phase-2-gate.md), 2026-05-15
 
 development_status:
@@ -246,8 +246,9 @@ development_status:
   8-7-2-mypy-strict-fix: done  # phase: 2 · 58→0 mypy --strict errors across 97 source files (commit 461a01e)
   8-7-3-check-imports-noqa-markers: done  # phase: 2 · 7 IMP001 cross-service violations annotated (commit f948387)
   8-7-4-node-24-sha-pins: done  # phase: 2 · 21 GHA action refs bumped to Node 24 versions (commit 8028380)
-  8-7-5-test-isolation-cascade: backlog  # phase: 2 · 11 cross-file collection errors from `secret.accessed` double-registration — Epic 8 retro debt item #3
-  epic-8-7-retrospective: optional
+  8-7-5-test-isolation-conftest: backlog  # phase: 2 · centralize ensure_registered() autouse fixture in tests/conftest.py (per-file pattern from 7e4ffec doesn't scale)
+  8-7-6-aiosqlite-teardown: backlog  # phase: 2 · root-fix the aiosqlite daemon-thread SIGABRT; replace exit-134 tolerance shim with proper engine disposal / fixture-loop-scope migration
+  epic-8-7-retrospective: done  # phase: 2 · 2026-05-16 retro captures hidden-gate cascade pattern (L1) + module-cache trap (L2) + bash -e gotcha (L3)
 
   # =========================================================================
   # Epic 9: α trace_id propagation kernel (7 stories, ~1 week)
