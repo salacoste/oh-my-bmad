@@ -1,0 +1,338 @@
+# Story 9.3 — telegram-gateway `AllowlistMiddleware` derives `trace_id = f"tg:{update.update_id}"`
+
+Status: **ready-for-dev**
+
+## Story
+
+**As** an operator command flowing through the telegram-gateway,
+**I want** the `AllowlistMiddleware` (Story 3.2 + 6.7) to derive `trace_id = f"tg:{update.update_id}"` from every inbound Telegram `Update` BEFORE delegating to downstream handlers, bind it into the structlog context for the duration of the dispatch, propagate it into the aiogram `data: dict[str, Any]` so handlers can pass it to `EventEnvelope.create(...)`, and unbind cleanly on the way out,
+**so that** every event emitted in the causal chain of a single Telegram message — `task.created`, `task.approval_requested`, `approval.granted`, etc. — carries the same deterministic `trace_id` derived from the update_id, AND replaying the same `update_id` (via the FR28 idempotency-cache hit path) produces the same `trace_id`, closing the Telegram ingress for Epic 9's α propagation kernel.
+
+This is Story 9.3 of Epic 9 (α `trace_id` propagation kernel). It's the **second of 5 entry-point ingresses** (after Story 9.2's HTTP ingress). The validation contract was established by Story 9.1 (`tg:<update_id>` form anchored as `\Atg:[1-9][0-9]{0,18}\Z` with int64 ceiling); 9.3 makes the **producer** wire that contract through.
+
+---
+
+## Acceptance criteria
+
+### AC1 — `AllowlistMiddleware.__call__` derives + binds `trace_id` deterministically
+
+In `services/telegram-gateway/src/telegram_gateway/app/middleware.py`, extend `AllowlistMiddleware.__call__` so that BEFORE any allowlist enforcement or handler delegation:
+
+1. If `event` is an `aiogram.types.Update` (the outer-middleware case — see `lifespan.py:240-247`), read `event.update_id` (always present on `Update`; `int` per the BotAPI schema).
+2. Construct `trace_id = f"tg:{update.update_id}"`.
+3. Validate the value via `events.envelope.is_valid_trace_id(trace_id)` (the public helper promoted in Story 9.2 pass-1 A1). If validation fails (e.g., a malformed BotAPI payload somehow provides a negative or zero `update_id`), log at WARNING and mint `new_uuid7(clock=self._clock)` as a fallback. This is defense-in-depth — the BotAPI guarantees `update_id ≥ 1`, so the fallback should never fire in production, but the cost of a fresh UUIDv7 mint is trivial compared to a 500.
+4. Bind into structlog contextvars: `structlog.contextvars.bind_contextvars(trace_id=trace_id)`.
+5. Insert into the `data` dict: `data["trace_id"] = trace_id` so downstream inner middlewares + handlers can read it (mirrors how Story 3.6's `request_id` is threaded — line 203 of the existing middleware).
+6. Unbind in a `try/finally` so an aiogram dispatcher reused for the next update never observes the prior update's trace.
+7. The unbind MUST run on every code path — including the `return None` short-circuit branches when the user is non-allowlisted or `user_id is None`.
+
+### AC2 — Deterministic / idempotent replay invariant
+
+For two `Update` objects with the same `update_id`, the derived `trace_id` MUST be byte-identical. This composes with FR28 idempotency (Story 7.5+): when the operator's client retransmits a previously-acknowledged update (e.g., webhook redelivery), the `trace_id` resolves to the same value, so the FR28 idempotency-cache hit produces a replay log entry carrying the same `trace_id` as the original. This is the **only** ingress in Epic 9 where the trace_id is derived from a stable identifier rather than minted — the determinism is load-bearing.
+
+Add a unit test `test_replay_same_update_id_produces_same_trace_id`: construct two `Update(update_id=42, ...)` instances (no other fields need to differ); pass both through the middleware; assert both `data["trace_id"]` values equal `"tg:42"`.
+
+### AC3 — Validates against Story 9.1 contract
+
+The derived `trace_id` MUST pass `is_valid_trace_id()` for any BotAPI-conformant `update_id` (`1 ≤ n ≤ 9_223_372_036_854_775_807`). Specifically:
+
+- `update_id=1` → `tg:1` → valid ✓
+- `update_id=9_223_372_036_854_775_807` → `tg:9223372036854775807` → valid ✓ (int64 max)
+- `update_id=0` → `tg:0` → REJECTED by `is_valid_trace_id` (Story 9.1 F2 leading-zero rule rejects `tg:0`) → fallback to `new_uuid7()`
+- `update_id=-1` (impossible per BotAPI but defense in depth) → `tg:-1` → REJECTED (regex requires `[1-9]` first digit, no sign char) → fallback
+
+The fallback path is exercised in tests for the impossible-but-defended cases.
+
+### AC4 — Rejection events also carry the derived `trace_id`
+
+`_emit_rejection` (the helper that builds and emits `telegram.rejected` envelopes) MUST receive and propagate the derived `trace_id`. Currently it takes `request_id` (Story 3.6) but no `trace_id`. Extend its signature:
+
+```python
+async def _emit_rejection(
+    self,
+    *,
+    user_id: int,
+    reason: str,
+    request_id: str | None,
+    trace_id: str,  # NEW — always set; the middleware derives it BEFORE deciding to reject
+) -> None:
+```
+
+The `EventEnvelope.create(...)` call inside `_emit_rejection` MUST pass `trace_id=trace_id`. This silences the Story 9.1 DeprecationWarning for the rejection-emission callsite.
+
+### AC5 — Downstream handlers consume `data["trace_id"]`
+
+Audit every handler registered on the Telegram dispatcher (`services/telegram-gateway/src/telegram_gateway/handlers/*.py`) that calls `EventEnvelope.create(...)`. For each:
+
+- Read `trace_id: str = data["trace_id"]` (aiogram guarantees `data` is set by outer middlewares before handlers run).
+- Pass `trace_id=trace_id` to the envelope factory.
+
+Targets identified by `grep -n "EventEnvelope.create" services/telegram-gateway/src/`:
+- `services/telegram-gateway/src/telegram_gateway/handlers/task_command.py` (Story 3.3 — `task.created` emission)
+- `services/telegram-gateway/src/telegram_gateway/handlers/approve_command.py` (Story 3.4 — approval orchestration; emits via the registry-api HTTP path which already gets trace_id from 9.2's middleware, so this handler MAY only need to PROPAGATE the trace_id as `X-Trace-Id` header on its outbound HTTP request)
+- `services/telegram-gateway/src/telegram_gateway/handlers/stop_command.py`, `reject_command.py`, `retry_command.py`, `agent_command.py` — same pattern: either direct envelope emission OR outbound HTTP call to registry-api.
+
+For each handler that makes an **outbound HTTP call** to registry-api, set the `X-Trace-Id: <data["trace_id"]>` header on the request so 9.2's middleware preserves rather than re-mints the value.
+
+### AC6 — `PerActorRateLimitMiddleware` integration
+
+`PerActorRateLimitMiddleware` is registered immediately AFTER `AllowlistMiddleware` (lifespan.py:253). It already reads from the `data` dict. Verify that any `telegram.rejected`-style envelopes emitted by the rate-limiter ALSO carry the propagated `trace_id` from `data["trace_id"]`. If the rate-limiter currently mints its own UUIDv7 or emits without `trace_id`, fix it to consume from `data`.
+
+### AC7 — Unit tests (≥10)
+
+New tests in `services/telegram-gateway/src/telegram_gateway/test_allowlist.py` (or a new test class):
+
+1. `test_trace_id_derived_from_update_id` — pass `Update(update_id=42, ...)`, assert `data["trace_id"] == "tg:42"`.
+2. `test_trace_id_bound_to_structlog_context_during_handler_dispatch` — inner handler reads `structlog.contextvars.get_contextvars()["trace_id"]`, asserts it matches.
+3. `test_trace_id_unbound_after_dispatch_success` — assert contextvars cleared after handler returns.
+4. `test_trace_id_unbound_after_dispatch_exception` — handler raises; assert contextvars still cleared.
+5. `test_trace_id_unbound_after_allowlist_rejection` — non-allowlisted user; middleware returns `None`; assert contextvars cleared.
+6. `test_trace_id_unbound_after_no_from_user_rejection` — event with no `from_user`; middleware returns `None`; assert contextvars cleared.
+7. `test_replay_same_update_id_produces_same_trace_id` (AC2).
+8. `test_trace_id_max_int64_update_id_accepted` — `update_id=9_223_372_036_854_775_807` → `tg:9223372036854775807`.
+9. `test_trace_id_fallback_on_zero_update_id` — synthetic `Update(update_id=0)` (impossible per BotAPI but defensive); assert WARNING log + fresh UUIDv7 in `data["trace_id"]`.
+10. `test_trace_id_fallback_on_negative_update_id` — synthetic `Update(update_id=-1)`; assert WARNING log + UUIDv7 fallback.
+11. `test_telegram_rejected_envelope_carries_trace_id` — non-allowlisted user; assert the emitted `telegram.rejected` envelope's `trace_id` field equals the derived value (NOT `None`).
+12. (Optional integration) `test_handler_emits_event_with_propagated_trace_id` — a stub handler reads `data["trace_id"]`, builds an envelope via `EventEnvelope.create(trace_id=data["trace_id"], ...)`; assert no DeprecationWarning fires and the envelope's `trace_id` matches.
+
+### AC8 — mypy --strict clean + Epic 8.7 baseline gates
+
+`uv run mypy --strict packages/ services/registry-api services/registry-state services/telegram-gateway` exits 0. The strict gate currently runs on `packages/ services/registry-api services/registry-state` per `.github/workflows/ci.yml:67` — **DO NOT** extend the CI command in 9.3. If telegram-gateway mypy isn't on the CI strict-gate baseline, that's a separate hygiene task; 9.3 must not introduce drift to the existing 97-source-files baseline.
+
+`ruff check`, `ruff format --check`, `check_imports`, `check_single_writer`, and the secret-hygiene full-tree scan all pass. Test count delta: +10 to +15 tests; full suite goes from 2269 → ~2280-2285.
+
+### AC9 — DeprecationWarning count drops further
+
+Before 9.3, the suite emits ~80 callsite DeprecationWarnings (silenced via `pyproject.toml` filterwarnings). After 9.3, the telegram-gateway handler cluster (~6-10 callsites — task/approve/stop/reject/retry/agent commands) stops emitting. Verify by running:
+
+```bash
+uv run pytest packages/ services/ -m "not slow" -W "always::DeprecationWarning" 2>&1 | grep -c "EventEnvelope created without trace_id"
+```
+
+Expected: count drops by ~4-6 (per-source-location dedup, mirroring Story 9.2's empirical "per-callsite" semantics — NOT per-test count). Document the actual measurement in the Dev Agent Record.
+
+### AC10 — FR58 (Telegram) literal compliance
+
+Every event emitted as a direct result of a Telegram update — `task.created` (from `/task`), `approval.granted` / `task.stop_requested` / etc. (from approve/stop/retry/reject handlers), AND `telegram.rejected` (from the allowlist middleware itself) — now carries the `trace_id` derived from `update.update_id` (or its UUIDv7 fallback). Verify via an integration test that posts a synthetic Telegram update, reads the JSONL event log, and asserts:
+
+- All envelopes share the same `trace_id` value (the chain correlation invariant)
+- The value matches `f"tg:{update_id_sent}"`
+- Multi-event chains (e.g., `/task` → `task.created` + `task.planning.started`) all share the same trace_id
+
+---
+
+## Developer context
+
+### Existing state
+
+- `AllowlistMiddleware` at `services/telegram-gateway/src/telegram_gateway/app/middleware.py:149-218` already handles the outer-middleware lifecycle and emits `telegram.rejected` envelopes on rejection.
+- It receives `event: TelegramObject` and `data: dict[str, Any]` per aiogram's `BaseMiddleware` contract.
+- It's registered on `dp.update.outer_middleware` (lifespan.py:240) — the outer-middleware-on-update wiring guarantees `event` is an `Update` instance.
+- Story 3.6 established the `request_id` propagation pattern via `data` dict (line 203). 9.3 mirrors this for `trace_id`.
+
+### Architecture compliance
+
+- **FR58 (Telegram)** — "telegram-gateway `AllowlistMiddleware` injects `trace_id = f"tg:{update_id}"` (deterministic per inbound update)."
+- **FR28 (idempotency)** — replay of same `update_id` MUST produce same `trace_id`. AC2 + AC7 lock this in.
+- **NFR-O7** — every event emitted in Phase 2+ carries non-null `trace_id`. AC4 + AC5 close the telegram-gateway callsites.
+- **P2-I2** — no `schema_version` bump in 9.3 (Story 9.7 owns it).
+- **Architecture §"trace_id propagation wiring"** — telegram-gateway is the "Telegram update update_id" ingress in the Mermaid diagram.
+
+### Library / framework requirements
+
+| Library | Version | Notes |
+|---|---|---|
+| aiogram | already in telegram-gateway deps | `BaseMiddleware` API; `Update.update_id: int` |
+| structlog | already wired | `contextvars.bind_contextvars` / `unbind_contextvars` |
+| events | workspace member | Import `is_valid_trace_id` from `events.envelope` (Story 9.2 pass-1 promoted it to public) and `new_uuid7` from `events.ids` |
+
+No new deps.
+
+### File-structure requirements
+
+| File | Change |
+|---|---|
+| `services/telegram-gateway/src/telegram_gateway/app/middleware.py` | Extend `AllowlistMiddleware.__call__` to derive + bind + propagate `trace_id`. Extend `_emit_rejection` signature. Add module-level `_log = logging.getLogger(__name__)` if not present. |
+| `services/telegram-gateway/src/telegram_gateway/handlers/task_command.py` | Pass `trace_id=data["trace_id"]` to `EventEnvelope.create(...)`. |
+| `services/telegram-gateway/src/telegram_gateway/handlers/approve_command.py` | Set `X-Trace-Id` header on outbound HTTP call to registry-api (registry-api's 9.2 middleware will preserve it). |
+| `services/telegram-gateway/src/telegram_gateway/handlers/stop_command.py` | Same pattern (envelope OR HTTP header). |
+| `services/telegram-gateway/src/telegram_gateway/handlers/reject_command.py` | Same. |
+| `services/telegram-gateway/src/telegram_gateway/handlers/retry_command.py` | Same. |
+| `services/telegram-gateway/src/telegram_gateway/handlers/agent_command.py` | Same. |
+| `services/telegram-gateway/src/telegram_gateway/app/rate_limit.py` (AC6) | Verify `PerActorRateLimitMiddleware` reads `trace_id` from `data` when emitting any rate-limit-rejected envelope. |
+| `services/telegram-gateway/src/telegram_gateway/test_allowlist.py` | ≥10 new tests per AC7. |
+
+Do **NOT** touch:
+- `packages/events/src/events/envelope.py` — Story 9.1 owns the validator. 9.3 imports `is_valid_trace_id` only.
+- `services/registry-api/*` — Story 9.2 owns the HTTP ingress.
+- `pyproject.toml` filterwarnings — Story 9.7 owns its removal.
+- Any non-telegram-gateway service.
+
+### Testing requirements
+
+- **Unit tests** in `test_allowlist.py` (≥10 per AC7).
+- **At least one integration-feeling test** that simulates a full Telegram update → handler chain and asserts the envelope's trace_id matches `f"tg:{update_id}"`.
+- Test markers: PR-gate (not `@pytest.mark.slow`).
+- **Test isolation**: structlog contextvars are process-global. Add a function-scoped autouse `clear_contextvars()` fixture for the new test class (mirror Story 9.2 pass-1 B2's pattern in registry-api).
+
+### Previous-story intelligence
+
+- **Story 9.1** established the `tg:<update_id>` contract. `is_valid_trace_id` validates `\Atg:[1-9][0-9]{0,18}\Z` + int64 ceiling. The middleware MUST use the public helper, NOT re-implement.
+- **Story 9.2** established the HTTP ingress pattern: validate-or-mint-or-fallback, bind to structlog contextvars, propagate via `data` dict, try/finally unbind, echo on response. 9.3 mirrors this for the Telegram BotAPI shape.
+- **Story 3.6** established `request_id` propagation via the `data` dict — exact same pattern.
+- **Story 7.5.1** added `PerActorRateLimitMiddleware` registered after Allowlist; AC6 lifts the same propagation pattern through it.
+- **Epic 8.7 retro L1 (hidden gate cascade)** — after local-green, push and watch. The N806 lint regression on Story 9.2 pass-2 is a fresh data point: ruff version drift between local and CI catches new lint codes silently.
+- **Epic 8.7 retro L2 (documentation poisoning)** — when updating `middleware.py` docstring, do file-top + per-class + `__all__` in one pass.
+
+### Git intelligence — recent commits
+
+```
+b490e4e fix(story-9.2): ruff N806 — _TM_NAME → tm_name in test_middleware
+c1dc9cb fix(story-9.2): pass-2 second-opinion review — 16 patches batch-applied
+3017f48 fix(story-9.2): pass-1 review — 19 patches batch-applied
+f0b83b2 chore(sprint-status): close Story 9.2 — CI green on 25961778907
+047e3d7 feat(registry-api): Story 9.2 — TraceIdMiddleware + X-Trace-Id propagation (FR58 HTTP)
+```
+
+### Latest-tech notes
+
+- **aiogram `BaseMiddleware`** API is stable. `__call__(handler, event, data)` signature — event is the TelegramObject, data is the propagation dict.
+- **`structlog.contextvars`** API: same as in 9.2's `TraceIdMiddleware`. Use `bind_contextvars(trace_id=...)` + `unbind_contextvars("trace_id")` in try/finally.
+- **`aiogram.types.Update.update_id`** — typed `int`, always present (validated by Pydantic at the BotAPI boundary).
+
+---
+
+## Dev notes
+
+### Middleware extension sketch
+
+```python
+# At module top — add to existing imports:
+from events.envelope import is_valid_trace_id  # noqa: IMP001 — services→packages allowed
+from events.ids import new_uuid7  # noqa: IMP001
+
+# Inside AllowlistMiddleware.__call__, before user_id extraction:
+
+trace_id: str
+if isinstance(event, Update) and event.update_id >= 1:
+    candidate = f"tg:{event.update_id}"
+    if is_valid_trace_id(candidate):
+        trace_id = candidate
+    else:
+        # Defense in depth — should never fire for BotAPI-conformant updates.
+        _log.warning(
+            "Telegram update_id failed trace_id validation; minting fallback",
+            extra={"update_id": event.update_id},
+        )
+        trace_id = new_uuid7(clock=self._clock)
+else:
+    # Edge case: event is not an Update (impossible given outer-middleware-on-update
+    # wiring) OR update_id is 0/negative (impossible per BotAPI).
+    _log.warning(
+        "AllowlistMiddleware received non-Update event or invalid update_id; "
+        "minting fallback trace_id",
+        extra={"event_type": type(event).__name__},
+    )
+    trace_id = new_uuid7(clock=self._clock)
+
+structlog.contextvars.bind_contextvars(trace_id=trace_id)
+data["trace_id"] = trace_id
+
+try:
+    # ... existing user-id extraction + allowlist enforcement + delegate to handler ...
+finally:
+    structlog.contextvars.unbind_contextvars("trace_id")
+```
+
+### Trade-off note (capture in commit message, not in code)
+
+Every existing `EventEnvelope.create(...)` callsite in the telegram-gateway handler cluster will continue emitting the DeprecationWarning UNTIL the handlers are individually updated to pass `trace_id=data["trace_id"]`. AC5 handles this in the same story. The `pyproject.toml` filterwarnings entry from Story 9.1 keeps the noise out of CI logs in the interim.
+
+### Non-goals (do NOT do in 9.3)
+
+- Implement console-cli / MCP / worker ingresses — Stories 9.4, 9.5, 9.6.
+- Bump `schema_version` to 1.1.0 — Story 9.7.
+- Add `events.trace_id` ORM column or migrator — Story 9.7.
+- Add `/trace <id>` Telegram operator command — Story 9.7 (Telegram-side surface; `oh-my-bmad trace` console-side surface is also 9.7).
+- Remove `pyproject.toml` filterwarnings — Story 9.7.
+- Touch envelope validator — Story 9.1.
+- Touch registry-api middleware — Story 9.2.
+
+---
+
+## Out-of-scope risk flags
+
+| Risk | Mitigation |
+|---|---|
+| `Update.update_id` could be 0 or negative in malformed BotAPI payloads (impossible per docs but defense in depth). | AC3 + AC7 #9, #10 lock the fallback path with WARNING log + UUIDv7. |
+| `data` dict is mutable and shared across the middleware chain — could a downstream middleware (PerActorRateLimitMiddleware) overwrite `data["trace_id"]`? | AC6 verifies the propagation invariant; PerActorRateLimitMiddleware is read-only on the trace_id field. |
+| Telegram webhook redelivery (FR28 idempotency replay) sends the same `update_id` twice. The derived `trace_id` will be identical — that's the deterministic invariant. The FR28 cache-hit path produces a replay envelope; does THAT envelope also carry the same trace_id? | Verify by inspecting the FR28 idempotency-cache writer (likely `EventLogWriter.append` from `_safe_emit`). Out of scope for 9.3 if not directly testable; flag in retro. |
+| `_emit_rejection`'s signature change is a breaking change to a private API. | OK — it's truly private (single caller). No back-compat concern. |
+| Outbound HTTP handlers (approve/stop/retry/reject/agent) need to set `X-Trace-Id` header. The httpx client used in these handlers may have a default `headers` dict; merge carefully. | AC5 calls out the pattern. Code review should verify no header is overwritten. |
+| `structlog.contextvars.clear_contextvars()` in autouse test fixture — does it conflict with aiogram's own contextvars usage during tests? | Mirror Story 9.2's autouse approach; aiogram dispatcher tests in test_allowlist.py already work with similar patterns. |
+
+---
+
+## Definition of done
+
+- All 10 ACs satisfied.
+- `uv run pytest services/telegram-gateway -q` shows new tests passing.
+- Local full-suite parity gate green.
+- CI green on push (allow for L1 hidden-gate cascade — be ready for follow-up).
+- Commit message follows `feat(telegram-gateway): Story 9.3 — ...` style.
+- `sprint-status.yaml` `9-3-telegram-gateway-tg-update-id-derivation: backlog → done`.
+- Dev Agent Record filled in with implementation notes, deprecation count delta, surprises, follow-up TODOs.
+- Two-pass adversarial code review (pass-1 + pass-2) completed per Epic 8.x cadence.
+
+---
+
+## Dev Agent Record
+
+_(To be completed by the dev agent at story closure.)_
+
+### Implementation summary
+_(tbd)_
+
+### Files changed
+_(tbd)_
+
+### Test count delta
+_(tbd)_
+
+### Callsite-warning observation
+_(How many DeprecationWarnings still fire after Story 9.3? Expected drop: ~4-6 telegram-gateway callsites.)_
+
+### Surprises / deviations from spec
+_(tbd)_
+
+### Follow-up TODOs surfaced for Epic 9
+_(tbd)_
+
+---
+
+## Frontmatter
+
+```yaml
+---
+story_id: 9.3
+story_key: 9-3-telegram-gateway-tg-update-id-derivation
+parent_epic: 9
+phase: 2
+fr_refs: [FR58, FR28]
+nfr_refs: [NFR-O7]
+arch_refs:
+  - "trace_id propagation wiring (Mermaid §line-1117+)"
+  - "P2-I2 (single Phase 2 schema bump deferred to 9.7)"
+  - "FR28 idempotency-cache deterministic replay"
+estimated_hours: 3-5
+priority: high (Telegram ingress for Epic 9; second of 5 ingresses)
+blocks:
+  - 9.7 (schema bump uses Story 9.3's middleware as the deterministic-replay unit-test baseline)
+blocked_by:
+  - 9.1 (trace_id shape contract — landed in commit 7cfebd9)
+  - 9.2 (HTTP ingress + public is_valid_trace_id helper — landed in commits 047e3d7 + 3017f48 + c1dc9cb + b490e4e)
+status: ready-for-dev
+created: 2026-05-16
+created_by: bmad-create-story skill
+---
+```
