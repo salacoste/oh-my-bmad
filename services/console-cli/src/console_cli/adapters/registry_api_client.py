@@ -162,6 +162,7 @@ class RegistryAPIClient:
         idempotency_key: str,
         actor_id: str = "console",
         request_id: str | None = None,
+        trace_id: str | None = None,
         repo: str | None = None,
         hint: str | None = None,
     ) -> CreateTaskResponseLocal:
@@ -177,6 +178,8 @@ class RegistryAPIClient:
         }
         if request_id is not None:
             headers["X-Request-ID"] = request_id
+        if trace_id is not None and trace_id != "":
+            headers["X-Trace-Id"] = trace_id
 
         body: dict[str, str] = {"title": title}
         if repo is not None:
@@ -215,6 +218,7 @@ class RegistryAPIClient:
         *,
         task_id: str,
         request_id: str | None = None,
+        trace_id: str | None = None,
     ) -> TaskResponseLocal:
         """GET /v1/tasks/{task_id} — retrieve task state.
 
@@ -227,6 +231,8 @@ class RegistryAPIClient:
         headers: dict[str, str] = {}
         if request_id is not None:
             headers["X-Request-ID"] = request_id
+        if trace_id is not None and trace_id != "":
+            headers["X-Trace-Id"] = trace_id
 
         async with httpx.AsyncClient(base_url=self._base_url, timeout=_DEFAULT_TIMEOUT) as client:
             response = await client.get(f"/v1/tasks/{task_id}", headers=headers)
@@ -247,6 +253,7 @@ class RegistryAPIClient:
         *,
         task_id: str,
         request_id: str | None = None,
+        trace_id: str | None = None,
     ) -> LogsDigestResponseLocal:
         """GET /v1/tasks/{task_id}/logs/digest — retrieve LLM-digest output.
 
@@ -262,6 +269,8 @@ class RegistryAPIClient:
         headers: dict[str, str] = {}
         if request_id is not None:
             headers["X-Request-ID"] = request_id
+        if trace_id is not None and trace_id != "":
+            headers["X-Trace-Id"] = trace_id
 
         async with httpx.AsyncClient(base_url=self._base_url, timeout=_DEFAULT_TIMEOUT) as client:
             response = await client.get(f"/v1/tasks/{task_id}/logs/digest", headers=headers)
@@ -285,6 +294,7 @@ class RegistryAPIClient:
         idempotency_key: str,
         actor_id: str = "console",
         request_id: str | None = None,
+        trace_id: str | None = None,
         hint: str | None = None,
     ) -> DecisionResponseLocal:
         """POST /v1/tasks/{task_id}/decisions — submit an operator decision.
@@ -304,6 +314,8 @@ class RegistryAPIClient:
         }
         if request_id is not None:
             headers["X-Request-ID"] = request_id
+        if trace_id is not None and trace_id != "":
+            headers["X-Trace-Id"] = trace_id
 
         body: dict[str, str] = {"action": action}
         if hint is not None:
@@ -344,6 +356,7 @@ class RegistryAPIClient:
         self,
         *,
         request_id: str | None = None,
+        trace_id: str | None = None,
     ) -> HealthResponseLocal:
         """GET /v1/health — platform health summary.
 
@@ -357,6 +370,8 @@ class RegistryAPIClient:
         headers: dict[str, str] = {}
         if request_id is not None:
             headers["X-Request-ID"] = request_id
+        if trace_id is not None and trace_id != "":
+            headers["X-Trace-Id"] = trace_id
 
         async with httpx.AsyncClient(base_url=self._base_url, timeout=_DEFAULT_TIMEOUT) as client:
             response = await client.get("/v1/health", headers=headers)
@@ -379,6 +394,7 @@ class RegistryAPIClient:
         since: str | None = None,
         limit: int = 100,
         request_id: str | None = None,
+        trace_id: str | None = None,
     ) -> TaskEventsResponseLocal:
         """GET /v1/tasks/{task_id}/events — raw event stream for debugging.
 
@@ -395,6 +411,8 @@ class RegistryAPIClient:
         headers: dict[str, str] = {}
         if request_id is not None:
             headers["X-Request-ID"] = request_id
+        if trace_id is not None and trace_id != "":
+            headers["X-Trace-Id"] = trace_id
 
         async with httpx.AsyncClient(base_url=self._base_url, timeout=_DEFAULT_TIMEOUT) as client:
             response = await client.get(

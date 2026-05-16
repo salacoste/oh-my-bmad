@@ -14,6 +14,7 @@ from console_cli.adapters.registry_api_client import (
     RegistryResponseError,
 )
 from console_cli.app.config import ConsoleSettings
+from console_cli.app.metadata import mint_command_metadata
 from console_cli.app.runner import run_async
 
 
@@ -27,9 +28,16 @@ def status(
 
     settings = ConsoleSettings()
     client = RegistryAPIClient(base_url=settings.registry_api_base_url)
+    metadata = mint_command_metadata()
 
     try:
-        result = run_async(client.get_task(task_id=task_id))
+        result = run_async(
+            client.get_task(
+                task_id=task_id,
+                request_id=metadata.request_id,
+                trace_id=metadata.trace_id,
+            )
+        )
     except httpx.ConnectError:
         print(
             "Error: Could not reach registry-api. Is docker compose up?",

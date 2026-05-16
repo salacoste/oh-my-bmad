@@ -378,3 +378,90 @@ def test_retry_command_task_not_found() -> None:
         result = runner.invoke(app, ["retry", _VALID_TASK_ID])
     assert result.exit_code != 0
     assert "not found" in (result.output + (result.stderr or "")).lower()
+
+
+# ---------------------------------------------------------------------------
+# Story 9.4 — X-Trace-Id header propagation on submit_decision (AC6 #7-#9)
+# ---------------------------------------------------------------------------
+
+
+_FAKE_TRACE_ID = "01917e5c-a7d1-7000-8abc-0123456789ab"
+
+
+@pytest.mark.asyncio
+async def test_submit_decision_sends_x_trace_id_header_when_provided() -> None:
+    """AC6 #7 — explicit trace_id propagates to outbound POST decisions."""
+    client = _make_client()
+    with patch(
+        "httpx.AsyncClient.post",
+        new_callable=AsyncMock,
+        return_value=_mock_200(_DECISION_RESPONSE_BODY),
+    ) as mock_post:
+        await client.submit_decision(
+            task_id=_VALID_TASK_ID,
+            action="approve",
+            idempotency_key="ik-123",
+            trace_id=_FAKE_TRACE_ID,
+        )
+    headers = mock_post.call_args[1]["headers"]
+    assert headers["X-Trace-Id"] == _FAKE_TRACE_ID
+
+
+@pytest.mark.asyncio
+async def test_submit_decision_omits_x_trace_id_header_when_none() -> None:
+    """AC6 #8 — no X-Trace-Id header when trace_id is None."""
+    client = _make_client()
+    with patch(
+        "httpx.AsyncClient.post",
+        new_callable=AsyncMock,
+        return_value=_mock_200(_DECISION_RESPONSE_BODY),
+    ) as mock_post:
+        await client.submit_decision(
+            task_id=_VALID_TASK_ID,
+            action="approve",
+            idempotency_key="ik-123",
+            trace_id=None,
+        )
+    headers = mock_post.call_args[1]["headers"]
+    assert "X-Trace-Id" not in headers
+
+
+@pytest.mark.asyncio
+async def test_submit_decision_omits_x_trace_id_header_when_empty_string() -> None:
+    """AC6 #9 — empty-string trace_id filtered (defense-in-depth, Q9 pattern)."""
+    client = _make_client()
+    with patch(
+        "httpx.AsyncClient.post",
+        new_callable=AsyncMock,
+        return_value=_mock_200(_DECISION_RESPONSE_BODY),
+    ) as mock_post:
+        await client.submit_decision(
+            task_id=_VALID_TASK_ID,
+            action="approve",
+            idempotency_key="ik-123",
+            trace_id="",
+        )
+    headers = mock_post.call_args[1]["headers"]
+    assert "X-Trace-Id" not in headers
+
+
+def test_approve_command_propagates_x_trace_id_to_outbound_request() -> None:
+    """End-to-end CliRunner — ``approve`` mints + forwards bare UUIDv7 trace_id."""
+    import re
+
+    from typer.testing import CliRunner
+
+    from console_cli.app.main import app
+
+    runner = CliRunner()
+    with patch(
+        "httpx.AsyncClient.post",
+        new_callable=AsyncMock,
+        return_value=_mock_200(_DECISION_RESPONSE_BODY),
+    ) as mock_post:
+        result = runner.invoke(app, ["approve", _VALID_TASK_ID])
+    assert result.exit_code == 0
+    headers = mock_post.call_args[1]["headers"]
+    assert "X-Trace-Id" in headers
+    uuidv7_bare_re = r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    assert re.match(uuidv7_bare_re, headers["X-Trace-Id"]), headers["X-Trace-Id"]

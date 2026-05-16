@@ -306,3 +306,53 @@ def test_events_follow_cursor_uses_since() -> None:
     # Second call should have since param from last emitted_at
     second_call = mock_get.call_args_list[1]
     assert second_call[1]["params"]["since"] == "2026-05-06T10:01:00Z"
+
+
+# ---------------------------------------------------------------------------
+# Story 9.4 — X-Trace-Id header propagation on get_task_events (AC6 #10-#11)
+# ---------------------------------------------------------------------------
+
+
+_FAKE_TRACE_ID = "01917e5c-a7d1-7000-8abc-0123456789ab"
+
+
+@pytest.mark.asyncio
+async def test_get_task_events_sends_x_trace_id_header_when_provided() -> None:
+    """AC6 #10 — get_task_events propagates explicit trace_id as X-Trace-Id."""
+    client = _make_client()
+    with patch(
+        "httpx.AsyncClient.get",
+        new_callable=AsyncMock,
+        return_value=_mock_events_200(),
+    ) as mock_get:
+        await client.get_task_events(task_id=_VALID_TASK_ID, trace_id=_FAKE_TRACE_ID)
+    headers = mock_get.call_args[1]["headers"]
+    assert headers["X-Trace-Id"] == _FAKE_TRACE_ID
+
+
+@pytest.mark.asyncio
+async def test_get_task_events_omits_x_trace_id_header_when_none() -> None:
+    """AC6 #11 — no X-Trace-Id header when trace_id is None."""
+    client = _make_client()
+    with patch(
+        "httpx.AsyncClient.get",
+        new_callable=AsyncMock,
+        return_value=_mock_events_200(),
+    ) as mock_get:
+        await client.get_task_events(task_id=_VALID_TASK_ID, trace_id=None)
+    headers = mock_get.call_args[1]["headers"]
+    assert "X-Trace-Id" not in headers
+
+
+@pytest.mark.asyncio
+async def test_get_task_events_omits_x_trace_id_header_when_empty_string() -> None:
+    """Empty-string trace_id filtered (defense-in-depth, Q9 pattern)."""
+    client = _make_client()
+    with patch(
+        "httpx.AsyncClient.get",
+        new_callable=AsyncMock,
+        return_value=_mock_events_200(),
+    ) as mock_get:
+        await client.get_task_events(task_id=_VALID_TASK_ID, trace_id="")
+    headers = mock_get.call_args[1]["headers"]
+    assert "X-Trace-Id" not in headers

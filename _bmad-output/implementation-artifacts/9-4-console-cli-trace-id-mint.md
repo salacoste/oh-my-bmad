@@ -341,25 +341,65 @@ If you find yourself editing `events.envelope.py`, registry-api routes, the sche
 
 ## Dev Agent Record
 
-_(To be completed by the dev agent at story closure.)_
-
 ### Implementation summary
-_(tbd)_
+
+Story 9.4 closed the third entry-point ingress for Epic 9's α `trace_id` propagation kernel. Every console-cli command invocation now mints a fresh bare-UUIDv7 `trace_id` at command entry via a centralized `mint_command_metadata()` helper in `services/console-cli/src/console_cli/app/metadata.py`, and the value is forwarded as an `X-Trace-Id` header on every outbound httpx call to registry-api. The mint is symmetric to the pre-existing `request_id` + `idempotency_key` pattern; the helper packs all three into a frozen `CommandMetadata` dataclass so future identifiers can join the triple without touching the 10 command modules.
+
+Defense-in-depth empty-string filter (`if trace_id is not None and trace_id != "":`) at the httpx boundary mirrors Story 9.3 pass-2 Q9. The `--follow` polling loop in `events.py` mints once per follow-session and reuses the same `trace_id` across all polls (correct semantic — one trace per command invocation, not per poll).
+
+The `status.py` and `logs.py` commands previously did NOT pass `request_id` at all — Story 9.4 backfilled that gap so all 10 commands now thread the full triple.
 
 ### Files changed
-_(tbd)_
+
+| File | Status | Lines (added) |
+|---|---|---|
+| `services/console-cli/src/console_cli/app/metadata.py` | NEW | +57 |
+| `services/console-cli/src/console_cli/test_metadata.py` | NEW | +70 |
+| `services/console-cli/src/console_cli/adapters/registry_api_client.py` | M | +18 (6 methods × `trace_id` kwarg + empty-string-filtered header set) |
+| `services/console-cli/src/console_cli/commands/task.py` | M | -7/+7 (mint via helper, pass `trace_id`) |
+| `services/console-cli/src/console_cli/commands/approve.py` | M | -7/+5 |
+| `services/console-cli/src/console_cli/commands/reject.py` | M | -7/+5 |
+| `services/console-cli/src/console_cli/commands/stop.py` | M | -7/+5 |
+| `services/console-cli/src/console_cli/commands/retry.py` | M | -7/+5 |
+| `services/console-cli/src/console_cli/commands/status.py` | M | +9 (also backfilled request_id which was missing) |
+| `services/console-cli/src/console_cli/commands/logs.py` | M | +9 (also backfilled request_id which was missing) |
+| `services/console-cli/src/console_cli/commands/events.py` | M | +14/-7 (both `--follow` poll loop AND non-follow path) |
+| `services/console-cli/src/console_cli/commands/ping.py` | M | +7/-5 |
+| `services/console-cli/src/console_cli/commands/agent.py` | M | +7/-4 |
+| `services/console-cli/src/console_cli/test_task_command.py` | M | +115 (3 trace_id unit + 1 CliRunner integration) |
+| `services/console-cli/src/console_cli/test_decision_commands.py` | M | +87 (3 trace_id unit + 1 CliRunner integration) |
+| `services/console-cli/src/console_cli/test_events_command.py` | M | +50 (3 trace_id unit) |
 
 ### Test count delta
-_(tbd)_
+
+- **Baseline (pre-9.4)**: 2298 selected / 2303 collected (full repo, `-m "not slow"`)
+- **Post-9.4**: 2313 selected / 2318 collected
+- **Delta**: +15 tests (+4 in `test_metadata.py`, +4 in `test_task_command.py`, +4 in `test_decision_commands.py`, +3 in `test_events_command.py`)
+
+Total console-cli tests grew 115 → 130 (+15).
 
 ### Callsite-warning observation
-_(How many DeprecationWarnings still fire after Story 9.4? Console-cli proxies through registry-api so the local drop may be 0; the SHAPE of the implementation — every command mints a trace_id and forwards it — is what matters.)_
+
+`EventEnvelope created without trace_id;…` DeprecationWarning count (full-suite, `-W default::DeprecationWarning`):
+
+- **Pre-9.4 baseline (per spec AC7)**: ~94
+- **Post-9.4 measured**: 95
+
+Steady — no measurable local drop. This is **the expected SHAPE** per AC7's caveat: console-cli proxies through registry-api over HTTP; it constructs zero `EventEnvelope` objects directly. The trace_id silencing happens server-side once registry-api's Story 9.2 `TraceIdMiddleware` receives the `X-Trace-Id` header, but the local pytest suite does not invoke the live middleware path for console-cli unit tests (they mock httpx). The contract closure is **structural**: every command now mints + forwards a trace_id, and Story 9.7's `oh-my-bmad-cli trace <id>` will be able to query the event spine for any console-originated command.
 
 ### Surprises / deviations from spec
-_(tbd)_
+
+1. **`status.py` and `logs.py` had no `request_id` plumbing at all** — pre-9.4 these two commands called `client.get_task(task_id=...)` / `client.get_logs_digest(task_id=...)` without forwarding any correlation header. Story 9.4 backfilled the missing `request_id` alongside the new `trace_id`, bringing them in line with the other 8 commands. This is a tiny scope expansion but tightly aligned with AC2 ("each command function mints ... at function entry, then calls `RegistryAPIClient.*` with the values").
+2. **`events.py --follow` polling loop**: each poll iteration still mints a fresh `request_id` (per-poll correlation), but reuses the **same** `trace_id` across the entire follow-session. This is the correct semantic: one trace per command invocation, not per network request. Documented inline in `_poll_events`'s docstring.
+3. **No `# noqa: IMP001`** on the `from events import …` / `from events.ids import new_uuid7` lines in `metadata.py` — the existing console-cli command modules already use unsuppressed `from events import …` (services → packages is allowed by `scripts/check_imports.py`), and adding noqa would produce inconsistent style. The spec sketch (line 233-234) showed the suppression but the codebase's actual rule does not require it.
+4. **Empty-string filter on `events.py --follow`** — the trace_id passed into `_poll_events` is always non-empty (minted by `mint_command_metadata()`), so the `if trace_id != "":` guard is defensive belt-and-braces. Kept for symmetry with the `RegistryAPIClient` boundary.
 
 ### Follow-up TODOs surfaced for Epic 9
-_(tbd)_
+
+- **Story 9.5 (MCP `caller_trace_id`)**: same shape applies — MCP server adapter should accept optional `caller_trace_id` parameter and propagate downstream. Reuse `mint_command_metadata()`'s pattern.
+- **Story 9.6 (worker-wrapper `--trace-id` CLI flag)**: same shape — accept flag, default to `new_uuid7()` if missing, thread through outbound calls.
+- **Story 9.7 (`oh-my-bmad-cli trace <trace-id>` operator query)**: now unblocked — every console-originated command emits an event with a trace_id; the `trace` subcommand can filter on `events.trace_id` once the schema column lands.
+- **CI scope expansion gate**: keep `services/console-cli` OUT of the `mypy --strict packages/ services/registry-api services/registry-state` baseline as planned. 97-source-files baseline preserved.
 
 ---
 

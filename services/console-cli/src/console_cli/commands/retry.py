@@ -14,6 +14,7 @@ from console_cli.adapters.registry_api_client import (
     RegistryResponseError,
 )
 from console_cli.app.config import ConsoleSettings
+from console_cli.app.metadata import mint_command_metadata
 from console_cli.app.runner import run_async
 
 
@@ -28,19 +29,16 @@ def retry(
 
     settings = ConsoleSettings()
     client = RegistryAPIClient(base_url=settings.registry_api_base_url)
-
-    from events import new_idempotency_key, new_request_id
-
-    idempotency_key = new_idempotency_key()
-    request_id = new_request_id()
+    metadata = mint_command_metadata()
 
     try:
         result = run_async(
             client.submit_decision(
                 task_id=task_id,
                 action="retry",
-                idempotency_key=idempotency_key,
-                request_id=request_id,
+                idempotency_key=metadata.idempotency_key,
+                request_id=metadata.request_id,
+                trace_id=metadata.trace_id,
                 hint=hint,
             )
         )

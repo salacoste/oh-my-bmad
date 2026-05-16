@@ -16,6 +16,7 @@ from console_cli.adapters.registry_api_client import (
     RegistryResponseError,
 )
 from console_cli.app.config import ConsoleSettings
+from console_cli.app.metadata import mint_command_metadata
 from console_cli.app.runner import run_async
 
 _POLL_INTERVAL = 0.5
@@ -31,11 +32,13 @@ def _exit_transport_error() -> None:
     raise SystemExit(1) from None
 
 
-async def _poll_events(task_id: str) -> None:
+async def _poll_events(task_id: str, trace_id: str) -> None:
     """Long-lived polling loop for --follow mode.
 
     Uses a single AsyncClient for the polling duration to avoid
-    creating a new TCP connection every 0.5 s.
+    creating a new TCP connection every 0.5 s. ``trace_id`` is the
+    per-invocation bare-UUIDv7 minted by ``mint_command_metadata`` —
+    constant across all polls of a single follow session.
     """
     settings = ConsoleSettings()
     base_url = settings.registry_api_base_url
@@ -55,6 +58,8 @@ async def _poll_events(task_id: str) -> None:
                 params["since"] = since
 
             headers: dict[str, str] = {"X-Request-ID": _new_request_id()}
+            if trace_id != "":
+                headers["X-Trace-Id"] = trace_id
 
             try:
                 response = await client.get(
@@ -103,8 +108,9 @@ def events(
         raise SystemExit(1) from None
 
     if follow:
+        follow_metadata = mint_command_metadata()
         try:
-            run_async(_poll_events(task_id))
+            run_async(_poll_events(task_id, follow_metadata.trace_id))
         except KeyboardInterrupt:
             return
         except httpx.ConnectError:
@@ -137,13 +143,16 @@ def events(
     # Non-follow: single fetch via RegistryAPIClient
     settings = ConsoleSettings()
     client = RegistryAPIClient(base_url=settings.registry_api_base_url)
-
-    from events import new_request_id
-
-    request_id = new_request_id()
+    metadata = mint_command_metadata()
 
     try:
-        result = run_async(client.get_task_events(task_id=task_id, request_id=request_id))
+        result = run_async(
+            client.get_task_events(
+                task_id=task_id,
+                request_id=metadata.request_id,
+                trace_id=metadata.trace_id,
+            )
+        )
     except httpx.ConnectError:
         print(
             "Error: Could not reach registry-api. Is docker compose up?",

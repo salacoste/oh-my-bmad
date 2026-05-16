@@ -12,6 +12,7 @@ from console_cli.adapters.registry_api_client import (
     RegistryResponseError,
 )
 from console_cli.app.config import ConsoleSettings
+from console_cli.app.metadata import mint_command_metadata
 from console_cli.app.runner import run_async
 
 
@@ -19,13 +20,15 @@ def ping() -> None:
     """Health-check the platform."""
     settings = ConsoleSettings()
     client = RegistryAPIClient(base_url=settings.registry_api_base_url)
-
-    from events import new_request_id
-
-    request_id = new_request_id()
+    metadata = mint_command_metadata()
 
     try:
-        result = run_async(client.get_platform_health(request_id=request_id))
+        result = run_async(
+            client.get_platform_health(
+                request_id=metadata.request_id,
+                trace_id=metadata.trace_id,
+            )
+        )
     except httpx.ConnectError:
         print(
             "Error: Could not reach registry-api. Is docker compose up?",
