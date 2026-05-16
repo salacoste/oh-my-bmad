@@ -7,6 +7,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "capabilities",
     "clawhip-bridge-mcp",
     "clawhip-daemon",
     "console-cli",
@@ -33,6 +34,7 @@ required-version = ">=0.5"
 members = ["services/*", "packages/*", "mcp-servers/*"]
 
 [tool.uv.sources]
+capabilities = { workspace = true }
 clawhip-bridge-mcp = { workspace = true }
 clawhip-daemon = { workspace = true }
 console-cli = { workspace = true }
@@ -56,6 +58,10 @@ dev = [
     "mypy",
     "pre-commit",
     "types-cachetools>=5.3",
+    # Test-only deps elevated from service-level groups so CI's `uv sync`
+    # at the workspace root materialises them for `pytest -m "not slow"`.
+    "asgi-lifespan>=2.1",
+    "httpx>=0.27",
 ]
 
 [tool.pytest.ini_options]
