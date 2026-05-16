@@ -22,6 +22,9 @@ from httpx import ASGITransport, AsyncClient
 from registry_state.adapters.sqlite_store import (  # noqa: IMP001 test fixture builds in-memory SQLite via registry-state's schema; no prod cross-service coupling
     create_engine,
 )
+from registry_state.domain.event_types import (  # noqa: IMP001 — test fixture re-registers canonical event types after sibling tests' unregister_all() (Epic 8 retro debt #3)
+    ensure_registered,
+)
 from registry_state.schema import (  # noqa: IMP001 test fixture imports tables for Base.metadata.create_all seeding
     Base,
     Event,
@@ -29,6 +32,21 @@ from registry_state.schema import (  # noqa: IMP001 test fixture imports tables 
 )
 
 from registry_api.app import build_app
+
+
+@pytest.fixture(autouse=True)
+def _ensure_event_types_registered() -> None:
+    """Re-register canonical event types before every test in this file.
+
+    Compensates for ``packages/events/test_canonical.py`` and
+    ``test_schema_registry.py``'s autouse ``unregister_all()`` fixtures
+    which wipe the global registry between cases. Python's module-cache
+    means ``event_types.py``'s module-level register() calls only run
+    ONCE per process — without this fixture, the registry stays empty
+    for the rest of the test session.
+    """
+    ensure_registered()
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
