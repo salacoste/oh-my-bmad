@@ -65,16 +65,48 @@ class CommandMetadata:
     trace_id: str
 
 
-def mint_command_metadata(
+@dataclass(frozen=True)
+class CommandReadMetadata:
+    """Correlation identifiers for **read-only** GET commands (pass-2 S8).
+
+    Subset of :class:`CommandMetadata` containing only the two identifiers
+    that GET endpoints consume — ``request_id`` (forwarded as
+    ``X-Request-ID``) and ``trace_id`` (forwarded as ``X-Trace-Id``).
+    The ``idempotency_key`` field is omitted because HTTP GET is
+    idempotent by semantics; registry-api never inspects an
+    ``Idempotency-Key`` header on read endpoints.
+
+    Splitting the read and write carriers makes the semantic clear at
+    the callsite: ``mint_read_metadata()`` for ``status`` / ``logs`` /
+    ``events`` (non-follow) / ``ping`` / ``agent``;
+    ``mint_write_metadata()`` for ``task`` / ``approve`` / ``reject`` /
+    ``stop`` / ``retry``.
+
+    Validation contract is identical to :class:`CommandMetadata` —
+    transport-only carrier, callers via :func:`mint_read_metadata`
+    receive bare-UUIDv7 strings by construction.
+
+    Attributes:
+        request_id: Per-call request correlation id (bare UUIDv7).
+        trace_id: Bare UUIDv7 trace identifier per Story 9.1's contract.
+    """
+
+    request_id: str
+    trace_id: str
+
+
+def mint_write_metadata(
     *,
     clock: Clock | None = None,
     rng: Random | None = None,
 ) -> CommandMetadata:
-    """Mint a fresh ``(request_id, idempotency_key, trace_id)`` triple.
+    """Mint a fresh ``(request_id, idempotency_key, trace_id)`` triple for writes.
 
-    Called once per command invocation by every console-cli command module.
-    All three fields are independent bare-UUIDv7 strings; the ``trace_id``
-    validates against the UUIDv7 branch of ``events.envelope.is_valid_trace_id``.
+    Called once per **write** command invocation (POST endpoints —
+    ``task`` / ``approve`` / ``reject`` / ``stop`` / ``retry``). All
+    three fields are independent bare-UUIDv7 strings; the ``trace_id``
+    validates against the UUIDv7 branch of
+    ``events.envelope.is_valid_trace_id``.
 
     Args:
         clock: Optional ``Clock`` to inject for deterministic minting
@@ -95,6 +127,63 @@ def mint_command_metadata(
         idempotency_key=new_idempotency_key(clock=clock, rng=rng),
         trace_id=new_uuid7(clock=clock, rng=rng),
     )
+
+
+def mint_read_metadata(
+    *,
+    clock: Clock | None = None,
+    rng: Random | None = None,
+) -> CommandReadMetadata:
+    """Mint a fresh ``(request_id, trace_id)`` pair for **read-only** commands (pass-2 S8).
+
+    Called once per **read** command invocation (GET endpoints —
+    ``status`` / ``logs`` / ``events`` non-follow / ``ping`` / ``agent``).
+    Omits the ``idempotency_key`` mint that ``mint_write_metadata``
+    eagerly builds — GET endpoints don't consume an ``Idempotency-Key``
+    header.
+
+    Args:
+        clock: Optional ``Clock`` for deterministic minting.
+        rng: Optional ``random.Random`` for deterministic minting.
+    """
+    return CommandReadMetadata(
+        request_id=new_request_id(clock=clock, rng=rng),
+        trace_id=new_uuid7(clock=clock, rng=rng),
+    )
+
+
+def mint_command_metadata(
+    *,
+    clock: Clock | None = None,
+    rng: Random | None = None,
+) -> CommandMetadata:
+    """Backwards-compatible alias for :func:`mint_write_metadata`.
+
+    Retained so external callers that imported the original name during
+    pass-1 continue to work. New write callsites should prefer
+    :func:`mint_write_metadata` for symmetry with :func:`mint_read_metadata`.
+    """
+    return mint_write_metadata(clock=clock, rng=rng)
+
+
+def mint_trace_id(
+    *,
+    clock: Clock | None = None,
+    rng: Random | None = None,
+) -> str:
+    """Mint a fresh bare-UUIDv7 ``trace_id`` (no request_id/idempotency_key) — pass-2 S5.
+
+    Use for callers that only need the parent ``trace_id`` correlation —
+    e.g. the ``events.py --follow`` polling loop, where idempotency-key
+    doesn't apply (GET endpoint) and ``request_id`` is minted per-poll
+    via :func:`mint_poll_request_id`. Avoids wasting two-thirds of the
+    triple that :func:`mint_command_metadata` eagerly produces.
+
+    Args:
+        clock: Optional ``Clock`` for deterministic minting.
+        rng: Optional ``random.Random`` for deterministic minting.
+    """
+    return new_uuid7(clock=clock, rng=rng)
 
 
 def mint_poll_request_id(
@@ -118,4 +207,12 @@ def mint_poll_request_id(
     return new_request_id(clock=clock, rng=rng)
 
 
-__all__ = ["CommandMetadata", "mint_command_metadata", "mint_poll_request_id"]
+__all__ = [
+    "CommandMetadata",
+    "CommandReadMetadata",
+    "mint_command_metadata",
+    "mint_poll_request_id",
+    "mint_read_metadata",
+    "mint_trace_id",
+    "mint_write_metadata",
+]

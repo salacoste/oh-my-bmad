@@ -8,17 +8,25 @@ import sys
 
 import httpx
 import typer
+from events.envelope import is_valid_trace_id  # noqa: IMP001
 
 from console_cli.adapters.error_renderer import render_http_error
 from console_cli.adapters.registry_api_client import (
-    REQUEST_ID_HEADER,
     TASK_ID_PATTERN,
-    TRACE_ID_HEADER,
     RegistryAPIClient,
     RegistryResponseError,
 )
 from console_cli.app.config import ConsoleSettings
-from console_cli.app.metadata import mint_command_metadata, mint_poll_request_id
+
+# Pass-2 S6: pull header constants from ``app.headers`` rather than
+# importing them through ``adapters.registry_api_client`` — commands
+# should not depend on adapter internals.
+from console_cli.app.headers import REQUEST_ID_HEADER, TRACE_ID_HEADER
+from console_cli.app.metadata import (
+    mint_poll_request_id,
+    mint_read_metadata,
+    mint_trace_id,
+)
 from console_cli.app.runner import run_async
 
 _POLL_INTERVAL = 0.5
@@ -43,22 +51,39 @@ async def _poll_events(task_id: str, trace_id: str) -> None:
     Per-command vs. per-poll semantics:
 
     * ``trace_id`` is the **per-command** bare-UUIDv7 minted once by
-      ``mint_command_metadata`` and reused across every poll of a
-      single ``--follow`` session. Operators correlating by trace_id
-      find **all** retry attempts of the same command.
+      ``mint_trace_id`` (pass-2 S5; previously ``mint_command_metadata``)
+      and reused across every poll of a single ``--follow`` session.
+      Operators correlating by trace_id find **all** retry attempts
+      of the same command.
     * ``X-Request-ID`` is minted **per HTTP attempt** via
       ``mint_poll_request_id``. Operators correlating by request_id
       find a single attempt.
 
     The trace_id parameter is required and must be non-empty — the
-    sole caller (``events()``) always passes
-    ``mint_command_metadata().trace_id`` which is a freshly minted
-    bare UUIDv7.
+    sole caller (``events()``) always passes ``mint_trace_id()`` which
+    is a freshly minted bare UUIDv7. The function-entry guards (S2/S9)
+    enforce the shape contract under ``python -O`` (where ``assert``
+    is stripped) and reject ``tg:`` prefixed values that don't belong
+    in console-cli.
     """
-    # R2: per-command trace_id must be present at function entry.
-    # ``mint_command_metadata()`` always returns a non-empty UUIDv7;
-    # any empty value here would indicate caller misuse.
-    assert trace_id, "_poll_events requires non-empty trace_id"
+    # Pass-2 S2: replace pass-1 R2 ``assert`` with an unconditional check —
+    # ``assert`` is stripped under ``python -O`` (optimised mode), so a
+    # production caller passing ``None``/``""`` would slip through silently
+    # and crash later at the httpx boundary with an opaque ``TypeError``.
+    # ``ValueError`` is the documented contract violation.
+    if not isinstance(trace_id, str) or not trace_id:
+        raise ValueError("_poll_events requires non-empty str trace_id")
+    # Pass-2 S9: also validate the SHAPE — Story 9.1 contract enforced
+    # in one place (events.envelope). A future caller passing an
+    # ill-formed value would otherwise inject control chars / CRLF into
+    # the outbound X-Trace-Id header. Console-cli is bare-UUIDv7 only
+    # (Telegram's ``tg:<update_id>`` form is reserved for Story 9.3).
+    if not is_valid_trace_id(trace_id):
+        msg = f"_poll_events: trace_id must validate against Story 9.1 contract; got {trace_id!r}"
+        raise ValueError(msg)
+    if trace_id.startswith("tg:"):
+        msg = f"_poll_events: console-cli uses bare UUIDv7 only (no `tg:` prefix); got {trace_id!r}"
+        raise ValueError(msg)
 
     settings = ConsoleSettings()
     base_url = settings.registry_api_base_url
@@ -80,10 +105,11 @@ async def _poll_events(task_id: str, trace_id: str) -> None:
             # preserved across retries (per-command correlation).
             # Intentional asymmetry — see function docstring.
             headers: dict[str, str] = {REQUEST_ID_HEADER: mint_poll_request_id()}
-            # R1/R2: type-safe guard mirrors RegistryAPIClient. The
-            # assert above already rules out empty/None for the documented
-            # contract; this is defense-in-depth at the httpx boundary.
-            if isinstance(trace_id, str) and trace_id:
+            # Pass-2 S1: tighten guard to ``is_valid_trace_id`` (matches
+            # RegistryAPIClient). The function-entry validation above
+            # already proved shape; this is defense-in-depth at the httpx
+            # boundary in case the contract ever loosens.
+            if isinstance(trace_id, str) and is_valid_trace_id(trace_id):
                 headers[TRACE_ID_HEADER] = trace_id
 
             try:
@@ -133,9 +159,14 @@ def events(
         raise SystemExit(1) from None
 
     if follow:
-        follow_metadata = mint_command_metadata()
+        # Pass-2 S5: ``--follow`` only needs the per-command trace_id —
+        # ``mint_command_metadata`` would also build an idempotency_key
+        # and a request_id that this branch immediately discards.
+        # ``mint_trace_id`` returns just the bare UUIDv7 (request_id is
+        # minted per-poll inside ``_poll_events``).
+        follow_trace_id = mint_trace_id()
         try:
-            run_async(_poll_events(task_id, follow_metadata.trace_id))
+            run_async(_poll_events(task_id, follow_trace_id))
         except KeyboardInterrupt:
             return
         except httpx.ConnectError:
@@ -165,10 +196,13 @@ def events(
             raise SystemExit(1) from None
         return
 
-    # Non-follow: single fetch via RegistryAPIClient
+    # Non-follow: single fetch via RegistryAPIClient.
+    # Pass-2 S8: read-only GET — use ``mint_read_metadata`` to avoid
+    # wasting an ``idempotency_key`` mint (the GET endpoint never
+    # reads ``Idempotency-Key``).
     settings = ConsoleSettings()
     client = RegistryAPIClient(base_url=settings.registry_api_base_url)
-    metadata = mint_command_metadata()
+    metadata = mint_read_metadata()
 
     try:
         result = run_async(

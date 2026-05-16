@@ -24,18 +24,17 @@ from datetime import datetime
 from typing import Literal
 
 import httpx
+from events.envelope import is_valid_trace_id  # noqa: IMP001
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+# Pass-2 S6: header constants live in ``app.headers`` (commands depend
+# on ``app/`` not ``adapters/``). Re-exported here as module-level names
+# for backwards-compatibility with pre-pass-2 imports that landed in
+# commit 653e2a9 (pass-1 R13). Listed in ``__all__`` below.
+from console_cli.app.headers import REQUEST_ID_HEADER, TRACE_ID_HEADER
 
 # Default timeout for CLI HTTP calls — prevents indefinite hangs on stalled connections.
 _DEFAULT_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
-
-# Header names — exported as module-level constants so callers (notably
-# ``console_cli.commands.events._poll_events``, which constructs its own
-# ``httpx.AsyncClient`` rather than going through this client class) can
-# reuse the literal strings without duplicating magic strings. Public-API
-# (no leading underscore) because they cross the module boundary.
-REQUEST_ID_HEADER = "X-Request-ID"
-TRACE_ID_HEADER = "X-Trace-Id"
 
 # TASK_ID_PATTERN — local definition (cannot import from telegram-gateway).
 # Validates the "t-<uuidv7>" task-id format per architecture naming rules.
@@ -186,10 +185,13 @@ class RegistryAPIClient:
         }
         if request_id is not None:
             headers[REQUEST_ID_HEADER] = request_id
-        # R1: type-safe guard — accept ``str`` truthy values only.
-        # Rejects ``bytes``, ``int``, ``list``, ``None``, "" before httpx
-        # raises TypeError at request time.
-        if isinstance(trace_id, str) and trace_id:
+        # Pass-2 S1: tighten the R1 type-safe guard further — reject not
+        # just ``bytes``/``int``/empty-string, but ALSO whitespace-only,
+        # NUL-bearing, and CRLF-injection values (``"uuidv7\r\nX-Evil: 1"``).
+        # Delegating to ``is_valid_trace_id`` keeps the shape contract in
+        # one place (events.envelope, Story 9.1) so future ingresses
+        # (Stories 9.5/9.6/etc.) get the same hardening for free.
+        if isinstance(trace_id, str) and is_valid_trace_id(trace_id):
             headers[TRACE_ID_HEADER] = trace_id
 
         body: dict[str, str] = {"title": title}
@@ -242,7 +244,7 @@ class RegistryAPIClient:
         headers: dict[str, str] = {}
         if request_id is not None:
             headers[REQUEST_ID_HEADER] = request_id
-        if isinstance(trace_id, str) and trace_id:
+        if isinstance(trace_id, str) and is_valid_trace_id(trace_id):
             headers[TRACE_ID_HEADER] = trace_id
 
         async with httpx.AsyncClient(base_url=self._base_url, timeout=_DEFAULT_TIMEOUT) as client:
@@ -280,7 +282,7 @@ class RegistryAPIClient:
         headers: dict[str, str] = {}
         if request_id is not None:
             headers[REQUEST_ID_HEADER] = request_id
-        if isinstance(trace_id, str) and trace_id:
+        if isinstance(trace_id, str) and is_valid_trace_id(trace_id):
             headers[TRACE_ID_HEADER] = trace_id
 
         async with httpx.AsyncClient(base_url=self._base_url, timeout=_DEFAULT_TIMEOUT) as client:
@@ -325,7 +327,7 @@ class RegistryAPIClient:
         }
         if request_id is not None:
             headers[REQUEST_ID_HEADER] = request_id
-        if isinstance(trace_id, str) and trace_id:
+        if isinstance(trace_id, str) and is_valid_trace_id(trace_id):
             headers[TRACE_ID_HEADER] = trace_id
 
         body: dict[str, str] = {"action": action}
@@ -381,7 +383,7 @@ class RegistryAPIClient:
         headers: dict[str, str] = {}
         if request_id is not None:
             headers[REQUEST_ID_HEADER] = request_id
-        if isinstance(trace_id, str) and trace_id:
+        if isinstance(trace_id, str) and is_valid_trace_id(trace_id):
             headers[TRACE_ID_HEADER] = trace_id
 
         async with httpx.AsyncClient(base_url=self._base_url, timeout=_DEFAULT_TIMEOUT) as client:
@@ -422,7 +424,7 @@ class RegistryAPIClient:
         headers: dict[str, str] = {}
         if request_id is not None:
             headers[REQUEST_ID_HEADER] = request_id
-        if isinstance(trace_id, str) and trace_id:
+        if isinstance(trace_id, str) and is_valid_trace_id(trace_id):
             headers[TRACE_ID_HEADER] = trace_id
 
         async with httpx.AsyncClient(base_url=self._base_url, timeout=_DEFAULT_TIMEOUT) as client:
@@ -445,17 +447,19 @@ class RegistryAPIClient:
 
 
 __all__ = [
-    "CreateTaskResponseLocal",
-    "TaskResponseLocal",
-    "LogsDigestResponseLocal",
-    "DecisionResponseLocal",
-    "HealthResponseLocal",
-    "TaskEventsResponseLocal",
-    "ActorLocal",
-    "LastEventLocal",
-    "RegistryAPIClient",
-    "RegistryResponseError",
+    # Pass-2 S7: ASCII-strict sort (RUF022) — uppercase constants first,
+    # then alphabetical PascalCase exports.
     "REQUEST_ID_HEADER",
     "TASK_ID_PATTERN",
     "TRACE_ID_HEADER",
+    "ActorLocal",
+    "CreateTaskResponseLocal",
+    "DecisionResponseLocal",
+    "HealthResponseLocal",
+    "LastEventLocal",
+    "LogsDigestResponseLocal",
+    "RegistryAPIClient",
+    "RegistryResponseError",
+    "TaskEventsResponseLocal",
+    "TaskResponseLocal",
 ]

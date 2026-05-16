@@ -12,7 +12,7 @@ from console_cli.adapters.registry_api_client import (
     RegistryResponseError,
 )
 from console_cli.app.config import ConsoleSettings
-from console_cli.app.metadata import mint_command_metadata
+from console_cli.app.metadata import mint_read_metadata
 from console_cli.app.runner import run_async
 
 
@@ -20,7 +20,8 @@ def ping() -> None:
     """Health-check the platform."""
     settings = ConsoleSettings()
     client = RegistryAPIClient(base_url=settings.registry_api_base_url)
-    metadata = mint_command_metadata()
+    # Pass-2 S8: read-only GET — no idempotency_key needed.
+    metadata = mint_read_metadata()
 
     try:
         result = run_async(

@@ -228,6 +228,56 @@ class TestCreateTaskTraceIdHeader:
         headers = mock_post.call_args[1]["headers"]
         assert "X-Trace-Id" not in headers
 
+    # ---------------------------------------------------------------------
+    # Pass-2 S1: whitespace / NUL / CRLF rejection at the boundary —
+    # ``isinstance(trace_id, str) and is_valid_trace_id(trace_id)`` rejects
+    # values that the pre-pass-2 ``and trace_id`` guard would have accepted.
+    # ---------------------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "malformed_trace_id",
+        [
+            # Whitespace-only (truthy under naive ``and trace_id``).
+            " ",
+            "    ",
+            # Leading / trailing whitespace around an otherwise-valid uuidv7.
+            f" {FAKE_TRACE_ID_UUIDV7} ",
+            # Newline-terminated (LF) — could split a header in a naive
+            # http parser.
+            f"{FAKE_TRACE_ID_UUIDV7}\n",
+            # CRLF injection attempt (RFC 7230 §3.2.4) — would append
+            # a phantom ``X-Evil`` header if the value reached httpx.
+            f"{FAKE_TRACE_ID_UUIDV7}\r\nX-Evil: 1",
+            # NUL byte embedded.
+            f"{FAKE_TRACE_ID_UUIDV7}\x00",
+            # Random garbage that's not a uuidv7.
+            "not-a-uuid",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_rejects_malformed_trace_id_at_boundary(self, malformed_trace_id: str) -> None:
+        """Pass-2 S1 — ``is_valid_trace_id`` guard drops whitespace/CRLF/garbage."""
+        client = RegistryAPIClient(base_url=_FAKE_BASE_URL)
+        body = {
+            "task_id": _FAKE_TASK_ID,
+            "event_id": "e-019abcde-f012-7abc-8def-0123456789ab",
+            "created_at": "2026-05-05T12:00:00Z",
+        }
+        with patch(
+            "httpx.AsyncClient.post",
+            new_callable=AsyncMock,
+            return_value=_make_response(201, body),
+        ) as mock_post:
+            await client.create_task(
+                title="trace test",
+                idempotency_key="019abcde-f012-7abc-8def-0123456789ab",
+                trace_id=malformed_trace_id,
+            )
+        headers = mock_post.call_args[1]["headers"]
+        assert "X-Trace-Id" not in headers, (
+            f"malformed trace_id {malformed_trace_id!r} leaked into outbound header"
+        )
+
 
 # ---------------------------------------------------------------------------
 # R11 — per-method X-Trace-Id propagation unit tests for the 3 client methods

@@ -101,7 +101,7 @@ New tests in a sibling `test_metadata.py` (or extend the existing `test_runner.p
 4. `test_create_task_sends_x_trace_id_header_when_provided` — call `RegistryAPIClient.create_task(..., trace_id="01917e5c-...")`; capture the outbound httpx request; assert `X-Trace-Id` header equals the provided value.
 5. `test_create_task_omits_x_trace_id_header_when_none` — call with `trace_id=None`; assert no `X-Trace-Id` header set (registry-api will mint via Story 9.2's middleware).
 6. `test_create_task_omits_x_trace_id_header_when_empty_string` — call with `trace_id=""`; assert no header set (defense-in-depth per Story 9.3 pass-2 Q9 pattern).
-7-11. Repeat #4-#6 for at least 3 other methods (`get_task`, `submit_decision`, `get_events`).
+7-11. Repeat #4-#6 for at least 3 other methods (`get_task`, `submit_decision`, `get_task_events`). Pass-2 S13: corrected from the stale `get_events` placeholder to the real method name (matches the AC3 fix from pass-1 R18).
 12. (Optional integration test) `test_task_command_propagates_trace_id_to_registry_api` — invoke the `task` Typer command via `CliRunner`, mock the registry-api response, assert the captured outbound request carries `X-Trace-Id` matching the minted UUIDv7.
 
 ### AC7 — DeprecationWarning count drops
@@ -375,10 +375,12 @@ The `status.py` and `logs.py` commands previously did NOT pass `request_id` at a
 ### Test count delta
 
 - **Baseline (pre-9.4)**: 2298 selected / 2303 collected (full repo, `-m "not slow"`)
-- **Post-9.4**: 2313 selected / 2318 collected
-- **Delta**: +15 tests (+4 in `test_metadata.py`, +4 in `test_task_command.py`, +4 in `test_decision_commands.py`, +3 in `test_events_command.py`)
+- **Post-pass-1 batch `653e2a9` (re-measured 2026-05-17)**: 2317 passed full-suite; 141 console-cli (`-m "not slow"`)
+- **Pass-1 delta (re-measured)**: +19 full-suite (2298 → 2317); console-cli **141** post-batch.
 
-Total console-cli tests grew 115 → 130 (+15).
+**Pass-2 S10 — count reconciliation**: an earlier draft of this section claimed `+15` Story 9.4 tests in console-cli with a baseline of "115 → 130". Both numbers were wrong. Re-running `uv run pytest services/console-cli -q -m "not slow"` against `653e2a9` returned **141 passed**, and `git diff 712538e..653e2a9 -- 'services/console-cli/src/console_cli/test_*.py' | grep -cE "^\+(async def test_|    async def test_|    def test_|def test_)"` returned **26 new `def test_*` lines**. The discrepancy came from the pass-1 author estimating per-file additions manually instead of running the diff command above. Authoritative source: pytest collection count.
+
+**Pass-2 batch (this commit) delta**: console-cli grew **141 → 154** (+13 new tests across `test_metadata.py` for the new `mint_trace_id` / `mint_read_metadata` / variant-bits cases and `test_task_command.py` for the parametrised malformed-trace-id boundary cases). Full-suite **2317 → 2330** (+13).
 
 ### Callsite-warning observation
 
@@ -465,3 +467,36 @@ Three-lane review (Blind Hunter / Edge Case Hunter / Acceptance Auditor) surface
 | R16 | LOW | Edge | `_poll_events` retry-loop per-poll `request_id` minting lacked comment explaining the per-poll vs per-command semantics asymmetry. | Added inline comment block and updated function docstring. |
 | R17 | LOW | Auditor | AC10 deferment was only a Follow-up TODO bullet in Dev Agent Record, not a dedicated subheading. | Added `### AC10 — ... deferred to Story 9.7` subheading with explanatory paragraph above the Follow-up TODOs section. |
 | R18 | LOW | Auditor | Spec AC3 method list referenced `get_events`/`stream_events` (placeholder names that never materialised); real method is `get_task_events`. | Updated AC3 to list `get_task_events` with the corrected method name and a note. |
+
+### Pass-2 review (second-opinion adversarial) — 2026-05-17
+
+Reviewed at commit `653e2a9` (Story 9.4 pass-1 batch-apply). Pass-2 second-opinion adversarial review (Blind Hunter / Edge-Case Hunter / Acceptance Auditor) produced **13 unique NEW findings** (S1-S13). User policy: "fix all issues even minors — dismiss-zero". Mirrors Epic 8.x and Story 9.3 pass-1+pass-2 cadence.
+
+#### Patch resolution — 2026-05-17 (pass-2 batch-apply)
+
+| ID | Severity | Lane | Finding | Resolution | Files |
+|---|---|---|---|---|---|
+| S1 | HIGH | Blind | Whitespace/CRLF injection past R1 type-safety guard — `isinstance(trace_id, str) and trace_id` accepts `" tg:42 "`, `"tg:42\x00"`, `"tg:42\r\nX-Evil: 1"`. 6 sites in `RegistryAPIClient` + 1 in `events.py`. | Switched all 7 sites to `isinstance(trace_id, str) and is_valid_trace_id(trace_id)`. Shape contract is now enforced in one place (Story 9.1's `events.envelope.is_valid_trace_id`). Added a parametrised negative test (`test_rejects_malformed_trace_id_at_boundary`) covering whitespace-only, leading/trailing whitespace, `\n`/CRLF, `\x00`, and garbage strings. | `adapters/registry_api_client.py`, `commands/events.py`, `test_task_command.py` |
+| S2 | HIGH | Blind | `_poll_events` used `assert trace_id, "..."` for the entry guard — stripped under `python -O` so a production caller passing `""`/`None` would slip silently to httpx and crash with an opaque `TypeError`. | Replaced with unconditional `if not isinstance(trace_id, str) or not trace_id: raise ValueError(...)`. `ValueError` is the documented contract violation. | `commands/events.py` |
+| S3 | HIGH | Blind | `test_mint_command_metadata_deterministic_under_frozen_clock` was tautological — asserting that same-seeded calls produce equal output is true for any pure function and doesn't prove the `rng` kwarg is CONSUMED. | Added paired NEGATIVE assertions: a third call with a different `rng` (same `clock`) MUST produce a different `trace_id` / `request_id` / `idempotency_key`. A future refactor that silently dropped `rng=rng` from the body would fail the negative case while still passing the positive one. | `test_metadata.py` |
+| S4 | HIGH | Blind | `test_command_metadata_explicit_construction` used `"r-fixture"` / `"ik-fixture"` literals which suggested a nonexistent `r-`/`ik-` namespace; in reality `new_request_id()` and `new_idempotency_key()` both return BARE UUIDv7s per `events.ids`. | Replaced both literals with bare-UUIDv7 strings; added a docstring note explaining the rename. The matching regex test (`test_mint_poll_request_id_deterministic_under_frozen_clock`) is correct as-is since `new_request_id()` is verified to be bare-UUIDv7 in `packages/events/src/events/ids.py:116-122`. | `test_metadata.py` |
+| S5 | HIGH | Blind | `events.py --follow` called `mint_command_metadata()` but consumed only `trace_id`, wasting an `idempotency_key` (no POST in `--follow` path) and a `request_id` (re-minted per-poll). | Added `mint_trace_id(*, clock, rng) -> str` helper in `app/metadata.py` that returns just the bare UUIDv7. Updated `events.py --follow` branch to call `mint_trace_id()` and pass to `_poll_events`. Added 3 unit tests covering shape / distinct-per-call / deterministic-under-FrozenClock. | `app/metadata.py`, `commands/events.py`, `test_metadata.py` |
+| S6 | MED | Blind | Cross-module header constants inverted dependency direction — `commands/events.py` imported `REQUEST_ID_HEADER`/`TRACE_ID_HEADER` from `adapters/registry_api_client.py`, making commands depend on adapter internals. | Created `console_cli/app/headers.py` with `REQUEST_ID_HEADER` and `TRACE_ID_HEADER` constants. `registry_api_client.py` re-exports the constants for backwards-compatibility with pre-pass-2 imports landed in `653e2a9`. `events.py` now imports directly from `app.headers`. | `app/headers.py` (new), `adapters/registry_api_client.py`, `commands/events.py` |
+| S7 | MED | Blind | `__all__` in `registry_api_client.py` mixed case (uppercase constants between PascalCase classes) — may trip ruff `RUF022` (strict-ASCII sort). | Sorted ASCII-strict: uppercase constants first (`REQUEST_ID_HEADER`, `TASK_ID_PATTERN`, `TRACE_ID_HEADER`), then alphabetical PascalCase (`ActorLocal`, `CreateTaskResponseLocal`, …, `TaskResponseLocal`). | `adapters/registry_api_client.py` |
+| S8 | MED | Blind | Read commands (`status`, `logs`, `events` non-follow, `ping`, `agent`) wasted an `idempotency_key` mint via `mint_command_metadata` — GET endpoints don't consume `Idempotency-Key` headers. | Added `CommandReadMetadata` dataclass (`request_id` + `trace_id` only) and `mint_read_metadata()` helper. Updated the 5 read commands to use it. Kept `mint_command_metadata` as an alias for the new `mint_write_metadata` (POST commands `task`/`approve`/`reject`/`stop`/`retry` keep `mint_command_metadata` for back-compat). Added unit tests for both new helpers and an alias-parity test. | `app/metadata.py`, `commands/{status,logs,events,ping,agent}.py`, `test_metadata.py` |
+| S9 | MED | Blind | `_poll_events` didn't validate trace_id SHAPE — only emptiness. A future caller passing `"tg:42"` would leak Telegram-form into a console-origin code path. | Added two shape gates at function entry after the S2 non-empty check: `if not is_valid_trace_id(trace_id): raise ValueError(...)` (Story 9.1 contract) and `if trace_id.startswith("tg:"): raise ValueError(...)` (console-cli-specific bare-UUIDv7-only rule). | `commands/events.py` |
+| S10 | LOW | Blind | Dev Agent Record claimed `+15` tests and "115 → 130" baseline; re-measuring `653e2a9` shows 141 console-cli passed and 26 new `def test_*` lines from the pass-1 diff. | Reconciled the "Test count delta" section: re-measured full-suite (2298 → 2317 = +19) and console-cli (141 post-pass-1). Documented the count-method discrepancy and named the authoritative source (pytest collection). | spec body |
+| S11 | LOW | Auditor | Pass-1 included a comment-only edit to `services/registry-api/src/registry_api/test_errors_envelope.py:~882-893` (+7 lines) that explained the `TierEnforcementMiddleware._resolve_tier` patch scope — not Story 9.4 scope. | Comment is already landed and harmless. Added a one-line note in this Dev Agent Record (below) acknowledging the unrelated edit landed in commit `653e2a9` so future bisects don't lose the context. | spec body (this row) |
+| S12 | LOW | Blind | Positive tests locked the `[89ab]` UUIDv7 variant byte; no negative test asserted that `[c-f]` is rejected. | Added `test_uuidv7_bare_re_rejects_non_variant_bits` — locks RFC 9562 §4 variant `10xx` (8/9/a/b) by iterating over c/d/e/f and asserting the regex rejects each. | `test_metadata.py` |
+| S13 | LOW | Auditor | AC6 line 104 still said "Repeat #4-#6 for at least 3 other methods (..., `get_events`)" — pass-1 R18 fixed AC3 but missed AC6's parallel reference. | Replaced `get_events` → `get_task_events` in AC6 #7-11; added a pass-2-S13 inline note pointing at the pass-1 R18 fix. | spec body (AC6) |
+
+**Pass-1 scope-drift note (resolves S11)**: pass-1 batch `653e2a9` included a 7-line comment-only edit to `services/registry-api/src/registry_api/test_errors_envelope.py:~882-893` explaining the `TierEnforcementMiddleware._resolve_tier` patch scope. That edit is **not** in Story 9.4's scope (the comment is registry-api-internal documentation that landed in Epic 8.x). The comment is harmless and already merged; it is recorded here so future readers see the cross-scope edit in the spec's audit trail rather than puzzling over the diff. No code-behaviour change; no rollback needed.
+
+**Test count delta after pass-2 batch-apply:**
+
+| Suite | Pre-pass-2 (`653e2a9`) | Post-pass-2 | Δ |
+|---|---|---|---|
+| `services/console-cli` (`-m "not slow"`) | 141 | 154 | **+13** |
+| Full workspace (`packages/ services/ -m "not slow"`) | 2317 | 2330 | **+13** |
+
+Test counts verified with `pytest -q -m "not slow"` pre- and post-apply. All Epic 8.7 baseline gates remain green (ruff check, ruff format, mypy --strict on 97-source-file baseline, check_imports, check_single_writer, secret-hygiene-precommit full-tree).
