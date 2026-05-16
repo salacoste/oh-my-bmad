@@ -36,8 +36,13 @@ EVENT_TYPES: frozenset[str] = frozenset()
 # registration sites do not poison EVENT_TYPES. Mirror the regexes in
 # envelope.py (``_EVENT_TYPE_RE`` / ``_SEMVER_RE``); intentionally duplicated
 # to avoid an import cycle (envelope imports this module).
-_EVENT_TYPE_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
-_SEMVER_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+#
+# Story 9.1 code-review N1 (pass-2): use ``\A``/``\Z`` (not ``^``/``$``) so
+# trailing-newline inputs can't sneak past at registration time either. The
+# envelope-side fix (commit 1ea5e90) explicitly promised these would stay
+# in sync; pass-1 missed the mirror, pass-2 closes it.
+_EVENT_TYPE_RE = re.compile(r"\A[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+\Z")
+_SEMVER_RE = re.compile(r"\A[0-9]+\.[0-9]+\.[0-9]+\Z")
 
 
 def _rebuild_types_cache() -> None:

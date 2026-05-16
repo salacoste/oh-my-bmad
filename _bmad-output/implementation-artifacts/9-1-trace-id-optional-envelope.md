@@ -20,10 +20,10 @@ Add a `field_validator("trace_id")` on `EventEnvelope` that, when the field is n
 
 | Form | Regex | Origin |
 |---|---|---|
-| Bare UUIDv7 | `^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` (same as `_UUIDV7_BARE_RE` at line 129) | Stories 9.2 (HTTP `X-Trace-Id`), 9.4 (console), 9.5 (MCP `caller_trace_id`), 9.6 (worker `--trace-id`) |
-| Telegram-derived | `^tg:[0-9]{1,19}$` (NEW regex) | Story 9.3 — `f"tg:{update.update_id}"`; `update_id` is a Telegram-internal int that fits a signed 64-bit (max 19 digits) |
+| Bare UUIDv7 | `\A[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z` (same as `_UUIDV7_BARE_RE` at line 134) | Stories 9.2 (HTTP `X-Trace-Id`), 9.4 (console), 9.5 (MCP `caller_trace_id`), 9.6 (worker `--trace-id`) |
+| Telegram-derived | `\Atg:[1-9][0-9]{0,18}\Z` + post-match int64-ceiling check (NEW regex; tightened in pass-1 review: leading-zero rejection F2 + int64 ceiling F3) | Story 9.3 — `f"tg:{update.update_id}"`; `update_id` is a positive signed 64-bit (1 ≤ n ≤ 9_223_372_036_854_775_807) |
 
-The error message must be specific: `trace_id must be a bare UUIDv7 OR match ^tg:<update_id>$ (got {v!r})`. Validation runs in Pydantic `mode="after"` so coercion has already happened.
+The error message must be specific: `trace_id must be a bare UUIDv7 OR match \\Atg:<update_id>\\Z (got {v!r})` for shape failures, and `trace_id Telegram update_id out of range (max 9223372036854775807); got <v>` for int64-overflow failures. Validation runs in Pydantic `mode="after"` (explicit, locked in pass-2 review) so coercion has already happened.
 
 Reject (with `ValidationError`):
 - empty string
@@ -36,10 +36,10 @@ Reject (with `ValidationError`):
 
 ### AC2 — `DeprecationWarning` on absent `trace_id`
 
-When `EventEnvelope.create(...)` is called WITHOUT `trace_id=` (or with `trace_id=None`), emit a `DeprecationWarning` whose message exactly matches:
+When `EventEnvelope.create(...)` is called WITHOUT `trace_id=` (or with `trace_id=None`), emit a `DeprecationWarning`. Pass-2 review (finding F6) stripped sprint-specific tokens from the user-facing text; the current message:
 
 ```
-EventEnvelope created without trace_id; this field becomes mandatory in Story 9.7 (schema_version 1.1.0). Pass trace_id= to silence this warning.
+EventEnvelope created without trace_id; this field will be required in a future schema_version bump. Pass trace_id= (UUIDv7 or 'tg:<update_id>') to silence this warning.
 ```
 
 The warning is emitted from `EventEnvelope.create()` (NOT from `EventEnvelope.__init__` directly — replay from the JSONL log must NOT emit this warning, since 1.0.0 envelopes legitimately have null `trace_id` and re-parsing them is not a deprecation event).
@@ -198,14 +198,18 @@ No Epic 9 commits yet — 9.1 is the kickoff. Story `7e4ffec`'s `ensure_register
 
 ## Dev notes
 
-### Validator implementation sketch
+### Validator implementation sketch (updated pass-2)
 
 ```python
-# Add near line 130, after _SEMVER_RE:
-_TRACE_ID_TELEGRAM_RE = re.compile(r"^tg:[0-9]{1,19}$")
+# Module top (line 14): unconditional import for the hot factory path.
+import warnings
 
-# Insert after _request_id_shape (line 218):
-@field_validator("trace_id")
+# Near line 134, after _SEMVER_RE:
+_TRACE_ID_TELEGRAM_RE = re.compile(r"\Atg:[1-9][0-9]{0,18}\Z")  # rejects tg:0 / leading zeros
+_INT64_MAX = 9_223_372_036_854_775_807
+
+# Insert after _request_id_shape:
+@field_validator("trace_id", mode="after")  # explicit mode (pass-2 locked)
 @classmethod
 def _trace_id_shape(cls, v: str | None) -> str | None:
     if v is None:
@@ -213,21 +217,26 @@ def _trace_id_shape(cls, v: str | None) -> str | None:
     if _UUIDV7_BARE_RE.match(v):
         return v
     if _TRACE_ID_TELEGRAM_RE.match(v):
+        if int(v[3:]) > _INT64_MAX:
+            raise ValueError(
+                f"trace_id Telegram update_id out of range "
+                f"(max {_INT64_MAX}); got {v!r}"
+            )
         return v
     raise ValueError(
-        f"trace_id must be a bare UUIDv7 OR match ^tg:<update_id>$ (got {v!r})"
+        f"trace_id must be a bare UUIDv7 OR match \\Atg:<update_id>\\Z (got {v!r})"
     )
 ```
 
-### Deprecation warning sketch
+### Deprecation warning sketch (updated pass-2)
 
 ```python
-# In EventEnvelope.create() body, BEFORE the registry lookup at line 336:
+# In EventEnvelope.create() body, BEFORE the registry lookup:
 if trace_id is None:
-    import warnings  # local import keeps module-load fast
     warnings.warn(
-        "EventEnvelope created without trace_id; this field becomes mandatory "
-        "in Story 9.7 (schema_version 1.1.0). Pass trace_id= to silence this warning.",
+        "EventEnvelope created without trace_id; this field will be "
+        "required in a future schema_version bump. Pass trace_id= "
+        "(UUIDv7 or 'tg:<update_id>') to silence this warning.",
         DeprecationWarning,
         stacklevel=2,
     )
@@ -439,6 +448,27 @@ All 12 `patch` findings resolved in a single follow-up commit on top of `dae92d8
 | F12 — Adversarial coverage | Added: trailing-whitespace rejection, internal-newline rejection (depends on F1), uppercase `TG:1` rejection, Arabic-Indic Unicode digit `tg:١` rejection. | `test_envelope.py:183-244` |
 
 **Test count delta after pass-2 batch-apply:** 85 envelope tests (was 69 after pass-1) — **+16 net new** post-review (+15 over the original Story 9.1 implementation). Full suite: **2204 → 2220** (+16). All gates green.
+
+#### Pass-2 review (second-opinion adversarial) — 2026-05-16
+
+Reviewed cumulative diff `07a9804..1ea5e90` (Story 9.1 implementation + pass-1 patches). User policy: **fix all issues even minors**. Three lanes produced 24 raw findings; deduplicated to 12 unique post-merge; all classified as `patch` and applied in a single follow-up commit.
+
+| # | Severity | Source | Title | Resolution |
+|---|---|---|---|---|
+| N1 | HIGH | auditor | `schema_registry.py:39-40` mirror regexes still used `^...$` after F1 — bypass class returns at registration time | `schema_registry.py` regexes switched to `\A...\Z` matching the envelope-side fix; comment block updated to record the mirror-promise. |
+| N2 | MEDIUM | blind | `pyproject.toml` filterwarnings: leading `^` is redundant (`re.match` already start-anchors); the real protection is a TAIL anchor | Filter changed to `"ignore:EventEnvelope created without trace_id;.*\\Z:DeprecationWarning"` — tail-anchored on the trailing semicolon. |
+| N3 | MEDIUM | blind | Int64 error message exposed implementation-detail "int64 max" to library consumers | Reworded to `"trace_id Telegram update_id out of range (max {n}); got {v!r}"` — symmetric with F6's principle. |
+| N4 | MEDIUM | blind | Implicit `mode=` on field validators — Pydantic future-refactor risk if `Field(validate_default=False)` is added later | Added explicit `mode="after"` to all 5 envelope shape validators (event_id, parent_event_id, request_id, trace_id, schema_version, type). Locks the contract. |
+| N5 | MEDIUM | blind | `test_invalid_trace_id_in_create_raises_without_warning` name claimed "ordering" but actually tested "warning-only-on-None" | Renamed to `test_invalid_non_none_trace_id_does_not_fire_deprecation_warning`. Comment updated. |
+| N6 | MEDIUM | blind | `create()` docstring claimed warning skips replay because it goes through `__init__` — true but incomplete; missed that direct `EventEnvelope(...)` construction ALSO skips | Reworded docstring: "fires only from `create()` when `trace_id is None`". |
+| N7 | MEDIUM+drift | auditor | Spec body D1-D6: original AC1 regex / AC2 message / Dev Notes sketches were never updated after pass-1 fixes | Replaced 4 stale spec artifacts (AC1 regex table, AC1 error message, AC2 message block, Dev Notes implementation sketches) with current code. |
+| N8 | LOW | blind | Two redundant no-digit tests | Merged into `test_telegram_form_non_canonical_digit_input_rejected` with `@pytest.mark.parametrize` covering 7 inputs (added `tg:1a`, `tg:a1`, `tg:1.5`, `tg:-1`, `tg:+1` beyond original `tg:` / `tg:abc`). |
+| N9 | LOW | blind | Round-trip tests asserted idempotence not canonicalization | Added `test_canonical_json_keys_are_alphabetical` using `events.canonical.to_canonical_json`. Pins `trace_id` between `schema_version` and `type`. |
+| N10 | LOW | blind | No test locked the `stacklevel=2` contract | Added `TestTraceIdDeprecationStacklevel` asserting `warning.filename` basename equals the test file's. |
+| N11 | LOW | blind | `TestLegacyJsonlReplay` hard-failed with cryptic message if fixture moved | Replaced `assert fixture.is_file()` with `pytest.skip(...)` carrying the expected path. |
+| N12 | LOW | blind | Int64 check `int(v[3:])` lacks documentation that regex guarantees ASCII digits | Added comment "regex guarantees ASCII digits so int() cannot raise" inline. |
+
+**Pass-2 test count delta:** 85 → **92** in envelope alone (+7 net: -2 from parametrize merge, +2 sort-key test, +1 stacklevel test, +6 parametrized table rows recognized). Full suite delta verified below.
 
 #### Dismissed (7)
 

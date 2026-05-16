@@ -206,14 +206,14 @@ class EventEnvelope(BaseModel):
     materially slows envelope construction; the model_validator path
     is both faster and gives clearer error messages."""
 
-    @field_validator("event_id")
+    @field_validator("event_id", mode="after")
     @classmethod
     def _event_id_shape(cls, v: str) -> str:
         if not _EVENT_ID_RE.match(v):
             raise ValueError(f"event_id must match ^e-<uuidv7>$ (got {v!r})")
         return v
 
-    @field_validator("parent_event_id")
+    @field_validator("parent_event_id", mode="after")
     @classmethod
     def _parent_event_id_shape(cls, v: str | None) -> str | None:
         if v is None:
@@ -222,14 +222,14 @@ class EventEnvelope(BaseModel):
             raise ValueError(f"parent_event_id must match ^e-<uuidv7>$ (got {v!r})")
         return v
 
-    @field_validator("request_id")
+    @field_validator("request_id", mode="after")
     @classmethod
     def _request_id_shape(cls, v: str) -> str:
         if not _UUIDV7_BARE_RE.match(v):
             raise ValueError(f"request_id must be a bare UUIDv7 (got {v!r})")
         return v
 
-    @field_validator("trace_id")
+    @field_validator("trace_id", mode="after")
     @classmethod
     def _trace_id_shape(cls, v: str | None) -> str | None:
         # Story 9.1 (FR57 / Epic 9 foundation): accept UUIDv7 OR Telegram-derived
@@ -240,25 +240,27 @@ class EventEnvelope(BaseModel):
             return v
         if _TRACE_ID_TELEGRAM_RE.match(v):
             # F3 carry-over: regex caps at 19 digits but ~9.99e18 > int64 max.
-            # Reject values > int64 ceiling so downstream `int()` parsing in
-            # Stories 9.2-9.7 can't overflow a Postgres `bigint`.
+            # The regex guarantees ASCII digits so int() cannot raise.
+            # Pass-2 review: error message reworded — "out of range" describes
+            # the symptom to a library consumer; the int64 specifics live in
+            # the implementation comment, not the user-facing text.
             if int(v[3:]) > _INT64_MAX:
                 raise ValueError(
-                    f"trace_id Telegram form exceeds int64 max ({_INT64_MAX}); got {v!r}"
+                    f"trace_id Telegram update_id out of range (max {_INT64_MAX}); got {v!r}"
                 )
             return v
         raise ValueError(
             f"trace_id must be a bare UUIDv7 OR match \\Atg:<update_id>\\Z (got {v!r})"
         )
 
-    @field_validator("schema_version")
+    @field_validator("schema_version", mode="after")
     @classmethod
     def _schema_version_shape(cls, v: str) -> str:
         if not _SEMVER_RE.match(v):
             raise ValueError(f"schema_version must be semver MAJOR.MINOR.PATCH (got {v!r})")
         return v
 
-    @field_validator("type")
+    @field_validator("type", mode="after")
     @classmethod
     def _type_shape(cls, v: str) -> str:
         if not _EVENT_TYPE_RE.match(v):
@@ -368,11 +370,12 @@ class EventEnvelope(BaseModel):
         v1.0.0 omit the kwarg; callers on v1.0.1+ pass the forward-compatible
         per-event metadata dict.
 
-        Omitting ``trace_id`` raises a :class:`DeprecationWarning`. The field
-        becomes mandatory in a future ``schema_version`` bump (Phase 2 Epic 9
-        cutover plan). Emitted from the factory (not ``__init__``) so JSONL
-        replay via ``model_validate_json`` does NOT fire the warning — only
-        new-emission paths do.
+        :class:`DeprecationWarning` fires only from ``create()`` when
+        ``trace_id is None``. Direct ``EventEnvelope(...)`` construction and
+        ``model_validate_json`` replay do NOT emit the warning — this is
+        intentional so JSONL replay and round-trip tests don't drown logs.
+        The field becomes mandatory in a future ``schema_version`` bump
+        (Phase 2 Epic 9 cutover plan).
         """
         if trace_id is None:
             # Code-review F6: user-facing message describes the contract

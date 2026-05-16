@@ -86,13 +86,17 @@ markers = [
 # (1.0.0 → 1.1.0 bump makes trace_id mandatory, so the absent-trace_id
 # path no longer exists).
 #
-# Code-review F5: anchor on the message text so a future identically-
-# prefixed warning can't be silenced by accident. Module qualifier omitted
-# intentionally — stacklevel=2 in the warnings.warn() call means the
-# "source module" pytest sees is the CALLER (services/*, mcp-servers/*),
-# not packages/events/, so a module-qualified filter wouldn't match.
+# Pass-2 review (code-review N2): Python's `warnings.filterwarnings`
+# already start-anchors the message regex via `re.match`, so a leading
+# `^` is redundant. The real protection against future identically-
+# prefixed warnings is a TAIL anchor — we pin on the trailing semicolon
+# of the actual message so `EventEnvelope created without trace_id_v2`
+# would NOT match. Module qualifier omitted: stacklevel=2 in the
+# warnings.warn() call means the "source module" pytest sees is the
+# CALLER (services/*, mcp-servers/*), not packages/events/, so a
+# module-qualified filter wouldn't match anything.
 filterwarnings = [
-    "ignore:^EventEnvelope created without trace_id:DeprecationWarning",
+    "ignore:EventEnvelope created without trace_id;.*\\Z:DeprecationWarning",
 ]
 norecursedirs = [
     ".git",

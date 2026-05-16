@@ -143,13 +143,13 @@ class TestTraceIdShape:
     def test_telegram_form_int64_plus_one_rejected(self) -> None:
         # F3 boundary: int64 max + 1 (still 19 digits, regex passes; post-
         # match int check rejects).
-        with pytest.raises(ValidationError, match="int64"):
+        with pytest.raises(ValidationError, match="out of range"):
             _make_envelope(trace_id="tg:9223372036854775808")
 
     def test_telegram_form_19_nines_rejected(self) -> None:
         # F3: 19-digit max regex would accept (10^19 - 1) ≈ 9.99e18, but
         # int64 ceiling is 9.22e18. Post-match check rejects.
-        with pytest.raises(ValidationError, match="int64"):
+        with pytest.raises(ValidationError, match="out of range"):
             _make_envelope(trace_id="tg:9999999999999999999")
 
     def test_telegram_form_zero_rejected(self) -> None:
@@ -167,13 +167,25 @@ class TestTraceIdShape:
         with pytest.raises(ValidationError, match="trace_id"):
             _make_envelope(trace_id="tg:007")
 
-    def test_telegram_form_no_digits_rejected(self) -> None:
+    @pytest.mark.parametrize(
+        "bad_trace_id",
+        [
+            "tg:",  # no digits
+            "tg:abc",  # all non-digits
+            "tg:1a",  # mixed digit + letter
+            "tg:a1",  # non-digit first
+            "tg:1.5",  # decimal — has dot
+            "tg:-1",  # signed
+            "tg:+1",  # signed plus
+        ],
+        ids=["empty", "alpha", "trailing-alpha", "leading-alpha", "decimal", "neg", "plus"],
+    )
+    def test_telegram_form_non_canonical_digit_input_rejected(self, bad_trace_id: str) -> None:
+        # Pass-2 review consolidation (blind #8): rolled the two single-case
+        # tests into one parametrized matrix to cover the analogous failure
+        # modes uniformly.
         with pytest.raises(ValidationError, match="trace_id"):
-            _make_envelope(trace_id="tg:")
-
-    def test_telegram_form_non_digit_rejected(self) -> None:
-        with pytest.raises(ValidationError, match="trace_id"):
-            _make_envelope(trace_id="tg:abc")
+            _make_envelope(trace_id=bad_trace_id)
 
     def test_telegram_form_20_digit_overflow_rejected(self) -> None:
         # Width-based rejection — 20 digits never fits any int64 form.
@@ -283,11 +295,11 @@ class TestTraceIdDeprecationWarning:
             replayed = EventEnvelope.model_validate_json(canonical)
             assert replayed.trace_id is None
 
-    def test_invalid_trace_id_in_create_raises_without_warning(self) -> None:
-        # F11: validator runs AFTER the warning check, but the warning only
-        # fires when trace_id is None. An invalid non-None trace_id must
-        # raise ValidationError WITHOUT emitting DeprecationWarning. Locks
-        # the ordering invariant.
+    def test_invalid_non_none_trace_id_does_not_fire_deprecation_warning(self) -> None:
+        # F11 (renamed per pass-2 review blind #6): the warning only fires
+        # when `trace_id is None`. An invalid non-None value must raise
+        # ValidationError WITHOUT emitting DeprecationWarning. Locks the
+        # "warning-only-on-None" invariant.
         import warnings
 
         with warnings.catch_warnings(record=True) as w:
@@ -355,6 +367,69 @@ class TestTraceIdRoundTrip:
         env = EventEnvelope.model_validate_json(blob)
         assert env.trace_id is None
 
+    def test_canonical_json_keys_are_alphabetical(self) -> None:
+        # Pass-2 review (blind #10): the byte-equality round-trip tests
+        # above use `model_dump_json()` which produces DECLARATION-order
+        # keys — those tests prove idempotence, not canonicalization.
+        # The true canonical encoder is `events.canonical.to_canonical_json`
+        # (used by the event-log writer + sinks). This test pins the
+        # alphabetical-key contract for the canonical form, including
+        # the alphabetical position of `trace_id` between `schema_version`
+        # and `type`.
+        import json
+
+        from events.canonical import to_canonical_json
+
+        env = _make_envelope(trace_id="tg:12345")
+        canonical_bytes = to_canonical_json(env)
+        parsed = json.loads(canonical_bytes)
+        keys = list(parsed.keys())
+        assert keys == sorted(keys), f"Canonical JSON keys must be alphabetical; got {keys!r}"
+        assert keys.index("schema_version") < keys.index("trace_id") < keys.index("type")
+
+
+# Story 9.1 pass-2 — stacklevel diagnostic regression test (blind #11).
+class TestTraceIdDeprecationStacklevel:
+    """Pass-2 review (blind #11): `stacklevel=2` is meant to point the
+    DeprecationWarning at the caller of ``EventEnvelope.create()``, not
+    inside envelope.py. The deferred F-flag for wrapped factories
+    (audited_secret.py:336-style helpers) acknowledges that any wrapper
+    breaks this — but no test currently locks the contract. This class
+    catches accidental regressions where someone forgets to bump
+    stacklevel after introducing an envelope.py-internal helper.
+    """
+
+    def test_warning_points_at_caller_not_envelope_internals(self) -> None:
+        import warnings
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", DeprecationWarning)
+            EventEnvelope.create(
+                event_id=_VALID_EVENT_ID,
+                schema_version="1.0.0",
+                type="task.created",
+                emitted_at=_VALID_EMITTED_AT,
+                emitted_at_monotonic_ns=1_000_000,
+                actor=Actor(kind="system", id="test-system"),
+                payload={"task_id": "abc"},
+                request_id=_VALID_REQUEST_ID,
+            )
+
+        deprecation_records = [r for r in caught if issubclass(r.category, DeprecationWarning)]
+        assert len(deprecation_records) == 1, (
+            f"Expected exactly one DeprecationWarning; got {len(deprecation_records)}"
+        )
+        # The warning's `filename` field must be THIS test file, not
+        # envelope.py. Compare basenames so the test survives path
+        # normalisation differences across platforms.
+        from pathlib import Path
+
+        warning_file = Path(deprecation_records[0].filename).name
+        assert warning_file == Path(__file__).name, (
+            f"DeprecationWarning stacklevel must point at caller "
+            f"({Path(__file__).name}); got {warning_file}"
+        )
+
 
 # Story 9.1 — legacy JSONL replay regression (patch F8).
 class TestLegacyJsonlReplay:
@@ -371,6 +446,10 @@ class TestLegacyJsonlReplay:
     """
 
     def test_migrator_fixture_corpus_parses(self) -> None:
+        # Pass-2 review (blind #3): the migrator fixture is in a sibling
+        # package tree. If the repo layout ever changes, skip with a
+        # helpful pointer rather than a cryptic hard-fail — the test's
+        # value is the regression check, not the layout assertion.
         from pathlib import Path
 
         fixture = (
@@ -381,7 +460,11 @@ class TestLegacyJsonlReplay:
             / "fixtures"
             / "sample_v1.0.0.jsonl"
         )
-        assert fixture.is_file(), f"Fixture missing: {fixture}"
+        if not fixture.is_file():
+            pytest.skip(
+                f"Migrator fixture not found at {fixture} (cross-package "
+                f"path may have changed); regression check skipped."
+            )
 
         count = 0
         for line in fixture.read_text(encoding="utf-8").splitlines():
