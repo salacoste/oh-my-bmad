@@ -22,13 +22,15 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Generator
 from pathlib import Path
 from typing import Any
 
 import pytest
 import pytest_asyncio
+import structlog
 from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.types import TelegramObject, Update
@@ -42,6 +44,9 @@ from telegram_gateway.app.config import TelegramSettings
 from telegram_gateway.app.lifespan import TELEGRAM_GATEWAY_ACTOR, _drain_dispatch_tasks
 from telegram_gateway.app.main import build_app
 from telegram_gateway.app.middleware import AllowlistMiddleware
+
+# Story 9.3: shape of a bare UUIDv7 (fallback path output).
+_UUIDV7_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
 _BOT_TOKEN = "1234:fake-bot-token"
 _WEBHOOK_SECRET = "fake-webhook-secret-1234"
@@ -873,3 +878,275 @@ async def test_rejected_user_receives_no_outbound_message(
         assert any(t == "telegram.rejected" for t in all_types), (
             f"expected telegram.rejected envelope in JSONL; got types: {all_types!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Story 9.3 — AllowlistMiddleware derives trace_id = f"tg:{update_id}"
+# (AC1-AC10; AC7 enumerates the 12 unit tests below.)
+# ---------------------------------------------------------------------------
+
+
+class TestStory93TraceIdDerivation:
+    """Story 9.3 (FR58 Telegram / FR28): trace_id derivation + propagation."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_structlog_contextvars(self) -> Generator[None, None, None]:
+        """Story 9.2 pass-1 B2 pattern: clear process-global contextvars.
+
+        Without this autouse fixture, a parallel async test that raised
+        before its ``try/finally`` unbind could leak ``trace_id`` into
+        these tests, making the unbound-after-dispatch assertions flaky.
+        Belt-and-braces: clear before AND after each test in this class.
+        """
+        structlog.contextvars.clear_contextvars()
+        yield
+        structlog.contextvars.clear_contextvars()
+
+    # -- AC1 #1 / AC2 baseline ----------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_trace_id_derived_from_update_id(self) -> None:
+        """AC1 #1: ``Update(update_id=42)`` → ``data['trace_id'] == 'tg:42'``."""
+        _, emit = _make_recording_emit()
+        _, handler = _make_handler()
+        mw = _build_middleware(allowlist=frozenset({12345}), emit=emit)
+
+        update = Update.model_validate(_make_update(12345, update_id=42))
+        data: dict[str, Any] = {}
+        await mw(handler, update, data)
+
+        assert data["trace_id"] == "tg:42"
+
+    # -- AC1 #4 (structlog binding) -----------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_trace_id_bound_to_structlog_context_during_handler_dispatch(
+        self,
+    ) -> None:
+        """AC1 #4: inside the handler, ``contextvars.get_contextvars()['trace_id']``
+        matches the derived value."""
+        observed: dict[str, Any] = {}
+
+        async def handler(event: Any, data: dict[str, Any]) -> Any:
+            observed.update(structlog.contextvars.get_contextvars())
+            return None
+
+        _, emit = _make_recording_emit()
+        mw = _build_middleware(allowlist=frozenset({12345}), emit=emit)
+
+        update = Update.model_validate(_make_update(12345, update_id=7))
+        await mw(handler, update, {})
+
+        assert observed.get("trace_id") == "tg:7"
+
+    # -- AC1 #6 / AC1 #7 (unbind paths) -------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_trace_id_unbound_after_dispatch_success(self) -> None:
+        """AC1 #6: contextvars cleared after handler returns normally."""
+        _, emit = _make_recording_emit()
+        _, handler = _make_handler()
+        mw = _build_middleware(allowlist=frozenset({12345}), emit=emit)
+
+        update = Update.model_validate(_make_update(12345, update_id=11))
+        await mw(handler, update, {})
+
+        assert "trace_id" not in structlog.contextvars.get_contextvars()
+
+    @pytest.mark.asyncio
+    async def test_trace_id_unbound_after_dispatch_exception(self) -> None:
+        """AC1 #7: contextvars cleared even when the inner handler raises."""
+
+        async def boom(_event: Any, _data: dict[str, Any]) -> Any:
+            raise RuntimeError("handler failed")
+
+        _, emit = _make_recording_emit()
+        mw = _build_middleware(allowlist=frozenset({12345}), emit=emit)
+
+        update = Update.model_validate(_make_update(12345, update_id=21))
+        with pytest.raises(RuntimeError, match="handler failed"):
+            await mw(boom, update, {})
+
+        assert "trace_id" not in structlog.contextvars.get_contextvars()
+
+    @pytest.mark.asyncio
+    async def test_trace_id_unbound_after_allowlist_rejection(self) -> None:
+        """AC1 #7: non-allowlisted user — ``return None`` path still unbinds."""
+        _, emit = _make_recording_emit()
+        _, handler = _make_handler()
+        mw = _build_middleware(allowlist=frozenset({12345}), emit=emit)
+
+        update = Update.model_validate(_make_update(99999, update_id=31))
+        result = await mw(handler, update, {})
+
+        assert result is None
+        assert "trace_id" not in structlog.contextvars.get_contextvars()
+
+    @pytest.mark.asyncio
+    async def test_trace_id_unbound_after_no_from_user_rejection(self) -> None:
+        """AC1 #7: ``no_from_user`` rejection branch still unbinds."""
+        _, emit = _make_recording_emit()
+        _, handler = _make_handler()
+        mw = _build_middleware(allowlist=frozenset({12345}), emit=emit)
+
+        # Bare update with no child events → no_from_user rejection.
+        update = Update.model_validate({"update_id": 41})
+        result = await mw(handler, update, {})
+
+        assert result is None
+        assert "trace_id" not in structlog.contextvars.get_contextvars()
+
+    # -- AC2 (deterministic replay) -----------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_replay_same_update_id_produces_same_trace_id(self) -> None:
+        """AC2: two ``Update`` instances with the same ``update_id`` MUST
+        produce byte-identical ``trace_id`` strings (FR28 idempotency invariant).
+        """
+        _, emit = _make_recording_emit()
+        _, handler = _make_handler()
+        mw = _build_middleware(allowlist=frozenset({12345}), emit=emit)
+
+        u1 = Update.model_validate(_make_update(12345, update_id=42))
+        u2 = Update.model_validate(_make_update(12345, update_id=42))
+
+        d1: dict[str, Any] = {}
+        d2: dict[str, Any] = {}
+        await mw(handler, u1, d1)
+        await mw(handler, u2, d2)
+
+        assert d1["trace_id"] == "tg:42"
+        assert d2["trace_id"] == "tg:42"
+        assert d1["trace_id"] == d2["trace_id"]
+
+    # -- AC3 (boundary values) ----------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_trace_id_max_int64_update_id_accepted(self) -> None:
+        """AC3: ``update_id`` = int64 max (9_223_372_036_854_775_807) → valid."""
+        _, emit = _make_recording_emit()
+        _, handler = _make_handler()
+        mw = _build_middleware(allowlist=frozenset({12345}), emit=emit)
+
+        int64_max = 9_223_372_036_854_775_807
+        update = Update.model_validate(_make_update(12345, update_id=int64_max))
+        data: dict[str, Any] = {}
+        await mw(handler, update, data)
+
+        assert data["trace_id"] == f"tg:{int64_max}"
+
+    @pytest.mark.asyncio
+    async def test_trace_id_fallback_on_zero_update_id(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """AC3 / AC7 #9: ``update_id=0`` → WARNING log + UUIDv7 fallback in data."""
+        _, emit = _make_recording_emit()
+        _, handler = _make_handler()
+        mw = _build_middleware(allowlist=frozenset({12345}), emit=emit)
+
+        update = Update.model_validate(_make_update(12345, update_id=0))
+        data: dict[str, Any] = {}
+
+        with caplog.at_level(logging.WARNING, logger="telegram_gateway.middleware"):
+            await mw(handler, update, data)
+
+        # Fallback minted a bare UUIDv7 (NOT a ``tg:`` form).
+        assert isinstance(data.get("trace_id"), str)
+        assert _UUIDV7_RE.match(data["trace_id"]), (
+            f"expected UUIDv7 fallback, got {data['trace_id']!r}"
+        )
+
+        # WARNING logged.
+        matching = [
+            r
+            for r in caplog.records
+            if r.name == "telegram_gateway.middleware"
+            and r.levelno == logging.WARNING
+            and "minting fallback" in r.getMessage()
+        ]
+        assert len(matching) >= 1, (
+            f"expected at least one fallback WARNING; "
+            f"got {[(r.name, r.levelname, r.getMessage()) for r in caplog.records]!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_trace_id_fallback_on_negative_update_id(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """AC3 / AC7 #10: ``update_id=-1`` → WARNING log + UUIDv7 fallback."""
+        _, emit = _make_recording_emit()
+        _, handler = _make_handler()
+        mw = _build_middleware(allowlist=frozenset({12345}), emit=emit)
+
+        update = Update.model_validate(_make_update(12345, update_id=-1))
+        data: dict[str, Any] = {}
+
+        with caplog.at_level(logging.WARNING, logger="telegram_gateway.middleware"):
+            await mw(handler, update, data)
+
+        assert isinstance(data.get("trace_id"), str)
+        assert _UUIDV7_RE.match(data["trace_id"]), (
+            f"expected UUIDv7 fallback, got {data['trace_id']!r}"
+        )
+
+        matching = [
+            r
+            for r in caplog.records
+            if r.name == "telegram_gateway.middleware"
+            and r.levelno == logging.WARNING
+            and "minting fallback" in r.getMessage()
+        ]
+        assert len(matching) >= 1
+
+    # -- AC4 (rejection envelope carries derived trace_id) ------------------
+
+    @pytest.mark.asyncio
+    async def test_telegram_rejected_envelope_carries_trace_id(self) -> None:
+        """AC4: ``telegram.rejected`` envelope's ``trace_id`` == derived value."""
+        captured, emit = _make_recording_emit()
+        _, handler = _make_handler()
+        mw = _build_middleware(allowlist=frozenset({12345}), emit=emit)
+
+        update = Update.model_validate(_make_update(99999, update_id=123))
+        await mw(handler, update, {})
+
+        assert len(captured) == 1
+        env = captured[0]
+        assert env.trace_id == "tg:123", (
+            f"expected envelope.trace_id == 'tg:123'; got {env.trace_id!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_from_user_rejection_envelope_carries_trace_id(self) -> None:
+        """AC4 (sibling): ``no_from_user`` rejection envelope also carries trace_id."""
+        captured, emit = _make_recording_emit()
+        _, handler = _make_handler()
+        mw = _build_middleware(allowlist=frozenset({12345}), emit=emit)
+
+        update = Update.model_validate({"update_id": 456})
+        await mw(handler, update, {})
+
+        assert len(captured) == 1
+        env = captured[0]
+        assert env.payload.reason == "no_from_user"
+        assert env.trace_id == "tg:456"
+
+    # -- AC7 #12 (integration-feeling: handler reads data["trace_id"]) ------
+
+    @pytest.mark.asyncio
+    async def test_handler_can_read_trace_id_from_data(self) -> None:
+        """AC5 / AC7 #12: a downstream handler reads ``data['trace_id']`` and
+        observes the value the middleware derived."""
+        observed_trace_ids: list[str] = []
+
+        async def handler(_event: Any, data: dict[str, Any]) -> Any:
+            observed_trace_ids.append(data["trace_id"])
+            return None
+
+        _, emit = _make_recording_emit()
+        mw = _build_middleware(allowlist=frozenset({12345}), emit=emit)
+
+        update = Update.model_validate(_make_update(12345, update_id=789))
+        await mw(handler, update, {})
+
+        assert observed_trace_ids == ["tg:789"]

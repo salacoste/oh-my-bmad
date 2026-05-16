@@ -288,25 +288,56 @@ Every existing `EventEnvelope.create(...)` callsite in the telegram-gateway hand
 
 ## Dev Agent Record
 
-_(To be completed by the dev agent at story closure.)_
-
 ### Implementation summary
-_(tbd)_
+
+Extended `AllowlistMiddleware.__call__` to derive `trace_id = f"tg:{update.update_id}"` from every inbound `Update` BEFORE allowlist enforcement, validate it via the public `events.envelope.is_valid_trace_id` helper (Story 9.2 pass-1 A1), bind it to structlog `contextvars`, propagate via `data["trace_id"]`, and unbind in `try/finally` so every return path (handler success, handler exception, allowlist rejection, no-from-user rejection) cleans up. Extended `_emit_rejection` to accept and forward `trace_id` to the `EventEnvelope.create(...)` call so `telegram.rejected` envelopes carry the same trace_id as the originating update.
+
+Audit of telegram-gateway handlers found NO direct `EventEnvelope.create(...)` callsites in `handlers/*.py` — every state-mutating action flows through `RegistryAPIClient` over HTTP, which means registry-api's TraceIdMiddleware (Story 9.2) preserves/re-mints downstream. AC5's spec phrasing about "passing trace_id to envelope factory in each handler" was therefore a non-existent target; the practical work is to **forward** `X-Trace-Id` header on every outbound registry-api call. Each handler now accepts an optional `trace_id: str | None = None` parameter (aiogram DI resolves it from `data["trace_id"]` set by the middleware) and threads it into the corresponding `RegistryAPIClient.*` method, which sets `X-Trace-Id` on the outbound httpx request.
+
+Deterministic-replay invariant (AC2): the derivation is pure-function of `event.update_id` — no per-instance middleware state participates in trace_id construction, so two `Update` objects with the same `update_id` always produce byte-identical `trace_id`. Regression test `test_replay_same_update_id_produces_same_trace_id` locks this in.
+
+`PerActorRateLimitMiddleware` (AC6) verified read-only on `data`: it consumes neither emits envelopes nor overwrites `data["trace_id"]`. No changes required.
 
 ### Files changed
-_(tbd)_
+
+- `services/telegram-gateway/src/telegram_gateway/app/middleware.py` (+95 / -19): module + class docstring update, imports for `is_valid_trace_id` / `new_uuid7` / `structlog`, trace_id derivation block at top of `__call__`, try/finally wrapper for unbind, extended `_emit_rejection` signature with `trace_id: str` kwarg.
+- `services/telegram-gateway/src/telegram_gateway/handlers/registry_client.py` (+22 / 0): added `trace_id: str | None = None` kwarg to `create_task`, `submit_decision`, `get_platform_health`, `get_task`, `get_logs_digest`; each method now sets `X-Trace-Id` header when present.
+- `services/telegram-gateway/src/telegram_gateway/handlers/task_command.py` (+2 / -1): handler signature + thread to `create_task`.
+- `services/telegram-gateway/src/telegram_gateway/handlers/approve_command.py` (+2 / -1): handler signature + thread to `submit_decision`.
+- `services/telegram-gateway/src/telegram_gateway/handlers/stop_command.py` (+2 / -1): handler signature + thread to `submit_decision`.
+- `services/telegram-gateway/src/telegram_gateway/handlers/retry_command.py` (+2 / -1): handler signature + thread to `submit_decision`.
+- `services/telegram-gateway/src/telegram_gateway/handlers/reject_command.py` (+2 / -1): handler signature + thread to `submit_decision`.
+- `services/telegram-gateway/src/telegram_gateway/handlers/agent_command.py` (+3 / -1): handler signature + thread to `get_task`.
+- `services/telegram-gateway/src/telegram_gateway/handlers/ping_command.py` (+3 / -1): handler signature + thread to `get_platform_health`.
+- `services/telegram-gateway/src/telegram_gateway/handlers/status_command.py` (+5 / -2): handler signature + thread to `get_task`.
+- `services/telegram-gateway/src/telegram_gateway/handlers/logs_command.py` (+5 / -2): handler signature + thread to `get_logs_digest`.
+- `services/telegram-gateway/src/telegram_gateway/test_allowlist.py` (+232): new `TestStory93TraceIdDerivation` class with autouse `_clear_structlog_contextvars` fixture and 13 unit tests covering AC1-AC4 + AC7 enumerated cases.
 
 ### Test count delta
-_(tbd)_
+
+Full suite: 2269 → 2283 (+14: 13 new explicit AC7 tests + 1 sibling test for the `no_from_user` rejection envelope carrying trace_id). All telegram-gateway tests pass (402 passed, 3 skipped, 3 deselected). All static gates clean: ruff check, ruff format --check, mypy --strict on baseline (97 source files), check_imports, check_single_writer, secret-hygiene full-tree scan.
 
 ### Callsite-warning observation
-_(How many DeprecationWarnings still fire after Story 9.3? Expected drop: ~4-6 telegram-gateway callsites.)_
+
+Baseline (HEAD before 9.3): 95 occurrences of `"EventEnvelope created without trace_id"` DeprecationWarning matches in full-suite pytest output with `-W "always::DeprecationWarning"`.
+
+After 9.3: 94 occurrences (delta = −1).
+
+The drop is smaller than the spec's predicted ~4-6 because **every telegram-gateway handler emits via registry-api over HTTP rather than direct `EventEnvelope.create()` calls**. The only direct envelope emission in telegram-gateway is the `_emit_rejection` helper in middleware — which is exactly the one callsite that stops emitting after 9.3. The spec's prediction was based on an assumption that handlers also created envelopes locally; the reality is the architecture defers envelope construction to registry-api (correctly — single-writer rule FR26).
 
 ### Surprises / deviations from spec
-_(tbd)_
+
+1. **Handlers do not call `EventEnvelope.create()` directly**: AC5's "Read `trace_id: str = data['trace_id']` and pass to envelope factory" was interpretable in two ways. Reality: handlers go through `RegistryAPIClient` HTTP calls. Implementation threads `X-Trace-Id` header through each method instead, which achieves the AC's intent (registry-api's TraceIdMiddleware preserves rather than re-mints).
+2. **`trace_id: str | None = None` default in handler signatures**: needed for back-compat with existing handler tests that call handlers directly without going through the middleware/data-dict path. Production code path always populates `data["trace_id"]` (by the middleware), so aiogram DI resolves the value; tests stay green without modification.
+3. **DeprecationWarning drop is 1 (not 4-6)**: see prior section. The spec's prediction underestimated the centralisation of envelope emission in registry-api.
+4. **`pyproject.toml`/`uv.lock` reverted between sessions**: the working-tree `git status` at task start showed `pyproject.toml` + `uv.lock` modified, but those were unrelated to 9.3 and got restored by another process during execution. No action needed.
 
 ### Follow-up TODOs surfaced for Epic 9
-_(tbd)_
+
+- **9.7 (or follow-up)**: verify FR28 idempotency-cache replay envelopes also carry the derived `tg:{update_id}` trace_id. The current implementation guarantees the first dispatch carries it; the cache-hit replay path (in `EventLogWriter.append` or wherever idempotency is enforced) needs an explicit test that the replayed envelope shares the same trace_id. Flagged but not in 9.3 scope.
+- **9.4-9.6 ingresses** (console-cli, MCP, worker): same pattern as 9.3 — derive deterministic or mint trace_id at the entry point, bind contextvars, propagate via the call's `data` analogue.
+- **registry-api callsites in worker-side** still emit DeprecationWarnings (94 remaining); each Epic 9 ingress story closes a tranche.
+- **Optional**: an integration test posting a synthetic webhook update, draining dispatch tasks, then reading the JSONL log and asserting all envelope `trace_id` fields match `f"tg:{update_id}"` (AC10 literal). The `test_rejected_user_receives_no_outbound_message` test reads the JSONL but does not yet assert on trace_id propagation through the full chain. Low-priority since unit-level invariants are covered.
 
 ---
 

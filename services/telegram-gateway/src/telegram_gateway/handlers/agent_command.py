@@ -44,6 +44,7 @@ _DEFAULT_RUNTIME = "claude-code"
 async def handle_agent(
     message: Message,
     registry_client: RegistryAPIClient,
+    trace_id: str | None = None,
 ) -> None:
     """Handle the /agent <task-id> command.
 
@@ -82,7 +83,7 @@ async def handle_agent(
     request_id = new_request_id()
 
     try:
-        await registry_client.get_task(task_id=task_id, request_id=request_id)
+        await registry_client.get_task(task_id=task_id, request_id=request_id, trace_id=trace_id)
     except httpx.TooManyRedirects as exc:
         _log.warning(
             "registry-api too many redirects for /agent (request_id=%s): %s",

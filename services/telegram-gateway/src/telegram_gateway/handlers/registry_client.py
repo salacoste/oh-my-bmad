@@ -240,6 +240,7 @@ class RegistryAPIClient:
         idempotency_key: str,
         operator_actor_id: str,
         request_id: str | None = None,
+        trace_id: str | None = None,
         chat_id: int | None = None,
         reply_to_message_id: int | None = None,
     ) -> CreateTaskResponseLocal:
@@ -281,6 +282,10 @@ class RegistryAPIClient:
         }
         if request_id is not None:
             headers["X-Request-ID"] = request_id
+        # Story 9.3 (FR58): forward derived trace_id so registry-api's
+        # TraceIdMiddleware (Story 9.2) preserves rather than re-mints.
+        if trace_id is not None:
+            headers["X-Trace-Id"] = trace_id
 
         # Story 3.9 AC-5: omit chat_id / reply_to_message_id from the JSON
         # body when they are None so registry-api's CreateTaskRequest
@@ -328,6 +333,7 @@ class RegistryAPIClient:
         idempotency_key: str,
         operator_actor_id: str,
         request_id: str | None = None,
+        trace_id: str | None = None,
         hint: str | None = None,
         override: Literal["license", "budget"] | None = None,
     ) -> DecisionResponseLocal:
@@ -374,6 +380,10 @@ class RegistryAPIClient:
         }
         if request_id is not None:
             headers["X-Request-ID"] = request_id
+        # Story 9.3 (FR58): forward derived trace_id so registry-api's
+        # TraceIdMiddleware (Story 9.2) preserves rather than re-mints.
+        if trace_id is not None:
+            headers["X-Trace-Id"] = trace_id
 
         # Omit hint key entirely when None (forward-compat with Story 3.18).
         body: dict[str, str] = {"action": action}
@@ -415,6 +425,7 @@ class RegistryAPIClient:
         self,
         *,
         request_id: str | None = None,
+        trace_id: str | None = None,
     ) -> HealthResponseLocal:
         """GET /v1/health and return a typed local response model.
 
@@ -442,6 +453,9 @@ class RegistryAPIClient:
         headers: dict[str, str] = {}
         if request_id is not None:
             headers["X-Request-ID"] = request_id
+        # Story 9.3 (FR58): forward derived trace_id through to registry-api.
+        if trace_id is not None:
+            headers["X-Trace-Id"] = trace_id
 
         response = await self._http_client.get(
             "/v1/health",
@@ -465,6 +479,7 @@ class RegistryAPIClient:
         *,
         task_id: str,
         request_id: str | None = None,
+        trace_id: str | None = None,
     ) -> TaskResponseLocal:
         """GET /v1/tasks/{task_id} and return a typed local response model.
 
@@ -491,6 +506,9 @@ class RegistryAPIClient:
         headers: dict[str, str] = {}
         if request_id is not None:
             headers["X-Request-ID"] = request_id
+        # Story 9.3 (FR58): forward derived trace_id through to registry-api.
+        if trace_id is not None:
+            headers["X-Trace-Id"] = trace_id
 
         response = await self._http_client.get(
             f"/v1/tasks/{task_id}",
@@ -509,6 +527,7 @@ class RegistryAPIClient:
         *,
         task_id: str,
         request_id: str | None = None,
+        trace_id: str | None = None,
     ) -> LogsDigestResponseLocal:
         """GET /v1/tasks/{task_id}/logs/digest and return a typed local response model.
 
@@ -540,6 +559,9 @@ class RegistryAPIClient:
         headers: dict[str, str] = {}
         if request_id is not None:
             headers["X-Request-ID"] = request_id
+        # Story 9.3 (FR58): forward derived trace_id through to registry-api.
+        if trace_id is not None:
+            headers["X-Trace-Id"] = trace_id
 
         response = await self._http_client.get(
             f"/v1/tasks/{task_id}/logs/digest",

@@ -110,6 +110,7 @@ async def handle_task(
     message: Message,
     bot: Bot,
     registry_client: RegistryAPIClient,
+    trace_id: str | None = None,
 ) -> None:
     """Handle the /task <description> command.
 
@@ -148,6 +149,7 @@ async def handle_task(
             idempotency_key=idempotency_key,
             operator_actor_id=str(message.from_user.id) if message.from_user else "unknown",
             request_id=request_id,
+            trace_id=trace_id,
             chat_id=message.chat.id,
             reply_to_message_id=message.message_id,
         )

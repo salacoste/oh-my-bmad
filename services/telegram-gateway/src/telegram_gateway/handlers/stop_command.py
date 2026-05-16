@@ -53,6 +53,7 @@ _log = logging.getLogger("telegram_gateway.handlers.stop_command")
 async def handle_stop(
     message: Message,
     registry_client: RegistryAPIClient,
+    trace_id: str | None = None,
 ) -> None:
     """Handle the /stop <task-id> command.
 
@@ -108,6 +109,7 @@ async def handle_stop(
             idempotency_key=idempotency_key,
             operator_actor_id=operator_actor_id,
             request_id=request_id,
+            trace_id=trace_id,
         )
     except httpx.TooManyRedirects:
         await _safe_reply(message, "⚠️ Registry misconfigured: too many redirects.")

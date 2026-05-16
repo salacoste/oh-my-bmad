@@ -68,6 +68,7 @@ _extract_task_id = _keys.extract_task_id_with_trailing
 async def handle_approve(
     message: Message,
     registry_client: RegistryAPIClient,
+    trace_id: str | None = None,
 ) -> None:
     """Handle the /approve <task-id> command.
 
@@ -145,6 +146,7 @@ async def handle_approve(
             idempotency_key=idempotency_key,
             operator_actor_id=operator_actor_id,
             request_id=request_id,
+            trace_id=trace_id,
             override=override,
         )
     except httpx.TooManyRedirects:

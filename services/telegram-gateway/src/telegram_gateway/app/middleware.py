@@ -8,6 +8,26 @@ to the audit trail as a typed ``telegram.rejected`` envelope with the
 minimal PII surface ``{user_id, reason}`` (no message content, no
 username, no chat metadata).
 
+``trace_id`` derivation (Story 9.3 / FR58 Telegram / FR28)
+----------------------------------------------------------
+
+Before any allowlist enforcement, the middleware derives
+``trace_id = f"tg:{update.update_id}"`` from the inbound :class:`Update`,
+validates it via :func:`events.envelope.is_valid_trace_id`, binds it to
+the structlog contextvars for the duration of the dispatch, and
+propagates it into the aiogram ``data`` dict so downstream inner
+middlewares + handlers can attach it (typically as ``X-Trace-Id`` on
+outbound registry-api calls — Story 9.2's TraceIdMiddleware will then
+preserve rather than re-mint).
+
+The derivation is **deterministic**: replaying the same ``update_id``
+(FR28 idempotency-cache hit path; webhook redelivery) produces the same
+``trace_id``, so the original event and the replay envelope share the
+same correlation id. For malformed BotAPI payloads (``update_id`` ≤ 0,
+impossible per docs but defensive), the middleware logs a WARNING and
+mints a UUIDv7 fallback. The unbind runs in a ``try/finally`` so a
+dispatcher reused across updates never observes a prior update's trace.
+
 Why outer_middleware (not inner)
 --------------------------------
 
@@ -81,12 +101,17 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
+import structlog
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, Update
 from events import TELEGRAM_REJECTED_SCHEMA_VERSION, TelegramRejectedPayload
 from events.clock import Clock
-from events.envelope import Actor, EventEnvelope
-from events.ids import new_event_id, new_request_id
+from events.envelope import (  # noqa: IMP001 — services→packages allowed
+    Actor,
+    EventEnvelope,
+    is_valid_trace_id,
+)
+from events.ids import new_event_id, new_request_id, new_uuid7  # noqa: IMP001
 
 # Re-entrant emission guard — same ContextVar used by AuditedSecret._safe_emit.
 # Importing it here lets AllowlistMiddleware's _safe_emit skip nested emissions
@@ -149,6 +174,16 @@ EmitCallable = Callable[[EventEnvelope], Awaitable[None]]
 class AllowlistMiddleware(BaseMiddleware):
     """Outer middleware enforcing the operator allowlist (FR11 / NFR-S4).
 
+    Story 9.3 (FR58 Telegram / FR28) extends this middleware to derive a
+    deterministic ``trace_id = f"tg:{update.update_id}"`` from every
+    inbound :class:`Update`, bind it to the structlog contextvars, and
+    propagate it via ``data["trace_id"]`` so downstream handlers can
+    attach ``X-Trace-Id`` on outbound registry-api calls (Story 9.2's
+    HTTP middleware will preserve rather than re-mint). The derivation
+    runs BEFORE allowlist enforcement so rejection envelopes also carry
+    the trace_id, and the unbind is in a ``try/finally`` so reuse of the
+    dispatcher across updates never leaks contextvars.
+
     Args:
         allowlist: ``frozenset[int]`` of allowed Telegram user ids. An
                    empty set rejects every inbound update (closed-by-
@@ -196,24 +231,70 @@ class AllowlistMiddleware(BaseMiddleware):
         Returning ``None`` short-circuits the dispatcher (handler never
         runs). Allowed users delegate to ``handler(event, data)``
         unchanged.
-        """
-        # Carry forward the inbound request_id when Story 3.6's request-id
-        # middleware has already injected it into ``data``. Falls back to a
-        # fresh ID until 3.6 lands (M6 — documented in module docstring).
-        inbound_request_id = data.get("request_id") if isinstance(data, dict) else None
 
-        user_id = self._extract_user_id(event)
-        if user_id is None:
+        Story 9.3: derive ``trace_id = f"tg:{update.update_id}"`` from
+        the inbound :class:`Update` BEFORE allowlist enforcement, bind
+        it to structlog contextvars, propagate via ``data["trace_id"]``
+        for downstream handlers, and unbind in ``try/finally`` so the
+        unbind runs on every return path (allowlist rejection,
+        no-from-user rejection, handler success, handler exception).
+        """
+        # --- Story 9.3 AC1-AC3: derive + validate + bind trace_id ----------
+        trace_id: str
+        if isinstance(event, Update) and event.update_id >= 1:
+            candidate = f"tg:{event.update_id}"
+            if is_valid_trace_id(candidate):
+                trace_id = candidate
+            else:
+                # Defense in depth: BotAPI's ``update_id`` ceiling matches the
+                # int64 max enforced by ``is_valid_trace_id`` (Story 9.1), so
+                # this branch should never fire for conformant payloads.
+                _log.warning(
+                    "Telegram update_id failed trace_id validation; minting "
+                    "fallback (update_id=%r)",
+                    event.update_id,
+                )
+                trace_id = new_uuid7(clock=self._clock)
+        else:
+            # Edge cases: event is not an Update (impossible given outer-
+            # middleware-on-update wiring) or update_id is 0 / negative
+            # (impossible per BotAPI but defended).
+            _log.warning(
+                "AllowlistMiddleware received non-Update event or invalid "
+                "update_id; minting fallback trace_id (event_type=%s)",
+                type(event).__name__,
+            )
+            trace_id = new_uuid7(clock=self._clock)
+
+        structlog.contextvars.bind_contextvars(trace_id=trace_id)
+        data["trace_id"] = trace_id
+
+        try:
+            # Carry forward the inbound request_id when Story 3.6's request-id
+            # middleware has already injected it into ``data``. Falls back to a
+            # fresh ID until 3.6 lands (M6 — documented in module docstring).
+            inbound_request_id = data.get("request_id") if isinstance(data, dict) else None
+
+            user_id = self._extract_user_id(event)
+            if user_id is None:
+                await self._emit_rejection(
+                    user_id=0,
+                    reason="no_from_user",
+                    request_id=inbound_request_id,
+                    trace_id=trace_id,
+                )
+                return None
+            if user_id in self._allowlist:
+                return await handler(event, data)
             await self._emit_rejection(
-                user_id=0, reason="no_from_user", request_id=inbound_request_id
+                user_id=user_id,
+                reason="not_in_allowlist",
+                request_id=inbound_request_id,
+                trace_id=trace_id,
             )
             return None
-        if user_id in self._allowlist:
-            return await handler(event, data)
-        await self._emit_rejection(
-            user_id=user_id, reason="not_in_allowlist", request_id=inbound_request_id
-        )
-        return None
+        finally:
+            structlog.contextvars.unbind_contextvars("trace_id")
 
     @staticmethod
     def _extract_user_id(event: TelegramObject) -> int | None:
@@ -266,8 +347,15 @@ class AllowlistMiddleware(BaseMiddleware):
         user_id: int,
         reason: Literal["not_in_allowlist", "no_from_user"],
         request_id: str | None = None,
+        trace_id: str,
     ) -> None:
-        """Build + dispatch a ``telegram.rejected`` envelope."""
+        """Build + dispatch a ``telegram.rejected`` envelope.
+
+        Story 9.3 AC4: ``trace_id`` is now required (always derived by
+        ``__call__`` before this helper is invoked) and propagated to
+        ``EventEnvelope.create`` so the rejection envelope shares the
+        same correlation id as the originating Telegram update.
+        """
         resolved_request_id = (
             request_id if request_id is not None else new_request_id(clock=self._clock)
         )
@@ -280,6 +368,7 @@ class AllowlistMiddleware(BaseMiddleware):
             actor=self._actor,
             payload=TelegramRejectedPayload(user_id=user_id, reason=reason),
             request_id=resolved_request_id,
+            trace_id=trace_id,
         )
         await self._safe_emit(envelope)
 

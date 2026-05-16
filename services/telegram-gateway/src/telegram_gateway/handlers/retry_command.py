@@ -59,6 +59,7 @@ _log = logging.getLogger("telegram_gateway.handlers.retry_command")
 async def handle_retry(
     message: Message,
     registry_client: RegistryAPIClient,
+    trace_id: str | None = None,
 ) -> None:
     """Handle the /retry <task-id> [hint] command.
 
@@ -115,6 +116,7 @@ async def handle_retry(
             idempotency_key=idempotency_key,
             operator_actor_id=operator_actor_id,
             request_id=request_id,
+            trace_id=trace_id,
             hint=hint,
         )
     except httpx.TooManyRedirects:

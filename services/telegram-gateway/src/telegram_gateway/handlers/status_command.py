@@ -140,6 +140,7 @@ def _render_status_reply(task: TaskResponseLocal) -> str:
 async def handle_status(
     message: Message,
     registry_client: RegistryAPIClient,
+    trace_id: str | None = None,
 ) -> None:
     """Handle the /status <task-id> command.
 
@@ -169,7 +170,9 @@ async def handle_status(
     request_id = new_request_id()
 
     try:
-        task = await registry_client.get_task(task_id=task_id, request_id=request_id)
+        task = await registry_client.get_task(
+            task_id=task_id, request_id=request_id, trace_id=trace_id
+        )
     except httpx.TooManyRedirects:
         _log.warning(
             "registry-api too many redirects for /status (request_id=%s)",

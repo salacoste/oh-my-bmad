@@ -59,6 +59,7 @@ _log = logging.getLogger("telegram_gateway.handlers.reject_command")
 async def handle_reject(
     message: Message,
     registry_client: RegistryAPIClient,
+    trace_id: str | None = None,
 ) -> None:
     """Handle the /reject <task-id> [reason] command.
 
@@ -115,6 +116,7 @@ async def handle_reject(
             idempotency_key=idempotency_key,
             operator_actor_id=operator_actor_id,
             request_id=request_id,
+            trace_id=trace_id,
             hint=reason,
         )
     except httpx.TooManyRedirects:

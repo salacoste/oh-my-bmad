@@ -59,6 +59,7 @@ _MAX_REPLY_LEN = 4000
 async def handle_logs(
     message: Message,
     registry_client: RegistryAPIClient,
+    trace_id: str | None = None,
 ) -> None:
     """Handle the /logs <task-id> command.
 
@@ -87,7 +88,9 @@ async def handle_logs(
     task_id_safe = html.escape(task_id)
 
     try:
-        digest_resp = await registry_client.get_logs_digest(task_id=task_id, request_id=request_id)
+        digest_resp = await registry_client.get_logs_digest(
+            task_id=task_id, request_id=request_id, trace_id=trace_id
+        )
     except httpx.TooManyRedirects:
         _log.warning(
             "registry-api too many redirects for /logs (request_id=%s)",

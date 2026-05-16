@@ -62,6 +62,7 @@ _log = logging.getLogger("telegram_gateway.handlers.ping_command")
 async def handle_ping(
     message: Message,
     registry_client: RegistryAPIClient,
+    trace_id: str | None = None,
 ) -> None:
     """Handle the /ping command.
 
@@ -82,7 +83,7 @@ async def handle_ping(
     request_id = new_request_id()
 
     try:
-        health = await registry_client.get_platform_health(request_id=request_id)
+        health = await registry_client.get_platform_health(request_id=request_id, trace_id=trace_id)
     except httpx.TooManyRedirects:
         # L1/L6: TooManyRedirects caught first — indicates misconfiguration
         # (redirect loop), not a transient network issue and not an HTTP status
