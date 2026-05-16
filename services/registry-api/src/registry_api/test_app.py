@@ -299,6 +299,14 @@ class TestPostTasks:
         read the JSONL event log and assert the emitted ``task.created``
         envelope's ``trace_id`` field equals the value sent on the request.
         This is the FR58 literal-compliance gate for the HTTP ingress.
+
+        Story 9.2 pass-1 review A5: engine disposal is owned by the registry-api
+        lifespan handler (``AsyncExitStack.push_async_callback(engine.dispose)``
+        in ``app.py:170, 186``). When ``LifespanManager(app)`` exits, the
+        async-exit stack unwinds and both the read-only and writable engines
+        are disposed before the SQLite file is closed. No explicit
+        ``engine.dispose()`` call is needed here; the lifespan contract is
+        load-bearing for SQLite-file-lock release on subsequent test runs.
         """
         from events.ids import new_uuid7 as _new_uuid7
 
@@ -326,7 +334,8 @@ class TestPostTasks:
             # Response echoes the trace_id on the outbound header.
             assert r.headers.get("X-Trace-Id") == sent_trace
 
-        # After lifespan exits the writer is closed; read the log.
+        # After lifespan exits the writer is closed AND both engines are
+        # disposed (see docstring above); read the log.
         log_path = current_day_path(events_dir, FROZEN_EPOCH)
         envelopes = list(read_log_lines(log_path))
         assert len(envelopes) == 1

@@ -11,7 +11,7 @@ from _TELEGRAM_NAMESPACE_UUID and seed "{chat_id}:{message_id}", then
 ``10xx``.  This satisfies registry-api's IdempotencyKeyMiddleware UUIDv7
 regex::
 
-    ^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    \\A[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\Z
 
 WARNING: do NOT revert to the plain-string format "telegram-{chat_id}-{message_id}".
 That format fails the regex and silently creates duplicate tasks on Telegram
@@ -39,14 +39,22 @@ _TELEGRAM_NAMESPACE_UUID = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 
 # Compiled regex for the registry-api IdempotencyKeyMiddleware UUIDv7 shape.
 # Reused by tests to assert keys pass middleware validation without calling it.
+#
+# Story 9.2 pass-1 review B3 (mirror-update discipline): anchors tightened
+# from ``^...$`` to ``\A...\Z`` to match the envelope-side validator at
+# ``packages/events/src/events/envelope.py:134``. Python's ``re.match`` only
+# anchors start; ``$`` matches before a trailing ``\n`` so a hostile value of
+# ``<valid-uuid>\n<garbage>`` would previously slip past ``^...$`` validation.
+# ``\A`` / ``\Z`` anchor strictly to absolute start/end of the input.
 UUIDV7_BARE_RE: re.Pattern[str] = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    r"\A[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z"
 )
 
 # Compiled regex for the "t-<uuidv7>" task-id format.
 # All handlers that accept a <task-id> argument MUST import from here.
+# Story 9.2 pass-1 review B3: same ``\A`` / ``\Z`` tightening as above.
 TASK_ID_PATTERN: re.Pattern[str] = re.compile(
-    r"^t-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    r"\At-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z"
 )
 
 

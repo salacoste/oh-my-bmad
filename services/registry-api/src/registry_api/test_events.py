@@ -472,7 +472,15 @@ class TestEventsCursorPagination:
 
 
 class TestTraceIdDocumentation:
-    """AC-2: trace_id is None, documented as Phase 2 dependency."""
+    """AC-2: trace_id is None, documented as Phase 2 dependency.
+
+    Story 9.2 pass-1 review C6: ``GET /v1/tasks/{id}/events`` continues to
+    project ``trace_id: None`` because the outbound projection requires an
+    ``Event.trace_id`` ORM column + materializer update (Story 9.7 scope).
+    The INBOUND side (Story 9.2 / FR58 HTTP ingress) IS wired and the
+    emitted JSONL envelopes DO carry the inbound trace_id — that is
+    asserted by ``TestPostTasksTraceIdJsonl`` below as a sibling pin.
+    """
 
     @pytest.mark.asyncio
     async def test_trace_id_is_none_awaiting_phase_2(self, events_client: AsyncClient) -> None:
@@ -482,6 +490,116 @@ class TestTraceIdDocumentation:
         body = r.json()
         for ev in body:
             assert ev["trace_id"] is None
+
+
+class TestPostTasksTraceIdJsonl:
+    """Story 9.2 pass-1 review C6: inbound X-Trace-Id propagates into the JSONL envelope.
+
+    Sibling to ``TestTraceIdDocumentation`` (which pins the OUTBOUND
+    projection is None until Story 9.7). These tests pin the INBOUND side:
+    when ``X-Trace-Id`` is set on POST /v1/tasks, the emitted envelope in
+    the JSONL event log carries the same value — independent of how the
+    outbound GET projection currently surfaces (or hides) it.
+
+    Same pattern as ``test_post_tasks_envelope_carries_trace_id_from_header``
+    in ``test_app.py`` but lives here next to the GET-projection
+    documentation tests so future readers can cross-reference the
+    inbound-vs-outbound asymmetry without grepping.
+    """
+
+    @pytest.mark.asyncio
+    async def test_post_tasks_emits_jsonl_envelope_with_inbound_trace_id_uuid(
+        self, tmp_path: Path
+    ) -> None:
+        """POST with ``X-Trace-Id: <uuidv7>`` → emitted envelope's trace_id matches."""
+        from events.ids import new_uuid7 as _new_uuid7  # noqa: PLC0415
+        from registry_state.adapters.event_log import (  # noqa: IMP001 — services→services allowed per AC-16; PLC0415 local import
+            current_day_path,
+            read_log_lines,
+        )
+
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        engine = create_engine(db_url)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        await engine.dispose()
+        events_dir = tmp_path / "events"
+        clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
+        app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+
+        sent_trace = _new_uuid7(clock=clock)
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://testserver"
+            ) as client,
+        ):
+            r = await client.post(
+                "/v1/tasks",
+                json={"title": "C6 inbound uuid"},
+                headers={"X-Trace-Id": sent_trace},
+            )
+            assert r.status_code == 201
+            assert r.headers.get("X-Trace-Id") == sent_trace
+
+        log_path = current_day_path(events_dir, FROZEN_EPOCH)
+        envelopes = list(read_log_lines(log_path))
+        assert len(envelopes) == 1
+        env = envelopes[0]
+        assert env.type == "task.created"
+        # Inbound-side load-bearing assertion (FR58 HTTP literal compliance).
+        assert env.trace_id == sent_trace
+
+    @pytest.mark.asyncio
+    async def test_post_tasks_emits_jsonl_envelope_with_inbound_trace_id_telegram_form(
+        self, tmp_path: Path
+    ) -> None:
+        """POST with ``X-Trace-Id: tg:<update_id>`` → emitted envelope's trace_id matches.
+
+        Locks the Story 9.1 Telegram form acceptance at the HTTP ingress
+        through to the emitted envelope. Even though no real Telegram client
+        would set ``X-Trace-Id: tg:42`` directly, a co-deployed bridge could
+        forward such a value, and the contract must round-trip cleanly.
+        """
+        from registry_state.adapters.event_log import (  # noqa: IMP001 — services→services allowed per AC-16; PLC0415 local import
+            current_day_path,
+            read_log_lines,
+        )
+
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        engine = create_engine(db_url)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        await engine.dispose()
+        events_dir = tmp_path / "events"
+        clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
+        app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+
+        sent_trace = "tg:42"
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://testserver"
+            ) as client,
+        ):
+            r = await client.post(
+                "/v1/tasks",
+                json={"title": "C6 inbound tg form"},
+                headers={"X-Trace-Id": sent_trace},
+            )
+            assert r.status_code == 201
+            assert r.headers.get("X-Trace-Id") == sent_trace
+
+        log_path = current_day_path(events_dir, FROZEN_EPOCH)
+        envelopes = list(read_log_lines(log_path))
+        assert len(envelopes) == 1
+        env = envelopes[0]
+        assert env.type == "task.created"
+        assert env.trace_id == sent_trace
 
 
 class TestCorruptPayloadDefense:

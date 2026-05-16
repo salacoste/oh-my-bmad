@@ -103,6 +103,28 @@ def _build_idempotency_extensions(request: Request) -> dict[str, Any] | None:
     return None
 
 
+def _build_problem_extensions(request: Request) -> dict[str, Any] | None:
+    """Return the merged ProblemDetails ``extensions`` dict for *request*.
+
+    Story 9.2 pass-1 review A4: when ``TraceIdMiddleware`` has populated
+    ``request.state.trace_id``, surface it in the RFC 7807 ``extensions``
+    payload so 4xx/5xx responses carry the same correlation hint as the
+    ``X-Trace-Id`` response header. Operators triaging a problem-json body
+    can find the trace_id without having to also capture the response
+    headers.
+
+    Defensive ``getattr(..., None)`` access — a middleware crash before
+    ``TraceIdMiddleware`` populated the field returns ``None`` rather than
+    raising ``AttributeError`` (mirrors ``_build_idempotency_extensions``'s
+    Story 2.9 review F1 discipline).
+    """
+    extensions: dict[str, Any] = dict(_build_idempotency_extensions(request) or {})
+    trace_id = getattr(request.state, "trace_id", None)
+    if trace_id is not None:
+        extensions["trace_id"] = trace_id
+    return extensions or None
+
+
 _STATUS_TITLES: dict[int, str] = {
     400: "Bad Request",
     401: "Unauthorized",
@@ -179,7 +201,11 @@ async def handle_http_exception(request: Request, exc: Exception) -> JSONRespons
         status=status,
         detail=detail,
         instance=str(request.url),
-        extensions=_build_idempotency_extensions(request),
+        # Story 9.2 pass-1 review A4: ``_build_problem_extensions`` merges
+        # the idempotency nudge with ``trace_id`` (when populated) so the
+        # problem-json body carries the same correlation hint as the
+        # ``X-Trace-Id`` response header.
+        extensions=_build_problem_extensions(request),
     )
     return JSONResponse(
         content=problem.model_dump(exclude_none=True),
@@ -238,7 +264,9 @@ async def handle_validation_error(request: Request, exc: Exception) -> JSONRespo
     # Story 3.7 review H1: defensive ``dict(...)`` copy guards against any
     # future caching of the helper's return value (currently always a fresh
     # dict, but the renderer must not rely on that).
-    existing = dict(_build_idempotency_extensions(request) or {})
+    # Story 9.2 pass-1 review A4: ``_build_problem_extensions`` adds
+    # ``trace_id`` when ``TraceIdMiddleware`` populated ``request.state``.
+    existing = dict(_build_problem_extensions(request) or {})
     # Story 3.7 review M9: only set the key when the list is non-empty so
     # the wire is not polluted with ``"validation_errors": []``.
     if errors_list:
@@ -272,7 +300,8 @@ def _build_capability_denied_response(request: Request, exc: CapabilityDenied) -
         status=403,
         detail=exc.reason,
         instance=str(request.url),
-        extensions=_build_idempotency_extensions(request),
+        # Story 9.2 pass-1 review A4: trace_id correlation in problem body.
+        extensions=_build_problem_extensions(request),
     )
     return JSONResponse(
         content=problem.model_dump(exclude_none=True),
@@ -321,7 +350,8 @@ async def handle_internal_error(request: Request, exc: Exception) -> JSONRespons
         status=500,
         detail="An internal error occurred. The error has been logged for investigation.",
         instance=str(request.url),
-        extensions=_build_idempotency_extensions(request),
+        # Story 9.2 pass-1 review A4: trace_id correlation in problem body.
+        extensions=_build_problem_extensions(request),
     )
     return JSONResponse(
         content=problem.model_dump(exclude_none=True),

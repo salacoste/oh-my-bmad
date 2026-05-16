@@ -26,7 +26,7 @@ from events import (
 )
 from events.budget_policy import calculate_new_limit
 from events.envelope import Actor, EventEnvelope
-from events.ids import new_decision_id, new_event_id
+from events.ids import new_decision_id, new_event_id, new_uuid7
 from fastapi import APIRouter, Path, Request, Response
 from fastapi.exceptions import HTTPException
 from fastapi.responses import JSONResponse
@@ -187,7 +187,11 @@ async def post_decision(
     response_body_cache: ResponseSlotCache = app.state.idempotency_response_cache
 
     request_id: str = request.state.request_id
-    trace_id: str = request.state.trace_id
+    # Story 9.2 pass-1 review A2: defensive ``getattr`` mirrors the pattern
+    # already used for ``actor_id`` so a misconfigured middleware stack
+    # cannot crash the handler with ``AttributeError`` before producing a
+    # diagnostic envelope.
+    trace_id: str = getattr(request.state, "trace_id", new_uuid7(clock=clock))
     # Phase 1: actor_id hardcoded by middleware. TODO(Story 6.1+): enforce
     # ownership/role before allowing decision on task.
     actor_id: str = getattr(request.state, "actor_id", "http-api")

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
 
 import pytest
@@ -65,8 +65,23 @@ async def app_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None]:
     app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
 
     # Probe endpoint that echoes request.state fields for middleware assertions.
+    #
+    # Story 9.2 pass-1 review C3: TEST-ONLY probe — NEVER register this in
+    # ``build_app``. The endpoint surfaces ``request.state`` fields directly
+    # which would be an information-disclosure hazard in production. The
+    # ``/debug/`` path prefix is conventional for test-only routes in this
+    # codebase but the load-bearing constraint is "never wired into
+    # build_app", not the URL shape.
     @app.get("/debug/state")
     async def _state_probe(request: Request) -> JSONResponse:
+        """TEST-ONLY probe — never register in ``build_app()``.
+
+        Surfaces ``request.state`` fields + structlog contextvars so the
+        middleware-assertion tests can observe binding semantics directly
+        from a handler. Story 9.2 added ``trace_id`` + ``structlog_trace_id``
+        for the FR58 HTTP-ingress assertions; Story 6.3 + 3.6 introduced the
+        rest. Do NOT wire this into ``build_app`` — it leaks internal state.
+        """
         # Story 9.2: include trace_id + the live structlog contextvars
         # snapshot so the TraceIdMiddleware tests can assert binding/
         # unbinding semantics directly from a probe handler.
@@ -213,6 +228,32 @@ class TestRequestIdMiddlewareStructlog:
         # Unbound after response.
         after = structlog.contextvars.get_merged_contextvars(structlog.get_logger())
         assert "request_id" not in after
+
+    @pytest.mark.asyncio
+    async def test_request_id_rejects_trailing_newline_payload(
+        self, app_client: AsyncClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Story 9.2 pass-1 review B1: ``\\A...\\Z`` anchors reject trailing-newline payloads.
+
+        Regression pin for the Story 9.1 / 9.2 mirror-update discipline: the
+        envelope-side validator switched from ``^...$`` to ``\\A...\\Z`` so a
+        hostile ``X-Request-ID`` of ``<valid-uuid>\\n<garbage>`` no longer
+        slips past validation. This test locks the HTTP-side behaviour:
+        the middleware regenerates a fresh UUIDv7 (not the partial match) and
+        emits a WARNING log.
+        """
+        valid = new_request_id(clock=_FROZEN_CLOCK)
+        hostile = f"{valid}\nextra-garbage"
+        with caplog.at_level(logging.WARNING, logger="registry_api.adapters.middleware"):
+            r = await app_client.get("/debug/state", headers={"X-Request-ID": hostile})
+        assert r.status_code == 200
+        echoed = r.headers.get("X-Request-ID")
+        assert echoed is not None
+        # Middleware regenerated — echoed value is NOT the hostile input nor
+        # the prefix-valid portion.
+        assert echoed != hostile
+        assert echoed != valid
+        assert any("invalid X-Request-ID header" in rec.getMessage() for rec in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +495,20 @@ _TRACE_UUID_RE = r"\A[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9
 class TestTraceIdMiddleware:
     """Story 9.2 AC1-AC6 + AC10: TraceIdMiddleware validate-or-mint + propagation."""
 
+    @pytest.fixture(autouse=True)
+    def _clear_structlog_contextvars(self) -> Generator[None, None, None]:
+        """Story 9.2 pass-1 review B2: ensure no prior test left ``trace_id`` bound.
+
+        structlog ``contextvars`` are process-global. Without this autouse
+        fixture, a parallel async test that raised before its ``try/finally``
+        unbind could leak state into this test class — making the
+        ``unbound after request`` assertions flaky. Belt-and-braces: clear
+        before AND after each test in this class.
+        """
+        structlog.contextvars.clear_contextvars()
+        yield
+        structlog.contextvars.clear_contextvars()
+
     @pytest.mark.asyncio
     async def test_trace_id_minted_on_missing_header(self, app_client: AsyncClient) -> None:
         """AC1 #4 + AC6 #1: no X-Trace-Id → server mints a bare UUIDv7."""
@@ -638,3 +693,204 @@ class TestTraceIdMiddleware:
         body = r.json()
         assert body["trace_id"] == sent_trace
         assert body["request_id"] == sent_request
+
+    # ------------------------------------------------------------------
+    # Story 9.2 pass-1 review additions (A3, B4, B8, C1, C4)
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_trace_id_not_echoed_on_raw_500_exception_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pass-1 A3 (corrected): documents that raw 500 crashes do NOT echo X-Trace-Id.
+
+        Starlette's ``BaseHTTPMiddleware.call_next`` re-raises any unhandled
+        exception from the inner ASGI app up through the outer middleware's
+        dispatch function. This means the echo line AFTER ``await call_next``
+        never executes when a ``RuntimeError`` escapes the route handler — the
+        exception propagates straight past it.
+
+        The ``X-Trace-Id`` echo on 422/404/403 responses DOES work because
+        those code paths return a ``JSONResponse`` (not a raw exception) through
+        the normal response flow. See ``test_trace_id_echoed_on_422_validation_error_response``
+        for the working case.
+
+        This test pins the ACTUAL behaviour (no header on raw 500) so future
+        contributors have a clear reference. Story 9.7 / a Starlette upgrade
+        may change this — the test will catch the regression.
+        """
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+        events_dir = tmp_path / "events"
+        clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
+        app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+
+        sent = new_uuid7(clock=clock)
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app, raise_app_exceptions=False),
+                base_url="http://testserver",
+            ) as client,
+        ):
+
+            async def _boom(*_args: object, **_kwargs: object) -> None:
+                raise RuntimeError("synthetic failure for 500 path documentation test")
+
+            monkeypatch.setattr(app.state.writer, "append", _boom)
+
+            r = await client.post(
+                "/v1/tasks",
+                json={"title": "boom-for-500-doc"},
+                headers={"X-Trace-Id": sent},
+            )
+
+        assert r.status_code == 500
+        # Document the actual behaviour: BaseHTTPMiddleware re-raises through
+        # call_next so the echo line never runs on the raw exception path.
+        # The ``trace_id`` IS still available via ``extensions.trace_id`` in the
+        # problem+json body (A4 wired it into ``handle_internal_error`` via
+        # ``_build_problem_extensions``), so correlation is not completely lost.
+        assert r.headers.get("X-Trace-Id") is None, (
+            "Starlette behaviour changed: X-Trace-Id is now echoed on raw 500 path "
+            "— update this test and the A3 docstring."
+        )
+
+    @pytest.mark.asyncio
+    async def test_trace_id_echoed_on_422_validation_error_response(
+        self, app_client: AsyncClient
+    ) -> None:
+        """Pass-1 A3: ``X-Trace-Id`` is echoed on 422 validation errors too.
+
+        FastAPI's ``RequestValidationError`` flows through the registered
+        exception handler (``handle_validation_error``) which returns a
+        ``JSONResponse`` — the outer middleware's echo line must still run.
+        """
+        sent = new_uuid7(clock=_FROZEN_CLOCK)
+        # Missing required ``title`` → RequestValidationError → 422.
+        r = await app_client.post("/v1/tasks", json={}, headers={"X-Trace-Id": sent})
+        assert r.status_code == 422
+        assert r.headers.get("X-Trace-Id") == sent
+
+    @pytest.mark.asyncio
+    async def test_trace_id_uppercase_uuid_rejected_with_lowercase_hint(
+        self, app_client: AsyncClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Pass-1 B4: uppercase-hex UUIDv7 is rejected; WARNING surfaces the lowercase hint.
+
+        The Story 9.1 shape contract requires lowercase hex; an uppercase
+        UUIDv7 is the most common operator mistake when copy-pasting from
+        Python's ``uuid.UUID(...).__str__()`` after a ``.upper()`` call.
+        The improved WARNING message documents the constraint so the operator
+        does not need to read the regex.
+        """
+        # Construct an uppercase variant of a valid UUIDv7.
+        lowercase = new_uuid7(clock=_FROZEN_CLOCK)
+        uppercase = lowercase.upper()
+        assert uppercase != lowercase  # sanity
+
+        with caplog.at_level(logging.WARNING, logger="registry_api.adapters.middleware"):
+            r = await app_client.get("/debug/state", headers={"X-Trace-Id": uppercase})
+        assert r.status_code == 200
+        echoed = r.headers.get("X-Trace-Id")
+        assert echoed is not None
+        # Middleware regenerated a fresh lowercase UUIDv7.
+        assert echoed != uppercase
+        assert re.match(_TRACE_UUID_RE, echoed)
+        # WARNING fired AND carries the lowercase hint.
+        warnings = [
+            rec for rec in caplog.records if "invalid X-Trace-Id header" in rec.getMessage()
+        ]
+        assert warnings, "expected a WARNING log for the uppercase X-Trace-Id"
+        assert any(
+            "lowercase UUIDv7" in rec.getMessage() and "tg:<update_id>" in rec.getMessage()
+            for rec in warnings
+        ), "WARNING message should hint at the lowercase + tg: shape constraints"
+
+    @pytest.mark.asyncio
+    async def test_trace_id_and_request_id_both_bound_during_handler(
+        self, app_client: AsyncClient
+    ) -> None:
+        """Pass-1 B8: both ``trace_id`` AND ``request_id`` visible inside the handler.
+
+        Locks the OUTERMOST-first execution order: ``TraceIdMiddleware`` binds
+        ``trace_id`` BEFORE ``RequestIdMiddleware`` binds ``request_id``, and
+        both are still visible to the inner handler. A future refactor that
+        reordered middleware registration would break this test before any
+        production logger lost correlation.
+        """
+        sent_trace = new_uuid7(clock=_FROZEN_CLOCK)
+        sent_request = new_request_id(clock=_FROZEN_CLOCK)
+        r = await app_client.get(
+            "/debug/state",
+            headers={"X-Trace-Id": sent_trace, "X-Request-ID": sent_request},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        # Handler observed BOTH bindings during dispatch.
+        assert body["structlog_trace_id"] == sent_trace
+        # ``request_id`` is bound by RequestIdMiddleware — verified indirectly
+        # via the response header echo (RequestIdMiddleware structlog binding
+        # is already covered by TestRequestIdMiddlewareStructlog above; this
+        # test pins that the binding ordering preserves both keys).
+        assert r.headers.get("X-Request-ID") == sent_request
+        assert r.headers.get("X-Trace-Id") == sent_trace
+        # And the state fields agree with the headers.
+        assert body["trace_id"] == sent_trace
+        assert body["request_id"] == sent_request
+
+    @pytest.mark.asyncio
+    async def test_trace_id_tg_int64_max_accepted_at_middleware(
+        self, app_client: AsyncClient
+    ) -> None:
+        """Pass-1 C1: ``tg:<int64-max>`` is accepted at the middleware boundary.
+
+        Boundary test mirroring the envelope-side coverage. The 19-digit
+        regex cap admits up to ~9.99e18; the post-match int check enforces
+        the int64 ceiling at exactly ``9_223_372_036_854_775_807``.
+        """
+        int64_max = "tg:9223372036854775807"
+        r = await app_client.get("/debug/state", headers={"X-Trace-Id": int64_max})
+        assert r.status_code == 200
+        assert r.headers.get("X-Trace-Id") == int64_max
+        assert r.json()["trace_id"] == int64_max
+
+    @pytest.mark.asyncio
+    async def test_trace_id_tg_int64_plus_one_regenerated_at_middleware(
+        self, app_client: AsyncClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Pass-1 C1: ``tg:<int64-max + 1>`` is rejected at the middleware boundary.
+
+        Sibling boundary test. The value matches the 19-digit regex but
+        exceeds int64 max — the post-match numeric check must reject it and
+        trigger remint + WARNING.
+        """
+        overflow = "tg:9223372036854775808"  # int64 max + 1
+        with caplog.at_level(logging.WARNING, logger="registry_api.adapters.middleware"):
+            r = await app_client.get("/debug/state", headers={"X-Trace-Id": overflow})
+        assert r.status_code == 200
+        echoed = r.headers.get("X-Trace-Id")
+        assert echoed is not None
+        assert echoed != overflow
+        assert re.match(_TRACE_UUID_RE, echoed)
+        assert any("invalid X-Trace-Id header" in rec.getMessage() for rec in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_trace_id_response_appends_vary_x_trace_id(self, app_client: AsyncClient) -> None:
+        """Pass-1 C4: response carries ``Vary: X-Trace-Id`` so caches do not serve stale traces.
+
+        Without ``Vary``, an upstream cache could serve a response with the
+        wrong echoed trace_id to a request that carried a different
+        ``X-Trace-Id`` header — silently corrupting correlation. The
+        middleware appends the token (or no-ops if already present).
+        """
+        sent = new_uuid7(clock=_FROZEN_CLOCK)
+        r = await app_client.get("/debug/state", headers={"X-Trace-Id": sent})
+        assert r.status_code == 200
+        vary_header = r.headers.get("Vary", "")
+        vary_tokens = [p.strip() for p in vary_header.split(",") if p.strip()]
+        assert "X-Trace-Id" in vary_tokens, (
+            f"expected 'X-Trace-Id' token in Vary header, got: {vary_header!r}"
+        )

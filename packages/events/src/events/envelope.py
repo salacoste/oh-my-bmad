@@ -140,8 +140,38 @@ _EVENT_TYPE_RE = re.compile(r"\A[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+\Z")
 # avoid aliasing where two distinct strings refer to the same update_id.
 # Code-review F3: the int64 ceiling is enforced post-match (the 19-digit cap
 # alone allows up to ~9.99e18 > 9.22e18 = int64 max).
-_TRACE_ID_TELEGRAM_RE = re.compile(r"\Atg:[1-9][0-9]{0,18}\Z")
+_TRACE_ID_TELEGRAM_RE = re.compile(r"\Atg:(?P<update_id>[1-9][0-9]{0,18})\Z")
 _INT64_MAX = 9_223_372_036_854_775_807
+
+# Story 9.2 pass-1 review A1: public aliases + helper so downstream HTTP /
+# Telegram / MCP / worker ingress middleware can validate inbound trace_id
+# headers symmetrically with the envelope-side ``_trace_id_shape`` validator.
+# Keeping a single source of truth here avoids the registry-api / telegram-
+# gateway drift hazard called out by the Epic 9 retro candidate (Story 9.2
+# spec follow-up TODOs).
+TRACE_ID_TELEGRAM_RE = _TRACE_ID_TELEGRAM_RE
+INT64_MAX_UPDATE_ID = _INT64_MAX
+
+
+def is_valid_trace_id(value: str) -> bool:
+    """Return True if *value* matches the Story 9.1 trace_id shape contract.
+
+    Public counterpart to the envelope-side ``_trace_id_shape`` validator —
+    use this from HTTP / Telegram / MCP / worker ingress middleware so the
+    validation logic stays in one place (Epic 9 retro candidate).
+
+    Accepted shapes:
+      - bare UUIDv7 (e.g. ``01917e5c-a7d1-7000-8abc-...``)
+      - Telegram-derived form ``tg:<update_id>`` where update_id is a positive
+        decimal integer in ``[1, 2**63 − 1]`` with no leading zeros.
+    """
+    if _UUIDV7_BARE_RE.match(value):
+        return True
+    m = _TRACE_ID_TELEGRAM_RE.match(value)
+    if m is not None:
+        return int(m["update_id"]) <= _INT64_MAX
+    return False
+
 
 ActorKind = Literal["operator", "orchestrator", "worker", "system", "clawhip"]
 
@@ -238,13 +268,17 @@ class EventEnvelope(BaseModel):
             return v
         if _UUIDV7_BARE_RE.match(v):
             return v
-        if _TRACE_ID_TELEGRAM_RE.match(v):
+        m = _TRACE_ID_TELEGRAM_RE.match(v)
+        if m is not None:
             # F3 carry-over: regex caps at 19 digits but ~9.99e18 > int64 max.
             # The regex guarantees ASCII digits so int() cannot raise.
             # Pass-2 review: error message reworded — "out of range" describes
             # the symptom to a library consumer; the int64 specifics live in
             # the implementation comment, not the user-facing text.
-            if int(v[3:]) > _INT64_MAX:
+            # Story 9.2 pass-1 review B7: named group ``update_id`` instead of
+            # slice ``v[3:]`` — slightly more defensive against future prefix
+            # changes.
+            if int(m["update_id"]) > _INT64_MAX:
                 raise ValueError(
                     f"trace_id Telegram update_id out of range (max {_INT64_MAX}); got {v!r}"
                 )
@@ -418,4 +452,12 @@ class EventEnvelope(BaseModel):
 
 
 # Re-export UTC for convenience in tests
-__all__ = ["Actor", "ActorKind", "EventEnvelope", "UTC"]
+__all__ = [
+    "Actor",
+    "ActorKind",
+    "EventEnvelope",
+    "INT64_MAX_UPDATE_ID",
+    "TRACE_ID_TELEGRAM_RE",
+    "UTC",
+    "is_valid_trace_id",
+]

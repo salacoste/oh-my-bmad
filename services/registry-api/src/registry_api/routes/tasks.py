@@ -30,7 +30,7 @@ from urllib.parse import quote
 import cachetools
 from events import TaskCreatedPayload
 from events.envelope import Actor, EventEnvelope
-from events.ids import new_event_id, new_task_id
+from events.ids import new_event_id, new_task_id, new_uuid7
 from fastapi import APIRouter, Path, Request, Response
 from fastapi.exceptions import HTTPException
 from idempotency import IdempotencyCacheStore
@@ -345,7 +345,11 @@ async def post_tasks(
 
     idempotency_key: str = request.state.idempotency_key
     request_id: str = request.state.request_id
-    trace_id: str = request.state.trace_id
+    # Story 9.2 pass-1 review A2: defensive ``getattr`` so a misconfigured
+    # middleware stack (e.g. ``TraceIdMiddleware`` accidentally omitted from
+    # ``build_app``) does not raise ``AttributeError`` mid-handler. Mirrors
+    # the same pattern used for ``actor_id`` below.
+    trace_id: str = getattr(request.state, "trace_id", new_uuid7(clock=clock))
     actor_id: str = getattr(request.state, "actor_id", "http-api")
 
     # Story 6.3 AC-6: scoped cache key prevents cross-actor cache leakage.

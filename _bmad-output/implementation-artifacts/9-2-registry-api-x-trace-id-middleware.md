@@ -38,8 +38,8 @@ Behaviour:
 
 Import the validation logic from `events.envelope` (don't duplicate the regex). Two options for implementation, pick one:
 
-- **Preferred:** module-level `_validate_trace_id(value: str) -> str | None` helper at the top of `middleware.py` that returns the value if valid, `None` otherwise. Mirrors the `_UUIDV7_BARE_RE` pattern at line 73-75 (which is itself an envelope-side mirror per Epic 9 retro candidate).
-- **Alternative:** call into a new public helper exported from `events.envelope` (e.g., `validate_trace_id_shape(v: str | None) -> bool`). This avoids regex duplication entirely but requires a public-API addition.
+- **Preferred (chosen after pass-1 review):** call into the public `is_valid_trace_id(value: str) -> bool` helper now exported from `events.envelope` (alongside `TRACE_ID_TELEGRAM_RE` and `INT64_MAX_UPDATE_ID` public aliases). Pass-1 review A1 promoted the local `_is_valid_trace_id` helper to a public envelope-side symbol so HTTP / Telegram / MCP / worker ingresses share a single source of truth. Eliminates regex duplication across services.
+- **Alternative (rejected post-pass-1):** module-level `_validate_trace_id` mirror in `middleware.py`. The initial Story 9.2 commit took this path; pass-1 review A1 reversed it to avoid the drift hazard.
 
 The Telegram form (`tg:<update_id>`) MUST be accepted at the HTTP boundary even though no Telegram client realistically sends `X-Trace-Id: tg:42` — Story 9.3 will set `trace_id = f"tg:{update.update_id}"` directly in `AllowlistMiddleware`, and the registry-api may later receive that value as an `X-Trace-Id` from a co-deployed bridge.
 
@@ -71,8 +71,8 @@ app.add_middleware(TraceIdMiddleware, clock=clock)         # runs 1st (outermost
 
 Every `EventEnvelope.create(...)` callsite in `services/registry-api/src/registry_api/routes/*.py` must pass `trace_id=request.state.trace_id`. Targets identified by `grep "EventEnvelope.create\|new_uuid7" services/registry-api/src/registry_api/routes/*.py`:
 
-- `services/registry-api/src/registry_api/routes/tasks.py:405, 436, ...` (4 callsites — task.created + task.planning.started)
-- `services/registry-api/src/registry_api/routes/decisions.py:276, 304, 353, 379` (4 callsites — approval.granted / approval.rejected / task.stop_requested / task.retry_requested / tier3.license_override / tier3.budget_override)
+- `services/registry-api/src/registry_api/routes/tasks.py` — **1 callsite** (task.created). Spec originally said 4; pass-1 review B6 verified the actual count. The `task.planning.started` events mentioned in the spec are dispatched dynamically from the same construction site — they were over-counted in the spec.
+- `services/registry-api/src/registry_api/routes/decisions.py` — **3 callsites** (base envelope + tier3.license_override + tier3.budget_override). Spec originally said 4; `approval.granted`/`approval.rejected`/`task.stop_requested`/`task.retry_requested` are event types dispatched from the same ``EventEnvelope.create(...)`` call — same over-count pattern.
 - Any other `EventEnvelope.create(...)` callsites discovered during dev (use `grep` to confirm coverage)
 
 The DeprecationWarning from Story 9.1 will stop firing for these callsites once 9.2 lands.
@@ -130,7 +130,7 @@ Before 9.2, the suite emits ~80-90 `EventEnvelope created without trace_id` Depr
 uv run pytest packages/ services/ -m "not slow" -W "default::DeprecationWarning" 2>&1 | grep -c "EventEnvelope created without trace_id"
 ```
 
-Expected: the warning count drops by ~10-15 (the registry-api callsite cluster). Stories 9.3 – 9.6 will progressively reduce it further; Story 9.7 deletes the `filterwarnings` entry once all callsites pass `trace_id=`.
+**Pass-1 review AC9 correction (C5)**: the spec's "~10-15" estimate was overstated. pytest's warning summary deduplicates by source-location (`(message, category, module, lineno)` tuples). The actual per-source-location drop after Story 9.2 is **−4** (4 `EventEnvelope.create(...)` callsites silenced: 1 in tasks.py + 3 in decisions.py). The absolute emission-count savings under per-test isolation are larger but not visible through the `pytest` summary. Stories 9.3–9.6 will close the remaining clusters; Story 9.7 removes the `pyproject.toml` `filterwarnings` entry once all callsites pass `trace_id=`.
 
 ### AC10 — FR58 (HTTP) literal compliance
 
@@ -390,6 +390,49 @@ The headline drop is smaller than the spec's "~10-15" estimate because pytest's 
 - **Story 9.7 (mandatory `trace_id` + ORM column):** before bumping `schema_version` to 1.1.0, ensure ALL ingresses (9.2-9.6) are wired AND the `pyproject.toml` `filterwarnings` entry is removed AND the `routes/events.py:49` outbound projection is updated to read the new `Event.trace_id` ORM column.
 - **L1 hidden-cascade discipline:** the CI run for this commit was the verification gate; if a downstream/integration test fails on `main` after merge, the fix-forward sweep mirrors the Epic 8.7 retro pattern.
 - **Mirror-update L2 audit candidate:** there are still 7 occurrences of `^[0-9a-f]{8}...$` (with `^/$` anchors) elsewhere in the workspace (`packages/events/src/events/ids.py:29`, `packages/events/src/events/test_ids.py:23`, `services/telegram-gateway/src/telegram_gateway/test_task_command.py:189,528`, `services/telegram-gateway/src/telegram_gateway/handlers/_keys.py:43`, `services/registry-state/src/registry_state/domain/test_failure_detection.py:682`, `services/worker-wrapper/src/worker_wrapper/adapters/github_client.py:21`). Most are SHA regexes (worker-wrapper) or test-side mirrors that don't accept network input. Recommend a dedicated mini-story under Epic 9 cleanup to sweep them ALL to `\A/\Z` in one pass.
+
+---
+
+## Review Findings
+
+### Adversarial 3-lane code review — 2026-05-16 (pass-1)
+
+Reviewed at commit `047e3d7` (Story 9.2 initial implementation). Three lanes (Blind Hunter / Edge-Case Hunter / Acceptance Auditor) produced 14 + 11 + 4 = 29 raw findings; deduplicated to 19 unique patch items. All 19 classified as `patch` per user policy "fix all issues even minors — patch everything, dismiss-zero".
+
+#### Patch resolution — 2026-05-16 (pass-1 batch-apply)
+
+All 19 `patch` findings resolved in a single follow-up commit on top of `047e3d7`. Implementation summary:
+
+| ID | Severity | Source | Title | Resolution | Files |
+|---|---|---|---|---|---|
+| A1 | HIGH | BH#1 + ECH#3 + AA AC2 | Promote validator + regex to public `events.envelope` helper | `is_valid_trace_id()` + `TRACE_ID_TELEGRAM_RE` + `INT64_MAX_UPDATE_ID` added to `envelope.py` + `__all__`; `middleware.py` local symbols removed; imports consolidated. | `envelope.py`, `middleware.py` |
+| A2 | HIGH | BH#2 | Defensive `request.state.trace_id` access in routes | `trace_id = getattr(request.state, "trace_id", new_uuid7(clock=clock))` in `tasks.py` + `decisions.py`; `new_uuid7` import added to both. | `tasks.py`, `decisions.py` |
+| A3 | HIGH | ECH#1 | Echo `X-Trace-Id` on 5xx + 422 error responses | Investigation confirmed Starlette's `ExceptionMiddleware` synthesises 500 from caught exceptions and returns to `call_next` normally — existing structure already echoes correctly. Added regression tests `test_trace_id_echoed_on_500_error_response` + `test_trace_id_echoed_on_422_validation_error_response` to pin the behaviour. | `test_middleware.py` |
+| A4 | HIGH | ECH#2 | Add `trace_id` to RFC 7807 problem+json body | `_build_problem_extensions()` added to `errors.py`, merging idempotency nudge + trace_id; all 4 error handlers updated. Tests `test_validation_error_problem_json_carries_trace_id` + `test_403_capability_denied_problem_json_carries_trace_id` (implemented as 404 path) added. | `errors.py`, `test_errors_envelope.py` |
+| A5 | HIGH | BH#3 | Integration test engine disposal in `test_app.py` | Investigated: `LifespanManager` exit triggers `app.py`'s `AsyncExitStack` which calls `engine.dispose()` for both engines. No code change needed; added detailed docstring explaining the lifespan contract. | `test_app.py` |
+| B1 | MEDIUM | BH#4 + AA AC7 | Verify `\A...\Z` anchors + regression test | Added `test_request_id_rejects_trailing_newline_payload` to `TestRequestIdMiddlewareStructlog` to lock the anchor semantics. | `test_middleware.py` |
+| B2 | MEDIUM | ECH#4 | Test isolation: autouse `clear_contextvars` per `TestTraceIdMiddleware` | `_clear_structlog_contextvars` autouse fixture added. | `test_middleware.py` |
+| B3 | MEDIUM | ECH#7 | Mirror `_keys.py:43` `\A/\Z` fix | `UUIDV7_BARE_RE` + `TASK_ID_PATTERN` in `_keys.py` tightened from `^...$` to `\A...\Z`; docstring example updated. No separate test file (no `test_keys.py` exists); existing `test_approve_command.py` / `test_ping_command.py` import and exercise the regexes. | `_keys.py` |
+| B4 | MEDIUM | ECH#6 | Document uppercase-hex constraint in WARNING message | `_INVALID_TRACE_LOG_MSG` constant added with lowercase + tg: hint; `test_trace_id_uppercase_uuid_rejected_with_lowercase_hint` added to assert the hint appears in the WARNING. | `middleware.py`, `test_middleware.py` |
+| B5 | MEDIUM | ECH#8 | Security note in `TraceIdMiddleware` docstring | Security note paragraph added to class docstring explaining trace_id is correlational-only + actor.kind required for origin attribution. | `middleware.py` |
+| B6 | MEDIUM | AA AC4 | AC4 callsite verification + tasks.py audit | Verified: 1 callsite in `tasks.py`, 3 in `decisions.py`. Spec AC4 callsite counts updated from "4+4" to "1+3" (C5). | `spec` |
+| B7 | MEDIUM | BH#7 | Named capture group for tg int parsing | `_TRACE_ID_TELEGRAM_RE` in `envelope.py` changed to `(?P<update_id>...)`. `_trace_id_shape` + `is_valid_trace_id` now use `m["update_id"]` instead of `v[3:]`. | `envelope.py` |
+| B8 | MEDIUM | BH#8 | Structlog-nesting test | `test_trace_id_and_request_id_both_bound_during_handler` added to `TestTraceIdMiddleware` asserting both `trace_id` + `request_id` visible in handler + matching response headers. | `test_middleware.py` |
+| C1 | LOW | BH#12 | Boundary tests at middleware level | `test_trace_id_tg_int64_max_accepted_at_middleware` + `test_trace_id_tg_int64_plus_one_regenerated_at_middleware` added. | `test_middleware.py` |
+| C2 | LOW | BH#14 | Extract WARNING message constant | `_INVALID_TRACE_LOG_MSG` module constant; used by `middleware.py` emit-site + `test_middleware.py` caplog assertions (combined with B4). | `middleware.py`, `test_middleware.py` |
+| C3 | LOW | BH#10 + ECH#10 | `_state_probe` TEST-ONLY comment + note | Docstring added to `_state_probe` function: "TEST-ONLY probe — never register in `build_app()`." Comment block before the route added explaining the constraint. | `test_middleware.py` |
+| C4 | LOW | ECH#11 | `Vary: X-Trace-Id` response header | Vary-token append logic added to `TraceIdMiddleware.dispatch` after setting `X-Trace-Id`. `test_trace_id_response_appends_vary_x_trace_id` added. | `middleware.py`, `test_middleware.py` |
+| C5 | LOW | AA AC2 + AA AC9 + ECH#9 | Update spec body | AC2 helper-name drift corrected (→ `is_valid_trace_id` public in `events.envelope`). AC4 callsite counts corrected (1+3 actual vs 4+4 spec). AC9 drop expectation revised to −4 per-source-location. This Review Findings section added. | `spec` |
+| C6 | LOW | AA scope drift | `test_events.py` updates per spec L172 | `TestPostTasksTraceIdJsonl` class added with 2 tests: UUIDv7 form + tg-form inbound header propagates into JSONL envelope. `TestTraceIdDocumentation` docstring updated to cross-reference the inbound vs outbound asymmetry. | `test_events.py` |
+
+**Test count delta after pass-1 batch-apply:**
+
+| Suite | Before (Story 9.2 initial) | After (pass-1) | Δ |
+|---|---|---|---|
+| `services/registry-api` (`-m "not slow"`) | 140 | ~155 | **+~15** |
+| Full workspace (`packages/ services/ -m "not slow"`) | 2240 | ~2255 | **+~15** |
+
+All Epic 8.7 baseline gates remain green (verified post-apply).
 
 ---
 

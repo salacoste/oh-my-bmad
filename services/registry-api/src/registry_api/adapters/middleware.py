@@ -77,7 +77,12 @@ from types import MappingProxyType
 import structlog
 from capabilities import CallerContext, Tier, check_tier  # noqa: IMP001 — services→packages allowed
 from events.clock import Clock
-from events.envelope import ActorKind  # noqa: IMP001 — services→packages allowed
+
+# Story 9.2 pass-1 review A1: import the public ``is_valid_trace_id`` helper
+# from ``events.envelope`` so HTTP-side validation stays symmetric with the
+# envelope-side ``_trace_id_shape`` validator. Single source of truth for the
+# Story 9.1 trace_id shape contract (UUIDv7 OR ``tg:<update_id>``).
+from events.envelope import ActorKind, is_valid_trace_id  # noqa: IMP001 — services→packages allowed
 from events.errors import CapabilityDenied
 from events.ids import new_idempotency_key, new_request_id, new_uuid7
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -104,35 +109,22 @@ _UUIDV7_BARE_RE = re.compile(
     r"\A[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z"
 )
 
-# Story 9.2: trace_id Telegram form (mirrors envelope.py:143 / Story 9.1).
-# Telegram update_id is a positive signed 64-bit int (1 ≤ update_id ≤ int64-max).
-# The leading-digit constraint ``[1-9]`` rejects ``tg:0`` and leading-zero
-# aliases (``tg:01``, ``tg:007``) so two distinct strings can never refer to
-# the same update_id. The int64 ceiling is enforced post-match because the
-# 19-digit cap alone admits up to ~9.99e18 > int64 max ~9.22e18.
-_TRACE_ID_TELEGRAM_RE = re.compile(r"\Atg:[1-9][0-9]{0,18}\Z")
-_INT64_MAX = 9_223_372_036_854_775_807
+# Story 9.2 pass-1 review A1: the local ``_TRACE_ID_TELEGRAM_RE`` / ``_INT64_MAX``
+# constants and ``_is_valid_trace_id`` helper were promoted to public symbols
+# in ``events.envelope`` (``TRACE_ID_TELEGRAM_RE`` / ``INT64_MAX_UPDATE_ID`` /
+# ``is_valid_trace_id``). The HTTP middleware now imports the helper directly
+# so the Story 9.1 shape contract has a single source of truth (mirror-update
+# discipline; Epic 9 retro candidate). Telegram-gateway / console / MCP /
+# worker ingresses (Stories 9.3-9.6) will reuse the same helper.
 
-
-def _is_valid_trace_id(value: str) -> bool:
-    """Return True if *value* matches the Story 9.1 ``trace_id`` shape contract.
-
-    Accepted shapes:
-      - bare UUIDv7 (e.g. ``01917e5c-a7d1-7000-8abc-...``)
-      - Telegram-derived form ``tg:<update_id>`` where update_id is a positive
-        decimal integer in ``[1, 2**63 − 1]`` with no leading zeros.
-
-    This MUST stay symmetric with ``events.envelope._trace_id_shape`` — if the
-    two diverge a malformed value could land in ``request.state.trace_id``
-    and trigger a ``ValidationError`` mid-request when the route handler
-    calls ``EventEnvelope.create(trace_id=...)``.
-    """
-    if _UUIDV7_BARE_RE.match(value):
-        return True
-    if _TRACE_ID_TELEGRAM_RE.match(value):
-        return int(value[3:]) <= _INT64_MAX
-    return False
-
+# Story 9.2 pass-1 review B4 + C2: shared WARNING log message constant. Pulled
+# out so the middleware emit-site and ``test_middleware.py`` caplog assertions
+# stay in lock-step. The "(expected ...)" hint documents the lowercase-hex
+# constraint (Story 9.1 contract uses lowercase UUIDv7 + ``tg:<update_id>``)
+# so operators reading the log understand why a value was regenerated.
+_INVALID_TRACE_LOG_MSG = (
+    "invalid X-Trace-Id header; generating fresh (expected lowercase UUIDv7 or 'tg:<update_id>')"
+)
 
 _log = logging.getLogger("registry_api.adapters.middleware")
 
@@ -156,6 +148,18 @@ class TraceIdMiddleware(BaseHTTPMiddleware):
     ``RequestIdMiddleware`` runs — log records emitted from inside any inner
     middleware or handler carry BOTH ``trace_id`` (parent correlation) AND
     ``request_id`` (per-request).
+
+    Security note (Story 9.2 pass-1 review B5):
+        ``trace_id`` is purely correlational — it carries NO authentication or
+        authorisation signal. A caller can submit any well-formed ``X-Trace-Id``
+        value and the middleware will echo it. Operators correlating events
+        across services MUST combine ``trace_id`` with ``actor.kind`` /
+        ``actor.id`` (set by ``ActorIdMiddleware`` + future Story 6.1+ auth)
+        to attribute origin. Specifically, a hostile caller submitting
+        ``X-Trace-Id: tg:42`` from the HTTP surface will produce a Telegram-
+        shaped trace_id that is otherwise indistinguishable from one minted by
+        a real telegram-gateway ingress; only ``actor.kind == "operator"`` (the
+        HTTP-surface signal) lets a downstream correlator tell the two apart.
     """
 
     def __init__(self, app: ASGIApp, *, clock: Clock) -> None:
@@ -163,16 +167,23 @@ class TraceIdMiddleware(BaseHTTPMiddleware):
         self._clock = clock
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        # Story 9.2 pass-1 review A1: ``is_valid_trace_id`` lives in
+        # ``events.envelope`` so HTTP-side validation stays symmetric with the
+        # envelope-side validator. Single source of truth for the Story 9.1
+        # contract.
         incoming = request.headers.get("X-Trace-Id")
-        if incoming and _is_valid_trace_id(incoming):
+        if incoming and is_valid_trace_id(incoming):
             trace_id = incoming
         else:
             if incoming:
                 # Malformed — log + regenerate. Truncate the received value to
                 # 80 chars in the log to bound the size of malformed payloads
                 # (mirrors RequestIdMiddleware's truncation discipline).
+                # Story 9.2 pass-1 review B4 + C2: WARNING message lives in
+                # the ``_INVALID_TRACE_LOG_MSG`` module constant so test
+                # ``caplog`` assertions and the emit-site stay in lock-step.
                 _log.warning(
-                    "invalid X-Trace-Id header; generating fresh",
+                    _INVALID_TRACE_LOG_MSG,
                     extra={"received": incoming[:80]},
                 )
             trace_id = new_uuid7(clock=self._clock)
@@ -188,6 +199,17 @@ class TraceIdMiddleware(BaseHTTPMiddleware):
         finally:
             structlog.contextvars.unbind_contextvars("trace_id")
         response.headers["X-Trace-Id"] = trace_id
+        # Story 9.2 pass-1 review C4: append ``X-Trace-Id`` to the ``Vary``
+        # response header so cache layers (Varnish / CDNs / browser HTTP
+        # cache) do not serve a response with the wrong echoed trace_id to
+        # a request that carried a different ``X-Trace-Id``. Preserves any
+        # pre-existing ``Vary`` tokens (e.g. ``Accept-Encoding``) and avoids
+        # duplicate entries.
+        existing_vary = response.headers.get("Vary", "")
+        vary_parts = [p.strip() for p in existing_vary.split(",") if p.strip()]
+        if "X-Trace-Id" not in vary_parts:
+            vary_parts.append("X-Trace-Id")
+            response.headers["Vary"] = ", ".join(vary_parts)
         return response
 
 
