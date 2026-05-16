@@ -129,6 +129,9 @@ _EVENT_ID_RE = re.compile(rf"^e-{_UUIDV7_CORE}$")
 _UUIDV7_BARE_RE = re.compile(rf"^{_UUIDV7_CORE}$")
 _SEMVER_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 _EVENT_TYPE_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
+# Story 9.1: trace_id accepts UUIDv7 (bare) OR Telegram-derived `tg:<update_id>`.
+# Telegram update_id is a signed 64-bit int (max 9_223_372_036_854_775_807 → 19 digits).
+_TRACE_ID_TELEGRAM_RE = re.compile(r"^tg:[0-9]{1,19}$")
 
 ActorKind = Literal["operator", "orchestrator", "worker", "system", "clawhip"]
 
@@ -215,6 +218,17 @@ class EventEnvelope(BaseModel):
         if not _UUIDV7_BARE_RE.match(v):
             raise ValueError(f"request_id must be a bare UUIDv7 (got {v!r})")
         return v
+
+    @field_validator("trace_id")
+    @classmethod
+    def _trace_id_shape(cls, v: str | None) -> str | None:
+        # Story 9.1 (FR57 / Epic 9 foundation): accept UUIDv7 OR Telegram-derived
+        # form. Stories 9.2/9.4/9.5/9.6 emit UUIDv7; Story 9.3 emits `tg:<update_id>`.
+        if v is None:
+            return v
+        if _UUIDV7_BARE_RE.match(v) or _TRACE_ID_TELEGRAM_RE.match(v):
+            return v
+        raise ValueError(f"trace_id must be a bare UUIDv7 OR match ^tg:<update_id>$ (got {v!r})")
 
     @field_validator("schema_version")
     @classmethod
@@ -332,7 +346,23 @@ class EventEnvelope(BaseModel):
         ``extensions`` defaults to ``{}`` (Story 2.14 / NFR-M3). Callers on
         v1.0.0 omit the kwarg; callers on v1.0.1+ pass the forward-compatible
         per-event metadata dict.
+
+        Story 9.1: omitting ``trace_id`` raises a :class:`DeprecationWarning`.
+        The field becomes mandatory in Story 9.7 when ``schema_version`` bumps
+        1.0.0 → 1.1.0. Emitted from the factory (not ``__init__``) so JSONL
+        replay via ``model_validate_json`` does NOT fire the warning — only
+        new-emission paths do.
         """
+        if trace_id is None:
+            import warnings
+
+            warnings.warn(
+                "EventEnvelope created without trace_id; this field becomes "
+                "mandatory in Story 9.7 (schema_version 1.1.0). Pass trace_id= "
+                "to silence this warning.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         key = (type, schema_version)
         if key not in schema_registry.REGISTRY:
             raise EventSchemaUnknown(type, schema_version, schema_registry.EVENT_TYPES)

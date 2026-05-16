@@ -1,6 +1,6 @@
 # Story 9.1 — `trace_id` as optional on the envelope + deprecation warning
 
-Status: **ready-for-dev**
+Status: **done**
 
 ## Story
 
@@ -301,25 +301,81 @@ If you see yourself touching `pyproject.toml` `dependencies`, `alembic/versions/
 
 ## Dev Agent Record
 
-_(To be completed by the dev agent at story closure.)_
-
 ### Implementation summary
-_(tbd)_
+
+Landed exactly as spec'd. The field was already declared since Phase 1 (Story 2.1); 9.1's job was three surgical additions:
+
+1. **`_TRACE_ID_TELEGRAM_RE`** module-private regex at `envelope.py:131` — `^tg:[0-9]{1,19}$` (bounded to signed 64-bit Telegram `update_id` overflow).
+2. **`_trace_id_shape` field validator** at `envelope.py:219` — accepts `None` (default), bare UUIDv7 (reused `_UUIDV7_BARE_RE`), or `tg:<digits>`. Rejects everything else with a precise error message.
+3. **`warnings.warn(DeprecationWarning, ...)` in `create()`** before the registry lookup — local import (`import warnings`) keeps module-load fast; `stacklevel=2` points the warning at the caller.
+
+Plus a transition-window `pyproject.toml [tool.pytest.ini_options].filterwarnings` entry that suppresses the deprecation noise across the wider suite while preserving the `pytest.warns(DeprecationWarning)` assertions inside `test_envelope.py` itself.
 
 ### Files changed
-_(tbd)_
+
+| File | Lines | Change |
+|---|---|---|
+| `packages/events/src/events/envelope.py` | +25 / −1 | regex constant, validator method, deprecation warning in `create()` |
+| `packages/events/src/events/test_envelope.py` | +95 / −1 | new `TestTraceIdShape` (12 tests) + `TestTraceIdDeprecationWarning` (3 tests) |
+| `pyproject.toml` | +9 / 0 | `filterwarnings` transition entry with removal pointer to Story 9.7 |
 
 ### Test count delta
-_(tbd)_
+
+- Local `packages/events`: 358 → **373** (+15: 12 shape tests + 3 deprecation-warning tests)
+- Local full suite: 2189 → **2204** (+15)
+- CI projection: 2376 → **2391** (assuming same +15 delta)
 
 ### Surprises / deviations from spec
-_(tbd)_
+
+1. **Spec said ≥12 tests; landed 15.** Split AC5's 12 enumerated tests into two test classes (`TestTraceIdShape` × 12 + `TestTraceIdDeprecationWarning` × 3) for clarity — the deprecation tests assert behaviour on `EventEnvelope.create()` whereas the shape tests assert on direct `EventEnvelope(...)` construction.
+
+2. **`test_warning_silent_on_model_validate_json_replay` exercises a subtle invariant.** Confirms that re-parsing a 1.0.0 envelope from canonical JSON does NOT fire the deprecation warning (because re-parse goes through `__init__`, not `create()`). This is the contract Story 9.7's migrator container will rely on when backfilling historical events — replay must not spam warnings.
+
+3. **`extensions` field's docstring at `envelope.py:172` is now slightly stale** — it references `trace_id` as a Phase 2 example, but `trace_id` is now a first-class envelope field rather than an `extensions["trace_id"]` artifact. Left unchanged: docstring polish is out of 9.1's scope and a one-word edit is more likely to surface a downstream test failure than to clarify anything. Flagged for Story 9.7 cleanup.
+
+4. **No new `import warnings` at module top.** The warning is emitted from a single callsite inside `create()`, so a local `import warnings` inside the method (consistent with Pyflakes' "imports near use" preference and the codebase's existing pattern at `envelope.py:75 import math`) is cleaner than a module-level import.
 
 ### Callsite-warning observation
-_(How many `EventEnvelope.create(...)` callsites now emit the DeprecationWarning? Worth capturing as a baseline for 9.2 – 9.6 progress tracking.)_
+
+`grep -rn "EventEnvelope[.]create(" packages/ services/ mcp-servers/ scripts/ --include="*.py"` returns 117 matches. After excluding docstrings, README references, and comment-only mentions, roughly **80-90 actual call locations** across the platform will emit the DeprecationWarning until Stories 9.2 – 9.6 pass `trace_id=`.
+
+The `pyproject.toml` `filterwarnings` ignore line is essential to keep CI logs readable. Future stories should:
+
+- 9.2 (registry-api `TraceIdMiddleware`): mint `new_uuid7()` per request; pass to every `EventEnvelope.create()` in registry-state's materializer handlers.
+- 9.3 (telegram-gateway): inject `trace_id = f"tg:{update.update_id}"` into structlog context; downstream `AcceptedCommand.create()` chain reads it.
+- 9.4 (console-cli): mint at command entry; thread through `command_envelope.create()`.
+- 9.5 (MCP): explicit `caller_trace_id: str` input to every Pydantic tool model; passed to downstream `EventEnvelope.create()` calls.
+- 9.6 (worker-wrapper): `--trace-id` CLI flag → propagate to clawhip-bridge emit_* tools.
 
 ### Follow-up TODOs surfaced for Epic 9
-_(tbd)_
+
+1. **Remove `filterwarnings` in Story 9.7** when `trace_id` becomes mandatory — the absent-trace_id path no longer exists, so the deprecation warning can't fire and the filter line is dead config.
+2. **Update `envelope.py:172` extensions docstring** in Story 9.7 (one-line edit, defer to avoid 9.1 scope creep).
+3. **CI gate `scripts/checks/check_trace_id_required.py`** (Story 9.7) should AST-scan for `EventEnvelope.create(` without a `trace_id=` kwarg — a more rigorous replacement for the runtime DeprecationWarning. The warning catches missed callsites at test time; the AST scanner catches them at lint time.
+4. **Hypothesis property test optional** — `@given(st.text())` strategy asserting `validate_trace_id(s)` raises iff `s` doesn't match the union pattern was considered but skipped to keep the test count manageable. Worth adding if future ill-shaped inputs surface real bugs.
+
+### Verification gate output
+
+```
+uv run mypy --strict packages/ services/registry-api services/registry-state
+  → Success: no issues found in 97 source files
+uv run ruff check .
+  → All checks passed!
+uv run ruff format --check .
+  → 307 files already formatted
+uv run python scripts/check_imports.py
+  → clean
+uv run python scripts/check_single_writer.py
+  → clean
+git ls-files -z | xargs -0 uv run secret-hygiene-precommit
+  → exit 0
+uv run pytest packages/events -q
+  → 373 passed, 1 warning in 0.29s
+uv run pytest packages/ services/ -q -m "not slow"
+  → 2204 passed, 3 skipped, 5 deselected in 25.94s
+```
+
+All Epic 8.7 baseline gates remain green.
 
 ---
 

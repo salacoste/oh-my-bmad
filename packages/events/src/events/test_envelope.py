@@ -113,6 +113,107 @@ class TestRequestIdShape:
             _make_envelope(request_id="e-01917e5c-a7d1-7000-8000-000000000099")
 
 
+# Story 9.1 — trace_id field validation + deprecation warning.
+class TestTraceIdShape:
+    def test_none_default_accepted(self) -> None:
+        env = _make_envelope()
+        assert env.trace_id is None
+
+    def test_explicit_none_accepted(self) -> None:
+        env = _make_envelope(trace_id=None)
+        assert env.trace_id is None
+
+    def test_bare_uuidv7_accepted(self) -> None:
+        env = _make_envelope(trace_id="01917e5c-a7d1-7000-8abc-000000000777")
+        assert env.trace_id == "01917e5c-a7d1-7000-8abc-000000000777"
+
+    def test_telegram_form_smallest_int_accepted(self) -> None:
+        env = _make_envelope(trace_id="tg:1")
+        assert env.trace_id == "tg:1"
+
+    def test_telegram_form_max_int64_accepted(self) -> None:
+        # Boundary: signed 64-bit max = 9_223_372_036_854_775_807 (19 digits).
+        env = _make_envelope(trace_id="tg:9223372036854775807")
+        assert env.trace_id == "tg:9223372036854775807"
+
+    def test_telegram_form_no_digits_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="trace_id"):
+            _make_envelope(trace_id="tg:")
+
+    def test_telegram_form_non_digit_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="trace_id"):
+            _make_envelope(trace_id="tg:abc")
+
+    def test_telegram_form_overflow_rejected(self) -> None:
+        # 20 digits exceeds signed 64-bit `update_id` capacity.
+        with pytest.raises(ValidationError, match="trace_id"):
+            _make_envelope(trace_id="tg:12345678901234567890")
+
+    def test_event_id_prefix_rejected(self) -> None:
+        # `e-` prefix is for event_id / parent_event_id, not trace_id.
+        with pytest.raises(ValidationError, match="trace_id"):
+            _make_envelope(trace_id="e-01917e5c-a7d1-7000-8abc-000000000777")
+
+    def test_uuidv4_rejected(self) -> None:
+        # Version nibble must be 7; use 4 here.
+        with pytest.raises(ValidationError, match="trace_id"):
+            _make_envelope(trace_id="01917e5c-a7d1-4000-8000-000000000777")
+
+    def test_empty_string_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="trace_id"):
+            _make_envelope(trace_id="")
+
+    def test_leading_whitespace_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="trace_id"):
+            _make_envelope(trace_id=" 01917e5c-a7d1-7000-8abc-000000000777")
+
+
+# Story 9.1 — DeprecationWarning emitted from create() when trace_id absent.
+class TestTraceIdDeprecationWarning:
+    def test_warning_fires_when_trace_id_absent(self) -> None:
+        with pytest.warns(DeprecationWarning, match="trace_id"):
+            EventEnvelope.create(
+                event_id=_VALID_EVENT_ID,
+                schema_version="1.0.0",
+                type="task.created",
+                emitted_at=_VALID_EMITTED_AT,
+                emitted_at_monotonic_ns=1_000_000,
+                actor=Actor(kind="system", id="test-system"),
+                payload={"task_id": "abc"},
+                request_id=_VALID_REQUEST_ID,
+            )
+
+    def test_warning_silent_when_trace_id_present(self) -> None:
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            env = EventEnvelope.create(
+                event_id=_VALID_EVENT_ID,
+                schema_version="1.0.0",
+                type="task.created",
+                emitted_at=_VALID_EMITTED_AT,
+                emitted_at_monotonic_ns=1_000_000,
+                actor=Actor(kind="system", id="test-system"),
+                payload={"task_id": "abc"},
+                request_id=_VALID_REQUEST_ID,
+                trace_id="01917e5c-a7d1-7000-8abc-000000000888",
+            )
+            assert env.trace_id == "01917e5c-a7d1-7000-8abc-000000000888"
+
+    def test_warning_silent_on_model_validate_json_replay(self) -> None:
+        # Replay path: re-parsing an existing 1.0.0 envelope is NOT a
+        # deprecation event. The warning only fires from create().
+        import warnings
+
+        env = _make_envelope()  # has trace_id=None
+        canonical = env.model_dump_json()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            replayed = EventEnvelope.model_validate_json(canonical)
+            assert replayed.trace_id is None
+
+
 class TestNaiveDatetimeRejected:
     def test_naive_datetime_raises(self) -> None:
         with pytest.raises(ValidationError):
