@@ -13,6 +13,7 @@ can construct with hard-coded UUIDv7-shaped literals until the generator lands.
 from __future__ import annotations
 
 import re
+import warnings
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NoReturn
@@ -124,14 +125,23 @@ def _deep_freeze_mapping(d: Mapping[str, Any]) -> _FrozenDict:
 
 
 # UUIDv7 shape: `e-` prefix optional, 36-char hex with version-7 nibble.
+# Story 9.1 code-review F1: use `\Z` (not `$`) so trailing newline characters
+# don't sneak past. Python's `re.match` only anchors start; `$` matches before
+# a trailing `\n`. Switching to `\Z` closes the bypass across ALL envelope
+# regex validators.
 _UUIDV7_CORE = r"[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
-_EVENT_ID_RE = re.compile(rf"^e-{_UUIDV7_CORE}$")
-_UUIDV7_BARE_RE = re.compile(rf"^{_UUIDV7_CORE}$")
-_SEMVER_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
-_EVENT_TYPE_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
+_EVENT_ID_RE = re.compile(rf"\Ae-{_UUIDV7_CORE}\Z")
+_UUIDV7_BARE_RE = re.compile(rf"\A{_UUIDV7_CORE}\Z")
+_SEMVER_RE = re.compile(r"\A[0-9]+\.[0-9]+\.[0-9]+\Z")
+_EVENT_TYPE_RE = re.compile(r"\A[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+\Z")
 # Story 9.1: trace_id accepts UUIDv7 (bare) OR Telegram-derived `tg:<update_id>`.
-# Telegram update_id is a signed 64-bit int (max 9_223_372_036_854_775_807 → 19 digits).
-_TRACE_ID_TELEGRAM_RE = re.compile(r"^tg:[0-9]{1,19}$")
+# Telegram update_id is a positive signed 64-bit int (1 ≤ update_id ≤ 9_223_372_036_854_775_807).
+# Code-review F2: reject `tg:0` and leading-zero forms (`tg:01`, `tg:007`) to
+# avoid aliasing where two distinct strings refer to the same update_id.
+# Code-review F3: the int64 ceiling is enforced post-match (the 19-digit cap
+# alone allows up to ~9.99e18 > 9.22e18 = int64 max).
+_TRACE_ID_TELEGRAM_RE = re.compile(r"\Atg:[1-9][0-9]{0,18}\Z")
+_INT64_MAX = 9_223_372_036_854_775_807
 
 ActorKind = Literal["operator", "orchestrator", "worker", "system", "clawhip"]
 
@@ -226,9 +236,20 @@ class EventEnvelope(BaseModel):
         # form. Stories 9.2/9.4/9.5/9.6 emit UUIDv7; Story 9.3 emits `tg:<update_id>`.
         if v is None:
             return v
-        if _UUIDV7_BARE_RE.match(v) or _TRACE_ID_TELEGRAM_RE.match(v):
+        if _UUIDV7_BARE_RE.match(v):
             return v
-        raise ValueError(f"trace_id must be a bare UUIDv7 OR match ^tg:<update_id>$ (got {v!r})")
+        if _TRACE_ID_TELEGRAM_RE.match(v):
+            # F3 carry-over: regex caps at 19 digits but ~9.99e18 > int64 max.
+            # Reject values > int64 ceiling so downstream `int()` parsing in
+            # Stories 9.2-9.7 can't overflow a Postgres `bigint`.
+            if int(v[3:]) > _INT64_MAX:
+                raise ValueError(
+                    f"trace_id Telegram form exceeds int64 max ({_INT64_MAX}); got {v!r}"
+                )
+            return v
+        raise ValueError(
+            f"trace_id must be a bare UUIDv7 OR match \\Atg:<update_id>\\Z (got {v!r})"
+        )
 
     @field_validator("schema_version")
     @classmethod
@@ -347,19 +368,21 @@ class EventEnvelope(BaseModel):
         v1.0.0 omit the kwarg; callers on v1.0.1+ pass the forward-compatible
         per-event metadata dict.
 
-        Story 9.1: omitting ``trace_id`` raises a :class:`DeprecationWarning`.
-        The field becomes mandatory in Story 9.7 when ``schema_version`` bumps
-        1.0.0 → 1.1.0. Emitted from the factory (not ``__init__``) so JSONL
+        Omitting ``trace_id`` raises a :class:`DeprecationWarning`. The field
+        becomes mandatory in a future ``schema_version`` bump (Phase 2 Epic 9
+        cutover plan). Emitted from the factory (not ``__init__``) so JSONL
         replay via ``model_validate_json`` does NOT fire the warning — only
         new-emission paths do.
         """
         if trace_id is None:
-            import warnings
-
+            # Code-review F6: user-facing message describes the contract
+            # without internal sprint terminology — the sprint linkage lives
+            # in the code comment below. Story 9.7 will bump schema_version
+            # 1.0.0 → 1.1.0 and make trace_id mandatory.
             warnings.warn(
-                "EventEnvelope created without trace_id; this field becomes "
-                "mandatory in Story 9.7 (schema_version 1.1.0). Pass trace_id= "
-                "to silence this warning.",
+                "EventEnvelope created without trace_id; this field will be "
+                "required in a future schema_version bump. Pass trace_id= "
+                "(UUIDv7 or 'tg:<update_id>') to silence this warning.",
                 DeprecationWarning,
                 stacklevel=2,
             )

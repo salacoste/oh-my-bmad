@@ -379,6 +379,79 @@ All Epic 8.7 baseline gates remain green.
 
 ---
 
+## Review Findings
+
+### Adversarial 3-lane code review — 2026-05-16
+
+Reviewed at commit `dae92d8` vs parent `07a9804`. Three lanes (Blind Hunter / Edge-Case Hunter / Acceptance Auditor) produced 22 raw findings; deduplicated to 15 unique; classified as 12 `patch` + 3 `defer` + 7 `dismiss`. Density consistent with the Epic 8.x 14-finding-per-pass cadence.
+
+#### Patch findings (action required)
+
+- [x] [Review][Patch] **HIGH — `re.match + $` allows trailing `\n` bypass** [`packages/events/src/events/envelope.py:134, 229`]. `_TRACE_ID_TELEGRAM_RE.match("tg:1\n")` returns a match because Python's `re.match` only anchors start and `$` matches before trailing newline. Affects ALL existing regex validators (event_id/request_id/schema_version/type/parent_event_id) — newly amplified by 9.1's two-pattern union. Fix: switch to `re.fullmatch` OR change `$` → `\Z` consistently across the module. Add test `_make_envelope(trace_id="tg:1\n")` raises.
+
+- [x] [Review][Patch] **HIGH — `tg:0` and leading-zero forms accepted** [`envelope.py:134`]. Regex `[0-9]{1,19}` accepts `tg:0`, `tg:01`, `tg:007` — Telegram BotAPI's `update_id` is always ≥1, so `tg:0` is semantically invalid; `tg:01` and `tg:007` create aliasing where two distinct trace_ids refer to the same logical update, breaking correlation/dedup downstream. Fix: tighten to `^tg:[1-9][0-9]{0,18}$`. Add negative tests for `tg:0`, `tg:01`, `tg:007`.
+
+- [x] [Review][Patch] **MEDIUM — `tg:` regex accepts int64-overflow values** [`envelope.py:134`]. 19-digit cap allows `tg:9999999999999999999` (9.99e18) > int64 max (9.22e18 = `9_223_372_036_854_775_807`). Story 9.3+ will likely `int(tid.removeprefix("tg:"))` and overflow downstream `bigint` columns. Fix: supplement regex with a numeric range check post-match (`int(v[3:]) <= 9_223_372_036_854_775_807`). Add boundary test for `tg:9223372036854775807` accepted, `tg:9223372036854775808` rejected.
+
+- [x] [Review][Patch] **MEDIUM — AC5 spec gap: canonical-JSON round-trip not asserted for trace_id set** [`packages/events/src/events/test_envelope.py`]. Spec AC5 enumerated scenarios #15-16 require canonical round-trip with `trace_id="<uuidv7>"` and `trace_id="tg:12345"`. Landed tests cover constructor acceptance but stop short of asserting `to_canonical_json(env) == expected_bytes`. Fix: add 2 tests mirroring `test_envelope.py:475`'s round-trip template.
+
+- [x] [Review][Patch] **MEDIUM — `filterwarnings` substring filter not anchored, no module qualifier** [`pyproject.toml:88-90`]. Current entry `"ignore:EventEnvelope created without trace_id:DeprecationWarning"` is a substring match with no module qualifier. Future warnings starting with the same prefix would be silently captured. Fix: anchor and qualify: `"ignore:^EventEnvelope created without trace_id.*$:DeprecationWarning:events.envelope"`.
+
+- [x] [Review][Patch] **MEDIUM — Deprecation message couples to internal sprint terminology** [`envelope.py:359-363`]. Message refers to "Story 9.7" and "schema_version 1.1.0" — opaque to library consumers; lies if the bump slips to 1.2.0 or a different story. Fix: drop sprint references in user-facing text; keep the linkage in a code comment.
+
+- [x] [Review][Patch] **MEDIUM — `test_warning_silent_on_model_validate_json_replay` misleading** [`test_envelope.py:204-214`]. `_make_envelope()` calls `EventEnvelope(...)` directly (not `create()`), so the original construction never emitted a warning either. Test only proves `model_validate_json` doesn't warn — NOT that "replay" specifically suppresses the warning. Fix: construct via `create()` first inside `pytest.warns(DeprecationWarning)`, dump to JSON, then assert silent re-parse via `simplefilter("error", DeprecationWarning)`.
+
+- [x] [Review][Patch] **MEDIUM — Legacy JSONL replay risk** [`services/registry-state/src/registry_state/adapters/event_log.py:109-179`]. Pre-9.1 records may have stored free-form correlation strings in `trace_id`. After 9.1, the validator rejects anything not matching UUIDv7 / `tg:<digits>` at replay time, crashing projection rebuilds. Fix: add a fixture-corpus regression test that loads all historical JSONL fixtures and asserts `read_log_lines` completes without ValidationError. If any fixture fails, document the migration path (advisory-warn on read).
+
+- [x] [Review][Patch] **LOW — `import warnings` should be module-level** [`envelope.py:358`]. Local import inside `create()` is premature optimization; `warnings` is always already imported by pytest/Pydantic and a `sys.modules` lookup on every absent-trace_id callsite is more cost than savings. Fix: move `import warnings` to module top.
+
+- [x] [Review][Patch] **LOW — No test for `model_validate_json` with omitted `trace_id` key** [`test_envelope.py`]. Locks the invariant that `{...}` (key absent) and `{"trace_id": null}` both yield `env.trace_id is None`. Fix: add `test_omitted_trace_id_in_json_accepted` parsing `'{"event_id":"...", ...}'` without the trace_id key.
+
+- [x] [Review][Patch] **LOW — No test for validation-vs-warning ordering** [`test_envelope.py`]. Today's behaviour: `create(trace_id="bad")` raises `ValidationError` BEFORE `warnings.warn` fires (because the warning checks `if trace_id is None`, and "bad" is not None). Lock this in. Fix: add `test_invalid_trace_id_in_create_raises_without_warning` using `pytest.warns(None)` + `pytest.raises(ValidationError)` together.
+
+- [x] [Review][Patch] **LOW — Adversarial coverage thin (trailing whitespace / Unicode / case)** [`test_envelope.py:152-154`]. Only leading whitespace tested. Add: `test_trailing_whitespace_rejected`, `test_internal_newline_rejected` (will fail until finding #1 fixed — that's the point), `test_telegram_form_uppercase_rejected("TG:1")`, `test_telegram_form_unicode_digit_rejected("tg:١")`.
+
+#### Deferred findings
+
+- [x] [Review][Defer] **`stacklevel=2` may not reach actual caller for wrapped factories** [`envelope.py:364`]. `audited_secret.py:336` wraps `create()`; warning will point at wrapper, not application code. Real fix is Story 9.7's AST CI gate (`scripts/checks/check_trace_id_required.py`) which the dev TODO already lists. Defer — runtime warning is a coarse indicator; AST scan is the proper diagnostic.
+
+- [x] [Review][Defer] **`parent_event_id` cascade — trace_id consistency design gap**. Today, parent A's `trace_id="tg:42"` can coexist with child B's `trace_id=<uuidv7>` or `None` without complaint, breaking the distributed-tracing causal-chain contract. Defer to Story 9.7's architectural decision (either: document per-event semantics, OR add `model_validator(mode="after")` enforcing inheritance).
+
+- [x] [Review][Defer] **Stale `extensions` field docstring at `envelope.py:172`**. Already listed in dev TODOs for Story 9.7 cleanup. References `trace_id` as a Phase 2 example, but trace_id is now a first-class envelope field.
+
+#### Patch resolution — 2026-05-16 (pass-1 batch-apply)
+
+All 12 `patch` findings resolved in a single follow-up commit on top of `dae92d8`. Implementation summary:
+
+| Finding | Resolution | Files touched |
+|---|---|---|
+| F1 — `re.match + $` newline bypass | All 5 envelope regex constants switched from `$` to `\Z`. Negative tests for `tg:1\n` and internal newline added. | `envelope.py:127-143`, `test_envelope.py:235-244` |
+| F2 — `tg:0` / leading zeros | Regex tightened to `\Atg:[1-9][0-9]{0,18}\Z`. Three rejection tests added (`tg:0`, `tg:01`, `tg:007`). | `envelope.py:143`, `test_envelope.py:155-168` |
+| F3 — int64 overflow window | Post-match `int(v[3:]) > _INT64_MAX` check in validator. Boundary tests for `tg:9223372036854775807` accepted, `tg:9223372036854775808` rejected, `tg:9999999999999999999` rejected. | `envelope.py:144, 233-244`, `test_envelope.py:138-153` |
+| F4 — canonical-JSON round-trip tests | New `TestTraceIdRoundTrip` class with 4 tests: None / UUIDv7 / `tg:12345` / omitted-key. Byte-stable assertions (`replayed.model_dump_json().encode("utf-8") == json_bytes`). | `test_envelope.py:339-396` |
+| F5 — filterwarnings anchoring | Message anchored with `^`. Module qualifier evaluated and intentionally OMITTED — `stacklevel=2` means the warning's source module is the caller, not envelope.py, so a module-qualified filter wouldn't match (verified by 825-warning regression on first attempt). | `pyproject.toml:90-99` |
+| F6 — Deprecation message coupling | Sprint terminology stripped from user-facing message. Linkage retained in code comment. | `envelope.py:386-393`, related docstring at `envelope.py:362-366` |
+| F7 — Misleading replay test | Test renamed to `test_replay_via_model_validate_json_does_not_warn` and refactored to: produce envelope via `create()` under `pytest.warns(DeprecationWarning)` (capturing the warning that DOES fire), serialise to canonical JSON, then re-parse under `simplefilter("error", DeprecationWarning)`. Honest. | `test_envelope.py:283-307` |
+| F8 — Legacy JSONL replay risk | New `TestLegacyJsonlReplay` class loads `scripts/migrator/tests/fixtures/sample_v1.0.0.jsonl` line-by-line through `model_validate_json` and asserts every record parses + `trace_id is None`. Catches a future hard-rejection regression on historical data. | `test_envelope.py:397-435` |
+| F9 — Module-level `import warnings` | `import warnings` lifted to module top (`envelope.py:16`). Local import inside `create()` removed. | `envelope.py:16, 386-393` |
+| F10 — Omitted-key JSON test | `test_model_validate_json_with_omitted_trace_id_key` parses a literal JSON blob without the `trace_id` key and asserts `env.trace_id is None`. | `test_envelope.py:323-337` |
+| F11 — Validation-vs-warning ordering test | `test_invalid_trace_id_in_create_raises_without_warning` uses `warnings.catch_warnings(record=True) + simplefilter("always")` and asserts `not any(issubclass(item.category, DeprecationWarning) for item in w)` when `create(trace_id="bad")` raises ValidationError. | `test_envelope.py:309-321` |
+| F12 — Adversarial coverage | Added: trailing-whitespace rejection, internal-newline rejection (depends on F1), uppercase `TG:1` rejection, Arabic-Indic Unicode digit `tg:١` rejection. | `test_envelope.py:183-244` |
+
+**Test count delta after pass-2 batch-apply:** 85 envelope tests (was 69 after pass-1) — **+16 net new** post-review (+15 over the original Story 9.1 implementation). Full suite: **2204 → 2220** (+16). All gates green.
+
+#### Dismissed (7)
+
+- `__all__` enforcement for module-private regex constant (underscore convention is standard Python).
+- `repr()` log-injection risk on error message (speculative; current validator only sees post-strict-coercion `str` and ValidationError isn't directly piped to HTTP responses).
+- Validator-skip-on-default coverage gap (false positive — Pydantic v2 `@field_validator` with default `mode="after"` DOES validate defaults).
+- Pytest-xdist `catch_warnings` thread-safety (xdist not in use on this project).
+- AC4 schema_version pre-existing docstring `1.1.0` references (predate Epic 9 — not 9.1 scope).
+- AC7 mypy unverifiable from diff (already verified via Dev Agent Record output: 97 source files clean).
+- Duplicate counting of newline-anchor issue across BH and ECH (merged into finding #1).
+
+---
+
 ## Frontmatter
 
 ```yaml

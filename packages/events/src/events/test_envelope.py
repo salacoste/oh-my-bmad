@@ -114,6 +114,10 @@ class TestRequestIdShape:
 
 
 # Story 9.1 — trace_id field validation + deprecation warning.
+# Code-review hardening pass (2026-05-16): expanded coverage across the
+# 12 patch findings — newline-anchor (F1), leading-zero rejection (F2),
+# int64 ceiling (F3), adversarial whitespace/case/unicode (F12), JSON
+# omitted-key path (F10), and validation-vs-warning ordering (F11).
 class TestTraceIdShape:
     def test_none_default_accepted(self) -> None:
         env = _make_envelope()
@@ -131,10 +135,37 @@ class TestTraceIdShape:
         env = _make_envelope(trace_id="tg:1")
         assert env.trace_id == "tg:1"
 
-    def test_telegram_form_max_int64_accepted(self) -> None:
-        # Boundary: signed 64-bit max = 9_223_372_036_854_775_807 (19 digits).
+    def test_telegram_form_int64_max_accepted(self) -> None:
+        # F3 boundary: signed 64-bit ceiling — exactly the int64 max.
         env = _make_envelope(trace_id="tg:9223372036854775807")
         assert env.trace_id == "tg:9223372036854775807"
+
+    def test_telegram_form_int64_plus_one_rejected(self) -> None:
+        # F3 boundary: int64 max + 1 (still 19 digits, regex passes; post-
+        # match int check rejects).
+        with pytest.raises(ValidationError, match="int64"):
+            _make_envelope(trace_id="tg:9223372036854775808")
+
+    def test_telegram_form_19_nines_rejected(self) -> None:
+        # F3: 19-digit max regex would accept (10^19 - 1) ≈ 9.99e18, but
+        # int64 ceiling is 9.22e18. Post-match check rejects.
+        with pytest.raises(ValidationError, match="int64"):
+            _make_envelope(trace_id="tg:9999999999999999999")
+
+    def test_telegram_form_zero_rejected(self) -> None:
+        # F2: Telegram update_id is always ≥ 1; tg:0 is semantically invalid.
+        with pytest.raises(ValidationError, match="trace_id"):
+            _make_envelope(trace_id="tg:0")
+
+    def test_telegram_form_leading_zero_rejected(self) -> None:
+        # F2: tg:01 and tg:1 would otherwise alias to the same update_id.
+        with pytest.raises(ValidationError, match="trace_id"):
+            _make_envelope(trace_id="tg:01")
+
+    def test_telegram_form_007_rejected(self) -> None:
+        # F2 corollary: prefix-zero rejection covers tg:007.
+        with pytest.raises(ValidationError, match="trace_id"):
+            _make_envelope(trace_id="tg:007")
 
     def test_telegram_form_no_digits_rejected(self) -> None:
         with pytest.raises(ValidationError, match="trace_id"):
@@ -144,18 +175,26 @@ class TestTraceIdShape:
         with pytest.raises(ValidationError, match="trace_id"):
             _make_envelope(trace_id="tg:abc")
 
-    def test_telegram_form_overflow_rejected(self) -> None:
-        # 20 digits exceeds signed 64-bit `update_id` capacity.
+    def test_telegram_form_20_digit_overflow_rejected(self) -> None:
+        # Width-based rejection — 20 digits never fits any int64 form.
         with pytest.raises(ValidationError, match="trace_id"):
             _make_envelope(trace_id="tg:12345678901234567890")
 
+    def test_telegram_form_uppercase_rejected(self) -> None:
+        # F12 adversarial: case sensitivity locked in.
+        with pytest.raises(ValidationError, match="trace_id"):
+            _make_envelope(trace_id="TG:1")
+
+    def test_telegram_form_unicode_digit_rejected(self) -> None:
+        # F12 adversarial: [0-9] (not \d) rejects Unicode digit categories.
+        with pytest.raises(ValidationError, match="trace_id"):
+            _make_envelope(trace_id="tg:١")  # Arabic-Indic digit 1.
+
     def test_event_id_prefix_rejected(self) -> None:
-        # `e-` prefix is for event_id / parent_event_id, not trace_id.
         with pytest.raises(ValidationError, match="trace_id"):
             _make_envelope(trace_id="e-01917e5c-a7d1-7000-8abc-000000000777")
 
     def test_uuidv4_rejected(self) -> None:
-        # Version nibble must be 7; use 4 here.
         with pytest.raises(ValidationError, match="trace_id"):
             _make_envelope(trace_id="01917e5c-a7d1-4000-8000-000000000777")
 
@@ -166,6 +205,23 @@ class TestTraceIdShape:
     def test_leading_whitespace_rejected(self) -> None:
         with pytest.raises(ValidationError, match="trace_id"):
             _make_envelope(trace_id=" 01917e5c-a7d1-7000-8abc-000000000777")
+
+    def test_trailing_whitespace_rejected(self) -> None:
+        # F12 adversarial: trailing whitespace.
+        with pytest.raises(ValidationError, match="trace_id"):
+            _make_envelope(trace_id="01917e5c-a7d1-7000-8abc-000000000777 ")
+
+    def test_trailing_newline_rejected(self) -> None:
+        # F1: the key regression test. With re.match + `$`, a trailing `\n`
+        # would silently pass because `$` matches before EOL. The `\Z` anchor
+        # closes this. Without the fix, this test fails.
+        with pytest.raises(ValidationError, match="trace_id"):
+            _make_envelope(trace_id="tg:1\n")
+
+    def test_internal_newline_rejected(self) -> None:
+        # F1 corollary: internal newline must reject.
+        with pytest.raises(ValidationError, match="trace_id"):
+            _make_envelope(trace_id="01917e5c-a7d1-7000-8abc-00000000\n0777")
 
 
 # Story 9.1 — DeprecationWarning emitted from create() when trace_id absent.
@@ -201,17 +257,140 @@ class TestTraceIdDeprecationWarning:
             )
             assert env.trace_id == "01917e5c-a7d1-7000-8abc-000000000888"
 
-    def test_warning_silent_on_model_validate_json_replay(self) -> None:
-        # Replay path: re-parsing an existing 1.0.0 envelope is NOT a
-        # deprecation event. The warning only fires from create().
+    def test_replay_via_model_validate_json_does_not_warn(self) -> None:
+        # F7: this test originally constructed via _make_envelope() (direct
+        # __init__) — which never fires the warning regardless. Honest
+        # replay test: produce the envelope via create() under pytest.warns
+        # (so the warning IS captured during construction), serialise to
+        # canonical JSON, then re-parse under simplefilter("error",
+        # DeprecationWarning) and assert no warning fires on the replay.
         import warnings
 
-        env = _make_envelope()  # has trace_id=None
+        with pytest.warns(DeprecationWarning, match="trace_id"):
+            env = EventEnvelope.create(
+                event_id=_VALID_EVENT_ID,
+                schema_version="1.0.0",
+                type="task.created",
+                emitted_at=_VALID_EMITTED_AT,
+                emitted_at_monotonic_ns=1_000_000,
+                actor=Actor(kind="system", id="test-system"),
+                payload={"task_id": "abc"},
+                request_id=_VALID_REQUEST_ID,
+            )
         canonical = env.model_dump_json()
         with warnings.catch_warnings():
             warnings.simplefilter("error", DeprecationWarning)
             replayed = EventEnvelope.model_validate_json(canonical)
             assert replayed.trace_id is None
+
+    def test_invalid_trace_id_in_create_raises_without_warning(self) -> None:
+        # F11: validator runs AFTER the warning check, but the warning only
+        # fires when trace_id is None. An invalid non-None trace_id must
+        # raise ValidationError WITHOUT emitting DeprecationWarning. Locks
+        # the ordering invariant.
+        import warnings
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            with pytest.raises(ValidationError, match="trace_id"):
+                EventEnvelope.create(
+                    event_id=_VALID_EVENT_ID,
+                    schema_version="1.0.0",
+                    type="task.created",
+                    emitted_at=_VALID_EMITTED_AT,
+                    emitted_at_monotonic_ns=1_000_000,
+                    actor=Actor(kind="system", id="test-system"),
+                    payload={"task_id": "abc"},
+                    request_id=_VALID_REQUEST_ID,
+                    trace_id="bad",
+                )
+            assert not any(issubclass(item.category, DeprecationWarning) for item in w), (
+                "DeprecationWarning must not fire when trace_id is provided (even if invalid)"
+            )
+
+
+# Story 9.1 — trace_id round-trip via canonical JSON.
+class TestTraceIdRoundTrip:
+    """Patch F4 — AC3 / AC5 #15-#16: canonical-JSON byte-stable round-trip
+    for trace_id set. The encoder is field-name-driven and alphabetical;
+    these tests are the regression net that catches a future encoder
+    refactor silently reordering or dropping the trace_id field.
+    """
+
+    def test_round_trip_with_none_trace_id(self) -> None:
+        env = _make_envelope()
+        json_bytes = env.model_dump_json().encode("utf-8")
+        replayed = EventEnvelope.model_validate_json(json_bytes)
+        assert replayed.trace_id is None
+        assert replayed.model_dump_json().encode("utf-8") == json_bytes
+
+    def test_round_trip_with_uuidv7_trace_id(self) -> None:
+        env = _make_envelope(trace_id="01917e5c-a7d1-7000-8abc-000000000aaa")
+        json_bytes = env.model_dump_json().encode("utf-8")
+        replayed = EventEnvelope.model_validate_json(json_bytes)
+        assert replayed.trace_id == "01917e5c-a7d1-7000-8abc-000000000aaa"
+        assert replayed.model_dump_json().encode("utf-8") == json_bytes
+
+    def test_round_trip_with_telegram_trace_id(self) -> None:
+        env = _make_envelope(trace_id="tg:12345")
+        json_bytes = env.model_dump_json().encode("utf-8")
+        replayed = EventEnvelope.model_validate_json(json_bytes)
+        assert replayed.trace_id == "tg:12345"
+        assert replayed.model_dump_json().encode("utf-8") == json_bytes
+
+    def test_model_validate_json_with_omitted_trace_id_key(self) -> None:
+        # F10: a JSON blob WITHOUT the `trace_id` key (vs explicit null)
+        # must still parse and yield env.trace_id is None.
+        blob = (
+            f'{{"event_id":"{_VALID_EVENT_ID}",'
+            f'"schema_version":"1.0.0",'
+            f'"type":"task.created",'
+            f'"emitted_at":"2026-04-21T10:30:00.000000Z",'
+            f'"emitted_at_monotonic_ns":1000000,'
+            f'"actor":{{"kind":"system","id":"test-system"}},'
+            f'"payload":{{"task_id":"abc"}},'
+            f'"request_id":"{_VALID_REQUEST_ID}",'
+            f'"extensions":{{}}}}'
+        )
+        env = EventEnvelope.model_validate_json(blob)
+        assert env.trace_id is None
+
+
+# Story 9.1 — legacy JSONL replay regression (patch F8).
+class TestLegacyJsonlReplay:
+    """The new trace_id validator must NOT reject 1.0.0 records emitted
+    before Epic 9 wiring landed. Historical records have ``trace_id: null``
+    (or omitted). Replay them through ``model_validate_json`` and confirm
+    every record parses cleanly.
+
+    The migrator's `sample_v1.0.0.jsonl` fixture is the canonical
+    representative corpus. If a future fixture or production log carries
+    free-form trace_id strings outside UUIDv7 / tg:<update_id>, this test
+    flips red and the design must reconsider (advisory-warn on read vs
+    hard-reject).
+    """
+
+    def test_migrator_fixture_corpus_parses(self) -> None:
+        from pathlib import Path
+
+        fixture = (
+            Path(__file__).resolve().parents[4]
+            / "scripts"
+            / "migrator"
+            / "tests"
+            / "fixtures"
+            / "sample_v1.0.0.jsonl"
+        )
+        assert fixture.is_file(), f"Fixture missing: {fixture}"
+
+        count = 0
+        for line in fixture.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            env = EventEnvelope.model_validate_json(line)
+            assert env.trace_id is None  # All historical records have null trace_id.
+            count += 1
+        assert count > 0, "Fixture corpus must contain at least one record"
 
 
 class TestNaiveDatetimeRejected:
