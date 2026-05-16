@@ -70,6 +70,9 @@ jobs:
         # printed by the time the fatal error fires. We only forgive 134 if
         # pytest's own summary line shows passed AND zero failed.
         run: |
+          # GHA runs `bash -e` by default. Disable `-e` so the script
+          # survives pytest exiting 134 and gets to the tolerance check.
+          set +e
           set -o pipefail
           uv run pytest -m "not slow" 2>&1 | tee /tmp/pytest-out.log
           rc=${PIPESTATUS[0]}
