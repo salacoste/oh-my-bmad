@@ -33,6 +33,7 @@ import pytest_asyncio
 import structlog
 from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 from aiogram.types import TelegramObject, Update
 from asgi_lifespan import LifespanManager
 from events import FROZEN_EPOCH, FrozenClock, TelegramRejectedPayload
@@ -924,26 +925,108 @@ async def test_rejected_user_receives_no_outbound_message(
 
 
 # ---------------------------------------------------------------------------
+# Story 9.3 pass-2 review Q4 — AC10 happy-path: allowlisted user's outbound
+# registry-api call carries the derived ``tg:<update_id>`` trace_id.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_allowed_user_envelope_chain_shares_trace_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """AC10 happy-path: an allowlisted ``/task`` delivery propagates the
+    derived ``trace_id`` through the handler to the registry-api call.
+
+    Pass-1 H2 added the JSONL trace_id assertion to the REJECTION path
+    only. Pass-2 Q4 closes the missing happy-path: send a ``/task``
+    delivery from an allowlisted user, patch ``RegistryAPIClient.create_task``
+    to capture the ``trace_id`` kwarg the handler passes, and assert it
+    equals ``f"tg:{update_id}"``. Direct envelope JSONL assertion isn't
+    possible — telegram-gateway emits zero envelopes on the happy-path
+    (registry-api creates ``task.created`` server-side per FR26).
+    """
+    _setup_env(monkeypatch, tmp_path, allowlist="[12345]")
+    _patch_aiogram(monkeypatch)
+
+    # Patch send_message so we never reach real Telegram.
+    async def fake_send_message(self: Bot, *args: Any, **kwargs: Any) -> Any:
+        return None
+
+    monkeypatch.setattr(Bot, "send_message", fake_send_message)
+
+    # Capture every call to ``RegistryAPIClient.create_task``.
+    captured_calls: list[dict[str, Any]] = []
+
+    from telegram_gateway.handlers import registry_client as _rc_mod
+
+    async def fake_create_task(
+        self: _rc_mod.RegistryAPIClient,
+        **kwargs: Any,
+    ) -> _rc_mod.CreateTaskResponseLocal:
+        captured_calls.append(kwargs)
+        return _rc_mod.CreateTaskResponseLocal(
+            task_id="t-00000000-0000-7000-8000-000000000000",
+            state="created",
+            actor=_rc_mod.ActorLocal(kind="operator", id="12345"),
+        )
+
+    monkeypatch.setattr(_rc_mod.RegistryAPIClient, "create_task", fake_create_task)
+
+    settings = TelegramSettings.from_env(
+        emit=None, actor=TELEGRAM_GATEWAY_ACTOR, clock=_make_clock()
+    )
+    app = build_app(settings=settings, clock=_make_clock())
+
+    update_id = 314159
+    body = {
+        "update_id": update_id,
+        "message": {
+            "message_id": 1,
+            "date": 1_700_000_000,
+            "chat": {"id": 1, "type": "private"},
+            "from": {"id": 12345, "is_bot": False, "first_name": "Test"},
+            "text": "/task ship the kernel",
+        },
+    }
+
+    async with (
+        LifespanManager(app) as manager,
+        AsyncClient(transport=ASGITransport(app=manager.app), base_url="http://testserver") as c,
+    ):
+        r = await c.post(
+            "/v1/telegram/webhook",
+            json=body,
+            headers={"X-Telegram-Bot-Api-Secret-Token": _WEBHOOK_SECRET},
+        )
+        assert r.status_code == 200
+        await _drain_dispatch_tasks(app.state._dispatch_tasks, timeout=2.0)
+
+    # The handler MUST have called create_task with trace_id="tg:<update_id>".
+    assert len(captured_calls) == 1, (
+        f"expected exactly one create_task call; got {len(captured_calls)}: {captured_calls!r}"
+    )
+    assert captured_calls[0].get("trace_id") == f"tg:{update_id}", (
+        f"expected trace_id='tg:{update_id}' on outbound create_task; "
+        f"got {captured_calls[0].get('trace_id')!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Story 9.3 — AllowlistMiddleware derives trace_id = f"tg:{update_id}"
 # (AC1-AC10; AC7 enumerates the 12 unit tests below.)
 # ---------------------------------------------------------------------------
 
 
 class TestStory93TraceIdDerivation:
-    """Story 9.3 (FR58 Telegram / FR28): trace_id derivation + propagation."""
+    """Story 9.3 (FR58 Telegram / FR28): trace_id derivation + propagation.
 
-    @pytest.fixture(autouse=True)
-    def _clear_structlog_contextvars(self) -> Generator[None, None, None]:
-        """Story 9.2 pass-1 B2 pattern: clear process-global contextvars.
-
-        Without this autouse fixture, a parallel async test that raised
-        before its ``try/finally`` unbind could leak ``trace_id`` into
-        these tests, making the unbound-after-dispatch assertions flaky.
-        Belt-and-braces: clear before AND after each test in this class.
-        """
-        structlog.contextvars.clear_contextvars()
-        yield
-        structlog.contextvars.clear_contextvars()
+    Note: structlog contextvars hygiene is handled by the module-level
+    ``_clear_structlog_contextvars_module`` autouse fixture (pass-1 L1).
+    The pass-1 class-scoped sibling fixture was removed in Story 9.3
+    pass-2 review Q6 — keeping both fires ``clear_contextvars()`` four
+    times per test (module + class around setup AND teardown), pure
+    overhead with no extra protection.
+    """
 
     # -- AC1 #1 / AC2 baseline ----------------------------------------------
 
@@ -1231,7 +1314,12 @@ class TestStory93TraceIdDerivation:
         """
         observed: list[str | None] = []
 
-        async with Bot(token=_BOT_TOKEN) as bot:
+        # Story 9.3 pass-2 review Q8: use an offline ``TelegramAPIServer``
+        # base so the bot's ``AiohttpSession`` does NOT initialize a real
+        # connection to ``api.telegram.org``. Without this, the test flakes
+        # under sandbox network-egress restrictions.
+        offline_api = TelegramAPIServer.from_base("http://localhost:0")
+        async with Bot(token=_BOT_TOKEN, session=AiohttpSession(api=offline_api)) as bot:
             dp = Dispatcher()
             _, emit = _make_recording_emit()
             dp.update.outer_middleware.register(
@@ -1298,22 +1386,24 @@ class TestStory93TraceIdDerivation:
         assert len(captured_envelope) == 1
         assert captured_envelope[0].trace_id == "tg:314"
 
-    # -- Pass-1 review M7 (Pydantic int coercion canonicalization) ----------
+    # -- Pass-1 review M7 / Pass-2 review Q7 (Pydantic coercion lock) -------
 
-    @pytest.mark.asyncio
-    async def test_update_id_string_coercion_produces_canonical_trace_id(self) -> None:
-        """M7: a hostile webhook posting ``{"update_id": "42"}`` should be
-        coerced by Pydantic to the integer 42, yielding the same canonical
-        ``trace_id`` as a native-int payload. Locks the wire-form-lossy
-        collapse behaviour into a test so any future Pydantic strictness
-        flip is caught.
+    def test_update_id_string_coercion_produces_canonical_trace_id(self) -> None:
+        """M7 / Q7: lock Pydantic's int-coercion contract for ``update_id``.
+
+        Pass-1 M7 routed the str-form payload through the middleware and
+        asserted ``data["trace_id"] == "tg:42"``. That was tautological:
+        by the time the middleware sees the :class:`Update`, Pydantic has
+        already coerced ``"42" → 42`` at construction time, so the
+        middleware always interpolates an ``int`` and produces ``"tg:42"``
+        regardless. Pass-2 Q7 rewrites this to assert the actual invariant
+        the test name claims: Pydantic coerces a string update_id to a
+        canonical ``int`` at ``model_validate`` time. If Pydantic flips to
+        strict mode in the future this assertion fails loudly at the
+        coercion site rather than silently passing because the
+        downstream interpolation is still well-defined.
         """
-        _, emit = _make_recording_emit()
-        _, handler = _make_handler()
-        mw = _build_middleware(allowlist=frozenset({12345}), emit=emit)
-
         raw_int = _make_update(12345, update_id=42)
-        # Build a string-form copy.
         raw_str: dict[str, Any] = dict(raw_int)
         raw_str["update_id"] = "42"
 
@@ -1323,14 +1413,15 @@ class TestStory93TraceIdDerivation:
         except Exception:
             pytest.skip("Pydantic strict-mode rejected string update_id — canonicalization moot")
 
-        d_int: dict[str, Any] = {}
-        d_str: dict[str, Any] = {}
-        await mw(handler, update_int, d_int)
-        await mw(handler, update_str, d_str)
-
-        assert d_int["trace_id"] == "tg:42"
-        assert d_str["trace_id"] == "tg:42"
-        assert d_int["trace_id"] == d_str["trace_id"]
+        # Pydantic must coerce the string to the canonical int form.
+        assert update_int.update_id == 42
+        assert update_str.update_id == 42
+        assert type(update_int.update_id) is int
+        assert type(update_str.update_id) is int
+        # Locking the equality avoids any future drift to ``Decimal`` /
+        # ``np.int64`` / etc. that would silently break the f-string
+        # interpolation in the middleware.
+        assert update_int.update_id == update_str.update_id
 
     # -- Pass-1 review L5 (rejection-envelope int64+1 overflow) -------------
 
@@ -1375,48 +1466,6 @@ class TestStory93TraceIdDerivation:
         assert len(matching) >= 1
 
 
-# ---------------------------------------------------------------------------
-# Story 9.3 pass-1 review M2: PerActorRateLimitMiddleware preserves trace_id
-# ---------------------------------------------------------------------------
-
-
-class TestStory93TraceIdRateLimitChain:
-    """M2: lock the invariant ``PerActorRateLimit`` does not mutate
-    ``data["trace_id"]`` set by the upstream :class:`AllowlistMiddleware`.
-    Catches any future change to ``rate_limit.py`` that mutates the dict.
-    """
-
-    @pytest.mark.asyncio
-    async def test_rate_limit_preserves_trace_id_in_data(self) -> None:
-        from telegram_gateway.app.rate_limit import PerActorRateLimitMiddleware
-
-        allowlist_mw = _build_middleware(
-            allowlist=frozenset({12345}), emit=_make_recording_emit()[1]
-        )
-        rate_limit_mw = PerActorRateLimitMiddleware(
-            capacity=10,
-            refill_per_second=1.0,
-            clock=_make_clock(),
-        )
-
-        observed_after_chain: list[str] = []
-
-        async def stub_handler(_event: Any, data: dict[str, Any]) -> Any:
-            observed_after_chain.append(data["trace_id"])
-            return None
-
-        async def rate_limit_step(event: TelegramObject, data: dict[str, Any]) -> Any:
-            # Capture trace_id BEFORE rate limit, AFTER allowlist.
-            assert data["trace_id"] == "tg:555", (
-                f"AllowlistMiddleware did not inject trace_id; got {data.get('trace_id')!r}"
-            )
-            return await rate_limit_mw(stub_handler, event, data)
-
-        update = Update.model_validate(_make_update(12345, update_id=555))
-        await allowlist_mw(rate_limit_step, update, {})
-
-        # After the full chain, the handler observed the SAME trace_id.
-        assert observed_after_chain == ["tg:555"], (
-            f"PerActorRateLimitMiddleware must not mutate data['trace_id']; "
-            f"handler observed {observed_after_chain!r}"
-        )
+# Story 9.3 pass-2 review Q11: ``TestStory93TraceIdRateLimitChain`` moved to
+# ``services/telegram-gateway/src/telegram_gateway/app/test_per_actor_rate_limit.py``
+# (the natural home for any test exercising ``PerActorRateLimitMiddleware``).

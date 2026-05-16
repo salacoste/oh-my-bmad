@@ -71,7 +71,37 @@ _TASK_ID_PATTERN = re.compile(
 
 _log = logging.getLogger("telegram_gateway.handlers._errors")
 
-__all__ = ["_INTERNAL_ERROR_MESSAGE", "format_http_error"]
+# Story 9.3 pass-2 review Q2: shared DEBUG helper for command handlers when
+# aiogram-DI cannot resolve ``data["trace_id"]`` into the handler param.
+# Pass-1 H5 used WARNING + per-handler inline text, which (a) polluted ~60
+# pre-existing direct-call test logs and (b) drifted between handlers (some
+# single-line, some broken two-line). DEBUG is the right level — ``None`` is
+# the test-default; production middleware ALWAYS injects a value, so a real
+# production firing here is exceedingly rare and DEBUG is enough signal.
+_MISSING_TRACE_ID_LOG_MSG = (
+    "%s invoked without trace_id (AllowlistMiddleware bypassed?); correlation will break"
+)
+
+
+def log_missing_trace_id(logger: logging.Logger, command: str) -> None:
+    """Emit a DEBUG record when a command handler runs without ``trace_id``.
+
+    Story 9.3 pass-2 review Q2: centralized DEBUG-level signal that a command
+    handler was invoked outside the AllowlistMiddleware chain (test-direct
+    invocation OR misconfiguration). Production paths inject ``trace_id`` via
+    the middleware's ``data`` dict + aiogram DI, so this should only fire in
+    tests. DEBUG (not WARNING) keeps CI logs quiet for the ~60 pre-existing
+    direct-call handler tests.
+    """
+    logger.debug(_MISSING_TRACE_ID_LOG_MSG, command)
+
+
+__all__ = [
+    "_INTERNAL_ERROR_MESSAGE",
+    "_MISSING_TRACE_ID_LOG_MSG",
+    "format_http_error",
+    "log_missing_trace_id",
+]
 
 
 def format_http_error(

@@ -54,7 +54,7 @@ from aiogram.types import Message
 from events.ids import new_request_id
 
 from telegram_gateway.handlers import _keys
-from telegram_gateway.handlers._errors import format_http_error
+from telegram_gateway.handlers._errors import format_http_error, log_missing_trace_id
 from telegram_gateway.handlers._safe_reply import safe_reply as _safe_reply
 from telegram_gateway.handlers.registry_client import RegistryAPIClient, RegistryResponseError
 
@@ -84,11 +84,9 @@ async def handle_approve(
     """
     # Story 9.3 pass-1 review H5: surface silent correlation loss when the
     # AllowlistMiddleware-injected ``data["trace_id"]`` is missing.
+    # Story 9.3 pass-2 review Q2: downgraded from WARNING to DEBUG via helper.
     if trace_id is None:
-        _log.warning(
-            "/approve invoked without trace_id "
-            "(AllowlistMiddleware bypassed?); correlation will break"
-        )
+        log_missing_trace_id(_log, "/approve")
     # L8: derive both actor fields in a single from_user guard block at the top.
     if message.from_user:
         operator_actor_id = str(message.from_user.id)

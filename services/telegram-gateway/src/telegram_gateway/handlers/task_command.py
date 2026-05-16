@@ -75,7 +75,7 @@ from aiogram.types import Message
 from events.ids import new_request_id
 
 from telegram_gateway.handlers import _keys
-from telegram_gateway.handlers._errors import format_http_error
+from telegram_gateway.handlers._errors import format_http_error, log_missing_trace_id
 from telegram_gateway.handlers.registry_client import RegistryAPIClient, RegistryResponseError
 
 _log = logging.getLogger("telegram_gateway.handlers.task_command")
@@ -124,11 +124,13 @@ async def handle_task(
     This handler ALWAYS returns normally — exceptions are surfaced as a Telegram
     reply so Telegram never retries the webhook delivery (Story 3.1 M3 contract).
     """
-    # Story 9.3 pass-1 review H5: surface silent correlation loss.
+    # Story 9.3 pass-2 review Q2: pass-1 H5 emitted a WARNING here, polluting
+    # ~60 pre-existing direct-call handler tests' logs. ``None`` is the test
+    # default; production middleware ALWAYS injects ``trace_id`` via aiogram
+    # DI. Downgraded to DEBUG via the shared ``log_missing_trace_id`` helper
+    # so the signal is preserved but CI logs stay quiet.
     if trace_id is None:
-        _log.warning(
-            "/task invoked without trace_id (AllowlistMiddleware bypassed?); correlation will break"
-        )
+        log_missing_trace_id(_log, "/task")
     # Strip the command prefix; split on any whitespace (M10) handles both
     # "/task description" (space) and "/task\ndescription" (newline).
     # aiogram's Command("task") filter already strips "/task" and "@botname"

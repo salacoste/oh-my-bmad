@@ -47,7 +47,7 @@ from aiogram.types import Message
 from events.ids import new_request_id
 
 from telegram_gateway.handlers import _keys
-from telegram_gateway.handlers._errors import format_http_error
+from telegram_gateway.handlers._errors import format_http_error, log_missing_trace_id
 from telegram_gateway.handlers._safe_reply import safe_reply as _safe_reply
 from telegram_gateway.handlers.registry_client import RegistryAPIClient, RegistryResponseError
 
@@ -75,11 +75,9 @@ async def handle_reject(
     (Story 3.1 M3 contract).
     """
     # Story 9.3 pass-1 review H5: surface silent correlation loss.
+    # Story 9.3 pass-2 review Q2: downgraded from WARNING to DEBUG via helper.
     if trace_id is None:
-        _log.warning(
-            "/reject invoked without trace_id "
-            "(AllowlistMiddleware bypassed?); correlation will break"
-        )
+        log_missing_trace_id(_log, "/reject")
     if message.from_user:
         operator_actor_id = str(message.from_user.id)
         if message.from_user.username:

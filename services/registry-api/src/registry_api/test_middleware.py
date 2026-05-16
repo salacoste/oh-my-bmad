@@ -34,10 +34,13 @@ from registry_state.adapters.sqlite_store import create_engine  # noqa: IMP001 �
 from registry_state.schema import Base  # noqa: IMP001 — Story 2.9 AC-16
 
 # Story 9.2 pass-2 review N8: import the canonical WARNING message constant
-# so caplog assertions use ``== _INVALID_TRACE_LOG_MSG`` rather than
+# so caplog assertions use ``== INVALID_TRACE_LOG_MSG`` rather than
 # substring matches. If the constant text changes, the assertion fails
 # loudly instead of silently passing because the substring still matches.
-from registry_api.adapters.middleware import _INVALID_TRACE_LOG_MSG
+# Story 9.3 pass-2 review Q10: renamed from ``INVALID_TRACE_LOG_MSG`` to
+# drop the misleading underscore (it was imported across the package
+# boundary, violating the private-name contract).
+from registry_api.adapters.middleware import INVALID_TRACE_LOG_MSG
 from registry_api.app import build_app
 
 # ---------------------------------------------------------------------------
@@ -598,7 +601,7 @@ class TestTraceIdMiddleware:
         assert re.match(_TRACE_UUID_RE, echoed)
         # Warning log fired with the (truncated) received payload.
         # Story 9.2 pass-2 review N8: assert against the canonical constant.
-        warnings = [rec for rec in caplog.records if rec.getMessage() == _INVALID_TRACE_LOG_MSG]
+        warnings = [rec for rec in caplog.records if rec.getMessage() == INVALID_TRACE_LOG_MSG]
         assert warnings, "expected a WARNING log for the malformed X-Trace-Id header"
 
     @pytest.mark.asyncio
@@ -614,7 +617,7 @@ class TestTraceIdMiddleware:
         assert echoed != "tg:0"
         assert re.match(_TRACE_UUID_RE, echoed)
         # Story 9.2 pass-2 review N8: assert against the canonical constant.
-        assert any(rec.getMessage() == _INVALID_TRACE_LOG_MSG for rec in caplog.records)
+        assert any(rec.getMessage() == INVALID_TRACE_LOG_MSG for rec in caplog.records)
 
     @pytest.mark.asyncio
     async def test_trace_id_regenerated_on_int64_overflow_header(
@@ -630,7 +633,7 @@ class TestTraceIdMiddleware:
         assert echoed != overflow
         assert re.match(_TRACE_UUID_RE, echoed)
         # Story 9.2 pass-2 review N8: assert against the canonical constant.
-        assert any(rec.getMessage() == _INVALID_TRACE_LOG_MSG for rec in caplog.records)
+        assert any(rec.getMessage() == INVALID_TRACE_LOG_MSG for rec in caplog.records)
 
     @pytest.mark.asyncio
     async def test_trace_id_attached_to_request_state(self, app_client: AsyncClient) -> None:
@@ -714,7 +717,7 @@ class TestTraceIdMiddleware:
 
         # Find the warning record and assert the ``received`` extra is ≤80 chars.
         # Story 9.2 pass-2 review N8: assert against the canonical constant.
-        warnings = [rec for rec in caplog.records if rec.getMessage() == _INVALID_TRACE_LOG_MSG]
+        warnings = [rec for rec in caplog.records if rec.getMessage() == INVALID_TRACE_LOG_MSG]
         assert warnings, "expected a WARNING log for the malformed X-Trace-Id header"
         rec = warnings[0]
         received = getattr(rec, "received", None)
@@ -848,12 +851,12 @@ class TestTraceIdMiddleware:
         # Story 9.2 pass-2 review N8: assert against the module-level constant
         # so future wording tweaks fail one specific assertion rather than
         # silently passing because the substring still matches.
-        warnings = [rec for rec in caplog.records if rec.getMessage() == _INVALID_TRACE_LOG_MSG]
+        warnings = [rec for rec in caplog.records if rec.getMessage() == INVALID_TRACE_LOG_MSG]
         assert warnings, "expected a WARNING log with the canonical message text"
         # And the canonical text surfaces the two acceptable shapes for
         # operators reading the log (pass-2 review N12 reworded the hint).
-        assert "lowercase-hex UUIDv7" in _INVALID_TRACE_LOG_MSG
-        assert "tg:<update_id>" in _INVALID_TRACE_LOG_MSG
+        assert "lowercase-hex UUIDv7" in INVALID_TRACE_LOG_MSG
+        assert "tg:<update_id>" in INVALID_TRACE_LOG_MSG
 
     @pytest.mark.asyncio
     async def test_trace_id_and_request_id_both_bound_during_handler(
@@ -936,7 +939,7 @@ class TestTraceIdMiddleware:
         assert echoed != overflow
         assert re.match(_TRACE_UUID_RE, echoed)
         # Story 9.2 pass-2 review N8: assert against the canonical constant.
-        assert any(rec.getMessage() == _INVALID_TRACE_LOG_MSG for rec in caplog.records)
+        assert any(rec.getMessage() == INVALID_TRACE_LOG_MSG for rec in caplog.records)
 
     @pytest.mark.asyncio
     async def test_trace_id_response_appends_vary_x_trace_id(self, app_client: AsyncClient) -> None:
@@ -1079,7 +1082,7 @@ class TestTraceIdMiddleware:
             f"expected fresh UUIDv7 on empty header; got: {echoed!r}"
         )
         # WARNING fired with the canonical message.
-        warnings = [rec for rec in caplog.records if rec.getMessage() == _INVALID_TRACE_LOG_MSG]
+        warnings = [rec for rec in caplog.records if rec.getMessage() == INVALID_TRACE_LOG_MSG]
         assert warnings, "expected a WARNING log on empty X-Trace-Id header"
 
 
@@ -1242,3 +1245,57 @@ class TestTraceIdMiddlewareMultiValueHeader:
             f"expected a WARNING on multi-value X-Trace-Id; "
             f"got {[(r.levelname, r.name, r.getMessage()) for r in caplog.records]!r}"
         )
+
+    # Story 9.3 pass-2 review Q12: lock first-only semantics when the FIRST
+    # value is invalid and the SECOND is valid. The middleware uses
+    # ``request.headers.get(...)`` → first occurrence per RFC 7230, so the
+    # invalid first value triggers the INVALID_TRACE_LOG_MSG WARNING and a
+    # fresh UUIDv7 mint, NOT a fallthrough to the valid second value. This
+    # locks the "no implicit failover" contract.
+    @pytest.mark.asyncio
+    async def test_multi_value_invalid_first_valid_second_uses_first_and_mints(
+        self, app_client: AsyncClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Q12: invalid-first + valid-second multi-value → mint fresh.
+
+        Confirms first-only semantics: the middleware does NOT fall through
+        to the valid second value when the first is malformed. The invalid
+        first value triggers an ``INVALID_TRACE_LOG_MSG`` WARNING and a
+        fresh UUIDv7 mint. The multi-value WARNING also fires.
+        """
+        invalid_first = "not-a-valid-trace-id"
+        valid_second = "0192a1b5-1234-7abc-89de-f0123456789a"
+
+        with caplog.at_level(logging.WARNING, logger="registry_api.adapters.middleware"):
+            r = await app_client.get(
+                "/debug/state",
+                headers=[
+                    ("X-Trace-Id", invalid_first),
+                    ("X-Trace-Id", valid_second),
+                ],
+            )
+
+        # The echoed value MUST NOT be the valid second value — the
+        # middleware mints fresh after detecting the invalid first.
+        echoed = r.headers.get("X-Trace-Id")
+        assert echoed != valid_second, (
+            f"middleware must not silently fall through to valid second value; "
+            f"echo={echoed!r} should be a fresh UUIDv7"
+        )
+        # And NOT the invalid first either (it failed validation).
+        assert echoed != invalid_first
+
+        # Both WARNINGs fire: multi-value detected + invalid-first.
+        multi_value_warns = [
+            rec
+            for rec in caplog.records
+            if "multi-value X-Trace-Id received" in rec.getMessage()
+            and rec.levelno == logging.WARNING
+        ]
+        assert len(multi_value_warns) >= 1, "expected multi-value WARNING"
+        invalid_warns = [
+            rec
+            for rec in caplog.records
+            if rec.getMessage() == INVALID_TRACE_LOG_MSG and rec.levelno == logging.WARNING
+        ]
+        assert len(invalid_warns) >= 1, "expected invalid-trace WARNING for the invalid first value"

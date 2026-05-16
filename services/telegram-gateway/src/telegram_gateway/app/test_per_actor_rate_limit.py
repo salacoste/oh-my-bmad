@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.types import Update
+from aiogram.types import TelegramObject, Update
 from asgi_lifespan import LifespanManager
 from events import FROZEN_EPOCH, FrozenClock, TickingClock
 
@@ -439,3 +439,62 @@ class TestPerActorRateLimitDocs:
             assert isinstance(user_mws[1], PerActorRateLimitMiddleware), (
                 f"expected PerActorRateLimitMiddleware second; got {type(user_mws[1]).__name__!r}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Story 9.3 pass-1 review M2 / pass-2 review Q11: PerActorRateLimit preserves
+# trace_id set by AllowlistMiddleware. Moved here from ``test_allowlist.py``
+# in pass-2 (the natural home is the rate-limit test module).
+# ---------------------------------------------------------------------------
+
+
+class TestStory93TraceIdRateLimitChain:
+    """M2 / Q11: lock the invariant ``PerActorRateLimit`` does not mutate
+    ``data["trace_id"]`` set by the upstream :class:`AllowlistMiddleware`.
+    Catches any future change to ``rate_limit.py`` that mutates the dict.
+    """
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_preserves_trace_id_in_data(self) -> None:
+        # Story 9.3 pass-2 review Q15: capture the recorder's first element
+        # (the captured list) so an accidental emit during the rate-limit
+        # chain is detectable. Pass-1 dropped it with ``[1]``-only indexing.
+        captured, emit = _make_recording_emit()
+        allowlist_mw = AllowlistMiddleware(
+            allowlist=frozenset({_ALLOWLISTED_USER}),
+            emit=emit,
+            actor=_ACTOR,
+            clock=FrozenClock(mono_ns=0, now=FROZEN_EPOCH),
+        )
+        rate_limit_mw = PerActorRateLimitMiddleware(
+            capacity=10,
+            refill_per_second=1.0,
+            clock=FrozenClock(mono_ns=0, now=FROZEN_EPOCH),
+        )
+
+        observed_after_chain: list[str] = []
+
+        async def stub_handler(_event: Any, data: dict[str, Any]) -> Any:
+            observed_after_chain.append(data["trace_id"])
+            return None
+
+        async def rate_limit_step(event: TelegramObject, data: dict[str, Any]) -> Any:
+            # Capture trace_id BEFORE rate limit, AFTER allowlist.
+            assert data["trace_id"] == "tg:555", (
+                f"AllowlistMiddleware did not inject trace_id; got {data.get('trace_id')!r}"
+            )
+            return await rate_limit_mw(stub_handler, event, data)
+
+        update = Update.model_validate(_make_update(_ALLOWLISTED_USER, update_id=555))
+        await allowlist_mw(rate_limit_step, update, {})
+
+        # After the full chain, the handler observed the SAME trace_id.
+        assert observed_after_chain == ["tg:555"], (
+            f"PerActorRateLimitMiddleware must not mutate data['trace_id']; "
+            f"handler observed {observed_after_chain!r}"
+        )
+        # Q15: the allowlisted-path should emit no envelopes — verify.
+        assert captured == [], (
+            f"rate-limit chain unexpectedly emitted envelopes for allowlisted "
+            f"actor; got {captured!r}"
+        )

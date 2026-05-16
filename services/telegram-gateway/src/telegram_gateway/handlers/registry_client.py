@@ -18,6 +18,7 @@ not shared Python objects.  See AC-2 doc-comment for details.
 from __future__ import annotations
 
 import json as _json
+import logging
 from datetime import datetime
 from typing import Literal
 
@@ -25,6 +26,10 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from telegram_gateway.handlers._keys import TASK_ID_PATTERN
+
+# Story 9.3 pass-2 review Q9: WARN when a caller passes an empty-string
+# ``trace_id`` (distinct from ``None`` which means "don't forward").
+_log = logging.getLogger("telegram_gateway.handlers.registry_client")
 
 
 class CreateTaskResponseLocal(BaseModel):
@@ -284,12 +289,19 @@ class RegistryAPIClient:
             headers["X-Request-ID"] = request_id
         # Story 9.3 (FR58): forward derived trace_id so registry-api's
         # TraceIdMiddleware (Story 9.2) preserves rather than re-mints.
-        # Pass-1 review H4: truthy check (not ``is not None``) — an empty
-        # string would send ``X-Trace-Id: `` to registry-api, which logs
-        # WARNING + mints a fresh UUIDv7 (correlation broken). Treat ``""``
-        # and ``None`` identically: do not set the header at all.
-        if trace_id:
+        # Pass-2 review Q9: tighten the truthy check to ``is not None and
+        # != ""`` so a future caller passing ``trace_id=0`` (int) is no
+        # longer silently dropped (truthy ``0`` is False). Empty-string
+        # remains skipped but now emits a WARNING — sending ``X-Trace-Id: ``
+        # would have produced a registry-api WARNING + UUIDv7 mint anyway;
+        # surfacing it at the producer side fixes it faster.
+        if trace_id is not None and trace_id != "":
             headers["X-Trace-Id"] = trace_id
+        elif trace_id == "":
+            _log.warning(
+                "empty trace_id supplied to registry_client; "
+                "correlation will break (X-Trace-Id header omitted)"
+            )
 
         # Story 3.9 AC-5: omit chat_id / reply_to_message_id from the JSON
         # body when they are None so registry-api's CreateTaskRequest
@@ -386,12 +398,19 @@ class RegistryAPIClient:
             headers["X-Request-ID"] = request_id
         # Story 9.3 (FR58): forward derived trace_id so registry-api's
         # TraceIdMiddleware (Story 9.2) preserves rather than re-mints.
-        # Pass-1 review H4: truthy check (not ``is not None``) — an empty
-        # string would send ``X-Trace-Id: `` to registry-api, which logs
-        # WARNING + mints a fresh UUIDv7 (correlation broken). Treat ``""``
-        # and ``None`` identically: do not set the header at all.
-        if trace_id:
+        # Pass-2 review Q9: tighten the truthy check to ``is not None and
+        # != ""`` so a future caller passing ``trace_id=0`` (int) is no
+        # longer silently dropped (truthy ``0`` is False). Empty-string
+        # remains skipped but now emits a WARNING — sending ``X-Trace-Id: ``
+        # would have produced a registry-api WARNING + UUIDv7 mint anyway;
+        # surfacing it at the producer side fixes it faster.
+        if trace_id is not None and trace_id != "":
             headers["X-Trace-Id"] = trace_id
+        elif trace_id == "":
+            _log.warning(
+                "empty trace_id supplied to registry_client; "
+                "correlation will break (X-Trace-Id header omitted)"
+            )
 
         # Omit hint key entirely when None (forward-compat with Story 3.18).
         body: dict[str, str] = {"action": action}
@@ -462,9 +481,16 @@ class RegistryAPIClient:
         if request_id is not None:
             headers["X-Request-ID"] = request_id
         # Story 9.3 (FR58): forward derived trace_id through to registry-api.
-        # Pass-1 review H4: truthy check — empty string would break correlation.
-        if trace_id:
+        # Pass-2 review Q9: ``is not None and != ""`` so ``trace_id=0`` (int)
+        # is not silently dropped; empty-string emits a WARNING at the
+        # producer site rather than at the registry-api receive site.
+        if trace_id is not None and trace_id != "":
             headers["X-Trace-Id"] = trace_id
+        elif trace_id == "":
+            _log.warning(
+                "empty trace_id supplied to registry_client; "
+                "correlation will break (X-Trace-Id header omitted)"
+            )
 
         response = await self._http_client.get(
             "/v1/health",
@@ -516,9 +542,16 @@ class RegistryAPIClient:
         if request_id is not None:
             headers["X-Request-ID"] = request_id
         # Story 9.3 (FR58): forward derived trace_id through to registry-api.
-        # Pass-1 review H4: truthy check — empty string would break correlation.
-        if trace_id:
+        # Pass-2 review Q9: ``is not None and != ""`` so ``trace_id=0`` (int)
+        # is not silently dropped; empty-string emits a WARNING at the
+        # producer site rather than at the registry-api receive site.
+        if trace_id is not None and trace_id != "":
             headers["X-Trace-Id"] = trace_id
+        elif trace_id == "":
+            _log.warning(
+                "empty trace_id supplied to registry_client; "
+                "correlation will break (X-Trace-Id header omitted)"
+            )
 
         response = await self._http_client.get(
             f"/v1/tasks/{task_id}",
@@ -570,9 +603,16 @@ class RegistryAPIClient:
         if request_id is not None:
             headers["X-Request-ID"] = request_id
         # Story 9.3 (FR58): forward derived trace_id through to registry-api.
-        # Pass-1 review H4: truthy check — empty string would break correlation.
-        if trace_id:
+        # Pass-2 review Q9: ``is not None and != ""`` so ``trace_id=0`` (int)
+        # is not silently dropped; empty-string emits a WARNING at the
+        # producer site rather than at the registry-api receive site.
+        if trace_id is not None and trace_id != "":
             headers["X-Trace-Id"] = trace_id
+        elif trace_id == "":
+            _log.warning(
+                "empty trace_id supplied to registry_client; "
+                "correlation will break (X-Trace-Id header omitted)"
+            )
 
         response = await self._http_client.get(
             f"/v1/tasks/{task_id}/logs/digest",

@@ -30,17 +30,16 @@ The unbind runs in a ``try/finally`` so a dispatcher reused across
 updates never observes a prior update's trace.
 
 .. note::
-   **AC2 deterministic-replay carve-out (Story 9.3 pass-1 M4):** the
-   determinism invariant applies ONLY to BotAPI-conformant updates
-   (``update_id ≥ 1``). Malformed updates (``update_id=0``, negative,
-   non-Update events) fall back to ``new_uuid7()``, which is
-   NON-deterministic by design — the fallback is a defense-in-depth
-   net for inputs that should never reach production. A deterministic
-   fallback (e.g., ``f"tg:invalid:{update_id}"``) is NOT viable because
-   it would fail ``is_valid_trace_id`` and break envelope construction
-   downstream. Operators correlating replayed malformed updates MUST
-   use ``request_id`` or the JSONL ``emitted_at`` window rather than
-   the per-attempt ``trace_id``.
+   **Deterministic-replay carve-out:** the determinism invariant applies
+   ONLY to BotAPI-conformant updates (``update_id ≥ 1``). Malformed
+   updates (``update_id=0``, negative, non-Update events) fall back to
+   ``new_uuid7()``, which is NON-deterministic by design — the fallback
+   is a defense-in-depth net for inputs that should never reach
+   production. A deterministic fallback (e.g., ``f"tg:invalid:{update_id}"``)
+   is NOT viable because it would fail ``is_valid_trace_id`` and break
+   envelope construction downstream. Operators correlating replayed
+   malformed updates MUST use ``request_id`` or the JSONL ``emitted_at``
+   window rather than the per-attempt ``trace_id``.
 
 Why outer_middleware (not inner)
 --------------------------------
@@ -188,22 +187,25 @@ EmitCallable = Callable[[EventEnvelope], Awaitable[None]]
 class AllowlistMiddleware(BaseMiddleware):
     """Outer middleware enforcing the operator allowlist (FR11 / NFR-S4).
 
-    Story 9.3 (FR58 Telegram / FR28) extends this middleware to derive a
-    deterministic ``trace_id = f"tg:{update.update_id}"`` from every
-    inbound :class:`Update`, bind it to the structlog contextvars, and
-    propagate it via ``data["trace_id"]`` so downstream handlers can
-    attach ``X-Trace-Id`` on outbound registry-api calls (Story 9.2's
-    HTTP middleware will preserve rather than re-mint). The derivation
+    Derives a deterministic ``trace_id = f"tg:{update.update_id}"`` from
+    every inbound :class:`Update`, binds it to the structlog contextvars,
+    and propagates it via ``data["trace_id"]`` so downstream handlers can
+    attach ``X-Trace-Id`` on outbound registry-api calls (the HTTP
+    ``TraceIdMiddleware`` preserves rather than re-mints). Derivation
     runs BEFORE allowlist enforcement so rejection envelopes also carry
     the trace_id, and the unbind is in a ``try/finally`` so reuse of the
     dispatcher across updates never leaks contextvars.
 
-    AC2 deterministic-replay carve-out (Story 9.3 pass-1 M4):
-        The determinism invariant applies ONLY to BotAPI-conformant
-        updates (``update_id ≥ 1``). Malformed updates (``update_id=0``,
-        negative, non-Update events) fall back to ``new_uuid7()`` —
-        NON-deterministic by design. See the module docstring for the
-        rationale.
+    Notes:
+        * Deterministic-replay carve-out: the determinism invariant
+          applies ONLY to BotAPI-conformant updates (``update_id ≥ 1``).
+          Malformed updates (``update_id=0``, negative, non-Update
+          events) fall back to ``new_uuid7()`` — NON-deterministic by
+          design. See the module docstring for the rationale.
+        * Caller-side trace_id preservation: if an outer middleware has
+          pre-bound a ``trace_id`` in structlog contextvars before
+          delegating into this middleware, the prior value is restored
+          on the way out rather than unbound.
 
     Args:
         allowlist: ``frozenset[int]`` of allowed Telegram user ids. An
@@ -249,16 +251,16 @@ class AllowlistMiddleware(BaseMiddleware):
     ) -> Any:
         """Reject non-allowlisted senders BEFORE handler dispatch.
 
-        Returning ``None`` short-circuits the dispatcher (handler never
-        runs). Allowed users delegate to ``handler(event, data)``
-        unchanged.
-
-        Story 9.3: derive ``trace_id = f"tg:{update.update_id}"`` from
-        the inbound :class:`Update` BEFORE allowlist enforcement, bind
-        it to structlog contextvars, propagate via ``data["trace_id"]``
-        for downstream handlers, and unbind in ``try/finally`` so the
-        unbind runs on every return path (allowlist rejection,
-        no-from-user rejection, handler success, handler exception).
+        Derives ``trace_id`` from the inbound :class:`Update`, binds it
+        to structlog contextvars, propagates it via ``data["trace_id"]``,
+        and unbinds (or restores a caller-side prior value) on every
+        return path — allowlist rejection, no-from-user rejection,
+        handler success, handler exception. Returning ``None``
+        short-circuits the dispatcher; allowed users delegate to
+        ``handler(event, data)`` unchanged. When ``data`` is not a
+        ``dict`` (impossible per aiogram contract; defended for test
+        harnesses), the derived ``trace_id`` is silently dropped from
+        downstream propagation but still bound to the contextvar.
         """
         # --- Story 9.3 AC1-AC3: derive + validate + bind trace_id ----------
         trace_id: str
@@ -295,10 +297,23 @@ class AllowlistMiddleware(BaseMiddleware):
         # harness) still triggers the unbind. Without this, the trace_id would
         # remain bound in contextvars across requests (process-global leak).
         # L3: warn on pre-existing trace_id overwrite by an upstream middleware.
+        #
+        # Story 9.3 pass-2 review Q1: snapshot caller-side ``trace_id`` (e.g. an
+        # outer middleware that pre-binds before delegating into us). The naive
+        # ``unbind_contextvars("trace_id")`` in finally would clobber the
+        # caller's value on the way out. Restore the prior value if present;
+        # otherwise unbind cleanly.
+        prior_trace_id = structlog.contextvars.get_contextvars().get("trace_id")
+        # Story 9.3 pass-2 review Q3: do the data["trace_id"] = ... assignment
+        # FIRST, then log the overwrite. The pass-1 ordering logged the
+        # overwrite BEFORE the assignment — if the assignment raised (read-only
+        # mapping), the log entry claimed an overwrite that never happened
+        # (past-tense lying).
         try:
             structlog.contextvars.bind_contextvars(trace_id=trace_id)
             if isinstance(data, dict):
                 existing = data.get("trace_id")
+                data["trace_id"] = trace_id  # do the work first (Q3)
                 if existing is not None and existing != trace_id:
                     _log.warning(
                         "AllowlistMiddleware overwrote existing data['trace_id']=%r "
@@ -306,7 +321,12 @@ class AllowlistMiddleware(BaseMiddleware):
                         existing,
                         trace_id,
                     )
-                data["trace_id"] = trace_id
+            # When ``data`` is not a dict (impossible per aiogram contract but
+            # defended here), the derived ``trace_id`` is silently dropped from
+            # downstream propagation. The structlog contextvar still carries
+            # it for log correlation. We do NOT raise — aiogram's contract is
+            # ``data: dict[str, Any]`` and any non-dict here is a programmer
+            # error in a test harness, not a runtime fault to abort on.
 
             # Carry forward the inbound request_id when Story 3.6's request-id
             # middleware has already injected it into ``data``. Falls back to a
@@ -332,7 +352,12 @@ class AllowlistMiddleware(BaseMiddleware):
             )
             return None
         finally:
-            structlog.contextvars.unbind_contextvars("trace_id")
+            # Story 9.3 pass-2 review Q1: restore caller-side ``trace_id`` if
+            # one was pre-bound; otherwise unbind cleanly.
+            if prior_trace_id is not None:
+                structlog.contextvars.bind_contextvars(trace_id=prior_trace_id)
+            else:
+                structlog.contextvars.unbind_contextvars("trace_id")
 
     @staticmethod
     def _extract_user_id(event: TelegramObject) -> int | None:

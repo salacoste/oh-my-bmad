@@ -124,7 +124,13 @@ _UUIDV7_BARE_RE = re.compile(
 # reading the log see the rule first — pass-1 wording buried "lowercase"
 # mid-sentence and operators reported scanning past it. The Telegram
 # ``tg:<update_id>`` alternate form is also surfaced explicitly.
-_INVALID_TRACE_LOG_MSG = (
+#
+# Story 9.3 pass-2 review Q10: renamed from ``_INVALID_TRACE_LOG_MSG`` —
+# leading-underscore is the Python convention for module-private symbols,
+# but ``test_middleware.py`` imports it across the package boundary. The
+# private-name contract is violated either way; expose it explicitly to
+# stop pretending. Added to ``__all__`` so the public surface is documented.
+INVALID_TRACE_LOG_MSG = (
     "invalid X-Trace-Id header; generating fresh "
     "(expected lowercase-hex UUIDv7 (a-f, 0-9 only) or 'tg:<update_id>')"
 )
@@ -205,10 +211,12 @@ class TraceIdMiddleware(BaseHTTPMiddleware):
             # received value to 80 chars in the log to bound the size of
             # malformed payloads (mirrors RequestIdMiddleware's truncation
             # discipline). Story 9.2 pass-1 review B4 + C2: WARNING message
-            # lives in the ``_INVALID_TRACE_LOG_MSG`` module constant so test
-            # ``caplog`` assertions and the emit-site stay in lock-step.
+            # lives in the ``INVALID_TRACE_LOG_MSG`` module constant so test
+            # ``caplog`` assertions and the emit-site stay in lock-step
+            # (renamed from ``_INVALID_TRACE_LOG_MSG`` in Story 9.3 pass-2
+            # review Q10 — see comment at the constant's definition site).
             _log.warning(
-                _INVALID_TRACE_LOG_MSG,
+                INVALID_TRACE_LOG_MSG,
                 extra={"received": incoming[:80]},
             )
             trace_id = new_uuid7(clock=self._clock)
@@ -450,6 +458,7 @@ class TierEnforcementMiddleware(BaseHTTPMiddleware):
 
 __all__ = [
     "ActorIdMiddleware",
+    "INVALID_TRACE_LOG_MSG",
     "IdempotencyKeyMiddleware",
     "RequestIdMiddleware",
     "ROUTE_TIER_MAP",

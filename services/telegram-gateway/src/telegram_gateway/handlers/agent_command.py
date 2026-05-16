@@ -31,7 +31,7 @@ from aiogram.types import Message
 from events.ids import new_request_id
 
 from telegram_gateway.handlers import _keys
-from telegram_gateway.handlers._errors import format_http_error
+from telegram_gateway.handlers._errors import format_http_error, log_missing_trace_id
 from telegram_gateway.handlers._safe_reply import safe_reply as _safe_reply
 from telegram_gateway.handlers.registry_client import RegistryAPIClient, RegistryResponseError
 
@@ -53,16 +53,12 @@ async def handle_agent(
     ``/approve``, ``/stop``, ``/reject``, ``/retry``, this handler does
     NOT call ``submit_decision``.
     """
-    # Story 9.3 pass-1 review H5: surface silent correlation loss. The
-    # AllowlistMiddleware ALWAYS injects ``data["trace_id"]``; aiogram's
-    # DI resolves it into this parameter. A None value means the middleware
-    # was bypassed (test harness, misconfiguration) and the downstream
-    # registry-api call will mint a fresh UUID — correlation broken.
+    # Story 9.3 pass-2 review Q2: pass-1 H5's WARNING here polluted ~60
+    # pre-existing direct-call handler tests' logs. ``None`` is the test
+    # default; production middleware always injects ``trace_id`` via
+    # aiogram DI. Downgraded to DEBUG via the shared helper.
     if trace_id is None:
-        _log.warning(
-            "/agent invoked without trace_id "
-            "(AllowlistMiddleware bypassed?); correlation will break"
-        )
+        log_missing_trace_id(_log, "/agent")
     task_id = _keys.extract_task_id_from_message(message)
     if task_id is None:
         raw_text = message.text or ""

@@ -30,6 +30,8 @@ In `services/telegram-gateway/src/telegram_gateway/app/middleware.py`, extend `A
 
 For two `Update` objects with the same `update_id`, the derived `trace_id` MUST be byte-identical. This composes with FR28 idempotency (Story 7.5+): when the operator's client retransmits a previously-acknowledged update (e.g., webhook redelivery), the `trace_id` resolves to the same value, so the FR28 idempotency-cache hit produces a replay log entry carrying the same `trace_id` as the original. This is the **only** ingress in Epic 9 where the trace_id is derived from a stable identifier rather than minted — the determinism is load-bearing.
 
+**Note on fallback path (Story 9.3 pass-1 M4 / pass-2 Q5):** the deterministic invariant applies ONLY to BotAPI-conformant updates (`update_id ≥ 1`). Malformed updates (`update_id=0`, negative, non-Update events) fall back to `new_uuid7()`, which is NON-deterministic by design — the fallback is a defense-in-depth net for inputs that should never reach production. Operators correlating replayed malformed updates MUST use `request_id` or the JSONL `emitted_at` window rather than the per-attempt `trace_id`. See `middleware.py` module docstring + `AllowlistMiddleware` class docstring for the architectural rationale.
+
 Add a unit test `test_replay_same_update_id_produces_same_trace_id`: construct two `Update(update_id=42, ...)` instances (no other fields need to differ); pass both through the middleware; assert both `data["trace_id"]` values equal `"tg:42"`.
 
 ### AC3 — Validates against Story 9.1 contract
@@ -94,6 +96,18 @@ New tests in `services/telegram-gateway/src/telegram_gateway/test_allowlist.py` 
 10. `test_trace_id_fallback_on_negative_update_id` — synthetic `Update(update_id=-1)`; assert WARNING log + UUIDv7 fallback.
 11. `test_telegram_rejected_envelope_carries_trace_id` — non-allowlisted user; assert the emitted `telegram.rejected` envelope's `trace_id` field equals the derived value (NOT `None`).
 12. (Optional integration) `test_handler_emits_event_with_propagated_trace_id` — a stub handler reads `data["trace_id"]`, builds an envelope via `EventEnvelope.create(trace_id=data["trace_id"], ...)`; assert no DeprecationWarning fires and the envelope's `trace_id` matches.
+
+Pass-1 / pass-2 review patches added the following tests (Q16):
+
+13. `test_trace_id_minimum_update_id_one_accepted` — AC3 lower bound (pass-1 M1).
+14. `test_rate_limit_preserves_trace_id_in_data` — AC6 (pass-1 M2 → pass-2 Q11 moved to `app/test_per_actor_rate_limit.py`).
+15. `test_handler_receives_trace_id_via_aiogram_di` — AC5 DI end-to-end via `Dispatcher.feed_update` (pass-1 M3 → pass-2 Q8 uses offline `TelegramAPIServer`).
+16. `test_handler_builds_envelope_with_propagated_trace_id_no_deprecation_warning` — AC9 (pass-1 M5).
+17. `test_update_id_string_coercion_produces_canonical_trace_id` — Pydantic coercion lock (pass-1 M7 → pass-2 Q7 rewritten from tautological).
+18. `test_rejection_envelope_overflow_update_id_uuid_fallback` — L5 int64+1 overflow.
+19. `test_allowed_user_envelope_chain_shares_trace_id` — AC10 happy-path: outbound `RegistryAPIClient.create_task` carries `tg:<update_id>` (pass-2 Q4).
+20. `test_multi_value_x_trace_id_logs_warning_and_uses_first` — registry-api L7 (pass-1).
+21. `test_multi_value_invalid_first_valid_second_uses_first_and_mints` — registry-api first-only semantics with invalid first (pass-2 Q12).
 
 ### AC8 — mypy --strict clean + Epic 8.7 baseline gates
 
@@ -266,7 +280,7 @@ Every existing `EventEnvelope.create(...)` callsite in the telegram-gateway hand
 |---|---|
 | `Update.update_id` could be 0 or negative in malformed BotAPI payloads (impossible per docs but defense in depth). | AC3 + AC7 #9, #10 lock the fallback path with WARNING log + UUIDv7. |
 | `data` dict is mutable and shared across the middleware chain — could a downstream middleware (PerActorRateLimitMiddleware) overwrite `data["trace_id"]`? | AC6 verifies the propagation invariant; PerActorRateLimitMiddleware is read-only on the trace_id field. |
-| Telegram webhook redelivery (FR28 idempotency replay) sends the same `update_id` twice. The derived `trace_id` will be identical — that's the deterministic invariant. The FR28 cache-hit path produces a replay envelope; does THAT envelope also carry the same trace_id? | Verify by inspecting the FR28 idempotency-cache writer (likely `EventLogWriter.append` from `_safe_emit`). Out of scope for 9.3 if not directly testable; flag in retro. |
+| Telegram webhook redelivery (FR28 idempotency replay) sends the same `update_id` twice. The derived `trace_id` will be identical — that's the deterministic invariant. The FR28 cache-hit path produces a replay envelope; does THAT envelope also carry the same trace_id? | Verify by inspecting the FR28 idempotency-cache writer (likely `EventLogWriter.append` from `_safe_emit`). Out of scope for 9.3 if not directly testable; flag in retro. The determinism invariant carve-out for malformed inputs is documented in AC2's "Note on fallback path" subsection (pass-2 Q5). |
 | `_emit_rejection`'s signature change is a breaking change to a private API. | OK — it's truly private (single caller). No back-compat concern. |
 | Outbound HTTP handlers (approve/stop/retry/reject/agent) need to set `X-Trace-Id` header. The httpx client used in these handlers may have a default `headers` dict; merge carefully. | AC5 calls out the pattern. Code review should verify no header is overwritten. |
 | `structlog.contextvars.clear_contextvars()` in autouse test fixture — does it conflict with aiogram's own contextvars usage during tests? | Mirror Story 9.2's autouse approach; aiogram dispatcher tests in test_allowlist.py already work with similar patterns. |
@@ -382,6 +396,42 @@ All 19 `patch` findings resolved in a single follow-up commit on top of `0e6c844
 | Full workspace (`packages/ services/ -m "not slow"`) | 2283 | 2290 | **+7** |
 
 Test count verified with `pytest -q -m "not slow"` post-apply. All Epic 8.7 baseline gates remain green (ruff check, ruff format, mypy --strict, check_imports, check_single_writer, secret-hygiene-precommit).
+
+### Adversarial 3-lane code review — 2026-05-16 (pass-2)
+
+Reviewed at commit `8d05049` (Story 9.3 pass-1 batch-apply). Pass-2 second-opinion adversarial review (Blind Hunter / Edge-Case Hunter / Acceptance Auditor) produced **16 unique NEW findings** (Q1-Q16). User policy: "fix all issues even minors — dismiss-zero". Mirrors Epic 8.x pass-1+pass-2 cadence.
+
+#### Patch resolution — 2026-05-16 (pass-2 batch-apply)
+
+| ID | Severity | Title | Resolution | Files |
+|---|---|---|---|---|
+| Q1 | HIGH | H1 contextvars caller-state-preservation gap | Snapshot prior `trace_id` via `structlog.contextvars.get_contextvars()` BEFORE bind; restore via `bind_contextvars(trace_id=prior_trace_id)` in `finally` if non-None, else `unbind_contextvars`. Prevents an upstream-bound `trace_id` from being clobbered by the naive unbind. | `middleware.py` |
+| Q2 | HIGH | H5 handler WARNING spam in ~60 pre-existing direct-call tests | Downgraded all 9 handler WARNINGs to DEBUG via a shared `log_missing_trace_id(logger, command)` helper in `handlers/_errors.py`. None is the test default; production middleware ALWAYS injects `trace_id`; DEBUG is the correct level. DRY-extracts the message text out of per-handler inlined strings (which had drifted between single-line and two-line forms). | `handlers/_errors.py`, 9 × `handlers/*_command.py` |
+| Q3 | HIGH | L3 overwrite WARNING fires BEFORE the overwrite (past-tense lying) | Reordered: `data["trace_id"] = trace_id` assignment now runs FIRST, then the `existing != trace_id` WARNING. If the assignment raises (read-only mapping), no false log entry is emitted. Documented the "data is not a dict" silent-drop in the `__call__` docstring. | `middleware.py` |
+| Q4 | HIGH | AC10 happy-path still missing | Added `test_allowed_user_envelope_chain_shares_trace_id` to `test_allowlist.py`: posts a `/task` from an allowlisted user, patches `RegistryAPIClient.create_task` to capture kwargs, asserts `trace_id == f"tg:{update_id}"`. Direct envelope JSONL assertion isn't possible (envelopes are created by registry-api per FR26). | `test_allowlist.py` |
+| Q5 | HIGH | AC2 spec body not updated with M4 carve-out | Appended "Note on fallback path" paragraph to AC2 explaining the deterministic carve-out for malformed updates. Updated Out-of-scope risk flags table to reference the carve-out (Epic 8.7 L2 documentation poisoning prevention). | spec body |
+| Q6 | MED | L1 module-level autouse + class-level autouse fire 4 times per test | Removed the class-scoped `_clear_structlog_contextvars` fixture on `TestStory93TraceIdDerivation`. Module-level fixture (pass-1 L1) handles hygiene for every test in the file. Added class docstring comment pointing at the module fixture. | `test_allowlist.py` |
+| Q7 | MED | M7 Pydantic coercion test was tautological | Rewrote to assert the actual invariant: `Update.model_validate({"update_id": "42"}).update_id == 42 and type(...) is int`. Pass-1 routed the str-form through the middleware and asserted the trace_id, which was tautological (Pydantic coerced before the middleware ever saw it). Test is now sync — no asyncio needed. | `test_allowlist.py` |
+| Q8 | MED | M3 aiogram-DI test leaks real Bot HTTP session | Replaced `async with Bot(token=_BOT_TOKEN)` with `Bot(token=_BOT_TOKEN, session=AiohttpSession(api=TelegramAPIServer.from_base("http://localhost:0")))` — offline session prevents flakiness under sandbox network-egress restrictions. | `test_allowlist.py` |
+| Q9 | MED | H4 truthy check silently swallows int 0 | Tightened all 5 sites in `registry_client.py` from `if trace_id:` to `if trace_id is not None and trace_id != "":` (allows int 0); empty-string fires a producer-side WARNING. Added module-level logger. | `handlers/registry_client.py` |
+| Q10 | MED | Private `_INVALID_TRACE_LOG_MSG` imported across module boundary | Renamed to `INVALID_TRACE_LOG_MSG` (no underscore); added to `__all__` of `adapters/middleware.py`. Updated all 10 usage sites in `test_middleware.py`. Private-name contract was violated by cross-package import — explicit public surface is more honest. | `registry-api/adapters/middleware.py`, `registry-api/test_middleware.py` |
+| Q11 | MED | M2 rate-limit test mis-located | Moved `TestStory93TraceIdRateLimitChain` from `test_allowlist.py` to `services/telegram-gateway/src/telegram_gateway/app/test_per_actor_rate_limit.py` (the natural home). Left a one-line breadcrumb pointer in `test_allowlist.py`. | `test_allowlist.py`, `app/test_per_actor_rate_limit.py` |
+| Q12 | LOW | L7 multi-value test doesn't lock invalid-first-valid-second behaviour | Added `test_multi_value_invalid_first_valid_second_uses_first_and_mints` to `TestTraceIdMiddlewareMultiValueHeader` — locks first-only semantics (no implicit failover to valid second value); asserts both multi-value WARNING and `INVALID_TRACE_LOG_MSG` WARNING fire. | `registry-api/test_middleware.py` |
+| Q13 | LOW | Spec drift: stale "94 occurrences" deprecation count | Re-ran `uv run pytest packages/ services/ -m "not slow" -W "always::DeprecationWarning" 2>&1 \| grep -c "EventEnvelope created without trace_id"`. Post-pass-2 count = **94** (unchanged from pass-1; pass-2 added no new envelope callsites). | (verification only) |
+| Q14 | LOW | Inconsistent docstring tense / Story 9.3 pollution | Class docstring rewritten to behavioral contract (no "Story 9.3 extends..." narration); `__call__` docstring trimmed to behavioral spec. Module-top docstring's "(Story 9.3 pass-1 M4)" reference removed from the `.. note::` block — story-history references migrated to the commit log. | `middleware.py` |
+| Q15 | LOW | M2 recorder tuple discards captured list | In the moved `TestStory93TraceIdRateLimitChain`, switched from `_make_recording_emit()[1]` to `captured, emit = _make_recording_emit()`. Added `assert captured == []` at end of test to detect accidental emits in the rate-limit chain. | `app/test_per_actor_rate_limit.py` |
+| Q16 | LOW | AC7 spec enumeration doesn't include new pass-1 tests | Appended items 13-21 to AC7 enumeration covering pass-1 M1, M2 (now in test_per_actor_rate_limit), M3 (with Q8 offline-session note), M5, M7 (with Q7 rewrite note), L5; pass-2 Q4 (AC10 happy-path); pass-1 L7 + pass-2 Q12 in registry-api. | spec body |
+
+**Test count delta after pass-2 batch-apply:**
+
+| Suite | Before (pass-1) | After (pass-2) | Δ |
+|---|---|---|---|
+| `services/telegram-gateway` (`-m "not slow"`) | 408 | 409 | **+1** (Q4 added; Q11 net-zero — moved 1 test out, Q4 brought 1 test in) |
+| `services/registry-api` (`-m "not slow"`) | 159 | 160 | **+1** (Q12) |
+| `services/telegram-gateway/.../app/test_per_actor_rate_limit.py` | 12 | 13 | **+1** (Q11 relocated here) |
+| Full workspace (`packages/ services/ -m "not slow"`) | 2289 passed | 2291 passed | **+2** (Q4 + Q12; Q11 net-zero across the two telegram-gateway test files; Q7 rewritten but stays as one test) |
+
+Test count verified with `pytest -q -m "not slow"` post-apply. All Epic 8.7 baseline gates remain green (ruff check, ruff format, mypy --strict on 97-source-file baseline, check_imports, check_single_writer, secret-hygiene-precommit full-tree). DeprecationWarning callsite count unchanged at 94 (Q13).
 
 ---
 
