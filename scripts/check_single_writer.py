@@ -176,6 +176,14 @@ def _scan(roots: list[Path]) -> tuple[list[Violation], int]:
         if any(path == excl or path.is_relative_to(excl) for excl in _EXCLUDED_ROOTS):
             continue
 
+        # Skip co-located test files (test_*.py / conftest.py). The `tests/`
+        # directory is already skipped via _SW_SKIP_DIRS, but mcp-servers
+        # and some packages keep test files alongside source. Test fixtures
+        # legitimately need to seed DB state for isolation; per-line noqa
+        # would be ~30 markers and is brittle under refactoring.
+        if path.name.startswith("test_") or path.name == "conftest.py":
+            continue
+
         try:
             source = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
