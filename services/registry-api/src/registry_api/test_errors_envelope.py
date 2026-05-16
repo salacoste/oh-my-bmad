@@ -882,6 +882,13 @@ class TestProblemDetailsTraceId:
 
         # Patch the (frozen) tier map so POST /v1/tasks requires Tier.THREE,
         # which a worker (max Tier.TWO) cannot satisfy.
+        #
+        # The ``with patch(...)`` scope covers BOTH ``build_app()`` and the
+        # HTTP request.  ``TierEnforcementMiddleware._resolve_tier`` is a
+        # ``@staticmethod`` that reads ``ROUTE_TIER_MAP`` from the module
+        # namespace at request time — it does NOT capture the map into an
+        # instance attribute at construction — so the patch MUST remain active
+        # during ``client.post(...)`` for the 403 path to fire.
         with patch(
             "registry_api.adapters.middleware.ROUTE_TIER_MAP",
             {"POST /v1/tasks": Tier.THREE},
