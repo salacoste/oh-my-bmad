@@ -210,10 +210,16 @@ def main(argv: list[str] | None = None) -> int:
     found_any = False
     scanned = 0
 
-    for file_str in args.files:
-        if allowlist_globs and _is_allowlisted(file_str, allowlist_globs):
-            continue
+    # Pre-filter the file list against the allowlist once so both the content
+    # scanner and the downstream path/license checks see the same view. Prior
+    # behaviour applied the allowlist only to the content scanner, which let
+    # vendored upstream files (e.g. upstream/**/.env.example) trip the
+    # sensitive-path check despite being explicitly ignored.
+    filtered_files: list[str] = [
+        f for f in args.files if not (allowlist_globs and _is_allowlisted(f, allowlist_globs))
+    ]
 
+    for file_str in filtered_files:
         scanned += 1
         matches = scan_file(Path(file_str))
         for match in matches:
@@ -227,17 +233,17 @@ def main(argv: list[str] | None = None) -> int:
 
     violations: list[Violation] = []
 
-    violations.extend(check_sensitive_paths(args.files))
+    violations.extend(check_sensitive_paths(filtered_files))
 
     worktree_root = Path(args.worktree_root) if args.worktree_root else Path.cwd()
-    violations.extend(check_worktree_boundary(args.files, worktree_root))
+    violations.extend(check_worktree_boundary(filtered_files, worktree_root))
 
     for v in violations:
         print(v.message, file=sys.stderr)
 
     # --- License compatibility scan (Story 6.10, FR40) ---
 
-    license_findings = scan_files_for_licenses(args.files, args.repo_license)
+    license_findings = scan_files_for_licenses(filtered_files, args.repo_license)
     for lf in license_findings:
         print(
             f"LICENSE {lf.reason_code}: {lf.file_path} ({lf.license_detected})",

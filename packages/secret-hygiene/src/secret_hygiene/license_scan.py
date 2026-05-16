@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -293,7 +294,7 @@ def scan_file_licenses(
 
 
 def scan_files_for_licenses(
-    paths: list[str | Path],
+    paths: Sequence[str | Path],
     repo_license: str = REPO_LICENSE,
 ) -> list[LicenseFinding]:
     """Scan multiple files for license incompatibilities.
