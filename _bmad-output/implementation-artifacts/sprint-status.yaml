@@ -255,8 +255,8 @@ development_status:
   # phase: 2 · unblocks every later epic · ADR-0004
   # FR57–FR59a · NFR-O7
   # =========================================================================
-  epic-9: backlog
-  9-1-trace-id-optional-envelope: backlog  # phase: 2 · FR57 · partial (optional phase)
+  epic-9: in-progress
+  9-1-trace-id-optional-envelope: ready-for-dev  # phase: 2 · FR57 · partial (optional phase)
   9-2-registry-api-x-trace-id-middleware: backlog  # phase: 2 · FR58 (HTTP)
   9-3-telegram-gateway-tg-update-id-derivation: backlog  # phase: 2 · FR58 (Telegram)
   9-4-console-cli-trace-id-mint: backlog  # phase: 2 · FR58 (console)
