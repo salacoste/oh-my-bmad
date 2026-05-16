@@ -1139,16 +1139,16 @@ class TestTraceIdMiddlewareBypass:
         # Compare by ``__name__`` (a string attr common to all callables)
         # to avoid the type-checker complaint while still being correct at
         # runtime — the class name is unique within this codebase.
-        _TM_NAME = "TraceIdMiddleware"
+        tm_name = "TraceIdMiddleware"
         app.user_middleware = [
-            mw for mw in app.user_middleware if getattr(mw.cls, "__name__", "") != _TM_NAME
+            mw for mw in app.user_middleware if getattr(mw.cls, "__name__", "") != tm_name
         ]
         # FastAPI / Starlette caches the middleware stack — clear it so the
         # next request rebuilds without ``TraceIdMiddleware``.
         app.middleware_stack = None
         # Sanity-check the stack truly lacks TraceIdMiddleware now.
         remaining = [getattr(mw.cls, "__name__", "") for mw in app.user_middleware]
-        assert _TM_NAME not in remaining, (
+        assert tm_name not in remaining, (
             f"failed to strip TraceIdMiddleware; remaining: {remaining}"
         )
         # The route-handler defensive fallback must still be exercised; the
