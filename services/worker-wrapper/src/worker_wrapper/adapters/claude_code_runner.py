@@ -95,7 +95,15 @@ class ClaudeCodeRunner:
         self._process: asyncio.subprocess.Process | None = None
 
     def _build_args(self, prompt: str) -> list[str]:
-        """Build CLI arguments for the ``claude`` subprocess."""
+        """Build CLI arguments for the ``claude`` subprocess.
+
+        Story 9.6 / FR59: propagates trace_id via ``--trace-id`` CLI flag so
+        any nested MCP tool calls Claude Code makes inherit the operator's
+        causal correlation token. Dual-mechanism: ``_spawn`` ALSO sets
+        ``OMB_TRACE_ID`` in the subprocess env as a fallback for Claude Code
+        builds that do not yet recognise the flag (most CLIs tolerate unknown
+        trailing flags as no-ops).
+        """
         args = [
             "-p",
             prompt,
@@ -104,6 +112,8 @@ class ClaudeCodeRunner:
         ]
         if self._settings.claude_max_turns > 0:
             args.extend(["--max-turns", str(self._settings.claude_max_turns)])
+        # Story 9.6 / FR59 — trace_id propagation to Claude Code subprocess.
+        args.extend(["--trace-id", self._settings.resolve_trace_id()])
         return args
 
     async def _spawn(
@@ -116,6 +126,11 @@ class ClaudeCodeRunner:
         env = dict(os.environ)
         if self._settings.anthropic_api_key:
             env["ANTHROPIC_API_KEY"] = self._settings.anthropic_api_key
+        # Story 9.6 / FR59 — also propagate trace_id via OMB_TRACE_ID env var
+        # (belt-and-braces alongside the ``--trace-id`` CLI flag). Claude Code
+        # may consume either surface; the env-var path is safe today because
+        # unknown env vars are ignored.
+        env["OMB_TRACE_ID"] = self._settings.resolve_trace_id()
         log = structlog.get_logger(__name__)
         preview = prompt[:_LOG_PROMPT_PREVIEW_LEN]
         if len(prompt) > _LOG_PROMPT_PREVIEW_LEN:

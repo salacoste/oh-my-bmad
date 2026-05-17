@@ -313,3 +313,129 @@ async def test_finish_session_releases_worktree_lock(tmp_path: Path) -> None:
 async def test_finish_session_no_lock_without_worktree() -> None:
     clients = _make_clients()
     await finish_session(clients, new_session_id(), new_worker_id())
+
+
+# ---------------------------------------------------------------------------
+# Story 9.6 / FR59 — caller_trace_id threading on emit_event MCP calls
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_session_started_emit_includes_caller_trace_id() -> None:
+    """AC4 / AC9: start_session forwards the resolved trace_id on the
+    clawhip-bridge ``emit_event`` MCP call as ``caller_trace_id``."""
+    from events.ids import new_uuid7
+
+    tid = new_uuid7()
+    clients = _make_clients()
+    settings = _settings()
+    settings.trace_id = tid
+    settings._resolved_trace_id = None  # ensure fresh resolve
+
+    await start_session(clients, settings)
+
+    # The clawhip-bridge.emit_event call must carry caller_trace_id.
+    emit_call = clients.clawhip_bridge.call_tool.call_args
+    args = emit_call[1]["arguments"]
+    assert args["type"] == "session.started"
+    assert args["caller_trace_id"] == tid
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_emit_includes_caller_trace_id() -> None:
+    """AC4: heartbeat_loop forwards the resolved trace_id on every tick."""
+    from events.ids import new_uuid7
+
+    tid = new_uuid7()
+    clients = _make_clients()
+    settings = _settings(heartbeat_interval_s=0.01)
+    settings.trace_id = tid
+    settings._resolved_trace_id = None
+
+    stop_event = asyncio.Event()
+    captured_trace_ids: list[str] = []
+
+    async def capture(name: str, arguments: dict[str, object]) -> None:
+        if name == "emit_event":
+            captured_trace_ids.append(arguments["caller_trace_id"])
+            if len(captured_trace_ids) >= 2:
+                stop_event.set()
+
+    clients.clawhip_bridge.call_tool = AsyncMock(side_effect=capture)
+
+    await heartbeat_loop(clients, settings, new_session_id(), stop_event)
+    assert len(captured_trace_ids) >= 2
+    # AC5: every emission shares the SAME trace_id.
+    assert all(t == tid for t in captured_trace_ids)
+
+
+@pytest.mark.asyncio
+async def test_finish_session_emit_includes_caller_trace_id() -> None:
+    """AC4: finish_session forwards an explicit trace_id (keyword param)."""
+    from events.ids import new_uuid7
+
+    tid = new_uuid7()
+    clients = _make_clients()
+    await finish_session(
+        clients,
+        new_session_id(),
+        new_worker_id(),
+        trace_id=tid,
+    )
+
+    emit_call = clients.clawhip_bridge.call_tool.call_args
+    args = emit_call[1]["arguments"]
+    assert args["type"] == "session.finished"
+    assert args["caller_trace_id"] == tid
+
+
+@pytest.mark.asyncio
+async def test_finish_session_mints_trace_id_when_absent() -> None:
+    """Defensive AC4 path: legacy caller omits trace_id → fresh UUIDv7 minted
+    to satisfy Story 9.5 mandatory-input contract (no crash)."""
+    from events.envelope import is_valid_trace_id
+
+    clients = _make_clients()
+    await finish_session(clients, new_session_id(), new_worker_id())
+
+    emit_call = clients.clawhip_bridge.call_tool.call_args
+    args = emit_call[1]["arguments"]
+    assert is_valid_trace_id(args["caller_trace_id"]) is True
+
+
+@pytest.mark.asyncio
+async def test_start_session_and_heartbeat_share_same_trace_id() -> None:
+    """AC5: within a single WorkerSettings instance, start_session and
+    heartbeat_loop emit byte-identical caller_trace_id values."""
+    settings = _settings(heartbeat_interval_s=0.01)
+    expected_tid = settings.resolve_trace_id()  # mint + cache once
+
+    clients = _make_clients()
+    captured: list[str] = []
+
+    async def capture(name: str, arguments: dict[str, object]) -> None:
+        if name == "emit_event":
+            captured.append(arguments["caller_trace_id"])
+
+    clients.clawhip_bridge.call_tool = AsyncMock(side_effect=capture)
+
+    await start_session(clients, settings)
+
+    stop_event = asyncio.Event()
+
+    async def capture_then_stop(name: str, arguments: dict[str, object]) -> None:
+        if name == "emit_event":
+            captured.append(arguments["caller_trace_id"])
+            stop_event.set()
+
+    clients.clawhip_bridge.call_tool = AsyncMock(side_effect=capture_then_stop)
+    await heartbeat_loop(
+        clients,
+        settings,
+        new_session_id(),
+        stop_event,
+    )
+
+    # At least one start emission + at least one heartbeat emission.
+    assert len(captured) >= 2
+    assert all(t == expected_tid for t in captured)

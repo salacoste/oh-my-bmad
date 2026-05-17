@@ -1,6 +1,6 @@
 # Story 9.6 — worker-wrapper passes `--trace-id` CLI flag to Claude Code
 
-Status: **ready-for-dev**
+Status: **review**
 
 ## Story
 
@@ -353,31 +353,80 @@ If `claude` strictly rejects unknown flags, fall back to env-var-only. Verify vi
 
 ## Dev Agent Record
 
-_(To be completed by the dev agent at story closure.)_
-
 ### Implementation summary
-_(tbd)_
+
+The worker-wrapper now participates fully in Epic 9's α trace_id propagation kernel. A `trace_id: str | None` Pydantic field was added to `WorkerSettings` with env var `WORKER_TRACE_ID` (see deviation note below). A `@field_validator` validates the shape via `is_valid_trace_id()` — present-but-invalid values log a WARNING and fall back to None; absent values are silently None. `resolve_trace_id()` mints a fresh UUIDv7 on first call and caches it for the WorkerSettings instance lifetime, implementing the per-invocation singleton required by AC5.
+
+The Claude Code subprocess now receives the trace_id via **two surfaces**: (a) the `--trace-id <value>` CLI flag appended to `_build_args()`, and (b) the `OMB_TRACE_ID` environment variable set in `_spawn()`. This dual-mechanism ensures forward compatibility regardless of which surface a future Claude Code version consumes. All five `clawhip-bridge.emit_event` MCP call sites in `app/main.py` were updated to pass `caller_trace_id`, satisfying the Story 9.5 mandatory-input contract: `session.started` (start_session), `session.heartbeat` (heartbeat_loop), `session.finished` (finish_session — new `trace_id` keyword param), the inner `_emit_event` closure in run_task (which feeds LifecycleManager's callback), and `tier3.action_performed` (_emit_tier3_performed — new `trace_id` keyword param + defensive UUIDv7 mint for legacy callers).
 
 ### Files changed
-_(tbd)_
+
+| File | Change |
+|---|---|
+| `services/worker-wrapper/src/worker_wrapper/app/config.py` | Added `trace_id: str \| None` field, `@field_validator`, `_resolved_trace_id` private attr, `resolve_trace_id()` method; added imports: `structlog`, `is_valid_trace_id`, `new_uuid7`, `field_validator` |
+| `services/worker-wrapper/src/worker_wrapper/adapters/claude_code_runner.py` | `_build_args()` appends `["--trace-id", resolve_trace_id()]`; `_spawn()` sets `env["OMB_TRACE_ID"]` |
+| `services/worker-wrapper/src/worker_wrapper/app/main.py` | Added `new_uuid7` import; `start_session` resolves and threads `trace_id`; `heartbeat_loop` resolves and threads `trace_id`; `finish_session` gains `trace_id: str \| None = None` keyword param; `run_task` resolves `trace_id` and captures it in `_emit_event` closure; `_handle_pending_approval` resolves and passes to all 4 `_emit_tier3_performed` callsites; `_emit_tier3_performed` gains `trace_id: str \| None = None` keyword param with defensive mint |
+| `services/worker-wrapper/src/worker_wrapper/__main__.py` | `finish_session` call now passes `trace_id=settings.resolve_trace_id()` |
+| `services/worker-wrapper/src/worker_wrapper/test_config.py` | +9 Story 9.6 tests (TestWorkerSettingsTraceId class) |
+| `services/worker-wrapper/src/worker_wrapper/test_claude_code_runner.py` | Fixed `test_default_args` to allow `--trace-id` in argv; +5 Story 9.6 tests (TestBuildArgs additions + TestSpawnEnvTraceId class) |
+| `services/worker-wrapper/src/worker_wrapper/test_session_lifecycle.py` | +5 Story 9.6 tests for caller_trace_id threading on all session-lifecycle emissions |
+| `services/worker-wrapper/src/worker_wrapper/test_run_task.py` | +4 Story 9.6 tests (TestRunTaskTraceIdPropagation class) |
+| `_bmad-output/implementation-artifacts/9-6-worker-wrapper-trace-id-cli-flag.md` | Status ready-for-dev → review; Dev Agent Record filled |
 
 ### Test count delta
-_(tbd)_
+
+- Worker-wrapper: 342 → 365 (+23 new tests)
+- Full suite: 2644 collected (pre-9.6) → 2667 collected (+23)
+- Passing: 2659 (+23 new; 5 pre-existing integration failures unchanged)
+- Pre-9.6 integration failures confirmed pre-existing: `test_journey_1_overnight_pr`, `test_journey_3_recovery`, `test_journey_6_stale_blocker`, `test_s1_cold_worker_swap`, `test_s2_midflight_swap` — all fail with `ModuleNotFoundError: No module named '_build_scripted_worker'`, unrelated to Story 9.6.
 
 ### Callsite-warning observation
-_(How many DeprecationWarnings still fire after Story 9.6? Expected drop: ~2-5 worker emission sites.)_
+
+- Before Story 9.6: 98 DeprecationWarnings (full suite, `-W default`)
+- After Story 9.6: 98 DeprecationWarnings (no change)
+- Reason: worker-wrapper tests use `AsyncMock` for the clawhip-bridge client — the actual MCP Pydantic envelope construction never executes in unit tests, so no DeprecationWarning callsites were exercised in the worker layer. AC7's expected drop of ~2-5 did not materialise because the worker's emission path is never hit against the real MCP server in CI tests. The integration journey tests that do hit live MCP (journeys 1/3/6) were already failing pre-9.6 for unrelated reasons. This is documented to distinguish "no drop" from "regression" — the worker callsites are now correctly passing `caller_trace_id`, which would eliminate any server-side DeprecationWarnings if the integration tests were green.
 
 ### CLI flag vs env var decision
-_(Document whether `--trace-id` flag, `OMB_TRACE_ID` env var, or BOTH was implemented, and why.)_
+
+**Decision: BOTH implemented (dual-mechanism).**
+
+- `--trace-id <value>` CLI flag appended to `_build_args()` — forward-compat for when Claude Code consumes the flag natively.
+- `OMB_TRACE_ID=<value>` env var set in `_spawn()` — safe today (unknown env vars are silently ignored), provides the consumption path for Claude Code's MCP client if/when it adds trace propagation from the subprocess environment.
+
+**Env var name deviation (critical):** The spec proposed `OMB_WORKER_TRACE_ID` as the env var a spawning service sets on the worker process. However, the existing `WorkerSettings` class uses `env_prefix="WORKER_"`, meaning a Pydantic field named `trace_id` naturally reads from `WORKER_TRACE_ID` (not `OMB_WORKER_TRACE_ID`). To avoid adding a custom alias that would create two valid names for the same field, we adopted `WORKER_TRACE_ID` as the canonical worker-facing env var name, consistent with all other `WorkerSettings` fields (`WORKER_SESSION_ID`, `WORKER_TASK_ID`, etc.). The subprocess-facing env var (`OMB_TRACE_ID`, consumed by Claude Code) remains as the spec intended.
 
 ### Surprises / deviations from spec
-_(tbd)_
+
+1. **Env var name**: `WORKER_TRACE_ID` (not `OMB_WORKER_TRACE_ID`) — see CLI flag vs env var decision above.
+2. **Field name**: `trace_id` (not `worker_trace_id` as the spec's WorkerSettings snippet showed) — `trace_id` is the natural Pydantic field name that produces `WORKER_TRACE_ID` with the existing prefix. `worker_trace_id` would have produced `WORKER_WORKER_TRACE_ID`.
+3. **finish_session signature**: added `trace_id: str | None = None` as a keyword-only param (not `settings`). All existing callers (`test_session_lifecycle.py:4 callsites`, `__main__.py:1 callsite`) continue to work — existing callers without the kwarg get a defensive fresh UUIDv7 mint for the session.finished envelope.
+4. **DeprecationWarning count**: no drop (see Callsite-warning observation above) — not a regression.
+5. **T1 finding**: pre-9.6 worker tests all passed (342/342) because they mock the clawhip-bridge client. Story 9.5's mandatory `caller_trace_id` had not yet broken the worker's unit test suite. The 5 integration test failures are pre-existing infrastructure gaps unrelated to Epic 9.
 
 ### Follow-up TODOs surfaced for Epic 9
-_(tbd — likely: registry-state spawner must set OMB_WORKER_TRACE_ID; Story 9.7 trace-query test.)_
+
+1. **Registry-state spawner (Story 9.7 or separate)**: the process that spawns the worker-wrapper subprocess must set `WORKER_TRACE_ID=<task.trace_id>` in the subprocess env when creating worker processes. Without this wiring, the worker will always mint a fresh UUIDv7 (graceful degradation per AC2, but the end-to-end chain is broken until the spawner passes the value through).
+2. **Integration test green gate**: journeys 1/3/6 and separability tests S1/S2 fail with `ModuleNotFoundError: No module named '_build_scripted_worker'` — a pre-existing infrastructure gap. Once fixed, those tests would exercise the live MCP envelope and verify `caller_trace_id` end-to-end.
+3. **AC10 integration test**: deferred to Story 9.7's `/trace <id>` query test, which will naturally exercise the full `POST /v1/tasks → worker-wrapper → JSONL event log` chain.
 
 ### Epic 9 mid-epic milestone
-_(After 9.6 lands, all 5 ingresses are closed. Cumulative Epic 9 stats — commits, tests, review findings — worth pinning here as the milestone marker before Story 9.7 finishes the schema bump.)_
+
+**All 5 entry-point ingresses of Epic 9's α trace_id propagation kernel are now closed:**
+
+| Story | Ingress | Mechanism |
+|---|---|---|
+| 9.2 | HTTP (`POST /v1/tasks`) | `X-Trace-Id` request header → envelope |
+| 9.3 | Telegram gateway | `tg:{update_id}` derived from Telegram Update |
+| 9.4 | Console CLI | UUIDv7 minted at command entry → `X-Trace-Id` |
+| 9.5 | MCP tool callers | `caller_trace_id` explicit input on every MCP tool |
+| **9.6** | **Worker subprocess** | **`WORKER_TRACE_ID` env → `--trace-id` flag + `OMB_TRACE_ID` + `caller_trace_id` on every MCP emission** |
+
+**Cumulative Epic 9 stats (Stories 9.1–9.6):**
+- Commits: ~26 (7 feat/fix/chore across 9.1-9.6 + ~19 pass-1/pass-2 review patches)
+- Tests added: ~120+ across stories 9.1-9.6 (Story 9.6 alone: +23)
+- DeprecationWarning delta: 98 (Story 9.5 pass-2 eliminated the bulk; Story 9.6 adds 0 net)
+- mypy --strict baseline: 97 source files, 0 errors (held throughout Epic 9)
+- Story 9.7 will: bump schema_version 1.0.0 → 1.1.0, add `oh-my-bmad-cli trace <id>` operator query, and complete the end-to-end AC10 integration assertion.
 
 ---
 

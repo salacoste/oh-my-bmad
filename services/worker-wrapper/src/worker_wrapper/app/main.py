@@ -24,6 +24,7 @@ from pathlib import Path
 
 import structlog
 from events.clock import SystemClock
+from events.ids import new_uuid7
 from events.payloads import (
     SessionFinishedPayload,
     SessionHeartbeatPayload,
@@ -105,6 +106,8 @@ async def start_session(
     session_id = settings.resolve_session_id()
     worker_id = settings.resolve_worker_id()
     task_id = settings.resolve_task_id()
+    # Story 9.6 / FR59 — resolve once, thread to every clawhip-bridge emission.
+    trace_id = settings.resolve_trace_id()
 
     started = SessionStartedPayload(
         session_id=session_id,
@@ -143,7 +146,11 @@ async def start_session(
         await _call_tool_best_effort(
             clients.clawhip_bridge,
             "emit_event",
-            {"type": "session.started", "payload": started.model_dump()},
+            {
+                "type": "session.started",
+                "payload": started.model_dump(),
+                "caller_trace_id": trace_id,  # Story 9.6 / FR59
+            },
             label="emit_session_started",
         )
     except BaseException:
@@ -181,6 +188,8 @@ async def heartbeat_loop(
     log = structlog.get_logger(__name__)
     log.info("heartbeat_loop_started", interval_s=settings.heartbeat_interval_s)
     mcp_timeout = _clamp_timeout(settings.heartbeat_interval_s)
+    # Story 9.6 / FR59 — resolve once for the lifetime of the heartbeat loop.
+    trace_id = settings.resolve_trace_id()
 
     while not stop_event.is_set():
         try:
@@ -196,7 +205,11 @@ async def heartbeat_loop(
         await _call_tool_best_effort(
             clients.clawhip_bridge,
             "emit_event",
-            {"type": "session.heartbeat", "payload": hb.model_dump()},
+            {
+                "type": "session.heartbeat",
+                "payload": hb.model_dump(),
+                "caller_trace_id": trace_id,  # Story 9.6 / FR59
+            },
             label="emit_session_heartbeat",
             timeout=mcp_timeout,
         )
@@ -217,18 +230,34 @@ async def finish_session(
     session_id: str,
     worker_id: str,
     worktree_path: str = "",
+    *,
+    trace_id: str | None = None,
 ) -> None:
     """Emit ``session.finished``, release worktree lock, call ``session.close``.
 
     Lock release is best-effort (catches ``Exception``, logs warning).
+
+    Story 9.6 / FR59: ``trace_id`` (keyword-only) is forwarded as
+    ``caller_trace_id`` on the clawhip-bridge ``emit_event`` call so the
+    session.finished envelope joins the same causal chain as session.started.
+    If absent (e.g. callers that have not been updated yet, or test fixtures),
+    a fresh UUIDv7 is minted at the call site to satisfy the Story 9.5
+    mandatory-input contract — those events simply won't correlate, which is
+    the same degradation Story 9.1 prescribes for orphaned events.
     """
     log = structlog.get_logger(__name__)
+
+    effective_trace_id = trace_id or new_uuid7()
 
     fin = SessionFinishedPayload(session_id=session_id)
     await _call_tool_best_effort(
         clients.clawhip_bridge,
         "emit_event",
-        {"type": "session.finished", "payload": fin.model_dump()},
+        {
+            "type": "session.finished",
+            "payload": fin.model_dump(),
+            "caller_trace_id": effective_trace_id,  # Story 9.6 / FR59
+        },
         label="emit_session_finished",
     )
 
@@ -271,13 +300,22 @@ async def run_task(
     if task_id is None:
         raise ValueError("task_id is required for run_task")
 
+    # Story 9.6 / FR59 — resolve once and thread to every clawhip-bridge
+    # emission inside this task execution (LifecycleManager callback,
+    # tier3 emitter, license-flagged payload, approval-requested envelope).
+    trace_id = settings.resolve_trace_id()
+
     state_path = worktree_path / ".lifecycle-state.json"
 
     async def _emit_event(event_type: str, payload: dict) -> str:
         try:
             result = await clients.clawhip_bridge.call_tool(
                 "emit_event",
-                {"type": event_type, "payload": payload},
+                {
+                    "type": event_type,
+                    "payload": payload,
+                    "caller_trace_id": trace_id,  # Story 9.6 / FR59
+                },
             )
             return str(result)
         except Exception:
@@ -436,7 +474,14 @@ async def _handle_pending_approval(
     settings: WorkerSettings,
     task_id: str,
 ) -> None:
-    """Poll for approval, then execute or fail the gated action."""
+    """Poll for approval, then execute or fail the gated action.
+
+    Story 9.6 / FR59: ``trace_id`` is read from ``settings.resolve_trace_id()``
+    and forwarded to ``_emit_tier3_performed`` so the ``tier3.action_performed``
+    envelope joins the same causal chain as the rest of the task lifecycle.
+    """
+    # Story 9.6 / FR59 — same trace_id as the run_task that started this gate.
+    trace_id = settings.resolve_trace_id()
     log = structlog.get_logger(__name__)
 
     if mgr.current_state != WorkerState.AWAITING_APPROVAL:
@@ -456,6 +501,7 @@ async def _handle_pending_approval(
             task_id,
             accepted=False,
             reason="event_log_dir not configured",
+            trace_id=trace_id,
         )
         return
 
@@ -475,6 +521,7 @@ async def _handle_pending_approval(
             task_id,
             accepted=False,
             reason=f"Approval timed out after {settings.approval_timeout_s}s",
+            trace_id=trace_id,
         )
         log.error("approval_timeout", task_id=task_id)
         return
@@ -487,6 +534,7 @@ async def _handle_pending_approval(
             task_id,
             accepted=False,
             reason=approval.reason or "operator rejected",
+            trace_id=trace_id,
         )
         log.info("approval_rejected", task_id=task_id)
         return
@@ -502,6 +550,7 @@ async def _handle_pending_approval(
             accepted=False,
             approval_event_id=approval.event_id,
             reason="gated action execution failed",
+            trace_id=trace_id,
         )
         return
     await _emit_tier3_performed(
@@ -509,6 +558,7 @@ async def _handle_pending_approval(
         task_id,
         accepted=True,
         approval_event_id=approval.event_id,
+        trace_id=trace_id,
     )
     log.info("tier3_action_performed", task_id=task_id)
 
@@ -520,8 +570,17 @@ async def _emit_tier3_performed(
     accepted: bool,
     approval_event_id: str = "",
     reason: str = "",
+    trace_id: str | None = None,
 ) -> None:
-    """Emit ``tier3.action_performed`` via clawhip-bridge (AC-6)."""
+    """Emit ``tier3.action_performed`` via clawhip-bridge (AC-6).
+
+    Story 9.6 / FR59: ``trace_id`` (keyword-only) is forwarded as
+    ``caller_trace_id`` on the MCP call. If absent (defensive default for
+    legacy / test callers), a fresh UUIDv7 is minted to satisfy the
+    mandatory-input contract from Story 9.5 — those events won't correlate
+    but the emission won't crash.
+    """
+    effective_trace_id = trace_id or new_uuid7()
     payload = Tier3ActionPerformedPayload(
         task_id=task_id,
         action="git_push",
@@ -532,6 +591,10 @@ async def _emit_tier3_performed(
     await _call_tool_best_effort(
         clients.clawhip_bridge,
         "emit_event",
-        {"type": "tier3.action_performed", "payload": payload.model_dump()},
+        {
+            "type": "tier3.action_performed",
+            "payload": payload.model_dump(),
+            "caller_trace_id": effective_trace_id,  # Story 9.6 / FR59
+        },
         label="emit_tier3_action_performed",
     )

@@ -118,12 +118,18 @@ class TestBuildArgs:
     def test_default_args(self) -> None:
         runner = ClaudeCodeRunner(_settings())
         args = runner._build_args("do something")
-        assert args == [
+        # Baseline argv (Story 5.4) — prompt + output format are positional.
+        assert args[:4] == [
             "-p",
             "do something",
             "--output-format",
             "stream-json",
         ]
+        # Story 9.6 / FR59 — --trace-id <value> always appended.
+        assert "--trace-id" in args
+        idx = args.index("--trace-id")
+        assert idx + 1 < len(args)
+        assert args[idx + 1] == runner._settings.resolve_trace_id()
 
     def test_max_turns_included(self) -> None:
         runner = ClaudeCodeRunner(_settings(claude_max_turns=10))
@@ -135,6 +141,98 @@ class TestBuildArgs:
         runner = ClaudeCodeRunner(_settings(claude_max_turns=0))
         args = runner._build_args("do something")
         assert "--max-turns" not in args
+
+    # ---- Story 9.6 / FR59 — --trace-id CLI flag propagation -----------------
+
+    def test_build_args_includes_trace_id_flag(self) -> None:
+        """AC3 / AC9: explicit WORKER_TRACE_ID flows into argv via ``--trace-id``."""
+        from events.ids import new_uuid7
+
+        tid = new_uuid7()
+        runner = ClaudeCodeRunner(_settings(trace_id=tid))
+        args = runner._build_args("hi")
+        assert "--trace-id" in args
+        idx = args.index("--trace-id")
+        assert args[idx + 1] == tid
+
+    def test_build_args_uses_minted_trace_id_when_env_absent(self) -> None:
+        """AC2 / AC3: absent env → fresh UUIDv7 minted and appears in argv."""
+        from events.envelope import is_valid_trace_id
+
+        runner = ClaudeCodeRunner(_settings())  # no trace_id set
+        args = runner._build_args("hi")
+        assert "--trace-id" in args
+        idx = args.index("--trace-id")
+        injected = args[idx + 1]
+        assert is_valid_trace_id(injected) is True
+
+    def test_build_args_trace_id_is_stable_within_runner(self) -> None:
+        """AC5: subsequent ``_build_args`` calls reuse the same trace_id
+        (cached on the underlying WorkerSettings, AC5 per-invocation singleton)."""
+        runner = ClaudeCodeRunner(_settings())
+        a1 = runner._build_args("hi")
+        a2 = runner._build_args("again")
+        assert a1[a1.index("--trace-id") + 1] == a2[a2.index("--trace-id") + 1]
+
+
+# ---------------------------------------------------------------------------
+# Tests: _spawn env propagation (Story 9.6 / FR59)
+# ---------------------------------------------------------------------------
+
+
+class TestSpawnEnvTraceId:
+    """``OMB_TRACE_ID`` env var is the belt-and-braces companion to
+    the ``--trace-id`` CLI flag (Story 9.6 dual-mechanism)."""
+
+    @pytest.mark.asyncio
+    async def test_spawn_env_contains_omb_trace_id(self, tmp_path: Path) -> None:
+        """AC3 / AC9: subprocess env carries OMB_TRACE_ID = resolved trace_id."""
+        from events.ids import new_uuid7
+
+        tid = new_uuid7()
+        runner = ClaudeCodeRunner(_settings(trace_id=tid))
+
+        captured: dict[str, Any] = {}
+
+        async def _fake_exec(*args: Any, **kwargs: Any) -> MagicMock:
+            captured["env"] = kwargs.get("env", {})
+            proc = MagicMock()
+            return proc
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=_fake_exec,
+        ):
+            await runner._spawn("do something", tmp_path)
+
+        assert captured["env"]["OMB_TRACE_ID"] == tid
+
+    @pytest.mark.asyncio
+    async def test_spawn_env_contains_minted_omb_trace_id(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """AC2: even when WORKER_TRACE_ID absent, OMB_TRACE_ID is set
+        (to the freshly-minted UUIDv7) — never empty."""
+        from events.envelope import is_valid_trace_id
+
+        runner = ClaudeCodeRunner(_settings())  # no trace_id
+
+        captured: dict[str, Any] = {}
+
+        async def _fake_exec(*args: Any, **kwargs: Any) -> MagicMock:
+            captured["env"] = kwargs.get("env", {})
+            proc = MagicMock()
+            return proc
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=_fake_exec,
+        ):
+            await runner._spawn("do something", tmp_path)
+
+        assert "OMB_TRACE_ID" in captured["env"]
+        assert is_valid_trace_id(captured["env"]["OMB_TRACE_ID"]) is True
 
 
 # ---------------------------------------------------------------------------

@@ -327,3 +327,147 @@ class TestRunTaskEventLogDirNotConfigured:
         state_file = tmp_path / ".lifecycle-state.json"
         data = json.loads(state_file.read_text())
         assert data["state"] == "failed"
+
+
+# ---------------------------------------------------------------------------
+# Story 9.6 / FR59 — caller_trace_id threading through run_task emissions
+# ---------------------------------------------------------------------------
+
+
+class TestRunTaskTraceIdPropagation:
+    """run_task threads the same trace_id to every clawhip-bridge emission."""
+
+    @pytest.mark.asyncio
+    async def test_run_task_threads_same_trace_id_to_all_emissions(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """AC4 / AC5 / AC9: every emit_event call from run_task carries the
+        same caller_trace_id (the worker-resolved trace_id, byte-identical)."""
+        from events.ids import new_uuid7
+
+        tid = new_uuid7()
+        settings = _make_settings(tmp_path, event_log_dir=str(tmp_path / "logs"))
+        settings.trace_id = tid
+        settings._resolved_trace_id = None  # ensure fresh resolve
+
+        clients = _FakeClients()
+        captured: list[str] = []
+
+        async def capture(name: str, arguments: dict[str, object]) -> None:
+            if name == "emit_event":
+                captured.append(arguments["caller_trace_id"])
+            return "evt-1"
+
+        clients.clawhip_bridge.call_tool = AsyncMock(side_effect=capture)
+
+        # No push events → straight to TASK_COMPLETED path (uses the inner
+        # _emit_event helper via LifecycleManager).
+        result = ClaudeCodeResult(
+            exit_code=0,
+            session_id="s-1",
+            events=[
+                ExtractedEvent(
+                    event_type="file.edited",
+                    tool_name="Write",
+                    tool_input={},
+                ),
+            ],
+        )
+
+        with patch("worker_wrapper.app.main.ClaudeCodeRunner") as mock_runner:
+            mock_runner.return_value.run = AsyncMock(return_value=result)
+            await run_task(clients, settings, "do stuff", tmp_path)
+
+        # Every lifecycle FSM transition emitted by LifecycleManager goes
+        # through _emit_event → caller_trace_id must be present + identical.
+        assert len(captured) >= 1
+        assert all(t == tid for t in captured)
+
+    @pytest.mark.asyncio
+    async def test_run_task_mints_fresh_trace_id_when_settings_unset(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """AC2 / AC5: when WORKER_TRACE_ID is absent, run_task uses the
+        WorkerSettings-minted UUIDv7 and threads it to all emissions."""
+        from events.envelope import is_valid_trace_id
+
+        settings = _make_settings(tmp_path, event_log_dir=str(tmp_path / "logs"))
+        # trace_id is None on this settings instance; resolve_trace_id will mint.
+
+        clients = _FakeClients()
+        captured: list[str] = []
+
+        async def capture(name: str, arguments: dict[str, object]) -> None:
+            if name == "emit_event":
+                captured.append(arguments["caller_trace_id"])
+            return "evt-1"
+
+        clients.clawhip_bridge.call_tool = AsyncMock(side_effect=capture)
+
+        result = ClaudeCodeResult(
+            exit_code=0,
+            session_id="s-1",
+            events=[],
+        )
+
+        with patch("worker_wrapper.app.main.ClaudeCodeRunner") as mock_runner:
+            mock_runner.return_value.run = AsyncMock(return_value=result)
+            await run_task(clients, settings, "do stuff", tmp_path)
+
+        assert len(captured) >= 1
+        # All emissions share a single minted trace_id (per-invocation singleton).
+        assert all(t == captured[0] for t in captured)
+        assert is_valid_trace_id(captured[0]) is True
+
+    @pytest.mark.asyncio
+    async def test_tier3_action_emit_includes_caller_trace_id(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """AC4 / AC9: tier3.action_performed envelope carries caller_trace_id
+        equal to the worker's resolved trace_id."""
+        from events.ids import new_uuid7
+
+        from worker_wrapper.app.main import _emit_tier3_performed
+
+        tid = new_uuid7()
+        clients = _FakeClients()
+
+        await _emit_tier3_performed(
+            clients,
+            task_id="t-00000000-0000-7000-8000-000000000001",
+            accepted=True,
+            approval_event_id="evt-approval",
+            trace_id=tid,
+        )
+
+        emit_call = clients.clawhip_bridge.call_tool.call_args
+        args = emit_call[1]["arguments"]
+        assert args["type"] == "tier3.action_performed"
+        assert args["caller_trace_id"] == tid
+
+    @pytest.mark.asyncio
+    async def test_tier3_action_mints_trace_id_when_absent(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Defensive fallback: legacy callers omitting trace_id get a fresh
+        UUIDv7 so the emit_event Pydantic validation still passes (no crash)."""
+        from events.envelope import is_valid_trace_id
+
+        from worker_wrapper.app.main import _emit_tier3_performed
+
+        clients = _FakeClients()
+
+        await _emit_tier3_performed(
+            clients,
+            task_id="t-00000000-0000-7000-8000-000000000001",
+            accepted=False,
+            reason="some reason",
+        )
+
+        emit_call = clients.clawhip_bridge.call_tool.call_args
+        args = emit_call[1]["arguments"]
+        assert is_valid_trace_id(args["caller_trace_id"]) is True

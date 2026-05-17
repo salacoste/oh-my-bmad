@@ -121,6 +121,10 @@ async def _run() -> None:
                 session_id,
                 worker_id,
                 worktree_path=settings.worktree_path,
+                # Story 9.6 / FR59 — propagate worker's trace_id into the
+                # session.finished envelope so all session-lifecycle events
+                # share the same causal chain.
+                trace_id=settings.resolve_trace_id(),
             )
         finally:
             ready.unlink(missing_ok=True)
