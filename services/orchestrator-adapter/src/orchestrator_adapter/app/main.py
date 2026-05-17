@@ -387,9 +387,14 @@ async def adapter_loop(
 ) -> None:
     """Main polling loop — poll task-registry, process tasks, repeat."""
     log = structlog.get_logger(__name__)
+    # Story 9.6 review pass-2 PH0 — thread the adapter's trace_id into the
+    # OMC subprocess env so downstream worker-wrapper spawns resolve a single
+    # shared trace_id (alias-resolved via ``WORKER_TRACE_ID`` /
+    # ``OMB_TRACE_ID``).
     runner = OMCRunner(
         omc_path=Path(settings.omc_path),
         timeout_s=settings.omc_timeout_s,
+        trace_id=settings.trace_id,
     )
 
     log.info("adapter_loop_started", poll_interval=settings.poll_interval_s)

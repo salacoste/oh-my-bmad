@@ -71,24 +71,37 @@ async def _call_tool_best_effort(
     *,
     label: str,
     timeout: float = _MCP_CALL_TIMEOUT,
-) -> None:
+    return_result: bool = False,
+) -> object | None:
     """Call an MCP tool; log and swallow any ``Exception``.
 
     ``BaseException`` subclasses (``CancelledError``, ``KeyboardInterrupt``,
     ``SystemExit``) propagate — they must not be silently swallowed.
 
-    Story 9.6 review pass-1 H7: ``ValueError`` is split out from the generic
-    ``Exception`` catch so a Story 9.1 trace_id contract violation surfaces as
-    a distinct ``mcp_tool_trace_id_invalid`` log event — operators can then
-    differentiate "transport timeout / connection drop" from "the caller sent
-    a malformed caller_trace_id and the server rejected it".
+    Story 9.6 review pass-1 H7 / review pass-2 PH3: ``ValueError`` is split out
+    from the generic ``Exception`` catch ONLY when the exception message
+    actually mentions ``"trace_id"`` (case-insensitive); other ``ValueError``s
+    (raised by the MCP SDK for unrelated transport reasons) fall through to
+    the generic ``mcp_tool_call_failed`` branch.  This narrows the H7
+    special-case to genuine Story 9.1 contract violations and stops benign
+    transport errors from being misclassified.
+
+    Review pass-2 PH3 (E6): if the caller_trace_id in the offending arguments
+    is the worker's OWN resolved trace_id, the log records
+    ``caller_trace_id_source="worker_resolved"`` and ONLY the first 8 chars of
+    the value — operators are not misled into thinking the worker leaked a
+    full opaque token.
+
+    Review pass-2 PH4: ``return_result=True`` returns the awaited tool result
+    so callers that need an event_id (run_task's ``_emit_event`` closure) can
+    share this single best-effort helper instead of duplicating the H7 logic.
     """
     log = structlog.get_logger(__name__)
     if session is None:
         log.warning("mcp_tool_skipped_no_session", label=label, tool=tool_name)
-        return
+        return None
     try:
-        await asyncio.wait_for(
+        result = await asyncio.wait_for(
             session.call_tool(tool_name, arguments=arguments),
             timeout=timeout,
         )
@@ -100,7 +113,14 @@ async def _call_tool_best_effort(
             timeout=timeout,
             _hint="session may be in inconsistent state — MCP stdio may be corrupted",
         )
+        return None
     except ValueError as exc:
+        # Review pass-2 PH3 — only classify as a trace_id contract violation
+        # when the exception message actually mentions ``trace_id``; otherwise
+        # fall through to the generic best-effort handler.
+        if "trace_id" not in str(exc).lower():
+            log.warning("mcp_tool_call_failed", label=label, tool=tool_name, exc_info=True)
+            return None
         # Review pass-1 H7: receiving MCP server raises ``ValueError`` for
         # contract violations (e.g. ``caller_trace_id must match Story 9.1
         # contract``). Surface this as a distinct log event with a bounded,
@@ -120,8 +140,11 @@ async def _call_tool_best_effort(
             caller_trace_id_preview=repr(preview_src),
             error=str(exc)[:200],
         )
+        return None
     except Exception:
         log.warning("mcp_tool_call_failed", label=label, tool=tool_name, exc_info=True)
+        return None
+    return result if return_result else None
 
 
 async def start_session(
@@ -361,23 +384,22 @@ async def run_task(
     state_path = worktree_path / ".lifecycle-state.json"
 
     async def _emit_event(event_type: str, payload: dict) -> str:
-        try:
-            result = await clients.clawhip_bridge.call_tool(
-                "emit_event",
-                {
-                    "type": event_type,
-                    "payload": payload,
-                    "caller_trace_id": trace_id,  # Story 9.6 / FR59
-                },
-            )
-            return str(result)
-        except Exception:
-            log.warning(
-                "emit_event_failed",
-                emit_type=event_type,
-                exc_info=True,
-            )
-            return ""
+        # Review pass-2 PH4 — delegate to ``_call_tool_best_effort`` so the
+        # H7 ValueError special-case (Story 9.1 trace_id contract violation)
+        # applies uniformly across run_task's emission sites instead of the
+        # closure's generic ``except Exception`` swallow.
+        result = await _call_tool_best_effort(
+            clients.clawhip_bridge,
+            "emit_event",
+            {
+                "type": event_type,
+                "payload": payload,
+                "caller_trace_id": trace_id,  # Story 9.6 / FR59
+            },
+            label=f"emit_event_{event_type}",
+            return_result=True,
+        )
+        return str(result) if result is not None else ""
 
     async def _gated_action() -> None:
         """Execute git push + PR draft (Tier-3 gated action).

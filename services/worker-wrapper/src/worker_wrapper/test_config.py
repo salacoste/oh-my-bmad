@@ -23,18 +23,8 @@ from worker_wrapper.app.config import WorkerSettings
 # boundary so any new callsite-warning ingress is caught immediately.
 pytestmark = pytest.mark.filterwarnings("error::DeprecationWarning")
 
-_TRACE_ID_ENV_NAMES = (
-    "WORKER_TRACE_ID",
-    "OMB_WORKER_TRACE_ID",
-    "OMB_TRACE_ID",
-)
-
-
-@pytest.fixture(autouse=True)
-def _clean_trace_id_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Story 9.6 review pass-1 H6 — strip all three accepted trace_id env names."""
-    for name in _TRACE_ID_ENV_NAMES:
-        monkeypatch.delenv(name, raising=False)
+# Story 9.6 review pass-2 PH5 — the autouse env-cleaning fixture lives in
+# ``worker_wrapper/conftest.py`` so we no longer duplicate it here.
 
 
 class TestWorkerSettingsDefaults:
@@ -193,21 +183,21 @@ class TestWorkerSettingsTraceId:
         assert warnings[0]["log_level"] == "warning"
         # Review pass-1 H8: preview is repr()-escaped — control chars / RTL /
         # ZWJ etc. become escape sequences, not literal bytes in the log line.
+        # Review pass-2 PM7 — assert the SHAPE of the preview (no smuggled
+        # control chars) rather than just its open-quote.  A regression that
+        # strips ``repr()`` and uses raw ``value[:80]`` would have passed
+        # ``preview.startswith("'")`` on alphanumeric inputs.
         preview = warnings[0]["value_preview"]
         assert isinstance(preview, str)
-        # repr() output for any str begins with ' (single quote).
-        assert preview.startswith("'") or preview.startswith('"')
+        assert "\r" not in preview
+        assert "\n" not in preview
+        assert "\x00" not in preview
 
-    def test_settings_rejects_trace_id_with_crlf(self) -> None:
-        """Story 9.4 pass-2 S1: shape validator must reject CRLF (smuggling)."""
-        with (
-            structlog.testing.capture_logs(),
-            patch.dict(os.environ, {"WORKER_TRACE_ID": "tg:42\r\n"}),
-        ):
-            s = WorkerSettings()
-        # Trailing CRLF is not a valid UUIDv7 nor a valid tg: form per
-        # Story 9.1 — must be rejected and silently dropped (no crash).
-        assert s.trace_id is None
+    # Review pass-2 PM2 — ``test_settings_rejects_trace_id_with_crlf`` was
+    # removed: it is fully covered by the parametrized
+    # ``test_settings_rejects_invalid_trace_id_with_warning`` corpus above,
+    # and the legacy version had ``capture_logs()`` with no assertion on the
+    # captured records (M9 was added to fix that asymmetry).
 
     def test_resolve_trace_id_returns_set_value(self) -> None:
         """AC5: when a valid trace_id is supplied, resolve returns it verbatim."""
@@ -267,6 +257,44 @@ class TestWorkerSettingsTraceId:
             s = WorkerSettings()
         assert s.trace_id == tid
 
+    # Story 9.6 review pass-2 PM10 — alias-priority is canonical-wins.
+    def test_alias_priority_canonical_wins_when_multiple_set(self) -> None:
+        """When all three alias env vars are set with distinct valid UUIDs,
+        the canonical ``WORKER_TRACE_ID`` wins per ``AliasChoices`` order."""
+        a = new_uuid7()
+        b = new_uuid7()
+        c = new_uuid7()
+        # Sanity: distinct values so the assertion is meaningful.
+        assert a != b != c
+        with patch.dict(
+            os.environ,
+            {
+                "WORKER_TRACE_ID": a,
+                "OMB_WORKER_TRACE_ID": b,
+                "OMB_TRACE_ID": c,
+            },
+            clear=False,
+        ):
+            s = WorkerSettings()
+        assert s.trace_id == a
+
+    # Story 9.6 review pass-2 PH1 — empty canonical env var no longer
+    # blackholes a valid fallback alias.  Previously ``AliasChoices`` picked
+    # ``WORKER_TRACE_ID=""`` (alias-first-wins on presence) which then
+    # failed shape validation and silently dropped to None.
+    def test_empty_worker_trace_id_falls_through_to_omb_trace_id(self) -> None:
+        valid = new_uuid7()
+        with patch.dict(
+            os.environ,
+            {
+                "WORKER_TRACE_ID": "",  # spawner shell idiom ${VAR:-}
+                "OMB_TRACE_ID": valid,
+            },
+            clear=False,
+        ):
+            s = WorkerSettings()
+        assert s.trace_id == valid
+
 
 class TestWorkerEmitTraceIdFlag:
     """Story 9.6 review pass-1 H2 — feature flag default-OFF behaviour."""
@@ -282,4 +310,17 @@ class TestWorkerEmitTraceIdFlag:
 
     def test_flag_enabled_via_constructor(self) -> None:
         s = WorkerSettings(emit_trace_id_flag=True)
+        assert s.emit_trace_id_flag is True
+
+    # Story 9.6 review pass-2 PH7 — backwards-compat alias also accepted.
+    def test_flag_enabled_via_legacy_double_prefix_alias(self) -> None:
+        """``WORKER_WORKER_EMIT_TRACE_ID_FLAG`` is kept as a backwards-compat
+        alias so deployments that already export the legacy name keep
+        working through PH7's rename."""
+        with patch.dict(
+            os.environ,
+            {"WORKER_WORKER_EMIT_TRACE_ID_FLAG": "1"},
+            clear=False,
+        ):
+            s = WorkerSettings()
         assert s.emit_trace_id_flag is True

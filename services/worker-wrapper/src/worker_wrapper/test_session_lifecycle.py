@@ -19,26 +19,15 @@ from events.ids import new_session_id, new_uuid7, new_worker_id
 
 from worker_wrapper.app.config import WorkerSettings
 from worker_wrapper.app.main import (
+    _call_tool_best_effort,
     _clamp_timeout,
     finish_session,
     heartbeat_loop,
     start_session,
 )
 
-# Story 9.6 review pass-1 H6 — clear ambient trace_id env so tests are
-# deterministic regardless of dev shell / CI runner state.
-_TRACE_ID_ENV_NAMES = (
-    "WORKER_TRACE_ID",
-    "OMB_WORKER_TRACE_ID",
-    "OMB_TRACE_ID",
-)
-
-
-@pytest.fixture(autouse=True)
-def _clean_trace_id_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Strip all three accepted trace_id env-var names before each test."""
-    for name in _TRACE_ID_ENV_NAMES:
-        monkeypatch.delenv(name, raising=False)
+# Story 9.6 review pass-2 PH5 — env-cleaning fixture moved to
+# ``worker_wrapper/conftest.py`` (single shared autouse fixture).
 
 
 def _make_clients(
@@ -181,8 +170,11 @@ async def test_finish_session_emits_finished_event() -> None:
     sid = new_session_id()
     wid = new_worker_id()
     await finish_session(clients, _settings(), sid, wid)
-    # clawhip_bridge.emit_event + session_registry.session.close = 2 mock calls
-    # but only the clawhip_bridge mock is inspected here.
+    # Story 9.6 review pass-2 PL1 — explicit: ``finish_session`` issues two
+    # distinct MCP calls (clawhip-bridge ``emit_event`` for
+    # ``session.finished`` AND session-registry ``session.close``); this
+    # test asserts the clawhip-bridge half — the session.close half is
+    # covered by ``test_finish_session_calls_session_close`` below.
     clients.clawhip_bridge.call_tool.assert_called_once()
     args = clients.clawhip_bridge.call_tool.call_args
     assert args[0][0] == "emit_event"
@@ -195,7 +187,8 @@ async def test_finish_session_calls_session_close() -> None:
     clients = _make_clients()
     sid = new_session_id()
     wid = new_worker_id()
-    await finish_session(clients, _settings(), sid, wid)
+    settings = _settings()
+    await finish_session(clients, settings, sid, wid)
     clients.session_registry.call_tool.assert_called_once()
     args = clients.session_registry.call_tool.call_args
     assert args[0][0] == "session.close"
@@ -203,7 +196,9 @@ async def test_finish_session_calls_session_close() -> None:
     assert args[1]["arguments"]["worker_id"] == wid
     # Story 9.6 review pass-1 H1 — caller_trace_id is now required on
     # session.close as well as session.started / session.heartbeat.
-    assert "caller_trace_id" in args[1]["arguments"]
+    # Review pass-2 PM4 — assert VALUE equality, not just key presence:
+    # a regression that wires ``caller_trace_id=""`` would have passed before.
+    assert args[1]["arguments"]["caller_trace_id"] == settings.resolve_trace_id()
 
 
 @pytest.mark.asyncio
@@ -551,3 +546,52 @@ async def test_start_session_and_heartbeat_share_same_trace_id() -> None:
     # At least one start emission + at least one heartbeat emission.
     assert len(captured) >= 2
     assert all(t == expected_tid for t in captured)
+
+
+# ---------------------------------------------------------------------------
+# Story 9.6 review pass-2 PH3 — narrow H7 ValueError classification.
+# ---------------------------------------------------------------------------
+
+
+class TestCallToolBestEffortValueErrorNarrowing:
+    """PH3: only ``ValueError``s mentioning ``trace_id`` are classified as
+    trace_id contract violations; other ``ValueError``s fall through to the
+    generic ``mcp_tool_call_failed`` branch (was previously misclassified)."""
+
+    @pytest.mark.asyncio
+    async def test_generic_value_error_falls_through_to_mcp_tool_call_failed(
+        self,
+    ) -> None:
+        import structlog.testing
+
+        session = AsyncMock()
+        session.call_tool = AsyncMock(side_effect=ValueError("schema mismatch"))
+        with structlog.testing.capture_logs() as cap:
+            await _call_tool_best_effort(
+                session,
+                "emit_event",
+                {"caller_trace_id": new_uuid7()},
+                label="test",
+            )
+        events = [e.get("event") for e in cap]
+        assert "mcp_tool_call_failed" in events
+        assert "mcp_tool_trace_id_invalid" not in events
+
+    @pytest.mark.asyncio
+    async def test_trace_related_value_error_logs_trace_id_invalid(self) -> None:
+        import structlog.testing
+
+        session = AsyncMock()
+        session.call_tool = AsyncMock(
+            side_effect=ValueError("caller_trace_id must match Story 9.1 contract")
+        )
+        with structlog.testing.capture_logs() as cap:
+            await _call_tool_best_effort(
+                session,
+                "emit_event",
+                {"caller_trace_id": "bad-value"},
+                label="test",
+            )
+        events = [e.get("event") for e in cap]
+        assert "mcp_tool_trace_id_invalid" in events
+        assert "mcp_tool_call_failed" not in events

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any, ClassVar
 
 import structlog
@@ -9,6 +10,18 @@ from events.envelope import is_valid_trace_id
 from events.ids import new_session_id, new_uuid7, new_worker_id
 from pydantic import AliasChoices, Field, PrivateAttr, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Story 9.6 review pass-2 PH5 — shared module-level constant referenced by the
+# autouse fixture in :mod:`worker_wrapper.conftest`.  Listing all three accepted
+# env-var names in one place keeps the fixture in sync with ``AliasChoices``.
+_TRACE_ID_ALIASES: tuple[str, ...] = (
+    "WORKER_TRACE_ID",
+    "OMB_WORKER_TRACE_ID",
+    "OMB_TRACE_ID",
+)
+# Review pass-2 PH7 / PM3 — the H2 flag env var (canonical name post-PH7) is
+# also stripped by the autouse fixture so CI exports cannot leak in.
+_EMIT_TRACE_ID_FLAG_ENV: str = "WORKER_EMIT_TRACE_ID_FLAG"
 
 
 class WorkerSettings(BaseSettings):
@@ -71,7 +84,19 @@ class WorkerSettings(BaseSettings):
     # Default OFF until Claude Code upstream consumes ``--trace-id``. The
     # ``OMB_TRACE_ID`` env var (set by ``_spawn``) is the non-breaking
     # surface that ships today; the CLI flag is opt-in until verified.
-    emit_trace_id_flag: bool = False
+    #
+    # Review pass-2 PH7: canonical env var name is ``WORKER_EMIT_TRACE_ID_FLAG``
+    # (no double-prefix stutter).  ``WORKER_WORKER_EMIT_TRACE_ID_FLAG`` is kept
+    # as a backwards-compat alias only — operators / CI should migrate to the
+    # canonical name.  ``populate_by_name=True`` lets ``WorkerSettings(emit_trace_id_flag=...)``
+    # keep working via the field name itself.
+    emit_trace_id_flag: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "WORKER_EMIT_TRACE_ID_FLAG",
+            "WORKER_WORKER_EMIT_TRACE_ID_FLAG",
+        ),
+    )
 
     # Story 9.6 / FR59 / NFR-O7 — trace_id propagation.
     #
@@ -83,6 +108,7 @@ class WorkerSettings(BaseSettings):
     trace_id: str | None = Field(
         default=None,
         validation_alias=AliasChoices(
+            "trace_id",  # review pass-2 PM10 — natural ctor kwarg name
             "WORKER_TRACE_ID",
             "OMB_WORKER_TRACE_ID",
             "OMB_TRACE_ID",
@@ -123,9 +149,27 @@ class WorkerSettings(BaseSettings):
         if value is None:
             return None
         log = structlog.get_logger(__name__)
+
+        # Review pass-2 PH1: when the canonical (first) AliasChoices entry
+        # supplies an invalid value (``""`` or shape-fail), Pydantic does NOT
+        # try the remaining aliases — alias-first-wins.  A spawner using
+        # shell idiom ``${WORKER_TRACE_ID:-}`` would silently blackhole a
+        # valid ``OMB_TRACE_ID`` fallback.  Walk the remaining aliases here
+        # and accept the first valid one before falling through to the
+        # warn-and-mint path.
+        def _try_fallback_aliases() -> str | None:
+            for fallback_env in ("OMB_WORKER_TRACE_ID", "OMB_TRACE_ID"):
+                candidate = os.environ.get(fallback_env, "")
+                if candidate and is_valid_trace_id(candidate):
+                    return candidate
+            return None
+
         # Empty string is "present-but-invalid" (a spawner bug), not "absent".
         # Review pass-1 M2: log a WARNING instead of silently returning None.
         if value == "":
+            fallback = _try_fallback_aliases()
+            if fallback is not None:
+                return fallback
             log.warning(
                 "worker_trace_id_invalid_will_mint_fresh",
                 value_preview=repr(""),  # review pass-1 H8 — escaped preview
@@ -135,6 +179,10 @@ class WorkerSettings(BaseSettings):
         # Review pass-1 L4: non-string types also log a WARNING (merged branch
         # with the shape failure below — single canonical log event).
         if not isinstance(value, str) or not is_valid_trace_id(value):
+            # Review pass-2 PH1 — alias-fallthrough also covers shape-fail.
+            fallback = _try_fallback_aliases()
+            if fallback is not None:
+                return fallback
             # Build a safe preview: ``repr`` on a string escapes control chars
             # (CRLF, NULL, ANSI, ZWJ U+200D, RTL override U+202E, etc.).
             preview_src = value if isinstance(value, str) else str(value)
@@ -167,7 +215,7 @@ class WorkerSettings(BaseSettings):
     # ------------------------------------------------------------------
 
     def model_post_init(self, __context: Any) -> None:
-        """Eagerly resolve trace_id at instance construction.
+        """Eagerly resolve trace_id / session_id / worker_id at construction.
 
         Review pass-1 H4: the previous "check-then-act" pattern inside
         :meth:`resolve_trace_id` was racy — multiple coroutines
@@ -177,29 +225,54 @@ class WorkerSettings(BaseSettings):
         field is populated before any concurrent reader exists; subsequent
         ``resolve_trace_id()`` calls are pure reads.
 
-        ``session_id`` / ``worker_id`` retain their lazy pattern because they
-        are not similarly racy (they're only resolved from the main coroutine
-        in ``start_session``).
+        Review pass-2 PM5: ``session_id`` / ``worker_id`` are resolved eagerly
+        too — symmetric with trace_id.  Although they're nominally
+        main-coroutine-only, defence-in-depth removes a class of "lazy
+        check-then-act" foot-guns that future async refactors could trip on.
+
+        Review pass-2 PM6 + PM12: the type-narrowing is explicit
+        (``if self.trace_id is not None``) and the value is re-validated at
+        the cache layer so any future Pydantic ordering change (v3) that
+        landed a raw env string here would not bypass H8 sanitization.
+
+        Review pass-2 PM13: emit an ``info`` log when minting fresh so an
+        operator can correlate an upstream-reject WARNING with the chosen
+        substitute trace_id (8-char preview only — no full UUID in log).
         """
-        # Local var pattern (review pass-1 M1) — strictly-typed ``str`` is
-        # assigned both to the private cache and returned by ``resolve_*``.
-        resolved: str = self.trace_id or new_uuid7()
+        log = structlog.get_logger(__name__)
+        # Review pass-2 PM6 / PM12 — explicit narrowing + defensive re-validate.
+        if self.trace_id is not None and is_valid_trace_id(self.trace_id):
+            resolved: str = self.trace_id
+        else:
+            resolved = new_uuid7()
+            # Review pass-2 PM13 — info log so operators can correlate.
+            log.info(
+                "worker_trace_id_minted_fresh",
+                value_preview=resolved[:8] + "...",
+            )
         self._resolved_trace_id = resolved
+        # Review pass-2 PM5 — eager session_id / worker_id resolution.
+        self._resolved_session_id = self.session_id or new_session_id()
+        self._resolved_worker_id = self.worker_id or new_worker_id()
 
     # ------------------------------------------------------------------
     # Methods (Story 9.6 review pass-1 L3 — grouped after private attrs).
     # ------------------------------------------------------------------
 
     def resolve_session_id(self) -> str:
-        """Return ``session_id`` or generate a new UUIDv7 if empty (cached)."""
+        """Return the eagerly-resolved ``session_id`` (review pass-2 PM5).
+
+        ``model_post_init`` populates the cache at construction so this is a
+        pure read; the narrowing raise mirrors :meth:`resolve_trace_id`.
+        """
         if self._resolved_session_id is None:
-            self._resolved_session_id = self.session_id or new_session_id()
+            raise RuntimeError("model_post_init must have populated _resolved_session_id")
         return self._resolved_session_id
 
     def resolve_worker_id(self) -> str:
-        """Return ``worker_id`` or generate a new UUIDv7 if empty (cached)."""
+        """Return the eagerly-resolved ``worker_id`` (review pass-2 PM5)."""
         if self._resolved_worker_id is None:
-            self._resolved_worker_id = self.worker_id or new_worker_id()
+            raise RuntimeError("model_post_init must have populated _resolved_worker_id")
         return self._resolved_worker_id
 
     def resolve_trace_id(self) -> str:
@@ -213,9 +286,7 @@ class WorkerSettings(BaseSettings):
         # ``model_post_init`` guarantees this is non-None for any
         # successfully-constructed instance — narrow the Optional for mypy.
         if self._resolved_trace_id is None:
-            raise RuntimeError(
-                "model_post_init must have populated _resolved_trace_id"
-            )
+            raise RuntimeError("model_post_init must have populated _resolved_trace_id")
         return self._resolved_trace_id
 
     def resolve_task_id(self) -> str | None:

@@ -5,7 +5,7 @@ Status: **review**
 ## Story
 
 **As** the worker-wrapper supervisor that spawns the `claude` Claude Code CLI subprocess AND emits events through the clawhip-bridge MCP server,
-**I want** the worker to (a) receive its `trace_id` via an `OMB_WORKER_TRACE_ID` environment variable (set by the spawning service per task), (b) pass `--trace-id <uuid>` as a CLI flag to every `claude` subprocess invocation, AND (c) supply that trace_id as `caller_trace_id` to every `clawhip-bridge.emit_*` MCP tool call,
+**I want** the worker to (a) receive its `trace_id` via the `WORKER_TRACE_ID` environment variable (canonical; `OMB_WORKER_TRACE_ID` and `OMB_TRACE_ID` accepted as aliases — review pass-2 PH10), (b) pass `--trace-id <uuid>` as a CLI flag to every `claude` subprocess invocation (gated by `emit_trace_id_flag`, default OFF), AND (c) supply that trace_id as `caller_trace_id` to every `clawhip-bridge.emit_*` MCP tool call,
 **so that** every event emitted in the causal chain of a single operator-originated task — `session.started`, `task.execution.started`, `agent.reasoning.*`, `file.edited`, `task.step.completed`, `task.completed` — carries the SAME `trace_id` as the inbound operator command, closing the FIFTH AND FINAL ingress (worker) in Epic 9's α propagation kernel.
 
 This is Story 9.6 of Epic 9 — the **caller side** of Story 9.5's MCP `caller_trace_id` contract. After 9.6 lands, Epic 9's wiring is complete: the trace_id flows end-to-end from operator command → ingress (HTTP / Telegram / console / MCP / worker) → registry-api → event log → cross-service correlation. Story 9.7 will then make the field MANDATORY (schema_version 1.0.0 → 1.1.0) + add the `oh-my-bmad-cli trace <id>` operator query.
@@ -14,7 +14,7 @@ This is Story 9.6 of Epic 9 — the **caller side** of Story 9.5's MCP `caller_t
 
 ## Acceptance criteria
 
-### AC1 — Worker reads `trace_id` from `OMB_WORKER_TRACE_ID` env var
+### AC1 — Worker reads `trace_id` from `WORKER_TRACE_ID` env var (also `OMB_WORKER_TRACE_ID` / `OMB_TRACE_ID` aliases)
 
 `services/worker-wrapper/src/worker_wrapper/app/config.py`'s `Settings` (Pydantic) gains a new field:
 
@@ -38,7 +38,7 @@ The Pydantic field validator should call `events.envelope.is_valid_trace_id()` o
 
 ### AC2 — Validation: invalid value → log WARNING + mint fresh UUIDv7
 
-If `worker_trace_id` is present but invalid (fails `is_valid_trace_id` per Story 9.1 contract), the worker logs at WARNING and mints a fresh UUIDv7 via `events.ids.new_uuid7()`. The worker does NOT crash on a malformed value — defensive degradation per Story 9.4 pass-2 lesson S2 (production-safe paths use raise/log, not assert).
+If `trace_id` is present but invalid (fails `is_valid_trace_id` per Story 9.1 contract), the worker logs at WARNING and mints a fresh UUIDv7 via `events.ids.new_uuid7()`. The worker does NOT crash on a malformed value — defensive degradation per Story 9.4 pass-2 lesson S2 (production-safe paths use raise/log, not assert).
 
 If absent entirely (env var unset), the worker mints a fresh UUIDv7 silently — this is the "worker invoked outside Epic 9's ingress chain" path (e.g., a manual dev-mode test). NO warning for absent; WARNING for present-but-invalid.
 
@@ -60,22 +60,18 @@ def _build_args(self, prompt: str) -> list[str]:
     # Claude Code may consume this for nested MCP tool calls; if Claude Code
     # doesn't yet recognize the flag, it should be tolerant (claude --help
     # should accept unknown flags as no-ops, OR we add via env var instead).
-    if self._effective_trace_id:
-        args.extend(["--trace-id", self._effective_trace_id])
+    if settings.resolve_trace_id():
+        args.extend(["--trace-id", settings.resolve_trace_id()])
     return args
 ```
 
-The `_effective_trace_id` attribute is set in `__init__` to either `settings.worker_trace_id` (if valid) or a freshly-minted UUIDv7 (per AC2's fallback).
+The runner consults `settings.resolve_trace_id()` (per Story 9.6 review pass-1) — a per-instance memoized accessor minted eagerly in `model_post_init`.
 
-**Robustness note:** if `claude --help` doesn't yet accept `--trace-id`, the subprocess invocation may fail. Two options:
-- (a) Hide behind a `worker_emit_trace_id_flag: bool = False` feature flag (default off until Claude Code consumes the flag)
-- (b) ALSO/INSTEAD set `OMB_TRACE_ID` env var on the subprocess (consumed by Claude Code's MCP client if/when it propagates trace context)
-
-Recommend (b) — env var is non-breaking. The CLI flag can be a follow-up once Claude Code consumes it. Spec language flexes to "via CLI flag and/or env var."
+**Robustness note (review pass-2 PL2):** Implementation chose HYBRID — `--trace-id` flag gated behind `emit_trace_id_flag` (default OFF, opt-in via `WORKER_EMIT_TRACE_ID_FLAG=1`) **plus** `OMB_TRACE_ID` env var ALWAYS set in `_spawn()`. The env var is the always-on non-breaking surface that ships today; the CLI flag is opt-in until Claude Code upstream confirms it consumes `--trace-id`.
 
 ### AC4 — Worker's clawhip-bridge MCP calls supply `caller_trace_id`
 
-In `services/worker-wrapper/src/worker_wrapper/adapters/mcp_clients.py` (or wherever the worker invokes `clawhip_bridge.call_tool("emit_event", ...)`), every call MUST include `caller_trace_id: self._effective_trace_id` in the args dict.
+In `services/worker-wrapper/src/worker_wrapper/adapters/mcp_clients.py` (or wherever the worker invokes `clawhip_bridge.call_tool("emit_event", ...)`), every call MUST include `caller_trace_id: settings.resolve_trace_id()` in the args dict.
 
 Targets identified by `grep -rn "clawhip_bridge.*call_tool\|emit_event\|emit_blocker\|emit_summary\|emit_approval_request\|emit_completion" services/worker-wrapper/src/`:
 
@@ -91,14 +87,14 @@ await clients.clawhip_bridge.call_tool(
     arguments={
         "type": "task.execution.started",
         "payload": {...},
-        "caller_trace_id": self._effective_trace_id,  # NEW — Story 9.6 / FR59
+        "caller_trace_id": settings.resolve_trace_id(),  # NEW — Story 9.6 / FR59
     },
 )
 ```
 
-### AC5 — All emission paths thread the same `_effective_trace_id`
+### AC5 — All emission paths thread the same resolved `trace_id`
 
-The worker's `_effective_trace_id` is minted ONCE per worker invocation (at `Settings` load or run_task entry) and reused across:
+The worker's resolved `trace_id` is minted ONCE per worker invocation (eagerly in `WorkerSettings.model_post_init`) and reused across:
 - The Claude Code subprocess `--trace-id` flag / `OMB_TRACE_ID` env var
 - Every clawhip-bridge MCP call's `caller_trace_id`
 - Any direct envelope construction (rare in worker-wrapper; check `lifecycle_manager.py` for any direct `EventEnvelope.create()` calls)
@@ -115,10 +111,10 @@ New tests in `services/worker-wrapper/src/worker_wrapper/test_*.py`:
 4. `test_settings_silent_when_trace_id_absent` — env var unset; `WorkerSettings().trace_id is None`; no warning.
 5. `test_build_args_includes_trace_id_flag` — instantiate `ClaudeCodeRunner` with `trace_id=tid` and `worker_emit_trace_id_flag=True`; call `_build_args("prompt")`; assert `["--trace-id", tid]` in result. (Review pass-1 H2: flag-gated)
 6. `test_build_args_omits_trace_id_flag_when_gate_off` — flag=False (default); assert no `--trace-id` in args (only baseline flags).
-7. `test_run_task_emits_events_with_caller_trace_id` — mock the clawhip-bridge MCP client; invoke `run_task(...)` with `OMB_WORKER_TRACE_ID=<known>`; assert every captured `emit_event` call's args dict contains `caller_trace_id=<known>`.
+7. `test_run_task_emits_events_with_caller_trace_id` — mock the clawhip-bridge MCP client; invoke `run_task(...)` with `WORKER_TRACE_ID=<known>` (or any accepted alias); assert every captured `emit_event` call's args dict contains `caller_trace_id=<known>`.
 8. `test_worker_mints_fresh_trace_id_when_env_unset` — env unset; invoke run_task; capture the trace_id used in MCP calls; assert it matches UUIDv7 regex.
 9. `test_worker_mints_fresh_trace_id_when_env_invalid` — env=`"bad"`; assert WARNING log + UUIDv7 fallback minted + propagated to MCP calls.
-10. `test_effective_trace_id_consistent_across_emission_sites` — within one run_task invocation, capture all `emit_*` MCP calls; assert all `caller_trace_id` values are byte-identical.
+10. `test_trace_id_consistent_across_emission_sites` — within one run_task invocation, capture all `emit_*` MCP calls; assert all `caller_trace_id` values are byte-identical.
 11. `test_subprocess_env_contains_omb_trace_id` (if env-var path implemented) — assert the subprocess env contains `OMB_TRACE_ID=<value>`.
 12. (Optional integration test) `test_journey_with_worker_trace_id_propagates_to_jsonl` — run a full mini-journey; assert JSONL events all share the same trace_id from a known input value.
 
@@ -132,7 +128,7 @@ Document actual measurement in Dev Agent Record. Following Story 9.3/9.4/9.5 les
 
 `uv run mypy --strict packages/ services/registry-api services/registry-state` exits 0 (97 source files). Do NOT extend the CI command to include `services/worker-wrapper`. All other Epic 8.7 baseline gates remain green.
 
-Test count delta: +12 to +15 tests; full suite goes from 2537 → ~2550-2560.
+Test count delta (pass-1 + pass-2): pre-9.6 baseline 2644 → post pass-2 ~2706 collected. Original 9.6 dev added +23; pass-1 added +31; pass-2 adds +7 (regression tests for PH0 / PH1 / PH3 / PH7 / PM10).
 
 ### AC9 — FR59 literal compliance — Claude Code flag + worker emission
 
@@ -191,7 +187,7 @@ No new deps.
 
 | File | Change |
 |---|---|
-| `services/worker-wrapper/src/worker_wrapper/app/config.py` | Add `worker_trace_id: str \| None` Pydantic field + validator |
+| `services/worker-wrapper/src/worker_wrapper/app/config.py` | Add `trace_id: str \| None` Pydantic field + validator (canonical field name; review pass-2 PH10) |
 | `services/worker-wrapper/src/worker_wrapper/adapters/claude_code_runner.py` | Extend `_build_args()` to include `--trace-id` flag; OR set `OMB_TRACE_ID` env var in `_spawn()` |
 | `services/worker-wrapper/src/worker_wrapper/adapters/mcp_clients.py` | Add `caller_trace_id` to every emission helper / wrapper |
 | `services/worker-wrapper/src/worker_wrapper/app/main.py` | `run_task()` accepts/threads `trace_id`; passes to MCP calls |
@@ -256,56 +252,12 @@ from events.envelope import is_valid_trace_id  # noqa: IMP001
 from events.ids import new_uuid7  # noqa: IMP001
 from pydantic import Field, field_validator
 
-class Settings(BaseSettings):
-    ...
-    worker_trace_id: str | None = Field(default=None, description="...")
-    
-    @field_validator("worker_trace_id")
-    @classmethod
-    def _validate_trace_id_shape(cls, value: str | None) -> str | None:
-        """Per Story 9.6 AC2: present-but-invalid → log + None; absent → None."""
-        if value is None or value == "":
-            return None
-        if not is_valid_trace_id(value):
-            # WARNING + return None → consumer mints fresh
-            logger.warning("OMB_WORKER_TRACE_ID invalid; will mint fresh", value=value[:80])
-            return None
-        return value
-```
-
-`claude_code_runner.py`:
-```python
-class ClaudeCodeRunner:
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
-        # Compute effective trace_id ONCE per runner instance.
-        if settings.worker_trace_id is not None:
-            self._effective_trace_id = settings.worker_trace_id
-        else:
-            self._effective_trace_id = new_uuid7()
-            logger.info("worker_trace_id_minted", value=self._effective_trace_id[:8] + "...")
-    
-    def _build_args(self, prompt: str) -> list[str]:
-        args = [..., "--trace-id", self._effective_trace_id, ...]
-        # Or set env var in _spawn() if --trace-id isn't yet consumed by claude.
-        return args
-    
-    async def _spawn(self, prompt, worktree_path):
-        env = dict(os.environ)
-        env["OMB_TRACE_ID"] = self._effective_trace_id  # belt-and-braces
-        ...
-```
-
-`mcp_clients.py` (or wherever worker emissions originate):
-```python
-await clients.clawhip_bridge.call_tool(
-    "emit_event",
-    arguments={
-        "type": event_type,
-        "payload": payload,
-        "caller_trace_id": effective_trace_id,
-    },
-)
+# Review pass-2 PL3 — implementation sketch removed.
+# The Dev Agent Record below (and pass-1 / pass-2 patch summaries) fully
+# documents the as-built shape: field `trace_id`, `_resolved_trace_id`
+# PrivateAttr, eager resolve in `model_post_init`, alias-fallthrough for
+# empty canonical env (PH1), AliasChoices including `"trace_id"` for ctor
+# kwarg (PM10), and `resolve_trace_id()` as a pure read.
 ```
 
 ### Trade-off note
@@ -336,9 +288,9 @@ If `claude` strictly rejects unknown flags, fall back to env-var-only. Verify vi
 | `claude` CLI doesn't accept `--trace-id` flag and errors on unknown args | Test via one-off invocation; fall back to env-var-only mode. AC3 explicitly allows env-var-only as the implementation. |
 | Worker's existing MCP emission calls BROKE when Story 9.5 made `caller_trace_id` required. | AC4 + AC7 explicitly address this — Story 9.6 RESTORES the emission contract. Pre-9.6 worker tests may already be red. |
 | Story 9.5 pass-1 added `caller_trace_id` to `clawhip-bridge.emit_*` but the worker hasn't been tested against the new contract — pre-existing Journey 1/3/6 tests may be silently broken. | AC10 integration test covers this. If pre-existing worker tests broke at Story 9.5, this is their fix-up story. |
-| `OMB_WORKER_TRACE_ID` env var name conflicts with existing `OMB_*` settings | Verify via `grep "OMB_" services/worker-wrapper/src/`. Name should be distinct from existing env vars. |
-| Worker is spawned by registry-state's subscriber loop; the spawner must set `OMB_WORKER_TRACE_ID`. | Out of 9.6's direct scope — spawner change is implied. Add a TODO for "the registry-state task subscriber must propagate `task.trace_id` → `OMB_WORKER_TRACE_ID` when spawning the worker." If this isn't already wired, Story 9.7 may need to address it. |
-| `_effective_trace_id` minted per-instance — what if `run_task` is called multiple times? | Mint per `run_task` invocation, not per `ClaudeCodeRunner` instance. AC5 specifies "per worker invocation" but the worker's lifecycle is "one run_task per worker process" so this is naturally fine. |
+| `WORKER_TRACE_ID` / `OMB_WORKER_TRACE_ID` / `OMB_TRACE_ID` env var name conflicts with existing `OMB_*` settings | Verify via `grep "OMB_" services/worker-wrapper/src/`. All three names are accepted via `AliasChoices` (review pass-1 M7). |
+| Worker is spawned by orchestrator-adapter (`OMCRunner._spawn`) — the spawner must set the trace_id on the child env. | Review pass-2 PH0: addressed in this story — `OMCRunner.__init__` accepts an optional `trace_id` and threads it into `env["OMB_TRACE_ID"]` for the child subprocess. Registry-state's spawning surface is covered by the ratchet test added in PH8 (asserts zero subprocess-spawn primitives in registry-state). |
+| Resolved `trace_id` minted per-instance — what if `run_task` is called multiple times? | Mint per `run_task` invocation, not per `ClaudeCodeRunner` instance. AC5 specifies "per worker invocation" but the worker's lifecycle is "one run_task per worker process" so this is naturally fine. |
 
 ---
 
@@ -355,13 +307,60 @@ If `claude` strictly rejects unknown flags, fall back to env-var-only. Verify vi
 
 ---
 
+## Review Findings — pass-2 (2026-05-17)
+
+Triaged from 3-lane second-opinion review (Blind Hunter + Edge Case Hunter + Acceptance Auditor) = 37 raw findings → 28 unique after dedup. Larger than typical pass-2 because pass-1 batch was rushed: missed `orchestrator-adapter/omc_runner.py` spawn site (real architectural gap, not just docs) and left ~half of L5 spec-body sweep undone.
+
+### Decision-needed (resolved)
+
+- [x] [Review][Decision] **Q2 — orchestrator-adapter/omc_runner.py is the spawn site H0 missed.** Resolved as option (a) — fix in this pass-2 (analogous to Q1). Promoted to **PH0** patch below.
+
+### Patch — HIGH (12)
+
+- [x] [Review][Patch] **PH0 — orchestrator-adapter `omc_runner.py` doesn't propagate trace_id** [services/orchestrator-adapter/src/orchestrator_adapter/adapters/omc_runner.py:53-68] — E5+E11. `OMCRunner._spawn` calls `asyncio.create_subprocess_exec("node", ..., "launch")` with NO `env=` kwarg → child inherits raw `os.environ` only. ANY OMC-spawned chain breaks at this boundary. Also: `tests/integration/docker-compose.j{1,3,6}.yml` worker-wrapper service has no WORKER_TRACE_ID env. Fix: add `trace_id: str | None` param to `OMCRunner.__init__`, set `env=dict(os.environ, OMB_TRACE_ID=trace_id)` in `_spawn`. Update j-compose files. Add regression test. THIS IS THE REAL H0 — pass-1 missed it.
+- [x] [Review][Patch] **PH1 — empty `WORKER_TRACE_ID=""` blackholes valid `OMB_TRACE_ID` (alias-first-wins)** [services/worker-wrapper/src/worker_wrapper/app/config.py:83-100] — E1 (empirically reproduced). Pydantic `AliasChoices` picks first-present env var, not first-valid; empty string counts as present. Spawner using shell idiom `${VAR:-}` defensive-empty pattern silently drops valid fallback alias. Fix: in `_validate_trace_id_shape`, when value is invalid, fall through to remaining aliases via `os.environ.get()` manual lookup before logging WARNING and returning None.
+- [x] [Review][Patch] **PH2 — `assert` in `resolve_trace_id` violates Story 9.4 S2 lesson** [services/worker-wrapper/src/worker_wrapper/app/config.py:215-217] — B2+A7+E2. `python -O` strips asserts; if `model_post_init` invariant ever fails, function returns None typed as str. Same lesson explicitly cited by AC2. Fix: replace `assert` with `if self._resolved_trace_id is None: raise RuntimeError("model_post_init invariant violated...")`.
+- [x] [Review][Patch] **PH3 — H7 ValueError special-case is speculative and misclassifies benign errors** [services/worker-wrapper/src/worker_wrapper/app/main.py:103-122] — E3+B12+E6. No MCP server currently raises `ValueError` for caller_trace_id violations (`grep caller_trace_id` returns zero in server modules). MCP SDK can raise generic `ValueError` for unrelated transport reasons. Plus H8 sanitization now leaks worker's OWN valid trace_id to logs as `caller_trace_id_preview` even when violation is unrelated. Fix: narrow detection by checking `"trace_id" in str(exc).lower()` before classifying as trace_id-violation; otherwise re-raise into generic Exception branch. Add regression test asserting generic ValueError → `mcp_tool_call_failed`, trace-related ValueError → `mcp_tool_trace_id_invalid`.
+- [x] [Review][Patch] **PH4 — `run_task._emit_event` closure swallows ValueError (H7 not applied)** [services/worker-wrapper/src/worker_wrapper/app/main.py:363-380] — A2. The inner `_emit_event` closure in `run_task` catches plain `Exception` with `emit_event_failed`. Three envelope types in hot task-execution path bypass H7. Fix: refactor to delegate to `_call_tool_best_effort`, OR duplicate the ValueError-special-case branch.
+- [x] [Review][Patch] **PH5 — H6 fixture not in conftest.py; 3 test files leak env** [services/worker-wrapper/src/worker_wrapper/test_mcp_clients.py, test_main.py, adapters/test_github_client.py] — B1+E4. `_clean_trace_id_env` duplicated in 4 test files; missing in 3 others that construct `WorkerSettings()`. Plus 4-way duplication of `_TRACE_ID_ENV_NAMES` (E12). Fix: create `services/worker-wrapper/src/worker_wrapper/conftest.py` with single autouse fixture; delete 4 duplicates; reference shared constant from config module.
+- [x] [Review][Patch] **PH6 — M6 tri-eq test uses `MagicMock()` not `AsyncMock(spec=Process)`** [services/worker-wrapper/src/worker_wrapper/test_run_task.py:607-610] — B3+E9. Contradicts M11 in the SAME patch series. Tolerant mock hides any future `_spawn` change that touches the returned process. Fix: replace with `AsyncMock(spec=asyncio.subprocess.Process)`.
+- [x] [Review][Patch] **PH7 — `WORKER_WORKER_EMIT_TRACE_ID_FLAG` double-prefix (stuttering env name)** [services/worker-wrapper/src/worker_wrapper/app/config.py + test_config.py:1201] — B10. Exactly the same env-var-stutter trap M7 was added to fix. Fix: rename field to `emit_trace_id_flag` (env: `WORKER_EMIT_TRACE_ID_FLAG`), OR add `validation_alias=AliasChoices("WORKER_EMIT_TRACE_ID_FLAG", "WORKER_WORKER_EMIT_TRACE_ID_FLAG")` with the canonical name first.
+- [x] [Review][Patch] **PH8 — H0 has no ratchet test** [services/registry-state/] — B6. Pass-1 H0 was marked `[x]` based on absence of code, not on a guard rail. Future commit adding `subprocess.Popen` to registry-state without setting WORKER_TRACE_ID would land silently. Fix: add `services/registry-state/test_no_subprocess_spawn.py` greping source tree for spawn primitives; assert zero matches (or, if any exist post-9.7, assert they pass WORKER_TRACE_ID env).
+- [x] [Review][Patch] **PH9 — Q1 ↔ H0 internal contradiction** [_bmad-output/.../9-6-...md:364, 425, 487] — A3. Spec line 364 says Q1 resolved as option (a) "fix the spawner in this story"; H0's Dev Agent Record says no code modified. Two statements in same doc contradict. Fix: rewrite Q1 line to reflect that pass-1 search found zero in registry-state but pass-2 found omc_runner.py; PH0 in pass-2 addresses the real spawner.
+- [x] [Review][Patch] **PH10 — L5 sweep incomplete: Story headline + AC1 title + multiple narrative sections** [_bmad-output/.../9-6-...md:8, 17, 41, 68, 194, 261-283, 339-340] — A1+E7+A10. `worker_trace_id`, `OMB_WORKER_TRACE_ID`, `_effective_trace_id` references remain in: Story headline (line 8), AC1 title (17), AC2 prose (41), AC3 prose (68), file-structure table (194), implementation sketch (261-283 — refs nonexistent `_effective_trace_id`), out-of-scope risks (339-340). Fix: sweep all 8+ sites with canonical names. Note AC1 now says "WORKER_TRACE_ID env var (also OMB_WORKER_TRACE_ID / OMB_TRACE_ID aliases)".
+- [x] [Review][Patch] **PH11 — Pass-1 wrong commit count: L6 said 17, actual `git log --grep='story-9' --oneline \| wc -l` = 18** [_bmad-output/.../9-6-...md:509] — A5. The exact patch whose purpose was precision shipped a wrong precise number. Fix: re-run command; update count; if number drifts at finalization re-run again.
+
+### Patch — MED (13)
+
+- [x] [Review][Patch] **PM1 — AC8 stale: "+12 to +15 tests; full suite 2537 → ~2550-2560"** [_bmad-output/.../9-6-...md:135] — A4. Reality: 2668 → 2699 from pass-1 alone (+31); accounting for original dev (+23) total ~+54. Fix: update line 135 with actuals.
+- [x] [Review][Patch] **PM2 — Legacy `test_settings_rejects_trace_id_with_crlf` still has `capture_logs()` w/o assert** [services/worker-wrapper/src/worker_wrapper/test_config.py:201-210] — A6. M9 added new parametrized test but never deleted/fixed the legacy one M9 explicitly named. Fix: delete the dead test (covered by new parametrized).
+- [x] [Review][Patch] **PM3 — H6 fixture doesn't clear `WORKER_WORKER_EMIT_TRACE_ID_FLAG`** — A8+B11. CI exporting the flag silently overrides constructor kwargs in flag-gate tests. Fix: extend env-name list to include the flag env var (after PH7 rename, the canonical name).
+- [x] [Review][Patch] **PM4 — H1 session.close assertion only checks key presence not value** [services/worker-wrapper/src/worker_wrapper/test_session_lifecycle.py:194-204] — B5. Regression that wires `caller_trace_id=""` would pass. Fix: strengthen to `assert args[1]["arguments"]["caller_trace_id"] == settings.resolve_trace_id()`.
+- [x] [Review][Patch] **PM5 — `_resolved_session_id` / `_resolved_worker_id` retain lazy check-then-act despite H4's race fix for trace_id** [services/worker-wrapper/src/worker_wrapper/app/config.py:193-203] — B7. Asymmetric: if H4's race analysis is correct for trace_id, same applies to session_id/worker_id. Fix: eager-resolve all 3 in `model_post_init` for consistency.
+- [x] [Review][Patch] **PM6 — Type narrowing fragile: `resolved: str = self.trace_id or new_uuid7()`** [services/worker-wrapper/src/worker_wrapper/app/config.py:186] — B8. Mypy can't see through validator `mode="before"`. Fix: explicit `if self.trace_id is not None else new_uuid7()`.
+- [x] [Review][Patch] **PM7 — M9 parametrized assertion too weak (`preview.startswith("'")`)** [services/worker-wrapper/src/worker_wrapper/test_config.py:1130-1135] — B9. A regression that strips `repr()` and uses raw `value[:80]` still passes for alphanumeric inputs. Fix: assert `"\r" not in preview and "\n" not in preview and "\x00" not in preview`.
+- [x] [Review][Patch] **PM8 — M6 test bypasses `_clean_trace_id_env` for flag env var** [services/worker-wrapper/src/worker_wrapper/test_run_task.py M6 test] — B11. AC9 cornerstone test should be most hermetic. After PH3 + PH7 fixed, extend fixture to cover new flag env name.
+- [x] [Review][Patch] **PM9 — Dead `new_uuid7` import? Verify after H3** [services/worker-wrapper/src/worker_wrapper/app/main.py] — B12 partial. Pass-1 removed `new_uuid7` import. Re-verify no leftover usage; if all defensive mints gone, import is dead. Fix: remove if unused (verify with ruff first).
+- [x] [Review][Patch] **PM10 — No alias-precedence test; `validation_alias=AliasChoices(...)` missing `"trace_id"` natural name** [services/worker-wrapper/src/worker_wrapper/app/config.py:26, 83-90] — B13+B15. When ALL THREE alias env vars set with different values, which wins? No test. Constructor kwarg works only via implicit `populate_by_name=True` coupling. Fix: add `test_alias_priority_canonical_wins_when_multiple_set`; add `"trace_id"` to AliasChoices.
+- [x] [Review][Patch] **PM11 — No boot-time log announces flag state** [services/worker-wrapper/src/worker_wrapper/__main__.py:109] — E8. Operators can't tell if `--trace-id` is on. Fix: add `trace_id_emit_flag=settings.worker_emit_trace_id_flag, trace_id=settings.resolve_trace_id()` to the `"ready"` log call.
+- [x] [Review][Patch] **PM12 — `model_post_init` non-defensive against future Pydantic v3 ordering changes** [services/worker-wrapper/src/worker_wrapper/app/config.py:186] — E10. If post_init fires before validator in v3, raw env string lands in cache, bypassing H8 sanitization. Fix: re-validate at cache layer: `resolved = self.trace_id if (self.trace_id and is_valid_trace_id(self.trace_id)) else new_uuid7()`.
+- [x] [Review][Patch] **PM13 — `model_post_init` mints fresh w/o info log** [services/worker-wrapper/src/worker_wrapper/app/config.py:186] — B4. Validator emits WARNING then post_init mints silently; operators can't correlate "rejected upstream value" with "minted substitute". Fix: when self.trace_id is None and we mint, emit `info` log `worker_trace_id_minted_fresh` with `value_preview=resolved[:8]+"..."`.
+
+### Patch — LOW (3)
+
+- [x] [Review][Patch] **PL1 — Stale comment in test_session_lifecycle.py:182-184** — B14. Comment misleads after H1 added session.close MCP call. Fix: delete or strengthen.
+- [x] [Review][Patch] **PL2 — AC3 robustness narrative still recommends option (b) env-var-only** [_bmad-output/.../9-6-...md:70-74] — A9. Pass-1 chose hybrid (env-var always-on + flag gated default-off) but AC3 narrative leads reader toward "drop the flag entirely". Fix: update AC3 robustness note to reflect hybrid choice.
+- [x] [Review][Patch] **PL3 — Implementation sketch refs non-existent `_effective_trace_id` attribute** [_bmad-output/.../9-6-...md:277-297] — A10 (partial overlap with PH10). Either delete sketch (Dev Agent Record covers what was built) or update to match actual `resolve_trace_id()` pattern.
+
+---
+
 ## Review Findings — pass-1 (2026-05-17)
 
 Triaged from 3-lane adversarial review (Blind Hunter + Edge Case Hunter + Acceptance Auditor) = 45 raw findings → 35 unique after dedup. Policy: dismiss-zero ("fix all issues even minors").
 
 ### Decision-needed (resolved)
 
-- [x] [Review][Decision] **Q1 — spawner-side WORKER_TRACE_ID propagation** → resolved as option (a) — fix the spawner in this story. Promoted to **H0** patch below.
+- [x] [Review][Decision] **Q1 — spawner-side WORKER_TRACE_ID propagation** → resolved as option (a) — fix the spawner. Pass-1 investigated registry-state and found ZERO spawn sites (no code change required, H0 closed). Pass-2 discovered `services/orchestrator-adapter/adapters/omc_runner.py` — the REAL spawner — and addresses it as **PH0** below (review pass-2 PH9 — narrative reconciliation).
 
 ### Patch — HIGH (9)
 
@@ -414,6 +413,22 @@ Triaged from 3-lane adversarial review (Blind Hunter + Edge Case Hunter + Accept
 
 ### Implementation summary
 
+**pass-2 review (2026-05-17): 28 patches batch-applied.**
+
+Pass-2's headline change is **PH0 — `orchestrator-adapter/adapters/omc_runner.py`**: the REAL worker-spawn site that pass-1 missed. `OMCRunner.__init__` gains an optional `trace_id` kwarg; `_spawn` builds an env (`dict(os.environ) + OMB_TRACE_ID`) and passes it to `create_subprocess_exec`. The construction site in `orchestrator-adapter/app/main.py:adapter_loop` was updated to thread `settings.trace_id`; `OrchestratorSettings` gained a `trace_id: str | None` field with the same `AliasChoices` shape (`trace_id` / `ORCHESTRATOR_TRACE_ID` / `OMB_ORCHESTRATOR_TRACE_ID` / `OMB_TRACE_ID`). The j-compose worker-wrapper services (j1/j3/j6) now propagate `WORKER_TRACE_ID` from the harness.
+
+A new `services/worker-wrapper/src/worker_wrapper/conftest.py` autouse fixture (PH5) replaces 4 duplicate `_clean_trace_id_env` fixtures across `test_config.py`, `test_session_lifecycle.py`, `test_run_task.py`, `test_claude_code_runner.py`. The env-name list is referenced from `worker_wrapper.app.config._TRACE_ID_ALIASES` + `_EMIT_TRACE_ID_FLAG_ENV` constants so the fixture stays in sync with `AliasChoices` (covers PM3/PM8 as a side effect — the flag env var is also stripped).
+
+`config.py` hardening: PH1 falls through to remaining aliases (`OMB_WORKER_TRACE_ID`, `OMB_TRACE_ID`) when the canonical `WORKER_TRACE_ID` is empty/invalid (the alias-first-wins blackhole is fixed); PM5 eager-resolves session_id/worker_id symmetrically with trace_id; PM6 narrows the type explicitly (`if self.trace_id is not None and is_valid_trace_id(self.trace_id)`); PM12 re-validates at the cache layer (defence-in-depth against future Pydantic v3 ordering changes); PM13 emits an `info` `worker_trace_id_minted_fresh` log when minting. PM10 added `"trace_id"` to `AliasChoices` so ctor kwarg works canonically; PH7 added `WORKER_WORKER_EMIT_TRACE_ID_FLAG` as a backwards-compat alias on `emit_trace_id_flag`.
+
+`main.py` PH3 narrows the H7 ValueError special-case via `"trace_id" in str(exc).lower()` so benign transport ValueErrors are no longer misclassified; PH4 routes `run_task`'s `_emit_event` closure through `_call_tool_best_effort` (with a new `return_result=True` mode) so the H7 logic applies uniformly. `__main__.py` PM11 adds `trace_id_emit_flag` + `trace_id_preview` to the `ready` log call.
+
+Tests: PH3 regression tests for narrowed ValueError detection (2 tests); PM4 strengthened session.close assertion to value-equality; PM2 deleted legacy CRLF test (covered by parametrized corpus); PM7 strengthened the parametrized assertion to check for absence of control chars in preview; PL1 clarified the stale comment; PM10 alias-precedence test (canonical wins when multiple set); PH1 regression test (empty canonical falls through to alias); PH7 backwards-compat alias test (legacy double-prefix still accepted); PH0 regression tests in `test_omc_runner.py` (2 tests — env contains/omits `OMB_TRACE_ID`). New `services/registry-state/src/registry_state/test_no_subprocess_spawn.py` ratchet test (PH8).
+
+Spec hygiene: PH9 reconciled the Q1/H0 narrative; PH10 swept stale `worker_trace_id` / `OMB_WORKER_TRACE_ID` / `_effective_trace_id` references (8+ sites); PH11 corrected the commit count; PM1 updated the test-count delta; PL2 documented the chosen HYBRID approach in AC3 instead of recommending env-var-only; PL3 deleted the stale implementation sketch.
+
+---
+
 **pass-1 review (2026-05-17): 31 patches batch-applied.**
 
 The worker-wrapper now participates fully in Epic 9's α trace_id propagation kernel. A `trace_id: str | None` Pydantic field was added to `WorkerSettings` with env var `WORKER_TRACE_ID` (canonical), plus `OMB_WORKER_TRACE_ID` and `OMB_TRACE_ID` aliases via `AliasChoices` (M7). A `@field_validator` validates the shape via `is_valid_trace_id()` — present-but-invalid values (including empty string, M2) log a WARNING with a `repr()`-escaped preview (H8) and fall back to None; absent values are silently None. `model_post_init` (H4) eagerly resolves the trace_id at construction so `resolve_trace_id()` is a pure read — no race. `_resolved_*` attrs converted to `PrivateAttr` (H5); class members reordered (L3).
@@ -422,7 +437,7 @@ The `--trace-id` CLI flag is now gated behind `worker_emit_trace_id_flag: bool =
 
 All tests use `monkeypatch.delenv` for env isolation (H6), hoisted module-level imports (L1), `asyncio.wait_for` timeout guards on heartbeat tests (M4), deterministic iteration counter (M10), `AsyncMock(spec=Process)` for spawn mocks (M11), literal-constant trace_id assertions (M3), `new_uuid7` call_count verified by spy (M12), and `caller_trace_id` assertion in `test_finish_session_no_lock_without_worktree` (M13). M6 tri-surface byte-identity test added. M9 invalid-shape corpus parametrized (18 entries). H2 flag-gating tests added.
 
-**H0 — registry-state spawner search results:** Exhaustive grep for `create_subprocess|Popen|spawn` in `services/registry-state/src/` returned zero hits. Registry-state is a pure event-log / SQLite service — it does NOT spawn worker-wrapper subprocesses. The spawning concern belongs to a higher-level orchestrator not yet implemented. TODO #1 (spawner-side WORKER_TRACE_ID propagation) remains open as a Story 9.7 deferred concern. Per user Q1 resolution: user approved fixing the spawner in-scope; however since no spawn site exists in the current codebase, the fix is a STUB documented in this record. Registry-state was NOT modified.
+**H0 — registry-state spawner search results:** Exhaustive grep for `create_subprocess|Popen|spawn` in `services/registry-state/src/` returned zero hits. Registry-state is a pure event-log / SQLite service — it does NOT spawn worker-wrapper subprocesses. **Review pass-2 acknowledgment:** pass-1 stopped here, but the REAL spawner is `services/orchestrator-adapter/adapters/omc_runner.py` (the OMC subprocess supervisor that transitively spawns worker-wrapper instances). Pass-2 addresses it as PH0 (`OMCRunner.__init__(trace_id=...)` + `env["OMB_TRACE_ID"]` in `_spawn`). The registry-state ratchet test added in PH8 keeps that surface guarded going forward.
 
 **AC10 deferral (M14):** Deferred to Story 9.7. Actual blockers: (a) registry-state spawner does not yet set `WORKER_TRACE_ID` when spawning workers (H0/Q1 gap — no spawn site found in current code); (b) integration journey tests 1/3/6 fail pre-9.6 with `ModuleNotFoundError: _build_scripted_worker`. Story 9.7's `/trace <id>` query test will naturally exercise the full `POST /v1/tasks → worker-wrapper → JSONL event log` chain.
 
@@ -430,15 +445,22 @@ All tests use `monkeypatch.delenv` for env isolation (H6), hoisted module-level 
 
 | File | Change |
 |---|---|
-| `services/worker-wrapper/src/worker_wrapper/app/config.py` | H5 PrivateAttr; H4 model_post_init eager resolve; M1 local-var pattern; L3 member reorder; M7 AliasChoices; M2 empty→WARNING; L4 non-str→WARNING (merged); H8 repr() preview; H2 worker_emit_trace_id_flag field |
+| `services/worker-wrapper/src/worker_wrapper/app/config.py` | H5 PrivateAttr; H4 model_post_init eager resolve; M1 local-var pattern; L3 member reorder; M7 AliasChoices; M2 empty→WARNING; L4 non-str→WARNING (merged); H8 repr() preview; H2 emit_trace_id_flag field; **PH1 alias-fallthrough; PH7 backwards-compat AliasChoices on flag; PM5 eager session_id/worker_id resolve; PM6 explicit narrowing; PM10 `"trace_id"` in AliasChoices; PM12 re-validate at cache; PM13 info log on mint; PH5 shared `_TRACE_ID_ALIASES` constant** |
 | `services/worker-wrapper/src/worker_wrapper/adapters/claude_code_runner.py` | H2 flag-gated `--trace-id`; L2 comment rephrase |
-| `services/worker-wrapper/src/worker_wrapper/app/main.py` | H1 caller_trace_id on all 3 session-registry callsites; H7 ValueError special-case; H3/M5 uniform `settings` API (finish_session + _emit_tier3_performed); L7 docstring updated |
-| `services/worker-wrapper/src/worker_wrapper/__main__.py` | L8/M5 finish_session call uses new signature |
-| `services/worker-wrapper/src/worker_wrapper/test_config.py` | H6 isolation fixture; M9 invalid-shape parametrize; M12 new_uuid7 spy; M7 alias tests; H2 flag tests |
-| `services/worker-wrapper/src/worker_wrapper/test_claude_code_runner.py` | H6 isolation fixture; L1 hoisted imports; M3 literal trace_id assertion; M11 AsyncMock(spec=Process); H2 flag tests |
-| `services/worker-wrapper/src/worker_wrapper/test_session_lifecycle.py` | H6 isolation fixture; L1 hoisted imports; M4 wait_for timeout; M10 deterministic counter; M13 caller_trace_id assertion; H1 session-registry caller_trace_id tests |
-| `services/worker-wrapper/src/worker_wrapper/test_run_task.py` | H6 isolation fixture; L1 hoisted imports; H3/M5 updated signatures; M6 tri-surface byte-identity test; H2 flag-gating tests |
-| `_bmad-output/implementation-artifacts/9-6-worker-wrapper-trace-id-cli-flag.md` | All 31 pass-1 checkboxes checked; Dev Agent Record updated |
+| `services/worker-wrapper/src/worker_wrapper/app/main.py` | H1 caller_trace_id on all 3 session-registry callsites; H7 ValueError special-case; H3/M5 uniform `settings` API; L7 docstring updated; **PH3 narrowed ValueError detection; PH4 closure routed through `_call_tool_best_effort` (new `return_result=True` mode)** |
+| `services/worker-wrapper/src/worker_wrapper/__main__.py` | L8/M5 finish_session call uses new signature; **PM11 ready log carries `trace_id_emit_flag` + `trace_id_preview`** |
+| `services/worker-wrapper/src/worker_wrapper/conftest.py` (NEW) | **PH5 single autouse `_clean_worker_env` fixture replacing 4 duplicates** |
+| `services/worker-wrapper/src/worker_wrapper/test_config.py` | H6 isolation fixture; M9 invalid-shape parametrize; M12 new_uuid7 spy; M7 alias tests; H2 flag tests; **PM2 legacy CRLF test removed; PM7 stronger preview-shape assertion; PM10 alias-priority test; PH1 empty-canonical-fallthrough test; PH7 legacy-flag-alias test; PH5 fixture deleted (moved to conftest)** |
+| `services/worker-wrapper/src/worker_wrapper/test_claude_code_runner.py` | H6 isolation fixture (removed by PH5); L1 hoisted imports; M3 literal trace_id assertion; M11 AsyncMock(spec=Process); H2 flag tests |
+| `services/worker-wrapper/src/worker_wrapper/test_session_lifecycle.py` | H6 isolation fixture (removed by PH5); L1 hoisted imports; M4 wait_for timeout; M10 deterministic counter; M13 caller_trace_id assertion; H1 session-registry caller_trace_id tests; **PM4 stronger session.close value-equality; PL1 stale comment fixed; PH3 narrowed ValueError regression tests** |
+| `services/worker-wrapper/src/worker_wrapper/test_run_task.py` | H6 isolation fixture (removed by PH5); L1 hoisted imports; H3/M5 updated signatures; M6 tri-surface byte-identity test; H2 flag-gating tests |
+| `services/orchestrator-adapter/src/orchestrator_adapter/adapters/omc_runner.py` (PH0) | **PH0: `OMCRunner.__init__(trace_id=...)` + `env["OMB_TRACE_ID"]` in `_spawn`** |
+| `services/orchestrator-adapter/src/orchestrator_adapter/app/config.py` (PH0) | **PH0: `trace_id: str \| None` field with `AliasChoices`** |
+| `services/orchestrator-adapter/src/orchestrator_adapter/app/main.py` (PH0) | **PH0: thread `settings.trace_id` into `OMCRunner(...)` construction** |
+| `services/orchestrator-adapter/src/orchestrator_adapter/test_omc_runner.py` (PH0) | **PH0: regression tests asserting env contains/omits `OMB_TRACE_ID`** |
+| `services/registry-state/src/registry_state/test_no_subprocess_spawn.py` (NEW, PH8) | **PH8: ratchet test asserting zero `subprocess.Popen` / `create_subprocess_*` in registry-state** |
+| `tests/integration/docker-compose.j{1,3,6}.yml` (PH0) | **PH0: propagate `WORKER_TRACE_ID` from harness to worker-wrapper service env** |
+| `_bmad-output/implementation-artifacts/9-6-worker-wrapper-trace-id-cli-flag.md` | All 31 pass-1 + 28 pass-2 checkboxes checked; Dev Agent Record updated; PH9 Q1/H0 narrative reconciled; PH10 stale-refs swept; PH11 commit count corrected; PM1 test-count delta updated; PL2 AC3 hybrid choice documented; PL3 stale sketch deleted |
 | `_bmad-output/implementation-artifacts/deferred-work.md` | D1/D2/D3 deferred items from pass-1 appended |
 
 ### Test count delta
@@ -470,11 +492,12 @@ TOTAL: 96
 
 ### CLI flag vs env var decision
 
-**pass-1 review update (H2): `--trace-id` CLI flag is now gated behind `worker_emit_trace_id_flag: bool = False` (default OFF).**
+**pass-1 review update (H2): `--trace-id` CLI flag is now gated behind `emit_trace_id_flag: bool = False` (default OFF).**
+**pass-2 review update (PH7): canonical env var is `WORKER_EMIT_TRACE_ID_FLAG`; the legacy `WORKER_WORKER_EMIT_TRACE_ID_FLAG` double-prefix name is kept as a backwards-compat alias only.**
 
-Rationale: the spec explicitly warned that `claude --help` may not yet accept `--trace-id`; enabling an unknown flag risks subprocess spawn failure (every worker run). The env-var surface (`OMB_TRACE_ID`, always set in `_spawn()`) is non-breaking today. The flag will be flipped ON once Claude Code upstream confirms it accepts `--trace-id`. Document in CI: set `WORKER_WORKER_EMIT_TRACE_ID_FLAG=1` to opt in.
+Rationale: the spec explicitly warned that `claude --help` may not yet accept `--trace-id`; enabling an unknown flag risks subprocess spawn failure (every worker run). The env-var surface (`OMB_TRACE_ID`, always set in `_spawn()`) is non-breaking today. The flag will be flipped ON once Claude Code upstream confirms it accepts `--trace-id`. Document in CI: set `WORKER_EMIT_TRACE_ID_FLAG=1` to opt in (legacy double-prefix name still accepted).
 
-`AliasChoices("WORKER_TRACE_ID", "OMB_WORKER_TRACE_ID", "OMB_TRACE_ID")` added (M7) so spawning services that set any of the three names reach the worker correctly.
+`AliasChoices("trace_id", "WORKER_TRACE_ID", "OMB_WORKER_TRACE_ID", "OMB_TRACE_ID")` declared (M7 + review pass-2 PM10) so spawning services that set any of the three env names — or callers passing `trace_id=` to the ctor directly — reach the worker correctly. Review pass-2 PH1 closes the empty-canonical-blackholes-fallback edge case (alias-first-wins on presence vs. validity).
 
 **Env var name deviation (unchanged from initial implementation):** `WORKER_TRACE_ID` is canonical (Pydantic `env_prefix="WORKER_"` + field name `trace_id`). `OMB_WORKER_TRACE_ID` and `OMB_TRACE_ID` accepted as aliases.
 
@@ -484,18 +507,20 @@ Rationale: the spec explicitly warned that `claude --help` may not yet accept `-
 2. **Field name**: `trace_id` (not `worker_trace_id`) — natural name with WORKER_ prefix.
 3. **finish_session / _emit_tier3_performed signature**: changed from `trace_id: str | None = None` (original impl) to `settings: WorkerSettings` (H3/M5 pass-1) — uniform API. All callers updated.
 4. **H2 flag gating**: `--trace-id` CLI flag now default-OFF (not in original impl). Pass-1 hardening.
-5. **H0 registry-state**: User-approved exception to non-goals. Exhaustive search (`grep -rn "create_subprocess|Popen|spawn" services/registry-state/src/`) returned zero hits — no worker spawn site exists in current code. No registry-state files modified. Deferred concern documented as Story 9.7 blocker.
-6. **DeprecationWarning count**: 98 → 96 (2 fewer, not worker-wrapper source).
+5. **H0 registry-state**: User-approved exception to non-goals. Exhaustive pass-1 search (`grep -rn "create_subprocess|Popen|spawn" services/registry-state/src/`) returned zero hits — no worker spawn site exists in registry-state. **Pass-2 caveat:** pass-1 stopped at the obvious search target; review pass-2 PH0 discovered `services/orchestrator-adapter/adapters/omc_runner.py` (the REAL spawner) and addresses it in this story — `OMCRunner.__init__(trace_id=...)` + `env["OMB_TRACE_ID"]` in `_spawn`. PH8 added a ratchet test asserting registry-state stays spawn-free.
+6. **PH7 field rename (review pass-2)**: original pass-1 introduced `emit_trace_id_flag` with effective env var `WORKER_EMIT_TRACE_ID_FLAG` already correct, but the spec/pass-1 narrative mentioned the double-prefix name. Pass-2 makes the canonical name explicit and adds the legacy double-prefix as a backwards-compat alias.
+7. **PH0 scope expansion (review pass-2)**: user-approved exception via Q2 (analogous to Q1 in pass-1). orchestrator-adapter modification is outside the original non-goals boundary; user explicitly approved the scope-extension to land the real spawner-side fix.
+8. **DeprecationWarning count**: 98 → 96 (2 fewer, not worker-wrapper source).
 
 ### Follow-up TODOs surfaced for Epic 9
 
-1. ~~**Registry-state spawner**~~ → **H0 resolution**: No spawn site found in registry-state. The orchestration layer that spawns worker-wrapper subprocesses does not exist yet. When it is built (Story 9.7 or separate), it MUST set `WORKER_TRACE_ID=<task.trace_id>` in the subprocess env. Until then, every worker invocation mints a fresh UUIDv7 (graceful degradation per AC2 — functional but trace chain broken).
+1. ~~**Registry-state spawner**~~ → **PH0 resolution (pass-2)**: orchestrator-adapter/`OMCRunner` now propagates `trace_id` to the spawned subprocess env. Registry-state holds no spawn site (covered by the PH8 ratchet test going forward).
 2. **Integration test green gate**: journeys 1/3/6 and separability tests S1/S2 fail pre-9.6 with `ModuleNotFoundError: _build_scripted_worker`. Pre-existing infrastructure gap.
-3. **AC10 integration test**: deferred to Story 9.7 — blocked by H0/Q1 spawner gap (no registry-state spawn site + integration journey tests broken pre-9.6).
+3. **AC10 integration test**: deferred to Story 9.7 — blocked by the pre-existing scripted-worker infrastructure gap (above). The PH0 + PH8 fixes have wired the producer side; AC10 can now land once the journey harness is restored.
 
 ### Epic 9 mid-epic milestone
 
-**All 5 entry-point ingresses of Epic 9's α trace_id propagation kernel are now closed:**
+**Consumer + the REAL producer (`OMCRunner`) wired; registry-state-style spawners covered by ratchet test (PH8).**
 
 | Story | Ingress | Mechanism |
 |---|---|---|
@@ -504,13 +529,14 @@ Rationale: the spec explicitly warned that `claude --help` may not yet accept `-
 | 9.4 | Console CLI | UUIDv7 minted at command entry → `X-Trace-Id` |
 | 9.5 | MCP tool callers | `caller_trace_id` explicit input on every MCP tool |
 | **9.6** | **Worker subprocess** | **`WORKER_TRACE_ID` env → (gated) `--trace-id` flag + `OMB_TRACE_ID` + `caller_trace_id` on every MCP emission** |
+| **9.6 PH0** | **OMC subprocess (orchestrator-adapter)** | **`OMCRunner._spawn` exports `OMB_TRACE_ID` to child env so worker resolves via `AliasChoices`** |
 
-**Cumulative Epic 9 stats (Stories 9.1–9.6) — pass-1 review update (L6):**
-- Commits: **17** feat/fix/chore across 9.1-9.6 (exact: `git log --grep='story-9' --oneline | wc -l`)
-- Tests added: ~151 across stories 9.1-9.6 (Story 9.6 initial +23; pass-1 +31 additional; total suite 2699 collected)
-- DeprecationWarning delta: 98 → 96 (post pass-1; 0 from worker-wrapper source)
-- mypy --strict baseline: 97 source files, 0 errors (held throughout Epic 9)
-- Story 9.7 will: bump schema_version 1.0.0 → 1.1.0, add `oh-my-bmad-cli trace <id>` operator query, and complete the end-to-end AC10 integration assertion (blocked by H0 spawner gap).
+**Cumulative Epic 9 stats (Stories 9.1–9.6) — pass-2 review update (PH11):**
+- Commits: **18** feat/fix/chore across 9.1-9.6 (exact: `git log --grep='story-9' --oneline | wc -l`; review pass-2 PH11 corrected the prior 17 figure). The pass-2 commit will increment this to 19; rerun the command at the finalization step if the figure is quoted.
+- Tests added: pre-9.6 baseline 2644 → after pass-2 ≈2706 collected (original 9.6 dev +23, pass-1 +31, pass-2 +7).
+- DeprecationWarning delta: 98 → 96 (post pass-1; 0 from worker-wrapper source — preserved through pass-2).
+- mypy --strict baseline: 98 source files, 0 errors (added `services/registry-state/src/registry_state/test_no_subprocess_spawn.py` via PH8 — held throughout pass-2).
+- Story 9.7 will: bump schema_version 1.0.0 → 1.1.0, add `oh-my-bmad-cli trace <id>` operator query, and land the AC10 integration assertion (PH0 unblocked the producer side; only the scripted-worker harness restoration remains).
 
 ---
 

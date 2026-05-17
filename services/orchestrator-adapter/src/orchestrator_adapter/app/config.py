@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from events.ids import new_worker_id
-from pydantic import Field, PrivateAttr, SecretStr
+from pydantic import AliasChoices, Field, PrivateAttr, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -46,6 +46,21 @@ class OrchestratorSettings(BaseSettings):
 
     # Story 5.15 — Per-task budget enforcement (FR44). 0 disables enforcement.
     task_token_budget: int = Field(default=50_000, ge=0)
+
+    # Story 9.6 review pass-2 PH0 — orchestrator-adapter is the REAL spawner
+    # of worker-wrapper (via OMC).  ``OMCRunner`` propagates this trace_id
+    # to the child subprocess as ``OMB_TRACE_ID`` so downstream workers
+    # resolve it via ``AliasChoices``.  Accepts the same three env-var names
+    # as the worker side (canonical first).
+    trace_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "trace_id",
+            "ORCHESTRATOR_TRACE_ID",
+            "OMB_ORCHESTRATOR_TRACE_ID",
+            "OMB_TRACE_ID",
+        ),
+    )
 
     _resolved_actor_id: str | None = PrivateAttr(default=None)
 

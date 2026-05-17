@@ -106,7 +106,19 @@ async def _run() -> None:
             session_id, worker_id = await start_session(clients, settings)
 
             ready.touch()
-            log.info("ready", service=_SERVICE, session_id=session_id, worker_id=worker_id)
+            # Story 9.6 review pass-2 PM11 — surface the flag state + resolved
+            # trace_id (8-char preview only) so operators can confirm at boot
+            # whether ``--trace-id`` is being passed to Claude Code and what
+            # the worker's effective trace_id is.
+            resolved_tid = settings.resolve_trace_id()
+            log.info(
+                "ready",
+                service=_SERVICE,
+                session_id=session_id,
+                worker_id=worker_id,
+                trace_id_emit_flag=settings.emit_trace_id_flag,
+                trace_id_preview=resolved_tid[:8] + "...",
+            )
 
             heartbeat_task = asyncio.create_task(
                 heartbeat_loop(clients, settings, session_id, stop_event),

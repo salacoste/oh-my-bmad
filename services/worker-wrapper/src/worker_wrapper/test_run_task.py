@@ -31,18 +31,8 @@ from worker_wrapper.adapters.claude_code_runner import (
 from worker_wrapper.app.config import WorkerSettings
 from worker_wrapper.app.main import run_task
 
-_TRACE_ID_ENV_NAMES = (
-    "WORKER_TRACE_ID",
-    "OMB_WORKER_TRACE_ID",
-    "OMB_TRACE_ID",
-)
-
-
-@pytest.fixture(autouse=True)
-def _clean_trace_id_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Story 9.6 review pass-1 H6 — strip ambient trace_id env names per test."""
-    for name in _TRACE_ID_ENV_NAMES:
-        monkeypatch.delenv(name, raising=False)
+# Story 9.6 review pass-2 PH5 — env-cleaning fixture moved to
+# ``worker_wrapper/conftest.py`` (single shared autouse fixture).
 
 
 def _make_settings(

@@ -2,12 +2,20 @@
 
 Manages the OMC process lifecycle: spawn, stdin prompt, stdout capture,
 graceful shutdown (SIGTERM → SIGKILL), and timeout enforcement.
+
+Story 9.6 review pass-2 PH0: ``OMCRunner`` now accepts an optional
+``trace_id`` and propagates it to the spawned subprocess via
+``env["OMB_TRACE_ID"]``.  The OMC child (and any worker-wrapper it
+spawns transitively) picks up the trace_id through the
+``WORKER_TRACE_ID`` / ``OMB_TRACE_ID`` ``AliasChoices`` declared on
+:class:`worker_wrapper.app.config.WorkerSettings`.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,7 +47,13 @@ class OMCRunner:
         print(result.stdout)
     """
 
-    def __init__(self, omc_path: Path, timeout_s: float = 120.0) -> None:
+    def __init__(
+        self,
+        omc_path: Path,
+        timeout_s: float = 120.0,
+        *,
+        trace_id: str | None = None,
+    ) -> None:
         if not omc_path.is_dir():
             raise ValueError(f"omc_path does not exist: {omc_path}")
         cli = omc_path / "bridge" / "cli.cjs"
@@ -48,15 +62,29 @@ class OMCRunner:
         self._omc_path = omc_path
         self._cli = cli
         self._timeout_s = timeout_s
+        # Story 9.6 review pass-2 PH0 — trace_id propagated to the OMC child
+        # subprocess via env so transitive worker-wrapper spawns pick it up.
+        self._trace_id: str | None = trace_id
         self._process: asyncio.subprocess.Process | None = None
 
     async def _spawn(self, prompt: str) -> asyncio.subprocess.Process:
-        """Spawn ``node bridge/cli.cjs launch`` with the prompt on stdin."""
+        """Spawn ``node bridge/cli.cjs launch`` with the prompt on stdin.
+
+        Story 9.6 review pass-2 PH0: when ``trace_id`` is set on the runner,
+        export ``OMB_TRACE_ID=<trace_id>`` to the child env so downstream
+        spawns (worker-wrapper et al.) resolve it via ``AliasChoices``.
+        """
         log = structlog.get_logger(__name__)
         preview = prompt[:_LOG_PROMPT_PREVIEW_LEN]
         if len(prompt) > _LOG_PROMPT_PREVIEW_LEN:
             preview += "..."
         log.info("omc_spawning", prompt_preview=preview, cwd=str(self._omc_path))
+        # Build env: start from parent env so PATH / NODE_PATH / etc. still
+        # work, then layer the trace_id when present.  Story 9.6 review
+        # pass-2 PH0.
+        env = dict(os.environ)
+        if self._trace_id is not None:
+            env["OMB_TRACE_ID"] = self._trace_id
         return await asyncio.create_subprocess_exec(
             "node",
             str(self._cli),
@@ -65,6 +93,7 @@ class OMCRunner:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(self._omc_path),
+            env=env,
         )
 
     async def _drain_stderr(self, process: asyncio.subprocess.Process) -> str:

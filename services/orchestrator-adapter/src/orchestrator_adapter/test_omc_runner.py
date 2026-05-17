@@ -136,3 +136,54 @@ class TestOMCRunnerRun:
 
         proc.terminate.assert_called()
         assert runner._process is None
+
+
+# ---------------------------------------------------------------------------
+# Story 9.6 review pass-2 PH0 — trace_id propagation via env.
+# ---------------------------------------------------------------------------
+
+
+class TestOMCRunnerTraceIdEnv:
+    """PH0: ``OMCRunner._spawn`` exports ``OMB_TRACE_ID`` to the child env
+    when ``trace_id`` is set; the env var is absent (or inherits parent's
+    value) when ``trace_id`` is None."""
+
+    @pytest.mark.asyncio
+    async def test_spawn_sets_omb_trace_id_when_provided(self, omc_dir: Path) -> None:
+        from typing import Any
+
+        captured_env: dict[str, str] = {}
+
+        async def _fake_exec(*a: Any, **kw: Any) -> Any:
+            captured_env.update(kw.get("env", {}))
+            return _mock_process()
+
+        with patch(_SPAWN_PATH, side_effect=_fake_exec):
+            runner = OMCRunner(
+                omc_path=omc_dir,
+                trace_id="01917e5c-a7d1-7000-8abc-0123456789ab",
+            )
+            await runner._spawn("hello")
+        assert captured_env.get("OMB_TRACE_ID") == "01917e5c-a7d1-7000-8abc-0123456789ab"
+
+    @pytest.mark.asyncio
+    async def test_spawn_omits_omb_trace_id_when_not_provided(
+        self, omc_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When ``trace_id`` is None, ``_spawn`` does NOT set ``OMB_TRACE_ID``
+        on top of the parent's env (the env var is either inherited from the
+        parent if set, or absent)."""
+        from typing import Any
+
+        # Strip ambient OMB_TRACE_ID to remove inheritance ambiguity.
+        monkeypatch.delenv("OMB_TRACE_ID", raising=False)
+        captured_env: dict[str, str] = {}
+
+        async def _fake_exec(*a: Any, **kw: Any) -> Any:
+            captured_env.update(kw.get("env", {}))
+            return _mock_process()
+
+        with patch(_SPAWN_PATH, side_effect=_fake_exec):
+            runner = OMCRunner(omc_path=omc_dir, trace_id=None)
+            await runner._spawn("hello")
+        assert "OMB_TRACE_ID" not in captured_env
