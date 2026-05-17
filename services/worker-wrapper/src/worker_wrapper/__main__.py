@@ -116,15 +116,15 @@ async def _run() -> None:
             with contextlib.suppress(asyncio.CancelledError):
                 await heartbeat_task
 
+            # Story 9.6 review pass-1 M5 / L8: finish_session resolves the
+            # trace_id from ``settings`` internally — uniform API with
+            # ``start_session`` / ``heartbeat_loop`` (no kwarg pollution).
             await finish_session(
                 clients,
+                settings,
                 session_id,
                 worker_id,
                 worktree_path=settings.worktree_path,
-                # Story 9.6 / FR59 — propagate worker's trace_id into the
-                # session.finished envelope so all session-lifecycle events
-                # share the same causal chain.
-                trace_id=settings.resolve_trace_id(),
             )
         finally:
             ready.unlink(missing_ok=True)

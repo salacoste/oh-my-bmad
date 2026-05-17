@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import structlog
 from events.envelope import is_valid_trace_id
 from events.ids import new_session_id, new_uuid7, new_worker_id
-from pydantic import Field, SecretStr, field_validator
+from pydantic import AliasChoices, Field, PrivateAttr, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,7 +22,12 @@ class WorkerSettings(BaseSettings):
 
     model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
         env_prefix="WORKER_",
+        populate_by_name=True,
     )
+
+    # ------------------------------------------------------------------
+    # Public fields (Story 9.6 review pass-1 L3 — grouped together).
+    # ------------------------------------------------------------------
 
     task_registry_command: str = "python"
     task_registry_args: list[str] = ["-m", "task_registry_mcp"]
@@ -62,20 +67,41 @@ class WorkerSettings(BaseSettings):
     github_api_base_url: str = "https://api.github.com"
     github_timeout_s: float = Field(default=10.0, gt=0)
 
+    # Story 9.6 review pass-1 H2 — CLI flag gating.
+    # Default OFF until Claude Code upstream consumes ``--trace-id``. The
+    # ``OMB_TRACE_ID`` env var (set by ``_spawn``) is the non-breaking
+    # surface that ships today; the CLI flag is opt-in until verified.
+    worker_emit_trace_id_flag: bool = False
+
     # Story 9.6 / FR59 / NFR-O7 — trace_id propagation.
+    #
+    # Review pass-1 M7: a spawning service may intuitively export either of
+    # ``WORKER_TRACE_ID`` (canonical), ``OMB_WORKER_TRACE_ID`` (spec name), or
+    # ``OMB_TRACE_ID`` (subprocess-facing name). ``AliasChoices`` accepts all
+    # three so the worker never silently mints a fresh UUIDv7 when the
+    # spawner sets the "wrong" name.
     trace_id: str | None = Field(
         default=None,
+        validation_alias=AliasChoices(
+            "WORKER_TRACE_ID",
+            "OMB_WORKER_TRACE_ID",
+            "OMB_TRACE_ID",
+        ),
         description=(
             "Trace_id supplied by the spawning service for this worker invocation. "
-            "Set via WORKER_TRACE_ID env var. Story 9.6 / FR59 / NFR-O7. "
-            "Must match Story 9.1 contract (UUIDv7 or 'tg:<update_id>'); "
-            "if absent or invalid, the worker mints a fresh UUIDv7 with a WARNING "
-            "log. Threaded through Claude Code subprocess as OMB_TRACE_ID env var "
-            "AND as caller_trace_id on every clawhip-bridge MCP tool call. "
-            "Spec proposed OMB_WORKER_TRACE_ID but existing WorkerSettings prefix "
-            "is WORKER_, so WORKER_TRACE_ID is the canonical env var name."
+            "Set via WORKER_TRACE_ID (canonical), OMB_WORKER_TRACE_ID, or "
+            "OMB_TRACE_ID env vars (all three are accepted via AliasChoices — "
+            "review pass-1 M7). Story 9.6 / FR59 / NFR-O7. Must match Story 9.1 "
+            "contract (UUIDv7 or 'tg:<update_id>'); if absent or invalid, the "
+            "worker mints a fresh UUIDv7 with a WARNING log. Threaded through "
+            "Claude Code subprocess as OMB_TRACE_ID env var AND as "
+            "caller_trace_id on every clawhip-bridge MCP tool call."
         ),
     )
+
+    # ------------------------------------------------------------------
+    # Validators (Story 9.6 review pass-1 L3 — grouped after public fields).
+    # ------------------------------------------------------------------
 
     @field_validator("trace_id", mode="before")
     @classmethod
@@ -87,25 +113,82 @@ class WorkerSettings(BaseSettings):
         not assert (asserts are stripped under ``python -O``). Following Story 9.1
         contract: ``is_valid_trace_id`` is the SHAPE oracle — use it instead of
         bare ``isinstance`` checks (Story 9.2 pass-2 N13 lesson).
+
+        Review pass-1 M2 / L4 / H8: empty string and non-string values log a
+        WARNING (no longer silent), and the warning preview uses ``repr()`` so
+        any CRLF / NULL / ANSI / RTL override / ZWJ in the env var is escaped
+        instead of injected into structured logs.
         """
-        if value is None or value == "":
+        # Absent — silent None per AC2.
+        if value is None:
             return None
-        if not isinstance(value, str):
-            return None
-        if not is_valid_trace_id(value):
-            log = structlog.get_logger(__name__)
-            # Preview-safe: cap at 80 chars per Story 9.3 pass-2 S1 lesson —
-            # never echo a full untrusted token back to logs.
+        log = structlog.get_logger(__name__)
+        # Empty string is "present-but-invalid" (a spawner bug), not "absent".
+        # Review pass-1 M2: log a WARNING instead of silently returning None.
+        if value == "":
             log.warning(
                 "worker_trace_id_invalid_will_mint_fresh",
-                value_preview=value[:80],
+                value_preview=repr(""),  # review pass-1 H8 — escaped preview
+                reason="empty_string",
+            )
+            return None
+        # Review pass-1 L4: non-string types also log a WARNING (merged branch
+        # with the shape failure below — single canonical log event).
+        if not isinstance(value, str) or not is_valid_trace_id(value):
+            # Build a safe preview: ``repr`` on a string escapes control chars
+            # (CRLF, NULL, ANSI, ZWJ U+200D, RTL override U+202E, etc.).
+            preview_src = value if isinstance(value, str) else str(value)
+            log.warning(
+                "worker_trace_id_invalid_will_mint_fresh",
+                # Review pass-1 H8 — repr() so log lines can't be smuggled.
+                value_preview=repr(preview_src[:80]),
+                reason="shape_mismatch",
             )
             return None
         return value
 
-    _resolved_session_id: str | None = None
-    _resolved_worker_id: str | None = None
-    _resolved_trace_id: str | None = None
+    # ------------------------------------------------------------------
+    # Private attrs (Story 9.6 review pass-1 H5 — PrivateAttr declarations).
+    # ------------------------------------------------------------------
+    #
+    # Pre-pass-1 these were plain ``str | None = None`` class attrs; mutating
+    # them on an instance worked but was a Pydantic anti-pattern (class-level
+    # data unless declared ``PrivateAttr``). Tests previously reached in via
+    # ``settings._resolved_trace_id = None`` — that hack is no longer needed
+    # because ``model_post_init`` (H4) eagerly populates these before any
+    # concurrent reader sees them.
+
+    _resolved_session_id: str | None = PrivateAttr(default=None)
+    _resolved_worker_id: str | None = PrivateAttr(default=None)
+    _resolved_trace_id: str | None = PrivateAttr(default=None)
+
+    # ------------------------------------------------------------------
+    # Lifecycle hooks (Story 9.6 review pass-1 H4).
+    # ------------------------------------------------------------------
+
+    def model_post_init(self, __context: Any) -> None:
+        """Eagerly resolve trace_id at instance construction.
+
+        Review pass-1 H4: the previous "check-then-act" pattern inside
+        :meth:`resolve_trace_id` was racy — multiple coroutines
+        (``heartbeat_loop``, ``start_session``, ``run_task``) could read
+        ``_resolved_trace_id`` before any single coroutine wrote it, each
+        minting a different ``new_uuid7()``. Resolving eagerly here means the
+        field is populated before any concurrent reader exists; subsequent
+        ``resolve_trace_id()`` calls are pure reads.
+
+        ``session_id`` / ``worker_id`` retain their lazy pattern because they
+        are not similarly racy (they're only resolved from the main coroutine
+        in ``start_session``).
+        """
+        # Local var pattern (review pass-1 M1) — strictly-typed ``str`` is
+        # assigned both to the private cache and returned by ``resolve_*``.
+        resolved: str = self.trace_id or new_uuid7()
+        self._resolved_trace_id = resolved
+
+    # ------------------------------------------------------------------
+    # Methods (Story 9.6 review pass-1 L3 — grouped after private attrs).
+    # ------------------------------------------------------------------
 
     def resolve_session_id(self) -> str:
         """Return ``session_id`` or generate a new UUIDv7 if empty (cached)."""
@@ -120,15 +203,18 @@ class WorkerSettings(BaseSettings):
         return self._resolved_worker_id
 
     def resolve_trace_id(self) -> str:
-        """Return validated ``trace_id`` or mint+cache a fresh UUIDv7 (Story 9.6).
+        """Return the validated ``trace_id`` (Story 9.6).
 
-        AC5: minted ONCE per ``WorkerSettings`` instance — every emission within
-        a single worker invocation shares the same trace_id. The cache makes the
-        per-invocation singleton explicit and avoids drift between e.g. the
-        Claude Code subprocess argv/env and the clawhip-bridge MCP calls.
+        Review pass-1 H4 + M1: ``model_post_init`` eagerly resolves the value
+        at construction so this method is a pure read. The narrowing assert
+        (review pass-1 M1) keeps mypy --strict happy without coercing the
+        type at call sites.
         """
-        if self._resolved_trace_id is None:
-            self._resolved_trace_id = self.trace_id or new_uuid7()
+        # ``model_post_init`` guarantees this is non-None for any
+        # successfully-constructed instance — narrow the Optional for mypy.
+        assert self._resolved_trace_id is not None, (
+            "model_post_init must have populated _resolved_trace_id"
+        )
         return self._resolved_trace_id
 
     def resolve_task_id(self) -> str | None:

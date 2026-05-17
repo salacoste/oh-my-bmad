@@ -6,6 +6,10 @@ Tests cover:
   - Rejection path: approval.rejected → FAILED transition
   - Timeout path: no approval arrives
   - Restart recovery: AWAITING_APPROVAL sidecar re-attach
+
+Story 9.6 review pass-1 H6 / L1: ambient ``WORKER_TRACE_ID`` (and aliases)
+is cleared from the env per test; ``new_uuid7`` / ``is_valid_trace_id``
+imports are hoisted to module-top instead of inline.
 """
 
 from __future__ import annotations
@@ -16,6 +20,8 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from events.envelope import is_valid_trace_id
+from events.ids import new_uuid7
 
 from worker_wrapper.adapters.claude_code_runner import (
     ClaudeCodeResult,
@@ -24,16 +30,31 @@ from worker_wrapper.adapters.claude_code_runner import (
 from worker_wrapper.app.config import WorkerSettings
 from worker_wrapper.app.main import run_task
 
+_TRACE_ID_ENV_NAMES = (
+    "WORKER_TRACE_ID",
+    "OMB_WORKER_TRACE_ID",
+    "OMB_TRACE_ID",
+)
+
+
+@pytest.fixture(autouse=True)
+def _clean_trace_id_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Story 9.6 review pass-1 H6 — strip ambient trace_id env names per test."""
+    for name in _TRACE_ID_ENV_NAMES:
+        monkeypatch.delenv(name, raising=False)
+
 
 def _make_settings(
     tmp_path: Path,
     *,
     event_log_dir: str = "",
+    trace_id: str | None = None,
 ) -> WorkerSettings:
     return WorkerSettings(
         task_id="t-00000000-0000-7000-8000-000000000001",
         worktree_path=str(tmp_path),
         event_log_dir=event_log_dir,
+        trace_id=trace_id,
     )
 
 
@@ -343,20 +364,27 @@ class TestRunTaskTraceIdPropagation:
         tmp_path: Path,
     ) -> None:
         """AC4 / AC5 / AC9: every emit_event call from run_task carries the
-        same caller_trace_id (the worker-resolved trace_id, byte-identical)."""
-        from events.ids import new_uuid7
+        same caller_trace_id (the worker-resolved trace_id, byte-identical).
 
+        Story 9.6 review pass-1 H6: settings built via constructor with
+        ``trace_id=tid`` — exercises the real validator path; no
+        post-construction private-attr mutation.
+        """
         tid = new_uuid7()
-        settings = _make_settings(tmp_path, event_log_dir=str(tmp_path / "logs"))
-        settings.trace_id = tid
-        settings._resolved_trace_id = None  # ensure fresh resolve
+        settings = _make_settings(
+            tmp_path,
+            event_log_dir=str(tmp_path / "logs"),
+            trace_id=tid,
+        )
 
         clients = _FakeClients()
         captured: list[str] = []
 
-        async def capture(name: str, arguments: dict[str, object]) -> None:
+        async def capture(name: str, arguments: dict[str, object]) -> str:
             if name == "emit_event":
-                captured.append(arguments["caller_trace_id"])
+                tid_val = arguments["caller_trace_id"]
+                if isinstance(tid_val, str):
+                    captured.append(tid_val)
             return "evt-1"
 
         clients.clawhip_bridge.call_tool = AsyncMock(side_effect=capture)
@@ -391,17 +419,17 @@ class TestRunTaskTraceIdPropagation:
     ) -> None:
         """AC2 / AC5: when WORKER_TRACE_ID is absent, run_task uses the
         WorkerSettings-minted UUIDv7 and threads it to all emissions."""
-        from events.envelope import is_valid_trace_id
-
         settings = _make_settings(tmp_path, event_log_dir=str(tmp_path / "logs"))
-        # trace_id is None on this settings instance; resolve_trace_id will mint.
+        # trace_id is None on this settings instance; model_post_init mints it.
 
         clients = _FakeClients()
         captured: list[str] = []
 
-        async def capture(name: str, arguments: dict[str, object]) -> None:
+        async def capture(name: str, arguments: dict[str, object]) -> str:
             if name == "emit_event":
-                captured.append(arguments["caller_trace_id"])
+                tid_val = arguments["caller_trace_id"]
+                if isinstance(tid_val, str):
+                    captured.append(tid_val)
             return "evt-1"
 
         clients.clawhip_bridge.call_tool = AsyncMock(side_effect=capture)
@@ -427,12 +455,12 @@ class TestRunTaskTraceIdPropagation:
         tmp_path: Path,
     ) -> None:
         """Approval-gate timeout path threads the worker trace_id to tier3 emit."""
-        from events.ids import new_uuid7
-
         tid = new_uuid7()
-        settings = _make_settings(tmp_path, event_log_dir=str(tmp_path / "logs"))
-        settings.trace_id = tid
-        settings._resolved_trace_id = None
+        settings = _make_settings(
+            tmp_path,
+            event_log_dir=str(tmp_path / "logs"),
+            trace_id=tid,
+        )
 
         clients = _FakeClients()
         captured: list[dict[str, object]] = []
@@ -487,20 +515,23 @@ class TestRunTaskTraceIdPropagation:
         tmp_path: Path,
     ) -> None:
         """AC4 / AC9: tier3.action_performed envelope carries caller_trace_id
-        equal to the worker's resolved trace_id."""
-        from events.ids import new_uuid7
+        equal to the worker's resolved trace_id.
 
+        Story 9.6 review pass-1 H3 / M5: signature now takes ``settings``
+        instead of an Optional ``trace_id`` kwarg (uniform API).
+        """
         from worker_wrapper.app.main import _emit_tier3_performed
 
         tid = new_uuid7()
         clients = _FakeClients()
+        settings = _make_settings(tmp_path, trace_id=tid)
 
         await _emit_tier3_performed(
             clients,
+            settings,
             task_id="t-00000000-0000-7000-8000-000000000001",
             accepted=True,
             approval_event_id="evt-approval",
-            trace_id=tid,
         )
 
         emit_call = clients.clawhip_bridge.call_tool.call_args
@@ -509,20 +540,22 @@ class TestRunTaskTraceIdPropagation:
         assert args["caller_trace_id"] == tid
 
     @pytest.mark.asyncio
-    async def test_tier3_action_mints_trace_id_when_absent(
+    async def test_tier3_action_uses_settings_minted_trace_id(
         self,
         tmp_path: Path,
     ) -> None:
-        """Defensive fallback: legacy callers omitting trace_id get a fresh
-        UUIDv7 so the emit_event Pydantic validation still passes (no crash)."""
-        from events.envelope import is_valid_trace_id
-
+        """Story 9.6 review pass-1 H3: when WORKER_TRACE_ID is absent the
+        settings-minted UUIDv7 is threaded — no defensive ``or new_uuid7()``
+        diverges from the run_task chain."""
         from worker_wrapper.app.main import _emit_tier3_performed
 
         clients = _FakeClients()
+        settings = _make_settings(tmp_path)
+        expected = settings.resolve_trace_id()
 
         await _emit_tier3_performed(
             clients,
+            settings,
             task_id="t-00000000-0000-7000-8000-000000000001",
             accepted=False,
             reason="some reason",
@@ -530,4 +563,114 @@ class TestRunTaskTraceIdPropagation:
 
         emit_call = clients.clawhip_bridge.call_tool.call_args
         args = emit_call[1]["arguments"]
+        assert args["caller_trace_id"] == expected
         assert is_valid_trace_id(args["caller_trace_id"]) is True
+
+
+# ---------------------------------------------------------------------------
+# Story 9.6 review pass-1 M6 — triple-equality byte-identity test (AC9)
+# ---------------------------------------------------------------------------
+
+
+class TestTriEqualByteIdentity:
+    """AC9: a single test that asserts the same trace_id literally appears on
+    all three surfaces — argv ``--trace-id`` value, env ``OMB_TRACE_ID``, and
+    MCP ``caller_trace_id`` — for one ``WorkerSettings`` instance."""
+
+    @pytest.mark.asyncio
+    async def test_trace_id_byte_identical_across_argv_env_and_mcp_call(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        from worker_wrapper.adapters.claude_code_runner import ClaudeCodeRunner
+
+        tid = new_uuid7()
+        settings = WorkerSettings(
+            anthropic_api_key="sk-test",
+            claude_command="claude",
+            claude_max_turns=0,
+            claude_output_format="stream-json",
+            trace_id=tid,
+            # H2 — flag-gating opt-in so argv contains --trace-id <value>.
+            worker_emit_trace_id_flag=True,
+        )
+
+        # Build runner — exposes argv via _build_args and env via _spawn.
+        runner = ClaudeCodeRunner(settings)
+        args = runner._build_args("hi")
+        idx = args.index("--trace-id")
+        argv_tid = args[idx + 1]
+
+        # Capture env from a faked subprocess_exec.
+        captured_env: dict[str, str] = {}
+
+        async def _fake_exec(*a: Any, **kw: Any) -> Any:
+            captured_env.update(kw.get("env", {}))
+            proc = MagicMock()
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_fake_exec):
+            await runner._spawn("prompt", tmp_path)
+        env_tid = captured_env["OMB_TRACE_ID"]
+
+        # Emit a single MCP call and capture caller_trace_id from arguments.
+        clients = _FakeClients()
+        from worker_wrapper.app.main import _emit_tier3_performed
+
+        captured_mcp: dict[str, object] = {}
+
+        async def capture(name: str, arguments: dict[str, object]) -> str:
+            captured_mcp.update(arguments)
+            return "evt-1"
+
+        clients.clawhip_bridge.call_tool = AsyncMock(side_effect=capture)
+        await _emit_tier3_performed(
+            clients,
+            settings,
+            task_id="t-00000000-0000-7000-8000-000000000001",
+            accepted=True,
+        )
+        mcp_tid = captured_mcp["caller_trace_id"]
+
+        # Single triple-equality assertion per spec M6.
+        assert argv_tid == env_tid == mcp_tid == tid
+
+
+# ---------------------------------------------------------------------------
+# Story 9.6 review pass-1 H2 — --trace-id flag gating
+# ---------------------------------------------------------------------------
+
+
+class TestTraceIdFlagGating:
+    """H2: the ``--trace-id`` CLI flag is absent unless
+    ``worker_emit_trace_id_flag`` is enabled."""
+
+    def test_flag_absent_by_default(self, tmp_path: Path) -> None:
+        from worker_wrapper.adapters.claude_code_runner import ClaudeCodeRunner
+
+        # Default settings (worker_emit_trace_id_flag=False).
+        settings = WorkerSettings(
+            anthropic_api_key="sk-test",
+            claude_command="claude",
+            claude_output_format="stream-json",
+            trace_id=new_uuid7(),
+        )
+        runner = ClaudeCodeRunner(settings)
+        args = runner._build_args("hi")
+        assert "--trace-id" not in args
+
+    def test_flag_present_when_enabled(self, tmp_path: Path) -> None:
+        from worker_wrapper.adapters.claude_code_runner import ClaudeCodeRunner
+
+        tid = new_uuid7()
+        settings = WorkerSettings(
+            anthropic_api_key="sk-test",
+            claude_command="claude",
+            claude_output_format="stream-json",
+            trace_id=tid,
+            worker_emit_trace_id_flag=True,
+        )
+        runner = ClaudeCodeRunner(settings)
+        args = runner._build_args("hi")
+        assert "--trace-id" in args
+        assert args[args.index("--trace-id") + 1] == tid

@@ -97,12 +97,17 @@ class ClaudeCodeRunner:
     def _build_args(self, prompt: str) -> list[str]:
         """Build CLI arguments for the ``claude`` subprocess.
 
-        Story 9.6 / FR59: propagates trace_id via ``--trace-id`` CLI flag so
-        any nested MCP tool calls Claude Code makes inherit the operator's
-        causal correlation token. Dual-mechanism: ``_spawn`` ALSO sets
-        ``OMB_TRACE_ID`` in the subprocess env as a fallback for Claude Code
-        builds that do not yet recognise the flag (most CLIs tolerate unknown
-        trailing flags as no-ops).
+        Story 9.6 / FR59: propagates trace_id to Claude Code via two surfaces:
+
+        1. ``--trace-id <value>`` CLI flag — appended only when the
+           ``worker_emit_trace_id_flag`` setting is enabled (review pass-1 H2
+           default OFF). The default-off gate prevents subprocess spawn
+           failures on Claude Code builds that reject unknown flags. Flip the
+           gate ON once upstream Claude Code consumes the flag.
+        2. ``OMB_TRACE_ID`` env var — always set by ``_spawn``; safe today
+           because unknown env vars are silently dropped by the child.
+
+        Either surface is sufficient for downstream consumption.
         """
         args = [
             "-p",
@@ -112,8 +117,10 @@ class ClaudeCodeRunner:
         ]
         if self._settings.claude_max_turns > 0:
             args.extend(["--max-turns", str(self._settings.claude_max_turns)])
-        # Story 9.6 / FR59 — trace_id propagation to Claude Code subprocess.
-        args.extend(["--trace-id", self._settings.resolve_trace_id()])
+        # Story 9.6 / FR59 review pass-1 H2 — flag gated; env var path
+        # (see ``_spawn``) is the non-breaking default surface.
+        if self._settings.worker_emit_trace_id_flag:
+            args.extend(["--trace-id", self._settings.resolve_trace_id()])
         return args
 
     async def _spawn(
@@ -126,10 +133,10 @@ class ClaudeCodeRunner:
         env = dict(os.environ)
         if self._settings.anthropic_api_key:
             env["ANTHROPIC_API_KEY"] = self._settings.anthropic_api_key
-        # Story 9.6 / FR59 — also propagate trace_id via OMB_TRACE_ID env var
-        # (belt-and-braces alongside the ``--trace-id`` CLI flag). Claude Code
-        # may consume either surface; the env-var path is safe today because
-        # unknown env vars are ignored.
+        # Story 9.6 / FR59 review pass-1 L2 — OMB_TRACE_ID env var is the
+        # always-on companion to the ``worker_emit_trace_id_flag``-gated CLI
+        # flag. Claude Code is expected to consume this; if it does not, the
+        # env var is unused by the child (no error).
         env["OMB_TRACE_ID"] = self._settings.resolve_trace_id()
         log = structlog.get_logger(__name__)
         preview = prompt[:_LOG_PROMPT_PREVIEW_LEN]

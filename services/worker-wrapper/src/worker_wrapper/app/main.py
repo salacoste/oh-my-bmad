@@ -14,6 +14,12 @@ shutdown).
 Story 6.7 adds ``run_task`` — the approval-gated task execution driver
 that wires LifecycleManager, ApprovalWaiter, and event emission into
 the session lifecycle.
+
+Story 9.6 review pass-1 H1 / H3 / H7 / M5: every session-lifecycle and
+tier3 emission now carries the worker's resolved ``trace_id`` as
+``caller_trace_id``; the API is uniform — every helper that emits MCP
+calls takes the same ``settings: WorkerSettings`` parameter and resolves
+the trace_id internally (no more defensive ``or new_uuid7()`` forks).
 """
 
 from __future__ import annotations
@@ -24,7 +30,6 @@ from pathlib import Path
 
 import structlog
 from events.clock import SystemClock
-from events.ids import new_uuid7
 from events.payloads import (
     SessionFinishedPayload,
     SessionHeartbeatPayload,
@@ -34,6 +39,8 @@ from events.payloads import (
     Tier3ActionPerformedPayload,
 )
 from mcp import ClientSession
+
+# secret_hygiene is a workspace package; imported here for license scan.
 from secret_hygiene.license_scan import scan_files_for_licenses
 
 from worker_wrapper.adapters.approval_waiter import ApprovalWaiter
@@ -47,6 +54,9 @@ from worker_wrapper.domain.worktree_lock import acquire_lock, release_lock
 
 _MCP_CALL_TIMEOUT: float = 10.0
 _CLAMP_FLOOR: float = 1.0
+
+# Story 9.6 review pass-1 H8 — bounded preview for log injection avoidance.
+_TRACE_ID_PREVIEW_LEN: int = 80
 
 
 def _clamp_timeout(interval_s: float) -> float:
@@ -66,6 +76,12 @@ async def _call_tool_best_effort(
 
     ``BaseException`` subclasses (``CancelledError``, ``KeyboardInterrupt``,
     ``SystemExit``) propagate — they must not be silently swallowed.
+
+    Story 9.6 review pass-1 H7: ``ValueError`` is split out from the generic
+    ``Exception`` catch so a Story 9.1 trace_id contract violation surfaces as
+    a distinct ``mcp_tool_trace_id_invalid`` log event — operators can then
+    differentiate "transport timeout / connection drop" from "the caller sent
+    a malformed caller_trace_id and the server rejected it".
     """
     log = structlog.get_logger(__name__)
     if session is None:
@@ -84,6 +100,26 @@ async def _call_tool_best_effort(
             timeout=timeout,
             _hint="session may be in inconsistent state — MCP stdio may be corrupted",
         )
+    except ValueError as exc:
+        # Review pass-1 H7: receiving MCP server raises ``ValueError`` for
+        # contract violations (e.g. ``caller_trace_id must match Story 9.1
+        # contract``). Surface this as a distinct log event with a bounded,
+        # escaped preview of the offending caller_trace_id so operators can
+        # diagnose the caller without trusting the raw value in log lines.
+        caller_trace_id = arguments.get("caller_trace_id")
+        preview_src: str = ""
+        if isinstance(caller_trace_id, str):
+            preview_src = caller_trace_id[:_TRACE_ID_PREVIEW_LEN]
+        elif caller_trace_id is not None:
+            preview_src = str(caller_trace_id)[:_TRACE_ID_PREVIEW_LEN]
+        log.warning(
+            "mcp_tool_trace_id_invalid",
+            label=label,
+            tool=tool_name,
+            # Review pass-1 H8 — repr() escapes CRLF / NULL / ANSI / ZWJ etc.
+            caller_trace_id_preview=repr(preview_src),
+            error=str(exc)[:200],
+        )
     except Exception:
         log.warning("mcp_tool_call_failed", label=label, tool=tool_name, exc_info=True)
 
@@ -101,12 +137,17 @@ async def start_session(
     Lock acquisition raises :class:`WorktreeLockHeld` if the worktree is
     already locked — this prevents the session from starting (by design,
     FR27).
+
+    Story 9.6 review pass-1 H1: ``session.register`` (session-registry MCP
+    tool) now carries ``caller_trace_id`` per Story 9.5's mandatory-input
+    contract — Story 9.5 made the field REQUIRED on all 3 MCP servers
+    (clawhip-bridge, session-registry, task-registry).
     """
     log = structlog.get_logger(__name__)
     session_id = settings.resolve_session_id()
     worker_id = settings.resolve_worker_id()
     task_id = settings.resolve_task_id()
-    # Story 9.6 / FR59 — resolve once, thread to every clawhip-bridge emission.
+    # Story 9.6 / FR59 — resolve once, thread to every MCP emission.
     trace_id = settings.resolve_trace_id()
 
     started = SessionStartedPayload(
@@ -121,6 +162,8 @@ async def start_session(
     reg_args: dict[str, object] = {
         "session_id": session_id,
         "worker_id": worker_id,
+        # Story 9.6 review pass-1 H1 — required since Story 9.5.
+        "caller_trace_id": trace_id,
     }
     if started.task_id is not None:
         reg_args["task_id"] = started.task_id
@@ -184,6 +227,9 @@ async def heartbeat_loop(
     """Periodic ``session.heartbeat`` event + MCP tool call (AC-2, AC-5).
 
     Exits when ``stop_event`` is set.
+
+    Story 9.6 review pass-1 H1: ``session.heartbeat`` (session-registry MCP
+    tool) now also carries ``caller_trace_id``.
     """
     log = structlog.get_logger(__name__)
     log.info("heartbeat_loop_started", interval_s=settings.heartbeat_interval_s)
@@ -216,7 +262,11 @@ async def heartbeat_loop(
         await _call_tool_best_effort(
             clients.session_registry,
             "session.heartbeat",
-            {"session_id": session_id},
+            {
+                "session_id": session_id,
+                # Story 9.6 review pass-1 H1 — required since Story 9.5.
+                "caller_trace_id": trace_id,
+            },
             label="session_heartbeat_mcp",
             timeout=mcp_timeout,
         )
@@ -227,27 +277,25 @@ async def heartbeat_loop(
 
 async def finish_session(
     clients: MCPClientGroup,
+    settings: WorkerSettings,
     session_id: str,
     worker_id: str,
     worktree_path: str = "",
-    *,
-    trace_id: str | None = None,
 ) -> None:
     """Emit ``session.finished``, release worktree lock, call ``session.close``.
 
     Lock release is best-effort (catches ``Exception``, logs warning).
 
-    Story 9.6 / FR59: ``trace_id`` (keyword-only) is forwarded as
-    ``caller_trace_id`` on the clawhip-bridge ``emit_event`` call so the
-    session.finished envelope joins the same causal chain as session.started.
-    If absent (e.g. callers that have not been updated yet, or test fixtures),
-    a fresh UUIDv7 is minted at the call site to satisfy the Story 9.5
-    mandatory-input contract — those events simply won't correlate, which is
-    the same degradation Story 9.1 prescribes for orphaned events.
+    Story 9.6 review pass-1 H3 / M5: the ``trace_id`` is resolved from
+    ``settings`` so every session-lifecycle helper has the SAME signature
+    (``settings`` everywhere — no more ``trace_id: str | None = None`` kwarg
+    with a defensive ``or new_uuid7()`` fork). The local-policy trace_id is
+    threaded as ``caller_trace_id`` on both clawhip-bridge ``session.finished``
+    and session-registry ``session.close`` (review pass-1 H1).
     """
     log = structlog.get_logger(__name__)
 
-    effective_trace_id = trace_id or new_uuid7()
+    trace_id = settings.resolve_trace_id()
 
     fin = SessionFinishedPayload(session_id=session_id)
     await _call_tool_best_effort(
@@ -256,7 +304,7 @@ async def finish_session(
         {
             "type": "session.finished",
             "payload": fin.model_dump(),
-            "caller_trace_id": effective_trace_id,  # Story 9.6 / FR59
+            "caller_trace_id": trace_id,  # Story 9.6 / FR59
         },
         label="emit_session_finished",
     )
@@ -276,7 +324,12 @@ async def finish_session(
     await _call_tool_best_effort(
         clients.session_registry,
         "session.close",
-        {"session_id": session_id, "worker_id": worker_id},
+        {
+            "session_id": session_id,
+            "worker_id": worker_id,
+            # Story 9.6 review pass-1 H1 — required since Story 9.5.
+            "caller_trace_id": trace_id,
+        },
         label="session_close",
     )
 
@@ -476,12 +529,10 @@ async def _handle_pending_approval(
 ) -> None:
     """Poll for approval, then execute or fail the gated action.
 
-    Story 9.6 / FR59: ``trace_id`` is read from ``settings.resolve_trace_id()``
-    and forwarded to ``_emit_tier3_performed`` so the ``tier3.action_performed``
-    envelope joins the same causal chain as the rest of the task lifecycle.
+    Story 9.6 review pass-1 H3 / M5: the worker-resolved ``trace_id`` is
+    read from ``settings.resolve_trace_id()`` and forwarded into the uniform
+    ``_emit_tier3_performed(settings=...)`` signature.
     """
-    # Story 9.6 / FR59 — same trace_id as the run_task that started this gate.
-    trace_id = settings.resolve_trace_id()
     log = structlog.get_logger(__name__)
 
     if mgr.current_state != WorkerState.AWAITING_APPROVAL:
@@ -498,10 +549,10 @@ async def _handle_pending_approval(
         await mgr.handle_event(LifecycleEvent.TASK_FAILED)
         await _emit_tier3_performed(
             clients,
+            settings,
             task_id,
             accepted=False,
             reason="event_log_dir not configured",
-            trace_id=trace_id,
         )
         return
 
@@ -518,10 +569,10 @@ async def _handle_pending_approval(
         await mgr.handle_event(LifecycleEvent.TASK_FAILED)
         await _emit_tier3_performed(
             clients,
+            settings,
             task_id,
             accepted=False,
             reason=f"Approval timed out after {settings.approval_timeout_s}s",
-            trace_id=trace_id,
         )
         log.error("approval_timeout", task_id=task_id)
         return
@@ -531,10 +582,10 @@ async def _handle_pending_approval(
         await mgr.handle_event(LifecycleEvent.APPROVAL_REJECTED)
         await _emit_tier3_performed(
             clients,
+            settings,
             task_id,
             accepted=False,
             reason=approval.reason or "operator rejected",
-            trace_id=trace_id,
         )
         log.info("approval_rejected", task_id=task_id)
         return
@@ -546,41 +597,40 @@ async def _handle_pending_approval(
         log.exception("handle_approval_failed", task_id=task_id)
         await _emit_tier3_performed(
             clients,
+            settings,
             task_id,
             accepted=False,
             approval_event_id=approval.event_id,
             reason="gated action execution failed",
-            trace_id=trace_id,
         )
         return
     await _emit_tier3_performed(
         clients,
+        settings,
         task_id,
         accepted=True,
         approval_event_id=approval.event_id,
-        trace_id=trace_id,
     )
     log.info("tier3_action_performed", task_id=task_id)
 
 
 async def _emit_tier3_performed(
     clients: MCPClientGroup,
+    settings: WorkerSettings,
     task_id: str,
     *,
     accepted: bool,
     approval_event_id: str = "",
     reason: str = "",
-    trace_id: str | None = None,
 ) -> None:
     """Emit ``tier3.action_performed`` via clawhip-bridge (AC-6).
 
-    Story 9.6 / FR59: ``trace_id`` is forwarded as ``caller_trace_id``
-    on the MCP call. If absent (defensive default for
-    legacy / test callers), a fresh UUIDv7 is minted to satisfy the
-    mandatory-input contract from Story 9.5 — those events won't correlate
-    but the emission won't crash.
+    Story 9.6 review pass-1 H3 / M5: signature now takes ``settings`` instead
+    of an Optional ``trace_id`` kwarg. The defensive ``or new_uuid7()`` mint
+    is gone — every emission shares the worker-singleton ``trace_id`` resolved
+    from settings, so the causal chain is preserved by construction.
     """
-    effective_trace_id = trace_id or new_uuid7()
+    trace_id = settings.resolve_trace_id()
     payload = Tier3ActionPerformedPayload(
         task_id=task_id,
         action="git_push",
@@ -594,7 +644,7 @@ async def _emit_tier3_performed(
         {
             "type": "tier3.action_performed",
             "payload": payload.model_dump(),
-            "caller_trace_id": effective_trace_id,  # Story 9.6 / FR59
+            "caller_trace_id": trace_id,  # Story 9.6 / FR59
         },
         label="emit_tier3_action_performed",
     )
