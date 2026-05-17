@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -420,6 +420,66 @@ class TestRunTaskTraceIdPropagation:
         # All emissions share a single minted trace_id (per-invocation singleton).
         assert all(t == captured[0] for t in captured)
         assert is_valid_trace_id(captured[0]) is True
+
+    @pytest.mark.asyncio
+    async def test_approval_timeout_tier3_emit_uses_worker_trace_id(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Approval-gate timeout path threads the worker trace_id to tier3 emit."""
+        from events.ids import new_uuid7
+
+        tid = new_uuid7()
+        settings = _make_settings(tmp_path, event_log_dir=str(tmp_path / "logs"))
+        settings.trace_id = tid
+        settings._resolved_trace_id = None
+
+        clients = _FakeClients()
+        captured: list[dict[str, object]] = []
+
+        async def capture(
+            name: str,
+            arguments: dict[str, object] | None = None,
+            **kwargs: object,
+        ) -> str:
+            if name == "emit_event":
+                call_args = (
+                    arguments
+                    if arguments is not None
+                    else cast(dict[str, object], kwargs["arguments"])
+                )
+                captured.append(call_args)
+            return "evt-1"
+
+        clients.clawhip_bridge.call_tool = AsyncMock(side_effect=capture)
+
+        result = ClaudeCodeResult(
+            exit_code=0,
+            session_id="s-timeout-trace",
+            events=[
+                ExtractedEvent(
+                    event_type="git.push",
+                    tool_name="Bash",
+                    tool_input={"command": "git push"},
+                ),
+            ],
+        )
+
+        with (
+            patch("worker_wrapper.app.main.ClaudeCodeRunner") as mock_runner,
+            patch("worker_wrapper.app.main.ApprovalWaiter") as mock_waiter,
+        ):
+            mock_runner.return_value.run = AsyncMock(return_value=result)
+            mock_waiter.return_value.wait_for_approval = AsyncMock(
+                side_effect=TimeoutError("timed out"),
+            )
+            await run_task(clients, settings, "implement timeout path", tmp_path)
+
+        tier3_calls = [call for call in captured if call["type"] == "tier3.action_performed"]
+        assert len(tier3_calls) == 1
+        assert tier3_calls[0]["caller_trace_id"] == tid
+        payload = cast(dict[str, object], tier3_calls[0]["payload"])
+        assert payload["accepted"] is False
 
     @pytest.mark.asyncio
     async def test_tier3_action_emit_includes_caller_trace_id(

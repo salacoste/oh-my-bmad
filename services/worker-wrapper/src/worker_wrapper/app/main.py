@@ -574,8 +574,8 @@ async def _emit_tier3_performed(
 ) -> None:
     """Emit ``tier3.action_performed`` via clawhip-bridge (AC-6).
 
-    Story 9.6 / FR59: ``trace_id`` (keyword-only) is forwarded as
-    ``caller_trace_id`` on the MCP call. If absent (defensive default for
+    Story 9.6 / FR59: ``trace_id`` is forwarded as ``caller_trace_id``
+    on the MCP call. If absent (defensive default for
     legacy / test callers), a fresh UUIDv7 is minted to satisfy the
     mandatory-input contract from Story 9.5 — those events won't correlate
     but the emission won't crash.
