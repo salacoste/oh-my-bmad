@@ -71,7 +71,7 @@ class WorkerSettings(BaseSettings):
     # Default OFF until Claude Code upstream consumes ``--trace-id``. The
     # ``OMB_TRACE_ID`` env var (set by ``_spawn``) is the non-breaking
     # surface that ships today; the CLI flag is opt-in until verified.
-    worker_emit_trace_id_flag: bool = False
+    emit_trace_id_flag: bool = False
 
     # Story 9.6 / FR59 / NFR-O7 — trace_id propagation.
     #
@@ -212,9 +212,10 @@ class WorkerSettings(BaseSettings):
         """
         # ``model_post_init`` guarantees this is non-None for any
         # successfully-constructed instance — narrow the Optional for mypy.
-        assert self._resolved_trace_id is not None, (
-            "model_post_init must have populated _resolved_trace_id"
-        )
+        if self._resolved_trace_id is None:
+            raise RuntimeError(
+                "model_post_init must have populated _resolved_trace_id"
+            )
         return self._resolved_trace_id
 
     def resolve_task_id(self) -> str | None:

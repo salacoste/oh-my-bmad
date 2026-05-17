@@ -14,6 +14,7 @@ imports are hoisted to module-top instead of inline.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any, cast
@@ -592,7 +593,7 @@ class TestTriEqualByteIdentity:
             claude_output_format="stream-json",
             trace_id=tid,
             # H2 — flag-gating opt-in so argv contains --trace-id <value>.
-            worker_emit_trace_id_flag=True,
+            emit_trace_id_flag=True,
         )
 
         # Build runner — exposes argv via _build_args and env via _spawn.
@@ -606,7 +607,7 @@ class TestTriEqualByteIdentity:
 
         async def _fake_exec(*a: Any, **kw: Any) -> Any:
             captured_env.update(kw.get("env", {}))
-            proc = MagicMock()
+            proc = AsyncMock(spec=asyncio.subprocess.Process)
             return proc
 
         with patch("asyncio.create_subprocess_exec", side_effect=_fake_exec):
@@ -643,12 +644,12 @@ class TestTriEqualByteIdentity:
 
 class TestTraceIdFlagGating:
     """H2: the ``--trace-id`` CLI flag is absent unless
-    ``worker_emit_trace_id_flag`` is enabled."""
+    ``emit_trace_id_flag`` is enabled."""
 
     def test_flag_absent_by_default(self, tmp_path: Path) -> None:
         from worker_wrapper.adapters.claude_code_runner import ClaudeCodeRunner
 
-        # Default settings (worker_emit_trace_id_flag=False).
+        # Default settings (emit_trace_id_flag=False).
         settings = WorkerSettings(
             anthropic_api_key="sk-test",
             claude_command="claude",
@@ -668,7 +669,7 @@ class TestTraceIdFlagGating:
             claude_command="claude",
             claude_output_format="stream-json",
             trace_id=tid,
-            worker_emit_trace_id_flag=True,
+            emit_trace_id_flag=True,
         )
         runner = ClaudeCodeRunner(settings)
         args = runner._build_args("hi")

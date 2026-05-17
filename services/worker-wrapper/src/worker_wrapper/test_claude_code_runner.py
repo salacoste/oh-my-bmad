@@ -132,7 +132,7 @@ async def _mock_process(
 
 class TestBuildArgs:
     def test_default_args(self) -> None:
-        """Story 9.6 review pass-1 H2: by default ``worker_emit_trace_id_flag``
+        """Story 9.6 review pass-1 H2: by default ``emit_trace_id_flag``
         is OFF, so ``--trace-id`` is NOT in argv. Review pass-1 M3: assertion
         is against a literal known constant, not the memoized return value."""
         runner = ClaudeCodeRunner(_settings())
@@ -162,9 +162,9 @@ class TestBuildArgs:
 
     def test_build_args_includes_trace_id_flag(self) -> None:
         """AC3 / AC9: explicit WORKER_TRACE_ID flows into argv via ``--trace-id``
-        when ``worker_emit_trace_id_flag`` is enabled (review pass-1 H2)."""
+        when ``emit_trace_id_flag`` is enabled (review pass-1 H2)."""
         tid = new_uuid7()
-        runner = ClaudeCodeRunner(_settings(trace_id=tid, worker_emit_trace_id_flag=True))
+        runner = ClaudeCodeRunner(_settings(trace_id=tid, emit_trace_id_flag=True))
         args = runner._build_args("hi")
         assert "--trace-id" in args
         idx = args.index("--trace-id")
@@ -174,7 +174,7 @@ class TestBuildArgs:
     def test_build_args_uses_minted_trace_id_when_env_absent(self) -> None:
         """AC2 / AC3: absent env → fresh UUIDv7 minted and appears in argv
         when the flag is enabled."""
-        runner = ClaudeCodeRunner(_settings(worker_emit_trace_id_flag=True))
+        runner = ClaudeCodeRunner(_settings(emit_trace_id_flag=True))
         args = runner._build_args("hi")
         assert "--trace-id" in args
         idx = args.index("--trace-id")
@@ -184,7 +184,7 @@ class TestBuildArgs:
     def test_build_args_trace_id_is_stable_within_runner(self) -> None:
         """AC5: subsequent ``_build_args`` calls reuse the same trace_id
         (cached on the underlying WorkerSettings, AC5 per-invocation singleton)."""
-        runner = ClaudeCodeRunner(_settings(worker_emit_trace_id_flag=True))
+        runner = ClaudeCodeRunner(_settings(emit_trace_id_flag=True))
         a1 = runner._build_args("hi")
         a2 = runner._build_args("again")
         assert a1[a1.index("--trace-id") + 1] == a2[a2.index("--trace-id") + 1]
@@ -194,7 +194,7 @@ class TestBuildArgs:
         even when WORKER_TRACE_ID is set. Env var path still ships via
         ``_spawn`` (see TestSpawnEnvTraceId)."""
         tid = new_uuid7()
-        # worker_emit_trace_id_flag defaults to False
+        # emit_trace_id_flag defaults to False
         runner = ClaudeCodeRunner(_settings(trace_id=tid))
         args = runner._build_args("hi")
         assert "--trace-id" not in args

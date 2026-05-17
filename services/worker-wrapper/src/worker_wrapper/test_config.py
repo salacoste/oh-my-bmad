@@ -273,13 +273,13 @@ class TestWorkerEmitTraceIdFlag:
 
     def test_flag_defaults_off(self) -> None:
         s = WorkerSettings()
-        assert s.worker_emit_trace_id_flag is False
+        assert s.emit_trace_id_flag is False
 
     def test_flag_enabled_via_env(self) -> None:
-        with patch.dict(os.environ, {"WORKER_WORKER_EMIT_TRACE_ID_FLAG": "1"}):
+        with patch.dict(os.environ, {"WORKER_EMIT_TRACE_ID_FLAG": "1"}):
             s = WorkerSettings()
-        assert s.worker_emit_trace_id_flag is True
+        assert s.emit_trace_id_flag is True
 
     def test_flag_enabled_via_constructor(self) -> None:
-        s = WorkerSettings(worker_emit_trace_id_flag=True)
-        assert s.worker_emit_trace_id_flag is True
+        s = WorkerSettings(emit_trace_id_flag=True)
+        assert s.emit_trace_id_flag is True

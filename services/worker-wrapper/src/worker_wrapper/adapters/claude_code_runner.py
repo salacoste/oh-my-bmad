@@ -100,7 +100,7 @@ class ClaudeCodeRunner:
         Story 9.6 / FR59: propagates trace_id to Claude Code via two surfaces:
 
         1. ``--trace-id <value>`` CLI flag — appended only when the
-           ``worker_emit_trace_id_flag`` setting is enabled (review pass-1 H2
+           ``emit_trace_id_flag`` setting is enabled (review pass-1 H2
            default OFF). The default-off gate prevents subprocess spawn
            failures on Claude Code builds that reject unknown flags. Flip the
            gate ON once upstream Claude Code consumes the flag.
@@ -119,7 +119,7 @@ class ClaudeCodeRunner:
             args.extend(["--max-turns", str(self._settings.claude_max_turns)])
         # Story 9.6 / FR59 review pass-1 H2 — flag gated; env var path
         # (see ``_spawn``) is the non-breaking default surface.
-        if self._settings.worker_emit_trace_id_flag:
+        if self._settings.emit_trace_id_flag:
             args.extend(["--trace-id", self._settings.resolve_trace_id()])
         return args
 
@@ -134,7 +134,7 @@ class ClaudeCodeRunner:
         if self._settings.anthropic_api_key:
             env["ANTHROPIC_API_KEY"] = self._settings.anthropic_api_key
         # Story 9.6 / FR59 review pass-1 L2 — OMB_TRACE_ID env var is the
-        # always-on companion to the ``worker_emit_trace_id_flag``-gated CLI
+        # always-on companion to the ``emit_trace_id_flag``-gated CLI
         # flag. Claude Code is expected to consume this; if it does not, the
         # env var is unused by the child (no error).
         env["OMB_TRACE_ID"] = self._settings.resolve_trace_id()
