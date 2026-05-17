@@ -106,12 +106,22 @@ async def _emit_event(
     payload: dict[str, object],
     *,
     label: str,
+    caller_trace_id: str,
 ) -> None:
-    """Emit a typed event via clawhip-bridge ``emit_event`` tool."""
+    """Emit a typed event via clawhip-bridge ``emit_event`` tool.
+
+    Story 9.6 review pass-3 TH0: ``caller_trace_id`` is now REQUIRED on
+    every emission to satisfy Story 9.5's clawhip-bridge MCP tool contract
+    (caller_trace_id is a required input field, validated server-side).
+    """
     await _call_tool(
         clients.clawhip_bridge,
         "emit_event",
-        {"type": event_type, "payload": payload},
+        {
+            "type": event_type,
+            "payload": payload,
+            "caller_trace_id": caller_trace_id,
+        },
         label=label,
     )
 
@@ -167,7 +177,14 @@ async def process_task(
     settings: OrchestratorSettings,
     task: dict[str, object],
 ) -> None:
-    """Process a single task: plan, then drive execution step-by-step."""
+    """Process a single task: plan, then drive execution step-by-step.
+
+    Story 9.6 review pass-3 TH0 + TH2: ``caller_trace_id`` is resolved
+    per-task — preferring the task's own ``trace_id`` field, falling back
+    to the adapter's resolved trace_id when absent.  The same value is
+    threaded into ``runner.run(..., trace_id=...)`` so the OMC subprocess
+    env carries the right token.
+    """
     log = structlog.get_logger(__name__)
     task_id = str(task.get("id", ""))
     if not task_id:
@@ -177,6 +194,16 @@ async def process_task(
     hint = task.get("hint")
     repo = task.get("repo")
 
+    # Story 9.6 review pass-3 TH0 / TH2 — resolve trace_id PER task.
+    # If the task carries its own valid trace_id (set upstream), use it;
+    # otherwise fall back to the adapter's settings-scoped trace_id.
+    raw_task_trace = task.get("trace_id")
+    task_trace_id: str
+    if isinstance(raw_task_trace, str) and raw_task_trace:
+        task_trace_id = raw_task_trace
+    else:
+        task_trace_id = settings.resolve_trace_id()
+
     # Emit task.planning.started.
     started_payload = build_planning_started_payload(task_id)
     await _emit_event(
@@ -184,6 +211,7 @@ async def process_task(
         "task.planning.started",
         started_payload,
         label=f"planning_started_{task_id}",
+        caller_trace_id=task_trace_id,
     )
     log.info("planning_started", task_id=task_id)
 
@@ -194,7 +222,7 @@ async def process_task(
         hint=str(hint) if hint else None,
         repo=str(repo) if repo else None,
     )
-    result = await runner.run(prompt)
+    result = await runner.run(prompt, trace_id=task_trace_id)
 
     if result.error:
         log.error(
@@ -209,6 +237,7 @@ async def process_task(
             "task.planning.failed",
             {"task_id": task_id, "error": result.error},
             label=f"planning_failed_{task_id}",
+            caller_trace_id=task_trace_id,
         )
         return
 
@@ -220,6 +249,7 @@ async def process_task(
         "task.plan.ready",
         ready_payload,
         label=f"plan_ready_{task_id}",
+        caller_trace_id=task_trace_id,
     )
     log.info(
         "plan_ready",
@@ -240,6 +270,7 @@ async def process_task(
             "task.completed",
             completion_payload,
             label=f"task_completed_{task_id}",
+            caller_trace_id=task_trace_id,
         )
         log.info("task_completed_no_steps", task_id=task_id)
         return
@@ -252,6 +283,7 @@ async def process_task(
         "task.execution.started",
         exec_started_payload,
         label=f"execution_started_{task_id}",
+        caller_trace_id=task_trace_id,
     )
     log.info("execution_started", task_id=task_id)
 
@@ -262,7 +294,7 @@ async def process_task(
     tracker = BudgetTracker(limit=budget_limit) if budget_limit > 0 else None
     for step in plan_result.steps:
         step_prompt = build_omc_prompt(task_id, hint=f"Step {step.step}: {step.description}")
-        step_result = await runner.run(step_prompt)
+        step_result = await runner.run(step_prompt, trace_id=task_trace_id)
 
         if step_result.error:
             log.error(
@@ -278,6 +310,7 @@ async def process_task(
                 "task.blocker_raised",
                 blocker_payload,
                 label=f"step_blocker_{task_id}_{step.step}",
+                caller_trace_id=task_trace_id,
             )
             blockers_count += 1
             break
@@ -291,6 +324,7 @@ async def process_task(
             "task.step.completed",
             step_completed_payload,
             label=f"step_completed_{task_id}_{step.step}",
+            caller_trace_id=task_trace_id,
         )
         log.info("step_completed", task_id=task_id, step=step.step)
 
@@ -322,6 +356,7 @@ async def process_task(
                         "task.budget_exceeded",
                         budget_payload,
                         label=f"budget_exceeded_{task_id}",
+                        caller_trace_id=task_trace_id,
                     )
                     break
             else:
@@ -376,6 +411,7 @@ async def process_task(
         "task.completed",
         completion_payload,
         label=f"task_completed_{task_id}",
+        caller_trace_id=task_trace_id,
     )
     log.info("task_completed", task_id=task_id, steps=len(step_outputs))
 
@@ -385,16 +421,16 @@ async def adapter_loop(
     settings: OrchestratorSettings,
     stop_event: asyncio.Event,
 ) -> None:
-    """Main polling loop — poll task-registry, process tasks, repeat."""
+    """Main polling loop — poll task-registry, process tasks, repeat.
+
+    Story 9.6 review pass-3 TH2: ``OMCRunner`` is constructed without
+    trace_id (per-call kwarg model); each ``runner.run(prompt, trace_id=...)``
+    inside ``process_task`` carries the task-scoped token.
+    """
     log = structlog.get_logger(__name__)
-    # Story 9.6 review pass-2 PH0 — thread the adapter's trace_id into the
-    # OMC subprocess env so downstream worker-wrapper spawns resolve a single
-    # shared trace_id (alias-resolved via ``WORKER_TRACE_ID`` /
-    # ``OMB_TRACE_ID``).
     runner = OMCRunner(
         omc_path=Path(settings.omc_path),
         timeout_s=settings.omc_timeout_s,
-        trace_id=settings.trace_id,
     )
 
     log.info("adapter_loop_started", poll_interval=settings.poll_interval_s)

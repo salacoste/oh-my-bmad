@@ -95,6 +95,13 @@ async def _call_tool_best_effort(
     Review pass-2 PH4: ``return_result=True`` returns the awaited tool result
     so callers that need an event_id (run_task's ``_emit_event`` closure) can
     share this single best-effort helper instead of duplicating the H7 logic.
+
+    Review pass-3 TH5 — audit:
+    All ``return_result=False`` callers discard the return value entirely;
+    the ``None`` they receive is indistinguishable from a swallowed failure
+    BY DESIGN (best-effort semantics).  Callers that need to distinguish
+    success-with-result from failure pass ``return_result=True`` and treat
+    a falsy result as "no event id" (cf. ``run_task._emit_event``).
     """
     log = structlog.get_logger(__name__)
     if session is None:
@@ -115,10 +122,14 @@ async def _call_tool_best_effort(
         )
         return None
     except ValueError as exc:
-        # Review pass-2 PH3 — only classify as a trace_id contract violation
-        # when the exception message actually mentions ``trace_id``; otherwise
-        # fall through to the generic best-effort handler.
-        if "trace_id" not in str(exc).lower():
+        # Review pass-2 PH3 + pass-3 TH4 — only classify as a trace_id
+        # contract violation when the exception message actually mentions
+        # ``caller_trace_id`` (the specific Story 9.5 contract field name
+        # used by all three MCP servers' ``validate_caller_trace_id``);
+        # otherwise fall through to the generic best-effort handler.
+        # TH4 narrowed from ``"trace_id"`` to ``"caller_trace_id"`` to avoid
+        # over-matching benign errors that incidentally contain "trace_id".
+        if "caller_trace_id" not in str(exc).lower():
             log.warning("mcp_tool_call_failed", label=label, tool=tool_name, exc_info=True)
             return None
         # Review pass-1 H7: receiving MCP server raises ``ValueError`` for

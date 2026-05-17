@@ -3,12 +3,14 @@
 Manages the OMC process lifecycle: spawn, stdin prompt, stdout capture,
 graceful shutdown (SIGTERM → SIGKILL), and timeout enforcement.
 
-Story 9.6 review pass-2 PH0: ``OMCRunner`` now accepts an optional
-``trace_id`` and propagates it to the spawned subprocess via
-``env["OMB_TRACE_ID"]``.  The OMC child (and any worker-wrapper it
-spawns transitively) picks up the trace_id through the
-``WORKER_TRACE_ID`` / ``OMB_TRACE_ID`` ``AliasChoices`` declared on
-:class:`worker_wrapper.app.config.WorkerSettings`.
+Story 9.6 review pass-2 PH0 + pass-3 TH2: ``OMCRunner`` accepts the
+trace_id PER-CALL (``run(prompt, *, trace_id=...)``) rather than
+per-instance, so multiple tasks polled by a single ``adapter_loop`` each
+carry their own correctly-scoped token.  When ``trace_id`` is non-None,
+``_spawn`` exports ``OMB_TRACE_ID`` to the child env.  The OMC child
+(and any worker-wrapper it spawns transitively) picks up the trace_id
+through the ``WORKER_TRACE_ID`` / ``OMB_TRACE_ID`` ``AliasChoices``
+declared on :class:`worker_wrapper.app.config.WorkerSettings`.
 """
 
 from __future__ import annotations
@@ -51,9 +53,11 @@ class OMCRunner:
         self,
         omc_path: Path,
         timeout_s: float = 120.0,
-        *,
-        trace_id: str | None = None,
     ) -> None:
+        # Story 9.6 review pass-3 TH2: ``trace_id`` lifted from ``__init__``
+        # to a per-call kwarg on ``run()``.  Per-process trace_id semantics
+        # were incorrect — distinct tasks polled by the same ``adapter_loop``
+        # require their own trace_id passed PER ``runner.run(...)``.
         if not omc_path.is_dir():
             raise ValueError(f"omc_path does not exist: {omc_path}")
         cli = omc_path / "bridge" / "cli.cjs"
@@ -62,17 +66,18 @@ class OMCRunner:
         self._omc_path = omc_path
         self._cli = cli
         self._timeout_s = timeout_s
-        # Story 9.6 review pass-2 PH0 — trace_id propagated to the OMC child
-        # subprocess via env so transitive worker-wrapper spawns pick it up.
-        self._trace_id: str | None = trace_id
         self._process: asyncio.subprocess.Process | None = None
 
-    async def _spawn(self, prompt: str) -> asyncio.subprocess.Process:
+    async def _spawn(
+        self, prompt: str, *, trace_id: str | None = None
+    ) -> asyncio.subprocess.Process:
         """Spawn ``node bridge/cli.cjs launch`` with the prompt on stdin.
 
-        Story 9.6 review pass-2 PH0: when ``trace_id`` is set on the runner,
-        export ``OMB_TRACE_ID=<trace_id>`` to the child env so downstream
-        spawns (worker-wrapper et al.) resolve it via ``AliasChoices``.
+        Story 9.6 review pass-2 PH0 + pass-3 TH2: when ``trace_id`` is
+        provided, export ``OMB_TRACE_ID=<trace_id>`` to the child env so
+        downstream spawns (worker-wrapper et al.) resolve it via
+        ``AliasChoices``.  The trace_id is now passed per-call (not stored
+        on the runner) so each task carries its own correctly-scoped token.
         """
         log = structlog.get_logger(__name__)
         preview = prompt[:_LOG_PROMPT_PREVIEW_LEN]
@@ -81,10 +86,10 @@ class OMCRunner:
         log.info("omc_spawning", prompt_preview=preview, cwd=str(self._omc_path))
         # Build env: start from parent env so PATH / NODE_PATH / etc. still
         # work, then layer the trace_id when present.  Story 9.6 review
-        # pass-2 PH0.
+        # pass-2 PH0 / pass-3 TH2.
         env = dict(os.environ)
-        if self._trace_id is not None:
-            env["OMB_TRACE_ID"] = self._trace_id
+        if trace_id is not None:
+            env["OMB_TRACE_ID"] = trace_id
         return await asyncio.create_subprocess_exec(
             "node",
             str(self._cli),
@@ -117,13 +122,17 @@ class OMCRunner:
             process.kill()
             await process.wait()
 
-    async def run(self, prompt: str) -> OMCResult:
-        """Run OMC with the given prompt and return a structured result."""
+    async def run(self, prompt: str, *, trace_id: str | None = None) -> OMCResult:
+        """Run OMC with the given prompt and return a structured result.
+
+        Story 9.6 review pass-3 TH2: ``trace_id`` is a per-call kwarg so
+        each task spawned by ``adapter_loop`` carries its own scoped token.
+        """
         log = structlog.get_logger(__name__)
         t0 = time.monotonic()
 
         try:
-            process = await self._spawn(prompt)
+            process = await self._spawn(prompt, trace_id=trace_id)
         except OSError as exc:
             return OMCResult(exit_code=-1, error=f"Failed to spawn OMC: {exc}")
 

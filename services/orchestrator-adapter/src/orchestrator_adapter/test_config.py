@@ -1,10 +1,28 @@
-"""Tests for OrchestratorSettings defaults and env-var overrides (Story 5.10 AC-9)."""
+"""Tests for OrchestratorSettings defaults and env-var overrides (Story 5.10 AC-9).
+
+Story 9.6 review pass-3 TH1: added regression tests for the trace_id
+shape contract — validator + post_init eager resolve + alias-fallthrough
++ resolver narrow-raise.
+"""
 
 from __future__ import annotations
 
 import pytest
 
 from orchestrator_adapter.app.config import OrchestratorSettings
+
+
+@pytest.fixture(autouse=True)
+def _clean_orchestrator_trace_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Story 9.6 review pass-3 TH1: strip ambient trace_id env vars between
+    tests so CI / dev shell exports cannot pollute alias-fallthrough logic.
+    """
+    for name in (
+        "ORCHESTRATOR_TRACE_ID",
+        "OMB_ORCHESTRATOR_TRACE_ID",
+        "OMB_TRACE_ID",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 def test_default_mcp_commands() -> None:
@@ -73,3 +91,82 @@ def test_ready_file_path_default() -> None:
     """Default ready-file path."""
     s = OrchestratorSettings()
     assert s.ready_file_path == "/tmp/ready"
+
+
+# ---------------------------------------------------------------------------
+# Story 9.6 review pass-3 TH1 — trace_id shape contract (mirror worker side).
+# ---------------------------------------------------------------------------
+
+
+_VALID_UUIDV7 = "01917e5c-a7d1-7000-8abc-0123456789ab"
+
+
+def test_trace_id_accepts_valid_uuidv7(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_TRACE_ID", _VALID_UUIDV7)
+    s = OrchestratorSettings()
+    assert s.trace_id == _VALID_UUIDV7
+    assert s.resolve_trace_id() == _VALID_UUIDV7
+
+
+def test_trace_id_accepts_telegram_form(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_TRACE_ID", "tg:42")
+    s = OrchestratorSettings()
+    assert s.trace_id == "tg:42"
+    assert s.resolve_trace_id() == "tg:42"
+
+
+def test_trace_id_invalid_value_mints_fresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_TRACE_ID", "not-a-uuid")
+    s = OrchestratorSettings()
+    assert s.trace_id is None
+    # Resolver returns a freshly-minted UUIDv7 (non-empty, shape-valid).
+    from events.envelope import is_valid_trace_id
+
+    assert is_valid_trace_id(s.resolve_trace_id())
+
+
+def test_trace_id_absent_mints_fresh_silently() -> None:
+    s = OrchestratorSettings()
+    assert s.trace_id is None
+    from events.envelope import is_valid_trace_id
+
+    assert is_valid_trace_id(s.resolve_trace_id())
+
+
+def test_trace_id_alias_fallthrough_when_canonical_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TH1 + PH1 parity: empty canonical falls through to remaining aliases."""
+    monkeypatch.setenv("ORCHESTRATOR_TRACE_ID", "")
+    monkeypatch.setenv("OMB_TRACE_ID", _VALID_UUIDV7)
+    s = OrchestratorSettings()
+    assert s.trace_id == _VALID_UUIDV7
+
+
+def test_trace_id_via_omb_orchestrator_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OMB_ORCHESTRATOR_TRACE_ID", _VALID_UUIDV7)
+    s = OrchestratorSettings()
+    assert s.trace_id == _VALID_UUIDV7
+
+
+def test_trace_id_via_omb_trace_id_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OMB_TRACE_ID", _VALID_UUIDV7)
+    s = OrchestratorSettings()
+    assert s.trace_id == _VALID_UUIDV7
+
+
+def test_trace_id_ctor_kwarg_via_populate_by_name() -> None:
+    """TH1: ``populate_by_name=True`` lets ctor kwarg use the field name."""
+    s = OrchestratorSettings(trace_id=_VALID_UUIDV7)
+    assert s.trace_id == _VALID_UUIDV7
+
+
+def test_resolve_trace_id_raises_when_post_init_skipped() -> None:
+    """TH6 parity: bypassing model_post_init surfaces a typed RuntimeError
+    (not an assert) so production runs under ``python -O`` still fail loud.
+    """
+    s = OrchestratorSettings()
+    # Simulate the invariant violation by clearing the cache.
+    s._resolved_trace_id = None
+    with pytest.raises(RuntimeError, match="model_post_init must have populated"):
+        s.resolve_trace_id()

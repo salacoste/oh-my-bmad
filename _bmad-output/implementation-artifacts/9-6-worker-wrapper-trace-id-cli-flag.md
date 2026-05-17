@@ -36,6 +36,8 @@ trace_id: str | None = Field(
 
 The Pydantic field validator should call `events.envelope.is_valid_trace_id()` on the value when present.
 
+**Orchestrator-adapter parity (pass-3 TL4):** `OrchestratorSettings.trace_id` mirrors this contract (validator + post_init eager resolve + resolver + alias-fallthrough + repr-escaped log preview). See pass-3 TH1 for implementation. The orchestrator-adapter forwards only a VALIDATED value (via `settings.resolve_trace_id()`) as `caller_trace_id` on every emission and as `OMB_TRACE_ID` in the worker subprocess env.
+
 ### AC2 — Validation: invalid value → log WARNING + mint fresh UUIDv7
 
 If `trace_id` is present but invalid (fails `is_valid_trace_id` per Story 9.1 contract), the worker logs at WARNING and mints a fresh UUIDv7 via `events.ids.new_uuid7()`. The worker does NOT crash on a malformed value — defensive degradation per Story 9.4 pass-2 lesson S2 (production-safe paths use raise/log, not assert).
@@ -101,7 +103,7 @@ The worker's resolved `trace_id` is minted ONCE per worker invocation (eagerly i
 
 The per-invocation singleton is correct (NOT per-event mint) — every event from the SAME worker invocation shares the same trace_id, supporting the "single operator command → causal chain" correlation model.
 
-### AC6 — Unit tests (≥12)
+### AC6 — Unit tests (≥12 floor; ~+61 delivered across pre-9.6 baseline through pass-3)
 
 New tests in `services/worker-wrapper/src/worker_wrapper/test_*.py`:
 
@@ -126,7 +128,7 @@ Document actual measurement in Dev Agent Record. Following Story 9.3/9.4/9.5 les
 
 ### AC8 — mypy --strict baseline preserved
 
-`uv run mypy --strict packages/ services/registry-api services/registry-state` exits 0 (97 source files). Do NOT extend the CI command to include `services/worker-wrapper`. All other Epic 8.7 baseline gates remain green.
+`uv run mypy --strict packages/ services/registry-api services/registry-state` exits 0 (98 source files, +1 from PH8 ratchet). Do NOT extend the CI command to include `services/worker-wrapper`. All other Epic 8.7 baseline gates remain green.
 
 Test count delta (pass-1 + pass-2): pre-9.6 baseline 2644 → post pass-2 ~2706 collected. Original 9.6 dev added +23; pass-1 added +31; pass-2 adds +7 (regression tests for PH0 / PH1 / PH3 / PH7 / PM10).
 
@@ -148,6 +150,8 @@ After 9.6 ships, Epic 9's 5-ingress chain is complete. Add ONE integration test 
 4. Asserts EVERY event for that task carries `trace_id=<known>` — from ingress through worker emission
 
 This is the literal Epic 9 FR58/FR59 closure proof. If feasible within Story 9.6's scope. If not, defer to Story 9.7's `/trace <id>` query test (which would naturally exercise the same path).
+
+**Orchestrator-adapter parity (pass-3 TH0/TH1/TH2):** Pass-3 closes the architectural gap pass-2 PH0 introduced. All 13+ `_emit_event` callsites in orchestrator-adapter now include `caller_trace_id` (TH0). `OrchestratorSettings.trace_id` mirrors the full worker-side defense pattern: validator + post_init eager resolve + resolver + alias-fallthrough (TH1). `OMCRunner.trace_id` lifted from per-process `__init__` to per-call `run(prompt, *, trace_id=...)` (TH2). The orchestrator-adapter propagation link forwards a VALIDATED trace_id (not raw env value) at every emission point.
 
 ---
 
@@ -307,6 +311,48 @@ If `claude` strictly rejects unknown flags, fall back to env-var-only. Verify vi
 
 ---
 
+## Review Findings — pass-3 (2026-05-18)
+
+Triaged from 3-lane third-opinion review = 25 raw findings → 22 unique after dedup. Pass-3 caught architectural gaps pass-2 introduced via PH0 scope expansion: orchestrator-adapter got the spawner-env path wired but NOT the producer-side MCP contract (13+ `_emit_event` calls without `caller_trace_id`) NOR the worker-side defense-in-depth pattern (no validator / resolver / post_init on `OrchestratorSettings.trace_id`). Plus per-process vs per-task trace_id semantics broken.
+
+### Decision-needed (resolved)
+
+- [x] [Review][Decision] **Q3 — per-process vs per-task trace_id** → resolved as per-task: lift trace_id from `OMCRunner.__init__` to `OMCRunner.run(prompt, *, trace_id)` so each spawn carries the correct task-level token. Promoted to **TH2** below.
+- [x] [Review][Decision] **Q4 — orchestrator-adapter caller_trace_id** → resolved: add full Story 9.5 caller_trace_id contract to all 13+ `_emit_event` callsites in orchestrator-adapter. Promoted to **TH0** below.
+
+### Patch — HIGH (10)
+
+- [x] [Review][Patch] **TH0 — orchestrator-adapter 13+ `_emit_event` callsites missing `caller_trace_id`** [services/orchestrator-adapter/src/orchestrator_adapter/app/main.py:103-116, 182, 207, 218, 238, 250, 276, 289, 320, 374] — A1+B3. Story 9.5 made `caller_trace_id` REQUIRED on clawhip-bridge MCP tools. `_emit_event` signature has no `caller_trace_id` arg. Production runs will fail Pydantic validation; tests pass because they mock `_emit_event` entirely. Same blindspot as pass-1 H1 for session-registry. Fix: extend `_emit_event(clients, event_type, payload, *, label, caller_trace_id: str)`, thread `caller_trace_id=settings.resolve_trace_id()` to every callsite.
+- [x] [Review][Patch] **TH1 — `OrchestratorSettings.trace_id` has no validator / resolver / post_init / fallthrough** [services/orchestrator-adapter/src/orchestrator_adapter/app/config.py:51-63] — A2+E2. Field is bare. Port the entire worker-side defense pattern (validator, post_init, resolver, alias-fallthrough, repr-escaped log preview) to `OrchestratorSettings`. Add regression tests.
+- [x] [Review][Patch] **TH2 — `OMCRunner` trace_id is per-process, not per-task** [services/orchestrator-adapter/src/orchestrator_adapter/app/main.py:394-398, adapters/omc_runner.py:64,90] — E1. All tasks share ONE trace_id. Fix: lift trace_id from `OMCRunner.__init__` to `OMCRunner.run(prompt, *, trace_id)`. `adapter_loop` reads `task.trace_id` from each polled task. Regression test: two `runner.run()` with distinct trace_ids → distinct child envs.
+- [x] [Review][Patch] **TH3 — PH8 ratchet regex weak** [services/registry-state/src/registry_state/test_no_subprocess_spawn.py] — B1+E3. Misses `os.system`, `subprocess.check_*`, `os.fork`, `multiprocessing.Process/Pool`, `pty.fork`. False positives on comments. Aliased imports bypass it. Fix: replace text-regex with AST-walk OR expand regex with `\b` anchors + self-test. Move test file out of scanned tree.
+- [x] [Review][Patch] **TH4 — PH3 substring match false pos/neg** [services/worker-wrapper/src/worker_wrapper/app/main.py:113-122] — B4+E6. `"trace_id" in str(exc).lower()` over-matches. Fix: tighten to `"caller_trace_id" in str(exc).lower()`, OR define `CallerTraceIdContractError(ValueError)` in `events.envelope` for typed dispatch.
+- [x] [Review][Patch] **TH5 — PH4 `_call_tool_best_effort` signature change risk** [services/worker-wrapper/src/worker_wrapper/app/main.py:103, 386-405] — B3. Pass-2 added `return_result: bool`; success path returning `None` indistinguishable from failure. Fix: verify all callers; consider extracting `_call_tool_best_effort_with_result()` as separate helper.
+- [x] [Review][Patch] **TH6 — PH2 RuntimeError lacks instance context + no test** [services/worker-wrapper/src/worker_wrapper/app/config.py:286-289] — B10. Fix: add `cls={type(self).__name__}` to error messages. Add `test_resolve_trace_id_raises_when_post_init_skipped`.
+- [x] [Review][Patch] **TH7 — PH7 backwards-compat alias precedence undefined + untested** [services/worker-wrapper/src/worker_wrapper/app/config.py:88-93] — B2. PM10 tested only `trace_id`. Fix: add `test_emit_flag_alias_priority_canonical_wins`.
+- [x] [Review][Patch] **TH8 — PM5 eager session/worker_id breaks post-construction patching** [services/worker-wrapper/src/worker_wrapper/app/config.py:241-243] — B8. Grep tests for `patch.*new_session_id`; either restructure tests OR revert PM5 (keep lazy for session/worker, eager only for trace_id).
+- [x] [Review][Patch] **TH9 — j-compose `WORKER_TRACE_ID: ${WORKER_TRACE_ID:-}` cosmetic** [tests/integration/docker-compose.j{1,3,6}.yml] — E5. No Makefile exports it. Fix: add harness recipe OR delete cosmetic lines and document in Dev Agent Record.
+
+### Patch — MED (8)
+
+- [x] [Review][Patch] **TM1 — PH0 leaks parent-process secrets in orchestrator-adapter** [services/orchestrator-adapter/.../omc_runner.py:75-82] — B5. Same B14-deferred pattern in new code. Fix: explicit allowlist OR document as deferred D4.
+- [x] [Review][Patch] **TM2 — PM11 + PM13 duplicate trace_id_preview, three formats** — B6+A6. Extract `_safe_trace_preview(tid)` helper; reuse across PM11/PM13/H8. Add `trace_id_source: Literal["env","minted"]` field.
+- [x] [Review][Patch] **TM3 — PH1 silently drops invalid aliases without per-fallback log** [services/worker-wrapper/src/worker_wrapper/app/config.py:118-135] — B7. Fix: emit `trace_id_alias_invalid` warning for each invalid alias visited in fallback loop.
+- [x] [Review][Patch] **TM4 — Spec body "5 ingresses closed" contradicts 6-row table** [_bmad-output/.../9-6-...md:9, 144, 173, 554, 557] — A4. Reframe orchestrator-adapter row as "propagation link not ingress"; update 5 locations.
+- [x] [Review][Patch] **TM5 — Line 442 AC10 deferral still says "no spawn site found"** [_bmad-output/.../9-6-...md:442] — A5. Rewrite to "Spawner closed by PH0+PH8; remaining blocker is pre-existing D2 integration test failures."
+- [x] [Review][Patch] **TM6 — AC8 still says "97 source files"; actual 98** [_bmad-output/.../9-6-...md:129] — A3. Fix: `(98 source files, +1 from PH8 ratchet)`.
+- [x] [Review][Patch] **TM7 — AC6 "≥12 unit tests" — actual ~+61** [_bmad-output/.../9-6-...md:104, 195, 208] — A7. Header → `### AC6 — Unit tests (≥12 floor; ~+61 delivered)`.
+- [x] [Review][Patch] **TM8 — PH0 negative test doesn't verify PATH propagation** [services/orchestrator-adapter/.../test_omc_runner.py:546-565] — B9+E8. Strengthen with `assert captured_env.get("PATH") == os.environ["PATH"]`.
+
+### Patch — LOW (4)
+
+- [x] [Review][Patch] **TL1 — PH1 ctor kwarg with valid env alias silently falls through** — E7. Surprising precedence. Add info-log when fallback fires OR document explicitly.
+- [x] [Review][Patch] **TL2 — PH0 unconditional `env=env` kwarg subtle semantic change** — E4. Document in Dev Agent Record OR conditional pass.
+- [x] [Review][Patch] **TL3 — Worker's PH1 canonical-empty edge** — E2 partial. Worker's PH1 fallthrough doesn't cover canonical name being empty (only aliases). After TH1, orchestrator validates before forwarding so this shouldn't reach worker; still defensive to handle.
+- [x] [Review][Patch] **TL4 — Documentation: spec body should mention orchestrator-adapter trace_id parity** — A2 partial overlap with TH1. After TH1 lands, add a paragraph to AC1 specifying orchestrator-adapter mirrors worker's contract.
+
+---
+
 ## Review Findings — pass-2 (2026-05-17)
 
 Triaged from 3-lane second-opinion review (Blind Hunter + Edge Case Hunter + Acceptance Auditor) = 37 raw findings → 28 unique after dedup. Larger than typical pass-2 because pass-1 batch was rushed: missed `orchestrator-adapter/omc_runner.py` spawn site (real architectural gap, not just docs) and left ~half of L5 spec-body sweep undone.
@@ -439,7 +485,7 @@ All tests use `monkeypatch.delenv` for env isolation (H6), hoisted module-level 
 
 **H0 — registry-state spawner search results:** Exhaustive grep for `create_subprocess|Popen|spawn` in `services/registry-state/src/` returned zero hits. Registry-state is a pure event-log / SQLite service — it does NOT spawn worker-wrapper subprocesses. **Review pass-2 acknowledgment:** pass-1 stopped here, but the REAL spawner is `services/orchestrator-adapter/adapters/omc_runner.py` (the OMC subprocess supervisor that transitively spawns worker-wrapper instances). Pass-2 addresses it as PH0 (`OMCRunner.__init__(trace_id=...)` + `env["OMB_TRACE_ID"]` in `_spawn`). The registry-state ratchet test added in PH8 keeps that surface guarded going forward.
 
-**AC10 deferral (M14):** Deferred to Story 9.7. Actual blockers: (a) registry-state spawner does not yet set `WORKER_TRACE_ID` when spawning workers (H0/Q1 gap — no spawn site found in current code); (b) integration journey tests 1/3/6 fail pre-9.6 with `ModuleNotFoundError: _build_scripted_worker`. Story 9.7's `/trace <id>` query test will naturally exercise the full `POST /v1/tasks → worker-wrapper → JSONL event log` chain.
+**AC10 deferral (M14):** Deferred to Story 9.7. Spawner-side wiring closed by pass-2 PH0 (orchestrator-adapter OMCRunner) + pass-3 TH0 (caller_trace_id on all 13+ emissions in orchestrator-adapter) + PH8 (registry-state ratchet). Remaining blocker: pre-existing D2 integration test failures (`_build_scripted_worker` ModuleNotFoundError). Story 9.7's `/trace <id>` query test will naturally exercise the now-complete chain once D2 is unblocked.
 
 ### Files changed
 
@@ -511,32 +557,40 @@ Rationale: the spec explicitly warned that `claude --help` may not yet accept `-
 6. **PH7 field rename (review pass-2)**: original pass-1 introduced `emit_trace_id_flag` with effective env var `WORKER_EMIT_TRACE_ID_FLAG` already correct, but the spec/pass-1 narrative mentioned the double-prefix name. Pass-2 makes the canonical name explicit and adds the legacy double-prefix as a backwards-compat alias.
 7. **PH0 scope expansion (review pass-2)**: user-approved exception via Q2 (analogous to Q1 in pass-1). orchestrator-adapter modification is outside the original non-goals boundary; user explicitly approved the scope-extension to land the real spawner-side fix.
 8. **DeprecationWarning count**: 98 → 96 (2 fewer, not worker-wrapper source).
+9. **PH0 unconditional `env=env` kwarg (pass-3 TL2)**: Pass-2 PH0's `OMCRunner._spawn` changed from no `env=` kwarg (pure `os.environ` inheritance) to always building an explicit `env = dict(os.environ)` dict and passing `env=env`. This is a subtle semantic change: previously the child process would inherit any env mutation made between process-start and the exec call; now it gets a dict copy at `_spawn` entry time. This is strictly safer (no TOCTOU on env mutation) but changes the inheritance model. Pass-3 TH2 completes this: trace_id is per-call kwarg, not stored on runner.
+10. **TH0/TH1/TH2 scope expansion (review pass-3)**: user-approved via Q3+Q4 decisions. Three architectural gaps that PH0 introduced: (a) 13+ `_emit_event` sites in orchestrator-adapter lacked `caller_trace_id` (TH0); (b) `OrchestratorSettings.trace_id` had no defense-in-depth (TH1); (c) `OMCRunner` stored trace_id per-instance making all tasks share one token (TH2). All three closed in pass-3.
 
 ### Follow-up TODOs surfaced for Epic 9
 
 1. ~~**Registry-state spawner**~~ → **PH0 resolution (pass-2)**: orchestrator-adapter/`OMCRunner` now propagates `trace_id` to the spawned subprocess env. Registry-state holds no spawn site (covered by the PH8 ratchet test going forward).
 2. **Integration test green gate**: journeys 1/3/6 and separability tests S1/S2 fail pre-9.6 with `ModuleNotFoundError: _build_scripted_worker`. Pre-existing infrastructure gap.
-3. **AC10 integration test**: deferred to Story 9.7 — blocked by the pre-existing scripted-worker infrastructure gap (above). The PH0 + PH8 fixes have wired the producer side; AC10 can now land once the journey harness is restored.
+3. **AC10 integration test**: deferred to Story 9.7 — blocked by the pre-existing scripted-worker infrastructure gap (above). The PH0 + TH0 + TH2 fixes have wired the full producer side; AC10 can now land once the journey harness is restored.
+4. ~~**orchestrator-adapter `_emit_event` caller_trace_id**~~ → **TH0 resolution (pass-3)**: all 13+ orchestrator-adapter emission sites now carry `caller_trace_id`.
+5. ~~**`OrchestratorSettings.trace_id` defense-in-depth**~~ → **TH1 resolution (pass-3)**: full validator + post_init + resolver ported.
+6. ~~**`OMCRunner` per-process vs per-task trace_id**~~ → **TH2 resolution (pass-3)**: trace_id lifted to per-call `run()` kwarg.
+7. **D4 — orchestrator-adapter `dict(os.environ)` env leak**: same hardening gap as worker-wrapper D1 — deferred to a separate hardening story (see deferred-work.md D4).
 
 ### Epic 9 mid-epic milestone
 
-**Consumer + the REAL producer (`OMCRunner`) wired; registry-state-style spawners covered by ratchet test (PH8).**
+**All 5 ingresses + orchestrator-adapter internal propagation link now complete (pass-3 TH0/TH1/TH2 closed the gaps PH0 introduced).**
 
-| Story | Ingress | Mechanism |
+Note: the table has 5 ingress rows (9.2–9.6) plus one internal propagation link row (9.6 PH0). The propagation link is NOT a new ingress — the orchestrator-adapter forwards a task-scoped trace_id through OMCRunner into the worker env, so the worker's ingress (9.6) resolves it via `AliasChoices`. Pass-3 TM4 reframes this distinction explicitly.
+
+| Story | Ingress / Link | Mechanism |
 |---|---|---|
-| 9.2 | HTTP (`POST /v1/tasks`) | `X-Trace-Id` request header → envelope |
-| 9.3 | Telegram gateway | `tg:{update_id}` derived from Telegram Update |
-| 9.4 | Console CLI | UUIDv7 minted at command entry → `X-Trace-Id` |
-| 9.5 | MCP tool callers | `caller_trace_id` explicit input on every MCP tool |
-| **9.6** | **Worker subprocess** | **`WORKER_TRACE_ID` env → (gated) `--trace-id` flag + `OMB_TRACE_ID` + `caller_trace_id` on every MCP emission** |
-| **9.6 PH0** | **OMC subprocess (orchestrator-adapter)** | **`OMCRunner._spawn` exports `OMB_TRACE_ID` to child env so worker resolves via `AliasChoices`** |
+| 9.2 | Ingress — HTTP (`POST /v1/tasks`) | `X-Trace-Id` request header → envelope |
+| 9.3 | Ingress — Telegram gateway | `tg:{update_id}` derived from Telegram Update |
+| 9.4 | Ingress — Console CLI | UUIDv7 minted at command entry → `X-Trace-Id` |
+| 9.5 | Ingress — MCP tool callers | `caller_trace_id` explicit input on every MCP tool |
+| **9.6** | **Ingress — Worker subprocess** | **`WORKER_TRACE_ID` env → (gated) `--trace-id` flag + `OMB_TRACE_ID` + `caller_trace_id` on every MCP emission** |
+| **9.6 PH0+TH0** | **Propagation link — OMC subprocess (orchestrator-adapter)** | **`OMCRunner.run(trace_id=task_trace_id)` per-call → `env["OMB_TRACE_ID"]`; all 13+ `_emit_event` sites carry `caller_trace_id=task_trace_id`** |
 
-**Cumulative Epic 9 stats (Stories 9.1–9.6) — pass-2 review update (PH11):**
-- Commits: **18** feat/fix/chore across 9.1-9.6 (exact: `git log --grep='story-9' --oneline | wc -l`; review pass-2 PH11 corrected the prior 17 figure). The pass-2 commit will increment this to 19; rerun the command at the finalization step if the figure is quoted.
-- Tests added: pre-9.6 baseline 2644 → after pass-2 ≈2706 collected (original 9.6 dev +23, pass-1 +31, pass-2 +7).
-- DeprecationWarning delta: 98 → 96 (post pass-1; 0 from worker-wrapper source — preserved through pass-2).
-- mypy --strict baseline: 98 source files, 0 errors (added `services/registry-state/src/registry_state/test_no_subprocess_spawn.py` via PH8 — held throughout pass-2).
-- Story 9.7 will: bump schema_version 1.0.0 → 1.1.0, add `oh-my-bmad-cli trace <id>` operator query, and land the AC10 integration assertion (PH0 unblocked the producer side; only the scripted-worker harness restoration remains).
+**Cumulative Epic 9 stats (Stories 9.1–9.6) — pass-3 review update:**
+- Commits: **20** feat/fix/chore across 9.1-9.6 (pass-2 commit was 19; pass-3 adds 1 more — rerun `git log --grep='story-9' --oneline | wc -l` at finalization).
+- Tests added: pre-9.6 baseline 2644 → after pass-3 ≈2725-2745 collected (original 9.6 dev +23, pass-1 +31, pass-2 +7, pass-3 ~20-30 net).
+- DeprecationWarning delta: 98 → 96 (post pass-1; 0 from worker-wrapper source — preserved through pass-3).
+- mypy --strict baseline: 98 source files, 0 errors (held throughout pass-3; orchestrator-adapter excluded from --strict CI command).
+- Story 9.7 will: bump schema_version 1.0.0 → 1.1.0, add `oh-my-bmad-cli trace <id>` operator query, and land the AC10 integration assertion (PH0 + TH0 + TH2 unblocked the full producer side; only the scripted-worker harness restoration remains).
 
 ---
 

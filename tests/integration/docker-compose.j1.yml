@@ -83,8 +83,12 @@ services:
       CLAWHIP_BRIDGE_LOG_DIR: /var/lib/oh-my-bmad/registry/events
       CLAWHIP_BRIDGE_ACTOR_KIND: worker
       CLAWHIP_BRIDGE_ACTOR_ID: scripted-worker-stub
-      # Story 9.6 review pass-2 PH0 — propagate the trace_id from the
-      # spawning harness into the worker so Epic 9's chain stays intact.
+      # Story 9.6 review pass-2 PH0 / pass-3 TH9 — propagate the trace_id
+      # from the spawning harness into the worker so Epic 9's chain stays
+      # intact.  Export ``WORKER_TRACE_ID=<uuid>`` in the harness shell
+      # before invoking docker-compose; empty default keeps the compose
+      # file valid for ad-hoc runs.  Wiring becomes load-bearing once the
+      # pre-existing D2 ``_build_scripted_worker`` failure is unblocked.
       WORKER_TRACE_ID: ${WORKER_TRACE_ID:-}
     user: "${OMB_S3_UID:-10002}:${OMB_S3_GID:-10000}"
     init: true

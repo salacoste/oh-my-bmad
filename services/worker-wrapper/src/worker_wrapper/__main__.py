@@ -14,7 +14,7 @@ import structlog
 from secret_hygiene.sanitizer import redact_secrets
 
 from worker_wrapper.adapters.mcp_clients import MCPClientGroup, verify_connectivity
-from worker_wrapper.app.config import WorkerSettings
+from worker_wrapper.app.config import WorkerSettings, _safe_trace_preview
 from worker_wrapper.app.main import finish_session, heartbeat_loop, start_session
 
 _SERVICE = "worker-wrapper"
@@ -117,7 +117,7 @@ async def _run() -> None:
                 session_id=session_id,
                 worker_id=worker_id,
                 trace_id_emit_flag=settings.emit_trace_id_flag,
-                trace_id_preview=resolved_tid[:8] + "...",
+                trace_id_preview=_safe_trace_preview(resolved_tid),  # pass-3 TM2
             )
 
             heartbeat_task = asyncio.create_task(

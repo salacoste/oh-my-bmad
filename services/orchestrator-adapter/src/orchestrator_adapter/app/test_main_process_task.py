@@ -8,7 +8,7 @@ import pytest
 
 from orchestrator_adapter.adapters.github_adapter import PRDraftResult
 from orchestrator_adapter.app.config import OrchestratorSettings
-from orchestrator_adapter.app.main import process_task
+from orchestrator_adapter.app.main import _emit_event, process_task
 
 # Valid UUIDv7-format task IDs matching payload pattern constraints.
 _T1 = "t-01234567-89ab-7def-8abc-0123456789ab"
@@ -41,7 +41,7 @@ def _make_sequential_runner(
     runner = AsyncMock()
     call_idx = 0
 
-    async def _run(_prompt: object) -> AsyncMock:
+    async def _run(_prompt: object, *, trace_id: str | None = None) -> AsyncMock:
         nonlocal call_idx
         r = AsyncMock()
         if call_idx == 0:
@@ -72,7 +72,7 @@ async def test_empty_plan_emits_completed_without_execution_started() -> None:
     """Zero-step plan should emit task.completed but NOT task.execution.started."""
     emitted_events: list[str] = []
 
-    async def fake_emit(clients, event_type, payload, *, label):
+    async def fake_emit(clients, event_type, payload, *, label, caller_trace_id):
         emitted_events.append(event_type)
 
     runner = _make_runner(stdout="")
@@ -96,7 +96,14 @@ async def test_empty_plan_emits_completed_without_execution_started() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _fake_emit(_clients: object, _event_type: str, _payload: object, *, label: str) -> None:
+async def _fake_emit(
+    _clients: object,
+    _event_type: str,
+    _payload: object,
+    *,
+    label: str,
+    caller_trace_id: str,
+) -> None:
     pass
 
 
@@ -190,3 +197,59 @@ async def test_pr_created_when_all_guards_pass() -> None:
     ):
         await process_task(AsyncMock(), runner, settings, task)
         mock_pr.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Story 9.6 review pass-3 TH0 — caller_trace_id contract tests
+# (real schema validation, not mocked-emit_event).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_emit_event_threads_caller_trace_id_to_clawhip_call() -> None:
+    """TH0 regression: ``_emit_event`` includes ``caller_trace_id`` in the
+    arguments dict passed to the clawhip-bridge ``call_tool``.
+
+    Asserts the FastMCP server contract (clawhip-bridge ``emit_event``
+    requires ``caller_trace_id``) is satisfied by the producer side.
+    """
+    captured: dict[str, object] = {}
+
+    async def _fake_call_tool(name: str, *, arguments: dict[str, object]) -> object:
+        captured["name"] = name
+        captured["arguments"] = arguments
+        return None
+
+    clients = AsyncMock()
+    clients.clawhip_bridge = AsyncMock()
+    clients.clawhip_bridge.call_tool = _fake_call_tool
+
+    # Patch isinstance(session, ClientSession) check inside _call_tool.
+    with patch("orchestrator_adapter.app.main.isinstance", return_value=True):
+        await _emit_event(
+            clients,
+            "task.planning.started",
+            {"task_id": _T1},
+            label="planning_started_test",
+            caller_trace_id="01917e5c-a7d1-7000-8abc-0123456789ab",
+        )
+
+    assert captured["name"] == "emit_event"
+    args = captured["arguments"]
+    assert isinstance(args, dict)
+    assert args["caller_trace_id"] == "01917e5c-a7d1-7000-8abc-0123456789ab"
+    assert args["type"] == "task.planning.started"
+
+
+def test_emit_event_caller_trace_id_passes_validate_caller_trace_id() -> None:
+    """TH0 schema contract: the trace_id produced by ``OrchestratorSettings.resolve_trace_id``
+    passes the clawhip-bridge ``validate_caller_trace_id`` shape oracle.
+
+    Asserts producer-side and consumer-side contracts agree on shape.
+    """
+    from clawhip_bridge_mcp.server import validate_caller_trace_id
+
+    settings = OrchestratorSettings()
+    tid = settings.resolve_trace_id()
+    # Must not raise.
+    validate_caller_trace_id(tid)

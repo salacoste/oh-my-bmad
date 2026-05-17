@@ -324,3 +324,47 @@ class TestWorkerEmitTraceIdFlag:
         ):
             s = WorkerSettings()
         assert s.emit_trace_id_flag is True
+
+    # Story 9.6 review pass-3 TH7 — alias precedence: canonical wins when
+    # both names are set, mirroring PM10's pattern for trace_id.
+    def test_emit_flag_alias_priority_canonical_wins(self) -> None:
+        """Both canonical and legacy double-prefix env vars set with conflicting
+        values — canonical (``WORKER_EMIT_TRACE_ID_FLAG``) wins per Pydantic
+        ``AliasChoices`` first-listed-wins semantics."""
+        with patch.dict(
+            os.environ,
+            {
+                "WORKER_EMIT_TRACE_ID_FLAG": "0",
+                "WORKER_WORKER_EMIT_TRACE_ID_FLAG": "1",
+            },
+            clear=False,
+        ):
+            s = WorkerSettings()
+        # Canonical "0" wins → False, NOT True from the legacy alias.
+        assert s.emit_trace_id_flag is False
+
+
+# Story 9.6 review pass-3 TH6 — resolver narrow-raise carries cls context.
+
+
+class TestResolverNarrowRaise:
+    def test_resolve_trace_id_raises_when_post_init_skipped(self) -> None:
+        """TH6: bypassing model_post_init (simulated via cache clear) surfaces
+        a typed RuntimeError that names the concrete class so the caller can
+        tell exactly which Settings subclass tripped the invariant."""
+        s = WorkerSettings()
+        s._resolved_trace_id = None
+        with pytest.raises(RuntimeError, match=r"_resolved_trace_id.*WorkerSettings"):
+            s.resolve_trace_id()
+
+    def test_resolve_session_id_raises_when_post_init_skipped(self) -> None:
+        s = WorkerSettings()
+        s._resolved_session_id = None
+        with pytest.raises(RuntimeError, match=r"_resolved_session_id.*WorkerSettings"):
+            s.resolve_session_id()
+
+    def test_resolve_worker_id_raises_when_post_init_skipped(self) -> None:
+        s = WorkerSettings()
+        s._resolved_worker_id = None
+        with pytest.raises(RuntimeError, match=r"_resolved_worker_id.*WorkerSettings"):
+            s.resolve_worker_id()

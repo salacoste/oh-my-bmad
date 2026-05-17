@@ -144,9 +144,15 @@ class TestOMCRunnerRun:
 
 
 class TestOMCRunnerTraceIdEnv:
-    """PH0: ``OMCRunner._spawn`` exports ``OMB_TRACE_ID`` to the child env
-    when ``trace_id`` is set; the env var is absent (or inherits parent's
-    value) when ``trace_id`` is None."""
+    """PH0 + pass-3 TH2: ``OMCRunner._spawn`` exports ``OMB_TRACE_ID`` to
+    the child env when ``trace_id`` is passed PER-CALL via ``run()`` /
+    ``_spawn()``; the env var is absent (or inherits parent's value) when
+    ``trace_id`` is None.
+
+    Story 9.6 review pass-3 TH2: ``trace_id`` is no longer stored on the
+    runner — it's a per-call kwarg so multiple ``run()`` invocations carry
+    distinct task-scoped tokens.
+    """
 
     @pytest.mark.asyncio
     async def test_spawn_sets_omb_trace_id_when_provided(self, omc_dir: Path) -> None:
@@ -159,11 +165,8 @@ class TestOMCRunnerTraceIdEnv:
             return _mock_process()
 
         with patch(_SPAWN_PATH, side_effect=_fake_exec):
-            runner = OMCRunner(
-                omc_path=omc_dir,
-                trace_id="01917e5c-a7d1-7000-8abc-0123456789ab",
-            )
-            await runner._spawn("hello")
+            runner = OMCRunner(omc_path=omc_dir)
+            await runner._spawn("hello", trace_id="01917e5c-a7d1-7000-8abc-0123456789ab")
         assert captured_env.get("OMB_TRACE_ID") == "01917e5c-a7d1-7000-8abc-0123456789ab"
 
     @pytest.mark.asyncio
@@ -172,7 +175,12 @@ class TestOMCRunnerTraceIdEnv:
     ) -> None:
         """When ``trace_id`` is None, ``_spawn`` does NOT set ``OMB_TRACE_ID``
         on top of the parent's env (the env var is either inherited from the
-        parent if set, or absent)."""
+        parent if set, or absent).
+
+        Story 9.6 review pass-3 TM8: also verify PATH propagates so the env
+        is not a stripped-down dict.
+        """
+        import os as _os
         from typing import Any
 
         # Strip ambient OMB_TRACE_ID to remove inheritance ambiguity.
@@ -184,6 +192,35 @@ class TestOMCRunnerTraceIdEnv:
             return _mock_process()
 
         with patch(_SPAWN_PATH, side_effect=_fake_exec):
-            runner = OMCRunner(omc_path=omc_dir, trace_id=None)
-            await runner._spawn("hello")
+            runner = OMCRunner(omc_path=omc_dir)
+            await runner._spawn("hello", trace_id=None)
         assert "OMB_TRACE_ID" not in captured_env
+        # Story 9.6 review pass-3 TM8 — PATH propagation regression guard.
+        if "PATH" in _os.environ:
+            assert captured_env.get("PATH") == _os.environ["PATH"]
+
+    @pytest.mark.asyncio
+    async def test_run_per_call_trace_id_yields_distinct_child_envs(self, omc_dir: Path) -> None:
+        """Story 9.6 review pass-3 TH2 regression: two ``runner.run()`` calls
+        with distinct trace_ids produce two distinct child envs.
+        """
+        from typing import Any
+
+        captured: list[dict[str, str]] = []
+
+        async def _fake_exec(*a: Any, **kw: Any) -> Any:
+            captured.append(dict(kw.get("env", {})))
+            return _mock_process()
+
+        tid_a = "01917e5c-a7d1-7000-8abc-0123456789aa"
+        tid_b = "01917e5c-a7d1-7000-8abc-0123456789bb"
+
+        with patch(_SPAWN_PATH, side_effect=_fake_exec):
+            runner = OMCRunner(omc_path=omc_dir, timeout_s=5)
+            await runner.run("prompt-a", trace_id=tid_a)
+            await runner.run("prompt-b", trace_id=tid_b)
+
+        assert len(captured) == 2
+        assert captured[0].get("OMB_TRACE_ID") == tid_a
+        assert captured[1].get("OMB_TRACE_ID") == tid_b
+        assert captured[0]["OMB_TRACE_ID"] != captured[1]["OMB_TRACE_ID"]

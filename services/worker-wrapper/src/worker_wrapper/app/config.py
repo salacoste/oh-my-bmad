@@ -24,6 +24,15 @@ _TRACE_ID_ALIASES: tuple[str, ...] = (
 _EMIT_TRACE_ID_FLAG_ENV: str = "WORKER_EMIT_TRACE_ID_FLAG"
 
 
+def _safe_trace_preview(tid: str) -> str:
+    """Return an 8-char bounded preview suitable for structured log fields.
+
+    Story 9.6 review pass-3 TM2: extracted helper shared across config /
+    __main__ log call sites (PM11 ready-log + PM13 mint-log).
+    """
+    return tid[:8] + "..."
+
+
 class WorkerSettings(BaseSettings):
     """Configuration for worker-wrapper MCP client connections.
 
@@ -160,8 +169,24 @@ class WorkerSettings(BaseSettings):
         def _try_fallback_aliases() -> str | None:
             for fallback_env in ("OMB_WORKER_TRACE_ID", "OMB_TRACE_ID"):
                 candidate = os.environ.get(fallback_env, "")
-                if candidate and is_valid_trace_id(candidate):
+                if not candidate:
+                    continue
+                if is_valid_trace_id(candidate):
+                    # Story 9.6 review pass-3 TL1 — info log when fallback
+                    # fires so operators know which alias was accepted.
+                    log.info(
+                        "trace_id_alias_fallthrough_accepted",
+                        alias_env=fallback_env,
+                    )
                     return candidate
+                # Story 9.6 review pass-3 TM3 — per-fallback invalid warning
+                # so operators can diagnose which alias carried a bad value
+                # (not just the final summary).
+                log.warning(
+                    "trace_id_alias_invalid",
+                    alias_env=fallback_env,
+                    value_preview=repr(candidate[:80]),
+                )
             return None
 
         # Empty string is "present-but-invalid" (a spawner bug), not "absent".
@@ -245,10 +270,10 @@ class WorkerSettings(BaseSettings):
             resolved: str = self.trace_id
         else:
             resolved = new_uuid7()
-            # Review pass-2 PM13 — info log so operators can correlate.
+            # Review pass-2 PM13 / pass-3 TM2 — use shared helper.
             log.info(
                 "worker_trace_id_minted_fresh",
-                value_preview=resolved[:8] + "...",
+                value_preview=_safe_trace_preview(resolved),
             )
         self._resolved_trace_id = resolved
         # Review pass-2 PM5 — eager session_id / worker_id resolution.
@@ -264,15 +289,26 @@ class WorkerSettings(BaseSettings):
 
         ``model_post_init`` populates the cache at construction so this is a
         pure read; the narrowing raise mirrors :meth:`resolve_trace_id`.
+        Review pass-3 TH6: error message names the concrete class so the
+        caller can tell exactly which Settings subclass tripped the invariant.
         """
         if self._resolved_session_id is None:
-            raise RuntimeError("model_post_init must have populated _resolved_session_id")
+            raise RuntimeError(
+                f"model_post_init must have populated _resolved_session_id "
+                f"(cls={type(self).__name__})"
+            )
         return self._resolved_session_id
 
     def resolve_worker_id(self) -> str:
-        """Return the eagerly-resolved ``worker_id`` (review pass-2 PM5)."""
+        """Return the eagerly-resolved ``worker_id`` (review pass-2 PM5).
+
+        Review pass-3 TH6: error message names the concrete class.
+        """
         if self._resolved_worker_id is None:
-            raise RuntimeError("model_post_init must have populated _resolved_worker_id")
+            raise RuntimeError(
+                f"model_post_init must have populated _resolved_worker_id "
+                f"(cls={type(self).__name__})"
+            )
         return self._resolved_worker_id
 
     def resolve_trace_id(self) -> str:
@@ -282,11 +318,18 @@ class WorkerSettings(BaseSettings):
         at construction so this method is a pure read. The narrowing assert
         (review pass-1 M1) keeps mypy --strict happy without coercing the
         type at call sites.
+
+        Review pass-3 TH6: error message names the concrete class so the
+        caller can tell exactly which Settings subclass tripped the invariant
+        (matches TH1's orchestrator-side resolver).
         """
         # ``model_post_init`` guarantees this is non-None for any
         # successfully-constructed instance — narrow the Optional for mypy.
         if self._resolved_trace_id is None:
-            raise RuntimeError("model_post_init must have populated _resolved_trace_id")
+            raise RuntimeError(
+                f"model_post_init must have populated _resolved_trace_id "
+                f"(cls={type(self).__name__})"
+            )
         return self._resolved_trace_id
 
     def resolve_task_id(self) -> str | None:
