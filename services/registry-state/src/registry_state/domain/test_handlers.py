@@ -198,6 +198,7 @@ def _make_created_envelope(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskCreatedPayload(task_id=tid, title=title),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
 
@@ -256,6 +257,7 @@ async def test_task_planning_started_updates_status(db_session: AsyncSession) ->
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskPlanningStartedPayload(task_id=task_id),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     await handle_task_planning_started(db_session, env_planning)
@@ -278,6 +280,7 @@ async def test_task_planning_started_clears_hint(db_session: AsyncSession) -> No
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskCreatedPayload(task_id=new_task_id(clock=clk, rng=rng), hint="focus on X"),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     await handle_task_created(db_session, env_created)
@@ -296,6 +299,7 @@ async def test_task_planning_started_clears_hint(db_session: AsyncSession) -> No
         emitted_at_monotonic_ns=clk2.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskPlanningStartedPayload(task_id=task_id),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk2, rng=rng),
     )
     await handle_task_planning_started(db_session, env_planning)
@@ -321,6 +325,7 @@ async def test_task_plan_ready_updates_status(db_session: AsyncSession) -> None:
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskPlanReadyPayload(task_id=task_id, plan_summary="Step 1"),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     await handle_task_plan_ready(db_session, env_pr)
@@ -353,6 +358,7 @@ async def test_task_execution_started_updates_status_and_inserts_session_row(
         emitted_at_monotonic_ns=clk4.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskExecutionStartedPayload(task_id=task_id, session_id=sid),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk4, rng=rng4),
     )
     await handle_task_execution_started(db_session, env_exec)
@@ -383,6 +389,7 @@ async def test_handler_on_missing_task_raises_materializer_error(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskPlanningStartedPayload(task_id=missing_task_id),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     with pytest.raises(MaterializerError) as exc_info:
@@ -413,6 +420,7 @@ async def test_plan_ready_on_missing_task_raises_materializer_error(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskPlanReadyPayload(task_id=missing_task_id, plan_summary="x"),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     with pytest.raises(MaterializerError) as exc_info:
@@ -438,6 +446,7 @@ async def test_execution_started_on_missing_task_raises_materializer_error(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskExecutionStartedPayload(task_id=missing_task_id, session_id=sid),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     with pytest.raises(MaterializerError) as exc_info:
@@ -471,6 +480,7 @@ async def test_task_blocker_raised_updates_last_event_id(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskBlockerRaisedPayload(task_id=task_id, reason="CI red"),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     await handle_task_blocker_raised(db_session, env_blocker)
@@ -500,6 +510,7 @@ async def test_task_blocker_raised_truncates_long_reason(db_session: AsyncSessio
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskBlockerRaisedPayload(task_id=task_id, reason=long_reason),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     await handle_task_blocker_raised(db_session, env_blocker)
@@ -529,6 +540,7 @@ async def test_task_summary_emitted_updates_last_event_id(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskSummaryEmittedPayload(task_id=task_id, summary="step 1 done"),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     await handle_task_summary_emitted(db_session, env_summary)
@@ -559,6 +571,7 @@ async def test_task_approval_requested_updates_last_event_id(
         payload=TaskApprovalRequestedPayload(
             task_id=task_id, action="deploy", justification="ready"
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     await handle_task_approval_requested(db_session, env_approval)
@@ -589,6 +602,7 @@ async def test_task_completed_sets_status_completed(
         payload=TaskCompletedPayload(
             task_id=task_id, summary="all done", pr_url="https://github.com/x/1"
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     await handle_task_completed(db_session, env_completed)
@@ -616,6 +630,7 @@ async def test_story28_handlers_raise_materializer_error_on_missing_task(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskBlockerRaisedPayload(task_id=missing_id, reason="oops"),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     with pytest.raises(MaterializerError):
@@ -630,6 +645,7 @@ async def test_story28_handlers_raise_materializer_error_on_missing_task(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskSummaryEmittedPayload(task_id=missing_id, summary="x"),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     with pytest.raises(MaterializerError):
@@ -644,6 +660,7 @@ async def test_story28_handlers_raise_materializer_error_on_missing_task(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskApprovalRequestedPayload(task_id=missing_id, action="x", justification="y"),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     with pytest.raises(MaterializerError):
@@ -658,6 +675,7 @@ async def test_story28_handlers_raise_materializer_error_on_missing_task(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskCompletedPayload(task_id=missing_id, summary="x"),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     with pytest.raises(MaterializerError):
@@ -693,6 +711,7 @@ async def test_approval_granted_updates_last_event_id(
             decision_id="d-aaa",
             actor_id="op-1",
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     await handle_approval_granted(db_session, env_grant)
@@ -728,6 +747,7 @@ async def test_approval_rejected_updates_last_event_id(
             actor_id="op-1",
             reason="bad plan",
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     await handle_approval_rejected(db_session, env_reject)
@@ -761,6 +781,7 @@ async def test_task_stop_requested_sets_status_stopped(
             task_id=task_id,
             actor_id="op-1",
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     await handle_task_stop_requested(db_session, env_stop)
@@ -805,6 +826,7 @@ async def test_task_stop_requested_closes_active_session(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskStopRequestedPayload(task_id=task_id, actor_id="op-1"),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     await handle_task_stop_requested(db_session, env_stop)
@@ -847,6 +869,7 @@ async def test_task_completed_closes_active_session(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskCompletedPayload(task_id=task_id, summary="done"),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     await handle_task_completed(db_session, env_complete)
@@ -880,6 +903,7 @@ async def test_task_retry_requested_updates_last_event_id(
             actor_id="op-1",
             hint="focus on X",
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     await handle_task_retry_requested(db_session, env_retry)
@@ -917,6 +941,7 @@ async def test_task_retry_without_hint_clears_existing_hint(
             actor_id="op-1",
             hint="first hint",
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk2, rng=rng),
     )
     await handle_task_retry_requested(db_session, env_retry1)
@@ -939,6 +964,7 @@ async def test_task_retry_without_hint_clears_existing_hint(
             actor_id="op-1",
             hint=None,
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk3, rng=rng),
     )
     await handle_task_retry_requested(db_session, env_retry2)
@@ -979,6 +1005,7 @@ async def test_task_retry_requested_transitions_to_pending(
             actor_id="op-1",
             hint="unblock it",
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk2, rng=rng),
     )
     await handle_task_retry_requested(db_session, env_retry)
@@ -1017,6 +1044,7 @@ async def test_task_retry_from_failed_transitions_to_pending(
             actor_id="op-1",
             hint="try again",
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk2, rng=Random(403)),
     )
     await handle_task_retry_requested(db_session, env_retry)
@@ -1047,6 +1075,7 @@ async def test_story65_handlers_raise_materializer_error_on_missing_task(
             decision_id="d-x1",
             actor_id="op-1",
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     with pytest.raises(MaterializerError):
@@ -1064,6 +1093,7 @@ async def test_story65_handlers_raise_materializer_error_on_missing_task(
             decision_id="d-x2",
             actor_id="op-1",
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     with pytest.raises(MaterializerError):
@@ -1080,6 +1110,7 @@ async def test_story65_handlers_raise_materializer_error_on_missing_task(
             task_id=missing_id,
             actor_id="op-1",
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     with pytest.raises(MaterializerError):
@@ -1097,6 +1128,7 @@ async def test_story65_handlers_raise_materializer_error_on_missing_task(
             decision_id="d-x3",
             actor_id="op-1",
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     with pytest.raises(MaterializerError):
@@ -1126,6 +1158,7 @@ async def test_story65_audit_fields_in_envelope(db_session: AsyncSession) -> Non
             decision_id="d-a1",
             actor_id="op-1",
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     assert env_grant.actor.kind == "system"
@@ -1148,6 +1181,7 @@ async def test_story65_audit_fields_in_envelope(db_session: AsyncSession) -> Non
             decision_id="d-a2",
             actor_id="op-1",
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     assert isinstance(env_reject.payload, ApprovalRejectedPayload)
@@ -1166,6 +1200,7 @@ async def test_story65_audit_fields_in_envelope(db_session: AsyncSession) -> Non
             task_id=task_id,
             actor_id="op-1",
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     assert isinstance(env_stop.payload, TaskStopRequestedPayload)
@@ -1185,6 +1220,7 @@ async def test_story65_audit_fields_in_envelope(db_session: AsyncSession) -> Non
             decision_id="d-a3",
             actor_id="op-1",
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     assert isinstance(env_retry.payload, TaskRetryRequestedPayload)
@@ -1210,6 +1246,7 @@ async def test_task_stop_requested_is_idempotent(db_session: AsyncSession) -> No
         emitted_at_monotonic_ns=clk1.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskStopRequestedPayload(task_id=task_id, actor_id="op-1"),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk1, rng=rng1),
     )
     await handle_task_stop_requested(db_session, env_stop1)
@@ -1224,6 +1261,7 @@ async def test_task_stop_requested_is_idempotent(db_session: AsyncSession) -> No
         emitted_at_monotonic_ns=clk2.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskStopRequestedPayload(task_id=task_id, actor_id="op-1"),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk2, rng=rng2),
     )
     await handle_task_stop_requested(db_session, env_stop2)
@@ -1263,6 +1301,7 @@ async def test_tier3_action_attempted_updates_last_event_id(
             task_id=task_id,
             accepted=True,
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     await handle_tier3_action_attempted(db_session, env)
@@ -1297,6 +1336,7 @@ async def test_tier3_action_performed_updates_last_event_id(
             action="git_push",
             accepted=True,
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     await handle_tier3_action_performed(db_session, env)
@@ -1332,6 +1372,7 @@ async def test_tier3_license_override_updates_last_event_id(
             actor_id="op-1",
             reason="operator_license_override",
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     await handle_tier3_license_override(db_session, env)
@@ -1364,6 +1405,7 @@ async def test_story66_handlers_raise_materializer_error_on_missing_task(
             accepted=False,
             reason="denied",
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     with pytest.raises(MaterializerError):
@@ -1381,6 +1423,7 @@ async def test_story66_handlers_raise_materializer_error_on_missing_task(
             action="git_push",
             accepted=True,
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     with pytest.raises(MaterializerError):
@@ -1399,6 +1442,7 @@ async def test_story66_handlers_raise_materializer_error_on_missing_task(
             actor_id="op-1",
             reason="test",
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     with pytest.raises(MaterializerError):
@@ -1428,6 +1472,7 @@ async def test_story66_audit_fields_in_envelope(db_session: AsyncSession) -> Non
             task_id=task_id,
             accepted=True,
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     assert env_a.actor.kind == "system"
@@ -1450,6 +1495,7 @@ async def test_story66_audit_fields_in_envelope(db_session: AsyncSession) -> Non
             action="git_push",
             accepted=True,
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     assert isinstance(env_p.payload, Tier3ActionPerformedPayload)
@@ -1469,6 +1515,7 @@ async def test_story66_audit_fields_in_envelope(db_session: AsyncSession) -> Non
             actor_id="op-1",
             reason="override",
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     assert isinstance(env_l.payload, LicenseOverridePayload)
@@ -1502,6 +1549,7 @@ async def test_tier3_action_performed_with_optional_fields(
             approval_event_id=approval_id,
             reason="manual operator approval",
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     assert isinstance(env.payload, Tier3ActionPerformedPayload)
@@ -1539,6 +1587,7 @@ async def test_tier3_action_attempted_accepted_false_updates_last_event_id(
             accepted=False,
             reason="tier-3 capability denied",
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     await handle_tier3_action_attempted(db_session, env)
@@ -1579,6 +1628,7 @@ async def test_budget_exceeded_sets_blocked_status(
             tokens_used=52_000,
             step=3,
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     await handle_task_budget_exceeded(db_session, env)
@@ -1609,6 +1659,7 @@ async def test_budget_exceeded_raises_on_missing_task(
             tokens_used=52_000,
             step=1,
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     with pytest.raises(MaterializerError):
@@ -1641,6 +1692,7 @@ async def test_budget_override_resumes_to_executing(
             tokens_used=52_000,
             step=3,
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk_block, rng=rng_block),
     )
     await handle_task_budget_exceeded(db_session, env_block)
@@ -1662,6 +1714,7 @@ async def test_budget_override_resumes_to_executing(
             old_limit=50_000,
             new_limit=100_000,
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk_ov, rng=rng_ov),
     )
     await handle_tier3_budget_override(db_session, env_ov)
@@ -1693,6 +1746,7 @@ async def test_budget_override_raises_on_missing_task(
             old_limit=50_000,
             new_limit=100_000,
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     with pytest.raises(MaterializerError):
@@ -1729,6 +1783,7 @@ async def test_license_flagged_updates_last_event_id(
             file_list=["src/gpl_code.py"],
             detected_licenses=["gpl-2.0"],
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     await handle_task_license_flagged(db_session, env)
@@ -1768,6 +1823,7 @@ async def test_step_completed_updates_current_step(
             description="Refactor module",
             output_summary="Renamed helper functions",
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     await handle_task_step_completed(db_session, env)
@@ -1797,6 +1853,7 @@ async def test_step_completed_raises_on_missing_task(
             description="x",
             output_summary="",
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     with pytest.raises(MaterializerError):
@@ -1843,6 +1900,7 @@ async def test_file_edited_updates_last_agent_action(
             lines_added=5,
             lines_removed=2,
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     await handle_file_edited(db_session, env)
@@ -1882,6 +1940,7 @@ async def test_file_edited_noop_on_missing_session(
             lines_added=10,
             lines_removed=0,
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     # Should not raise — no-op.
@@ -1930,6 +1989,7 @@ async def test_reasoning_breadcrumb_updates_last_agent_action(
             suppressed=False,
             raw_length=38,
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     await handle_agent_reasoning_breadcrumb(db_session, env)
@@ -1977,6 +2037,7 @@ async def test_reasoning_breadcrumb_suppressed_is_noop(
             suppressed=True,
             raw_length=100,
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     await handle_agent_reasoning_breadcrumb(db_session, env)
@@ -2015,6 +2076,7 @@ async def test_reasoning_breadcrumb_noop_on_missing_session(
             suppressed=False,
             raw_length=30,
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     await handle_agent_reasoning_breadcrumb(db_session, env)

@@ -445,6 +445,43 @@ class RegistryAPIClient:
         ) as exc:
             raise RegistryResponseError(f"malformed body: {exc}") from exc
 
+    async def get_trace(
+        self,
+        *,
+        trace_id: str,
+        request_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        """GET /v1/trace/{trace_id} — all events in the causal chain (FR59a / Story 9.7).
+
+        Returns a list of raw event dicts ordered by emitted_at_monotonic_ns.
+        Raises ValueError if trace_id doesn't match Story 9.1 shape contract.
+        Raises RegistryResponseError on malformed responses.
+        """
+        if not is_valid_trace_id(trace_id):
+            raise ValueError(
+                f"Invalid trace_id (must be bare UUIDv7 or 'tg:<update_id>'): {trace_id!r}"
+            )
+
+        headers: dict[str, str] = {}
+        if request_id is not None:
+            headers[REQUEST_ID_HEADER] = request_id
+        # Don't set X-Trace-Id for the trace query itself — the trace_id IS the
+        # query parameter, not a correlation header for this request.
+
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=_DEFAULT_TIMEOUT) as client:
+            response = await client.get(
+                f"/v1/trace/{trace_id}",
+                headers=headers,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+        if not isinstance(data, list):
+            raise RegistryResponseError(
+                f"expected JSON array from /v1/trace/{trace_id!r}, got {type(data).__name__}"
+            )
+        return data  # type: ignore[return-value]
+
 
 __all__ = [
     # Pass-2 S7: ASCII-strict sort (RUF022) — uppercase constants first,

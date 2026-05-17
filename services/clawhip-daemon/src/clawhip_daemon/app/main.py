@@ -47,8 +47,10 @@ from pathlib import Path
 
 import httpx
 import structlog
+from events import SecretAccessedPayload
 from events.clock import SystemClock
 from events.envelope import Actor
+from events.schema_registry import register
 from secret_hygiene.audited_secret import AuditedSecret
 from secret_hygiene.sanitizer import redact_secrets
 
@@ -63,6 +65,13 @@ _DEFAULT_REGISTRY_API_URL = "http://registry-api:8080"
 # Story 3.6 carry-forward: idempotency sentinel — re-running main() must not
 # double-wire the structlog processor chain or stack handlers on the root logger.
 _STRUCTLOG_CONFIGURED: bool = False
+
+
+def _register_secret_accessed_schema() -> None:
+    """Install the audit-event schema needed by AuditedSecret in this process."""
+    for version in ("1.0.0", "1.0.1"):
+        with contextlib.suppress(ValueError):
+            register("secret.accessed", version, SecretAccessedPayload)
 
 
 def _configure_logging() -> None:
@@ -97,6 +106,10 @@ def _configure_logging() -> None:
     root_logger.handlers.clear()
     root_logger.addHandler(handler)
     root_logger.setLevel(logging.INFO)
+    # Telegram Bot API tokens are embedded in request URLs; keep dependency
+    # request logs out of stdout/stderr and rely on our sanitized app logs.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     structlog.configure(
         processors=[
@@ -207,6 +220,7 @@ def main() -> None:
     Telegram outbound sink loop.
     """
     _configure_logging()
+    _register_secret_accessed_schema()
     log = logging.getLogger(_SERVICE)
 
     log_dir = Path(os.environ.get("CLAWHIP_DAEMON_LOG_DIR", _DEFAULT_LOG_DIR))
@@ -229,7 +243,7 @@ def main() -> None:
     # MCP wiring lands in a future story).
     # L12: Actor.id uses the service name string (not UUID7) — consistent with
     # how other services identify themselves; no UUID constraint on Actor.id.
-    def _audit_emit(payload: object) -> None:
+    async def _audit_emit(payload: object) -> None:
         log.warning("secret.accessed audit (scaffold — clawhip-bridge not wired): %s", payload)
 
     bot_token = AuditedSecret(

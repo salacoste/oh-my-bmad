@@ -223,38 +223,35 @@ async def run_subscriber(
         # snapshot's payload JSON a second time (Story 2.6 F9).
         restored_cursor_ns = await restore_state_from_latest_snapshot(session_maker)
 
-        # Story 2.6 startup phase 2: compute the replay cursor as the
-        # higher of the snapshot's cursor (from phase 1) and the events
-        # table's max — neither anchor regresses past the other.
+        # Story 2.6 startup phase 2: keep the cursor calculation only as
+        # startup instrumentation. It must NOT be used to filter events:
+        # emitted_at_monotonic_ns is process-local and not comparable across
+        # registry-api, workers, orchestrator, and capture helpers.
         events_max_ns = await compute_events_max_cursor(session_maker)
         cursor_ns = max(restored_cursor_ns, events_max_ns)
 
         # Startup replay: read every *.jsonl byte-by-byte (offloaded to thread)
-        # and apply only events newer than the persisted cursor.  Populate the
-        # per-file byte-offset checkpoint so the tail loop only has to read
-        # NEW bytes from each file.
+        # and let Materializer.apply_many skip duplicate event_ids. Populate
+        # the per-file byte-offset checkpoint so the tail loop only has to
+        # read NEW bytes from each file.
         offsets: dict[str, int] = {}
         startup_applied = 0
-        startup_skipped = 0
         for path in sorted(base_dir.glob("*.jsonl")):
             new_offset, envelopes = await asyncio.to_thread(_read_new_envelopes_since, path, 0)
             offsets[path.name] = new_offset
-            new_envelopes = [env for env in envelopes if env.emitted_at_monotonic_ns > cursor_ns]
-            startup_skipped += len(envelopes) - len(new_envelopes)
-            if new_envelopes:
-                applied = await materializer.apply_many(new_envelopes)
+            if envelopes:
+                applied = await materializer.apply_many(envelopes)
                 startup_applied += applied
                 if applied:
-                    last_env = new_envelopes[-1]
+                    last_env = envelopes[-1]
                     await snapshot_policy.maybe_capture(last_env, applied)
         # Story 2.6 AC-9: instrumentation for "verified via instrumentation
         # counter". Always log once at startup-replay end so tests can
         # assert on the line. Pure facts — no causal "via snapshot" claim,
         # because the cursor may have come from the events table instead.
         log.info(
-            "startup replay: cursor=%d, skipped=%d events, applied=%d new",
+            "startup replay: cursor=%d, applied=%d new",
             cursor_ns,
-            startup_skipped,
             startup_applied,
         )
 
@@ -265,23 +262,15 @@ async def run_subscriber(
         while not stop.is_set():
             envelopes = await _scan_new_envelopes(base_dir, offsets)
             if envelopes:
-                # Tail loop cursor uses materializer.cursor (events-table-MAX,
-                # not compute_replay_cursor) because:
-                #   1. Events table grows monotonically post-startup
-                #      (snapshots only added, never removed in current
-                #      architecture).
-                #   2. The snapshot cursor is always <= events-max once
-                #      startup replay completes.
-                # If event-table pruning is ever added (Phase 4 retention),
-                # revisit this — pruning would invalidate (1).
-                async with session_maker() as session:
-                    cursor_ns = await materializer.cursor(session)
-                to_apply = [env for env in envelopes if env.emitted_at_monotonic_ns > cursor_ns]
-                if to_apply:
-                    applied = await materializer.apply_many(to_apply)
-                    if applied:
-                        last_env = to_apply[-1]
-                        await snapshot_policy.maybe_capture(last_env, applied)
+                # Do not filter by MAX(emitted_at_monotonic_ns): monotonic
+                # clocks are process-local, so events from registry-api,
+                # workers, orchestrator, and capture helpers are not globally
+                # comparable. Offsets bound the tail loop to newly-read bytes;
+                # Materializer.apply_many handles duplicate event_ids safely.
+                applied = await materializer.apply_many(envelopes)
+                if applied:
+                    last_env = envelopes[-1]
+                    await snapshot_policy.maybe_capture(last_env, applied)
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=poll_interval_s)
     finally:

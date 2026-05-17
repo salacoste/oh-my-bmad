@@ -32,9 +32,14 @@ upstream/
 # Architecture §line-344 pattern). **/tests/ supersedes the root tests/ line
 # but both kept for belt-and-suspenders clarity.
 **/tests/
-# Exception: null-orchestrator fixture needed in Docker build context for
-# separability tests (Story 2.15 / 3.5.4).
+# Exceptions: fixture images needed in Docker build context for separability
+# and integration tests (Stories 2.15 / 3.5.4 / 5.16 / 5.18).
+# Story 9.7 / AC11 (D2 unblock): scripted_worker_stub and auto_approval_stub
+# were missing from the allowlist, causing Docker build to fail with
+# "file not found" errors when building fixture images from the repo root.
 !tests/fixtures/null_orchestrator/
+!tests/fixtures/scripted_worker_stub/
+!tests/fixtures/auto_approval_stub/
 **/test_*.py
 **/__pycache__/
 

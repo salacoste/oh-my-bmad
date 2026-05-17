@@ -169,6 +169,7 @@ async def emit_service_crashed(
     service: str,
     exit_code: int,
     actor_id: str | None = None,
+    trace_id: str | None = None,
     request_id: str | None = None,
     parent_event_id: str | None = None,
 ) -> EventEnvelope:
@@ -189,6 +190,10 @@ async def emit_service_crashed(
                          (the payload validator rejects ``0``).
         actor_id:        Override for ``Actor.id``. Defaults to ``service``
                          (the crashing process is the actor).
+        trace_id:        Optional correlation ID (Story 9.7 / FR57). When
+                         ``None``, a synthetic bare UUIDv7 is minted — failure
+                         events are system-initiated, so they get their own
+                         synthetic trace rather than propagating an operator one.
         request_id:      Optional bare-UUIDv7 request id for correlation.
                          When ``None``, a fresh ``new_request_id(clock=...)``
                          is synthesized — failure events are internally
@@ -209,6 +214,7 @@ async def emit_service_crashed(
         emitted_at_monotonic_ns=clock.monotonic_ns(),
         actor=Actor(kind="system", id=resolved_actor_id),
         payload=payload,
+        trace_id=trace_id if trace_id is not None else new_request_id(clock=clock),
         request_id=request_id if request_id is not None else new_request_id(clock=clock),
         parent_event_id=parent_event_id,
     )
@@ -225,6 +231,7 @@ async def emit_session_heartbeat_timeout(
     last_heartbeat_at: datetime,
     timeout_threshold_s: float,
     actor_id: str = "registry-state",
+    trace_id: str | None = None,
     request_id: str | None = None,
     parent_event_id: str | None = None,
 ) -> EventEnvelope:
@@ -243,6 +250,7 @@ async def emit_session_heartbeat_timeout(
         actor_id:            Free-form actor identifier (the detector — the
                              default is ``"registry-state"`` because the
                              timeout signal is system-initiated).
+        trace_id:            See :func:`emit_service_crashed`.
         request_id:          See :func:`emit_service_crashed`.
         parent_event_id:     See :func:`emit_service_crashed`.
     """
@@ -260,6 +268,7 @@ async def emit_session_heartbeat_timeout(
         emitted_at_monotonic_ns=clock.monotonic_ns(),
         actor=Actor(kind="system", id=actor_id),
         payload=payload,
+        trace_id=trace_id if trace_id is not None else new_request_id(clock=clock),
         request_id=request_id if request_id is not None else new_request_id(clock=clock),
         parent_event_id=parent_event_id,
     )
@@ -275,6 +284,7 @@ async def emit_sink_delivery_failed(
     consecutive_failures: int,
     last_error: str | None = None,
     actor_id: str = "registry-state",
+    trace_id: str | None = None,
     request_id: str | None = None,
     parent_event_id: str | None = None,
 ) -> EventEnvelope:
@@ -299,6 +309,7 @@ async def emit_sink_delivery_failed(
                               be passed through ``_redact_last_error``).
         actor_id:             Free-form detector identifier (default
                               ``"registry-state"``).
+        trace_id:             See :func:`emit_service_crashed`.
         request_id:           See :func:`emit_service_crashed`.
         parent_event_id:      See :func:`emit_service_crashed`.
 
@@ -320,6 +331,7 @@ async def emit_sink_delivery_failed(
         emitted_at_monotonic_ns=clock.monotonic_ns(),
         actor=Actor(kind="system", id=actor_id),
         payload=payload,
+        trace_id=trace_id if trace_id is not None else new_request_id(clock=clock),
         request_id=request_id if request_id is not None else new_request_id(clock=clock),
         parent_event_id=parent_event_id,
     )
@@ -334,6 +346,7 @@ async def emit_task_stop_requested(
     task_id: str,
     actor_id: str,
     actor_kind: ActorKind = "system",
+    trace_id: str | None = None,
     request_id: str | None = None,
     parent_event_id: str | None = None,
 ) -> EventEnvelope:
@@ -354,6 +367,7 @@ async def emit_task_stop_requested(
         actor_id:        Identity of the actor that requested the stop.
         actor_kind:      ``"operator"`` for operator-initiated stops,
                          ``"system"`` (default) for internal triggers.
+        trace_id:        See :func:`emit_service_crashed`.
         request_id:      See :func:`emit_service_crashed`.
         parent_event_id: See :func:`emit_service_crashed`. Particularly
                          useful here to chain to the operator command's
@@ -368,6 +382,7 @@ async def emit_task_stop_requested(
         emitted_at_monotonic_ns=clock.monotonic_ns(),
         actor=Actor(kind=actor_kind, id=actor_id),
         payload=payload,
+        trace_id=trace_id if trace_id is not None else new_request_id(clock=clock),
         request_id=request_id if request_id is not None else new_request_id(clock=clock),
         parent_event_id=parent_event_id,
     )

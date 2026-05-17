@@ -580,6 +580,7 @@ class TestFastMCPIntegration:
             emitted_at_monotonic_ns=seed_clock.monotonic_ns(),
             actor=Actor(kind="worker", id="seed"),
             payload={"task_id": _task_id(seed=999), "title": "pre-existing"},
+            trace_id="01917e5c-a7d1-7000-8abc-000000000000",
             request_id=new_request_id(clock=seed_clock),
         )
         complete_line = to_canonical_json(seed_envelope) + b"\n"
@@ -753,6 +754,7 @@ class TestApprovalLookup:
             emitted_at_monotonic_ns=fixed_clock.monotonic_ns(),
             actor=Actor(kind="operator", id="op-1"),
             payload={"task_id": tid, "decision_id": "d-1", "actor_id": "op-1"},
+            trace_id="01917e5c-a7d1-7000-8abc-000000000000",
             request_id=new_request_id(clock=fixed_clock),
         )
         day_path = current_day_path(tmp_path, fixed_clock.now())

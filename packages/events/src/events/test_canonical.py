@@ -23,6 +23,7 @@ from events.schema_registry import register, unregister_all
 _VALID_EVENT_ID = "e-01917e5c-a7d1-7000-8000-000000000001"
 _VALID_REQUEST_ID = "01917e5c-a7d1-7000-8000-000000000002"
 _VALID_EMITTED_AT = datetime(2026, 4, 21, 10, 30, 0, 123000, tzinfo=UTC)
+_VALID_TRACE_ID = "01917e5c-a7d1-7000-8abc-000000000000"
 
 
 class _SimplePayload(BaseModel):
@@ -33,6 +34,7 @@ class _SimplePayload(BaseModel):
 def _clean_registry() -> Generator[None, None, None]:
     unregister_all()
     register("task.created", "1.0.0", _SimplePayload)
+    register("task.created", "1.1.0", _SimplePayload)
     yield
     unregister_all()
 
@@ -46,6 +48,7 @@ def _make_envelope(**overrides: object) -> EventEnvelope:
         emitted_at_monotonic_ns=999,
         actor=Actor(kind="system", id="sys"),
         payload={"value": "hello"},
+        trace_id=_VALID_TRACE_ID,
         request_id=_VALID_REQUEST_ID,
     )
     kwargs.update(overrides)
@@ -124,6 +127,7 @@ class TestAllowNanFalse:
             emitted_at_monotonic_ns=0,
             actor=Actor(kind="system", id="sys"),
             payload={"val": float("nan")},
+            trace_id=_VALID_TRACE_ID,
             request_id=_VALID_REQUEST_ID,
         )
         with pytest.raises(CanonicalSerializationError):
@@ -142,6 +146,7 @@ class TestAllowNanFalse:
             emitted_at_monotonic_ns=0,
             actor=Actor(kind="system", id="sys"),
             payload={"val": float("inf")},
+            trace_id=_VALID_TRACE_ID,
             request_id=_VALID_REQUEST_ID,
         )
         with pytest.raises(CanonicalSerializationError):
@@ -196,7 +201,9 @@ class TestRoundTripByteStableFromVariousInputs:
             b'"parent_event_id":null,'
             b'"payload":{"value":"hello"},'
             b'"request_id":"01917e5c-a7d1-7000-8000-000000000002",'
-            b'"schema_version":"1.0.0","trace_id":null,"type":"task.created"}'
+            b'"schema_version":"1.0.0",'
+            b'"trace_id":"01917e5c-a7d1-7000-8abc-000000000000",'
+            b'"type":"task.created"}'
         )
         env = from_canonical_json(data_plus)
         canonical = to_canonical_json(env)
@@ -232,6 +239,7 @@ class TestUnicodeEncodeErrorWrapped:
             emitted_at_monotonic_ns=0,
             actor=Actor(kind="system", id="sys"),
             payload={"s": "\ud800"},  # lone high surrogate
+            trace_id=_VALID_TRACE_ID,
             request_id=_VALID_REQUEST_ID,
         )
         with pytest.raises(CanonicalSerializationError):

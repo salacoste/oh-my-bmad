@@ -32,8 +32,16 @@ class _TaskPayload(BaseModel):
     task_id: str
 
 
+_VALID_TRACE_ID = "01917e5c-a7d1-7000-8abc-000000000000"
+
+
 def _make_envelope(**overrides: object) -> EventEnvelope:
-    """Return a valid EventEnvelope using sensible defaults."""
+    """Return a valid EventEnvelope using sensible defaults.
+
+    Story 9.7: trace_id is now REQUIRED. The helper provides a default bare
+    UUIDv7 so existing tests don't need to be updated individually. Tests
+    that verify trace_id acceptance/rejection pass ``trace_id=`` explicitly.
+    """
     kwargs: dict[str, object] = dict(
         event_id=_VALID_EVENT_ID,
         schema_version="1.0.0",
@@ -42,6 +50,7 @@ def _make_envelope(**overrides: object) -> EventEnvelope:
         emitted_at_monotonic_ns=1_000_000,
         actor=Actor(kind="system", id="test-system"),
         payload={"task_id": "abc"},
+        trace_id=_VALID_TRACE_ID,
         request_id=_VALID_REQUEST_ID,
     )
     kwargs.update(overrides)
@@ -52,6 +61,7 @@ def _make_envelope(**overrides: object) -> EventEnvelope:
 def _clean_registry() -> Generator[None, None, None]:
     unregister_all()
     register("task.created", "1.0.0", _TaskPayload)
+    register("task.created", "1.1.0", _TaskPayload)
     yield
     unregister_all()
 
@@ -66,7 +76,51 @@ class TestValidEnvelopeConstruction:
         env = _make_envelope()
         assert env.event_id == _VALID_EVENT_ID
         assert env.type == "task.created"
+        # schema_version is passed as "1.0.0" in _make_envelope for legacy compat.
         assert env.schema_version == "1.0.0"
+
+    def test_default_schema_version_is_1_1_0(self) -> None:
+        """Story 9.7: schema_version defaults to 1.1.0 (was 1.0.0)."""
+        env = EventEnvelope(
+            event_id=_VALID_EVENT_ID,
+            type="task.created",
+            emitted_at=_VALID_EMITTED_AT,
+            emitted_at_monotonic_ns=1_000_000,
+            actor=Actor(kind="system", id="test-system"),
+            payload={"task_id": "abc"},
+            trace_id=_VALID_TRACE_ID,
+            request_id=_VALID_REQUEST_ID,
+        )
+        assert env.schema_version == "1.1.0"
+
+    def test_missing_trace_id_raises_validation_error(self) -> None:
+        """Story 9.7: trace_id is REQUIRED — missing it raises ValidationError."""
+        with pytest.raises(ValidationError, match="trace_id"):
+            EventEnvelope(  # type: ignore[call-arg]
+                event_id=_VALID_EVENT_ID,
+                schema_version="1.1.0",
+                type="task.created",
+                emitted_at=_VALID_EMITTED_AT,
+                emitted_at_monotonic_ns=1_000_000,
+                actor=Actor(kind="system", id="test-system"),
+                payload={"task_id": "abc"},
+                request_id=_VALID_REQUEST_ID,
+            )
+
+    def test_none_trace_id_raises_validation_error(self) -> None:
+        """Story 9.7: trace_id=None raises ValidationError (no longer Optional)."""
+        with pytest.raises(ValidationError, match="trace_id"):
+            EventEnvelope(
+                event_id=_VALID_EVENT_ID,
+                schema_version="1.1.0",
+                type="task.created",
+                emitted_at=_VALID_EMITTED_AT,
+                emitted_at_monotonic_ns=1_000_000,
+                actor=Actor(kind="system", id="test-system"),
+                payload={"task_id": "abc"},
+                trace_id=None,  # type: ignore[arg-type]
+                request_id=_VALID_REQUEST_ID,
+            )
 
 
 class TestFrozenMutation:
@@ -113,20 +167,13 @@ class TestRequestIdShape:
             _make_envelope(request_id="e-01917e5c-a7d1-7000-8000-000000000099")
 
 
-# Story 9.1 — trace_id field validation + deprecation warning.
+# Story 9.1 — trace_id field validation.
+# Story 9.7 — trace_id is now REQUIRED (str, not Optional). None tests removed.
 # Code-review hardening pass (2026-05-16): expanded coverage across the
 # 12 patch findings — newline-anchor (F1), leading-zero rejection (F2),
 # int64 ceiling (F3), adversarial whitespace/case/unicode (F12), JSON
-# omitted-key path (F10), and validation-vs-warning ordering (F11).
+# omitted-key path (F10).
 class TestTraceIdShape:
-    def test_none_default_accepted(self) -> None:
-        env = _make_envelope()
-        assert env.trace_id is None
-
-    def test_explicit_none_accepted(self) -> None:
-        env = _make_envelope(trace_id=None)
-        assert env.trace_id is None
-
     def test_bare_uuidv7_accepted(self) -> None:
         env = _make_envelope(trace_id="01917e5c-a7d1-7000-8abc-000000000777")
         assert env.trace_id == "01917e5c-a7d1-7000-8abc-000000000777"
@@ -271,105 +318,20 @@ class TestIsValidTraceIdDefensiveTypeGuard:
         assert is_valid_trace_id("01917e5c-a7d1-7000-8000-000000000000") is True
 
 
-# Story 9.1 — DeprecationWarning emitted from create() when trace_id absent.
-class TestTraceIdDeprecationWarning:
-    def test_warning_fires_when_trace_id_absent(self) -> None:
-        with pytest.warns(DeprecationWarning, match="trace_id"):
-            EventEnvelope.create(
-                event_id=_VALID_EVENT_ID,
-                schema_version="1.0.0",
-                type="task.created",
-                emitted_at=_VALID_EMITTED_AT,
-                emitted_at_monotonic_ns=1_000_000,
-                actor=Actor(kind="system", id="test-system"),
-                payload={"task_id": "abc"},
-                request_id=_VALID_REQUEST_ID,
-            )
-
-    def test_warning_silent_when_trace_id_present(self) -> None:
-        import warnings
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", DeprecationWarning)
-            env = EventEnvelope.create(
-                event_id=_VALID_EVENT_ID,
-                schema_version="1.0.0",
-                type="task.created",
-                emitted_at=_VALID_EMITTED_AT,
-                emitted_at_monotonic_ns=1_000_000,
-                actor=Actor(kind="system", id="test-system"),
-                payload={"task_id": "abc"},
-                request_id=_VALID_REQUEST_ID,
-                trace_id="01917e5c-a7d1-7000-8abc-000000000888",
-            )
-            assert env.trace_id == "01917e5c-a7d1-7000-8abc-000000000888"
-
-    def test_replay_via_model_validate_json_does_not_warn(self) -> None:
-        # F7: this test originally constructed via _make_envelope() (direct
-        # __init__) — which never fires the warning regardless. Honest
-        # replay test: produce the envelope via create() under pytest.warns
-        # (so the warning IS captured during construction), serialise to
-        # canonical JSON, then re-parse under simplefilter("error",
-        # DeprecationWarning) and assert no warning fires on the replay.
-        import warnings
-
-        with pytest.warns(DeprecationWarning, match="trace_id"):
-            env = EventEnvelope.create(
-                event_id=_VALID_EVENT_ID,
-                schema_version="1.0.0",
-                type="task.created",
-                emitted_at=_VALID_EMITTED_AT,
-                emitted_at_monotonic_ns=1_000_000,
-                actor=Actor(kind="system", id="test-system"),
-                payload={"task_id": "abc"},
-                request_id=_VALID_REQUEST_ID,
-            )
-        canonical = env.model_dump_json()
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", DeprecationWarning)
-            replayed = EventEnvelope.model_validate_json(canonical)
-            assert replayed.trace_id is None
-
-    def test_invalid_non_none_trace_id_does_not_fire_deprecation_warning(self) -> None:
-        # F11 (renamed per pass-2 review blind #6): the warning only fires
-        # when `trace_id is None`. An invalid non-None value must raise
-        # ValidationError WITHOUT emitting DeprecationWarning. Locks the
-        # "warning-only-on-None" invariant.
-        import warnings
-
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            with pytest.raises(ValidationError, match="trace_id"):
-                EventEnvelope.create(
-                    event_id=_VALID_EVENT_ID,
-                    schema_version="1.0.0",
-                    type="task.created",
-                    emitted_at=_VALID_EMITTED_AT,
-                    emitted_at_monotonic_ns=1_000_000,
-                    actor=Actor(kind="system", id="test-system"),
-                    payload={"task_id": "abc"},
-                    request_id=_VALID_REQUEST_ID,
-                    trace_id="bad",
-                )
-            assert not any(issubclass(item.category, DeprecationWarning) for item in w), (
-                "DeprecationWarning must not fire when trace_id is provided (even if invalid)"
-            )
+# Story 9.7: TestTraceIdDeprecationWarning class REMOVED.
+# trace_id is now REQUIRED; there is no deprecation-warning path.
+# ValidationError tests live in TestValidEnvelopeConstruction above.
 
 
 # Story 9.1 — trace_id round-trip via canonical JSON.
+# Story 9.7: removed test_round_trip_with_none_trace_id (None no longer valid) and
+#            test_model_validate_json_with_omitted_trace_id_key (omission now ValidationError).
 class TestTraceIdRoundTrip:
     """Patch F4 — AC3 / AC5 #15-#16: canonical-JSON byte-stable round-trip
     for trace_id set. The encoder is field-name-driven and alphabetical;
     these tests are the regression net that catches a future encoder
     refactor silently reordering or dropping the trace_id field.
     """
-
-    def test_round_trip_with_none_trace_id(self) -> None:
-        env = _make_envelope()
-        json_bytes = env.model_dump_json().encode("utf-8")
-        replayed = EventEnvelope.model_validate_json(json_bytes)
-        assert replayed.trace_id is None
-        assert replayed.model_dump_json().encode("utf-8") == json_bytes
 
     def test_round_trip_with_uuidv7_trace_id(self) -> None:
         env = _make_envelope(trace_id="01917e5c-a7d1-7000-8abc-000000000aaa")
@@ -385,9 +347,8 @@ class TestTraceIdRoundTrip:
         assert replayed.trace_id == "tg:12345"
         assert replayed.model_dump_json().encode("utf-8") == json_bytes
 
-    def test_model_validate_json_with_omitted_trace_id_key(self) -> None:
-        # F10: a JSON blob WITHOUT the `trace_id` key (vs explicit null)
-        # must still parse and yield env.trace_id is None.
+    def test_model_validate_json_with_omitted_trace_id_key_raises(self) -> None:
+        # Story 9.7: omitting trace_id key from JSON now raises ValidationError.
         blob = (
             f'{{"event_id":"{_VALID_EVENT_ID}",'
             f'"schema_version":"1.0.0",'
@@ -399,8 +360,8 @@ class TestTraceIdRoundTrip:
             f'"request_id":"{_VALID_REQUEST_ID}",'
             f'"extensions":{{}}}}'
         )
-        env = EventEnvelope.model_validate_json(blob)
-        assert env.trace_id is None
+        with pytest.raises(ValidationError, match="trace_id"):
+            EventEnvelope.model_validate_json(blob)
 
     def test_canonical_json_keys_are_alphabetical(self) -> None:
         # Pass-2 review (blind #10): the byte-equality round-trip tests
@@ -423,92 +384,53 @@ class TestTraceIdRoundTrip:
         assert keys.index("schema_version") < keys.index("trace_id") < keys.index("type")
 
 
-# Story 9.1 pass-2 — stacklevel diagnostic regression test (blind #11).
-class TestTraceIdDeprecationStacklevel:
-    """Pass-2 review (blind #11): `stacklevel=2` is meant to point the
-    DeprecationWarning at the caller of ``EventEnvelope.create()``, not
-    inside envelope.py. The deferred F-flag for wrapped factories
-    (audited_secret.py:336-style helpers) acknowledges that any wrapper
-    breaks this — but no test currently locks the contract. This class
-    catches accidental regressions where someone forgets to bump
-    stacklevel after introducing an envelope.py-internal helper.
-    """
-
-    def test_warning_points_at_caller_not_envelope_internals(self) -> None:
-        import warnings
-
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always", DeprecationWarning)
-            EventEnvelope.create(
-                event_id=_VALID_EVENT_ID,
-                schema_version="1.0.0",
-                type="task.created",
-                emitted_at=_VALID_EMITTED_AT,
-                emitted_at_monotonic_ns=1_000_000,
-                actor=Actor(kind="system", id="test-system"),
-                payload={"task_id": "abc"},
-                request_id=_VALID_REQUEST_ID,
-            )
-
-        deprecation_records = [r for r in caught if issubclass(r.category, DeprecationWarning)]
-        assert len(deprecation_records) == 1, (
-            f"Expected exactly one DeprecationWarning; got {len(deprecation_records)}"
-        )
-        # The warning's `filename` field must be THIS test file, not
-        # envelope.py. Compare basenames so the test survives path
-        # normalisation differences across platforms.
-        from pathlib import Path
-
-        warning_file = Path(deprecation_records[0].filename).name
-        assert warning_file == Path(__file__).name, (
-            f"DeprecationWarning stacklevel must point at caller "
-            f"({Path(__file__).name}); got {warning_file}"
-        )
+# Story 9.7: TestTraceIdDeprecationStacklevel REMOVED — no deprecation warning exists.
 
 
-# Story 9.1 — legacy JSONL replay regression (patch F8).
+# Story 9.7: TestLegacyJsonlReplay updated.
+# Pre-1.1.0 JSONL records have null/missing trace_id. Replay is handled by
+# the migrator (Story 2.14) which adds a synthetic trace_id during migration.
+# Direct model_validate_json of legacy records now raises ValidationError —
+# this is expected and intentional per the mandatory-field contract.
 class TestLegacyJsonlReplay:
-    """The new trace_id validator must NOT reject 1.0.0 records emitted
-    before Epic 9 wiring landed. Historical records have ``trace_id: null``
-    (or omitted). Replay them through ``model_validate_json`` and confirm
-    every record parses cleanly.
-
-    The migrator's `sample_v1.0.0.jsonl` fixture is the canonical
-    representative corpus. If a future fixture or production log carries
-    free-form trace_id strings outside UUIDv7 / tg:<update_id>, this test
-    flips red and the design must reconsider (advisory-warn on read vs
-    hard-reject).
+    """Story 9.7: model_validate_json of legacy 1.0.0 records WITHOUT trace_id
+    now raises ValidationError (trace_id is required). This is intentional —
+    replay of 1.0.0 events goes through the migrator (Story 2.14) which adds
+    synthetic trace_ids; raw replay skips the migrator layer.
     """
 
-    def test_migrator_fixture_corpus_parses(self) -> None:
-        # Pass-2 review (blind #3): the migrator fixture is in a sibling
-        # package tree. If the repo layout ever changes, skip with a
-        # helpful pointer rather than a cryptic hard-fail — the test's
-        # value is the regression check, not the layout assertion.
-        from pathlib import Path
-
-        fixture = (
-            Path(__file__).resolve().parents[4]
-            / "scripts"
-            / "migrator"
-            / "tests"
-            / "fixtures"
-            / "sample_v1.0.0.jsonl"
+    def test_legacy_jsonl_without_trace_id_raises_validation_error(self) -> None:
+        """Legacy records missing trace_id raise ValidationError (Story 9.7 contract)."""
+        blob = (
+            f'{{"event_id":"{_VALID_EVENT_ID}",'
+            f'"schema_version":"1.0.0",'
+            f'"type":"task.created",'
+            f'"emitted_at":"2026-04-21T10:30:00.000000Z",'
+            f'"emitted_at_monotonic_ns":1000000,'
+            f'"actor":{{"kind":"system","id":"test-system"}},'
+            f'"payload":{{"task_id":"abc"}},'
+            f'"request_id":"{_VALID_REQUEST_ID}",'
+            f'"extensions":{{}}}}'
         )
-        if not fixture.is_file():
-            pytest.skip(
-                f"Migrator fixture not found at {fixture} (cross-package "
-                f"path may have changed); regression check skipped."
-            )
+        with pytest.raises(ValidationError, match="trace_id"):
+            EventEnvelope.model_validate_json(blob)
 
-        count = 0
-        for line in fixture.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            env = EventEnvelope.model_validate_json(line)
-            assert env.trace_id is None  # All historical records have null trace_id.
-            count += 1
-        assert count > 0, "Fixture corpus must contain at least one record"
+    def test_modern_jsonl_with_trace_id_parses(self) -> None:
+        """Post-1.1.0 records with trace_id parse cleanly."""
+        blob = (
+            f'{{"event_id":"{_VALID_EVENT_ID}",'
+            f'"schema_version":"1.1.0",'
+            f'"type":"task.created",'
+            f'"emitted_at":"2026-04-21T10:30:00.000000Z",'
+            f'"emitted_at_monotonic_ns":1000000,'
+            f'"actor":{{"kind":"system","id":"test-system"}},'
+            f'"payload":{{"task_id":"abc"}},'
+            f'"trace_id":"{_VALID_TRACE_ID}",'
+            f'"request_id":"{_VALID_REQUEST_ID}",'
+            f'"extensions":{{}}}}'
+        )
+        env = EventEnvelope.model_validate_json(blob)
+        assert env.trace_id == _VALID_TRACE_ID
 
 
 class TestNaiveDatetimeRejected:
@@ -582,6 +504,7 @@ class TestExtraFieldsForbidden:
                 emitted_at_monotonic_ns=0,
                 actor=Actor(kind="system", id="sys"),
                 payload={"task_id": "x"},
+                trace_id=_VALID_TRACE_ID,
                 request_id=_VALID_REQUEST_ID,
                 unknown_extra_field="oops",
             )
@@ -610,6 +533,7 @@ class TestCreateFactoryUnregistered:
                 emitted_at_monotonic_ns=0,
                 actor=Actor(kind="system", id="sys"),
                 payload={},
+                trace_id=_VALID_TRACE_ID,
                 request_id=_VALID_REQUEST_ID,
             )
         assert exc_info.value.event_type == "unknown.event"
@@ -625,6 +549,7 @@ class TestCreateFactoryRegistered:
             emitted_at_monotonic_ns=0,
             actor=Actor(kind="system", id="sys"),
             payload={"task_id": "my-task"},
+            trace_id=_VALID_TRACE_ID,
             request_id=_VALID_REQUEST_ID,
         )
         assert isinstance(env.payload, _TaskPayload)
@@ -654,6 +579,7 @@ class TestEventSchemaUnknownReportsLiveTypes:
                 emitted_at_monotonic_ns=1,
                 actor=Actor(kind="system", id="sys"),
                 payload={},
+                trace_id=_VALID_TRACE_ID,
                 request_id=_VALID_REQUEST_ID,
             )
         assert "known.type" in exc_info.value.registered_types
@@ -751,6 +677,7 @@ class TestCreateWrongBaseModelPayload:
                 emitted_at_monotonic_ns=0,
                 actor=Actor(kind="system", id="sys"),
                 payload=other,
+                trace_id=_VALID_TRACE_ID,
                 request_id=_VALID_REQUEST_ID,
             )
         sr.unregister_all()
@@ -770,16 +697,16 @@ class TestExtensionsField:
         assert env.extensions == {}
 
     def test_explicit_extensions_round_trip_via_canonical_json(self) -> None:
-        """v1.0.1 envelopes with explicit ``extensions`` round-trip byte-stable."""
+        """v1.1.0 envelopes with explicit ``extensions`` round-trip byte-stable."""
         from events.canonical import to_canonical_json
 
         env = _make_envelope(
-            schema_version="1.0.1",
-            extensions={"trace_id": "abc-123", "nested": {"k": "v"}},
+            schema_version="1.1.0",
+            extensions={"extra_info": "abc-123", "nested": {"k": "v"}},
         )
         data = to_canonical_json(env)
         env2 = EventEnvelope.model_validate_json(data)
-        assert env2.extensions == {"trace_id": "abc-123", "nested": {"k": "v"}}
+        assert env2.extensions == {"extra_info": "abc-123", "nested": {"k": "v"}}
         # Re-serialize: byte-identical (canonical-JSON contract).
         assert to_canonical_json(env2) == data
 
@@ -885,6 +812,7 @@ class TestGeneratorIntegration:
             emitted_at_monotonic_ns=clock.monotonic_ns(),
             actor=Actor(kind="system", id="x"),
             payload={"task_id": "abc"},
+            trace_id=_VALID_TRACE_ID,
             request_id=new_request_id(clock=clock, rng=rng),
         )
         from events.envelope import _EVENT_ID_RE, _UUIDV7_BARE_RE
@@ -916,6 +844,7 @@ class TestGeneratorIntegration:
             emitted_at_monotonic_ns=0,
             actor=Actor(kind="system", id="gen-test"),
             payload={"task_id": "gen-task"},
+            trace_id=_VALID_TRACE_ID,
             request_id=_VALID_REQUEST_ID,
         )
         assert env.event_id == eid2

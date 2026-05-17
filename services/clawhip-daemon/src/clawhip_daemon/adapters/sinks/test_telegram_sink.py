@@ -45,6 +45,7 @@ from events import (  # Story 2.9 AC-16
     new_event_id,
     new_task_id,
     new_uuid7,
+    to_canonical_json,
 )
 from events.schema_registry import register as _reg
 
@@ -57,6 +58,7 @@ from clawhip_daemon.adapters.sinks.telegram_sink import (
     _EMERGENCY_TASK_ID_MAX_CHARS,
     _RENDERERS,
     _SELF_RECOVERED_MESSAGE_MAX_CHARS,
+    EventLogReader,
     TelegramSink,
     _build_diff_stats_line,
     _build_pr_line,
@@ -120,6 +122,7 @@ def _task_created_envelope(task_id: str, *, mono_ns: int = 1_000_000) -> EventEn
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskCreatedPayload(task_id=task_id, title="test"),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=rid,
     )
 
@@ -141,6 +144,7 @@ def _task_completed_envelope(task_id: str, *, mono_ns: int = 2_000_000) -> Event
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskCompletedPayload(task_id=task_id, summary="done"),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=rid,
     )
 
@@ -162,6 +166,7 @@ def _service_crashed_envelope(*, mono_ns: int = 3_000_000) -> EventEnvelope:
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=ServiceCrashedPayload(service="worker", exit_code=1),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=rid,
     )
 
@@ -233,6 +238,73 @@ async def test_sink_dispatches_on_task_event() -> None:
     # ``✅ Task <id> complete.\n\n<summary>``.
     assert "✅ Task " in call_kwargs["text"]
     assert "complete." in call_kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_sink_hydrates_jsonl_payload_before_rendering() -> None:
+    """JSONL-replayed dict payloads render through the typed completion template."""
+    rng = Random(101)
+    clk = FrozenClock(mono_ns=101, now=FROZEN_EPOCH)
+    task_id = new_task_id(clock=clk, rng=rng)
+
+    outbound_mock = MagicMock()
+    outbound_mock.send_to_thread = AsyncMock()
+    sink = _make_sink(
+        outbound=outbound_mock,
+        registry_response={"chat_id": -1001, "reply_to_message_id": 42},
+    )
+
+    typed_env = _task_completed_envelope(task_id)
+    raw_env = typed_env.model_copy(
+        update={"payload": {"task_id": task_id, "summary": "hydrated from jsonl"}}
+    )
+    await sink._handle(raw_env)
+
+    outbound_mock.send_to_thread.assert_called_once()
+    text = outbound_mock.send_to_thread.call_args[1]["text"]
+    assert text.startswith("✅ Task ")
+    assert "hydrated from jsonl" in text
+    assert "task.completed" not in text
+
+
+@pytest.mark.asyncio
+async def test_sink_uses_env_deliverable_event_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Capture overlays can reduce Telegram noise without changing production defaults."""
+    monkeypatch.setenv("CLAWHIP_DAEMON_DELIVER_EVENT_TYPES", "task.completed")
+    rng = Random(102)
+    clk = FrozenClock(mono_ns=102, now=FROZEN_EPOCH)
+    task_id = new_task_id(clock=clk, rng=rng)
+
+    outbound_mock = MagicMock()
+    outbound_mock.send_to_thread = AsyncMock()
+    sink = _make_sink(outbound=outbound_mock)
+
+    await sink._handle(_task_created_envelope(task_id))
+
+    outbound_mock.send_to_thread.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_event_log_reader_start_at_end_skips_existing_events(tmp_path: Path) -> None:
+    """Capture mode starts from EOF so daemon restarts do not replay old Telegram events."""
+    log_path = tmp_path / "2026-05-17.jsonl"
+    old_env = _task_completed_envelope(
+        "t-00000000-0000-7000-8000-0000000000a1",
+        mono_ns=201_000_000,
+    )
+    new_env = _task_completed_envelope(
+        "t-00000000-0000-7000-8000-0000000000a2",
+        mono_ns=202_000_000,
+    )
+    log_path.write_bytes(to_canonical_json(old_env) + b"\n")
+
+    reader = EventLogReader(tmp_path, start_at_end=True)
+
+    assert await reader.read_new_envelopes() == []
+    with log_path.open("ab") as f:
+        f.write(to_canonical_json(new_env) + b"\n")
+    envelopes = await reader.read_new_envelopes()
+    assert [e.event_id for e in envelopes] == [new_env.event_id]
 
 
 # ---------------------------------------------------------------------------
@@ -353,6 +425,7 @@ def _approval_envelope(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=payload,
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=rid,
     )
 
@@ -725,6 +798,7 @@ def test_render_dispatcher_falls_back_to_placeholder_for_unknown_type() -> None:
             task_id=task_id,
             session_id="s-00000000-0000-7000-8000-000000000001",
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=rid,
     )
     result = _render(env)
@@ -1016,6 +1090,7 @@ def _blocker_envelope(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=payload,
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=rid,
     )
 
@@ -1641,6 +1716,7 @@ def _completed_envelope(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=payload,
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=rid,
     )
 
@@ -2070,6 +2146,7 @@ def test_render_blocker_raised_emergency_collapses_newline_in_task_id() -> None:
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=payload,
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=rid,
     )
     result = _render(env)
@@ -2636,6 +2713,7 @@ def test_task_completed_v1_0_0_envelope_renders_through_dispatcher() -> None:
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=payload,
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=rid,
     )
     result = _render(env)
@@ -2715,6 +2793,7 @@ def _self_recovered_envelope(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=payload,
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=rid,
     )
 
@@ -2939,6 +3018,7 @@ def _plan_ready_envelope(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=payload,
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=rid,
     )
 
@@ -3105,6 +3185,7 @@ def test_render_plan_ready_v1_0_0_backward_compat() -> None:
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=payload,
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=rid,
     )
     result = _render(env)
@@ -3159,6 +3240,7 @@ def _step_completed_envelope(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=payload,
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=rid,
     )
 

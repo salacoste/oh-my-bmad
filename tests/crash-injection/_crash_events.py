@@ -123,6 +123,7 @@ def synthesize_envelope(
     clock: Clock,
     rng: Random,
     parent_event_id: str | None = None,
+    trace_id: str | None = None,
 ) -> EventEnvelope:
     """Build a canonical EventEnvelope with sane crash-harness defaults.
 
@@ -153,6 +154,9 @@ def synthesize_envelope(
             f"synthesize_envelope: task_id kwarg {task_id!r} does not match "
             f"payload.task_id {payload_task_id!r}"
         )
+    # Story 9.7: trace_id is now REQUIRED. When the harness caller doesn't
+    # supply one (pre-9.7 tests), mint a fresh UUIDv7 as a synthetic handle.
+    resolved_trace_id = trace_id if trace_id is not None else new_request_id(clock=clock, rng=rng)
     return EventEnvelope.create(
         event_id=new_event_id(clock=clock, rng=rng),
         schema_version=schema_version,
@@ -161,6 +165,7 @@ def synthesize_envelope(
         emitted_at_monotonic_ns=clock.monotonic_ns(),
         actor=HARNESS_ACTOR,
         payload=payload,
+        trace_id=resolved_trace_id,
         parent_event_id=parent_event_id,
         request_id=new_request_id(clock=clock, rng=rng),
     )

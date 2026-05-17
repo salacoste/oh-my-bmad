@@ -172,6 +172,10 @@ class Event(Base):
         String(38), ForeignKey("sessions.id", ondelete="RESTRICT"), nullable=True
     )
     parent_event_id: Mapped[str | None] = mapped_column(String(38), nullable=True)
+    # Story 9.7 / FR57 / FR59a: trace_id column for WHERE trace_id = ? query.
+    # Nullable: pre-1.1.0 events (no trace_id) remain queryable; post-1.1.0
+    # events all carry a non-null value (EventEnvelope enforces required).
+    trace_id: Mapped[str | None] = mapped_column(String(38), nullable=True)
     request_id: Mapped[str] = mapped_column(String(36), nullable=False)
     payload_json: Mapped[str] = mapped_column(Text, nullable=False)
 
@@ -236,6 +240,10 @@ Index("ix_idempotency_cache_expires_at", IdempotencyCache.expires_at)
 
 # List active tasks by status + recency.
 Index("ix_tasks_status_updated_at", Task.status, Task.updated_at)
+
+# Story 9.7 / FR59a: trace_id query — SELECT * FROM events WHERE trace_id = ?
+# Non-unique: many events share the same trace_id (one per operator command).
+Index("ix_events_trace_id", Event.trace_id)
 
 __all__ = [
     "Base",

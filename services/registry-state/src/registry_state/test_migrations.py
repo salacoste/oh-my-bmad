@@ -33,6 +33,7 @@ _EXPECTED_INDEXES = frozenset(
         "ix_events_task_id_emitted_at",
         "ix_events_session_id_emitted_at",
         "ix_events_type_emitted_at",
+        "ix_events_trace_id",  # Story 9.7 / AC4
         "ix_sessions_task_id_status",
         "ix_idempotency_cache_expires_at",
         "ix_tasks_status_updated_at",
@@ -40,8 +41,8 @@ _EXPECTED_INDEXES = frozenset(
 )
 # Tracks the latest alembic head revision. Bump when a new migration is added.
 # History: 0001 initial → 0002 task thread binding → 0003 session compound index
-# → 0004 add task state columns (Story 8.x).
-_REVISION = "0004"
+# → 0004 add task state columns (Story 8.x) → 0005 add event trace_id (Story 9.7).
+_REVISION = "0005"
 _INI_PATH = str(Path(__file__).parent.parent.parent / "alembic.ini")
 
 

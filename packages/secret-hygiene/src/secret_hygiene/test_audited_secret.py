@@ -34,7 +34,7 @@ from typing import Any, Literal
 import pytest
 from events.clock import FROZEN_EPOCH, FrozenClock
 from events.envelope import Actor, EventEnvelope
-from events.schema_registry import register
+from events.schema_registry import register, unregister_all
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
 from . import audited_secret as audited_secret_module
@@ -467,6 +467,31 @@ class TestAuditedSecretBestEffort:
         error_records = [r for r in caplog.records if r.levelname == "ERROR"]
         assert error_records, "expected an ERROR log record but none was captured"
         assert any("emission" in r.getMessage() for r in error_records)
+
+    @pytest.mark.asyncio
+    async def test_envelope_construction_failure_does_not_propagate(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Schema-registry drift must not make a secret read crash."""
+        emitter = _RecordingEmitter()
+        s = AuditedSecret(
+            "the-actual-secret",
+            secret_name="missing_schema_secret",
+            emit=emitter,
+            actor=_actor(),
+        )
+
+        unregister_all()
+        try:
+            with caplog.at_level(logging.WARNING, logger="secret_hygiene.audited_secret"):
+                v = s.value
+                await _drain_emissions()
+        finally:
+            _ensure_secret_accessed_registered()
+
+        assert v == "the-actual-secret"
+        assert emitter.envelopes == []
+        assert any("envelope construction failed" in r.getMessage() for r in caplog.records)
 
     @pytest.mark.asyncio
     async def test_cancelled_error_inside_emit_is_contained(self) -> None:

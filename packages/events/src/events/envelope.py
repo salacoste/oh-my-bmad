@@ -13,7 +13,6 @@ can construct with hard-coded UUIDv7-shaped literals until the generator lands.
 from __future__ import annotations
 
 import re
-import warnings
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NoReturn
@@ -210,14 +209,20 @@ class EventEnvelope(BaseModel):
     )
 
     event_id: str
-    schema_version: str
+    schema_version: str = Field(default="1.1.0")
     type: str
     emitted_at: datetime
     emitted_at_monotonic_ns: int = Field(ge=0)
     actor: Actor
     payload: dict[str, Any] | BaseModel
     parent_event_id: str | None = None
-    trace_id: str | None = None
+    trace_id: str = Field(
+        ...,
+        description=(
+            "Required since Story 9.7 / schema_version 1.1.0 — bumped from "
+            "Optional. Story 9.1 shape contract: bare UUIDv7 OR 'tg:<update_id>'."
+        ),
+    )
     request_id: str
     extensions: dict[str, Any] = Field(default_factory=dict)
     """Reserved for forward-compatible per-event metadata (e.g., ``trace_id``
@@ -269,11 +274,12 @@ class EventEnvelope(BaseModel):
 
     @field_validator("trace_id", mode="after")
     @classmethod
-    def _trace_id_shape(cls, v: str | None) -> str | None:
+    def _trace_id_shape(cls, v: str) -> str:
         # Story 9.1 (FR57 / Epic 9 foundation): accept UUIDv7 OR Telegram-derived
         # form. Stories 9.2/9.4/9.5/9.6 emit UUIDv7; Story 9.3 emits `tg:<update_id>`.
-        if v is None:
-            return v
+        # Story 9.7: trace_id is now REQUIRED; the previous ``v is None`` branch
+        # is dead because Pydantic rejects ``None`` against ``str`` before this
+        # validator runs.
         if _UUIDV7_BARE_RE.match(v):
             return v
         m = _TRACE_ID_TELEGRAM_RE.match(v)
@@ -397,8 +403,8 @@ class EventEnvelope(BaseModel):
         emitted_at_monotonic_ns: int,
         actor: Actor | dict[str, Any],
         payload: dict[str, Any] | BaseModel,
+        trace_id: str,
         parent_event_id: str | None = None,
-        trace_id: str | None = None,
         request_id: str,
         extensions: dict[str, Any] | None = None,
     ) -> EventEnvelope:
@@ -412,25 +418,13 @@ class EventEnvelope(BaseModel):
         v1.0.0 omit the kwarg; callers on v1.0.1+ pass the forward-compatible
         per-event metadata dict.
 
-        :class:`DeprecationWarning` fires only from ``create()`` when
-        ``trace_id is None``. Direct ``EventEnvelope(...)`` construction and
-        ``model_validate_json`` replay do NOT emit the warning — this is
-        intentional so JSONL replay and round-trip tests don't drown logs.
-        The field becomes mandatory in a future ``schema_version`` bump
-        (Phase 2 Epic 9 cutover plan).
+        Story 9.7: ``trace_id`` is now a REQUIRED kwarg (no default, no
+        fallback). The transitional ``DeprecationWarning`` from Story 9.1 has
+        been removed; missing ``trace_id`` raises ``pydantic.ValidationError``.
+        Callers obtain a value via :func:`events.envelope.is_valid_trace_id`
+        validated upstream input, or by minting a fresh UUIDv7 at the entry
+        boundary.
         """
-        if trace_id is None:
-            # Code-review F6: user-facing message describes the contract
-            # without internal sprint terminology — the sprint linkage lives
-            # in the code comment below. Story 9.7 will bump schema_version
-            # 1.0.0 → 1.1.0 and make trace_id mandatory.
-            warnings.warn(
-                "EventEnvelope created without trace_id; this field will be "
-                "required in a future schema_version bump. Pass trace_id= "
-                "(UUIDv7 or 'tg:<update_id>') to silence this warning.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
         key = (type, schema_version)
         if key not in schema_registry.REGISTRY:
             raise EventSchemaUnknown(type, schema_version, schema_registry.EVENT_TYPES)

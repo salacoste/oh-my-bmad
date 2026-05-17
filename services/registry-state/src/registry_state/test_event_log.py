@@ -97,6 +97,9 @@ def _clean_registry() -> Generator[None, None, None]:
 _ACTOR = Actor(kind="system", id="test")
 
 
+_DEFAULT_TRACE_ID = "01917e5c-a7d1-7000-8abc-000000000000"
+
+
 def _make_envelope(
     clock: FrozenClock | None = None,
     value: str = "hello",
@@ -109,6 +112,9 @@ def _make_envelope(
 
     Uses a *dict* payload so that ``to_canonical_json`` + ``from_canonical_json``
     round-trips produce equal envelopes.
+
+    Story 9.7: trace_id is now REQUIRED. Default to _DEFAULT_TRACE_ID when
+    the caller doesn't supply one.
     """
     rng = Random(mono_seed)
     clk = clock or FrozenClock(mono_ns=mono_seed, now=FROZEN_EPOCH)
@@ -123,7 +129,7 @@ def _make_envelope(
         actor=_ACTOR,
         payload={"value": value},
         parent_event_id=parent_event_id,
-        trace_id=trace_id,
+        trace_id=trace_id if trace_id is not None else _DEFAULT_TRACE_ID,
         request_id=rid,
     )
 
@@ -201,6 +207,7 @@ class TestEventLogWriterRoundTrip:
                 emitted_at_monotonic_ns=i,
                 actor=_ACTOR,
                 payload={"value": f"item-{i}"},
+                trace_id="01917e5c-a7d1-7000-8abc-000000000000",
                 request_id=new_uuid7(clock=clk_i, rng=rng),
             )
             envelopes.append(env)
@@ -316,6 +323,7 @@ class TestDailyRollover:
             emitted_at_monotonic_ns=0,
             actor=_ACTOR,
             payload={"value": "day0"},
+            trace_id="01917e5c-a7d1-7000-8abc-000000000000",
             request_id=new_uuid7(clock=clk0, rng=rng),
         )
         await writer.append(env1)
@@ -329,6 +337,7 @@ class TestDailyRollover:
             emitted_at_monotonic_ns=1,
             actor=_ACTOR,
             payload={"value": "day1"},
+            trace_id="01917e5c-a7d1-7000-8abc-000000000000",
             request_id=new_uuid7(clock=clk1, rng=rng),
         )
         await writer.append(env2)
@@ -356,6 +365,7 @@ class TestDailyRollover:
                 emitted_at_monotonic_ns=i,
                 actor=_ACTOR,
                 payload={"value": f"ms-{i}"},
+                trace_id="01917e5c-a7d1-7000-8abc-000000000000",
                 request_id=new_uuid7(clock=FrozenClock(mono_ns=i + 100, now=FROZEN_EPOCH), rng=rng),
             )
             await writer.append(env)
@@ -752,6 +762,7 @@ class TestRolloverAtomicity:
             emitted_at_monotonic_ns=0,
             actor=_ACTOR,
             payload={"value": "day0"},
+            trace_id="01917e5c-a7d1-7000-8abc-000000000000",
             request_id=new_uuid7(clock=clk0, rng=rng),
         )
         await writer.append(env1)
@@ -787,6 +798,7 @@ class TestRolloverAtomicity:
             emitted_at_monotonic_ns=1,
             actor=_ACTOR,
             payload={"value": "day1-fails"},
+            trace_id="01917e5c-a7d1-7000-8abc-000000000000",
             request_id=new_uuid7(clock=clk1, rng=rng),
         )
         # Rollover attempts os.open → OSError bubbles up; writer is poisoned

@@ -113,6 +113,7 @@ from telegram_gateway.handlers import (
     make_task_router,
 )
 from telegram_gateway.handlers.registry_client import RegistryAPIClient
+from telegram_gateway.handlers.trace_command import make_trace_router
 
 # Drain timeout for in-flight ``secret.accessed`` emission tasks on
 # shutdown. Matches the registry-api precedent (Story 2.9 + 2.16 H6).
@@ -339,6 +340,8 @@ def make_lifespan(
             dp.include_router(make_reject_router())
             dp.include_router(make_retry_router())
             dp.include_router(make_agent_router())
+            # Story 9.7 / FR59a — /trace <trace_id> causal-chain query.
+            dp.include_router(make_trace_router())
 
             # Assign app.state ONLY after set_webhook succeeds
             # (review-fix M8). If set_webhook raises, the stack unwinds

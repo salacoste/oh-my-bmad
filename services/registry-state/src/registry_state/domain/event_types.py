@@ -142,12 +142,15 @@ def ensure_registered() -> None:
     register("task.created", "1.1.0", TaskCreatedPayload)
     register("task.planning.started", "1.0.0", TaskPlanningStartedPayload)
     register("task.planning.started", "1.0.1", TaskPlanningStartedPayload)
+    register("task.planning.started", "1.1.0", TaskPlanningStartedPayload)
     register("task.plan.ready", "1.0.0", TaskPlanReadyPayload)
     register("task.plan.ready", "1.0.1", TaskPlanReadyPayload)
     register("task.plan.ready", "1.1.0", TaskPlanReadyPayload)  # Story 5.11 — structured plan steps
     register("task.execution.started", "1.0.0", TaskExecutionStartedPayload)
     register("task.execution.started", "1.0.1", TaskExecutionStartedPayload)
+    register("task.execution.started", "1.1.0", TaskExecutionStartedPayload)
     register("task.step.completed", "1.0.0", TaskStepCompletedPayload)
+    register("task.step.completed", "1.1.0", TaskStepCompletedPayload)
 
     # Story 2.8 — 4 new event types.
     register("task.blocker_raised", "1.0.0", TaskBlockerRaisedPayload)
@@ -155,6 +158,7 @@ def ensure_registered() -> None:
     register("task.blocker_raised", "1.1.0", TaskBlockerRaisedPayload)
     register("task.summary_emitted", "1.0.0", TaskSummaryEmittedPayload)
     register("task.summary_emitted", "1.0.1", TaskSummaryEmittedPayload)
+    register("task.summary_emitted", "1.1.0", TaskSummaryEmittedPayload)
     register("task.approval_requested", "1.0.0", TaskApprovalRequestedPayload)
     register("task.approval_requested", "1.0.1", TaskApprovalRequestedPayload)
     register("task.approval_requested", "1.1.0", TaskApprovalRequestedPayload)
@@ -166,66 +170,94 @@ def ensure_registered() -> None:
     # Story 2.10 — 4 failure-detection event types (FR24a, NFR-R5).
     register("service.crashed", "1.0.0", ServiceCrashedPayload)
     register("service.crashed", "1.0.1", ServiceCrashedPayload)
+    register("service.crashed", "1.1.0", ServiceCrashedPayload)
     register("session.heartbeat_timeout", "1.0.0", SessionHeartbeatTimeoutPayload)
     register("session.heartbeat_timeout", "1.0.1", SessionHeartbeatTimeoutPayload)
+    register("session.heartbeat_timeout", "1.1.0", SessionHeartbeatTimeoutPayload)
     register("sink.delivery_failed", "1.0.0", SinkDeliveryFailedPayload)
     register("sink.delivery_failed", "1.0.1", SinkDeliveryFailedPayload)
+    register("sink.delivery_failed", "1.1.0", SinkDeliveryFailedPayload)
     register("task.stop_requested", "1.0.0", TaskStopRequestedPayload)
     register("task.stop_requested", "1.0.1", TaskStopRequestedPayload)
+    register("task.stop_requested", "1.1.0", TaskStopRequestedPayload)
 
     # Story 2.14 — v1.0.1 registrations (same models, additive envelope field).
     # Story 2.16 — secret.accessed audit-event payload (FR42 / NFR-S3).
     register("secret.accessed", "1.0.0", SecretAccessedPayload)
     register("secret.accessed", "1.0.1", SecretAccessedPayload)
+    register("secret.accessed", "1.1.0", SecretAccessedPayload)
 
     # Story 3.2 — telegram.rejected event payload (FR11 / NFR-S4).
     register("telegram.rejected", "1.0.0", TelegramRejectedPayload)
     register("telegram.rejected", "1.0.1", TelegramRejectedPayload)
+    register("telegram.rejected", "1.1.0", TelegramRejectedPayload)
 
     # Story 3.13 — task.self_recovered event payload (FR16).
     register("task.self_recovered", "1.0.0", TaskSelfRecoveredPayload)
+    register("task.self_recovered", "1.1.0", TaskSelfRecoveredPayload)
 
     # Story 5.2 — session lifecycle event payloads (FR24a).
     register("session.started", "1.0.0", SessionStartedPayload)
     register("session.started", "1.0.1", SessionStartedPayload)
+    register("session.started", "1.1.0", SessionStartedPayload)
     register("session.heartbeat", "1.0.0", SessionHeartbeatPayload)
     register("session.heartbeat", "1.0.1", SessionHeartbeatPayload)
+    register("session.heartbeat", "1.1.0", SessionHeartbeatPayload)
     register("session.finished", "1.0.0", SessionFinishedPayload)
     register("session.finished", "1.0.1", SessionFinishedPayload)
+    register("session.finished", "1.1.0", SessionFinishedPayload)
     # Story 7.8 — restart-recovery event payloads (FR29 models, FR16 synthesis).
     register("session.reconnecting", "1.0.0", SessionReconnectingPayload)
+    register("session.reconnecting", "1.1.0", SessionReconnectingPayload)
     register("task.execution.resumed", "1.0.0", TaskExecutionResumedPayload)
+    register("task.execution.resumed", "1.1.0", TaskExecutionResumedPayload)
 
     # Story 5.5 — agent.reasoning.* breadcrumb payloads (FR17b, NFR-O6).
     register("agent.reasoning.plan_drafted", "1.0.0", AgentReasoningBreadcrumbPayload)
+    register("agent.reasoning.plan_drafted", "1.1.0", AgentReasoningBreadcrumbPayload)
     register("agent.reasoning.tool_call_rationale", "1.0.0", AgentReasoningBreadcrumbPayload)
+    register("agent.reasoning.tool_call_rationale", "1.1.0", AgentReasoningBreadcrumbPayload)
     register("agent.reasoning.step_summary", "1.0.0", AgentReasoningBreadcrumbPayload)
+    register("agent.reasoning.step_summary", "1.1.0", AgentReasoningBreadcrumbPayload)
 
     # Story 5.6 — file.edited event payload (FR30, NFR-R2).
     register("file.edited", "1.0.0", FileEditedPayload)
     register("file.edited", "1.0.1", FileEditedPayload)
+    register("file.edited", "1.1.0", FileEditedPayload)
 
     # Story 5.15 — task.budget_exceeded event payload (FR44 / NFR-P5).
     register("task.budget_exceeded", "1.0.0", TaskBudgetExceededPayload)
+    register("task.budget_exceeded", "1.1.0", TaskBudgetExceededPayload)
 
     # Story 6.2 — tier3.action_attempted audit event (FR38).
     # Emitter added in Story 6.5.
     register("tier3.action_attempted", "1.0.0", Tier3ActionAttemptedPayload)
+    register("tier3.action_attempted", "1.1.0", Tier3ActionAttemptedPayload)
 
     # Story 6.6 — tier3.action_performed audit event (FR38).
     register("tier3.action_performed", "1.0.0", Tier3ActionPerformedPayload)
+    register("tier3.action_performed", "1.1.0", Tier3ActionPerformedPayload)
 
     # Story 6.4 — operator decision event types (FR7, FR41).
     register("approval.granted", "1.0.0", ApprovalGrantedPayload)
+    register("approval.granted", "1.1.0", ApprovalGrantedPayload)
     register("approval.rejected", "1.0.0", ApprovalRejectedPayload)
+    register("approval.rejected", "1.1.0", ApprovalRejectedPayload)
     register("task.retry_requested", "1.0.0", TaskRetryRequestedPayload)
+    register("task.retry_requested", "1.1.0", TaskRetryRequestedPayload)
     register("tier3.license_override", "1.0.0", LicenseOverridePayload)
+    register("tier3.license_override", "1.1.0", LicenseOverridePayload)
 
     # Story 6.10 — task.license_flagged event payload (FR40).
     register("task.license_flagged", "1.0.0", TaskLicenseFlaggedPayload)
+    register("task.license_flagged", "1.1.0", TaskLicenseFlaggedPayload)
 
     # Story 6.11 — tier3.budget_override audit event (FR44).
     register("tier3.budget_override", "1.0.0", BudgetOverridePayload)
+    register("tier3.budget_override", "1.1.0", BudgetOverridePayload)
+
+    # Story 9.7 / AC10: all event types registered under 1.1.0 above for
+    # replay safety. Both 1.0.0 and 1.1.0 entries kept per AC10 option (a).
 
 
 # Module-load registration — runs once on first import.

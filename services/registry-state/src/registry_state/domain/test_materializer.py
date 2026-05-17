@@ -157,6 +157,7 @@ def _task_created_envelope(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskCreatedPayload(task_id=tid, title=title),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=rid,
     )
 
@@ -178,6 +179,7 @@ def _planning_started_envelope(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskPlanningStartedPayload(task_id=task_id),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=rid,
     )
 
@@ -240,6 +242,7 @@ async def test_apply_many_counts_new_only(materializer: Materializer) -> None:
         emitted_at_monotonic_ns=clk2.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskCreatedPayload(task_id=tid2, title="Task 2"),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk2, rng=rng2),
     )
     # Apply env1 first so it's a duplicate in the batch.
@@ -281,6 +284,7 @@ async def test_cursor_returns_max_monotonic_ns_after_inserts(
         emitted_at_monotonic_ns=clk2.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskCreatedPayload(task_id=tid2, title=None),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk2, rng=rng2),
     )
     await materializer.apply(env1)
@@ -348,6 +352,7 @@ async def test_unregistered_event_type_inserts_event_row_without_handler(
             emitted_at_monotonic_ns=clk.monotonic_ns(),
             actor=_ACTOR,
             payload=_UnknownPayload(task_id="t-00000000-0000-7000-8000-000000000000"),
+            trace_id="01917e5c-a7d1-7000-8abc-000000000000",
             request_id=new_uuid7(clock=clk, rng=rng),
         )
         await m.apply(env)  # must not raise
@@ -457,6 +462,7 @@ async def test_apply_plan_ready_updates_task_status(
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskPlanReadyPayload(task_id=task_id, plan_summary="Do the thing"),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
 
@@ -504,6 +510,7 @@ async def test_apply_execution_started_updates_status_and_inserts_session(
         emitted_at_monotonic_ns=clk4.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskExecutionStartedPayload(task_id=task_id, session_id=sid),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk4, rng=rng4),
     )
 
@@ -521,6 +528,7 @@ async def test_apply_execution_started_updates_status_and_inserts_session(
             emitted_at_monotonic_ns=clk_pr.monotonic_ns(),
             actor=_ACTOR,
             payload=TaskPlanReadyPayload(task_id=task_id, plan_summary="plan"),
+            trace_id="01917e5c-a7d1-7000-8abc-000000000000",
             request_id=new_uuid7(clock=clk_pr, rng=rng_pr),
         )
     )
@@ -571,6 +579,7 @@ def _task_created_envelope_with_binding(
             chat_id=chat_id,
             reply_to_message_id=reply_to_message_id,
         ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=rid,
     )
 

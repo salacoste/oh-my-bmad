@@ -148,7 +148,13 @@ def _make_fresh_engine() -> AsyncEngine:
 
 
 async def _materialize_log(log_path: Path, engine: AsyncEngine) -> int:
-    """Replay every envelope in *log_path* through a fresh Materializer/DB."""
+    """Replay every envelope in *log_path* through a fresh Materializer/DB.
+
+    Story 9.7 compatibility: pre-1.1.0 records have ``trace_id: null``.
+    Before parsing through ``from_canonical_json`` (which now requires a
+    non-null trace_id), inject the ``request_id`` as a synthetic trace_id
+    for any record missing one. Mirrors the migrator's back-fill strategy.
+    """
     sm = get_session(engine)
     materializer = Materializer(session_maker=sm)
     register_default_handlers(materializer)
@@ -157,7 +163,11 @@ async def _materialize_log(log_path: Path, engine: AsyncEngine) -> int:
         line = raw.strip()
         if not line:
             continue
-        envelopes.append(from_canonical_json(line))
+        # Back-fill trace_id for legacy records so from_canonical_json succeeds.
+        record = json.loads(line)
+        if not record.get("trace_id"):
+            record["trace_id"] = record.get("request_id", "")
+        envelopes.append(from_canonical_json(json.dumps(record).encode()))
     return await materializer.apply_many(envelopes)
 
 
@@ -210,6 +220,13 @@ def test_migrator_output_round_trips_through_event_envelope(
         env = from_canonical_json(line)
         assert env.schema_version == "1.0.1"
         assert env.extensions == {}
+        # Story 9.7: migrator back-fills trace_id using request_id so that
+        # post-9.7 envelope validation (which requires trace_id) accepts
+        # migrated records. Verify the back-fill was applied.
+        assert env.trace_id is not None, "migrated record must carry a trace_id"
+        assert env.trace_id == env.request_id, (
+            "migrated trace_id should equal request_id (synthetic back-fill)"
+        )
         parsed_count += 1
     assert parsed_count == _EXPECTED_EVENTS
 

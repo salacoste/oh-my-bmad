@@ -78,26 +78,6 @@ markers = [
     "migrator: event-log schema migrator tests",
     "fuzz: NFR-S5 hypothesis fuzz tests (per-strategy: PR gate; combined 10K: nightly only via @slow)",
 ]
-# Story 9.1 transition filter: existing EventEnvelope.create(...) callsites
-# now emit a DeprecationWarning until Stories 9.2-9.6 wire trace_id through
-# every entry point. Suppress here so the warning doesn't drown CI logs;
-# the dedicated test_envelope.py::TestTraceIdDeprecationWarning suite still
-# exercises the warning via pytest.warns(). Remove this line in Story 9.7
-# (1.0.0 → 1.1.0 bump makes trace_id mandatory, so the absent-trace_id
-# path no longer exists).
-#
-# Pass-2 review (code-review N2): Python's `warnings.filterwarnings`
-# already start-anchors the message regex via `re.match`, so a leading
-# `^` is redundant. The real protection against future identically-
-# prefixed warnings is a TAIL anchor — we pin on the trailing semicolon
-# of the actual message so `EventEnvelope created without trace_id_v2`
-# would NOT match. Module qualifier omitted: stacklevel=2 in the
-# warnings.warn() call means the "source module" pytest sees is the
-# CALLER (services/*, mcp-servers/*), not packages/events/, so a
-# module-qualified filter wouldn't match anything.
-filterwarnings = [
-    "ignore:EventEnvelope created without trace_id;.*\\Z:DeprecationWarning",
-]
 norecursedirs = [
     ".git",
     ".venv",

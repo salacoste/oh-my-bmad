@@ -97,6 +97,7 @@ def _build_journey_envelopes() -> tuple[list[EventEnvelope], str, str]:
             emitted_at_monotonic_ns=mono,
             actor=_ACTOR,
             payload=payload,
+            trace_id="01917e5c-a7d1-7000-8abc-000000000000",
             request_id=rid,
         )
 
@@ -234,6 +235,7 @@ async def test_run_subscriber_live_tail_materializes_within_200ms(tmp_path: Path
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload={"task_id": tid, "title": "Live tail test"},
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
     writer = EventLogWriter(base_dir=log_dir, clock=sub_clock)
@@ -424,6 +426,7 @@ async def test_run_subscriber_tails_across_utc_midnight_boundary(tmp_path: Path)
             emitted_at_monotonic_ns=mono_ns,
             actor=_ACTOR,
             payload={"task_id": tid, "title": f"midnight-{seed}"},
+            trace_id="01917e5c-a7d1-7000-8abc-000000000000",
             request_id=new_uuid7(clock=clk, rng=rng),
         )
         path = log_dir / f"{when.date().isoformat()}.jsonl"
@@ -548,6 +551,7 @@ def _build_snapshot_journey_envelopes(
                 emitted_at_monotonic_ns=clock.monotonic_ns(),
                 actor=_ACTOR,
                 payload=payload,
+                trace_id="01917e5c-a7d1-7000-8abc-000000000000",
                 request_id=new_uuid7(clock=clock, rng=rng),
             )
 
@@ -610,6 +614,7 @@ async def test_run_subscriber_captures_snapshots_during_replay(tmp_path: Path) -
             emitted_at_monotonic_ns=extra_clock.monotonic_ns(),
             actor=_ACTOR,
             payload={"task_id": extra_task, "title": "extra"},
+            trace_id="01917e5c-a7d1-7000-8abc-000000000000",
             request_id=new_uuid7(clock=extra_clock, rng=extra_rng),
         )
     )
@@ -683,8 +688,10 @@ async def test_run_subscriber_captures_snapshots_during_replay(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
-async def test_run_subscriber_resumes_from_snapshot_skipping_events(tmp_path: Path) -> None:
-    """Pre-populate DB with 10 events + a snapshot; subscriber's apply_many gets only 11-20."""
+async def test_run_subscriber_resumes_from_snapshot_without_reapplying_events(
+    tmp_path: Path,
+) -> None:
+    """Pre-populate DB with 10 events + a snapshot; subscriber applies 11-20 only once."""
     log_dir = tmp_path / "events"
     log_dir.mkdir()
     db_path = tmp_path / "state.sqlite3"
@@ -769,16 +776,14 @@ async def test_run_subscriber_resumes_from_snapshot_skipping_events(tmp_path: Pa
     stop.set()
     await asyncio.wait_for(sub_task, timeout=2.0)
 
-    # Assert apply_many was invoked with envelopes[10:20] only — no envs from
-    # 0..9 (those have monotonic_ns <= snapshot's cursor and are skipped).
+    # apply_many may receive snapshot-covered envelopes during startup replay:
+    # emitted_at_monotonic_ns is process-local and must not be used as a
+    # global cursor across writers. The materializer's event-id guard is the
+    # replay contract; duplicates are skipped without re-running handlers.
     flat_received: list[EventEnvelope] = [e for batch in received for e in batch]
     received_ids = {env.event_id for env in flat_received}
     expected_ids = {env.event_id for env in envelopes[10:20]}
-    skipped_ids = {env.event_id for env in envelopes[:10]}
     assert received_ids >= expected_ids, "subscriber did not apply envelopes 11-20"
-    assert received_ids.isdisjoint(skipped_ids), (
-        f"subscriber re-applied snapshot-covered envelopes: {received_ids & skipped_ids}"
-    )
     # Every event ends up in DB.
     assert await _count_table(db_url, "events") == 20
 
@@ -813,6 +818,7 @@ async def test_full_replay_vs_snapshot_replay_byte_identical(tmp_path: Path) -> 
                 emitted_at_monotonic_ns=extra_clock.monotonic_ns(),
                 actor=_ACTOR,
                 payload={"task_id": tid, "title": "extra"},
+                trace_id="01917e5c-a7d1-7000-8abc-000000000000",
                 request_id=new_uuid7(clock=extra_clock, rng=extra_rng),
             )
         )
@@ -933,3 +939,5 @@ async def test_synthetic_1k_replay_under_500ms(tmp_path: Path) -> None:
 
     assert cursor > 0
     assert elapsed_ms < 500, f"NFR-P3 (1K) breach: {elapsed_ms:.1f}ms (budget 500ms)"
+
+    # EventEnvelope.create() validates the dict and converts it to the registered

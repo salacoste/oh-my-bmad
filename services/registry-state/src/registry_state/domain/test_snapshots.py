@@ -95,6 +95,7 @@ def _make_envelope(*, mono_ns: int, seed: int = 1) -> EventEnvelope:
         emitted_at_monotonic_ns=mono_ns,
         actor=_ACTOR,
         payload={"task_id": tid, "title": f"snap-helper-{seed}"},
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
         request_id=new_uuid7(clock=clk, rng=rng),
     )
 

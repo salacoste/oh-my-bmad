@@ -44,6 +44,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import html
+import os
 import re
 import time
 from collections.abc import Callable, Mapping
@@ -104,6 +105,9 @@ _DELIVERABLE_EVENT_TYPES: frozenset[str] = frozenset(
     }
 )
 
+_DELIVERABLE_EVENT_TYPES_ENV = "CLAWHIP_DAEMON_DELIVER_EVENT_TYPES"
+_SKIP_EXISTING_EVENTS_ON_START_ENV = "CLAWHIP_DAEMON_SKIP_EXISTING_EVENTS_ON_START"
+
 
 # ---------------------------------------------------------------------------
 # M4: typed Pydantic model for registry-api binding response
@@ -136,11 +140,24 @@ class EventLogReader:
     touching the sink's dispatch logic.
     """
 
-    def __init__(self, base_dir: Path) -> None:
+    def __init__(self, base_dir: Path, *, start_at_end: bool = False) -> None:
         self._base_dir = base_dir
         self._offsets: dict[str, int] = {}
         # M5: track last-seen time per filename to prune stale offset keys.
         self._last_seen: dict[str, float] = {}
+        if start_at_end:
+            self._initialize_offsets_at_end()
+
+    def _initialize_offsets_at_end(self) -> None:
+        """Prime offsets to EOF so startup does not replay historical events."""
+        if not self._base_dir.exists():
+            return
+        now = time.time()
+        for path in sorted(self._base_dir.iterdir()):
+            if not path.is_file() or not _LOG_FILE_RE.match(path.name):
+                continue
+            self._offsets[path.name] = path.stat().st_size
+            self._last_seen[path.name] = now
 
     async def read_new_envelopes(self) -> list[EventEnvelope]:
         """Return all newly-appended envelopes across all log files.
@@ -1668,6 +1685,51 @@ _RENDERERS: MappingProxyType[str, _RenderFn] = MappingProxyType(
     }
 )
 
+_RENDER_PAYLOAD_TYPES: MappingProxyType[str, type[BaseModel]] = MappingProxyType(
+    {
+        "task.approval_requested": TaskApprovalRequestedPayload,
+        "task.blocker_raised": TaskBlockerRaisedPayload,
+        "task.completed": TaskCompletedPayload,
+        "task.plan.ready": TaskPlanReadyPayload,
+        "task.self_recovered": TaskSelfRecoveredPayload,
+        "task.step.completed": TaskStepCompletedPayload,
+    }
+)
+
+
+def _hydrate_envelope_payload_for_render(envelope: EventEnvelope) -> EventEnvelope:
+    """Rebuild typed payloads for JSONL-replayed envelopes before rendering.
+
+    JSONL replay intentionally parses payloads as immutable dicts, while the
+    Telegram renderers operate on typed payload models. Hydrating here keeps
+    renderer unit tests' mismatch fallback intact and fixes production replay.
+    """
+    model_cls = _RENDER_PAYLOAD_TYPES.get(envelope.type)
+    if model_cls is None or isinstance(envelope.payload, model_cls):
+        return envelope
+
+    payload = envelope.payload
+    if isinstance(payload, BaseModel):
+        raw_payload: Any = payload.model_dump(mode="python")
+    elif isinstance(payload, Mapping):
+        raw_payload = dict(payload)
+    else:
+        return envelope
+
+    try:
+        hydrated_payload = model_cls.model_validate(raw_payload)
+    except pydantic.ValidationError as exc:
+        _log.warning(
+            "telegram_sink: renderer payload hydration failed",
+            event_type=envelope.type,
+            event_id=envelope.event_id,
+            payload_type=type(payload).__name__,
+            exc=str(exc),
+        )
+        return envelope
+
+    return envelope.model_copy(update={"payload": hydrated_payload})
+
 
 def _render(envelope: EventEnvelope) -> str:
     """Dispatch by event-type to the registered renderer; fall back to placeholder.
@@ -1689,6 +1751,35 @@ def _render(envelope: EventEnvelope) -> str:
     # L1: envelope.type is registry-controlled; escape preserved as
     # defense-in-depth (no-op).
     return f"Task {html.escape(task_id)}: {html.escape(envelope.type)}"
+
+
+def _parse_deliverable_event_types(raw: str | None) -> frozenset[str]:
+    """Parse optional sink allowlist from env, falling back to the product default."""
+    if raw is None or raw.strip() == "":
+        return _DELIVERABLE_EVENT_TYPES
+
+    requested = {part for part in re.split(r"[\s,]+", raw.strip()) if part}
+    unknown = requested - _DELIVERABLE_EVENT_TYPES
+    if unknown:
+        _log.warning(
+            "telegram_sink: unknown deliverable event types ignored",
+            env_var=_DELIVERABLE_EVENT_TYPES_ENV,
+            event_types=sorted(unknown),
+        )
+
+    allowed = requested & _DELIVERABLE_EVENT_TYPES
+    if not allowed:
+        _log.warning(
+            "telegram_sink: deliverable event allowlist empty after validation; using default",
+            env_var=_DELIVERABLE_EVENT_TYPES_ENV,
+        )
+        return _DELIVERABLE_EVENT_TYPES
+    return frozenset(allowed)
+
+
+def _env_flag(name: str) -> bool:
+    """Return True for common truthy env values."""
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 # ---------------------------------------------------------------------------
@@ -1780,7 +1871,10 @@ class TelegramSink:
         else:
             if base_dir is None:
                 raise TypeError("TelegramSink requires either log_reader or base_dir")
-            self._log_reader = EventLogReader(base_dir)
+            self._log_reader = EventLogReader(
+                base_dir,
+                start_at_end=_env_flag(_SKIP_EXISTING_EVENTS_ON_START_ENV),
+            )
 
         if registry_client is not None:
             self._registry_client = registry_client
@@ -1797,6 +1891,9 @@ class TelegramSink:
 
         self._outbound = outbound
         self._poll_interval_s = poll_interval_s
+        self._deliverable_event_types = _parse_deliverable_event_types(
+            os.environ.get(_DELIVERABLE_EVENT_TYPES_ENV)
+        )
         # M7: TTLCache for immutable bindings (set-once at task.created).
         self._binding_cache: cachetools.TTLCache[str, tuple[int | None, int | None]] = (
             cachetools.TTLCache(maxsize=1000, ttl=3600)
@@ -1835,7 +1932,7 @@ class TelegramSink:
     async def _handle(self, envelope: EventEnvelope) -> None:
         """Process a single envelope: skip non-deliverable events, lookup binding, dispatch."""
         # L15: positive allowlist replaces the too-broad startswith("task.") check.
-        if envelope.type not in _DELIVERABLE_EVENT_TYPES:
+        if envelope.type not in self._deliverable_event_types:
             return
 
         # Extract task_id from payload (all task.* payloads carry task_id).
@@ -1877,7 +1974,7 @@ class TelegramSink:
         # ``html.escape``, or a future-version model evolution) cannot crash
         # the sink loop. Fall back to the placeholder shape and log.
         try:
-            text = _render(envelope)
+            text = _render(_hydrate_envelope_payload_for_render(envelope))
         except Exception as exc:  # noqa: BLE001 — best-effort, never crash the sink loop
             _log.error(
                 "telegram_sink: renderer raised; falling back to placeholder",
@@ -1992,6 +2089,9 @@ class TelegramSink:
                     events_replayed=recovery["events_replayed"],
                     replay_duration_ms=recovery["replay_duration_ms"],
                 ),
+                # Story 9.7: trace_id required. Synthetic envelope — no operator
+                # trace context; mint a fresh UUIDv7 as the correlation handle.
+                trace_id=new_uuid7(),
                 request_id=new_uuid7(),
             )
             text = _render(synthetic_env)

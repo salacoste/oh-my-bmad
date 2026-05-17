@@ -32,13 +32,19 @@ def migrate_v1_0_0_to_v1_0_1(event: dict[str, Any]) -> dict[str, Any]:
     """Additive upgrade: add an empty `extensions` object + bump schema_version.
 
     v1.0.1 introduces an `extensions: {}` field on every event, reserved for
-    forward-compatible per-event metadata (e.g., trace_id when distributed
-    tracing lands in Phase 2). No semantic change.
+    forward-compatible per-event metadata. No semantic change at the payload level.
 
     Story 2.14 code-review fix M5: validates that the input event is
     actually v1.0.0. A non-1.0.0 input is a programmer error (the wrong
     migrator was invoked) and would otherwise be silently clobbered to
     ``schema_version="1.0.1"``.
+
+    Story 9.7 extension: also back-fills ``trace_id`` when the event has
+    ``null`` or no ``trace_id`` value. Pre-1.1.0 events were emitted without
+    a trace_id; migration injects the ``request_id`` as a synthetic trace_id
+    so that post-9.7 envelope validation (which requires trace_id) accepts
+    migrated records. Using request_id ensures each migrated event carries a
+    unique, valid bare UUIDv7 while preserving the original causal identity.
     """
     src_version = event.get("schema_version")
     if src_version != "1.0.0":
@@ -49,6 +55,11 @@ def migrate_v1_0_0_to_v1_0_1(event: dict[str, Any]) -> dict[str, Any]:
     migrated = dict(event)
     migrated["schema_version"] = "1.0.1"
     migrated.setdefault("extensions", {})
+    # Back-fill trace_id: use request_id as a synthetic bare UUIDv7 so that
+    # post-Story-9.7 envelope parsing (which requires trace_id) succeeds.
+    # Deterministic: same request_id → same synthetic trace_id on re-run.
+    if not migrated.get("trace_id"):
+        migrated["trace_id"] = migrated.get("request_id", "")
     return migrated
 
 

@@ -84,6 +84,9 @@ from registry_api.routes.tasks import (
 from registry_api.routes.tasks import (
     router as tasks_router,
 )
+from registry_api.routes.trace import (
+    router as trace_router,
+)
 
 # Idempotency-cache TTL — 7 days per FR28 (Architecture line 205). The cache is
 # created by the registry-state schema (``IdempotencyCache`` ORM model) and
@@ -278,6 +281,8 @@ def build_app(
     app.include_router(events_router, prefix="/v1")
     # Story 6.4 — decisions sub-resource on tasks.
     app.include_router(decisions_router, prefix="/v1")
+    # Story 9.7 / FR59a — /trace/{trace_id} operator query.
+    app.include_router(trace_router, prefix="/v1")
 
     return app
 

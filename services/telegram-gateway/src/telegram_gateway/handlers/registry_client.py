@@ -626,6 +626,37 @@ class RegistryAPIClient:
         except (_json.JSONDecodeError, KeyError, ValidationError, ValueError) as exc:
             raise RegistryResponseError(f"registry-api returned malformed body: {exc}") from exc
 
+    async def get_trace(
+        self,
+        *,
+        trace_id: str,
+        request_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        """GET /v1/trace/{trace_id} — all events in the causal chain (FR59a / Story 9.7).
+
+        Returns a list of raw event dicts ordered by emitted_at_monotonic_ns.
+        Raises RegistryResponseError on malformed responses or non-2xx HTTP.
+        """
+        headers: dict[str, str] = {}
+        if request_id is not None:
+            headers["X-Request-ID"] = request_id
+
+        response = await self._http_client.get(
+            f"/v1/trace/{trace_id}",
+            headers=headers,
+        )
+        response.raise_for_status()
+
+        try:
+            data = response.json()
+            if not isinstance(data, list):
+                raise RegistryResponseError(
+                    f"expected JSON array from /v1/trace, got {type(data).__name__}"
+                )
+            return data  # type: ignore[return-value]
+        except (_json.JSONDecodeError, ValueError) as exc:
+            raise RegistryResponseError(f"registry-api returned malformed body: {exc}") from exc
+
 
 __all__ = [
     "ActorLocal",

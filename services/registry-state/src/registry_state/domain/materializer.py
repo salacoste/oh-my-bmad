@@ -156,6 +156,10 @@ class Materializer:
                 task_id=task_id,
                 session_id=session_id,
                 parent_event_id=envelope.parent_event_id,
+                # Story 9.7 / AC5: wire envelope.trace_id → events.trace_id column.
+                # trace_id is mandatory on post-1.1.0 envelopes; ORM column is
+                # nullable to preserve queryability of pre-1.1.0 rows (NULL there).
+                trace_id=envelope.trace_id,
                 request_id=envelope.request_id,
                 payload_json=_canonical_payload_json(envelope),
             )
@@ -220,6 +224,8 @@ class Materializer:
                             task_id=task_id,
                             session_id=session_id,
                             parent_event_id=envelope.parent_event_id,
+                            # Story 9.7 / AC5: trace_id wired in apply_many path too.
+                            trace_id=envelope.trace_id,
                             request_id=envelope.request_id,
                             payload_json=_canonical_payload_json(envelope),
                         )

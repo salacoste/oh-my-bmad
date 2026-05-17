@@ -299,6 +299,8 @@ class AuditedSecret:
             return
 
         envelope = self._build_envelope()
+        if envelope is None:
+            return  # construction failed; warning already logged in _build_envelope
         # Type narrowing: _schedule_emission is only called when emit is not None
         emit = self._emit
         assert emit is not None  # noqa: S101 — invariant of the call site
@@ -321,7 +323,7 @@ class AuditedSecret:
         _live_emission_tasks.add(task)
         task.add_done_callback(_on_emission_done)
 
-    def _build_envelope(self) -> EventEnvelope:
+    def _build_envelope(self) -> EventEnvelope | None:
         """Construct the canonical ``secret.accessed`` envelope.
 
         ``EventEnvelope.create()`` form is intentional — it routes through
@@ -332,17 +334,35 @@ class AuditedSecret:
         ``EventEnvelope(...)`` construction and ``<receiver>.emit(...)``
         patterns; ``EventEnvelope.create()`` is outside the scanner's
         scope (vacuously green per Story 2.10's pattern, AC-12).
+
+        Story 9.7: trace_id is now REQUIRED on EventEnvelope.  Secret-access
+        audit events are internally-generated (no operator request supplies a
+        trace_id), so we mint a synthetic bare UUIDv7 here.  This gives each
+        audit envelope its own unique correlation handle without fabricating an
+        end-to-end trace (the correct design: audit != operator-initiated trace).
+
+        Returns ``None`` on construction failure (e.g. schema-registry drift)
+        so the caller can skip emission without crashing the secret read.
         """
-        return EventEnvelope.create(
-            event_id=new_event_id(clock=self._clock),
-            schema_version="1.0.0",
-            type="secret.accessed",
-            emitted_at=self._clock.now(),
-            emitted_at_monotonic_ns=self._clock.monotonic_ns(),
-            actor=self._actor,
-            payload={"secret_name": self._secret_name, "scope": "read"},
-            request_id=new_request_id(clock=self._clock),
-        )
+        try:
+            return EventEnvelope.create(
+                event_id=new_event_id(clock=self._clock),
+                schema_version="1.0.0",
+                type="secret.accessed",
+                emitted_at=self._clock.now(),
+                emitted_at_monotonic_ns=self._clock.monotonic_ns(),
+                actor=self._actor,
+                payload={"secret_name": self._secret_name, "scope": "read"},
+                trace_id=new_request_id(clock=self._clock),
+                request_id=new_request_id(clock=self._clock),
+            )
+        except Exception as exc:  # noqa: BLE001 — audit must not crash secret reads
+            _stdlib_logger.warning(
+                "secret.accessed emission skipped — envelope construction failed for secret %r: %s",
+                self._secret_name,
+                exc,
+            )
+            return None
 
     @staticmethod
     async def _safe_emit(emit: EmitCallable, envelope: EventEnvelope) -> None:

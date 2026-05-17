@@ -134,6 +134,7 @@ class TestPayloadRoundTrip:
             emitted_at_monotonic_ns=clock.monotonic_ns(),
             actor=Actor(kind="operator", id="cli-helper"),
             payload=payload,
+            trace_id="01917e5c-a7d1-7000-8abc-000000000000",
             request_id=new_request_id(),
         )
         line = to_canonical_json(env)

@@ -15,6 +15,7 @@ from console_cli.commands import (
     status,
     stop,
     task,
+    trace,
 )
 
 app = typer.Typer(
@@ -33,6 +34,7 @@ app.command()(retry.retry)
 app.command()(ping.ping)
 app.command()(agent.agent)
 app.command(name="events")(events.events)
+app.command(name="trace")(trace.trace)
 
 
 __all__ = ["app"]

@@ -1,0 +1,279 @@
+"""Project-wide ratchet: every process-spawn primitive must appear in the allowlist.
+
+Story 9.7 / AC12: extends the registry-state-scoped ratchet (pass-3 TH3,
+services/registry-state/src/registry_state/test_no_subprocess_spawn.py) to
+cover all of services/, mcp-servers/, and packages/.
+
+If you need to add a new spawn site:
+1. Add it to ``_ALLOWLIST`` below with a brief justification.
+2. Propagate ``WORKER_TRACE_ID`` (or equivalent) through the spawn's env dict
+   so the trace_id crosses the process boundary (Epic 9 / FR59).
+3. Open a PR referencing this file in the review checklist.
+
+Without an allowlist entry, the CI gate fails — forcing authors to make the
+spawn site visible and documented.
+
+Pattern mirrors registry-state/test_no_subprocess_spawn.py (pass-3 TH3 AST
+walk, alias-aware, test files excluded from the scan).
+"""
+
+from __future__ import annotations
+
+import ast
+import textwrap
+from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Forbidden dotted names — matches subprocess / asyncio / os / multiprocessing /
+# pty spawn primitives. Mirror of the registry-state ratchet.
+# ---------------------------------------------------------------------------
+
+_FORBIDDEN_DOTTED: frozenset[str] = frozenset(
+    {
+        # subprocess module surface
+        "subprocess.Popen",
+        "subprocess.run",
+        "subprocess.call",
+        "subprocess.check_output",
+        "subprocess.check_call",
+        "subprocess.getoutput",
+        "subprocess.getstatusoutput",
+        # asyncio subprocess
+        "asyncio.create_subprocess_exec",
+        "asyncio.create_subprocess_shell",
+        # os module surface — process spawn / fork primitives
+        "os.system",
+        "os.popen",
+        "os.fork",
+        "os.forkpty",
+        "os.execl",
+        "os.execle",
+        "os.execlp",
+        "os.execlpe",
+        "os.execv",
+        "os.execve",
+        "os.execvp",
+        "os.execvpe",
+        "os.spawnl",
+        "os.spawnle",
+        "os.spawnlp",
+        "os.spawnlpe",
+        "os.spawnv",
+        "os.spawnve",
+        "os.spawnvp",
+        "os.spawnvpe",
+        # multiprocessing module — process objects
+        "multiprocessing.Process",
+        "multiprocessing.Pool",
+        # pty — fork primitive
+        "pty.fork",
+    }
+)
+
+# Bare-name → canonical dotted form for ``from X import Y [as Z]`` imports.
+_FROM_IMPORT_MAP: dict[str, str] = {
+    "Popen": "subprocess.Popen",
+    "create_subprocess_exec": "asyncio.create_subprocess_exec",
+    "create_subprocess_shell": "asyncio.create_subprocess_shell",
+    "check_output": "subprocess.check_output",
+    "check_call": "subprocess.check_call",
+    "getoutput": "subprocess.getoutput",
+    "getstatusoutput": "subprocess.getstatusoutput",
+    # Note: ``run`` and ``call`` omitted — too generic for bare-name detection.
+}
+
+# ---------------------------------------------------------------------------
+# Allowlist — every known legitimate spawn site.
+#
+# Key format: relative path from repo root (str) → set of allowed line numbers.
+# Line numbers may drift on edits; when a ratchet trip references a stale line,
+# re-run the scan to find the new line and update the allowlist entry.
+# ---------------------------------------------------------------------------
+
+_REPO_ROOT: Path = Path(__file__).resolve().parents[1]
+
+
+def _rel(p: str) -> str:
+    """Return p as a POSIX relative path string (canonical key form)."""
+    return str(Path(p).as_posix())
+
+
+# Each value is a set of allowed lines for that file.
+# Format: { rel_path: {line, ...} }
+_ALLOWLIST: dict[str, set[int]] = {
+    # worker-wrapper: spawns Claude Code subprocess.
+    # Story 9.6 — propagates WORKER_TRACE_ID through env (FR59 / PH0).
+    _rel("services/worker-wrapper/src/worker_wrapper/adapters/claude_code_runner.py"): {151},
+    # orchestrator-adapter: spawns OMC node subprocess.
+    # Story 9.6 — propagates OMB_TRACE_ID through env (FR59 / TH3).
+    _rel("services/orchestrator-adapter/src/orchestrator_adapter/adapters/omc_runner.py"): {93},
+}
+
+
+# ---------------------------------------------------------------------------
+# AST walker (mirrors registry-state ratchet, pass-3 TH3)
+# ---------------------------------------------------------------------------
+
+
+class _SpawnVisitor(ast.NodeVisitor):
+    """AST walker that detects forbidden spawn primitives."""
+
+    def __init__(self) -> None:
+        self._import_aliases: dict[str, str] = {}
+        self.offenders: list[tuple[int, str]] = []
+
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            canonical = alias.name
+            local = alias.asname or alias.name
+            self._import_aliases[local] = canonical
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        mod = node.module or ""
+        for alias in node.names:
+            bare = alias.name
+            local = alias.asname or alias.name
+            canonical = _FROM_IMPORT_MAP.get(bare)
+            canonical = f"{mod}.{bare}" if canonical is None and mod else canonical or bare
+            self._import_aliases[local] = canonical
+        self.generic_visit(node)
+
+    def _resolve_call_name(self, node: ast.expr) -> str | None:
+        if isinstance(node, ast.Name):
+            return self._import_aliases.get(node.id, node.id)
+        if isinstance(node, ast.Attribute):
+            parts: list[str] = []
+            cur: ast.expr = node
+            while isinstance(cur, ast.Attribute):
+                parts.append(cur.attr)
+                cur = cur.value
+            if isinstance(cur, ast.Name):
+                leftmost = self._import_aliases.get(cur.id, cur.id)
+                parts.append(leftmost)
+                return ".".join(reversed(parts))
+        return None
+
+    def visit_Call(self, node: ast.Call) -> None:
+        name = self._resolve_call_name(node.func)
+        if name is not None and name in _FORBIDDEN_DOTTED:
+            self.offenders.append((node.lineno, name))
+        self.generic_visit(node)
+
+
+def _scan_file(path: Path) -> list[tuple[int, str]]:
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except SyntaxError:
+        return []
+    visitor = _SpawnVisitor()
+    visitor.visit(tree)
+    return visitor.offenders
+
+
+# ---------------------------------------------------------------------------
+# Test
+# ---------------------------------------------------------------------------
+
+_SCAN_ROOTS: tuple[str, ...] = ("services", "mcp-servers", "packages")
+
+
+def test_no_undocumented_spawn_sites() -> None:
+    """Every spawn site in services/, mcp-servers/, packages/ must be in
+    the allowlist, or this gate fails.
+
+    If you are adding a legitimate spawn site:
+      1. Add it to _ALLOWLIST in this file with a justification comment.
+      2. Propagate trace_id through the subprocess env (Epic 9 / FR59).
+      3. Update the allowlist line number if the code was refactored.
+
+    Story 9.7 / AC12 — project-wide spawn-site visibility gate.
+    """
+    undocumented: list[str] = []
+
+    for root_name in _SCAN_ROOTS:
+        root = _REPO_ROOT / root_name
+        if not root.exists():
+            continue
+        for py in sorted(root.rglob("*.py")):
+            if "__pycache__" in str(py):
+                continue
+            # Skip co-located test files (same policy as registry-state ratchet).
+            if py.name.startswith("test_"):
+                continue
+            rel = str(py.relative_to(_REPO_ROOT).as_posix())
+            hits = _scan_file(py)
+            if not hits:
+                continue
+            allowed_lines = _ALLOWLIST.get(rel, set())
+            for lineno, spawn_name in hits:
+                if lineno not in allowed_lines:
+                    undocumented.append(
+                        f"{rel}:{lineno} -> {spawn_name}  "
+                        f"[not in allowlist; add to _ALLOWLIST or remove the spawn]"
+                    )
+
+    assert not undocumented, (
+        "Undocumented spawn sites found — add to _ALLOWLIST in "
+        "tests/test_no_undocumented_spawn_sites.py and propagate trace_id "
+        "through the subprocess env (Epic 9 / FR59):\n" + "\n".join(f"  {s}" for s in undocumented)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Self-tests (mirror registry-state ratchet TH3 self-tests)
+# ---------------------------------------------------------------------------
+
+
+def test_ast_walker_detects_aliased_popen() -> None:
+    """AST walker catches ``from subprocess import Popen as _foo; _foo(...)``."""
+    fixture = textwrap.dedent(
+        """
+        from subprocess import Popen as _foo
+        _foo("/bin/true")
+        """
+    )
+    tree = ast.parse(fixture)
+    v = _SpawnVisitor()
+    v.visit(tree)
+    assert v.offenders, "aliased Popen should be flagged"
+    assert any(name == "subprocess.Popen" for _, name in v.offenders)
+
+
+def test_ast_walker_detects_asyncio_create_subprocess() -> None:
+    """AST walker catches ``asyncio.create_subprocess_exec``."""
+    fixture = textwrap.dedent(
+        """
+        import asyncio
+        await asyncio.create_subprocess_exec("ls")
+        """
+    )
+    tree = ast.parse(fixture)
+    v = _SpawnVisitor()
+    v.visit(tree)
+    assert any(name == "asyncio.create_subprocess_exec" for _, name in v.offenders)
+
+
+def test_ast_walker_clean_code_passes() -> None:
+    """AST walker is silent for code with no spawn primitives."""
+    fixture = textwrap.dedent(
+        """
+        from pathlib import Path
+        Path("/tmp").exists()
+        """
+    )
+    tree = ast.parse(fixture)
+    v = _SpawnVisitor()
+    v.visit(tree)
+    assert v.offenders == []
+
+
+def test_allowlist_keys_are_valid_paths() -> None:
+    """Every key in _ALLOWLIST must reference a file that exists in the repo."""
+    missing = []
+    for rel in _ALLOWLIST:
+        if not (_REPO_ROOT / rel).is_file():
+            missing.append(rel)
+    assert not missing, "Stale allowlist entries (files no longer exist):\n" + "\n".join(
+        f"  {m}" for m in missing
+    )
