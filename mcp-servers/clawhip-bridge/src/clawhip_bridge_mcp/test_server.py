@@ -49,9 +49,16 @@ from registry_state.adapters.event_log import (  # noqa: IMP001 — mcp-servers�
 from clawhip_bridge_mcp.server import (  # noqa: IMP001 — test file in mcp-servers
     TIER_MAP,
     _make_approval_lookup,
+    _validate_caller_trace_id,
     _validate_limit,
     build_server,
 )
+
+# Story 9.5: a deterministic, valid UUIDv7 used as ``caller_trace_id`` across
+# the existing test corpus. The variant nibble (8/9/a/b) and version nibble (7)
+# satisfy ``is_valid_trace_id`` per the Story 9.1 contract.
+_VALID_TRACE_ID = "01917e5c-a7d1-7000-8abc-0123456789ab"
+_VALID_TG_TRACE_ID = "tg:42"
 
 # ---------------------------------------------------------------------------
 # Local fixtures (inlined — no conftest per project convention)
@@ -171,6 +178,7 @@ class TestEmitEventTool:
         result = await fn(
             type="task.created",
             payload={"task_id": _task_id(), "title": "test"},
+            caller_trace_id=_VALID_TRACE_ID,
         )
         assert "event_id" in result
         assert "emitted_at" in result
@@ -194,6 +202,7 @@ class TestEmitEventTool:
             await fn(
                 type="task.does_not_exist",
                 payload={"task_id": _task_id()},
+                caller_trace_id=_VALID_TRACE_ID,
             )
 
     @pytest.mark.asyncio
@@ -211,6 +220,7 @@ class TestEmitEventTool:
         await fn(
             type="task.created",
             payload={"task_id": _task_id(), "title": "actor test"},
+            caller_trace_id=_VALID_TRACE_ID,
         )
         path = current_day_path(tmp_path, fixed_clock.now())
         envelopes = list(read_log_lines(path))
@@ -232,6 +242,7 @@ class TestEmitEventTool:
         result = await fn(
             type="task.created",
             payload={"task_id": _task_id(), "title": "clock test"},
+            caller_trace_id=_VALID_TRACE_ID,
         )
         assert result["emitted_at"] == FROZEN_EPOCH.isoformat()
 
@@ -249,6 +260,7 @@ class TestEmitEventTool:
         result = await fn(
             type="task.created",
             payload={"task_id": task_id, "title": "log test"},
+            caller_trace_id=_VALID_TRACE_ID,
         )
         path = current_day_path(tmp_path, fixed_clock.now())
         envelopes = list(read_log_lines(path))
@@ -282,6 +294,7 @@ class TestEmitEventTool:
                         "task_id": f"t-019b76da-0001-7000-8000-{i:012d}",
                         "title": f"ev-{i}",
                     },
+                    caller_trace_id=_VALID_TRACE_ID,
                 )
                 for i in range(10)
             ]
@@ -320,6 +333,7 @@ class TestEmitEventTool:
                     "pr_url": "https://example.com",
                     "EXTRA_FIELD": "should be rejected",
                 },
+                caller_trace_id=_VALID_TRACE_ID,
             )
 
 
@@ -339,7 +353,7 @@ class TestTypedEmitTools:
             base_dir=tmp_path, clock=fixed_clock, actor_kind="worker", actor_id="w-1"
         )
         fn = mcp._tool_manager._tools["emit_blocker"].fn
-        await fn(task_id=_task_id(), reason="waiting for approval")
+        await fn(task_id=_task_id(), reason="waiting for approval", caller_trace_id=_VALID_TRACE_ID)
         path = current_day_path(tmp_path, fixed_clock.now())
         envs = list(read_log_lines(path))
         assert envs[0].type == "task.blocker_raised"
@@ -352,7 +366,7 @@ class TestTypedEmitTools:
             base_dir=tmp_path, clock=fixed_clock, actor_kind="worker", actor_id="w-2"
         )
         fn = mcp._tool_manager._tools["emit_summary"].fn
-        await fn(task_id=_task_id(), summary="done step 1")
+        await fn(task_id=_task_id(), summary="done step 1", caller_trace_id=_VALID_TRACE_ID)
         path = current_day_path(tmp_path, fixed_clock.now())
         envs = list(read_log_lines(path))
         assert envs[0].type == "task.summary_emitted"
@@ -365,7 +379,12 @@ class TestTypedEmitTools:
             base_dir=tmp_path, clock=fixed_clock, actor_kind="worker", actor_id="w-3"
         )
         fn = mcp._tool_manager._tools["emit_approval_request"].fn
-        await fn(task_id=_task_id(), action="deploy", justification="ready")
+        await fn(
+            task_id=_task_id(),
+            action="deploy",
+            justification="ready",
+            caller_trace_id=_VALID_TRACE_ID,
+        )
         path = current_day_path(tmp_path, fixed_clock.now())
         envs = list(read_log_lines(path))
         assert envs[0].type == "task.approval_requested"
@@ -378,7 +397,12 @@ class TestTypedEmitTools:
             base_dir=tmp_path, clock=fixed_clock, actor_kind="worker", actor_id="w-4"
         )
         fn = mcp._tool_manager._tools["emit_completion"].fn
-        await fn(task_id=_task_id(), summary="all done", pr_url="https://github.com/foo/1")
+        await fn(
+            task_id=_task_id(),
+            summary="all done",
+            pr_url="https://github.com/foo/1",
+            caller_trace_id=_VALID_TRACE_ID,
+        )
         path = current_day_path(tmp_path, fixed_clock.now())
         envs = list(read_log_lines(path))
         assert envs[0].type == "task.completed"
@@ -405,6 +429,7 @@ class TestRecentEventsResource:
         await emit_fn(
             type="task.created",
             payload={"task_id": _task_id(), "title": "resource test"},
+            caller_trace_id=_VALID_TRACE_ID,
         )
         # Materialise the resource via the URI template (F3) and read it.
         tpl = mcp._resource_manager._templates["recent-events://current-day/{limit}"]
@@ -435,6 +460,7 @@ class TestRecentEventsResource:
             await emit_fn(
                 type="task.created",
                 payload={"task_id": _task_id(seed=i + 10), "title": f"ev-{i}"},
+                caller_trace_id=_VALID_TRACE_ID,
             )
         tpl = mcp._resource_manager._templates["recent-events://current-day/{limit}"]
         res_obj2 = await tpl.create_resource(
@@ -584,6 +610,7 @@ class TestFastMCPIntegration:
                         "task_id": _task_id(seed=101),
                         "title": "integration test",
                     },
+                    "caller_trace_id": _VALID_TRACE_ID,
                 },
             )
             # FastMCP returns (Sequence[ContentBlock], dict). The tuple form is
@@ -621,7 +648,11 @@ class TestFastMCPIntegration:
             with pytest.raises(Exception):  # noqa: B017 — FastMCP wraps; assert SOME exception
                 await mcp.call_tool(
                     "emit_event",
-                    {"type": "unregistered.type", "payload": {}},
+                    {
+                        "type": "unregistered.type",
+                        "payload": {},
+                        "caller_trace_id": _VALID_TRACE_ID,
+                    },
                 )
 
 
@@ -667,6 +698,7 @@ class TestTierEnforcement:
             await fn(
                 type="task.created",
                 payload={"task_id": _task_id(), "title": "test"},
+                caller_trace_id=_VALID_TRACE_ID,
             )
 
 
@@ -694,6 +726,7 @@ class TestApprovalLookup:
         await fn(
             type="task.created",
             payload={"task_id": tid, "title": "test"},
+            caller_trace_id=_VALID_TRACE_ID,
         )
 
         lookup = _make_approval_lookup(tmp_path, fixed_clock)
@@ -793,3 +826,234 @@ class TestEntryPoint:
             f"got {result.returncode} (stdout: {result.stdout!r}, stderr: {result.stderr!r})"
         )
         assert "CLAWHIP_BRIDGE_ACTOR_ID" in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# TestCallerTraceId (Story 9.5 / FR58 MCP)
+# ---------------------------------------------------------------------------
+
+
+class TestCallerTraceIdValidationHelper:
+    """Unit tests for the module-level ``_validate_caller_trace_id`` helper."""
+
+    def test_accepts_uuidv7(self) -> None:
+        """Bare UUIDv7 → no exception."""
+        _validate_caller_trace_id(_VALID_TRACE_ID)
+
+    def test_accepts_telegram_form(self) -> None:
+        """``tg:<digits>`` → no exception."""
+        _validate_caller_trace_id(_VALID_TG_TRACE_ID)
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "",
+            "bad-format",
+            "not-a-uuid",
+            "tg:",
+            "tg:0",  # leading-zero rejected per Story 9.1 F2
+            "tg:abc",
+            "01917e5c-a7d1-7000-8abc-0123456789ab\n",  # CRLF guard (S1)
+            " 01917e5c-a7d1-7000-8abc-0123456789ab",  # whitespace
+        ],
+    )
+    def test_rejects_invalid_shapes(self, bad: str) -> None:
+        with pytest.raises(ValueError, match="Story 9.1 contract"):
+            _validate_caller_trace_id(bad)
+
+
+class TestCallerTraceIdEmitEvent:
+    """AC1 / AC2 / AC3 / AC6 for ``emit_event``."""
+
+    @pytest.mark.asyncio
+    async def test_emit_event_requires_caller_trace_id(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """Call without ``caller_trace_id`` → TypeError (missing kwarg)."""
+        mcp = build_server(base_dir=tmp_path, clock=fixed_clock, actor_kind="system", actor_id="t1")
+        fn = mcp._tool_manager._tools["emit_event"].fn
+        with pytest.raises(TypeError):
+            await fn(type="task.created", payload={"task_id": _task_id(), "title": "x"})
+
+    @pytest.mark.asyncio
+    async def test_emit_event_rejects_invalid_caller_trace_id(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """Invalid ``caller_trace_id`` → ValueError surfaced before tier check."""
+        mcp = build_server(base_dir=tmp_path, clock=fixed_clock, actor_kind="system", actor_id="t2")
+        fn = mcp._tool_manager._tools["emit_event"].fn
+        with pytest.raises(ValueError, match="Story 9.1 contract"):
+            await fn(
+                type="task.created",
+                payload={"task_id": _task_id(), "title": "x"},
+                caller_trace_id="bad-format",
+            )
+
+    @pytest.mark.asyncio
+    async def test_emit_event_accepts_uuidv7_caller_trace_id(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        mcp = build_server(base_dir=tmp_path, clock=fixed_clock, actor_kind="system", actor_id="t3")
+        fn = mcp._tool_manager._tools["emit_event"].fn
+        result = await fn(
+            type="task.created",
+            payload={"task_id": _task_id(), "title": "ok"},
+            caller_trace_id=_VALID_TRACE_ID,
+        )
+        assert result["event_id"].startswith("e-")
+
+    @pytest.mark.asyncio
+    async def test_emit_event_accepts_telegram_caller_trace_id(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        mcp = build_server(base_dir=tmp_path, clock=fixed_clock, actor_kind="system", actor_id="t4")
+        fn = mcp._tool_manager._tools["emit_event"].fn
+        result = await fn(
+            type="task.created",
+            payload={"task_id": _task_id(), "title": "ok"},
+            caller_trace_id=_VALID_TG_TRACE_ID,
+        )
+        assert result["event_id"].startswith("e-")
+
+    @pytest.mark.asyncio
+    async def test_emit_event_envelope_carries_caller_trace_id(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """AC3: ``trace_id`` in the emitted JSONL envelope == supplied ``caller_trace_id``."""
+        mcp = build_server(base_dir=tmp_path, clock=fixed_clock, actor_kind="system", actor_id="t5")
+        fn = mcp._tool_manager._tools["emit_event"].fn
+        await fn(
+            type="task.created",
+            payload={"task_id": _task_id(), "title": "carry"},
+            caller_trace_id=_VALID_TRACE_ID,
+        )
+        path = current_day_path(tmp_path, fixed_clock.now())
+        envelopes = list(read_log_lines(path))
+        assert len(envelopes) == 1
+        assert envelopes[0].trace_id == _VALID_TRACE_ID
+
+
+class TestCallerTraceIdTypedEmitTools:
+    """AC1/AC2/AC3 across emit_blocker, emit_summary, emit_approval_request, emit_completion."""
+
+    @pytest.mark.asyncio
+    async def test_emit_blocker_envelope_carries_caller_trace_id(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        mcp = build_server(
+            base_dir=tmp_path, clock=fixed_clock, actor_kind="worker", actor_id="w-1"
+        )
+        fn = mcp._tool_manager._tools["emit_blocker"].fn
+        await fn(task_id=_task_id(), reason="why", caller_trace_id=_VALID_TG_TRACE_ID)
+        path = current_day_path(tmp_path, fixed_clock.now())
+        envelopes = list(read_log_lines(path))
+        assert envelopes[0].trace_id == _VALID_TG_TRACE_ID
+
+    @pytest.mark.asyncio
+    async def test_emit_summary_envelope_carries_caller_trace_id(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        mcp = build_server(
+            base_dir=tmp_path, clock=fixed_clock, actor_kind="worker", actor_id="w-2"
+        )
+        fn = mcp._tool_manager._tools["emit_summary"].fn
+        await fn(task_id=_task_id(), summary="s", caller_trace_id=_VALID_TRACE_ID)
+        path = current_day_path(tmp_path, fixed_clock.now())
+        envelopes = list(read_log_lines(path))
+        assert envelopes[0].trace_id == _VALID_TRACE_ID
+
+    @pytest.mark.asyncio
+    async def test_emit_approval_request_envelope_carries_caller_trace_id(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        mcp = build_server(
+            base_dir=tmp_path, clock=fixed_clock, actor_kind="worker", actor_id="w-3"
+        )
+        fn = mcp._tool_manager._tools["emit_approval_request"].fn
+        await fn(
+            task_id=_task_id(),
+            action="deploy",
+            justification="ok",
+            caller_trace_id=_VALID_TRACE_ID,
+        )
+        path = current_day_path(tmp_path, fixed_clock.now())
+        envelopes = list(read_log_lines(path))
+        assert envelopes[0].trace_id == _VALID_TRACE_ID
+
+    @pytest.mark.asyncio
+    async def test_emit_completion_envelope_carries_caller_trace_id(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        mcp = build_server(
+            base_dir=tmp_path, clock=fixed_clock, actor_kind="worker", actor_id="w-4"
+        )
+        fn = mcp._tool_manager._tools["emit_completion"].fn
+        await fn(
+            task_id=_task_id(),
+            summary="done",
+            caller_trace_id=_VALID_TG_TRACE_ID,
+        )
+        path = current_day_path(tmp_path, fixed_clock.now())
+        envelopes = list(read_log_lines(path))
+        assert envelopes[0].trace_id == _VALID_TG_TRACE_ID
+
+    @pytest.mark.asyncio
+    async def test_emit_blocker_rejects_invalid_caller_trace_id(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        mcp = build_server(
+            base_dir=tmp_path, clock=fixed_clock, actor_kind="worker", actor_id="w-5"
+        )
+        fn = mcp._tool_manager._tools["emit_blocker"].fn
+        with pytest.raises(ValueError, match="Story 9.1 contract"):
+            await fn(task_id=_task_id(), reason="why", caller_trace_id="bad")
+
+    @pytest.mark.asyncio
+    async def test_emit_completion_requires_caller_trace_id(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        mcp = build_server(
+            base_dir=tmp_path, clock=fixed_clock, actor_kind="worker", actor_id="w-6"
+        )
+        fn = mcp._tool_manager._tools["emit_completion"].fn
+        with pytest.raises(TypeError):
+            await fn(task_id=_task_id(), summary="x")
+
+
+class TestCallerTraceIdToolSchemas:
+    """AC9: FastMCP-derived input schemas include ``caller_trace_id`` as required."""
+
+    @pytest.mark.asyncio
+    async def test_emit_event_schema_requires_caller_trace_id(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        mcp = build_server(
+            base_dir=tmp_path, clock=fixed_clock, actor_kind="system", actor_id="s-1"
+        )
+        tools = await mcp.list_tools()
+        schema = next(t for t in tools if t.name == "emit_event").inputSchema
+        assert "caller_trace_id" in schema["required"]
+        assert schema["properties"]["caller_trace_id"]["type"] == "string"
+
+    @pytest.mark.asyncio
+    async def test_all_emit_tool_schemas_require_caller_trace_id(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """Every clawhip-bridge tool's schema includes caller_trace_id as required."""
+        mcp = build_server(
+            base_dir=tmp_path, clock=fixed_clock, actor_kind="system", actor_id="s-2"
+        )
+        tools = await mcp.list_tools()
+        names = {
+            "emit_event",
+            "emit_blocker",
+            "emit_summary",
+            "emit_approval_request",
+            "emit_completion",
+        }
+        for tool in tools:
+            if tool.name in names:
+                assert "caller_trace_id" in tool.inputSchema["required"], (
+                    f"tool {tool.name!r} schema missing caller_trace_id"
+                )
+                assert tool.inputSchema["properties"]["caller_trace_id"]["type"] == "string"

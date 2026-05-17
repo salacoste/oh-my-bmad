@@ -35,13 +35,17 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import StaticPool
 
 from task_registry_mcp.app.main import build_server
-from task_registry_mcp.handlers.tools import TIER_MAP
+from task_registry_mcp.handlers.tools import TIER_MAP, _validate_caller_trace_id
 
 # ---------------------------------------------------------------------------
 # Local fixtures (inlined — no conftest per project convention)
 # ---------------------------------------------------------------------------
 
 _NOW = datetime(2026, 1, 15, 12, 0, 0, tzinfo=UTC)
+
+# Story 9.5: deterministic valid trace_id values for ``caller_trace_id`` kwarg.
+_VALID_TRACE_ID = "01917e5c-a7d1-7000-8abc-0123456789ab"
+_VALID_TG_TRACE_ID = "tg:42"
 
 
 @pytest_asyncio.fixture
@@ -399,6 +403,7 @@ class TestToolHandlers:
         result = await fn(
             task_id="t-00000001-0001-7000-8000-000000000001",
             note="This is a test note",
+            caller_trace_id=_VALID_TRACE_ID,
         )
         assert result == {"ok": True}
 
@@ -408,7 +413,7 @@ class TestToolHandlers:
     ) -> None:
         mcp = _build(db_session_maker)
         fn = mcp._tool_manager._tools["task_add_note"].fn
-        result = await fn(task_id="t-nonexistent", note="note")
+        result = await fn(task_id="t-nonexistent", note="note", caller_trace_id=_VALID_TRACE_ID)
         assert result["ok"] is False
         assert "not found" in result["error"]
 
@@ -418,7 +423,7 @@ class TestToolHandlers:
     ) -> None:
         mcp = _build(db_session_maker)
         fn = mcp._tool_manager._tools["task_add_note"].fn
-        result = await fn(task_id="", note="some note")
+        result = await fn(task_id="", note="some note", caller_trace_id=_VALID_TRACE_ID)
         assert result["ok"] is False
 
     @pytest.mark.asyncio
@@ -431,6 +436,7 @@ class TestToolHandlers:
             task_id="t-00000001-0001-7000-8000-000000000001",
             artifact_url="https://example.com/artifact.log",
             artifact_type="log",
+            caller_trace_id=_VALID_TRACE_ID,
         )
         assert result == {"ok": True}
 
@@ -444,6 +450,7 @@ class TestToolHandlers:
             task_id="t-nonexistent",
             artifact_url="https://example.com/f.txt",
             artifact_type="text",
+            caller_trace_id=_VALID_TRACE_ID,
         )
         assert result["ok"] is False
         assert "not found" in result["error"]
@@ -458,6 +465,7 @@ class TestToolHandlers:
             task_id="",
             artifact_url="https://example.com/f.txt",
             artifact_type="text",
+            caller_trace_id=_VALID_TRACE_ID,
         )
         assert result["ok"] is False
 
@@ -471,6 +479,7 @@ class TestToolHandlers:
             task_id="t-00000001-0001-7000-8000-000000000001",
             event_type="task.note_added",
             payload={"note": "hello"},
+            caller_trace_id=_VALID_TRACE_ID,
         )
         assert result == {"ok": True}
 
@@ -484,6 +493,7 @@ class TestToolHandlers:
             task_id="t-00000001-0001-7000-8000-000000000001",
             event_type="",
             payload={},
+            caller_trace_id=_VALID_TRACE_ID,
         )
         assert result["ok"] is False
 
@@ -497,6 +507,7 @@ class TestToolHandlers:
             task_id="",
             event_type="task.note_added",
             payload={},
+            caller_trace_id=_VALID_TRACE_ID,
         )
         assert result["ok"] is False
 
@@ -540,6 +551,7 @@ class TestTierEnforcement:
             await fn(
                 task_id="t-00000001-0001-7000-8000-000000000001",
                 note="test",
+                caller_trace_id=_VALID_TRACE_ID,
             )
 
 
@@ -571,6 +583,7 @@ class TestTier2Enforcement:
             await fn(
                 task_id="t-00000001-0001-7000-8000-000000000001",
                 note="test",
+                caller_trace_id=_VALID_TRACE_ID,
             )
         assert "allows Tier.1" in exc_info.value.reason
 
@@ -752,3 +765,155 @@ class TestEntryPoint:
         )
         assert result.returncode == 2
         assert "invalid" in result.stderr.lower()
+
+
+# ---------------------------------------------------------------------------
+# TestCallerTraceId (Story 9.5 / FR58 MCP)
+# ---------------------------------------------------------------------------
+
+
+class TestCallerTraceIdValidationHelper:
+    """Unit tests for the module-level ``_validate_caller_trace_id`` helper."""
+
+    def test_accepts_uuidv7(self) -> None:
+        _validate_caller_trace_id(_VALID_TRACE_ID)
+
+    def test_accepts_telegram_form(self) -> None:
+        _validate_caller_trace_id(_VALID_TG_TRACE_ID)
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "",
+            "bad-format",
+            "tg:",
+            "tg:0",
+            "01917e5c-a7d1-7000-8abc-0123456789ab\n",
+            " 01917e5c-a7d1-7000-8abc-0123456789ab",
+        ],
+    )
+    def test_rejects_invalid_shapes(self, bad: str) -> None:
+        with pytest.raises(ValueError, match="Story 9.1 contract"):
+            _validate_caller_trace_id(bad)
+
+
+class TestCallerTraceIdToolHandlers:
+    """AC1 / AC2 / AC6 for the 3 task-registry tools."""
+
+    @pytest.mark.asyncio
+    async def test_task_add_note_requires_caller_trace_id(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        mcp = _build(db_session_maker)
+        fn = mcp._tool_manager._tools["task_add_note"].fn
+        with pytest.raises(TypeError):
+            await fn(task_id="t-00000001-0001-7000-8000-000000000001", note="x")
+
+    @pytest.mark.asyncio
+    async def test_task_add_note_rejects_invalid_caller_trace_id(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        mcp = _build(db_session_maker)
+        fn = mcp._tool_manager._tools["task_add_note"].fn
+        with pytest.raises(ValueError, match="Story 9.1 contract"):
+            await fn(
+                task_id="t-00000001-0001-7000-8000-000000000001",
+                note="x",
+                caller_trace_id="bad",
+            )
+
+    @pytest.mark.asyncio
+    async def test_task_add_note_accepts_uuidv7_caller_trace_id(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        mcp = _build(db_session_maker)
+        fn = mcp._tool_manager._tools["task_add_note"].fn
+        result = await fn(
+            task_id="t-00000001-0001-7000-8000-000000000001",
+            note="x",
+            caller_trace_id=_VALID_TRACE_ID,
+        )
+        assert result == {"ok": True}
+
+    @pytest.mark.asyncio
+    async def test_task_add_note_accepts_telegram_caller_trace_id(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        mcp = _build(db_session_maker)
+        fn = mcp._tool_manager._tools["task_add_note"].fn
+        result = await fn(
+            task_id="t-00000001-0001-7000-8000-000000000001",
+            note="x",
+            caller_trace_id=_VALID_TG_TRACE_ID,
+        )
+        assert result == {"ok": True}
+
+    @pytest.mark.asyncio
+    async def test_task_attach_artifact_requires_caller_trace_id(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        mcp = _build(db_session_maker)
+        fn = mcp._tool_manager._tools["task_attach_artifact"].fn
+        with pytest.raises(TypeError):
+            await fn(
+                task_id="t-00000001-0001-7000-8000-000000000001",
+                artifact_url="https://example.com/a",
+                artifact_type="log",
+            )
+
+    @pytest.mark.asyncio
+    async def test_task_attach_artifact_rejects_invalid_caller_trace_id(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        mcp = _build(db_session_maker)
+        fn = mcp._tool_manager._tools["task_attach_artifact"].fn
+        with pytest.raises(ValueError, match="Story 9.1 contract"):
+            await fn(
+                task_id="t-00000001-0001-7000-8000-000000000001",
+                artifact_url="https://example.com/a",
+                artifact_type="log",
+                caller_trace_id="bad",
+            )
+
+    @pytest.mark.asyncio
+    async def test_task_emit_event_requires_caller_trace_id(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        mcp = _build(db_session_maker)
+        fn = mcp._tool_manager._tools["task_emit_event"].fn
+        with pytest.raises(TypeError):
+            await fn(
+                task_id="t-00000001-0001-7000-8000-000000000001",
+                event_type="task.note_added",
+                payload={},
+            )
+
+    @pytest.mark.asyncio
+    async def test_task_emit_event_accepts_telegram_caller_trace_id(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        mcp = _build(db_session_maker)
+        fn = mcp._tool_manager._tools["task_emit_event"].fn
+        result = await fn(
+            task_id="t-00000001-0001-7000-8000-000000000001",
+            event_type="task.note_added",
+            payload={},
+            caller_trace_id=_VALID_TG_TRACE_ID,
+        )
+        assert result == {"ok": True}
+
+
+class TestCallerTraceIdToolSchemas:
+    """AC9: FastMCP-derived input schemas include ``caller_trace_id`` as required."""
+
+    @pytest.mark.asyncio
+    async def test_all_tool_schemas_require_caller_trace_id(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        mcp = _build(db_session_maker)
+        tools = await mcp.list_tools()
+        for tool in tools:
+            assert "caller_trace_id" in tool.inputSchema["required"], (
+                f"tool {tool.name!r} schema missing caller_trace_id"
+            )
+            assert tool.inputSchema["properties"]["caller_trace_id"]["type"] == "string"

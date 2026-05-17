@@ -12,7 +12,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from capabilities import CallerContext, Tier, check_tier
-from events.envelope import ActorKind  # noqa: IMP001 — packages/
+from events.envelope import ActorKind, is_valid_trace_id  # noqa: IMP001 — packages/
 from registry_state.schema import (  # noqa: IMP001 — mcp-servers→services allowed per AC-7/Arch
     Event,
     Session,
@@ -32,6 +32,33 @@ TIER_MAP: dict[str, Tier] = {
     "session.heartbeat": Tier.ONE,
     "session.close": Tier.ONE,
 }
+
+
+def _validate_caller_trace_id(caller_trace_id: str) -> None:
+    """Reject invalid ``caller_trace_id`` per Story 9.1 contract.
+
+    Public helper used by every ``@mcp.tool()`` handler in this server to
+    validate the operator-originating correlation ID supplied as an explicit
+    Pydantic-validated input (Story 9.5 / FR58 MCP). Validation uses
+    :func:`events.envelope.is_valid_trace_id` so the shape contract (UUIDv7
+    bare form OR ``tg:<update_id>``) stays in one place — Story 9.4 pass-2 S1
+    lesson (shape-validation, not just type-check, avoids whitespace/CRLF
+    injection).
+
+    NOTE: Duplicated byte-identically in ``clawhip-bridge`` and
+    ``task-registry``. mcp-servers cannot share code per Story 5.8's
+    import-graph constraint; the helper body MUST stay in sync across all
+    three servers.
+
+    Raises:
+        ValueError: if ``caller_trace_id`` doesn't match the Story 9.1
+            contract (UUIDv7 bare form OR ``tg:<digits>``).
+    """
+    if not is_valid_trace_id(caller_trace_id):
+        raise ValueError(
+            f"caller_trace_id must match Story 9.1 contract "
+            f"(UUIDv7 or tg:<update_id>); got {caller_trace_id!r}"
+        )
 
 
 def _make_approval_lookup(
@@ -96,8 +123,19 @@ def register_tools(
         task_id: str,
         worker_kind: str,
         worktree_path: str,
+        *,
+        caller_trace_id: str,
     ) -> dict[str, object]:
-        """Register a new session (Tier-1 bounded write, Phase 1 stub)."""
+        """Register a new session (Tier-1 bounded write, Phase 1 stub).
+
+        Args:
+            caller_trace_id: Story 9.5 / FR58 MCP. Required correlation ID
+                matching the Story 9.1 contract (UUIDv7 OR ``tg:<update_id>``).
+                Invalid values raise ``ValueError``. Phase 1 stub logs this at
+                INFO level so the contract is observable before Story 5.12
+                envelope emission lands.
+        """
+        _validate_caller_trace_id(caller_trace_id)
         check_tier(
             "session.register",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id, task_id=task_id),
@@ -109,16 +147,30 @@ def register_tools(
         if not exists:
             return {"ok": False, "error": f"task {task_id!r} not found"}
         log.info(
-            "session.register: task_id=%s worker_kind=%s actor=%s (stub)",
+            "session.register: task_id=%s worker_kind=%s actor=%s caller_trace_id=%s (stub)",
             task_id,
             worker_kind,
             actor_id,
+            caller_trace_id,
         )
         return {"ok": True}
 
     @mcp.tool()
-    async def session_heartbeat(session_id: str) -> dict[str, object]:
-        """Update session heartbeat timestamp (Tier-1 bounded write, Phase 1 stub)."""
+    async def session_heartbeat(
+        session_id: str,
+        *,
+        caller_trace_id: str,
+    ) -> dict[str, object]:
+        """Update session heartbeat timestamp (Tier-1 bounded write, Phase 1 stub).
+
+        Args:
+            caller_trace_id: Story 9.5 / FR58 MCP. Required correlation ID
+                matching the Story 9.1 contract (UUIDv7 OR ``tg:<update_id>``).
+                Invalid values raise ``ValueError``. Phase 1 stub logs this at
+                INFO level so the contract is observable before Story 5.12
+                envelope emission lands.
+        """
+        _validate_caller_trace_id(caller_trace_id)
         check_tier(
             "session.heartbeat",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id),
@@ -130,15 +182,29 @@ def register_tools(
         if not exists:
             return {"ok": False, "error": f"session {session_id!r} not found"}
         log.info(
-            "session.heartbeat: session_id=%s actor=%s (stub)",
+            "session.heartbeat: session_id=%s actor=%s caller_trace_id=%s (stub)",
             session_id,
             actor_id,
+            caller_trace_id,
         )
         return {"ok": True}
 
     @mcp.tool()
-    async def session_close(session_id: str) -> dict[str, object]:
-        """Close a session (Tier-1 bounded write, Phase 1 stub)."""
+    async def session_close(
+        session_id: str,
+        *,
+        caller_trace_id: str,
+    ) -> dict[str, object]:
+        """Close a session (Tier-1 bounded write, Phase 1 stub).
+
+        Args:
+            caller_trace_id: Story 9.5 / FR58 MCP. Required correlation ID
+                matching the Story 9.1 contract (UUIDv7 OR ``tg:<update_id>``).
+                Invalid values raise ``ValueError``. Phase 1 stub logs this at
+                INFO level so the contract is observable before Story 5.12
+                envelope emission lands.
+        """
+        _validate_caller_trace_id(caller_trace_id)
         check_tier(
             "session.close",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id),
@@ -150,8 +216,9 @@ def register_tools(
         if not exists:
             return {"ok": False, "error": f"session {session_id!r} not found"}
         log.info(
-            "session.close: session_id=%s actor=%s (stub)",
+            "session.close: session_id=%s actor=%s caller_trace_id=%s (stub)",
             session_id,
             actor_id,
+            caller_trace_id,
         )
         return {"ok": True}

@@ -41,7 +41,7 @@ from events import (  # noqa: IMP001 — events is packages/
 )
 from events.canonical import to_canonical_json
 from events.clock import Clock
-from events.envelope import ActorKind
+from events.envelope import ActorKind, is_valid_trace_id
 from mcp.server.fastmcp import FastMCP
 from registry_state import (  # noqa: IMP001 — mcp-servers→services allowed per AC-7/Arch line 272
     EventLogWriter,
@@ -107,6 +107,33 @@ def _validate_limit(limit: int) -> None:
         raise ValueError("limit must be between 1 and 1000")
 
 
+def _validate_caller_trace_id(caller_trace_id: str) -> None:
+    """Reject invalid ``caller_trace_id`` per Story 9.1 contract.
+
+    Public helper used by every ``@mcp.tool()`` handler in this server to
+    validate the operator-originating correlation ID supplied as an explicit
+    Pydantic-validated input (Story 9.5 / FR58 MCP). Validation uses
+    :func:`events.envelope.is_valid_trace_id` so the shape contract (UUIDv7
+    bare form OR ``tg:<update_id>``) stays in one place — Story 9.4 pass-2 S1
+    lesson (shape-validation, not just type-check, avoids whitespace/CRLF
+    injection).
+
+    NOTE: Duplicated byte-identically in ``task-registry`` and
+    ``session-registry``. mcp-servers cannot share code per Story 5.8's
+    import-graph constraint; the helper body MUST stay in sync across all
+    three servers.
+
+    Raises:
+        ValueError: if ``caller_trace_id`` doesn't match the Story 9.1
+            contract (UUIDv7 bare form OR ``tg:<digits>``).
+    """
+    if not is_valid_trace_id(caller_trace_id):
+        raise ValueError(
+            f"caller_trace_id must match Story 9.1 contract "
+            f"(UUIDv7 or tg:<update_id>); got {caller_trace_id!r}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Server factory
 # ---------------------------------------------------------------------------
@@ -156,8 +183,16 @@ def build_server(
         event_type: str,
         payload: dict[str, object],
         parent_event_id: str | None,
+        caller_trace_id: str,
     ) -> dict[str, str]:
-        """Build, validate, persist and return an event envelope."""
+        """Build, validate, persist and return an event envelope.
+
+        ``caller_trace_id`` (Story 9.5 / FR58 MCP) is threaded into
+        ``EventEnvelope.create(trace_id=...)`` so every event emitted via the
+        5 ``@mcp.tool()`` handlers carries the operator-originating correlation
+        ID end-to-end. This silences the Story 9.1 DeprecationWarning for the
+        5 clawhip-bridge emit_* callsites.
+        """
         envelope = EventEnvelope.create(
             event_id=new_event_id(clock=clock),
             schema_version="1.0.0",
@@ -167,6 +202,7 @@ def build_server(
             actor=Actor(kind=actor_kind, id=actor_id),
             payload=payload,
             parent_event_id=parent_event_id,
+            trace_id=caller_trace_id,
             request_id=new_request_id(clock=clock),
         )
         await writer.append(envelope)
@@ -184,18 +220,28 @@ def build_server(
         type: str,  # noqa: A002 — `type` is the canonical envelope field name; F13 deferred (FastMCP arg-coercion does not unwrap a single Pydantic model with field aliases)
         payload: dict[str, object],
         *,
+        caller_trace_id: str,
         parent_event_id: str | None = None,
     ) -> dict[str, str]:
         """Emit a typed event to the spine. Validated against REGISTRY.
 
-        Raises ``EventSchemaUnknown`` if ``type`` is not registered.
+        Args:
+            caller_trace_id: Story 9.5 / FR58 MCP. Required correlation ID
+                matching the Story 9.1 contract (bare UUIDv7 OR
+                ``tg:<update_id>``). Invalid values raise ``ValueError``
+                surfaced as an MCP tool-error response.
+
+        Raises:
+            EventSchemaUnknown: if ``type`` is not registered.
+            ValueError: if ``caller_trace_id`` fails Story 9.1 validation.
         """
+        _validate_caller_trace_id(caller_trace_id)
         check_tier(
             "emit_event",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id),
             TIER_MAP["emit_event"],
         )
-        return await _emit(type, payload, parent_event_id)  # noqa: A002
+        return await _emit(type, payload, parent_event_id, caller_trace_id)  # noqa: A002
 
     # ------------------------------------------------------------------
     # Typed sugar tools — type literals baked in, no EVT001 needed
@@ -206,9 +252,17 @@ def build_server(
         task_id: str,
         reason: str,
         *,
+        caller_trace_id: str,
         parent_event_id: str | None = None,
     ) -> dict[str, str]:
-        """Emit a ``task.blocker_raised`` event."""
+        """Emit a ``task.blocker_raised`` event.
+
+        Args:
+            caller_trace_id: Story 9.5 / FR58 MCP. Required correlation ID
+                matching the Story 9.1 contract (UUIDv7 OR ``tg:<update_id>``).
+                Invalid values raise ``ValueError``.
+        """
+        _validate_caller_trace_id(caller_trace_id)
         check_tier(
             "emit_blocker",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id),
@@ -218,6 +272,7 @@ def build_server(
             "task.blocker_raised",
             {"task_id": task_id, "reason": reason},
             parent_event_id,
+            caller_trace_id,
         )
 
     @mcp.tool()
@@ -225,9 +280,17 @@ def build_server(
         task_id: str,
         summary: str,
         *,
+        caller_trace_id: str,
         parent_event_id: str | None = None,
     ) -> dict[str, str]:
-        """Emit a ``task.summary_emitted`` event."""
+        """Emit a ``task.summary_emitted`` event.
+
+        Args:
+            caller_trace_id: Story 9.5 / FR58 MCP. Required correlation ID
+                matching the Story 9.1 contract (UUIDv7 OR ``tg:<update_id>``).
+                Invalid values raise ``ValueError``.
+        """
+        _validate_caller_trace_id(caller_trace_id)
         check_tier(
             "emit_summary",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id),
@@ -237,6 +300,7 @@ def build_server(
             "task.summary_emitted",
             {"task_id": task_id, "summary": summary},
             parent_event_id,
+            caller_trace_id,
         )
 
     @mcp.tool()
@@ -245,9 +309,17 @@ def build_server(
         action: str,
         justification: str,
         *,
+        caller_trace_id: str,
         parent_event_id: str | None = None,
     ) -> dict[str, str]:
-        """Emit a ``task.approval_requested`` event."""
+        """Emit a ``task.approval_requested`` event.
+
+        Args:
+            caller_trace_id: Story 9.5 / FR58 MCP. Required correlation ID
+                matching the Story 9.1 contract (UUIDv7 OR ``tg:<update_id>``).
+                Invalid values raise ``ValueError``.
+        """
+        _validate_caller_trace_id(caller_trace_id)
         check_tier(
             "emit_approval_request",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id),
@@ -257,6 +329,7 @@ def build_server(
             "task.approval_requested",
             {"task_id": task_id, "action": action, "justification": justification},
             parent_event_id,
+            caller_trace_id,
         )
 
     @mcp.tool()
@@ -264,10 +337,18 @@ def build_server(
         task_id: str,
         summary: str,
         *,
+        caller_trace_id: str,
         pr_url: str | None = None,
         parent_event_id: str | None = None,
     ) -> dict[str, str]:
-        """Emit a ``task.completed`` event."""
+        """Emit a ``task.completed`` event.
+
+        Args:
+            caller_trace_id: Story 9.5 / FR58 MCP. Required correlation ID
+                matching the Story 9.1 contract (UUIDv7 OR ``tg:<update_id>``).
+                Invalid values raise ``ValueError``.
+        """
+        _validate_caller_trace_id(caller_trace_id)
         check_tier(
             "emit_completion",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id),
@@ -280,6 +361,7 @@ def build_server(
             "task.completed",
             payload,
             parent_event_id,
+            caller_trace_id,
         )
 
     # ------------------------------------------------------------------

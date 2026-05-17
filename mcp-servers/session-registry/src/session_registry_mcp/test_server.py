@@ -35,13 +35,17 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import StaticPool
 
 from session_registry_mcp.app.main import build_server
-from session_registry_mcp.handlers.tools import TIER_MAP
+from session_registry_mcp.handlers.tools import TIER_MAP, _validate_caller_trace_id
 
 # ---------------------------------------------------------------------------
 # Local fixtures (inlined — no conftest per project convention)
 # ---------------------------------------------------------------------------
 
 _NOW = datetime(2026, 1, 15, 12, 0, 0, tzinfo=UTC)
+
+# Story 9.5: deterministic valid trace_id values for ``caller_trace_id`` kwarg.
+_VALID_TRACE_ID = "01917e5c-a7d1-7000-8abc-0123456789ab"
+_VALID_TG_TRACE_ID = "tg:42"
 _NOW_PLUS = datetime(2026, 1, 15, 13, 0, 0, tzinfo=UTC)
 
 
@@ -365,6 +369,7 @@ class TestToolHandlers:
             task_id="t-00000001-0001-7000-8000-000000000001",
             worker_kind="claude-code",
             worktree_path="/tmp/wt",
+            caller_trace_id=_VALID_TRACE_ID,
         )
         assert result == {"ok": True}
 
@@ -378,6 +383,7 @@ class TestToolHandlers:
             task_id="t-nonexistent",
             worker_kind="claude-code",
             worktree_path="/tmp/wt",
+            caller_trace_id=_VALID_TRACE_ID,
         )
         assert result["ok"] is False
         assert "not found" in result["error"]
@@ -388,7 +394,12 @@ class TestToolHandlers:
     ) -> None:
         mcp = _build(db_session_maker)
         fn = mcp._tool_manager._tools["session_register"].fn
-        result = await fn(task_id="", worker_kind="claude-code", worktree_path="/tmp/wt")
+        result = await fn(
+            task_id="",
+            worker_kind="claude-code",
+            worktree_path="/tmp/wt",
+            caller_trace_id=_VALID_TRACE_ID,
+        )
         assert result["ok"] is False
 
     @pytest.mark.asyncio
@@ -401,6 +412,7 @@ class TestToolHandlers:
             task_id="t-00000001-0001-7000-8000-000000000001",
             worker_kind="",
             worktree_path="/tmp/wt",
+            caller_trace_id=_VALID_TRACE_ID,
         )
         assert result["ok"] is False
 
@@ -414,6 +426,7 @@ class TestToolHandlers:
             task_id="t-00000001-0001-7000-8000-000000000001",
             worker_kind="claude-code",
             worktree_path="",
+            caller_trace_id=_VALID_TRACE_ID,
         )
         assert result == {"ok": True}
 
@@ -423,7 +436,9 @@ class TestToolHandlers:
     ) -> None:
         mcp = _build(db_session_maker)
         fn = mcp._tool_manager._tools["session_heartbeat"].fn
-        result = await fn(session_id="s-00000001-0001-7000-8000-000000000001")
+        result = await fn(
+            session_id="s-00000001-0001-7000-8000-000000000001", caller_trace_id=_VALID_TRACE_ID
+        )
         assert result == {"ok": True}
 
     @pytest.mark.asyncio
@@ -432,7 +447,7 @@ class TestToolHandlers:
     ) -> None:
         mcp = _build(db_session_maker)
         fn = mcp._tool_manager._tools["session_heartbeat"].fn
-        result = await fn(session_id="s-nonexistent")
+        result = await fn(session_id="s-nonexistent", caller_trace_id=_VALID_TRACE_ID)
         assert result["ok"] is False
         assert "not found" in result["error"]
 
@@ -442,7 +457,7 @@ class TestToolHandlers:
     ) -> None:
         mcp = _build(db_session_maker)
         fn = mcp._tool_manager._tools["session_heartbeat"].fn
-        result = await fn(session_id="")
+        result = await fn(session_id="", caller_trace_id=_VALID_TRACE_ID)
         assert result["ok"] is False
 
     @pytest.mark.asyncio
@@ -451,7 +466,9 @@ class TestToolHandlers:
     ) -> None:
         mcp = _build(db_session_maker)
         fn = mcp._tool_manager._tools["session_close"].fn
-        result = await fn(session_id="s-00000001-0001-7000-8000-000000000001")
+        result = await fn(
+            session_id="s-00000001-0001-7000-8000-000000000001", caller_trace_id=_VALID_TRACE_ID
+        )
         assert result == {"ok": True}
 
     @pytest.mark.asyncio
@@ -460,7 +477,7 @@ class TestToolHandlers:
     ) -> None:
         mcp = _build(db_session_maker)
         fn = mcp._tool_manager._tools["session_close"].fn
-        result = await fn(session_id="s-nonexistent")
+        result = await fn(session_id="s-nonexistent", caller_trace_id=_VALID_TRACE_ID)
         assert result["ok"] is False
         assert "not found" in result["error"]
 
@@ -470,7 +487,7 @@ class TestToolHandlers:
     ) -> None:
         mcp = _build(db_session_maker)
         fn = mcp._tool_manager._tools["session_close"].fn
-        result = await fn(session_id="")
+        result = await fn(session_id="", caller_trace_id=_VALID_TRACE_ID)
         assert result["ok"] is False
 
 
@@ -514,6 +531,7 @@ class TestTierEnforcement:
                 task_id="t-00000001-0001-7000-8000-000000000001",
                 worker_kind="claude-code",
                 worktree_path="/tmp/wt",
+                caller_trace_id=_VALID_TRACE_ID,
             )
 
 
@@ -653,3 +671,150 @@ class TestEntryPoint:
         )
         assert result.returncode == 2
         assert "invalid" in result.stderr.lower()
+
+
+# ---------------------------------------------------------------------------
+# TestCallerTraceId (Story 9.5 / FR58 MCP)
+# ---------------------------------------------------------------------------
+
+
+class TestCallerTraceIdValidationHelper:
+    """Unit tests for the module-level ``_validate_caller_trace_id`` helper."""
+
+    def test_accepts_uuidv7(self) -> None:
+        _validate_caller_trace_id(_VALID_TRACE_ID)
+
+    def test_accepts_telegram_form(self) -> None:
+        _validate_caller_trace_id(_VALID_TG_TRACE_ID)
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "",
+            "bad-format",
+            "tg:",
+            "tg:0",
+            "01917e5c-a7d1-7000-8abc-0123456789ab\n",
+            " 01917e5c-a7d1-7000-8abc-0123456789ab",
+        ],
+    )
+    def test_rejects_invalid_shapes(self, bad: str) -> None:
+        with pytest.raises(ValueError, match="Story 9.1 contract"):
+            _validate_caller_trace_id(bad)
+
+
+class TestCallerTraceIdToolHandlers:
+    """AC1 / AC2 / AC6 for the 3 session-registry tools."""
+
+    @pytest.mark.asyncio
+    async def test_session_register_requires_caller_trace_id(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        mcp = _build(db_session_maker)
+        fn = mcp._tool_manager._tools["session_register"].fn
+        with pytest.raises(TypeError):
+            await fn(
+                task_id="t-00000001-0001-7000-8000-000000000001",
+                worker_kind="claude-code",
+                worktree_path="/tmp/wt",
+            )
+
+    @pytest.mark.asyncio
+    async def test_session_register_rejects_invalid_caller_trace_id(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        mcp = _build(db_session_maker)
+        fn = mcp._tool_manager._tools["session_register"].fn
+        with pytest.raises(ValueError, match="Story 9.1 contract"):
+            await fn(
+                task_id="t-00000001-0001-7000-8000-000000000001",
+                worker_kind="claude-code",
+                worktree_path="/tmp/wt",
+                caller_trace_id="bad",
+            )
+
+    @pytest.mark.asyncio
+    async def test_session_register_accepts_uuidv7_caller_trace_id(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        mcp = _build(db_session_maker)
+        fn = mcp._tool_manager._tools["session_register"].fn
+        result = await fn(
+            task_id="t-00000001-0001-7000-8000-000000000001",
+            worker_kind="claude-code",
+            worktree_path="/tmp/wt",
+            caller_trace_id=_VALID_TRACE_ID,
+        )
+        assert result == {"ok": True}
+
+    @pytest.mark.asyncio
+    async def test_session_register_accepts_telegram_caller_trace_id(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        mcp = _build(db_session_maker)
+        fn = mcp._tool_manager._tools["session_register"].fn
+        result = await fn(
+            task_id="t-00000001-0001-7000-8000-000000000001",
+            worker_kind="claude-code",
+            worktree_path="/tmp/wt",
+            caller_trace_id=_VALID_TG_TRACE_ID,
+        )
+        assert result == {"ok": True}
+
+    @pytest.mark.asyncio
+    async def test_session_heartbeat_requires_caller_trace_id(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        mcp = _build(db_session_maker)
+        fn = mcp._tool_manager._tools["session_heartbeat"].fn
+        with pytest.raises(TypeError):
+            await fn(session_id="s-00000001-0001-7000-8000-000000000001")
+
+    @pytest.mark.asyncio
+    async def test_session_heartbeat_rejects_invalid_caller_trace_id(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        mcp = _build(db_session_maker)
+        fn = mcp._tool_manager._tools["session_heartbeat"].fn
+        with pytest.raises(ValueError, match="Story 9.1 contract"):
+            await fn(
+                session_id="s-00000001-0001-7000-8000-000000000001",
+                caller_trace_id="bad",
+            )
+
+    @pytest.mark.asyncio
+    async def test_session_close_requires_caller_trace_id(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        mcp = _build(db_session_maker)
+        fn = mcp._tool_manager._tools["session_close"].fn
+        with pytest.raises(TypeError):
+            await fn(session_id="s-00000001-0001-7000-8000-000000000001")
+
+    @pytest.mark.asyncio
+    async def test_session_close_accepts_telegram_caller_trace_id(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        mcp = _build(db_session_maker)
+        fn = mcp._tool_manager._tools["session_close"].fn
+        result = await fn(
+            session_id="s-00000001-0001-7000-8000-000000000001",
+            caller_trace_id=_VALID_TG_TRACE_ID,
+        )
+        assert result == {"ok": True}
+
+
+class TestCallerTraceIdToolSchemas:
+    """AC9: FastMCP-derived input schemas include ``caller_trace_id`` as required."""
+
+    @pytest.mark.asyncio
+    async def test_all_tool_schemas_require_caller_trace_id(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        mcp = _build(db_session_maker)
+        tools = await mcp.list_tools()
+        for tool in tools:
+            assert "caller_trace_id" in tool.inputSchema["required"], (
+                f"tool {tool.name!r} schema missing caller_trace_id"
+            )
+            assert tool.inputSchema["properties"]["caller_trace_id"]["type"] == "string"

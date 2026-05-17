@@ -12,7 +12,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from capabilities import CallerContext, Tier, check_tier
-from events.envelope import ActorKind  # noqa: IMP001 — packages/
+from events.envelope import ActorKind, is_valid_trace_id  # noqa: IMP001 — packages/
 from registry_state.schema import (  # noqa: IMP001 — mcp-servers→services allowed per AC-7/Arch
     Event,
     Task,
@@ -31,6 +31,33 @@ TIER_MAP: dict[str, Tier] = {
     "task.attach_artifact": Tier.ONE,
     "task.emit_event": Tier.ONE,
 }
+
+
+def _validate_caller_trace_id(caller_trace_id: str) -> None:
+    """Reject invalid ``caller_trace_id`` per Story 9.1 contract.
+
+    Public helper used by every ``@mcp.tool()`` handler in this server to
+    validate the operator-originating correlation ID supplied as an explicit
+    Pydantic-validated input (Story 9.5 / FR58 MCP). Validation uses
+    :func:`events.envelope.is_valid_trace_id` so the shape contract (UUIDv7
+    bare form OR ``tg:<update_id>``) stays in one place — Story 9.4 pass-2 S1
+    lesson (shape-validation, not just type-check, avoids whitespace/CRLF
+    injection).
+
+    NOTE: Duplicated byte-identically in ``clawhip-bridge`` and
+    ``session-registry``. mcp-servers cannot share code per Story 5.8's
+    import-graph constraint; the helper body MUST stay in sync across all
+    three servers.
+
+    Raises:
+        ValueError: if ``caller_trace_id`` doesn't match the Story 9.1
+            contract (UUIDv7 bare form OR ``tg:<digits>``).
+    """
+    if not is_valid_trace_id(caller_trace_id):
+        raise ValueError(
+            f"caller_trace_id must match Story 9.1 contract "
+            f"(UUIDv7 or tg:<update_id>); got {caller_trace_id!r}"
+        )
 
 
 def _make_approval_lookup(
@@ -85,12 +112,25 @@ def register_tools(
     # ------------------------------------------------------------------
 
     @mcp.tool()
-    async def task_add_note(task_id: str, note: str) -> dict[str, object]:
+    async def task_add_note(
+        task_id: str,
+        note: str,
+        *,
+        caller_trace_id: str,
+    ) -> dict[str, object]:
         """Add a note to a task (Tier-1 bounded write, Phase 1 stub).
 
         Validates tier and task existence. Actual persistence deferred to
         Story 5.12 integration with the event spine.
+
+        Args:
+            caller_trace_id: Story 9.5 / FR58 MCP. Required correlation ID
+                matching the Story 9.1 contract (UUIDv7 OR ``tg:<update_id>``).
+                Invalid values raise ``ValueError``. Phase 1 stub logs this at
+                INFO level so the contract is observable before Story 5.12
+                envelope emission lands.
         """
+        _validate_caller_trace_id(caller_trace_id)
         check_tier(
             "task.add_note",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id, task_id=task_id),
@@ -101,7 +141,12 @@ def register_tools(
         exists = await _validate_task_exists(session_maker, task_id)
         if not exists:
             return {"ok": False, "error": f"task {task_id!r} not found"}
-        log.info("task.add_note: task_id=%s actor=%s (stub)", task_id, actor_id)
+        log.info(
+            "task.add_note: task_id=%s actor=%s caller_trace_id=%s (stub)",
+            task_id,
+            actor_id,
+            caller_trace_id,
+        )
         return {"ok": True}
 
     # ------------------------------------------------------------------
@@ -113,12 +158,22 @@ def register_tools(
         task_id: str,
         artifact_url: str,
         artifact_type: str,
+        *,
+        caller_trace_id: str,
     ) -> dict[str, object]:
         """Attach an artifact to a task (Tier-1 bounded write, Phase 1 stub).
 
         Validates tier and task existence. Actual persistence deferred to
         Story 5.12 integration with the event spine.
+
+        Args:
+            caller_trace_id: Story 9.5 / FR58 MCP. Required correlation ID
+                matching the Story 9.1 contract (UUIDv7 OR ``tg:<update_id>``).
+                Invalid values raise ``ValueError``. Phase 1 stub logs this at
+                INFO level so the contract is observable before Story 5.12
+                envelope emission lands.
         """
+        _validate_caller_trace_id(caller_trace_id)
         check_tier(
             "task.attach_artifact",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id, task_id=task_id),
@@ -130,9 +185,10 @@ def register_tools(
         if not exists:
             return {"ok": False, "error": f"task {task_id!r} not found"}
         log.info(
-            "task.attach_artifact: task_id=%s type=%s (stub)",
+            "task.attach_artifact: task_id=%s type=%s caller_trace_id=%s (stub)",
             task_id,
             artifact_type,
+            caller_trace_id,
         )
         return {"ok": True}
 
@@ -145,13 +201,23 @@ def register_tools(
         task_id: str,
         event_type: str,
         payload: dict[str, object],
+        *,
+        caller_trace_id: str,
     ) -> dict[str, object]:
         """Emit a bounded task event (Tier-1 bounded write, Phase 1 stub).
 
         Validates tier, task existence, and required parameters. Actual
         event emission routes through the event spine via clawhip-bridge
         — deferred to Story 5.12 integration.
+
+        Args:
+            caller_trace_id: Story 9.5 / FR58 MCP. Required correlation ID
+                matching the Story 9.1 contract (UUIDv7 OR ``tg:<update_id>``).
+                Invalid values raise ``ValueError``. Phase 1 stub logs this at
+                INFO level so the contract is observable before Story 5.12
+                envelope emission lands.
         """
+        _validate_caller_trace_id(caller_trace_id)
         check_tier(
             "task.emit_event",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id, task_id=task_id),
@@ -163,9 +229,10 @@ def register_tools(
         if not exists:
             return {"ok": False, "error": f"task {task_id!r} not found"}
         log.info(
-            "task.emit_event: task_id=%s type=%s actor=%s (stub)",
+            "task.emit_event: task_id=%s type=%s actor=%s caller_trace_id=%s (stub)",
             task_id,
             event_type,
             actor_id,
+            caller_trace_id,
         )
         return {"ok": True}

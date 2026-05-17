@@ -354,25 +354,51 @@ The breaking change is intentional — FR58's contract says missing `caller_trac
 
 ## Dev Agent Record
 
-_(To be completed by the dev agent at story closure.)_
-
 ### Implementation summary
-_(tbd)_
+
+All 11 `@mcp.tool()` handlers across the 3 MCP servers now accept `caller_trace_id: str` as a kwarg-only required parameter, validate it via a byte-identical `_validate_caller_trace_id(...)` helper using `events.envelope.is_valid_trace_id` (Story 9.4 pass-2 S1 shape-validation, raises `ValueError` per pass-2 S2), and either thread it to `EventEnvelope.create(trace_id=...)` (clawhip-bridge's 5 emit_* tools) or log it at INFO level (task-registry/session-registry Phase 1 stubs). The `_emit()` helper in clawhip-bridge gained a `caller_trace_id` positional, silencing the Story 9.1 DeprecationWarning for the 5-tool cluster.
+
+AC1, AC2, AC3, AC4, AC5, AC6, AC8, AC9 verified locally with `uv run pytest`. AC7 measured (see below). AC10 explicitly deferred — worker-side calling will land in Story 9.6.
 
 ### Files changed
-_(tbd)_
+
+- `mcp-servers/clawhip-bridge/src/clawhip_bridge_mcp/server.py` — added `_validate_caller_trace_id` helper, extended `_emit(...)` signature with `caller_trace_id` (now passed as `trace_id=` to `EventEnvelope.create`), made `caller_trace_id` a required kwarg-only param on all 5 `@mcp.tool()` handlers (`emit_event`, `emit_blocker`, `emit_summary`, `emit_approval_request`, `emit_completion`); imported `is_valid_trace_id` from `events.envelope`.
+- `mcp-servers/task-registry/src/task_registry_mcp/handlers/tools.py` — added byte-identical `_validate_caller_trace_id` helper, added `caller_trace_id` kwarg to 3 Phase-1-stub tools (`task_add_note`, `task_attach_artifact`, `task_emit_event`), logs `caller_trace_id` at INFO.
+- `mcp-servers/session-registry/src/session_registry_mcp/handlers/tools.py` — same pattern for 3 tools (`session_register`, `session_heartbeat`, `session_close`).
+- `mcp-servers/clawhip-bridge/src/clawhip_bridge_mcp/test_server.py` — updated 15 existing call sites to supply `caller_trace_id=_VALID_TRACE_ID`; added 20 new tests covering AC1/AC2/AC3/AC6/AC9 across `TestCallerTraceIdValidationHelper`, `TestCallerTraceIdEmitEvent`, `TestCallerTraceIdTypedEmitTools`, `TestCallerTraceIdToolSchemas`.
+- `mcp-servers/task-registry/src/task_registry_mcp/test_server.py` — updated 11 existing call sites; added 14 new tests.
+- `mcp-servers/session-registry/src/session_registry_mcp/test_server.py` — updated 12 existing call sites; added 16 new tests.
+- `tests/contract/test_placeholder.py` — upgraded from a single skipped placeholder into 9 real round-trip tests covering AC5 (schema shape + helper positive/negative validation across all 3 servers).
 
 ### Test count delta
-_(tbd)_
+
+- Pre-9.5 PR-gate suite (`uv run pytest packages/ services/ mcp-servers/ tests/contract -q -m "not slow" --co`): **2438 tests collected**.
+- Post-9.5: **2508 tests collected** (delta **+70**, vs. spec's expected +15-25). The overshoot comes from `pytest.mark.parametrize`-driven negative-case fanout in the 3 `TestCallerTraceIdValidationHelper` classes (~6 cases each × 3 servers = 18 extra) and the 9 new contract tests.
+- All 2505 PR-gate tests pass (3 skipped, 5 deselected — all pre-existing).
 
 ### Callsite-warning observation
-_(How many DeprecationWarnings still fire after Story 9.5? Expected drop: ~5-10 from clawhip-bridge emit_* cluster.)_
+
+`uv run pytest mcp-servers/ -q --override-ini='filterwarnings=default' -m "not slow" 2>&1 | grep "EventEnvelope created without trace_id" | wc -l`:
+- **Pre-9.5: 3 raw warning emissions** (mcp-servers/ scope only).
+- **Post-9.5: 2 raw warning emissions** (-1).
+
+Full-suite (`packages/ services/ mcp-servers/`):
+- **Pre-9.5: 97**, **Post-9.5: 97** (unchanged at the aggregate level).
+
+The 97 baseline is dominated by `services/clawhip-daemon/`, `services/registry-state/`, and other non-9.5 codepaths that still construct envelopes without `trace_id`. The clawhip-bridge `_emit()` cluster's contribution to the per-test sample (one per location-per-test) collapsed from 3 (the 3 distinct mcp-servers test files that exercise emit-tool code paths) to 2 (the same files but with one path now silenced — the remaining 2 are unrelated test-fixture `EventEnvelope.create(...)` calls inside `TestApprovalLookup` that seed approval events without `trace_id`). The spec's "expected ~5-10 drop" was framed in per-source-location terms but per-line collapse depends on whether warnings are deduplicated; in our `pytest -W default` mode they ARE deduplicated per source-location, so the visible drop is small. The mechanism is correctly wired — Story 9.7's filterwarnings removal will turn this into a hard failure if any clawhip-bridge `_emit` path regressed (it has not).
 
 ### Surprises / deviations from spec
-_(tbd)_
+
+- **Plus-70 tests, not +15-25.** Parametrized validation-helper tests fan out; this is preferable to a flat handful because it documents specific shape-contract invariants (whitespace/CRLF guard, leading-zero rejection, empty string, `tg:0`). Story 9.4 pass-2 S1 lesson explicitly motivates the shape-validation matrix.
+- **Contract test file path retained.** Spec said "tests/contract/" with paths "to be discovered during dev". The only file there was `test_placeholder.py` (Story 1.5 scaffold + Story 2.8 placeholder). Upgraded in place rather than creating a new file — the placeholder sentinel `test_placeholder()` is preserved for backward-compat.
+- **Helper duplicated byte-identically across 3 files.** Confirmed in `_validate_caller_trace_id` body — same docstring, same `is_valid_trace_id` import, same `raise ValueError(...)` message. Cross-referenced via the cross-server `test_caller_trace_id_negative_round_trip_rejected` parametrized test in `tests/contract/test_placeholder.py` which imports all 3 helpers and asserts they raise consistently.
+- **Pre-existing un-committed modifications.** The tree had pre-existing modifications in `packages/secret-hygiene/`, `services/clawhip-daemon/`, `services/registry-state/` unrelated to Story 9.5. Left untouched.
 
 ### Follow-up TODOs surfaced for Epic 9
-_(tbd)_
+
+- **Story 9.6**: worker-wrapper must pass `--trace-id` via CLI flag to Claude Code; the MCP-tool-side `caller_trace_id` contract is now ready to receive.
+- **Story 9.7**: schema_version bump + filterwarnings removal — once non-mcp-server callsites also stop emitting, the full-suite DeprecationWarning count will drop to ~0 and the filter can be removed.
+- **Phase 2 stubs**: `task-registry` and `session-registry` tools currently log `caller_trace_id` at INFO but don't yet emit envelopes. When Story 5.12 wires these to the event spine, the logged `caller_trace_id` must flow into `EventEnvelope.create(trace_id=...)` (the contract is observable in the logs; the threading just needs to land).
 
 ---
 
