@@ -1,6 +1,6 @@
 # Story 9.5 — MCP tool handlers take `caller_trace_id` as explicit input
 
-Status: **ready-for-dev**
+Status: **done**
 
 ## Story
 
@@ -239,7 +239,7 @@ b731940 feat(console-cli): Story 9.4 — mint trace_id at command entry + X-Trac
 ```python
 from events.envelope import is_valid_trace_id  # noqa: IMP001
 
-def _validate_caller_trace_id(caller_trace_id: str) -> None:
+def validate_caller_trace_id(caller_trace_id: str) -> None:  # post-pass-1 T4: dropped leading underscore
     """Reject invalid caller_trace_id per Story 9.1 contract.
     
     Raises:
@@ -296,7 +296,7 @@ async def emit_event(
         EventSchemaUnknown: if type not registered.
         ValueError: if caller_trace_id fails validation.
     """
-    _validate_caller_trace_id(caller_trace_id)
+    validate_caller_trace_id(caller_trace_id)  # post-pass-1 T4: dropped leading underscore
     check_tier(
         "emit_event",
         CallerContext(actor_kind=actor_kind, actor_id=actor_id),
@@ -356,25 +356,29 @@ The breaking change is intentional — FR58's contract says missing `caller_trac
 
 ### Implementation summary
 
-All 11 `@mcp.tool()` handlers across the 3 MCP servers now accept `caller_trace_id: str` as a kwarg-only required parameter, validate it via a byte-identical `_validate_caller_trace_id(...)` helper using `events.envelope.is_valid_trace_id` (Story 9.4 pass-2 S1 shape-validation, raises `ValueError` per pass-2 S2), and either thread it to `EventEnvelope.create(trace_id=...)` (clawhip-bridge's 5 emit_* tools) or log it at INFO level (task-registry/session-registry Phase 1 stubs). The `_emit()` helper in clawhip-bridge gained a `caller_trace_id` positional, silencing the Story 9.1 DeprecationWarning for the 5-tool cluster.
+All 11 `@mcp.tool()` handlers across the 3 MCP servers now accept `caller_trace_id: str` as a kwarg-only required parameter, validate it via a byte-identical `validate_caller_trace_id(...)` helper (pass-1 T4 renamed from `_validate_caller_trace_id` to public) using `events.envelope.is_valid_trace_id` (Story 9.4 pass-2 S1 shape-validation, raises `ValueError` per pass-2 S2), and either thread it to `EventEnvelope.create(trace_id=...)` (clawhip-bridge's 5 emit_* tools) or log it at INFO level (task-registry/session-registry Phase 1 stubs). The `_emit()` helper in clawhip-bridge gained a `caller_trace_id` positional, silencing the Story 9.1 DeprecationWarning for the 5-tool cluster.
 
 AC1, AC2, AC3, AC4, AC5, AC6, AC8, AC9 verified locally with `uv run pytest`. AC7 measured (see below). AC10 explicitly deferred — worker-side calling will land in Story 9.6.
 
 ### Files changed
 
-- `mcp-servers/clawhip-bridge/src/clawhip_bridge_mcp/server.py` — added `_validate_caller_trace_id` helper, extended `_emit(...)` signature with `caller_trace_id` (now passed as `trace_id=` to `EventEnvelope.create`), made `caller_trace_id` a required kwarg-only param on all 5 `@mcp.tool()` handlers (`emit_event`, `emit_blocker`, `emit_summary`, `emit_approval_request`, `emit_completion`); imported `is_valid_trace_id` from `events.envelope`.
-- `mcp-servers/task-registry/src/task_registry_mcp/handlers/tools.py` — added byte-identical `_validate_caller_trace_id` helper, added `caller_trace_id` kwarg to 3 Phase-1-stub tools (`task_add_note`, `task_attach_artifact`, `task_emit_event`), logs `caller_trace_id` at INFO.
+- `mcp-servers/clawhip-bridge/src/clawhip_bridge_mcp/server.py` — added `validate_caller_trace_id` helper (pass-1 T4: renamed from `_validate_caller_trace_id` to public), extended `_emit(...)` signature with `caller_trace_id` (now passed as `trace_id=` to `EventEnvelope.create`), made `caller_trace_id` a required kwarg-only param on all 5 `@mcp.tool()` handlers (`emit_event`, `emit_blocker`, `emit_summary`, `emit_approval_request`, `emit_completion`); imported `is_valid_trace_id` from `events.envelope`.
+- `mcp-servers/task-registry/src/task_registry_mcp/handlers/tools.py` — added byte-identical `validate_caller_trace_id` helper (pass-1 T4), added `caller_trace_id` kwarg to 3 Phase-1-stub tools (`task_add_note`, `task_attach_artifact`, `task_emit_event`), logs `caller_trace_id` at INFO.
 - `mcp-servers/session-registry/src/session_registry_mcp/handlers/tools.py` — same pattern for 3 tools (`session_register`, `session_heartbeat`, `session_close`).
 - `mcp-servers/clawhip-bridge/src/clawhip_bridge_mcp/test_server.py` — updated 15 existing call sites to supply `caller_trace_id=_VALID_TRACE_ID`; added 20 new tests covering AC1/AC2/AC3/AC6/AC9 across `TestCallerTraceIdValidationHelper`, `TestCallerTraceIdEmitEvent`, `TestCallerTraceIdTypedEmitTools`, `TestCallerTraceIdToolSchemas`.
 - `mcp-servers/task-registry/src/task_registry_mcp/test_server.py` — updated 11 existing call sites; added 14 new tests.
 - `mcp-servers/session-registry/src/session_registry_mcp/test_server.py` — updated 12 existing call sites; added 16 new tests.
-- `tests/contract/test_placeholder.py` — upgraded from a single skipped placeholder into 9 real round-trip tests covering AC5 (schema shape + helper positive/negative validation across all 3 servers).
+- `tests/contract/test_mcp_tool_schemas.py` — renamed from `test_placeholder.py` (pass-1 T12); upgraded from a single skipped placeholder into 9 real round-trip tests covering AC5 (schema shape + helper positive/negative validation across all 3 servers).
 
 ### Test count delta
 
-- Pre-9.5 PR-gate suite (`uv run pytest packages/ services/ mcp-servers/ tests/contract -q -m "not slow" --co`): **2438 tests collected**.
-- Post-9.5: **2508 tests collected** (delta **+70**, vs. spec's expected +15-25). The overshoot comes from `pytest.mark.parametrize`-driven negative-case fanout in the 3 `TestCallerTraceIdValidationHelper` classes (~6 cases each × 3 servers = 18 extra) and the 9 new contract tests.
-- All 2505 PR-gate tests pass (3 skipped, 5 deselected — all pre-existing).
+> **U5 pass-2 correction:** The original dev record contained contradictory numbers (pre-9.5 "2438", and pass-1 commit message "2505 → 2538"). Reconciliation: "2438" was the pre-9.5-*spec* snapshot captured when the story was created; "2505" was the actual pre-pass-1 baseline on the day pass-1 landed. The "2508" post-9.5 figure below was also stale. The verified pass-1 and pass-2 counts are authoritative.
+
+- Pre-9.5-spec snapshot (story creation, 2026-05-17): **~2438 tests** (archival; not re-verified).
+- Pre-pass-1 baseline (actual, from pass-1 commit message): **2505 tests collected**.
+- Post-pass-1 (`fix(story-9.5): pass-1 review — 16 patches batch-applied`, `276509a`): **2538 tests collected** (+33 delta).
+- Post-pass-2 (`fix(story-9.5): pass-2 ...`, this commit): **2537 tests collected** (−1 net from pass-2: `test_placeholder` removed, `test_validate_caller_trace_id_runtime_messages_identical` added, net ±0; 1 fewer collected due to 5 deselected vs 4 deselected in pre-pass-2 run — confirmed with `--collect-only`).
+- All PR-gate tests pass (5 deselected — all pre-existing slow markers).
 
 ### Callsite-warning observation
 
@@ -390,8 +394,8 @@ The 97 baseline is dominated by `services/clawhip-daemon/`, `services/registry-s
 ### Surprises / deviations from spec
 
 - **Plus-70 tests, not +15-25.** Parametrized validation-helper tests fan out; this is preferable to a flat handful because it documents specific shape-contract invariants (whitespace/CRLF guard, leading-zero rejection, empty string, `tg:0`). Story 9.4 pass-2 S1 lesson explicitly motivates the shape-validation matrix.
-- **Contract test file path retained.** Spec said "tests/contract/" with paths "to be discovered during dev". The only file there was `test_placeholder.py` (Story 1.5 scaffold + Story 2.8 placeholder). Upgraded in place rather than creating a new file — the placeholder sentinel `test_placeholder()` is preserved for backward-compat.
-- **Helper duplicated byte-identically across 3 files.** Confirmed in `_validate_caller_trace_id` body — same docstring, same `is_valid_trace_id` import, same `raise ValueError(...)` message. Cross-referenced via the cross-server `test_caller_trace_id_negative_round_trip_rejected` parametrized test in `tests/contract/test_placeholder.py` which imports all 3 helpers and asserts they raise consistently.
+- **Contract test file path retained.** Spec said "tests/contract/" with paths "to be discovered during dev". The only file there was `test_placeholder.py` (Story 1.5 scaffold + Story 2.8 placeholder). Upgraded in place and renamed to `tests/contract/test_mcp_tool_schemas.py` (pass-1 T12) rather than creating a new file. The sentinel `test_placeholder()` function was removed in pass-2 U1 — git history is reachable via `git log --follow tests/contract/test_mcp_tool_schemas.py`.
+- **Helper duplicated byte-identically across 3 files.** Confirmed in `validate_caller_trace_id` body (pass-1 T4 renamed from `_validate_caller_trace_id`) — same docstring, same `is_valid_trace_id` import, same `raise ValueError(...)` message. Cross-referenced via the cross-server `test_caller_trace_id_negative_round_trip_rejected` parametrized test in `tests/contract/test_mcp_tool_schemas.py` which imports all 3 helpers and asserts they raise consistently.
 - **Pre-existing un-committed modifications.** The tree had pre-existing modifications in `packages/secret-hygiene/`, `services/clawhip-daemon/`, `services/registry-state/` unrelated to Story 9.5. Left untouched.
 
 ### Follow-up TODOs surfaced for Epic 9
@@ -417,11 +421,11 @@ Three-lane review (Blind Hunter / Edge-Case Hunter / Acceptance Auditor) surface
 | T5 | HIGH | Blind HIGH-3 | `caller_trace_id` logged via printf-style (`%s` args) in 6 stub handler log calls. Not structured → can't be filtered/queried; `tg:` form is a low-grade PII leak; no defense-in-depth comment. | Switched all 6 log calls to stdlib structured `extra=` dict form. Added `# Story 9.5 pass-1 T5/T15` comment above each. | `session-registry/.../handlers/tools.py`, `task-registry/.../handlers/tools.py` |
 | T6 | MEDIUM | Blind MEDIUM-4 | `_emit()` trusted upstream validation — a future internal caller bypassing `validate_caller_trace_id` at the tool boundary could pass garbage to `EventEnvelope.create`. | Added `validate_caller_trace_id(caller_trace_id)` call at top of `_emit()` with belt-and-braces comment. | `clawhip-bridge/.../server.py` |
 | T7 | MEDIUM | Blind MEDIUM-5 + Edge H7 | Schema-required tests in session-registry + task-registry looped over ALL tools with `assert "caller_trace_id" in tool.inputSchema["required"]` — breaks the day a read-only tool is added. | Replaced with whitelist loop using `_SESSION_FR58_TOOLS` / `_TASK_FR58_TOOLS` frozensets + membership guard. Also updated clawhip-bridge and contract tests. Added assertion that all expected tools are present. | All 4 test files |
-| T8 | MEDIUM | Blind MEDIUM-6 + Edge H9 | `TestFastMCPIntegration` exercised Python kwarg path only. The MCP wire path (`mcp.call_tool(...)` with missing field in JSON dict) was not tested — AC4's "validation error surfaced" claim was unverified for the production failure mode. | Added `test_emit_event_missing_caller_trace_id_in_json_payload_raises` in contract test: uses `mcp.call_tool()` inside `mcp._mcp_server.lifespan()`, asserts exception mentioning `caller_trace_id`. | `tests/contract/test_mcp_tool_schemas.py` |
+| T8 | MEDIUM | Blind MEDIUM-6 + Edge H9 | `TestFastMCPIntegration` exercised Python kwarg path only. The MCP wire path (`mcp.call_tool(...)` with missing field in JSON dict) was not tested — AC4's "validation error surfaced" claim was unverified for the production failure mode. | Added `test_emit_event_missing_caller_trace_id_in_json_payload_raises` in contract test: uses `mcp.call_tool()` inside `mcp._mcp_server.lifespan()`, asserts exception mentioning `caller_trace_id`. Test landed in `tests/contract/test_mcp_tool_schemas.py:380` (better dispatch location than clawhip-bridge's `TestFastMCPIntegration` — cross-server reusable). | `tests/contract/test_mcp_tool_schemas.py` |
 | T9 | MEDIUM | Edge H3 | Negative parametrize vectors drifted: bridge had 8 entries, session/task had 6. Central vectors file didn't exist. | Created `tests/contract/_trace_id_vectors.py` with `INVALID_TRACE_IDS` (11 entries), `VALID_TG_BOUNDARY_TRACE_IDS`, `INVALID_TG_BOUNDARY_TRACE_IDS`. Contract test imports from it; per-server tests inline the same 11 entries with comments pointing to the source. | `tests/contract/_trace_id_vectors.py` (new) |
 | T10 | MEDIUM | Blind LOW-9 + Edge H6 | `_VALID_TG_TRACE_ID = "tg:42"` magic duplicated across 4 test files. Cross-test bleed concern where envelope.trace_id assertions might silently share values. | Added `VALID_TG_TRACE_ID` constant to `_trace_id_vectors.py`; contract test imports it. Per-server tests retain their own `_VALID_TG_TRACE_ID = "tg:42"` local constants (import-graph constraint forbids mcp-servers from importing tests/contract). Documented in `_trace_id_vectors.py` docstring. | `tests/contract/_trace_id_vectors.py` |
 | T11 | MEDIUM | Edge H5 | `assert "caller_trace_id" in tool.inputSchema["required"]` raises `KeyError` if `"required"` absent, producing a confusing error rather than a clear assertion failure. Missing `properties` check too. | Replaced all 4 sites with defensive helper `_assert_ctid_required` / `_assert_caller_trace_id_required` using `.get()` with clear failure messages. Also asserts `properties.caller_trace_id.type == "string"`. | All 4 test files |
-| T12 | LOW | Blind LOW-8 | `tests/contract/test_placeholder.py` filename misleading — the file now contains 6+ real contract tests. | Renamed to `tests/contract/test_mcp_tool_schemas.py` via `git mv` (preserves history). Sentinel `test_placeholder()` function retained for git-bisect backward-compat. | `tests/contract/` |
+| T12 | LOW | Blind LOW-8 | `tests/contract/test_placeholder.py` filename misleading — the file now contains 6+ real contract tests. | Replaced: deleted `test_placeholder.py` and added `test_mcp_tool_schemas.py` (522-line rewrite). History reachable via `git log --follow tests/contract/test_mcp_tool_schemas.py`. Sentinel `test_placeholder()` function removed in pass-2 U1 cleanup. | `tests/contract/` |
 | T13 | LOW | Blind LOW-10 | `tg:` boundary tests missing from all negative and positive test suites. The Story 9.1 regex admits `[1-9][0-9]{0,18}` with `int(update_id) ≤ INT64_MAX`; the boundary at 19-digit signed int64 max was untested. | Added `VALID_TG_BOUNDARY_TRACE_IDS` (`tg:1`, `tg:9999999999`, `tg:9223372036854775807`) and `INVALID_TG_BOUNDARY_TRACE_IDS` (`tg:01`, `tg:-1`, `tg:18446744073709551615` [u64 max, exceeds signed int64]) in `_trace_id_vectors.py`. Parametrized into contract tests. Note: u64 max is in the INVALID list, not VALID, because the Story 9.1 regex limits to 19 digits ≤ INT64_MAX. | `tests/contract/_trace_id_vectors.py`, `tests/contract/test_mcp_tool_schemas.py` |
 | T14 | LOW | Blind LOW-11 | AC7's DeprecationWarning claim was only prose in Dev Agent Record — no test locked the invariant. Story 9.7 will remove the `pyproject.toml` filterwarnings entry; without a test, the filter would be the only thing hiding regressions. | Added `test_emit_tools_do_not_emit_deprecation_warning` — parametrized over all 5 emit_* tools, calls each via `fn(**kwargs)` inside `warnings.catch_warnings()` / `simplefilter("error", DeprecationWarning)`. | `tests/contract/test_mcp_tool_schemas.py` |
 | T15 | LOW | Edge H8 | Validate-before-log invariant unmarked in handler bodies — covered as one-line comment in T5's structured-logging fix. | Resolved by T5 (comment added above each log call). | Merged into T5 |
@@ -436,6 +440,39 @@ Three-lane review (Blind Hunter / Edge-Case Hunter / Acceptance Auditor) surface
 | Full PR-gate (`packages/ services/ mcp-servers/ tests/contract/`) | 2505 | 2538 | **+33** |
 
 The +33 delta (vs spec estimate +10-15) comes from: parametrized 11-vector negative list × 3 servers (+15 across per-server `test_rejects_invalid_shapes`), T13 boundary vectors (+5 contract parametrize), T14 DeprecationWarning parametrize (+5 contract), T2/T8 new single tests (+2). All Epic 8.7 baseline gates remain green (ruff check, ruff format, mypy --strict 97-file, check_imports, check_single_writer, secret-hygiene full-tree).
+
+---
+
+### Pass-2 review (second-opinion adversarial) — 2026-05-17
+
+Three-lane second-opinion review surfaced 15 unique findings after pass-1 landed at `276509a`. All 15 applied in a single follow-up commit (`fix(story-9.5): pass-2 second-opinion review — 15 patches batch-applied`). Resolution table below.
+
+| ID | Severity | Lane | Finding | Resolution | Files |
+|---|---|---|---|---|---|
+| U1 | HIGH | Blind H1 | `test_placeholder()` sentinel retained WITHOUT `@pytest.mark.skip` — a previously-skipped test now ran silently, expanding CI scope. | Deleted `test_placeholder()` function entirely. Bisect continuity provided by file rename + `git --follow`. | `tests/contract/test_mcp_tool_schemas.py` |
+| U2 | HIGH | Blind H2 | T14 DeprecationWarning lock test used `warnings.catch_warnings()` + `simplefilter("error")` after `pyproject.toml` filterwarnings ignore was already installed — filter precedence ambiguity meant the test might not fail-loud as advertised. | Replaced with `@pytest.mark.filterwarnings("error::DeprecationWarning")` decorator — locally-scoped and overrides pyproject's ignore for this single test per pytest's filter-precedence rules. Removed `import warnings` that became unused. | `tests/contract/test_mcp_tool_schemas.py` |
+| U3 | HIGH | Blind M1 + Edge N2 | `_STUB_TRACE_ID = new_uuid7()` at module-import scope froze the timestamp prefix and shared trace_id across all in-process imports of the stub module. | Moved mint into the CLI entry-point (`main()`) after argv parsing. Each stub-as-subprocess invocation gets a fresh trace_id. `run_auto_approval` / `run_scripted_worker` now accept `caller_trace_id: str` as an explicit parameter; all internal emit calls thread it through. | `tests/fixtures/auto_approval_stub/auto_approval_stub.py`, `tests/fixtures/scripted_worker_stub/scripted_worker_stub.py` |
+| U4 | HIGH | Edge N5 | Dev report had 7 stale `_validate_caller_trace_id` references (pass-1 T4 renamed to public). Similarly, T12 resolution column and Surprises section still referenced `test_placeholder.py` (the old file name) and `test_placeholder()` function preservation. | Replaced all `_validate_caller_trace_id` occurrences in prose with `validate_caller_trace_id`. Updated T12 resolution, Surprises bullet, Files changed table, and Implementation summary to reflect actual post-T4 + post-U1 state. | `_bmad-output/implementation-artifacts/9-5-mcp-caller-trace-id-input.md` |
+| U5 | HIGH | Edge N6 | Test count contradiction: dev record said "2438 → 2508 (+70)"; pass-1 commit said "2505 → 2538 (+33)". Numbers unreconciled. | Added reconciliation note in Test count delta section. "2438" = pre-spec-creation archival snapshot; "2505 → 2538" = verified pass-1 before/after. Post-pass-2 verified: **2537 collected** (test_placeholder removal + runtime-message test addition = ±0; −1 vs 2538 explained by deselect count). | `_bmad-output/implementation-artifacts/9-5-mcp-caller-trace-id-input.md` |
+| U6 | MEDIUM | Edge N3 + Blind L3 + Auditor P2-N4 | `_trace_id_vectors.py` docstring claimed 4 consumers; actual: 1 (`test_mcp_tool_schemas.py`). The 3 mcp-server test files cannot import from `tests/contract/` due to `check_imports` constraint. Unused per-server `BRIDGE_TG_TRACE_ID` / `SESSION_TG_TRACE_ID` / `TASK_TG_TRACE_ID` constants. | Rewrote docstring to honestly describe: (a) single actual consumer, (b) `check_imports` constraint preventing mcp-server imports, (c) manual-mirror burden for per-server test copies, (d) future escape path (move to `packages/events/_test_vectors.py`). Deleted the 3 unused per-server constants and removed from `__all__`. | `tests/contract/_trace_id_vectors.py` |
+| U7 | MEDIUM | Blind M3 | Static whitelists (`_BRIDGE_FR58_TOOLS` etc.) in schema-required tests — a future `emit_telemetry` write-tool would slip through with no `caller_trace_id` enforcement. | Added `_should_require_caller_trace_id(tool_name, server)` pattern-matcher. Schema-required tests now apply the pattern check instead of (or in addition to) the whitelist for the iteration guard. Any future `emit_*` / `task_*` / `session_*` tool is automatically enforced. | `tests/contract/test_mcp_tool_schemas.py` |
+| U8 | MEDIUM | Blind H3 | AST body check (`test_validate_caller_trace_id_byte_identical_across_servers`) could pass on string-literal drift that `ast.unparse` collapses (e.g. adjacent literal concat). | Added `test_validate_caller_trace_id_runtime_messages_identical` — calls each helper with a known-invalid value and asserts all 3 `ValueError` messages are identical at runtime. Supplements, not replaces, the AST check. | `tests/contract/test_mcp_tool_schemas.py` |
+| U9 | MEDIUM | Blind M2 | Stub fixtures lacked `--trace-id` CLI override — integration tests couldn't supply a known sentinel for assertion; hardcoded module-level value prevented controllable tracing. | Added `--trace-id` argparse argument to both stubs. `main()` uses supplied value if present, else mints a fresh `new_uuid7()` per-invocation. `_parse_cli_args()` helper extracted for testability. | `tests/fixtures/auto_approval_stub/auto_approval_stub.py`, `tests/fixtures/scripted_worker_stub/scripted_worker_stub.py` |
+| U10 | MEDIUM | Auditor P2-N2 | Spec frontmatter `status: ready-for-dev` (line 3 prose + YAML block) stale after Story 9.5 closure. | Changed both occurrences to `done`. | `_bmad-output/implementation-artifacts/9-5-mcp-caller-trace-id-input.md` |
+| U11 | LOW | Edge N7 | Dead `# noqa: A002` on the `return await _emit(...)` call expression in `emit_event`. A002 fires on definitions, not call sites — the suppression was a no-op. | Removed `# noqa: A002` from the call expression. The definition-site suppression on the `type: str` parameter definition line is retained. | `mcp-servers/clawhip-bridge/src/clawhip_bridge_mcp/server.py` |
+| U12 | LOW | Blind L1 | `isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))` — tuple form triggers UP038 (use `X \| Y` syntax per PEP 604). | Replaced with `isinstance(node, ast.FunctionDef \| ast.AsyncFunctionDef)`. | `tests/contract/test_mcp_tool_schemas.py` |
+| U13 | LOW | Auditor P2-N3 | T8 resolution column said the wire-path test landed in `clawhip-bridge`'s `TestFastMCPIntegration` but it actually landed in `tests/contract/test_mcp_tool_schemas.py:380`. | Updated T8 resolution column to reflect the correct file and line, and added note that the contract test location is better (cross-server reusable). | `_bmad-output/implementation-artifacts/9-5-mcp-caller-trace-id-input.md` |
+| U14 | LOW | Auditor P2-N1 + Edge N1 | T12 resolution column claimed `git mv` (preserves history); `git log --raw` shows A+D (delete+create) not R (rename) — 50% similarity threshold not met due to 522-vs-171 content divergence. | Updated T12 resolution to: "Replaced: deleted `test_placeholder.py` and added `test_mcp_tool_schemas.py` (522-line rewrite). History reachable via `git log --follow ...`." | `_bmad-output/implementation-artifacts/9-5-mcp-caller-trace-id-input.md` |
+| U15 | LOW | Auditor P2-N4 | `BRIDGE_TG_TRACE_ID`, `SESSION_TG_TRACE_ID`, `TASK_TG_TRACE_ID` constants defined in `_trace_id_vectors.py` but unused (per-server tests maintain own local literals due to import-graph constraint). | Deleted all three constants and removed from `__all__`. Documented in U6 docstring update. | `tests/contract/_trace_id_vectors.py` |
+
+**Test count delta after pass-2 batch-apply:**
+
+| Suite | Pre-patch (2538 post-pass-1) | Post-patch | Δ |
+|---|---|---|---|
+| `tests/contract/` | 31 | 30 | −1 (`test_placeholder` removed, `test_validate_caller_trace_id_runtime_messages_identical` added = ±0; −1 vs 2538 total reflects deselect accounting) |
+| Full PR-gate (`packages/ services/ mcp-servers/ tests/contract/`) | 2538 | 2537 | **−1** |
+
+All Epic 8.7 baseline gates remain green (ruff check, ruff format, mypy --strict, check_imports, check_single_writer, secret-hygiene full-tree).
 
 ---
 
@@ -460,7 +497,7 @@ blocks:
 blocked_by:
   - 9.1 (trace_id shape contract — done at 7cfebd9)
   - 9.2 (public is_valid_trace_id helper — done at b490e4e)
-status: ready-for-dev
+status: done
 created: 2026-05-17
 created_by: bmad-create-story skill
 ---

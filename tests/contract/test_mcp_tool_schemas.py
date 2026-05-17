@@ -7,9 +7,12 @@ required ``string`` field in its FastMCP-auto-derived input schema.
 
 Story 9.5 pass-1 review (T12): renamed from ``test_placeholder.py`` to
 ``test_mcp_tool_schemas.py`` — the file now contains substantive contract
-tests, not a placeholder. The stub ``test_placeholder()`` sentinel is
-preserved at the bottom for backward-compat git-bisect continuity (the
-function was in CI history at Story 1.5; removing it would confuse blame).
+tests, not a placeholder. Git history is reachable via
+``git log --follow tests/contract/test_mcp_tool_schemas.py``.
+
+Story 9.5 pass-2 review (U1): the ``test_placeholder()`` sentinel function
+was removed — file-rename + ``git --follow`` is the supported continuity
+mechanism, a stub function adds noise without value.
 
 Pass-1 additions landed in this file:
   T2  — byte-identical sync guard for ``validate_caller_trace_id`` across 3 servers
@@ -19,6 +22,15 @@ Pass-1 additions landed in this file:
   T11 — defensive schema-required assertion form (no KeyError on absent "required")
   T13 — tg: boundary positive + negative vectors
   T14 — DeprecationWarning lock for all 5 emit_* tools
+
+Pass-2 additions landed in this file:
+  U2  — DeprecationWarning lock test pivoted to ``@pytest.mark.filterwarnings``
+        decorator form (locally-scoped override of ``pyproject.toml`` ignore).
+  U7  — schema-required assertion uses pattern-based matcher (any future
+        ``emit_*`` / ``task_*`` / ``session_*`` write-tool is auto-enforced).
+  U8  — runtime helper-message identity test supplements the AST body
+        check (catches string-literal drift that ``ast.unparse`` collapses).
+  U12 — ``isinstance(... , ast.FunctionDef | ast.AsyncFunctionDef)`` per UP038.
 
 Negative round-trip: an input dict missing ``caller_trace_id`` raises
 ``ValueError`` from the validation helper before the tool body runs.
@@ -87,6 +99,35 @@ _SESSION_FR58_TOOLS: frozenset[str] = frozenset(
 
 
 # ---------------------------------------------------------------------------
+# Pass-2 U7: pattern-based write-tool detection
+#
+# The pass-1 whitelist guards against breakage when a future read-only tool
+# is added — but a future WRITE-tool whose name matches the per-server
+# prefix (``emit_*``, ``task_*``, ``session_*``) would slip through with
+# no caller_trace_id requirement. Use a name-pattern matcher so any new
+# write-tool is auto-enforced by these contract tests.
+# ---------------------------------------------------------------------------
+
+
+def _should_require_caller_trace_id(tool_name: str, server: str) -> bool:
+    """Return True if *tool_name* on *server* must require ``caller_trace_id``.
+
+    Pattern-based check (Story 9.5 pass-2 U7): any future write-tool matching
+    the per-server prefix is automatically subject to the FR58 contract
+    without needing an explicit whitelist update. Read-only tools (e.g.
+    a future ``list_recent_events``) are correctly excluded — their names
+    don't match the write-tool prefix.
+    """
+    if server == "clawhip-bridge":
+        return tool_name.startswith("emit_")
+    if server == "task-registry":
+        return tool_name.startswith("task_")
+    if server == "session-registry":
+        return tool_name.startswith("session_")
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
@@ -152,11 +193,14 @@ def _assert_caller_trace_id_required(tool: object, *, context: str) -> None:
 async def test_clawhip_bridge_tool_schemas_require_caller_trace_id(
     tmp_path: Path,
 ) -> None:
-    """All 5 clawhip-bridge FR58 tools require caller_trace_id in their schema.
+    """All clawhip-bridge ``emit_*`` write-tools require caller_trace_id.
 
-    Story 9.5 pass-1 T7: uses whitelist so adding a future read-only tool
-    (e.g. ``list_recent_events``) does NOT break this test.
+    Story 9.5 pass-1 T7: whitelist so future read-only tools (e.g.
+    ``list_recent_events``) don't break this test.
     Story 9.5 pass-1 T11: defensive get()-based assertion (no KeyError).
+    Story 9.5 pass-2 U7: pattern-based matcher — any future ``emit_*``
+    write-tool is automatically enforced (membership in the static
+    whitelist is no longer the only gate).
     """
     from clawhip_bridge_mcp.server import build_server  # noqa: IMP001 — contract test
 
@@ -166,7 +210,7 @@ async def test_clawhip_bridge_tool_schemas_require_caller_trace_id(
     observed = {t.name for t in tools}
     assert observed >= _BRIDGE_FR58_TOOLS, f"missing FR58 tools: {_BRIDGE_FR58_TOOLS - observed}"
     for tool in tools:
-        if tool.name in _BRIDGE_FR58_TOOLS:
+        if _should_require_caller_trace_id(tool.name, "clawhip-bridge"):
             _assert_caller_trace_id_required(tool, context="clawhip-bridge")
 
 
@@ -175,10 +219,12 @@ async def test_clawhip_bridge_tool_schemas_require_caller_trace_id(
 async def test_task_registry_tool_schemas_require_caller_trace_id(
     _empty_session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
-    """All 3 task-registry FR58 tools require caller_trace_id.
+    """All task-registry ``task_*`` write-tools require caller_trace_id.
 
     Story 9.5 pass-1 T7: whitelist guards against future read-only tools.
     Story 9.5 pass-1 T11: defensive assertion.
+    Story 9.5 pass-2 U7: pattern-based matcher — any future ``task_*``
+    write-tool is automatically enforced.
     """
     from task_registry_mcp.app.main import build_server  # noqa: IMP001
 
@@ -191,7 +237,7 @@ async def test_task_registry_tool_schemas_require_caller_trace_id(
     observed = {t.name for t in tools}
     assert observed >= _TASK_FR58_TOOLS, f"missing FR58 tools: {_TASK_FR58_TOOLS - observed}"
     for tool in tools:
-        if tool.name in _TASK_FR58_TOOLS:
+        if _should_require_caller_trace_id(tool.name, "task-registry"):
             _assert_caller_trace_id_required(tool, context="task-registry")
 
 
@@ -200,10 +246,12 @@ async def test_task_registry_tool_schemas_require_caller_trace_id(
 async def test_session_registry_tool_schemas_require_caller_trace_id(
     _empty_session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
-    """All 3 session-registry FR58 tools require caller_trace_id.
+    """All session-registry ``session_*`` write-tools require caller_trace_id.
 
     Story 9.5 pass-1 T7: whitelist guards against future read-only tools.
     Story 9.5 pass-1 T11: defensive assertion.
+    Story 9.5 pass-2 U7: pattern-based matcher — any future ``session_*``
+    write-tool is automatically enforced.
     """
     from session_registry_mcp.app.main import build_server  # noqa: IMP001
 
@@ -216,7 +264,7 @@ async def test_session_registry_tool_schemas_require_caller_trace_id(
     observed = {t.name for t in tools}
     assert observed >= _SESSION_FR58_TOOLS, f"missing FR58 tools: {_SESSION_FR58_TOOLS - observed}"
     for tool in tools:
-        if tool.name in _SESSION_FR58_TOOLS:
+        if _should_require_caller_trace_id(tool.name, "session-registry"):
             _assert_caller_trace_id_required(tool, context="session-registry")
 
 
@@ -328,7 +376,7 @@ def _extract_fn_body_ast(fn: object) -> str:
     src = textwrap.dedent(src)
     tree = ast.parse(src)
     fn_def = next(
-        node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
     )
     body = fn_def.body
     # Drop the leading docstring Expr node if present.
@@ -368,6 +416,34 @@ def test_validate_caller_trace_id_byte_identical_across_servers() -> None:
         f"\n--- bridge ---\n{bridge_body}"
         f"\n--- task ---\n{task_body}"
     )
+
+
+@pytest.mark.contract
+def test_validate_caller_trace_id_runtime_messages_identical() -> None:
+    """U8: runtime error-message identity across 3 servers.
+
+    Supplements the AST body check (which can collapse string-literal drift
+    such as adjacent literal concatenation ``"x" "y"`` vs ``"x y"``). If a
+    contributor "improves" the error message in one server and the AST
+    unparser collapses the diff, this runtime check still catches it.
+    """
+    from clawhip_bridge_mcp.server import validate_caller_trace_id as _v_bridge
+    from session_registry_mcp.handlers.tools import (
+        validate_caller_trace_id as _v_sess,
+    )
+    from task_registry_mcp.handlers.tools import (
+        validate_caller_trace_id as _v_task,
+    )
+
+    bad = "not-a-uuid"
+    messages: list[str] = []
+    for fn in (_v_bridge, _v_sess, _v_task):
+        try:
+            fn(bad)
+        except ValueError as exc:
+            messages.append(str(exc))
+    assert len(messages) == 3, f"expected 3 ValueError messages, got {messages!r}"
+    assert len(set(messages)) == 1, f"helper messages drift: {messages!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -422,6 +498,7 @@ async def test_emit_event_missing_caller_trace_id_in_json_payload_raises(
 
 @pytest.mark.contract
 @pytest.mark.asyncio
+@pytest.mark.filterwarnings("error::DeprecationWarning")
 @pytest.mark.parametrize(
     "tool_name,call_kwargs",
     [
@@ -484,9 +561,15 @@ async def test_emit_tools_do_not_emit_deprecation_warning(
     Dev Agent Record). Story 9.7 will remove the ``pyproject.toml``
     filterwarnings entry; this test guards against regression where the filter
     is the only thing hiding warnings.
-    """
-    import warnings
 
+    Story 9.5 pass-2 U2: uses ``@pytest.mark.filterwarnings("error::Deprecation
+    Warning")`` decorator instead of in-body ``warnings.catch_warnings()`` —
+    pytest's marker registers the filter AFTER ``pyproject.toml``'s
+    ``filterwarnings`` ignore entry, locally overriding it. The previous
+    in-body ``simplefilter()`` form was subject to ``warnings`` precedence
+    ambiguity because the pyproject filter was installed first at the
+    process level. See pytest docs for filter-precedence rules.
+    """
     from clawhip_bridge_mcp.server import build_server  # noqa: IMP001
 
     clock = FrozenClock(mono_ns=1_000_000, now=FROZEN_EPOCH)
@@ -499,24 +582,5 @@ async def test_emit_tools_do_not_emit_deprecation_warning(
         actor_id=f"dep-{tool_name}",
     )
     fn = mcp._tool_manager._tools[tool_name].fn
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", DeprecationWarning)
-        result = await fn(**call_kwargs)
+    result = await fn(**call_kwargs)
     assert result is not None
-
-
-# ---------------------------------------------------------------------------
-# Backward-compat sentinel (Story 1.5 / T12: keep for git-bisect continuity)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.contract
-def test_placeholder() -> None:
-    """Backward-compat sentinel — original placeholder from Story 1.5.
-
-    Kept so ``git bisect`` on early CI runs that relied on this test name
-    still finds a passing test. The file was renamed from ``test_placeholder.py``
-    to ``test_mcp_tool_schemas.py`` in Story 9.5 pass-1 T12; this function
-    survives the rename.
-    """
-    assert True

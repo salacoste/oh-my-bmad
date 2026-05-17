@@ -16,6 +16,7 @@ Environment variables:
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import contextlib
 import json
@@ -35,10 +36,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 log = structlog.get_logger("auto-approval-stub")
 
-# Story 9.5: caller_trace_id is now required for clawhip-bridge emit_* tools.
-# Generate a per-process UUIDv7 so all approvals from this stub run share one
-# trace root (consistent with the stub's single-operator-action semantics).
-_STUB_TRACE_ID: str = new_uuid7()
+# Story 9.5 pass-2 (U3 + U9): the per-process ``_STUB_TRACE_ID`` is now
+# minted lazily inside the CLI entry-point (after argv parsing) so a fresh
+# UUIDv7 is generated per stub-as-subprocess invocation, and integration
+# tests can override the value via the ``--trace-id`` CLI flag. Module-
+# level mint froze the timestamp prefix across in-process imports and
+# prevented test-supplied sentinels — both real failure modes.
 
 _DEFAULT_LOG_DIR = "/var/lib/oh-my-bmad/registry/events"
 _DEFAULT_POLL_INTERVAL_S = 0.5
@@ -103,6 +106,7 @@ async def _emit_approval(
     session: ClientSession,
     task_id: str,
     *,
+    caller_trace_id: str,
     parent_event_id: str | None = None,
 ) -> dict[str, Any]:
     """Emit ``approval.granted`` for *task_id* via clawhip-bridge."""
@@ -119,7 +123,9 @@ async def _emit_approval(
     if parent_event_id is not None:
         args["parent_event_id"] = parent_event_id
     # Story 9.5: caller_trace_id is now required for clawhip-bridge emit_* tools.
-    args["caller_trace_id"] = _STUB_TRACE_ID
+    # Story 9.5 pass-2 (U3/U9): value supplied by caller (CLI flag or fresh
+    # mint at the entry-point) — no longer a frozen module-level constant.
+    args["caller_trace_id"] = caller_trace_id
     result = await session.call_tool("emit_event", arguments=args)
     text_parts = [c.text for c in result.content if hasattr(c, "text")]
     raw = "".join(text_parts)
@@ -135,6 +141,7 @@ async def run_auto_approval(
     base_dir: Path,
     settings: AutoApprovalSettings,
     stop_event: asyncio.Event,
+    caller_trace_id: str,
 ) -> None:
     """Main async loop: connect MCP → tail JSONL → auto-approve tasks."""
     approved_tasks: set[str] = set()
@@ -173,7 +180,12 @@ async def run_auto_approval(
 
                     parent_event_id = env_obj.get("event_id")
                     try:
-                        await _emit_approval(clawhip, task_id, parent_event_id=parent_event_id)
+                        await _emit_approval(
+                            clawhip,
+                            task_id,
+                            caller_trace_id=caller_trace_id,
+                            parent_event_id=parent_event_id,
+                        )
                     except Exception:
                         log.warning("emit_approval_failed", task_id=task_id, exc_info=True)
                         continue
@@ -201,7 +213,25 @@ def _install_signal_handlers(loop: asyncio.AbstractEventLoop, stop_event: asynci
             continue
 
 
-async def _async_main() -> None:
+def _parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse CLI arguments for the auto-approval stub.
+
+    Story 9.5 pass-2 (U9): ``--trace-id`` flag allows integration tests to
+    supply a known sentinel value asserted on by the test fixture.
+    """
+    parser = argparse.ArgumentParser(description="Journey 1 auto-approval stub")
+    parser.add_argument(
+        "--trace-id",
+        default=None,
+        help=(
+            "caller_trace_id override (Story 9.1 shape: UUIDv7 or tg:<digits>). "
+            "If omitted, a fresh UUIDv7 is minted per invocation."
+        ),
+    )
+    return parser.parse_args(argv)
+
+
+async def _async_main(*, caller_trace_id: str) -> None:
     """Async entrypoint."""
     base_dir = Path(os.environ.get("EVENT_LOG_DIR", _DEFAULT_LOG_DIR))
     settings = AutoApprovalSettings()
@@ -215,6 +245,7 @@ async def _async_main() -> None:
         base_dir=base_dir,
         settings=settings,
         stop_event=stop_event,
+        caller_trace_id=caller_trace_id,
     )
 
 
@@ -226,8 +257,11 @@ def main() -> None:
         stream=sys.stderr,
     )
     structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.INFO))
+    args = _parse_cli_args()
+    # Story 9.5 pass-2 (U3/U9): mint per-invocation if no override supplied.
+    caller_trace_id: str = args.trace_id if args.trace_id else new_uuid7()
     with contextlib.suppress(KeyboardInterrupt):
-        asyncio.run(_async_main())
+        asyncio.run(_async_main(caller_trace_id=caller_trace_id))
 
 
 if __name__ == "__main__":

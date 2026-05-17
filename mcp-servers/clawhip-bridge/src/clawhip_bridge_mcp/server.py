@@ -258,7 +258,7 @@ def build_server(
             CallerContext(actor_kind=actor_kind, actor_id=actor_id),
             TIER_MAP["emit_event"],
         )
-        return await _emit(  # noqa: A002 — `type` shadows builtin; intentional per envelope schema
+        return await _emit(
             type,
             payload,
             parent_event_id,
