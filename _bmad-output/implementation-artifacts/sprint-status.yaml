@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-17T00:00:00Z
+last_updated: 2026-05-17T03:00:00Z
 current_phase: 2  # Phase 2 opened by ADR-0003 (docs/adr/0003-phase-2-gate.md), 2026-05-15
 
 development_status:
@@ -260,7 +260,7 @@ development_status:
   9-2-registry-api-x-trace-id-middleware: done  # phase: 2 · FR58 (HTTP)
   9-3-telegram-gateway-tg-update-id-derivation: done  # phase: 2 · FR58 (Telegram)
   9-4-console-cli-trace-id-mint: done  # phase: 2 · FR58 (console)
-  9-5-mcp-caller-trace-id-input: backlog  # phase: 2 · FR58 (MCP)
+  9-5-mcp-caller-trace-id-input: ready-for-dev  # phase: 2 · FR58 (MCP)
   9-6-worker-wrapper-trace-id-cli-flag: backlog  # phase: 2 · FR59
   9-7-schema-bump-1-1-0-plus-backfill-plus-trace-query: backlog  # phase: 2 · FR57, FR59a · schema 1.0.0 → 1.1.0
   epic-9-retrospective: optional
