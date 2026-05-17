@@ -102,6 +102,7 @@ async def test_task_thread_binding_end_to_end(tmp_path: Path) -> None:
         emitted_at_monotonic_ns=clk.monotonic_ns(),
         actor=_ACTOR,
         payload=TaskCompletedPayload(task_id=task_id, summary="all done"),
+        trace_id=request_id,  # Story 9.7: required; reuse request_id as synthetic handle
         request_id=request_id,
     )
 

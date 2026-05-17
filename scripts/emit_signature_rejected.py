@@ -92,6 +92,9 @@ def _build_envelope(
         ghcr_owner=ghcr_owner,
         operator_id=operator_id,
     )
+    # Story 9.7: trace_id is now REQUIRED. This script is a CLI helper that
+    # runs standalone without a preceding operator command; mint a fresh
+    # synthetic bare-UUIDv7 as the trace_id correlation handle.
     return EventEnvelope.create(
         event_id=new_event_id(),
         schema_version="1.0.0",
@@ -100,6 +103,7 @@ def _build_envelope(
         emitted_at_monotonic_ns=clock.monotonic_ns(),
         actor=Actor(kind="operator", id="cli-helper"),
         payload=payload,
+        trace_id=new_request_id(),
         request_id=new_request_id(),
     )
 
