@@ -27,12 +27,18 @@ from pathlib import Path
 from typing import Any
 
 import structlog
+from events import new_uuid7  # noqa: IMP001 — test fixture; events is a workspace package
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 log = structlog.get_logger("auto-approval-stub")
+
+# Story 9.5: caller_trace_id is now required for clawhip-bridge emit_* tools.
+# Generate a per-process UUIDv7 so all approvals from this stub run share one
+# trace root (consistent with the stub's single-operator-action semantics).
+_STUB_TRACE_ID: str = new_uuid7()
 
 _DEFAULT_LOG_DIR = "/var/lib/oh-my-bmad/registry/events"
 _DEFAULT_POLL_INTERVAL_S = 0.5
@@ -112,6 +118,8 @@ async def _emit_approval(
     }
     if parent_event_id is not None:
         args["parent_event_id"] = parent_event_id
+    # Story 9.5: caller_trace_id is now required for clawhip-bridge emit_* tools.
+    args["caller_trace_id"] = _STUB_TRACE_ID
     result = await session.call_tool("emit_event", arguments=args)
     text_parts = [c.text for c in result.content if hasattr(c, "text")]
     raw = "".join(text_parts)

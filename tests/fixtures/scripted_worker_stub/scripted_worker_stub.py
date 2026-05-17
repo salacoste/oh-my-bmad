@@ -53,7 +53,7 @@ from pathlib import Path
 from typing import Any
 
 import structlog
-from events import SystemClock, new_session_id, new_worker_id
+from events import SystemClock, new_session_id, new_uuid7, new_worker_id
 from events.clock import Clock
 from events.payloads import PlanStep, SessionFinishedPayload, SessionStartedPayload
 from mcp import ClientSession, StdioServerParameters
@@ -63,6 +63,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from registry_state.adapters.event_log import read_log_lines
 
 log = structlog.get_logger("scripted-worker-stub")
+
+# Story 9.5: caller_trace_id is now required for clawhip-bridge emit_* tools.
+# Generate a per-process UUIDv7 so all events from this stub run share one
+# trace root (consistent with a single worker session's lifecycle semantics).
+_STUB_TRACE_ID: str = new_uuid7()
 
 _DEFAULT_LOG_DIR = "/var/lib/oh-my-bmad/registry/events"
 _DEFAULT_POLL_INTERVAL_S = 0.5
@@ -492,6 +497,8 @@ async def _emit_via_clawhip(
     args: dict[str, Any] = {"type": event_type, "payload": payload}
     if parent_event_id is not None:
         args["parent_event_id"] = parent_event_id
+    # Story 9.5: caller_trace_id is now required for clawhip-bridge emit_* tools.
+    args["caller_trace_id"] = _STUB_TRACE_ID
     result = await session.call_tool("emit_event", arguments=args)
     # Result content is a list of TextContent objects.
     text_parts = [c.text for c in result.content if hasattr(c, "text")]

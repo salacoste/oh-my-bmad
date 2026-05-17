@@ -35,7 +35,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import StaticPool
 
 from task_registry_mcp.app.main import build_server
-from task_registry_mcp.handlers.tools import TIER_MAP, _validate_caller_trace_id
+from task_registry_mcp.handlers.tools import TIER_MAP, validate_caller_trace_id
 
 # ---------------------------------------------------------------------------
 # Local fixtures (inlined — no conftest per project convention)
@@ -773,28 +773,35 @@ class TestEntryPoint:
 
 
 class TestCallerTraceIdValidationHelper:
-    """Unit tests for the module-level ``_validate_caller_trace_id`` helper."""
+    """Unit tests for the module-level ``validate_caller_trace_id`` helper."""
 
     def test_accepts_uuidv7(self) -> None:
-        _validate_caller_trace_id(_VALID_TRACE_ID)
+        validate_caller_trace_id(_VALID_TRACE_ID)
 
     def test_accepts_telegram_form(self) -> None:
-        _validate_caller_trace_id(_VALID_TG_TRACE_ID)
+        validate_caller_trace_id(_VALID_TG_TRACE_ID)
 
     @pytest.mark.parametrize(
         "bad",
         [
+            # Core shape failures
             "",
             "bad-format",
+            "not-a-uuid",
             "tg:",
-            "tg:0",
-            "01917e5c-a7d1-7000-8abc-0123456789ab\n",
-            " 01917e5c-a7d1-7000-8abc-0123456789ab",
+            "tg:0",  # leading-zero rejected per Story 9.1 F2
+            "tg:abc",
+            # Story 9.4 pass-2 S1 / Story 9.5 pass-1 T3/T9: whitespace/CRLF
+            "01917e5c-a7d1-7000-8abc-0123456789ab\n",  # trailing LF
+            " 01917e5c-a7d1-7000-8abc-0123456789ab",  # leading space
+            "01917e5c-a7d1-7000-8abc-0123456789ab\t",  # trailing tab
+            "01917e5c-a7d1-7000-8abc-0123456789ab\r\n",  # CRLF
+            "tg:42\nX-Evil: 1",  # CRLF-injection attempt
         ],
     )
     def test_rejects_invalid_shapes(self, bad: str) -> None:
         with pytest.raises(ValueError, match="Story 9.1 contract"):
-            _validate_caller_trace_id(bad)
+            validate_caller_trace_id(bad)
 
 
 class TestCallerTraceIdToolHandlers:
@@ -903,17 +910,44 @@ class TestCallerTraceIdToolHandlers:
         assert result == {"ok": True}
 
 
+_TASK_FR58_TOOLS: frozenset[str] = frozenset(
+    {"task_add_note", "task_attach_artifact", "task_emit_event"}
+)
+
+
+def _assert_ctid_required(tool: object) -> None:
+    """Defensive schema assertion — T11: no KeyError if 'required' absent."""
+    schema = tool.inputSchema  # type: ignore[attr-defined]
+    required: list[str] = schema.get("required") or []
+    assert isinstance(required, list), (
+        f"tool {tool.name!r}: 'required' is not a list: {required!r}"  # type: ignore[attr-defined]
+    )
+    assert "caller_trace_id" in required, (
+        f"tool {tool.name!r}: caller_trace_id missing from required: {required!r}"  # type: ignore[attr-defined]
+    )
+    properties: dict[str, object] = schema.get("properties") or {}
+    ctid_prop = properties.get("caller_trace_id", {})
+    assert ctid_prop.get("type") == "string", (  # type: ignore[union-attr]
+        f"tool {tool.name!r}: caller_trace_id type wrong: {ctid_prop!r}"
+    )
+
+
 class TestCallerTraceIdToolSchemas:
-    """AC9: FastMCP-derived input schemas include ``caller_trace_id`` as required."""
+    """AC9: FastMCP-derived input schemas include ``caller_trace_id`` as required.
+
+    Story 9.5 pass-1 T7: whitelist-based loop so adding a future read-only tool
+    doesn't break this test. T11: defensive .get()-based assertion (no KeyError).
+    """
 
     @pytest.mark.asyncio
     async def test_all_tool_schemas_require_caller_trace_id(
         self, db_session_maker: async_sessionmaker[AsyncSession]
     ) -> None:
+        """T7: only FR58 whitelisted tools checked; safe for future read-only tools."""
         mcp = _build(db_session_maker)
         tools = await mcp.list_tools()
+        observed = {t.name for t in tools}
+        assert observed >= _TASK_FR58_TOOLS, f"missing FR58 tools: {_TASK_FR58_TOOLS - observed}"
         for tool in tools:
-            assert "caller_trace_id" in tool.inputSchema["required"], (
-                f"tool {tool.name!r} schema missing caller_trace_id"
-            )
-            assert tool.inputSchema["properties"]["caller_trace_id"]["type"] == "string"
+            if tool.name in _TASK_FR58_TOOLS:
+                _assert_ctid_required(tool)

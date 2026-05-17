@@ -107,7 +107,7 @@ def _validate_limit(limit: int) -> None:
         raise ValueError("limit must be between 1 and 1000")
 
 
-def _validate_caller_trace_id(caller_trace_id: str) -> None:
+def validate_caller_trace_id(caller_trace_id: str) -> None:
     """Reject invalid ``caller_trace_id`` per Story 9.1 contract.
 
     Public helper used by every ``@mcp.tool()`` handler in this server to
@@ -118,10 +118,17 @@ def _validate_caller_trace_id(caller_trace_id: str) -> None:
     lesson (shape-validation, not just type-check, avoids whitespace/CRLF
     injection).
 
+    Public name (no leading underscore) per Story 9.5 pass-1 review T4:
+    these helpers are part of the public tool-validation contract documented
+    in the Story 9.5 spec and exercised by ``tests/contract/`` — the contract
+    test for byte-identical body sync (T2) requires a public symbol.
+
     NOTE: Duplicated byte-identically in ``task-registry`` and
     ``session-registry``. mcp-servers cannot share code per Story 5.8's
     import-graph constraint; the helper body MUST stay in sync across all
-    three servers.
+    three servers. Drift is guarded by
+    ``tests/contract/test_mcp_tool_schemas.py::test_validate_caller_trace_id_byte_identical_across_servers``
+    (Story 9.5 pass-1 T2).
 
     Raises:
         ValueError: if ``caller_trace_id`` doesn't match the Story 9.1
@@ -183,6 +190,7 @@ def build_server(
         event_type: str,
         payload: dict[str, object],
         parent_event_id: str | None,
+        *,
         caller_trace_id: str,
     ) -> dict[str, str]:
         """Build, validate, persist and return an event envelope.
@@ -192,7 +200,16 @@ def build_server(
         5 ``@mcp.tool()`` handlers carries the operator-originating correlation
         ID end-to-end. This silences the Story 9.1 DeprecationWarning for the
         5 clawhip-bridge emit_* callsites.
+
+        Story 9.5 pass-1 review T6: defense-in-depth re-validation of
+        ``caller_trace_id`` even though every ``@mcp.tool()`` handler already
+        calls :func:`validate_caller_trace_id` at the tool boundary. Belt-and-
+        braces against a future internal helper that bypasses the tool layer.
+        Story 9.5 pass-1 review T16: ``caller_trace_id`` is enforced kwarg-only
+        via the leading ``*,`` separator so positional drift cannot reorder
+        the field silently across the 5 callsites.
         """
+        validate_caller_trace_id(caller_trace_id)
         envelope = EventEnvelope.create(
             event_id=new_event_id(clock=clock),
             schema_version="1.0.0",
@@ -235,13 +252,18 @@ def build_server(
             EventSchemaUnknown: if ``type`` is not registered.
             ValueError: if ``caller_trace_id`` fails Story 9.1 validation.
         """
-        _validate_caller_trace_id(caller_trace_id)
+        validate_caller_trace_id(caller_trace_id)
         check_tier(
             "emit_event",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id),
             TIER_MAP["emit_event"],
         )
-        return await _emit(type, payload, parent_event_id, caller_trace_id)  # noqa: A002
+        return await _emit(  # noqa: A002 — `type` shadows builtin; intentional per envelope schema
+            type,
+            payload,
+            parent_event_id,
+            caller_trace_id=caller_trace_id,
+        )
 
     # ------------------------------------------------------------------
     # Typed sugar tools — type literals baked in, no EVT001 needed
@@ -262,7 +284,7 @@ def build_server(
                 matching the Story 9.1 contract (UUIDv7 OR ``tg:<update_id>``).
                 Invalid values raise ``ValueError``.
         """
-        _validate_caller_trace_id(caller_trace_id)
+        validate_caller_trace_id(caller_trace_id)
         check_tier(
             "emit_blocker",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id),
@@ -272,7 +294,7 @@ def build_server(
             "task.blocker_raised",
             {"task_id": task_id, "reason": reason},
             parent_event_id,
-            caller_trace_id,
+            caller_trace_id=caller_trace_id,
         )
 
     @mcp.tool()
@@ -290,7 +312,7 @@ def build_server(
                 matching the Story 9.1 contract (UUIDv7 OR ``tg:<update_id>``).
                 Invalid values raise ``ValueError``.
         """
-        _validate_caller_trace_id(caller_trace_id)
+        validate_caller_trace_id(caller_trace_id)
         check_tier(
             "emit_summary",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id),
@@ -300,7 +322,7 @@ def build_server(
             "task.summary_emitted",
             {"task_id": task_id, "summary": summary},
             parent_event_id,
-            caller_trace_id,
+            caller_trace_id=caller_trace_id,
         )
 
     @mcp.tool()
@@ -319,7 +341,7 @@ def build_server(
                 matching the Story 9.1 contract (UUIDv7 OR ``tg:<update_id>``).
                 Invalid values raise ``ValueError``.
         """
-        _validate_caller_trace_id(caller_trace_id)
+        validate_caller_trace_id(caller_trace_id)
         check_tier(
             "emit_approval_request",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id),
@@ -329,7 +351,7 @@ def build_server(
             "task.approval_requested",
             {"task_id": task_id, "action": action, "justification": justification},
             parent_event_id,
-            caller_trace_id,
+            caller_trace_id=caller_trace_id,
         )
 
     @mcp.tool()
@@ -348,7 +370,7 @@ def build_server(
                 matching the Story 9.1 contract (UUIDv7 OR ``tg:<update_id>``).
                 Invalid values raise ``ValueError``.
         """
-        _validate_caller_trace_id(caller_trace_id)
+        validate_caller_trace_id(caller_trace_id)
         check_tier(
             "emit_completion",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id),
@@ -361,7 +383,7 @@ def build_server(
             "task.completed",
             payload,
             parent_event_id,
-            caller_trace_id,
+            caller_trace_id=caller_trace_id,
         )
 
     # ------------------------------------------------------------------

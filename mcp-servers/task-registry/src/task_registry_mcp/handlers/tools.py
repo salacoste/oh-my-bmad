@@ -33,7 +33,7 @@ TIER_MAP: dict[str, Tier] = {
 }
 
 
-def _validate_caller_trace_id(caller_trace_id: str) -> None:
+def validate_caller_trace_id(caller_trace_id: str) -> None:
     """Reject invalid ``caller_trace_id`` per Story 9.1 contract.
 
     Public helper used by every ``@mcp.tool()`` handler in this server to
@@ -44,10 +44,17 @@ def _validate_caller_trace_id(caller_trace_id: str) -> None:
     lesson (shape-validation, not just type-check, avoids whitespace/CRLF
     injection).
 
+    Public name (no leading underscore) per Story 9.5 pass-1 review T4:
+    these helpers are part of the public tool-validation contract documented
+    in the Story 9.5 spec and exercised by ``tests/contract/`` — the contract
+    test for byte-identical body sync (T2) requires a public symbol.
+
     NOTE: Duplicated byte-identically in ``clawhip-bridge`` and
     ``session-registry``. mcp-servers cannot share code per Story 5.8's
     import-graph constraint; the helper body MUST stay in sync across all
-    three servers.
+    three servers. Drift is guarded by
+    ``tests/contract/test_mcp_tool_schemas.py::test_validate_caller_trace_id_byte_identical_across_servers``
+    (Story 9.5 pass-1 T2).
 
     Raises:
         ValueError: if ``caller_trace_id`` doesn't match the Story 9.1
@@ -130,7 +137,7 @@ def register_tools(
                 INFO level so the contract is observable before Story 5.12
                 envelope emission lands.
         """
-        _validate_caller_trace_id(caller_trace_id)
+        validate_caller_trace_id(caller_trace_id)
         check_tier(
             "task.add_note",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id, task_id=task_id),
@@ -141,11 +148,18 @@ def register_tools(
         exists = await _validate_task_exists(session_maker, task_id)
         if not exists:
             return {"ok": False, "error": f"task {task_id!r} not found"}
+        # Story 9.5 pass-1 T5/T15: caller_trace_id pre-validated by
+        # validate_caller_trace_id() above (T15 sync invariant). Use stdlib
+        # structured logging via ``extra=`` so the fields are queryable and
+        # CRLF/control characters in ``caller_trace_id`` cannot inject fake
+        # log lines (shape contract already rejects them — defense in depth).
         log.info(
-            "task.add_note: task_id=%s actor=%s caller_trace_id=%s (stub)",
-            task_id,
-            actor_id,
-            caller_trace_id,
+            "task.add_note (stub)",
+            extra={
+                "task_id": task_id,
+                "actor_id": actor_id,
+                "caller_trace_id": caller_trace_id,
+            },
         )
         return {"ok": True}
 
@@ -173,7 +187,7 @@ def register_tools(
                 INFO level so the contract is observable before Story 5.12
                 envelope emission lands.
         """
-        _validate_caller_trace_id(caller_trace_id)
+        validate_caller_trace_id(caller_trace_id)
         check_tier(
             "task.attach_artifact",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id, task_id=task_id),
@@ -184,11 +198,16 @@ def register_tools(
         exists = await _validate_task_exists(session_maker, task_id)
         if not exists:
             return {"ok": False, "error": f"task {task_id!r} not found"}
+        # Story 9.5 pass-1 T5/T15: caller_trace_id pre-validated above.
+        # Structured logging via ``extra=`` for queryability + CRLF safety.
         log.info(
-            "task.attach_artifact: task_id=%s type=%s caller_trace_id=%s (stub)",
-            task_id,
-            artifact_type,
-            caller_trace_id,
+            "task.attach_artifact (stub)",
+            extra={
+                "task_id": task_id,
+                "artifact_type": artifact_type,
+                "actor_id": actor_id,
+                "caller_trace_id": caller_trace_id,
+            },
         )
         return {"ok": True}
 
@@ -217,7 +236,7 @@ def register_tools(
                 INFO level so the contract is observable before Story 5.12
                 envelope emission lands.
         """
-        _validate_caller_trace_id(caller_trace_id)
+        validate_caller_trace_id(caller_trace_id)
         check_tier(
             "task.emit_event",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id, task_id=task_id),
@@ -228,11 +247,15 @@ def register_tools(
         exists = await _validate_task_exists(session_maker, task_id)
         if not exists:
             return {"ok": False, "error": f"task {task_id!r} not found"}
+        # Story 9.5 pass-1 T5/T15: caller_trace_id pre-validated above.
+        # Structured logging via ``extra=`` for queryability + CRLF safety.
         log.info(
-            "task.emit_event: task_id=%s type=%s actor=%s caller_trace_id=%s (stub)",
-            task_id,
-            event_type,
-            actor_id,
-            caller_trace_id,
+            "task.emit_event (stub)",
+            extra={
+                "task_id": task_id,
+                "event_type": event_type,
+                "actor_id": actor_id,
+                "caller_trace_id": caller_trace_id,
+            },
         )
         return {"ok": True}

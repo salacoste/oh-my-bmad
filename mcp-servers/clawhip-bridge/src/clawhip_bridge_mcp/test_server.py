@@ -49,9 +49,9 @@ from registry_state.adapters.event_log import (  # noqa: IMP001 — mcp-servers�
 from clawhip_bridge_mcp.server import (  # noqa: IMP001 — test file in mcp-servers
     TIER_MAP,
     _make_approval_lookup,
-    _validate_caller_trace_id,
     _validate_limit,
     build_server,
+    validate_caller_trace_id,
 )
 
 # Story 9.5: a deterministic, valid UUIDv7 used as ``caller_trace_id`` across
@@ -834,32 +834,37 @@ class TestEntryPoint:
 
 
 class TestCallerTraceIdValidationHelper:
-    """Unit tests for the module-level ``_validate_caller_trace_id`` helper."""
+    """Unit tests for the module-level ``validate_caller_trace_id`` helper."""
 
     def test_accepts_uuidv7(self) -> None:
         """Bare UUIDv7 → no exception."""
-        _validate_caller_trace_id(_VALID_TRACE_ID)
+        validate_caller_trace_id(_VALID_TRACE_ID)
 
     def test_accepts_telegram_form(self) -> None:
         """``tg:<digits>`` → no exception."""
-        _validate_caller_trace_id(_VALID_TG_TRACE_ID)
+        validate_caller_trace_id(_VALID_TG_TRACE_ID)
 
     @pytest.mark.parametrize(
         "bad",
         [
+            # Core shape failures
             "",
             "bad-format",
             "not-a-uuid",
             "tg:",
             "tg:0",  # leading-zero rejected per Story 9.1 F2
             "tg:abc",
-            "01917e5c-a7d1-7000-8abc-0123456789ab\n",  # CRLF guard (S1)
-            " 01917e5c-a7d1-7000-8abc-0123456789ab",  # whitespace
+            # Story 9.4 pass-2 S1 / Story 9.5 pass-1 T3: whitespace/CRLF
+            "01917e5c-a7d1-7000-8abc-0123456789ab\n",  # trailing LF
+            " 01917e5c-a7d1-7000-8abc-0123456789ab",  # leading space
+            "01917e5c-a7d1-7000-8abc-0123456789ab\t",  # trailing tab
+            "01917e5c-a7d1-7000-8abc-0123456789ab\r\n",  # CRLF
+            "tg:42\nX-Evil: 1",  # CRLF-injection attempt
         ],
     )
     def test_rejects_invalid_shapes(self, bad: str) -> None:
         with pytest.raises(ValueError, match="Story 9.1 contract"):
-            _validate_caller_trace_id(bad)
+            validate_caller_trace_id(bad)
 
 
 class TestCallerTraceIdEmitEvent:
@@ -1020,8 +1025,40 @@ class TestCallerTraceIdTypedEmitTools:
             await fn(task_id=_task_id(), summary="x")
 
 
+_BRIDGE_FR58_TOOLS: frozenset[str] = frozenset(
+    {
+        "emit_event",
+        "emit_blocker",
+        "emit_summary",
+        "emit_approval_request",
+        "emit_completion",
+    }
+)
+
+
+def _assert_ctid_required(tool: object) -> None:
+    """Defensive schema assertion — T11: no KeyError if 'required' absent."""
+    schema = tool.inputSchema  # type: ignore[attr-defined]
+    required: list[str] = schema.get("required") or []
+    assert isinstance(required, list), (
+        f"tool {tool.name!r}: 'required' is not a list: {required!r}"  # type: ignore[attr-defined]
+    )
+    assert "caller_trace_id" in required, (
+        f"tool {tool.name!r}: caller_trace_id missing from required: {required!r}"  # type: ignore[attr-defined]
+    )
+    properties: dict[str, object] = schema.get("properties") or {}
+    ctid_prop = properties.get("caller_trace_id", {})
+    assert ctid_prop.get("type") == "string", (  # type: ignore[union-attr]
+        f"tool {tool.name!r}: caller_trace_id type wrong: {ctid_prop!r}"
+    )
+
+
 class TestCallerTraceIdToolSchemas:
-    """AC9: FastMCP-derived input schemas include ``caller_trace_id`` as required."""
+    """AC9: FastMCP-derived input schemas include ``caller_trace_id`` as required.
+
+    Story 9.5 pass-1 T7: whitelist-based loop so adding a future read-only tool
+    doesn't break this test. T11: defensive .get()-based assertion (no KeyError).
+    """
 
     @pytest.mark.asyncio
     async def test_emit_event_schema_requires_caller_trace_id(
@@ -1031,29 +1068,22 @@ class TestCallerTraceIdToolSchemas:
             base_dir=tmp_path, clock=fixed_clock, actor_kind="system", actor_id="s-1"
         )
         tools = await mcp.list_tools()
-        schema = next(t for t in tools if t.name == "emit_event").inputSchema
-        assert "caller_trace_id" in schema["required"]
-        assert schema["properties"]["caller_trace_id"]["type"] == "string"
+        emit_event_tool = next(t for t in tools if t.name == "emit_event")
+        _assert_ctid_required(emit_event_tool)
 
     @pytest.mark.asyncio
     async def test_all_emit_tool_schemas_require_caller_trace_id(
         self, tmp_path: Path, fixed_clock: FrozenClock
     ) -> None:
-        """Every clawhip-bridge tool's schema includes caller_trace_id as required."""
+        """T7: whitelist loop — only FR58 tools checked; safe for future read-only tools."""
         mcp = build_server(
             base_dir=tmp_path, clock=fixed_clock, actor_kind="system", actor_id="s-2"
         )
         tools = await mcp.list_tools()
-        names = {
-            "emit_event",
-            "emit_blocker",
-            "emit_summary",
-            "emit_approval_request",
-            "emit_completion",
-        }
+        observed = {t.name for t in tools}
+        assert observed >= _BRIDGE_FR58_TOOLS, (
+            f"missing FR58 tools: {_BRIDGE_FR58_TOOLS - observed}"
+        )
         for tool in tools:
-            if tool.name in names:
-                assert "caller_trace_id" in tool.inputSchema["required"], (
-                    f"tool {tool.name!r} schema missing caller_trace_id"
-                )
-                assert tool.inputSchema["properties"]["caller_trace_id"]["type"] == "string"
+            if tool.name in _BRIDGE_FR58_TOOLS:
+                _assert_ctid_required(tool)
