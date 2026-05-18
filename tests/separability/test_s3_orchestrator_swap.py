@@ -532,6 +532,9 @@ def test_spine_source_code_unchanged() -> None:
         # the service reaches feature-completeness and enters maintenance.
         # "services/worker-wrapper/src/",
         ":!services/registry-state/src/registry_state/domain/event_types.py",
+        # test_failure_detection.py is a co-located test file — not worker-facing
+        # source. Story 9.7 updates fixture assertions for schema_version 1.1.0.
+        ":!services/registry-state/src/registry_state/domain/test_failure_detection.py",
     ]
 
     # Skip on non-git checkout (e.g., source tarball).

@@ -77,9 +77,13 @@ def _ensure_failure_detection_types_registered() -> Generator[None, None, None]:
     # whatever was present is safe.
     snapshot = dict(REGISTRY)
     register("service.crashed", "1.0.0", ServiceCrashedPayload)
+    register("service.crashed", "1.1.0", ServiceCrashedPayload)
     register("session.heartbeat_timeout", "1.0.0", SessionHeartbeatTimeoutPayload)
+    register("session.heartbeat_timeout", "1.1.0", SessionHeartbeatTimeoutPayload)
     register("sink.delivery_failed", "1.0.0", SinkDeliveryFailedPayload)
+    register("sink.delivery_failed", "1.1.0", SinkDeliveryFailedPayload)
     register("task.stop_requested", "1.0.0", TaskStopRequestedPayload)
+    register("task.stop_requested", "1.1.0", TaskStopRequestedPayload)
     try:
         yield
     finally:
@@ -362,7 +366,7 @@ class TestEmissionFunctions:
         )
         await writer.close()
         assert env.type == "service.crashed"
-        assert env.schema_version == "1.0.0"
+        assert env.schema_version == "1.1.0"
         assert env.actor.kind == "system"
         assert env.actor.id == "supervisor"
         assert isinstance(env.payload, ServiceCrashedPayload)

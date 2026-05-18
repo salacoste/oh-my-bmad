@@ -68,8 +68,11 @@ _STRUCTLOG_CONFIGURED: bool = False
 
 
 def _register_secret_accessed_schema() -> None:
-    """Install the audit-event schema needed by AuditedSecret in this process."""
-    for version in ("1.0.0", "1.0.1"):
+    """Install the audit-event schema needed by AuditedSecret in this process.
+
+    Story 9.7 / AC10: 1.1.0 added for envelope-level trace_id bump.
+    """
+    for version in ("1.0.0", "1.0.1", "1.1.0"):
         with contextlib.suppress(ValueError):
             register("secret.accessed", version, SecretAccessedPayload)
 

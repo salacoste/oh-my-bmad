@@ -95,7 +95,7 @@ class TestHappyPath:
         env = from_canonical_json(lines[0])
         assert env.event_id == event_id
         assert env.type == "deployment.signature_rejected"
-        assert env.schema_version == "1.0.0"
+        assert env.schema_version == "1.1.0"
         assert env.actor.kind == "operator"
         assert env.actor.id == "cli-helper"
         assert isinstance(env.payload, dict)

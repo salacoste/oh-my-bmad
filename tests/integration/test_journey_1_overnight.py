@@ -391,6 +391,9 @@ def test_worker_facing_source_code_unchanged() -> None:
         "services/registry-state/src/registry_state/domain/event_types.py",
         "services/orchestrator-adapter/src/orchestrator_adapter/adapters/test_github_adapter.py",
         "services/orchestrator-adapter/src/orchestrator_adapter/domain/task_dispatch.py",
+        # test_failure_detection.py is a co-located test file — not worker-facing
+        # source. Story 9.7 updates fixture assertions for schema_version 1.1.0.
+        "services/registry-state/src/registry_state/domain/test_failure_detection.py",
     }
 
     rev_parse = subprocess.run(

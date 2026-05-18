@@ -107,6 +107,11 @@ _ALLOWLIST: dict[str, set[int]] = {
     # orchestrator-adapter: spawns OMC node subprocess.
     # Story 9.6 — propagates OMB_TRACE_ID through env (FR59 / TH3).
     _rel("services/orchestrator-adapter/src/orchestrator_adapter/adapters/omc_runner.py"): {93},
+    # sync_upstream.py: dev-only maintenance script — clones upstream repos
+    # into scripts/upstream/ for vendored-source tracking. Not invoked at
+    # runtime, has no trace_id context (operator-local one-shot tool).
+    # Story 9.7 / AC12 PH-B7/B8/E5: scripts/ added to _SCAN_ROOTS.
+    _rel("scripts/sync_upstream.py"): {76, 93},
 }
 
 
@@ -185,7 +190,10 @@ _SCAN_ROOTS: tuple[str, ...] = ("services", "mcp-servers", "packages", "scripts"
 # py.name.startswith("test_") which missed files like `conftest.py`, files in
 # `tests/` sub-trees, and co-located `test_*.py` inside src packages.
 # PH-B7: use directory-based exclusion instead of filename prefix.
-_TEST_DIR_NAMES: frozenset[str] = frozenset({"tests", "test"})
+# Story 9.7 pass-1: ``fixtures`` added so that
+# ``scripts/checks/fixtures/no_subprocess/`` (positive/negative samples for
+# the SHELL001 ruff-plugin gate) are not flagged as undocumented spawn sites.
+_TEST_DIR_NAMES: frozenset[str] = frozenset({"tests", "test", "fixtures"})
 
 # Wildcard-import limitation: ``from subprocess import *`` followed by
 # ``Popen(...)`` is NOT detected. The bare-name mapping in _FROM_IMPORT_MAP only

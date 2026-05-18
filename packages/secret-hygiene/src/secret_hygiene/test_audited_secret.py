@@ -84,10 +84,11 @@ def _ensure_secret_accessed_registered() -> None:
     registered key raises ``ValueError`` — caught and ignored (xdist
     race tolerance + registry-state-canonical co-existence per L23).
     """
-    for _v in ("1.0.0", "1.0.1"):
+    for _v in ("1.0.0", "1.0.1", "1.1.0"):
         # Already registered (same class — no-op) or canonical
         # registry-state class is registered. Either is fine; the
         # tests don't rely on which class is bound.
+        # Story 9.7 / AC10: 1.1.0 added for envelope-level trace_id bump.
         with contextlib.suppress(ValueError):
             register("secret.accessed", _v, _LocalSecretAccessedPayload)
 
@@ -217,7 +218,7 @@ class TestAuditedSecretEmission:
         assert len(emitter.envelopes) == 1
         env = emitter.envelopes[0]
         assert env.type == "secret.accessed"
-        assert env.schema_version == "1.0.0"
+        assert env.schema_version == "1.1.0"
         assert env.actor.kind == "worker"
         assert env.actor.id == "worker-wrapper"
 
@@ -491,7 +492,9 @@ class TestAuditedSecretBestEffort:
 
         assert v == "the-actual-secret"
         assert emitter.envelopes == []
-        assert any("envelope construction failed" in r.getMessage() for r in caplog.records)
+        # Story 9.7 PH-A6/E10: log message changed to ``audit_emission_dropped``
+        # when narrowed exception (EventSchemaUnknown / ValidationError) fires.
+        assert any("audit_emission_dropped" in r.getMessage() for r in caplog.records)
 
     @pytest.mark.asyncio
     async def test_cancelled_error_inside_emit_is_contained(self) -> None:

@@ -106,9 +106,17 @@ class DeploymentSignatureRejectedPayload(BaseModel):
 # Side-effect: register at module-load. Idempotent — re-import is a no-op per
 # schema_registry.py:80. Test isolation strategies that call ``unregister_all()``
 # must re-import this module (or call ``register(...)`` directly) to restore.
+#
+# Story 9.7 / AC10: register both 1.0.0 and 1.1.0 (envelope-level schema bump
+# for trace_id) — both retained for replay safety. Payload shape unchanged.
 register(
     "deployment.signature_rejected",
     "1.0.0",
+    DeploymentSignatureRejectedPayload,
+)
+register(
+    "deployment.signature_rejected",
+    "1.1.0",
     DeploymentSignatureRejectedPayload,
 )
 

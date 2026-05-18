@@ -44,15 +44,21 @@ from secret_hygiene.audited_secret import (
 
 
 def _ensure_secret_accessed_registered() -> None:
-    """Idempotently register ``secret.accessed`` for both schema versions."""
-    for _v in ("1.0.0", "1.0.1"):
+    """Idempotently register ``secret.accessed`` for all schema versions.
+
+    Story 9.7 / AC10: 1.1.0 added for envelope-level trace_id bump.
+    """
+    for _v in ("1.0.0", "1.0.1", "1.1.0"):
         with contextlib.suppress(ValueError):
             register("secret.accessed", _v, SecretAccessedPayload)
 
 
 def _ensure_telegram_rejected_registered() -> None:
-    """Idempotently register ``telegram.rejected`` for both schema versions (Story 3.2)."""
-    for _v in ("1.0.0", "1.0.1"):
+    """Idempotently register ``telegram.rejected`` for all schema versions (Story 3.2).
+
+    Story 9.7 / AC10: 1.1.0 added for envelope-level trace_id bump.
+    """
+    for _v in ("1.0.0", "1.0.1", "1.1.0"):
         with contextlib.suppress(ValueError):
             register("telegram.rejected", _v, TelegramRejectedPayload)
 
