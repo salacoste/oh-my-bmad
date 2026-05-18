@@ -247,6 +247,7 @@ def test_emit_event_caller_trace_id_passes_validate_caller_trace_id() -> None:
 
     Asserts producer-side and consumer-side contracts agree on shape.
     """
+    pytest.importorskip("clawhip_bridge_mcp")
     from clawhip_bridge_mcp.server import validate_caller_trace_id
 
     settings = OrchestratorSettings()

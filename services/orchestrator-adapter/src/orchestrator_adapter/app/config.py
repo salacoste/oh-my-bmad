@@ -80,12 +80,7 @@ class OrchestratorSettings(BaseSettings):
     # ``model_post_init`` mirror the worker-side defense pattern.
     trace_id: str | None = Field(
         default=None,
-        validation_alias=AliasChoices(
-            "trace_id",
-            "ORCHESTRATOR_TRACE_ID",
-            "OMB_ORCHESTRATOR_TRACE_ID",
-            "OMB_TRACE_ID",
-        ),
+        validation_alias=AliasChoices("trace_id", *_TRACE_ID_ALIASES),
         description=(
             "Trace_id supplied by the spawning service for this orchestrator-adapter "
             "invocation. Set via ORCHESTRATOR_TRACE_ID (canonical), "
@@ -119,7 +114,7 @@ class OrchestratorSettings(BaseSettings):
         log = structlog.get_logger(__name__)
 
         def _try_fallback_aliases() -> str | None:
-            for fallback_env in ("OMB_ORCHESTRATOR_TRACE_ID", "OMB_TRACE_ID"):
+            for fallback_env in _TRACE_ID_ALIASES[1:]:
                 candidate = os.environ.get(fallback_env, "")
                 if not candidate:
                     continue

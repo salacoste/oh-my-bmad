@@ -20,6 +20,8 @@ import structlog
 from orchestrator_adapter.adapters.github_adapter import GitHubAdapter, PRDraftResult
 from orchestrator_adapter.adapters.mcp_clients import MCPClientGroup
 from orchestrator_adapter.adapters.omc_runner import OMCRunner
+from events.envelope import is_valid_trace_id
+
 from orchestrator_adapter.app.config import OrchestratorSettings
 from orchestrator_adapter.domain.task_dispatch import (
     BudgetTracker,
@@ -199,8 +201,19 @@ async def process_task(
     # otherwise fall back to the adapter's settings-scoped trace_id.
     raw_task_trace = task.get("trace_id")
     task_trace_id: str
-    if isinstance(raw_task_trace, str) and raw_task_trace:
+    if (
+        isinstance(raw_task_trace, str)
+        and raw_task_trace
+        and is_valid_trace_id(raw_task_trace)
+    ):
         task_trace_id = raw_task_trace
+    elif isinstance(raw_task_trace, str) and raw_task_trace:
+        log.warning(
+            "task_trace_id_invalid_falling_back_to_settings",
+            task_id=task_id,
+            value_preview=repr(raw_task_trace[:80]),
+        )
+        task_trace_id = settings.resolve_trace_id()
     else:
         task_trace_id = settings.resolve_trace_id()
 
