@@ -22,10 +22,49 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+
+class MigratorError(ValueError):
+    """Migrator-specific validation failure (per-record).
+
+    Story 9.7 pass-1 PH-B2/E2: distinguishes "input data is invalid" from
+    other ValueErrors raised by the migrator (e.g., wrong source version
+    in :func:`migrate_v1_0_0_to_v1_0_1`). Both are still ValueErrors so
+    existing catchers continue to work; the dedicated subclass lets the
+    test suite assert the exact failure mode for back-fill mistakes.
+    """
+
+
+# Story 9.1 trace_id shape contract — mirrored locally so the migrator
+# does not have to depend on the events package. Two valid shapes:
+#   * bare UUIDv7 (lowercase canonical 36-char string with version=7)
+#   * "tg:<digits>" where digits ∈ [1, 2^63 - 1]
+# Mirror keeps the validator deterministic + dependency-free in the
+# minimal migrator image. The authoritative validator lives in
+# packages/events/src/events/envelope.py::is_valid_trace_id.
+_UUIDV7_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+_TG_RE = re.compile(r"^tg:(\d+)$")
+_INT64_MAX = (1 << 63) - 1
+
+
+def _is_valid_trace_id(candidate: object) -> bool:
+    """Local mirror of :func:`events.envelope.is_valid_trace_id` (Story 9.1)."""
+    if not isinstance(candidate, str) or not candidate:
+        return False
+    if _UUIDV7_RE.match(candidate):
+        return True
+    m = _TG_RE.match(candidate)
+    if m is None:
+        return False
+    try:
+        return 1 <= int(m.group(1)) <= _INT64_MAX
+    except ValueError:
+        return False
 
 
 def migrate_v1_0_0_to_v1_0_1(event: dict[str, Any]) -> dict[str, Any]:
@@ -58,8 +97,21 @@ def migrate_v1_0_0_to_v1_0_1(event: dict[str, Any]) -> dict[str, Any]:
     # Back-fill trace_id: use request_id as a synthetic bare UUIDv7 so that
     # post-Story-9.7 envelope parsing (which requires trace_id) succeeds.
     # Deterministic: same request_id → same synthetic trace_id on re-run.
+    #
+    # Story 9.7 pass-1 PH-B2/E2: hard-fail when request_id is missing OR
+    # not shape-valid as a trace_id (Story 9.1 contract). The prior code
+    # silently emitted ``trace_id=""`` on missing request_id, which then
+    # failed downstream envelope validation with a much less actionable
+    # error far from the source record.
     if not migrated.get("trace_id"):
-        migrated["trace_id"] = migrated.get("request_id", "")
+        request_id = migrated.get("request_id", "")
+        if not _is_valid_trace_id(request_id):
+            raise MigratorError(
+                f"cannot back-fill trace_id: request_id missing or invalid "
+                f"(got {request_id!r}); migration requires every input record "
+                f"to carry a Story-9.1-valid request_id (UUIDv7 or 'tg:<digits>')"
+            )
+        migrated["trace_id"] = request_id
     return migrated
 
 

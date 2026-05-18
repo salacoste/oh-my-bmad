@@ -68,6 +68,12 @@ dev = [
 testpaths = ["tests", "packages", "services", "mcp-servers"]
 asyncio_mode = "strict"
 addopts = "-ra --strict-markers --import-mode=importlib"
+# Story 9.7 pass-1 PM-B12: filterwarnings restored as empty list (not deleted).
+# The 14-line "ignore:EventEnvelope created without trace_id" block was removed
+# in Story 9.7 (AC2) when the DeprecationWarning itself was deleted. Keeping an
+# explicit empty list here rather than omitting the key documents the cleanup and
+# lets future stories add targeted filters (e.g. from third-party libraries).
+filterwarnings = []
 markers = [
     "slow: exclude from PR-gate CI; runs on merge / nightly",
     "separability: S-1/S-2/S-3 adapter-swap tests",

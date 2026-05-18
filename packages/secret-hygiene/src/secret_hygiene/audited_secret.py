@@ -96,8 +96,10 @@ from typing import TYPE_CHECKING, Any, ClassVar
 import structlog
 from events.clock import Clock, SystemClock
 from events.envelope import Actor, EventEnvelope
+from events.errors import EventSchemaUnknown
 from events.ids import new_event_id, new_request_id
 from pydantic import AliasChoices, Field, model_validator
+from pydantic import ValidationError as _PydanticValidationError
 from pydantic.fields import FieldInfo
 from pydantic_core import CoreSchema, core_schema
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -347,7 +349,7 @@ class AuditedSecret:
         try:
             return EventEnvelope.create(
                 event_id=new_event_id(clock=self._clock),
-                schema_version="1.0.0",
+                schema_version="1.1.0",
                 type="secret.accessed",
                 emitted_at=self._clock.now(),
                 emitted_at_monotonic_ns=self._clock.monotonic_ns(),
@@ -356,10 +358,17 @@ class AuditedSecret:
                 trace_id=new_request_id(clock=self._clock),
                 request_id=new_request_id(clock=self._clock),
             )
-        except Exception as exc:  # noqa: BLE001 — audit must not crash secret reads
+        except (EventSchemaUnknown, _PydanticValidationError) as exc:
+            # PH-A6/E10: narrow exception — only schema-registry drift and
+            # Pydantic validation failures are expected/recoverable here.
+            # TypeError / AttributeError / AssertionError are programmer errors
+            # and must propagate so CI catches them immediately.
+            # Structured log "audit_emission_dropped" makes this alertable.
             _stdlib_logger.warning(
-                "secret.accessed emission skipped — envelope construction failed for secret %r: %s",
+                "audit_emission_dropped secret_name=%r error_type=%s detail=%s "
+                "— NFR-S3 audit event not emitted; alert if this fires in production",
                 self._secret_name,
+                type(exc).__name__,
                 exc,
             )
             return None

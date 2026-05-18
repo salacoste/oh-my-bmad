@@ -16,12 +16,11 @@ import json
 from pathlib import Path
 
 import structlog
+from events.envelope import is_valid_trace_id
 
 from orchestrator_adapter.adapters.github_adapter import GitHubAdapter, PRDraftResult
 from orchestrator_adapter.adapters.mcp_clients import MCPClientGroup
 from orchestrator_adapter.adapters.omc_runner import OMCRunner
-from events.envelope import is_valid_trace_id
-
 from orchestrator_adapter.app.config import OrchestratorSettings
 from orchestrator_adapter.domain.task_dispatch import (
     BudgetTracker,

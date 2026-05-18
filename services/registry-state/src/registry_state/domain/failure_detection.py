@@ -204,12 +204,22 @@ async def emit_service_crashed(
     Returns:
         The persisted :class:`EventEnvelope`.
     """
+    # PH-A5/B16: log when trace_id is None so silent synthetic mints surface.
+    # System-initiated detection (process crash) has no operator trace context;
+    # the synthetic is intentional. PH-B16: if a caller HAS operator context
+    # (rare for service.crashed), pass it explicitly to link the chain.
+    if trace_id is None:
+        log.warning(
+            "emit_service_crashed: no trace_id supplied; minting synthetic "
+            "(service=%s) — if caller has operator context, pass trace_id explicitly",
+            service,
+        )
     payload = ServiceCrashedPayload(service=service, exit_code=exit_code)
     resolved_actor_id = actor_id if actor_id is not None else service
     envelope = EventEnvelope.create(
         event_id=new_event_id(clock=clock),
         type="service.crashed",
-        schema_version="1.0.0",
+        schema_version="1.1.0",
         emitted_at=clock.now(),
         emitted_at_monotonic_ns=clock.monotonic_ns(),
         actor=Actor(kind="system", id=resolved_actor_id),
@@ -254,6 +264,14 @@ async def emit_session_heartbeat_timeout(
         request_id:          See :func:`emit_service_crashed`.
         parent_event_id:     See :func:`emit_service_crashed`.
     """
+    # PH-A5/B16: system-initiated timeout detection; synthetic trace intentional.
+    if trace_id is None:
+        log.warning(
+            "emit_session_heartbeat_timeout: no trace_id supplied; minting synthetic "
+            "(session_id=%s task_id=%s) — pass trace_id from operator event if available",
+            session_id,
+            task_id,
+        )
     payload = SessionHeartbeatTimeoutPayload(
         session_id=session_id,
         task_id=task_id,
@@ -263,7 +281,7 @@ async def emit_session_heartbeat_timeout(
     envelope = EventEnvelope.create(
         event_id=new_event_id(clock=clock),
         type="session.heartbeat_timeout",
-        schema_version="1.0.0",
+        schema_version="1.1.0",
         emitted_at=clock.now(),
         emitted_at_monotonic_ns=clock.monotonic_ns(),
         actor=Actor(kind="system", id=actor_id),
@@ -318,6 +336,13 @@ async def emit_sink_delivery_failed(
         ``writer``; the order shown here is for documentation only — call
         with whatever ordering is most readable at the call site.
     """
+    # PH-A5/B16: system-initiated sink monitoring; synthetic trace intentional.
+    if trace_id is None:
+        log.warning(
+            "emit_sink_delivery_failed: no trace_id supplied; minting synthetic "
+            "(sink_name=%s) — pass trace_id from triggering operator event if available",
+            sink_name,
+        )
     payload = SinkDeliveryFailedPayload(
         sink_name=sink_name,
         consecutive_failures=consecutive_failures,
@@ -326,7 +351,7 @@ async def emit_sink_delivery_failed(
     envelope = EventEnvelope.create(
         event_id=new_event_id(clock=clock),
         type="sink.delivery_failed",
-        schema_version="1.0.0",
+        schema_version="1.1.0",
         emitted_at=clock.now(),
         emitted_at_monotonic_ns=clock.monotonic_ns(),
         actor=Actor(kind="system", id=actor_id),
@@ -373,11 +398,23 @@ async def emit_task_stop_requested(
                          useful here to chain to the operator command's
                          envelope.
     """
+    # PH-A5/B16: operator-initiated stop should pass the operator's trace_id.
+    # If trace_id is None, log a warning — operator /stop command callers MUST
+    # supply trace_id to keep the causal chain intact (FR59a). System-initiated
+    # stops (actor_kind="system") are the only legitimate case for None.
+    if trace_id is None:
+        log.warning(
+            "emit_task_stop_requested: no trace_id supplied; minting synthetic "
+            "(task_id=%s actor_id=%s actor_kind=%s) — operator callers MUST pass trace_id",
+            task_id,
+            actor_id,
+            actor_kind,
+        )
     payload = TaskStopRequestedPayload(task_id=task_id, actor_id=actor_id)
     envelope = EventEnvelope.create(
         event_id=new_event_id(clock=clock),
         type="task.stop_requested",
-        schema_version="1.0.0",
+        schema_version="1.1.0",
         emitted_at=clock.now(),
         emitted_at_monotonic_ns=clock.monotonic_ns(),
         actor=Actor(kind=actor_kind, id=actor_id),

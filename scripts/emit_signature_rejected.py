@@ -97,7 +97,7 @@ def _build_envelope(
     # synthetic bare-UUIDv7 as the trace_id correlation handle.
     return EventEnvelope.create(
         event_id=new_event_id(),
-        schema_version="1.0.0",
+        schema_version="1.1.0",
         type="deployment.signature_rejected",
         emitted_at=clock.now(),
         emitted_at_monotonic_ns=clock.monotonic_ns(),

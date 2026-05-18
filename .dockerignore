@@ -40,6 +40,11 @@ upstream/
 !tests/fixtures/null_orchestrator/
 !tests/fixtures/scripted_worker_stub/
 !tests/fixtures/auto_approval_stub/
+# PM-B14 (Story 9.7 pass-1): re-included fixture directories must NEVER
+# contain .env files, *.pem certificates, id_rsa keys, or other secrets —
+# they would bake silently into production Docker images. The secret-hygiene
+# CI scan (packages/secret-hygiene) validates this path. Any new fixture
+# directory added here must be reviewed for credentials before merging.
 **/test_*.py
 **/__pycache__/
 

@@ -776,14 +776,17 @@ async def test_run_subscriber_resumes_from_snapshot_without_reapplying_events(
     stop.set()
     await asyncio.wait_for(sub_task, timeout=2.0)
 
-    # apply_many may receive snapshot-covered envelopes during startup replay:
-    # emitted_at_monotonic_ns is process-local and must not be used as a
-    # global cursor across writers. The materializer's event-id guard is the
-    # replay contract; duplicates are skipped without re-running handlers.
+    # Story 9.7 PH-B11/E3 revert restores the cursor-filter: apply_many must
+    # only see envelopes 11-20. Envelopes 1-10 are snapshot-covered and the
+    # startup cursor filters them out before they reach apply_many.
     flat_received: list[EventEnvelope] = [e for batch in received for e in batch]
     received_ids = {env.event_id for env in flat_received}
     expected_ids = {env.event_id for env in envelopes[10:20]}
+    skipped_ids = {env.event_id for env in envelopes[:10]}
     assert received_ids >= expected_ids, "subscriber did not apply envelopes 11-20"
+    assert received_ids.isdisjoint(skipped_ids), (
+        "subscriber re-applied snapshot-covered envelopes 1-10 — cursor-filter regression"
+    )
     # Every event ends up in DB.
     assert await _count_table(db_url, "events") == 20
 

@@ -21,6 +21,7 @@ import json as _json
 import logging
 from datetime import datetime
 from typing import Literal
+from urllib.parse import quote
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -642,7 +643,7 @@ class RegistryAPIClient:
             headers["X-Request-ID"] = request_id
 
         response = await self._http_client.get(
-            f"/v1/trace/{trace_id}",
+            f"/v1/trace/{quote(trace_id, safe='')}",
             headers=headers,
         )
         response.raise_for_status()

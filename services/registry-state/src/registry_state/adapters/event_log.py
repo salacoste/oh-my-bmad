@@ -62,6 +62,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
+import logging
 import os
 from collections.abc import Iterator
 from datetime import date, datetime, timedelta
@@ -69,6 +71,8 @@ from pathlib import Path
 
 from events import EventEnvelope, from_canonical_json, to_canonical_json
 from events.clock import Clock
+
+_log = logging.getLogger(__name__)
 
 # macOS compatibility: os.fdatasync is available on Linux but may be absent on
 # some macOS environments.  Fall back to os.fsync (which also forces metadata,
@@ -189,10 +193,89 @@ def _read_new_envelopes_since(path: Path, offset: int) -> tuple[int, list[EventE
                 # Trailing partial line — leave it for the next poll to
                 # finish.  The cursor stays at last_complete_end.
                 break
-            envelopes.append(from_canonical_json(raw.rstrip(b"\r\n")))
+            line_bytes = raw.rstrip(b"\r\n")
+            # PH-E1 (Story 9.7 pass-1): subscriber startup replay must not
+            # crash on pre-1.1.0 JSONL.  After the schema bump, trace_id is
+            # REQUIRED by EventEnvelope; any pre-bump record without trace_id
+            # would raise pydantic.ValidationError inside from_canonical_json.
+            # Fix: inject migrator-style back-fill (trace_id = request_id)
+            # before parsing.  If request_id is also absent/invalid, skip the
+            # line with a structured warning rather than crashing the subscriber.
+            envelope = _parse_with_pre110_backfill(line_bytes, path)
+            if envelope is not None:
+                envelopes.append(envelope)
             last_complete_end += len(raw)
         new_offset = last_complete_end
     return new_offset, envelopes
+
+
+def _parse_with_pre110_backfill(
+    line_bytes: bytes,
+    source_path: Path,
+) -> EventEnvelope | None:
+    """Parse a JSONL line, back-filling trace_id for pre-1.1.0 envelopes.
+
+    Story 9.7 pass-1 PH-E1: avoids deployment-breaking ValidationError when
+    subscriber replays pre-1.1.0 JSONL during startup.
+
+    Returns None (with structured warning) when the line is unrecoverable so
+    the subscriber skips it rather than crashing. Returns the parsed
+    EventEnvelope on success.
+    """
+    from events.envelope import is_valid_trace_id  # noqa: PLC0415 — avoid circular at module level
+
+    try:
+        raw_dict: object = json.loads(line_bytes)
+    except json.JSONDecodeError as exc:
+        _log.warning(
+            "event_log_parse_skip path=%s error_type=JSONDecodeError detail=%s",
+            source_path,
+            exc,
+        )
+        return None
+
+    if not isinstance(raw_dict, dict):
+        _log.warning(
+            "event_log_parse_skip path=%s error_type=NotADict",
+            source_path,
+        )
+        return None
+
+    # Back-fill trace_id for pre-1.1.0 records (those lacking a valid trace_id).
+    existing_trace = raw_dict.get("trace_id")
+    if not is_valid_trace_id(str(existing_trace) if existing_trace is not None else ""):
+        request_id = str(raw_dict.get("request_id") or "")
+        if is_valid_trace_id(request_id):
+            raw_dict = dict(raw_dict)
+            raw_dict["trace_id"] = request_id
+            _log.debug(
+                "event_log_pre110_backfill path=%s event_id=%s synthetic_trace_id=%s",
+                source_path,
+                raw_dict.get("event_id", "?"),
+                request_id,
+            )
+        else:
+            _log.warning(
+                "event_log_parse_skip path=%s event_id=%s "
+                "error_type=pre110_missing_trace_id request_id=%r "
+                "— cannot back-fill; skipping envelope",
+                source_path,
+                raw_dict.get("event_id", "?"),
+                request_id,
+            )
+            return None
+
+    try:
+        return from_canonical_json(json.dumps(raw_dict).encode())
+    except Exception as exc:  # noqa: BLE001 — log and skip; never crash subscriber
+        _log.warning(
+            "event_log_parse_skip path=%s event_id=%s error_type=%s detail=%s",
+            source_path,
+            raw_dict.get("event_id", "?") if isinstance(raw_dict, dict) else "?",
+            type(exc).__name__,
+            exc,
+        )
+        return None
 
 
 # ---------------------------------------------------------------------------

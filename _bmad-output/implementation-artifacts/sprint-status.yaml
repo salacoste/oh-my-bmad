@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-18T10:00:00Z
+last_updated: 2026-05-18T20:00:00Z
 current_phase: 2  # Phase 2 opened by ADR-0003 (docs/adr/0003-phase-2-gate.md), 2026-05-15
 
 development_status:
@@ -255,7 +255,7 @@ development_status:
   # phase: 2 · unblocks every later epic · ADR-0004
   # FR57–FR59a · NFR-O7
   # =========================================================================
-  epic-9: done  # closed 2026-05-18 — α trace_id propagation kernel complete (FR57, FR58, FR59, FR59a)
+  epic-9: in-progress  # 9-7 in pass-1 review; revert from premature done — AC15 atomicity (PH-A4 pass-1)
   9-1-trace-id-optional-envelope: done  # phase: 2 · FR57 · partial (optional phase)
   9-2-registry-api-x-trace-id-middleware: done  # phase: 2 · FR58 (HTTP)
   9-3-telegram-gateway-tg-update-id-derivation: done  # phase: 2 · FR58 (Telegram)

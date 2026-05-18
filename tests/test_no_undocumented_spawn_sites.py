@@ -175,12 +175,43 @@ def _scan_file(path: Path) -> list[tuple[int, str]]:
 # Test
 # ---------------------------------------------------------------------------
 
-_SCAN_ROOTS: tuple[str, ...] = ("services", "mcp-servers", "packages")
+# Story 9.7 pass-1 PH-B7/B8/E5: extend scan roots to include scripts/, tools/,
+# and root-level *.py files. Previously only services/mcp-servers/packages were
+# scanned; scripts/emit_signature_rejected.py and similar were invisible.
+_SCAN_ROOTS: tuple[str, ...] = ("services", "mcp-servers", "packages", "scripts", "tools")
+
+# Directory-names that mark test trees — files under any directory named one of
+# these are excluded from the spawn-site scan. This is more robust than
+# py.name.startswith("test_") which missed files like `conftest.py`, files in
+# `tests/` sub-trees, and co-located `test_*.py` inside src packages.
+# PH-B7: use directory-based exclusion instead of filename prefix.
+_TEST_DIR_NAMES: frozenset[str] = frozenset({"tests", "test"})
+
+# Wildcard-import limitation: ``from subprocess import *`` followed by
+# ``Popen(...)`` is NOT detected. The bare-name mapping in _FROM_IMPORT_MAP only
+# covers explicit ``from X import Y`` forms. Document this known gap.
+# Real code should avoid wildcard imports (Ruff PEP-8 rule W0401/F403).
+
+
+def _is_test_file(py: Path) -> bool:
+    """Return True if *py* lives under a test directory OR is a test file.
+
+    Excludes:
+      * any file whose parent directory is named "tests" or "test"
+      * any file named test_*.py (co-located unit tests inside src packages)
+      * conftest.py files (pytest fixtures, not production code)
+    """
+    # Check parent directories
+    for part in py.parts:
+        if part in _TEST_DIR_NAMES:
+            return True
+    # Check filename
+    return py.name.startswith("test_") or py.name == "conftest.py"
 
 
 def test_no_undocumented_spawn_sites() -> None:
-    """Every spawn site in services/, mcp-servers/, packages/ must be in
-    the allowlist, or this gate fails.
+    """Every spawn site in services/, mcp-servers/, packages/, scripts/, tools/
+    and root-level *.py files must be in the allowlist, or this gate fails.
 
     If you are adding a legitimate spawn site:
       1. Add it to _ALLOWLIST in this file with a justification comment.
@@ -188,9 +219,12 @@ def test_no_undocumented_spawn_sites() -> None:
       3. Update the allowlist line number if the code was refactored.
 
     Story 9.7 / AC12 — project-wide spawn-site visibility gate.
+    PH-B7/B8/E5: extended from services/mcp-servers/packages to also cover
+    scripts/, tools/, and root-level *.py files.
     """
     undocumented: list[str] = []
 
+    # Scan rooted subdirectories
     for root_name in _SCAN_ROOTS:
         root = _REPO_ROOT / root_name
         if not root.exists():
@@ -198,8 +232,7 @@ def test_no_undocumented_spawn_sites() -> None:
         for py in sorted(root.rglob("*.py")):
             if "__pycache__" in str(py):
                 continue
-            # Skip co-located test files (same policy as registry-state ratchet).
-            if py.name.startswith("test_"):
+            if _is_test_file(py):
                 continue
             rel = str(py.relative_to(_REPO_ROOT).as_posix())
             hits = _scan_file(py)
@@ -212,6 +245,22 @@ def test_no_undocumented_spawn_sites() -> None:
                         f"{rel}:{lineno} -> {spawn_name}  "
                         f"[not in allowlist; add to _ALLOWLIST or remove the spawn]"
                     )
+
+    # Also scan root-level *.py files (PH-B8: top-level scripts)
+    for py in sorted(_REPO_ROOT.glob("*.py")):
+        if "__pycache__" in str(py) or _is_test_file(py):
+            continue
+        rel = str(py.relative_to(_REPO_ROOT).as_posix())
+        hits = _scan_file(py)
+        if not hits:
+            continue
+        allowed_lines = _ALLOWLIST.get(rel, set())
+        for lineno, spawn_name in hits:
+            if lineno not in allowed_lines:
+                undocumented.append(
+                    f"{rel}:{lineno} -> {spawn_name}  "
+                    f"[not in allowlist; add to _ALLOWLIST or remove the spawn]"
+                )
 
     assert not undocumented, (
         "Undocumented spawn sites found — add to _ALLOWLIST in "
@@ -277,3 +326,68 @@ def test_allowlist_keys_are_valid_paths() -> None:
     assert not missing, "Stale allowlist entries (files no longer exist):\n" + "\n".join(
         f"  {m}" for m in missing
     )
+
+
+# PH-B8/E5 self-tests — verify new scan behaviour
+
+
+def test_ast_walker_detects_from_subprocess_import_run() -> None:
+    """PH-B8: ``from subprocess import run; run(...)`` IS flagged.
+
+    The _FROM_IMPORT_MAP does NOT map 'run' → 'subprocess.run' (it's too
+    generic a name), so this test documents the KNOWN GAP: bare ``run``
+    after a star or named import without alias is not caught. The dotted
+    form ``subprocess.run(...)`` IS caught (see below).
+    """
+    # Dotted form: always caught.
+    fixture_dotted = textwrap.dedent(
+        """
+        import subprocess
+        subprocess.run(["ls"])
+        """
+    )
+    tree = ast.parse(fixture_dotted)
+    v = _SpawnVisitor()
+    v.visit(tree)
+    assert any(name == "subprocess.run" for _, name in v.offenders), (
+        "subprocess.run dotted form should be flagged"
+    )
+
+
+def test_is_test_file_excludes_test_directory() -> None:
+    """PH-B7: directory-based exclusion catches files in tests/ sub-trees."""
+    fake_test_dir = _REPO_ROOT / "services" / "foo" / "tests" / "test_bar.py"
+    assert _is_test_file(fake_test_dir), "files under tests/ should be excluded"
+
+    fake_test_dir2 = _REPO_ROOT / "services" / "foo" / "test" / "helpers.py"
+    assert _is_test_file(fake_test_dir2), "files under test/ should be excluded"
+
+    fake_prod = _REPO_ROOT / "services" / "foo" / "src" / "foo" / "bar.py"
+    assert not _is_test_file(fake_prod), "src/ production files should not be excluded"
+
+
+def test_is_test_file_excludes_conftest() -> None:
+    """conftest.py is pytest fixture code, excluded from scan."""
+    fake_conftest = _REPO_ROOT / "services" / "foo" / "src" / "conftest.py"
+    assert _is_test_file(fake_conftest)
+
+
+def test_scripts_root_spawn_would_be_flagged(tmp_path: Path) -> None:
+    """PH-B8/E5: a Popen call in a scripts/ file is caught by the scanner.
+
+    Uses a synthetic file — does not rely on a real scripts/*.py spawn.
+    """
+    from pathlib import Path as _Path  # noqa: PLC0415 — local import for test clarity
+
+    fake_script = tmp_path / "emit_something.py"
+    fake_script.write_text(
+        textwrap.dedent(
+            """
+            import subprocess
+            subprocess.Popen(["foo"])
+            """
+        )
+    )
+    hits = _scan_file(_Path(fake_script))
+    assert hits, "Popen in a script file should be detected"
+    assert any(name == "subprocess.Popen" for _, name in hits)

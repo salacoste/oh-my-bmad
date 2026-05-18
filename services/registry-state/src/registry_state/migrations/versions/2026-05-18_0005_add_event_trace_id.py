@@ -35,6 +35,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_events_trace_id", table_name="events")
+    # PM-B6 (Story 9.7 pass-1): downgrade is DESTRUCTIVE — batch_alter_table
+    # rebuilds the SQLite table, dropping all trace_id values. Operators must
+    # ensure no 1.1.0-schema events are in the table before running downgrade,
+    # or those events will become unqueryable by trace_id.
+    # The index must be dropped INSIDE the batch_alter_table context so it is
+    # reflected in the rebuilt table schema (not left dangling).
     with op.batch_alter_table("events") as batch_op:
+        batch_op.drop_index("ix_events_trace_id")
         batch_op.drop_column("trace_id")

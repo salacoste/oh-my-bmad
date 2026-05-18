@@ -22,6 +22,7 @@ import json as _json
 import re
 from datetime import datetime
 from typing import Literal
+from urllib.parse import quote
 
 import httpx
 from events.envelope import is_valid_trace_id  # noqa: IMP001
@@ -470,7 +471,7 @@ class RegistryAPIClient:
 
         async with httpx.AsyncClient(base_url=self._base_url, timeout=_DEFAULT_TIMEOUT) as client:
             response = await client.get(
-                f"/v1/trace/{trace_id}",
+                f"/v1/trace/{quote(trace_id, safe='')}",
                 headers=headers,
             )
             response.raise_for_status()
