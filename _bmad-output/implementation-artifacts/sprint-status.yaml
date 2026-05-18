@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-18T21:00:00Z
+last_updated: 2026-05-19T00:00:00Z
 current_phase: 2  # Phase 2 opened by ADR-0003 (docs/adr/0003-phase-2-gate.md), 2026-05-15
 
 development_status:
@@ -263,7 +263,7 @@ development_status:
   9-5-mcp-caller-trace-id-input: done  # phase: 2 · FR58 (MCP)
   9-6-worker-wrapper-trace-id-cli-flag: done  # phase: 2 · FR59
   9-7-schema-bump-1-1-0-plus-backfill-plus-trace-query: done  # phase: 2 · FR57, FR59a · 3-pass adversarial review (100 patches across 90 raw findings) · CI green 35f9e1e
-  epic-9-retrospective: optional
+  epic-9-retrospective: done  # 2026-05-19 — retro saved to epic-9-retro-2026-05-19.md
 
   # =========================================================================
   # Epic 10: β metrics-subscriber service (6 stories, ~1 week)
