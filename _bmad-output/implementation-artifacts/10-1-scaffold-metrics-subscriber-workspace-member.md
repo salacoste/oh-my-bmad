@@ -382,9 +382,28 @@ NO MANUAL CHANGES NEEDED. The script auto-discovers workspace members by scannin
 
 1. **Mid-dev deadlock:** Executor agent added `metrics-subscriber` to `[project].dependencies` BEFORE adding to `[tool.uv.sources]`. Resulted in invalid pyproject.toml. All Claude Code PreToolUse hooks (which use `uv run`) blocked. Required manual user intervention in terminal to insert sources entry. Lesson for future scaffold stories: pyproject.toml edits must be atomic (single Edit operation) — never partial state.
 
-2. **check_imports.py auto-discovery:** AC6 spec said to "register `metrics_subscriber` in allowlist" but the script is dynamic — no static allowlist exists. AC6 satisfied implicitly via the pyproject.toml-driven discovery.
+2. **check_imports.py auto-discovery:** AC6 spec said to "register `metrics_subscriber` in allowlist" but the script is dynamic — no static allowlist exists. AC6 satisfied implicitly via the pyproject.toml-driven discovery. Pass-1 review A6 surfaced spec also wanted a fixture-level regression test; addressed by adding `scripts/checks/fixtures/imports/violations/metrics_subscriber_imports_service.py` (P2-I1 boundary test).
 
-3. **bootstrap-verify count off by 1:** Spec said "14 → 15", actual was "13 → 14". Spec correction.
+3. **bootstrap-verify count off by 1:** Spec said "14 → 15", actual was "13 → 14". Spec correction. Pass-1 review B2+A4 also noted `capabilities` package is excluded by convention (library-only, no service entrypoint); justfile header comment updated to document this.
+
+4. **AC3 workspace members glob (pass-1 A3):** Spec instructed adding explicit `services/metrics-subscriber` entry to `[tool.uv.workspace].members`, but root already uses glob `members = ["services/*", ...]`. No `[tool.uv.workspace]` change was needed. Only `[project].dependencies` and `[tool.uv.sources]` modified — AC3 intent fully satisfied.
+
+5. **AC10 allowlist incomplete (pass-1 A10):** AC10 allowlist omitted the story `.md` file itself, which is necessarily modified during Dev Agent Record fill. Future story specs should include the story file in AC10. Documented for retrospective.
+
+6. **Mypy file count +4 vs +3 .py files added (pass-1 A8):** Local count showed 102 → 106 (+4) but only 3 new `.py` files (init, main, test_version). Probable causes: mypy follows one additional stub, or baseline 102 was already inaccurate. Treat 106 as the Story 10.2 starting baseline.
+
+7. **`[project.scripts]` not added (pass-1 B3):** No CLI alias declared. Pattern matches other service packages (registry-api, registry-state, telegram-gateway) which use `python -m <package>` invocation. Decision deferred to Story 10.2 if process supervisor requires alias.
+
+### Pass-1 review summary (2026-05-19, scaffold-low-complexity, 1-pass per Epic 9 AI-1)
+
+2-lane adversarial review (Blind Hunter + Acceptance Auditor) — Edge Case Hunter skipped for scaffold-only story. **10 raw findings → 9 unique** (B2+A4 dedup); **all 9 addressed in single follow-up patch batch:**
+
+- **B1+B4** — strengthened `test_version.py`: regex semver match rejecting leading zeros + cross-check `__version__` against `importlib.metadata.version()` (catches drift between `__init__.py` and pyproject.toml)
+- **A6** — added `scripts/checks/fixtures/imports/violations/metrics_subscriber_imports_service.py` regression fixture for P2-I1 read-only-subscriber rule (`metrics_subscriber → registry_state` must fail check_imports)
+- **B2+A4** — justfile header comment updated to reflect 14 modules verified (capabilities excluded by convention)
+- **B3, B5, A3, A8, A10** — deviations 4-7 documented above
+
+Self-test: 8 fixtures (was 7), 0 failures. Production scan: 0 violations across 268 files. test_version.py: 3 tests passing (was 2 pre-patch).
 
 ### Story 10.2 readiness check
 

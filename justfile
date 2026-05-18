@@ -1,7 +1,10 @@
 # oh-my-bmad — operator recipes
 #
-# Story 1.1 shipped `bootstrap-verify`. Story 1.2 extended it to cover all 14
-# workspace members. Story 1.3 adds `sync-upstream` + `migrator-test-additive`.
+# Story 1.1 shipped `bootstrap-verify`. Story 1.2 extended it to cover all
+# importable workspace members. Story 10.1 (2026-05-19) raised to 14 modules
+# verified (capabilities excluded by convention — library-only, no service
+# entrypoint; documented in 10.1 Dev Agent Record).
+# Story 1.3 adds `sync-upstream` + `migrator-test-additive`.
 # Richer recipes (dev, test, lint, scenarios, backup, build, deploy-vps,
 # deploy-macos) arrive in Story 1.4 (compose + env + justfile).
 
