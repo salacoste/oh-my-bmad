@@ -1,0 +1,402 @@
+# Story 10.1 — Scaffold `services/metrics-subscriber/` workspace member
+
+Status: **ready-for-dev**
+
+## Story
+
+**As** the Phase 2 platform operator preparing for derived metrics observability,
+**I want** a new uv-workspace member `services/metrics-subscriber/` with standard layout (pyproject.toml, `src/metrics_subscriber/__init__.py` + `__main__.py` + `py.typed`),
+**so that** subsequent stories 10.2–10.6 can wire the tail loop, FastAPI `/metrics` endpoint, Prometheus exposition, cardinality guards, and separability tests on a clean scaffold — establishing the "derived metrics, not parallel instrumentation" pattern (FR60, NFR-O1 preservation).
+
+This is Story 10.1 of Epic 10 — the first story of the β metrics-subscriber service. It's a **scaffold-only** story: zero business logic, no tail loop, no `/metrics` endpoint. Subsequent stories (10.2 tail loop, 10.3 FastAPI exposition, 10.4 metric set, 10.5 cardinality discipline, 10.6 separability + compose) build on this foundation.
+
+---
+
+## Acceptance criteria
+
+### AC1 — `services/metrics-subscriber/pyproject.toml` exists with workspace conventions
+
+Mirror existing worker-wrapper / registry-api pattern:
+
+```toml
+[project]
+name = "metrics-subscriber"
+version = "0.1.0"
+description = "β derived-metrics subscriber: read-only Prometheus exposition over JSONL event log (no parallel instrumentation per NFR-O1)."
+authors = [
+    { name = "R2d2", email = "bad.vano23ru@gmail.com" },
+]
+requires-python = ">=3.12"
+dependencies = [
+    "structlog>=24.1",
+    "pydantic-settings>=2.5,<3.0",
+    "events",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.0,<1.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+]
+
+[tool.uv.sources]
+events = { workspace = true }
+```
+
+NB: Story 10.1 is scaffold-only — `fastapi` / `prometheus_client` / etc. are NOT added here. Those come in Stories 10.2/10.3 when the imports become real.
+
+### AC2 — Standard `src/metrics_subscriber/` layout
+
+```
+services/metrics-subscriber/
+├── pyproject.toml
+└── src/
+    └── metrics_subscriber/
+        ├── __init__.py      # exposes __version__
+        ├── __main__.py      # scaffold entry point (prints version, exits 0)
+        └── py.typed         # PEP 561 marker (empty file)
+```
+
+`__init__.py`:
+```python
+"""β metrics-subscriber service — derived Prometheus exposition over JSONL event log.
+
+Phase 2 / Epic 10 / Story 10.1: scaffold only. See FR60 / NFR-O1 / NFR-O8.
+"""
+
+from __future__ import annotations
+
+__version__ = "0.1.0"
+
+__all__ = ["__version__"]
+```
+
+`__main__.py`:
+```python
+"""Scaffold entry point for ``python -m metrics_subscriber``.
+
+Story 10.1 — prints version + exits 0. Real lifespan + tail loop arrive
+in Story 10.2; FastAPI exposition in Story 10.3.
+"""
+
+from __future__ import annotations
+
+from metrics_subscriber import __version__
+
+
+def main() -> int:
+    print(f"metrics-subscriber {__version__} (scaffold; not yet wired — Story 10.1)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
+
+`py.typed`: empty file (PEP 561 marker — required for downstream mypy-strict consumers).
+
+### AC3 — Root `pyproject.toml` workspace entry
+
+Add to repo-root `pyproject.toml`:
+
+```toml
+[tool.uv.workspace]
+members = [
+    # ... existing members ...
+    "services/metrics-subscriber",  # NEW — Story 10.1 / Epic 10
+]
+
+[tool.uv.sources]
+# ... existing sources ...
+metrics-subscriber = { workspace = true }
+```
+
+Add to root `[project].dependencies` (so the meta-package pulls it in):
+```toml
+dependencies = [
+    # ... existing entries ...
+    "metrics-subscriber",  # NEW
+]
+```
+
+### AC4 — `justfile` `bootstrap-verify` covers new member
+
+Extend the `bootstrap-verify` recipe to import `metrics_subscriber` (14 → 15 module verifications):
+
+```just
+bootstrap-verify:
+    uv sync --frozen --no-dev
+    uv run --no-dev python -c "from events import __version__; print('events', __version__)"
+    # ... existing 13 lines ...
+    uv run --no-dev python -c "from metrics_subscriber import __version__; print('metrics_subscriber', __version__)"
+```
+
+### AC5 — `python -m metrics_subscriber` exits 0 with version banner
+
+```bash
+$ uv run --no-dev python -m metrics_subscriber
+metrics-subscriber 0.1.0 (scaffold; not yet wired — Story 10.1)
+$ echo $?
+0
+```
+
+### AC6 — `check_imports.py` CI gate covers new workspace member (P2-I1 read-only-subscriber rule)
+
+In `scripts/checks/check_imports.py` (or wherever the import graph is enforced), extend the `_KNOWN_SERVICES` / equivalent allowlist to include `metrics_subscriber`. Per **P2-I1** read-only-subscriber rule, `metrics_subscriber` may import from `packages/events` but must NOT import from any other `services/*` module.
+
+Test that fails if `metrics_subscriber` tries to import from `services/worker-wrapper/`, `services/registry-state/`, etc.
+
+### AC7 — Lock files updated
+
+Run `uv lock` to regenerate `uv.lock` with the new workspace member. Commit the regenerated lockfile.
+
+### AC8 — Mypy --strict covers the new package (optional)
+
+Decide: extend `uv run mypy --strict packages/ services/registry-api services/registry-state` to also include `services/metrics-subscriber/`?
+
+Recommend: YES — add now while package is small. Sets the discipline baseline before Stories 10.2-10.6 add code. Adjust CI command if needed.
+
+### AC9 — Unit test verifying `__version__` import path
+
+Add `services/metrics-subscriber/src/metrics_subscriber/test_version.py`:
+
+```python
+"""Smoke test: package imports + version string is non-empty."""
+
+from __future__ import annotations
+
+from metrics_subscriber import __version__
+
+
+def test_version_is_non_empty_string() -> None:
+    assert isinstance(__version__, str)
+    assert __version__  # not empty
+
+
+def test_version_matches_semver_shape() -> None:
+    parts = __version__.split(".")
+    assert len(parts) == 3
+    assert all(p.isdigit() for p in parts)
+```
+
+### AC10 — Zero touch on existing services
+
+Story 10.1 is scaffold-only. Verify via grep that ZERO files outside `services/metrics-subscriber/`, `scripts/checks/check_imports.py`, `pyproject.toml` (root), `uv.lock`, `justfile`, and `_bmad-output/implementation-artifacts/sprint-status.yaml` were modified.
+
+---
+
+## Developer context
+
+### Existing state
+
+- 14 workspace members today (packages: events, idempotency, secret-hygiene, capabilities, etc; services: registry-api, registry-state, worker-wrapper, console-cli, telegram-gateway, orchestrator-adapter, clawhip-daemon; mcp-servers: task-registry, session-registry, clawhip-bridge). Confirm by counting `[tool.uv.workspace].members` in root `pyproject.toml`.
+- `services/worker-wrapper/pyproject.toml` is the canonical mirror pattern for a service-tier workspace member.
+- `services/clawhip-daemon/` is also similar in scope (lifespan + subscriber pattern that Story 10.2 will mirror).
+- `scripts/checks/check_imports.py` enforces the import graph; new members must be registered there.
+- `just bootstrap-verify` (in `justfile`) is the canary that fails CI if any workspace member is unimportable.
+
+### Architecture compliance
+
+- **FR60** — `metrics-subscriber` service exists as workspace member; scaffold this.
+- **NFR-O1** — preserved: no instrumentation added to existing services; subscriber is read-only.
+- **P2-I1** — read-only-subscriber rule: `check_imports.py` extended to enforce.
+
+### Library / framework requirements
+
+| Library | Version | Notes |
+|---|---|---|
+| `structlog` | already in deps | Logging baseline for Stories 10.2+ |
+| `pydantic-settings` | already in deps | Settings for Stories 10.2+ |
+| `events` | workspace member | Source-of-truth envelope shape (Story 9.1 contract) |
+
+No new third-party deps in Story 10.1. `fastapi`, `prometheus_client` land in Stories 10.2/10.3 when imports become real.
+
+### File-structure requirements
+
+| File | Change |
+|---|---|
+| `services/metrics-subscriber/pyproject.toml` | NEW (workspace member pyproject) |
+| `services/metrics-subscriber/src/metrics_subscriber/__init__.py` | NEW (`__version__ = "0.1.0"`) |
+| `services/metrics-subscriber/src/metrics_subscriber/__main__.py` | NEW (scaffold entry point) |
+| `services/metrics-subscriber/src/metrics_subscriber/py.typed` | NEW (empty PEP 561 marker) |
+| `services/metrics-subscriber/src/metrics_subscriber/test_version.py` | NEW (smoke test) |
+| `pyproject.toml` (root) | MODIFY (`[tool.uv.workspace].members` + `[tool.uv.sources]` + `[project].dependencies`) |
+| `uv.lock` | MODIFY (regenerated via `uv lock`) |
+| `justfile` | MODIFY (extend `bootstrap-verify`) |
+| `scripts/checks/check_imports.py` | MODIFY (register `metrics_subscriber`) |
+| `_bmad-output/implementation-artifacts/sprint-status.yaml` | MODIFY (`10-1-metrics-subscriber-scaffold: backlog → ready-for-dev → in-progress → review → done`) |
+
+DO NOT touch:
+- Any other `services/*/` (workspace member is independent)
+- Any other workspace pyproject.toml
+- `packages/events/`, `packages/idempotency/`, etc.
+- `mcp-servers/`
+
+### Testing requirements
+
+- Unit tests: `test_version.py` smoke test (AC9) — 2 tests minimum
+- CI smoke: `just bootstrap-verify` exits 0 (AC4 + AC5)
+- Test markers: standard PR gate
+
+### Previous-story intelligence
+
+- **Story 1.1 / 1.2** — workspace scaffold pattern established (14 members)
+- **Story 1.3** — `sync-upstream` recipe pattern
+- **Story 1.4** — `bootstrap-verify` recipe + check_imports.py extension pattern
+- **Story 9.1** — `events.envelope.is_valid_trace_id` is the canonical contract (relevant for Stories 10.2+ when subscriber reads envelopes)
+- **Epic 9 retrospective lessons:**
+  - **AI-1:** Default to 3-pass review cadence для high-complexity stories. Story 10.1 is LOW complexity (scaffold) — pass-1 only is fine.
+  - **AI-2:** Executor briefs include self-verification ACs. Apply: AC4/AC5 are runnable verification.
+  - **AG-2:** Empirical verification of "no X anywhere" claims. Apply to AC10.
+
+### Git intelligence — recent commits
+
+```
+0653873 docs(retro): Epic 9 retrospective — α trace_id propagation kernel
+cca7bd7 chore(sprint-status): close Story 9.7 + Epic 9 — α trace_id propagation kernel COMPLETE
+35f9e1e fix(story-9.7): backfill invariant — migrator preserves valid existing trace_id
+6732d42 fix(story-9.7): pass-3 review — 17 patches batch-applied
+61fddb7 fix(story-9.7): pass-2 review — 24 patches batch-applied
+```
+
+### Latest-tech notes
+
+- **uv 0.11+** workspace pattern: `[tool.uv.workspace].members` + `[tool.uv.sources]` workspace = true
+- **PEP 561** `py.typed` marker required for mypy-strict downstream consumers
+- **PEP 517/518** `[build-system]` with `uv_build` backend
+
+---
+
+## Dev notes
+
+### Implementation sketch
+
+The work is mechanical — copy worker-wrapper pyproject.toml structure, trim dependencies to scaffold-only, add to root pyproject.toml workspace list, add bootstrap-verify entry, register in check_imports.py allowlist, run `uv lock`, smoke-test.
+
+Order of operations:
+1. Create `services/metrics-subscriber/` directory tree (pyproject.toml + src/metrics_subscriber/{__init__.py, __main__.py, py.typed, test_version.py})
+2. Edit root `pyproject.toml`: add to `members`, `[tool.uv.sources]`, `[project].dependencies`
+3. Run `uv lock` — regenerate lockfile
+4. Edit `justfile`: add bootstrap-verify line
+5. Edit `scripts/checks/check_imports.py`: register module in allowlist
+6. Run `just bootstrap-verify` — verify green
+7. Run `uv run --no-dev python -m metrics_subscriber` — verify exits 0 with banner
+8. Run `uv run pytest services/metrics-subscriber/ -q` — verify 2 smoke tests pass
+9. Run `uv run mypy --strict services/metrics-subscriber/` — verify exit 0 (AC8)
+
+### Non-goals (do NOT do in 10.1)
+
+- Tail loop / `EventLogReader` integration — Story 10.2
+- FastAPI `/metrics` endpoint — Story 10.3
+- Prometheus exposition — Story 10.3
+- Specific metric counters/gauges — Story 10.4
+- Cardinality discipline tests — Story 10.5
+- Compose stack integration — Story 10.6
+- Separability test S-4 — Story 10.6
+- Touch any existing service (worker-wrapper, registry-state, etc.)
+
+### Trade-off note
+
+**AC8 (mypy --strict extension):** Recommend YES (extend baseline now) because:
+- Package is currently empty (scaffold) — strict baseline costs nothing
+- Sets discipline for Stories 10.2-10.6 which WILL add code
+- Matches the pattern Epic 9 established (`services/registry-api`, `services/registry-state` already in baseline)
+
+Alternative: defer to Story 10.2 when first real code lands. Either works. Recommend lock baseline now to avoid debt.
+
+---
+
+## Out-of-scope risk flags
+
+| Risk | Mitigation |
+|---|---|
+| `uv lock` regeneration touches unrelated dependency pins | Verify diff is contained to new member's hash entries. If unrelated pins drift, isolate to separate commit and investigate. |
+| Root pyproject.toml `[tool.uv.workspace].members` ordering matters | Insert alphabetically or at end — match existing convention. |
+| `check_imports.py` allowlist format may have changed since Story 1.4 | Grep for existing workspace-member registrations and mirror format exactly. |
+| `bootstrap-verify` recipe ordering | Add new line at end OR alphabetically by module name — match existing pattern. |
+| `python -m metrics_subscriber` SystemExit propagation | Verify `raise SystemExit(main())` pattern returns int exit code correctly (mirror worker-wrapper `__main__.py`). |
+
+---
+
+## Definition of done
+
+- All 10 ACs satisfied.
+- `just bootstrap-verify` exits 0.
+- `uv run --no-dev python -m metrics_subscriber` exits 0 with banner.
+- `uv run pytest services/metrics-subscriber/ -q` shows 2 tests passing.
+- `uv run mypy --strict services/metrics-subscriber/` exits 0 (AC8).
+- `uv run ruff check services/metrics-subscriber/` + `ruff format --check` clean.
+- Full suite (`uv run pytest -q`) green; no regressions.
+- CI green on push.
+- Commit message follows `feat(metrics-subscriber): Story 10.1 — workspace scaffold (FR60)` style.
+- `sprint-status.yaml` `10-1-metrics-subscriber-scaffold: backlog → done`.
+- Dev Agent Record filled in.
+- One-pass adversarial code review per Epic 8.x cadence (Story 10.1 is scaffold-only, low risk — pass-1 sufficient).
+
+---
+
+## Dev Agent Record
+
+_(To be completed by the dev agent at story closure.)_
+
+### Implementation summary
+_(tbd)_
+
+### Files changed
+_(tbd)_
+
+### Test count delta
+_(tbd — pre-10.1 baseline ~2792; expect +2 net from smoke tests)_
+
+### `bootstrap-verify` count
+_(Document: 14 → 15 modules verified)_
+
+### `check_imports.py` extension
+_(Document the allowlist entry added)_
+
+### Mypy --strict baseline change
+_(Document: 103 → ~104 source files)_
+
+### Surprises / deviations from spec
+_(tbd)_
+
+### Story 10.2 readiness check
+_(Verify Story 10.2 — tail loop + cursor persistence — has the foundation it needs:
+- `services/metrics-subscriber/` exists with importable `metrics_subscriber` package
+- Scaffold ready for `EventLogReader` import + lifespan task)_
+
+---
+
+## Frontmatter
+
+```yaml
+---
+story_id: 10.1
+story_key: 10-1-metrics-subscriber-scaffold
+parent_epic: 10
+phase: 2
+fr_refs: [FR60]
+nfr_refs: [NFR-O1]
+arch_refs:
+  - "Read-only subscriber rule (P2-I1)"
+  - "metrics-subscriber as derived projection (ADR-0005 — to be drafted)"
+estimated_hours: 1-2
+priority: low (foundation for Stories 10.2-10.6)
+blocks:
+  - 10.2 (tail loop)
+  - 10.3 (FastAPI /metrics)
+  - 10.4 (metric set)
+  - 10.5 (cardinality discipline)
+  - 10.6 (compose + separability)
+blocked_by:
+  - Epic 8 (CI baseline)
+  - Epic 9 (trace_id propagation kernel — done)
+status: ready-for-dev
+created: 2026-05-19
+created_by: bmad-create-story skill
+---
+```
