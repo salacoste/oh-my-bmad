@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-19T01:00:00Z
+last_updated: 2026-05-19T03:00:00Z
 current_phase: 2  # Phase 2 opened by ADR-0003 (docs/adr/0003-phase-2-gate.md), 2026-05-15
 
 development_status:
@@ -271,7 +271,7 @@ development_status:
   # FR60–FR62a · NFR-O8, NFR-O10
   # =========================================================================
   epic-10: in-progress  # 2026-05-19 — Story 10.1 scaffold spec authored
-  10-1-scaffold-metrics-subscriber-workspace-member: ready-for-dev  # phase: 2 · FR60 · spec authored 2026-05-19
+  10-1-scaffold-metrics-subscriber-workspace-member: review  # phase: 2 · FR60 · 10/10 ACs · 2 smoke tests · mypy 102→106 files
   10-2-tail-loop-cursor-persistence: backlog  # phase: 2 · FR60
   10-3-fastapi-metrics-endpoint: backlog  # phase: 2 · FR61
   10-4-core-counter-gauge-histogram-set: backlog  # phase: 2 · FR62

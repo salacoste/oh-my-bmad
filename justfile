@@ -31,7 +31,8 @@ bootstrap-verify:
     uv run --no-dev python -c "from clawhip_bridge_mcp import __version__; print('clawhip_bridge_mcp', __version__)"
     uv run --no-dev python -c "from secret_hygiene import __version__; print('secret_hygiene', __version__)"
     uv run --no-dev python -c "from idempotency import __version__; print('idempotency', __version__)"
-    @echo "✓ bootstrap OK (13 workspace-member imports verified)"
+    uv run --no-dev python -c "from metrics_subscriber import __version__; print('metrics_subscriber', __version__)"
+    @echo "✓ bootstrap OK (14 workspace-member imports verified)"
 
 # Vendor an upstream fork into upstream/<name>/ and update VENDORED.md with
 # the pinned commit SHA. Supported names: omc, clawhip. See Architecture

@@ -1,0 +1,26 @@
+[project]
+name = "metrics-subscriber"
+version = "0.1.0"
+description = "β derived-metrics subscriber: read-only Prometheus exposition over JSONL event log (no parallel instrumentation per NFR-O1)."
+authors = [
+    { name = "R2d2", email = "bad.vano23ru@gmail.com" },
+]
+requires-python = ">=3.12"
+dependencies = [
+    "structlog>=24.1",
+    "pydantic-settings>=2.5,<3.0",
+    "events",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.0,<1.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+]
+
+[tool.uv.sources]
+events = { workspace = true }

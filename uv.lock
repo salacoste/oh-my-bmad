@@ -14,6 +14,7 @@ members = [
     "console-cli",
     "events",
     "idempotency",
+    "metrics-subscriber",
     "oh-my-bmad",
     "orchestrator-adapter",
     "registry-api",
@@ -1686,6 +1687,35 @@ wheels = [
 ]
 
 [[package]]
+name = "metrics-subscriber"
+version = "0.1.0"
+source = { editable = "services/metrics-subscriber" }
+dependencies = [
+    { name = "events" },
+    { name = "pydantic-settings" },
+    { name = "structlog" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "events", editable = "packages/events" },
+    { name = "pydantic-settings", specifier = ">=2.5,<3.0" },
+    { name = "structlog", specifier = ">=24.1" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[[package]]
 name = "more-itertools"
 version = "11.0.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1892,6 +1922,7 @@ dependencies = [
     { name = "console-cli" },
     { name = "events" },
     { name = "idempotency" },
+    { name = "metrics-subscriber" },
     { name = "orchestrator-adapter" },
     { name = "registry-api" },
     { name = "registry-state" },
@@ -1923,6 +1954,7 @@ requires-dist = [
     { name = "console-cli", editable = "services/console-cli" },
     { name = "events", editable = "packages/events" },
     { name = "idempotency", editable = "packages/idempotency" },
+    { name = "metrics-subscriber", editable = "services/metrics-subscriber" },
     { name = "orchestrator-adapter", editable = "services/orchestrator-adapter" },
     { name = "registry-api", editable = "services/registry-api" },
     { name = "registry-state", editable = "services/registry-state" },
