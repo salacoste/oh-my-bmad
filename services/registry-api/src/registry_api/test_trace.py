@@ -24,8 +24,15 @@ import pytest_asyncio
 from asgi_lifespan import LifespanManager
 from events import FROZEN_EPOCH, FrozenClock
 from httpx import ASGITransport, AsyncClient
-from registry_state.adapters.sqlite_store import create_engine  # noqa: IMP001
-from registry_state.schema import Base, Event, Task  # noqa: IMP001
+from registry_state.adapters.sqlite_store import (  # noqa: IMP001 test fixture seeds in-memory SQLite via registry-state schema; no prod cross-service coupling
+    create_engine,
+)
+from registry_state.schema import (  # noqa: IMP001 test fixture imports tables for Base.metadata.create_all seeding
+    Base,
+    Event,
+    Task,
+)
+from sqlalchemy import select
 
 from registry_api.app import build_app
 
@@ -248,16 +255,13 @@ async def test_get_trace_after_event_id_cursor(tmp_path: Path) -> None:
         eid = f"e-00000000-0000-7000-8000-0000000000{i:02d}"
         await _insert_event(db_url, event_id=eid, trace_id=_TRACE_ID, mono_ns=1000 + i)
 
-    # Get row IDs to find a cursor
+    # Get row IDs to find a cursor — Event is already imported at top level
     engine = create_engine(db_url)
-    from registry_state.schema import Event as _Event  # noqa: PLC0415, IMP001
-    from sqlalchemy import select  # noqa: PLC0415
-
     async with engine.connect() as conn:
         result = await conn.execute(
-            select(_Event.id)
-            .where(_Event.trace_id == _TRACE_ID)
-            .order_by(_Event.emitted_at_monotonic_ns)
+            select(Event.id)
+            .where(Event.trace_id == _TRACE_ID)
+            .order_by(Event.emitted_at_monotonic_ns)
         )
         row_ids = [r[0] for r in result.fetchall()]
     await engine.dispose()
