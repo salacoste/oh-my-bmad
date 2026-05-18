@@ -9,12 +9,14 @@ Architecture §"trace_id propagation wiring" §line-1169.
 Response shape — PRESENTATION view, not canonical replay (pass-3 UM-1)
 ---------------------------------------------------------------------
 The response shape is NOT byte-equivalent to the canonical envelope
-emitted via :func:`events.canonical.to_canonical_json`. The ``extensions``
-field is reserved on the response but ALWAYS empty until D7 lands
-(per-row ``extensions`` ORM column — see ``deferred-work.md``). Operators
-needing the canonical envelope MUST consume the JSONL event log directly.
-This response is optimised for human-readable causal-chain queries (PRD
-FR59a) and does NOT replace the canonical wire format.
+emitted via :func:`events.canonical.to_canonical_json`. Story 9.8 D7
+landed the ``events.extensions`` ORM column so the ``extensions`` field
+now round-trips ``envelope.extensions`` (empty dict for the common case;
+non-empty for envelopes that carried explicit forward-compatible
+metadata). Operators needing byte-equivalent canonical envelopes MUST
+still consume the JSONL event log directly — the JSON encoding here
+parses-and-re-serialises and is optimised for human-readable causal
+queries (PRD FR59a), not for the canonical wire format.
 
 Story 9.7 pass-1 patches applied:
   * PH-B5/E4 — LIMIT + after_event_id cursor pagination; X-Trace-Truncated
@@ -32,6 +34,17 @@ Story 9.7 pass-3 changes:
   * UH-8: ``extensions`` field documented as "presentation view"; the
     `/trace` response is NOT byte-equivalent to the canonical envelope
     until D7 lands (extensions ORM column).
+
+Story 9.8 deferred-work D6+D7 (Epic 9 retro):
+  * D6: response now exposes a top-level ``trace_id_synthetic_source``
+    field populated from the new ``events.trace_id_synthetic_source``
+    column. ``None`` for operator-originated (real) traces; one of
+    the documented synthetic labels otherwise.
+  * D7: response ``extensions`` field now populates from the new
+    ``events.extensions`` canonical-JSON column instead of always
+    returning ``{}``. NULL on the column → ``{}`` in the response so
+    pre-9.8 rows + envelopes with empty extensions still present
+    consistently.
 """
 
 from __future__ import annotations
@@ -71,10 +84,22 @@ def _row_to_dict(row: Event) -> dict[str, Any]:
     wrong: a legitimate payload that happens to have a ``"payload"`` key
     (e.g. ``secret.accessed`` payload with a nested ``payload`` summary)
     would be incorrectly unwrapped. Fix: return ``parsed_payload`` directly
-    as the response's ``payload`` field. ``extensions`` is NOT stored on
-    the Event row (no column for it), so the response field is always
-    ``{}`` — operators needing the full canonical envelope should consume
-    the JSONL log directly.
+    as the response's ``payload`` field.
+
+    Story 9.8 deferred-work D6+D7 (Epic 9 retro):
+
+    * ``extensions`` now populates from the new ``events.extensions``
+      column (canonical-JSON text written by the materializer from
+      ``envelope.extensions``). NULL there → empty dict in the response
+      so pre-9.8 rows + envelopes with empty extensions still present
+      consistently. Malformed JSON in the column (should not happen —
+      the materializer writes only canonical output) falls back to
+      ``{}`` with a structured warning.
+    * ``trace_id_synthetic_source`` is exposed as a top-level field
+      parallel to ``trace_id``. ``None`` for operator-originated
+      (real) traces; one of the documented labels (e.g.
+      ``"migrator-v1_0_0-to-v1_0_1"``) for synthetic ones. Replaces
+      the dropped pass-2 ``X-Trace-Has-Synthetic`` row-level heuristic.
     """
     try:
         parsed_payload: dict[str, Any] = json.loads(row.payload_json)
@@ -86,6 +111,25 @@ def _row_to_dict(row: Event) -> dict[str, Any]:
             exc,
         )
         parsed_payload = {"_raw": row.payload_json}
+
+    # Story 9.8 D7: read the new ``events.extensions`` canonical-JSON column.
+    # NULL → {} (preserves backwards-compat for pre-9.8 rows AND for the
+    # common case of empty envelope.extensions, where the materializer also
+    # stores NULL to avoid wasting bytes per row).
+    extensions_value: dict[str, Any]
+    if row.extensions is None:
+        extensions_value = {}
+    else:
+        try:
+            extensions_value = json.loads(row.extensions)
+        except (json.JSONDecodeError, TypeError) as exc:
+            _log.warning(
+                "trace_extensions_json_corrupt event_id=%s error_type=%s detail=%s",
+                row.id,
+                type(exc).__name__,
+                exc,
+            )
+            extensions_value = {}
 
     # PM-A10/E13: canonical ``Z`` suffix matches to_canonical_json format
     # (strftime("%Y-%m-%dT%H:%M:%S.%fZ") yields microsecond precision +
@@ -103,10 +147,13 @@ def _row_to_dict(row: Event) -> dict[str, Any]:
         "session_id": row.session_id,
         # TH-B6: materializer canonical shape is payload-only — no heuristic.
         "payload": parsed_payload,
-        # ``extensions`` is not persisted on the Event row; always {} here.
-        "extensions": {},
+        # Story 9.8 D7: extensions populates from events.extensions column.
+        "extensions": extensions_value,
         "parent_event_id": row.parent_event_id,
         "trace_id": row.trace_id,
+        # Story 9.8 D6: provenance label for synthetic trace_ids; None for
+        # operator-originated (real) traces.
+        "trace_id_synthetic_source": row.trace_id_synthetic_source,
         "request_id": row.request_id,
     }
 

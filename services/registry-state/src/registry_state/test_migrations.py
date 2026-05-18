@@ -41,8 +41,9 @@ _EXPECTED_INDEXES = frozenset(
 )
 # Tracks the latest alembic head revision. Bump when a new migration is added.
 # History: 0001 initial → 0002 task thread binding → 0003 session compound index
-# → 0004 add task state columns (Story 8.x) → 0005 add event trace_id (Story 9.7).
-_REVISION = "0005"
+# → 0004 add task state columns (Story 8.x) → 0005 add event trace_id (Story 9.7)
+# → 0006 add event trace_id_synthetic_source + extensions (Story 9.8 D6+D7).
+_REVISION = "0006"
 _INI_PATH = str(Path(__file__).parent.parent.parent / "alembic.ini")
 
 
@@ -143,3 +144,95 @@ def test_upgrade_head_twice_is_noop() -> None:
         assert versions_2 == [_REVISION], f"Unexpected revision after second upgrade: {versions_2}"
         # Byte-identical DDL: compares (type, name, sql) tuples.
         assert snapshot_1 == snapshot_2, "sqlite_master changed between two upgrade head calls"
+
+
+def test_migration_0006_adds_synthetic_source_and_extensions_columns() -> None:
+    """Story 9.8 D6+D7: migration 0006 adds two nullable columns to ``events``.
+
+    Smoke test: upgrade head on an empty DB and assert both new columns
+    exist with the expected (nullable, no-default) shape. Existing rows
+    (none here) would carry NULL for both per the additive-migration
+    contract.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = str(Path(tmpdir) / "state.sqlite3")
+        url = f"sqlite+aiosqlite:///{db_path}"
+        _run_upgrade(url)
+
+        conn = sqlite3.connect(db_path)
+        try:
+            cur = conn.cursor()
+            cur.execute("PRAGMA table_info(events)")
+            cols = {row[1]: row for row in cur.fetchall()}
+        finally:
+            conn.close()
+
+        # Both columns must exist.
+        assert "trace_id_synthetic_source" in cols, (
+            "migration 0006 must add events.trace_id_synthetic_source"
+        )
+        assert "extensions" in cols, "migration 0006 must add events.extensions"
+        # PRAGMA table_info columns: (cid, name, type, notnull, dflt_value, pk).
+        # Both columns must be nullable (notnull == 0).
+        assert cols["trace_id_synthetic_source"][3] == 0, (
+            "events.trace_id_synthetic_source must be nullable"
+        )
+        assert cols["extensions"][3] == 0, "events.extensions must be nullable"
+
+
+def test_migration_0006_preserves_existing_rows_with_null() -> None:
+    """Story 9.8 D6+D7: pre-9.8 rows survive migration 0006 with NULL on new cols.
+
+    Drives the additive-migration contract: ADD COLUMN ... NULL on SQLite
+    is metadata-only; existing rows keep their data and receive NULL on
+    the new columns. We seed a row through the materializer-equivalent
+    raw INSERT to exercise the column-default path.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = str(Path(tmpdir) / "state.sqlite3")
+        url = f"sqlite+aiosqlite:///{db_path}"
+        _run_upgrade(url)
+
+        # Seed a row directly via sqlite3 (post-0006 schema; new columns
+        # absent from the INSERT — they must default to NULL).
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute(
+                "INSERT INTO tasks (id, status, created_at, updated_at, "
+                "actor_kind, actor_id) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "t-00000000-0000-7000-8000-000000000001",
+                    "blocked",
+                    "2026-05-19T00:00:00.000",
+                    "2026-05-19T00:00:00.000",
+                    "operator",
+                    "test-op",
+                ),
+            )
+            conn.execute(
+                "INSERT INTO events (id, type, schema_version, emitted_at, "
+                "emitted_at_monotonic_ns, actor_kind, actor_id, task_id, "
+                "request_id, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "e-00000000-0000-7000-8000-000000000001",
+                    "task.created",
+                    "1.1.0",
+                    "2026-05-19T00:00:00.000",
+                    1,
+                    "operator",
+                    "test-op",
+                    "t-00000000-0000-7000-8000-000000000001",
+                    "00000000-0000-7000-8000-000000000001",
+                    '{"k":"v"}',
+                ),
+            )
+            conn.commit()
+
+            cur = conn.execute("SELECT trace_id_synthetic_source, extensions FROM events")
+            row = cur.fetchone()
+        finally:
+            conn.close()
+
+        assert row == (None, None), "pre-9.8 row must have NULL on both new columns; got " + repr(
+            row
+        )

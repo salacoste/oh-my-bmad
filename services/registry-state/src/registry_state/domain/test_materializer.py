@@ -646,3 +646,138 @@ async def test_materializer_persists_only_chat_id(
     assert task is not None
     assert task.chat_id == 99999
     assert task.reply_to_message_id is None
+
+
+# ===========================================================================
+# Story 9.8 deferred-work D6+D7 (Epic 9 retro) — trace_id_synthetic_source
+# + extensions ORM columns wired through materializer.
+# ===========================================================================
+
+
+def _task_created_envelope_with_extensions(
+    extensions: dict[str, object],
+    mono_ns: int = 4_000_000,
+) -> EventEnvelope:
+    """Same as ``_task_created_envelope`` but with a non-default extensions dict.
+
+    Used by D6/D7 regression tests to drive the materializer's extensions
+    extraction path. Keyword args mirror the production helper so the test
+    surface stays small.
+    """
+    rng = Random(7)
+    clk = FrozenClock(mono_ns=mono_ns, now=FROZEN_EPOCH)
+    tid = new_task_id(clock=clk, rng=rng)
+    eid = new_event_id(clock=clk, rng=rng)
+    rid = new_uuid7(clock=clk, rng=rng)
+    return EventEnvelope.create(
+        event_id=eid,
+        schema_version="1.0.0",
+        type="task.created",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=TaskCreatedPayload(task_id=tid, title="D6/D7 test"),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
+        request_id=rid,
+        extensions=extensions,
+    )
+
+
+@pytest.mark.asyncio
+async def test_materializer_persists_envelope_extensions(
+    materializer: Materializer, session_maker: object
+) -> None:
+    """Story 9.8 D7: non-empty envelope.extensions round-trips through canonical JSON.
+
+    The materializer must persist envelope.extensions as canonical-JSON
+    text on the new events.extensions column so /trace can rebuild the
+    presentation view. Round-trip via ``json.loads`` to assert semantic
+    equality (key order is byte-stable but not required for equality).
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    assert isinstance(session_maker, async_sessionmaker)
+    env = _task_created_envelope_with_extensions(
+        extensions={"a": 1, "nested": {"k": "v"}},
+    )
+    await materializer.apply(env)
+    async with session_maker() as session:
+        row = await session.get(Event, env.event_id)
+    assert row is not None
+    assert row.extensions is not None, "non-empty extensions must populate the column"
+    parsed = json.loads(row.extensions)
+    assert parsed == {"a": 1, "nested": {"k": "v"}}
+    # Canonical-JSON contract: recursive sort_keys.
+    assert row.extensions == '{"a":1,"nested":{"k":"v"}}'
+
+
+@pytest.mark.asyncio
+async def test_materializer_extensions_none_when_empty_dict(
+    materializer: Materializer, session_maker: object
+) -> None:
+    """Story 9.8 D7: an empty extensions dict (v1.0.1+ default) → NULL column.
+
+    Decision: empty dict is the overwhelmingly common case for the
+    foreseeable future. Storing canonical ``"{}"`` for every event would
+    waste a few bytes per row indefinitely; NULL is cheaper and equally
+    round-trippable (/trace coerces NULL back to {} for presentation).
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    assert isinstance(session_maker, async_sessionmaker)
+    env = _task_created_envelope()  # extensions defaults to {}
+    await materializer.apply(env)
+    async with session_maker() as session:
+        row = await session.get(Event, env.event_id)
+    assert row is not None
+    assert row.extensions is None, "empty extensions must store NULL, not '{}'"
+
+
+@pytest.mark.asyncio
+async def test_materializer_trace_id_synthetic_source_null_for_normal_envelope(
+    materializer: Materializer, session_maker: object
+) -> None:
+    """Story 9.8 D6: real (operator-originated) traces leave the column NULL.
+
+    The provenance column populates only when envelope.extensions carries
+    the ``trace_id_synthetic_source`` key (set by the back-fill helper
+    and failure-detection emits). A normal operator-originated envelope
+    has no such key and must store NULL.
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    assert isinstance(session_maker, async_sessionmaker)
+    env = _task_created_envelope()
+    await materializer.apply(env)
+    async with session_maker() as session:
+        row = await session.get(Event, env.event_id)
+    assert row is not None
+    assert row.trace_id_synthetic_source is None
+
+
+@pytest.mark.asyncio
+async def test_materializer_persists_trace_id_synthetic_source_label(
+    materializer: Materializer, session_maker: object
+) -> None:
+    """Story 9.8 D6: synthetic-source label lifted from envelope.extensions.
+
+    The back-fill helper and failure-detection emits set
+    ``envelope.extensions["trace_id_synthetic_source"] = "<label>"``; the
+    materializer extracts that value and persists it on the new column.
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    assert isinstance(session_maker, async_sessionmaker)
+    env = _task_created_envelope_with_extensions(
+        extensions={"trace_id_synthetic_source": "migrator-v1_0_0-to-v1_0_1"},
+    )
+    await materializer.apply(env)
+    async with session_maker() as session:
+        row = await session.get(Event, env.event_id)
+    assert row is not None
+    assert row.trace_id_synthetic_source == "migrator-v1_0_0-to-v1_0_1"
+    # The label is also preserved in the extensions canonical JSON for
+    # full round-trip via /trace.
+    assert row.extensions is not None
+    parsed = json.loads(row.extensions)
+    assert parsed == {"trace_id_synthetic_source": "migrator-v1_0_0-to-v1_0_1"}

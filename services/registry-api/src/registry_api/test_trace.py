@@ -62,6 +62,8 @@ async def _insert_event(
     trace_id: str | None,
     mono_ns: int,
     payload_json: str | None = None,
+    extensions: str | None = None,
+    trace_id_synthetic_source: str | None = None,
 ) -> None:
     engine = create_engine(db_url)
     async with engine.begin() as conn:
@@ -95,6 +97,11 @@ async def _insert_event(
                 "request_id": "req-0001",
                 "payload_json": payload_json or json.dumps({"key": "value"}),
                 "trace_id": trace_id,
+                # Story 9.8 D6+D7: seed the new columns directly so tests
+                # can exercise the /trace response shape without going
+                # through the materializer.
+                "extensions": extensions,
+                "trace_id_synthetic_source": trace_id_synthetic_source,
             },
         )
     await engine.dispose()
@@ -420,3 +427,134 @@ async def test_get_trace_after_event_id_cursor_with_disagreeing_mono_order(
     # cursor switches to ``(emitted_at_monotonic_ns, event_id)`` tuples
     # in a future story, this assertion would flip.
     assert after_high.json() == []
+
+
+# ---------------------------------------------------------------------------
+# Story 9.8 deferred-work D6+D7 (Epic 9 retro)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_trace_returns_extensions_from_db(tmp_path: Path) -> None:
+    """Story 9.8 D7: ``events.extensions`` canonical-JSON round-trips through /trace.
+
+    Replaces the pre-D7 always-empty placeholder. The response's
+    ``extensions`` field must parse the canonical JSON stored in the
+    column.
+    """
+    db_url = _db_url(tmp_path / "state.sqlite3")
+    events_dir = tmp_path / "events"
+    events_dir.mkdir()
+    await _create_schema(db_url)
+
+    extensions = {"forensic_key": "forensic_value", "nested": {"k": 42}}
+    await _insert_event(
+        db_url,
+        event_id="e-00000000-0000-7000-8000-000000000d70",
+        trace_id=_TRACE_ID,
+        mono_ns=1000,
+        extensions=json.dumps(extensions, sort_keys=True),
+    )
+
+    app = build_app(base_dir=events_dir, db_url=db_url, clock=_FROZEN_CLOCK)
+    async with LifespanManager(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.get(f"/v1/trace/{_TRACE_ID}")
+
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 1
+    assert rows[0]["extensions"] == extensions
+
+
+@pytest.mark.asyncio
+async def test_get_trace_returns_synthetic_source_when_set(tmp_path: Path) -> None:
+    """Story 9.8 D6: synthetic-source label populates the top-level response field."""
+    db_url = _db_url(tmp_path / "state.sqlite3")
+    events_dir = tmp_path / "events"
+    events_dir.mkdir()
+    await _create_schema(db_url)
+
+    await _insert_event(
+        db_url,
+        event_id="e-00000000-0000-7000-8000-000000000d61",
+        trace_id=_TRACE_ID,
+        mono_ns=1000,
+        trace_id_synthetic_source="migrator-v1_0_0-to-v1_0_1",
+    )
+
+    app = build_app(base_dir=events_dir, db_url=db_url, clock=_FROZEN_CLOCK)
+    async with LifespanManager(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.get(f"/v1/trace/{_TRACE_ID}")
+
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 1
+    assert rows[0]["trace_id_synthetic_source"] == "migrator-v1_0_0-to-v1_0_1"
+
+
+@pytest.mark.asyncio
+async def test_get_trace_synthetic_source_null_for_real_traces(tmp_path: Path) -> None:
+    """Story 9.8 D6: real (operator-originated) traces report None on the new field."""
+    db_url = _db_url(tmp_path / "state.sqlite3")
+    events_dir = tmp_path / "events"
+    events_dir.mkdir()
+    await _create_schema(db_url)
+
+    # No trace_id_synthetic_source passed → defaults to None.
+    await _insert_event(
+        db_url,
+        event_id="e-00000000-0000-7000-8000-000000000d60",
+        trace_id=_TRACE_ID,
+        mono_ns=1000,
+    )
+
+    app = build_app(base_dir=events_dir, db_url=db_url, clock=_FROZEN_CLOCK)
+    async with LifespanManager(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.get(f"/v1/trace/{_TRACE_ID}")
+
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 1
+    assert rows[0]["trace_id_synthetic_source"] is None
+    # D7: extensions is still {} when the column is NULL (default for the
+    # common case + back-compat for pre-9.8 rows).
+    assert rows[0]["extensions"] == {}
+
+
+@pytest.mark.asyncio
+async def test_get_trace_extensions_null_returns_empty_dict(tmp_path: Path) -> None:
+    """Story 9.8 D7: NULL ``events.extensions`` → ``{}`` in response (back-compat).
+
+    Pre-9.8 rows have NULL on the new column; the response must still
+    return ``{}`` so the API shape is stable across the migration.
+    """
+    db_url = _db_url(tmp_path / "state.sqlite3")
+    events_dir = tmp_path / "events"
+    events_dir.mkdir()
+    await _create_schema(db_url)
+
+    # extensions=None (NULL on the column).
+    await _insert_event(
+        db_url,
+        event_id="e-00000000-0000-7000-8000-000000000d77",
+        trace_id=_TRACE_ID,
+        mono_ns=1000,
+        extensions=None,
+    )
+
+    app = build_app(base_dir=events_dir, db_url=db_url, clock=_FROZEN_CLOCK)
+    async with LifespanManager(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.get(f"/v1/trace/{_TRACE_ID}")
+
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 1
+    assert rows[0]["extensions"] == {}

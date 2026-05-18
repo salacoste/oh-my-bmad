@@ -257,8 +257,14 @@ def _parse_with_pre110_backfill(
 
     # TH-B5 shared helper: back-fill trace_id from request_id (with e-prefix
     # strip per Q6). Returns None when neither trace_id nor request_id
-    # produces a valid bare UUIDv7.
-    backfilled = backfill_trace_id_from_request_id(raw_dict)
+    # produces a valid bare UUIDv7. Story 9.8 D6: pass the subscriber-specific
+    # provenance label so the materializer can route it to
+    # events.trace_id_synthetic_source — distinguishing online replay
+    # back-fills from the offline migrator's records.
+    backfilled = backfill_trace_id_from_request_id(
+        raw_dict,
+        caller_label="subscriber-pre110-replay",
+    )
     if backfilled is None:
         _log.warning(
             "event_log_parse_skip path=%s event_id=%s "

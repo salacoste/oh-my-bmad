@@ -169,6 +169,14 @@ def migrate_v1_0_0_to_v1_0_1(event: dict[str, Any]) -> dict[str, Any]:
                 f"or 'tg:<digits>')"
             )
         migrated["trace_id"] = backfilled
+        # Story 9.8 D6 (Epic 9 retro): mark synthetic-source provenance so
+        # the materializer can populate events.trace_id_synthetic_source.
+        # Mirrors the rule in :func:`events.backfill.backfill_trace_id_from_request_id`
+        # — kept in lock-step with the shared helper.
+        existing_ext = migrated.get("extensions")
+        ext: dict[str, Any] = dict(existing_ext) if isinstance(existing_ext, dict) else {}
+        ext["trace_id_synthetic_source"] = "migrator-v1_0_0-to-v1_0_1"
+        migrated["extensions"] = ext
     return migrated
 
 

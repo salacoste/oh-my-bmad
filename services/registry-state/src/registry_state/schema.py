@@ -176,8 +176,26 @@ class Event(Base):
     # Nullable: pre-1.1.0 events (no trace_id) remain queryable; post-1.1.0
     # events all carry a non-null value (EventEnvelope enforces required).
     trace_id: Mapped[str | None] = mapped_column(String(38), nullable=True)
+    # Story 9.8 deferred-work D6 (Epic 9 retro): provenance label for synthetic
+    # trace_ids. NULL for operator-originated (real) traces; non-NULL only when
+    # the trace_id was minted by an internal back-fill or system-initiated
+    # emission. Known labels:
+    #   - "migrator-v1_0_0-to-v1_0_1"          — offline migrator back-fill
+    #   - "subscriber-pre110-replay"           — online subscriber back-fill
+    #   - "failure-detection-system-initiated" — emit_* without operator context
+    # No index: low-cardinality (≤ handful of distinct values) and no anticipated
+    # WHERE clauses; operators consume the column via /trace per-row inspection.
+    trace_id_synthetic_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
     request_id: Mapped[str] = mapped_column(String(36), nullable=False)
     payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    # Story 9.8 deferred-work D7 (Epic 9 retro): canonical-JSON text of
+    # ``envelope.extensions`` so the /trace presentation view can populate the
+    # ``extensions`` field instead of always returning ``{}``. NULL when the
+    # envelope's extensions dict is empty (the v1.0.1+ default); non-empty
+    # extensions are serialised via :func:`events.canonical.to_canonical_json`'s
+    # underlying rule (recursive sort_keys, no whitespace, UTF-8). No index:
+    # extensions is presentation-only and never queried.
+    extensions: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class IdempotencyCache(Base):

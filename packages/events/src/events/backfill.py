@@ -33,7 +33,11 @@ _BACKFILL_UUIDV7_RE = re.compile(
 )
 
 
-def backfill_trace_id_from_request_id(envelope_dict: dict[str, Any]) -> dict[str, Any] | None:
+def backfill_trace_id_from_request_id(
+    envelope_dict: dict[str, Any],
+    *,
+    caller_label: str = "migrator-v1_0_0-to-v1_0_1",
+) -> dict[str, Any] | None:
     """Inject ``trace_id`` derived from ``request_id`` when missing/invalid.
 
     Returns:
@@ -46,6 +50,20 @@ def backfill_trace_id_from_request_id(envelope_dict: dict[str, Any]) -> dict[str
     The back-fill is deterministic: same input ``request_id`` always
     produces the same ``trace_id`` so the subscriber + migrator paths
     converge on the same value.
+
+    Args:
+        envelope_dict: Parsed JSONL record being back-filled.
+        caller_label: Story 9.8 D6 (Epic 9 retro) — provenance label
+            written to ``envelope.extensions["trace_id_synthetic_source"]``
+            when this helper actually back-fills a trace_id. Defaults to
+            ``"migrator-v1_0_0-to-v1_0_1"`` (the original caller); the
+            subscriber back-fill path passes
+            ``"subscriber-pre110-replay"``. The materializer later lifts
+            this label to the new ``events.trace_id_synthetic_source``
+            column so operators inspecting /trace can distinguish real
+            (operator-originated) traces from synthetic ones. NOT applied
+            when the no-op path returns the input dict unchanged — an
+            already-valid trace_id is authoritative.
 
     Story 9.7 pass-2 TM-E7 / pass-3 UH-5: also ensures ``schema_version`` is
     present AND historically valid on the returned dict. Pre-1.1.0 JSONL
@@ -88,6 +106,18 @@ def backfill_trace_id_from_request_id(envelope_dict: dict[str, Any]) -> dict[str
         if not is_valid_trace_id(bare_uuid):
             return None
         new_dict["trace_id"] = bare_uuid
+        # Story 9.8 D6 (Epic 9 retro): mark the synthetic origin so the
+        # materializer can route it to events.trace_id_synthetic_source.
+        # ``envelope.extensions`` is the reserved forward-compatible
+        # metadata channel (envelope.py docstring: "Reserved for
+        # forward-compatible per-event metadata e.g. trace_id_synthetic_source").
+        # We mutate the existing dict (or create an empty one) rather than
+        # overwriting so callers that already populated other extensions
+        # keys keep them.
+        existing_ext = new_dict.get("extensions")
+        ext: dict[str, Any] = dict(existing_ext) if isinstance(existing_ext, dict) else {}
+        ext["trace_id_synthetic_source"] = caller_label
+        new_dict["extensions"] = ext
 
     if not has_valid_schema_version:
         # Pre-1.1.0 records had no explicit schema_version; the historical

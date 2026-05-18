@@ -50,6 +50,11 @@ from registry_state.schema import Event
 
 log = logging.getLogger(__name__)
 
+# Story 9.8 deferred-work D6: extensions key reserved exclusively for
+# routing the synthetic-trace-id provenance label through the envelope
+# to the events.trace_id_synthetic_source column.
+_SYNTHETIC_SOURCE_KEY = "trace_id_synthetic_source"
+
 # Handler callable: (session, envelope) → None  (async)
 Handler = Callable[[AsyncSession, EventEnvelope], Awaitable[None]]
 
@@ -100,6 +105,35 @@ def _canonical_payload_json(env: EventEnvelope) -> str:
     return to_canonical_payload_json(data)
 
 
+def _extract_extensions_columns(env: EventEnvelope) -> tuple[str | None, str | None]:
+    """Return ``(trace_id_synthetic_source, extensions_canonical_json)`` for *env*.
+
+    Story 9.8 deferred-work D6+D7 (Epic 9 retro):
+
+    * ``trace_id_synthetic_source`` is lifted from
+      ``env.extensions[_SYNTHETIC_SOURCE_KEY]`` when present (set by the
+      back-fill helper for synthetic traces and by failure-detection emits
+      with no operator context); ``None`` otherwise — operator-originated
+      traces leave the column NULL.
+    * ``extensions_canonical_json`` is the canonical-JSON serialisation of
+      ``env.extensions`` when the dict is non-empty; ``None`` when empty
+      (the v1.0.1+ default) so the column stays NULL for the common case
+      and only carries forensic payloads.
+    """
+    raw_extensions = env.extensions
+    synthetic_source_raw: object | None = raw_extensions.get(_SYNTHETIC_SOURCE_KEY)
+    synthetic_source: str | None = (
+        synthetic_source_raw if isinstance(synthetic_source_raw, str) else None
+    )
+    if raw_extensions:
+        # Materialise as plain dict so the canonical encoder is given a
+        # standard ``dict`` (env.extensions is wrapped in _FrozenDict).
+        ext_json: str | None = to_canonical_payload_json(dict(raw_extensions))
+    else:
+        ext_json = None
+    return synthetic_source, ext_json
+
+
 class Materializer:
     """Dispatch core: apply events to SQLite state via registered handlers.
 
@@ -144,6 +178,7 @@ class Materializer:
         """
         async with self._session_maker() as session, session.begin():
             task_id, session_id = _extract_ids(envelope)
+            synthetic_source, extensions_json = _extract_extensions_columns(envelope)
             event_values = dict(
                 id=envelope.event_id,
                 type=envelope.type,
@@ -159,8 +194,14 @@ class Materializer:
                 # trace_id is mandatory on post-1.1.0 envelopes; ORM column is
                 # nullable to preserve queryability of pre-1.1.0 rows (NULL there).
                 trace_id=envelope.trace_id,
+                # Story 9.8 D6: provenance label for synthetic trace_ids,
+                # lifted from envelope.extensions[_SYNTHETIC_SOURCE_KEY].
+                trace_id_synthetic_source=synthetic_source,
                 request_id=envelope.request_id,
                 payload_json=_canonical_payload_json(envelope),
+                # Story 9.8 D7: canonical-JSON of envelope.extensions for
+                # /trace round-trip; NULL when the dict is empty.
+                extensions=extensions_json,
             )
             # Check for duplicate BEFORE running handler (avoid side-effects
             # on already-applied events). Use a SELECT for existence check.
@@ -210,6 +251,7 @@ class Materializer:
                         await handler(session, envelope)
                     # Event row insert after handler so FK is satisfied.
                     task_id, session_id = _extract_ids(envelope)
+                    synthetic_source, extensions_json = _extract_extensions_columns(envelope)
                     event_stmt = (
                         sqlite_insert(Event)
                         .values(
@@ -225,8 +267,12 @@ class Materializer:
                             parent_event_id=envelope.parent_event_id,
                             # Story 9.7 / AC5: trace_id wired in apply_many path too.
                             trace_id=envelope.trace_id,
+                            # Story 9.8 D6: synthetic-source provenance.
+                            trace_id_synthetic_source=synthetic_source,
                             request_id=envelope.request_id,
                             payload_json=_canonical_payload_json(envelope),
+                            # Story 9.8 D7: canonical-JSON envelope.extensions.
+                            extensions=extensions_json,
                         )
                         .on_conflict_do_nothing(index_elements=["id"])
                     )

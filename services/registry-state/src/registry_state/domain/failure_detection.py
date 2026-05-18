@@ -85,6 +85,27 @@ from registry_state.domain.event_types import (
 log = logging.getLogger(__name__)
 
 
+# Story 9.8 D6 (Epic 9 retro): label used by failure-detection emits when the
+# trace_id was minted synthetically because no operator context is available.
+# Threaded through ``EventEnvelope.create(extensions=...)``; the materializer
+# lifts it to ``events.trace_id_synthetic_source``. Callers that DO have an
+# operator-originated trace_id MUST omit ``synthetic_source`` so the column
+# stays NULL (real provenance).
+_SYNTHETIC_SOURCE_LABEL_SYSTEM_INITIATED = "failure-detection-system-initiated"
+
+
+def _synthetic_source_extensions(synthetic_source: str | None) -> dict[str, str] | None:
+    """Return an ``extensions`` dict carrying the provenance label, or ``None``.
+
+    Returns ``None`` (i.e. EventEnvelope.create defaults to ``{}``) when no
+    label is requested — preserving the v1.0.1+ empty-extensions default
+    for operator-originated traces.
+    """
+    if synthetic_source is None:
+        return None
+    return {"trace_id_synthetic_source": synthetic_source}
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 #
@@ -182,6 +203,7 @@ async def emit_service_crashed(
     actor_id: str | None = None,
     request_id: str | None = None,
     parent_event_id: str | None = None,
+    synthetic_source: str | None = None,
 ) -> EventEnvelope:
     """Emit a ``service.crashed`` event for a supervised process exit.
 
@@ -235,6 +257,10 @@ async def emit_service_crashed(
         trace_id=trace_id,
         request_id=request_id if request_id is not None else new_request_id(clock=clock),
         parent_event_id=parent_event_id,
+        # Story 9.8 D6: if the caller minted a synthetic trace_id, record
+        # the provenance so the materializer can populate the
+        # events.trace_id_synthetic_source column.
+        extensions=_synthetic_source_extensions(synthetic_source),
     )
     await writer.append(envelope)
     return envelope
@@ -252,6 +278,7 @@ async def emit_session_heartbeat_timeout(
     actor_id: str = "registry-state",
     request_id: str | None = None,
     parent_event_id: str | None = None,
+    synthetic_source: str | None = None,
 ) -> EventEnvelope:
     """Emit a ``session.heartbeat_timeout`` event for an overdue session.
 
@@ -290,6 +317,8 @@ async def emit_session_heartbeat_timeout(
         trace_id=trace_id,
         request_id=request_id if request_id is not None else new_request_id(clock=clock),
         parent_event_id=parent_event_id,
+        # Story 9.8 D6: see emit_service_crashed.
+        extensions=_synthetic_source_extensions(synthetic_source),
     )
     await writer.append(envelope)
     return envelope
@@ -306,6 +335,7 @@ async def emit_sink_delivery_failed(
     actor_id: str = "registry-state",
     request_id: str | None = None,
     parent_event_id: str | None = None,
+    synthetic_source: str | None = None,
 ) -> EventEnvelope:
     """Emit a ``sink.delivery_failed`` event after ``consecutive_failures``.
 
@@ -354,6 +384,8 @@ async def emit_sink_delivery_failed(
         trace_id=trace_id,
         request_id=request_id if request_id is not None else new_request_id(clock=clock),
         parent_event_id=parent_event_id,
+        # Story 9.8 D6: see emit_service_crashed.
+        extensions=_synthetic_source_extensions(synthetic_source),
     )
     await writer.append(envelope)
     return envelope
@@ -369,6 +401,7 @@ async def emit_task_stop_requested(
     actor_kind: ActorKind = "system",
     request_id: str | None = None,
     parent_event_id: str | None = None,
+    synthetic_source: str | None = None,
 ) -> EventEnvelope:
     """Emit a ``task.stop_requested`` event for a stop request.
 
@@ -409,6 +442,8 @@ async def emit_task_stop_requested(
         trace_id=trace_id,
         request_id=request_id if request_id is not None else new_request_id(clock=clock),
         parent_event_id=parent_event_id,
+        # Story 9.8 D6: see emit_service_crashed.
+        extensions=_synthetic_source_extensions(synthetic_source),
     )
     await writer.append(envelope)
     return envelope
@@ -787,8 +822,14 @@ __all__ = [
     "HeartbeatMonitor",
     "SinkFailureState",
     "SinkFailureTracker",
+    "SYNTHETIC_SOURCE_SYSTEM_INITIATED",
     "emit_service_crashed",
     "emit_session_heartbeat_timeout",
     "emit_sink_delivery_failed",
     "emit_task_stop_requested",
 ]
+
+
+# Public alias for the system-initiated synthetic-source label so callers can
+# reference the constant rather than repeating the literal at every emit site.
+SYNTHETIC_SOURCE_SYSTEM_INITIATED: Final = _SYNTHETIC_SOURCE_LABEL_SYSTEM_INITIATED

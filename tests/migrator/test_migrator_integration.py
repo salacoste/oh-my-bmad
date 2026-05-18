@@ -198,7 +198,16 @@ def test_migrator_v1_0_0_to_v1_0_1_in_process_round_trip(
     for i, line in enumerate(lines):
         event = json.loads(line)
         assert event["schema_version"] == "1.0.1", f"line {i}: {event['schema_version']!r}"
-        assert event.get("extensions") == {}, f"line {i}: extensions={event.get('extensions')!r}"
+        # Story 9.8 D6: migrator now stamps extensions["trace_id_synthetic_source"]
+        # on every record it back-fills so the materializer can populate
+        # events.trace_id_synthetic_source (provenance column). Pre-9.8 the
+        # assertion was ``== {}``. The extensions dict is now non-empty for
+        # records that had no prior trace_id (the vast majority of v1.0.0 events).
+        ext = event.get("extensions")
+        assert isinstance(ext, dict), f"line {i}: extensions must be a dict, got {ext!r}"
+        assert ext.get("trace_id_synthetic_source") == "migrator-v1_0_0-to-v1_0_1", (
+            f"line {i}: extensions={ext!r}"
+        )
 
 
 @pytest.mark.migrator
@@ -219,7 +228,11 @@ def test_migrator_output_round_trips_through_event_envelope(
             continue
         env = from_canonical_json(line)
         assert env.schema_version == "1.0.1"
-        assert env.extensions == {}
+        # Story 9.8 D6: extensions now carries the synthetic-source provenance
+        # label written by migrate_v1_0_0_to_v1_0_1 for back-filled records.
+        assert env.extensions.get("trace_id_synthetic_source") == "migrator-v1_0_0-to-v1_0_1", (
+            f"migrated record must carry provenance label; got {env.extensions!r}"
+        )
         # Story 9.7: migrator back-fills trace_id using request_id so that
         # post-9.7 envelope validation (which requires trace_id) accepts
         # migrated records. Verify the back-fill was applied.

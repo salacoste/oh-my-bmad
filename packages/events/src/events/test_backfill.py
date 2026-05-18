@@ -124,3 +124,92 @@ def test_backfill_invalid_request_id_shape_returns_none() -> None:
     record = {"request_id": "not-a-uuid", "schema_version": "1.0.0"}
     result = backfill_trace_id_from_request_id(record)
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Story 9.8 deferred-work D6 (Epic 9 retro) — caller-label provenance
+# ---------------------------------------------------------------------------
+
+
+def test_backfill_helper_marks_synthetic_source_default_label() -> None:
+    """Story 9.8 D6: back-fill helper stamps the default migrator label.
+
+    When the helper actually back-fills (i.e. trace_id was missing/invalid),
+    it must write ``extensions["trace_id_synthetic_source"]`` so the
+    materializer can route the provenance to
+    ``events.trace_id_synthetic_source``. Default label corresponds to
+    the migrator caller (the original caller of the helper).
+    """
+    record = {"request_id": _VALID_TRACE_ID, "schema_version": "1.0.0"}
+    result = backfill_trace_id_from_request_id(record)
+    assert result is not None
+    ext = result.get("extensions")
+    assert isinstance(ext, dict)
+    assert ext.get("trace_id_synthetic_source") == "migrator-v1_0_0-to-v1_0_1"
+
+
+def test_backfill_migrator_label_vs_subscriber_label() -> None:
+    """Story 9.8 D6: ``caller_label`` distinguishes migrator vs subscriber callers.
+
+    Same input record, different ``caller_label`` arguments must produce
+    distinct provenance labels so /trace can later tell apart offline
+    migrator-rewritten events from online subscriber-replay back-fills.
+    """
+    migrator_record = {"request_id": _VALID_TRACE_ID, "schema_version": "1.0.0"}
+    migrator_result = backfill_trace_id_from_request_id(
+        migrator_record, caller_label="migrator-v1_0_0-to-v1_0_1"
+    )
+    assert migrator_result is not None
+    migrator_ext = migrator_result.get("extensions")
+    assert isinstance(migrator_ext, dict)
+    assert migrator_ext.get("trace_id_synthetic_source") == "migrator-v1_0_0-to-v1_0_1"
+
+    subscriber_record = {"request_id": _VALID_TRACE_ID, "schema_version": "1.0.0"}
+    subscriber_result = backfill_trace_id_from_request_id(
+        subscriber_record, caller_label="subscriber-pre110-replay"
+    )
+    assert subscriber_result is not None
+    subscriber_ext = subscriber_result.get("extensions")
+    assert isinstance(subscriber_ext, dict)
+    assert subscriber_ext.get("trace_id_synthetic_source") == "subscriber-pre110-replay"
+
+
+def test_backfill_no_op_does_not_overwrite_extensions() -> None:
+    """Story 9.8 D6: the no-op path leaves extensions untouched.
+
+    When the input dict already has a valid trace_id AND schema_version,
+    the helper returns the input unchanged (same object). No
+    ``trace_id_synthetic_source`` is written because the trace is
+    operator-originated, not synthetic.
+    """
+    record = {
+        "trace_id": _VALID_TRACE_ID,
+        "schema_version": "1.1.0",
+        "request_id": _VALID_TRACE_ID,
+        "extensions": {"existing": "value"},
+    }
+    result = backfill_trace_id_from_request_id(record)
+    # No-op path returns the input dict (same object) untouched.
+    assert result is record
+    assert result["extensions"] == {"existing": "value"}
+    assert "trace_id_synthetic_source" not in result["extensions"]
+
+
+def test_backfill_preserves_existing_extensions_keys() -> None:
+    """Story 9.8 D6: existing extensions keys survive the back-fill.
+
+    When the helper back-fills, it must MERGE the provenance label into
+    the existing extensions dict rather than overwriting it. This
+    preserves any caller-set forward-compatible metadata.
+    """
+    record = {
+        "request_id": _VALID_TRACE_ID,
+        "schema_version": "1.0.0",
+        "extensions": {"existing_key": "existing_value"},
+    }
+    result = backfill_trace_id_from_request_id(record)
+    assert result is not None
+    ext = result.get("extensions")
+    assert isinstance(ext, dict)
+    assert ext.get("existing_key") == "existing_value"
+    assert ext.get("trace_id_synthetic_source") == "migrator-v1_0_0-to-v1_0_1"
