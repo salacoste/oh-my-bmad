@@ -341,7 +341,17 @@ def make_lifespan(
             dp.include_router(make_retry_router())
             dp.include_router(make_agent_router())
             # Story 9.7 / FR59a — /trace <trace_id> causal-chain query.
-            dp.include_router(make_trace_router())
+            # Story 9.7 pass-2 TH-B1: wire per-chat allowlist (defense-in-depth
+            # on top of the per-user AllowlistMiddleware). Fall back to the
+            # per-user allowlist when ``trace_allowed_chat_ids`` is empty so
+            # the common 1:1 DM case (chat_id == user_id) inherits the same
+            # closed-by-default surface without explicit operator config.
+            trace_chat_allowlist = (
+                audited.trace_allowed_chat_ids
+                if audited.trace_allowed_chat_ids
+                else audited.tg_allowlist_user_ids
+            )
+            dp.include_router(make_trace_router(allowed_chat_ids=trace_chat_allowlist))
 
             # Assign app.state ONLY after set_webhook succeeds
             # (review-fix M8). If set_webhook raises, the stack unwinds

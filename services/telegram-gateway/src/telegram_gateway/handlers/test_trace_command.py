@@ -143,20 +143,41 @@ async def test_trace_pagination_boundary_21_shows_page_notice() -> None:
 
 
 @pytest.mark.asyncio
-async def test_trace_html_escapes_trace_id() -> None:
-    """trace_id is HTML-escaped in reply (XSS prevention)."""
-    # Inject an XSS payload as trace_id via the rendered trace_id label.
-    # We use the no-events path so handler replies with the trace_id in text.
-    trace_id = _VALID_TRACE_ID
-    msg = _make_message(text=f"/trace {trace_id}")
-    client = _make_client(events=[])
+async def test_trace_html_escapes_event_fields() -> None:
+    """Story 9.7 pass-2 TH-B10: HTML-special chars in event fields are escaped.
+
+    The previous tautological test injected via ``trace_id`` which is gated
+    by :func:`is_valid_trace_id` (so HTML-special chars never reach the
+    renderer). The real attack surface is the registry-api response payload
+    — ``event.type``, ``event.event_id``, ``event.emitted_at`` flow into
+    :func:`_render_trace_reply` and MUST be HTML-escaped.
+    """
+    # Craft an event whose ``type`` and ``event_id`` carry HTML-special
+    # characters. The handler accepts this because ``is_valid_trace_id``
+    # only gates the trace_id arg, NOT the registry response payload.
+    malicious_event = {
+        "event_id": "e-<script>alert(1)</script>-0000-0000-000000000000",
+        "type": "evil.<img/src=x>",
+        "emitted_at": "2026-01-01T10:00:00.000000Z",
+        "emitted_at_monotonic_ns": 1000,
+        "trace_id": _VALID_TRACE_ID,
+        "payload": {},
+        "extensions": {},
+    }
+
+    msg = _make_message(text=f"/trace {_VALID_TRACE_ID}")
+    client = _make_client(events=[malicious_event])
 
     await handle_trace(msg, client)
 
     msg.reply.assert_called_once()
     reply_text: str = msg.reply.call_args[0][0]
-    # The trace_id appears in the reply and is safe (no raw < > characters injected)
-    assert trace_id in reply_text
+    # Raw payload chars MUST NOT appear unescaped.
+    assert "<script>" not in reply_text
+    assert "<img/src=x>" not in reply_text
+    # Escaped form MUST appear (proves the renderer ran html.escape).
+    assert "&lt;script&gt;" in reply_text or "&lt;" in reply_text
+    assert "&lt;img" in reply_text or "evil." in reply_text
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +258,36 @@ async def test_trace_zwsp_prefix_stripped() -> None:
     await handle_trace(msg, client)
 
     # get_trace called (ZWSP was stripped, valid trace_id passed)
+    client.get_trace.assert_called_once_with(
+        trace_id=_VALID_TRACE_ID,
+        request_id=client.get_trace.call_args.kwargs["request_id"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_trace_zwsp_trailing_stripped() -> None:
+    """Story 9.7 pass-2 TM-B9: trailing ZWSP also stripped (was bug under lstrip)."""
+    zwsp = "​"
+    trace_id_trailing = f"{_VALID_TRACE_ID}{zwsp}"
+    msg = _make_message(text=f"/trace {trace_id_trailing}")
+    client = _make_client(events=[_make_event()])
+    await handle_trace(msg, client)
+    client.get_trace.assert_called_once_with(
+        trace_id=_VALID_TRACE_ID,
+        request_id=client.get_trace.call_args.kwargs["request_id"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_trace_zwsp_embedded_stripped() -> None:
+    """Story 9.7 pass-2 TM-B9: embedded ZWSP also stripped (was bug under lstrip)."""
+    zwsp = "​"
+    # Insert a ZWSP in the middle of the trace_id.
+    mid = len(_VALID_TRACE_ID) // 2
+    trace_id_embedded = _VALID_TRACE_ID[:mid] + zwsp + _VALID_TRACE_ID[mid:]
+    msg = _make_message(text=f"/trace {trace_id_embedded}")
+    client = _make_client(events=[_make_event()])
+    await handle_trace(msg, client)
     client.get_trace.assert_called_once_with(
         trace_id=_VALID_TRACE_ID,
         request_id=client.get_trace.call_args.kwargs["request_id"],

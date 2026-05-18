@@ -38,13 +38,24 @@ _MAX_LIMIT = 2000
 def _row_to_dict(row: Event) -> dict[str, Any]:
     """Map an Event ORM row to an envelope dict for /trace response.
 
-    PM-A10/E13: includes ``extensions`` (from payload_json) + canonical
-    ``Z``-suffixed datetime so the response shape matches what
-    ``to_canonical_json`` would emit.
+    PM-A10/E13: canonical ``Z``-suffixed datetime so the response shape
+    matches what :func:`to_canonical_json` would emit.
 
     PM-B17: logs a structured ``trace_payload_json_corrupt`` event when
     payload_json is malformed instead of silently returning ``{"_raw": ...}``.
     Forensics: the row id is included so the operator can locate the row.
+
+    Story 9.7 pass-2 TH-B6 (Q7 audit): the materializer stores PAYLOAD-ONLY
+    in ``payload_json`` via :func:`_canonical_payload_json` (which returns
+    ``env.payload.model_dump()`` serialised — NOT the full envelope). The
+    inherited heuristic ``if "payload" in parsed_payload`` was therefore
+    wrong: a legitimate payload that happens to have a ``"payload"`` key
+    (e.g. ``secret.accessed`` payload with a nested ``payload`` summary)
+    would be incorrectly unwrapped. Fix: return ``parsed_payload`` directly
+    as the response's ``payload`` field. ``extensions`` is NOT stored on
+    the Event row (no column for it), so the response field is always
+    ``{}`` — operators needing the full canonical envelope should consume
+    the JSONL log directly.
     """
     try:
         parsed_payload: dict[str, Any] = json.loads(row.payload_json)
@@ -56,19 +67,6 @@ def _row_to_dict(row: Event) -> dict[str, Any]:
             exc,
         )
         parsed_payload = {"_raw": row.payload_json}
-
-    # The materializer stores the FULL envelope payload (including the
-    # ``extensions`` and ``payload`` sub-objects) in ``payload_json``. The
-    # wire contract for /trace should return both top-level fields so the
-    # response is round-trippable through :func:`to_canonical_json`.
-    extensions = parsed_payload.get("extensions", {}) if isinstance(parsed_payload, dict) else {}
-    # If parsed payload looks like a full envelope (has ``payload`` key),
-    # surface that inner payload as the response's ``payload`` field;
-    # otherwise treat parsed_payload itself as the payload.
-    if isinstance(parsed_payload, dict) and "payload" in parsed_payload:
-        payload = parsed_payload["payload"]
-    else:
-        payload = parsed_payload
 
     # PM-A10/E13: canonical ``Z`` suffix matches to_canonical_json format
     # (strftime("%Y-%m-%dT%H:%M:%S.%fZ") yields microsecond precision +
@@ -84,8 +82,10 @@ def _row_to_dict(row: Event) -> dict[str, Any]:
         "actor": {"kind": row.actor_kind, "id": row.actor_id},
         "task_id": row.task_id,
         "session_id": row.session_id,
-        "payload": payload,
-        "extensions": extensions,
+        # TH-B6: materializer canonical shape is payload-only — no heuristic.
+        "payload": parsed_payload,
+        # ``extensions`` is not persisted on the Event row; always {} here.
+        "extensions": {},
         "parent_event_id": row.parent_event_id,
         "trace_id": row.trace_id,
         "request_id": row.request_id,
@@ -147,13 +147,38 @@ async def get_trace(
     stmt = select(Event).where(Event.trace_id == trace_id)
     if after_event_id is not None:
         stmt = stmt.where(Event.id > after_event_id)
-    stmt = stmt.order_by(Event.emitted_at_monotonic_ns.asc()).limit(limit)
+    # Story 9.7 pass-2 TH-B4: LIMIT+1 pattern so we can DISTINGUISH "exactly
+    # `limit` rows total" (no truncation) from "more rows exist" (truncated).
+    # The prior ``len(rows) == limit`` heuristic produced false-positive
+    # truncated headers when the result set happened to match the limit
+    # exactly, causing clients to infinite-loop fetching empty pages.
+    stmt = stmt.order_by(Event.emitted_at_monotonic_ns.asc()).limit(limit + 1)
 
     async with session_maker() as session:
         result = await session.execute(stmt)
-        rows = result.scalars().all()
+        fetched = result.scalars().all()
 
-    if len(rows) == limit:
+    truncated = len(fetched) > limit
+    rows = fetched[:limit]
+
+    # TL-B14: surface whether ANY returned row was synthetically back-filled
+    # (per Q1 Migrator decision). Operators consuming /trace then know
+    # collision risk applies. Inspecting ``row.request_id`` vs ``row.trace_id``
+    # is the cheapest signal: the back-fill rule sets ``trace_id = request_id``
+    # (with ``e-`` prefix stripped), so equality (modulo prefix) is a strong
+    # synthetic marker. False-positive cost is acceptable — non-synthetic
+    # callers that intentionally pass trace_id=request_id also get the header,
+    # which surfaces an interesting correlation rather than hiding it.
+    has_synthetic = any(
+        row.trace_id is not None
+        and row.request_id is not None
+        and (row.trace_id == row.request_id or row.trace_id == row.request_id.removeprefix("e-"))
+        for row in rows
+    )
+    if has_synthetic:
+        response.headers["X-Trace-Has-Synthetic"] = "true"
+
+    if truncated:
         response.headers["X-Trace-Truncated"] = "true"
 
     return [_row_to_dict(row) for row in rows]

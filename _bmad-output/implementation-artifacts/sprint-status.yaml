@@ -315,3 +315,21 @@ development_status:
   13-3-just-restore-from-litestream-recipe: backlog  # phase: 2 · FR71
   13-4-litestream-lag-check-replication-lagging-event: backlog  # phase: 2 · NFR-R7 · new event type
   epic-13-retrospective: optional
+
+# ===========================================================================
+# Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
+# ===========================================================================
+audit_trail:
+  - date: "2026-05-18"
+    event: epic-9-reopened
+    from: done
+    to: in-progress
+    story: 9-7-schema-bump-1-1-0-plus-backfill-plus-trace-query
+    reason: >
+      Pass-1 adversarial review surfaced PH-A1 through PH-A7 quality gaps:
+      zero /trace test coverage, Telegram allowlist dead code (TH-B1),
+      read_log_lines missing pre-1.1.0 backfill (TH-E1), failure_detection
+      OR-branch weakness (TH-B3/TH-A5), payload unwrap heuristic (TH-B6),
+      pagination boundary bug (TH-B4). Epic-9 reverted to in-progress (PH-A4)
+      per AC15 atomicity invariant. Pass-2 batch of 24 patches applied
+      2026-05-18 to close all HIGH/MED/LOW findings.

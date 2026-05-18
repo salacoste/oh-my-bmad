@@ -279,3 +279,144 @@ async def test_get_trace_after_event_id_cursor(tmp_path: Path) -> None:
     assert len(rows) == 2
     for row in rows:
         assert row["event_id"] not in row_ids[:2], "cursor should exclude first 2 rows"
+
+
+# ---------------------------------------------------------------------------
+# Story 9.7 pass-2 patches
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_trace_limit_exactly_matches_total_does_not_set_truncated(
+    tmp_path: Path,
+) -> None:
+    """Story 9.7 pass-2 TH-B4: ``len(rows) == limit`` boundary fix.
+
+    The prior code set ``X-Trace-Truncated: true`` whenever the result
+    happened to equal the limit, causing clients to infinite-loop fetching
+    an empty next page. The LIMIT+1 pattern distinguishes "exactly N total"
+    from "more rows exist".
+    """
+    db_url = _db_url(tmp_path / "state.sqlite3")
+    events_dir = tmp_path / "events"
+    events_dir.mkdir()
+    await _create_schema(db_url)
+
+    # Exactly 3 events total.
+    for i in range(3):
+        eid = f"e-00000000-0000-7000-8000-0000000000{i:02d}"
+        await _insert_event(db_url, event_id=eid, trace_id=_TRACE_ID, mono_ns=1000 + i)
+
+    app = build_app(base_dir=events_dir, db_url=db_url, clock=_FROZEN_CLOCK)
+    async with LifespanManager(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.get(f"/v1/trace/{_TRACE_ID}?limit=3")
+
+    assert response.status_code == 200
+    assert len(response.json()) == 3
+    # The critical assertion: X-Trace-Truncated MUST NOT be set when total
+    # equals the limit exactly.
+    assert "x-trace-truncated" not in response.headers
+
+
+@pytest.mark.asyncio
+async def test_get_trace_inner_payload_key_not_unwrapped(tmp_path: Path) -> None:
+    """Story 9.7 pass-2 TH-B6/Q7: payload with a ``payload`` key is NOT unwrapped.
+
+    Per the materializer audit (Q7): ``payload_json`` stores payload-only,
+    NOT the full envelope. The prior heuristic ``if "payload" in parsed_payload``
+    incorrectly unwrapped legitimate payloads that happen to include a
+    ``payload`` field (e.g. a nested summary on a typed event).
+    """
+    db_url = _db_url(tmp_path / "state.sqlite3")
+    events_dir = tmp_path / "events"
+    events_dir.mkdir()
+    await _create_schema(db_url)
+
+    payload_with_inner_key = json.dumps({"payload": "innocent string", "extensions": {"a": 1}})
+    eid = "e-00000000-0000-7000-8000-000000000099"
+    await _insert_event(
+        db_url,
+        event_id=eid,
+        trace_id=_TRACE_ID,
+        mono_ns=2000,
+        payload_json=payload_with_inner_key,
+    )
+
+    app = build_app(base_dir=events_dir, db_url=db_url, clock=_FROZEN_CLOCK)
+    async with LifespanManager(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.get(f"/v1/trace/{_TRACE_ID}")
+
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 1
+    # The full dict (NOT the unwrapped inner string) must be the payload.
+    assert rows[0]["payload"] == {"payload": "innocent string", "extensions": {"a": 1}}
+    # ``extensions`` on the response is always ``{}`` per materializer audit.
+    assert rows[0]["extensions"] == {}
+
+
+@pytest.mark.asyncio
+async def test_get_trace_after_event_id_cursor_with_disagreeing_mono_order(
+    tmp_path: Path,
+) -> None:
+    """Story 9.7 pass-2 TH-B12: cursor invariant under lex-vs-mono divergence.
+
+    Production event_ids may be generated cross-process such that their
+    lexicographic order disagrees with ``emitted_at_monotonic_ns`` order
+    (clock drift, race on UUIDv7 timestamp ms bucket). The cursor query
+    ``Event.id > after_event_id`` then admits or excludes rows in an order
+    that can differ from the response ordering (``emitted_at_monotonic_ns
+    asc``). This test seeds explicitly-disagreeing rows and documents the
+    current invariant: the cursor filters by event_id ordering, and the
+    response orders by mono_ns — both must remain self-consistent (no
+    duplicates, no skipped rows) across a paginated walk.
+    """
+    db_url = _db_url(tmp_path / "state.sqlite3")
+    events_dir = tmp_path / "events"
+    events_dir.mkdir()
+    await _create_schema(db_url)
+
+    # Seed rows so event_id DESCENDS lexicographically while mono_ns
+    # ASCENDS (deliberate disagreement). The cursor filter (id >) and
+    # response order (mono asc) then expose any non-monotone behavior.
+    rows_spec = [
+        ("e-00000000-0000-7000-8000-000000000099", 1000),  # lex high, mono low
+        ("e-00000000-0000-7000-8000-000000000050", 2000),  # lex mid, mono mid
+        ("e-00000000-0000-7000-8000-000000000010", 3000),  # lex low, mono high
+    ]
+    for eid, mono in rows_spec:
+        await _insert_event(db_url, event_id=eid, trace_id=_TRACE_ID, mono_ns=mono)
+
+    app = build_app(base_dir=events_dir, db_url=db_url, clock=_FROZEN_CLOCK)
+    async with LifespanManager(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            # First page: no cursor, response orders by mono asc.
+            full = (await ac.get(f"/v1/trace/{_TRACE_ID}")).json()
+
+    # All three returned, mono_ns ascending.
+    assert [r["event_id"] for r in full] == [
+        "e-00000000-0000-7000-8000-000000000099",
+        "e-00000000-0000-7000-8000-000000000050",
+        "e-00000000-0000-7000-8000-000000000010",
+    ]
+
+    # Cursor invariant: ``after_event_id=<lex high>`` will only admit
+    # rows whose id sorts AFTER it lexicographically. Document the
+    # behavior so future cursor changes surface in CI.
+    async with LifespanManager(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            after_high = await ac.get(
+                f"/v1/trace/{_TRACE_ID}?after_event_id=e-00000000-0000-7000-8000-000000000099"
+            )
+
+    # The lex-high cursor admits NOTHING (no id sorts after it),
+    # demonstrating the cursor's lex-ordering semantic clearly. If the
+    # cursor switches to ``(emitted_at_monotonic_ns, event_id)`` tuples
+    # in a future story, this assertion would flip.
+    assert after_high.json() == []

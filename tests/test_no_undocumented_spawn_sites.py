@@ -190,10 +190,22 @@ _SCAN_ROOTS: tuple[str, ...] = ("services", "mcp-servers", "packages", "scripts"
 # py.name.startswith("test_") which missed files like `conftest.py`, files in
 # `tests/` sub-trees, and co-located `test_*.py` inside src packages.
 # PH-B7: use directory-based exclusion instead of filename prefix.
-# Story 9.7 pass-1: ``fixtures`` added so that
-# ``scripts/checks/fixtures/no_subprocess/`` (positive/negative samples for
-# the SHELL001 ruff-plugin gate) are not flagged as undocumented spawn sites.
-_TEST_DIR_NAMES: frozenset[str] = frozenset({"tests", "test", "fixtures"})
+#
+# Story 9.7 pass-2 TM-E6: ``fixtures`` is intentionally excluded from this
+# set — a blanket fixtures-exclusion would hide production files under any
+# ``fixtures/`` directory (e.g. ``services/foo/src/foo/fixtures/loader.py``).
+# Instead, ``fixtures/`` directories are excluded ONLY when their parent
+# is ``tests/`` or ``test/`` (see :func:`_is_test_file`).
+_TEST_DIR_NAMES: frozenset[str] = frozenset({"tests", "test"})
+
+# Explicit path-level exclusion list for non-test fixtures directories that
+# nonetheless ship spawn-related sample code for ruff/lint gates.
+_EXPLICIT_FIXTURE_PATHS: frozenset[str] = frozenset(
+    {
+        # SHELL001 ruff-plugin samples — positive/negative fixtures, not prod.
+        "scripts/checks/fixtures",
+    }
+)
 
 # Wildcard-import limitation: ``from subprocess import *`` followed by
 # ``Popen(...)`` is NOT detected. The bare-name mapping in _FROM_IMPORT_MAP only
@@ -208,13 +220,29 @@ def _is_test_file(py: Path) -> bool:
       * any file whose parent directory is named "tests" or "test"
       * any file named test_*.py (co-located unit tests inside src packages)
       * conftest.py files (pytest fixtures, not production code)
+      * Story 9.7 pass-2 TM-E6: ``fixtures/`` directories ONLY when nested
+        under a ``tests/``/``test/`` ancestor, plus an explicit allowlist
+        for non-test fixture trees (``scripts/checks/fixtures``).
     """
-    # Check parent directories
-    for part in py.parts:
+    parts = py.parts
+    # Check parent directories for tests/test
+    for part in parts:
         if part in _TEST_DIR_NAMES:
             return True
-    # Check filename
-    return py.name.startswith("test_") or py.name == "conftest.py"
+    # Filename heuristics
+    if py.name.startswith("test_") or py.name == "conftest.py":
+        return True
+    # Fixtures handling — nested fixtures under tests/test count, AND a small
+    # explicit list of non-test fixture dirs that ship sample-code for gates.
+    if "fixtures" in parts:
+        try:
+            rel = str(py.relative_to(_REPO_ROOT).as_posix())
+        except ValueError:
+            rel = str(py.as_posix())
+        for explicit in _EXPLICIT_FIXTURE_PATHS:
+            if rel.startswith(explicit + "/"):
+                return True
+    return False
 
 
 def test_no_undocumented_spawn_sites() -> None:
@@ -334,6 +362,31 @@ def test_allowlist_keys_are_valid_paths() -> None:
     assert not missing, "Stale allowlist entries (files no longer exist):\n" + "\n".join(
         f"  {m}" for m in missing
     )
+
+
+def test_allowlisted_lines_contain_real_spawn_calls() -> None:
+    """Story 9.7 pass-2 TM-E2: validate that every allowlisted (path, line)
+    actually contains the expected spawn AST node.
+
+    The ``(path, line_number)`` allowlist shape is fragile — any re-indent
+    silently shifts line numbers and a non-spawn line can occupy the
+    formerly-flagged number, masking a regression. Mitigate by asserting
+    that the allowlisted line is in fact a spawn-call site (validated
+    against the same AST walker used by the gate).
+    """
+    stale: list[str] = []
+    for rel, lines in _ALLOWLIST.items():
+        path = _REPO_ROOT / rel
+        if not path.is_file():
+            continue
+        hits = {lineno for lineno, _name in _scan_file(path)}
+        for line in lines:
+            if line not in hits:
+                stale.append(
+                    f"{rel}:{line} — allowlisted but no spawn call on that line "
+                    "(refactor drift; update _ALLOWLIST)"
+                )
+    assert not stale, "Stale allowlist line numbers:\n" + "\n".join(f"  {s}" for s in stale)
 
 
 # PH-B8/E5 self-tests — verify new scan behaviour

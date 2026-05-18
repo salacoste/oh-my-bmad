@@ -433,6 +433,61 @@ def test_migrator_rejects_non_v1_0_0_input() -> None:
 
 
 @pytest.mark.migrator
+def test_migrator_accepts_e_prefix_request_id() -> None:
+    """Story 9.7 pass-2 TH-B2 / Q6: migrator accepts ``e-<uuidv7>`` request_id.
+
+    Pre-9.1 envelopes used ``e-<uuidv7>`` as their ``request_id`` shape
+    (matching the event_id shape). The back-fill rule must strip the ``e-``
+    prefix before assigning to ``trace_id`` so the result is a valid bare
+    UUIDv7 (Story-9.1 contract).
+    """
+    event_with_e_prefix = {
+        "event_id": "e-01917e5c-a7d1-7000-8abc-000000000001",
+        "schema_version": "1.0.0",
+        "type": "task.created",
+        "emitted_at": "2026-01-01T00:00:00.000000Z",
+        "emitted_at_monotonic_ns": 1000,
+        "actor": {"kind": "operator", "id": "test-op"},
+        "payload": {"task_id": "t-00000000-0000-7000-8000-000000000001", "title": "t"},
+        "request_id": "e-01917e5c-a7d1-7000-8abc-000000000001",
+        "extensions": {},
+    }
+    result = migrate_v1_0_0_to_v1_0_1(event_with_e_prefix)
+    assert result["trace_id"] == "01917e5c-a7d1-7000-8abc-000000000001", (
+        f"e-prefix should be stripped: got {result['trace_id']!r}"
+    )
+
+
+@pytest.mark.migrator
+def test_backfill_invariant_migrator_eq_subscriber() -> None:
+    """Story 9.7 pass-2 TH-B5: migrator + subscriber back-fill produce same output.
+
+    The shared helper in ``packages/events/src/events/backfill.py`` is the
+    source of truth. This test asserts that the migrator's local mirror
+    (``_backfill_trace_id_from_request_id``) produces identical ``trace_id``
+    for the same input dict.
+    """
+    from events.backfill import backfill_trace_id_from_request_id
+    from migrator.cli import _backfill_trace_id_from_request_id as _migrator_backfill
+
+    samples = [
+        # Plain UUIDv7 request_id
+        {"request_id": "01917e5c-a7d1-7000-8abc-000000000001"},
+        # e-prefixed request_id (pre-9.1 shape)
+        {"request_id": "e-01917e5c-a7d1-7000-8abc-000000000002"},
+    ]
+    for record in samples:
+        migrator_result = _migrator_backfill(record)
+        shared_result = backfill_trace_id_from_request_id(record)
+        assert migrator_result is not None, f"migrator back-fill returned None for {record!r}"
+        assert shared_result is not None, f"shared back-fill returned None for {record!r}"
+        assert migrator_result == shared_result.get("trace_id"), (
+            f"invariant broken for {record!r}: migrator={migrator_result!r}, "
+            f"shared={shared_result.get('trace_id')!r}"
+        )
+
+
+@pytest.mark.migrator
 def test_gen_fixture_is_byte_deterministic() -> None:
     """``gen_fixture.main()`` produces a byte-identical fixture across runs.
 

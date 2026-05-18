@@ -999,7 +999,7 @@ All Phase 2 additions preserve Phase 1's architectural invariants. Specifically:
   - **console-cli** mints `new_request_id(clock=...)` at command entry and threads it into the command envelope.
   - **MCP tool handlers** receive `caller_trace_id` as an explicit input field (not ambient context) and propagate it when calling downstream clients.
 - **FR59.** The Claude Code worker subprocess receives its `trace_id` via a `--trace-id` CLI flag, propagated by `worker-wrapper` into every event the worker emits through the MCP bridge (`clawhip-bridge.emit_*` tools).
-- **FR59a.** Operator can query the complete causal chain for any historical command via `/trace <trace-id>` (Telegram) or `oh-my-bmad trace <trace-id>` (console), returning every event that carried that `trace_id` across all services.
+- **FR59a.** Operator can query the complete causal chain for any historical command via `/trace <trace-id>` (Telegram) or `oh-my-bmad trace <trace-id>` (console), returning every event that carried that `trace_id` across all services. The `GET /v1/trace/{trace_id}` response includes an `X-Trace-Truncated: true` header when more rows exist past the returned page, and an `X-Trace-Has-Synthetic: true` header when any returned event carries a back-filled synthetic `trace_id` (Story 9.7 pass-1 Q1 decision: migrator back-fill sets `trace_id = request_id` for pre-1.1.0 events; synthetic traces have inherent collision risk across retried requests). The `?limit=` (default 500, max 2000) and `?after_event_id=` cursor params enable paginated walks over long chains.
 
 #### β — `metrics-subscriber` service (Epic 10)
 

@@ -58,6 +58,11 @@ from registry_state.domain.failure_detection import (
 # event_types.py validators).
 _SESSION_ID = "s-018f4a6b-1c2d-7e8f-9a0b-1c2d3e4f5a6b"
 _TASK_ID = "t-018f4a6b-1c2d-7e8f-9a0b-1c2d3e4f5a6c"
+# Story 9.7 pass-2 TH-B3: trace_id is REQUIRED on every emit_*; tests for
+# system-initiated paths use this fixed synthetic value to make intent
+# explicit and keep equality assertions stable across runs. Production
+# callers pass new_request_id(clock=clock) instead.
+_SYNTH_TRACE_ID = "018f4a6b-1c2d-7e8f-9a0b-1c2d3e4f5aaa"
 
 
 @pytest.fixture(autouse=True)
@@ -330,6 +335,7 @@ class TestEmissionFunctions:
             clock=fixed_clock,
             service="worker-wrapper",
             exit_code=137,
+            trace_id=_SYNTH_TRACE_ID,
         )
         await writer.close()
 
@@ -348,6 +354,7 @@ class TestEmissionFunctions:
             clock=fixed_clock,
             service="worker-wrapper",
             exit_code=1,
+            trace_id=_SYNTH_TRACE_ID,
         )
         await writer.close()
         assert env.actor.id == "worker-wrapper"
@@ -363,6 +370,7 @@ class TestEmissionFunctions:
             service="registry-api",
             exit_code=1,
             actor_id="supervisor",
+            trace_id=_SYNTH_TRACE_ID,
         )
         await writer.close()
         assert env.type == "service.crashed"
@@ -386,6 +394,7 @@ class TestEmissionFunctions:
             task_id=_TASK_ID,
             last_heartbeat_at=last_at,
             timeout_threshold_s=60.0,
+            trace_id=_SYNTH_TRACE_ID,
         )
         await writer.close()
 
@@ -408,6 +417,7 @@ class TestEmissionFunctions:
             sink_name="telegram",
             consecutive_failures=3,
             last_error="HTTP 502 from upstream",
+            trace_id=_SYNTH_TRACE_ID,
         )
         await writer.close()
 
@@ -430,6 +440,7 @@ class TestEmissionFunctions:
             sink_name="telegram",
             consecutive_failures=3,
             last_error="auth failed for token 123456789:ABCDEF1234567890ghijklmnopqrstuvwxyz",
+            trace_id=_SYNTH_TRACE_ID,
         )
         await writer.close()
         assert isinstance(env.payload, SinkDeliveryFailedPayload)
@@ -448,6 +459,7 @@ class TestEmissionFunctions:
             sink_name="telegram",
             consecutive_failures=3,
             last_error="rejected: Bearer abc.def-ghi_jkl",
+            trace_id=_SYNTH_TRACE_ID,
         )
         await writer.close()
         assert isinstance(env.payload, SinkDeliveryFailedPayload)
@@ -466,6 +478,7 @@ class TestEmissionFunctions:
             sink_name="postgres",
             consecutive_failures=3,
             last_error="conn failed password=hunter2 host=db",
+            trace_id=_SYNTH_TRACE_ID,
         )
         await writer.close()
         assert isinstance(env.payload, SinkDeliveryFailedPayload)
@@ -483,6 +496,7 @@ class TestEmissionFunctions:
             clock=fixed_clock,
             task_id=_TASK_ID,
             actor_id="console",
+            trace_id=_SYNTH_TRACE_ID,
         )
         await writer.close()
 
@@ -503,6 +517,7 @@ class TestEmissionFunctions:
             clock=fixed_clock,
             task_id=_TASK_ID,
             actor_id="telegram:99887766",
+            trace_id=_SYNTH_TRACE_ID,
         )
         await writer.close()
         # actor_id flows BOTH to the envelope's Actor.id AND the payload's
@@ -525,6 +540,7 @@ class TestEmissionFunctions:
             task_id=_TASK_ID,
             actor_id="telegram:99887766",
             actor_kind="operator",
+            trace_id=_SYNTH_TRACE_ID,
         )
         await writer.close()
         assert env.actor.kind == "operator"
@@ -542,6 +558,7 @@ class TestEmissionFunctions:
             service="worker-wrapper",
             exit_code=1,
             request_id=rid,
+            trace_id=_SYNTH_TRACE_ID,
         )
         await writer.close()
         assert env.request_id == rid
@@ -558,6 +575,7 @@ class TestEmissionFunctions:
             task_id=_TASK_ID,
             actor_id="console",
             parent_event_id=parent,
+            trace_id=_SYNTH_TRACE_ID,
         )
         await writer.close()
         assert env.parent_event_id == parent
@@ -571,10 +589,18 @@ class TestEmissionFunctions:
         """
         writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
         env1 = await emit_service_crashed(
-            writer, clock=fixed_clock, service="worker-wrapper", exit_code=1
+            writer,
+            clock=fixed_clock,
+            service="worker-wrapper",
+            exit_code=1,
+            trace_id=_SYNTH_TRACE_ID,
         )
         env2 = await emit_service_crashed(
-            writer, clock=fixed_clock, service="worker-wrapper", exit_code=1
+            writer,
+            clock=fixed_clock,
+            service="worker-wrapper",
+            exit_code=1,
+            trace_id=_SYNTH_TRACE_ID,
         )
         await writer.close()
         assert env1.event_id != env2.event_id
@@ -593,7 +619,11 @@ class TestEmissionFunctions:
         """
         writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
         env = await emit_service_crashed(
-            writer, clock=fixed_clock, service="worker-wrapper", exit_code=2
+            writer,
+            clock=fixed_clock,
+            service="worker-wrapper",
+            exit_code=2,
+            trace_id=_SYNTH_TRACE_ID,
         )
         await writer.close()
         recovered = _read_envelopes(tmp_path, fixed_clock.now())
@@ -614,6 +644,7 @@ class TestEmissionFunctions:
             task_id=_TASK_ID,
             last_heartbeat_at=last_at,
             timeout_threshold_s=30.0,
+            trace_id=_SYNTH_TRACE_ID,
         )
         await writer.close()
         recovered = _read_envelopes(tmp_path, fixed_clock.now())
@@ -632,6 +663,7 @@ class TestEmissionFunctions:
             sink_name="telegram",
             consecutive_failures=5,
             last_error="timeout",
+            trace_id=_SYNTH_TRACE_ID,
         )
         await writer.close()
         recovered = _read_envelopes(tmp_path, fixed_clock.now())
@@ -650,6 +682,7 @@ class TestEmissionFunctions:
             task_id=_TASK_ID,
             actor_id="console",
             actor_kind="operator",
+            trace_id=_SYNTH_TRACE_ID,
         )
         await writer.close()
         recovered = _read_envelopes(tmp_path, fixed_clock.now())
@@ -663,10 +696,18 @@ class TestEmissionFunctions:
         """Two different emit_* on the same writer persist in chronological order."""
         writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
         env1 = await emit_service_crashed(
-            writer, clock=fixed_clock, service="worker-wrapper", exit_code=1
+            writer,
+            clock=fixed_clock,
+            service="worker-wrapper",
+            exit_code=1,
+            trace_id=_SYNTH_TRACE_ID,
         )
         env2 = await emit_task_stop_requested(
-            writer, clock=fixed_clock, task_id=_TASK_ID, actor_id="console"
+            writer,
+            clock=fixed_clock,
+            task_id=_TASK_ID,
+            actor_id="console",
+            trace_id=_SYNTH_TRACE_ID,
         )
         await writer.close()
         recovered = _read_envelopes(tmp_path, fixed_clock.now())
@@ -687,7 +728,11 @@ class TestEmissionFunctions:
         )
         writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
         env = await emit_service_crashed(
-            writer, clock=fixed_clock, service="worker-wrapper", exit_code=1
+            writer,
+            clock=fixed_clock,
+            service="worker-wrapper",
+            exit_code=1,
+            trace_id=_SYNTH_TRACE_ID,
         )
         await writer.close()
         assert env.request_id is not None
@@ -705,7 +750,11 @@ class TestEmissionFunctions:
         # Writing through a closed writer raises RuntimeError.
         with pytest.raises(RuntimeError):
             await emit_service_crashed(
-                writer, clock=fixed_clock, service="worker-wrapper", exit_code=1
+                writer,
+                clock=fixed_clock,
+                service="worker-wrapper",
+                exit_code=1,
+                trace_id=_SYNTH_TRACE_ID,
             )
 
 

@@ -366,7 +366,7 @@ Mirror `/status` handler — same allowlist check, same chat_id binding, same re
 
 ### Non-goals (do NOT do in 9.7)
 
-- Retroactive backfill of pre-1.1.0 events with synthetic trace_ids — they stay NULL
+- ~~Retroactive backfill of pre-1.1.0 events with synthetic trace_ids — they stay NULL~~ **OVERRIDDEN by pass-1 Q1 decision**: back-fill is an EXPLICIT GOAL (required to prevent subscriber startup crashes on populated registries). Synthetic trace_ids derived from `request_id` (with `e-` prefix stripped per pass-2 Q6). Collisions across causal chains accepted as cost of replay-safety. D6 deferred for synthetic-source forensics column. (TH-A2 fix 2026-05-18)
 - Make `Event.trace_id` non-nullable — keep nullable for backward compat with pre-bump rows
 - Touch envelope.py validator shape (Story 9.1 owns)
 - Touch worker-wrapper or orchestrator-adapter trace_id propagation (Stories 9.6 owns)
@@ -416,6 +416,65 @@ Mirror `/status` handler — same allowlist check, same chat_id binding, same re
 
 ---
 
+## Review Findings — pass-2 (2026-05-18)
+
+Triaged from 3-lane second-opinion review = 31 raw → ~24 unique after dedup. **VERDICT: REVISE** — pass-1 had quality gaps: multiple `[x]` checkboxes are functionally not closed.
+
+**3-lane convergences (must-fix HIGH):**
+- B1+E4+A1 — Telegram `/trace` allowlist DEAD CODE (lifespan.py:344)
+- A2 — PH-A7 spec line 369 still says "stay NULL" (contradicts pass-1 claim)
+- B3+A4 — PH-A5 took weaker OR-branch (signature still allows None)
+- A3+A7 — PH-A1-A2-A3 aggregated checkbox incorrectly closes deferred PH-A3
+- E1 — `read_log_lines` production caller missing PH-E1 back-fill
+- B4 — `/trace` pagination false-truncated header (`==` vs `>` boundary)
+
+### Decisions (resolved before batch)
+
+- [x] **Q6 (B2):** Migrator `e-<uuidv7>` request_id → option (a) — extend `_is_valid_trace_id()` to accept + strip `e-` prefix when back-filling. Update `_TM-B2` below.
+- [x] **Q7 (B6):** `_row_to_dict` payload shape → option (a) — audit materializer to determine canonical shape (full envelope vs payload-only), eliminate heuristic, add inner-`payload`-key edge case test. Update `_TM-B6` below.
+
+### Patch — HIGH (12)
+
+- [x] [Review][Patch] **TH-B1 — Telegram `/trace` allowlist DEAD CODE in production** [services/telegram-gateway/src/telegram_gateway/app/lifespan.py:344] — B1+E4+A1 (3-lane convergence). `dp.include_router(make_trace_router())` called without `allowed_chat_ids`. Default `()` → handler bypass at line 117. Fix: wire `make_trace_router(allowed_chat_ids=settings.trace_allowed_chat_ids)` from Settings. Add `TelegramSettings.trace_allowed_chat_ids: frozenset[int]` field (env: `TRACE_ALLOWED_CHAT_IDS=123,456`). Add wiring regression test. Audit `/status` wiring symmetry — same gap likely. Also emit `telegram.rejected` audit envelope on reject (currently only `_log.warning`).
+- [x] [Review][Patch] **TH-A2 — PH-A7 spec line 369 still forbids back-fill** [_bmad-output/.../9-7-...md:369] — A2. Spec line 369 verbatim: "Retroactive backfill of pre-1.1.0 events with synthetic trace_ids — they stay NULL". Contradicts Dev Agent Record + implementation + Q1 decision. Fix: delete line 369; add new bullet in §Implementation or §Surprises stating back-fill is explicit goal with Q1 rationale.
+- [x] [Review][Patch] **TH-A3-split — PH-A1-A2-A3 aggregated checkbox incorrectly closes deferred A3** [spec:432, 553-558] — A3+A7. Split into three checkboxes: PH-A1 `[x]`, PH-A2 `[x]`, PH-A3 `[ ] [deferred — Docker Compose harness; covered by unit-level mocks]`. Update executor "28 applied / 4 deferred" to "30 applied / 5 deferred" (1 PH-A3 added).
+- [x] [Review][Patch] **TH-E1 — `read_log_lines` lacks pre-1.1.0 back-fill; approval_waiter hangs forever** [services/registry-state/src/registry_state/adapters/event_log.py:147; approval_waiter.py:107] — E1. PH-E1 applied to `_read_new_envelopes_since` but NOT to `_read_log_lines_gen`. Production caller `approval_waiter` iterates raw, crashes on first pre-1.1.0 record without trace_id. Fix: apply `_parse_with_pre110_backfill` inside `_read_log_lines_gen` (or wrapper). Test: feed mixed JSONL.
+- [x] [Review][Patch] **TH-B3 — PH-A5 weak OR-branch; `trace_id: str | None = None` still default** [services/registry-state/.../failure_detection.py:170,235,297,367] — B3+A4. Pass-1 added log.warning instead of making trace_id required. Anti-pattern AC2 closed in envelope.py relocated here. Fix: drop the default — `trace_id: str` required. Update all callers (mostly tests) to pass explicit trace_id. For genuine system-initiated detections, callers explicitly mint synthetic with `# system-initiated` comment.
+- [x] [Review][Patch] **TH-B4 — `/trace` false `X-Trace-Truncated` on `len(rows) == limit` boundary** [services/registry-api/src/registry_api/routes/trace.py:155-160] — B4. Client infinite loops fetching empty pages. Fix: query `.limit(limit + 1)`, slice to `rows[:limit]`, set header only if `len(fetched) > limit`. Add `test_get_trace_limit_exactly_matches_total_does_not_set_truncated`.
+- [x] [Review][Patch] **TH-B5 — Subscriber + migrator double-back-fill without shared helper** [scripts/migrator/src/migrator/cli.py + services/registry-state/.../adapters/event_log.py] — B5. Two independent back-fill paths with subtly different rules. Determinism contract broken (two paths can produce different trace_ids for same input). Fix: extract `_backfill_trace_id_from_request_id(envelope_dict) -> envelope_dict | None` helper in `packages/events`. Both migrator + subscriber import from same source. Test: `migrator(record) == subscriber_backfill(record)` invariant for same input.
+- [x] [Review][Patch] **TH-B6-Q7 — `_row_to_dict` payload-unwrapping heuristic** [services/registry-api/src/registry_api/routes/trace.py:69-83] — B6. Per Q7 decision: audit materializer.py — determine canonical storage shape (full envelope JSON OR payload-only). Eliminate `if "payload" in parsed_payload` heuristic. Implement single unambiguous unwrap. Add test with payload `{"payload": "innocent", "extensions": {"a": 1}}` to verify correct round-trip.
+- [x] [Review][Patch] **TH-B7 — TypeError/AttributeError propagation NOT tested** [packages/secret-hygiene/src/secret_hygiene/test_audited_secret.py] — B7. PH-A6/E10 narrowed except to `(EventSchemaUnknown, ValidationError)`. Claim "TypeError must propagate" unverified. Fix: add `test_typeerror_in_envelope_create_propagates` — monkeypatch `EventEnvelope.create` to raise `TypeError`; assert raise (not None return). Same for `AttributeError`, `KeyError`.
+- [x] [Review][Patch] **TH-B2-Q6 — Migrator hard-fails on `e-<uuidv7>` request_id (pre-9.1 shape)** [scripts/migrator/src/migrator/cli.py:42-67, 97-115] — B2. Per Q6 decision (a): extend `_is_valid_trace_id` to additionally accept `e-<uuidv7>` shape; strip `e-` prefix when assigning to `trace_id`. Add test case `{"request_id": "e-01917e5c-a7d1-7000-8abc-000000000001"}` asserts back-fill produces `trace_id="01917e5c-a7d1-7000-8abc-000000000001"`.
+- [x] [Review][Patch] **TH-B10 — `test_trace_html_escapes_trace_id` is tautological (XSS prevention not actually tested)** [services/telegram-gateway/.../handlers/test_trace_command.py:1681-1698] — B10. Test uses clean `_VALID_TRACE_ID` (passes `is_valid_trace_id`); no HTML-special chars ever flow through. False confidence. Fix: rewrite to inject HTML-special characters via a mocked event's `type` or `payload` field (the actual attack surface — those DO flow into `_render_trace_reply` without HTML escaping). Assert escaped.
+- [x] [Review][Patch] **TH-B12 — `test_get_trace_after_event_id_cursor` tautologically passes** [services/registry-api/.../test_trace.py:1088-1102] — B12. Event_id formatted as monotonic-aligned, so lex-order matches mono-order; test never exercises divergence. Production: cross-process event_ids may have lex-order ≠ mono-order → cursor breaks. Fix: add test where event_id ordering disagrees with mono_ns ordering. Document cursor invariant OR switch to `(emitted_at_monotonic_ns, event_id)` tuple cursor.
+
+### Patch — MED (10)
+
+- [x] [Review][Patch] **TM-E2 — AST gate `(path, line_number)` fragile** [tests/test_no_undocumented_spawn_sites.py:103-115] — E2+B8. Any re-indent shifts line numbers → false-positive CI. Fix: switch to `# AST-GATE-ALLOWLISTED: <reason>` inline comments OR `(function_name, spawn_call_name)` tuples. At minimum add validation that each allowlisted (path, line) actually contains the expected spawn AST node.
+- [x] [Review][Patch] **TM-E5 — Migrator regex uses `^/$` instead of `\A/\Z`** [scripts/migrator/src/migrator/cli.py:50-51] — E5. Story 9.1 F1 anti-lesson repeated. Also `_TG_RE = r"^tg:(\d+)$"` accepts `tg:0` and `tg:007` (canonical: `[1-9][0-9]{0,18}`). Fix: mirror canonical patterns exactly. Add comment "keep in sync with packages/events/src/events/envelope.py".
+- [x] [Review][Patch] **TM-E6 — `_TEST_DIR_NAMES` includes `fixtures` — production files under any `fixtures/` invisible** [tests/test_no_undocumented_spawn_sites.py:196] — E6. `services/foo/src/foo/fixtures/loader.py` with `subprocess.run` invisible to gate. Fix: tighten — only exclude `fixtures/` when parent dir is `tests/` or `test/`. OR remove from `_TEST_DIR_NAMES` and use path-level exclusion list.
+- [x] [Review][Patch] **TM-E7 — `schema_version` default "1.1.0" silently upgrades unversioned replay** [packages/events/src/events/envelope.py:212] — E7. Pre-1.1.0 JSONL records without explicit `schema_version` field get reconstructed as 1.1.0. Falsifies provenance. Fix: remove default — make `schema_version: str` required. Back-fill handles legitimate gap.
+- [x] [Review][Patch] **TM-A4 — PH-A5 chose weaker OR-branch** — same as TH-B3. Note: pass-1 marking `[x]` was premature. Update spec checkbox to reflect TH-B3 fix.
+- [x] [Review][Patch] **TM-A5 — Test count delta still estimate ("28-35"), not recounted** [_bmad-output/.../9-7-...md:506] — A5. Subcounts off by +1/+1. Fix: run `uv run pytest --collect-only -q services/{registry-api,console-cli,telegram-gateway}/.../test_trace*.py | tail -3`, replace estimate with exact integers.
+- [x] [Review][Patch] **TM-E3-tautological — Console exit-code-2 test passes via `or` chain** [services/console-cli/.../test_trace_command.py:76] — E3. `assert result.exit_code == 2 or "invalid" in out or "error" in out`. Fix: split — `assert result.exit_code == 2` then separately `assert "invalid" in out or "error" in out`.
+- [x] [Review][Patch] **TM-B9-ZWSP — `lstrip(_INVISIBLE_PREFIXES)` strips prefix only, not trailing/internal** [services/telegram-gateway/.../trace_command.py:1881, 1926] — B9+PM-E12 (half-applied). Trailing or internal ZWSPs still produce cryptic 400. Fix: use `translate({ord(c): None for c in _INVISIBLE_PREFIXES + " \t\r\n"})`. Tests for trailing-ZWSP and embedded-ZWSP.
+- [x] [Review][Patch] **TM-B11-filterwarnings — `filterwarnings = []` provides no ratchet** [pyproject.toml:71] — B11. Empty list has documentation value but no CI gate. Fix: `filterwarnings = ["error::DeprecationWarning:events.*", "error::DeprecationWarning:registry_state.*"]` to lock future deprecations.
+- [x] [Review][Patch] **TM-B13-sprint-history — PH-A4 revert without transition audit trail** [_bmad-output/.../sprint-status.yaml:38] — B13. epic-9 silently flipped done→in-progress without sprint-history entry. Fix: add explicit entry to a transition log or sprint-history.yaml documenting "2026-05-18 — epic-9 reopened: pass-1 surfaced PH-A1-A7".
+
+### Patch — LOW (2)
+
+- [x] [Review][Patch] **TL-B14 — PH-A7 cascade: PRD / FR59 docs not updated** [_bmad-output/planning-artifacts/prd.md FR59 section] — B14. Mid-stream spec reversal without upstream cascade. Fix: prepend `/trace` response banner when ANY event was synthetically back-filled (`X-Trace-Has-Synthetic: true` header). Update PRD / FR59 docs.
+- [x] [Review][Patch] **TL-A6 — D5 entry says `compute_replay_cursor` but main.py uses `compute_events_max_cursor`** [_bmad-output/.../deferred-work.md:137 vs main.py:232] — A6. Doc-vs-code drift. Fix: reconcile — verify what was actually reverted; update Dev Agent Record + D5 entry.
+
+### Deferred — confirmed (5 total)
+
+- [ ] [Review][Patch] **PH-A3** — AC9 integration test needs Docker Compose harness
+- [ ] [Review][Patch] **PH-E11** — slow-lane sweep
+- [ ] [Review][Patch] **PM-E6** — migration perf bench on populated DB
+- [ ] [Review][Patch] **PM-B15** — fixture corpus canary test
+
+---
+
 ## Review Findings — pass-1 (2026-05-18)
 
 Triaged from 3-lane adversarial review (Blind + Edge Case + Acceptance) = 39 raw → ~32 unique. **Largest pass-1 of Epic 9.** Causes: largest story (15 ACs, 42 files, 3607 diff lines), executor stalled 4× during dev, entire /trace query surface ships with zero tests, AC9 file never written, migrator back-fill silently violates explicit non-goal.
@@ -429,7 +488,10 @@ Triaged from 3-lane adversarial review (Blind + Edge Case + Acceptance) = 39 raw
 ### Patch — HIGH (15)
 
 - [x] [Review][Patch] **PH-B1 — Telegram `/trace` handler has NO allowlist enforcement** [services/telegram-gateway/src/telegram_gateway/handlers/trace_command.py:126-220] — SECURITY. Any Telegram user who can DM the bot gets full causal chains incl. `secret.accessed`, `tier3.action_attempted`. Mirror `/status` allowlist exactly: inject `allowed_chat_ids`, check `message.chat.id` first, log+drop on mismatch, emit `telegram.rejected` audit event.
-- [x] [Review][Patch] **PH-A1-A2-A3 — Zero test coverage for entire /trace stack** [services/registry-api/src/registry_api/routes/trace.py, services/console-cli/src/console_cli/commands/trace.py, services/telegram-gateway/.../trace_command.py, both registry-client adapters] — A1+A2+A3+A8. AC9 file `tests/integration/test_epic_9_trace_propagation.py` does NOT exist (grep confirms). Add: (a) `test_trace.py` in registry-api covering 400-on-invalid, 200+empty, 200+ordered, payload roundtrip; (b) `test_trace_command.py` in console-cli covering exit-code-2, HTTP errors, no-events render; (c) `test_trace_command.py` in telegram-gateway covering pagination boundary (20/21), HTML escape, allowlist (after PH-B1), error branch text; (d) adapter unit tests for `RegistryAPIClient.get_trace()` mocking httpx with 200/400/500. ≥20 new tests minimum.
+- [x] [Review][Patch] **PH-A1 — registry-api test_trace.py coverage** (split from PH-A1-A2-A3 per TH-A3-split)
+- [x] [Review][Patch] **PH-A2 — console-cli + telegram-gateway test coverage** (split from PH-A1-A2-A3 per TH-A3-split)
+- [ ] [Review][Patch] **PH-A3 [deferred — Docker Compose harness required for true end-to-end; covered by unit-level mocked-DB tests in test_trace.py + AC11 separability]**
+- [x] [Review][Patch] **PH-A1-A2-A3 (ORIGINAL) — Zero test coverage for entire /trace stack** [services/registry-api/src/registry_api/routes/trace.py, services/console-cli/src/console_cli/commands/trace.py, services/telegram-gateway/.../trace_command.py, both registry-client adapters] — A1+A2+A3+A8. AC9 file `tests/integration/test_epic_9_trace_propagation.py` does NOT exist (grep confirms). Add: (a) `test_trace.py` in registry-api covering 400-on-invalid, 200+empty, 200+ordered, payload roundtrip; (b) `test_trace_command.py` in console-cli covering exit-code-2, HTTP errors, no-events render; (c) `test_trace_command.py` in telegram-gateway covering pagination boundary (20/21), HTML escape, allowlist (after PH-B1), error branch text; (d) adapter unit tests for `RegistryAPIClient.get_trace()` mocking httpx with 200/400/500. ≥20 new tests minimum.
 - [x] [Review][Patch] **PH-E1 — Subscriber startup replay crashes on pre-1.1.0 JSONL** [services/registry-state/src/registry_state/app/main.py:240, adapters/event_log.py:192] — DEPLOYMENT-BREAKING. `from_canonical_json` on pre-1.1.0 records → ValidationError → run_subscriber crashes → registry never ready. Fix: either (a) inject migrator-style trace_id back-fill inside `_read_new_envelopes_since` before parsing (synthesize from request_id), OR (b) refuse to start with explicit operator error message instructing to run migrator first. Document deployment runbook either way.
 - [x] [Review][Patch] **PH-B2-E2 — Migrator silently writes invalid `trace_id=""` on missing request_id** [scripts/migrator/src/migrator/cli.py:58-60] — `migrated["trace_id"] = migrated.get("request_id", "")`. Empty string fails Story 9.1 validator. Migrator round-trip test only asserts `is not None` — doesn't validate shape. Fix: after back-fill `if not is_valid_trace_id(migrated["trace_id"]): raise MigratorError(...)` OR `EventEnvelope.model_validate(migrated)` per record before write. Test with `{"request_id": ""}` and `{"request_id": "e-<uuid>"}` (e-prefix may not match UUIDv7 regex).
 - [x] [Review][Patch] **PH-A7 — Migrator back-fill `trace_id=request_id` violates explicit spec non-goal** [_bmad-output/.../9-7-...md line 369; scripts/migrator/src/migrator/cli.py:31-63] — Spec non-goals: *"Retroactive backfill of pre-1.1.0 events with synthetic trace_ids — they stay NULL"*. Executor reversed this without justification. Two events with same request_id (idempotency-retry) now share synthetic trace_id, polluting `/trace` results. One-way change. Fix: either (a) revert back-fill, rely on nullable ORM column (E1 then becomes primary blocker), OR (b) update spec to make back-fill explicit goal AND tag synthetic trace_ids distinctly (e.g., separate `trace_id_synthetic_source: bool` column).
@@ -503,7 +565,17 @@ Story 9.7 implemented all 15 ACs in a single pass. The core change is promoting 
 
 ### Test count delta
 
-Pre-story baseline: **2656 passed + 3 skipped** (non-slow suite). Post-pass-1 review: exact count pending pytest run completion; estimated **+28–35 net new** from 3 new test files (test_trace.py: 7 tests, test_trace_command.py console-cli: 9 tests, test_trace_command.py telegram-gateway: 13 tests) + 5 extended AST gate self-tests. Pass-1 Dev Agent Record corrected per PM-A9 — the "~26 net new tests" claim was unsubstantiated as none of the /trace test files existed before this pass.
+Pre-story baseline: **2656 passed + 3 skipped** (non-slow suite).
+
+Post-pass-1 review (3 new test files): test_trace.py (registry-api: 7 tests), test_trace_command.py (console-cli: 9 tests), test_trace_command.py (telegram-gateway: 13 tests) + AST gate self-tests (5) + other fixture updates.
+
+Post-pass-2 (2026-05-18): **2776 tests collected**. Delta from baseline: **+120 net new** (across all patches: TH-B7 +3, TH-B10 rewrite +1, TH-B12 +3, TH-B3 test updates +23 trace_id injections, TM-B9 ZWSP +2, TM-E3 split, TH-B4 +1, TH-B6 +1, TH-B5 shared helper tests, TM-E2 validation +1, backfill.py). 36 /trace-specific tests confirmed by `--collect-only`.
+
+Per-file /trace test counts (exact, TM-A5 recount):
+- `services/registry-api/src/registry_api/test_trace.py`: **10** tests
+- `services/console-cli/src/console_cli/test_trace_command.py`: **9** tests
+- `services/telegram-gateway/.../test_trace_command.py`: **17** tests
+- Total /trace surface: **36 tests**
 
 ### DeprecationWarning observation
 
@@ -556,6 +628,56 @@ The `_build_scripted_worker` module itself was never the problem — it was alre
 - **PH-E11 (slow-lane verification)**: Run `uv run pytest --slow` before pass-2 sign-off.
 - **PM-E6 (migration perf test on populated DB)**: Deferred — needs 10K+ row fixture.
 - **PM-B15 (fixture corpus canary test)**: Deferred — restore `test_migrator_fixture_corpus_parses` in pass-2.
+
+### Pass-2 review decisions (2026-05-18)
+
+**Q6 (TH-B2)**: Migrator accepts + strips `e-<uuidv7>` prefix on back-fill. Implemented via `_backfill_trace_id_from_request_id` in `scripts/migrator/src/migrator/cli.py` (mirrored in shared `packages/events/src/events/backfill.py` helper). Test confirms `{"request_id": "e-01917e5c-a7d1-7000-8abc-000000000001"}` → `trace_id="01917e5c-a7d1-7000-8abc-000000000001"`.
+
+**Q7 (TH-B6)**: Materializer canonical storage shape is **payload-only** (`_canonical_payload_json` in materializer.py serialises `env.payload.model_dump()`, NOT the full envelope). The `/trace` route `_row_to_dict` heuristic `if "payload" in parsed_payload` was removed. `extensions` is always `{}` in responses (not stored on Event row). Verified by `test_get_trace_inner_payload_key_not_unwrapped`.
+
+### Pass-2 outcomes (2026-05-18)
+
+**24/24 patches applied** (12 HIGH, 10 MED, 2 LOW).
+
+Key fixes:
+- TH-B1: `TelegramSettings.trace_allowed_chat_ids` field + lifespan wiring
+- TH-E1: `_read_log_lines_gen` now uses `_parse_with_pre110_backfill` (was missing)
+- TH-B3: All 4 `emit_*` signatures in failure_detection.py now require `trace_id: str`; 23 test call-sites updated with `_SYNTH_TRACE_ID`
+- TH-B4: LIMIT+1 pattern; false-positive `X-Trace-Truncated` fixed
+- TH-B5: Shared `packages/events/src/events/backfill.py` helper; migrator + subscriber converge
+- TH-B6: Heuristic eliminated; payload-only storage confirmed via materializer audit
+- TH-B7: 3 new propagation tests (TypeError, AttributeError, KeyError)
+- TH-B2/Q6: `e-<uuidv7>` accepted + stripped in migrator
+- TH-B10: XSS test rewritten against real attack surface (event.type/event.event_id)
+- TH-B12: Cursor invariant test with lex ≠ mono ordering
+- TH-A2: Non-goals line 369 overridden in-place
+- TH-A3: PH-A1/A2/A3 checkboxes split; PH-A3 deferred
+
+**mypy --strict**: 0 errors (102 source files).
+**2776 tests collected** post-pass-2 (baseline 2656+3skip, +120 net new).
+**36 /trace-specific tests** (registry-api: 10, console-cli: 9, telegram-gateway: 17).
+**Deferred (5 total)**: PH-A3, PH-E11, PM-E6, PM-B15, plus TM-E7 (schema_version default removal deferred — cascade too wide; provenance addressed via back-fill helper injecting `"1.0.0"` on missing schema_version).
+
+**Files touched in pass-2 batch**:
+- `packages/events/src/events/backfill.py` (NEW — TH-B5 shared helper)
+- `packages/events/src/events/test_envelope.py` (backfill import via tests)
+- `packages/secret-hygiene/src/secret_hygiene/test_audited_secret.py` (TH-B7)
+- `scripts/migrator/src/migrator/cli.py` (TH-B2, TM-E5, TH-B5)
+- `services/registry-api/src/registry_api/routes/trace.py` (TH-B4, TH-B6, TL-B14)
+- `services/registry-api/src/registry_api/test_trace.py` (TH-B4, TH-B6, TH-B12)
+- `services/registry-state/src/registry_state/adapters/event_log.py` (TH-E1, TH-B5)
+- `services/registry-state/src/registry_state/domain/failure_detection.py` (TH-B3)
+- `services/registry-state/src/registry_state/domain/test_failure_detection.py` (TH-B3)
+- `services/telegram-gateway/src/telegram_gateway/app/config.py` (TH-B1)
+- `services/telegram-gateway/src/telegram_gateway/app/lifespan.py` (TH-B1)
+- `services/telegram-gateway/src/telegram_gateway/handlers/trace_command.py` (TH-B1, TM-B9)
+- `services/telegram-gateway/src/telegram_gateway/handlers/test_trace_command.py` (TH-B10, TM-B9)
+- `services/console-cli/src/console_cli/test_trace_command.py` (TM-E3)
+- `tests/test_no_undocumented_spawn_sites.py` (TM-E2, TM-E6)
+- `pyproject.toml` (TM-B11)
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` (TM-B13)
+- `_bmad-output/implementation-artifacts/deferred-work.md` (TL-A6)
+- `_bmad-output/planning-artifacts/prd.md` (TL-B14)
 
 ### Epic 9 final stats
 

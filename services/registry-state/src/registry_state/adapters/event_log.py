@@ -139,12 +139,22 @@ def read_log_lines(path: Path) -> Iterator[EventEnvelope]:
 
 
 def _read_log_lines_gen(path: Path) -> Iterator[EventEnvelope]:
-    """Inner generator for ``read_log_lines`` — deferred file I/O."""
+    """Inner generator for ``read_log_lines`` — deferred file I/O.
+
+    Story 9.7 pass-2 TH-E1: ``approval_waiter`` (and other production
+    consumers) iterate this helper directly, so the same pre-1.1.0
+    back-fill applied to :func:`_read_new_envelopes_since` is applied
+    here. Without it the first pre-1.1.0 record raises
+    :class:`pydantic.ValidationError` and the consumer hangs/crashes.
+    """
     with open(path, "rb") as f:
         for raw in f:
             if not raw.endswith(b"\n"):
                 return  # trailing partial line — skip silently
-            yield from_canonical_json(raw.rstrip(b"\r\n"))
+            line_bytes = raw.rstrip(b"\r\n")
+            envelope = _parse_with_pre110_backfill(line_bytes, path)
+            if envelope is not None:
+                yield envelope
 
 
 def _read_new_envelopes_since(path: Path, offset: int) -> tuple[int, list[EventEnvelope]]:
@@ -215,14 +225,18 @@ def _parse_with_pre110_backfill(
 ) -> EventEnvelope | None:
     """Parse a JSONL line, back-filling trace_id for pre-1.1.0 envelopes.
 
-    Story 9.7 pass-1 PH-E1: avoids deployment-breaking ValidationError when
-    subscriber replays pre-1.1.0 JSONL during startup.
+    Story 9.7 pass-1 PH-E1 / pass-2 TH-B5: avoids deployment-breaking
+    ValidationError when subscriber replays pre-1.1.0 JSONL during startup.
+    Delegates to :func:`events.backfill.backfill_trace_id_from_request_id`
+    so the migrator + subscriber paths share one back-fill rule.
 
     Returns None (with structured warning) when the line is unrecoverable so
     the subscriber skips it rather than crashing. Returns the parsed
     EventEnvelope on success.
     """
-    from events.envelope import is_valid_trace_id  # noqa: PLC0415 — avoid circular at module level
+    from events.backfill import (  # noqa: PLC0415 — avoid circular at module level
+        backfill_trace_id_from_request_id,
+    )
 
     try:
         raw_dict: object = json.loads(line_bytes)
@@ -241,29 +255,28 @@ def _parse_with_pre110_backfill(
         )
         return None
 
-    # Back-fill trace_id for pre-1.1.0 records (those lacking a valid trace_id).
-    existing_trace = raw_dict.get("trace_id")
-    if not is_valid_trace_id(str(existing_trace) if existing_trace is not None else ""):
-        request_id = str(raw_dict.get("request_id") or "")
-        if is_valid_trace_id(request_id):
-            raw_dict = dict(raw_dict)
-            raw_dict["trace_id"] = request_id
-            _log.debug(
-                "event_log_pre110_backfill path=%s event_id=%s synthetic_trace_id=%s",
-                source_path,
-                raw_dict.get("event_id", "?"),
-                request_id,
-            )
-        else:
-            _log.warning(
-                "event_log_parse_skip path=%s event_id=%s "
-                "error_type=pre110_missing_trace_id request_id=%r "
-                "— cannot back-fill; skipping envelope",
-                source_path,
-                raw_dict.get("event_id", "?"),
-                request_id,
-            )
-            return None
+    # TH-B5 shared helper: back-fill trace_id from request_id (with e-prefix
+    # strip per Q6). Returns None when neither trace_id nor request_id
+    # produces a valid bare UUIDv7.
+    backfilled = backfill_trace_id_from_request_id(raw_dict)
+    if backfilled is None:
+        _log.warning(
+            "event_log_parse_skip path=%s event_id=%s "
+            "error_type=pre110_missing_trace_id request_id=%r "
+            "— cannot back-fill; skipping envelope",
+            source_path,
+            raw_dict.get("event_id", "?"),
+            raw_dict.get("request_id"),
+        )
+        return None
+    if backfilled is not raw_dict:
+        _log.debug(
+            "event_log_pre110_backfill path=%s event_id=%s synthetic_trace_id=%s",
+            source_path,
+            backfilled.get("event_id", "?"),
+            backfilled.get("trace_id"),
+        )
+    raw_dict = backfilled
 
     try:
         return from_canonical_json(json.dumps(raw_dict).encode())

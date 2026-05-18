@@ -85,11 +85,16 @@ def _render_trace_reply(
     return reply
 
 
-# Zero-width / BOM-style characters that copy-paste tooling can prepend to
-# pasted trace_ids. Stripped before validation so operators don't see the
-# cryptic "invalid trace_id shape" error without a hint about invisible chars
-# (Story 9.7 pass-1 PM-E12).
+# Zero-width / BOM-style characters that copy-paste tooling can sneak in
+# (anywhere — prefix, middle, suffix). Stripped before validation so operators
+# don't see the cryptic "invalid trace_id shape" error without a hint about
+# invisible chars (Story 9.7 pass-1 PM-E12 / pass-2 TM-B9).
 _INVISIBLE_PREFIXES = "​﻿‌‍⁠"
+# Story 9.7 pass-2 TM-B9: translate-table that strips ALL positions (not just
+# leading) of invisible chars and standard whitespace. ``lstrip`` only handles
+# the prefix case; embedded or trailing ZWSPs would still hit the regex with
+# the cryptic error.
+_TRACE_ID_STRIP_TABLE = {ord(c): None for c in _INVISIBLE_PREFIXES + " \t\r\n"}
 
 
 async def handle_trace(
@@ -114,10 +119,20 @@ async def handle_trace(
     # enforces per-user allowlist; this protects against forwarding/
     # group-add scenarios where an allowlisted user is in a non-allowlisted
     # chat. Empty set = bypass (back-compat default).
+    #
+    # Story 9.7 pass-2 TH-B1: emit a structured WARNING with the
+    # ``telegram.rejected`` marker so the rejection is greppable from
+    # the operator's log stream. A typed envelope (matching the outer
+    # ``AllowlistMiddleware`` shape) would require threading writer+actor
+    # through ``make_trace_router`` — followup work tracked alongside the
+    # /status wiring symmetry audit.
     if allowed_chat_ids:
         chat_id = message.chat.id if message.chat is not None else None
         if chat_id is None or chat_id not in allowed_chat_ids:
-            _log.warning("/trace rejected: chat_id=%r not in allowed_chat_ids", chat_id)
+            _log.warning(
+                "telegram.rejected handler=/trace chat_id=%r reason=chat_not_allowed",
+                chat_id,
+            )
             # Do NOT reply — silent drop avoids confirming bot presence to
             # unauthorized chats. Mirrors AllowlistMiddleware behavior.
             return
@@ -133,9 +148,10 @@ async def handle_trace(
         )
         return
 
-    # PM-E12: strip ZWSP/BOM/ZWJ/ZWNJ/word-joiner prefixes that copy-paste
-    # tooling can sneak in. Then standard whitespace strip.
-    arg_trace_id = parts[1].strip().lstrip(_INVISIBLE_PREFIXES)
+    # PM-E12 / Story 9.7 pass-2 TM-B9: strip ZWSP/BOM/ZWJ/ZWNJ/word-joiner
+    # from ALL positions (prefix + middle + suffix) that copy-paste tooling
+    # can sneak in. ``translate`` is position-agnostic; ``lstrip`` was not.
+    arg_trace_id = parts[1].translate(_TRACE_ID_STRIP_TABLE)
 
     # Parse optional page=N argument. PM-B9: show error on bad page rather
     # than silently defaulting to 1 (silent defaulting hides operator bugs).

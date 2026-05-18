@@ -70,10 +70,17 @@ def _make_response(status: int, body: object) -> httpx.Response:
 
 
 def test_trace_validates_shape_exits_2_on_invalid() -> None:
-    """Invalid trace_id → exit code 2 + error message to stderr."""
+    """Invalid trace_id → exit code 2 + error message to stderr.
+
+    Story 9.7 pass-2 TM-E3: split the OR-chain — exit_code is the PRIMARY
+    contract; the error-message assertion is a SECONDARY check. The prior
+    ``exit_code == 2 OR "invalid" in out`` form silently passed even when
+    the exit code was wrong as long as the output contained either keyword.
+    """
     result = runner.invoke(app, ["trace", _INVALID_TRACE_ID])
     out = (result.output or "").lower()
-    assert result.exit_code == 2 or "invalid" in out or "error" in out
+    assert result.exit_code == 2
+    assert "invalid" in out or "error" in out
 
 
 def test_trace_http_404_friendly_message() -> None:

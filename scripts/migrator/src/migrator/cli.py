@@ -47,13 +47,31 @@ class MigratorError(ValueError):
 # Mirror keeps the validator deterministic + dependency-free in the
 # minimal migrator image. The authoritative validator lives in
 # packages/events/src/events/envelope.py::is_valid_trace_id.
-_UUIDV7_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
-_TG_RE = re.compile(r"^tg:(\d+)$")
+#
+# Story 9.7 pass-2 TM-E5: use \A/\Z (Story 9.1 F1 anti-lesson — ^/$ matches
+# end-of-line under MULTILINE). _TG_RE rejects ``tg:0`` and leading-zero
+# forms (``tg:007``) — keep in sync with packages/events/src/events/envelope.py
+# canonical patterns (``_TRACE_ID_TELEGRAM_RE``).
+#
+# Story 9.7 pass-2 TH-B2 (Q6): the back-fill path additionally accepts
+# ``e-<uuidv7>`` (pre-9.1 request_id shape) and strips the ``e-`` prefix
+# before storing as ``trace_id``. The Story-9.1 validator only accepts
+# bare UUIDv7 / tg:<digits>; the back-fill helper bridges the gap.
+_UUIDV7_RE = re.compile(r"\A[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z")
+_TG_RE = re.compile(r"\Atg:[1-9][0-9]{0,18}\Z")
+_BACKFILL_UUIDV7_RE = re.compile(
+    r"\A(?:e-)?[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z"
+)
 _INT64_MAX = (1 << 63) - 1
 
 
 def _is_valid_trace_id(candidate: object) -> bool:
-    """Local mirror of :func:`events.envelope.is_valid_trace_id` (Story 9.1)."""
+    """Local mirror of :func:`events.envelope.is_valid_trace_id` (Story 9.1).
+
+    Story 9.7 pass-2 TM-E5: ``\\A``/``\\Z`` anchors + ``tg:[1-9][0-9]{0,18}``
+    canonical pattern (no ``tg:0``, no leading zeros). Mirrors
+    ``packages/events/src/events/envelope.py``.
+    """
     if not isinstance(candidate, str) or not candidate:
         return False
     if _UUIDV7_RE.match(candidate):
@@ -61,10 +79,35 @@ def _is_valid_trace_id(candidate: object) -> bool:
     m = _TG_RE.match(candidate)
     if m is None:
         return False
+    # The regex already constrained digits to [1, 10^19); enforce the int64
+    # ceiling post-match (canonical: ≤ 2^63 − 1).
     try:
-        return 1 <= int(m.group(1)) <= _INT64_MAX
+        return 1 <= int(candidate[3:]) <= _INT64_MAX
     except ValueError:
         return False
+
+
+def _backfill_trace_id_from_request_id(envelope_dict: dict[str, Any]) -> str | None:
+    """Story 9.7 pass-2 TH-B5/TH-B2 — shared back-fill rule for migrator.
+
+    Returns the bare UUIDv7 to assign as ``trace_id``, or ``None`` when
+    back-fill is not possible. Q6 decision (a): accepts ``e-<uuidv7>`` shape
+    by stripping the ``e-`` prefix.
+
+    NOTE — keep this rule in sync with :func:`events.backfill.backfill_trace_id_from_request_id`.
+    The migrator implements its own copy to avoid pulling the events
+    package into the minimal migrator container; the test suite enforces
+    invariance via ``test_backfill_invariant_migrator_eq_subscriber``.
+    """
+    raw_request_id = envelope_dict.get("request_id")
+    if not isinstance(raw_request_id, str) or not raw_request_id:
+        return None
+    if not _BACKFILL_UUIDV7_RE.match(raw_request_id):
+        return None
+    bare_uuid = raw_request_id.removeprefix("e-")
+    if not _is_valid_trace_id(bare_uuid):
+        return None
+    return bare_uuid
 
 
 def migrate_v1_0_0_to_v1_0_1(event: dict[str, Any]) -> dict[str, Any]:
@@ -104,14 +147,19 @@ def migrate_v1_0_0_to_v1_0_1(event: dict[str, Any]) -> dict[str, Any]:
     # failed downstream envelope validation with a much less actionable
     # error far from the source record.
     if not migrated.get("trace_id"):
-        request_id = migrated.get("request_id", "")
-        if not _is_valid_trace_id(request_id):
+        # Story 9.7 pass-2 TH-B2/Q6: accept ``e-<uuidv7>`` request_id (pre-9.1
+        # shape) by stripping the ``e-`` prefix before validation. The shared
+        # back-fill helper returns the bare UUIDv7 or ``None``.
+        backfilled = _backfill_trace_id_from_request_id(migrated)
+        if backfilled is None:
+            request_id = migrated.get("request_id", "")
             raise MigratorError(
                 f"cannot back-fill trace_id: request_id missing or invalid "
                 f"(got {request_id!r}); migration requires every input record "
-                f"to carry a Story-9.1-valid request_id (UUIDv7 or 'tg:<digits>')"
+                f"to carry a Story-9.1-valid request_id (UUIDv7, ``e-<uuidv7>``, "
+                f"or 'tg:<digits>')"
             )
-        migrated["trace_id"] = request_id
+        migrated["trace_id"] = backfilled
     return migrated
 
 

@@ -189,6 +189,27 @@ class TelegramSettings(AuditedBaseSettings):
         ),
     )
 
+    # Story 9.7 pass-2 TH-B1: per-chat allowlist for /trace defense-in-depth.
+    # Distinct from ``tg_allowlist_user_ids`` (user-level): /trace exposes full
+    # causal chains (secret.accessed, tier3.action_attempted payloads), so a
+    # per-chat allowlist guards against forwarded/group-added scenarios where
+    # an allowlisted USER ends up in a non-allowlisted CHAT. Empty default
+    # falls back to ``tg_allowlist_user_ids`` (treated as a per-chat ids set
+    # for the common 1:1 DM case where chat_id == user_id).
+    #
+    # Env-var: ``TRACE_ALLOWED_CHAT_IDS=123,456`` (bare CSV) or JSON list form
+    # ``TRACE_ALLOWED_CHAT_IDS=[123,456]``. Empty string / unset → falls back
+    # to ``tg_allowlist_user_ids`` (which itself defaults to closed/empty).
+    trace_allowed_chat_ids: Any = Field(
+        default_factory=frozenset,
+        validation_alias="TRACE_ALLOWED_CHAT_IDS",
+        description=(
+            "Per-chat allowlist for /trace command. Defense-in-depth on top "
+            "of tg_allowlist_user_ids. Empty default falls back to "
+            "tg_allowlist_user_ids in the lifespan wiring (TH-B1)."
+        ),
+    )
+
     # Story 3.2 / FR11 / NFR-S4: allowlist of Telegram user ids.
     # Closed-by-default — empty frozenset rejects every inbound update
     # (including the operator's own id). The lifespan emits a startup
@@ -209,6 +230,51 @@ class TelegramSettings(AuditedBaseSettings):
             "closed-by-default (rejects every inbound update). FR11."
         ),
     )
+
+    @field_validator("trace_allowed_chat_ids", mode="before")
+    @classmethod
+    def _validate_trace_allowed_chat_ids(cls, value: Any) -> frozenset[int]:
+        """Normalise + validate the trace per-chat allowlist (TH-B1).
+
+        Same parsing rules as ``tg_allowlist_user_ids``: empty string → empty
+        frozenset (fallback applied in lifespan), bare CSV → list of ints,
+        JSON list parsed normally. Bool values + non-positive ids rejected.
+        """
+        import json as _json
+
+        if isinstance(value, str):
+            value = _coerce_allowlist_raw_string(value)
+            if isinstance(value, str):
+                try:
+                    value = _json.loads(value)
+                except _json.JSONDecodeError as exc:
+                    raise ValueError(
+                        f"TRACE_ALLOWED_CHAT_IDS is not valid JSON: {exc}. "
+                        "Use JSON list syntax, e.g. [123,456]"
+                    ) from exc
+
+        value = _coerce_allowlist_env(value)
+        try:
+            result = frozenset(int(i) for i in value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"trace_allowed_chat_ids must be a list of integers; got: {exc}"
+            ) from exc
+
+        iterable_value = value if hasattr(value, "__iter__") else []
+        bad_bools = [i for i in iterable_value if isinstance(i, bool)]
+        if bad_bools:
+            raise ValueError(
+                f"trace_allowed_chat_ids must contain integers, not booleans; got {bad_bools!r}"
+            )
+
+        bad = [i for i in result if i <= 0]
+        if bad:
+            raise ValueError(
+                f"trace_allowed_chat_ids must contain positive integers; "
+                f"got non-positive value(s): {sorted(bad)!r}"
+            )
+        return result
 
     @field_validator("tg_allowlist_user_ids", mode="before")
     @classmethod

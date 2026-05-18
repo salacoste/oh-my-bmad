@@ -168,8 +168,8 @@ async def emit_service_crashed(
     clock: Clock,
     service: str,
     exit_code: int,
+    trace_id: str,
     actor_id: str | None = None,
-    trace_id: str | None = None,
     request_id: str | None = None,
     parent_event_id: str | None = None,
 ) -> EventEnvelope:
@@ -204,16 +204,11 @@ async def emit_service_crashed(
     Returns:
         The persisted :class:`EventEnvelope`.
     """
-    # PH-A5/B16: log when trace_id is None so silent synthetic mints surface.
-    # System-initiated detection (process crash) has no operator trace context;
-    # the synthetic is intentional. PH-B16: if a caller HAS operator context
-    # (rare for service.crashed), pass it explicitly to link the chain.
-    if trace_id is None:
-        log.warning(
-            "emit_service_crashed: no trace_id supplied; minting synthetic "
-            "(service=%s) — if caller has operator context, pass trace_id explicitly",
-            service,
-        )
+    # Story 9.7 pass-2 TH-B3: ``trace_id`` is REQUIRED — no silent mint.
+    # System-initiated detectors (where there is no operator trace context)
+    # MUST explicitly mint with ``new_request_id(clock=clock)`` and a
+    # ``# system-initiated synthetic`` comment so the cost of synthetic
+    # traces is visible at every call site.
     payload = ServiceCrashedPayload(service=service, exit_code=exit_code)
     resolved_actor_id = actor_id if actor_id is not None else service
     envelope = EventEnvelope.create(
@@ -224,7 +219,7 @@ async def emit_service_crashed(
         emitted_at_monotonic_ns=clock.monotonic_ns(),
         actor=Actor(kind="system", id=resolved_actor_id),
         payload=payload,
-        trace_id=trace_id if trace_id is not None else new_request_id(clock=clock),
+        trace_id=trace_id,
         request_id=request_id if request_id is not None else new_request_id(clock=clock),
         parent_event_id=parent_event_id,
     )
@@ -240,8 +235,8 @@ async def emit_session_heartbeat_timeout(
     task_id: str,
     last_heartbeat_at: datetime,
     timeout_threshold_s: float,
+    trace_id: str,
     actor_id: str = "registry-state",
-    trace_id: str | None = None,
     request_id: str | None = None,
     parent_event_id: str | None = None,
 ) -> EventEnvelope:
@@ -264,14 +259,7 @@ async def emit_session_heartbeat_timeout(
         request_id:          See :func:`emit_service_crashed`.
         parent_event_id:     See :func:`emit_service_crashed`.
     """
-    # PH-A5/B16: system-initiated timeout detection; synthetic trace intentional.
-    if trace_id is None:
-        log.warning(
-            "emit_session_heartbeat_timeout: no trace_id supplied; minting synthetic "
-            "(session_id=%s task_id=%s) — pass trace_id from operator event if available",
-            session_id,
-            task_id,
-        )
+    # Story 9.7 pass-2 TH-B3: ``trace_id`` is REQUIRED (see emit_service_crashed).
     payload = SessionHeartbeatTimeoutPayload(
         session_id=session_id,
         task_id=task_id,
@@ -286,7 +274,7 @@ async def emit_session_heartbeat_timeout(
         emitted_at_monotonic_ns=clock.monotonic_ns(),
         actor=Actor(kind="system", id=actor_id),
         payload=payload,
-        trace_id=trace_id if trace_id is not None else new_request_id(clock=clock),
+        trace_id=trace_id,
         request_id=request_id if request_id is not None else new_request_id(clock=clock),
         parent_event_id=parent_event_id,
     )
@@ -300,9 +288,9 @@ async def emit_sink_delivery_failed(
     clock: Clock,
     sink_name: str,
     consecutive_failures: int,
+    trace_id: str,
     last_error: str | None = None,
     actor_id: str = "registry-state",
-    trace_id: str | None = None,
     request_id: str | None = None,
     parent_event_id: str | None = None,
 ) -> EventEnvelope:
@@ -336,13 +324,7 @@ async def emit_sink_delivery_failed(
         ``writer``; the order shown here is for documentation only — call
         with whatever ordering is most readable at the call site.
     """
-    # PH-A5/B16: system-initiated sink monitoring; synthetic trace intentional.
-    if trace_id is None:
-        log.warning(
-            "emit_sink_delivery_failed: no trace_id supplied; minting synthetic "
-            "(sink_name=%s) — pass trace_id from triggering operator event if available",
-            sink_name,
-        )
+    # Story 9.7 pass-2 TH-B3: ``trace_id`` is REQUIRED (see emit_service_crashed).
     payload = SinkDeliveryFailedPayload(
         sink_name=sink_name,
         consecutive_failures=consecutive_failures,
@@ -356,7 +338,7 @@ async def emit_sink_delivery_failed(
         emitted_at_monotonic_ns=clock.monotonic_ns(),
         actor=Actor(kind="system", id=actor_id),
         payload=payload,
-        trace_id=trace_id if trace_id is not None else new_request_id(clock=clock),
+        trace_id=trace_id,
         request_id=request_id if request_id is not None else new_request_id(clock=clock),
         parent_event_id=parent_event_id,
     )
@@ -370,8 +352,8 @@ async def emit_task_stop_requested(
     clock: Clock,
     task_id: str,
     actor_id: str,
+    trace_id: str,
     actor_kind: ActorKind = "system",
-    trace_id: str | None = None,
     request_id: str | None = None,
     parent_event_id: str | None = None,
 ) -> EventEnvelope:
@@ -398,18 +380,10 @@ async def emit_task_stop_requested(
                          useful here to chain to the operator command's
                          envelope.
     """
-    # PH-A5/B16: operator-initiated stop should pass the operator's trace_id.
-    # If trace_id is None, log a warning — operator /stop command callers MUST
-    # supply trace_id to keep the causal chain intact (FR59a). System-initiated
-    # stops (actor_kind="system") are the only legitimate case for None.
-    if trace_id is None:
-        log.warning(
-            "emit_task_stop_requested: no trace_id supplied; minting synthetic "
-            "(task_id=%s actor_id=%s actor_kind=%s) — operator callers MUST pass trace_id",
-            task_id,
-            actor_id,
-            actor_kind,
-        )
+    # Story 9.7 pass-2 TH-B3: ``trace_id`` is REQUIRED — operator callers
+    # MUST pass the operator's trace_id; system-initiated stops MUST mint
+    # synthetic at the call site with ``# system-initiated synthetic`` so
+    # the cost is visible.
     payload = TaskStopRequestedPayload(task_id=task_id, actor_id=actor_id)
     envelope = EventEnvelope.create(
         event_id=new_event_id(clock=clock),
@@ -419,7 +393,7 @@ async def emit_task_stop_requested(
         emitted_at_monotonic_ns=clock.monotonic_ns(),
         actor=Actor(kind=actor_kind, id=actor_id),
         payload=payload,
-        trace_id=trace_id if trace_id is not None else new_request_id(clock=clock),
+        trace_id=trace_id,
         request_id=request_id if request_id is not None else new_request_id(clock=clock),
         parent_event_id=parent_event_id,
     )

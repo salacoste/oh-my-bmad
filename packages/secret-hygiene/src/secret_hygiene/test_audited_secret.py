@@ -497,6 +497,73 @@ class TestAuditedSecretBestEffort:
         assert any("audit_emission_dropped" in r.getMessage() for r in caplog.records)
 
     @pytest.mark.asyncio
+    async def test_typeerror_in_envelope_create_propagates(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Story 9.7 pass-2 TH-B7: programmer errors must NOT be swallowed.
+
+        PH-A6/E10 narrowed ``_build_envelope`` to ``except (EventSchemaUnknown,
+        ValidationError)``. ``TypeError`` raised by ``EventEnvelope.create`` is
+        a programmer error (bad kwarg, model contract mismatch) — it must
+        propagate so CI catches it immediately rather than silently dropping
+        audit emissions.
+        """
+        import unittest.mock as _mock
+
+        with _mock.patch(
+            "events.envelope.EventEnvelope.create",
+            side_effect=TypeError("bad kwarg — programmer error"),
+        ):
+            s = AuditedSecret(
+                "tval",
+                secret_name="typeerror_propagates",
+                emit=_RecordingEmitter(),
+                actor=_actor(),
+            )
+            with pytest.raises(TypeError, match="bad kwarg"):
+                _ = s.value
+
+    @pytest.mark.asyncio
+    async def test_attributeerror_in_envelope_create_propagates(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Story 9.7 pass-2 TH-B7: AttributeError is a programmer error — must propagate."""
+        import unittest.mock as _mock
+
+        with _mock.patch(
+            "events.envelope.EventEnvelope.create",
+            side_effect=AttributeError("missing attribute — programmer error"),
+        ):
+            s = AuditedSecret(
+                "tval",
+                secret_name="attrerror_propagates",
+                emit=_RecordingEmitter(),
+                actor=_actor(),
+            )
+            with pytest.raises(AttributeError, match="missing attribute"):
+                _ = s.value
+
+    @pytest.mark.asyncio
+    async def test_keyerror_in_envelope_create_propagates(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Story 9.7 pass-2 TH-B7: KeyError is a programmer error — must propagate."""
+        import unittest.mock as _mock
+
+        with _mock.patch(
+            "events.envelope.EventEnvelope.create",
+            side_effect=KeyError("missing required key — programmer error"),
+        ):
+            s = AuditedSecret(
+                "tval",
+                secret_name="keyerror_propagates",
+                emit=_RecordingEmitter(),
+                actor=_actor(),
+            )
+            with pytest.raises(KeyError):
+                _ = s.value
+
+    @pytest.mark.asyncio
     async def test_cancelled_error_inside_emit_is_contained(self) -> None:
         """M1: ``asyncio.CancelledError`` raised inside emit propagates to the task.
 
