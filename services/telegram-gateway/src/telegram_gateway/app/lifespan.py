@@ -346,6 +346,17 @@ def make_lifespan(
             # per-user allowlist when ``trace_allowed_chat_ids`` is empty so
             # the common 1:1 DM case (chat_id == user_id) inherits the same
             # closed-by-default surface without explicit operator config.
+            #
+            # Pass-3 UH-1 decision: the user-ids-as-chat-ids fallback is
+            # KEPT as a deliberate dev-mode default. Rationale: most operators
+            # interact with the bot via 1:1 DM where chat_id == user_id (a
+            # positive integer matching the user's Telegram id), so reusing
+            # ``tg_allowlist_user_ids`` produces a "just works" experience.
+            # Operators wanting group chats (negative chat_ids) MUST set
+            # ``TRACE_ALLOWED_CHAT_IDS`` explicitly. ``handle_trace`` itself
+            # now REQUIRES the allowlist kwarg (pass-3 UH-1) so empty values
+            # produced by a misconfigured fallback path still deny every
+            # chat — closed-by-default surface, not a bypass.
             trace_chat_allowlist = (
                 audited.trace_allowed_chat_ids
                 if audited.trace_allowed_chat_ids

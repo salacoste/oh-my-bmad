@@ -35,11 +35,10 @@ did occur.
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Awaitable, Callable, Iterable
 
-from events.canonical import _default_encoder  # reuse canonical encoder
+from events.canonical import to_canonical_payload_json
 from events.envelope import EventEnvelope
 from pydantic import BaseModel
 from sqlalchemy import func, literal, select
@@ -84,21 +83,21 @@ def _extract_ids(env: EventEnvelope) -> tuple[str | None, str | None]:
 def _canonical_payload_json(env: EventEnvelope) -> str:
     """Return canonical-JSON text of the payload portion ONLY (not the full envelope).
 
-    Matches the Story 2.1 canonical encoder: sorted keys, no whitespace,
-    UTF-8, ``_default_encoder`` for datetime and other non-stdlib types.
+    Story 9.7 pass-3 UH-8: delegates to :func:`events.canonical.to_canonical_payload_json`
+    so the canonical-encoder contract has exactly ONE implementation. The
+    earlier inline ``json.dumps(sort_keys=True)`` was equivalent in
+    practice (stdlib ``sort_keys`` does recurse into nested dicts) but
+    duplicating the rules invited future divergence — any change to the
+    canonical contract (e.g. ``allow_nan=False`` added later) would have
+    to be applied in both places. The shared helper guarantees byte-stable
+    output across all producers.
     """
     payload = env.payload
     if isinstance(payload, BaseModel):
         data: dict[str, object] = payload.model_dump()
     else:
         data = dict(payload)
-    return json.dumps(
-        data,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        default=_default_encoder,
-    )
+    return to_canonical_payload_json(data)
 
 
 class Materializer:

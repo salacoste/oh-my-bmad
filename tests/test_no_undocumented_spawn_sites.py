@@ -98,20 +98,43 @@ def _rel(p: str) -> str:
     return str(Path(p).as_posix())
 
 
-# Each value is a set of allowed lines for that file.
-# Format: { rel_path: {line, ...} }
-_ALLOWLIST: dict[str, set[int]] = {
+# Each value is a dict mapping allowed line number → expected primitive
+# dotted name (e.g. ``"subprocess.Popen"``). Pass-3 UH-6 tightened the
+# shape from ``set[int]`` to ``dict[int, str]`` so a refactor that swaps
+# one primitive for another at the same line (e.g. Popen → os.fork) is
+# caught — the prior shape validated lineno only.
+# Format: { rel_path: {line: primitive_name, ...} }
+#
+# Pass-3 TM-E2 / UM-5 design note: TM-E2 chose minimum-viable validation
+# (lineno + primitive name) over the comment-anchor mechanism
+# (``# AST-GATE-ALLOWLISTED: <reason>`` inline comments, the strongest
+# option from the 3-option spec). Comment anchors survive re-indents but
+# require non-trivial AST walker changes and a per-file comment policy.
+#
+# D8 deferral (see _bmad-output/implementation-artifacts/deferred-work.md):
+# Implement comment anchors when EITHER (a) the spawn-site count exceeds
+# 10 (currently 3 files / 4 entries) OR (b) line-number drift breaks CI
+# more than once. Until then: STABILITY RULE — any edit to an allowlisted
+# file MUST update the corresponding line number here in the same commit.
+_ALLOWLIST: dict[str, dict[int, str]] = {
     # worker-wrapper: spawns Claude Code subprocess.
     # Story 9.6 — propagates WORKER_TRACE_ID through env (FR59 / PH0).
-    _rel("services/worker-wrapper/src/worker_wrapper/adapters/claude_code_runner.py"): {151},
+    _rel("services/worker-wrapper/src/worker_wrapper/adapters/claude_code_runner.py"): {
+        151: "asyncio.create_subprocess_exec",
+    },
     # orchestrator-adapter: spawns OMC node subprocess.
     # Story 9.6 — propagates OMB_TRACE_ID through env (FR59 / TH3).
-    _rel("services/orchestrator-adapter/src/orchestrator_adapter/adapters/omc_runner.py"): {93},
+    _rel("services/orchestrator-adapter/src/orchestrator_adapter/adapters/omc_runner.py"): {
+        93: "asyncio.create_subprocess_exec",
+    },
     # sync_upstream.py: dev-only maintenance script — clones upstream repos
     # into scripts/upstream/ for vendored-source tracking. Not invoked at
     # runtime, has no trace_id context (operator-local one-shot tool).
     # Story 9.7 / AC12 PH-B7/B8/E5: scripts/ added to _SCAN_ROOTS.
-    _rel("scripts/sync_upstream.py"): {76, 93},
+    _rel("scripts/sync_upstream.py"): {
+        76: "subprocess.run",
+        93: "subprocess.run",
+    },
 }
 
 
@@ -274,12 +297,21 @@ def test_no_undocumented_spawn_sites() -> None:
             hits = _scan_file(py)
             if not hits:
                 continue
-            allowed_lines = _ALLOWLIST.get(rel, set())
+            allowed: dict[int, str] = _ALLOWLIST.get(rel, {})
             for lineno, spawn_name in hits:
-                if lineno not in allowed_lines:
+                # Pass-3 UH-6: lineno present AND primitive name matches.
+                # A refactor that swaps Popen → os.fork at the same line is
+                # caught by the name check rather than passing silently.
+                if lineno not in allowed:
                     undocumented.append(
                         f"{rel}:{lineno} -> {spawn_name}  "
                         f"[not in allowlist; add to _ALLOWLIST or remove the spawn]"
+                    )
+                elif allowed[lineno] != spawn_name:
+                    undocumented.append(
+                        f"{rel}:{lineno} -> {spawn_name}  "
+                        f"[primitive name mismatch; allowlist expects "
+                        f"{allowed[lineno]!r} at this line; refactor drift?]"
                     )
 
     # Also scan root-level *.py files (PH-B8: top-level scripts)
@@ -290,12 +322,18 @@ def test_no_undocumented_spawn_sites() -> None:
         hits = _scan_file(py)
         if not hits:
             continue
-        allowed_lines = _ALLOWLIST.get(rel, set())
+        allowed = _ALLOWLIST.get(rel, {})
         for lineno, spawn_name in hits:
-            if lineno not in allowed_lines:
+            if lineno not in allowed:
                 undocumented.append(
                     f"{rel}:{lineno} -> {spawn_name}  "
                     f"[not in allowlist; add to _ALLOWLIST or remove the spawn]"
+                )
+            elif allowed[lineno] != spawn_name:
+                undocumented.append(
+                    f"{rel}:{lineno} -> {spawn_name}  "
+                    f"[primitive name mismatch; allowlist expects "
+                    f"{allowed[lineno]!r} at this line; refactor drift?]"
                 )
 
     assert not undocumented, (
@@ -365,28 +403,40 @@ def test_allowlist_keys_are_valid_paths() -> None:
 
 
 def test_allowlisted_lines_contain_real_spawn_calls() -> None:
-    """Story 9.7 pass-2 TM-E2: validate that every allowlisted (path, line)
-    actually contains the expected spawn AST node.
+    """Story 9.7 pass-2 TM-E2 / pass-3 UH-6: validate every allowlisted
+    ``(path, line, primitive_name)`` triple is current.
 
-    The ``(path, line_number)`` allowlist shape is fragile — any re-indent
+    The ``(path, line_number)`` allowlist shape was fragile — any re-indent
     silently shifts line numbers and a non-spawn line can occupy the
-    formerly-flagged number, masking a regression. Mitigate by asserting
-    that the allowlisted line is in fact a spawn-call site (validated
-    against the same AST walker used by the gate).
+    formerly-flagged number, masking a regression. Pass-3 UH-6 tightened
+    the shape further: the allowlist value is now ``dict[int, str]``
+    mapping line → expected primitive name. A refactor that swaps one
+    spawn primitive for another at the same line (e.g. Popen → os.fork)
+    is caught by the name check, not just the line check.
+
+    Asserts both:
+      * the allowlisted line actually contains a spawn call (no stale lines)
+      * the spawn primitive at that line matches the allowlist's recorded
+        name (refactor that swaps primitives at the same line is surfaced)
     """
     stale: list[str] = []
-    for rel, lines in _ALLOWLIST.items():
+    for rel, lines_map in _ALLOWLIST.items():
         path = _REPO_ROOT / rel
         if not path.is_file():
             continue
-        hits = {lineno for lineno, _name in _scan_file(path)}
-        for line in lines:
-            if line not in hits:
+        scanned: dict[int, str] = {lineno: name for lineno, name in _scan_file(path)}
+        for line, expected_name in lines_map.items():
+            if line not in scanned:
                 stale.append(
                     f"{rel}:{line} — allowlisted but no spawn call on that line "
                     "(refactor drift; update _ALLOWLIST)"
                 )
-    assert not stale, "Stale allowlist line numbers:\n" + "\n".join(f"  {s}" for s in stale)
+            elif scanned[line] != expected_name:
+                stale.append(
+                    f"{rel}:{line} — expected primitive {expected_name!r} but found "
+                    f"{scanned[line]!r} (refactor swap; update _ALLOWLIST or revert swap)"
+                )
+    assert not stale, "Stale allowlist entries:\n" + "\n".join(f"  {s}" for s in stale)
 
 
 # PH-B8/E5 self-tests — verify new scan behaviour

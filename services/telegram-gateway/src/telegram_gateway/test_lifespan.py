@@ -381,3 +381,92 @@ def test_telegram_gateway_actor_identity() -> None:
     """L17: _TELEGRAM_GATEWAY_ACTOR has the canonical identity."""
     assert _TELEGRAM_GATEWAY_ACTOR.kind == "system"
     assert _TELEGRAM_GATEWAY_ACTOR.id == "telegram-gateway"
+
+
+# ---------------------------------------------------------------------------
+# Story 9.7 pass-3 UH-1: /trace router wiring regression
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_lifespan_wires_trace_router_with_chat_allowlist(
+    env_setup: dict[str, Any],
+    patched_aiogram: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """UH-1: lifespan calls ``make_trace_router`` with the audited chat allowlist.
+
+    Pass-2 TH-B1 added ``trace_allowed_chat_ids`` plumbing but had no
+    regression test asserting the wiring. Pass-3 UH-1: assert the
+    ``make_trace_router`` factory is invoked AND the ``allowed_chat_ids``
+    kwarg matches ``audited.trace_allowed_chat_ids`` (with the documented
+    fallback to ``tg_allowlist_user_ids`` when the former is empty).
+    """
+    from telegram_gateway.app import lifespan as lifespan_mod
+
+    captured_kwargs: list[dict[str, Any]] = []
+    real_make_trace_router = lifespan_mod.make_trace_router
+
+    def recording_make_trace_router(**kwargs: Any) -> Any:
+        captured_kwargs.append(kwargs)
+        return real_make_trace_router(**kwargs)
+
+    monkeypatch.setattr(lifespan_mod, "make_trace_router", recording_make_trace_router)
+    # Operator sets only TG_ALLOWLIST_USER_IDS — TRACE_ALLOWED_CHAT_IDS is empty
+    # so the lifespan fallback path is exercised.
+    monkeypatch.setenv("TG_ALLOWLIST_USER_IDS", "[12345]")
+
+    settings = _seed_settings(tmp_path)
+    clock = FrozenClock(mono_ns=0, now=FROZEN_EPOCH)
+    app = build_app(settings=settings, clock=clock)
+
+    async with LifespanManager(app):
+        pass
+
+    assert len(captured_kwargs) == 1, (
+        f"make_trace_router must be called exactly once; got {len(captured_kwargs)}"
+    )
+    kwargs = captured_kwargs[0]
+    assert "allowed_chat_ids" in kwargs, "make_trace_router must receive allowed_chat_ids kwarg"
+    # The fallback path: trace_allowed_chat_ids empty → use tg_allowlist_user_ids.
+    assert kwargs["allowed_chat_ids"] == frozenset({12345}), (
+        f"expected fallback to tg_allowlist_user_ids; got {kwargs['allowed_chat_ids']!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_lifespan_wires_trace_router_with_explicit_trace_allowlist(
+    env_setup: dict[str, Any],
+    patched_aiogram: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """UH-1: explicit ``TRACE_ALLOWED_CHAT_IDS`` is used verbatim by the wiring.
+
+    Includes a negative chat id (Telegram group) to pin the pass-3 UH-1
+    validator fix — group allowlists must be possible.
+    """
+    from telegram_gateway.app import lifespan as lifespan_mod
+
+    captured_kwargs: list[dict[str, Any]] = []
+    real_make_trace_router = lifespan_mod.make_trace_router
+
+    def recording_make_trace_router(**kwargs: Any) -> Any:
+        captured_kwargs.append(kwargs)
+        return real_make_trace_router(**kwargs)
+
+    monkeypatch.setattr(lifespan_mod, "make_trace_router", recording_make_trace_router)
+    monkeypatch.setenv("TG_ALLOWLIST_USER_IDS", "[12345]")
+    # Group chat id (-100123456789) MUST be accepted — UH-1 validator fix.
+    monkeypatch.setenv("TRACE_ALLOWED_CHAT_IDS", "[789,-100123456789]")
+
+    settings = _seed_settings(tmp_path)
+    clock = FrozenClock(mono_ns=0, now=FROZEN_EPOCH)
+    app = build_app(settings=settings, clock=clock)
+
+    async with LifespanManager(app):
+        pass
+
+    assert len(captured_kwargs) == 1
+    assert captured_kwargs[0]["allowed_chat_ids"] == frozenset({789, -100123456789})

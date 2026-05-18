@@ -460,31 +460,91 @@ def test_migrator_accepts_e_prefix_request_id() -> None:
 
 @pytest.mark.migrator
 def test_backfill_invariant_migrator_eq_subscriber() -> None:
-    """Story 9.7 pass-2 TH-B5: migrator + subscriber back-fill produce same output.
+    """Story 9.7 pass-2 TH-B5 / pass-3 UH-2: migrator + subscriber back-fill
+    produce same ``trace_id`` value AND the migrator end-to-end output
+    matches the shared helper's contract for every probed input shape.
 
-    The shared helper in ``packages/events/src/events/backfill.py`` is the
-    source of truth. This test asserts that the migrator's local mirror
-    (``_backfill_trace_id_from_request_id``) produces identical ``trace_id``
-    for the same input dict.
+    Migrator container is minimal (no ``packages/events`` dependency, see
+    ``scripts/migrator/Dockerfile``) so the local mirror in ``migrator.cli``
+    is retained. This invariant test enforces that the two implementations
+    stay byte-equivalent on the trace_id field across ≥10 sample shapes
+    including missing schema_version, null trace_id, garbage, empty
+    strings, and the ``e-`` prefix carry-over from pre-9.1 envelopes.
+
+    The migrator helper returns ``str | None`` (just the bare UUIDv7);
+    the shared helper returns ``dict | None``. Both produce the same
+    ``trace_id`` value for the same input — this is the determinism
+    contract operators rely on for replay safety.
     """
     from events.backfill import backfill_trace_id_from_request_id
     from migrator.cli import _backfill_trace_id_from_request_id as _migrator_backfill
 
-    samples = [
-        # Plain UUIDv7 request_id
-        {"request_id": "01917e5c-a7d1-7000-8abc-000000000001"},
-        # e-prefixed request_id (pre-9.1 shape)
-        {"request_id": "e-01917e5c-a7d1-7000-8abc-000000000002"},
+    valid_uuid = "01917e5c-a7d1-7000-8abc-000000000001"
+    valid_uuid_2 = "01917e5c-a7d1-7000-8abc-000000000002"
+
+    # Pass-3 UH-2: expanded to ≥10 samples including the edge cases that
+    # pass-3 UH-5 tightened on the shared helper.
+    convergent_samples: list[dict[str, object]] = [
+        # 1. Plain UUIDv7 request_id, no other fields
+        {"request_id": valid_uuid},
+        # 2. e-prefixed request_id (pre-9.1 shape)
+        {"request_id": f"e-{valid_uuid_2}"},
+        # 3. With explicit schema_version
+        {"request_id": valid_uuid, "schema_version": "1.0.0"},
+        # 4. With null schema_version (UH-5 path on shared; migrator stays str)
+        {"request_id": valid_uuid, "schema_version": None},
+        # 5. With empty-string schema_version
+        {"request_id": valid_uuid, "schema_version": ""},
+        # 6. With garbage schema_version
+        {"request_id": valid_uuid, "schema_version": "garbage"},
+        # 7. Valid trace_id pre-set (no back-fill needed)
+        {"trace_id": valid_uuid, "request_id": valid_uuid, "schema_version": "1.1.0"},
+        # 8. Invalid trace_id, valid request_id
+        {"trace_id": "bogus", "request_id": valid_uuid, "schema_version": "1.0.0"},
+        # 9. e-prefixed + valid trace_id already present
+        {
+            "trace_id": valid_uuid,
+            "request_id": f"e-{valid_uuid_2}",
+            "schema_version": "1.0.0",
+        },
+        # 10. UUIDv7 trace_id with extra payload fields (round-trip safe)
+        {
+            "request_id": valid_uuid,
+            "schema_version": "1.0.0",
+            "type": "task.created",
+            "extensions": {},
+        },
     ]
-    for record in samples:
+    for record in convergent_samples:
         migrator_result = _migrator_backfill(record)
         shared_result = backfill_trace_id_from_request_id(record)
-        assert migrator_result is not None, f"migrator back-fill returned None for {record!r}"
-        assert shared_result is not None, f"shared back-fill returned None for {record!r}"
-        assert migrator_result == shared_result.get("trace_id"), (
-            f"invariant broken for {record!r}: migrator={migrator_result!r}, "
-            f"shared={shared_result.get('trace_id')!r}"
+        # Both must agree on whether back-fill is possible.
+        assert (migrator_result is None) == (shared_result is None), (
+            f"invariant broken (None disagreement) for {record!r}: "
+            f"migrator={migrator_result!r}, shared={shared_result!r}"
         )
+        if migrator_result is None:
+            continue
+        assert shared_result is not None  # narrows type for mypy
+        assert migrator_result == shared_result.get("trace_id"), (
+            f"invariant broken (trace_id mismatch) for {record!r}: "
+            f"migrator={migrator_result!r}, shared={shared_result.get('trace_id')!r}"
+        )
+
+    # Negative invariant: both must agree on rejection cases too.
+    rejection_samples: list[dict[str, object]] = [
+        {},  # no request_id at all
+        {"request_id": ""},  # empty request_id
+        {"request_id": "not-a-uuid"},  # garbage shape
+        {"request_id": None},  # null request_id
+    ]
+    for record in rejection_samples:
+        migrator_result = _migrator_backfill(record)
+        shared_result = backfill_trace_id_from_request_id(record)
+        assert migrator_result is None, (
+            f"migrator must reject {record!r}, returned {migrator_result!r}"
+        )
+        assert shared_result is None, f"shared must reject {record!r}, returned {shared_result!r}"
 
 
 @pytest.mark.migrator

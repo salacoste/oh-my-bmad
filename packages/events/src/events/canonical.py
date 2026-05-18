@@ -70,6 +70,36 @@ def to_canonical_json(envelope: EventEnvelope) -> bytes:
         raise CanonicalSerializationError(str(exc)) from exc
 
 
+def to_canonical_payload_json(data: dict[str, Any]) -> str:
+    """Serialize a PAYLOAD dict to canonical JSON text (Story 9.7 pass-3 UH-8).
+
+    Single source of truth for "canonical payload" serialisation — the
+    materializer + any future caller that needs to byte-stably serialise
+    just the payload portion (NOT the whole envelope) MUST go through
+    this helper. Matches :func:`to_canonical_json` rules: recursive
+    sort_keys, no whitespace, UTF-8, ``allow_nan=False``, datetime →
+    canonical Z-suffix via ``_default_encoder``.
+
+    Returns text (not bytes) because the materializer's ORM column is
+    TEXT, not BLOB. The underlying ``json.dumps(sort_keys=True)`` is
+    recursive — nested dicts sort their own keys too — so two callers
+    serialising semantically-equal nested payloads produce byte-identical
+    output. Pass-3 UH-8: replaces the materializer's inline ``json.dumps``
+    call so the canonical contract has exactly one implementation.
+    """
+    try:
+        return json.dumps(
+            data,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+            default=_default_encoder,
+        )
+    except (ValueError, TypeError, UnicodeEncodeError) as exc:
+        raise CanonicalSerializationError(str(exc)) from exc
+
+
 def from_canonical_json(data: bytes) -> EventEnvelope:
     """Parse canonical JSON bytes back into an EventEnvelope.
 

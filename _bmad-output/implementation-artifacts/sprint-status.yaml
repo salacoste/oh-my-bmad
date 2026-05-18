@@ -255,7 +255,7 @@ development_status:
   # phase: 2 · unblocks every later epic · ADR-0004
   # FR57–FR59a · NFR-O7
   # =========================================================================
-  epic-9: in-progress  # 9-7 in pass-1 review; revert from premature done — AC15 atomicity (PH-A4 pass-1)
+  epic-9: in-progress  # 9-7 in pass-3 review; pass-1 + pass-2 batches applied via commits e1d091d / 61fddb7
   9-1-trace-id-optional-envelope: done  # phase: 2 · FR57 · partial (optional phase)
   9-2-registry-api-x-trace-id-middleware: done  # phase: 2 · FR58 (HTTP)
   9-3-telegram-gateway-tg-update-id-derivation: done  # phase: 2 · FR58 (Telegram)
@@ -333,3 +333,19 @@ audit_trail:
       pagination boundary bug (TH-B4). Epic-9 reverted to in-progress (PH-A4)
       per AC15 atomicity invariant. Pass-2 batch of 24 patches applied
       2026-05-18 to close all HIGH/MED/LOW findings.
+  - date: "2026-05-18"
+    event: epic-9-pass-2-batch-applied
+    commit: 61fddb7
+    story: 9-7-schema-bump-1-1-0-plus-backfill-plus-trace-query
+    reason: >
+      Pass-2 24-patch batch applied (12 HIGH, 10 MED, 2 LOW). Key fixes:
+      TH-B1 trace_allowed_chat_ids wiring, TH-E1 read_log_lines backfill,
+      TH-B3 failure_detection trace_id required, TH-B4 truncation boundary,
+      TH-B5 shared backfill helper, TH-B6 payload heuristic removed.
+  - date: "2026-05-18"
+    event: epic-9-pass-3-entered-review
+    story: 9-7-schema-bump-1-1-0-plus-backfill-plus-trace-query
+    reason: >
+      Pass-3 third-opinion review opened. 20 raw findings triaged to
+      17 unique patches (9 HIGH, 5 MED, 3 LOW). Pass-3 trend: 39 → 31 → 20
+      raw findings (converging). Patch batch in progress.

@@ -56,8 +56,8 @@ from secret_hygiene import (
 _log = logging.getLogger("telegram_gateway.config")
 
 
-def _coerce_allowlist_raw_string(raw: str) -> Any:
-    """Normalise raw env-var string for ``TG_ALLOWLIST_USER_IDS`` (H3 / M2 / M3).
+def _coerce_allowlist_raw_string(raw: str, field_name: str = "TG_ALLOWLIST_USER_IDS") -> Any:
+    """Normalise raw env-var string for an allowlist field (H3 / M2 / M3; pass-3 UM-3).
 
     Called from the class-level ``model_validator(mode="before")`` BEFORE
     pydantic-settings attempts JSON parsing, so problematic strings that
@@ -68,14 +68,18 @@ def _coerce_allowlist_raw_string(raw: str) -> Any:
     * JSON array/object (starts with ``[`` or ``{``) → returned unchanged so
       pydantic-settings can JSON-parse it normally
     * bare CSV ``"12345,67890"`` → coerced to ``[12345, 67890]`` + INFO log (M3)
+
+    Pass-3 UM-3: ``field_name`` lets the function be reused for fields other
+    than ``TG_ALLOWLIST_USER_IDS`` (e.g. ``TRACE_ALLOWED_CHAT_IDS``) so log
+    messages reference the actual env-var the operator set.
     """
     stripped = raw.strip()
     if stripped == "":
         return []
     if stripped.lower() in ("null", "none"):
         _log.info(
-            "TG_ALLOWLIST_USER_IDS=%r coerced to [] (closed-by-default); "
-            "set to a JSON list of user ids, e.g. [12345]",
+            "%s=%r coerced to [] (closed-by-default); set to a JSON list of ids, e.g. [12345]",
+            field_name,
             stripped,
         )
         return []
@@ -88,12 +92,13 @@ def _coerce_allowlist_raw_string(raw: str) -> Any:
         coerced = [int(p) for p in parts]
     except ValueError:
         raise ValueError(
-            f"TG_ALLOWLIST_USER_IDS={raw!r} is not valid JSON and could "
+            f"{field_name}={raw!r} is not valid JSON and could "
             "not be parsed as comma-separated integers. "
-            "Use JSON list syntax, e.g. TG_ALLOWLIST_USER_IDS=[12345,67890]"
+            f"Use JSON list syntax, e.g. {field_name}=[12345,67890]"
         ) from None
     _log.info(
-        "TG_ALLOWLIST_USER_IDS: bare CSV %r coerced to %r; prefer JSON list form [%s] for clarity",
+        "%s: bare CSV %r coerced to %r; prefer JSON list form [%s] for clarity",
+        field_name,
         stripped,
         coerced,
         ",".join(str(i) for i in coerced),
@@ -234,23 +239,28 @@ class TelegramSettings(AuditedBaseSettings):
     @field_validator("trace_allowed_chat_ids", mode="before")
     @classmethod
     def _validate_trace_allowed_chat_ids(cls, value: Any) -> frozenset[int]:
-        """Normalise + validate the trace per-chat allowlist (TH-B1).
+        """Normalise + validate the trace per-chat allowlist (TH-B1; pass-3 UH-1).
 
         Same parsing rules as ``tg_allowlist_user_ids``: empty string → empty
         frozenset (fallback applied in lifespan), bare CSV → list of ints,
-        JSON list parsed normally. Bool values + non-positive ids rejected.
+        JSON list parsed normally. Bool values rejected; ``0`` rejected.
+
+        Pass-3 UH-1: NEGATIVE chat_ids are valid (Telegram group chats use
+        negative ids; supergroups start at ``-100...``). The earlier
+        ``i <= 0`` reject made group allowlists impossible. Only ``i == 0``
+        (the Telegram-undefined chat id) is rejected.
         """
         import json as _json
 
         if isinstance(value, str):
-            value = _coerce_allowlist_raw_string(value)
+            value = _coerce_allowlist_raw_string(value, field_name="TRACE_ALLOWED_CHAT_IDS")
             if isinstance(value, str):
                 try:
                     value = _json.loads(value)
                 except _json.JSONDecodeError as exc:
                     raise ValueError(
                         f"TRACE_ALLOWED_CHAT_IDS is not valid JSON: {exc}. "
-                        "Use JSON list syntax, e.g. [123,456]"
+                        "Use JSON list syntax, e.g. [123,456] or [-100123456789]"
                     ) from exc
 
         value = _coerce_allowlist_env(value)
@@ -268,11 +278,14 @@ class TelegramSettings(AuditedBaseSettings):
                 f"trace_allowed_chat_ids must contain integers, not booleans; got {bad_bools!r}"
             )
 
-        bad = [i for i in result if i <= 0]
+        # Pass-3 UH-1: allow negative ids (Telegram group / supergroup chat
+        # ids are negative). Reject only ``0`` (undefined chat id in
+        # Telegram's API).
+        bad = [i for i in result if i == 0]
         if bad:
             raise ValueError(
-                f"trace_allowed_chat_ids must contain positive integers; "
-                f"got non-positive value(s): {sorted(bad)!r}"
+                f"trace_allowed_chat_ids must not contain 0 (undefined Telegram chat id); "
+                f"got: {sorted(bad)!r}"
             )
         return result
 

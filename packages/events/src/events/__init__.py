@@ -9,6 +9,7 @@ this module's contracts.
 from __future__ import annotations
 
 from events import schema_registry as _schema_registry
+from events.backfill import backfill_trace_id_from_request_id
 from events.canonical import from_canonical_json, to_canonical_json
 from events.clock import FROZEN_EPOCH, Clock, FrozenClock, SystemClock, TickingClock
 from events.envelope import Actor, EventEnvelope
@@ -89,6 +90,10 @@ __all__ = [
     "SystemClock",
     "TickingClock",
     "__version__",
+    # Story 9.7 pass-3 UH-9: public re-export of the shared back-fill helper
+    # so callers can use ``from events import backfill_trace_id_from_request_id``
+    # instead of the deeper ``from events.backfill import ...`` form.
+    "backfill_trace_id_from_request_id",
     "from_canonical_json",
     "new_decision_id",
     "new_event_id",

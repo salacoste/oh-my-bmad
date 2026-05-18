@@ -5,15 +5,21 @@ renders each event compactly. Paginates at 20 events per message.
 
 Architecture §"trace_id propagation wiring" §line-1169.
 
-Allowlist (Story 9.7 pass-1 PH-B1)
-----------------------------------
+Allowlist (Story 9.7 pass-1 PH-B1; pass-3 UH-1)
+-----------------------------------------------
 The outer ``AllowlistMiddleware`` already enforces per-user allowlist
-(FR11/NFR-S4). This handler additionally enforces an OPTIONAL per-chat
+(FR11/NFR-S4). This handler additionally enforces a REQUIRED per-chat
 allowlist as defense-in-depth: `/trace` exposes full causal chains
 including ``secret.accessed`` and ``tier3.action_attempted`` payloads,
 so leaking even to an allowlisted user in an unintended chat (e.g.
-forwarded/added to a group) is unacceptable. When ``allowed_chat_ids``
-is empty the per-chat check is bypassed (back-compat default).
+forwarded/added to a group) is unacceptable.
+
+Pass-3 UH-1: ``allowed_chat_ids`` has NO default — every caller MUST
+pass an explicit frozenset. An empty frozenset is still legal and
+denies every chat (closed-by-default surface). Removing the default
+eliminates the previous bypass where bare ``handle_trace(message,
+client)`` calls in the production wiring left the per-chat check
+disabled.
 """
 
 from __future__ import annotations
@@ -43,6 +49,9 @@ _log = logging.getLogger("telegram_gateway.handlers.trace_command")
 _MAX_REPLY_LEN = 4000
 # Maximum events to show per message before pagination notice.
 _MAX_EVENTS_PER_PAGE = 20
+# Pass-3 UL-3: hard cap on the page= argument to prevent absurd "Page
+# 999999/3" renders before we know the actual page count.
+_MAX_PAGE_ARG = 10_000
 
 
 def _render_event_line(event: dict[str, object]) -> str:
@@ -88,37 +97,42 @@ def _render_trace_reply(
 # Zero-width / BOM-style characters that copy-paste tooling can sneak in
 # (anywhere — prefix, middle, suffix). Stripped before validation so operators
 # don't see the cryptic "invalid trace_id shape" error without a hint about
-# invisible chars (Story 9.7 pass-1 PM-E12 / pass-2 TM-B9).
-_INVISIBLE_PREFIXES = "​﻿‌‍⁠"
-# Story 9.7 pass-2 TM-B9: translate-table that strips ALL positions (not just
-# leading) of invisible chars and standard whitespace. ``lstrip`` only handles
-# the prefix case; embedded or trailing ZWSPs would still hit the regex with
-# the cryptic error.
-_TRACE_ID_STRIP_TABLE = {ord(c): None for c in _INVISIBLE_PREFIXES + " \t\r\n"}
+# invisible chars (Story 9.7 pass-1 PM-E12 / pass-2 TM-B9 / pass-3 UL-1/UL-2).
+# Pass-3 UL-2: renamed from _INVISIBLE_PREFIXES (old name implied prefix-only;
+# translate strips from ALL positions, not just the prefix).
+_INVISIBLE_CHARS = "​﻿‌‍⁠"
+# Pass-3 UL-1: removed ASCII whitespace (" \t\r\n") from the table — those
+# characters are already consumed by ``parts = raw_text.split(None, 2)``
+# (split(None) strips + collapses whitespace). Including them was dead code.
+# Defense-in-depth for invisible Unicode chars only; explicit ``.strip()``
+# handles standard whitespace before any invisible-char translate is needed.
+_TRACE_ID_STRIP_TABLE = {ord(c): None for c in _INVISIBLE_CHARS}
 
 
 async def handle_trace(
     message: Message,
     registry_client: RegistryAPIClient,
-    allowed_chat_ids: frozenset[int] = frozenset(),
+    allowed_chat_ids: frozenset[int],
 ) -> None:
     """Handle the /trace <trace-id> [page=N] command.
 
     Parses the trace_id argument, validates it, queries /v1/trace/{trace_id}
     and renders a compact event list. Paginates at 20 events per message.
 
-    ``allowed_chat_ids`` (Story 9.7 pass-1 PH-B1): optional per-chat
-    allowlist. Empty set bypasses the per-chat check; non-empty sets log
-    + drop messages from non-allowed chats. Defense-in-depth on top of
-    the global :class:`AllowlistMiddleware` per-user check.
+    ``allowed_chat_ids`` (Story 9.7 pass-1 PH-B1; pass-3 UH-1): REQUIRED
+    per-chat allowlist (no default). Defense-in-depth on top of the
+    global :class:`AllowlistMiddleware` per-user check. An empty frozenset
+    denies EVERY chat — pass-3 UH-1 removed the previous default-to-empty
+    bypass where missing wiring left the check disabled.
 
     Same allowlist-and-error contract as other handlers — ALWAYS returns
     normally so Telegram never retries the webhook delivery.
     """
-    # PH-B1: per-chat allowlist defense-in-depth. The outer middleware
-    # enforces per-user allowlist; this protects against forwarding/
-    # group-add scenarios where an allowlisted user is in a non-allowlisted
-    # chat. Empty set = bypass (back-compat default).
+    # PH-B1 / UH-1: per-chat allowlist defense-in-depth. The outer
+    # middleware enforces per-user allowlist; this protects against
+    # forwarding / group-add scenarios where an allowlisted user is in
+    # a non-allowlisted chat. ``allowed_chat_ids`` is REQUIRED — an empty
+    # frozenset denies every chat (closed-by-default).
     #
     # Story 9.7 pass-2 TH-B1: emit a structured WARNING with the
     # ``telegram.rejected`` marker so the rejection is greppable from
@@ -126,16 +140,15 @@ async def handle_trace(
     # ``AllowlistMiddleware`` shape) would require threading writer+actor
     # through ``make_trace_router`` — followup work tracked alongside the
     # /status wiring symmetry audit.
-    if allowed_chat_ids:
-        chat_id = message.chat.id if message.chat is not None else None
-        if chat_id is None or chat_id not in allowed_chat_ids:
-            _log.warning(
-                "telegram.rejected handler=/trace chat_id=%r reason=chat_not_allowed",
-                chat_id,
-            )
-            # Do NOT reply — silent drop avoids confirming bot presence to
-            # unauthorized chats. Mirrors AllowlistMiddleware behavior.
-            return
+    chat_id = message.chat.id if message.chat is not None else None
+    if chat_id is None or chat_id not in allowed_chat_ids:
+        _log.warning(
+            "telegram.rejected handler=/trace chat_id=%r reason=chat_not_allowed",
+            chat_id,
+        )
+        # Do NOT reply — silent drop avoids confirming bot presence to
+        # unauthorized chats. Mirrors AllowlistMiddleware behavior.
+        return
 
     raw_text = message.text or ""
     parts = raw_text.split(None, 2)
@@ -155,6 +168,8 @@ async def handle_trace(
 
     # Parse optional page=N argument. PM-B9: show error on bad page rather
     # than silently defaulting to 1 (silent defaulting hides operator bugs).
+    # Pass-3 UL-3: cap page parsing at 10_000 so very large integers can't
+    # cause misleading "Page 999999/3" replies before we even check bounds.
     page = 1
     if len(parts) >= 3:
         page_arg = parts[2].strip()
@@ -172,6 +187,12 @@ async def handle_trace(
                 await _safe_reply(
                     message,
                     f"⚠️ Invalid page: must be ≥ 1, got {page}.",
+                )
+                return
+            if page > _MAX_PAGE_ARG:
+                await _safe_reply(
+                    message,
+                    f"⚠️ Page {page} exceeds maximum of {_MAX_PAGE_ARG}.",
                 )
                 return
 
@@ -242,20 +263,32 @@ async def handle_trace(
         )
         return
 
+    # Pass-3 UL-3: early-return error when page > computed page count so
+    # operators don't see the nonsensical "Page 999999/3" reply.
+    total = len(events)
+    pages = (total + _MAX_EVENTS_PER_PAGE - 1) // _MAX_EVENTS_PER_PAGE
+    if page > pages:
+        await _safe_reply(
+            message,
+            f"⚠️ Page {page} out of range (max {pages}).",
+        )
+        return
+
     reply_text = _render_trace_reply(arg_trace_id, events, page=page)
     await _safe_reply(message, reply_text)
 
 
 def make_trace_router(
     *,
-    allowed_chat_ids: Iterable[int] = (),
+    allowed_chat_ids: Iterable[int],
 ) -> Router:
     """Factory — creates a fresh Router per dispatcher instance.
 
-    ``allowed_chat_ids`` (Story 9.7 pass-1 PH-B1): optional per-chat
-    allowlist. Empty iterable disables the per-chat check (back-compat
-    default). Non-empty: the handler silently drops messages from chats
-    not in the set.
+    ``allowed_chat_ids`` (Story 9.7 pass-1 PH-B1; pass-3 UH-1): REQUIRED
+    per-chat allowlist (no default). The handler silently drops messages
+    from chats not in the set. An empty iterable denies every chat
+    (closed-by-default surface) — pass-3 UH-1 removed the previous
+    default-to-empty bypass where missing wiring left the check disabled.
 
     Avoids "Router already attached" RuntimeError across test lifespans.
     Same pattern as other command routers.

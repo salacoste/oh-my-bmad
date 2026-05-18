@@ -11,7 +11,11 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import BaseModel
 
-from events.canonical import from_canonical_json, to_canonical_json
+from events.canonical import (
+    from_canonical_json,
+    to_canonical_json,
+    to_canonical_payload_json,
+)
 from events.envelope import Actor, EventEnvelope
 from events.errors import CanonicalSerializationError
 from events.schema_registry import register, unregister_all
@@ -282,3 +286,42 @@ class TestBaseModelPayloadSerialization:
         data1 = to_canonical_json(env)
         data2 = to_canonical_json(env)
         assert data1 == data2
+
+
+# ---------------------------------------------------------------------------
+# Story 9.7 pass-3 UH-8 — to_canonical_payload_json shared helper
+# ---------------------------------------------------------------------------
+
+
+class TestCanonicalPayloadJson:
+    """Pass-3 UH-8: the shared payload encoder produces deterministic output
+    for nested dicts, matching the rules ``to_canonical_json`` applies to the
+    full envelope.
+    """
+
+    def test_payload_nested_dict_recursive_sort_keys(self) -> None:
+        """sort_keys recurses — inner dicts are sorted, not just the top level."""
+        data = {"b": {"z": 1, "a": 2}, "a": 1}
+        out = to_canonical_payload_json(data)
+        # Top-level sorted, AND nested dict also sorted.
+        assert out == '{"a":1,"b":{"a":2,"z":1}}'
+
+    def test_payload_byte_stable_across_input_orderings(self) -> None:
+        """Two semantically-equal nested payloads byte-match after canonical encode."""
+        nested_a = {"outer": {"z": 1, "a": 2}, "x": [3, 1, 2]}
+        nested_b = {"x": [3, 1, 2], "outer": {"a": 2, "z": 1}}
+        assert to_canonical_payload_json(nested_a) == to_canonical_payload_json(nested_b)
+
+    def test_payload_no_whitespace_no_unicode_escape(self) -> None:
+        """Canonical rules: no whitespace, ensure_ascii=False."""
+        data = {"k": "v", "u": "тест"}
+        out = to_canonical_payload_json(data)
+        assert " " not in out
+        assert "тест" in out  # non-ASCII preserved verbatim
+        assert "\\u" not in out
+
+    def test_payload_allow_nan_false_raises(self) -> None:
+        """NaN / Inf floats raise CanonicalSerializationError, not silently null."""
+        data = {"x": float("nan")}
+        with pytest.raises(CanonicalSerializationError):
+            to_canonical_payload_json(data)

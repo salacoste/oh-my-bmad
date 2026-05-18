@@ -6,6 +6,16 @@ from the console-cli and Telegram-gateway.
 
 Architecture §"trace_id propagation wiring" §line-1169.
 
+Response shape — PRESENTATION view, not canonical replay (pass-3 UM-1)
+---------------------------------------------------------------------
+The response shape is NOT byte-equivalent to the canonical envelope
+emitted via :func:`events.canonical.to_canonical_json`. The ``extensions``
+field is reserved on the response but ALWAYS empty until D7 lands
+(per-row ``extensions`` ORM column — see ``deferred-work.md``). Operators
+needing the canonical envelope MUST consume the JSONL event log directly.
+This response is optimised for human-readable causal-chain queries (PRD
+FR59a) and does NOT replace the canonical wire format.
+
 Story 9.7 pass-1 patches applied:
   * PH-B5/E4 — LIMIT + after_event_id cursor pagination; X-Trace-Truncated
     header when result equals the limit.
@@ -13,6 +23,15 @@ Story 9.7 pass-1 patches applied:
     ``Z`` suffix to match :func:`events.canonical.to_canonical_json`.
   * PM-B17 — structured ``trace_payload_json_corrupt`` log on JSON parse
     failure so operators have forensics to chase.
+
+Story 9.7 pass-3 changes:
+  * UH-4: ``X-Trace-Has-Synthetic`` header DROPPED (pass-2 TL-B14
+    heuristic produced false +/- and shipped without test coverage).
+    Synthetic-vs-real provenance is deferred to D6 (per-row
+    ``trace_id_synthetic_source`` column).
+  * UH-8: ``extensions`` field documented as "presentation view"; the
+    `/trace` response is NOT byte-equivalent to the canonical envelope
+    until D7 lands (extensions ORM column).
 """
 
 from __future__ import annotations
@@ -161,22 +180,17 @@ async def get_trace(
     truncated = len(fetched) > limit
     rows = fetched[:limit]
 
-    # TL-B14: surface whether ANY returned row was synthetically back-filled
-    # (per Q1 Migrator decision). Operators consuming /trace then know
-    # collision risk applies. Inspecting ``row.request_id`` vs ``row.trace_id``
-    # is the cheapest signal: the back-fill rule sets ``trace_id = request_id``
-    # (with ``e-`` prefix stripped), so equality (modulo prefix) is a strong
-    # synthetic marker. False-positive cost is acceptable — non-synthetic
-    # callers that intentionally pass trace_id=request_id also get the header,
-    # which surfaces an interesting correlation rather than hiding it.
-    has_synthetic = any(
-        row.trace_id is not None
-        and row.request_id is not None
-        and (row.trace_id == row.request_id or row.trace_id == row.request_id.removeprefix("e-"))
-        for row in rows
-    )
-    if has_synthetic:
-        response.headers["X-Trace-Has-Synthetic"] = "true"
+    # Pass-3 UH-1 / UH-4: the previous ``X-Trace-Has-Synthetic`` header
+    # (TL-B14, pass-2) was DROPPED. Its row-level ``row.trace_id ==
+    # row.request_id`` heuristic produced false positives for legitimate
+    # post-bump callers that happen to pass identical values, and false
+    # negatives if a downstream canonicalisation normalised one but not
+    # the other. Worse, the feature shipped with zero test coverage so
+    # any regression would have been invisible. Synthetic-vs-real
+    # provenance is properly addressed by D6 (per-row
+    # ``trace_id_synthetic_source`` column in ``deferred-work.md``).
+    # Until that column lands, the header is removed rather than
+    # producing misleading signals.
 
     if truncated:
         response.headers["X-Trace-Truncated"] = "true"

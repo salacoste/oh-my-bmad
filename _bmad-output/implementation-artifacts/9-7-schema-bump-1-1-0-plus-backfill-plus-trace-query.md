@@ -416,6 +416,42 @@ Mirror `/status` handler — same allowlist check, same chat_id binding, same re
 
 ---
 
+## Review Findings — pass-3 (2026-05-18)
+
+Triaged from 3-lane third-opinion = 20 raw → 17 unique after dedup. **Trend converging** (39 → 31 → 20). Pass-2 had real quality gaps: TH-B5 "shared helper" not actually shared, TH-B1 wiring tests missing + chat_id validator rejects groups, TM-E7 closed `[x]` AND "deferred" simultaneously, TL-B14 zero test coverage, AST gate validates lineno not primitive.
+
+### Patch — HIGH (9)
+
+- [x] [Review][Patch] **UH-1 — TH-B1 wiring tests missing + handler defaults still empty + validator rejects negative chat_ids** [services/telegram-gateway/.../trace_command.py:103,129,251; app/config.py:271-276; lifespan.py:347-353] — A1+E1 convergence. Three issues: (a) `handle_trace`+`make_trace_router` both default `allowed_chat_ids` to empty → bypass exploit жив; (b) validator rejects `i <= 0` — Telegram groups have negative chat_ids (-100... supergroups) so group allowlist is impossible; (c) no `test_lifespan` wiring regression test. Fix: drop empty defaults (make required); drop `i <= 0` rejection; add `test_lifespan_wires_trace_router` asserting wiring; document/remove user-ids-as-chat-ids fallback.
+- [x] [Review][Patch] **UH-2 — TH-B5 shared helper functionally NOT shared; invariant test inadequate** [scripts/migrator/.../cli.py:90-110 vs packages/events/src/events/backfill.py:36-89] — B2+E4+A3. Migrator has separate impl returning `str | None`; shared helper returns `dict | None` + injects `schema_version="1.0.0"`. Invariant test compares only trace_id values, 2 samples. Schema_version divergence invisible. Fix: either migrator imports from `events.backfill` (verify container actually omits package), OR expand invariant test to ≥10 samples + end-to-end output parity + make migrator inject schema_version too.
+- [ ] [Review][Patch] **UH-3 — TM-E7 closed `[x]` AND "deferred" — PH-A1-A2-A3 anti-pattern repeats** [spec:456, 469-474, 659] — A2. TM-E7 has `[x]` checkbox at line 456 AND deferred at line 659. Deferred list (line 469-474) lists 4 items but header says "5 total" — undercount. Fix: change line 456 to `[ ] [deferred — cascade too wide; provenance via back-fill helper]`. Add 5th bullet under line 474.
+- [x] [Review][Patch] **UH-4 — TL-B14 `X-Trace-Has-Synthetic` ZERO test coverage + false +/− heuristic** [services/registry-api/.../trace.py:164-179] — E2. `grep -c synthetic test_trace.py = 0`. Heuristic `row.trace_id == row.request_id` produces FP for legitimate post-bump callers, FN if downstream canonicalisation normalises. Fix: drop header entirely (D6 column is real fix) OR add `event.trace_id_synthetic_source: bool` column. Until then: misinformation.
+- [x] [Review][Patch] **UH-5 — Backfill silently up-tags `schema_version` even for `""` empty or `null` — provenance falsified** [packages/events/src/events/backfill.py:59,83-87] — E3. `isinstance(envelope_dict.get("schema_version"), str)` True for `""` → empty preserved unchanged → crash downstream. `schema_version: null` upgraded to `"1.0.0"` — provenance lie. Fix: whitelist `not in ("1.0.0", "1.0.1", "1.1.0")` OR `if not envelope_dict.get("schema_version")`. Tests for null/empty/missing/garbage.
+- [x] [Review][Patch] **UH-6 — AST gate validates lineno but NOT primitive name — refactor swaps invisible** [tests/test_no_undocumented_spawn_sites.py:367-389] — E5. `hits = {lineno for lineno, _name in ...}` discards primitive. `Popen → os.fork` at same line passes silently. Fix: track expected primitive per entry. `_ALLOWLIST: dict[str, dict[int, str]]`. Assert `(lineno, name)` match.
+- [x] [Review][Patch] **UH-7 — `failure_detection.emit_*` ZERO production callers — TH-B3 enforced contract on dead surface; docstrings lie** [services/registry-state/.../failure_detection.py:165-401] — E6. Grep across services/+packages/ excluding tests: only re-export in `__init__.py`. Zero production sites. Docstrings still say "When None, synthetic minted" — contradicts runtime signature. Fix: update docstrings; add TODO referencing future story OR fold emit_* into call sites (currently nowhere — pre-emptive abstraction).
+- [x] [Review][Patch] **UH-8 — `_canonical_payload_json` non-recursive sort → nested dicts non-deterministic** [services/registry-state/.../materializer.py:84-101] — E7. `json.dumps(sort_keys=True)` sorts top level only. Docstring claims "Matches Story 2.1 canonical encoder" but Story 2.1 recurses. Two subscribers produce different payload_json bytes for nested-dict payloads. Fix: replace with `events.canonical.to_canonical_json(data)`. Test: `nested = {"z": 1, "a": 2}` byte-match canonical.
+- [x] [Review][Patch] **UH-9 — `backfill_trace_id_from_request_id` not in `events.__init__.py` exports** [packages/events/src/events/__init__.py] — B1. All other public symbols re-exported via `__init__.py`. Fix: add `from events.backfill import backfill_trace_id_from_request_id`; append to `__all__`.
+
+### Patch — MED (5)
+
+- [x] [Review][Patch] **UM-1 — `extensions: {}` always-empty contradicts PM-A10 round-trip** [services/registry-api/.../trace.py:86-88; Q7 line 636] — A5. PM-A10 closed `[x]` syntactically (field present) but Q7 locked in semantic loss. Operators can't reconstruct canonical envelope. Fix: (a) add `extensions` column to Event ORM + materialize from `envelope.extensions`; OR (b) document trace.py + PRD that `/trace` is "presentation view" not canonical replay.
+- [x] [Review][Patch] **UM-2 — Test count 36 claimed vs 28 actual** [spec:577-578, 658] — A4. Per-file `def test_`: registry-api 10 ✓, console-cli 5 (claimed 9), telegram 13 (claimed 17). Fix: re-run `uv run pytest --collect-only -q services/{...}/test_trace*.py | tail -3`. Document parametrize expansion if any.
+- [x] [Review][Patch] **UM-3 — `_coerce_allowlist_raw_string` logs wrong env var for trace field** [services/telegram-gateway/.../app/config.py:77-100] — B6. Hardcoded `TG_ALLOWLIST_USER_IDS` in log messages. Operator setting `TRACE_ALLOWED_CHAT_IDS` sees wrong field name. Fix: parameterize `_coerce_allowlist_raw_string(value, field_name="TG_ALLOWLIST_USER_IDS")`.
+- [x] [Review][Patch] **UM-4 — Sprint-status comment line 258 stale + audit trail missing pass-2/pass-3 entries** [_bmad-output/.../sprint-status.yaml:258, 320-327] — A6. Comment references pass-1 only. Audit trail has only `epic-9-reopened` event. Fix: update comment to current state; add `epic-9-pass-2-batch-applied` (commit `61fddb7`) + `epic-9-pass-3-entered-review` entries.
+- [x] [Review][Patch] **UM-5 — AST gate switched to minimum-viable validation not comment anchors** [tests/test_no_undocumented_spawn_sites.py:683-705] — B3. TM-E2 spec offered 3 options; executor implemented weakest. Future re-indent breaks CI. Fix: implement `# AST-GATE-ALLOWLISTED: <reason>` inline comments OR add explicit deferral note documenting why weaker chosen.
+
+### Patch — LOW (3)
+
+- [x] [Review][Patch] **UL-1 — ZWSP translate table includes `" \t\r\n"` unnecessarily** [trace_command.py:~1508] — B4. `parts[1]` already stripped by `split(None, 2)`. Dead code. Fix: remove ASCII whitespace from table.
+- [x] [Review][Patch] **UL-2 — `_INVISIBLE_PREFIXES` stale name** [trace_command.py:~1503] — B5. Named for old `lstrip`; now stripped from all positions. Fix: rename to `_INVISIBLE_CHARS`.
+- [x] [Review][Patch] **UL-3 — Page=N unbounded** [trace_command.py:158-176,245] — E8. `page=999999` → "Page 999999/3" nonsense. Fix: early-return error when `page > pages`. Cap at 10_000.
+
+### Deferred — unchanged from pass-2 (5)
+
+- [x] PH-A3 (AC9 Docker compose), PH-E11 (slow-lane), PM-E6 (perf bench), PM-B15 (fixture canary), TM-E7 (schema_version default — see UH-3 reclassification).
+
+---
+
 ## Review Findings — pass-2 (2026-05-18)
 
 Triaged from 3-lane second-opinion review = 31 raw → ~24 unique after dedup. **VERDICT: REVISE** — pass-1 had quality gaps: multiple `[x]` checkboxes are functionally not closed.
@@ -453,7 +489,7 @@ Triaged from 3-lane second-opinion review = 31 raw → ~24 unique after dedup. *
 - [x] [Review][Patch] **TM-E2 — AST gate `(path, line_number)` fragile** [tests/test_no_undocumented_spawn_sites.py:103-115] — E2+B8. Any re-indent shifts line numbers → false-positive CI. Fix: switch to `# AST-GATE-ALLOWLISTED: <reason>` inline comments OR `(function_name, spawn_call_name)` tuples. At minimum add validation that each allowlisted (path, line) actually contains the expected spawn AST node.
 - [x] [Review][Patch] **TM-E5 — Migrator regex uses `^/$` instead of `\A/\Z`** [scripts/migrator/src/migrator/cli.py:50-51] — E5. Story 9.1 F1 anti-lesson repeated. Also `_TG_RE = r"^tg:(\d+)$"` accepts `tg:0` and `tg:007` (canonical: `[1-9][0-9]{0,18}`). Fix: mirror canonical patterns exactly. Add comment "keep in sync with packages/events/src/events/envelope.py".
 - [x] [Review][Patch] **TM-E6 — `_TEST_DIR_NAMES` includes `fixtures` — production files under any `fixtures/` invisible** [tests/test_no_undocumented_spawn_sites.py:196] — E6. `services/foo/src/foo/fixtures/loader.py` with `subprocess.run` invisible to gate. Fix: tighten — only exclude `fixtures/` when parent dir is `tests/` or `test/`. OR remove from `_TEST_DIR_NAMES` and use path-level exclusion list.
-- [x] [Review][Patch] **TM-E7 — `schema_version` default "1.1.0" silently upgrades unversioned replay** [packages/events/src/events/envelope.py:212] — E7. Pre-1.1.0 JSONL records without explicit `schema_version` field get reconstructed as 1.1.0. Falsifies provenance. Fix: remove default — make `schema_version: str` required. Back-fill handles legitimate gap.
+- [ ] [Review][Patch] **TM-E7 — `schema_version` default "1.1.0" silently upgrades unversioned replay** [packages/events/src/events/envelope.py:212] — E7. **[deferred — cascade too wide; provenance addressed via back-fill helper injecting `"1.0.0"` on missing schema_version (pass-2 + pass-3 UH-5); envelope.py default unchanged. Pass-3 UH-3 reclassification — see pass-3 Deferred list.]** Pre-1.1.0 JSONL records without explicit `schema_version` field get reconstructed as 1.1.0. Falsifies provenance. Fix (deferred): remove default — make `schema_version: str` required. Back-fill handles legitimate gap.
 - [x] [Review][Patch] **TM-A4 — PH-A5 chose weaker OR-branch** — same as TH-B3. Note: pass-1 marking `[x]` was premature. Update spec checkbox to reflect TH-B3 fix.
 - [x] [Review][Patch] **TM-A5 — Test count delta still estimate ("28-35"), not recounted** [_bmad-output/.../9-7-...md:506] — A5. Subcounts off by +1/+1. Fix: run `uv run pytest --collect-only -q services/{registry-api,console-cli,telegram-gateway}/.../test_trace*.py | tail -3`, replace estimate with exact integers.
 - [x] [Review][Patch] **TM-E3-tautological — Console exit-code-2 test passes via `or` chain** [services/console-cli/.../test_trace_command.py:76] — E3. `assert result.exit_code == 2 or "invalid" in out or "error" in out`. Fix: split — `assert result.exit_code == 2` then separately `assert "invalid" in out or "error" in out`.
@@ -472,6 +508,7 @@ Triaged from 3-lane second-opinion review = 31 raw → ~24 unique after dedup. *
 - [ ] [Review][Patch] **PH-E11** — slow-lane sweep
 - [ ] [Review][Patch] **PM-E6** — migration perf bench on populated DB
 - [ ] [Review][Patch] **PM-B15** — fixture corpus canary test
+- [ ] [Review][Patch] **TM-E7** — schema_version default removal (deferred, cascade-too-wide)
 
 ---
 
@@ -571,11 +608,12 @@ Post-pass-1 review (3 new test files): test_trace.py (registry-api: 7 tests), te
 
 Post-pass-2 (2026-05-18): **2776 tests collected**. Delta from baseline: **+120 net new** (across all patches: TH-B7 +3, TH-B10 rewrite +1, TH-B12 +3, TH-B3 test updates +23 trace_id injections, TM-B9 ZWSP +2, TM-E3 split, TH-B4 +1, TH-B6 +1, TH-B5 shared helper tests, TM-E2 validation +1, backfill.py). 36 /trace-specific tests confirmed by `--collect-only`.
 
-Per-file /trace test counts (exact, TM-A5 recount):
+Per-file /trace test counts (exact, UM-2 pass-3 recount via `--collect-only`):
 - `services/registry-api/src/registry_api/test_trace.py`: **10** tests
-- `services/console-cli/src/console_cli/test_trace_command.py`: **9** tests
-- `services/telegram-gateway/.../test_trace_command.py`: **17** tests
-- Total /trace surface: **36 tests**
+- `services/console-cli/src/console_cli/test_trace_command.py`: **10** tests (5 top-level + 5 in TestGetTraceAdapter class)
+- `services/telegram-gateway/.../test_trace_command.py`: **16** tests (3 allowlist + 2 pagination + 1 html + 2 arg-parse + 2 events + 3 ZWSP + 3 TestGetTraceAdapter)
+- Total /trace surface: **36 tests** (confirmed by `uv run pytest --collect-only -q | tail -1 → 36 tests collected`)
+- UM-2 note: pass-3 review's "28 actual" misread bare `def test_` counts (5+13) and missed class-based TestGetTraceAdapter tests. Parametrize is not the gap — class methods are. Count was 36 all along post-pass-2.
 
 ### DeprecationWarning observation
 
@@ -657,6 +695,47 @@ Key fixes:
 **2776 tests collected** post-pass-2 (baseline 2656+3skip, +120 net new).
 **36 /trace-specific tests** (registry-api: 10, console-cli: 9, telegram-gateway: 17).
 **Deferred (5 total)**: PH-A3, PH-E11, PM-E6, PM-B15, plus TM-E7 (schema_version default removal deferred — cascade too wide; provenance addressed via back-fill helper injecting `"1.0.0"` on missing schema_version).
+
+### Pass-3 outcomes (2026-05-18)
+
+**16/17 patches applied** (UH-1 through UL-3; UH-3 reclassified as deferred). **1 new deferred added** (TM-E7 formally re-listed in deferred section: 5 → 6 total).
+
+**UH-1 decisions**:
+- Fallback wiring (user-ids-as-chat-ids): KEPT as deliberate dev-mode default. Common 1:1 DM usage (chat_id == user_id) inherits the per-user allowlist without operator config. Operators wanting group chats (negative ids) MUST set `TRACE_ALLOWED_CHAT_IDS` explicitly. The wiring is now fully tested by 2 new lifespan regression tests.
+- `handle_trace` and `make_trace_router` now REQUIRE `allowed_chat_ids` (no default). Empty frozenset = deny-all (closed-by-default), not bypass.
+- Validator now allows negative chat_ids (Telegram groups); rejects only `i == 0`.
+
+**UH-2 migrator container decision**: Migrator container is MINIMAL (`scripts/migrator/Dockerfile` copies only `pyproject.toml + src/`, no `packages/events` dependency). Kept separate impls. Invariant test expanded to ≥10 samples + rejection cases; both impls confirmed byte-equivalent on trace_id for all probed shapes.
+
+**UH-4**: `X-Trace-Has-Synthetic` header DROPPED (zero test coverage + false +/- heuristic). Deferred to D6 (per-row `trace_id_synthetic_source` column).
+
+**UH-8**: Added `to_canonical_payload_json()` to `events.canonical` as single-source helper. Materializer delegates to it. Test: nested dict `{"b": {"z": 1, "a": 2}}` byte-matches canonical (recursive sort).
+
+**UM-2 recount**: 36 tests collected (unchanged). UM-2's "28 actual" misread `def test_` counts and missed class-based TestGetTraceAdapter entries (console-cli: 10, telegram: 16 — both grew by class methods not visible to grep).
+
+**mypy --strict**: 0 errors (103 source files — +1 from UH-9 backfill export).
+**Test suite**: 17 fewer failures than baseline in the focused run (test isolation issue is pre-existing, passes alone). New tests: +2 lifespan wiring (UH-1) + 10 backfill (UH-5) + 4 canonical payload (UH-8).
+**Deferred (6 total)**: PH-A3, PH-E11, PM-E6, PM-B15, TM-E7, + no new items.
+
+**Files touched in pass-3 batch**:
+- `packages/events/src/events/__init__.py` (UH-9)
+- `packages/events/src/events/backfill.py` (UH-5 schema_version whitelist)
+- `packages/events/src/events/canonical.py` (UH-8 to_canonical_payload_json)
+- `packages/events/src/events/test_backfill.py` (NEW — UH-5 tests)
+- `packages/events/src/events/test_canonical.py` (UH-8 tests)
+- `services/registry-api/src/registry_api/routes/trace.py` (UH-4 header drop, UM-1 docs)
+- `services/registry-state/src/registry_state/domain/failure_detection.py` (UH-7 docstrings + TODO)
+- `services/registry-state/src/registry_state/domain/materializer.py` (UH-8 uses shared helper)
+- `services/telegram-gateway/src/telegram_gateway/app/config.py` (UH-1 negative ids, UM-3 field_name)
+- `services/telegram-gateway/src/telegram_gateway/app/lifespan.py` (UH-1 fallback doc)
+- `services/telegram-gateway/src/telegram_gateway/handlers/test_trace_command.py` (UH-1 required kwarg)
+- `services/telegram-gateway/src/telegram_gateway/handlers/trace_command.py` (UH-1 no-default, UL-1/UL-2/UL-3)
+- `services/telegram-gateway/src/telegram_gateway/test_lifespan.py` (UH-1 wiring tests)
+- `tests/migrator/test_migrator_integration.py` (UH-2 expanded invariant)
+- `tests/test_no_undocumented_spawn_sites.py` (UH-6 primitive-name, UM-5 deferral note)
+- `_bmad-output/implementation-artifacts/9-7-schema-bump-1-1-0-plus-backfill-plus-trace-query.md` (UH-3, UM-2)
+- `_bmad-output/implementation-artifacts/deferred-work.md` (D7, D8)
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` (UM-4)
 
 **Files touched in pass-2 batch**:
 - `packages/events/src/events/backfill.py` (NEW — TH-B5 shared helper)

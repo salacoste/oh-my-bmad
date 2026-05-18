@@ -159,6 +159,16 @@ def _redact_last_error(s: str | None) -> str | None:
 # ``service`` parameter (the crashing process is the actor, not the
 # detector). This is verified end-to-end by the AC-7 dual-write tests in
 # ``test_failure_detection.py``.
+#
+# Story 9.7 pass-3 UH-7 TODO: these emit_* functions have ZERO production
+# callers as of pass-3 (grep across services/+packages/ excluding tests).
+# They are pre-emptive abstractions that pass-2 TH-B3 hardened (trace_id
+# required) on a dead surface. The functions remain in place because
+# downstream code may import them via ``__init__.py``; do NOT delete.
+# Tracker: a future story should either (a) wire them into the polling
+# loops they were originally designed for (Epic 3 / Epic 5 follow-up) or
+# (b) fold their bodies into the call sites once those exist. See pass-3
+# review notes (UH-7) for the audit trail.
 # ---------------------------------------------------------------------------
 
 
@@ -190,10 +200,13 @@ async def emit_service_crashed(
                          (the payload validator rejects ``0``).
         actor_id:        Override for ``Actor.id``. Defaults to ``service``
                          (the crashing process is the actor).
-        trace_id:        Optional correlation ID (Story 9.7 / FR57). When
-                         ``None``, a synthetic bare UUIDv7 is minted — failure
-                         events are system-initiated, so they get their own
-                         synthetic trace rather than propagating an operator one.
+        trace_id:        REQUIRED bare UUIDv7 (Story 9.7 pass-2 TH-B3 /
+                         pass-3 UH-7). System-initiated detectors MUST mint
+                         a synthetic trace explicitly at the call site —
+                         the previous "when None, synthetic minted" behaviour
+                         was removed because it hid the cost of synthetic
+                         traces and produced orphan chains undetectable at
+                         review time.
         request_id:      Optional bare-UUIDv7 request id for correlation.
                          When ``None``, a fresh ``new_request_id(clock=...)``
                          is synthesized — failure events are internally

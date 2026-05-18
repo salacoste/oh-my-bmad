@@ -13,6 +13,11 @@ Covers:
   * test_trace_zwsp_prefix_stripped (PM-E12)
   * test_get_trace_adapter_200 (PM-A8)
   * test_get_trace_adapter_malformed_body (PM-A8)
+
+Pass-3 UH-1: ``handle_trace`` no longer defaults ``allowed_chat_ids`` —
+every test call MUST pass an explicit frozenset. The shared
+``_DEFAULT_ALLOWED_CHATS`` matches the ``_make_message`` default chat_id
+so previously-bare ``handle_trace(msg, client)`` calls keep working.
 """
 
 from __future__ import annotations
@@ -28,6 +33,10 @@ from telegram_gateway.handlers.trace_command import handle_trace
 _VALID_TRACE_ID = "01917e5c-a7d1-7000-8abc-0123456789ab"
 _TG_TRACE_ID = "tg:99999"
 _FAKE_BASE = "http://registry-api:8080"
+# Pass-3 UH-1: allowed_chat_ids is now REQUIRED on every handle_trace call.
+# Tests that don't care about the allowlist behaviour use this shared default
+# (matches the chat_id default in ``_make_message`` below).
+_DEFAULT_ALLOWED_CHATS = frozenset({100})
 
 
 def _make_message(
@@ -92,16 +101,24 @@ async def test_trace_allowlist_passes_authorized_chat() -> None:
 
 
 @pytest.mark.asyncio
-async def test_trace_allowlist_empty_bypasses_check() -> None:
-    """Empty allowed_chat_ids = bypass (back-compat default)."""
+async def test_trace_allowlist_empty_denies_every_chat() -> None:
+    """Story 9.7 pass-3 UH-1: empty allowed_chat_ids = closed-by-default.
+
+    Previously (pre-UH-1) empty was a bypass — any chat allowed. That
+    produced a silent production bypass when the lifespan failed to wire
+    the allowlist. Pass-3 inverted the contract: empty frozenset denies
+    every chat (closed-by-default), matching the per-user allowlist
+    semantics in ``AllowlistMiddleware``.
+    """
     msg = _make_message(chat_id=999_999)
     client = _make_client(events=[])
 
-    # Empty frozenset = bypass; any chat allowed
+    # Empty frozenset = deny-all under UH-1
     await handle_trace(msg, client, allowed_chat_ids=frozenset())
 
-    # Proceeded to API call (empty result → no-events reply)
-    client.get_trace.assert_called_once()
+    # Silent drop: no API call, no reply
+    client.get_trace.assert_not_called()
+    msg.reply.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +133,7 @@ async def test_trace_pagination_boundary_20_fits_one_message() -> None:
     msg = _make_message()
     client = _make_client(events=events)
 
-    await handle_trace(msg, client)
+    await handle_trace(msg, client, allowed_chat_ids=_DEFAULT_ALLOWED_CHATS)
 
     msg.reply.assert_called_once()
     reply_text: str = msg.reply.call_args[0][0]
@@ -130,7 +147,7 @@ async def test_trace_pagination_boundary_21_shows_page_notice() -> None:
     msg = _make_message()
     client = _make_client(events=events)
 
-    await handle_trace(msg, client)
+    await handle_trace(msg, client, allowed_chat_ids=_DEFAULT_ALLOWED_CHATS)
 
     msg.reply.assert_called_once()
     reply_text: str = msg.reply.call_args[0][0]
@@ -168,7 +185,7 @@ async def test_trace_html_escapes_event_fields() -> None:
     msg = _make_message(text=f"/trace {_VALID_TRACE_ID}")
     client = _make_client(events=[malicious_event])
 
-    await handle_trace(msg, client)
+    await handle_trace(msg, client, allowed_chat_ids=_DEFAULT_ALLOWED_CHATS)
 
     msg.reply.assert_called_once()
     reply_text: str = msg.reply.call_args[0][0]
@@ -191,7 +208,7 @@ async def test_trace_page_arg_invalid_shows_error() -> None:
     msg = _make_message(text=f"/trace {_VALID_TRACE_ID} page=abc")
     client = _make_client(events=[_make_event()])
 
-    await handle_trace(msg, client)
+    await handle_trace(msg, client, allowed_chat_ids=_DEFAULT_ALLOWED_CHATS)
 
     msg.reply.assert_called_once()
     reply_text: str = msg.reply.call_args[0][0]
@@ -206,7 +223,7 @@ async def test_trace_invalid_shape_friendly_error() -> None:
     msg = _make_message(text="/trace not-a-valid-id-at-all")
     client = _make_client(events=[])
 
-    await handle_trace(msg, client)
+    await handle_trace(msg, client, allowed_chat_ids=_DEFAULT_ALLOWED_CHATS)
 
     msg.reply.assert_called_once()
     reply_text: str = msg.reply.call_args[0][0]
@@ -220,7 +237,7 @@ async def test_trace_no_events_message() -> None:
     msg = _make_message()
     client = _make_client(events=[])
 
-    await handle_trace(msg, client)
+    await handle_trace(msg, client, allowed_chat_ids=_DEFAULT_ALLOWED_CHATS)
 
     msg.reply.assert_called_once()
     reply_text: str = msg.reply.call_args[0][0]
@@ -234,7 +251,7 @@ async def test_trace_renders_events_happy_path() -> None:
     msg = _make_message()
     client = _make_client(events=events)
 
-    await handle_trace(msg, client)
+    await handle_trace(msg, client, allowed_chat_ids=_DEFAULT_ALLOWED_CHATS)
 
     msg.reply.assert_called_once()
     reply_text: str = msg.reply.call_args[0][0]
@@ -255,7 +272,7 @@ async def test_trace_zwsp_prefix_stripped() -> None:
     client = _make_client(events=[_make_event()])
 
     # Should NOT reject with invalid shape — ZWSP stripped, real trace_id validated
-    await handle_trace(msg, client)
+    await handle_trace(msg, client, allowed_chat_ids=_DEFAULT_ALLOWED_CHATS)
 
     # get_trace called (ZWSP was stripped, valid trace_id passed)
     client.get_trace.assert_called_once_with(
@@ -271,7 +288,7 @@ async def test_trace_zwsp_trailing_stripped() -> None:
     trace_id_trailing = f"{_VALID_TRACE_ID}{zwsp}"
     msg = _make_message(text=f"/trace {trace_id_trailing}")
     client = _make_client(events=[_make_event()])
-    await handle_trace(msg, client)
+    await handle_trace(msg, client, allowed_chat_ids=_DEFAULT_ALLOWED_CHATS)
     client.get_trace.assert_called_once_with(
         trace_id=_VALID_TRACE_ID,
         request_id=client.get_trace.call_args.kwargs["request_id"],
@@ -287,7 +304,7 @@ async def test_trace_zwsp_embedded_stripped() -> None:
     trace_id_embedded = _VALID_TRACE_ID[:mid] + zwsp + _VALID_TRACE_ID[mid:]
     msg = _make_message(text=f"/trace {trace_id_embedded}")
     client = _make_client(events=[_make_event()])
-    await handle_trace(msg, client)
+    await handle_trace(msg, client, allowed_chat_ids=_DEFAULT_ALLOWED_CHATS)
     client.get_trace.assert_called_once_with(
         trace_id=_VALID_TRACE_ID,
         request_id=client.get_trace.call_args.kwargs["request_id"],

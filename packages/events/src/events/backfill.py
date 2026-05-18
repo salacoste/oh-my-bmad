@@ -47,18 +47,27 @@ def backfill_trace_id_from_request_id(envelope_dict: dict[str, Any]) -> dict[str
     produces the same ``trace_id`` so the subscriber + migrator paths
     converge on the same value.
 
-    Story 9.7 pass-2 TM-E7: also ensures ``schema_version`` is present on
-    the returned dict. Pre-1.1.0 JSONL records lacking an explicit
-    ``schema_version`` field would otherwise silently be upgraded to the
-    EventEnvelope default (``"1.1.0"``), falsifying provenance. We tag
-    them ``"1.0.0"`` (the historical default) on back-fill so the wire
-    label matches the on-disk record's true origin.
+    Story 9.7 pass-2 TM-E7 / pass-3 UH-5: also ensures ``schema_version`` is
+    present AND historically valid on the returned dict. Pre-1.1.0 JSONL
+    records lacking an explicit ``schema_version`` field would otherwise
+    silently be upgraded to the EventEnvelope default (``"1.1.0"``),
+    falsifying provenance. Pass-3 UH-5 tightens the check from
+    ``isinstance(_, str)`` (which accepted ``""``) and ``in {"1.0.0",
+    "1.0.1", "1.1.0"}`` (only those three are known wire labels). Anything
+    else — empty string, ``None``, ``"garbage"``, missing key — triggers
+    tagging as ``"1.0.0"`` (the historical default) on back-fill so the
+    wire label matches the on-disk record's true origin and downstream
+    validation surfaces real garbage rather than silently coercing it.
     """
     existing_trace = envelope_dict.get("trace_id")
     has_valid_trace = isinstance(existing_trace, str) and is_valid_trace_id(existing_trace)
-    has_schema_version = isinstance(envelope_dict.get("schema_version"), str)
+    # Pass-3 UH-5: strict whitelist of historically-known wire labels.
+    # An empty string, null, or garbage value would otherwise pass the prior
+    # ``isinstance(_, str)`` check (or silently upgrade null → "1.0.0").
+    sv = envelope_dict.get("schema_version")
+    has_valid_schema_version = isinstance(sv, str) and sv in ("1.0.0", "1.0.1", "1.1.0")
 
-    if has_valid_trace and has_schema_version:
+    if has_valid_trace and has_valid_schema_version:
         return envelope_dict
 
     new_dict = dict(envelope_dict)
@@ -80,10 +89,13 @@ def backfill_trace_id_from_request_id(envelope_dict: dict[str, Any]) -> dict[str
             return None
         new_dict["trace_id"] = bare_uuid
 
-    if not has_schema_version:
+    if not has_valid_schema_version:
         # Pre-1.1.0 records had no explicit schema_version; the historical
         # default was ``"1.0.0"`` (the value at the time those records were
         # written). Tag accordingly so provenance survives the back-fill.
+        # Pass-3 UH-5: also overwrite empty-string / null / garbage values
+        # so they're tagged as the historical default rather than passed
+        # through to fail later validation with a less-actionable error.
         new_dict["schema_version"] = "1.0.0"
 
     return new_dict
