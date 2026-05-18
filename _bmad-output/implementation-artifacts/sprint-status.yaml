@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-18T20:00:00Z
+last_updated: 2026-05-18T21:00:00Z
 current_phase: 2  # Phase 2 opened by ADR-0003 (docs/adr/0003-phase-2-gate.md), 2026-05-15
 
 development_status:
@@ -255,14 +255,14 @@ development_status:
   # phase: 2 · unblocks every later epic · ADR-0004
   # FR57–FR59a · NFR-O7
   # =========================================================================
-  epic-9: in-progress  # 9-7 in pass-3 review; pass-1 + pass-2 batches applied via commits e1d091d / 61fddb7
+  epic-9: done  # closed 2026-05-18 — α trace_id propagation kernel COMPLETE (FR57, FR58, FR59, FR59a) — 7 stories, 3-pass adversarial review on 9.7, ~150 cumulative tests added
   9-1-trace-id-optional-envelope: done  # phase: 2 · FR57 · partial (optional phase)
   9-2-registry-api-x-trace-id-middleware: done  # phase: 2 · FR58 (HTTP)
   9-3-telegram-gateway-tg-update-id-derivation: done  # phase: 2 · FR58 (Telegram)
   9-4-console-cli-trace-id-mint: done  # phase: 2 · FR58 (console)
   9-5-mcp-caller-trace-id-input: done  # phase: 2 · FR58 (MCP)
   9-6-worker-wrapper-trace-id-cli-flag: done  # phase: 2 · FR59
-  9-7-schema-bump-1-1-0-plus-backfill-plus-trace-query: review  # phase: 2 · FR57, FR59a · schema 1.0.0 → 1.1.0 · commit 3162be1
+  9-7-schema-bump-1-1-0-plus-backfill-plus-trace-query: done  # phase: 2 · FR57, FR59a · 3-pass adversarial review (100 patches across 90 raw findings) · CI green 35f9e1e
   epic-9-retrospective: optional
 
   # =========================================================================
@@ -349,3 +349,39 @@ audit_trail:
       Pass-3 third-opinion review opened. 20 raw findings triaged to
       17 unique patches (9 HIGH, 5 MED, 3 LOW). Pass-3 trend: 39 → 31 → 20
       raw findings (converging). Patch batch in progress.
+  - date: "2026-05-18"
+    event: epic-9-pass-3-batch-applied
+    commit: "6732d42 + 35f9e1e (CI fix)"
+    story: 9-7-schema-bump-1-1-0-plus-backfill-plus-trace-query
+    reason: >
+      Pass-3 17-patch batch applied (9 HIGH, 5 MED, 3 LOW). Key fixes:
+      UH-1 chat-allowlist wiring + groups support, UH-2 backfill-helper
+      convergence test (14 samples), UH-3 TM-E7 deferred-not-aggregated,
+      UH-4 X-Trace-Has-Synthetic dropped (D6 column real fix), UH-5
+      backfill schema_version whitelist, UH-6 AST gate primitive-name
+      validation, UH-7 failure_detection docstrings aligned, UH-8
+      canonical encoder in materializer, UH-9 backfill in __init__
+      exports. CI fix commit 35f9e1e addressed real invariant divergence
+      surfaced by the expanded test (existing trace_id preserved over
+      e-prefix derivation). Deferred items final: 6 (PH-A3 compose,
+      PH-E11 slow-lane, PM-E6 perf bench, PM-B15 fixture canary,
+      TM-E7 schema_version default, D7 extensions ORM column).
+  - date: "2026-05-18"
+    event: epic-9-closed
+    from: in-progress
+    to: done
+    reason: >
+      Epic 9 α trace_id propagation kernel COMPLETE. 7 stories landed
+      (9.1 through 9.7) covering FR57, FR58, FR59, FR59a. Story 9.7
+      went through 3 adversarial review passes; cumulative ~100 review
+      patches addressed ~90 raw findings (converging trend: 39 → 31 → 20).
+      Test count: 2644 → ~2792 (+148 net). mypy --strict: 103 source
+      files exit 0. DeprecationWarning count: 0 (clean Phase 2 baseline
+      via filterwarnings ratchet). 6 deferred items tracked in
+      deferred-work.md. Production wiring: HTTP middleware (9.2),
+      Telegram derivation (9.3), console CLI mint (9.4), MCP receiver
+      (9.5), worker subprocess (9.6 + 9.7 orchestrator-adapter pass-2),
+      registry-state events.trace_id column + materializer + /v1/trace
+      HTTP endpoint + console-cli `trace` command + telegram /trace
+      handler. Schema 1.0.0 → 1.1.0 with both retained for replay
+      safety. Operator can now query causal chains end-to-end.
