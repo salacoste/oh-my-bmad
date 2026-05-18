@@ -200,11 +200,7 @@ async def process_task(
     # otherwise fall back to the adapter's settings-scoped trace_id.
     raw_task_trace = task.get("trace_id")
     task_trace_id: str
-    if (
-        isinstance(raw_task_trace, str)
-        and raw_task_trace
-        and is_valid_trace_id(raw_task_trace)
-    ):
+    if isinstance(raw_task_trace, str) and raw_task_trace and is_valid_trace_id(raw_task_trace):
         task_trace_id = raw_task_trace
     elif isinstance(raw_task_trace, str) and raw_task_trace:
         log.warning(
