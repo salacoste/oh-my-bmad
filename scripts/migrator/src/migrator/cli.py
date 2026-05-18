@@ -98,7 +98,16 @@ def _backfill_trace_id_from_request_id(envelope_dict: dict[str, Any]) -> str | N
     The migrator implements its own copy to avoid pulling the events
     package into the minimal migrator container; the test suite enforces
     invariance via ``test_backfill_invariant_migrator_eq_subscriber``.
+
+    Story 9.7 pass-3 CI fix: if the envelope already carries a valid
+    ``trace_id`` (Story-9.1 shape), short-circuit and return it as-is.
+    Mirrors the shared helper's order of operations: an existing valid
+    trace_id is authoritative and must not be overwritten by stripping
+    ``e-`` from a co-present request_id.
     """
+    existing_trace = envelope_dict.get("trace_id")
+    if isinstance(existing_trace, str) and _is_valid_trace_id(existing_trace):
+        return existing_trace
     raw_request_id = envelope_dict.get("request_id")
     if not isinstance(raw_request_id, str) or not raw_request_id:
         return None
