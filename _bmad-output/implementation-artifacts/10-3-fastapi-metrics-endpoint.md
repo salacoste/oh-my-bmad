@@ -1,6 +1,6 @@
 # Story 10.3 — FastAPI `/metrics` endpoint (Prometheus exposition)
 
-Status: **review** (CI pending @ 0847708)
+Status: **review** (CI pending @ eb53bb9)
 
 ## Story
 
@@ -410,7 +410,7 @@ docs/adr/0005-metrics-subscriber-derived-projection.md   # NEW
 
 **Implementation date:** 2026-05-19
 **Implementer:** executor agent (Claude Opus 4.7, 1M context)
-**Status flip:** `ready-for-dev` → `review` (CI pending @ 0847708)
+**Status flip:** `ready-for-dev` → `review` (CI pending @ eb53bb9)
 
 ### Implementation summary
 
