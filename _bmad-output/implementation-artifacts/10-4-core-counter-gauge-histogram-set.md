@@ -1,6 +1,6 @@
 # Story 10.4 — Core counter + gauge + histogram set
 
-Status: **review** (CI pending @ pre-commit)
+Status: **review** (CI pending @ 1040c4b)
 
 ## Story
 
