@@ -1,6 +1,6 @@
 # Story 10.2 — Tail loop + cursor persistence in metrics-subscriber
 
-Status: **done (CI green @ `<new-sha>` — pending — 2026-05-19; pass-1: 27 applied + 1 deferred (VH-7); pass-2: 24/24 closed (VH-7 transitively via P2-H9); pass-3: 18/18 closed)**
+Status: **done (CI green @ `bda8dec` — pending — 2026-05-19; pass-1: 27 applied + 1 deferred (VH-7); pass-2: 24/24 closed (VH-7 transitively via P2-H9); pass-3: 18/18 closed)**
 
 ## Story
 
