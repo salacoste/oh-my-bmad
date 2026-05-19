@@ -65,7 +65,7 @@ def _make_envelope(value: str, mono_seed: int) -> EventEnvelope:
     return EventEnvelope(
         event_id=new_event_id(clock=clk, rng=rng),
         schema_version="1.0.0",
-        type="test.restart_recovery_subproc.envelope",  # noqa: EVT001
+        type="test.restart_recovery_subproc.envelope",  # noqa: EVT001 test-only fixture envelope for P2-H9 subprocess restart-recovery test
         emitted_at=FROZEN_EPOCH,
         emitted_at_monotonic_ns=mono_seed,
         actor=_ACTOR,
