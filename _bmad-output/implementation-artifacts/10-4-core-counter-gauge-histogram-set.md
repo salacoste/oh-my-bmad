@@ -1,6 +1,6 @@
 # Story 10.4 — Core counter + gauge + histogram set
 
-Status: **review** (CI pending @ 1040c4b)
+Status: **done** (CI green @ `9fd4c06` (run 26128096551) — confirmed 2026-05-20; impl `1040c4b` + `6716336`; pass-1 review batch: 15/15 closed = 5H + 4M + 6L)
 
 ## Story
 
