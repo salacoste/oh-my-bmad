@@ -241,9 +241,17 @@ def test_lock_released_by_unlock(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_restore_into_negative_offset_raises(
+def test_restore_into_negative_offset_resets_to_zero_and_logs_warning(
     tmp_path: Path, captured_log_events: list[MutableMapping[str, Any]]
 ) -> None:
+    """P3-H4 / Q12 — negative offset emits WARNING and resets to 0.
+
+    Pre-pass-3 a negative offset raised ``ValueError`` — uncaught
+    through ``asyncio.run()``, undefined exit code, broke the Q6
+    0/1/2/3 matrix.  Aligned with the existing
+    ``cursor_invalid_shape`` / ``cursor_missing_fields`` handling
+    which already warn+reset.
+    """
     cursor_path = tmp_path / "cursor.json"
     today_path = current_day_path(tmp_path, _TODAY)
     today_path.write_bytes(b"x" * 100)
@@ -258,10 +266,11 @@ def test_restore_into_negative_offset_raises(
     )
     cp = CursorPersistence(cursor_path, persist_every=5, clock=_make_clock())
     reader = EventLogReader(tmp_path, clock=_make_clock())
-    with pytest.raises(ValueError, match="non-negative"):
-        cp.restore_into(reader, base_dir=tmp_path)
+    # Must NOT raise; must reset cursor to 0 and emit the new warning.
+    cp.restore_into(reader, base_dir=tmp_path)
+    assert reader.cursor_offset == 0
     assert any(
-        entry.get("event") == "metrics_subscriber_cursor_offset_invalid"
+        entry.get("event") == "metrics_subscriber_cursor_offset_negative_resetting_to_zero"
         for entry in captured_log_events
     )
 

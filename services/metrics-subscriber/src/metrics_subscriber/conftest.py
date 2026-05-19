@@ -57,3 +57,33 @@ def _clear_omb_metrics_env() -> Generator[None, None, None]:
         for k in [k for k in os.environ if k.startswith("OMB_METRICS_")]:
             os.environ.pop(k, None)
         os.environ.update(saved)
+
+
+@pytest.fixture(autouse=True)
+def _reset_module_global_warn_flags() -> Generator[None, None, None]:
+    """P3-L3 — reset module-global one-shot warn flags between tests.
+
+    Module-global ``_MAX_EVENTS_EXCEEDS_LINE_CAP_WARNED``
+    (``events.log_reader``) and ``_FIELD_RENAME_NOTICE_EMITTED``
+    (``metrics_subscriber.cursor``) make warn-once test ordering
+    fragile: once one test triggers the warn, no subsequent test in
+    the same pytest session can observe it.  This autouse fixture
+    invokes the test-only ``_reset_warn_state_for_tests()`` helper
+    on each module so each test sees a clean slate.
+
+    Test-only; do not call these helpers in production.
+    """
+    # Resets must run BEFORE the test body so tests asserting "first
+    # invocation emits the warn" succeed independently of session
+    # ordering.
+    from events.log_reader import (
+        _reset_warn_state_for_tests as _reset_events_warn,
+    )
+
+    from metrics_subscriber.cursor import (
+        _reset_warn_state_for_tests as _reset_cursor_warn,
+    )
+
+    _reset_events_warn()
+    _reset_cursor_warn()
+    yield

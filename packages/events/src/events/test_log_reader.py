@@ -373,6 +373,75 @@ def test_iter_new_envelopes_since_parse_skip_state_persists_across_polls(
         )
 
 
+def test_iter_new_envelopes_since_corruption_offset_anchored_at_run_start_across_polls(
+    tmp_path: Path,
+) -> None:
+    """P3-H2 / Q11 — ``ParseSkipThresholdExceeded.offset`` reports TRUE run-start.
+
+    Pre-pass-3 ``corruption_run_start`` was a per-call local — when
+    the threshold tripped in a later poll than where corruption
+    started, ``exc.offset`` reported a stale anchor (often the
+    current poll's entry offset).  This defeated P2-H3's headline
+    guarantee that operators can manually advance the cursor past
+    the corrupt region using ``exc.offset``.
+
+    Scenario: 5 valid envelopes + 30 garbage + 30 more garbage,
+    across two polls, threshold=50.  The exception must report
+    ``offset == 5 * envelope_size`` (start of the corrupt run, not
+    current poll's entry offset).
+    """
+    from events.errors import ParseSkipThresholdExceeded
+    from events.log_reader import iter_new_envelopes_since
+
+    path = tmp_path / "2026-05-19.jsonl"
+    valid_lines = b"".join(to_canonical_json(_make_envelope(mono_seed=i)) + b"\n" for i in range(5))
+    valid_size = len(valid_lines)
+    garbage_line = b"{garbage\n"
+    path.write_bytes(valid_lines + garbage_line * 60)
+
+    state: list[int] = [0, 0]
+    # Poll 1: drain 5 valid envelopes + 30 garbage lines.  Below
+    # threshold (30 < 50).
+    items_p1 = list(
+        iter_new_envelopes_since(
+            path,
+            0,
+            max_lines_per_poll=35,
+            max_contiguous_parse_skips=50,
+            parse_skip_state=state,
+        )
+    )
+    assert len(items_p1) == 5
+    assert state[0] == 30
+    # Cross-poll: the run-start anchor MUST be the byte after the
+    # last valid envelope (where the first garbage line begins).
+    assert state[1] == valid_size, (
+        f"run-start anchor lost across poll boundary: state={state}, expected[1]={valid_size}"
+    )
+    # Poll 2: continue from where poll 1 stopped (5 valid + 30
+    # garbage lines = valid_size + 30 * len(garbage_line)).  This
+    # poll reads 30 more garbage lines, trips threshold on the 20th
+    # additional (30 + 20 = 50 >= threshold).
+    next_offset = valid_size + 30 * len(garbage_line)
+    with pytest.raises(ParseSkipThresholdExceeded) as exc_info:
+        list(
+            iter_new_envelopes_since(
+                path,
+                next_offset,
+                max_lines_per_poll=30,
+                max_contiguous_parse_skips=50,
+                parse_skip_state=state,
+            )
+        )
+    # The exception offset must point at the START of the corrupt
+    # run (immediately after the 5 valid envelopes), NOT at
+    # ``next_offset`` (poll 2's entry).
+    assert exc_info.value.offset == valid_size, (
+        f"exc.offset={exc_info.value.offset} should equal valid_size={valid_size} "
+        f"(the byte position where the corrupt run BEGAN, across poll boundary)"
+    )
+
+
 def test_iter_new_envelopes_since_parse_skip_state_resets_on_valid(tmp_path: Path) -> None:
     """P2-H4 — successful parse resets the cross-poll counter to 0."""
     from events.log_reader import iter_new_envelopes_since
@@ -531,7 +600,13 @@ def test_open_after_aexit_raises() -> None:
 
 
 def test_rollover_skips_if_today_path_is_stale_mtime(tmp_path: Path) -> None:
-    """P2-M4 — stale today_path (older than 25h) does NOT trigger rollover."""
+    """P2-M4 + P3-M1 — stale today_path (older than yesterday) does NOT trigger rollover.
+
+    P3-M1 reframes the stale-mtime guard as RELATIVE ordering
+    (today_mtime >= yesterday_mtime) so it is immune to absolute
+    clock jumps in both directions.  Test uses ``os.utime`` to set
+    BOTH mtimes explicitly.
+    """
     import os
     import time
 
@@ -540,9 +615,13 @@ def test_rollover_skips_if_today_path_is_stale_mtime(tmp_path: Path) -> None:
     today_path = tmp_path / "2026-05-19.jsonl"
     yesterday_path.write_bytes(b"x" * 100)
     today_path.write_bytes(b"y" * 100)
-    # Backdate today's mtime to 26h before clock.now() → stale.
-    stale_mtime = clock.now().timestamp() - 26 * 3600
-    os.utime(str(today_path), (stale_mtime, stale_mtime))
+    # Stale scenario: today's mtime is older than yesterday's mtime
+    # (e.g., today_path is a leftover from a prior day with a stale
+    # mtime; yesterday_path was the actually-written file).
+    yesterday_mtime = time.time()
+    stale_today_mtime = yesterday_mtime - 3600  # 1h older than yesterday
+    os.utime(str(yesterday_path), (yesterday_mtime, yesterday_mtime))
+    os.utime(str(today_path), (stale_today_mtime, stale_today_mtime))
 
     reader = EventLogReader(tmp_path, clock=clock, rollover_quiescence_s=0.0)
     reader.seek(path=yesterday_path, offset=100)  # already drained
@@ -554,13 +633,57 @@ def test_rollover_skips_if_today_path_is_stale_mtime(tmp_path: Path) -> None:
             return fake_loop_time[0]
 
     ready = reader._is_rollover_ready(today_path, _FakeLoop())  # type: ignore[arg-type]
-    # Stale today_path → rollover refused.
+    # Stale today_path (older than yesterday) → rollover refused.
     assert ready is False
-    # And touching the file to "now" allows the fast-path to engage.
-    os.utime(str(today_path), (time.time(), time.time()))
-    # Re-evaluate against a fresh clock that returns wall-now.
-    fresh_clock = FrozenClock(mono_ns=0, now=datetime.now(UTC))
-    reader2 = EventLogReader(tmp_path, clock=fresh_clock, rollover_quiescence_s=0.0)
+    # Touch today's mtime to NEWER than yesterday → fast-path engages.
+    fresh_today_mtime = yesterday_mtime + 3600
+    os.utime(str(today_path), (fresh_today_mtime, fresh_today_mtime))
+    reader2 = EventLogReader(tmp_path, clock=clock, rollover_quiescence_s=0.0)
     reader2.seek(path=yesterday_path, offset=100)
     ready2 = reader2._is_rollover_ready(today_path, _FakeLoop())  # type: ignore[arg-type]
     assert ready2 is True
+
+
+def test_rollover_immune_to_forward_clock_skew(tmp_path: Path) -> None:
+    """P3-M5 — forward clock skew >25h does NOT falsely refuse rollover.
+
+    Pre-pass-3 a system-clock forward jump (NTP correction, VM
+    snapshot resume to future time) made
+    ``today_mtime < wall_now - 25h`` even for a freshly written
+    today file → rollover refused indefinitely.  P3-M1's relative
+    ordering (today_mtime >= yesterday_mtime) is immune.
+
+    Scenario: yesterday_mtime and today_mtime both set to "real
+    wall-clock now" but the reader's clock returns a far-future
+    timestamp (30h ahead).  Pre-fix this would trip the 25h window;
+    post-fix the relative ordering passes.
+    """
+    import os
+    import time
+
+    # FrozenClock returns May 2026 timestamps; real file mtimes will
+    # be the actual current wall clock — which on a fresh CI runner
+    # is also May 2026 BUT we additionally simulate a forward jump
+    # by setting BOTH files' mtimes to (clock.now - 30h) i.e., the
+    # file was written 30h before "now" per the reader's clock.
+    clock = FrozenClock(mono_ns=0, now=datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC))
+    yesterday_path = tmp_path / "2026-05-18.jsonl"
+    today_path = tmp_path / "2026-05-19.jsonl"
+    yesterday_path.write_bytes(b"x" * 100)
+    today_path.write_bytes(b"y" * 100)
+    base_mtime = time.time() - 30 * 3600
+    today_mtime = base_mtime + 3600  # today written 1h after yesterday
+    os.utime(str(yesterday_path), (base_mtime, base_mtime))
+    os.utime(str(today_path), (today_mtime, today_mtime))
+
+    reader = EventLogReader(tmp_path, clock=clock, rollover_quiescence_s=0.0)
+    reader.seek(path=yesterday_path, offset=100)  # already drained
+
+    class _FakeLoop:
+        def time(self) -> float:
+            return 0.0
+
+    ready = reader._is_rollover_ready(today_path, _FakeLoop())  # type: ignore[arg-type]
+    # today_mtime > yesterday_mtime → rollover fires, regardless of
+    # absolute clock skew.
+    assert ready is True

@@ -143,7 +143,12 @@ def test_subprocess_sigterm_persists_cursor_and_resumes_exactly_once(tmp_path: P
         if proc.poll() is None:
             proc.kill()
             proc.wait(timeout=2.0)
-    assert rc in (0, -signal.SIGTERM), f"unexpected rc={rc}"
+    # P3-H6: tightened from ``rc in (0, -SIGTERM)`` to ``rc == 0``.
+    # SIGKILL fallback (``proc.kill()`` after timeout) is no longer
+    # acceptable — the subscriber must drain cleanly under SIGTERM
+    # within 5s.  Pre-pass-3 the looser assertion masked the
+    # missing-stop-check-after-drain bug uncovered by P3-H6.
+    assert rc == 0, f"clean SIGTERM exit required; got rc={rc}"
 
     # Cursor must be persisted with at least the previously-observed offset.
     body = json.loads(cursor_path.read_text())
@@ -167,18 +172,24 @@ def test_subprocess_sigterm_persists_cursor_and_resumes_exactly_once(tmp_path: P
             except (OSError, json.JSONDecodeError):
                 pass
             time.sleep(0.05)
+        # P3-H6: small additional dwell so the subscriber is firmly
+        # past ``asyncio.run`` bootstrap (signal handler installed)
+        # before SIGTERM arrives.  Without this, a SIGTERM delivered
+        # during bootstrap kills the process with -15 (Python's
+        # default SIGTERM handler) which the tightened
+        # ``rc2 == 0`` assertion (no SIGKILL/SIGTERM fallback)
+        # correctly flags as a regression.
+        time.sleep(0.5)
         proc2.send_signal(signal.SIGTERM)
-        # Accept either clean exit (0, signal handler caught SIGTERM
-        # and set stop_event) or SIGTERM kill (-15, race where SIGTERM
-        # arrived during asyncio.run() bootstrap before handlers were
-        # installed).  Either way, the cursor must reflect the full
-        # drain — that is the actual AC7 invariant under test.
+        # P3-H6: tightened from ``rc2 in (0, -SIGTERM)`` to
+        # ``rc2 == 0``.  Clean exit only — no SIGKILL/SIGTERM
+        # default-handler fallback acceptable.
         rc2 = proc2.wait(timeout=5.0)
     finally:
         if proc2.poll() is None:
             proc2.kill()
             proc2.wait(timeout=2.0)
-    assert rc2 in (0, -signal.SIGTERM), f"unexpected rc2={rc2}"
+    assert rc2 == 0, f"clean SIGTERM exit required for proc2; got rc2={rc2}"
     body_final = json.loads(cursor_path.read_text())
     assert body_final["offset"] == log_path.stat().st_size
 
@@ -204,6 +215,14 @@ def test_subprocess_second_instance_refuses_with_concurrent_start_event(tmp_path
     _write_envelopes(log_path, envs)
 
     env = _subscriber_env(tmp_path, events_dir, cursor_path)
+    # P3-H3 — set the lock-acquired sentinel env var.  Polling for
+    # ``<cursor>.lock`` itself races on the open-but-not-flocked
+    # window (``os.open(O_CREAT)`` creates the file BEFORE
+    # ``fcntl.flock`` is called).  The sentinel exists ONLY after
+    # ``cursor.lock()`` has returned successfully, eliminating the
+    # race.
+    lock_sentinel = tmp_path / "proc1_lock_acquired.sentinel"
+    env["OMB_METRICS_LOCK_ACQUIRED_SENTINEL"] = str(lock_sentinel)
     proc1 = subprocess.Popen(
         [sys.executable, "-m", "metrics_subscriber"],
         env=env,
@@ -211,13 +230,16 @@ def test_subprocess_second_instance_refuses_with_concurrent_start_event(tmp_path
         stderr=subprocess.PIPE,
     )
     try:
-        # Wait until proc1 has acquired the lock (the file appears).
+        # P3-H3: wait for the sentinel (proof flock is held), not the
+        # lockfile itself.
         deadline = time.monotonic() + 5.0
-        lock_path = Path(str(cursor_path) + ".lock")
         while time.monotonic() < deadline:
-            if lock_path.exists():
+            if lock_sentinel.exists():
                 break
             time.sleep(0.05)
+        assert lock_sentinel.exists(), (
+            "proc1 did not write the lock-acquired sentinel; flock may not be held"
+        )
         # Spawn the second; it should exit 1 quickly.
         proc2 = subprocess.run(
             [sys.executable, "-m", "metrics_subscriber"],
@@ -242,3 +264,80 @@ def test_subprocess_second_instance_refuses_with_concurrent_start_event(tmp_path
         if proc1.poll() is None:
             proc1.kill()
             proc1.wait(timeout=2.0)
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_subprocess_sigterm_during_quiescence_drains_cleanly(tmp_path: Path) -> None:
+    """P3-H6 — SIGTERM during the rollover-quiescence wait exits 0 cleanly.
+
+    Scenario: yesterday's JSONL exists with stable size (no further
+    growth), no today file (so quiescence-wait engages — the
+    fast-path requires today's file to exist with non-zero size).
+    The subscriber spends the wait window polling.  SIGTERM
+    delivered during the wait must result in a clean ``rc == 0``
+    exit + cursor reflecting all drained events.
+
+    Pre-pass-3 the post-drain stop-event check was missing — a
+    SIGTERM that arrived after ``_drain_chunk`` returned but before
+    the rollover branch / next sleep would not be observed until
+    the next poll cycle.  Combined with the looser ``rc in (0,
+    -SIGTERM)`` assertion, a missing-clean-exit regression slipped
+    through.
+    """
+    events_dir = tmp_path / "events"
+    cursor_path = tmp_path / "metrics" / "cursor.json"
+    events_dir.mkdir(parents=True)
+
+    # Write yesterday's JSONL with stable size; do NOT create today
+    # so the rollover quiescence-wait engages.
+    yesterday = datetime.now(UTC).date()
+    # Force the path to be a day BEFORE today so the reader sees
+    # rollover-pending.  Subscriber's current_day_path uses real
+    # ``datetime.now(UTC).date()`` so write the file with that name
+    # and the reader will treat it as "today" until midnight or
+    # until restart sees a new today.
+    # Simpler: write the file using yesterday's date string and let
+    # the cursor reference it via the cursor.json path field.
+    yesterday_str = yesterday.isoformat()  # e.g., 2026-05-19
+    log_path = events_dir / f"{yesterday_str}.jsonl"
+    envs = [_make_envelope(f"v{i}", mono_seed=i) for i in range(50)]
+    _write_envelopes(log_path, envs)
+
+    env = _subscriber_env(tmp_path, events_dir, cursor_path)
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "metrics_subscriber"],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        # Wait until the subscriber has drained the file (offset
+        # reflects EOF) — that is when it enters the rollover-
+        # quiescence wait.
+        target_size = log_path.stat().st_size
+        deadline = time.monotonic() + 8.0
+        while time.monotonic() < deadline:
+            if cursor_path.exists():
+                try:
+                    body = json.loads(cursor_path.read_text())
+                    if body.get("offset", 0) >= target_size:
+                        break
+                except (OSError, json.JSONDecodeError):
+                    pass
+            time.sleep(0.05)
+        # Deliver SIGTERM while the subscriber is in the
+        # quiescence wait (file fully drained, no today file).
+        proc.send_signal(signal.SIGTERM)
+        rc = proc.wait(timeout=5.0)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=2.0)
+    # P3-H6: clean exit required — no SIGKILL fallback.
+    assert rc == 0, f"clean SIGTERM exit required during quiescence; got rc={rc}"
+    # Cursor must reflect the full drain.
+    body_final = json.loads(cursor_path.read_text())
+    assert body_final["offset"] == target_size, (
+        f"cursor must reflect drained EOF; got {body_final['offset']}, expected {target_size}"
+    )

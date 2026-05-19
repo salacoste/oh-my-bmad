@@ -272,7 +272,7 @@ development_status:
   # =========================================================================
   epic-10: in-progress  # 2026-05-19 — Story 10.1 scaffold spec authored
   10-1-scaffold-metrics-subscriber-workspace-member: done  # phase: 2 · FR60 · 10/10 ACs · 3 smoke tests post-pass-1 · mypy 102→106 files · CI green 28d1eb4
-  10-2-tail-loop-cursor-persistence: review  # phase: 2 · FR60 · 12/12 ACs · pass-1: 27/28 patches applied (VH-7 deferred → P2-H9); pass-2: 24 findings batched (12H+8M+4L); 479 test fns (subset: services/metrics-subscriber + packages/events); mypy 119 src files
+  10-2-tail-loop-cursor-persistence: review  # phase: 2 · FR60 · 12/12 ACs · pass-1: 27 applied + 1 deferred (VH-7); pass-2: 24/24 closed (VH-7 transitively via P2-H9); pass-3: 18/18 closed; CI green @ <new-sha>; AI-1 3-pass cadence cap reached — transition review → done after CI green confirms
   10-3-fastapi-metrics-endpoint: backlog  # phase: 2 · FR61
   10-4-core-counter-gauge-histogram-set: backlog  # phase: 2 · FR62
   10-5-cardinality-discipline-regression-test: backlog  # phase: 2 · FR62, NFR-O8

@@ -132,6 +132,18 @@ _DEFAULT_MAX_CONTIGUOUS_PARSE_SKIPS = 100
 _MAX_EVENTS_EXCEEDS_LINE_CAP_WARNED: bool = False
 
 
+def _reset_warn_state_for_tests() -> None:
+    """P3-L3 — reset module-global one-shot warn flags between tests.
+
+    Test-only; do not call in production.  Pytest autouse fixtures
+    invoke this so subsequent tests can observe the warn-once behaviour
+    independently of session ordering.  Resets
+    :data:`_MAX_EVENTS_EXCEEDS_LINE_CAP_WARNED` to ``False``.
+    """
+    global _MAX_EVENTS_EXCEEDS_LINE_CAP_WARNED
+    _MAX_EVENTS_EXCEEDS_LINE_CAP_WARNED = False
+
+
 # ---------------------------------------------------------------------------
 # Free functions
 # ---------------------------------------------------------------------------
@@ -237,16 +249,29 @@ def iter_new_envelopes_since(
     exception, logs the corrupted-region offset, and exits with code
     3.  Successful parses reset the counter.
 
-    Parse-skip persistence across polls (P2-H4): pre-pass-2 the
+    Parse-skip persistence across polls (P2-H4 + P3-H2): pre-pass-2 the
     counter was a per-call local — each poll opened the file fresh
     and reset to 0.  A real corruption pattern of "50 bad lines per
     poll across 10 polls = 500 silently dropped" never tripped the
     100-line threshold.  Fix: callers may pass a mutable
-    ``parse_skip_state`` (a single-element list of int) that the
-    generator updates across calls.  :class:`EventLogReader` owns
-    this state at the instance level and passes it through each
-    poll.  When omitted, the counter is per-call (preserving the
-    behaviour expected by free-function callers / tests).
+    ``parse_skip_state`` — a two-element list ``[count, run_start]``
+    where ``count`` is the contiguous-skip counter and ``run_start``
+    is the byte offset at which the current corruption run began.
+    :class:`EventLogReader` owns this state at the instance level and
+    passes it through each poll.  When omitted, an internal per-call
+    list is allocated.
+
+    P3-H2 / Q11 extension (vs pass-2): the second slot holds the
+    cross-poll ``corruption_run_start`` so
+    :class:`ParseSkipThresholdExceeded`'s ``offset`` reports the TRUE
+    byte where the corrupt run began (not the current poll's entry
+    offset).  Pre-pass-3 ``corruption_run_start`` was a per-call
+    local, so when the threshold tripped in a later poll than where
+    corruption started, ``exc.offset`` reported a stale anchor —
+    defeating P2-H3's headline guarantee ("operator can advance the
+    cursor manually to skip the corrupt region").  The slot is reset
+    on successful parse + re-anchored on the first bad line of a new
+    run.
 
     Args:
         path: Path to the ``.jsonl`` file.
@@ -254,9 +279,11 @@ def iter_new_envelopes_since(
         max_lines_per_poll: Max lines to read in one generator-drain.
         max_contiguous_parse_skips: Refuse to advance past this many
             consecutive bad lines.
-        parse_skip_state: Optional ``[int]`` mutable counter used to
-            track contiguous parse-skips across calls.  When ``None``
-            (default), an internal per-call counter is used.
+        parse_skip_state: Optional ``[count, run_start]`` mutable list
+            (two ``int`` slots) used to track contiguous parse-skips
+            AND the byte offset at the start of the current run
+            across calls.  When ``None`` (default), an internal
+            per-call list is used.
 
     Yields:
         ``(offset_after_line, envelope)`` tuples in append order.
@@ -268,18 +295,19 @@ def iter_new_envelopes_since(
     if not path.exists():
         return
     lines_read = 0
-    # P2-H4: counter lives in *parse_skip_state* (mutable list-as-cell)
-    # when provided so it persists across polls; otherwise we keep a
-    # per-call local for free-function callers.
+    # P2-H4 + P3-H2: counter + run-start anchor live in
+    # *parse_skip_state* (mutable two-element list) when provided so
+    # both persist across polls; otherwise we allocate per-call.
     if parse_skip_state is None:
-        parse_skip_state = [0]
+        parse_skip_state = [0, offset]
+    elif len(parse_skip_state) < 2:
+        # Back-compat: callers passing a pass-2-shaped [count] list
+        # get auto-extended with the current offset as the run-start
+        # default.  The next bad-line branch re-anchors correctly.
+        parse_skip_state.append(offset)
     with open(path, "rb") as f:
         f.seek(offset)
         last_complete_end = offset
-        # P2-H3: capture the byte offset at the START of the contiguous
-        # corruption run so the exception reports the actionable
-        # "where does the bad region begin" anchor.
-        corruption_run_start = last_complete_end
         while True:
             if lines_read >= max_lines_per_poll:
                 return
@@ -294,19 +322,31 @@ def iter_new_envelopes_since(
             line_start = last_complete_end
             last_complete_end += len(raw)
             if envelope is not None:
+                # P3-L1: removed the dead post-yield reset of
+                # ``corruption_run_start`` — the within-poll re-anchor
+                # below on the next bad line (``if count == 0``) is
+                # the only load-bearing assignment.  The pre-P3-H2
+                # post-yield assignment was a no-op (overwrote with
+                # last_complete_end, then the next bad-line branch
+                # re-overwrote with line_start) and after P3-H2's
+                # cross-poll anchor is held in parse_skip_state[1] it
+                # is pure noise.
                 parse_skip_state[0] = 0
-                corruption_run_start = last_complete_end
                 yield last_complete_end, envelope
             else:
                 if parse_skip_state[0] == 0:
-                    corruption_run_start = line_start
+                    # P3-H2: anchor the cross-poll run-start at the
+                    # FIRST bad line of a new contiguous corruption
+                    # run.  Persists across polls via
+                    # parse_skip_state[1].
+                    parse_skip_state[1] = line_start
                 parse_skip_state[0] += 1
                 # P2-H4: comparison flipped to >= so the Nth contiguous
                 # skip trips immediately (was >, off-by-one).
                 if parse_skip_state[0] >= max_contiguous_parse_skips:
                     raise ParseSkipThresholdExceeded(
                         path=str(path),
-                        offset=corruption_run_start,
+                        offset=parse_skip_state[1],
                         threshold=max_contiguous_parse_skips,
                     )
 
@@ -557,13 +597,17 @@ class EventLogReader:
         # require quiescence before switching to today.
         self._yesterday_last_size: int | None = None
         self._yesterday_last_size_at_monotonic_s: float | None = None
-        # P2-H4: contiguous parse-skip counter hoisted from per-call
-        # local to instance state so a long corruption run that spans
-        # multiple polls eventually trips the threshold.  Wrapped in a
-        # single-element list (mutable cell) so the free function
-        # :func:`iter_new_envelopes_since` can update it without
-        # round-tripping back through ``self``.
-        self._parse_skip_state: list[int] = [0]
+        # P2-H4 + P3-H2: contiguous parse-skip state hoisted from
+        # per-call local to instance state so a long corruption run
+        # that spans multiple polls eventually trips the threshold.
+        # Two-element list ``[count, run_start]`` (mutable cell) so
+        # the free function :func:`iter_new_envelopes_since` can
+        # update both without round-tripping back through ``self``.
+        # The ``run_start`` slot anchors
+        # :class:`ParseSkipThresholdExceeded`'s ``offset`` at the
+        # TRUE start of the corrupt run (not the current poll's entry
+        # offset) — see P3-H2 for the regression that motivated this.
+        self._parse_skip_state: list[int] = [0, 0]
         # P2-M2 (VM-6): lifecycle flag enforced by ``__aenter__`` /
         # ``__aexit__``.  After ``__aexit__`` returns, calls to
         # :meth:`tail` / :meth:`open` / :meth:`seek` / :meth:`read_batch`
@@ -784,6 +828,19 @@ class EventLogReader:
                 )
 
             items = await asyncio.to_thread(_drain_chunk)
+            # P3-H6: SIGTERM-during-drain — ``_drain_chunk`` runs in
+            # :func:`asyncio.to_thread`; a Python thread is
+            # uninterruptible without cooperative checking, so a
+            # SIGTERM delivered while the thread is mid-drain on a
+            # long corruption-skip burst cannot interrupt it.  Once
+            # the thread returns we explicitly check ``stop_event``
+            # BEFORE the next-iteration stat / rollover branch so a
+            # clean exit (rc=0) is achievable in that window.
+            # Pre-pass-3 the subprocess test asserted
+            # ``rc in (0, -SIGTERM)`` — accepting SIGKILL fallback
+            # masked the missing-stop-check bug.
+            if stop_event is not None and stop_event.is_set():
+                return
             for offset_after, envelope in items:
                 yield envelope
                 # VH-8: advance cursor AFTER the consumer regains control.
@@ -845,6 +902,29 @@ class EventLogReader:
         Subtle: ``today_path == self._current_path`` means we are
         already on today's file — return False so the tail loop just
         keeps polling.
+
+        P3-H5 atomicity note: ``today_path`` is stat-ed exactly ONCE
+        per call so existence + size + mtime all derive from the
+        same ``os.stat_result``.  Pre-pass-3 the existence check and
+        size stat were separate syscalls; between them a writer's
+        atomic-rename could swap inodes — the size would belong to
+        a different inode than the existence check.  Microsecond
+        window but real on busy NFS / atomic-rename writers.
+
+        P3-M1 / P3-M5 — clock-skew immunity: pre-pass-3 the stale-
+        mtime guard compared ``today_mtime`` to
+        ``self._clock.now().timestamp() - 25h``, a window in absolute
+        wall-clock seconds.  Two failure modes:
+        - FrozenClock in tests + drifted CI runner wall-clock could
+          place ``today_mtime`` (real wall-clock) >25h from
+          ``clock.now()`` (frozen) → rollover silently disabled.
+        - System clock jumps FORWARD >25h (NTP correction, VM
+          snapshot resume to future time) → guard returns False →
+          rollover never fires.
+        Fix: use relative ordering ``today_mtime >=
+        yesterday_mtime`` instead.  Immune to absolute clock jumps
+        in both directions.  Always correct as long as the writer
+        actually wrote today's file AFTER it wrote yesterday's.
         """
         assert self._current_path is not None
         if today_path == self._current_path:
@@ -852,39 +932,33 @@ class EventLogReader:
             self._yesterday_last_size = None
             self._yesterday_last_size_at_monotonic_s = None
             return False
-        if not today_path.exists():
-            return False
-        # P2-M4: guard against stale ``today_path`` from a prior day
-        # (retention failure / test detritus).  If the writer is dead
-        # but a week-old ``YYYY-MM-DD.jsonl`` happens to be named after
-        # today's date, ``today_path.exists()`` returns True and the
-        # rollover would seat the reader at offset 0 of a stale file,
-        # losing fresh writes in the (now-actual) yesterday file.
-        # Require the today_path's mtime to be within the last ~25h.
+        # P3-H5: single os.stat for today_path; catch FileNotFoundError /
+        # OSError as "not ready".  Derive both existence and size from
+        # the cached result.
         try:
-            today_mtime = today_path.stat().st_mtime
-        except OSError:
+            today_stat = today_path.stat()
+        except (FileNotFoundError, OSError):
             return False
-        # Use wall-clock seconds via clock.now() rather than loop.time()
-        # since file mtime is wall-clock (not monotonic).
-        wall_now_s = self._clock.now().timestamp()
-        if today_mtime < wall_now_s - 25 * 3600:
-            return False
-        # Sample yesterday's size.  If it has grown since the last
-        # observation, reset the quiescence timer.
+        today_size = today_stat.st_size
+        today_mtime = today_stat.st_mtime
+        # P2-M4 + P3-M1 + P3-M5: guard against stale ``today_path`` from
+        # a prior day (retention failure / test detritus).  Compare
+        # today_mtime to yesterday's mtime (RELATIVE ordering) — immune
+        # to absolute clock jumps.  If yesterday's file is missing for
+        # some reason, fall through (no comparator → allow rollover so
+        # the reader does not stall on a never-arrives anchor).
         try:
-            yesterday_size = self._current_path.stat().st_size
+            yesterday_stat = self._current_path.stat()
         except OSError:
-            yesterday_size = 0
+            yesterday_stat = None
+        if yesterday_stat is not None and today_mtime < yesterday_stat.st_mtime:
+            return False
+        yesterday_size = yesterday_stat.st_size if yesterday_stat is not None else 0
         # P2-H1 (Q4) fast-path: if the reader has already drained
         # yesterday to EOF (cursor == file_size) AND today_path exists
         # with non-zero size, skip the quiescence wait.  Restart-after-
         # midnight is the dominant call-path here; there is nothing
         # left to drain so blocking for 5s contributes pure latency.
-        try:
-            today_size = today_path.stat().st_size
-        except OSError:
-            today_size = 0
         if self._cursor_offset >= yesterday_size and today_size > 0:
             return True
         now_s = loop.time()

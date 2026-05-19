@@ -1,6 +1,6 @@
 # Story 10.2 — Tail loop + cursor persistence in metrics-subscriber
 
-Status: **review**
+Status: **done (CI green @ `<new-sha>` — pending — 2026-05-19; pass-1: 27 applied + 1 deferred (VH-7); pass-2: 24/24 closed (VH-7 transitively via P2-H9); pass-3: 18/18 closed)**
 
 ## Story
 
@@ -454,7 +454,7 @@ Tick `[x]` on every applied finding from pass-1 (VH-1, VH-2, VH-3, VH-4, VH-5, V
 
 - [x] [Review][Patch] **P2-M2 — VM-6 `__aenter__`/`__aexit__` placeholders provide no lifecycle benefit; future-trap on resource handles** [packages/events/src/events/log_reader.py:482-493] — **2-lane: E6+B15**. `async with EventLogReader(...)` in `__main__.py:179` is effectively a no-op. If Story 10.4 contributor adds an open fd or async task to the reader and forgets to wire `__aexit__`, the `async with` site won't fail loudly. Fix: add `self._closed: bool = False` flag; in `__aexit__` set `self._closed = True`; in `tail()` / `open()` / `seek()` raise `RuntimeError("EventLogReader used after close")` if `_closed`. This converts the placeholder into an enforced contract. Document for Story 10.4 contributors.
 
-- [x] [Review][Patch] **P2-M3 — VM-7 `_StepClock` test-only relies on GIL atomicity; nogil future-trap** [packages/events/src/events/test_log_reader.py:_StepClock] — Solo MED: E7. Pre-existing test helper; will silently break under PEP 703 (Python 3.14+ no-GIL). Marginal but documented for future. Fix: add explicit `threading.Lock()` around `self._next` mutation in `_StepClock.now()`. One-liner. Document "test-only; production clock uses `time` module which is GIL-independent".
+- [x] [Review][Patch] **P2-M3 — VM-7 `_StepClock` test-only relies on GIL atomicity; nogil future-trap** [services/metrics-subscriber/src/metrics_subscriber/test_day_rollover.py:_StepClock] — Solo MED: E7. Pre-existing test helper; will silently break under PEP 703 (Python 3.14+ no-GIL). Marginal but documented for future. Fix: add explicit `threading.Lock()` around `self._mono` mutation in `_StepClock.monotonic_ns()` (note: the load-bearing mutation is on the monotonic counter, not `now()` which returns an immutable datetime). One-liner. Document "test-only; production clock uses `time` module which is GIL-independent". **P3-M7 doc fix**: original entry cited `packages/events/src/events/test_log_reader.py:_StepClock` + `self._next` in `now()`; both pointers were stale (executor applied the fix at the correct location during pass-2 but the spec evidence path was not updated).
 
 - [x] [Review][Patch] **P2-M4 — `_is_rollover_ready` triggers on stale `today_path` from prior day (retention failure / test detritus)** [packages/events/src/events/log_reader.py:687-703] — Solo MED: B7. `today_path.exists()` returns True even if the file is from a prior week (retention bug). Combined with quiescent yesterday, would fire rollover and seat reader at offset 0 of stale file. Fix: add `today_path.stat().st_mtime > (now - 25h)` guard before declaring rollover-ready. Add docstring note. Add test `test_rollover_skips_if_today_path_is_stale_mtime`.
 
@@ -477,6 +477,66 @@ Tick `[x]` on every applied finding from pass-1 (VH-1, VH-2, VH-3, VH-4, VH-5, V
 - [x] [Review][Patch] **P2-L4 — Sentinel single-writer allowlist limitation undocumented (pre-existing)** [tests/separability/*.py + tests/integration/test_journey_1_overnight.py] — Solo LOW: E8. Pre-existing project-wide limitation surfaced by Story 10.2's AC1 extraction: the single-writer gate's allowlist mechanism is path-based rather than module-based, so future read-then-write modules in `packages/events/` (e.g., Story 10.4's cursor-managing helpers) will require explicit allowlist entries. Not a defect, but undocumented. Fix: add a docstring note to `packages/events/src/events/log_reader.py` module header explaining the read-only contract for callers in `services/` (single-writer gate enforces write-from-orchestrator-only). Add a one-line "See also" pointer in `tests/separability/conftest.py` or equivalent.
 
 ### Deferred (none — all 24 addressed in this pass)
+
+---
+
+## Review Findings — pass-3 (2026-05-19)
+
+Pass-3 adversarial review on pass-2 batch diff `87f3db5..d43d01b` (~2000 lines, 12 files). Three independent lanes ran in parallel: Blind Hunter (9 findings B1–B9), Edge Case Hunter (10 findings E1–E10), Acceptance Auditor (3 findings A1–A3 — ACCEPT-with-reservations). Acceptance Auditor confirms all 24 pass-2 findings cleanly closed in code+tests+docs; pass-3's REVISE verdict from Blind+Edge comes from second-order regressions introduced by pass-2 (cross-poll offset state, substring-based exception discrimination, exit-code matrix gaps for unforeseen error classes).
+
+After dedup → **18 unique findings** (6 HIGH, 7 MED, 5 LOW). **Verdict: REVISE** (final pass before ACCEPT per AI-1 3-pass cadence cap). All 18 close per "fix all issues even minors" policy.
+
+### Decisions (resolved before pass-3 batch)
+
+- **Q10 — Typed exception for filesystem-unsupported flock failure (B3+E4 convergence):** Define `class CursorLockUnsupportedFilesystemError(BlockingIOError)` in `cursor.py`. Raise that subclass on the unsupported-FS code path (currently constructed inline). `__main__.py` discriminates by `isinstance` rather than `"unsupported" in str(exc)`. Eliminates the string-match landmine that would silently invert exit-code-1 dashboard alerting on any future error-message refactor.
+- **Q11 — `corruption_run_start` cross-poll persistence (B1):** Extend `parse_skip_state` from `list[int]` (single-element counter) to `list[int]` with two slots `[count, run_start]`. Reset both on successful parse. Remove the per-call local `corruption_run_start` — it becomes `parse_skip_state[1]`. `ParseSkipThresholdExceeded.offset` then reports the true start-of-corruption across multi-poll runs.
+- **Q12 — Negative offset uncaught (E1):** Treat `_validate_offset` negative-offset as the same class as `cursor_invalid_shape` / `cursor_missing_fields` (already handled as "warn + reset to 0"). Replace `raise ValueError` with `log.warning + return 0`. Keeps Q6 exit-code matrix complete (0/1/2/3 covers every reachable failure mode).
+- **Q13 — `_ACCEPTED_SCHEMA_VERSIONS` upgrade-path contract (E7):** Add inline docstring above the frozenset literal documenting "When bumping to '1.2' in Story 10.4+, RETAIN '1.1' in the accepted set for one release cycle, then drop '1' in the same release." Prevents future contributor from doing a hard cutover that breaks rolling deploys.
+- **Q14 — Pass-3 is the cap; ACCEPT after this batch.** Per Epic 9 retro AI-1, 3-pass cadence is the ceiling for high-complexity stories. After this batch + CI green, transition `10-2 → done`. Pass-4 would be diminishing returns (auditor already ACCEPT-with-reservations on bookkeeping; remaining hunters' findings are operational hardening, fully addressable in one batch).
+
+### Patch — HIGH (6)
+
+- [x] [Review][Patch] **P3-H1 — Substring-match exit-code discrimination for flock failures is fragile landmine** [services/metrics-subscriber/src/metrics_subscriber/__main__.py:188 + cursor.py:130-176] — **2-lane: B3+E4**. Pass-2's P2-H6 added FS-unsupported branch but discriminated via `reason = "filesystem_unsupported" if "unsupported" in str(exc) else "concurrent_start"`. One message-edit (locale, refactor, error-string review) silently inverts the dashboard alerting split. Fix per Q10: define `class CursorLockUnsupportedFilesystemError(BlockingIOError)` in `cursor.py`; raise it on the unsupported-FS path; `__main__.py` discriminates via `isinstance(exc, CursorLockUnsupportedFilesystemError)`. Add `test_exit_codes.py::test_main_exit_1_filesystem_unsupported_uses_isinstance_not_substring` patching `fcntl.flock` to raise the typed exception, assert `rc == 1` AND structured event field `reason == "filesystem_unsupported"`.
+
+- [x] [Review][Patch] **P3-H2 — `corruption_run_start` not persisted across polls; ParseSkipThresholdExceeded.offset reports stale anchor** [packages/events/src/events/log_reader.py:293-310] — **Solo HIGH: B1**. P2-H4 hoisted `parse_skip_state` (the counter) to caller-supplied state but `corruption_run_start` remained a per-call local. When threshold trips in a later poll than where corruption started, `exc.offset` reports poll-N entry offset (stale, often current-poll start) instead of the true byte where the corrupt run began. Defeats P2-H3's headline guarantee ("operator can advance cursor manually to skip the corrupt region"). Test `test_iter_new_envelopes_since_parse_skip_state_persists_across_polls` asserts the exception fires but does NOT assert `exc.offset`. Fix per Q11: extend `parse_skip_state` to `[count, run_start]` (two-slot list); remove per-call local; update raise site to use `parse_skip_state[1]` for `offset`. Add `test_iter_new_envelopes_since_corruption_offset_anchored_at_run_start_across_polls` writing 5 valid + 30 garbage + 30 garbage across two polls with threshold=50, assert `exc.offset == 5 * envelope_size`.
+
+- [x] [Review][Patch] **P3-H3 — Concurrent-start subprocess test races on `lock_path.exists()` not on flock-held** [services/metrics-subscriber/src/metrics_subscriber/test_restart_recovery_subprocess.py:175] — **Solo HIGH: B6**. `O_CREAT | O_RDWR` creates the lockfile BEFORE `fcntl.flock` is called. If proc1 crashes between `os.open` and `fcntl.flock`, the file exists but no lock is held — proc2 acquires the lock, test assertion `returncode == 1` fails non-deterministically. Test polling for file existence ≠ confirming flock is held. Fix: have proc1 write a sentinel marker file AFTER `cursor.lock()` returns successfully (e.g., via env var `OMB_METRICS_LOCK_ACQUIRED_SENTINEL=/path/to/marker` consumed in `__main__.py` after lock); test polls for sentinel existence (not lockfile existence). Document the env var as test-only.
+
+- [x] [Review][Patch] **P3-H4 — Negative offset `ValueError` uncaught; Q6 exit-code matrix incomplete** [services/metrics-subscriber/src/metrics_subscriber/cursor.py:373-381 + __main__.py:219-241] — **Solo HIGH: E1**. `_validate_offset` raises `ValueError` for `offset < 0`. `run_subscriber` catches `CursorSchemaVersionError` (exit 2) and `ParseSkipThresholdExceeded` (exit 3) but not `ValueError`. A corrupt cursor.json (manual edit, bit-flip, partial write recovered as JSON with `offset: -1`) escapes through `asyncio.run()` as uncaught traceback — undefined exit code, no structured event. Operator dashboards alerting on exit codes 1/2/3 silently miss a real corruption mode. Fix per Q12: in `_validate_offset`, replace `raise ValueError` with `log.warning("metrics_subscriber_cursor_offset_negative_resetting_to_zero", offset=offset, cursor_path=...)` and `return 0`. Aligns with existing `cursor_invalid_shape` / `cursor_missing_fields` handling. Add test `test_restore_into_negative_offset_resets_to_zero_and_logs_warning`.
+
+- [x] [Review][Patch] **P3-H5 — Day-rollover fast-path TOCTOU race on `today_path.exists()` + `today_path.stat()`** [packages/events/src/events/log_reader.py:855-889] — **Solo HIGH: E3**. Between the existence check at line 855 and the size stat at line 885, a writer's atomic-rename can swap inodes — the size belongs to a different inode than the existence check. Microsecond window but real on busy NFS / atomic-rename writers. Fix: restructure `_is_rollover_ready` to call `os.stat()` once at top (catch `FileNotFoundError`/`OSError` as "not ready"); derive both existence and size from the cached `os.stat_result`. One stat per call instead of two. Add docstring note about atomicity guarantee.
+
+- [x] [Review][Patch] **P3-H6 — SIGTERM-during-quiescence-wait does not produce clean shutdown; subprocess test asserts SIGKILL fallback** [packages/events/src/events/log_reader.py:794-832 + test_restart_recovery_subprocess.py] — **Solo HIGH: E6**. `_drain_chunk` runs in `asyncio.to_thread`; if it's mid-drain on a long corruption-skip burst, SIGTERM cannot interrupt the thread (Python threads are uninterruptible without `threading.Event` cooperation). Subprocess test uses `proc.wait(timeout=5.0)` then `proc.kill()`, asserts `rc in (0, -signal.SIGTERM)` — `-9` (SIGKILL) is permitted, so the test PASSES when the subprocess never shuts down cleanly. P2-H1's 5s quiescence + SIGTERM-during-wait scenario uncovered. Fix: (a) after `await asyncio.to_thread(_drain_chunk)` returns, check `if stop_event is not None and stop_event.is_set(): return` BEFORE rollover branch + before next iteration's stat calls; (b) tighten subprocess test to assert `rc == 0` (clean exit) NOT permit `-SIGTERM` fallback; (c) add subprocess variant `test_subprocess_sigterm_during_quiescence_drains_cleanly` — write yesterday with stable size, no today file, send SIGTERM during the 5s quiescence wait, assert `rc == 0` AND cursor reflects all drained events.
+
+### Patch — MED (7)
+
+- [x] [Review][Patch] **P3-M1 — Stale-mtime guard `today_mtime < wall_now_s - 25h` mismatches FrozenClock in CI with drifted system clock** [packages/events/src/events/log_reader.py:870-872] — Solo MED: B4. `self._clock.now().timestamp()` returns FrozenClock's configured Unix timestamp (May 2026 in tests); `today_mtime` comes from `os.utime` / actual filesystem write time (real wall-clock). On CI hosts with drifted clocks (>25h between FrozenClock setting and runner wall-clock), rollover is silently disabled. Fix: use relative ordering instead of absolute window — compare `today_mtime >= yesterday_path.stat().st_mtime` (today must be newer than yesterday's last write). Immune to absolute clock jumps. Update test `test_rollover_skips_if_today_path_is_stale_mtime` to set both mtimes explicitly via `os.utime`.
+
+- [x] [Review][Patch] **P3-M2 — `persist_now(reader.cursor_offset)` on corrupt-region exit wastes restart work** [services/metrics-subscriber/src/metrics_subscriber/__main__.py:283-291] — Solo MED: B5. P2-H3 persists `reader.cursor_offset` (last successful yield) on `ParseSkipThresholdExceeded`. On restart, reader re-reads from cursor.offset → re-parses the good prefix between cursor.offset and exc.offset → trips threshold again → exit 3. Works (no crash loop, per `test_main_exit_3_corrupt_region_restart_loop_does_not_crash`) but every restart re-does identical parsing work. Fix: persist `exc.offset` (start of corrupt region per P3-H2's anchor) so restart picks up AT the corrupt region. Update `exit_codes` test to assert second-restart's cursor is `exc.offset`, not pre-corruption offset.
+
+- [x] [Review][Patch] **P3-M3 — Restart-loop test only exercises all-garbage scenario; realistic `valid_prefix + garbage_tail` uncovered** [services/metrics-subscriber/src/metrics_subscriber/test_exit_codes.py:108] — Solo MED: B7. `test_main_exit_3_corrupt_region_restart_loop_does_not_crash` writes all-garbage; both runs trivially exit 3 with cursor=0. A regression that mis-persists cursor past the corruption (e.g., persisting end-of-file offset on the corrupt path) would PASS this test but break recovery. Fix: add variant `test_main_exit_3_with_valid_prefix_then_garbage_persists_at_corruption_start` writing N valid envelopes + M garbage lines, assert first run exits 3 with cursor.offset between N and N+M boundary, second run still exits 3 (no advance past corruption).
+
+- [x] [Review][Patch] **P3-M4 — `_ACCEPTED_SCHEMA_VERSIONS` upgrade-path contract undocumented; future contributor risks hard cutover breaking rolling deploys** [services/metrics-subscriber/src/metrics_subscriber/cursor.py:87] — Solo MED: E7. Frozenset literal `{"1", "1.1"}` has no inline doc about transition policy. Story 10.4+ contributor bumping to "1.2" could simply rename `_SCHEMA_VERSION` without updating the accepted set — rolling deploy would see one subscriber writing "1.2" and another refusing to read it. Fix per Q13: add inline docstring above the frozenset documenting `"When bumping to '1.2' in Story 10.4+, retain '1.1' in this set for one release cycle (rolling-deploy support), then drop '1' in the same release. Always: |_ACCEPTED_SCHEMA_VERSIONS| >= 2 across schema changes."`.
+
+- [x] [Review][Patch] **P3-M5 — Forward clock skew >25h falsely marks today_path as stale → rollover refused** [packages/events/src/events/log_reader.py:870-872] — Solo MED: E8. If system clock jumps FORWARD by >25h (NTP correction, VM snapshot resume to future time), `wall_now_s - 25h` exceeds today_mtime → guard returns False → rollover never fires. P3-M1's relative-ordering fix (compare today_mtime to yesterday_mtime) is immune to absolute clock jumps in both directions — adopt that solution and close both P3-M1 + P3-M5 together. No separate fix needed if P3-M1 lands; verify the test covers the forward-skew case (set `os.utime(today_path, (now-3600, now-3600))` then advance FrozenClock by 30h, assert rollover still fires because today_mtime > yesterday_mtime).
+
+- [x] [Review][Patch] **P3-M6 — `pragma: no cover` on persist-on-corrupt error path → persist-fails-loop untested** [services/metrics-subscriber/src/metrics_subscriber/__main__.py:283-291] — Solo MED: E10. The `except OSError` recovery branch around `cursor.persist_now` is annotated `# pragma: no cover`. If persist fails (disk full, parent dir deleted), subscriber returns 3 having NOT advanced cursor → restart re-reads same corrupt region → re-raises → infinite persist-fails-loop (different shape than the corrupt-loop P2-H3 escaped). P2-H3's core guarantee is partially undone. Fix: remove `pragma: no cover`; add test `test_main_exit_3_persist_failure_still_returns_3_with_warning` mocking `cursor.persist_now` to raise `OSError`, assert subscriber exits 3 and logs `metrics_subscriber_persist_failed_during_corrupt_exit` warning. Optional: escalate to exit code `4` ("corrupt + cursor-unwritable") for operator-runbook clarity — DEFER decision to Story 10.4 if scope creep concern.
+
+- [x] [Review][Patch] **P3-M7 — P2-M3 evidence-path drift in spec; `_StepClock` lives in different file than cited** [_bmad-output/implementation-artifacts/10-2-tail-loop-cursor-persistence.md P2-M3 entry] — Solo MED: A1. P2-M3 cited `packages/events/src/events/test_log_reader.py:_StepClock`; actual `_StepClock` lives at `services/metrics-subscriber/src/metrics_subscriber/test_day_rollover.py:67` where lock was correctly added. Executor read intent correctly; doc pointer is stale. Future readers tracing P2-M3 hit a dead pointer. Fix: edit P2-M3 entry — change evidence path to `services/metrics-subscriber/src/metrics_subscriber/test_day_rollover.py:_StepClock` and note "around `self._mono` mutation in `monotonic_ns()`" (not `now()`).
+
+### Patch — LOW (5)
+
+- [x] [Review][Patch] **P3-L1 — `corruption_run_start = last_complete_end` dead-write after successful yield** [packages/events/src/events/log_reader.py:294-297] — **2-lane: B2+E2**. Post-yield reset assigns to end-of-good-line; the `if parse_skip_state[0] == 0:` re-anchor on next bad line overwrites correctly. Within-poll: dead. Cross-poll: WAS load-bearing for the wrong value (resolved by P3-H2's `parse_skip_state[1]` extension). After P3-H2 lands, remove the dead assignment entirely. Fix: drop the line; rely solely on the `if parse_skip_state[0] == 0:` re-anchor inside the bad-line branch.
+
+- [x] [Review][Patch] **P3-L2 — VL-2 dual-field write has no deprecation log; operators lack signal to update queries** [services/metrics-subscriber/src/metrics_subscriber/cursor.py:469-473] — Solo LOW: B8. Forward-compat write of `events_processed_since_last_persist` AND `events_in_this_persist_window` is silent. Operators grepping for either field don't know which is canonical. Fix: emit one-shot `log.info("metrics_subscriber_cursor_field_rename_deprecation_notice", deprecated="events_processed_since_last_persist", canonical="events_in_this_persist_window", retiring_in="Story 10.4+")` on first persist after start. Guard with module-global `_FIELD_RENAME_NOTICE_EMITTED` flag (similar to P2-H11's WARN-once pattern; see P3-L3 for test-isolation fix).
+
+- [x] [Review][Patch] **P3-L3 — Module-global `_MAX_EVENTS_EXCEEDS_LINE_CAP_WARNED` breaks test isolation** [packages/events/src/events/log_reader.py:131] — **2-lane: B9+E9**. Per-process boolean means once one test triggers the warn, no subsequent test in the same pytest session can observe it. Test-ordering footgun for future Story 10.4 contributors. Apply same fix to P3-L2's `_FIELD_RENAME_NOTICE_EMITTED` flag. Fix: add `_reset_warn_state_for_tests()` helper exposed via `events.testing` (or similar) that pytest fixtures can call in `autouse` mode. Document "test-only; do not call in production". Update relevant tests to call it in setup if asserting the warn.
+
+- [x] [Review][Patch] **P3-L4 — Dev Agent Record lacks pytest --collect-only evidence-paste for 479-test claim** [_bmad-output/implementation-artifacts/10-2-tail-loop-cursor-persistence.md Dev Agent Record / Test count delta] — Solo LOW: A2. Pass-2's "479 collected / +16 delta" is plausible but unverified by Acceptance Auditor pass-3. CI green @ `d43d01b` implies the count is real but no evidence-line captured. Fix: paste `uv run pytest --collect-only -q services/metrics-subscriber packages/events | tail -1` output into the Dev Agent Record under "Test count delta" as evidence. One-line append.
+
+- [x] [Review][Patch] **P3-L5 — Sprint-status "28/28 closed" overstates pass-1 (was 27 applied + 1 deferred → P2-H9)** [_bmad-output/implementation-artifacts/sprint-status.yaml line 275] — Solo LOW: A3. Current annotation says `pass-1: 28/28 closed; pass-2: 24/24 closed`. Truthful framing: pass-1 closed 27 directly + deferred VH-7; pass-2 transitively closed VH-7 via P2-H9 subprocess test. Fix: update annotation to `pass-1: 27 applied + 1 deferred (VH-7); pass-2: 24/24 closed (VH-7 transitively via P2-H9); pass-3: 18 findings batched`. Final transition to `done` after pass-3 batch CI green per Q14.
+
+### Deferred (none — all 18 addressed in this pass per Q14)
 
 ---
 
@@ -547,6 +607,25 @@ and `uv run mypy --strict packages/ services/registry-api services/registry-stat
 - Post-10.2 pass-1: **463** collected.
 - Post-10.2 pass-2: **479** collected (delta over pass-1: +16 new
   test functions; over pre-10.2: +64 new tests in this scope).
+- **Post-10.2 pass-3: 485 collected** (delta over pass-2: +6 new test
+  functions; over pre-10.2: +70 new tests in this scope).
+  P3-L4 evidence — output of
+  ``uv run pytest --collect-only -q services/metrics-subscriber packages/events | tail -1``:
+
+  ```
+  485 tests collected in 0.24s
+  ```
+
+  Pass-3 new tests (6):
+  - ``test_log_reader.py``: 2 new (P3-H2 cross-poll corruption-offset
+    anchor; P3-M5 forward-clock-skew rollover-immunity).
+  - ``test_exit_codes.py``: 3 new (P3-H1 isinstance discrimination;
+    P3-M3 valid-prefix-then-garbage corruption anchor; P3-M6
+    persist-failure on corrupt-exit).
+  - ``test_restart_recovery_subprocess.py``: 1 new (P3-H6 SIGTERM
+    during quiescence drains cleanly).
+  - ``test_cursor.py``: 1 renamed (negative-offset now warns+resets
+    per P3-H4; same test slot, behaviour changed).
 - New pass-2 test files:
   - ``test_log_reader.py`` (added): 6 new tests (P2-H4 multi-poll
     skip × 2, P2-H5 cursor-unchanged-on-raise, P2-H12 clamp-after-rotation,
@@ -562,8 +641,9 @@ and `uv run mypy --strict packages/ services/registry-api services/registry-stat
     flock refusal) — both ``@pytest.mark.slow``.
   - ``test_day_rollover.py`` (added): 1 new test (P2-H1 fast-path
     restart-after-midnight within 5s).
-- mypy --strict baseline: **117 → 119** source files (added two new
-  test modules — ``test_exit_codes.py`` + ``test_restart_recovery_subprocess.py``).
+- mypy --strict baseline: **117 → 119** source files post-pass-2;
+  **119 → 120** post-pass-3 (added ``packages/events/src/events/conftest.py``
+  for P3-L3 warn-state reset autouse fixture).
 
 ### EventLogReader extraction scope decision
 

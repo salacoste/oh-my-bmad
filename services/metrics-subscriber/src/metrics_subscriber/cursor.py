@@ -50,10 +50,13 @@ acquires an exclusive ``fcntl.flock`` on ``<cursor_path>.lock``.  A
 second subscriber on the same cursor path raises immediately on
 startup.
 
-Bounds validation (VH-11): on restore, ``persisted_offset`` is
-validated against the on-disk file size.  Negative offsets raise
-``ValueError``; offsets beyond EOF are treated as a skip-ahead with
-``cursor_offset_beyond_eof`` CRITICAL log + metric placeholder.
+Bounds validation (VH-11 + P3-H4): on restore, ``persisted_offset`` is
+validated against the on-disk file size.  Negative offsets emit a
+WARNING and reset to 0 (P3-H4 / Q12 — was ``ValueError`` pre-pass-3;
+the uncaught exception escaped through ``asyncio.run()`` as undefined
+exit code, breaking the Q6 0/1/2/3 matrix).  Offsets beyond EOF are
+treated as a skip-ahead with ``cursor_offset_beyond_eof`` CRITICAL log
++ metric placeholder.
 """
 
 from __future__ import annotations
@@ -78,13 +81,57 @@ if TYPE_CHECKING:
 
 _log = structlog.get_logger(__name__)
 
+
+class CursorLockUnsupportedFilesystemError(BlockingIOError):
+    """Raised when ``fcntl.flock`` fails on an unsupported filesystem (P3-H1, Q10).
+
+    Subclass of :class:`BlockingIOError` (the exception type previously
+    raised for both concurrent-start AND unsupported-FS, distinguished
+    only by substring-matching ``str(exc)``).  Pass-3 introduces this
+    typed exception so :func:`run_subscriber` discriminates via
+    ``isinstance`` and the dashboard ``reason`` field cannot silently
+    invert under a future error-string refactor.
+
+    Operators: this exit-code-1 sub-class indicates the cursor path
+    lives on a filesystem that does not support advisory locking
+    (NFS without lockd, some FUSE mounts, overlayfs in containers).
+    The cursor path must live on a local filesystem.
+    """
+
+
 # P2-L2: bump from "1" → "1.1" for the ``events_in_this_persist_window``
 # field rename (semver-minor: backwards-compatible).  Both schema_versions
 # are accepted on restore; dual field-name write keeps log-aggregation
 # queries grepping the old name working for one release cycle, and the
 # old name will be dropped in Story 10.4.
+#
+# P3-M4 / Q13 — upgrade-path contract:
+#   When bumping to '1.2' in Story 10.4+, RETAIN '1.1' in this accepted
+#   set for one release cycle (rolling-deploy support — one subscriber
+#   instance may write '1.2' while another still reads '1.1'), then
+#   drop '1' in the same release.  Always: |_ACCEPTED_SCHEMA_VERSIONS|
+#   >= 2 across any schema change.  A hard cutover (rename _SCHEMA_VERSION
+#   without expanding _ACCEPTED_SCHEMA_VERSIONS) would break rolling
+#   deploys — one subscriber writes the new version, the other refuses
+#   to read it, and the system is broken until both restart simultaneously.
 _SCHEMA_VERSION = "1.1"
 _ACCEPTED_SCHEMA_VERSIONS = frozenset({"1", "1.1"})
+
+# P3-L2: one-shot guard so the VL-2 dual-field-write deprecation notice
+# is emitted exactly once per process.  Tests reset via
+# :func:`_reset_warn_state_for_tests`.
+_FIELD_RENAME_NOTICE_EMITTED: bool = False
+
+
+def _reset_warn_state_for_tests() -> None:
+    """P3-L3 — reset module-global one-shot warn flags between tests.
+
+    Test-only; do not call in production.  Pytest autouse fixtures
+    invoke this so subsequent tests can observe the deprecation notice
+    on first persist.
+    """
+    global _FIELD_RENAME_NOTICE_EMITTED
+    _FIELD_RENAME_NOTICE_EMITTED = False
 
 
 class CursorPersistence:
@@ -174,7 +221,13 @@ class CursorPersistence:
                     "mounts, overlayfs).  Local filesystem required."
                 ),
             )
-            raise BlockingIOError(exc.errno, "fcntl.flock unsupported on filesystem") from exc
+            # P3-H1 (Q10): raise the typed subclass so __main__.py can
+            # discriminate via ``isinstance`` instead of substring-matching
+            # the message text.  String-based discrimination silently
+            # inverts under any future error-message refactor.
+            raise CursorLockUnsupportedFilesystemError(
+                exc.errno, "fcntl.flock unsupported on filesystem"
+            ) from exc
         self._lock_fd = fd
 
     def unlock(self) -> None:
@@ -234,7 +287,6 @@ class CursorPersistence:
         Raises:
             CursorSchemaVersionError: When ``cursor.json`` declares an
                 unknown schema_version (VH-9).
-            ValueError: When the persisted offset is negative (VH-11).
         """
         today_path = current_day_path(base_dir, self._clock.now())
 
@@ -352,8 +404,13 @@ class CursorPersistence:
     def _validate_offset(self, path: Path, offset: int) -> int:
         """VH-11 — validate ``offset`` against ``path``'s on-disk size.
 
-        - Negative offsets are programmer / corruption errors.  Raise
-          :class:`ValueError`.
+        - Negative offsets (programmer error / cursor corruption) emit
+          a WARNING and reset to 0 (P3-H4 / Q12).  Aligns with the
+          existing ``cursor_invalid_shape`` / ``cursor_missing_fields``
+          handling.  Pre-pass-3 this raised ``ValueError`` which
+          escaped through ``asyncio.run()`` as an uncaught traceback —
+          undefined exit code, no structured event.  The Q6 exit-code
+          matrix (0/1/2/3) now covers every reachable failure mode.
         - Offsets beyond EOF (file truncated externally) log CRITICAL
           ``cursor_offset_beyond_eof`` and reset to ``file_size`` so
           the reader does not stall forever waiting for bytes that
@@ -366,19 +423,20 @@ class CursorPersistence:
 
         Returns:
             The (possibly clamped) offset to seat the reader on.
-
-        Raises:
-            ValueError: If ``offset`` < 0.
         """
         if offset < 0:
-            _log.critical(
-                "metrics_subscriber_cursor_offset_invalid",
+            _log.warning(
+                "metrics_subscriber_cursor_offset_negative_resetting_to_zero",
                 cursor_path=str(self._path),
                 target_path=str(path),
                 offset=offset,
-                reason="negative_offset",
+                note=(
+                    "persisted offset is negative (likely cursor.json corruption "
+                    "or manual edit); resetting to 0.  The reader will replay "
+                    "the day's events from the start."
+                ),
             )
-            raise ValueError(f"cursor offset must be non-negative; got {offset!r} for {path!r}")
+            return 0
         try:
             file_size = path.stat().st_size if path.exists() else None
         except OSError:
@@ -451,6 +509,19 @@ class CursorPersistence:
           containing directory's inode).
         """
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        # P3-L2: emit the dual-field-write deprecation notice exactly
+        # once per process so operator log-aggregation queries grepping
+        # the legacy field name surface a signal to migrate before the
+        # field is dropped in Story 10.4.
+        global _FIELD_RENAME_NOTICE_EMITTED
+        if not _FIELD_RENAME_NOTICE_EMITTED:
+            _log.info(
+                "metrics_subscriber_cursor_field_rename_deprecation_notice",
+                deprecated="events_processed_since_last_persist",
+                canonical="events_in_this_persist_window",
+                retiring_in="Story 10.4+",
+            )
+            _FIELD_RENAME_NOTICE_EMITTED = True
         # AC3 schema: explicit "Z" suffix for UTC; we format directly
         # rather than relying on isoformat() so the format is stable
         # across Python versions (some emit ``+00:00`` instead of ``Z``).
@@ -529,4 +600,4 @@ class CursorPersistence:
         self._events_since_last_persist = 0
 
 
-__all__ = ["CursorPersistence"]
+__all__ = ["CursorLockUnsupportedFilesystemError", "CursorPersistence"]

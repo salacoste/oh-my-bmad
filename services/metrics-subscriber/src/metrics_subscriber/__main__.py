@@ -61,7 +61,20 @@ from events.log_reader import EventLogReader
 
 from metrics_subscriber import __version__
 from metrics_subscriber.app.config import MetricsSubscriberSettings
-from metrics_subscriber.cursor import CursorPersistence
+from metrics_subscriber.cursor import (
+    CursorLockUnsupportedFilesystemError,
+    CursorPersistence,
+)
+
+# P3-H3 (test-only): when set, after a successful ``cursor.lock()`` we
+# touch the path in this env var so subprocess tests can wait on a
+# sentinel that EXISTS-IFF-FLOCK-HELD.  ``<cursor>.lock`` itself is
+# created by ``os.open(O_CREAT)`` BEFORE ``fcntl.flock`` is called, so
+# polling for the lockfile races on the proc1-crashed-between-open-and-
+# flock window.  This sentinel is the only test-observable evidence
+# that the lock is actually held.  Production deployments do NOT set
+# this variable; the code path is a no-op otherwise.
+_LOCK_ACQUIRED_SENTINEL_ENV = "OMB_METRICS_LOCK_ACQUIRED_SENTINEL"
 
 log = structlog.get_logger(__name__)
 
@@ -183,13 +196,19 @@ async def run_subscriber(
     try:
         cursor.lock()
     except BlockingIOError as exc:
-        # The P2-H6 path inside ``cursor.lock()`` re-raises
-        # filesystem-unsupported OSError as BlockingIOError WITH a
-        # specific message so we can distinguish here.  The "unsupported"
-        # path already emitted ``metrics_subscriber_flock_unsupported_filesystem``
-        # CRITICAL; we add the concurrent-start log only for the
-        # legitimate concurrent-start case.
-        reason = "filesystem_unsupported" if "unsupported" in str(exc) else "concurrent_start"
+        # P3-H1 (Q10): discriminate the two exit-code-1 sub-classes via
+        # ``isinstance`` rather than substring-matching ``str(exc)``.
+        # The typed exception
+        # :class:`CursorLockUnsupportedFilesystemError` (a subclass of
+        # ``BlockingIOError``) is raised on the unsupported-FS path
+        # inside ``cursor.lock()``; plain ``BlockingIOError`` indicates
+        # concurrent-start.  Substring matching was a landmine — one
+        # message-edit (locale, refactor, error-string review) would
+        # silently invert the dashboard alerting split.
+        if isinstance(exc, CursorLockUnsupportedFilesystemError):
+            reason = "filesystem_unsupported"
+        else:
+            reason = "concurrent_start"
         log.error(
             "metrics_subscriber_concurrent_start_refused",
             cursor_path=str(settings.cursor_path),
@@ -202,6 +221,22 @@ async def run_subscriber(
             ),
         )
         return 1
+
+    # P3-H3 (test-only): write the lock-acquired sentinel marker so
+    # subprocess tests can poll for it.  Polling for ``<cursor>.lock``
+    # itself races on the open-but-not-flocked window.  Production
+    # deployments do not set ``OMB_METRICS_LOCK_ACQUIRED_SENTINEL``; the
+    # write is a no-op when the env var is unset.
+    sentinel_path_str = os.environ.get(_LOCK_ACQUIRED_SENTINEL_ENV)
+    if sentinel_path_str:
+        try:
+            Path(sentinel_path_str).touch()
+        except OSError as sentinel_exc:
+            log.warning(
+                "metrics_subscriber_lock_sentinel_write_failed",
+                sentinel_path=sentinel_path_str,
+                detail=str(sentinel_exc),
+            )
 
     try:
         # VM-6 / P2-M2: ``async with`` per AC5 spec sketch.  Pass-2:
@@ -277,12 +312,32 @@ async def run_subscriber(
                             "Operator inspection required."
                         ),
                     )
-                    # Drain the cursor at the last successful offset
-                    # BEFORE returning so a restart picks up where
-                    # this corrupt region starts (not past it).
+                    # P3-M2: persist ``exc.offset`` (the start of the
+                    # corrupt region — anchored across polls per
+                    # P3-H2) so restart picks up AT the corrupt
+                    # region.  Pre-pass-3 we persisted
+                    # ``reader.cursor_offset`` (last successful yield),
+                    # which meant restart re-parsed the good prefix
+                    # between cursor_offset and exc.offset every time
+                    # before tripping the threshold again.  Cosmetic
+                    # but wasteful — exit-3 restart loops are now
+                    # O(corrupt-region-only) instead of O(file-size).
+                    #
+                    # Reseat the reader's cursor BEFORE the persist
+                    # so the outer ``finally`` block (which always
+                    # re-drains at ``reader.cursor_offset``) does not
+                    # silently overwrite the corrupt-region anchor.
+                    reader.seek(path=reader.current_path, offset=exc.offset)
                     try:
-                        cursor.persist_now(reader.cursor_offset, reader.current_path)
-                    except OSError as drain_exc:  # pragma: no cover
+                        cursor.persist_now(exc.offset, reader.current_path)
+                    except OSError as drain_exc:
+                        # P3-M6: remove ``pragma: no cover`` and exercise
+                        # this branch via
+                        # ``test_main_exit_3_persist_failure_still_returns_3_with_warning``.
+                        # Persist-failure on the corrupt-exit path is a
+                        # distinct failure shape from the corrupt-loop
+                        # P2-H3 escaped — operators need a structured
+                        # log warning to recognise it.
                         log.warning(
                             "metrics_subscriber_persist_on_corrupt_region_failed",
                             error_type=type(drain_exc).__name__,
