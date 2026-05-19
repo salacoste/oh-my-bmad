@@ -80,6 +80,18 @@ def _reset_collector_registry_per_test() -> Generator[None, None, None]:
     global-registry registration in one test cannot make the next
     one flake.  The built-in process / platform collectors are left
     in place (they re-register on every import otherwise).
+
+    **Scope-of-guarantee clarification (pass-1 P1-M6)**: this fixture
+    only guarantees registry isolation for tests whose lifespan
+    completes normally between assertions.  A test that crashes
+    mid-lifespan and then reuses the SAME ``app`` instance in a
+    subsequent test would still see the per-app registry from the
+    prior run (the per-app registry lives on ``app.state.registry``
+    and is not touched by this fixture).  In practice every Story
+    10.3 test constructs a fresh ``build_app(...)`` instance per
+    test, so the crash-mid-lifespan path does not arise.  If Story
+    10.4 introduces session-scoped app fixtures, this assumption
+    must be revisited and the lifespan exit path hardened.
     """
     from prometheus_client import REGISTRY  # noqa: PLC0415 — test-only import
 

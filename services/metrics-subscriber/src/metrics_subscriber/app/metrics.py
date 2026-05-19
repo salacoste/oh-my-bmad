@@ -89,11 +89,23 @@ class MetricsState:
     parse_skip_total: Counter
 
     def record_lag(self, *, lag_seconds: float, bytes_behind: int) -> None:
-        """Atomic mutation of the two label-free persist-time gauges.
+        """Update the two label-free persist-time gauges.
 
         Called by :func:`metrics_subscriber.run_subscriber` from
-        within the tail-loop coroutine on each persist event.  The
-        underlying ``Gauge.set()`` is thread-safe.
+        within the tail-loop coroutine on each persist event.  Each
+        underlying ``Gauge.set()`` is thread-safe via its own internal
+        lock.
+
+        Atomicity note (Story 10.3 pass-1 P1-H3): the two ``.set()``
+        calls are NOT performed under a shared lock — at a Prometheus
+        scrape boundary the two gauges may reflect different persist
+        events for a microsecond-scale window.  Operationally this is
+        fine for correlated alerting rules (the Prometheus scrape
+        interval is 15s and the split-brain window is sub-microsecond,
+        well within scrape jitter).  For strict atomicity a future
+        revision could introduce a custom collector that takes a single
+        lock and emits both samples from one ``collect()`` call; see
+        ADR-0005 §atomicity-note for the trade-off.
 
         Negative ``lag_seconds`` (clock skew with writer running
         ahead) is intentionally not clamped — the metric reflects the
@@ -161,6 +173,14 @@ def build_collectors(registry: CollectorRegistry) -> MetricsState:
         labelnames=("reason",),
         registry=registry,
     )
+    # P1-H1: pre-populate the four known reason children at registration
+    # time so subsequent ``.labels(reason=...)`` calls from the worker
+    # thread are pure dict-lookups (no lazy registration race against a
+    # concurrent ``generate_latest()`` scrape).  See Story 10.3 review
+    # findings P1-H1 + P1-M1 for the full enum.  ``.inc(0)`` is the
+    # canonical idiom to materialise a child without bumping the value.
+    for _reason in ("json_decode", "not_a_dict", "pre110_missing_trace_id", "validation"):
+        parse_skip_total.labels(reason=_reason).inc(0)
     return MetricsState(
         registry=registry,
         lag_seconds=lag_seconds,

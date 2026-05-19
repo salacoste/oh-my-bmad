@@ -61,7 +61,6 @@ import contextlib
 import ipaddress
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
-from typing import Any
 
 import structlog
 import uvicorn
@@ -190,6 +189,11 @@ def build_app(*, settings: MetricsSubscriberSettings) -> FastAPI:
             run_subscriber(settings, stop_event=stop_event, metrics_state=metrics_state),
             name="metrics_subscriber_tail",
         )
+        # Story 10.3 pass-1 P1-H4: expose the task on app.state so the
+        # ``/healthz`` handler can probe ``task.done() / task.exception()``
+        # to discriminate "tail running" vs "tail crashed but exit code
+        # not yet propagated".
+        app.state.tail_task = tail_task
 
         # Wire the tail task's exit code → app.state + uvicorn shutdown.
         # ``isinstance`` on the typed exception is the canonical path
@@ -249,13 +253,23 @@ def build_app(*, settings: MetricsSubscriberSettings) -> FastAPI:
                 )
             _request_uvicorn_shutdown(app)
 
-        tail_task.add_done_callback(_on_tail_done)
-
         async with AsyncExitStack() as stack:
             # Each callback unwinds independently (the registry-api
             # F5+F14 pattern): a failure in the tail-drain does not
             # leak the registry / metrics state.
             stack.push_async_callback(_drain_tail_task, tail_task, stop_event)
+            # Story 10.3 pass-1 P1-M4: register the done-callback INSIDE
+            # the AsyncExitStack scope (post-stack-entry) so the
+            # callback can only fire while the lifespan is fully wired
+            # up.  If ``tail_task`` completes between ``create_task`` and
+            # this line (e.g. zero-length event log + immediate
+            # stop_event), the callback registers on the already-done
+            # task and asyncio schedules it on the next loop pass with
+            # the AsyncExitStack still active — eliminating the
+            # ms-level race window where ``_on_tail_done`` would have
+            # called ``server.should_exit = True`` before lifespan
+            # finished setting up.
+            tail_task.add_done_callback(_on_tail_done)
             yield
 
     app = FastAPI(
@@ -277,14 +291,37 @@ def build_app(*, settings: MetricsSubscriberSettings) -> FastAPI:
         return Response(content=body, media_type=CONTENT_TYPE_LATEST)
 
     @app.get("/healthz")
-    async def healthz() -> dict[str, str]:
-        """AC2 — minimal JSON health probe for compose ``service_healthy``.
+    async def healthz(request: Request) -> JSONResponse:
+        """AC2 — JSON health probe for compose ``service_healthy``.
 
         Wired by Story 10.6 in docker-compose.yml; here we just expose
         the route so probes have a non-exposition surface to hit
         without scraping ``/metrics`` (a hot path under Prometheus).
+
+        Story 10.3 pass-1 P1-H4: the probe is NOT hollow.  If the
+        background tail task has crashed (``_on_tail_done`` already
+        fired and set a non-zero ``app.state.exit_code``) OR the task
+        finished with an exception, the probe returns
+        ``503 {"status": "degraded", "reason": "tail_task_failed",
+        "exit_code": <code>}`` so the compose ``service_healthy``
+        probe fails fast instead of passing while the subscriber is
+        already dead-walking toward uvicorn shutdown.
         """
-        return {"status": "ok"}
+        exit_code = getattr(request.app.state, "exit_code", 0)
+        tail_task: asyncio.Task[int] | None = getattr(request.app.state, "tail_task", None)
+        tail_task_crashed = (
+            tail_task is not None and tail_task.done() and tail_task.exception() is not None
+        )
+        if exit_code != 0 or tail_task_crashed:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "degraded",
+                    "reason": "tail_task_failed",
+                    "exit_code": int(exit_code) if isinstance(exit_code, int) else 1,
+                },
+            )
+        return JSONResponse(status_code=200, content={"status": "ok"})
 
     @app.exception_handler(Exception)
     async def _on_unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
@@ -326,12 +363,9 @@ def _request_uvicorn_shutdown(app: FastAPI) -> None:
 
 __all__ = ["build_app"]
 
-
-# Story 10.3 P2-I5 internal-only banner — grep target:
-# ``grep -rn "P2-I5" services/metrics-subscriber/src/metrics_subscriber/app/``
-# resolves here.  See module-level docstring for the full rationale.
-_P2_I5_INTERNAL_ONLY: dict[str, Any] = {
-    "P2-I5": "/metrics MUST be reachable only via the docker internal network",
-    "FR61": "internal-only Prometheus exposition for SSH-tunneled curl",
-    "NFR-O10": "derived projection — no instrumentation in producer services",
-}
+# Story 10.3 pass-1 P1-L2: the ``_P2_I5_INTERNAL_ONLY`` dict that
+# previously lived below ``__all__`` was dead code — the P2-I5 grep
+# anchor is satisfied by the module-level docstring (lines 27-43).
+# Deleted to remove a maintenance landmine for future contributors.
+# Grep ``"P2-I5" services/metrics-subscriber/src/metrics_subscriber/app/main.py``
+# still finds the docstring header.

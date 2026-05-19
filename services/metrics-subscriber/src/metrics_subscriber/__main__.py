@@ -78,6 +78,38 @@ from metrics_subscriber.cursor import (
 # this variable; the code path is a no-op otherwise.
 _LOCK_ACQUIRED_SENTINEL_ENV = "OMB_METRICS_LOCK_ACQUIRED_SENTINEL"
 
+
+# Story 10.3 pass-1 P1-M7: configure structlog at module-import time so
+# the module-level ``log`` binding emits structured JSON for ALL events
+# — including the invalid-``OMB_METRICS_RUN_MODE`` branch in
+# :func:`main` that previously logged BEFORE ``logging.basicConfig``
+# ran.  Idempotent guard mirrors ``registry_api.__main__`` Story 3.6
+# AC-4 — repeated module imports (e.g. via pytest) do not double-wire
+# the processor chain.
+_STRUCTLOG_CONFIGURED: bool = False
+
+
+def _configure_structlog_for_module() -> None:
+    """Idempotent structlog config bound at module import.
+
+    Production-only: tests bring their own structlog wiring via
+    ``conftest.py`` BEFORE this module is imported, and the sentinel
+    here short-circuits the call when those tests later trigger a
+    re-import.  The check on the global flag is the load-bearing
+    idempotency guard.
+    """
+    global _STRUCTLOG_CONFIGURED
+    if _STRUCTLOG_CONFIGURED:
+        return
+    logging.basicConfig(
+        level=os.environ.get("OMB_METRICS_LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+    _STRUCTLOG_CONFIGURED = True
+
+
+_configure_structlog_for_module()
+
 log = structlog.get_logger(__name__)
 
 
@@ -383,20 +415,35 @@ async def run_subscriber(
                 # the per-1000 counter — preserves the resumability invariant.
                 # Wrap in try/except so a failure to persist (disk full,
                 # etc.) is logged but does not crash the shutdown path.
-                try:
-                    cursor.persist_now(reader.cursor_offset, reader.current_path)
-                    _emit_lag_log(
-                        reader.cursor_offset,
-                        reader.current_path,
-                        last_envelope,
-                        metrics_state,
-                    )
-                except OSError as exc:  # pragma: no cover — surfaced via log
-                    log.warning(
-                        "metrics_subscriber_persist_on_shutdown_failed",
-                        error_type=type(exc).__name__,
-                        detail=str(exc),
-                    )
+                #
+                # Story 10.3 pass-1 P1-H2: guard ``reader.current_path``
+                # access against the ``RuntimeError`` raised by the
+                # property when ``_current_path`` is None.  ``restore_into``
+                # can raise non-:class:`CursorSchemaVersionError`
+                # exceptions (e.g. ``OSError`` / ``json.JSONDecodeError``
+                # for a corrupt cursor file); pre-fix those propagated
+                # into this finally block, ``reader.current_path``
+                # raised a secondary ``RuntimeError``, and the original
+                # exception was masked.  Probing ``_current_path``
+                # directly (an attribute read, never raising) keeps the
+                # finally drain side-effect-free on the no-path branch
+                # while still attempting a best-effort persist when the
+                # reader was actually seated.
+                if reader._current_path is not None:
+                    try:
+                        cursor.persist_now(reader.cursor_offset, reader._current_path)
+                        _emit_lag_log(
+                            reader.cursor_offset,
+                            reader._current_path,
+                            last_envelope,
+                            metrics_state,
+                        )
+                    except OSError as exc:  # pragma: no cover — surfaced via log
+                        log.warning(
+                            "metrics_subscriber_persist_on_shutdown_failed",
+                            error_type=type(exc).__name__,
+                            detail=str(exc),
+                        )
 
             log.info("metrics_subscriber_stopped", offset=reader.cursor_offset)
     finally:
@@ -465,6 +512,14 @@ def _run_server_mode(settings: MetricsSubscriberSettings) -> int:
 
     async def _serve() -> None:
         await server.serve()
+        # Story 10.3 pass-1 P1-M5: yield once after ``serve()`` returns
+        # so any pending ``_on_tail_done`` done-callback that asyncio
+        # scheduled on the final loop pass actually runs BEFORE we
+        # unwind ``asyncio.run`` and read ``app.state.exit_code``.
+        # Without this yield, CPython 3.12 may unwind the loop with
+        # the callback still queued, leaving ``exit_code = 0`` even
+        # when the tail crashed with a typed exception.
+        await asyncio.sleep(0)
 
     with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(_serve())
@@ -485,10 +540,12 @@ def main() -> int:
     ``OMB_METRICS_RUN_MODE=tail``; production deployments leave the
     env var unset and run the server path.
     """
-    logging.basicConfig(
-        level=os.environ.get("OMB_METRICS_LOG_LEVEL", "INFO"),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
+    # Story 10.3 pass-1 P1-M7: structlog/stdlib logging is configured
+    # at module-import time via :func:`_configure_structlog_for_module`
+    # so the invalid-run-mode branch below emits structured output
+    # rather than relying on basicConfig running first.  Idempotent —
+    # safe to re-enter ``main()`` from tests.
+    _configure_structlog_for_module()
     settings = MetricsSubscriberSettings()
     mode = os.environ.get("OMB_METRICS_RUN_MODE", "server").strip().lower()
     if mode == "tail":

@@ -159,7 +159,7 @@ async def test_metrics_endpoint_returns_valid_exposition(tmp_path: Path) -> None
     settings = _make_settings(tmp_path)
     app = build_app(settings=settings)
     async with LifespanManager(app):
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             r = await client.get("/metrics")
             assert r.status_code == 200
@@ -181,7 +181,7 @@ async def test_healthz_returns_ok(tmp_path: Path) -> None:
     settings = _make_settings(tmp_path)
     app = build_app(settings=settings)
     async with LifespanManager(app):
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             r = await client.get("/healthz")
             assert r.status_code == 200
@@ -211,10 +211,15 @@ async def test_lag_seconds_gauge_updates_after_persist(tmp_path: Path) -> None:
     async with LifespanManager(app):
         # Tail loop is running; we mutate the same MetricsState the
         # /metrics route reads.
+        # Story 10.3 pass-1 P1-L3: use a tmp_path-rooted stable filename
+        # so the test is not coupled to authoring date.  The path value
+        # is purely a metric label here (no FS access); a deterministic
+        # filename keeps label-cardinality stable across CI runs.
+        labelled_path = tmp_path / "today.jsonl"
         app.state.metrics.record_lag(lag_seconds=2.5, bytes_behind=123)
-        app.state.metrics.record_cursor(path=Path("/tmp/2026-05-19.jsonl"), offset=999)
+        app.state.metrics.record_cursor(path=labelled_path, offset=999)
 
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             r = await client.get("/metrics")
             assert r.status_code == 200
@@ -223,7 +228,7 @@ async def test_lag_seconds_gauge_updates_after_persist(tmp_path: Path) -> None:
             offset = _parse_sample(
                 r.content,
                 "metrics_subscriber_cursor_offset_bytes",
-                labels={"path": "/tmp/2026-05-19.jsonl"},
+                labels={"path": str(labelled_path)},
             )
             assert offset == 999.0
 
@@ -235,19 +240,25 @@ async def test_lag_seconds_gauge_updates_after_persist(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_parse_skip_counter_increments_by_reason(tmp_path: Path) -> None:
-    """AC6 — invalid + non-dict + validation skips → counter labelled.
+    """AC6 — all four bounded-enum skip reasons → counter labelled.
 
     Drives the parse layer directly via
     :func:`events.log_reader.parse_with_pre110_backfill` so the test
     is deterministic without needing the tail loop to drain the file.
+
+    Story 10.3 pass-1 P1-M1: extended from the original two reasons
+    (``json_decode`` + ``not_a_dict``) to cover all four bounded-enum
+    values emitted by ``log_reader.py``:
+    ``{json_decode, not_a_dict, pre110_missing_trace_id, validation}``.
+    Spec AC6 reason enum table updated to match implementation.
     """
     from events.log_reader import parse_with_pre110_backfill
 
     registry = CollectorRegistry()
     state = build_collectors(registry)
 
-    fake_path = tmp_path / "2026-05-19.jsonl"
-    # 3 invalid JSON lines.
+    fake_path = tmp_path / "today.jsonl"
+    # 3 invalid JSON lines → reason=json_decode.
     for _ in range(3):
         result = parse_with_pre110_backfill(
             b"not-valid-json{",
@@ -255,7 +266,7 @@ async def test_parse_skip_counter_increments_by_reason(tmp_path: Path) -> None:
             on_skip=state.on_parse_skip,
         )
         assert result is None
-    # 2 non-dict lines.
+    # 2 non-dict lines → reason=not_a_dict.
     for _ in range(2):
         result = parse_with_pre110_backfill(
             b'"a-string-not-a-dict"',
@@ -263,6 +274,30 @@ async def test_parse_skip_counter_increments_by_reason(tmp_path: Path) -> None:
             on_skip=state.on_parse_skip,
         )
         assert result is None
+    # 1 pre-1.1.0 envelope with neither trace_id nor a useable request_id
+    # → reason=pre110_missing_trace_id.  Minimal raw dict shape: missing
+    # ``trace_id`` AND ``request_id`` so the back-fill helper returns
+    # None and the skip path fires.
+    pre110_line = b'{"event_id": "x", "schema_version": "1.0.0"}'
+    result = parse_with_pre110_backfill(
+        pre110_line,
+        fake_path,
+        on_skip=state.on_parse_skip,
+    )
+    assert result is None
+    # 1 envelope with valid back-fill but failing envelope validation
+    # (unknown schema, missing required fields) → reason=validation.
+    # ``trace_id`` set so back-fill succeeds; ``from_canonical_json``
+    # then rejects it for missing required envelope fields.
+    validation_line = (
+        b'{"trace_id": "01917e5c-a7d1-7000-8abc-000000000123", "event_id": "not-a-valid-event-id"}'
+    )
+    result = parse_with_pre110_backfill(
+        validation_line,
+        fake_path,
+        on_skip=state.on_parse_skip,
+    )
+    assert result is None
 
     body = generate_latest(registry)
     assert (
@@ -281,6 +316,45 @@ async def test_parse_skip_counter_increments_by_reason(tmp_path: Path) -> None:
         )
         == 2.0
     )
+    assert (
+        _parse_sample(
+            body,
+            "metrics_subscriber_parse_skip_total",
+            labels={"reason": "pre110_missing_trace_id"},
+        )
+        == 1.0
+    )
+    assert (
+        _parse_sample(
+            body,
+            "metrics_subscriber_parse_skip_total",
+            labels={"reason": "validation"},
+        )
+        == 1.0
+    )
+
+
+def test_parse_skip_counter_all_reasons_pre_populated_in_collectors() -> None:
+    """Story 10.3 pass-1 P1-H1 — all four reason children exist at register time.
+
+    ``build_collectors`` MUST pre-populate
+    ``parse_skip_total.labels(reason=r).inc(0)`` for every value of
+    the bounded-enum so subsequent ``.labels(...)`` calls from the
+    worker thread are pure dict-lookups (no lazy-registration race
+    against a concurrent ``generate_latest()`` scrape).
+    """
+    registry = CollectorRegistry()
+    state = build_collectors(registry)
+    body = generate_latest(registry)
+    for reason in ("json_decode", "not_a_dict", "pre110_missing_trace_id", "validation"):
+        sample = _parse_sample(
+            body,
+            "metrics_subscriber_parse_skip_total",
+            labels={"reason": reason},
+        )
+        assert sample == 0.0, f"expected reason={reason!r} pre-populated to 0.0; got {sample!r}"
+    # Sanity: the state's own counter handle agrees.
+    assert state.parse_skip_total is not None
 
 
 # ---------------------------------------------------------------------------
@@ -388,6 +462,272 @@ def test_main_dispatch_invalid_run_mode_returns_one(monkeypatch: pytest.MonkeyPa
     monkeypatch.setenv("OMB_METRICS_RUN_MODE", "bogus")
     rc = ms_main.main()
     assert rc == 1
+
+
+def test_invalid_run_mode_logs_structured_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Story 10.3 pass-1 P1-M7 — invalid run-mode emits a structured event.
+
+    Pre-fix, the invalid-mode log fired BEFORE ``logging.basicConfig``
+    ran inside ``main()``, so the event arrived through stdlib logging
+    rather than the structured pipeline.  The fix moves the basicConfig
+    call to module-import time (idempotent guard), so by the time
+    ``main()`` runs the structured pipeline owns the log line.
+
+    The test asserts the structured event NAME appears in the captured
+    log; the test conftest's structlog routing makes
+    ``structlog.testing.capture_logs`` the canonical sink.
+    """
+    from metrics_subscriber import __main__ as ms_main
+
+    monkeypatch.setenv("OMB_METRICS_RUN_MODE", "bogus-value-for-test")
+    captured: list[MutableMapping[str, Any]] = []
+    with structlog.testing.capture_logs() as logs:
+        rc = ms_main.main()
+        captured.extend(logs)
+    assert rc == 1
+    assert any(
+        entry.get("event") == "metrics_subscriber_invalid_run_mode"
+        and entry.get("run_mode") == "bogus-value-for-test"
+        for entry in captured
+    ), f"expected structured invalid-run-mode event in {captured!r}"
+
+
+# ---------------------------------------------------------------------------
+# Story 10.3 pass-1 P1-H4 — /healthz 503 when tail crashed
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_healthz_503_when_tail_task_crashed(tmp_path: Path) -> None:
+    """P1-H4 — /healthz reports degraded when the tail task failed.
+
+    Simulates the tail-task-crashed state by setting ``app.state.exit_code``
+    to a non-zero value (the exit-code matrix value for unclassified
+    failure).  The handler must return 503 with a structured JSON
+    envelope so compose ``service_healthy`` probes fail fast.
+    """
+    settings = _make_settings(tmp_path)
+    app = build_app(settings=settings)
+    async with LifespanManager(app):
+        # Pre-fix the handler ignored exit_code entirely and returned
+        # 200; with P1-H4 it must observe the non-zero state and 503.
+        app.state.exit_code = 1
+        transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get("/healthz")
+            assert r.status_code == 503, (
+                f"expected 503 degraded; got {r.status_code} body={r.text!r}"
+            )
+            body = r.json()
+            assert body["status"] == "degraded"
+            assert body["reason"] == "tail_task_failed"
+            assert body["exit_code"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Story 10.3 pass-1 P1-H2 — finally drain handles non-CursorSchemaVersionError
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_finally_drain_skipped_when_restore_into_raises_uncaught_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P1-H2 — non-CursorSchemaVersionError from restore_into does not get masked.
+
+    ``restore_into`` can raise ``OSError`` / ``json.JSONDecodeError``
+    for a corrupt cursor file.  Pre-fix, those exceptions propagated
+    into the outer ``finally`` block which probed
+    ``reader.current_path`` — a property that raises ``RuntimeError``
+    when ``_current_path`` is None.  The secondary RuntimeError
+    masked the original error, defeating diagnosis.
+
+    Post-fix, the finally block guards on ``reader._current_path is
+    not None`` and is therefore side-effect-free when the reader was
+    never seated.  This test patches ``restore_into`` to raise
+    ``OSError`` and asserts the original exception propagates out of
+    ``run_subscriber`` cleanly.
+    """
+    import asyncio as _asyncio
+
+    from metrics_subscriber import __main__ as ms_main
+    from metrics_subscriber.cursor import CursorPersistence
+
+    settings = _make_settings(tmp_path)
+
+    def _explode(self: CursorPersistence, reader: Any, *, base_dir: Path) -> None:
+        raise OSError("simulated corrupt cursor file")
+
+    monkeypatch.setattr(CursorPersistence, "restore_into", _explode)
+
+    stop_event = _asyncio.Event()
+    with pytest.raises(OSError, match="simulated corrupt cursor file"):
+        await ms_main.run_subscriber(settings, stop_event=stop_event)
+
+
+# ---------------------------------------------------------------------------
+# Story 10.3 pass-1 P1-H5 — on_skip callback exception does not crash the tail
+# ---------------------------------------------------------------------------
+
+
+def test_on_skip_callback_exception_does_not_crash_tail_loop(tmp_path: Path) -> None:
+    """P1-H5 — a raising ``on_skip`` callback is downgraded to a WARNING.
+
+    Drives ``parse_with_pre110_backfill`` with an ``on_skip`` callback
+    that always raises.  Pre-fix the exception propagated and would
+    have killed the ``asyncio.to_thread`` worker (→ subscriber crash);
+    post-fix the helper ``_safe_on_skip`` catches the exception and
+    emits ``metrics_subscriber_on_skip_callback_failed`` instead.
+    """
+    from events.log_reader import parse_with_pre110_backfill
+
+    def _raiser(reason: str) -> None:
+        raise RuntimeError(f"callback boom for reason={reason}")
+
+    fake_path = tmp_path / "today.jsonl"
+    captured: list[MutableMapping[str, Any]] = []
+    with structlog.testing.capture_logs() as logs:
+        result = parse_with_pre110_backfill(
+            b"not-valid-json{",
+            fake_path,
+            on_skip=_raiser,
+        )
+        captured.extend(logs)
+    # Parse skip itself returned None — semantic behaviour preserved.
+    assert result is None
+    # The callback failure was downgraded to a structured WARNING.
+    assert any(
+        entry.get("event") == "metrics_subscriber_on_skip_callback_failed"
+        and entry.get("reason") == "json_decode"
+        for entry in captured
+    ), f"expected on_skip_callback_failed log in {captured!r}"
+
+
+# ---------------------------------------------------------------------------
+# Story 10.3 pass-1 P1-M3 — read_new_envelopes_since threads on_skip
+# ---------------------------------------------------------------------------
+
+
+def test_read_new_envelopes_since_threads_on_skip_through(tmp_path: Path) -> None:
+    """P1-M3 — sync read path honours ``on_skip``.
+
+    Writes a JSONL file containing a single garbage line, calls
+    :func:`events.log_reader.read_new_envelopes_since` with an
+    ``on_skip`` callback, and asserts the callback was invoked with
+    the expected ``reason``.  Pre-fix the parameter did not exist;
+    registry-state / registry-api callers silently dropped the skip
+    accounting.
+    """
+    from events.log_reader import read_new_envelopes_since
+
+    path = tmp_path / "today.jsonl"
+    path.write_bytes(b"not-valid-json{\n")
+    reasons_seen: list[str] = []
+    _new_offset, envelopes = read_new_envelopes_since(
+        path,
+        0,
+        on_skip=reasons_seen.append,
+    )
+    # The sync wrapper only advances ``new_offset`` on successful yields,
+    # so a skip-only file leaves it at the input offset.  The behaviour
+    # under test is "the on_skip callback fires for each skipped line",
+    # NOT the offset semantics (covered by other tests).
+    assert envelopes == []
+    assert reasons_seen == ["json_decode"]
+
+
+# ---------------------------------------------------------------------------
+# Story 10.3 pass-1 P1-M5 — exit_code propagation after serve returns
+# ---------------------------------------------------------------------------
+
+
+def test_exit_code_propagation_after_serve_returns(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P1-M5 — ``_run_server_mode`` flushes pending done-callbacks before reading exit_code.
+
+    Patches ``uvicorn.Server.serve`` to return immediately AND patches
+    ``build_app`` to install a done-callback on a dummy completed task
+    that flips ``app.state.exit_code`` to 2.  The ``await
+    asyncio.sleep(0)`` after ``serve()`` returns must allow the
+    callback to run BEFORE the function reads ``app.state.exit_code``;
+    the test asserts the function returns 2 (not 0).
+    """
+    import asyncio as _asyncio
+
+    import uvicorn as _uvicorn
+
+    from metrics_subscriber import __main__ as ms_main
+
+    settings = _make_settings(tmp_path)
+
+    async def _instant_serve(self: _uvicorn.Server) -> None:
+        # Mimic uvicorn returning instantly.  Schedule a "tail crashed"
+        # callback that pokes app.state.exit_code on the NEXT loop pass.
+        loop = _asyncio.get_running_loop()
+        # ``Config.app`` is a Union including ``str | ASGI*`` shapes —
+        # the test cast is safe because ``_run_server_mode`` always
+        # passes a real FastAPI instance.
+        from fastapi import FastAPI as _FastAPI
+
+        app_obj = self.config.app
+        assert isinstance(app_obj, _FastAPI)
+        # Defer one pass so the assignment lands AFTER serve() returns
+        # but BEFORE _run_server_mode reads exit_code.
+        loop.call_soon(lambda: setattr(app_obj.state, "exit_code", 2))
+
+    monkeypatch.setattr(_uvicorn.Server, "serve", _instant_serve)
+    rc = ms_main._run_server_mode(settings)
+    assert rc == 2, f"expected exit_code 2 to propagate; got {rc}"
+
+
+# ---------------------------------------------------------------------------
+# Story 10.3 pass-1 P1-L6 — cursor schema_version refused exits 2 (AC8 risk-flag)
+# ---------------------------------------------------------------------------
+
+
+def test_lifespan_cursor_schema_version_refused_exits_2(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P1-L6 — patches ``CursorPersistence.restore_into`` to raise ``CursorSchemaVersionError``.
+
+    Drives ``run_subscriber`` directly (the same path the FastAPI
+    lifespan invokes via the tail task) and asserts rc==2 with a
+    structured ``metrics_subscriber_cursor_schema_version_refused``
+    log emitted.  AC8 out-of-scope risk flag required this test to
+    exist.
+    """
+    import asyncio as _asyncio
+
+    from events.errors import CursorSchemaVersionError
+
+    from metrics_subscriber import __main__ as ms_main
+    from metrics_subscriber.cursor import CursorPersistence
+
+    settings = _make_settings(tmp_path)
+
+    def _refuse_schema(self: CursorPersistence, reader: Any, *, base_dir: Path) -> None:
+        raise CursorSchemaVersionError(
+            cursor_path=str(settings.cursor_path),
+            schema_version="bogus-v99",
+            expected="1",
+        )
+
+    monkeypatch.setattr(CursorPersistence, "restore_into", _refuse_schema)
+
+    stop_event = _asyncio.Event()
+    captured: list[MutableMapping[str, Any]] = []
+    with structlog.testing.capture_logs() as logs:
+        rc = _asyncio.run(ms_main.run_subscriber(settings, stop_event=stop_event))
+        captured.extend(logs)
+    assert rc == 2, f"expected exit code 2; got {rc}"
+    assert any(
+        entry.get("event") == "metrics_subscriber_cursor_schema_version_refused"
+        for entry in captured
+    ), f"expected schema-version-refused log in {captured!r}"
 
 
 # Silence unused-import; envelope/helper fns are kept for symmetry with

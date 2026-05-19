@@ -84,10 +84,16 @@ async def test_metrics_endpoint_p95_under_100ms(tmp_path: Path) -> None:
         _populate_state_to_story_10_4_scale(app.state.registry)
         # Mutate the four Story 10.3 collectors so the body has real values.
         app.state.metrics.record_lag(lag_seconds=0.42, bytes_behind=10_000)
-        app.state.metrics.record_cursor(path=Path("/tmp/2026-05-19.jsonl"), offset=5_000)
+        # Story 10.3 pass-1 P1-L3: use a stable tmp_path-rooted filename
+        # so the label-cardinality is not coupled to the authoring date.
+        app.state.metrics.record_cursor(path=tmp_path / "today.jsonl", offset=5_000)
         app.state.metrics.on_parse_skip("validation")
 
-        transport = httpx.ASGITransport(app=app)
+        # Story 10.3 pass-1 P1-L1: ``raise_app_exceptions=False`` for
+        # consistency with the other test surfaces — exceptions surface
+        # as 5xx responses we can assert on, not raw raises that
+        # confuse failure triage.
+        transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             # Warm-up: a single request that primes the route resolver.
             warm = await client.get("/metrics")

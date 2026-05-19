@@ -1,6 +1,6 @@
 # Story 10.3 — FastAPI `/metrics` endpoint (Prometheus exposition)
 
-Status: **review** (CI pending @ eb53bb9)
+Status: **review** (CI pending; pass-1 batch applied 2026-05-19 — all 20 findings closed)
 
 ## Story
 
@@ -31,7 +31,7 @@ Add to `[dependency-groups] dev`:
 
 Self-verification:
 - `uv lock` succeeds; `uv.lock` updated.
-- `just bootstrap-verify` green (still 15/15 imports).
+- `just bootstrap-verify` green (14 workspace-member imports verified — pass-1 P1-M2 reconciled this with the DAR row; the pre-pass-1 "15/15" figure was a Story 10.1 wording carryover that included `events` as a package import alongside the 14 service / package workspace members).
 - `grep -F "prometheus-client" services/metrics-subscriber/pyproject.toml` non-empty.
 
 ### AC2 — `app/main.py` FastAPI factory
@@ -134,12 +134,17 @@ Counter from Story 10.2 VH-13 fix (preview field documented in 10.2 spec):
 
 | Metric | Type | Labels | Description |
 |---|---|---|---|
-| `metrics_subscriber_parse_skip_total` | Counter | `reason` | Lines skipped during JSONL tail. `reason` enum: `invalid_json`, `unknown_event_type`, `payload_validation_failure`. Cardinality bounded by enum. |
+| `metrics_subscriber_parse_skip_total` | Counter | `reason` | Lines skipped during JSONL tail. `reason` enum (pass-1 P1-M1 aligned with implementation): `json_decode`, `not_a_dict`, `pre110_missing_trace_id`, `validation`. Cardinality bounded by enum. |
 
 Implementation: extend `events.log_reader.iter_new_envelopes_since` to accept an optional `on_skip: Callable[[str], None]` callback; Story 10.3 wires the callback to `counter.labels(reason=...).inc()`. Story 10.2 path passes `None` → unchanged behavior.
 
 Self-verification:
-- Test `test_parse_skip_counter_increments_by_reason` — write 3 garbage + 2 unknown-type lines, assert `parse_skip_total{reason="invalid_json"} == 3` AND `{reason="unknown_event_type"} == 2`.
+- Test `test_parse_skip_counter_increments_by_reason` — drive `parse_with_pre110_backfill` to emit each of the four reason values, assert
+  `parse_skip_total{reason="json_decode"} == 3`,
+  `parse_skip_total{reason="not_a_dict"} == 2`,
+  `parse_skip_total{reason="pre110_missing_trace_id"} == 1`,
+  `parse_skip_total{reason="validation"} == 1`.
+- Test `test_parse_skip_counter_all_reasons_pre_populated_in_collectors` (pass-1 P1-H1) — after `build_collectors(registry)`, all four reason children exist at value `0.0` (eliminates lazy-registration race against concurrent `generate_latest()` scrapes).
 
 ### AC7 — Settings extension for HTTP binding
 
@@ -193,7 +198,7 @@ No code change forces the network policy — the gate is at the compose layer (S
 - Update `tests/separability/` and `tests/integration/` to NOT scrape via external host:port; use the FastAPI TestClient (in-process) for unit tests, leaving real-network scrape for Story 10.6's S-4 separability test.
 
 Self-verification:
-- `grep -rn "P2-I5" services/metrics-subscriber/src/metrics_subscriber/app/` finds the docstring.
+- `grep -n "P2-I5" services/metrics-subscriber/src/metrics_subscriber/app/main.py` returns the module-level docstring header (line ≈28+) — the previously-present `_P2_I5_INTERNAL_ONLY` dict was deleted in pass-1 P1-L2 as dead code; the docstring grep target remains.
 - Test `test_app_warns_on_external_bind_heuristic` — patch settings.metrics_host to `192.0.2.1`, assert warning emitted.
 
 ### AC10 — NFR-O8 latency benchmark (<100ms p95)
@@ -217,7 +222,9 @@ async def test_metrics_endpoint_p95_under_100ms(app: FastAPI, populated_state: M
 ```
 
 Constraints:
-- `populated_state` fixture loads a `MetricsState` with the full Story 10.4 metric count (~30 metrics) to ensure the benchmark reflects realistic exposition size — even though Story 10.4 isn't done yet, populate via direct `MetricsState` mutation in the fixture.
+- `populated_state` fixture loads a `MetricsState` with the full Story 10.4 metric count (~30 metric families = ~50 timeseries[^prom-terminology]) to ensure the benchmark reflects realistic exposition size — even though Story 10.4 isn't done yet, populate via direct `MetricsState` mutation in the fixture.
+
+[^prom-terminology]: Prometheus terminology: a **metric family** is the named collector (e.g. `metrics_subscriber_parse_skip_total`); a **timeseries** is the family + one label-set permutation. The benchmark fixture creates 10 gauges + 10 counters + 10 labelled gauges × 3 tier values = 30 metric families expanded to 50 timeseries (the 10 labelled families each emit 3 samples, one per tier). Both numbers are valid descriptions of the same exposition; pass-1 P1-L4 disambiguated the spec/DAR wording.
 - Benchmark runs on `ubuntu-latest` CI runner (fixed-size per NFR-O8).
 - If p95 ≥ 100ms, the test FAILS — Story 10.3 cannot ship without meeting the latency budget.
 
@@ -276,7 +283,7 @@ Self-verification:
 - `uv run pytest -q services/metrics-subscriber/ packages/events/` — all green
 - `uv run pytest -q -m slow services/metrics-subscriber/` — NFR-O8 benchmark passes
 - `uv run pytest -q -m "not slow"` — full suite, no regressions
-- `just bootstrap-verify` — green (15/15 imports)
+- `just bootstrap-verify` — green (14 workspace-member imports verified — pass-1 P1-M2 reconciled to the DAR row; pre-pass-1 "15/15" was a wording inconsistency)
 
 ---
 
@@ -288,7 +295,7 @@ Self-verification:
 - **Story 10.2 done**: tail loop + cursor persistence, lifespan task, structlog adoption, exit code matrix (0/1/2/3), `bytes_behind` + `wall_clock_lag_s` structured logs every persist, `metrics_subscriber_parse_skip_total{reason}` Counter preview field reserved by VH-13 fix, `MetricsSubscriberSettings` extensible.
 - **`packages/events/src/events/log_reader.py`**: shared `EventLogReader` + `iter_new_envelopes_since` (extraction from registry-state per Story 10.2 AC1 — P2-I1 satisfied).
 - **`registry-api`**: reference FastAPI factory pattern at `services/registry-api/src/registry_api/app.py` (`build_app`) + `__main__.py` (uvicorn). Mirror conventions: structlog wiring in `__main__.py` only (test pollution avoidance per Story 3.6 AC-4), `AsyncExitStack` for independent teardown, per-app state (NOT module globals).
-- **Bootstrap verify**: 15/15 imports (Story 10.1 added metrics-subscriber).
+- **Bootstrap verify**: 14 workspace-member imports verified (Story 10.1 added metrics-subscriber as the 14th — pass-1 P1-M2 reconciled the prior "15/15" wording).
 - **Mypy --strict baseline**: 120 source files (post Story 10.2 pass-3).
 
 ### Architecture compliance
@@ -528,14 +535,30 @@ Key design decisions:
 ### Test count delta
 
 - **Pre-Story-10.3 metrics-subscriber:** 44 tests (baseline post 10.2).
-- **Post-Story-10.3 metrics-subscriber:** 61 tests (`+17` new).
+- **Post-Story-10.3 metrics-subscriber (initial):** 61 tests (`+17` new).
+- **Post-pass-1 batch:** services/metrics-subscriber + packages/events
+  combined run at **510 collected** (`+8` vs. the pre-pass-1 502 figure
+  the parent task brief cites; the eight additions are the pass-1
+  required tests P1-H1, P1-H2, P1-H4, P1-H5, P1-M3, P1-M5, P1-M7, P1-L6
+  plus the four-reason extension to `test_parse_skip_counter_increments_by_reason`).
+- **Pass-1 P1-L7 evidence line** (per Story 10.2 P2-M8 convention —
+  fresh `--collect-only` paste):
+
+  ```
+  $ uv run pytest --collect-only -q services/metrics-subscriber packages/events | tail -1
+  510 tests collected in 0.77s
+  ```
+
 - **Full PR-gate suite (`-m "not slow"`):** 2864 passed, 3 skipped,
-  28 deselected. Zero new failures vs. baseline.
+  28 deselected pre-pass-1; the pass-1 additions land in the
+  `services/metrics-subscriber` portion of the gate so the full-suite
+  count rises by the same `+8`. Zero new failures vs. baseline.
 - **`-m slow` in metrics-subscriber:** 4 passed (NFR-O8 benchmark +
   3 subprocess tests).
 - **`packages/events`:** unchanged test count; existing tests still
   green after `on_skip` callback addition (parameter is optional /
-  default `None`).
+  default `None`). Pass-1 P1-H5 + P1-M3 changes are also additive in
+  this package — no existing behaviour changed.
 
 ### Mypy `--strict` baseline delta
 
@@ -547,6 +570,12 @@ Key design decisions:
 - No new mypy override stanzas required — `fastapi`, `uvicorn`,
   `prometheus_client`, `httpx`, `asgi_lifespan` all ship `py.typed`
   in the resolved versions.
+- **Pass-1 P1-L5 explicit confirmation**: all Story 10.3 deps
+  (`fastapi`, `uvicorn`, `prometheus_client`, `httpx`, `asgi_lifespan`)
+  ship `py.typed`; **no** `[[tool.mypy.overrides]]` blocks added in
+  this story (verified `mypy --strict` passes across 125 source files
+  without them). The "no overrides" outcome was a considered decision
+  reached by reviewing each dep's package metadata, not an omission.
 
 ### NFR-O8 latency benchmark (AC10)
 
@@ -560,9 +589,12 @@ NFR-O8 /metrics latency (100 samples): p50=0.31ms p95=0.94ms p99=1.50ms
 - **CI runner (ubuntu-latest):** to be captured on PR CI; the budget
   applies on the CI runner per the AC10 wording. Local headroom is
   large enough that the CI delta is not a concern.
-- Fixture preloads ~50 timeseries (10 gauges + 10 counters + 10
-  labelled gauges × 3 tier values) to simulate Story 10.4's
-  exposition size.
+- Fixture preloads ~50 timeseries (~30 metric families) — 10 gauges
+  + 10 counters + 10 labelled gauges × 3 tier values — to simulate
+  Story 10.4's exposition size. Pass-1 P1-L4 disambiguated the
+  "30 metrics" / "50 timeseries" wording across spec body + DAR:
+  both numbers describe the same fixture, with "metric families"
+  the canonical Prometheus term for the 30 figure.
 
 ### Validation gates (AC15) — final run
 
@@ -580,7 +612,7 @@ the commit:
   — 502 passed
 - `uv run pytest -x -q -m slow services/metrics-subscriber` — 4 passed
 - `uv run pytest -q -m "not slow"` — 2864 passed, 3 skipped
-- `just bootstrap-verify` — ✓ bootstrap OK (14 workspace-member imports verified)
+- `just bootstrap-verify` — ✓ bootstrap OK (14 workspace-member imports verified — confirmed against AC1/AC15/Existing-state references in pass-1 P1-M2)
 
 ### Surprises / deviations from spec
 
@@ -611,6 +643,30 @@ the commit:
    assertions use family-name matching with `_total` stripped (which
    is correct for the family-existence check). Documented in
    `test_metrics_state.py` docstring.
+6. **AC6 reason enum drift between spec table and implementation
+   (pass-1 P1-L8)**: the original spec AC6 table listed
+   `{invalid_json, unknown_event_type, payload_validation_failure}`,
+   but the actual `log_reader.py` skip points emit
+   `{json_decode, not_a_dict, pre110_missing_trace_id, validation}`
+   (4 values, different naming). The spec table + self-verification
+   clause + test fixture were ALL written against the speculative
+   enum and silently never matched the production labels — the test
+   passed only because it asserted on the implementation's own
+   labels (json_decode, not_a_dict) via `_parse_sample` rather than
+   the spec's. Pass-1 P1-M1 updated the spec AC6 table to mirror
+   implementation and extended the test to cover all four reasons.
+   Lesson: when adding a new metric, copy the production label
+   strings into the spec table at authoring time, do not paraphrase.
+7. **`bootstrap-verify` count was 14, not 15 (pass-1 P1-M2)**: AC1 +
+   AC15 + the existing-state row all said "15/15 imports" while the
+   DAR validation-gates row said "14". Live `just bootstrap-verify`
+   on HEAD produced "14 workspace-member imports verified". The
+   discrepancy was a wording inconsistency carried over from
+   Story 10.1's "15 workspace members" framing (which counted
+   `events` as a workspace member alongside the 14 service / package
+   imports the `bootstrap-verify` Justfile recipe loops over). All
+   three spec occurrences updated to the live count. No member
+   actually regressed.
 
 ### Story 10.4 readiness check
 
@@ -632,7 +688,65 @@ session state, capability tier) is unblocked by Story 10.3:
 
 ---
 
-## Frontmatter
+## Review Findings — pass-1 (2026-05-19)
+
+Pass-1 adversarial review on diff `c211a7f..249d387` (17 files, +1940 / −31 lines). Three parallel reviewers (Sonnet): Blind Hunter (8 findings B-HIGH-1..2 + B-MED-1..3 + B-LOW-1..3), Edge Case Hunter (6 findings E1..E6), Acceptance Auditor (6 findings A1..A2 + 4 minor + observations). All three verdicts: **REVISE**.
+
+After dedup → **20 unique findings** (5 HIGH, 7 MED, 8 LOW). Convergences:
+- `_P2_I5_INTERNAL_ONLY` dead-code dict (B-LOW-2 + A-minor-4)
+- Benchmark date hardcode (B-LOW-3 + E4)
+- AC6 spec/impl label drift + test coverage gap (A1 + A-minor-1)
+
+All 20 close per "fix all issues even minors" standing policy.
+
+### Patch — HIGH (5)
+
+- [x] [Review][Patch] **P1-H1 — Counter.labels() called from `asyncio.to_thread` worker risks lazy-registration race on first-seen reason** [services/metrics-subscriber/src/metrics_subscriber/app/metrics.py:124] — Solo HIGH: B-HIGH-1. The module docstring (app/main.py:47-54) claims "Subsequent `.inc()` / `.set()` calls can interleave safely" — true for already-created label children but NOT for the first `.labels(reason=r)` call which lazily inserts into the Counter's internal `_metrics` dict (form of lazy registration on the registry's `_names_to_collectors` structure). Concurrent `generate_latest()` from `/metrics` route + worker-thread `.labels()` on novel `reason` value is a real low-probability race during startup. Fix: in `build_collectors(registry)`, pre-populate ALL known reason children: `for r in ("json_decode", "not_a_dict", "pre110_missing_trace_id", "validation"): parse_skip_total.labels(reason=r).inc(0)`. Eliminates lazy-registration entirely. Add test `test_parse_skip_counter_all_reasons_pre_populated_in_collectors`.
+
+- [x] [Review][Patch] **P1-H2 — `reader.current_path` raises `RuntimeError` in finally drain when `restore_into` raises non-CursorSchemaVersionError, masking the original exception** [services/metrics-subscriber/src/metrics_subscriber/__main__.py:387-390] — Solo HIGH: B-HIGH-2. `restore_into` can raise `OSError`/`json.JSONDecodeError` for corrupt cursor files. Current code catches only `CursorSchemaVersionError`; other exceptions propagate to outer `finally` where `reader.current_path` raises `RuntimeError` (property requires `_current_path` non-None, only set after `open()`/`seek()`). Original exception is masked by the secondary RuntimeError. Fix: guard finally with `if reader._current_path is not None:` OR restructure so `restore_into` lives inside the try whose finally reads `current_path`. Add test `test_finally_drain_skipped_when_restore_into_raises_uncaught_exception`.
+
+- [x] [Review][Patch] **P1-H3 — `record_lag` two-setter sequence (`lag_seconds.set()` + `bytes_behind.set()`) is non-atomic; Prometheus scrape between setters sees split-brain** [services/metrics-subscriber/src/metrics_subscriber/app/metrics.py:104-105] — Solo HIGH: E1. Each `Gauge.set()` acquires its own internal lock independently. The docstring at line 91 falsely claims "Atomic mutation". Alerting rules correlating `lag_seconds × bytes_behind` see inconsistent snapshots. Fix: (a) easy — collapse docstring claim and document as best-effort eventual-consistency (operationally fine for 15s scrape interval, microsecond split window); OR (b) collapse the two into a single labeled gauge `metrics_subscriber_persist_snapshot{field="lag_seconds|bytes_behind"}` collected atomically; OR (c) use a custom collector with a single lock. **Decision per "fix all issues even minors": choose (a) — update docstring honestly + add explicit "may not be atomic at scrape boundary, see ADR-0005 §atomicity note" reference. Document the operational impact: at 15s scrape the split-brain window is sub-microsecond, well within Prometheus scrape jitter.**
+
+- [x] [Review][Patch] **P1-H4 — `/healthz` returns 200 unconditionally even when tail task has crashed (hollow health gate)** [services/metrics-subscriber/src/metrics_subscriber/app/main.py:279-287] — Solo HIGH: E2. When `_on_tail_done` fires for an unclassified exception, it logs CRITICAL and requests uvicorn shutdown — but `/healthz` still returns 200 between callback and uvicorn drain. compose `service_healthy` probe passes while subscriber is dead. Docstring at line 25 ("gates the service") is hollow. Fix: in healthz handler, check `request.app.state.exit_code` (if non-zero, 503) AND/OR `tail_task.done() and tail_task.exception() is not None`. Return `503 {"status": "degraded", "reason": "tail_task_failed", "exit_code": <code>}`. Add `test_healthz_503_when_tail_task_crashed`.
+
+- [x] [Review][Patch] **P1-H5 — `on_skip` callback exception propagates out of `asyncio.to_thread`, killing the entire subscriber (instrumentation kill switch)** [packages/events/src/events/log_reader.py:482, 493, 516, 539] — Solo HIGH: E3. The callback (which wires to `parse_skip_total.labels(reason=r).inc()`) has no try/except wrapper at any of the 4 call sites. If prometheus_client raises (locked registry, child-creation race per P1-H1, future contributor bug), the worker thread propagates → tail_task crashes → exit 1 for entire subscriber. Tail loop must NOT die because of instrumentation failure. Fix: wrap each `on_skip(...)` call in `try: on_skip(reason) except Exception as e: logger.warning("metrics_subscriber_on_skip_callback_failed", reason=reason, error=str(e))`. Add `test_on_skip_callback_exception_does_not_crash_tail_loop` (mock callback to raise, assert tail continues).
+
+### Patch — MED (7)
+
+- [x] [Review][Patch] **P1-M1 — AC6 spec/implementation label drift + test coverage gap** [spec AC6 + services/metrics-subscriber/src/metrics_subscriber/test_app_main.py:237-283] — **2-lane: A1+A-minor-1**. Spec AC6 table says reason enum is `{invalid_json, unknown_event_type, payload_validation_failure}`. Actual reasons in `log_reader.py:482/493/516/539` are `{json_decode, not_a_dict, pre110_missing_trace_id, validation}` (4 values, different naming). Spec self-verification clause asserts `reason="invalid_json"` which never fires. Test covers only `json_decode` and `not_a_dict` — `pre110_missing_trace_id` + `validation` paths untested. Fix: (a) update AC6 reason enum table in spec to actual labels `{json_decode, not_a_dict, pre110_missing_trace_id, validation}`; (b) update self-verification clause; (c) extend test `test_parse_skip_counter_increments_by_reason` to cover all 4 reasons; (d) add Surprises bullet in DAR noting the deviation (per P1-L8).
+
+- [x] [Review][Patch] **P1-M2 — bootstrap-verify count contradiction: AC1/AC15 claim "15/15 imports", DAR validation gates row says "14 workspace-member imports"** [spec lines 33-35 + 583] — Solo MED: A2. Internal contradiction within the spec document. Either the AC self-verification clauses are wrong OR a workspace member regressed from Story 10.1's 15-member baseline. Fix: run `just bootstrap-verify` on current HEAD, record exact count, update ALL three occurrences (AC1, AC15, DAR row) to match. If actual count is 14, investigate which member dropped + add a tech-debt note.
+
+- [x] [Review][Patch] **P1-M3 — `read_new_envelopes_since` / `read_batch` does not thread `on_skip` callback through; sync code path silently drops parse-skip counter** [packages/events/src/events/log_reader.py:355-431] — Solo MED: B-MED-1. `iter_new_envelopes_since` accepts `on_skip` but its wrapper `read_new_envelopes_since` (line 355) doesn't expose it; `EventLogReader.read_batch` calls it without the callback. registry-state / registry-api callers see zero parse_skip_total increments regardless of skip count. AC6 claims the counter is wired for "lines skipped during JSONL tail" — strictly true for tail() path but the gap on sync path is silent. Fix: add `on_skip: Callable[[str], None] | None = None` parameter to `read_new_envelopes_since` (additive, default None preserves existing callers); thread through to `iter_new_envelopes_since` call. Update `EventLogReader.read_batch` to pass `self._on_skip` (if set during construction). Add test exercising the sync path with a skip.
+
+- [x] [Review][Patch] **P1-M4 — `_on_tail_done` `add_done_callback` race with lifespan `yield`** [services/metrics-subscriber/src/metrics_subscriber/app/main.py:201-252] — Solo MED: B-MED-2. If `tail_task` completes (with non-zero exit) between `add_done_callback` (line 252) and `yield` (line 259) — possible with zero-length event log + immediate stop_event — `_on_tail_done` fires before lifespan teardown is fully set up, causing uvicorn to begin shutdown mid-startup. AsyncExitStack drain races with uvicorn's own shutdown. Window is ms-level in production. Fix: move `tail_task.add_done_callback(_on_tail_done)` to AFTER the `yield`, inside the `async with AsyncExitStack()` block so the callback is only active while lifespan is fully running. Verify with test that simulates immediate task completion.
+
+- [x] [Review][Patch] **P1-M5 — `app.state.exit_code` read after `asyncio.run(_serve())` may race with `_on_tail_done` callback dispatch** [services/metrics-subscriber/src/metrics_subscriber/__main__.py:469-474] — Solo MED: B-MED-3 (Blind Hunter Open Question). If uvicorn's shutdown path causes `asyncio.run()` to unwind before pending done-callbacks are scheduled, `getattr(app.state, "exit_code", 0)` reads 0 even when the tail crashed with non-zero exit. CPython 3.12 docs say callbacks are dispatched "when the Future finishes" within the running loop — likely safe but unverified. Fix: explicit `await asyncio.sleep(0)` after `await server.serve()` returns to flush pending callbacks, OR restructure exit_code into an `asyncio.Future` that the callback explicitly resolves and `_run_server_mode` awaits with a timeout. Add `test_exit_code_propagation_after_serve_returns` with mock callback delay.
+
+- [x] [Review][Patch] **P1-M6 — autouse `_reset_collector_registry_per_test` fixture resets global `prometheus_client.REGISTRY`, but the per-app `app.state.registry` is the actual isolation mechanism; comment overstates the guarantee for crash-mid-lifespan tests** [services/metrics-subscriber/src/metrics_subscriber/conftest.py:79-80] — Solo MED: E5. Comment claims "a fresh registry per app instance means cross-test metric value leak is impossible" — only true for tests that complete lifespan normally. If a test crashes mid-lifespan and reuses the same app instance, per-app registry leaks. Fix: clarify comment to document the actual guarantee scope ("per-test lifespan-complete scenarios"). Optional: add post-yield assertion that `build_app` succeeds without duplicate-metric errors. Decision: doc-only fix unless we want to harden the lifespan exit path (deferred to Story 10.4 if scope creep).
+
+- [x] [Review][Patch] **P1-M7 — Invalid `OMB_METRICS_RUN_MODE` value logs via structlog BEFORE `logging.basicConfig` in `main()` — operator sees plain stdlib format, not JSON** [services/metrics-subscriber/src/metrics_subscriber/__main__.py:81 + 489] — Solo MED: E6. Module-level `log = structlog.get_logger(...)` at line 81; structlog config happens in `main()` at line 489. Invalid-mode branch fires the log before structlog is configured → operator sees unstructured output where they expect JSON. Fix: either (a) move structlog `configure()` to module-import time (idempotent guard already exists per Story 3.6 AC-4 pattern), or (b) use stdlib `logging.error()` for the pre-configure window. Decision: (a) — move config to module level with `_STRUCTLOG_CONFIGURED` guard, matching registry-api precedent. Add test `test_invalid_run_mode_logs_structured_event`.
+
+### Patch — LOW (8)
+
+- [x] [Review][Patch] **P1-L1 — `httpx.ASGITransport(raise_app_exceptions=...)` inconsistency across tests** [test_app_main.py:162 vs :366] — Solo LOW: B-LOW-1. Some tests use `ASGITransport(app=app)` (raises exceptions), others use `raise_app_exceptions=False` (returns response). The exception-test path correctly uses `False`; happy-path tests should be consistent. Fix: standardize on `raise_app_exceptions=False` for ALL tests; assert response codes explicitly. Avoids confusing "raw exception vs 500" failures during test triage.
+
+- [x] [Review][Patch] **P1-L2 — `_P2_I5_INTERNAL_ONLY` dict in `app/main.py:333-337` is dead code; module docstring already cites P2-I5** [services/metrics-subscriber/src/metrics_subscriber/app/main.py:333-337] — **2-lane: B-LOW-2 + A-minor-4**. Dict exists solely as grep anchor for AC9 self-verification. The docstring at line 28 already cites P2-I5 — grep target satisfied without the dict. Confuses future contributors. Fix: delete the dict; update AC9 self-verification clause to reference docstring grep only (`grep -n "P2-I5" services/metrics-subscriber/src/metrics_subscriber/app/main.py` returns line 28+).
+
+- [x] [Review][Patch] **P1-L3 — Hardcoded `/tmp/2026-05-19.jsonl` path in benchmark + lag test fixtures** [test_metrics_endpoint_benchmark.py:87 + test_app_main.py:215] — **2-lane: B-LOW-3 + E4**. Date string couples tests to authoring date. Today the test path is just a label string (no FS access via this exact path), so test currently passes regardless of date — but it's a maintenance trap (false-positive understanding) and label cardinality churn risk in CI when today's date differs. Fix: replace with `str(tmp_path / "2026-01-01.jsonl")` (stable fixture path) or `Path("today.jsonl")` (semantic).
+
+- [x] [Review][Patch] **P1-L4 — AC10 wording ambiguity: spec body says "~30 metrics", DAR says "~50 timeseries"; fixture creates 10 gauges + 10 counters + 10 labelled × 3 tiers = 50 timeseries / 30 metric families** [spec AC10 + DAR] — Solo LOW: A-minor-2. Both numbers are correct but the spec uses "metrics" ambiguously. Fix: update spec AC10 to clarify "~30 metric families = ~50 timeseries" with footnote on Prometheus terminology. Update DAR to match.
+
+- [x] [Review][Patch] **P1-L5 — DAR mypy section does not explicitly confirm "no new overrides needed" was a considered decision (deps all ship `py.typed`)** [spec DAR Mypy baseline section] — Solo LOW: A-minor-3. Reader can't distinguish "no overrides needed" from "forgot to add overrides". Fix: one-line addition to DAR: "All Story 10.3 deps (`fastapi`, `uvicorn`, `prometheus_client`, `httpx`, `asgi_lifespan`) ship `py.typed`; no `[[tool.mypy.overrides]]` blocks added (verified mypy --strict passes without them)."
+
+- [x] [Review][Patch] **P1-L6 — Missing `test_lifespan_cursor_schema_version_refused_exits_2` from AC8 risk-flag requirement** [services/metrics-subscriber/src/metrics_subscriber/test_app_main.py] — Solo LOW: A-missing-1. AC8 out-of-scope risk flag explicitly required this test ("Test `test_lifespan_cursor_schema_version_refused_exits_2` MUST exist"). Not found in test_app_main.py. Fix: add the test — patches `CursorPersistence.restore_into` to raise `CursorSchemaVersionError`, calls `_run_server_mode`, asserts rc==2 + structured log emitted.
+
+- [x] [Review][Patch] **P1-L7 — DAR lacks `pytest --collect-only` evidence-line for test count (per Story 10.2 P2-M8 lesson)** [spec DAR Test count delta] — Solo LOW: A-missing-2. Story 10.2's pass-2 P2-M8 finding established the convention: paste the `pytest --collect-only -q | tail -1` output in DAR as evidence. Story 10.3 DAR states "61 collected" without backing evidence. Fix: run `uv run pytest --collect-only -q services/metrics-subscriber packages/events | tail -1` and paste output in DAR.
+
+- [x] [Review][Patch] **P1-L8 — AC6 label drift not recorded in DAR Surprises/deviations section** [spec DAR Surprises] — Solo LOW: A-missing-3. Implementation diverged from spec labels (per P1-M1) but Surprises section doesn't mention it. Future readers tracing AC6 confusion will hit unexplained drift. Fix: add Surprises bullet: "AC6 reason enum: spec table listed `{invalid_json, unknown_event_type, payload_validation_failure}` but actual `log_reader.py` skip points emit `{json_decode, not_a_dict, pre110_missing_trace_id, validation}` (4 values, different naming). Spec AC6 + test updated in pass-1 P1-M1 to match implementation."
+
+### Deferred (none — all 20 addressed in this pass)
+
 
 ```yaml
 ---

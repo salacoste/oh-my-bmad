@@ -132,6 +132,35 @@ _DEFAULT_MAX_CONTIGUOUS_PARSE_SKIPS = 100
 _MAX_EVENTS_EXCEEDS_LINE_CAP_WARNED: bool = False
 
 
+def _safe_on_skip(on_skip: Callable[[str], None] | None, reason: str) -> None:
+    """Story 10.3 pass-1 P1-H5 — invoke ``on_skip`` without ever crashing the tail.
+
+    The Prometheus parse-skip counter callback runs on the
+    ``asyncio.to_thread`` worker that drives ``iter_new_envelopes_since``
+    inside :class:`EventLogReader.tail`.  If the callback raises
+    (locked registry, child-creation race, future contributor bug), the
+    exception propagates out of ``to_thread`` → ``tail_task`` crashes
+    → the entire subscriber exits non-zero on what should be an
+    instrumentation-only failure.
+
+    This helper is the kill-switch.  Any exception from the user
+    callback is downgraded to a structured ``WARNING`` log and the
+    tail loop continues.  Per Story 10.3 review finding P1-H5: the
+    tail loop MUST NOT die because of an instrumentation failure.
+    """
+    if on_skip is None:
+        return
+    try:
+        on_skip(reason)
+    except Exception as exc:  # noqa: BLE001 — instrumentation kill-switch
+        _log.warning(
+            "metrics_subscriber_on_skip_callback_failed",
+            reason=reason,
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+
+
 def _reset_warn_state_for_tests() -> None:
     """P3-L3 — reset module-global one-shot warn flags between tests.
 
@@ -358,6 +387,7 @@ def read_new_envelopes_since(
     *,
     max_events: int | None = None,
     max_lines_per_poll: int = _DEFAULT_MAX_LINES_PER_POLL,
+    on_skip: Callable[[str], None] | None = None,
 ) -> tuple[int, list[EventEnvelope]]:
     """Batch-form: read complete ``\\n``-terminated envelopes past *offset*.
 
@@ -423,8 +453,14 @@ def read_new_envelopes_since(
         return offset, []
     envelopes: list[EventEnvelope] = []
     new_offset = offset
+    # Story 10.3 pass-1 P1-M3: thread ``on_skip`` through to
+    # :func:`iter_new_envelopes_since` so the sync code path (used by
+    # :meth:`EventLogReader.read_batch`) honours the parse-skip
+    # callback.  Pre-fix the callback was tail-only, so registry-state /
+    # registry-api callers silently dropped the
+    # ``metrics_subscriber_parse_skip_total`` increment.
     for offset_after, envelope in iter_new_envelopes_since(
-        path, offset, max_lines_per_poll=max_lines_per_poll
+        path, offset, max_lines_per_poll=max_lines_per_poll, on_skip=on_skip
     ):
         envelopes.append(envelope)
         new_offset = offset_after
@@ -478,8 +514,7 @@ def parse_with_pre110_backfill(
             detail=str(exc),
             metric="metrics_subscriber_parse_skip_total{reason=json_decode}",
         )
-        if on_skip is not None:
-            on_skip("json_decode")
+        _safe_on_skip(on_skip, "json_decode")
         return None
 
     if not isinstance(raw_dict, dict):
@@ -489,8 +524,7 @@ def parse_with_pre110_backfill(
             error_type="NotADict",
             metric="metrics_subscriber_parse_skip_total{reason=not_a_dict}",
         )
-        if on_skip is not None:
-            on_skip("not_a_dict")
+        _safe_on_skip(on_skip, "not_a_dict")
         return None
 
     # TH-B5 shared helper: back-fill trace_id from request_id (with e-prefix
@@ -512,8 +546,7 @@ def parse_with_pre110_backfill(
             request_id=raw_dict.get("request_id"),
             metric="metrics_subscriber_parse_skip_total{reason=pre110_missing_trace_id}",
         )
-        if on_skip is not None:
-            on_skip("pre110_missing_trace_id")
+        _safe_on_skip(on_skip, "pre110_missing_trace_id")
         return None
     if backfilled is not raw_dict:
         _log.debug(
@@ -535,8 +568,7 @@ def parse_with_pre110_backfill(
             detail=str(exc),
             metric="metrics_subscriber_parse_skip_total{reason=validation}",
         )
-        if on_skip is not None:
-            on_skip("validation")
+        _safe_on_skip(on_skip, "validation")
         return None
 
 
@@ -758,6 +790,10 @@ class EventLogReader:
             self._cursor_offset,
             max_events=max_events,
             max_lines_per_poll=self._max_lines_per_poll,
+            # Story 10.3 pass-1 P1-M3: forward the per-instance skip
+            # callback so the sync path honours the same parse-skip
+            # accounting the async ``tail()`` path does.
+            on_skip=self._on_skip,
         )
         self._cursor_offset = new_offset
         return envelopes
