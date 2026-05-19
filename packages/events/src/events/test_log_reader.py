@@ -274,18 +274,23 @@ def test_iter_new_envelopes_since_chunk_cap(tmp_path: Path) -> None:
 
 
 def test_iter_new_envelopes_since_max_contiguous_parse_skips(tmp_path: Path) -> None:
-    """VH-13 — parse-skip threshold raises RuntimeError on corruption.
+    """VH-13 + P2-H3/P2-H4 — parse-skip threshold raises typed exception.
 
-    A run of N+1 garbage lines after the threshold triggers a refusal
-    to advance.
+    Pass-2 changes:
+    * Comparison is now ``>=`` (P2-H4 off-by-one fix); threshold=3
+      trips on the 3rd contiguous skip, not the 4th.
+    * Exception type is :class:`ParseSkipThresholdExceeded` (was
+      generic ``RuntimeError``) per P2-H3 so the subscriber catches
+      a typed exception and exits with code 3.
     """
+    from events.errors import ParseSkipThresholdExceeded
     from events.log_reader import iter_new_envelopes_since
 
     path = tmp_path / "2026-05-19.jsonl"
     # Write 5 garbage lines then 1 valid envelope.
     path.write_bytes(b"{not json\n" * 5 + to_canonical_json(_make_envelope()) + b"\n")
-    # Threshold=3 → after 4 contiguous skips raise.
-    with pytest.raises(RuntimeError, match="parse_skip_threshold"):
+    # Threshold=3 → trips on 3rd contiguous skip (>= comparison).
+    with pytest.raises(ParseSkipThresholdExceeded):
         list(iter_new_envelopes_since(path, 0, max_contiguous_parse_skips=3))
 
 
@@ -312,3 +317,250 @@ def test_iter_new_envelopes_since_cursor_advances_after_yield(tmp_path: Path) ->
     offset_re, env_re = next(gen2)
     assert env_re.event_id == envs[0].event_id
     assert offset_re == offset1
+
+
+def test_iter_new_envelopes_since_parse_skip_state_persists_across_polls(
+    tmp_path: Path,
+) -> None:
+    """P2-H4 — contiguous parse-skip counter accumulates across polls.
+
+    Pre-pass-2 the counter was a per-call local; each poll opened the
+    file fresh and reset to 0.  A corruption pattern of N bad lines
+    per poll across K polls (K*N total) never tripped the threshold.
+
+    With the new ``parse_skip_state`` mutable cell, callers can hand
+    in their own counter that persists across polls.  Test: 5 bad
+    lines per poll, 3 polls = 15 contiguous skips → trips threshold=10.
+    """
+    from events.errors import ParseSkipThresholdExceeded
+    from events.log_reader import iter_new_envelopes_since
+
+    path = tmp_path / "2026-05-19.jsonl"
+    path.write_bytes(b"{garbage\n" * 15)
+    state = [0]
+    # Poll 1: 4 lines — below threshold (4 < 10).
+    list(
+        iter_new_envelopes_since(
+            path,
+            0,
+            max_lines_per_poll=4,
+            max_contiguous_parse_skips=10,
+            parse_skip_state=state,
+        )
+    )
+    assert state[0] == 4
+    # Poll 2: 4 more lines — still below threshold (8 < 10).
+    list(
+        iter_new_envelopes_since(
+            path,
+            4 * len(b"{garbage\n"),
+            max_lines_per_poll=4,
+            max_contiguous_parse_skips=10,
+            parse_skip_state=state,
+        )
+    )
+    assert state[0] == 8
+    # Poll 3: trips on the 2nd bad line of this poll (8+2 = 10 = threshold).
+    with pytest.raises(ParseSkipThresholdExceeded):
+        list(
+            iter_new_envelopes_since(
+                path,
+                8 * len(b"{garbage\n"),
+                max_lines_per_poll=4,
+                max_contiguous_parse_skips=10,
+                parse_skip_state=state,
+            )
+        )
+
+
+def test_iter_new_envelopes_since_parse_skip_state_resets_on_valid(tmp_path: Path) -> None:
+    """P2-H4 — successful parse resets the cross-poll counter to 0."""
+    from events.log_reader import iter_new_envelopes_since
+
+    path = tmp_path / "2026-05-19.jsonl"
+    valid_line = to_canonical_json(_make_envelope()) + b"\n"
+    # 3 bad lines, then 1 valid, then 3 bad lines.
+    path.write_bytes(b"{bad\n" * 3 + valid_line + b"{bad\n" * 3)
+    state = [0]
+    items = list(
+        iter_new_envelopes_since(
+            path, 0, max_lines_per_poll=100, max_contiguous_parse_skips=5, parse_skip_state=state
+        )
+    )
+    # 1 valid envelope yielded, counter at 3 (the trailing bad run).
+    assert len(items) == 1
+    assert state[0] == 3
+
+
+@pytest.mark.asyncio
+async def test_tail_cursor_unchanged_on_consumer_raise(tmp_path: Path) -> None:
+    """P2-H5 — VH-8 invariant: consumer-side raise leaves cursor on prior line.
+
+    The cursor advance follows ``yield envelope`` in
+    :meth:`EventLogReader.tail`.  When the consumer raises on
+    envelope N, the cursor must stay on the offset PRIOR to N (so a
+    restart re-yields N).
+    """
+    import asyncio
+
+    clock = FrozenClock(mono_ns=0, now=datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC))
+    path = current_day_path(tmp_path, clock.now())
+    envs = [_make_envelope(value=f"e{i}", mono_seed=i) for i in range(5)]
+    _write_envelopes(path, envs)
+    reader = EventLogReader(tmp_path, clock=clock)
+    reader.open(initial_offset=0)
+
+    # Capture the byte-offset PRIOR to envelope 2 (zero-indexed).
+    can_lines = [to_canonical_json(e) + b"\n" for e in envs]
+    offset_prior_to_env2 = sum(len(line) for line in can_lines[:2])
+
+    received: list[EventEnvelope] = []
+    stop = asyncio.Event()
+
+    class _ConsumerError(RuntimeError):
+        pass
+
+    async def _drive() -> None:
+        async for env in reader.tail(poll_interval_s=0.01, stop_event=stop):
+            received.append(env)
+            if len(received) == 2:
+                # Consumer raises BEFORE the cursor-advance line in
+                # tail() runs (the advance is post-yield in the loop
+                # body — raising here aborts before that statement).
+                raise _ConsumerError
+
+    with pytest.raises(_ConsumerError):
+        await asyncio.wait_for(_drive(), timeout=5.0)
+
+    # VH-8 invariant: cursor stays on the offset PRIOR to envelope 2.
+    # The two yielded envelopes were envs[0] and envs[1]; the cursor
+    # advanced past envs[0] (post-yield of envs[0]) but NOT past
+    # envs[1] (the raise pre-empted the post-yield assignment).
+    expected_offset = sum(len(line) for line in can_lines[:1])
+    assert reader.cursor_offset == expected_offset
+    # Sanity: the offset is strictly less than "past env 2".
+    assert reader.cursor_offset < offset_prior_to_env2
+
+
+@pytest.mark.asyncio
+async def test_tail_clamps_offset_after_external_rotation(tmp_path: Path) -> None:
+    """P2-H12 (Q7) — offset > file_size mid-stream is clamped + logged.
+
+    Restart-time clamping in cursor.restore_into seats the reader at
+    old EOF.  If the file is then externally rotated to a smaller
+    size (logrotate, replay-from-archive, accidental truncation), the
+    next tail() poll would seek past the (new) EOF and stall silently
+    forever.  Re-validate per-poll and clamp to current size.
+
+    Test sequence:
+    1. Write 10 envelopes (large file).
+    2. Truncate to half — file now ends on a newline boundary at byte K.
+    3. Seat reader at the ORIGINAL EOF (file_size_before > K).
+    4. Start tailing → clamp logs at the start of the first poll +
+       cursor seats at K.
+    5. Append 2 fresh envelopes (at bytes K..K+envelope*2).
+    6. Reader picks up the 2 new envelopes (proof: it didn't stall).
+    """
+    import asyncio
+
+    clock = FrozenClock(mono_ns=0, now=datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC))
+    path = current_day_path(tmp_path, clock.now())
+    envs = [_make_envelope(value=f"e{i}", mono_seed=i) for i in range(10)]
+    _write_envelopes(path, envs)
+    file_size_before = path.stat().st_size
+
+    # External rotation: truncate to half its size, ending on a
+    # newline boundary so envelopes parse cleanly.
+    body = path.read_bytes()
+    half = file_size_before // 2
+    last_nl = body.rfind(b"\n", 0, half)
+    assert last_nl > 0
+    path.write_bytes(body[: last_nl + 1])
+    truncated_size = path.stat().st_size
+    assert truncated_size < file_size_before
+
+    reader = EventLogReader(tmp_path, clock=clock)
+    # Seat the reader past the (current/truncated) EOF, simulating
+    # restore-time clamping to old EOF.
+    reader.seek(path=path, offset=file_size_before)
+    received: list[EventEnvelope] = []
+    stop = asyncio.Event()
+
+    async def _drive() -> None:
+        async for env in reader.tail(poll_interval_s=0.05, stop_event=stop):
+            received.append(env)
+            if len(received) >= 2:
+                stop.set()
+                return
+
+    drive_task = asyncio.create_task(_drive())
+    # Give the tail loop a moment to clamp + observe the EOF.
+    await asyncio.sleep(0.2)
+    # Append 2 fresh envelopes AFTER the clamp has occurred.
+    new_envs = [_make_envelope(value=f"f{i}", mono_seed=100 + i) for i in range(2)]
+    with open(path, "ab") as f:
+        for e in new_envs:
+            f.write(to_canonical_json(e) + b"\n")
+
+    import contextlib
+
+    try:
+        await asyncio.wait_for(drive_task, timeout=5.0)
+    finally:
+        stop.set()
+        if not drive_task.done():
+            drive_task.cancel()
+            with contextlib.suppress(TimeoutError, asyncio.CancelledError):
+                await drive_task
+    # The reader recovered (did not stall): we saw both new envelopes.
+    assert len(received) == 2
+    assert [e.event_id for e in received] == [e.event_id for e in new_envs]
+
+
+def test_open_after_aexit_raises() -> None:
+    """P2-M2 (VM-6) — async-CM exit makes the reader unusable."""
+    import asyncio
+
+    async def _run() -> None:
+        async with EventLogReader(Path("/tmp")) as reader:
+            pass
+        with pytest.raises(RuntimeError, match="used after close"):
+            reader.open()
+
+    asyncio.run(_run())
+
+
+def test_rollover_skips_if_today_path_is_stale_mtime(tmp_path: Path) -> None:
+    """P2-M4 — stale today_path (older than 25h) does NOT trigger rollover."""
+    import os
+    import time
+
+    clock = FrozenClock(mono_ns=0, now=datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC))
+    yesterday_path = tmp_path / "2026-05-18.jsonl"
+    today_path = tmp_path / "2026-05-19.jsonl"
+    yesterday_path.write_bytes(b"x" * 100)
+    today_path.write_bytes(b"y" * 100)
+    # Backdate today's mtime to 26h before clock.now() → stale.
+    stale_mtime = clock.now().timestamp() - 26 * 3600
+    os.utime(str(today_path), (stale_mtime, stale_mtime))
+
+    reader = EventLogReader(tmp_path, clock=clock, rollover_quiescence_s=0.0)
+    reader.seek(path=yesterday_path, offset=100)  # already drained
+    # Use a fake event-loop-like object that supports .time()
+    fake_loop_time = [0.0]
+
+    class _FakeLoop:
+        def time(self) -> float:
+            return fake_loop_time[0]
+
+    ready = reader._is_rollover_ready(today_path, _FakeLoop())  # type: ignore[arg-type]
+    # Stale today_path → rollover refused.
+    assert ready is False
+    # And touching the file to "now" allows the fast-path to engage.
+    os.utime(str(today_path), (time.time(), time.time()))
+    # Re-evaluate against a fresh clock that returns wall-now.
+    fresh_clock = FrozenClock(mono_ns=0, now=datetime.now(UTC))
+    reader2 = EventLogReader(tmp_path, clock=fresh_clock, rollover_quiescence_s=0.0)
+    reader2.seek(path=yesterday_path, offset=100)
+    ready2 = reader2._is_rollover_ready(today_path, _FakeLoop())  # type: ignore[arg-type]
+    assert ready2 is True

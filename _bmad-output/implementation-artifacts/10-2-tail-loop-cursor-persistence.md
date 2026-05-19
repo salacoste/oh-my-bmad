@@ -67,6 +67,15 @@ class EventLogReader:
         """
 ```
 
+> **AC2 update (pass-1 — see Q3 Decisions block).** The concrete API
+> also exposes ``iter_new_envelopes_since(path, offset, *, ...)`` as
+> a public helper for per-line streaming consumers (Story 10.4).
+> ``read_batch`` is now a thin batch-form wrapper that drains that
+> generator — both share one parsing path.  Pass-2 P2-H4 hoists the
+> contiguous-parse-skip counter to instance state so a long
+> corruption run that spans multiple polls eventually trips
+> ``max_contiguous_parse_skips``.
+
 ### AC3 — Cursor persistence — `cursor.json` schema
 
 In `oh-my-bmad-data/metrics-subscriber/cursor.json`:
@@ -86,6 +95,36 @@ Persisted via atomic write (`os.replace` after tempfile write).
 On restart: read `cursor.json`; if `path` matches today's file, open at `offset`; if path is a previous day's file (rollover happened during downtime), open today's at offset 0 AND log a `WARNING tail.restart_after_day_rollover` audit event.
 
 If `cursor.json` doesn't exist: open today's file at offset 0.
+
+> **AC3 update (pass-1 — see Q1 Decisions block).** The third case
+> is now a TWO-PHASE restore (VH-1 fix): the reader is seated on
+> yesterday's path at `persisted_offset` and the tail loop drains
+> `[persisted_offset, yesterday_EOF)` BEFORE the day-rollover
+> transition fires (the previous design silently abandoned those
+> events).  The WARNING is renamed to
+> `tail.draining_yesterday_before_rollover`.
+>
+> **AC3 update (pass-2 — see P2-L2).** ``schema_version`` was bumped
+> to ``"1.1"`` (semver-minor — backwards-compatible field rename of
+> ``events_processed_since_last_persist`` → ``events_in_this_persist_window``).
+> Both schema_version ``"1"`` and ``"1.1"`` are accepted on restore,
+> and both legacy and renamed field names are written for one
+> release cycle (the legacy field will be dropped in Story 10.4).
+>
+> **AC3 update (pass-2 — see P2-H7).** If the persisted path is from
+> a previous day BUT no longer exists on disk (logrotate, accidental
+> delete), the yesterday-tail backfill is abandoned: log CRITICAL
+> ``metrics_subscriber_persisted_path_missing_falling_through_to_today``
+> and start fresh on today's path at offset 0.
+>
+> **AC3 update (pass-2 — see P2-H6 / VH-10).** Concurrent-subscriber
+> guard via ``fcntl.flock`` on ``<cursor_path>.lock`` — a second
+> subscriber on the same cursor path exits ``1`` with a structured
+> ``reason="concurrent_start"`` field.  Non-EWOULDBLOCK ``OSError``
+> on the flock call (NFS without lockd, some FUSE mounts, overlayfs)
+> exits ``1`` with ``reason="filesystem_unsupported"`` — deployments
+> MUST use a local filesystem.  The ``<cursor_path>.lock`` artifact
+> is NEW in pass-1 and is created lazily at lock-acquisition time.
 
 ### AC4 — Persist every 1000 events
 
@@ -166,6 +205,17 @@ log.info("metrics_subscriber_lag",
 ```
 
 Story 10.3 will turn `bytes_behind` and `wall_clock_lag_s` into Prometheus gauges. Story 10.2 just emits the structured log so operators can grep.
+
+> **AC9 update (pass-1 — see Q2 Decisions block).** ``wall_clock_lag_s``
+> is computed from ``envelope.emitted_at`` (UTC datetime, set by the
+> writer process) vs ``datetime.now(UTC)`` — NOT a cross-process
+> subtraction of ``time.monotonic_ns()`` (which is undefined per
+> Python docs; ``monotonic_ns`` is per-process).  Trade-off: the
+> result is sensitive to writer-vs-subscriber wall-clock skew; an
+> NTP-sync requirement (chrony / ntpd) is documented as a
+> deployment prerequisite.  The
+> ``last_envelope_emitted_at_monotonic_ns`` field is retained as a
+> writer-side tracing handle even though we no longer subtract it.
 
 ### AC10 — Test isolation + autouse fixture
 
@@ -316,42 +366,117 @@ Triaged from 3-lane adversarial review (Blind Hunter + Edge Case Hunter + Accept
 
 ### Patch — HIGH (15)
 
-- [ ] [Review][Patch] **VH-1 — AC7 violation: rollover restore abandons yesterday's tail** [services/metrics-subscriber/.../cursor.py:175-186] — B5+E5+B9 (3-lane). When subscriber restarts after midnight, events `[persisted_offset, yesterday_EOF)` are silently dropped (warning only). AC7 exactly-once promise becomes at-most-once. Fix per Q1: implement two-phase restore — drain yesterday's tail from persisted_offset → EOF, persist new cursor, THEN open today's at offset 0.
-- [ ] [Review][Patch] **VH-2 — `wall_clock_lag_s` cross-process meaningless + AC9 field rename** [services/metrics-subscriber/.../__main__.py:79-95] — B1+E11+A1. `time.monotonic_ns()` is per-process; subtracting writer's from subscriber's gives a meaningless number. AC9 also requires field `last_envelope_emitted_at_monotonic_ns` which is missing. Fix per Q2: compute `wall_clock_lag_s` from `envelope.emitted_at` (UTC datetime) vs `now(UTC)`. Add the missing `last_envelope_emitted_at_monotonic_ns` field per spec. Document NTP-sync assumption.
-- [ ] [Review][Patch] **VH-3 — `max_events` soft cap silently advances cursor past undelivered envelopes** [packages/events/src/events/log_reader.py:664-672] — B4. `read_new_envelopes_since` advances new_offset past all parsed envelopes; cap then slices the returned list, but `self._cursor_offset` is already at EOF — dropped envelopes are never re-served. AC7 exactly-once violation. Fix: make `read_new_envelopes_since` accept `max_events` and stop reading lines AND advance offset to match. Test: write N events, `read_batch(max_events=3)` repeatedly, assert union == all N.
-- [ ] [Review][Patch] **VH-4 — `tail()` materializes entire backlog into RAM via `list(iter_new_envelopes_since)`** [packages/events/src/events/log_reader.py:466-473] — E2. After multi-hour outage, first iteration reads 100s of MB and calls `from_canonical_json` on every line in single thread call → multi-GB memory blowup + multi-minute latency + `stop_event` cannot interrupt. Fix: add internal `max_lines_per_poll` cap (default 10K) inside `iter_new_envelopes_since`; outer loop spins to drain next chunk.
-- [ ] [Review][Patch] **VH-5 — SIGTERM-to-exit latency unbounded** [services/metrics-subscriber/.../__main__.py:54] — E1. `asyncio.to_thread` blocks loop while reading; SIGTERM ENV `stop_event.set()` doesn't interrupt. Combined with VH-4, AC4 "drain on shutdown" can take arbitrary wall time. Fix: bound per-poll work via VH-4's chunk cap; verify SIGTERM-to-exit ≤ N·poll_interval_s in integration test.
-- [ ] [Review][Patch] **VH-6 — Day-rollover clock-only detection loses midnight events** [packages/events/src/events/log_reader.py:450, 484] — B2+E3. Reader switches to today via clock comparison; writer may still be appending to yesterday's file (clock skew). Fix: detect rollover by NEW FILE existence, not clock — check `today_path.exists()` AND yesterday's file size stopped growing for ≥2× clock-skew budget. Add test exercising writer-keeps-appending past reader-rollover-detection.
-- [ ] [Review][Patch] **VH-7 — restart-recovery test NOT a real restart (in-process)** [services/metrics-subscriber/.../test_restart_recovery.py:162-226] — B3+A3. Both "runs" share Python process; SIGTERM is replaced by `stop_event.set()`. `persist_now` in finally masks actual `maybe_persist` cadence bug — AC4 per-N persistence semantics not verified. Fix: add subprocess-based variant using `python -m metrics_subscriber` + real `proc.send_signal(SIGTERM)`. Keep fast in-process exactly-once test + add `@pytest.mark.slow` subprocess test.
-- [ ] [Review][Patch] **VH-8 — `iter_new_envelopes_since` advances cursor BEFORE yield (Story 10.4 footgun)** [packages/events/src/events/log_reader.py:481-483] — B5. Consumer's side-effect (Story 10.4 counter updates) may fail after cursor advance → at-most-once for those failures. Spec claim "exactly-once" is conditional. Fix: defer `self._cursor_offset = offset_after` until AFTER `yield envelope` returns control. Update docstring + AC7 commentary about consumer-side guarantees.
-- [ ] [Review][Patch] **VH-9 — schema_version="2" rollback replays entire day** [services/metrics-subscriber/.../cursor.py:144-154] — E7. v2 upgrade-then-rollback path: v1 sees future schema_version, restarts from offset 0 → at-least-once across rollback. Fix: REFUSE to start (raise + exit non-zero) on unknown schema_version. Let operator decide. Update test_restore_into_unknown_schema_version_starts_fresh to assert raise.
-- [ ] [Review][Patch] **VH-10 — Concurrent subscriber double-start corrupts cursor (no fcntl lock)** [services/metrics-subscriber/.../cursor.py:215-245] — E9. Two simultaneous subscribers race on cursor write → silent corruption + double-processing. Fix: acquire `fcntl.flock` on `<cursor_path>.lock` at startup; refuse to run if locked. Add test for "second instance refuses to start".
-- [ ] [Review][Patch] **VH-11 — Cursor offset bounds validation missing** [services/metrics-subscriber/.../cursor.py:167-174 + log_reader.py:165-166] — B11+E8. cursor.offset=-1 OR offset > file_size silently accepted. Negative crashes on seek; beyond-EOF silently stalls forever. Fix: in `restore_into` after path match: stat the file; if offset > size or offset < 0, log CRITICAL `cursor_offset_invalid` and reset to file_size (skip-ahead) or fail-fast per policy.
-- [ ] [Review][Patch] **VH-12 — `_write_atomic` no parent-dir fsync + tempfile leak on exception** [services/metrics-subscriber/.../cursor.py:215-245] — B12+E6+A5. Without `fsync(dirfd)` after `os.replace`, rename can be lost on power failure. Plus `delete=False` tempfile leaks on json.dump/fsync exception. Fix: wrap in try/except for cleanup; add `os.open(parent, O_DIRECTORY)` + `os.fsync(dirfd)` after replace.
-- [ ] [Review][Patch] **VH-13 — Cursor advances past unparseable lines without DLQ** [packages/events/src/events/log_reader.py:188-191] — E12. Skipped malformed lines silently lost (only log.warning). 100 corrupt lines = 100 events permanently dropped. Fix: emit Prometheus counter `metrics_subscriber_parse_skip_total{reason=...}` (preview field; Story 10.3 wires); refuse to advance past contiguous run > N skips.
-- [ ] [Review][Patch] **VH-14 — AC1 false re-export claim in shim comment** [services/registry-state/.../adapters/event_log.py:75-87] — A2. Comment claims "legacy underscore-prefixed names also re-exported" but they don't exist. Fix: either delete the misleading comment block or add the aliases (`_read_new_envelopes_since = read_new_envelopes_since`).
-- [ ] [Review][Patch] **VH-15 — `iter_new_envelopes_since` claimed public but not in `events/__init__`** [packages/events/src/events/__init__.py] — A4. Dev Agent Record says "public helper" but `events/__init__.py` doesn't re-export. Fix: add to imports + `__all__`.
+- [x] [Review][Patch] **VH-1 — AC7 violation: rollover restore abandons yesterday's tail** [services/metrics-subscriber/.../cursor.py:175-186] — B5+E5+B9 (3-lane). When subscriber restarts after midnight, events `[persisted_offset, yesterday_EOF)` are silently dropped (warning only). AC7 exactly-once promise becomes at-most-once. Fix per Q1: implement two-phase restore — drain yesterday's tail from persisted_offset → EOF, persist new cursor, THEN open today's at offset 0.
+- [x] [Review][Patch] **VH-2 — `wall_clock_lag_s` cross-process meaningless + AC9 field rename** [services/metrics-subscriber/.../__main__.py:79-95] — B1+E11+A1. `time.monotonic_ns()` is per-process; subtracting writer's from subscriber's gives a meaningless number. AC9 also requires field `last_envelope_emitted_at_monotonic_ns` which is missing. Fix per Q2: compute `wall_clock_lag_s` from `envelope.emitted_at` (UTC datetime) vs `now(UTC)`. Add the missing `last_envelope_emitted_at_monotonic_ns` field per spec. Document NTP-sync assumption.
+- [x] [Review][Patch] **VH-3 — `max_events` soft cap silently advances cursor past undelivered envelopes** [packages/events/src/events/log_reader.py:664-672] — B4. `read_new_envelopes_since` advances new_offset past all parsed envelopes; cap then slices the returned list, but `self._cursor_offset` is already at EOF — dropped envelopes are never re-served. AC7 exactly-once violation. Fix: make `read_new_envelopes_since` accept `max_events` and stop reading lines AND advance offset to match. Test: write N events, `read_batch(max_events=3)` repeatedly, assert union == all N.
+- [x] [Review][Patch] **VH-4 — `tail()` materializes entire backlog into RAM via `list(iter_new_envelopes_since)`** [packages/events/src/events/log_reader.py:466-473] — E2. After multi-hour outage, first iteration reads 100s of MB and calls `from_canonical_json` on every line in single thread call → multi-GB memory blowup + multi-minute latency + `stop_event` cannot interrupt. Fix: add internal `max_lines_per_poll` cap (default 10K) inside `iter_new_envelopes_since`; outer loop spins to drain next chunk.
+- [x] [Review][Patch] **VH-5 — SIGTERM-to-exit latency unbounded** [services/metrics-subscriber/.../__main__.py:54] — E1. `asyncio.to_thread` blocks loop while reading; SIGTERM ENV `stop_event.set()` doesn't interrupt. Combined with VH-4, AC4 "drain on shutdown" can take arbitrary wall time. Fix: bound per-poll work via VH-4's chunk cap; verify SIGTERM-to-exit ≤ N·poll_interval_s in integration test.
+- [x] [Review][Patch] **VH-6 — Day-rollover clock-only detection loses midnight events** [packages/events/src/events/log_reader.py:450, 484] — B2+E3. Reader switches to today via clock comparison; writer may still be appending to yesterday's file (clock skew). Fix: detect rollover by NEW FILE existence, not clock — check `today_path.exists()` AND yesterday's file size stopped growing for ≥2× clock-skew budget. Add test exercising writer-keeps-appending past reader-rollover-detection.
+- [ ] [Review][Patch] **DEFERRED — see P2-H9** **VH-7 — restart-recovery test NOT a real restart (in-process)** [services/metrics-subscriber/.../test_restart_recovery.py:162-226] — B3+A3. Both "runs" share Python process; SIGTERM is replaced by `stop_event.set()`. `persist_now` in finally masks actual `maybe_persist` cadence bug — AC4 per-N persistence semantics not verified. Fix: add subprocess-based variant using `python -m metrics_subscriber` + real `proc.send_signal(SIGTERM)`. Keep fast in-process exactly-once test + add `@pytest.mark.slow` subprocess test.
+- [x] [Review][Patch] **VH-8 — `iter_new_envelopes_since` advances cursor BEFORE yield (Story 10.4 footgun)** [packages/events/src/events/log_reader.py:481-483] — B5. Consumer's side-effect (Story 10.4 counter updates) may fail after cursor advance → at-most-once for those failures. Spec claim "exactly-once" is conditional. Fix: defer `self._cursor_offset = offset_after` until AFTER `yield envelope` returns control. Update docstring + AC7 commentary about consumer-side guarantees.
+- [x] [Review][Patch] **VH-9 — schema_version="2" rollback replays entire day** [services/metrics-subscriber/.../cursor.py:144-154] — E7. v2 upgrade-then-rollback path: v1 sees future schema_version, restarts from offset 0 → at-least-once across rollback. Fix: REFUSE to start (raise + exit non-zero) on unknown schema_version. Let operator decide. Update test_restore_into_unknown_schema_version_starts_fresh to assert raise.
+- [x] [Review][Patch] **VH-10 — Concurrent subscriber double-start corrupts cursor (no fcntl lock)** [services/metrics-subscriber/.../cursor.py:215-245] — E9. Two simultaneous subscribers race on cursor write → silent corruption + double-processing. Fix: acquire `fcntl.flock` on `<cursor_path>.lock` at startup; refuse to run if locked. Add test for "second instance refuses to start".
+- [x] [Review][Patch] **VH-11 — Cursor offset bounds validation missing** [services/metrics-subscriber/.../cursor.py:167-174 + log_reader.py:165-166] — B11+E8. cursor.offset=-1 OR offset > file_size silently accepted. Negative crashes on seek; beyond-EOF silently stalls forever. Fix: in `restore_into` after path match: stat the file; if offset > size or offset < 0, log CRITICAL `cursor_offset_invalid` and reset to file_size (skip-ahead) or fail-fast per policy.
+- [x] [Review][Patch] **VH-12 — `_write_atomic` no parent-dir fsync + tempfile leak on exception** [services/metrics-subscriber/.../cursor.py:215-245] — B12+E6+A5. Without `fsync(dirfd)` after `os.replace`, rename can be lost on power failure. Plus `delete=False` tempfile leaks on json.dump/fsync exception. Fix: wrap in try/except for cleanup; add `os.open(parent, O_DIRECTORY)` + `os.fsync(dirfd)` after replace.
+- [x] [Review][Patch] **VH-13 — Cursor advances past unparseable lines without DLQ** [packages/events/src/events/log_reader.py:188-191] — E12. Skipped malformed lines silently lost (only log.warning). 100 corrupt lines = 100 events permanently dropped. Fix: emit Prometheus counter `metrics_subscriber_parse_skip_total{reason=...}` (preview field; Story 10.3 wires); refuse to advance past contiguous run > N skips.
+- [x] [Review][Patch] **VH-14 — AC1 false re-export claim in shim comment** [services/registry-state/.../adapters/event_log.py:75-87] — A2. Comment claims "legacy underscore-prefixed names also re-exported" but they don't exist. Fix: either delete the misleading comment block or add the aliases (`_read_new_envelopes_since = read_new_envelopes_since`).
+- [x] [Review][Patch] **VH-15 — `iter_new_envelopes_since` claimed public but not in `events/__init__`** [packages/events/src/events/__init__.py] — A4. Dev Agent Record says "public helper" but `events/__init__.py` doesn't re-export. Fix: add to imports + `__all__`.
 
 ### Patch — MED (10)
 
-- [ ] [Review][Patch] **VM-1 — `last_envelope` carries across day-rollover, mis-attributing lag** [services/metrics-subscriber/.../__main__.py:1171-1188] — B6. After rollover, lag log uses yesterday's `last_event_id` against today's `current_path`. Fix: clear `last_envelope = None` when `reader.current_path` changes.
-- [ ] [Review][Patch] **VM-2 — `current_path` lambda race + type-ignore** [packages/events/src/events/log_reader.py:469] — B7+E10. Lambda captures `self._current_path` by reference; concurrent mutation could surface AttributeError. Fix: capture into local `path_snapshot = self._current_path; offset_snapshot = self._cursor_offset` BEFORE `to_thread`, pass as lambda defaults. Remove `# type: ignore`.
-- [ ] [Review][Patch] **VM-3 — Signal handler swallows `RuntimeError` (masks real bugs)** [services/metrics-subscriber/.../__main__.py:1090-1093] — B15+E13. `RuntimeError` from `add_signal_handler` is programmer error (wrong loop state), should propagate. Currently silenced → SIGTERM silent fail. Fix: catch only `NotImplementedError` (Windows). Log warning on fallback.
-- [ ] [Review][Patch] **VM-4 — Pydantic NaN/inf acceptance in `poll_interval_s`** [services/metrics-subscriber/.../app/config.py:1274-1275] — B10. `OMB_METRICS_POLL_INTERVAL_S=nan` may not be caught; `asyncio.sleep(nan)` crashes. Fix: `model_config = SettingsConfigDict(env_prefix="OMB_METRICS_", allow_inf_nan=False)`. Add tests for `nan` and `inf`.
-- [ ] [Review][Patch] **VM-5 — `structlog` dep declared but unused; stdlib `logging` used** [services/metrics-subscriber/pyproject.toml:10] — A6. Spec sketch AC5 says `log = structlog.get_logger(__name__)`. Code uses stdlib. Fix per spec: convert lag/persist logs to structlog so Story 10.3 metrics-extraction can hook JSONRenderer.
-- [ ] [Review][Patch] **VM-6 — AC5 spec sketch shows `async with EventLogReader(...)` but no context manager** [packages/events/src/events/log_reader.py] — A7. Fix: add `__aenter__`/`__aexit__` to `EventLogReader` (placeholders for now; future seek-and-close semantics).
-- [ ] [Review][Patch] **VM-7 — Test `test_get_trace_after_event_id_cursor` tautological / day-rollover test fragile** [services/metrics-subscriber/.../test_day_rollover.py:1991-1992] — B13. `received[:100] == day0_envs` depends on `EventEnvelope.__eq__` + payload type registration. Fix: compare by `event_id` lists. Set `clock.current = day1` BEFORE writing day1 envelopes.
-- [ ] [Review][Patch] **VM-8 — Worker-wrapper IMP001 noqa now stale** [services/worker-wrapper/.../adapters/approval_waiter.py:22-25] — A8. Comment says "deferred to Phase 3" but extraction landed. Fix: change import to `from events import current_day_path, read_log_lines`; remove `# noqa: IMP001`.
-- [ ] [Review][Patch] **VM-9 — Empty/no-events startup busy-spin** [packages/events/src/events/log_reader.py:466-503] — E14. If subscriber starts mid-midnight, `current_day_path` may roll between `open()` and first iter — restored offset silently discarded. Fix: defer path computation; let `tail()` be single source of truth for "what day is it now".
-- [ ] [Review][Patch] **VM-10 — Dev Agent Record test count discrepancy (claim 34, actual 31)** [_bmad-output/.../10-2-...md:360] — A9. Subcounts off. Fix: re-run `pytest --collect-only` for the test files; replace estimate with exact integers OR document parametrize expansion.
+- [x] [Review][Patch] **VM-1 — `last_envelope` carries across day-rollover, mis-attributing lag** [services/metrics-subscriber/.../__main__.py:1171-1188] — B6. After rollover, lag log uses yesterday's `last_event_id` against today's `current_path`. Fix: clear `last_envelope = None` when `reader.current_path` changes.
+- [x] [Review][Patch] **VM-2 — `current_path` lambda race + type-ignore** [packages/events/src/events/log_reader.py:469] — B7+E10. Lambda captures `self._current_path` by reference; concurrent mutation could surface AttributeError. Fix: capture into local `path_snapshot = self._current_path; offset_snapshot = self._cursor_offset` BEFORE `to_thread`, pass as lambda defaults. Remove `# type: ignore`.
+- [x] [Review][Patch] **VM-3 — Signal handler swallows `RuntimeError` (masks real bugs)** [services/metrics-subscriber/.../__main__.py:1090-1093] — B15+E13. `RuntimeError` from `add_signal_handler` is programmer error (wrong loop state), should propagate. Currently silenced → SIGTERM silent fail. Fix: catch only `NotImplementedError` (Windows). Log warning on fallback.
+- [x] [Review][Patch] **VM-4 — Pydantic NaN/inf acceptance in `poll_interval_s`** [services/metrics-subscriber/.../app/config.py:1274-1275] — B10. `OMB_METRICS_POLL_INTERVAL_S=nan` may not be caught; `asyncio.sleep(nan)` crashes. Fix: `model_config = SettingsConfigDict(env_prefix="OMB_METRICS_", allow_inf_nan=False)`. Add tests for `nan` and `inf`.
+- [x] [Review][Patch] **VM-5 — `structlog` dep declared but unused; stdlib `logging` used** [services/metrics-subscriber/pyproject.toml:10] — A6. Spec sketch AC5 says `log = structlog.get_logger(__name__)`. Code uses stdlib. Fix per spec: convert lag/persist logs to structlog so Story 10.3 metrics-extraction can hook JSONRenderer.
+- [x] [Review][Patch] **VM-6 — AC5 spec sketch shows `async with EventLogReader(...)` but no context manager** [packages/events/src/events/log_reader.py] — A7. Fix: add `__aenter__`/`__aexit__` to `EventLogReader` (placeholders for now; future seek-and-close semantics).
+- [x] [Review][Patch] **VM-7 — Test `test_get_trace_after_event_id_cursor` tautological / day-rollover test fragile** [services/metrics-subscriber/.../test_day_rollover.py:1991-1992] — B13. `received[:100] == day0_envs` depends on `EventEnvelope.__eq__` + payload type registration. Fix: compare by `event_id` lists. Set `clock.current = day1` BEFORE writing day1 envelopes.
+- [x] [Review][Patch] **VM-8 — Worker-wrapper IMP001 noqa now stale** [services/worker-wrapper/.../adapters/approval_waiter.py:22-25] — A8. Comment says "deferred to Phase 3" but extraction landed. Fix: change import to `from events import current_day_path, read_log_lines`; remove `# noqa: IMP001`.
+- [x] [Review][Patch] **VM-9 — Empty/no-events startup busy-spin** [packages/events/src/events/log_reader.py:466-503] — E14. If subscriber starts mid-midnight, `current_day_path` may roll between `open()` and first iter — restored offset silently discarded. Fix: defer path computation; let `tail()` be single source of truth for "what day is it now".
+- [x] [Review][Patch] **VM-10 — Dev Agent Record test count discrepancy (claim 34, actual 31)** [_bmad-output/.../10-2-...md:360] — A9. Subcounts off. Fix: re-run `pytest --collect-only` for the test files; replace estimate with exact integers OR document parametrize expansion.
 
 ### Patch — LOW (3)
 
-- [ ] [Review][Patch] **VL-1 — Day-rollover INFO log misleading message** [packages/events/.../log_reader.py:744-753] — B8. "drained-then-rolled" vs "rolled-without-draining" indistinguishable. Fix: include `pre_rollover_envelope_count` in log line.
-- [ ] [Review][Patch] **VL-2 — `events_processed_since_last_persist` field semantics unclear** [services/metrics-subscriber/.../cursor.py:1547-1567] — B16. Name implies "since prior persist" but value is "in this persist window". Fix: rename to `events_in_this_persist_window` OR document explicitly in schema.
-- [ ] [Review][Patch] **VL-3 — Verify `FrozenClock` exported in events.__init__** [packages/events/.../test_log_reader.py:832-834] — B14. Tests import from top-level package; verify export exists. Fix: confirm or add to `__all__`.
+- [x] [Review][Patch] **VL-1 — Day-rollover INFO log misleading message** [packages/events/.../log_reader.py:744-753] — B8. "drained-then-rolled" vs "rolled-without-draining" indistinguishable. Fix: include `pre_rollover_envelope_count` in log line.
+- [x] [Review][Patch] **VL-2 — `events_processed_since_last_persist` field semantics unclear** [services/metrics-subscriber/.../cursor.py:1547-1567] — B16. Name implies "since prior persist" but value is "in this persist window". Fix: rename to `events_in_this_persist_window` OR document explicitly in schema.
+- [x] [Review][Patch] **VL-3 — Verify `FrozenClock` exported in events.__init__** [packages/events/.../test_log_reader.py:832-834] — B14. Tests import from top-level package; verify export exists. Fix: confirm or add to `__all__`.
 
 ### Deferred (none — all addressed in this pass)
+
+---
+
+## Review Findings — pass-2 (2026-05-19)
+
+Pass-2 adversarial review on pass-1 batch diff `87f3db5~1..87f3db5` (2415 lines, 19 files). Three independent lanes ran in parallel: Blind Hunter (zero context, 15 findings B1–B15), Edge Case Hunter (project read access, 8 findings E1–E8), Acceptance Auditor (spec audit, 8 findings A1–A8). After dedup and convergence-weighting → **24 unique findings**. **Verdict: REVISE** — pass-1's substantive code changes are largely sound; gaps are bookkeeping (A1/A5/A6/A8), one outright dismissal (A2/P2-H9), one missing operator-UX layer (A4/P2-H2), several startup/recovery operational regressions (E1/E2/B2/B3 → P2-H1/P2-H3/P2-H7), and one Python-deprecation footgun (B4 → P2-H8). All 24 will close per "fix all issues even minors" policy.
+
+### Decisions (resolved before pass-2 batch)
+
+- **Q4 — VH-1+VH-6 startup latency vs. crash-safety:** Lower default `rollover_quiescence_s` to **5.0s** (was 60.0s) AND add fast-path skip when reader just drained yesterday to EOF AND today_path exists with `st_size > 0`. Rationale: 60s on every restart-after-midnight is an undocumented operational regression (3-lane convergence E2+B2+A3); 5s bounds startup latency while keeping the "wait for writer quiescence" safety; fast-path eliminates the cost when there's nothing left to drain on yesterday. (Per A3 fix part c, also document residual 5s lag.)
+- **Q5 — VH-13 RuntimeError recovery policy:** Introduce dedicated `ParseSkipThresholdExceeded(EventsError)` exception class. `run_subscriber` catches it, logs `metrics_subscriber_corrupt_region_detected` (structured) with cursor offset + last_envelope_id, returns exit code **3** (distinct from VH-9's 2, VH-10's 1). This preserves VM-3's "RuntimeError = programmer error, propagate" decision for true programmer errors while routing operational corruption through a structured failure path. Operator can advance cursor manually via offline tool (Story 10.4+ scope).
+- **Q6 — VH-9 / VH-10 / VH-13 exit code matrix:** Reserve exit codes for distinct startup-refusal classes so dashboards can alert separately: `0` success, `1` concurrent-start-refused (VH-10), `2` cursor-schema-version-refused (VH-9), `3` corrupt-region-detected (VH-13). Document in Dev Agent Record.
+- **Q7 — VH-11 clamp+rotation silent stall:** Re-run `_validate_offset` on every poll (not just at restore). If `offset > current_file_size` mid-stream, log CRITICAL `metrics_subscriber_offset_clamp_after_rotation` and clamp to current file_size. Avoid making policy configurable (YAGNI for Phase 2).
+- **Q8 — VH-3 soft→hard cap behavioral change:** Audit registry-state callers of `read_batch` / `read_new_envelopes_since` before flipping. If no caller depends on soft-cap behavior, keep hard cap + add docstring CHANGELOG note. If any caller does, restore soft-cap as opt-in `hard_cap: bool = True` parameter.
+- **Q9 — `asyncio.get_event_loop()` → `asyncio.get_running_loop()`:** Direct replacement (B4). Variable rename `_yesterday_last_size_at_s` → `_yesterday_last_size_at_monotonic_s` for clarity (loop.time is monotonic, not wall-clock).
+
+### Pass-1 checkbox closure (P2-H10 mechanical)
+
+Tick `[x]` on every applied finding from pass-1 (VH-1, VH-2, VH-3, VH-4, VH-5, VH-6, VH-8, VH-9, VH-10, VH-11, VH-12, VH-13, VH-14, VH-15, VM-1, VM-2, VM-3, VM-4, VM-5, VM-6, VM-7, VM-8, VM-9, VM-10, VL-1, VL-2, VL-3 = 27 items). Leave `[ ]` on VH-7 only, with explicit `**DEFERRED — see P2-H9**` annotation.
+
+### Patch — HIGH (12)
+
+- [x] [Review][Patch] **P2-H1 — VH-1+VH-6 60s rollover quiescence is restart-after-midnight regression** [packages/events/src/events/log_reader.py:687-703] — **3-lane: E2+B2+A3**. Production default `_DEFAULT_ROLLOVER_QUIESCENCE_S = 60.0` adds a 60s cold-start delay on every restart-after-midnight, with NTP-skew writer appends extending it indefinitely. Test sets `0.0` to mask the regression. Fix per Q4: (a) lower default to `5.0`; (b) fast-path in `_is_rollover_ready` — if reader's cursor offset equals current file size AND today_path exists with `st_size > 0`, return True immediately without waiting; (c) add integration test `test_restart_after_midnight_completes_within_5s` using production defaults. Document residual 5s lag in Dev Agent Record "Surprises".
+
+- [x] [Review][Patch] **P2-H2 — VH-9 `CursorSchemaVersionError` lacks structured log; raw traceback exits the process** [services/metrics-subscriber/src/metrics_subscriber/__main__.py:223-244 + cursor.py:227-233] — **2-lane: B1+A4**. Pass-1 changed VH-9 to "raise + exit non-zero" but `main()` only suppresses `KeyboardInterrupt`. `CursorSchemaVersionError` propagates through `asyncio.run()` as uncaught traceback. Pass-1 intent ("Let operator decide") requires structured `log.error("metrics_subscriber_cursor_schema_version_refused", cursor_path=..., found_schema_version=..., expected="1")` parallel to VH-10's `metrics_subscriber_concurrent_start_refused`. Fix per Q6: wrap `restore_into` call in `run_subscriber` with `except CursorSchemaVersionError`, emit structured log, return exit code **2**. Add `test_main_exit_2_on_schema_version_refused` asserting both rc==2 AND the structured event captured.
+
+- [x] [Review][Patch] **P2-H3 — VH-13 `RuntimeError` from `iter_new_envelopes_since` causes infinite crash loop with no recovery** [packages/events/src/events/log_reader.py:248-257 + __main__.py:187-200] — **Solo HIGH: B3**. When corruption threshold trips, `RuntimeError` propagates out of `tail()` → `run_subscriber` → `main()`. Cursor is persisted at the LAST successful envelope's offset (before the corrupt run); on restart, reader re-seeks to that offset, re-reads the corrupted region, raises again. No operator intervention path. Fix per Q5: (a) introduce `class ParseSkipThresholdExceeded(EventsError)` in `packages/events/src/events/errors.py`; (b) raise it from `iter_new_envelopes_since` (replaces generic `RuntimeError`); (c) catch in `run_subscriber`, log `metrics_subscriber_corrupt_region_detected` with offset+last_envelope_id, return exit code **3**. Add restart-loop integration test confirming the second restart also exits 3 (not crash-loop).
+
+- [x] [Review][Patch] **P2-H4 — VH-13 `contiguous_skips` is per-call local; resets every poll → silent miss of long corruption runs** [packages/events/src/events/log_reader.py:228-257] — **2-lane: E5+B12**. The counter is initialized as local inside `iter_new_envelopes_since`. Each poll opens the file fresh and resets to 0. Real corruption pattern (50 bad lines per poll across 10 polls = 500 silently dropped, never tripping the 100-line threshold). Fix: hoist `_contiguous_parse_skips: int = 0` to `EventLogReader` instance state, reset only on successful parse (across polls). Adjust comparison to `>=` (clearer "raises on Nth skip" semantics, fixes B12 off-by-one). Add test exercising multi-poll skip accumulation.
+
+- [x] [Review][Patch] **P2-H5 — VH-8 cursor-advance-after-yield test asserts wrong invariant; "exactly-once" silently became "at-most-one-duplicate"** [packages/events/src/events/test_log_reader.py + log_reader.py:240-257] — **2-lane: E3+B5**. Current `test_iter_new_envelopes_since_cursor_advances_after_yield` tests determinism (same input → same first yield), NOT the VH-8 invariant. The real VH-8 fix lives in `EventLogReader.tail()` where `self._cursor_offset = offset_after` follows `yield envelope` — but no test injects a consumer-raise to verify the cursor stays on the prior line. Pass-1's restart-test loosening (`duplicate_count <= 1`) silently weakens AC7 from "exactly-once" to "at-most-one-duplicate at restart boundary". Fix: (a) add `test_tail_cursor_unchanged_on_consumer_raise` — inject consumer raising on envelope N, assert `reader.cursor_offset` equals the offset PRIOR to envelope N; (b) update AC7 wording in the spec to "at-most-once-duplicate at restart boundary" with explicit rationale (consumer-side side-effects must be idempotent); (c) annotate `note_event_processed()` docstring with the Story 10.4 idempotency requirement.
+
+- [x] [Review][Patch] **P2-H6 — VH-10 `fcntl.flock` only catches `BlockingIOError`; `OSError` on NFS/FUSE/overlay leaks** [services/metrics-subscriber/src/metrics_subscriber/cursor.py + AC5 spec] — **Solo HIGH: E4**. On non-local filesystems (NFS without lockd, some FUSE mounts, overlayfs in containers), `fcntl.flock` returns `OSError(EINVAL/ENOLCK/EOPNOTSUPP)` not `BlockingIOError`. Currently uncaught → subscriber crashes at startup on unsupported FS. Fix: catch `(BlockingIOError, OSError) as exc:` — distinguish `EWOULDBLOCK` (legit concurrent-start refusal, exit 1) from other OSError (log CRITICAL `metrics_subscriber_flock_unsupported_filesystem`, document local-FS requirement, exit 1 with distinct event field `reason="filesystem_unsupported"`). Add docstring note + Dev Agent Record entry.
+
+- [x] [Review][Patch] **P2-H7 — VH-1 yesterday-tail backfill: `_validate_offset` clamps to `file_size=0` if yesterday's file is missing/truncated → reader stalls forever** [services/metrics-subscriber/src/metrics_subscriber/cursor.py:262-326] — **Solo HIGH: E1**. After logrotate or accidental deletion, `persisted_path != today_path AND not persisted_path.exists()` → `stat` raises FileNotFoundError → caught somewhere upstream → seek lands on missing path with offset=0. The reader sits on missing path forever (no rollover signal because `_current_path` IS yesterday's path, `_is_rollover_ready` compares to today). AC7 still violated for this edge case. Fix: in `restore_into`, before `_validate_offset`, check `if not persisted_path.exists():` → log CRITICAL `metrics_subscriber_persisted_path_missing_falling_through_to_today`, fall through to today-fresh path (skip the yesterday-tail backfill entirely). Add test for "yesterday file deleted between persist and restart".
+
+- [x] [Review][Patch] **P2-H8 — `asyncio.get_event_loop()` deprecated inside coroutine; will error in Python 3.14+** [packages/events/src/events/log_reader.py:599] — **Solo HIGH: B4**. Introduced in pass-1 for `_is_rollover_ready`'s `loop.time()`. `asyncio.get_event_loop()` is deprecated since Python 3.10 inside `async def`, will raise `DeprecationWarning` → `RuntimeError` in 3.14+. Fix per Q9: replace with `asyncio.get_running_loop()`. Consider `time.monotonic()` direct call instead (no asyncio-specific reason for `loop.time()`). Rename `_yesterday_last_size_at_s` → `_yesterday_last_size_at_monotonic_s` for clarity.
+
+- [x] [Review][Patch] **P2-H9 — VH-7 silently dismissed; spec-mandated subprocess restart test not added** [services/metrics-subscriber/src/metrics_subscriber/test_restart_recovery.py:16-20] — **Solo HIGH: A2**. Pass-1 plan said *"add subprocess-based variant using `python -m metrics_subscriber` + real `proc.send_signal(SIGTERM)`. Keep fast in-process exactly-once test + add `@pytest.mark.slow` subprocess test."* Actual implementation: docstring argues *"AC7's 'spawn subscriber' requirement is satisfied semantically..."* — exactly the defense pass-1 rejected. No subprocess test exists. SIGTERM-to-exit-via-signal-handler path has zero coverage. Fix: implement the subprocess variant — spawn `python -m metrics_subscriber` via `subprocess.Popen`, send `proc.send_signal(signal.SIGTERM)`, mark `@pytest.mark.slow`, assert `cursor.json` offset > 0 after first run, restart and assert exactly-once across the boundary.
+
+- [x] [Review][Patch] **P2-H10 — Checkbox audit: all 28 pass-1 review-patch checkboxes still `[ ]` despite ~27/28 applied; AI-3 anti-pattern (inverted)** [_bmad-output/implementation-artifacts/10-2-tail-loop-cursor-persistence.md:319-352] — **Solo HIGH: A1**. `grep -c "^- \[x\]"` returns 0; `grep -c "^- \[ \]"` returns 28. Most patches ARE applied in source but the doc state is unchanged. Mirrors the Story 9.7 anti-pattern that Epic 9 retro AI-3 warned about — inverted (all-unchecked-but-claimed-done vs. aggregated-checked-but-incomplete). Fix: tick `[x]` on every applied finding (27 items) and leave `[ ]` only on VH-7 with `**DEFERRED — see P2-H9**` annotation (will close in pass-2 batch). See "Pass-1 checkbox closure" block above.
+
+- [x] [Review][Patch] **P2-H11 — VH-3 silent soft→hard cap behavioral change for `read_batch` callers** [packages/events/src/events/log_reader.py:519-550] — **2-lane: B10+A7**. Pre-pass-1 docstring said "soft cap"; post-pass-1 it's a hard cap. Plus `max_events > max_lines_per_poll` silently caps at `max_lines_per_poll` without warning (A7 two-cap interaction). Fix per Q8: (a) `grep -rn "read_batch\|read_new_envelopes_since" services/registry-state services/registry-api` to enumerate callers; (b) if no caller depends on soft-cap, keep hard cap + add CHANGELOG-style note in docstring + emit `WARNING max_events_exceeds_line_cap` once-per-process when `max_events > max_lines_per_poll`; (c) if any caller depends on it, restore soft-cap as opt-in `hard_cap: bool = True` parameter. Document Story 10.4 readers should pass `max_events <= max_lines_per_poll`.
+
+- [x] [Review][Patch] **P2-H12 — VH-11 clamp-to-EOF + external rotation → reader stalls silently on next poll** [services/metrics-subscriber/src/metrics_subscriber/cursor.py:315-326] — **Solo HIGH: B11**. Restore-time clamp seats reader at old EOF. If file is rotated to a smaller size, next poll opens, seeks to old EOF (which now exceeds new file_size), reads zero bytes, stalls silently. CRITICAL log fires once at restore; nothing fires on subsequent stalls. Fix per Q7: in `EventLogReader.tail()` before each `_drain_chunk`, stat current file; if `self._cursor_offset > current_file_size`, log CRITICAL `metrics_subscriber_offset_clamp_after_rotation` (with old_offset + new_file_size) and clamp to current_file_size. Add test `test_tail_clamps_offset_after_external_rotation` writing N events, rotating file to truncated copy, asserting reader recovers (does not stall).
+
+### Patch — MED (8)
+
+- [x] [Review][Patch] **P2-M1 — VM-9 docstring overstates fix; `open()` still seats `_current_path` eagerly** [packages/events/src/events/log_reader.py:499-507] — B6. Pass-1 plan said "defer path computation; let `tail()` be single source of truth", but `open()` still computes `current_day_path` at-call. The actual fix is `tail()` re-evaluating today_path each iteration (correct). The original VM-9 concern (restored offset silently discarded on midnight-straddle startup) is mitigated via VH-6 quiescence, not via deferred path. Fix: rewrite `open()` docstring to: *"Best-effort seat at today's path for fresh-start callers. For restart-with-cursor, callers should use `cursor.restore_into(reader)` which calls `seek()` directly. Midnight-straddle for fresh-start is handled by `tail()`'s per-iteration today_path re-evaluation + VH-6 quiescence."* Note: `restore_into` uses `seek()` not `open()`.
+
+- [x] [Review][Patch] **P2-M2 — VM-6 `__aenter__`/`__aexit__` placeholders provide no lifecycle benefit; future-trap on resource handles** [packages/events/src/events/log_reader.py:482-493] — **2-lane: E6+B15**. `async with EventLogReader(...)` in `__main__.py:179` is effectively a no-op. If Story 10.4 contributor adds an open fd or async task to the reader and forgets to wire `__aexit__`, the `async with` site won't fail loudly. Fix: add `self._closed: bool = False` flag; in `__aexit__` set `self._closed = True`; in `tail()` / `open()` / `seek()` raise `RuntimeError("EventLogReader used after close")` if `_closed`. This converts the placeholder into an enforced contract. Document for Story 10.4 contributors.
+
+- [x] [Review][Patch] **P2-M3 — VM-7 `_StepClock` test-only relies on GIL atomicity; nogil future-trap** [packages/events/src/events/test_log_reader.py:_StepClock] — Solo MED: E7. Pre-existing test helper; will silently break under PEP 703 (Python 3.14+ no-GIL). Marginal but documented for future. Fix: add explicit `threading.Lock()` around `self._next` mutation in `_StepClock.now()`. One-liner. Document "test-only; production clock uses `time` module which is GIL-independent".
+
+- [x] [Review][Patch] **P2-M4 — `_is_rollover_ready` triggers on stale `today_path` from prior day (retention failure / test detritus)** [packages/events/src/events/log_reader.py:687-703] — Solo MED: B7. `today_path.exists()` returns True even if the file is from a prior week (retention bug). Combined with quiescent yesterday, would fire rollover and seat reader at offset 0 of stale file. Fix: add `today_path.stat().st_mtime > (now - 25h)` guard before declaring rollover-ready. Add docstring note. Add test `test_rollover_skips_if_today_path_is_stale_mtime`.
+
+- [x] [Review][Patch] **P2-M5 — VM-1 `previous_path: Path` annotation wrong + dead `last_envelope = None` line** [services/metrics-subscriber/src/metrics_subscriber/__main__.py:184-197] — Solo MED: B9. (a) `reader.current_path` returns `Path | None`; annotation forces `Path` — mypy --strict will flag once property typing is tightened; (b) `last_envelope = None` inside the rollover branch is overwritten two lines later → dead code. Fix: (a) `previous_path: Path | None = reader.current_path` + assert/handle None; (b) inside rollover branch, emit `log.info("metrics_subscriber_day_rollover_observed", from_path=..., to_path=...)` and drop the dead `last_envelope = None` line (the unconditional `last_envelope = envelope` below already does the right thing).
+
+- [x] [Review][Patch] **P2-M6 — Parent-dir fsync `os.open(parent)` failure path uncovered** [services/metrics-subscriber/src/metrics_subscriber/cursor.py:392-403] — Solo MED: B13. If `os.replace` succeeds but `os.open(parent)` raises (EMFILE, parent dir vanished), the except handler re-raises without diagnostic log. Rename already happened — partial durability is still better than aborting. `test_atomic_write_fsyncs_parent_dir` only counts fsync calls, doesn't test failure. Fix: wrap `os.open(parent) → fsync → close` in `try/except OSError`, log `metrics_subscriber_parent_fsync_failed` warning and continue (rename succeeded; cursor is on disk). Add test patching `os.open` to raise OSError on parent path, assert warning emitted + persist completes.
+
+- [x] [Review][Patch] **P2-M7 — Spec ACs not back-annotated with Q1/Q2/Q3 pass-1 decisions; spec body now contradicts Decisions block** [_bmad-output/implementation-artifacts/10-2-tail-loop-cursor-persistence.md AC2/AC3/AC9] — Solo MED: A8. AC3 line 84-86 still says *"if path is a previous day's file (rollover happened during downtime), open today's at offset 0 AND log a WARNING"* — contradicts Q1 (now drains yesterday first). AC9 line 159-165 still includes `wall_clock_lag_s=now_ns - envelope.emitted_at_monotonic_ns` cross-process subtraction — contradicts Q2. AC2 line 51 advertises `read_batch(max_events=1000)` only — Q3's `iter_new_envelopes_since` public helper not surfaced. Story 10.3 author + future operators see contradictory picture. Fix: edit AC3/AC9/AC2 in-place with inline `(updated pass-1 — see Q1/Q2/Q3 Decisions block)` annotations reflecting actual implemented design.
+
+- [x] [Review][Patch] **P2-M8 — Dev Agent Record stale on test count, mypy baseline, schema-version contract, lockfile artifact, quiescence regression** [_bmad-output/implementation-artifacts/10-2-tail-loop-cursor-persistence.md:358-516] — Solo MED: A5. Test count delta claim "34 new test functions / +31 passing" contradicts actual ~45 collected. Mypy baseline claim "117" not re-verified post-pass-1. "Surprises / deviations" section missing: (1) VH-9 changed behavior pre→post-pass-1 (silent-reset → refuse-to-start); (2) VH-10 introduces brand-new lockfile artifact `<cursor_path>.lock` not in AC3 spec table line 224; (3) VH-6 default 60s rollover quiescence operational lag (after P2-H1, becomes 5s). Fix: re-run `pytest --collect-only -q services/metrics-subscriber packages/events`, update test count delta to actual integers; re-run `uv run mypy --strict packages/ services/registry-api services/registry-state services/metrics-subscriber`, update mypy baseline with evidence; add three bullets under "Surprises / deviations" covering VH-9/VH-10/VH-6 behavior changes + exit code matrix (0/1/2/3 per Q6); update implementation summary to mark Pass-1 + Pass-2 review as complete.
+
+### Patch — LOW (4)
+
+- [x] [Review][Patch] **P2-L1 — VH-10 lock test only exercises same-process; production cross-process semantics not verified** [services/metrics-subscriber/src/metrics_subscriber/test_cursor.py:1914-1929] — Solo LOW: B8. Pass-1 docstring misstates flock semantics ("per-fd in the same process") — fcntl.flock is per-OFD on Linux, contends across `os.open` calls in same process AND across processes. Same-process test validates OFD contention only. Fix: add subprocess-based test parallel to P2-H9's VH-7 approach — spawn two `python -m metrics_subscriber` processes against the same `OMB_METRICS_CURSOR_PATH`, assert second exits non-zero with `metrics_subscriber_concurrent_start_refused` event captured in stderr. Mark `@pytest.mark.slow`. Correct the docstring's flock semantics note.
+
+- [x] [Review][Patch] **P2-L2 — VL-2 `events_in_this_persist_window` rename has no `schema_version` bump; operator tooling silent break** [services/metrics-subscriber/src/metrics_subscriber/cursor.py:378-381] — Solo LOW: B14. Pre-pass-1 cursor.json contained `events_processed_since_last_persist`; pass-1 renames to `events_in_this_persist_window` without bumping `schema_version`. Operator tooling, log-aggregation queries, and dashboards grepping for the old name break silently. Fix: bump `schema_version` to `"1.1"` (semver-minor: backwards-compatible field rename) AND for one release cycle, write BOTH field names in the JSON payload (drop the old one in Story 10.4). Update `restore_into` to accept both schema_version `"1"` and `"1.1"`. Document in Dev Agent Record + operator runbook.
+
+- [x] [Review][Patch] **P2-L3 — Sprint-status audit trail missing for pass-1 outcomes** [_bmad-output/implementation-artifacts/sprint-status.yaml] — Solo LOW: A6. Inline annotation `+31 tests; mypy 107→117` reflects pre-pass-1 state. Pass-1 added ~14 new test functions and may have shifted mypy baseline. No annotation reflects pass-1 outcomes. Fix: update inline annotation to `10-2-tail-loop-cursor-persistence: review  # phase: 2 · FR60 · 12/12 ACs · pass-1: 27/28 patches applied (VH-7 deferred → P2-H9); pass-2: 24 findings → batch in flight; ~45 test fns`. Once pass-2 batch closes, transition status to `done` with final consolidated numbers (after CI green).
+
+- [x] [Review][Patch] **P2-L4 — Sentinel single-writer allowlist limitation undocumented (pre-existing)** [tests/separability/*.py + tests/integration/test_journey_1_overnight.py] — Solo LOW: E8. Pre-existing project-wide limitation surfaced by Story 10.2's AC1 extraction: the single-writer gate's allowlist mechanism is path-based rather than module-based, so future read-then-write modules in `packages/events/` (e.g., Story 10.4's cursor-managing helpers) will require explicit allowlist entries. Not a defect, but undocumented. Fix: add a docstring note to `packages/events/src/events/log_reader.py` module header explaining the read-only contract for callers in `services/` (single-writer gate enforces write-from-orchestrator-only). Add a one-line "See also" pointer in `tests/separability/conftest.py` or equivalent.
+
+### Deferred (none — all 24 addressed in this pass)
 
 ---
 
@@ -359,14 +484,20 @@ Triaged from 3-lane adversarial review (Blind Hunter + Edge Case Hunter + Accept
 
 ### Implementation summary
 
-Pass-1 implementation of Story 10.2 complete. The β metrics-subscriber
-service now has a real async lifespan (replacing Story 10.1's scaffold
-print): `EventLogReader` opens today's JSONL file, `CursorPersistence`
-restores from `cursor.json` (or starts fresh + WARNING on day-rollover
-during downtime), the tail loop yields envelopes one-by-one with per-
-line cursor advance, and SIGTERM drains the cursor before exit. All
-12 ACs satisfied; mypy --strict, ruff, and the full test suite are
-green. Pass-2 adversarial review pending per Epic 9 retro AI-1.
+Pass-1 + Pass-2 adversarial review of Story 10.2 complete. The β
+metrics-subscriber service has a real async lifespan (replacing
+Story 10.1's scaffold print): `EventLogReader` opens today's JSONL
+file, `CursorPersistence` restores from `cursor.json` (or starts
+fresh + WARNING on day-rollover during downtime, two-phase
+backfilling yesterday's tail per pass-1 VH-1), the tail loop yields
+envelopes one-by-one with per-line cursor advance, and SIGTERM
+drains the cursor before exit. All 12 ACs satisfied; mypy --strict,
+ruff, and the targeted services/metrics-subscriber + packages/events
+test suite (479 collected) are green.
+
+Pass-2 (P2-H1..P2-H12 + P2-M1..P2-M8 + P2-L1..P2-L4 = 24 patches)
+closed all findings from a 3-lane re-review (Blind Hunter + Edge
+Case Hunter + Acceptance Auditor) on commit `87f3db5`.
 
 ### Files changed
 
@@ -407,14 +538,32 @@ green. Pass-2 adversarial review pending per Epic 9 retro AI-1.
 
 ### Test count delta
 
-- Pre-10.2 baseline: **2784** passed.
-- Post-10.2: **2815** passed (delta = +31 new tests).
-- Breakdown: `test_log_reader.py` (17), `test_config.py` (6),
-  `test_cursor.py` (9), `test_day_rollover.py` (1),
-  `test_restart_recovery.py` (1) — total 34 new test functions, with
-  3 net pytest-collected-test-count adjustment from fixture
-  isolation.
-- mypy --strict baseline: **107 → 117** source files.
+Counts re-verified post-pass-2 via
+`pytest --collect-only -q services/metrics-subscriber packages/events`
+and `uv run mypy --strict packages/ services/registry-api services/registry-state services/metrics-subscriber`:
+
+- Pre-10.2 baseline (services/metrics-subscriber + packages/events
+  scope): **~415** collected.
+- Post-10.2 pass-1: **463** collected.
+- Post-10.2 pass-2: **479** collected (delta over pass-1: +16 new
+  test functions; over pre-10.2: +64 new tests in this scope).
+- New pass-2 test files:
+  - ``test_log_reader.py`` (added): 6 new tests (P2-H4 multi-poll
+    skip × 2, P2-H5 cursor-unchanged-on-raise, P2-H12 clamp-after-rotation,
+    P2-M2 used-after-close, P2-M4 stale-mtime).
+  - ``test_cursor.py`` (added): 4 new tests (P2-H7 missing-yesterday
+    path, P2-L2 schema_v1 still accepted + dual-field write,
+    P2-M6 parent fsync failure).
+  - ``test_exit_codes.py`` (NEW file): 3 tests (P2-H2 schema_version
+    refused → rc=2, P2-H3 corrupt-region → rc=3, P2-H3 restart loop
+    does not crash).
+  - ``test_restart_recovery_subprocess.py`` (NEW file): 2 tests
+    (P2-H9 subprocess SIGTERM exactly-once, P2-L1 cross-process
+    flock refusal) — both ``@pytest.mark.slow``.
+  - ``test_day_rollover.py`` (added): 1 new test (P2-H1 fast-path
+    restart-after-midnight within 5s).
+- mypy --strict baseline: **117 → 119** source files (added two new
+  test modules — ``test_exit_codes.py`` + ``test_restart_recovery_subprocess.py``).
 
 ### EventLogReader extraction scope decision
 
@@ -499,20 +648,63 @@ re-export name).
    is enforced post-hoc on the in-memory list, not at the byte-read
    level. Acceptable for Story 10.2's drop-on-floor consumer; if
    Story 10.4's metric updates ever become CPU-bound this can be
-   revisited.
+   revisited.  **(Pass-2 update P2-H11):** ``max_events`` is now a
+   HARD cap honoured at the line-read level (the soft cap was
+   the VH-3 bug — it silently dropped envelopes past the cap
+   because the cursor was already advanced past them).  Audit of
+   ``services/registry-state`` + ``services/registry-api`` callers
+   confirmed no caller depends on the soft-cap shape.  Pass-2 also
+   emits a once-per-process WARNING when ``max_events >
+   max_lines_per_poll`` so the inner line-cap truncation surprise
+   is visible to operators.
+5. **(Pass-2 — VH-9 behavior change, P2-M8 bullet 1)**
+   ``CursorSchemaVersionError`` was changed pre→post-pass-1 from
+   "silently reset to offset 0" to "raise + exit non-zero" (Q5/Q6
+   exit code matrix).  Pass-2 P2-H2 wraps the raise in
+   ``run_subscriber`` so the subscriber returns exit code **2** with
+   a structured ``metrics_subscriber_cursor_schema_version_refused``
+   log event — previously the exception propagated through
+   ``asyncio.run()`` as an uncaught traceback.
+6. **(Pass-2 — VH-10 introduces brand-new lockfile artifact, P2-M8
+   bullet 2)** ``<cursor_path>.lock`` is created lazily at
+   :meth:`CursorPersistence.lock` invocation.  The artifact is NEW
+   in pass-1 and was NOT in the AC3 spec table; pass-2 P2-H6 also
+   widens the catch to ``OSError`` (NFS/FUSE/overlay) so the
+   subscriber exits 1 with ``reason="filesystem_unsupported"`` on
+   non-local filesystems.  Operators must use a local filesystem for
+   ``OMB_METRICS_CURSOR_PATH``.
+7. **(Pass-2 — P2-H1 quiescence reduction, P2-M8 bullet 3)**
+   ``_DEFAULT_ROLLOVER_QUIESCENCE_S`` lowered from 60.0 → 5.0
+   (restart-after-midnight cold-start regression eliminated).  A
+   fast-path in :meth:`_is_rollover_ready` reduces this to ~0s when
+   the reader has already drained yesterday to EOF and today's file
+   has non-zero size.  Residual lag is ~5s when there is mid-flight
+   work to drain on yesterday but yesterday is no longer growing.
+8. **(Pass-2 — Q6 Exit code matrix)** ``0`` graceful · ``1``
+   concurrent-start-refused (VH-10) OR filesystem-unsupported
+   (P2-H6) · ``2`` cursor-schema-version-refused (VH-9 + P2-H2) ·
+   ``3`` corrupt-region-detected (P2-H3 — distinct from generic
+   ``RuntimeError`` programmer errors which still propagate per
+   VM-3).
 
 ### Story 10.3 readiness check
 
 - ✅ `EventLogReader` exists in `packages/events/` (P2-I1 satisfied).
 - ✅ Tail loop running as async lifespan task in
   `metrics_subscriber.__main__.run_subscriber`.
-- ✅ `cursor.json` schema_version="1" stable for upstream consumers.
+- ✅ `cursor.json` schema_version="1.1" stable for upstream
+  consumers (pass-2 P2-L2; "1" and "1.1" both accepted; dual
+  field-name write for one release cycle).
 - ✅ Lag log fields (`bytes_behind`, `wall_clock_lag_s`) emit on
   every persist — Story 10.3 just needs to lift them into Prometheus
   gauges.
 - ✅ `MetricsSubscriberSettings` extensible (Story 10.3 can add
   `metrics_port: int = Field(default=9090)` without touching
   10.2's surface).
+- ✅ Exit code matrix (Q6): ``0`` graceful · ``1`` concurrent-start
+  / filesystem-unsupported · ``2`` cursor-schema-version refused ·
+  ``3`` corrupt-region detected.  Story 10.3 dashboards can alert
+  on each code separately.
 
 ---
 

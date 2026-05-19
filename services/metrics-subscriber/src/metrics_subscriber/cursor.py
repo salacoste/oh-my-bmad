@@ -59,6 +59,7 @@ validated against the on-disk file size.  Negative offsets raise
 from __future__ import annotations
 
 import contextlib
+import errno
 import fcntl
 import json
 import os
@@ -77,7 +78,13 @@ if TYPE_CHECKING:
 
 _log = structlog.get_logger(__name__)
 
-_SCHEMA_VERSION = "1"
+# P2-L2: bump from "1" → "1.1" for the ``events_in_this_persist_window``
+# field rename (semver-minor: backwards-compatible).  Both schema_versions
+# are accepted on restore; dual field-name write keeps log-aggregation
+# queries grepping the old name working for one release cycle, and the
+# old name will be dropped in Story 10.4.
+_SCHEMA_VERSION = "1.1"
+_ACCEPTED_SCHEMA_VERSIONS = frozenset({"1", "1.1"})
 
 
 class CursorPersistence:
@@ -120,6 +127,20 @@ class CursorPersistence:
         the lock — the caller (``__main__``) logs and exits non-zero so
         a second subscriber does not race with the first on cursor
         writes (which would silently corrupt the cursor file).
+
+        P2-H6 (E4): the ``fcntl.flock`` call also raises
+        :class:`OSError` (``EINVAL`` / ``ENOLCK`` / ``EOPNOTSUPP``) on
+        non-local filesystems (NFS without lockd, some FUSE mounts,
+        overlayfs in containers).  Pre-pass-2 these crashed the
+        subscriber at startup with an uncaught exception.  Now we
+        distinguish ``EWOULDBLOCK`` (concurrent-start, legitimate;
+        re-raise as :class:`BlockingIOError`) from other ``OSError``
+        codes (unsupported filesystem; log CRITICAL and re-raise as
+        :class:`BlockingIOError` so :func:`run_subscriber` exits 1
+        with a distinct ``reason="filesystem_unsupported"`` field).
+
+        Deployment requirement: the cursor path must live on a local
+        filesystem that supports ``fcntl.flock``.
         """
         self._path.parent.mkdir(parents=True, exist_ok=True)
         # O_CREAT to create the lockfile if missing; mode 0o640 to match
@@ -131,6 +152,29 @@ class CursorPersistence:
         except BlockingIOError:
             os.close(fd)
             raise
+        except OSError as exc:
+            os.close(fd)
+            # P2-H6: distinguish EWOULDBLOCK (concurrent-start) from
+            # other OSError codes (unsupported filesystem).  On Linux
+            # ``BlockingIOError`` is a subclass of ``OSError`` so this
+            # path is reached only for non-EWOULDBLOCK codes.
+            if exc.errno == errno.EWOULDBLOCK:
+                raise BlockingIOError(exc.errno, exc.strerror) from exc
+            _log.critical(
+                "metrics_subscriber_flock_unsupported_filesystem",
+                cursor_path=str(self._path),
+                lock_path=str(self._lock_path),
+                errno=exc.errno,
+                errno_name=errno.errorcode.get(exc.errno or 0, "?"),
+                detail=str(exc),
+                note=(
+                    "fcntl.flock returned a non-EWOULDBLOCK OSError; the "
+                    "cursor path likely lives on a filesystem that does not "
+                    "support advisory locking (NFS without lockd, some FUSE "
+                    "mounts, overlayfs).  Local filesystem required."
+                ),
+            )
+            raise BlockingIOError(exc.errno, "fcntl.flock unsupported on filesystem") from exc
         self._lock_fd = fd
 
     def unlock(self) -> None:
@@ -224,8 +268,10 @@ class CursorPersistence:
             return
 
         schema_version = payload.get("schema_version")
-        if schema_version != _SCHEMA_VERSION:
-            # VH-9: refuse to start.  Operator must intervene.
+        if schema_version not in _ACCEPTED_SCHEMA_VERSIONS:
+            # VH-9 + P2-L2: refuse to start on unknown schema_version.
+            # Both "1" (pre-pass-2) and "1.1" (current) are accepted so
+            # an in-place upgrade does NOT replay yesterday's events.
             raise CursorSchemaVersionError(
                 cursor_path=str(self._path),
                 schema_version=schema_version,
@@ -243,6 +289,31 @@ class CursorPersistence:
             return
 
         persisted_path = Path(persisted_path_str)
+
+        # P2-H7: yesterday-tail backfill is only meaningful when
+        # yesterday's file is still on disk.  After logrotate or
+        # accidental deletion the file is gone — seating the reader on
+        # a missing path would stall forever (the reader's own
+        # rollover detection compares to ``current_path`` so it never
+        # transitions away from the missing file).  Fall through to
+        # today-fresh instead.
+        if persisted_path != today_path and not persisted_path.exists():
+            _log.critical(
+                "metrics_subscriber_persisted_path_missing_falling_through_to_today",
+                cursor_path=str(self._path),
+                missing_path=str(persisted_path),
+                today_path=str(today_path),
+                persisted_offset=persisted_offset,
+                note=(
+                    "yesterday's JSONL file is missing on disk (logrotate, "
+                    "accidental delete, etc.); abandoning yesterday-tail "
+                    "backfill and starting fresh on today's path at offset 0. "
+                    "Events between [persisted_offset, yesterday_EOF) are "
+                    "permanently lost — operator runbook required."
+                ),
+            )
+            reader.open(initial_offset=0)
+            return
 
         # VH-11 — bounds validation against on-disk file size.
         validated_offset = self._validate_offset(persisted_path, persisted_offset)
@@ -330,7 +401,21 @@ class CursorPersistence:
     # ------------------------------------------------------------------
 
     def note_event_processed(self, n: int = 1) -> None:
-        """Increment the internal counter by *n* events (AC4)."""
+        """Increment the internal counter by *n* events (AC4).
+
+        Story 10.4 idempotency requirement (P2-H5): the AC7 invariant
+        is "at-most-one-duplicate at restart boundary" — the cursor
+        advances AFTER ``yield envelope`` returns control in
+        :meth:`EventLogReader.tail`, so a consumer-side raise leaves
+        the cursor on the previous successful line.  This means the
+        ONE envelope yielded immediately before a SIGTERM-set break
+        may be re-yielded after restart.  Story 10.4 counter / gauge
+        update side-effects MUST therefore be idempotent on envelope
+        ``event_id`` — incrementing a counter by ``event_id`` is safe
+        only if the consumer keeps a small dedupe window OR if the
+        counter naturally tolerates a single duplicate (e.g.,
+        ``set.add`` semantics).
+        """
         self._events_since_last_persist += n
 
     def maybe_persist(self, offset: int, path: Path) -> bool:
@@ -382,6 +467,10 @@ class CursorPersistence:
             # "events seen in this persist window", not "since the
             # prior persist call ran".
             "events_in_this_persist_window": self._events_since_last_persist,
+            # P2-L2: dual-field write for one release cycle so operator
+            # tooling / log-aggregation queries grepping the old name
+            # keep working.  Drop in Story 10.4.
+            "events_processed_since_last_persist": self._events_since_last_persist,
         }
         tmp_name: str | None = None
         try:
@@ -401,11 +490,35 @@ class CursorPersistence:
             tmp_name = None  # ownership transferred to self._path
             # VH-12: fsync the parent directory so the rename's
             # directory-entry change is durable.
-            dir_fd = os.open(str(self._path.parent), os.O_RDONLY)
+            # P2-M6: wrap the parent-dir open+fsync+close in
+            # try/except OSError.  If ``os.replace`` succeeded but
+            # ``os.open(parent)`` raises (EMFILE / parent dir vanished),
+            # the rename is already committed and partial durability
+            # is still better than aborting and re-raising — the
+            # cursor body is on disk; only the parent-dir-entry sync
+            # is missing.  Log a warning and continue.
             try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
+                dir_fd = os.open(str(self._path.parent), os.O_RDONLY)
+            except OSError as exc:
+                _log.warning(
+                    "metrics_subscriber_parent_fsync_failed",
+                    cursor_path=str(self._path),
+                    parent=str(self._path.parent),
+                    errno=exc.errno,
+                    errno_name=errno.errorcode.get(exc.errno or 0, "?"),
+                    detail=str(exc),
+                    note=(
+                        "os.replace succeeded but parent-dir fsync could not "
+                        "be performed (rename data is on disk; directory-entry "
+                        "durability across power-loss is not guaranteed). "
+                        "Continuing — partial durability > aborting."
+                    ),
+                )
+            else:
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
         except BaseException:
             # VH-12: cleanup the tempfile on any failure so we don't
             # leak ``cursor.*.json.tmp`` orphans.

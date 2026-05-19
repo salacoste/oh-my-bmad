@@ -108,6 +108,39 @@ class CursorSchemaVersionError(EventsError):  # noqa: N818
         )
 
 
+class ParseSkipThresholdExceeded(EventsError):  # noqa: N818
+    """Raised when a JSONL log accumulates too many consecutive parse-skips.
+
+    Story 10.2 pass-2 P2-H3 (Q5): routes operational log-corruption
+    through a structured failure path so the subscriber exits with a
+    distinct code (3) and logs the offset of the corrupted region.
+    Without this, the prior generic ``RuntimeError`` caused an
+    infinite restart loop — the cursor would persist before the
+    corrupted run, then the next restart re-read the same bytes and
+    re-raised.
+
+    Operators can manually advance the cursor past the corrupted
+    region via an offline tool (Story 10.4+ scope).
+
+    Attributes:
+        path: The JSONL file where the threshold was exceeded.
+        offset: The byte offset where the corrupted region begins
+            (i.e., the start of the run of un-parseable lines).
+        threshold: The configured ``max_contiguous_parse_skips``.
+    """
+
+    def __init__(self, *, path: str, offset: int, threshold: int) -> None:
+        self.path = path
+        self.offset = offset
+        self.threshold = threshold
+        super().__init__(
+            f"metrics_subscriber_parse_skip_threshold_exceeded: "
+            f"more than {threshold} consecutive unparseable lines in "
+            f"{path!r} starting at offset={offset}; refusing to advance "
+            "cursor past corrupted region. Operator inspection required."
+        )
+
+
 class CapabilityDenied(EventsError):  # noqa: N818
     """Raised when a caller's actor kind is not authorized for the requested tier.
 
@@ -141,5 +174,6 @@ __all__ = [
     "EventSchemaUnknown",
     "EventValidationError",
     "EventsError",
+    "ParseSkipThresholdExceeded",
     "WorktreeLockHeld",
 ]

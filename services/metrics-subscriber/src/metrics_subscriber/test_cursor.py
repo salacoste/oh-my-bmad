@@ -55,18 +55,20 @@ def _make_clock() -> FrozenClock:
 
 
 def test_first_time_persist_writes_schema_v1(tmp_path: Path) -> None:
+    """Pass-2 P2-L2: bumped to schema_version="1.1" with dual-field write."""
     cursor_path = tmp_path / "cursor.json"
     cp = CursorPersistence(cursor_path, persist_every=5, clock=_make_clock())
     log_path = tmp_path / "2026-05-19.jsonl"
     cp.persist_now(offset=42, path=log_path)
     body = json.loads(cursor_path.read_text())
-    assert body["schema_version"] == "1"
+    assert body["schema_version"] == "1.1"
     assert body["path"] == str(log_path)
     assert body["offset"] == 42
     assert body["persisted_at"].endswith("Z")
     # VL-2: field renamed to ``events_in_this_persist_window``.
     assert body["events_in_this_persist_window"] == 0
-    assert "events_processed_since_last_persist" not in body
+    # P2-L2: legacy field also written for one release cycle.
+    assert body["events_processed_since_last_persist"] == 0
 
 
 def test_maybe_persist_below_threshold_does_nothing(tmp_path: Path) -> None:
@@ -205,9 +207,12 @@ def test_atomic_write_no_partial_visible(tmp_path: Path) -> None:
 def test_concurrent_subscriber_refuses_to_start(tmp_path: Path) -> None:
     """VH-10 — second :meth:`lock` call (in same process) raises BlockingIOError.
 
-    fcntl.flock semantics: the lock is per-fd in the same process, so
-    we acquire two ``CursorPersistence`` instances on the same path —
-    the second raises immediately under ``LOCK_NB``.
+    fcntl.flock semantics (corrected in P2-L1): on Linux fcntl.flock
+    is per-OFD — contends across distinct ``os.open`` calls in the
+    same process AND across processes.  This in-process test
+    validates OFD contention only.  See
+    ``test_restart_recovery_subprocess.test_subprocess_second_instance_refuses_with_concurrent_start_event``
+    for cross-process coverage (P2-L1, ``@pytest.mark.slow``).
     """
     cursor_path = tmp_path / "cursor.json"
     cp1 = CursorPersistence(cursor_path, persist_every=5, clock=_make_clock())
@@ -335,3 +340,117 @@ def test_atomic_write_fsyncs_parent_dir(tmp_path: Path, monkeypatch: pytest.Monk
     cp.persist_now(offset=42, path=log_path)
     # At least 2 fsyncs: the tempfile + the parent directory.
     assert len(fsync_calls) >= 2
+
+
+# ---------------------------------------------------------------------------
+# P2-H7 — yesterday file missing → fall through to today-fresh
+# ---------------------------------------------------------------------------
+
+
+def test_restore_into_yesterday_missing_falls_through_to_today(
+    tmp_path: Path, captured_log_events: list[MutableMapping[str, Any]]
+) -> None:
+    """P2-H7 — persisted yesterday file deleted → start fresh on today.
+
+    Logrotate or accidental deletion can remove yesterday's file
+    between persist and restart.  Seating the reader on the missing
+    path would stall forever (the rollover detection compares against
+    ``self._current_path`` which IS the missing path).  Fix: fall
+    through to today-fresh + log CRITICAL.
+    """
+    cursor_path = tmp_path / "cursor.json"
+    cursor_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.1",
+                "path": str(tmp_path / "2026-05-18.jsonl"),  # does NOT exist
+                "offset": 1000,
+            }
+        )
+    )
+    cp = CursorPersistence(cursor_path, persist_every=5, clock=_make_clock())
+    reader = EventLogReader(tmp_path, clock=_make_clock())
+    cp.restore_into(reader, base_dir=tmp_path)
+    # Fell through to today at offset 0.
+    today_path = current_day_path(tmp_path, _TODAY)
+    assert reader.current_path == today_path
+    assert reader.cursor_offset == 0
+    assert any(
+        entry.get("event") == "metrics_subscriber_persisted_path_missing_falling_through_to_today"
+        for entry in captured_log_events
+    )
+
+
+# ---------------------------------------------------------------------------
+# P2-L2 — schema_version "1" still accepted for one release cycle
+# ---------------------------------------------------------------------------
+
+
+def test_restore_into_schema_v1_still_accepted(tmp_path: Path) -> None:
+    """P2-L2 — schema_version "1" is accepted alongside "1.1" (transition)."""
+    cursor_path = tmp_path / "cursor.json"
+    today_path = current_day_path(tmp_path, _TODAY)
+    today_path.write_bytes(b"x" * 1024)
+    cursor_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",  # pre-pass-2 cursor
+                "path": str(today_path),
+                "offset": 512,
+            }
+        )
+    )
+    cp = CursorPersistence(cursor_path, persist_every=5, clock=_make_clock())
+    reader = EventLogReader(tmp_path, clock=_make_clock())
+    cp.restore_into(reader, base_dir=tmp_path)
+    assert reader.cursor_offset == 512
+
+
+def test_persist_writes_dual_field_for_transition(tmp_path: Path) -> None:
+    """P2-L2 — both legacy and renamed fields written for one release."""
+    cursor_path = tmp_path / "cursor.json"
+    cp = CursorPersistence(cursor_path, persist_every=5, clock=_make_clock())
+    log_path = tmp_path / "2026-05-19.jsonl"
+    cp.note_event_processed(3)
+    cp.persist_now(offset=42, path=log_path)
+    body = json.loads(cursor_path.read_text())
+    # Both fields present; both equal.
+    assert body["events_in_this_persist_window"] == 3
+    assert body["events_processed_since_last_persist"] == 3
+    assert body["schema_version"] == "1.1"
+
+
+# ---------------------------------------------------------------------------
+# P2-M6 — parent-dir fsync failure does not abort persist
+# ---------------------------------------------------------------------------
+
+
+def test_parent_dir_fsync_failure_logged_persist_completes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    captured_log_events: list[MutableMapping[str, Any]],
+) -> None:
+    """P2-M6 — ``os.open(parent)`` failure is non-fatal; persist completes."""
+    cursor_path = tmp_path / "cursor.json"
+    cp = CursorPersistence(cursor_path, persist_every=1, clock=_make_clock())
+    log_path = tmp_path / "2026-05-19.jsonl"
+
+    original_open = os.open
+    parent_str = str(cursor_path.parent)
+
+    def _flaky_open(path: str | bytes, flags: int, mode: int = 0o777) -> int:
+        if str(path) == parent_str and flags == os.O_RDONLY:
+            raise OSError(24, "EMFILE simulation")
+        return original_open(path, flags, mode)
+
+    monkeypatch.setattr(os, "open", _flaky_open)
+    # Should NOT raise; the rename already succeeded.
+    cp.persist_now(offset=99, path=log_path)
+    # Cursor body is on disk.
+    body = json.loads(cursor_path.read_text())
+    assert body["offset"] == 99
+    # Warning was emitted.
+    assert any(
+        entry.get("event") == "metrics_subscriber_parent_fsync_failed"
+        for entry in captured_log_events
+    )

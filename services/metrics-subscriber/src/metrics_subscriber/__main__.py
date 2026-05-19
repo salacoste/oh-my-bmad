@@ -1,5 +1,20 @@
 """Async lifespan entrypoint for the β metrics-subscriber service.
 
+Exit code matrix (Q6 — pass-2):
+
+* **0** — graceful shutdown (SIGTERM, SIGINT, or stop_event set).
+* **1** — concurrent-start refused (VH-10 ``BlockingIOError``) OR
+  filesystem-unsupported (P2-H6 — ``fcntl.flock`` raised non-EWOULDBLOCK
+  ``OSError`` on NFS/FUSE/overlay).  Distinct via the structured log
+  ``reason`` field (``"concurrent_start"`` vs ``"filesystem_unsupported"``).
+* **2** — cursor schema_version refused (VH-9 + P2-H2 —
+  :class:`CursorSchemaVersionError`).  Operator must inspect
+  ``cursor.json`` manually.
+* **3** — corrupt-region detected (P2-H3 — :class:`ParseSkipThresholdExceeded`).
+  The JSONL log has a contiguous run of un-parseable lines exceeding
+  the threshold; operator must inspect and advance the cursor past
+  the corrupted region via an offline tool (Story 10.4+ scope).
+
 Story 10.2 replaces the Story-10.1 scaffold print with the actual tail
 loop:
 
@@ -41,6 +56,7 @@ from pathlib import Path
 
 import structlog
 from events import EventEnvelope
+from events.errors import CursorSchemaVersionError, ParseSkipThresholdExceeded
 from events.log_reader import EventLogReader
 
 from metrics_subscriber import __version__
@@ -160,44 +176,119 @@ async def run_subscriber(
         settings.cursor_path,
         persist_every=settings.persist_every_n_events,
     )
-    # VH-10 — acquire fcntl lock; refuse to run on contention.
+    # VH-10 + P2-H6 — acquire fcntl lock; refuse to run on contention.
+    # Both ``concurrent_start`` and ``filesystem_unsupported`` exit
+    # with code 1 but emit distinct structured logs so dashboards can
+    # alert separately.
     try:
         cursor.lock()
-    except BlockingIOError:
+    except BlockingIOError as exc:
+        # The P2-H6 path inside ``cursor.lock()`` re-raises
+        # filesystem-unsupported OSError as BlockingIOError WITH a
+        # specific message so we can distinguish here.  The "unsupported"
+        # path already emitted ``metrics_subscriber_flock_unsupported_filesystem``
+        # CRITICAL; we add the concurrent-start log only for the
+        # legitimate concurrent-start case.
+        reason = "filesystem_unsupported" if "unsupported" in str(exc) else "concurrent_start"
         log.error(
             "metrics_subscriber_concurrent_start_refused",
             cursor_path=str(settings.cursor_path),
+            reason=reason,
             note=(
                 "another subscriber process already holds the cursor lock; "
                 "refusing to start to avoid corrupting cursor.json"
+                if reason == "concurrent_start"
+                else "fcntl.flock unsupported on cursor filesystem"
             ),
         )
         return 1
 
     try:
-        # VM-6: ``async with`` per AC5 spec sketch.
+        # VM-6 / P2-M2: ``async with`` per AC5 spec sketch.  Pass-2:
+        # ``__aexit__`` now sets ``_closed=True`` so post-exit calls
+        # raise ``RuntimeError`` rather than silently no-oping.
         async with EventLogReader(settings.event_log_dir) as reader:
-            cursor.restore_into(reader, base_dir=settings.event_log_dir)
+            # P2-H2: wrap restore_into so VH-9's CursorSchemaVersionError
+            # surfaces as a structured log + exit code 2 instead of an
+            # uncaught traceback through asyncio.run().
+            try:
+                cursor.restore_into(reader, base_dir=settings.event_log_dir)
+            except CursorSchemaVersionError as exc:
+                log.error(
+                    "metrics_subscriber_cursor_schema_version_refused",
+                    cursor_path=str(settings.cursor_path),
+                    found_schema_version=repr(exc.schema_version),
+                    expected=exc.expected,
+                    note=(
+                        "cursor.json declares an unknown schema_version; "
+                        "refusing to start to avoid replaying an entire "
+                        "day's events.  Operator must inspect the cursor "
+                        "file manually."
+                    ),
+                )
+                return 2
 
-            # Track the path the reader is currently on so we can clear
-            # ``last_envelope`` when the day rolls (VM-1).
-            previous_path: Path = reader.current_path
+            # P2-M5: ``reader.current_path`` returns ``Path | None``;
+            # annotate accordingly and handle the None branch.  In
+            # practice ``restore_into`` always seats the cursor before
+            # we read this, but mypy --strict requires the annotation
+            # to match the property's signature.
+            previous_path: Path | None = reader.current_path
             last_envelope: EventEnvelope | None = None
             try:
-                async for envelope in reader.tail(
-                    poll_interval_s=settings.poll_interval_s, stop_event=stop
-                ):
-                    # VM-1 — day-rollover mid-loop: clear last_envelope
-                    # so lag log does not attribute yesterday's envelope
-                    # to today's path.
-                    if reader.current_path != previous_path:
-                        last_envelope = None
-                        previous_path = reader.current_path
-                    # Story 10.4 will inject counter/gauge updates here.
-                    last_envelope = envelope
-                    cursor.note_event_processed()
-                    if cursor.maybe_persist(reader.cursor_offset, reader.current_path):
-                        _emit_lag_log(reader.cursor_offset, reader.current_path, last_envelope)
+                # P2-H3: catch the typed corruption exception so the
+                # subscriber exits with code 3 instead of crashing
+                # through asyncio.run() in an infinite restart loop.
+                try:
+                    async for envelope in reader.tail(
+                        poll_interval_s=settings.poll_interval_s, stop_event=stop
+                    ):
+                        # VM-1 — day-rollover mid-loop: log the
+                        # transition and clear ``last_envelope`` so the
+                        # lag log does not attribute yesterday's
+                        # envelope to today's path.  P2-M5: drop the
+                        # dead ``last_envelope = None`` (the
+                        # unconditional assignment below already does
+                        # the right thing for a non-None last_envelope
+                        # at the new path).
+                        if reader.current_path != previous_path:
+                            log.info(
+                                "metrics_subscriber_day_rollover_observed",
+                                from_path=str(previous_path),
+                                to_path=str(reader.current_path),
+                            )
+                            previous_path = reader.current_path
+                        # Story 10.4 will inject counter/gauge updates here.
+                        last_envelope = envelope
+                        cursor.note_event_processed()
+                        if cursor.maybe_persist(reader.cursor_offset, reader.current_path):
+                            _emit_lag_log(reader.cursor_offset, reader.current_path, last_envelope)
+                except ParseSkipThresholdExceeded as exc:
+                    log.critical(
+                        "metrics_subscriber_corrupt_region_detected",
+                        cursor_path=str(settings.cursor_path),
+                        log_path=exc.path,
+                        corrupt_offset=exc.offset,
+                        threshold=exc.threshold,
+                        last_envelope_id=(last_envelope.event_id if last_envelope else None),
+                        note=(
+                            "contiguous parse-skip threshold exceeded; "
+                            "refusing to advance cursor past corrupted region. "
+                            "Operator inspection required."
+                        ),
+                    )
+                    # Drain the cursor at the last successful offset
+                    # BEFORE returning so a restart picks up where
+                    # this corrupt region starts (not past it).
+                    try:
+                        cursor.persist_now(reader.cursor_offset, reader.current_path)
+                    except OSError as drain_exc:  # pragma: no cover
+                        log.warning(
+                            "metrics_subscriber_persist_on_corrupt_region_failed",
+                            error_type=type(drain_exc).__name__,
+                            detail=str(drain_exc),
+                        )
+                    return 3
             finally:
                 # AC4 SIGTERM drain: force-persist on shutdown regardless of
                 # the per-1000 counter — preserves the resumability invariant.

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -64,18 +65,26 @@ _DEFAULT_TRACE_ID = "01917e5c-a7d1-7000-8abc-000000000000"
 
 
 class _StepClock(Clock):
-    """Mutable clock — :attr:`current` may be reassigned from the test."""
+    """Mutable clock — :attr:`current` may be reassigned from the test.
+
+    P2-M3 (E7): the monotonic counter is incremented under an explicit
+    ``threading.Lock`` so the test helper does not silently break
+    under PEP 703 (no-GIL Python 3.14+).  Production code uses the
+    ``time`` module's monotonic clock which is GIL-independent.
+    """
 
     def __init__(self, *, current: datetime) -> None:
         self.current = current
         self._mono = 0
+        self._mono_lock = threading.Lock()
 
     def now(self) -> datetime:
         return self.current
 
     def monotonic_ns(self) -> int:
-        self._mono += 1
-        return self._mono
+        with self._mono_lock:
+            self._mono += 1
+            return self._mono
 
 
 def _make_envelope(value: str, mono_seed: int) -> EventEnvelope:
@@ -251,3 +260,62 @@ async def test_day_rollover_writer_appending_past_reader_clock_does_not_drop_eve
 
     # All 10 events received from yesterday's file (no false rollover).
     assert [e.event_id for e in received] == [e.event_id for e in envs]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_restart_after_midnight_completes_within_5s(tmp_path: Path) -> None:
+    """P2-H1 (Q4) — restart-after-midnight uses fast-path skip.
+
+    Scenario: subscriber restarts AFTER midnight; cursor.json points
+    at yesterday's file fully drained (offset == file_size); today's
+    file already exists with non-zero size.  Pre-pass-2 the
+    quiescence default was 60s — the reader would idle for 60s before
+    transitioning to today.  Pass-2's fast-path skip should
+    short-circuit (no quiescence wait) since there is nothing left to
+    drain on yesterday.
+
+    Uses **production defaults** for ``rollover_quiescence_s`` (5.0s
+    after P2-H1) — the fast-path means the wall-clock should be well
+    under 5s.
+    """
+    events_dir = tmp_path / "events"
+    events_dir.mkdir(parents=True)
+    yesterday = datetime(2026, 5, 18, 23, 59, 30, tzinfo=UTC)
+    today = yesterday + timedelta(minutes=2)  # → 2026-05-19 00:01:30 UTC
+    yesterday_path = events_dir / "2026-05-18.jsonl"
+    today_path = events_dir / "2026-05-19.jsonl"
+
+    # Yesterday fully drained; today already has a fresh event.
+    yesterday_envs = [_make_envelope(f"y{i}", mono_seed=i) for i in range(3)]
+    today_envs = [_make_envelope(f"t{i}", mono_seed=100 + i) for i in range(3)]
+    _write_envelopes(yesterday_path, yesterday_envs)
+    _write_envelopes(today_path, today_envs)
+
+    clock = _StepClock(current=today)
+    from events.log_reader import EventLogReader
+
+    # **Production default** rollover_quiescence_s — exercising the
+    # fast-path skip is the entire point of this test.
+    reader = EventLogReader(events_dir, clock=clock)
+    # Restart seats reader at yesterday EOF (fully drained).
+    reader.seek(path=yesterday_path, offset=yesterday_path.stat().st_size)
+    received: list[EventEnvelope] = []
+    stop = asyncio.Event()
+
+    async def _drive() -> None:
+        async for env in reader.tail(poll_interval_s=0.01, stop_event=stop):
+            received.append(env)
+            if len(received) >= len(today_envs):
+                stop.set()
+                return
+
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    task = asyncio.create_task(_drive())
+    await asyncio.wait_for(task, timeout=5.0)
+    elapsed = loop.time() - t0
+    # Fast-path means we should NOT have waited the full 5s quiescence
+    # window.  Generous ceiling for CI variance.
+    assert elapsed < 2.0, f"P2-H1 fast-path did not engage: elapsed={elapsed:.3f}s"
+    assert [e.event_id for e in received] == [e.event_id for e in today_envs]

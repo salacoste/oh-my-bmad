@@ -46,6 +46,15 @@ Design notes preserved from the original (registry-state Story 2.4):
   skip the line with a structured WARNING rather than crash the
   consumer.
 
+Read-only contract for ``services/`` consumers (P2-L4): single-writer
+gate (Story 1.6) enforces that production writes to the JSONL log
+happen ONLY in the orchestrator/registry-state write path.  Callers
+in ``services/`` (worker-wrapper approval_waiter, metrics-subscriber)
+MUST treat this module as read-only.  The single-writer-gate
+allowlist is path-based (not module-based); new read-then-write
+helpers added in ``packages/events/`` will require an explicit
+allowlist entry — see ``tests/separability/conftest.py``.
+
 Story 10.2 review pass-1 hardening:
 
 * **VH-3** — :func:`read_new_envelopes_since` and
@@ -87,6 +96,7 @@ import structlog
 from events.canonical import from_canonical_json
 from events.clock import Clock, SystemClock
 from events.envelope import EventEnvelope
+from events.errors import ParseSkipThresholdExceeded
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -102,10 +112,24 @@ _DEFAULT_MAX_LINES_PER_POLL = 10_000
 # yesterday's file size to be stable for at least this many seconds
 # BEFORE switching to today's file.  Eliminates the
 # "writer-still-appending-past-reader-clock-midnight" race.
-_DEFAULT_ROLLOVER_QUIESCENCE_S = 60.0
+#
+# P2-H1 (Q4): lowered from 60.0s → 5.0s.  The 60s value introduced a
+# restart-after-midnight cold-start regression (every restart added
+# 60s of latency before the reader switched to today's file).  5s
+# bounds startup latency while keeping enough headroom for short
+# writer-clock drift.  The fast-path in :meth:`_is_rollover_ready`
+# eliminates the cost entirely when there is nothing left to drain on
+# yesterday's file.
+_DEFAULT_ROLLOVER_QUIESCENCE_S = 5.0
 
 # VH-13: refuse to advance past this many consecutive parse-skips.
 _DEFAULT_MAX_CONTIGUOUS_PARSE_SKIPS = 100
+
+# P2-H11: once-per-process guard so the "max_events exceeds line-cap"
+# WARNING does not flood the log if a caller hammers ``read_batch``
+# in a tight loop.  Per-process is sufficient — the WARNING signals a
+# caller configuration mistake, not a per-call event.
+_MAX_EVENTS_EXCEEDS_LINE_CAP_WARNED: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +209,7 @@ def iter_new_envelopes_since(
     *,
     max_lines_per_poll: int = _DEFAULT_MAX_LINES_PER_POLL,
     max_contiguous_parse_skips: int = _DEFAULT_MAX_CONTIGUOUS_PARSE_SKIPS,
+    parse_skip_state: list[int] | None = None,
 ) -> Iterator[tuple[int, EventEnvelope]]:
     """Yield ``(offset_after_line, envelope)`` pairs from *path* past *offset*.
 
@@ -205,10 +230,23 @@ def iter_new_envelopes_since(
     preventing multi-GB RAM blowup on multi-hour-outage restart.  The
     outer tail loop simply iterates again to drain the next chunk.
 
-    Parse-skip threshold (VH-13): if more than
+    Parse-skip threshold (VH-13 + pass-2 P2-H3/P2-H4): if more than
     ``max_contiguous_parse_skips`` consecutive lines fail to parse,
-    raises :class:`RuntimeError` so a corrupted file does not silently
-    drop a million events.  Successful parses reset the counter.
+    raises :class:`ParseSkipThresholdExceeded` (was generic
+    ``RuntimeError`` pre-pass-2) so the subscriber catches a typed
+    exception, logs the corrupted-region offset, and exits with code
+    3.  Successful parses reset the counter.
+
+    Parse-skip persistence across polls (P2-H4): pre-pass-2 the
+    counter was a per-call local — each poll opened the file fresh
+    and reset to 0.  A real corruption pattern of "50 bad lines per
+    poll across 10 polls = 500 silently dropped" never tripped the
+    100-line threshold.  Fix: callers may pass a mutable
+    ``parse_skip_state`` (a single-element list of int) that the
+    generator updates across calls.  :class:`EventLogReader` owns
+    this state at the instance level and passes it through each
+    poll.  When omitted, the counter is per-call (preserving the
+    behaviour expected by free-function callers / tests).
 
     Args:
         path: Path to the ``.jsonl`` file.
@@ -216,20 +254,32 @@ def iter_new_envelopes_since(
         max_lines_per_poll: Max lines to read in one generator-drain.
         max_contiguous_parse_skips: Refuse to advance past this many
             consecutive bad lines.
+        parse_skip_state: Optional ``[int]`` mutable counter used to
+            track contiguous parse-skips across calls.  When ``None``
+            (default), an internal per-call counter is used.
 
     Yields:
         ``(offset_after_line, envelope)`` tuples in append order.
 
     Raises:
-        RuntimeError: If ``max_contiguous_parse_skips`` is exceeded.
+        ParseSkipThresholdExceeded: If the contiguous-skip count
+            reaches or exceeds ``max_contiguous_parse_skips``.
     """
     if not path.exists():
         return
     lines_read = 0
-    contiguous_skips = 0
+    # P2-H4: counter lives in *parse_skip_state* (mutable list-as-cell)
+    # when provided so it persists across polls; otherwise we keep a
+    # per-call local for free-function callers.
+    if parse_skip_state is None:
+        parse_skip_state = [0]
     with open(path, "rb") as f:
         f.seek(offset)
         last_complete_end = offset
+        # P2-H3: capture the byte offset at the START of the contiguous
+        # corruption run so the exception reports the actionable
+        # "where does the bad region begin" anchor.
+        corruption_run_start = last_complete_end
         while True:
             if lines_read >= max_lines_per_poll:
                 return
@@ -241,19 +291,23 @@ def iter_new_envelopes_since(
             lines_read += 1
             line_bytes = raw.rstrip(b"\r\n")
             envelope = parse_with_pre110_backfill(line_bytes, path)
+            line_start = last_complete_end
             last_complete_end += len(raw)
             if envelope is not None:
-                contiguous_skips = 0
+                parse_skip_state[0] = 0
+                corruption_run_start = last_complete_end
                 yield last_complete_end, envelope
             else:
-                contiguous_skips += 1
-                if contiguous_skips > max_contiguous_parse_skips:
-                    raise RuntimeError(
-                        "metrics_subscriber_parse_skip_threshold_exceeded: "
-                        f"more than {max_contiguous_parse_skips} consecutive "
-                        f"unparseable lines in {path!r}; refusing to advance "
-                        "cursor past corrupted region.  Operator inspection "
-                        "required."
+                if parse_skip_state[0] == 0:
+                    corruption_run_start = line_start
+                parse_skip_state[0] += 1
+                # P2-H4: comparison flipped to >= so the Nth contiguous
+                # skip trips immediately (was >, off-by-one).
+                if parse_skip_state[0] >= max_contiguous_parse_skips:
+                    raise ParseSkipThresholdExceeded(
+                        path=str(path),
+                        offset=corruption_run_start,
+                        threshold=max_contiguous_parse_skips,
                     )
 
 
@@ -298,6 +352,32 @@ def read_new_envelopes_since(
         position just past the last yielded line and ``envelopes`` is
         the parsed envelope list (possibly empty).
     """
+    # P2-H11: WARN once-per-process when ``max_events`` exceeds the
+    # line-cap.  The interaction is subtle: the line-cap silently
+    # truncates the batch to ``max_lines_per_poll`` regardless of the
+    # caller-requested ``max_events`` (since the inner generator
+    # stops at the line-cap).  A caller that asked for 10_000 events
+    # would receive at most 10_000 (the default) and could infer
+    # incorrectly that the log was drained.  Story 10.4 readers
+    # SHOULD pass ``max_events <= max_lines_per_poll``.
+    global _MAX_EVENTS_EXCEEDS_LINE_CAP_WARNED
+    if (
+        max_events is not None
+        and max_events > max_lines_per_poll
+        and not _MAX_EVENTS_EXCEEDS_LINE_CAP_WARNED
+    ):
+        _log.warning(
+            "max_events_exceeds_line_cap",
+            max_events=max_events,
+            max_lines_per_poll=max_lines_per_poll,
+            note=(
+                "max_events exceeds max_lines_per_poll; the inner cap will "
+                "silently truncate the batch.  Pass max_events <= "
+                "max_lines_per_poll to avoid the surprise."
+            ),
+            metric="metrics_subscriber_max_events_exceeds_line_cap_total{reason=config}",
+        )
+        _MAX_EVENTS_EXCEEDS_LINE_CAP_WARNED = True
     if not path.exists():
         return offset, []
     envelopes: list[EventEnvelope] = []
@@ -461,7 +541,10 @@ class EventLogReader:
                 per poll.
             rollover_quiescence_s: VH-6 minimum seconds yesterday's
                 file size must be stable before rollover transition.
-                Default 60s.
+                Default 5.0s (P2-H1 Q4 — was 60s pre-pass-2).  The
+                fast-path skip in :meth:`_is_rollover_ready` reduces
+                this to ~0s when the reader has already drained
+                yesterday's file to EOF.
         """
         self._base_dir = base_dir
         self._clock: Clock = clock if clock is not None else SystemClock()
@@ -473,13 +556,30 @@ class EventLogReader:
         # and the wall-clock seconds since that observation so we can
         # require quiescence before switching to today.
         self._yesterday_last_size: int | None = None
-        self._yesterday_last_size_at_s: float | None = None
+        self._yesterday_last_size_at_monotonic_s: float | None = None
+        # P2-H4: contiguous parse-skip counter hoisted from per-call
+        # local to instance state so a long corruption run that spans
+        # multiple polls eventually trips the threshold.  Wrapped in a
+        # single-element list (mutable cell) so the free function
+        # :func:`iter_new_envelopes_since` can update it without
+        # round-tripping back through ``self``.
+        self._parse_skip_state: list[int] = [0]
+        # P2-M2 (VM-6): lifecycle flag enforced by ``__aenter__`` /
+        # ``__aexit__``.  After ``__aexit__`` returns, calls to
+        # :meth:`tail` / :meth:`open` / :meth:`seek` / :meth:`read_batch`
+        # raise ``RuntimeError("EventLogReader used after close")``.
+        # This converts the previously no-op async-CM into an enforced
+        # contract for Story 10.4 contributors who may add fd/task
+        # resources to the reader.
+        self._closed: bool = False
 
     # ------------------------------------------------------------------
     # VM-6 — async context manager
     # ------------------------------------------------------------------
 
     async def __aenter__(self) -> EventLogReader:
+        if self._closed:
+            raise RuntimeError("EventLogReader used after close")
         return self
 
     async def __aexit__(
@@ -488,21 +588,39 @@ class EventLogReader:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        # No fd held at the class level today; placeholder so callers
-        # can adopt ``async with`` per AC5 spec sketch (VM-6).
+        # P2-M2: enforce the lifecycle contract.  Future Story 10.4
+        # contributors who add open fd or async tasks to the reader
+        # MUST also wire teardown here; the ``_closed`` flag guards
+        # against ``async with`` site reuse.
+        self._closed = True
         return None
+
+    def _check_not_closed(self) -> None:
+        """P2-M2 — raise if the reader has been closed via ``__aexit__``."""
+        if self._closed:
+            raise RuntimeError("EventLogReader used after close")
 
     # ------------------------------------------------------------------
     # Public sync API
     # ------------------------------------------------------------------
 
     def open(self, initial_offset: int = 0) -> None:
-        """Seat the cursor at today's JSONL file path with *initial_offset*.
+        """Best-effort seat at today's path for fresh-start callers.
 
-        VM-9: today's path is computed at-call so a startup that
-        straddles UTC midnight does not leave the reader pointed at
-        yesterday.  :meth:`tail` re-evaluates per iteration.
+        For restart-with-cursor, callers should use
+        :meth:`CursorPersistence.restore_into` which calls :meth:`seek`
+        directly.  Midnight-straddle for fresh-start is handled by
+        :meth:`tail`'s per-iteration today_path re-evaluation + the
+        VH-6 rollover-quiescence window — :meth:`open` itself only
+        snapshots today's path at-call (P2-M1 docstring clarification:
+        the original VM-9 concern about restored offsets being
+        silently discarded is mitigated via VH-6 quiescence, not via
+        deferred path computation).
+
+        Note: :meth:`CursorPersistence.restore_into` uses :meth:`seek`,
+        not :meth:`open`.
         """
+        self._check_not_closed()
         self._current_path = current_day_path(self._base_dir, self._clock.now())
         self._cursor_offset = initial_offset
 
@@ -513,6 +631,7 @@ class EventLogReader:
         cursor.json refers to a specific path (which may differ from
         ``current_day_path`` after a downtime that spans midnight).
         """
+        self._check_not_closed()
         self._current_path = path
         self._cursor_offset = offset
 
@@ -522,12 +641,22 @@ class EventLogReader:
     ) -> list[EventEnvelope]:
         """Read up to *max_events* new envelopes since the last call.
 
-        VH-3 fix: ``max_events`` is now a HARD cap honoured at the
-        line-read level.  The cursor advances to the last yielded
+        VH-3 / P2-H11 (Q8): ``max_events`` is a HARD cap honoured at
+        the line-read level.  The cursor advances to the last yielded
         line's end (NOT EOF), so a subsequent ``read_batch`` call
         returns the unread tail.  Previously the cursor was advanced
         past all parsed envelopes and the returned list was sliced —
         silently dropping the unsliced tail.
+
+        Soft → hard cap CHANGELOG note (P2-H11, pass-2): the pre-pass-1
+        docstring described ``max_events`` as a soft cap (cursor at
+        EOF, slice post-hoc).  Pass-1 changed it to a hard cap as the
+        VH-3 fix.  Callers that depended on soft-cap semantics would
+        observe silent envelope loss; the audit at pass-2 found no
+        such callers in ``services/registry-state`` or
+        ``services/registry-api`` (the only known external callers).
+        Story 10.4 readers SHOULD pass ``max_events <= max_lines_per_poll``
+        to avoid the WARNING emitted by :func:`read_new_envelopes_since`.
 
         Returns an empty list if no new bytes are available.
         Idempotent for an EOF reader (returns ``[]``).
@@ -535,6 +664,7 @@ class EventLogReader:
         Raises:
             RuntimeError: If called before :meth:`open` or :meth:`seek`.
         """
+        self._check_not_closed()
         if self._current_path is None:
             raise RuntimeError(
                 "EventLogReader.read_batch called before open(); "
@@ -591,29 +721,67 @@ class EventLogReader:
         Raises:
             RuntimeError: If called before :meth:`open` / :meth:`seek`.
         """
+        self._check_not_closed()
         if self._current_path is None:
             raise RuntimeError(
                 "EventLogReader.tail called before open(); "
                 "call reader.open(initial_offset=...) first."
             )
-        loop = asyncio.get_event_loop()
+        # P2-H8 (Q9): use `get_running_loop()` — `get_event_loop()` is
+        # deprecated inside coroutines since Python 3.10 and raises
+        # `RuntimeError` in 3.14+.
+        loop = asyncio.get_running_loop()
         # Per-iteration count for VL-1 rollover log.
         chunk_envelopes = 0
         while stop_event is None or not stop_event.is_set():
             today_path = current_day_path(self._base_dir, self._clock.now())
+            # P2-H12 (Q7): re-validate the cursor against current file
+            # size on every poll.  After an external rotation that
+            # truncated the file (logrotate, replay-from-archive,
+            # accidental ``> file``), the cursor may now point past
+            # EOF.  Pre-pass-2 the reader would seek past EOF, read
+            # zero bytes, and stall silently forever.  Now we log
+            # CRITICAL and clamp to the current size.
+            try:
+                current_file_size = self._current_path.stat().st_size
+            except OSError:
+                current_file_size = None
+            if current_file_size is not None and self._cursor_offset > current_file_size:
+                _log.critical(
+                    "metrics_subscriber_offset_clamp_after_rotation",
+                    path=str(self._current_path),
+                    old_offset=self._cursor_offset,
+                    new_file_size=current_file_size,
+                    metric=(
+                        "metrics_subscriber_offset_clamp_after_rotation_total"
+                        "{reason=external_rotation}"
+                    ),
+                )
+                self._cursor_offset = current_file_size
             # Snapshot the path + offset BEFORE to_thread (VM-2): the
             # lambda captures locals (not ``self``) to avoid races on
             # the reader's internal state.
             path_snapshot = self._current_path
             offset_snapshot = self._cursor_offset
             max_lines = self._max_lines_per_poll
+            # P2-H4: pass instance-state counter so contiguous parse-
+            # skips accumulate across polls.
+            parse_skip_state = self._parse_skip_state
 
             def _drain_chunk(
                 path: Path = path_snapshot,
                 start_offset: int = offset_snapshot,
                 cap: int = max_lines,
+                skip_state: list[int] = parse_skip_state,
             ) -> list[tuple[int, EventEnvelope]]:
-                return list(iter_new_envelopes_since(path, start_offset, max_lines_per_poll=cap))
+                return list(
+                    iter_new_envelopes_since(
+                        path,
+                        start_offset,
+                        max_lines_per_poll=cap,
+                        parse_skip_state=skip_state,
+                    )
+                )
 
             items = await asyncio.to_thread(_drain_chunk)
             for offset_after, envelope in items:
@@ -649,7 +817,7 @@ class EventLogReader:
                 self._current_path = today_path
                 self._cursor_offset = 0
                 self._yesterday_last_size = None
-                self._yesterday_last_size_at_s = None
+                self._yesterday_last_size_at_monotonic_s = None
                 chunk_envelopes = 0
                 continue  # immediate re-poll on the new file (don't sleep)
 
@@ -682,9 +850,25 @@ class EventLogReader:
         if today_path == self._current_path:
             # Reset rollover tracking when we are not in a rollover window.
             self._yesterday_last_size = None
-            self._yesterday_last_size_at_s = None
+            self._yesterday_last_size_at_monotonic_s = None
             return False
         if not today_path.exists():
+            return False
+        # P2-M4: guard against stale ``today_path`` from a prior day
+        # (retention failure / test detritus).  If the writer is dead
+        # but a week-old ``YYYY-MM-DD.jsonl`` happens to be named after
+        # today's date, ``today_path.exists()`` returns True and the
+        # rollover would seat the reader at offset 0 of a stale file,
+        # losing fresh writes in the (now-actual) yesterday file.
+        # Require the today_path's mtime to be within the last ~25h.
+        try:
+            today_mtime = today_path.stat().st_mtime
+        except OSError:
+            return False
+        # Use wall-clock seconds via clock.now() rather than loop.time()
+        # since file mtime is wall-clock (not monotonic).
+        wall_now_s = self._clock.now().timestamp()
+        if today_mtime < wall_now_s - 25 * 3600:
             return False
         # Sample yesterday's size.  If it has grown since the last
         # observation, reset the quiescence timer.
@@ -692,14 +876,25 @@ class EventLogReader:
             yesterday_size = self._current_path.stat().st_size
         except OSError:
             yesterday_size = 0
+        # P2-H1 (Q4) fast-path: if the reader has already drained
+        # yesterday to EOF (cursor == file_size) AND today_path exists
+        # with non-zero size, skip the quiescence wait.  Restart-after-
+        # midnight is the dominant call-path here; there is nothing
+        # left to drain so blocking for 5s contributes pure latency.
+        try:
+            today_size = today_path.stat().st_size
+        except OSError:
+            today_size = 0
+        if self._cursor_offset >= yesterday_size and today_size > 0:
+            return True
         now_s = loop.time()
         if self._yesterday_last_size is None or yesterday_size != self._yesterday_last_size:
             self._yesterday_last_size = yesterday_size
-            self._yesterday_last_size_at_s = now_s
+            self._yesterday_last_size_at_monotonic_s = now_s
             return False
         # File size is stable; require quiescence window.
-        assert self._yesterday_last_size_at_s is not None
-        elapsed = now_s - self._yesterday_last_size_at_s
+        assert self._yesterday_last_size_at_monotonic_s is not None
+        elapsed = now_s - self._yesterday_last_size_at_monotonic_s
         return elapsed >= self._rollover_quiescence_s
 
     # ------------------------------------------------------------------
