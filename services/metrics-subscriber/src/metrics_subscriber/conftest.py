@@ -13,6 +13,7 @@ pipeline; in tests we want a minimal config that bridges to stdlib.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 from collections.abc import Generator
@@ -57,6 +58,44 @@ def _clear_omb_metrics_env() -> Generator[None, None, None]:
         for k in [k for k in os.environ if k.startswith("OMB_METRICS_")]:
             os.environ.pop(k, None)
         os.environ.update(saved)
+
+
+@pytest.fixture(autouse=True)
+def _reset_collector_registry_per_test() -> Generator[None, None, None]:
+    """Story 10.3 AC14 — defensive CollectorRegistry isolation.
+
+    The Story 10.3 design uses a **per-app** :class:`CollectorRegistry`
+    (constructed inside :func:`build_app`); the global
+    ``prometheus_client.REGISTRY`` is NOT touched by production code.
+    However, third-party processors (e.g. ``prometheus_client``'s
+    own default ``process_collector`` / ``platform_collector``) AND
+    any future contributor mistake (a top-level ``Counter(...)`` /
+    ``Gauge(...)`` declaration that defaults to the global registry)
+    can still leak collectors into the global registry between tests
+    — causing "Duplicated timeseries in CollectorRegistry" on the
+    second build.
+
+    This autouse fixture unregisters every dynamically-added collector
+    from the global ``REGISTRY`` between tests so an inadvertent
+    global-registry registration in one test cannot make the next
+    one flake.  The built-in process / platform collectors are left
+    in place (they re-register on every import otherwise).
+    """
+    from prometheus_client import REGISTRY  # noqa: PLC0415 — test-only import
+
+    yield
+    # Iterate over a snapshot — unregister mutates the dict-like
+    # ``_collector_to_names`` internal during traversal otherwise.
+    snapshot = list(getattr(REGISTRY, "_collector_to_names", {}).keys())
+    for collector in snapshot:
+        name = type(collector).__name__
+        # Leave default-process / default-platform collectors in
+        # place; they are re-registered on module import and erroring
+        # on unregister is undesirable.
+        if name in {"ProcessCollector", "PlatformCollector", "GCCollector"}:
+            continue
+        with contextlib.suppress(KeyError):
+            REGISTRY.unregister(collector)
 
 
 @pytest.fixture(autouse=True)

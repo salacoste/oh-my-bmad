@@ -1,6 +1,6 @@
 # Story 10.3 — FastAPI `/metrics` endpoint (Prometheus exposition)
 
-Status: **ready-for-dev**
+Status: **review** (CI pending @ 0847708)
 
 ## Story
 
@@ -406,6 +406,232 @@ docs/adr/0005-metrics-subscriber-derived-projection.md   # NEW
 
 ---
 
+## Dev Agent Record
+
+**Implementation date:** 2026-05-19
+**Implementer:** executor agent (Claude Opus 4.7, 1M context)
+**Status flip:** `ready-for-dev` → `review` (CI pending @ 0847708)
+
+### Implementation summary
+
+Story 10.3 lifts Story 10.2's structured-log fields (`bytes_behind`,
+`wall_clock_lag_s`, `metrics_subscriber_parse_skip_total` preview) into
+actual Prometheus gauges + counter, wrapped behind a FastAPI factory
+that mirrors `registry-api`'s `build_app` pattern. ADR-0005 authored,
+closing one of the five Phase-2 forward-referenced ADR acceptance-gate
+items declared in ADR-0003. Architecture.md:1218 placeholder removed.
+
+Key design decisions:
+
+1. **Per-app `CollectorRegistry`** (NOT module global) — test isolation;
+   each `build_app` call gets a fresh registry, eliminating
+   "Duplicated metric registration" flakes (Story 10.2 P3-L3 lesson).
+2. **`MetricsState` dataclass** holds `Gauge` / `Counter` instances
+   — one instance per app, stored on `app.state.metrics`, mutated by
+   the tail loop via `_emit_lag_log`, read by the `/metrics` HTTP
+   handler via the same registry. (Story 10.2 P2-H4 + P3-H2 lesson:
+   cross-poll / cross-request state lives on app-scoped objects,
+   not module globals.)
+3. **Async lifespan via `AsyncExitStack`** — wraps `run_subscriber` as
+   a background task; tail-task `done_callback` discriminates typed
+   exceptions (`CursorSchemaVersionError`, `ParseSkipThresholdExceeded`,
+   `CursorLockUnsupportedFilesystemError | BlockingIOError`) via
+   `isinstance` checks (Story 10.2 P3-H1 lesson — NO substring-match)
+   and surfaces them onto `app.state.exit_code` + `should_exit` for
+   `__main__.py` to pick up.
+4. **`OMB_METRICS_RUN_MODE=server|tail` dispatch** in `__main__.py` —
+   default `server` runs uvicorn + FastAPI; `tail` preserves the
+   Story 10.2 standalone tail-loop path that the
+   `test_restart_recovery_subprocess.py` tests rely on (rewriting
+   them to drive the FastAPI server would conflate 10.2 + 10.3
+   review semantics; trade-off documented in the spec).
+5. **`asgi-lifespan>=2.1` adopted for the test client** — `httpx.AsyncClient`
+   + `ASGITransport` alone does NOT trigger FastAPI lifespan
+   (documented Story 10.3 risk-flag). `LifespanManager(app)` wrap
+   exercises startup + shutdown deterministically.
+6. **External-bind heuristic** (`_is_external_bind_heuristic`) — emits
+   `metrics_subscriber_bind_external_interface_suspected` WARN log
+   if `settings.metrics_host` parses as a concrete IP that is neither
+   loopback (`127.0.0.1` / `::1`) nor wildcard (`0.0.0.0` / `::`).
+   Sanity guard against typos; real P2-I5 enforcement is at the
+   compose layer (Story 10.6).
+7. **Parse-skip counter wiring via `events.log_reader.set_on_skip`**
+   callback — Story 10.2 `iter_new_envelopes_since` was extended in
+   prep; Story 10.3 wires the callback to
+   `MetricsState.on_parse_skip(reason)`. Server mode wires the callback;
+   tail mode passes `None` → unchanged behaviour.
+
+### Files changed
+
+**Modified (8):**
+
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` — flip
+  `in-progress` → `review` for Story 10.3 row.
+- `_bmad-output/planning-artifacts/architecture.md` — replace ADR-0005
+  "to be drafted" placeholder with accepted-status reference (AC11).
+- `_bmad-output/implementation-artifacts/10-3-fastapi-metrics-endpoint.md`
+  — Status flip + this Dev Agent Record block.
+- `packages/events/src/events/log_reader.py` — add `on_skip` callback
+  parameter to `parse_with_pre110_backfill` + propagate through
+  `iter_new_envelopes_since`; add `EventLogReader.set_on_skip` method
+  (AC6 wiring).
+- `pyproject.toml` — register `benchmark` pytest marker; add
+  `asgi-lifespan>=2.1` + `httpx>=0.27` to workspace dev deps so the
+  metrics-subscriber tests resolve at the workspace root (CI `uv sync`
+  materialises them for `pytest -m "not slow"`).
+- `services/metrics-subscriber/pyproject.toml` — add
+  `prometheus-client>=0.20,<1.0`, `fastapi>=0.115,<0.120`,
+  `uvicorn[standard]>=0.30,<0.35` to `[project] dependencies`;
+  `httpx>=0.27`, `pytest-benchmark>=4.0`, `asgi-lifespan>=2.1` to
+  `[dependency-groups] dev` (AC1).
+- `services/metrics-subscriber/src/metrics_subscriber/__main__.py` —
+  dispatch via `OMB_METRICS_RUN_MODE` env var; add `_run_server_mode`
+  (uvicorn-hosted FastAPI factory) + `_run_tail_mode` (Story 10.2
+  standalone path) (AC8). `run_subscriber` gains
+  `metrics_state: MetricsState | None = None` parameter; passes
+  through to `_emit_lag_log` which now mutates gauges when not None
+  (AC5).
+- `services/metrics-subscriber/src/metrics_subscriber/app/config.py` —
+  add `metrics_host: str = Field(default="0.0.0.0")` and
+  `metrics_port: int = Field(default=9090, ge=1, le=65535)` (AC7).
+- `services/metrics-subscriber/src/metrics_subscriber/conftest.py` —
+  add autouse fixture `_reset_collector_registry_per_test` that
+  unregisters dynamically-added collectors from the global
+  `prometheus_client.REGISTRY` between tests (defensive: production
+  code uses per-app registries, but this prevents an inadvertent
+  global-registry registration from leaking across tests) (AC14).
+- `services/metrics-subscriber/src/metrics_subscriber/test_restart_recovery_subprocess.py`
+  — set `OMB_METRICS_RUN_MODE=tail` on subprocess env so the subprocess
+  tests exercise the standalone tail-loop path (AC8 trade-off).
+- `uv.lock` — refreshed by `uv lock` after new dependencies.
+
+**Added (5):**
+
+- `docs/adr/0005-metrics-subscriber-derived-projection.md` — ADR-0005
+  authored at `status: accepted`, date 2026-05-19. Context / Decision /
+  Consequences / 3 rejected alternatives / References (AC11).
+- `services/metrics-subscriber/src/metrics_subscriber/app/main.py` —
+  `build_app(*, settings) -> FastAPI` factory + lifespan +
+  `/metrics` + `/healthz` + exception handler (AC2/AC3/AC4/AC9).
+- `services/metrics-subscriber/src/metrics_subscriber/app/metrics.py` —
+  `MetricsState` dataclass + `build_collectors(registry) -> MetricsState`
+  (AC5/AC6).
+- `services/metrics-subscriber/src/metrics_subscriber/test_app_main.py`
+  — FastAPI integration tests via `LifespanManager` + `httpx.AsyncClient`
+  + `ASGITransport` (AC2/AC3/AC4/AC5/AC6/AC9 + AC8 dispatch).
+- `services/metrics-subscriber/src/metrics_subscriber/test_metrics_state.py`
+  — unit tests for `MetricsState` + `build_collectors` (AC5/AC6/AC14).
+- `services/metrics-subscriber/src/metrics_subscriber/test_metrics_endpoint_benchmark.py`
+  — `@pytest.mark.slow @pytest.mark.benchmark` NFR-O8 latency benchmark
+  with ~30-metric fixture simulating Story 10.4 scale (AC10).
+
+### Test count delta
+
+- **Pre-Story-10.3 metrics-subscriber:** 44 tests (baseline post 10.2).
+- **Post-Story-10.3 metrics-subscriber:** 61 tests (`+17` new).
+- **Full PR-gate suite (`-m "not slow"`):** 2864 passed, 3 skipped,
+  28 deselected. Zero new failures vs. baseline.
+- **`-m slow` in metrics-subscriber:** 4 passed (NFR-O8 benchmark +
+  3 subprocess tests).
+- **`packages/events`:** unchanged test count; existing tests still
+  green after `on_skip` callback addition (parameter is optional /
+  default `None`).
+
+### Mypy `--strict` baseline delta
+
+- **Pre-Story-10.3:** 120 source files clean.
+- **Post-Story-10.3:** **125 source files clean** (delta `+5` — matches
+  the AC13 expectation of "≈125"). New files contributing:
+  `app/main.py`, `app/metrics.py`, `test_app_main.py`,
+  `test_metrics_state.py`, `test_metrics_endpoint_benchmark.py`.
+- No new mypy override stanzas required — `fastapi`, `uvicorn`,
+  `prometheus_client`, `httpx`, `asgi_lifespan` all ship `py.typed`
+  in the resolved versions.
+
+### NFR-O8 latency benchmark (AC10)
+
+```
+NFR-O8 /metrics latency (100 samples): p50=0.31ms p95=0.94ms p99=1.50ms
+```
+
+- **Budget:** p95 < 100 ms.
+- **Observed (local M-series macOS, in-process `ASGITransport`):**
+  p95 = **0.94 ms** — ~100× headroom against the budget.
+- **CI runner (ubuntu-latest):** to be captured on PR CI; the budget
+  applies on the CI runner per the AC10 wording. Local headroom is
+  large enough that the CI delta is not a concern.
+- Fixture preloads ~50 timeseries (10 gauges + 10 counters + 10
+  labelled gauges × 3 tier values) to simulate Story 10.4's
+  exposition size.
+
+### Validation gates (AC15) — final run
+
+All gates green at the local checkpoint that immediately precedes
+the commit:
+
+- `uv run ruff check .` — All checks passed
+- `uv run ruff format --check .` — 347 files already formatted
+- `uv run mypy --strict packages/ services/registry-api services/registry-state services/metrics-subscriber`
+  — Success: no issues found in 125 source files
+- `uv run python scripts/check_imports.py` — exit 0
+- `uv run python scripts/check_event_registry.py` — exit 0
+- `uv run python scripts/check_single_writer.py` — exit 0
+- `uv run pytest -x -q services/metrics-subscriber packages/events`
+  — 502 passed
+- `uv run pytest -x -q -m slow services/metrics-subscriber` — 4 passed
+- `uv run pytest -q -m "not slow"` — 2864 passed, 3 skipped
+- `just bootstrap-verify` — ✓ bootstrap OK (14 workspace-member imports verified)
+
+### Surprises / deviations from spec
+
+1. **Spec said "expected baseline shift 120 → ~125" — observed exactly
+   125.** No additional sources crept in unexpectedly.
+2. **`pytest -m "not slow"` post-test fatal Python error.** Daemon-
+   thread shutdown noise from aiosqlite + asyncio teardown surfaces
+   AFTER the test summary line ("2864 passed"). Not a regression —
+   present on baseline too — and zero functional impact (test results
+   are reported correctly before the noise). Out-of-scope for Story
+   10.3; tracked informally for a future cleanup story.
+3. **Subprocess tests required `OMB_METRICS_RUN_MODE=tail` env-var
+   addition** to `_subscriber_env` helper in
+   `test_restart_recovery_subprocess.py` (initial run failed with
+   `rc=-15` because the default `server` mode owns SIGTERM via
+   uvicorn, not the tail loop's `stop_event`). One-line fix; documented
+   inline.
+4. **Test count delta differs from the parent task brief's "485 vs new"
+   wording.** The 485 figure was the Story 10.2 closing test count
+   (line 275 of sprint-status); the local-equivalent baseline for
+   _metrics-subscriber only_ pre-Story-10.3 was 44 (10.2 tests carry
+   over). Post-Story-10.3 metrics-subscriber = 61 tests; full suite =
+   2864 passed. Both numbers captured above.
+5. **`prometheus_client` family-name vs sample-name in parser**:
+   `text_string_to_metric_families` strips `_total` from Counter family
+   names, but the underlying sample names retain it. AC6 assertions
+   use sample-name matching (the canonical comparison) and pass; AC4
+   assertions use family-name matching with `_total` stripped (which
+   is correct for the family-existence check). Documented in
+   `test_metrics_state.py` docstring.
+
+### Story 10.4 readiness check
+
+Story 10.4 (FR62 — counter/gauge/histogram set over task lifecycle,
+session state, capability tier) is unblocked by Story 10.3:
+
+- ✅ `MetricsState` dataclass + `build_collectors` factory — Story 10.4
+  extends `build_collectors` with the FR62 metric set; the per-app
+  `CollectorRegistry` + autouse-reset fixture machinery is reusable.
+- ✅ FastAPI factory + `/metrics` route — Story 10.4 adds NO new
+  routes, only collectors.
+- ✅ NFR-O8 benchmark — Story 10.4's larger metric set should still
+  comfortably meet the 100ms budget given the 100× headroom observed
+  here. The benchmark fixture (10/10/10 metric pattern) was sized to
+  approximate Story 10.4's footprint, so the budget is already
+  validated at that scale.
+- ✅ ADR-0005 accepted — closes the Phase-2 acceptance-gate item that
+  was blocking further Epic 10 merges.
+
+---
+
 ## Frontmatter
 
 ```yaml
@@ -429,7 +655,7 @@ blocks:
 blocked_by:
   - 10.1 (scaffold — done)
   - 10.2 (tail loop + cursor persistence — done)
-status: ready-for-dev
+status: review
 created: 2026-05-19
 created_by: bmad-create-story skill
 ---

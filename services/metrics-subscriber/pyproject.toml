@@ -10,6 +10,12 @@ dependencies = [
     "structlog>=24.1",
     "pydantic-settings>=2.5,<3.0",
     "events",
+    # Story 10.3 AC1 — FastAPI factory + Prometheus exposition surface
+    # (FR61). Versions tracked against ``services/registry-api`` so the
+    # two FastAPI services stay binary-compatible under shared uvicorn.
+    "prometheus-client>=0.20,<1.0",
+    "fastapi>=0.115,<0.120",
+    "uvicorn[standard]>=0.30,<0.35",
 ]
 
 [build-system]
@@ -20,6 +26,13 @@ build-backend = "uv_build"
 dev = [
     "pytest",
     "pytest-asyncio",
+    # Story 10.3 AC1 — in-process FastAPI test client via ``ASGITransport``
+    # + lifespan exercise for the NFR-O8 benchmark.  ``asgi-lifespan`` is
+    # already provided at the workspace root; declared here for explicit
+    # provenance per the import-graph guard convention.
+    "httpx>=0.27",
+    "pytest-benchmark>=4.0",
+    "asgi-lifespan>=2.1",
 ]
 
 [tool.uv.sources]

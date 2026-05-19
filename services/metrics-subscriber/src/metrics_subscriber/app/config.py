@@ -44,6 +44,26 @@ class MetricsSubscriberSettings(BaseSettings):
     cursor_path: Path = Path("/var/lib/oh-my-bmad/metrics-subscriber/cursor.json")
     poll_interval_s: float = Field(default=0.5, gt=0, le=60)
     persist_every_n_events: int = Field(default=1000, ge=1)
+    # Story 10.3 AC7 — HTTP binding for the FastAPI /metrics exposition
+    # surface.  ``metrics_host`` defaults to ``0.0.0.0`` (bind on all
+    # container interfaces) on purpose: docker-compose ingress (P2-I5
+    # — Story 10.6 scope) controls real reachability, NOT the bind
+    # address.  The architecture forbids exposing the port to the
+    # host via ``ports:`` — only stack peers reach this surface.  Do
+    # NOT bind to a concrete external IP; that would defeat the
+    # compose-level network scoping and turn ``/metrics`` into a
+    # public ingress in a host-network deployment.  A startup
+    # heuristic in :mod:`metrics_subscriber.app.main` emits
+    # ``metrics_subscriber_bind_external_interface_suspected`` if it
+    # detects a non-loopback / non-wildcard bind value.
+    metrics_host: str = Field(default="0.0.0.0")
+    # ``metrics_port`` is a TCP port number; standard 1–65535 range.
+    # Default 9090 mirrors Prometheus's own convention so SSH-tunneled
+    # ``curl`` invocations work out-of-the-box.  Env override is
+    # ``OMB_METRICS_METRICS_PORT`` (the double-``metrics`` is acceptable
+    # under the existing ``OMB_METRICS_`` prefix; using ``OMB_METRICS_PORT``
+    # would clash with the poll/persist namespace if extended later).
+    metrics_port: int = Field(default=9090, ge=1, le=65535)
 
 
 __all__ = ["MetricsSubscriberSettings"]

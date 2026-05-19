@@ -91,6 +91,7 @@ markers = [
     "contract: upstream-fork behavioral contracts",
     "migrator: event-log schema migrator tests",
     "fuzz: NFR-S5 hypothesis fuzz tests (per-strategy: PR gate; combined 10K: nightly only via @slow)",
+    "benchmark: Story 10.3 NFR-O8 /metrics latency benchmark (gates p95<100ms; @slow co-marker)",
 ]
 norecursedirs = [
     ".git",

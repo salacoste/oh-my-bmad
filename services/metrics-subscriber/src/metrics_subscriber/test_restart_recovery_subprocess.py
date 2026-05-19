@@ -89,6 +89,14 @@ def _subscriber_env(tmp_path: Path, events_dir: Path, cursor_path: Path) -> dict
     env["OMB_METRICS_POLL_INTERVAL_S"] = "0.05"
     env["OMB_METRICS_PERSIST_EVERY_N_EVENTS"] = "100"
     env["OMB_METRICS_LOG_LEVEL"] = "INFO"
+    # Story 10.3 AC8 — dispatch to the standalone tail-loop entry path.
+    # The subprocess tests exercise tail semantics (signal handling,
+    # cursor-lock contention, SIGTERM drain) directly; they do NOT need
+    # the FastAPI uvicorn surface.  Without this env var the default
+    # ``server`` mode spins up uvicorn and SIGTERM exits with rc=-15
+    # because the uvicorn server (not the tail loop) owns signal
+    # handling and does not propagate stop_event drain semantics.
+    env["OMB_METRICS_RUN_MODE"] = "tail"
     return env
 
 

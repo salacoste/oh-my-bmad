@@ -86,7 +86,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -222,6 +222,7 @@ def iter_new_envelopes_since(
     max_lines_per_poll: int = _DEFAULT_MAX_LINES_PER_POLL,
     max_contiguous_parse_skips: int = _DEFAULT_MAX_CONTIGUOUS_PARSE_SKIPS,
     parse_skip_state: list[int] | None = None,
+    on_skip: Callable[[str], None] | None = None,
 ) -> Iterator[tuple[int, EventEnvelope]]:
     """Yield ``(offset_after_line, envelope)`` pairs from *path* past *offset*.
 
@@ -318,7 +319,7 @@ def iter_new_envelopes_since(
                 return  # partial line — leave for next poll
             lines_read += 1
             line_bytes = raw.rstrip(b"\r\n")
-            envelope = parse_with_pre110_backfill(line_bytes, path)
+            envelope = parse_with_pre110_backfill(line_bytes, path, on_skip=on_skip)
             line_start = last_complete_end
             last_complete_end += len(raw)
             if envelope is not None:
@@ -435,6 +436,8 @@ def read_new_envelopes_since(
 def parse_with_pre110_backfill(
     line_bytes: bytes,
     source_path: Path,
+    *,
+    on_skip: Callable[[str], None] | None = None,
 ) -> EventEnvelope | None:
     """Parse a JSONL line, back-filling trace_id for pre-1.1.0 envelopes.
 
@@ -451,6 +454,15 @@ def parse_with_pre110_backfill(
     ``metrics_subscriber_parse_skip_total{reason=...}`` metric-name
     string so Story 10.3 can wire a Prometheus counter without touching
     this module.
+
+    Story 10.3 AC6: ``on_skip`` is an optional callable invoked with the
+    bounded-enum ``reason`` string (``json_decode``, ``not_a_dict``,
+    ``pre110_missing_trace_id``, ``validation``) whenever a line is
+    skipped.  The metrics-subscriber wires this to the
+    ``metrics_subscriber_parse_skip_total{reason=...}`` Prometheus
+    counter so the structured-log preview field becomes a real
+    counter.  Callers that pass ``None`` (the Story 10.2 path and any
+    other read-only consumer) observe unchanged behaviour.
     """
     from events.backfill import (  # noqa: PLC0415 — avoid circular at module level
         backfill_trace_id_from_request_id,
@@ -466,6 +478,8 @@ def parse_with_pre110_backfill(
             detail=str(exc),
             metric="metrics_subscriber_parse_skip_total{reason=json_decode}",
         )
+        if on_skip is not None:
+            on_skip("json_decode")
         return None
 
     if not isinstance(raw_dict, dict):
@@ -475,6 +489,8 @@ def parse_with_pre110_backfill(
             error_type="NotADict",
             metric="metrics_subscriber_parse_skip_total{reason=not_a_dict}",
         )
+        if on_skip is not None:
+            on_skip("not_a_dict")
         return None
 
     # TH-B5 shared helper: back-fill trace_id from request_id (with e-prefix
@@ -496,6 +512,8 @@ def parse_with_pre110_backfill(
             request_id=raw_dict.get("request_id"),
             metric="metrics_subscriber_parse_skip_total{reason=pre110_missing_trace_id}",
         )
+        if on_skip is not None:
+            on_skip("pre110_missing_trace_id")
         return None
     if backfilled is not raw_dict:
         _log.debug(
@@ -517,6 +535,8 @@ def parse_with_pre110_backfill(
             detail=str(exc),
             metric="metrics_subscriber_parse_skip_total{reason=validation}",
         )
+        if on_skip is not None:
+            on_skip("validation")
         return None
 
 
@@ -608,6 +628,13 @@ class EventLogReader:
         # TRUE start of the corrupt run (not the current poll's entry
         # offset) — see P3-H2 for the regression that motivated this.
         self._parse_skip_state: list[int] = [0, 0]
+        # Story 10.3 AC6 — optional parse-skip-counter hook installed via
+        # :meth:`set_on_skip` after construction so existing call-sites
+        # (Story 10.2 ``test_restart_recovery_subprocess.py``,
+        # tests-via-``read_batch``) keep zero-arg semantics.  The hook is
+        # invoked from inside :func:`iter_new_envelopes_since` whenever
+        # a line is skipped, with the bounded-enum ``reason`` string.
+        self._on_skip: Callable[[str], None] | None = None
         # P2-M2 (VM-6): lifecycle flag enforced by ``__aenter__`` /
         # ``__aexit__``.  After ``__aexit__`` returns, calls to
         # :meth:`tail` / :meth:`open` / :meth:`seek` / :meth:`read_batch`
@@ -667,6 +694,18 @@ class EventLogReader:
         self._check_not_closed()
         self._current_path = current_day_path(self._base_dir, self._clock.now())
         self._cursor_offset = initial_offset
+
+    def set_on_skip(self, callback: Callable[[str], None] | None) -> None:
+        """Install (or clear) the Story 10.3 AC6 parse-skip callback.
+
+        Invoked from inside :func:`iter_new_envelopes_since` (via the
+        tail-loop drain) whenever a line is skipped.  Callers wire
+        this to a Prometheus ``Counter`` ``.labels(reason=...).inc()``;
+        passing ``None`` (the default after construction) disables
+        the hook and preserves the Story 10.2 zero-arg behaviour.
+        """
+        self._check_not_closed()
+        self._on_skip = callback
 
     def seek(self, *, path: Path, offset: int) -> None:
         """Reseat the cursor to an explicit *path* + *offset*.
@@ -811,12 +850,18 @@ class EventLogReader:
             # P2-H4: pass instance-state counter so contiguous parse-
             # skips accumulate across polls.
             parse_skip_state = self._parse_skip_state
+            # Story 10.3 AC6: thread the per-instance skip-counter hook
+            # through to the parse layer.  ``None`` preserves the
+            # Story 10.2 zero-cost path for any caller that did not
+            # install a hook.
+            on_skip_callback = self._on_skip
 
             def _drain_chunk(
                 path: Path = path_snapshot,
                 start_offset: int = offset_snapshot,
                 cap: int = max_lines,
                 skip_state: list[int] = parse_skip_state,
+                on_skip: Callable[[str], None] | None = on_skip_callback,
             ) -> list[tuple[int, EventEnvelope]]:
                 return list(
                     iter_new_envelopes_since(
@@ -824,6 +869,7 @@ class EventLogReader:
                         start_offset,
                         max_lines_per_poll=cap,
                         parse_skip_state=skip_state,
+                        on_skip=on_skip,
                     )
                 )
 

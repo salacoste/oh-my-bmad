@@ -1215,7 +1215,7 @@ async def metrics() -> Response:
 
 **Separability impact.** Adding a new subscriber is the first since Phase 1's design. The recovery cursor calculation in `registry-state.domain.recovery` is unaffected (the new subscriber owns its own cursor file), but `tests/separability/` gains test S-4: spin up the stack without `metrics-subscriber` and assert every other service still starts + serves traffic identically.
 
-**New ADR placeholder:** `docs/adr/0005-metrics-subscriber-derived-projection.md` — documents *why* metrics are derived from the event log rather than instrumented in-process. Forecloses the "OTel everywhere" anti-pattern with an explicit decision record.
+**ADR-0005 (accepted 2026-05-19, Story 10.3).** [`docs/adr/0005-metrics-subscriber-derived-projection.md`](../../docs/adr/0005-metrics-subscriber-derived-projection.md) documents *why* metrics are derived from the event log rather than instrumented in-process. Forecloses the "OTel-everywhere" anti-pattern with an explicit decision record + three rejected alternatives.
 
 ### HMAC signing flow for approvals
 

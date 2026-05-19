@@ -55,12 +55,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
+import uvicorn
 from events import EventEnvelope
 from events.errors import CursorSchemaVersionError, ParseSkipThresholdExceeded
 from events.log_reader import EventLogReader
 
 from metrics_subscriber import __version__
 from metrics_subscriber.app.config import MetricsSubscriberSettings
+from metrics_subscriber.app.metrics import MetricsState
 from metrics_subscriber.cursor import (
     CursorLockUnsupportedFilesystemError,
     CursorPersistence,
@@ -111,6 +113,7 @@ def _emit_lag_log(
     offset: int,
     path: Path,
     last_envelope: EventEnvelope | None,
+    metrics_state: MetricsState | None = None,
 ) -> None:
     """AC9 — emit structured lag log on each persist.
 
@@ -155,18 +158,37 @@ def _emit_lag_log(
         last_envelope_emitted_at_monotonic_ns=last_envelope_emitted_at_monotonic_ns,
         wall_clock_lag_s=wall_clock_lag_s,
     )
+    # Story 10.3 AC5: lift the structured-log values into the Prometheus
+    # gauges held on ``MetricsState``.  Updating from inside the lag-log
+    # emit guarantees both observation paths (logs + ``/metrics``) see
+    # the SAME numbers at the SAME persist event — VH-8 silent-downgrade
+    # lesson applied (Story 10.2 P2-H5).  ``metrics_state is None`` is
+    # the Story 10.2 tail-only path that has no FastAPI surface; the
+    # gauges simply do not exist in that deployment.
+    if metrics_state is not None:
+        metrics_state.record_lag(lag_seconds=wall_clock_lag_s, bytes_behind=bytes_behind)
+        metrics_state.record_cursor(path=path, offset=offset)
 
 
 async def run_subscriber(
     settings: MetricsSubscriberSettings,
     *,
     stop_event: asyncio.Event | None = None,
+    metrics_state: MetricsState | None = None,
 ) -> int:
     """Async lifespan: open reader, restore cursor, tail JSONL.
 
     Args:
         settings: Validated config from env.
         stop_event: Optional shutdown signal.  ``None`` → tail forever.
+        metrics_state: Optional Story 10.3 :class:`MetricsState` shared
+            with the FastAPI ``/metrics`` route.  ``None`` (the Story
+            10.2 standalone tail-loop path, also used by the
+            ``test_restart_recovery_subprocess.py`` tests via
+            ``OMB_METRICS_RUN_MODE=tail``) disables gauge/counter
+            updates; the structured ``metrics_subscriber_lag`` log is
+            still emitted on every persist so the no-FastAPI path
+            preserves its observability surface.
 
     Returns:
         Process exit code (0 on graceful shutdown).
@@ -243,6 +265,13 @@ async def run_subscriber(
         # ``__aexit__`` now sets ``_closed=True`` so post-exit calls
         # raise ``RuntimeError`` rather than silently no-oping.
         async with EventLogReader(settings.event_log_dir) as reader:
+            # Story 10.3 AC6: install the parse-skip Prometheus counter
+            # callback when a ``MetricsState`` was provided (the FastAPI
+            # ``server`` run-mode).  Standalone ``tail`` mode (Story 10.2
+            # subprocess tests) passes ``None`` and observes unchanged
+            # behaviour — the parse-skip log line still emits.
+            if metrics_state is not None:
+                reader.set_on_skip(metrics_state.on_parse_skip)
             # P2-H2: wrap restore_into so VH-9's CursorSchemaVersionError
             # surfaces as a structured log + exit code 2 instead of an
             # uncaught traceback through asyncio.run().
@@ -297,7 +326,12 @@ async def run_subscriber(
                         last_envelope = envelope
                         cursor.note_event_processed()
                         if cursor.maybe_persist(reader.cursor_offset, reader.current_path):
-                            _emit_lag_log(reader.cursor_offset, reader.current_path, last_envelope)
+                            _emit_lag_log(
+                                reader.cursor_offset,
+                                reader.current_path,
+                                last_envelope,
+                                metrics_state,
+                            )
                 except ParseSkipThresholdExceeded as exc:
                     log.critical(
                         "metrics_subscriber_corrupt_region_detected",
@@ -351,7 +385,12 @@ async def run_subscriber(
                 # etc.) is logged but does not crash the shutdown path.
                 try:
                     cursor.persist_now(reader.cursor_offset, reader.current_path)
-                    _emit_lag_log(reader.cursor_offset, reader.current_path, last_envelope)
+                    _emit_lag_log(
+                        reader.cursor_offset,
+                        reader.current_path,
+                        last_envelope,
+                        metrics_state,
+                    )
                 except OSError as exc:  # pragma: no cover — surfaced via log
                     log.warning(
                         "metrics_subscriber_persist_on_shutdown_failed",
@@ -366,16 +405,20 @@ async def run_subscriber(
     return 0
 
 
-def main() -> int:
-    """Sync entrypoint for ``python -m metrics_subscriber``."""
-    logging.basicConfig(
-        level=os.environ.get("OMB_METRICS_LOG_LEVEL", "INFO"),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
-    settings = MetricsSubscriberSettings()
+def _run_tail_mode(settings: MetricsSubscriberSettings) -> int:
+    """Story 10.2 standalone tail-loop entry path.
+
+    Preserved for the ``test_restart_recovery_subprocess.py`` +
+    ``test_exit_codes.py`` tests that exercise tail semantics directly
+    (signal-handler installation, cursor-lock contention, SIGTERM
+    drain).  Re-running those tests through the FastAPI lifespan would
+    conflate Story 10.3 + 10.2 review semantics; defer that rewrite to
+    a follow-up story per the trade-off note in the Story 10.3 spec.
+    """
     stop_event = asyncio.Event()
 
     async def _run() -> int:
+        # P2-H8 (Q9): get_running_loop, not the deprecated get_event_loop.
         loop = asyncio.get_running_loop()
         _install_signal_handlers(loop, stop_event)
         return await run_subscriber(settings, stop_event=stop_event)
@@ -384,6 +427,81 @@ def main() -> int:
     with contextlib.suppress(KeyboardInterrupt):
         rc = asyncio.run(_run())
     return rc
+
+
+def _run_server_mode(settings: MetricsSubscriberSettings) -> int:
+    """Story 10.3 default — uvicorn-hosted FastAPI factory.
+
+    Mirrors ``registry_api.__main__.main`` programmatic-uvicorn pattern
+    (Story 3.6 AC-4 lesson — ``log_config=None`` so structlog owns
+    logging; ``access_log=False`` so /metrics scrapes do not spam the
+    log).
+
+    Exit-code matrix preservation: ``build_app``'s lifespan handler
+    captures typed lifespan failures onto ``app.state.exit_code`` and
+    flips ``uvicorn.Server.should_exit = True``.  Once ``serve()``
+    returns we surface that value as the process exit code.
+    """
+    # Local import — the FastAPI factory module pulls in heavy
+    # dependencies (fastapi, uvicorn, prometheus_client) that the
+    # tail-mode entry path does NOT need; keeping the import inside
+    # ``_run_server_mode`` lets the standalone tail subprocess tests
+    # avoid the import cost.
+    from metrics_subscriber.app.main import build_app  # noqa: PLC0415
+
+    app = build_app(settings=settings)
+    config = uvicorn.Config(
+        app,
+        host=settings.metrics_host,
+        port=settings.metrics_port,
+        log_config=None,
+        access_log=False,
+        lifespan="on",
+    )
+    server = uvicorn.Server(config)
+    # Hand the server back to the app so the lifespan failure-handler
+    # can request shutdown without circular imports.
+    app.state.uvicorn_server = server
+
+    async def _serve() -> None:
+        await server.serve()
+
+    with contextlib.suppress(KeyboardInterrupt):
+        asyncio.run(_serve())
+    # ``app.state.exit_code`` carries the Story 10.2 1/2/3 matrix when
+    # the lifespan tail task surfaces a typed exception.
+    rc_obj = getattr(app.state, "exit_code", 0)
+    rc: int = int(rc_obj) if isinstance(rc_obj, int) else 0
+    return rc
+
+
+def main() -> int:
+    """Sync entrypoint for ``python -m metrics_subscriber``.
+
+    AC8 dispatch: ``OMB_METRICS_RUN_MODE`` selects between the
+    Story 10.2 standalone tail-loop (``tail``) and the Story 10.3
+    FastAPI + uvicorn surface (``server``, default).  Tests that need
+    to exercise tail semantics directly set
+    ``OMB_METRICS_RUN_MODE=tail``; production deployments leave the
+    env var unset and run the server path.
+    """
+    logging.basicConfig(
+        level=os.environ.get("OMB_METRICS_LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+    settings = MetricsSubscriberSettings()
+    mode = os.environ.get("OMB_METRICS_RUN_MODE", "server").strip().lower()
+    if mode == "tail":
+        return _run_tail_mode(settings)
+    if mode == "server":
+        return _run_server_mode(settings)
+    log.error(
+        "metrics_subscriber_invalid_run_mode",
+        run_mode=mode,
+        valid_modes=["server", "tail"],
+        note="unset OMB_METRICS_RUN_MODE for default server mode",
+    )
+    return 1
 
 
 if __name__ == "__main__":
