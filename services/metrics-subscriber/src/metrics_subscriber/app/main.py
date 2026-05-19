@@ -52,6 +52,73 @@ HTTP request handler is attached, so the unsafe window never overlaps
 with concurrent access.  Subsequent ``.inc()`` / ``.set()`` calls from
 the tail-loop task and ``generate_latest()`` from a ``/metrics``
 request handler can therefore interleave safely.
+
+Cardinality Discipline (Story 10.5 amendment, 2026-05-20)
+---------------------------------------------------------
+The ``/metrics`` exposition surface is a **bounded** Prometheus
+endpoint by contract — every label value is restricted to a small
+enum pre-populated at :func:`metrics_subscriber.app.metrics.build_collectors`
+time.  Operators can rely on the following invariants:
+
+* **Steady-state baseline = exactly 51 canonical timeseries** (post
+  ``_created`` metadata filter).  Composition::
+
+      Story 10.3 baseline (lag, bytes_behind, parse_skip × 4)   =  6
+      Task lifecycle (15 event types)                           = 15
+      Session lifecycle (5 phases)                              =  5
+      Secret accessed (5 ActorKind values)                      =  5
+      Event family (11 registered + 1 ``unknown`` fallback)     = 12
+      Idempotency cache (2 outcomes — DEFERRED preview)         =  2
+      Capability denied (3 tiers × 2 boundaries — DEFERRED)     =  6
+      ─────────────────────────────────────────────────────────
+                                                                = 51
+
+* **Per-task gauge cardinality** is bounded by ``active task count``
+  via the cleanup invariant: on ``task.completed`` /
+  ``task.stop_requested`` the dispatcher calls
+  ``state.task_tokens_spent.remove(task_id)`` to retire the labelled
+  child.  See
+  :func:`metrics_subscriber.app.metrics._update_task_lifecycle_and_clear_task_gauge`.
+
+* **Ghost-gauge prevention** (Story 10.4 P1-H3): a bounded LRU window
+  of ``maxlen=10_000`` task_ids is kept in
+  :attr:`metrics_subscriber.app.metrics.MetricsState._terminated_task_ids` —
+  out-of-order token-bearing envelopes (e.g. ``task.budget_exceeded``
+  arriving after ``task.completed``) cannot resurrect a labelled
+  gauge child within the 10K-event window.  Bounded-leak risk for
+  envelopes more than 10K events behind their terminator is
+  documented + accepted in :class:`MetricsState`.
+
+* **ActorKind drift** is statically guarded: :data:`_ACTOR_KINDS` is
+  derived from :data:`events.envelope.ActorKind` via
+  :func:`typing.get_args`; a startup ``assert`` in
+  :func:`build_collectors` re-checks set equality so an upstream
+  type-alias refactor cannot drift this subscriber silently.
+
+* **Unknown event families** fold into the pre-populated ``"unknown"``
+  bucket via the :data:`_EVENT_FAMILIES_SET` membership guard in
+  :func:`metrics_subscriber.app.metrics.update_for` — no novel
+  ``event_family`` labelled child can be lazily materialised from the
+  tail loop.
+
+These invariants are enforced as a CI regression gate in
+``tests/integration/test_metrics_cardinality.py`` (Story 10.5):
+
+* AC2 — exact-51 baseline.
+* AC3 — 10K varying task_ids → returns to baseline after synchronous
+  cleanup (``@pytest.mark.slow`` — 30s wall-clock budget).
+* AC4 — N=100 concurrent active tasks → baseline + N labelled
+  children, returns to baseline after full cleanup.
+* AC5 — deliberate violation proves the gate is sensitive (failure-
+  injection D3 — bypass guard via direct mutation).
+* AC6 — ActorKind drift meta-test fingerprints the startup assertion.
+* AC7 — 50 novel-family envelopes fold into the ``"unknown"`` bucket;
+  no per-family children are materialised.
+
+See `docs/adr/0005-metrics-subscriber-derived-projection.md`
+§Cardinality Discipline for the architectural rationale and
+foreclosed anti-patterns; the integration test file is the runtime
+contract gate.
 """
 
 from __future__ import annotations

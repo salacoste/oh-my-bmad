@@ -296,9 +296,48 @@ re-materialised and cleaned on the next terminator.  See
 ``services/metrics-subscriber/src/metrics_subscriber/test_metrics_state.py
 ::test_cardinality_at_steady_state_is_bounded`` — emits 1000 mixed
 envelopes through the dispatch table and asserts
-``len(<canonical_timeseries>) <= 50`` (where canonical timeseries
-filters out ``_created`` bookkeeping samples).  Story 10.5 will
-extend with a 10K-task regression assertion at ≤ 200 timeseries.
+``len(<canonical_timeseries>) <= 51`` (where canonical timeseries
+filters out ``_created`` bookkeeping samples).
+
+### CI regression gate (Story 10.5 amendment, 2026-05-20)
+
+The runtime contract is enforced by
+``tests/integration/test_metrics_cardinality.py`` — a CI-blocking
+integration suite that exercises the FULL ``/metrics`` HTTP scrape
+path via ``httpx.AsyncClient + ASGITransport`` against
+``build_app(...)`` (the same path Prometheus scrape would take).
+Seven tests fingerprint the load-bearing invariants documented above:
+
+1. ``test_baseline_cardinality_at_steady_state`` — asserts exact 51
+   canonical timeseries on a fresh ``build_app`` with no envelopes
+   emitted.  Per-family breakdown surfaces in the failure message so
+   any drift is immediately diagnosable.
+2. ``test_cardinality_under_10k_varying_task_ids`` (``@pytest.mark.slow``)
+   — emits 20000 envelopes (10K distinct ``task_id`` pairs of
+   ``task.execution.started`` + ``task.completed``); asserts cardinality
+   returns to baseline after synchronous tail-loop cleanup and that
+   the ``_terminated_task_ids`` LRU stays at its 10K bound.  Wall-clock
+   budget: 30 seconds (D4).
+3. ``test_cardinality_with_n_concurrent_active_tasks`` — fingerprints
+   the operational ``N ~ 100`` active-task ceiling: 100 distinct active
+   tasks → baseline + 100 per-task gauge children; after full cleanup
+   → baseline.
+4. ``test_deliberate_unbounded_label_violation_fails`` — failure-
+   injection (D3): bypasses the ``_EVENT_FAMILIES_SET`` guard via
+   direct counter mutation to prove the gate observes a real leak
+   (>= 251 timeseries).
+5. ``test_actor_kind_startup_assertion_catches_drift`` — meta-test for
+   Story 10.4 P1-H2: synthetic ``_ACTOR_KINDS`` drift triggers
+   ``AssertionError`` in ``build_collectors``.
+6. ``test_envelope_with_unknown_family_falls_to_unknown_bucket`` —
+   50 distinct novel envelope families fold into the pre-populated
+   ``"unknown"`` ``event_family`` bucket; no novel labelled children
+   are materialised.
+
+If a future contributor accidentally introduces a high-cardinality
+label (e.g., ``actor_id`` instead of ``actor_kind``, or ``task_id``
+retained after task completion), the CI gate fails before the metric
+explodes Prometheus's TSDB in production.
 
 ### Foreclosed anti-patterns
 
