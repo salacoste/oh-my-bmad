@@ -30,6 +30,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import structlog
 from events import Actor, EventEnvelope
 from prometheus_client import CollectorRegistry, generate_latest
 from prometheus_client.parser import text_string_to_metric_families
@@ -37,6 +38,7 @@ from pydantic import BaseModel
 
 from metrics_subscriber.app.metrics import (
     _DISPATCH,
+    _TASK_LIFECYCLE_EVENT_TYPES,
     MetricsState,
     build_collectors,
     update_for,
@@ -164,24 +166,8 @@ def test_per_app_registry_is_isolated() -> None:
 # ===========================================================================
 
 
-# All task lifecycle event types per AC1 enum table (15 values).
-_TASK_LIFECYCLE_EVENT_TYPES = (
-    "task.created",
-    "task.planning.started",
-    "task.plan.ready",
-    "task.execution.started",
-    "task.step.completed",
-    "task.blocker_raised",
-    "task.approval_requested",
-    "task.completed",
-    "task.stop_requested",
-    "task.retry_requested",
-    "task.self_recovered",
-    "task.execution.resumed",
-    "task.budget_exceeded",
-    "task.license_flagged",
-    "task.summary_emitted",
-)
+# Task lifecycle event types are imported from the metrics module
+# (Story 10.4 P1-L1 — avoid duplication drift trap).
 
 _SESSION_TYPES = (
     "session.started",
@@ -374,6 +360,65 @@ def test_task_tokens_spent_gauge_set_and_cleared() -> None:
     )
 
 
+def test_task_completed_logs_final_token_usage_before_gauge_clear() -> None:
+    """Story 10.4 P1-H4 — FR44 final ``token_usage`` reading is logged on terminate.
+
+    The gauge is the LIVE view; the structured log entry is the
+    canonical historical record (NFR-O1 — events as primary
+    observability).  This test asserts the log entry is emitted with
+    the final token count BEFORE the gauge is cleared.
+    """
+    registry = CollectorRegistry()
+    state = build_collectors(registry)
+    task_id = "task-final-tokens"
+    # Set the gauge first so cleanup has something to remove.
+    update_for(
+        state,
+        _make_envelope(
+            "task.budget_exceeded",
+            payload={"task_id": task_id, "tokens_used": 1234},
+        ),
+    )
+    with structlog.testing.capture_logs() as caps:
+        update_for(
+            state,
+            _make_envelope(
+                "task.completed",
+                payload={"task_id": task_id, "token_usage": 5678},
+            ),
+        )
+    finals = [c for c in caps if c.get("event") == "metrics_subscriber_task_token_usage_final"]
+    assert len(finals) == 1, (
+        f"expected exactly one final-token log entry, got {len(finals)}: {caps}"
+    )
+    entry = finals[0]
+    assert entry["task_id"] == task_id
+    assert entry["tokens"] == 5678
+    assert entry["source"] == "task.completed"
+    # Gauge is cleared after the log emission.
+    body = generate_latest(registry)
+    assert _metric_value(body, "omb_task_tokens_spent", labels={"task_id": task_id}) is None
+
+
+def test_task_completed_without_token_usage_skips_final_log() -> None:
+    """Story 10.4 P1-H4 — missing/None ``token_usage`` is a silent no-op.
+
+    ``task.stop_requested`` and minimal ``task.completed`` payloads
+    that omit the token field MUST NOT emit a spurious final-token
+    log entry (would corrupt the FR44 historical record with placeholder
+    zeros).
+    """
+    registry = CollectorRegistry()
+    state = build_collectors(registry)
+    with structlog.testing.capture_logs() as caps:
+        update_for(
+            state,
+            _make_envelope("task.stop_requested", payload={"task_id": "t-no-tokens"}),
+        )
+    finals = [c for c in caps if c.get("event") == "metrics_subscriber_task_token_usage_final"]
+    assert finals == [], "task.stop_requested without token_usage must NOT emit final-token log"
+
+
 def test_task_tokens_spent_gauge_cleared_by_stop_requested() -> None:
     """AC5 — task.stop_requested is the second terminal event that cleans the gauge."""
     registry = CollectorRegistry()
@@ -394,19 +439,24 @@ def test_task_tokens_spent_gauge_cleared_by_stop_requested() -> None:
 
 
 def test_task_gauge_cleanup_then_resurrect_is_idempotent() -> None:
-    """Out-of-scope risk flag — out-of-order completion before token-emitting event.
+    """Out-of-order ``task.budget_exceeded`` after terminator does NOT resurrect gauge.
 
-    Scenario: a ``task.completed`` arrives BEFORE any token-emitting
-    envelope (clock skew or replay).  The cleanup must be a no-op (no
-    KeyError), and a subsequent token-bearing envelope must still set
-    the gauge correctly.
+    Story 10.4 P1-H3 — the terminated-task LRU prevents ghost-gauge
+    leak.  A ``task.budget_exceeded`` arriving AFTER ``task.completed``
+    (clock skew or replay) MUST NOT create a labelled child for that
+    task_id — without the guard the gauge would persist with no
+    subsequent cleanup, leaking cardinality monotonically.
+
+    Bounded-leak risk: tasks completed more than 10_000 events ago can
+    still resurrect a gauge child (LRU evicts oldest task_id).  This
+    is documented and accepted in :class:`MetricsState`.
     """
     registry = CollectorRegistry()
     state = build_collectors(registry)
     task_id = "task-out-of-order"
     # Out-of-order: completion before any tokens recorded.
     update_for(state, _make_envelope("task.completed", payload={"task_id": task_id}))
-    # Then a late token-bearing envelope arrives.
+    # Late token-bearing envelope — must be skipped by the LRU guard.
     update_for(
         state,
         _make_envelope(
@@ -415,7 +465,11 @@ def test_task_gauge_cleanup_then_resurrect_is_idempotent() -> None:
         ),
     )
     body = generate_latest(registry)
-    assert _metric_value(body, "omb_task_tokens_spent", labels={"task_id": task_id}) == 99.0
+    assert _metric_value(body, "omb_task_tokens_spent", labels={"task_id": task_id}) is None, (
+        "ghost-gauge leak: task_tokens_spent labelled child should remain "
+        "REMOVED after task.completed; late task.budget_exceeded must NOT "
+        "resurrect it (Story 10.4 P1-H3)"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -424,8 +478,12 @@ def test_task_gauge_cleanup_then_resurrect_is_idempotent() -> None:
 
 
 def test_dispatch_table_size_meets_minimum() -> None:
-    """AC6 — at least 21 entries: 15 task + 5 session + 1 secret."""
-    assert len(_DISPATCH) >= 21, f"dispatch table has {len(_DISPATCH)} entries, expected ≥ 21"
+    """AC6 — exactly 21 entries.
+
+    Breakdown: 10 lifecycle-only + 3 token-bearing + 2 terminal +
+    5 session + 1 secret = 21.
+    """
+    assert len(_DISPATCH) == 21, f"dispatch table has {len(_DISPATCH)} entries, expected == 21"
 
 
 def test_dispatch_table_covers_all_task_lifecycle_event_types() -> None:
@@ -444,12 +502,9 @@ def test_dispatch_unknown_envelope_type_only_increments_appended_counter() -> No
     """AC6 — unknown type updates only events_appended; no other metric raises."""
     registry = CollectorRegistry()
     state = build_collectors(registry)
-    # ``unknown.type`` has family ``unknown`` — NOT in the bounded
-    # _EVENT_FAMILIES enum.  This is intentionally a free-form test
-    # (the family-counter `labels(...)` call materialises a new
-    # labelled child on demand); Story 10.5 enforces the bound via a
-    # cardinality regression test.  Story 10.4 verifies only that
-    # update_for itself does not raise on an unknown type.
+    # ``unknown.type`` has family ``unknown`` — Story 10.4 P1-H1 added
+    # ``"unknown"`` to the bounded ``_EVENT_FAMILIES`` enum as the
+    # fallback bucket so this case routes through a PRE-POPULATED label.
     update_for(state, _make_envelope("unknown.type"))
     body = generate_latest(registry)
     # The known task counter family is untouched.
@@ -462,6 +517,31 @@ def test_dispatch_unknown_envelope_type_only_increments_appended_counter() -> No
     # The events_appended counter recorded the unknown family.
     value = _metric_value(body, "omb_events_appended_total", labels={"event_family": "unknown"})
     assert value == 1.0
+
+
+def test_events_appended_unknown_family_falls_through_to_unknown_bucket() -> None:
+    """Story 10.4 P1-H1 — out-of-enum prefix routes to the ``"unknown"`` bucket.
+
+    The cardinality contract requires that NO envelope can lazily
+    create a new ``event_family`` labelled child.  An envelope with a
+    novel family prefix (here ``"novelty"``) must register in the pre-
+    populated ``"unknown"`` bucket, NOT create a new ``"novelty"``
+    child.
+    """
+    registry = CollectorRegistry()
+    state = build_collectors(registry)
+    # ``novelty.event`` has family ``"novelty"`` which is NOT in
+    # ``_EVENT_FAMILIES``; the update_for path must route to ``unknown``.
+    update_for(state, _make_envelope("novelty.event"))
+    body = generate_latest(registry)
+    # No ``novelty`` child was created (would be a cardinality leak).
+    assert (
+        _metric_value(body, "omb_events_appended_total", labels={"event_family": "novelty"}) is None
+    ), "novelty family must NOT materialise a labelled child (P1-H1 cardinality contract)"
+    # The ``unknown`` bucket absorbed the increment.
+    assert (
+        _metric_value(body, "omb_events_appended_total", labels={"event_family": "unknown"}) == 1.0
+    ), "novelty.event should route to the ``unknown`` fallback bucket"
 
 
 # ---------------------------------------------------------------------------
@@ -495,7 +575,7 @@ def test_deferred_counters_pre_populated_with_zero_values() -> None:
 
 
 def test_cardinality_at_steady_state_is_bounded() -> None:
-    """AC10 — emit 1000 mixed envelopes; total timeseries ≤ 50.
+    """AC10 — emit 1000 mixed envelopes; canonical timeseries ≤ 51.
 
     Story 10.4 asserts the steady-state bound as a smoke check.  Story
     10.5 will extend this with a regression test that emits 10K varying
@@ -508,12 +588,14 @@ def test_cardinality_at_steady_state_is_bounded() -> None:
                            this test) + parse_skip_total (4) = 6
       Story 10.4 counters: task_lifecycle (15) + session (5) +
                            secret_accessed (5) + events_appended
-                           (≥ 11 — bounded enum; mixed envelopes may
-                           also create unknown-family labels in this
-                           test) + idempotency (2) + capability (6) = 44
+                           (12 — 11 registered families + ``"unknown"``
+                           fallback bucket per P1-H1) + idempotency (2) +
+                           capability (6) = 45
       task_tokens_spent  : 0 after cleanup (terminal events ran).
 
-      Total ≤ 50 — fits the AC10 bound with operational headroom.
+      Total = 51 — bound widened by +1 vs Story 10.4 dev complete to
+      accommodate the P1-H1 ``"unknown"`` fallback bucket; "timeseries"
+      = canonical samples post-``_created`` filter per P1-L4 wording.
     """
     registry = CollectorRegistry()
     state = build_collectors(registry)
@@ -538,23 +620,75 @@ def test_cardinality_at_steady_state_is_bounded() -> None:
                 if event_type == "task.budget_exceeded":
                     payload["tokens_used"] = 100
             update_for(state, _make_envelope(event_type, payload=payload))
+    # P1-M3: explicit assertion on the unbounded-label gauge — must be
+    # ZERO labelled children after cleanup.  Relying solely on the
+    # total-timeseries bound can hide a few leaked children inside the
+    # 50-sample headroom.
+    assert len(list(state.task_tokens_spent._metrics)) == 0, (  # noqa: SLF001
+        "task_tokens_spent gauge children leaked after cleanup"
+    )
     timeseries = list(registry.collect())
     # Each Metric Family is collected once; ``samples`` enumerates
     # per-labelset.  ``prometheus_client`` emits TWO samples per
     # Counter labelset — the ``_total`` value AND a ``_created``
-    # timestamp.  Counting Prometheus-canonical timeseries means
-    # ignoring ``_created`` (it is bookkeeping metadata, not a
-    # distinct timeseries Prometheus indexes separately).
-    # Gauge labelsets emit a single sample.
+    # timestamp.  "Canonical timeseries" in AC10 = the number of
+    # samples Prometheus actually indexes separately, which means
+    # filtering the ``_created`` bookkeeping metadata.  Gauge labelsets
+    # emit a single sample each.
     canonical_timeseries = sum(
         1
         for family in timeseries
         for sample in family.samples
         if not sample.name.endswith("_created")
     )
-    assert canonical_timeseries <= 50, (
-        f"cardinality {canonical_timeseries} exceeds AC10 steady-state bound of 50; "
+    assert canonical_timeseries <= 51, (
+        f"cardinality {canonical_timeseries} exceeds AC10 steady-state bound of 51; "
         f"families: {[(f.name, len(f.samples)) for f in timeseries]}"
+    )
+
+
+def test_cardinality_under_burst_cleanup() -> None:
+    """Story 10.4 P1-M3 / P1-L5 — adversarial burst sequence.
+
+    The base steady-state test interleaves token-emitting + terminal
+    events 1-for-1 in the same rotation, so cleanup runs in the same
+    iteration as ``.set()``.  This variant emits ALL token-bearing
+    envelopes FIRST (gauge children pile up), THEN all terminal events
+    (cleanup must drain them).  Asserts the unbounded-label gauge is
+    empty + the total timeseries bound still holds.
+    """
+    registry = CollectorRegistry()
+    state = build_collectors(registry)
+    n_tasks = 50
+    # Phase 1 — burst-create gauge children.
+    for i in range(n_tasks):
+        task_id = f"burst-task-{i}"
+        update_for(
+            state,
+            _make_envelope(
+                "task.budget_exceeded",
+                payload={"task_id": task_id, "tokens_used": 42 + i},
+            ),
+        )
+    # Mid-burst sanity: all 50 gauge children present.
+    assert len(list(state.task_tokens_spent._metrics)) == n_tasks, (  # noqa: SLF001
+        "burst phase 1 should have created exactly n_tasks gauge children"
+    )
+    # Phase 2 — drain via terminators.
+    for i in range(n_tasks):
+        task_id = f"burst-task-{i}"
+        update_for(state, _make_envelope("task.completed", payload={"task_id": task_id}))
+    assert len(list(state.task_tokens_spent._metrics)) == 0, (  # noqa: SLF001
+        "task_tokens_spent gauge children leaked after burst-cleanup"
+    )
+    canonical_timeseries = sum(
+        1
+        for family in registry.collect()
+        for sample in family.samples
+        if not sample.name.endswith("_created")
+    )
+    assert canonical_timeseries <= 51, (
+        f"cardinality {canonical_timeseries} exceeds AC10 burst-cleanup bound of 51"
     )
 
 

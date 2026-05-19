@@ -82,29 +82,35 @@ Deferred-FROM-FR62 metrics (Story 10.4 D1):
   Pre-registering the metric NAMES keeps operator dashboards stable
   during the deferral window.  See ADR-0005 §Deferred Metrics.
 
-Actor-kind enum deviation (Story 10.4 spec-drift note):
+Actor-kind enum (Story 10.4 — drift-proof at the type level):
 
-  The story 10.4 spec AC3 enumerates ``actor_kind`` as
-  ``{human, system, agent}`` (a logical bucketing).  The actual
-  envelope's ``Actor.kind`` enum
-  (:data:`events.envelope.ActorKind`) is
-  ``{operator, orchestrator, worker, system, clawhip}``.  We use the
-  ACTUAL enum values as the bounded label set — labelling by an
-  imaginary three-bucket projection would either drop information or
-  require a mapping function that doesn't exist anywhere else in the
-  codebase.  Documented in the Story 10.4 Dev Agent Record.
+  ``_ACTOR_KINDS`` is derived from :data:`events.envelope.ActorKind`
+  via ``typing.get_args`` so the canonical type is the single source
+  of truth.  The 5 values are
+  ``{operator, orchestrator, worker, system, clawhip}`` per the
+  envelope schema.  Story 10.4 spec AC3 enumerated a three-bucket
+  projection (``{human, system, agent}``) which was a documentation
+  artifact; the spec was amended after pass-1 P1-H2 to match the
+  canonical type.  A startup ``assert`` in :func:`build_collectors`
+  re-checks the set equality so a type-alias refactor in the
+  ``events`` package cannot drift this subscriber silently.
 """
 
 from __future__ import annotations
 
 import contextlib
+from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, get_args
 
+import structlog
 from events import EventEnvelope
+from events.envelope import ActorKind
 from prometheus_client import CollectorRegistry, Counter, Gauge
+
+log = structlog.get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Bounded-enum label sets (Story 10.4 — pre-populated at build_collectors).
@@ -160,20 +166,28 @@ _SESSION_TYPE_TO_PHASE: Final[dict[str, str]] = {
 #: Bounded enum of actor kinds.  Uses the ACTUAL
 #: :data:`events.envelope.ActorKind` values (Story 10.4 spec-drift note
 #: in module docstring).
-_ACTOR_KINDS: Final[tuple[str, ...]] = (
-    "operator",
-    "orchestrator",
-    "worker",
-    "system",
-    "clawhip",
-)
+#:
+#: Story 10.4 pass-1 P1-H2: derived from :data:`events.envelope.ActorKind`
+#: via :func:`typing.get_args` so spec/impl drift is impossible at
+#: runtime.  A startup assertion in :func:`build_collectors` verifies the
+#: set equality.
+_ACTOR_KINDS: Final[tuple[str, ...]] = tuple(get_args(ActorKind))
+
+#: O(1) membership-test set companion for ``_ACTOR_KINDS`` — used by
+#: :func:`_update_secret_accessed` to defensively skip unknown actor kinds
+#: (Story 10.4 P1-H2).
+_ACTOR_KINDS_SET: Final[frozenset[str]] = frozenset(_ACTOR_KINDS)
 
 #: Bounded enum of event families (envelope.type prefix before first dot).
-#: 11 values per Story 10.4 AC4.  Currently registered families (10):
-#: agent, approval, file, secret, service, session, sink, task, telegram,
-#: tier3.  ``deployment`` is included for forward-compatibility per the
-#: AC4 enum table (no registered events yet — counter sample stays at 0
-#: until a future story adds the event family).
+#: Story 10.4 P1-H1: includes ``"approval"`` (was missing despite being
+#: registered in ``event_types.py:242-245``) and an ``"unknown"`` fallback
+#: bucket so :func:`update_for` can never create an unbounded label child.
+#: Currently registered families: agent, approval, file, secret, service,
+#: session, sink, task, telegram, tier3.  ``deployment`` is included for
+#: forward-compatibility per the AC4 enum table (no registered events yet
+#: — counter sample stays at 0 until a future story adds the event
+#: family).  ``unknown`` is the fallback bucket for any envelope whose
+#: prefix is not in the enum.
 _EVENT_FAMILIES: Final[tuple[str, ...]] = (
     "task",
     "session",
@@ -186,7 +200,14 @@ _EVENT_FAMILIES: Final[tuple[str, ...]] = (
     "file",
     "telegram",
     "deployment",
+    "unknown",
 )
+
+#: O(1) membership-test set companion for ``_EVENT_FAMILIES`` — used by
+#: :func:`update_for` to gate the ``event_family`` label against the
+#: bounded enum.  Unknown prefixes fall through to the ``"unknown"``
+#: bucket (Story 10.4 P1-H1).
+_EVENT_FAMILIES_SET: Final[frozenset[str]] = frozenset(_EVENT_FAMILIES)
 
 #: Bounded enum of idempotency-cache outcomes (Story 10.4 AC8 — DEFERRED).
 _IDEMPOTENCY_OUTCOMES: Final[tuple[str, ...]] = (
@@ -257,6 +278,17 @@ class MetricsState:
     # Story 10.4 AC8 — DEFERRED preview counters.
     idempotency_cache_total: Counter
     capability_denied_total: Counter
+    # Story 10.4 P1-H3 — bounded LRU of terminated task_ids used by
+    # :func:`_update_task_tokens` to prevent the ghost-gauge regression
+    # (out-of-order ``task.budget_exceeded`` after the terminal event
+    # would otherwise resurrect a labelled child with no cleanup).  Set
+    # mirrors the deque for O(1) membership; deque is the sliding
+    # bounded window — see :func:`_remember_terminated_task` for the
+    # eviction-sync invariant.  Bounded-leak risk for tasks completed
+    # more than 10_000 events ago is accepted (documented at
+    # :func:`_update_task_lifecycle_and_clear_task_gauge`).
+    _terminated_task_ids: deque[str] = field(default_factory=lambda: deque(maxlen=10_000))
+    _terminated_task_ids_set: set[str] = field(default_factory=set)
 
     def record_lag(self, *, lag_seconds: float, bytes_behind: int) -> None:
         """Update the two label-free persist-time gauges.
@@ -344,6 +376,28 @@ def _update_task_lifecycle(state: MetricsState, envelope: EventEnvelope) -> None
     state.task_lifecycle_total.labels(event_type=envelope.type).inc()
 
 
+def _remember_terminated_task(state: MetricsState, task_id: str) -> None:
+    """Append *task_id* to the bounded LRU + sync the O(1) membership set.
+
+    Eviction invariant (Story 10.4 P1-H3): when the deque is at its
+    ``maxlen`` and a new item is appended, the oldest item is evicted
+    automatically.  We capture the eviction here by checking ``len()``
+    before the append and removing the to-be-evicted item from the
+    companion set so deque and set stay in lock-step.
+    """
+    terminated_deque = state._terminated_task_ids
+    terminated_set = state._terminated_task_ids_set
+    # If the deque is full, the upcoming append evicts ``deque[0]``.
+    # Sync the set BEFORE the append so a concurrent reader never sees
+    # an evicted ID still in the set (single-thread tail loop so this
+    # is belt-and-braces, but the invariant is easier to reason about).
+    if terminated_deque.maxlen is not None and len(terminated_deque) == terminated_deque.maxlen:
+        evicted = terminated_deque[0]
+        terminated_set.discard(evicted)
+    terminated_deque.append(task_id)
+    terminated_set.add(task_id)
+
+
 def _update_task_lifecycle_and_clear_task_gauge(
     state: MetricsState, envelope: EventEnvelope
 ) -> None:
@@ -354,12 +408,21 @@ def _update_task_lifecycle_and_clear_task_gauge(
     load-bearing cardinality invariant (Story 10.4 AC5): without it the
     ``task_id`` label set would grow unbounded.
 
-    Out-of-order resilience: if a ``task.completed`` envelope arrives
-    BEFORE the final ``task.step.completed`` for the same task (clock
-    skew or replay), the cleanup runs first then the late step re-
-    creates a labelled child.  The steady-state observation is still
-    correct: the metric will be cleaned on the next terminator.  See
-    ``test_task_gauge_cleanup_then_resurrect_is_idempotent``.
+    Story 10.4 P1-H4 — final ``token_usage`` reading is logged via
+    structlog BEFORE the gauge is removed so the FR44 retrospective-
+    observability requirement is satisfied through the event-log
+    surface (NFR-O1: events as primary observability).  The gauge is
+    the LIVE view; the structured log entry is the historical record.
+
+    Story 10.4 P1-H3 — after ``.remove()`` the task_id is appended to
+    a bounded LRU (``_terminated_task_ids``).  ``_update_task_tokens``
+    consults this LRU and skips ``.set()`` for any task_id present —
+    preventing the ghost-gauge regression where an out-of-order
+    ``task.budget_exceeded`` after the terminal event would otherwise
+    resurrect the labelled child with no subsequent cleanup.  Bounded-
+    leak risk: a task whose final token-bearing envelope arrives more
+    than 10_000 envelopes after its terminator can still resurrect the
+    gauge; documented and accepted in :data:`MetricsState`.
 
     Atomicity note (Story 10.3 P1-H3 honest claim): the increment and
     the ``.remove()`` are TWO operations — between them a concurrent
@@ -369,13 +432,31 @@ def _update_task_lifecycle_and_clear_task_gauge(
     """
     state.task_lifecycle_total.labels(event_type=envelope.type).inc()
     task_id = _payload_get(envelope, "task_id")
-    if isinstance(task_id, str) and task_id:
-        # ``Gauge.remove(...)`` raises ``KeyError`` if no labelled child
-        # exists for this task — out-of-order ``task.completed`` before
-        # any token-emitting envelope is benign and must not crash the
-        # updater.
-        with contextlib.suppress(KeyError):
-            state.task_tokens_spent.remove(task_id)
+    if not (isinstance(task_id, str) and task_id):
+        return
+    # P1-H4: emit the final token_usage reading to the structured log
+    # BEFORE clearing the gauge.  ``TaskCompletedPayload.token_usage``
+    # is the canonical FR44 cumulative count; ``task.stop_requested``
+    # does not carry one but we still try the field for forward-
+    # compatibility (no-op on absent / wrong-typed values).
+    tokens = _payload_get(envelope, "token_usage")
+    if isinstance(tokens, int) and tokens >= 0:
+        log.info(
+            "metrics_subscriber_task_token_usage_final",
+            task_id=task_id,
+            tokens=tokens,
+            source=envelope.type,
+        )
+    # ``Gauge.remove(...)`` raises ``KeyError`` if no labelled child
+    # exists for this task — out-of-order ``task.completed`` before
+    # any token-emitting envelope is benign and must not crash the
+    # updater.
+    with contextlib.suppress(KeyError):
+        state.task_tokens_spent.remove(task_id)
+    # P1-H3: remember this task as terminated so any subsequent token-
+    # bearing envelope (out-of-order ``task.budget_exceeded`` etc.)
+    # cannot resurrect the gauge child.
+    _remember_terminated_task(state, task_id)
 
 
 def _update_task_tokens(state: MetricsState, envelope: EventEnvelope) -> None:
@@ -393,6 +474,13 @@ def _update_task_tokens(state: MetricsState, envelope: EventEnvelope) -> None:
     forward-compatible: when a future schema_version bumps add token
     fields to those payloads, the gauge starts tracking automatically.
 
+    Story 10.4 P1-H3 — a task_id that has already been terminated
+    (present in :attr:`MetricsState._terminated_task_ids_set`) is
+    silently skipped.  Without this guard, an out-of-order
+    ``task.budget_exceeded`` arriving after ``task.completed`` would
+    resurrect the gauge child with no subsequent cleanup, leaking
+    cardinality monotonically over the deployment lifetime.
+
     Atomicity note (Story 10.3 P1-H3 honest claim): the
     ``Gauge.set()`` IS a single atomic op via the internal lock.  The
     lifecycle counter increment + gauge set sequence (called via the
@@ -404,6 +492,12 @@ def _update_task_tokens(state: MetricsState, envelope: EventEnvelope) -> None:
     state.task_lifecycle_total.labels(event_type=envelope.type).inc()
     task_id = _payload_get(envelope, "task_id")
     if not (isinstance(task_id, str) and task_id):
+        return
+    # P1-H3 — terminated tasks are not allowed to resurrect a gauge
+    # child.  Bounded by the 10_000-entry LRU; out-of-order events that
+    # arrive far enough behind the terminator are accepted as a
+    # documented bounded-leak risk.
+    if task_id in state._terminated_task_ids_set:
         return
     tokens = _payload_get(envelope, "token_usage")
     if tokens is None:
@@ -430,8 +524,23 @@ def _update_secret_accessed(state: MetricsState, envelope: EventEnvelope) -> Non
     Reads ``envelope.actor.kind`` directly (typed
     :class:`events.envelope.Actor`); the actor field is always populated
     (envelope schema invariant).
+
+    Story 10.4 P1-H2 — defensive guard against unknown actor_kind values
+    leaking through a schema_version drift that adds a new ActorKind
+    Literal value without updating this subscriber.  An unknown kind is
+    logged at WARNING and the increment is skipped — preserves the
+    bounded-enum cardinality contract for ``actor_kind``.
     """
-    state.secret_accessed_total.labels(actor_kind=envelope.actor.kind).inc()
+    kind = envelope.actor.kind
+    if kind not in _ACTOR_KINDS_SET:
+        log.warning(
+            "metrics_subscriber_unknown_actor_kind",
+            actor_kind=kind,
+            event_type=envelope.type,
+            event_id=envelope.event_id,
+        )
+        return
+    state.secret_accessed_total.labels(actor_kind=kind).inc()
 
 
 #: Story 10.4 AC6 — immutable event_type → updater dispatch table.
@@ -493,14 +602,14 @@ def update_for(state: MetricsState, envelope: EventEnvelope) -> None:
 
     The ``event_family`` label is bounded by the
     :data:`_EVENT_FAMILIES` enum at registration time (pre-populated
-    in :func:`build_collectors`).  A wholly novel family (no
-    ``register()`` call, no prefix match) would still call
-    ``.labels(...)`` here — but the bounded-enum pre-population +
-    Story 10.5's cardinality regression test (≤ 200 timeseries
-    bound) catches drift.  Defensive: this is the only place in the
-    Story 10.4 surface where an unbounded ``event_family`` value
-    could leak; if a future story registers ``foo.bar`` it MUST also
-    extend :data:`_EVENT_FAMILIES`.
+    in :func:`build_collectors`).  Story 10.4 P1-H1 — the prefix
+    derived from ``envelope.type`` is checked against
+    :data:`_EVENT_FAMILIES_SET`; unknown prefixes fall through to the
+    pre-populated ``"unknown"`` bucket so no novel labelled child can
+    ever be lazily created from the tail loop.  If a future story
+    registers an event in a new family it MUST also extend
+    :data:`_EVENT_FAMILIES`; until then the envelope still registers
+    in the ``"unknown"`` counter for accurate append-rate computation.
 
     Atomicity note: dispatch update + family-counter increment is NOT
     atomic across the two operations.  A concurrent scrape can observe
@@ -512,6 +621,10 @@ def update_for(state: MetricsState, envelope: EventEnvelope) -> None:
     if updater is not None:
         updater(state, envelope)
     family = envelope.type.split(".", 1)[0]
+    # P1-H1: gate the label value against the bounded enum so no
+    # unknown prefix can lazily materialise a new labelled child.
+    if family not in _EVENT_FAMILIES_SET:
+        family = "unknown"
     state.events_appended_total.labels(event_family=family).inc()
 
 
@@ -532,10 +645,11 @@ def build_collectors(registry: CollectorRegistry) -> MetricsState:
     time.  This eliminates the lazy-registration race between
     ``Counter.labels(...).inc()`` from the worker thread and a
     concurrent ``generate_latest()`` scrape.  Counters: 15 task +
-    5 session + 5 actor_kind + 11 event_family + 2 idempotency +
-    6 capability + 4 parse_skip = 48 pre-populated children.  Plus
+    5 session + 5 actor_kind + 12 event_family (11 registered + 1
+    ``"unknown"`` fallback bucket per Story 10.4 P1-H1) + 2 idempotency +
+    6 capability + 4 parse_skip = 49 pre-populated children.  Plus
     the 3 label-free gauges + 2 labelled gauges (cursor_offset,
-    task_tokens) — total steady-state cardinality ≈ 50 timeseries
+    task_tokens) — total steady-state cardinality ≤ 50 timeseries
     (Story 10.4 AC10 bound).
 
     Args:
@@ -546,6 +660,17 @@ def build_collectors(registry: CollectorRegistry) -> MetricsState:
         A populated :class:`MetricsState` ready to mutate from the
         tail loop.
     """
+    # Story 10.4 P1-H2 — startup invariant: ``_ACTOR_KINDS`` is derived
+    # from :data:`events.envelope.ActorKind` via ``get_args``, but
+    # guard against an upstream type-alias refactor that silently
+    # changes the type without re-running this module's import.  A
+    # failed assertion here means the metrics-subscriber must be
+    # rebuilt against the new envelope schema.
+    assert set(_ACTOR_KINDS) == set(get_args(ActorKind)), (  # noqa: S101
+        f"_ACTOR_KINDS drift detected: {set(_ACTOR_KINDS)} != "
+        f"{set(get_args(ActorKind))} — events.envelope.ActorKind changed; "
+        "rebuild metrics-subscriber."
+    )
     # --- Story 10.3 metrics ------------------------------------------------
     lag_seconds = Gauge(
         "metrics_subscriber_lag_seconds",

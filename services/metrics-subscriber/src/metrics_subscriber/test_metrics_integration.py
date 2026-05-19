@@ -54,15 +54,22 @@ class _DispatchTestPayload(BaseModel):
 
 @pytest.fixture(autouse=True)
 def _register_dispatch_test_event_types() -> Generator[None, None, None]:
-    """Register a permissive payload for the unknown-type integration tests.
+    """Register a permissive payload under the bounded ``"task"`` family.
 
     The Story 10.4 tail loop dispatches envelopes that round-trip through
     :func:`events.log_reader.iter_new_envelopes_since` — which validates
-    against the schema registry.  Story 10.4 integration tests use the
-    PRODUCTION event types (task.*, session.*, secret.accessed); the
-    permissive payload is reserved for the unknown-family stress test.
+    against the schema registry.
+
+    Story 10.4 P1-M4 — the test event type uses the existing ``"task"``
+    family prefix so an accidental tail-loop emission cannot leak an
+    out-of-enum ``event_family`` label.  The schema_registry has no
+    documented unregister API, so we keep the autouse-without-teardown
+    pattern but constrain the side-effect to an enum-safe prefix.  Story
+    10.4 integration tests primarily use the PRODUCTION event types
+    (task.*, session.*, secret.accessed); the permissive payload is
+    reserved for the unknown-family stress test path.
     """
-    register("integration.test.dispatch", "1.0.0", _DispatchTestPayload)
+    register("task.test_dispatch_synthetic", "1.0.0", _DispatchTestPayload)
     yield
 
 
@@ -126,19 +133,28 @@ async def _wait_for_event_appended(
     *,
     timeout_s: float = 5.0,
 ) -> None:
-    """Poll the in-memory MetricsState until the events_appended counter reaches *expected*.
+    """Poll the ``/metrics`` endpoint until the events_appended counter reaches *expected*.
 
-    Faster than scraping /metrics in a loop; uses the same MetricsState
-    instance the tail loop mutates.  Times out (test fails) if the value
-    doesn't reach *expected* within *timeout_s*.
+    Story 10.4 P1-M2 — uses the public Prometheus HTTP exposition + the
+    canonical :func:`prometheus_client.parser.text_string_to_metric_families`
+    parser instead of the private ``Counter._value.get()`` introspection.
+    Slightly slower (HTTP round-trip per poll) but immune to
+    prometheus_client minor-version churn.
     """
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
     deadline = asyncio.get_running_loop().time() + timeout_s
-    while asyncio.get_running_loop().time() < deadline:
-        counter = app.state.metrics.events_appended_total.labels(event_family=family)
-        # ``_value.get()`` returns the float value of a ``Counter`` child.
-        if counter._value.get() >= expected:  # noqa: SLF001 — test-only introspection
-            return
-        await asyncio.sleep(0.01)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        while asyncio.get_running_loop().time() < deadline:
+            r = await client.get("/metrics")
+            if r.status_code == 200:
+                value = _parse_sample(
+                    r.content,
+                    "omb_events_appended_total",
+                    labels={"event_family": family},
+                )
+                if value is not None and value >= expected:
+                    return
+            await asyncio.sleep(0.01)
     raise AssertionError(
         f"events_appended_total{{event_family={family}}} did not reach "
         f"{expected} within {timeout_s}s"
@@ -433,11 +449,18 @@ async def test_run_subscriber_dispatches_envelopes_to_metrics_state(
         ],
     )
     await _wait_for_event_appended(app, "task", 1.0)
-    # The MetricsState exposed on app.state reflects the increment.
-    assert (
-        app.state.metrics.task_lifecycle_total.labels(event_type="task.created")._value.get()  # noqa: SLF001
-        == 1.0
-    )
+    # Story 10.4 P1-M2 — verify via the public /metrics HTTP exposition
+    # + canonical parser rather than the private ``Counter._value.get()``.
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        r = await client.get("/metrics")
+        assert r.status_code == 200
+        value = _parse_sample(
+            r.content,
+            "omb_task_lifecycle_events_total",
+            labels={"event_type": "task.created"},
+        )
+        assert value == 1.0
 
 
 @pytest.mark.asyncio

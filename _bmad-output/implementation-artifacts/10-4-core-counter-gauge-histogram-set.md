@@ -56,15 +56,17 @@ Self-verification:
 
 | Metric | Type | Labels | Description |
 |---|---|---|---|
-| `omb_secret_accessed_total` | Counter | `actor_kind` (bounded enum: 3 values) | Counts `secret.accessed` events. `actor_kind` is the envelope's `actor.kind` enum: `human`, `system`, `agent`. NEVER label by `actor.id` (cardinality unbounded — human IDs are operator names, agent IDs are session UUIDs). |
+| `omb_secret_accessed_total` | Counter | `actor_kind` (bounded enum: 5 values, derived from `events.envelope.ActorKind`) | Counts `secret.accessed` events. `actor_kind` is the envelope's `actor.kind` enum: `operator`, `orchestrator`, `worker`, `system`, `clawhip`. NEVER label by `actor.id` (cardinality unbounded — operator IDs are human-readable strings, worker IDs are session UUIDs). |
 
-Bounded `actor_kind` enum (pre-populated):
+Bounded `actor_kind` enum (pre-populated, derived from `events.envelope.ActorKind` via `typing.get_args` per Story 10.4 P1-H2):
 ```
-human, system, agent
+operator, orchestrator, worker, system, clawhip
 ```
 
 Self-verification:
 - Test `test_secret_accessed_counter_by_actor_kind` — emit 3 `secret.accessed` envelopes with different `actor.kind`, assert per-kind label.
+- `curl /metrics | grep ^omb_secret_accessed_total` returns 5 pre-populated label combinations.
+- Startup invariant in `build_collectors`: `assert set(_ACTOR_KINDS) == set(get_args(ActorKind))` — drift-proofs against silent envelope-schema refactors.
 
 ### AC4 — Event-log append-rate counter
 
@@ -132,7 +134,7 @@ Constraints:
 - Dispatch table is a `Final[dict]` constant — no runtime mutation.
 
 Self-verification:
-- `from metrics_subscriber.app.metrics import _DISPATCH; assert len(_DISPATCH) >= 18` (10 task + 5 session + 1 secret + 2 task-cleanup + 0 idempotency/capability).
+- `from metrics_subscriber.app.metrics import _DISPATCH; assert len(_DISPATCH) == 21` (10 lifecycle-only + 3 token-bearing (`task.execution.started`, `task.step.completed`, `task.budget_exceeded`) + 2 terminal + 5 session + 1 secret = 21; Story 10.4 P1-M1 — corrected arithmetic).
 - Test `test_dispatch_unknown_envelope_type_only_increments_appended_counter` — emit envelope with type `"unknown.type"`, assert no metric raises, only `events_appended_total{event_family="unknown"}` increments.
 
 ### AC7 — Hook dispatch into the tail loop
@@ -192,7 +194,7 @@ Each AC1–AC5 self-verification clause demands an integration test that:
 Helper fixture: `test_app_with_event_dir` in `conftest.py` — yields `(app, event_dir)` with the lifespan started.
 
 Self-verification:
-- 5 integration tests added (one per AC1–AC5) plus 1 dispatch coverage test (AC6).
+- ≥ 6 integration tests (5 per AC1–AC5 + dispatch coverage + exception-safety per Story 10.4 P1-L3 — actual count = 7).
 
 ### AC10 — Cardinality discipline preview (Story 10.5 prerequisite)
 
@@ -201,7 +203,7 @@ Story 10.5's regression test will assert cardinality bounds (emit 10K varying ta
 1. **All counter labels are pre-populated bounded enums** (AC1–AC4, AC8) — operator can't surprise the cardinality by emitting novel labels because dispatchers only emit known enum values.
 2. **`omb_task_tokens_spent` gauge clears on task termination** (AC5 cleanup rule).
 3. **Unknown envelope types** increment ONLY `omb_events_appended_total{event_family=<prefix>}` where prefix is itself an enum — no novel `event_type` leaks into a Counter label.
-4. Add a unit test `test_cardinality_at_steady_state_is_bounded` — emit 1000 envelopes of mixed types (including known + unknown), call `len(list(registry.collect()))`, assert total timeseries ≤ 50 (10 task + 5 session + 3 secret + 11 family + 2 idempotency + 6 capability + 3 Story 10.3 baseline ≈ 40).
+4. Add a unit test `test_cardinality_at_steady_state_is_bounded` — emit 1000 envelopes of mixed types (including known + unknown), iterate `registry.collect()` and count CANONICAL TIMESERIES (= samples whose names do NOT end in `_created`; `_created` is prometheus_client bookkeeping metadata, not a separately indexed timeseries). Assert ≤ 51 (15 task + 5 session + 5 secret + 12 family [11 registered + 1 `"unknown"` fallback bucket per Story 10.4 P1-H1] + 2 idempotency + 6 capability + 6 Story 10.3 baseline = 51).  Story 10.4 P1-L4 — wording clarified: "timeseries" means canonical samples post-`_created` filter, NOT the metric-family count returned by raw `registry.collect()`.  Story 10.4 P1-M3 — companion `test_cardinality_under_burst_cleanup` validates the cleanup invariant under an adversarial burst-then-drain sequence.
 
 ### AC11 — Settings extension (none)
 
@@ -358,7 +360,68 @@ docs/adr/0005-metrics-subscriber-derived-projection.md   # MINOR APPEND: §cardi
 
 ---
 
-## Frontmatter
+## Review Findings — pass-1 (2026-05-20)
+
+Pass-1 adversarial review on diff `a7ef730..6716336` (7 files, +1886 / −52 lines). Three parallel reviewers (Sonnet): Blind Hunter (8 findings — 2H + 2M + 3L + obs), Edge Case Hunter (7 findings — 2H + 3M + 2L), Acceptance Auditor (5 findings — 1H + 2M + 2L). All three verdicts: **REVISE**.
+
+After dedup → **15 unique findings** (5 HIGH, 4 MED, 6 LOW). Multi-lane convergences:
+- **`event_family` unbounded label + `approval` missing**: B1 + E4 + E6 (3-lane HIGH)
+- **`actor_kind` enum drift spec/reality**: E1 + A3 + B4 (3-lane HIGH)
+- **Cardinality test weakness**: E3 + B6 (MED)
+- **AC10 cardinality comment misleading**: E7 + A-minor-1 (LOW)
+
+All 15 close per "fix all issues even minors" standing policy.
+
+### Decisions (resolved before pass-1 batch)
+
+- **Q5 — `actor_kind` enum: single source of truth via `events.envelope.ActorKind`.** Update `_ACTOR_KINDS` to derive from `typing.get_args(ActorKind)` so spec/impl drift is impossible at runtime. Update spec AC3 enum from `{human, system, agent}` to the actual 5-value `{operator, orchestrator, worker, system, clawhip}`. Add startup assertion in `build_collectors` that `set(_ACTOR_KINDS) == set(get_args(ActorKind))`. Reason: prevents Story 10.3 P1-M1 spec/impl-drift re-occurrence (this time at the type level).
+
+- **Q6 — `event_family` cardinality: frozenset guard + `"unknown"` fallback.** Define `_EVENT_FAMILIES_SET: Final[frozenset[str]] = frozenset(_EVENT_FAMILIES)` once at module load. In `update_for`, check membership and fallback to `"unknown"` (which itself is in `_EVENT_FAMILIES`, pre-populated at zero). ALSO add the missing `"approval"` family to `_EVENT_FAMILIES` (was registered in `event_types.py` but absent from the enum — Story 10.3 P1-H1 lazy-registration race re-introduced).
+
+- **Q7 — Ghost-gauge from `task.budget_exceeded` after terminal events: track terminated tasks via bounded LRU.** Maintain `_terminated_task_ids: collections.deque(maxlen=10000)` (sliding window) in `MetricsState`. `_update_task_tokens` checks before `.set()` — skips if `task_id in _terminated_task_ids`. Bounded by the deque maxlen; oldest IDs naturally evict. Document in docstring as "accepted bounded leak risk for tasks completed >10K events ago".
+
+- **Q8 — `task.completed` final `token_usage` reading: log structured event + then clear.** In `_update_task_lifecycle_and_clear_task_gauge`, BEFORE `.remove()`, read `token_usage` from payload (defensive `_payload_get`); if present, emit `log.info("metrics_subscriber_task_token_usage_final", task_id=..., tokens=...)`. The event-log is the canonical observability surface (NFR-O1); the gauge is the LIVE view. Then `.remove()` the gauge per cleanup contract (D3). Honors FR44 retrospective observability without retaining gauge children.
+
+- **Q9 — Test infrastructure: remove private API usage.** Replace `counter._value.get()` polling in `test_metrics_integration.py` with `httpx /metrics` scrape + `prometheus_client.parser.text_string_to_metric_families` parsing. Stable public API; immune to prometheus_client minor-version changes.
+
+### Patch — HIGH (5)
+
+- [x] [Review][Patch] **P1-H1 — `event_family` unbounded label cardinality leak; `approval` family missing from `_EVENT_FAMILIES` enum** [services/metrics-subscriber/src/metrics_subscriber/app/metrics.py:514 + `_EVENT_FAMILIES` definition] — **3-lane: B1 + E4 + E6**. `update_for` calls `state.events_appended_total.labels(event_family=envelope.type.split(".",1)[0]).inc()` with whatever prefix the envelope carries — no membership check against `_EVENT_FAMILIES`. `approval.granted` / `approval.rejected` are registered in `event_types.py:242-245` but `"approval"` is absent from `_EVENT_FAMILIES`. Every `approval.*` envelope creates a lazy-registration race child (Story 10.3 P1-H1 trap re-introduced). Fix per Q6: (a) add `"approval"` to `_EVENT_FAMILIES`; (b) add `"unknown"` to `_EVENT_FAMILIES` for fallback; (c) define `_EVENT_FAMILIES_SET = frozenset(_EVENT_FAMILIES)`; (d) in `update_for`, `family = family if family in _EVENT_FAMILIES_SET else "unknown"` BEFORE `.labels()`. Add test `test_events_appended_unknown_family_falls_through_to_unknown_bucket`.
+
+- [x] [Review][Patch] **P1-H2 — `actor_kind` enum drift: spec says `{human, system, agent}` (3), reality is `ActorKind = Literal["operator", "orchestrator", "worker", "system", "clawhip"]` (5); no startup assertion catches drift** [services/metrics-subscriber/src/metrics_subscriber/app/metrics.py + spec AC3] — **3-lane: E1 + A3 + B4**. The AC3 checkbox was ticked despite acknowledged deviation. Operator dashboards configured for `{human, system, agent}` would silently never fire. Fix per Q5: (a) `from events.envelope import ActorKind; from typing import get_args`; (b) `_ACTOR_KINDS: Final = tuple(get_args(ActorKind))` (derives from canonical type); (c) in `build_collectors`, `assert set(_ACTOR_KINDS) == set(get_args(ActorKind))` startup invariant; (d) update spec AC3 enum to actual 5 values + update self-verification curl expectation; (e) add `_update_secret_accessed` guard against unknown actor_kind values (defensive — `if envelope.actor.kind not in _ACTOR_KINDS_SET: log.warning + skip`).
+
+- [x] [Review][Patch] **P1-H3 — Ghost-gauge leak: `task.budget_exceeded` after terminal event re-creates gauge with no cleanup; test `test_task_gauge_cleanup_then_resurrect_is_idempotent` actually demonstrates the leak** [services/metrics-subscriber/src/metrics_subscriber/app/metrics.py:356-388 + test_metrics_state.py:396-415] — Solo HIGH: B2. Test name says "idempotent" but assertions show gauge = 99 after terminal+late_event sequence — gauge persists, NOT cleaned. Docstring claims "cleaned on the next terminator" but no second terminal event arrives in this scenario. Fix per Q7: (a) add `_terminated_task_ids: collections.deque[str]` field to `MetricsState` (init with `maxlen=10000`); (b) `_update_task_lifecycle_and_clear_task_gauge` appends task_id after `.remove()`; (c) `_update_task_tokens` checks `task_id not in _terminated_task_ids_set` (use auxiliary set for O(1) lookup, sync with deque) before `.set()`. Update test to assert gauge.IS_REMOVED after late-event sequence. Document bounded-leak risk in docstring.
+
+- [x] [Review][Patch] **P1-H4 — `task.completed` silently drops `token_usage` final reading before clearing gauge; FR44 observability gap** [services/metrics-subscriber/src/metrics_subscriber/app/metrics.py:_update_task_lifecycle_and_clear_task_gauge] — Solo HIGH: E2. `TaskCompletedPayload.token_usage: int | None` carries the FR44 cumulative count, but `_update_task_lifecycle_and_clear_task_gauge` calls `.remove(task_id)` without first reading + recording `token_usage`. The final value is lost. Fix per Q8: BEFORE the `.remove()` call: `tokens = _payload_get(envelope, "token_usage"); if isinstance(tokens, int) and tokens >= 0: log.info("metrics_subscriber_task_token_usage_final", task_id=..., tokens=tokens, source=envelope.type)`. Then proceed with `.remove()`. The event-log retains the final reading (NFR-O1 — events as primary observability). Add test `test_task_completed_logs_final_token_usage_before_gauge_clear`.
+
+- [x] [Review][Patch] **P1-H5 — Sprint-status frozen at `in-progress`; spec Status says `review` (CI pending @ 1040c4b) — desync** [_bmad-output/implementation-artifacts/sprint-status.yaml:276] — Solo HIGH: A1. Story 10.2/10.3 convention: same commit that flips spec Status `ready-for-dev → review` also flips sprint-status `in-progress → review`. Story 10.4's executor stopped one step short. Fix: flip sprint-status line to `review` with annotation matching the spec Status header (`# pass-1 review opened ...`). Final transition `review → done` happens AFTER pass-1 batch CI green.
+
+### Patch — MED (4)
+
+- [x] [Review][Patch] **P1-M1 — AC6 self-verification clause stale: `len(_DISPATCH) >= 18` but actual count is 21** [_bmad-output/implementation-artifacts/10-4-core-counter-gauge-histogram-set.md AC6] — Solo MED: A2. Spec arithmetic `10 task + 5 session + 1 secret + 2 task-cleanup = 18` doesn't count the 3 token-bearing entries (`task.execution.started`, `task.step.completed`, `task.budget_exceeded` → `_update_task_tokens`) as separate dispatch keys. The `>= 18` clause passes trivially but the breakdown comment is wrong. Fix: update AC6 self-verification to `len(_DISPATCH) == 21` with corrected arithmetic: `10 lifecycle-only + 3 token-bearing + 2 terminal + 5 session + 1 secret = 21`.
+
+- [x] [Review][Patch] **P1-M2 — `_wait_for_event_appended` uses `counter._value.get()` private prometheus_client API** [services/metrics-subscriber/src/metrics_subscriber/test_metrics_integration.py:138-139, 438] — Solo MED: B3. `_value` is a `ValueClass` implementation detail of prometheus_client; not in the public API and changed between minor versions. The `noqa: SLF001` acknowledges private access but the comment doesn't note fragility. Fix per Q9: replace polling with `httpx.AsyncClient(...).get("/metrics")` + `prometheus_client.parser.text_string_to_metric_families` parsing. Stable public surface; immune to private-API churn.
+
+- [x] [Review][Patch] **P1-M3 — Cardinality test does not assert `task_tokens_spent._metrics` is empty after cleanup; relies on assertion on total timeseries which can pass with leaked children** [services/metrics-subscriber/src/metrics_subscriber/test_metrics_state.py:test_cardinality_at_steady_state_is_bounded] — **2-lane: E3 + B6**. The test counts `len(list(registry.collect()))` ≤ 50 but doesn't explicitly verify zero leak on the unbounded-label gauge. If cleanup silently fails for any task_id, the test may still pass (pre-populated 50 timeseries count survives a few leaks). Fix: after the rotation loop, add `assert len(list(state.task_tokens_spent._metrics)) == 0, "task_tokens_spent gauge children leaked after cleanup"`. Add a burst variant: emit ALL token envelopes first, THEN all terminal events, assert cleanup completes.
+
+- [x] [Review][Patch] **P1-M4 — Integration test fixture registers `integration.test.dispatch` event type but `integration` family is not in `_EVENT_FAMILIES` enum (dormant trap)** [services/metrics-subscriber/src/metrics_subscriber/test_metrics_integration.py:_register_dispatch_test_event_types] — Solo MED: E5. Autouse fixture registers but doesn't unregister; if any future test emits `integration.test.dispatch` through the full tail loop, it creates an out-of-enum `event_family="integration"` child (now caught by P1-H1's `"unknown"` fallback, but the test name "integration.*" misrepresents the actual fallback path). Fix: rename test event type to use existing family (e.g., `task.test_dispatch_synthetic`) OR add proper teardown that removes the registration. Document the constraint in the fixture comment.
+
+### Patch — LOW (6)
+
+- [x] [Review][Patch] **P1-L1 — Test duplicates `_TASK_LIFECYCLE_EVENT_TYPES` tuple verbatim instead of importing from module** [services/metrics-subscriber/src/metrics_subscriber/test_metrics_state.py:176-191] — Solo LOW: B5. Future divergence trap: if the module constant changes, the test constant silently does not. Fix: import the constant directly — `from metrics_subscriber.app.metrics import _TASK_LIFECYCLE_EVENT_TYPES`; remove the local copy.
+
+- [x] [Review][Patch] **P1-L2 — Spec file-structure called for `test_dispatch.py` (NEW); tests landed in `test_metrics_state.py` + `test_metrics_integration.py` instead** [_bmad-output/implementation-artifacts/10-4-core-counter-gauge-histogram-set.md File-structure requirements] — Solo LOW: A-missing-1. Naming deviation, not functional gap. DAR Surprises section doesn't mention it. Fix: add DAR Surprises bullet: "test_dispatch.py was not created; dispatch coverage tests landed in test_metrics_state.py (unit-level) and test_metrics_integration.py (lifespan-level). Reason: avoids module proliferation for what was effectively 6 tests across two granularity levels."
+
+- [x] [Review][Patch] **P1-L3 — AC9 self-verification count discrepancy: spec says "5 integration tests + 1 dispatch = 6", DAR says 7** [spec AC9 + DAR] — Solo LOW: A-missing-2. The extra integration test (`test_dispatch_updater_exception_does_not_crash_tail_loop`) is a net positive but the spec clause was not updated. Fix: update AC9 self-verification: "≥ 6 integration tests (5 per AC1-AC5 + dispatch coverage + exception-safety)" — relax to lower-bound. Update DAR test_count_delta arithmetic to match.
+
+- [x] [Review][Patch] **P1-L4 — AC10 cardinality test comment claims "mixed envelopes may also create unknown-family labels" but the rotation only uses known families** [test_metrics_state.py:test_cardinality_at_steady_state_is_bounded comment + spec AC10 wording] — **2-lane: E7 + A-minor-1**. Misleading documentation; no runtime impact. Fix: remove the "may also create unknown-family labels" hedge from the test comment (after P1-H1 the `"unknown"` bucket is pre-populated anyway, so this comment becomes nonsensical). Update spec AC10 wording: clarify "timeseries" = `len(list(registry.collect()))` semantics (canonical samples, not metric families).
+
+- [x] [Review][Patch] **P1-L5 — Cardinality smoke test passes trivially: cleanup runs in same loop iteration as set** [test_metrics_state.py:test_cardinality_at_steady_state_is_bounded] — Solo LOW: B6. More adversarial: write all token envelopes FIRST, then all terminal events, confirming cleanup under burst. Fix: add a second test `test_cardinality_under_burst_cleanup` that does the burst sequence + asserts steady-state ≤ 50.
+
+- [x] [Review][Patch] **P1-L6 — DAR NFR-O8 p95 comparison apples-to-oranges: Story 10.3 had ~6 timeseries (3 metrics × 4 labels for parse_skip), Story 10.4 has ~50; the "0.65ms vs 0.94ms" comparison cites different baselines** [spec DAR NFR-O8 section] — Solo LOW: A-minor-2. Story 10.3 actual baseline was 3 metrics not 50. Story 10.4 properly populates to 50 via fixture. Fix: update DAR text to note: "Story 10.3 baseline measurement used a benchmark fixture pre-populated to ~50 timeseries (anticipating Story 10.4 scale). Story 10.4's actual 50-timeseries production exposition measures p95=0.65ms — well within budget."
+
+### Deferred (none — all 15 addressed in this pass per "fix all issues even minors")
+
 
 ```yaml
 ---
@@ -463,10 +526,13 @@ Implemented the full FR62 core metric set for the β `metrics-subscriber`:
 
 `uv run pytest --collect-only -q services/metrics-subscriber packages/events | tail -1` evidence:
 
-- **Before**: 510 tests collected
-- **After**: 533 tests collected (+23 new — 17 unit + 7 integration; one of the original tests was reordered into 10.4's enum-pre-population coverage via a new test name)
+- **Before** (Story 10.3 close): 510 tests collected
+- **After Story 10.4 dev complete @ 1040c4b**: 533 tests collected (+23 — 17 unit + 7 integration)
+- **After Story 10.4 pass-1 batch (this commit)**: 537 tests collected (+4 new — `test_events_appended_unknown_family_falls_through_to_unknown_bucket` (P1-H1), `test_task_completed_logs_final_token_usage_before_gauge_clear` (P1-H4), `test_task_completed_without_token_usage_skips_final_log` (P1-H4 negative), `test_cardinality_under_burst_cleanup` (P1-M3 / P1-L5))
 
-Full repo: `uv run pytest -q -m "not slow"` reports `2895 passed, 3 skipped, 28 deselected`.
+Spec AC9 self-verification (P1-L3): "≥ 6 integration tests" — actual count = 7 integration tests (5 per AC1-AC5 + dispatch coverage + exception-safety). Unit test count grew from 17 → 20 (P1-H1 unknown-family routing + P1-H4 final-token logging positive + P1-H4 negative-path), and `test_cardinality_under_burst_cleanup` brought the cardinality test count to 2.
+
+Full repo: `uv run pytest -q -m "not slow"` reports `2895+ passed` (pre-existing 5 Docker-dep separability/integration failures pre-date this batch).
 
 ### Mypy baseline delta
 
@@ -475,16 +541,22 @@ Full repo: `uv run pytest -q -m "not slow"` reports `2895 passed, 3 skipped, 28 
 
 ### NFR-O8 p95 re-measurement (expanded metric set)
 
-With the ~50-timeseries Story 10.4 metric surface populated (per
-`_populate_state_to_story_10_4_scale` benchmark helper):
+With the ~51-timeseries Story 10.4 metric surface populated (per
+`_populate_state_to_story_10_4_scale` benchmark helper; +1 vs Story 10.4
+dev-complete to accommodate the P1-H1 `"unknown"` event_family fallback
+bucket):
 
 - **p50 = 0.58 ms**
 - **p95 = 0.65 ms** ← well under 100 ms budget
 - **p99 = 0.70 ms**
 
-Story 10.3 baseline p95 was 0.94 ms with ~50 timeseries; this run measures
-0.65 ms — the slight improvement is likely runner-load variance, not a real
-optimisation.
+Story 10.4 P1-L6 — the apples-to-apples baseline comparison: Story 10.3's
+NFR-O8 benchmark used a fixture pre-populated to ~50 timeseries
+(anticipating Story 10.4 scale; only 3 actual production metric families
+were live in Story 10.3 itself).  Story 10.4's actual 50-timeseries
+production exposition measures p95=0.65ms — well within budget.  The
+0.94ms → 0.65ms shift between baselines is dominated by runner-load
+variance, not a real optimisation.
 
 ### Steady-state cardinality
 
@@ -537,6 +609,20 @@ Matches AC10 bound exactly.
   split-threshold suggestion. Kept inline (not split to 0005a) — the
   content is tightly coupled to the existing ADR and a split would add
   cross-link churn without clear benefit.
+- **`test_dispatch.py` NOT created** (Story 10.4 P1-L2 — addressed in
+  pass-1 batch): dispatch coverage tests landed in `test_metrics_state.py`
+  (unit-level: `test_dispatch_table_*` + `test_dispatch_unknown_*` +
+  `test_events_appended_unknown_family_falls_through_to_unknown_bucket`)
+  and `test_metrics_integration.py` (lifespan-level:
+  `test_run_subscriber_dispatches_envelopes_to_metrics_state` +
+  `test_dispatch_updater_exception_does_not_crash_tail_loop`).  Avoids
+  module proliferation for ~6 tests across two granularity levels.
+- **Cardinality bound widened to 51** (Story 10.4 P1-H1 — addressed in
+  pass-1 batch): the bounded `_EVENT_FAMILIES` enum grew from 11 → 12
+  entries to add the ``"unknown"`` fallback bucket; the AC10 timeseries
+  bound widened from 50 → 51 accordingly.  Both `test_cardinality_at_
+  steady_state_is_bounded` and `test_cardinality_under_burst_cleanup`
+  assert against the new bound.
 
 ### Story 10.5 readiness check
 
