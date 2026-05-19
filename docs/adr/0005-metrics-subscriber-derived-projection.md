@@ -237,3 +237,170 @@ same structured envelopes the spine already carries).
 
 - [ADR-0003](./0003-phase-2-gate.md) — Phase 2 gate; declares this
   ADR as a Phase-2 acceptance-gate item.
+
+---
+
+## Cardinality Discipline (Story 10.4 amendment, 2026-05-20)
+
+Story 10.4 ships the FR62 core metric set (task lifecycle, session
+lifecycle, secret-access counters, event-log append-rate counter, per-
+task token-spend gauge).  Steady-state cardinality post-Story-10.4
+sits at ~50 timeseries — well under the operator-dashboard pain point
+(thousands).  The discipline below MUST hold for every future metric
+extension; the Story 10.5 regression test (10K varying task_ids ≤ 200
+timeseries) enforces it programmatically.
+
+### Bounded-enum policy (load-bearing)
+
+Every counter label is a **pre-populated bounded enum**.  At
+``build_collectors`` time we call ``Counter.labels(<enum_value>).inc(0)``
+once per known enum value, materialising the labelled child without
+incrementing.  This serves two purposes:
+
+1. **Cardinality bound at registration**: the upper-bound label
+   cardinality is visible in source code — a reviewer can grep the
+   ``_TASK_LIFECYCLE_EVENT_TYPES`` / ``_SESSION_PHASES`` /
+   ``_ACTOR_KINDS`` / ``_EVENT_FAMILIES`` / ``_IDEMPOTENCY_OUTCOMES``
+   / ``_CAPABILITY_TIERS`` / ``_CAPABILITY_BOUNDARIES`` tuples and
+   count.  Story 10.4 totals: 15 + 5 + 5 + 11 + 2 + 6 = 44 counter
+   children, plus 4 ``parse_skip_total`` reasons + 2 unlabeled gauges
+   = ~50 timeseries.
+
+2. **Eliminates the lazy-registration race** (Story 10.3 pass-1
+   P1-H1): without pre-population, the first
+   ``Counter.labels(...).inc()`` call from the tail-loop thread
+   races against a concurrent ``generate_latest()`` scrape — both
+   mutate the same ``_metrics`` dict on the Counter parent.  Pre-
+   population shifts every registration into the single-threaded
+   ``build_collectors`` startup window where no scrape is yet
+   possible.
+
+### Per-task gauge cleanup pattern (load-bearing)
+
+The ``omb_task_tokens_spent`` gauge is the ONLY Story 10.4 metric
+with an unbounded label (``task_id``).  Cardinality is bounded by
+the active-task count via the cleanup invariant: when
+``task.completed`` or ``task.stop_requested`` is observed for a
+task, the dispatcher calls ``gauge.remove(task_id)`` to retire the
+labelled child.
+
+Out-of-order resilience: if a terminator arrives before any token-
+emitting envelope, ``remove(...)`` raises ``KeyError`` — suppressed
+via ``contextlib.suppress``.  If a token-emitting envelope arrives
+AFTER a terminator (replay or clock skew), a new labelled child is
+re-materialised and cleaned on the next terminator.  See
+``test_task_gauge_cleanup_then_resurrect_is_idempotent``.
+
+### Steady-state bound assertion
+
+``services/metrics-subscriber/src/metrics_subscriber/test_metrics_state.py
+::test_cardinality_at_steady_state_is_bounded`` — emits 1000 mixed
+envelopes through the dispatch table and asserts
+``len(<canonical_timeseries>) <= 50`` (where canonical timeseries
+filters out ``_created`` bookkeeping samples).  Story 10.5 will
+extend with a 10K-task regression assertion at ≤ 200 timeseries.
+
+### Foreclosed anti-patterns
+
+The following patterns are explicitly OUT OF SCOPE for any future
+metric extension in the subscriber:
+
+- **Unbounded string labels** — e.g. labelling
+  ``omb_secret_accessed_total`` by ``actor.id`` (operator names,
+  session UUIDs).  Use ``actor.kind`` (bounded enum) instead.
+- **Retained per-task gauges** — gauges labelled by ``task_id`` MUST
+  have a documented cleanup terminator and a test verifying the
+  cleanup.
+- **Event-type labels without bounded-enum pre-population** —
+  ``Counter.labels(event_type=envelope.type).inc()`` on raw envelope
+  type without an enum filter is forbidden.  The
+  ``omb_task_lifecycle_events_total`` precedent pre-populates the
+  15-value enum at registration time and only the registered enum
+  values are reachable from the dispatch table (unknown task.* event
+  types skip the lifecycle counter entirely).
+- **Per-request-id / per-trace-id labels** — these are unbounded by
+  design (one per request).  Use distributed tracing surfaces (out of
+  Phase 2 scope, see ADR-0003) for per-request observability, not
+  Prometheus.
+
+### Trade-off: counter labels by `event_type`, not "status"
+
+FR62 wording mentions "by status" (e.g. task status), but the
+subscriber sees ENVELOPES not STATE.  Status is a derived
+projection (registry-state computes it from the same envelope
+stream).  We label
+``omb_task_lifecycle_events_total`` by ``event_type`` instead;
+operators reconstruct status views via PromQL ``label_replace`` or
+``sum without (event_type)`` queries.  Cardinality stays bounded by
+the 15-value event-type enum.
+
+### Actor-kind spec-drift note (Story 10.4 implementation)
+
+The Story 10.4 spec AC3 enumerates ``actor_kind`` as
+``{human, system, agent}`` — a logical bucketing.  The actual
+:data:`events.envelope.ActorKind` enum is
+``{operator, orchestrator, worker, system, clawhip}``.  We label by
+the ACTUAL enum values; a hypothetical 3-bucket projection would
+either drop information or require a mapping function that doesn't
+exist anywhere else in the codebase.  Documented in the Story 10.4
+Dev Agent Record.
+
+---
+
+## Deferred Metrics (Story 10.4 amendment, 2026-05-20)
+
+Two metric families enumerated in FR62 are SHIPPED in Story 10.4 as
+preview-only counters at zero pending upstream event emission.  This
+keeps the operator-dashboard surface stable (metric names are stable
+identifiers) while honestly signalling unwired status.
+
+### D1: Idempotency cache hit-rate metric
+
+| Metric | Type | Labels | Pre-populated values | Status |
+|---|---|---|---|---|
+| ``omb_idempotency_cache_total`` | Counter | ``outcome`` ∈ ``{cache_hit, factory_ran}`` | both at 0 | DEFERRED |
+
+Required upstream events (NOT YET REGISTERED):
+
+- ``idempotency.cache_hit`` — emitted on cache-hit path in
+  :class:`registry_api.middleware.idempotency.IdempotencyMiddleware`.
+- ``idempotency.factory_ran`` — emitted on cache-miss / factory-run
+  path in the same middleware.
+
+Resolution: Story 10.4.x or absorbed into Story 11.x.  Requires
+``registry-api`` emission contract change (FR addition + payload model
++ schema registration + middleware emission wiring).
+
+### D2: Capability-tier deny counter
+
+| Metric | Type | Labels | Pre-populated values | Status |
+|---|---|---|---|---|
+| ``omb_capability_denied_total`` | Counter | ``tier`` ∈ ``{tier1, tier2, tier3}``, ``boundary`` ∈ ``{mcp, http}`` | 6 combinations at 0 | DEFERRED |
+
+Required upstream events (NOT YET REGISTERED):
+
+- ``capability.denied`` with payload fields ``tier`` and ``boundary``
+  — emitted by:
+  - ``registry-api`` :class:`TierEnforcementMiddleware` (HTTP
+    boundary) — Story 11.x scope.
+  - MCP server capability handler (MCP boundary) — Story 11.x scope.
+
+Resolution: Story 10.4.x or absorbed into Story 11.x.  Requires
+cross-service emission contract change.
+
+### Why pre-register the names now
+
+If we waited for the upstream events to land before registering the
+metric names, every Grafana dashboard / Prometheus alerting rule
+referencing these metrics would error during the deferral window.
+Pre-registering keeps the surface stable; the metric values transition
+from 0 → meaningful in a single deployment when the upstream events
+ship.
+
+### Verification
+
+``services/metrics-subscriber/src/metrics_subscriber/test_metrics_state.py
+::test_deferred_counters_pre_populated_with_zero_values`` — asserts
+the 2 idempotency outcomes and 6 capability ``(tier, boundary)``
+combinations are pre-populated and visible at the ``/metrics``
+endpoint.

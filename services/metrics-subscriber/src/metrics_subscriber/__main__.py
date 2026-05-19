@@ -62,7 +62,7 @@ from events.log_reader import EventLogReader
 
 from metrics_subscriber import __version__
 from metrics_subscriber.app.config import MetricsSubscriberSettings
-from metrics_subscriber.app.metrics import MetricsState
+from metrics_subscriber.app.metrics import MetricsState, update_for
 from metrics_subscriber.cursor import (
     CursorLockUnsupportedFilesystemError,
     CursorPersistence,
@@ -354,7 +354,27 @@ async def run_subscriber(
                                 to_path=str(reader.current_path),
                             )
                             previous_path = reader.current_path
-                        # Story 10.4 will inject counter/gauge updates here.
+                        # Story 10.4 AC7 — dispatch envelope to the
+                        # FR62 metric updaters.  Wrapped in
+                        # ``try/except Exception`` per Story 10.3
+                        # P1-H5 lesson: a single bad envelope (e.g.
+                        # payload-field drift, future schema_version
+                        # the updater doesn't yet handle) MUST NOT
+                        # kill the tail subscriber.  A failure here
+                        # is observability degradation, not data
+                        # loss — the cursor still advances and the
+                        # event log is unaffected.
+                        if metrics_state is not None:
+                            try:
+                                update_for(metrics_state, envelope)
+                            except Exception as exc:  # noqa: BLE001 — defensive log-and-continue
+                                log.warning(
+                                    "metrics_subscriber_dispatch_updater_failed",
+                                    envelope_type=envelope.type,
+                                    event_id=str(envelope.event_id),
+                                    error=str(exc),
+                                    error_type=type(exc).__name__,
+                                )
                         last_envelope = envelope
                         cursor.note_event_processed()
                         if cursor.maybe_persist(reader.cursor_offset, reader.current_path):

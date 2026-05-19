@@ -1,29 +1,46 @@
-"""Unit tests for :class:`metrics_subscriber.app.metrics.MetricsState` (Story 10.3).
+"""Unit tests for :class:`metrics_subscriber.app.metrics.MetricsState` (Stories 10.3 + 10.4).
 
 Synchronous tests for the dataclass + ``build_collectors`` factory.
 No FastAPI overhead — exercises the per-app ``CollectorRegistry`` and
-the four collectors directly.
+the collectors directly.
 
 ACs covered:
 
-  - AC5 — gauge construction + ``record_lag`` / ``record_cursor``
+  - Story 10.3 AC5 — gauge construction + ``record_lag`` / ``record_cursor``
     mutations are reflected in ``generate_latest``.
-  - AC6 — ``on_parse_skip`` increments
+  - Story 10.3 AC6 — ``on_parse_skip`` increments
     ``metrics_subscriber_parse_skip_total{reason=...}`` for the
     bounded-enum reason values.
-  - AC14 (defensive) — fresh ``CollectorRegistry()`` per ``build_collectors``
-    call has zero pre-existing collectors so registration is idempotent
-    across test sessions.
+  - Story 10.3 AC14 (defensive) — fresh ``CollectorRegistry()`` per
+    ``build_collectors`` call has zero pre-existing collectors so
+    registration is idempotent across test sessions.
+  - Story 10.4 AC1 — task lifecycle counter increments per event type.
+  - Story 10.4 AC2 — session lifecycle counter increments per phase.
+  - Story 10.4 AC3 — secret.accessed counter increments per actor_kind.
+  - Story 10.4 AC4 — events_appended counter increments per event_family.
+  - Story 10.4 AC5 — task tokens gauge set + cleanup-on-completion.
+  - Story 10.4 AC6 — dispatch table coverage (full unit-test surface).
+  - Story 10.4 AC8 — DEFERRED preview counters pre-populated at zero.
+  - Story 10.4 AC10 — steady-state cardinality bound.
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
+from events import Actor, EventEnvelope
 from prometheus_client import CollectorRegistry, generate_latest
 from prometheus_client.parser import text_string_to_metric_families
+from pydantic import BaseModel
 
-from metrics_subscriber.app.metrics import MetricsState, build_collectors
+from metrics_subscriber.app.metrics import (
+    _DISPATCH,
+    MetricsState,
+    build_collectors,
+    update_for,
+)
 
 
 def _metric_value(body: bytes, name: str, labels: dict[str, str] | None = None) -> float | None:
@@ -140,3 +157,450 @@ def test_per_app_registry_is_isolated() -> None:
     body_b = generate_latest(reg_b)
     assert _metric_value(body_a, "metrics_subscriber_lag_seconds") == 5.0
     assert _metric_value(body_b, "metrics_subscriber_lag_seconds") == 99.0
+
+
+# ===========================================================================
+# Story 10.4 — FR62 core metric set tests.
+# ===========================================================================
+
+
+# All task lifecycle event types per AC1 enum table (15 values).
+_TASK_LIFECYCLE_EVENT_TYPES = (
+    "task.created",
+    "task.planning.started",
+    "task.plan.ready",
+    "task.execution.started",
+    "task.step.completed",
+    "task.blocker_raised",
+    "task.approval_requested",
+    "task.completed",
+    "task.stop_requested",
+    "task.retry_requested",
+    "task.self_recovered",
+    "task.execution.resumed",
+    "task.budget_exceeded",
+    "task.license_flagged",
+    "task.summary_emitted",
+)
+
+_SESSION_TYPES = (
+    "session.started",
+    "session.heartbeat",
+    "session.finished",
+    "session.heartbeat_timeout",
+    "session.reconnecting",
+)
+
+
+def _make_envelope(
+    event_type: str,
+    *,
+    actor_kind: str = "system",
+    payload: dict[str, Any] | BaseModel | None = None,
+    event_id: str = "e-01917e5c-a7d1-7000-8abc-000000000000",
+) -> EventEnvelope:
+    """Construct a minimal valid EventEnvelope for unit tests.
+
+    Bypasses ``EventEnvelope.create`` (no schema registry round-trip);
+    the dispatcher unit tests exercise label routing, not envelope
+    validation.
+    """
+    return EventEnvelope(
+        event_id=event_id,
+        schema_version="1.1.0",
+        type=event_type,  # noqa: EVT001 — test helper takes parametric type
+        emitted_at=datetime(2026, 5, 20, 12, 0, 0, tzinfo=UTC),
+        emitted_at_monotonic_ns=1,
+        actor=Actor(kind=actor_kind, id="test-actor"),  # type: ignore[arg-type]
+        payload=payload if payload is not None else {},
+        trace_id="01917e5c-a7d1-7000-8abc-000000000123",
+        request_id="01917e5c-a7d1-7000-8abc-000000000456",
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC1 — task lifecycle counter.
+# ---------------------------------------------------------------------------
+
+
+def test_task_lifecycle_counter_pre_populated_at_zero() -> None:
+    """AC1 — all 15 bounded-enum labels are pre-populated at registration."""
+    registry = CollectorRegistry()
+    build_collectors(registry)
+    body = generate_latest(registry)
+    for event_type in _TASK_LIFECYCLE_EVENT_TYPES:
+        value = _metric_value(
+            body,
+            "omb_task_lifecycle_events_total",
+            labels={"event_type": event_type},
+        )
+        assert value == 0.0, f"missing pre-populated label: event_type={event_type}"
+
+
+def test_task_lifecycle_counter_increments_per_event_type() -> None:
+    """AC1 — emit one envelope of each type; each label increments to 1."""
+    registry = CollectorRegistry()
+    state = build_collectors(registry)
+    for event_type in _TASK_LIFECYCLE_EVENT_TYPES:
+        # ``task.completed`` / ``task.stop_requested`` go through the
+        # gauge-clearing updater — include a benign ``task_id`` so the
+        # cleanup path is exercised without crashing.
+        env = _make_envelope(event_type, payload={"task_id": f"task-{event_type}"})
+        update_for(state, env)
+    body = generate_latest(registry)
+    for event_type in _TASK_LIFECYCLE_EVENT_TYPES:
+        value = _metric_value(
+            body,
+            "omb_task_lifecycle_events_total",
+            labels={"event_type": event_type},
+        )
+        assert value == 1.0, f"event_type={event_type} did not increment"
+
+
+# ---------------------------------------------------------------------------
+# AC2 — session lifecycle counter.
+# ---------------------------------------------------------------------------
+
+
+def test_session_lifecycle_counter_per_phase() -> None:
+    """AC2 — emit one envelope of each session.* type, assert per-phase label."""
+    registry = CollectorRegistry()
+    state = build_collectors(registry)
+    for event_type in _SESSION_TYPES:
+        update_for(state, _make_envelope(event_type))
+    body = generate_latest(registry)
+    for event_type, phase in [
+        ("session.started", "started"),
+        ("session.heartbeat", "heartbeat"),
+        ("session.finished", "finished"),
+        ("session.heartbeat_timeout", "heartbeat_timeout"),
+        ("session.reconnecting", "reconnecting"),
+    ]:
+        value = _metric_value(
+            body,
+            "omb_session_lifecycle_events_total",
+            labels={"phase": phase},
+        )
+        assert value == 1.0, f"phase={phase} (from {event_type}) did not increment"
+
+
+# ---------------------------------------------------------------------------
+# AC3 — secret.accessed counter by actor_kind.
+# ---------------------------------------------------------------------------
+
+
+def test_secret_accessed_counter_by_actor_kind() -> None:
+    """AC3 — emit 3 secret.accessed envelopes with different actor.kind.
+
+    Uses the actual ActorKind enum (operator, orchestrator, worker,
+    system, clawhip) per Story 10.4 actor-kind spec-drift resolution.
+    """
+    registry = CollectorRegistry()
+    state = build_collectors(registry)
+    for kind in ("operator", "system", "worker"):
+        update_for(state, _make_envelope("secret.accessed", actor_kind=kind))
+    body = generate_latest(registry)
+    assert (
+        _metric_value(body, "omb_secret_accessed_total", labels={"actor_kind": "operator"}) == 1.0
+    )
+    assert _metric_value(body, "omb_secret_accessed_total", labels={"actor_kind": "system"}) == 1.0
+    assert _metric_value(body, "omb_secret_accessed_total", labels={"actor_kind": "worker"}) == 1.0
+    # Untouched kinds remain at the pre-populated zero.
+    assert _metric_value(body, "omb_secret_accessed_total", labels={"actor_kind": "clawhip"}) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# AC4 — events_appended counter per family.
+# ---------------------------------------------------------------------------
+
+
+def test_events_appended_counter_per_family() -> None:
+    """AC4 — emit envelopes of 3+ different families; per-family counter increments."""
+    registry = CollectorRegistry()
+    state = build_collectors(registry)
+    # task.created counts once for the family.
+    update_for(state, _make_envelope("task.created", payload={"task_id": "t1"}))
+    update_for(state, _make_envelope("task.created", payload={"task_id": "t2"}))
+    update_for(state, _make_envelope("session.started"))
+    update_for(state, _make_envelope("secret.accessed"))
+    # An unknown type that still has a family prefix.
+    update_for(state, _make_envelope("approval.granted"))
+    body = generate_latest(registry)
+    assert _metric_value(body, "omb_events_appended_total", labels={"event_family": "task"}) == 2.0
+    assert (
+        _metric_value(body, "omb_events_appended_total", labels={"event_family": "session"}) == 1.0
+    )
+    assert (
+        _metric_value(body, "omb_events_appended_total", labels={"event_family": "secret"}) == 1.0
+    )
+    assert (
+        _metric_value(body, "omb_events_appended_total", labels={"event_family": "approval"}) == 1.0
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC5 — per-task token-spend gauge (set + cleanup).
+# ---------------------------------------------------------------------------
+
+
+def test_task_tokens_spent_gauge_set_and_cleared() -> None:
+    """AC5 — set gauge on token-bearing envelope, clear on task.completed.
+
+    ``task.budget_exceeded`` carries ``tokens_used``; ``task.completed``
+    carries ``token_usage``; both are picked up by
+    ``_update_task_tokens`` via the field-name-tolerant
+    :func:`_payload_get`.
+    """
+    registry = CollectorRegistry()
+    state = build_collectors(registry)
+    task_id = "task-abc-123"
+    # Set: task.budget_exceeded carries ``tokens_used`` field.
+    update_for(
+        state,
+        _make_envelope(
+            "task.budget_exceeded",
+            payload={"task_id": task_id, "tokens_used": 4200},
+        ),
+    )
+    body = generate_latest(registry)
+    assert _metric_value(body, "omb_task_tokens_spent", labels={"task_id": task_id}) == 4200.0, (
+        "gauge should be set after task.budget_exceeded"
+    )
+    # Cleanup: task.completed removes the labelled child.
+    update_for(state, _make_envelope("task.completed", payload={"task_id": task_id}))
+    body = generate_latest(registry)
+    assert _metric_value(body, "omb_task_tokens_spent", labels={"task_id": task_id}) is None, (
+        "gauge labelled child should be removed after task.completed"
+    )
+
+
+def test_task_tokens_spent_gauge_cleared_by_stop_requested() -> None:
+    """AC5 — task.stop_requested is the second terminal event that cleans the gauge."""
+    registry = CollectorRegistry()
+    state = build_collectors(registry)
+    task_id = "task-stop-test"
+    update_for(
+        state,
+        _make_envelope(
+            "task.budget_exceeded",
+            payload={"task_id": task_id, "tokens_used": 1000},
+        ),
+    )
+    body = generate_latest(registry)
+    assert _metric_value(body, "omb_task_tokens_spent", labels={"task_id": task_id}) == 1000.0
+    update_for(state, _make_envelope("task.stop_requested", payload={"task_id": task_id}))
+    body = generate_latest(registry)
+    assert _metric_value(body, "omb_task_tokens_spent", labels={"task_id": task_id}) is None
+
+
+def test_task_gauge_cleanup_then_resurrect_is_idempotent() -> None:
+    """Out-of-scope risk flag — out-of-order completion before token-emitting event.
+
+    Scenario: a ``task.completed`` arrives BEFORE any token-emitting
+    envelope (clock skew or replay).  The cleanup must be a no-op (no
+    KeyError), and a subsequent token-bearing envelope must still set
+    the gauge correctly.
+    """
+    registry = CollectorRegistry()
+    state = build_collectors(registry)
+    task_id = "task-out-of-order"
+    # Out-of-order: completion before any tokens recorded.
+    update_for(state, _make_envelope("task.completed", payload={"task_id": task_id}))
+    # Then a late token-bearing envelope arrives.
+    update_for(
+        state,
+        _make_envelope(
+            "task.budget_exceeded",
+            payload={"task_id": task_id, "tokens_used": 99},
+        ),
+    )
+    body = generate_latest(registry)
+    assert _metric_value(body, "omb_task_tokens_spent", labels={"task_id": task_id}) == 99.0
+
+
+# ---------------------------------------------------------------------------
+# AC6 — dispatch table coverage.
+# ---------------------------------------------------------------------------
+
+
+def test_dispatch_table_size_meets_minimum() -> None:
+    """AC6 — at least 21 entries: 15 task + 5 session + 1 secret."""
+    assert len(_DISPATCH) >= 21, f"dispatch table has {len(_DISPATCH)} entries, expected ≥ 21"
+
+
+def test_dispatch_table_covers_all_task_lifecycle_event_types() -> None:
+    """AC6 — every task lifecycle event type has a dispatch updater."""
+    for event_type in _TASK_LIFECYCLE_EVENT_TYPES:
+        assert event_type in _DISPATCH, f"missing dispatch for {event_type}"
+
+
+def test_dispatch_table_covers_all_session_event_types() -> None:
+    """AC6 — every session event type has a dispatch updater."""
+    for event_type in _SESSION_TYPES:
+        assert event_type in _DISPATCH, f"missing dispatch for {event_type}"
+
+
+def test_dispatch_unknown_envelope_type_only_increments_appended_counter() -> None:
+    """AC6 — unknown type updates only events_appended; no other metric raises."""
+    registry = CollectorRegistry()
+    state = build_collectors(registry)
+    # ``unknown.type`` has family ``unknown`` — NOT in the bounded
+    # _EVENT_FAMILIES enum.  This is intentionally a free-form test
+    # (the family-counter `labels(...)` call materialises a new
+    # labelled child on demand); Story 10.5 enforces the bound via a
+    # cardinality regression test.  Story 10.4 verifies only that
+    # update_for itself does not raise on an unknown type.
+    update_for(state, _make_envelope("unknown.type"))
+    body = generate_latest(registry)
+    # The known task counter family is untouched.
+    assert (
+        _metric_value(
+            body, "omb_task_lifecycle_events_total", labels={"event_type": "task.created"}
+        )
+        == 0.0
+    )
+    # The events_appended counter recorded the unknown family.
+    value = _metric_value(body, "omb_events_appended_total", labels={"event_family": "unknown"})
+    assert value == 1.0
+
+
+# ---------------------------------------------------------------------------
+# AC8 — DEFERRED preview counters pre-populated at zero.
+# ---------------------------------------------------------------------------
+
+
+def test_deferred_counters_pre_populated_with_zero_values() -> None:
+    """AC8 — idempotency + capability deny counters registered at zero."""
+    registry = CollectorRegistry()
+    build_collectors(registry)
+    body = generate_latest(registry)
+    # Idempotency: 2 outcomes.
+    for outcome in ("cache_hit", "factory_ran"):
+        value = _metric_value(body, "omb_idempotency_cache_total", labels={"outcome": outcome})
+        assert value == 0.0, f"missing deferred-preview label outcome={outcome}"
+    # Capability: 3 tiers × 2 boundaries = 6 combinations.
+    for tier in ("tier1", "tier2", "tier3"):
+        for boundary in ("mcp", "http"):
+            value = _metric_value(
+                body,
+                "omb_capability_denied_total",
+                labels={"tier": tier, "boundary": boundary},
+            )
+            assert value == 0.0, f"missing deferred-preview label tier={tier} boundary={boundary}"
+
+
+# ---------------------------------------------------------------------------
+# AC10 — steady-state cardinality bound.
+# ---------------------------------------------------------------------------
+
+
+def test_cardinality_at_steady_state_is_bounded() -> None:
+    """AC10 — emit 1000 mixed envelopes; total timeseries ≤ 50.
+
+    Story 10.4 asserts the steady-state bound as a smoke check.  Story
+    10.5 will extend this with a regression test that emits 10K varying
+    task_ids and asserts cardinality ≤ 200.
+
+    Steady-state arithmetic (post-task-cleanup):
+
+      Story 10.3 metrics : lag_seconds (1) + bytes_behind (1) +
+                           cursor_offset_bytes (0 — no path labels in
+                           this test) + parse_skip_total (4) = 6
+      Story 10.4 counters: task_lifecycle (15) + session (5) +
+                           secret_accessed (5) + events_appended
+                           (≥ 11 — bounded enum; mixed envelopes may
+                           also create unknown-family labels in this
+                           test) + idempotency (2) + capability (6) = 44
+      task_tokens_spent  : 0 after cleanup (terminal events ran).
+
+      Total ≤ 50 — fits the AC10 bound with operational headroom.
+    """
+    registry = CollectorRegistry()
+    state = build_collectors(registry)
+    # Round-robin: terminal events ensure task gauge cleanup.
+    rotation = (
+        ("task.created", "task-1"),
+        ("task.execution.started", "task-1"),
+        ("task.step.completed", "task-1"),
+        ("task.completed", "task-1"),  # cleanup
+        ("session.started", None),
+        ("session.heartbeat", None),
+        ("session.finished", None),
+        ("secret.accessed", None),
+        ("task.budget_exceeded", "task-2"),
+        ("task.stop_requested", "task-2"),  # cleanup
+    )
+    for i in range(100):  # 1000 envelopes / 10 per rotation
+        for event_type, task_id in rotation:
+            payload: dict[str, Any] = {}
+            if task_id is not None:
+                payload["task_id"] = f"{task_id}-{i}"
+                if event_type == "task.budget_exceeded":
+                    payload["tokens_used"] = 100
+            update_for(state, _make_envelope(event_type, payload=payload))
+    timeseries = list(registry.collect())
+    # Each Metric Family is collected once; ``samples`` enumerates
+    # per-labelset.  ``prometheus_client`` emits TWO samples per
+    # Counter labelset — the ``_total`` value AND a ``_created``
+    # timestamp.  Counting Prometheus-canonical timeseries means
+    # ignoring ``_created`` (it is bookkeeping metadata, not a
+    # distinct timeseries Prometheus indexes separately).
+    # Gauge labelsets emit a single sample.
+    canonical_timeseries = sum(
+        1
+        for family in timeseries
+        for sample in family.samples
+        if not sample.name.endswith("_created")
+    )
+    assert canonical_timeseries <= 50, (
+        f"cardinality {canonical_timeseries} exceeds AC10 steady-state bound of 50; "
+        f"families: {[(f.name, len(f.samples)) for f in timeseries]}"
+    )
+
+
+def test_steady_state_includes_known_metric_families() -> None:
+    """Sanity check — the named Story 10.4 metric families ARE registered."""
+    registry = CollectorRegistry()
+    build_collectors(registry)
+    body = generate_latest(registry)
+    text = body.decode()
+    for name in (
+        "omb_task_lifecycle_events_total",
+        "omb_session_lifecycle_events_total",
+        "omb_secret_accessed_total",
+        "omb_events_appended_total",
+        "omb_task_tokens_spent",
+        "omb_idempotency_cache_total",
+        "omb_capability_denied_total",
+    ):
+        assert name in text, f"missing metric family: {name}"
+
+
+# ---------------------------------------------------------------------------
+# AC6 graceful-payload — dispatch updaters tolerate missing payload fields.
+# ---------------------------------------------------------------------------
+
+
+def test_task_tokens_updater_handles_missing_payload_field() -> None:
+    """AC6 — _update_task_tokens does not crash when payload omits tokens."""
+    registry = CollectorRegistry()
+    state = build_collectors(registry)
+    # task.execution.started has NO token field on the payload model;
+    # the updater bumps the lifecycle counter but does not set the
+    # gauge.
+    update_for(
+        state,
+        _make_envelope("task.execution.started", payload={"task_id": "t-no-tokens"}),
+    )
+    body = generate_latest(registry)
+    # Lifecycle counter bumped.
+    assert (
+        _metric_value(
+            body,
+            "omb_task_lifecycle_events_total",
+            labels={"event_type": "task.execution.started"},
+        )
+        == 1.0
+    )
+    # Gauge not set — no labelled child.
+    assert _metric_value(body, "omb_task_tokens_spent", labels={"task_id": "t-no-tokens"}) is None
