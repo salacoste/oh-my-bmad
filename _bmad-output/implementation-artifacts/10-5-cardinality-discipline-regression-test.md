@@ -1,6 +1,6 @@
 # Story 10.5 — Cardinality discipline + regression test
 
-Status: **review** (CI pending @ <new-sha>)
+Status: **review** (CI pending @ 18c8b79)
 
 ## Story
 
