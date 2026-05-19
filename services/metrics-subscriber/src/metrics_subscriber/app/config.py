@@ -31,7 +31,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class MetricsSubscriberSettings(BaseSettings):
     """Settings for the metrics-subscriber lifespan task (AC6)."""
 
-    model_config = SettingsConfigDict(env_prefix="OMB_METRICS_", extra="ignore")
+    # VM-4: ``allow_inf_nan=False`` rejects ``OMB_METRICS_POLL_INTERVAL_S=nan``
+    # / ``inf`` at validation time; otherwise ``asyncio.sleep(nan)`` would
+    # crash the tail loop at runtime.
+    model_config = SettingsConfigDict(
+        env_prefix="OMB_METRICS_",
+        extra="ignore",
+        allow_inf_nan=False,
+    )
 
     event_log_dir: Path = Path("/var/lib/oh-my-bmad/registry/events")
     cursor_path: Path = Path("/var/lib/oh-my-bmad/metrics-subscriber/cursor.json")

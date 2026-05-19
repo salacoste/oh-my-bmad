@@ -223,3 +223,92 @@ def test_event_log_reader_max_events_soft_cap(tmp_path: Path) -> None:
     reader.open(initial_offset=0)
     batch = reader.read_batch(max_events=3)
     assert len(batch) == 3
+
+
+def test_read_batch_max_events_preserves_unread_tail(tmp_path: Path) -> None:
+    """VH-3 — ``max_events`` cap must not silently drop the unread tail.
+
+    Write 10 envelopes; call ``read_batch(max_events=3)`` four times;
+    assert the union covers all 10 exactly once.  Previously the
+    implementation advanced the cursor to EOF then sliced the list,
+    silently dropping envelopes 3..9 on the first call.
+    """
+    clock = FrozenClock(mono_ns=0, now=datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC))
+    path = current_day_path(tmp_path, clock.now())
+    envs = [_make_envelope(value=f"e{i}", mono_seed=i) for i in range(10)]
+    _write_envelopes(path, envs)
+    reader = EventLogReader(tmp_path, clock=clock)
+    reader.open(initial_offset=0)
+
+    collected: list[EventEnvelope] = []
+    for _ in range(4):
+        collected.extend(reader.read_batch(max_events=3))
+    # All 10 envelopes accounted for exactly once, in order.
+    assert collected == envs
+    # And the cursor lands at EOF after the final drain.
+    assert reader.cursor_offset == path.stat().st_size
+
+
+def test_iter_new_envelopes_since_chunk_cap(tmp_path: Path) -> None:
+    """VH-4 — ``iter_new_envelopes_since`` stops at ``max_lines_per_poll``.
+
+    Write 200 envelopes; iterate with ``max_lines_per_poll=50`` and
+    assert exactly 50 are returned.  The cursor advances to the 50th
+    line's end (not EOF).
+    """
+    from events.log_reader import iter_new_envelopes_since
+
+    path = tmp_path / "2026-05-19.jsonl"
+    envs = [_make_envelope(value=f"e{i}", mono_seed=i) for i in range(200)]
+    _write_envelopes(path, envs)
+
+    items = list(iter_new_envelopes_since(path, 0, max_lines_per_poll=50))
+    assert len(items) == 50
+    last_offset = items[-1][0]
+    # The offset is past the 50th line's newline, so a follow-up call
+    # picks up envelope 50 next.
+    more = list(iter_new_envelopes_since(path, last_offset, max_lines_per_poll=50))
+    assert len(more) == 50
+    assert [env.event_id for _, env in items] == [env.event_id for env in envs[:50]]
+    assert [env.event_id for _, env in more] == [env.event_id for env in envs[50:100]]
+
+
+def test_iter_new_envelopes_since_max_contiguous_parse_skips(tmp_path: Path) -> None:
+    """VH-13 — parse-skip threshold raises RuntimeError on corruption.
+
+    A run of N+1 garbage lines after the threshold triggers a refusal
+    to advance.
+    """
+    from events.log_reader import iter_new_envelopes_since
+
+    path = tmp_path / "2026-05-19.jsonl"
+    # Write 5 garbage lines then 1 valid envelope.
+    path.write_bytes(b"{not json\n" * 5 + to_canonical_json(_make_envelope()) + b"\n")
+    # Threshold=3 → after 4 contiguous skips raise.
+    with pytest.raises(RuntimeError, match="parse_skip_threshold"):
+        list(iter_new_envelopes_since(path, 0, max_contiguous_parse_skips=3))
+
+
+def test_iter_new_envelopes_since_cursor_advances_after_yield(tmp_path: Path) -> None:
+    """VH-8 — generator yields envelope BEFORE caller has cursor advancement.
+
+    Verified by consuming one item, raising, and confirming we can
+    re-iterate from the same offset (the offset was the post-yield
+    offset, captured for the NEXT iteration, not this one).
+    """
+    from events.log_reader import iter_new_envelopes_since
+
+    path = tmp_path / "2026-05-19.jsonl"
+    envs = [_make_envelope(value=f"e{i}", mono_seed=i) for i in range(3)]
+    _write_envelopes(path, envs)
+
+    gen = iter_new_envelopes_since(path, 0)
+    offset1, env1 = next(gen)
+    assert env1.event_id == envs[0].event_id
+    # If a consumer-side exception occurs before they store offset1,
+    # they can restart from offset=0 and re-see env1 (exactly-once
+    # guarantee for the consumer side).
+    gen2 = iter_new_envelopes_since(path, 0)
+    offset_re, env_re = next(gen2)
+    assert env_re.event_id == envs[0].event_id
+    assert offset_re == offset1

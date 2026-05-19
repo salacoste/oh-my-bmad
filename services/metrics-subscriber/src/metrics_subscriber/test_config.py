@@ -63,3 +63,17 @@ def test_unrelated_env_vars_ignored() -> None:
     settings = MetricsSubscriberSettings()
     # Should not raise; the unknown field should be silently dropped.
     assert settings.poll_interval_s == 0.5
+
+
+def test_poll_interval_rejects_nan() -> None:
+    """VM-4 — ``nan`` must not be accepted (would crash asyncio.sleep)."""
+    os.environ["OMB_METRICS_POLL_INTERVAL_S"] = "nan"
+    with pytest.raises(ValidationError):
+        MetricsSubscriberSettings()
+
+
+def test_poll_interval_rejects_inf() -> None:
+    """VM-4 — ``inf`` must not be accepted (would hang asyncio.sleep)."""
+    os.environ["OMB_METRICS_POLL_INTERVAL_S"] = "inf"
+    with pytest.raises(ValidationError):
+        MetricsSubscriberSettings()

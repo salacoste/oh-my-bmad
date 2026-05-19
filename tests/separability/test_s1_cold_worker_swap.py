@@ -354,6 +354,12 @@ def test_worker_facing_source_code_unchanged() -> None:
         # source" in the architectural sense. Story 9.7 updates fixture assertions
         # for the 1.0.0→1.1.0 schema_version bump; excluding mirrors event_types.py.
         ":!services/registry-state/src/registry_state/domain/test_failure_detection.py",
+        # Story 10.2 AC1 EventLogReader extraction: read-side functions moved to
+        # packages/events/log_reader.py. These files become a thin re-export shim
+        # (event_log.py) + import rename (app/main.py). The extraction is
+        # backwards-compat-preserving by design; behavior unchanged.
+        ":!services/registry-state/src/registry_state/adapters/event_log.py",
+        ":!services/registry-state/src/registry_state/app/main.py",
     ]
 
     rev_parse = subprocess.run(

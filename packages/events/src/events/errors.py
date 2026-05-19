@@ -89,6 +89,25 @@ class BudgetExceeded(EventsError):  # noqa: N818
         )
 
 
+class CursorSchemaVersionError(EventsError):  # noqa: N818
+    """Raised when a persisted cursor file declares an unknown schema_version.
+
+    Story 10.2 pass-1 VH-9: refusing to start on an unknown schema_version
+    (vs silently resetting to offset 0) avoids replaying an entire day's
+    worth of events after a forward-rollback (v2 written, then rolled back
+    to v1). Operators must inspect and fix manually.
+    """
+
+    def __init__(self, *, cursor_path: str, schema_version: object, expected: str) -> None:
+        self.cursor_path = cursor_path
+        self.schema_version = schema_version
+        self.expected = expected
+        super().__init__(
+            f"cursor at {cursor_path!r} has unknown schema_version={schema_version!r} "
+            f"(expected {expected!r}); refuse to start — manual operator inspection required"
+        )
+
+
 class CapabilityDenied(EventsError):  # noqa: N818
     """Raised when a caller's actor kind is not authorized for the requested tier.
 
@@ -118,6 +137,7 @@ __all__ = [
     "BudgetExceeded",
     "CanonicalSerializationError",
     "CapabilityDenied",
+    "CursorSchemaVersionError",
     "EventSchemaUnknown",
     "EventValidationError",
     "EventsError",

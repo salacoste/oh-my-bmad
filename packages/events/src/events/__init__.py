@@ -16,6 +16,7 @@ from events.envelope import Actor, EventEnvelope
 from events.errors import (
     CanonicalSerializationError,
     CapabilityDenied,
+    CursorSchemaVersionError,
     EventSchemaUnknown,
     EventsError,
     EventValidationError,
@@ -35,6 +36,7 @@ from events.ids import (
 from events.log_reader import (
     EventLogReader,
     current_day_path,
+    iter_new_envelopes_since,
     parse_with_pre110_backfill,
     read_log_lines,
     read_new_envelopes_since,
@@ -87,6 +89,7 @@ __all__ = [
     "CanonicalSerializationError",
     "CapabilityDenied",
     "Clock",
+    "CursorSchemaVersionError",
     "DeploymentSignatureRejectedPayload",
     "EventEnvelope",
     "EventLogReader",
@@ -104,6 +107,7 @@ __all__ = [
     "backfill_trace_id_from_request_id",
     "current_day_path",
     "from_canonical_json",
+    "iter_new_envelopes_since",
     "new_decision_id",
     "new_event_id",
     "new_idempotency_key",

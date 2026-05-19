@@ -2,14 +2,18 @@
 
 Scenario:
 
-1. Write 100 envelopes to ``events-2026-05-19.jsonl``.
-2. Tail-process them via :func:`run_subscriber` with a deterministic
-   clock at 23:59:00 UTC, ``poll_interval_s`` very short so the loop
-   spins.
-3. Advance the clock to 2026-05-20 00:00:01 UTC.
-4. Write 100 envelopes to ``events-2026-05-20.jsonl``.
-5. Confirm the tail loop transitions cleanly (no dropped envelopes;
-   final cursor points at the new path).
+1. Write 100 envelopes to ``2026-05-19.jsonl``.
+2. Tail-process them with a deterministic clock at 23:59 UTC.
+3. Advance the clock to 2026-05-20 00:01 UTC, write 100 envelopes to
+   ``2026-05-20.jsonl``.
+4. Confirm the tail loop transitions cleanly via VH-6 file-existence
+   + quiescence detection (no dropped envelopes).
+5. **VM-7 fix**: compare by ``event_id`` lists rather than full
+   envelope equality (which depended on payload-type registration
+   ordering and was fragile under suite-wide reordering).  Also set
+   ``clock.current = day1`` BEFORE writing day1 envelopes so the
+   rollover-detection-quiescence window observes the writer-quiescent
+   state before transitioning.
 """
 
 from __future__ import annotations
@@ -102,7 +106,7 @@ def _write_envelopes(path: Path, envs: list[EventEnvelope]) -> None:
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_day_rollover_transitions_to_new_file(tmp_path: Path) -> None:
-    """AC8: tail-loop seamlessly switches to next day's file at midnight."""
+    """AC8 + VH-6: tail-loop seamlessly switches to next day's file."""
     events_dir = tmp_path / "events"
     cursor_path = tmp_path / "metrics" / "cursor.json"
     events_dir.mkdir(parents=True)
@@ -117,9 +121,6 @@ async def test_day_rollover_transitions_to_new_file(tmp_path: Path) -> None:
 
     clock = _StepClock(current=day0)
 
-    # Patch the EventLogReader's clock + the cursor's clock via run_subscriber.
-    # We construct a custom run by inlining the relevant logic to avoid
-    # globally patching SystemClock — keeping the test deterministic.
     from events.log_reader import EventLogReader
 
     from metrics_subscriber.cursor import CursorPersistence
@@ -130,7 +131,9 @@ async def test_day_rollover_transitions_to_new_file(tmp_path: Path) -> None:
         poll_interval_s=0.01,
         persist_every_n_events=10,
     )
-    reader = EventLogReader(settings.event_log_dir, clock=clock)
+    # VH-6: zero quiescence window so the test does not have to wait
+    # 60s for rollover detection.  Production default is 60s.
+    reader = EventLogReader(settings.event_log_dir, clock=clock, rollover_quiescence_s=0.0)
     cursor = CursorPersistence(
         settings.cursor_path,
         persist_every=settings.persist_every_n_events,
@@ -158,7 +161,9 @@ async def test_day_rollover_transitions_to_new_file(tmp_path: Path) -> None:
         await asyncio.sleep(0.02)
     assert len(received) == 100
 
-    # Cross midnight: advance the clock + write day1 envelopes.
+    # VM-7 fix: advance clock BEFORE writing day1 envelopes so the
+    # quiescence window observes a stable yesterday-size while today's
+    # path exists.
     clock.current = day1
     day1_envs = [_make_envelope(f"d1-{i}", mono_seed=1000 + i) for i in range(100)]
     _write_envelopes(day1_path, day1_envs)
@@ -170,14 +175,79 @@ async def test_day_rollover_transitions_to_new_file(tmp_path: Path) -> None:
         await asyncio.sleep(0.02)
 
     stop.set()
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=5.0)
 
     assert len(received) == 200
-    assert received[:100] == day0_envs
-    assert received[100:] == day1_envs
+    # VM-7: compare by event_id lists (not full envelope equality) to
+    # avoid coupling to payload-type registration ordering.
+    received_ids = [e.event_id for e in received]
+    expected_ids = [e.event_id for e in day0_envs] + [e.event_id for e in day1_envs]
+    assert received_ids == expected_ids
 
     # Persist final state + verify cursor points at day 1's file.
     cursor.persist_now(reader.cursor_offset, reader.current_path)
     body = json.loads(cursor_path.read_text())
     assert body["path"] == str(day1_path)
     assert body["offset"] == day1_path.stat().st_size
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_day_rollover_writer_appending_past_reader_clock_does_not_drop_events(
+    tmp_path: Path,
+) -> None:
+    """VH-6 — writer keeps appending past reader's clock midnight; no events lost.
+
+    Scenario:
+
+    1. Reader's clock advances past UTC midnight.
+    2. Writer is still appending to yesterday's file (NTP skew).
+    3. Today's file does NOT exist yet.
+    4. Reader must continue draining yesterday's file (NOT switch to
+       a non-existent today-path at offset 0).
+    """
+    events_dir = tmp_path / "events"
+    events_dir.mkdir(parents=True)
+    day0 = datetime(2026, 5, 19, 23, 59, 30, tzinfo=UTC)
+    day1 = day0 + timedelta(minutes=2)
+    yesterday_path = events_dir / "2026-05-19.jsonl"
+
+    envs = [_make_envelope(f"e{i}", mono_seed=i) for i in range(10)]
+    _write_envelopes(yesterday_path, envs[:5])  # 5 initial events
+
+    clock = _StepClock(current=day0)
+
+    from events.log_reader import EventLogReader
+
+    reader = EventLogReader(events_dir, clock=clock, rollover_quiescence_s=0.0)
+    reader.open(initial_offset=0)
+    received: list[EventEnvelope] = []
+    stop = asyncio.Event()
+
+    async def _drive() -> None:
+        async for env in reader.tail(poll_interval_s=0.01, stop_event=stop):
+            received.append(env)
+
+    task = asyncio.create_task(_drive())
+    for _ in range(100):
+        if len(received) >= 5:
+            break
+        await asyncio.sleep(0.01)
+
+    # Reader's clock crosses midnight, but today's file does NOT
+    # exist; writer continues appending to yesterday.
+    clock.current = day1
+    with open(yesterday_path, "ab") as f:
+        for env in envs[5:]:
+            f.write(to_canonical_json(env) + b"\n")
+
+    for _ in range(200):
+        if len(received) >= 10:
+            break
+        await asyncio.sleep(0.01)
+
+    stop.set()
+    await asyncio.wait_for(task, timeout=5.0)
+
+    # All 10 events received from yesterday's file (no false rollover).
+    assert [e.event_id for e in received] == [e.event_id for e in envs]

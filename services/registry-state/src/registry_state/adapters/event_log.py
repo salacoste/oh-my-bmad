@@ -73,10 +73,11 @@ from events import EventEnvelope, to_canonical_json
 # Re-export here so existing call-sites (registry-state app/main.py,
 # worker-wrapper.adapters.approval_waiter, registry-api tests, integration
 # tests, idempotency tests, scripted_worker_stub fixture) keep working
-# without code changes. Public-facing names are unprefixed
-# (``read_new_envelopes_since`` / ``parse_with_pre110_backfill``) but the
-# legacy underscore-prefixed names are also re-exported so the long tail
-# of imports continues to function during the migration.
+# without code changes.  All callers migrated to public names during
+# Story 10.2 extraction; no underscore-prefixed aliases re-exported
+# (Story 10.2 review pass-1 VH-14: previous comment falsely claimed
+# legacy ``_read_new_envelopes_since`` / ``_parse_with_pre110_backfill``
+# aliases existed — they do not).
 from events.clock import Clock
 from events.log_reader import (
     EventLogReader,
@@ -104,10 +105,11 @@ _O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 # Read-side functions (Story 10.2 AC1):
 #
 # ``current_day_path``, ``read_log_lines``, ``read_new_envelopes_since``,
-# ``parse_with_pre110_backfill`` and the legacy underscore-prefixed aliases
-# ``_read_new_envelopes_since`` / ``_parse_with_pre110_backfill`` are re-
-# exported from ``events.log_reader`` at the top of this file — keeping
-# this module's public surface backwards-compatible after the extraction.
+# ``parse_with_pre110_backfill`` and ``EventLogReader`` are re-exported
+# from ``events.log_reader`` at the top of this file — keeping this
+# module's public surface backwards-compatible after the extraction.
+# No underscore-prefixed aliases exist; all internal call-sites were
+# migrated to the public names during the Story 10.2 extraction.
 # ---------------------------------------------------------------------------
 
 

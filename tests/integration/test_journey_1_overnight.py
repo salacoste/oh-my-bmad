@@ -394,6 +394,10 @@ def test_worker_facing_source_code_unchanged() -> None:
         # test_failure_detection.py is a co-located test file — not worker-facing
         # source. Story 9.7 updates fixture assertions for schema_version 1.1.0.
         "services/registry-state/src/registry_state/domain/test_failure_detection.py",
+        # Story 10.2 AC1 EventLogReader extraction: see test_s1 for details.
+        # event_log.py becomes thin re-export shim; app/main.py uses renamed public imports.
+        "services/registry-state/src/registry_state/adapters/event_log.py",
+        "services/registry-state/src/registry_state/app/main.py",
     }
 
     rev_parse = subprocess.run(
