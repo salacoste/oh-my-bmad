@@ -189,7 +189,7 @@ Self-verification:
 No code change forces the network policy — the gate is at the compose layer (Story 10.6 scope). But Story 10.3 MUST:
 
 - Add a docstring to `app/main.py` citing P2-I5 with the explicit warning: *"This endpoint MUST NOT be exposed via `ports:` in docker-compose.yml; reachable only through the internal network. Operator scrapes via SSH-tunneled `curl` (FR61) or a co-located Prometheus instance on the same docker host."*
-- Add a check in `app/main.py` startup that emits `log.warning("metrics_subscriber_bind_external_interface_suspected", host=settings.metrics_host)` if `settings.metrics_host` is set to a non-loopback / non-`0.0.0.0` / non-`::` value (heuristic: an explicit external IP suggests misconfiguration).
+- Add a check in `app/main.py` startup that emits `log.warning("metrics_subscriber_bind_external_interface_suspected", host=settings.metrics_host)` if `settings.metrics_host` is a concrete IP address that is neither loopback (`127.0.0.1`/`::1`) nor the wildcard bind-all (`0.0.0.0`/`::`). Note: `0.0.0.0` intentionally binds all container interfaces and IS externally reachable within the docker network — the real enforcement is compose-level network scoping (Story 10.6). This heuristic is a sanity guard against typos (e.g. a specific external IP like `192.0.2.1`), not a security boundary.
 - Update `tests/separability/` and `tests/integration/` to NOT scrape via external host:port; use the FastAPI TestClient (in-process) for unit tests, leaving real-network scrape for Story 10.6's S-4 separability test.
 
 Self-verification:
@@ -212,7 +212,7 @@ async def test_metrics_endpoint_p95_under_100ms(app: FastAPI, populated_state: M
             r = await client.get("/metrics")
             latencies.append(time.perf_counter() - t0)
             assert r.status_code == 200
-        p95 = sorted(latencies)[95]
+        p95 = sorted(latencies)[94]  # index 94 = 95th percentile of 100 samples (indices 0-99)
         assert p95 < 0.1, f"NFR-O8 violation: /metrics p95={p95*1000:.1f}ms ≥ 100ms"
 ```
 
