@@ -1,0 +1,225 @@
+"""Unit tests for the extracted :mod:`events.log_reader` (Story 10.2 AC1/AC2).
+
+The deep-coverage tests for the underlying free functions live in
+``services/registry-state/src/registry_state/test_event_log.py`` — those
+must continue to pass via the re-export shim (verified by the registry-
+state suite). The tests here focus on:
+
+* :class:`EventLogReader` public API (open / seek / read_batch /
+  cursor_offset / current_path)
+* :func:`read_log_lines` basic + CRLF
+* :func:`read_new_envelopes_since` cursor advance + partial-line stop
+* :func:`parse_with_pre110_backfill` skip + back-fill paths
+* :func:`current_day_path` validation
+"""
+
+from __future__ import annotations
+
+from collections.abc import Generator
+from datetime import UTC, datetime, timedelta, timezone
+from pathlib import Path
+from random import Random
+
+import pytest
+from pydantic import BaseModel
+
+from events import (
+    FROZEN_EPOCH,
+    Actor,
+    EventEnvelope,
+    EventLogReader,
+    FrozenClock,
+    current_day_path,
+    new_event_id,
+    new_uuid7,
+    read_log_lines,
+    read_new_envelopes_since,
+    to_canonical_json,
+)
+from events.log_reader import parse_with_pre110_backfill
+from events.schema_registry import register
+
+
+class _SimplePayload(BaseModel):
+    value: str
+
+
+@pytest.fixture(autouse=True)
+def _isolated_registry() -> Generator[None, None, None]:
+    """Register the test payload model idempotently.
+
+    We DO NOT call ``unregister_all()`` because module-load side-effect
+    registrations in registry-state (``event_types.ensure_registered()``)
+    register the production ``TaskCreatedPayload`` against the same key
+    used here; wiping them would break downstream cross-service tests
+    that share the pytest session (Epic 9 retro D5 — schema-registry
+    is global session-scoped). We rely on ``register()`` being
+    idempotent for same-model re-registrations and use a fresh
+    test-only payload model for our envelopes.
+    """
+    # Use a non-production event_type so we never collide with
+    # registry-state's TaskCreatedPayload registration.
+    register("test.log_reader.envelope", "1.0.0", _SimplePayload)
+    yield
+
+
+_ACTOR = Actor(kind="system", id="test")
+_DEFAULT_TRACE_ID = "01917e5c-a7d1-7000-8abc-000000000000"
+
+
+def _make_envelope(value: str = "hello", mono_seed: int = 0) -> EventEnvelope:
+    rng = Random(mono_seed)
+    clk = FrozenClock(mono_ns=mono_seed, now=FROZEN_EPOCH)
+    eid = new_event_id(clock=clk, rng=rng)
+    rid = new_uuid7(clock=clk, rng=rng)
+    return EventEnvelope(
+        event_id=eid,
+        schema_version="1.0.0",
+        type="test.log_reader.envelope",  # noqa: EVT001 test-only fixture envelope
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload={"value": value},
+        trace_id=_DEFAULT_TRACE_ID,
+        request_id=rid,
+    )
+
+
+def _write_envelopes(path: Path, envelopes: list[EventEnvelope]) -> None:
+    with open(path, "wb") as f:
+        for env in envelopes:
+            f.write(to_canonical_json(env) + b"\n")
+
+
+def test_current_day_path_utc_only() -> None:
+    base = Path("/tmp/x")
+    now = datetime(2026, 5, 19, 23, 59, 0, tzinfo=UTC)
+    assert current_day_path(base, now) == base / "2026-05-19.jsonl"
+    naive = datetime(2026, 5, 19, 12, 0, 0)
+    with pytest.raises(ValueError, match="UTC-aware"):
+        current_day_path(base, naive)
+    non_utc = datetime(2026, 5, 19, 12, 0, 0, tzinfo=timezone(timedelta(hours=-5)))
+    with pytest.raises(ValueError, match="UTC-aware"):
+        current_day_path(base, non_utc)
+
+
+def test_read_log_lines_basic(tmp_path: Path) -> None:
+    path = tmp_path / "2026-05-19.jsonl"
+    envs = [_make_envelope(value=f"e{i}", mono_seed=i) for i in range(3)]
+    _write_envelopes(path, envs)
+    recovered = list(read_log_lines(path))
+    assert recovered == envs
+
+
+def test_read_log_lines_missing_raises_eagerly(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        read_log_lines(tmp_path / "nonexistent.jsonl")
+
+
+def test_read_log_lines_skips_trailing_partial(tmp_path: Path) -> None:
+    path = tmp_path / "2026-05-19.jsonl"
+    env = _make_envelope()
+    canonical = to_canonical_json(env)
+    # Complete line + partial line with no terminating \n.
+    path.write_bytes(canonical + b"\n" + canonical[:50])
+    recovered = list(read_log_lines(path))
+    assert recovered == [env]
+
+
+def test_read_new_envelopes_since_cursor_advance(tmp_path: Path) -> None:
+    path = tmp_path / "2026-05-19.jsonl"
+    envs = [_make_envelope(value=f"e{i}", mono_seed=i) for i in range(5)]
+    _write_envelopes(path, envs)
+
+    new_offset, batch = read_new_envelopes_since(path, 0)
+    assert batch == envs
+    assert new_offset == path.stat().st_size
+
+    # Subsequent call at EOF returns nothing.
+    new_offset2, batch2 = read_new_envelopes_since(path, new_offset)
+    assert batch2 == []
+    assert new_offset2 == new_offset
+
+
+def test_read_new_envelopes_since_partial_line_held_back(tmp_path: Path) -> None:
+    path = tmp_path / "2026-05-19.jsonl"
+    env1, env2 = _make_envelope(mono_seed=0), _make_envelope(mono_seed=1)
+    can1 = to_canonical_json(env1)
+    can2 = to_canonical_json(env2)
+    path.write_bytes(can1 + b"\n" + can2[:20])  # partial 2nd line
+    new_offset, batch = read_new_envelopes_since(path, 0)
+    assert batch == [env1]
+    # Cursor stops at the partial line's start (= just past env1's newline).
+    assert new_offset == len(can1) + 1
+
+    # Now append the rest of env2 + newline; next call picks it up.
+    with open(path, "wb") as f:
+        f.write(can1 + b"\n" + can2 + b"\n")
+    new_offset2, batch2 = read_new_envelopes_since(path, new_offset)
+    assert batch2 == [env2]
+
+
+def test_read_new_envelopes_since_missing_file(tmp_path: Path) -> None:
+    missing = tmp_path / "no.jsonl"
+    new_offset, batch = read_new_envelopes_since(missing, 42)
+    assert batch == []
+    assert new_offset == 42
+
+
+def test_parse_with_pre110_backfill_skips_invalid_json(tmp_path: Path) -> None:
+    result = parse_with_pre110_backfill(b"{garbage", tmp_path / "x.jsonl")
+    assert result is None
+
+
+def test_parse_with_pre110_backfill_skips_non_dict(tmp_path: Path) -> None:
+    result = parse_with_pre110_backfill(b'"a string"', tmp_path / "x.jsonl")
+    assert result is None
+
+
+def test_event_log_reader_open_and_read_batch(tmp_path: Path) -> None:
+    clock = FrozenClock(mono_ns=0, now=datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC))
+    path = current_day_path(tmp_path, clock.now())
+    envs = [_make_envelope(value=f"e{i}", mono_seed=i) for i in range(4)]
+    _write_envelopes(path, envs)
+
+    reader = EventLogReader(tmp_path, clock=clock)
+    reader.open(initial_offset=0)
+    assert reader.current_path == path
+    batch = reader.read_batch()
+    assert batch == envs
+    assert reader.cursor_offset == path.stat().st_size
+
+    # Read at EOF returns empty.
+    assert reader.read_batch() == []
+
+
+def test_event_log_reader_read_batch_before_open_raises(tmp_path: Path) -> None:
+    reader = EventLogReader(tmp_path)
+    with pytest.raises(RuntimeError, match="before open"):
+        reader.read_batch()
+
+
+def test_event_log_reader_current_path_before_open_raises(tmp_path: Path) -> None:
+    reader = EventLogReader(tmp_path)
+    with pytest.raises(RuntimeError, match="before open"):
+        _ = reader.current_path
+
+
+def test_event_log_reader_seek_overrides_path(tmp_path: Path) -> None:
+    clock = FrozenClock(mono_ns=0, now=datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC))
+    reader = EventLogReader(tmp_path, clock=clock)
+    arbitrary = tmp_path / "2026-05-17.jsonl"
+    reader.seek(path=arbitrary, offset=1234)
+    assert reader.current_path == arbitrary
+    assert reader.cursor_offset == 1234
+
+
+def test_event_log_reader_max_events_soft_cap(tmp_path: Path) -> None:
+    clock = FrozenClock(mono_ns=0, now=datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC))
+    path = current_day_path(tmp_path, clock.now())
+    envs = [_make_envelope(value=f"e{i}", mono_seed=i) for i in range(10)]
+    _write_envelopes(path, envs)
+    reader = EventLogReader(tmp_path, clock=clock)
+    reader.open(initial_offset=0)
+    batch = reader.read_batch(max_events=3)
+    assert len(batch) == 3

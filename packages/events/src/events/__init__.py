@@ -32,6 +32,13 @@ from events.ids import (
     new_worker_id,
     parse_prefix,
 )
+from events.log_reader import (
+    EventLogReader,
+    current_day_path,
+    parse_with_pre110_backfill,
+    read_log_lines,
+    read_new_envelopes_since,
+)
 
 # Story 3.5.2 — re-export payload models so consumers can use
 # ``from events import TaskCreatedPayload`` instead of cross-service imports.
@@ -82,6 +89,7 @@ __all__ = [
     "Clock",
     "DeploymentSignatureRejectedPayload",
     "EventEnvelope",
+    "EventLogReader",
     "EventSchemaUnknown",
     "EventValidationError",
     "EventsError",
@@ -94,6 +102,7 @@ __all__ = [
     # so callers can use ``from events import backfill_trace_id_from_request_id``
     # instead of the deeper ``from events.backfill import ...`` form.
     "backfill_trace_id_from_request_id",
+    "current_day_path",
     "from_canonical_json",
     "new_decision_id",
     "new_event_id",
@@ -104,6 +113,9 @@ __all__ = [
     "new_uuid7",
     "new_worker_id",
     "parse_prefix",
+    "parse_with_pre110_backfill",
+    "read_log_lines",
+    "read_new_envelopes_since",
     "register",
     "to_canonical_json",
     *_payloads_all,

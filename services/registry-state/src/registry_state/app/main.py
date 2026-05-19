@@ -45,7 +45,7 @@ from events.clock import Clock, SystemClock
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from registry_state.adapters.event_log import (
-    _read_new_envelopes_since,
+    read_new_envelopes_since,
     recover_all_logs,
 )
 from registry_state.adapters.sqlite_store import create_engine, get_session
@@ -96,7 +96,7 @@ async def _scan_new_envelopes(base_dir: Path, offsets: dict[str, int]) -> list[E
     collected: list[EventEnvelope] = []
     for path in sorted(base_dir.glob("*.jsonl")):
         prior = offsets.get(path.name, 0)
-        new_offset, envelopes = await asyncio.to_thread(_read_new_envelopes_since, path, prior)
+        new_offset, envelopes = await asyncio.to_thread(read_new_envelopes_since, path, prior)
         offsets[path.name] = new_offset
         collected.extend(envelopes)
     return collected
@@ -240,7 +240,7 @@ async def run_subscriber(
         startup_applied = 0
         startup_skipped = 0
         for path in sorted(base_dir.glob("*.jsonl")):
-            new_offset, envelopes = await asyncio.to_thread(_read_new_envelopes_since, path, 0)
+            new_offset, envelopes = await asyncio.to_thread(read_new_envelopes_since, path, 0)
             offsets[path.name] = new_offset
             new_envelopes = [env for env in envelopes if env.emitted_at_monotonic_ns > cursor_ns]
             startup_skipped += len(envelopes) - len(new_envelopes)

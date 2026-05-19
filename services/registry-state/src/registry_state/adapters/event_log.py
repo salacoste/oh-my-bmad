@@ -62,15 +62,29 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import logging
 import os
-from collections.abc import Iterator
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 
-from events import EventEnvelope, from_canonical_json, to_canonical_json
+from events import EventEnvelope, to_canonical_json
+
+# Story 10.2 AC1: read-side JSONL functions moved to packages/events/.
+# Re-export here so existing call-sites (registry-state app/main.py,
+# worker-wrapper.adapters.approval_waiter, registry-api tests, integration
+# tests, idempotency tests, scripted_worker_stub fixture) keep working
+# without code changes. Public-facing names are unprefixed
+# (``read_new_envelopes_since`` / ``parse_with_pre110_backfill``) but the
+# legacy underscore-prefixed names are also re-exported so the long tail
+# of imports continues to function during the migration.
 from events.clock import Clock
+from events.log_reader import (
+    EventLogReader,
+    current_day_path,
+    parse_with_pre110_backfill,
+    read_log_lines,
+    read_new_envelopes_since,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -87,218 +101,18 @@ _O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 
 
 # ---------------------------------------------------------------------------
-# Free functions
+# Read-side functions (Story 10.2 AC1):
+#
+# ``current_day_path``, ``read_log_lines``, ``read_new_envelopes_since``,
+# ``parse_with_pre110_backfill`` and the legacy underscore-prefixed aliases
+# ``_read_new_envelopes_since`` / ``_parse_with_pre110_backfill`` are re-
+# exported from ``events.log_reader`` at the top of this file — keeping
+# this module's public surface backwards-compatible after the extraction.
 # ---------------------------------------------------------------------------
 
 
-def current_day_path(base_dir: Path, now: datetime) -> Path:
-    """Return the JSONL file path for the UTC date of *now*.
-
-    Args:
-        base_dir: Root directory for the event log.
-        now: UTC-aware datetime.  Raises ``ValueError`` for naïve datetimes
-            or datetimes with a non-zero UTC offset.
-
-    Returns:
-        ``base_dir / "YYYY-MM-DD.jsonl"`` for the UTC date of *now*.
-
-    Raises:
-        ValueError: If *now* is naïve or not exactly UTC (i.e., offset ≠ 0).
-    """
-    if now.tzinfo is None or now.utcoffset() != timedelta(0):
-        raise ValueError(f"current_day_path requires UTC-aware datetime; got tzinfo={now.tzinfo!r}")
-    return base_dir / f"{now.date().isoformat()}.jsonl"
-
-
-def read_log_lines(path: Path) -> Iterator[EventEnvelope]:
-    """Read a JSONL event-log file and yield ``EventEnvelope`` objects.
-
-    Trailing partial lines (no terminating ``\\n``) are silently skipped —
-    they indicate an interrupted write that ``recover()`` has not yet cleaned
-    up, or that the writer was killed mid-line.  Callers should run
-    ``recover()`` before reading in production.
-
-    CRLF tolerance: the writer emits LF only, so any CR byte in a file is the
-    result of external tooling (editors, VCS translation).  We strip trailing
-    ``\\r`` bytes pragmatically before JSON parsing.
-
-    Args:
-        path: Path to the ``.jsonl`` file.
-
-    Yields:
-        ``EventEnvelope`` objects, one per complete line.
-
-    Raises:
-        FileNotFoundError: If *path* does not exist.  Raised eagerly (before
-            iteration begins) so callers don't receive a half-constructed
-            generator that only fails on ``next()``.
-    """
-    if not path.exists():
-        raise FileNotFoundError(f"event log file not found: {path}")
-    return _read_log_lines_gen(path)
-
-
-def _read_log_lines_gen(path: Path) -> Iterator[EventEnvelope]:
-    """Inner generator for ``read_log_lines`` — deferred file I/O.
-
-    Story 9.7 pass-2 TH-E1: ``approval_waiter`` (and other production
-    consumers) iterate this helper directly, so the same pre-1.1.0
-    back-fill applied to :func:`_read_new_envelopes_since` is applied
-    here. Without it the first pre-1.1.0 record raises
-    :class:`pydantic.ValidationError` and the consumer hangs/crashes.
-    """
-    with open(path, "rb") as f:
-        for raw in f:
-            if not raw.endswith(b"\n"):
-                return  # trailing partial line — skip silently
-            line_bytes = raw.rstrip(b"\r\n")
-            envelope = _parse_with_pre110_backfill(line_bytes, path)
-            if envelope is not None:
-                yield envelope
-
-
-def _read_new_envelopes_since(path: Path, offset: int) -> tuple[int, list[EventEnvelope]]:
-    """Read complete ``\\n``-terminated envelopes from *path* starting at *offset*.
-
-    Used by the subscriber tail loop to consume only the bytes appended since
-    the last poll — bounding the per-iteration cost regardless of how large
-    the per-day log file grows.  Designed to be invoked via
-    ``asyncio.to_thread`` so the blocking ``open``/``seek``/``read`` syscalls
-    do not stall the event loop.
-
-    Behaviour:
-      - If *path* does not exist (e.g., the day's first event has not been
-        appended yet) returns ``(offset, [])`` unchanged.
-      - If *offset* is beyond EOF (file was rotated/truncated externally),
-        the read returns no bytes and the offset is left unchanged.  We do
-        NOT auto-reset to zero — re-reading from the start would replay
-        every event we have already applied.
-      - Trailing partial lines (no terminating ``\\n``) are NOT consumed:
-        the returned offset stops at the last newline so the next call
-        picks up the partial line once it is completed.
-      - CRLF tolerance: any ``\\r`` bytes are stripped before JSON parsing,
-        matching ``read_log_lines``'s permissive policy.
-
-    Args:
-        path: Path to the ``.jsonl`` file.
-        offset: Byte offset to start reading from.
-
-    Returns:
-        ``(new_offset, envelopes)`` where ``new_offset`` is the byte
-        position just past the last complete line, and ``envelopes`` is
-        the parsed envelope list (possibly empty).
-    """
-    if not path.exists():
-        return offset, []
-    envelopes: list[EventEnvelope] = []
-    new_offset = offset
-    with open(path, "rb") as f:
-        f.seek(offset)
-        last_complete_end = offset
-        while True:
-            raw = f.readline()
-            if not raw:
-                break
-            if not raw.endswith(b"\n"):
-                # Trailing partial line — leave it for the next poll to
-                # finish.  The cursor stays at last_complete_end.
-                break
-            line_bytes = raw.rstrip(b"\r\n")
-            # PH-E1 (Story 9.7 pass-1): subscriber startup replay must not
-            # crash on pre-1.1.0 JSONL.  After the schema bump, trace_id is
-            # REQUIRED by EventEnvelope; any pre-bump record without trace_id
-            # would raise pydantic.ValidationError inside from_canonical_json.
-            # Fix: inject migrator-style back-fill (trace_id = request_id)
-            # before parsing.  If request_id is also absent/invalid, skip the
-            # line with a structured warning rather than crashing the subscriber.
-            envelope = _parse_with_pre110_backfill(line_bytes, path)
-            if envelope is not None:
-                envelopes.append(envelope)
-            last_complete_end += len(raw)
-        new_offset = last_complete_end
-    return new_offset, envelopes
-
-
-def _parse_with_pre110_backfill(
-    line_bytes: bytes,
-    source_path: Path,
-) -> EventEnvelope | None:
-    """Parse a JSONL line, back-filling trace_id for pre-1.1.0 envelopes.
-
-    Story 9.7 pass-1 PH-E1 / pass-2 TH-B5: avoids deployment-breaking
-    ValidationError when subscriber replays pre-1.1.0 JSONL during startup.
-    Delegates to :func:`events.backfill.backfill_trace_id_from_request_id`
-    so the migrator + subscriber paths share one back-fill rule.
-
-    Returns None (with structured warning) when the line is unrecoverable so
-    the subscriber skips it rather than crashing. Returns the parsed
-    EventEnvelope on success.
-    """
-    from events.backfill import (  # noqa: PLC0415 — avoid circular at module level
-        backfill_trace_id_from_request_id,
-    )
-
-    try:
-        raw_dict: object = json.loads(line_bytes)
-    except json.JSONDecodeError as exc:
-        _log.warning(
-            "event_log_parse_skip path=%s error_type=JSONDecodeError detail=%s",
-            source_path,
-            exc,
-        )
-        return None
-
-    if not isinstance(raw_dict, dict):
-        _log.warning(
-            "event_log_parse_skip path=%s error_type=NotADict",
-            source_path,
-        )
-        return None
-
-    # TH-B5 shared helper: back-fill trace_id from request_id (with e-prefix
-    # strip per Q6). Returns None when neither trace_id nor request_id
-    # produces a valid bare UUIDv7. Story 9.8 D6: pass the subscriber-specific
-    # provenance label so the materializer can route it to
-    # events.trace_id_synthetic_source — distinguishing online replay
-    # back-fills from the offline migrator's records.
-    backfilled = backfill_trace_id_from_request_id(
-        raw_dict,
-        caller_label="subscriber-pre110-replay",
-    )
-    if backfilled is None:
-        _log.warning(
-            "event_log_parse_skip path=%s event_id=%s "
-            "error_type=pre110_missing_trace_id request_id=%r "
-            "— cannot back-fill; skipping envelope",
-            source_path,
-            raw_dict.get("event_id", "?"),
-            raw_dict.get("request_id"),
-        )
-        return None
-    if backfilled is not raw_dict:
-        _log.debug(
-            "event_log_pre110_backfill path=%s event_id=%s synthetic_trace_id=%s",
-            source_path,
-            backfilled.get("event_id", "?"),
-            backfilled.get("trace_id"),
-        )
-    raw_dict = backfilled
-
-    try:
-        return from_canonical_json(json.dumps(raw_dict).encode())
-    except Exception as exc:  # noqa: BLE001 — log and skip; never crash subscriber
-        _log.warning(
-            "event_log_parse_skip path=%s event_id=%s error_type=%s detail=%s",
-            source_path,
-            raw_dict.get("event_id", "?") if isinstance(raw_dict, dict) else "?",
-            type(exc).__name__,
-            exc,
-        )
-        return None
-
-
 # ---------------------------------------------------------------------------
-# Internal helpers
+# Internal helpers (write-side recovery)
 # ---------------------------------------------------------------------------
 
 
@@ -600,8 +414,11 @@ class EventLogWriter:
 
 
 __all__ = [
+    "EventLogReader",  # Story 10.2 AC1 re-export
     "EventLogWriter",
     "current_day_path",
+    "parse_with_pre110_backfill",
     "read_log_lines",
+    "read_new_envelopes_since",
     "recover_all_logs",
 ]

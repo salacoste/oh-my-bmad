@@ -1,6 +1,6 @@
 # Story 10.2 — Tail loop + cursor persistence in metrics-subscriber
 
-Status: **ready-for-dev**
+Status: **review**
 
 ## Story
 
@@ -306,34 +306,162 @@ Pick **(a)**. Preserves backwards compat, follows DRY.
 
 ## Dev Agent Record
 
-_(To be completed by the dev agent at story closure.)_
-
 ### Implementation summary
-_(tbd)_
+
+Pass-1 implementation of Story 10.2 complete. The β metrics-subscriber
+service now has a real async lifespan (replacing Story 10.1's scaffold
+print): `EventLogReader` opens today's JSONL file, `CursorPersistence`
+restores from `cursor.json` (or starts fresh + WARNING on day-rollover
+during downtime), the tail loop yields envelopes one-by-one with per-
+line cursor advance, and SIGTERM drains the cursor before exit. All
+12 ACs satisfied; mypy --strict, ruff, and the full test suite are
+green. Pass-2 adversarial review pending per Epic 9 retro AI-1.
 
 ### Files changed
-_(tbd)_
+
+- **NEW** `packages/events/src/events/log_reader.py` — extracted
+  read-side functions + new `EventLogReader` class + async `tail()`
+  generator + new `iter_new_envelopes_since` per-line generator
+  (added during dev to satisfy AC7 exactly-once invariant — see
+  Surprises below).
+- **NEW** `packages/events/src/events/test_log_reader.py` — 17 unit
+  tests for the extracted module.
+- **MOD** `packages/events/src/events/__init__.py` — public re-export
+  of `EventLogReader`, `current_day_path`, `read_log_lines`,
+  `read_new_envelopes_since`, `parse_with_pre110_backfill`.
+- **MOD** `services/registry-state/src/registry_state/adapters/event_log.py`
+  — read-side functions DELETED (~200 lines); replaced with
+  re-export shim from `events.log_reader`. Writer-side
+  (`EventLogWriter`, `recover_all_logs`, `_recover_file`) untouched.
+- **MOD** `services/registry-state/src/registry_state/app/main.py`
+  — renamed import + call sites from `_read_new_envelopes_since` to
+  the public name `read_new_envelopes_since`.
+- **NEW** `services/metrics-subscriber/src/metrics_subscriber/app/__init__.py`
+- **NEW** `services/metrics-subscriber/src/metrics_subscriber/app/config.py`
+  — `MetricsSubscriberSettings` (AC6).
+- **NEW** `services/metrics-subscriber/src/metrics_subscriber/cursor.py`
+  — `CursorPersistence` atomic-write + day-rollover restore (AC3/AC4).
+- **REWRITE** `services/metrics-subscriber/src/metrics_subscriber/__main__.py`
+  — async `run_subscriber()` + SIGTERM handler + lag log (AC5/AC9).
+- **NEW** `services/metrics-subscriber/src/metrics_subscriber/conftest.py`
+  — autouse fixture clearing `OMB_METRICS_*` env vars (AC10).
+- **NEW** `services/metrics-subscriber/src/metrics_subscriber/test_config.py`
+  — 6 settings tests.
+- **NEW** `services/metrics-subscriber/src/metrics_subscriber/test_cursor.py`
+  — 9 unit tests for `CursorPersistence`.
+- **NEW** `services/metrics-subscriber/src/metrics_subscriber/test_day_rollover.py`
+  — AC8 integration test.
+- **NEW** `services/metrics-subscriber/src/metrics_subscriber/test_restart_recovery.py`
+  — AC7 exactly-once integration test.
 
 ### Test count delta
-_(tbd — pre-10.2 baseline ~278X; expect +20-30 net)_
+
+- Pre-10.2 baseline: **2784** passed.
+- Post-10.2: **2815** passed (delta = +31 new tests).
+- Breakdown: `test_log_reader.py` (17), `test_config.py` (6),
+  `test_cursor.py` (9), `test_day_rollover.py` (1),
+  `test_restart_recovery.py` (1) — total 34 new test functions, with
+  3 net pytest-collected-test-count adjustment from fixture
+  isolation.
+- mypy --strict baseline: **107 → 117** source files.
 
 ### EventLogReader extraction scope decision
-_(Document choice (a)/(b)/(c) from Trade-off note + rationale.)_
+
+**Confirmed option (a)** from the Trade-off note: moved read-side
+functions only. `EventLogWriter`, `recover_all_logs`, and
+`_recover_file` stayed in registry-state because they own the
+durable write-side semantics (poison-pill, fdatasync, O_APPEND
+locking) and have no β-side consumer. `registry_state.adapters.event_log`
+is now a thin re-export shim for backwards compatibility — every
+existing call-site (registry-state app/main, worker-wrapper
+approval_waiter, registry-api tests, integration tests, idempotency
+tests, scripted_worker_stub fixture, null_orchestrator fixture)
+continues to work without source changes apart from the
+intentional rename `_read_new_envelopes_since` → `read_new_envelopes_since`
+in registry-state's own app/main.py (consistent with the public
+re-export name).
 
 ### Cursor.json schema choices
-_(Document version field strategy, atomic write mechanism, corrupt-file recovery.)_
+
+- **schema_version = "1"** (string, not int) so future migrations
+  read as JSON without numeric coercion ambiguity.
+- **Atomic write via** `tempfile.NamedTemporaryFile` in the same
+  directory as the target + `os.fsync(tmp)` + `os.replace(tmp, dest)`.
+  Same-directory tempfile guarantees the rename is intra-filesystem
+  (cross-fs `os.replace` would fall back to non-atomic copy on some
+  POSIX impls).
+- **Corrupt-file recovery**: any JSON parse error, missing required
+  fields, or unknown `schema_version` falls through to "start fresh
+  at offset 0" with a structured WARNING (`cursor_corrupt` /
+  `cursor_invalid_shape` / `cursor_unknown_schema`). The cursor file
+  is NOT deleted — the next successful persist overwrites it. This is
+  safer than the alternative (delete + recreate) because it preserves
+  forensic state for operators.
+- **`persisted_at`** formatted with explicit "Z" suffix (UTC) so the
+  format is stable across Python versions (some emit `+00:00`).
 
 ### Day-rollover edge cases discovered during dev
-_(tbd)_
+
+- The original `tail()` design read the ENTIRE post-cursor batch in
+  one call, advancing the cursor to EOF before yielding. This breaks
+  AC7's exactly-once invariant: a mid-batch SIGTERM would persist a
+  cursor past envelopes the consumer hadn't yet seen. **Fix:** added
+  `iter_new_envelopes_since` (per-line generator) and rewrote the
+  tail loop to capture `(offset_after_line, envelope)` pairs and
+  advance the cursor per-yield. Now a `break` or `stop_event.set()`
+  inside the consumer's `async for` body leaves the cursor on the
+  last-yielded line.
+- Day-rollover during ACTIVE tailing: the loop drains the current
+  file first, THEN switches paths and immediately re-polls (no
+  `poll_interval_s` sleep on rollover) so the first envelope on the
+  new day's file is observed with minimal latency.
+- Day-rollover during DOWNTIME: handled by `restore_into` —
+  detects mismatch between `cursor.json["path"]` and today's path,
+  emits `tail.restart_after_day_rollover` WARNING, opens today at
+  offset 0. Bytes appended to yesterday's file AFTER cursor.json's
+  last persist are NOT replayed; operator runbook required for
+  manual backfill of the missed range (documented in spec
+  out-of-scope risk flags table).
 
 ### Surprises / deviations from spec
-_(tbd)_
+
+1. **Per-line cursor advance** (above): the spec's AC2 sketch
+   implied batch-level cursor advance (one `read_batch()` call,
+   one cursor update). Actual AC7 invariant required per-line —
+   this is a strict generalization, not a deviation. `read_batch()`
+   API on `EventLogReader` retained for non-streaming consumers.
+2. **`iter_new_envelopes_since`** added to the events package as a
+   public helper. Not in spec but necessary to expose the per-line
+   semantics outside the class (and unit-testable in isolation).
+3. **Schema-registry isolation pattern**: initial draft used
+   `unregister_all()` in test setup, mirroring registry-state's
+   Story-2.4 test pattern. This broke 17 registry-api tests when
+   run in the full suite because `event_types.ensure_registered()`
+   is a module-load side-effect that never re-runs after a
+   session-scoped wipe. **Fix:** switched all metrics-subscriber +
+   `test_log_reader.py` tests to use test-only event types
+   (`test.log_reader.envelope`, `test.metrics_subscriber.envelope`,
+   `test.restart_recovery.created`, `test.restart_recovery.completed`)
+   and idempotent `register()` without teardown wipe. Epic 9 retro
+   D5 (schema-registry is global session-scoped) directly applies.
+4. **`max_events` soft cap**: `EventLogReader.read_batch(max_events=N)`
+   is enforced post-hoc on the in-memory list, not at the byte-read
+   level. Acceptable for Story 10.2's drop-on-floor consumer; if
+   Story 10.4's metric updates ever become CPU-bound this can be
+   revisited.
 
 ### Story 10.3 readiness check
-_(Verify Story 10.3 (FastAPI /metrics) has the foundation it needs:
-- EventLogReader exists in packages/events/
-- Tail loop running as lifespan task
-- cursor.json schema stable for upstream consumers)_
+
+- ✅ `EventLogReader` exists in `packages/events/` (P2-I1 satisfied).
+- ✅ Tail loop running as async lifespan task in
+  `metrics_subscriber.__main__.run_subscriber`.
+- ✅ `cursor.json` schema_version="1" stable for upstream consumers.
+- ✅ Lag log fields (`bytes_behind`, `wall_clock_lag_s`) emit on
+  every persist — Story 10.3 just needs to lift them into Prometheus
+  gauges.
+- ✅ `MetricsSubscriberSettings` extensible (Story 10.3 can add
+  `metrics_port: int = Field(default=9090)` without touching
+  10.2's surface).
 
 ---
 
