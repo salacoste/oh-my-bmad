@@ -1,6 +1,6 @@
 # Story 10.3 — FastAPI `/metrics` endpoint (Prometheus exposition)
 
-Status: **review** (CI pending; pass-1 batch applied 2026-05-19 — all 20 findings closed)
+Status: **done** (CI green @ `4fd27e3` (run 26115999732) — confirmed 2026-05-19; impl `eb53bb9` + `249d387`; pass-1 review batch: 20/20 closed = 5H + 7M + 8L)
 
 ## Story
 

@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-19T14:20:00Z
+last_updated: 2026-05-19T15:10:00Z
 current_phase: 2  # Phase 2 opened by ADR-0003 (docs/adr/0003-phase-2-gate.md), 2026-05-15
 
 development_status:
@@ -273,7 +273,7 @@ development_status:
   epic-10: in-progress  # 2026-05-19 — Story 10.1 scaffold spec authored
   10-1-scaffold-metrics-subscriber-workspace-member: done  # phase: 2 · FR60 · 10/10 ACs · 3 smoke tests post-pass-1 · mypy 102→106 files · CI green 28d1eb4
   10-2-tail-loop-cursor-persistence: done  # phase: 2 · FR60 · 12/12 ACs · pass-1: 27 applied + 1 deferred (VH-7); pass-2: 24/24 closed (VH-7 transitively via P2-H9); pass-3: 18/18 closed; CI green @ 469b6d2 (run 26103548952); 485 test fns; mypy 120 src files; AI-1 3-pass cadence cap reached (2026-05-19)
-  10-3-fastapi-metrics-endpoint: review  # phase: 2 · FR61 · 15 ACs · review opened 2026-05-19 · FastAPI factory + 2 gauges + 1 counter + NFR-O8 benchmark (p95=0.94ms) + ADR-0005 accepted; mypy 120→125 src files; +17 tests (44→61 metrics-subscriber)
+  10-3-fastapi-metrics-endpoint: done  # phase: 2 · FR61 · 15 ACs · FastAPI factory + 2 gauges + 1 counter + NFR-O8 benchmark (p95=0.94ms) + ADR-0005 accepted; mypy 125 src files; 510 test fns; pass-1: 20/20 closed (5H+7M+8L); CI green @ 4fd27e3 (run 26115999732)
   10-4-core-counter-gauge-histogram-set: backlog  # phase: 2 · FR62
   10-5-cardinality-discipline-regression-test: backlog  # phase: 2 · FR62, NFR-O8
   10-6-separability-test-s4-plus-compose-entry: backlog  # phase: 2 · FR62a
