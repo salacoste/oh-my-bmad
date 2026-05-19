@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-19T05:00:00Z
+last_updated: 2026-05-19T06:00:00Z
 current_phase: 2  # Phase 2 opened by ADR-0003 (docs/adr/0003-phase-2-gate.md), 2026-05-15
 
 development_status:
@@ -271,8 +271,8 @@ development_status:
   # FR60–FR62a · NFR-O8, NFR-O10
   # =========================================================================
   epic-10: in-progress  # 2026-05-19 — Story 10.1 scaffold spec authored
-  10-1-scaffold-metrics-subscriber-workspace-member: review  # phase: 2 · FR60 · 10/10 ACs · 2 smoke tests · mypy 102→106 files
-  10-2-tail-loop-cursor-persistence: ready-for-dev  # phase: 2 · FR60 · spec authored 2026-05-19
+  10-1-scaffold-metrics-subscriber-workspace-member: done  # phase: 2 · FR60 · 10/10 ACs · 3 smoke tests post-pass-1 · mypy 102→106 files · CI green 28d1eb4
+  10-2-tail-loop-cursor-persistence: in-progress  # phase: 2 · FR60 · dev started 2026-05-19
   10-3-fastapi-metrics-endpoint: backlog  # phase: 2 · FR61
   10-4-core-counter-gauge-histogram-set: backlog  # phase: 2 · FR62
   10-5-cardinality-discipline-regression-test: backlog  # phase: 2 · FR62, NFR-O8
@@ -385,3 +385,32 @@ audit_trail:
       HTTP endpoint + console-cli `trace` command + telegram /trace
       handler. Schema 1.0.0 → 1.1.0 with both retained for replay
       safety. Operator can now query causal chains end-to-end.
+  - date: "2026-05-19"
+    event: story-10-1-closed
+    from: review
+    to: done
+    story: 10-1-scaffold-metrics-subscriber-workspace-member
+    commit: "f6eff39 (scaffold) + 28d1eb4 (pass-1 9 patches)"
+    reason: >
+      Story 10.1 scaffold COMPLETE. 10/10 ACs satisfied. 3 smoke
+      tests post-pass-1 (test_version: non-empty, semver regex
+      rejecting leading zeros, importlib.metadata cross-check
+      catching drift). mypy --strict 102 → 106 source files.
+      bootstrap-verify 13 → 14 modules (capabilities excluded by
+      convention). check_imports.py auto-discovers new workspace
+      member via pyproject.toml scan. Pass-1 review found 10 raw
+      → 9 unique patches, all addressed. CI green at 26063766814.
+  - date: "2026-05-19"
+    event: deferred-work-d6-d7-resolved
+    commit: 0e5bb21
+    reason: >
+      D6 (synthetic-source ORM column) + D7 (extensions ORM column)
+      both RESOLVED as combined tech-debt sweep before Story 10.2
+      began. Migration 0006 adds two nullable columns to events
+      table; materializer wires envelope.extensions through to
+      both new columns. Backfill helper gained caller_label kwarg
+      to distinguish migrator/subscriber/failure-detection synthetic
+      sources. /trace response now populates extensions field
+      (was always {}) and includes top-level
+      trace_id_synthetic_source field. Tests +15. mypy 106 → 107
+      files. CI green at 26065774343.
