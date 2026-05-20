@@ -1,6 +1,6 @@
 # Story 10.6 — Separability test S-4 + add metrics-subscriber to compose stack
 
-Status: **review** (CI pending @ c9c5cbc)
+Status: **done** (CI green @ `bde83ee` (run 26153985092) — confirmed 2026-05-20; impl `c9c5cbc` + `361a257`; pass-1 review batch: 13/13 closed = 4 MAJOR + 4 MED + 5 LOW. **CLOSES EPIC 10.**)
 
 ## Story
 
