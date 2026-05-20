@@ -19,7 +19,7 @@ New file: `tests/integration/test_metrics_cardinality.py`.
 Path discipline: per the epics.md Story 10.5 scope wording ("Add `tests/integration/test_metrics_cardinality.py`"), the test lives at the **repo-level integration suite**, NOT inside `services/metrics-subscriber/`. Rationale: cardinality is a contract between the subscriber and the observability stack; the test exercises the FULL `/metrics` endpoint via `httpx.AsyncClient + ASGITransport` against `build_app(...)` — i.e., the same path Prometheus scrape would take.
 
 Constraints:
-- Imports: `from metrics_subscriber.app.config import MetricsSubscriberSettings`; `from metrics_subscriber.app.main import build_app`; `from metrics_subscriber.app.metrics import _EVENT_FAMILIES, _ACTOR_KINDS, _TASK_LIFECYCLE_EVENT_TYPES, _SESSION_PHASES, MetricsState`; `from events import EventEnvelope, ...`; `from asgi_lifespan import LifespanManager`.
+- Imports (module-level, per delivered file — Story 10.5 P1-L3 pass-1 amendment): `from metrics_subscriber.app.config import MetricsSubscriberSettings`; `from metrics_subscriber.app.main import build_app`; `from metrics_subscriber.app.metrics import _EVENT_FAMILIES, MetricsState, build_collectors`; `from events import Actor, EventEnvelope, to_canonical_json`; `from asgi_lifespan import LifespanManager`. AC6's drift-detection test imports `metrics_subscriber.app.metrics` locally (inside the test function) to apply `monkeypatch.setattr` to the live `_ACTOR_KINDS` symbol — `_TASK_LIFECYCLE_EVENT_TYPES` and `_SESSION_PHASES` are not needed at module scope.
 - NO direct import from `services/registry-state/` or `services/registry-api/` — P2-I1 read-only-subscriber rule.
 - Pytest marker: `@pytest.mark.integration` (existing convention in `tests/integration/`).
 
@@ -58,25 +58,29 @@ Self-verification:
 
 Test `test_cardinality_under_10k_varying_task_ids`:
 1. Spin up `build_app(...)` via `LifespanManager`.
-2. Emit 10000 envelope pairs into the test event-log directory: `task.execution.started{task_id=T_i, token_usage=N_i}` followed by `task.completed{task_id=T_i, token_usage=M_i}` for `i in range(10000)`. Each `T_i` is a distinct UUID-like string.
-3. Poll cursor until tail loop drains all 20000 envelopes (verify via `/metrics` `omb_events_appended_total{event_family="task"}` reaching 20000).
-4. Scrape `/metrics`; assert canonical_timeseries_count is **≤ 51** (baseline) — every per-task gauge was cleaned up on `task.completed` per Story 10.4 D3 cleanup rule.
-5. Additionally assert `_terminated_task_ids` ring-buffer state: `len(state._terminated_task_ids_set) <= 10000` (the deque maxlen — Story 10.4 P1-H3 bound).
+2. Emit **10_001 envelope pairs** (P1-M2 / B5+E3 pass-1 amendment — 10_001 not 10_000 so the LRU eviction path actually fires) into the test event-log directory: `task.execution.started{task_id=T_i, tokens_used=i}` followed by `task.completed{task_id=T_i, summary=..., ...}` for `i in range(10001)`. Each `T_i` is a distinct UUID-like string. **`tokens_used` payload field is REQUIRED on every started envelope (P1-H1 pass-1 amendment)** — without it, `_update_task_tokens` short-circuits in the `tokens is None` branch, no per-task gauge children materialise, and the post-cleanup `== 0` assertion is vacuously true.
+3. Two-phase verification (P1-H1 pass-1 amendment):
+   - Phase 1 — drain only the starter envelopes; assert `len(list(state.task_tokens_spent._metrics)) >= 10_000` (proves per-task gauge children DID materialise).
+   - Phase 2 — drain the matching terminators; assert `len(list(state.task_tokens_spent._metrics)) == 0` (proves cleanup ran).
+4. Poll cursor until tail loop drains all **20_002 envelopes** (verify via `/metrics` `omb_events_appended_total{event_family="task"}` reaching 20_002).
+5. Scrape `/metrics`; assert canonical_timeseries_count is **≤ 52** (51 baseline + 1 cursor-offset path child after the first tail-loop persist — P1-H2 pass-1 amendment; the original "≤ 51" wording was idealised and would silently fail-pass at 52 due to one cursor-offset child).
+6. Additionally assert `_terminated_task_ids` ring-buffer state: `len(state._terminated_task_ids_set) == 10_000` (P1-M2 pass-1 amendment — exact, not `<= 10_000`; the eviction path must have fired on the 10_001st completion so the companion set is at exactly the deque `maxlen`).
 
-Performance budget: this test ingests 20K envelopes through the full tail loop. Use `tmp_path` event-log dir with high-throughput JSONL writing; reasonable wall-clock budget = **30 seconds** on a typical CI runner. Mark with `@pytest.mark.slow` so it doesn't bloat the inner-loop test runs. CI runs the slow marker on the same job that runs NFR-O8 benchmark.
+Performance budget: this test ingests 20_002 envelopes through the full tail loop. Use `tmp_path` event-log dir with high-throughput JSONL writing; reasonable wall-clock budget = **30 seconds** on a typical CI runner. Mark with `@pytest.mark.slow` so it doesn't bloat the inner-loop test runs. CI runs the slow marker on the same job that runs NFR-O8 benchmark.
 
 Self-verification:
-- Test asserts `canonical_timeseries_count <= 51` (NOT <= 200 as Story 10.4 spec hinted — the cleanup is synchronous in the tail loop so by the time we scrape, all per-task gauges are gone).
-- Test asserts `omb_events_appended_total{event_family="task"} == 20000` (proves we actually processed all envelopes, not just a subset).
+- Test asserts `canonical_timeseries_count <= 52` (51 baseline + 1 cursor-offset path child — see P1-H2 pass-1 amendment).
+- Test asserts `omb_events_appended_total{event_family="task"} >= 20_002` (proves we actually processed all envelopes, not just a subset).
+- Test asserts `len(state._terminated_task_ids_set) == 10_000` exactly (proves the LRU eviction path fired — P1-M2 pass-1 amendment).
 
 ### AC4 — Concurrent-active-tasks scenario: cardinality bounded by N + baseline
 
 Test `test_cardinality_with_n_concurrent_active_tasks`:
 1. Spin up `build_app(...)`.
-2. Emit `task.execution.started` for 100 distinct `task_id` values (no `task.completed` follow-up).
-3. Scrape `/metrics`; assert `canonical_timeseries_count == 51 + 100 = 151` (baseline + one `omb_task_tokens_spent` child per active task).
+2. Emit 100 envelopes carrying `tokens_used` for distinct `task_id` values, with NO terminator follow-up. **Implementation note (P1-L5 pass-1 amendment):** the delivered test uses `task.budget_exceeded` (NOT `task.execution.started`) here — `task.execution.started` carries no payload field for tokens (the strict payload model has only `task_id` + `session_id`), so dispatching it would not materialise the per-task gauge children that this AC's mid-flight assertion depends on. `task.budget_exceeded` carries `tokens_used` AND does NOT terminate the task — perfect fingerprint for the active-gauge ceiling. See DAR Surprises bullet for the chosen pattern.
+3. Scrape `/metrics`; assert `canonical_timeseries_count == 51 + 100 = 151` mid-flight (baseline + one `omb_task_tokens_spent` child per active task). Implementation tightens to `151 <= count <= 152` to account for the 1 cursor-offset path child after the first tail-loop persist (see DAR Surprises).
 4. Emit `task.completed` for ALL 100 task_ids.
-5. Re-scrape; assert `canonical_timeseries_count == 51` (full cleanup).
+5. Re-scrape; assert `canonical_timeseries_count == 51` (full cleanup). Implementation tightens to `<= 52` for the same cursor-offset-path-child reason as AC3 (P1-M6 pass-1 amendment — this divergence is now individually documented in DAR Surprises).
 
 Constraints:
 - This test exercises the **active-task bound** documented in Story 10.4 AC5: "concurrent active task count" is the cardinality ceiling for the per-task gauge.
@@ -286,7 +290,7 @@ docs/adr/
 - **D2 — Test file lives at `tests/integration/`, not inside `services/metrics-subscriber/`.** Per epic.md wording + cardinality being a cross-service deployment contract.
 - **D3 — Failure-injection via direct-mutation (bypass guard), not `pytest.mark.xfail`.** Proves both leak reality + assertion sensitivity. Executor may swap to `xfail(strict=True)` if cleaner; document in DAR.
 - **D4 — `@pytest.mark.slow` on the 10K test only (AC3).** Other tests (AC2, AC4, AC5, AC6, AC7) are fast and run in the inner-loop test set.
-- **D5 — Mypy strict scope unchanged.** Story 10.5 adds tests, not source code; `tests/integration/` is already in the strict scope per Story 10.4 baseline.
+- **D5 — Mypy strict scope unchanged.** Story 10.5 adds tests, not source code. `tests/integration/` is *excluded* from strict scope via `[mypy-tests.*] ignore_errors = True` in `mypy.ini` (P1-L6 pass-1 amendment — the prior wording incorrectly claimed it was already in strict scope; the correct rationale is that `tests/*` is excluded by the wildcard rule, so Story 10.5's test file inherits the exclusion and the strict-mypy baseline stays at 126 source files).
 
 ## Definition of done
 
@@ -383,6 +387,8 @@ Story 10.4 measured NFR-O8 p95 at the `/metrics` endpoint. Story 10.5 introduces
 
 - **Spec said "7 tests" / "AC1: ≥ 4 tests"; actual count is 6 tests.** Each AC2-AC7 maps to exactly one test (1:1). The original spec wording in the "Self-verification" of AC1 said "collects ≥ 4 tests", and the file-structure requirements section listed "~300 lines, 7 tests" — the test plan crystallised to 6 tests during implementation (no need for a 7th test; AC5+AC6+AC7 cover the meta-test surface). The delivered file is ~625 lines (more docstring / explanatory commentary than the 300-line estimate, which strengthens future-contributor onboarding).
 - **AC3 / AC4 cardinality bound tightened to `≤ 52` (NOT `≤ 51`) post-drain.** The tail loop persists the cursor after each batch, which materialises **one** `metrics_subscriber_cursor_offset_bytes{path=...}` labelled gauge child. The spec's `<= 51` figure was idealised; actual real-world steady state after tail-loop activity is 51 + 1 (cursor-offset child) = 52. The CRITICAL invariant (zero per-task gauge children leaked) is asserted separately via `len(list(state.task_tokens_spent._metrics)) == 0`. This is a load-bearing correction; tests would have failed at the strict `<= 51` bound.
+
+  Per **P1-M6 pass-1 amendment**, AC4 step 5 deserves its own callout: spec said `canonical_timeseries_count == 51` (full cleanup, exact); the delivered implementation asserts `<= 52` for the same cursor-offset-path-child reason as AC3 step 4. The CRITICAL zero-leak invariant remains asserted separately via `len(list(state.task_tokens_spent._metrics)) == 0` immediately after the cardinality check.
 - **AC4 mid-flight bound: 151..152 (not exactly 151).** Same reason — one cursor-offset path child appears once the tail loop persists. Test asserts `151 <= count_mid <= 152` for robust passage regardless of persist timing.
 - **AC4 used `task.budget_exceeded` (not `task.execution.started`) to materialise per-task gauge children.** Reason: `task.execution.started` carries no token field → dispatch table doesn't call `.labels(task_id=...)` → no gauge child is created. `task.budget_exceeded` carries `tokens_used` AND does not terminate the task — perfect for fingerprinting the active-task ceiling. Documented inline in the test docstring.
 - **AC7 used direct `update_for(state, env)` dispatch (NOT JSONL → tail loop).** Reason: novel envelope types (`completely.new.synthetic_*`) don't round-trip through the schema registry — the registry rejects them at JSONL parse time. Direct dispatch to `update_for` is the cleanest path to exercise the `_EVENT_FAMILIES_SET` fallback. Assertions still scrape via public `/metrics` HTTP surface (P1-M2 lesson honoured).
@@ -429,6 +435,59 @@ $ uv run pytest -q -m "not slow" --ignore=tests/separability
 $ just bootstrap-verify
 ✓ bootstrap OK (14 workspace-member imports verified)
 ```
+
+---
+
+## Review Findings — pass-1 (2026-05-20)
+
+Pass-1 adversarial review on diff `1ee98b0..32ccd9a` (5 files, +869 / −6 lines). Three parallel reviewers (Sonnet): Blind Hunter (9 findings — 2H + 3M + 4L), Edge Case Hunter (3 findings — 0H + 0M + 3L, ACCEPT-WITH-RESERVATIONS), Acceptance Auditor (6 findings — 3 MAJOR markdown + 3 minor). Verdicts: 2× REVISE + 1× ACCEPT-with-reservations.
+
+After dedup → **17 unique findings** (2 HIGH, 6 MED, 9 LOW). Multi-lane convergences:
+- **`_terminated_task_ids_set` exact bound** (B5 + E3): tighten `<= 10_000` to `== 10_000` + emit 10_001 for eviction path coverage
+
+All 17 close per "fix all issues even minors" standing policy.
+
+### Patch — HIGH (2)
+
+- [x] [Review][Patch] **P1-H1 — AC3 gauge-cleanup assertion vacuously true; `task.execution.started` without `token_usage`/`tokens_used` payload means gauge children are NEVER materialized → cleanup invariant not tested at 10K scale** [tests/integration/test_metrics_cardinality.py:275-360, esp. line 344-348] — Solo HIGH: B1. `_update_task_tokens` checks `token_usage`/`tokens_used` payload fields; AC3 payloads contain only `{"task_id": "..."}`. Result: `tokens = None` → gauge.set() never called → no children exist → `.remove()` silently suppresses KeyError → assertion `len(_metrics) == 0` passes trivially with zero work done. **The load-bearing Story 10.4 P1-H3 LRU regression risk is not exercised at 10K scale.** Fix: (a) add `"tokens_used": i` to each `task.execution.started` payload so gauge children materialize; (b) add pre-cleanup assertion `assert len(list(state.task_tokens_spent._metrics)) == 10_000` BEFORE emitting `task.completed` events to prove children were created; (c) post-cleanup `== 0` assertion then becomes load-bearing.
+
+- [x] [Review][Patch] **P1-H2 — Inline comment misleads about direction: "tighten to `<= 52`" — but `<= 52` is LOOSER than `<= 51`** [tests/integration/test_metrics_cardinality.py:334-336] — Solo HIGH: B2. Comment says "AC3 self-verification says `<= 51`; we tighten to `<= 52`" — strict mathematical reversal: 52 is strictly LESS restrictive than 51. Future reviewers reading the test believe `<= 52` is more conservative than the spec; if cardinality drifts to 52 for a bad reason (e.g., 2 cursor-offset path children from day-rollover during test), the test silently passes. Fix: replace comment with: `# Post-drain bound is <= 52 (NOT <= 51 as spec D1 originally stated — this is one unit MORE PERMISSIVE than the spec baseline). Reason: persist_every_n_events=1 + first envelope causes the tail loop to persist the cursor, materializing one omb_metrics_subscriber_cursor_offset_bytes{path=...} child. The critical zero-leak invariant (task_tokens_spent._metrics empty) is asserted separately below.`
+
+### Patch — MED (6)
+
+- [x] [Review][Patch] **P1-M1 — `._metrics` private prometheus_client API used in 3 assertion locations; module docstring forbids private API access per Story 10.4 P1-M2 lesson** [tests/integration/test_metrics_cardinality.py:345, 347, 352, 466, 467] — Solo MED: B3. The `noqa: SLF001` suppresses the linter but contradicts the docstring claim at lines 29-30. P1-M2 lesson targeted `._value.get()` specifically; `._metrics` is the only way to count labeled gauge children (no public alternative exists). Fix: (a) update docstring at lines 29-30 to acknowledge: "EXCEPT `._metrics` for child-count assertions where no public API exists — pin `prometheus-client>=0.20,<1.0` in dev-deps to contain breakage risk"; (b) add inline comment at each usage explaining the exception.
+
+- [x] [Review][Patch] **P1-M2 — `_terminated_task_ids_set` bound assertion `<= 10_000` is trivially satisfied; 10K completions fill but never overflow the deque** [tests/integration/test_metrics_cardinality.py:352-354] — **2-lane: B5 + E3**. After exactly 10K `task.completed`, the deque is full (10K entries) but eviction never fires (would require 10001st completion). The LRU eviction path (`_remember_terminated_task` when `len == maxlen`) is unexercised. Fix: (a) emit 10_001 task pairs (not 10K) to force at least one eviction cycle; (b) change assertion to `assert len(state._terminated_task_ids_set) == 10_000` (exact — deque should be at maxlen after eviction); (c) update AC3 self-verification clause + breakdown comment to reflect 10_001 envelopes processed.
+
+- [x] [Review][Patch] **P1-M3 — AC7 `== 51` exact assertion fragile to future fixture changes (implicit assumption: tail loop never runs for `update_for()` direct calls)** [tests/integration/test_metrics_cardinality.py:622-625] — Solo MED: B4. AC7 calls `update_for` directly without writing JSONL → tail loop processes 0 bytes → no cursor persist → exact 51 baseline holds. If a future fixture change ever pre-warms the log with a real envelope, AC7 would fail mysteriously. Fix: add inline comment explaining the why: `# Exact 51 (not <= 52) is correct here because AC7 bypasses JSONL — calling update_for() directly. The tail loop processes 0 bytes, no cursor persist fires, no cursor_offset path child materializes. If this test ever uses LifespanManager + log writes, change to <= 52.`
+
+- [x] [Review][Patch] **P1-M4 — ADR-0005 line 309 says "Seven tests" but 6 tests were delivered** [docs/adr/0005-metrics-subscriber-derived-projection.md:309] — Solo MAJOR: A1. The numbered list (1–6) at line 309 follows "Seven tests fingerprint..." — one-char fix. Fix: replace "Seven" with "Six" at line 309. Verify the numbered list count below matches (1–6 items).
+
+- [x] [Review][Patch] **P1-M5 — ADR-0005 §Cardinality body line 250 contains stale `≤ 200` bound contradicting actual CI gate's `<= 52`** [docs/adr/0005-metrics-subscriber-derived-projection.md:248-252] — Solo MAJOR: A2. Pre-D1 wording: "the Story 10.5 regression test (10K varying task_ids ≤ 200 timeseries) enforces it programmatically." Operator confusion risk HIGH — first ADR-visible cardinality bound contradicts the test. Fix: replace `"10K varying task_ids ≤ 200 timeseries"` with `"10K varying task_ids ≤ 52 timeseries (51 baseline + 1 cursor-offset path child after first tail-loop persist — see Story 10.5 DAR Surprises)"`.
+
+- [x] [Review][Patch] **P1-M6 — AC4 step 5 spec `== 51` vs implementation `<= 52` divergence not individually called out in DAR Surprises** [_bmad-output/implementation-artifacts/10-5-...md DAR Surprises section + tests/integration/test_metrics_cardinality.py:459] — Solo MAJOR: A3. DAR's combined entry covers AC3 + AC4 mid-flight `<= 52` but the AC4 post-drain (step 5) `== 51 → <= 52` is not individually named. Traceability gap. Fix: expand the DAR Surprises bullet to explicitly state: "AC4 post-drain (step 5): spec said `== 51` (full cleanup); implementation asserts `<= 52` for the same cursor-offset-path-child reason as AC3. The critical zero-leak invariant remains asserted separately via `task_tokens_spent._metrics == 0`."
+
+### Patch — LOW (9)
+
+- [x] [Review][Patch] **P1-L1 — AC4 mid-flight lower bound `151 <= count_mid <= 152` relies on undocumented asyncio single-task invariant** [tests/integration/test_metrics_cardinality.py:430-436] — Solo LOW: E1. Between `_wait_for_total_appended` return and the next `/metrics` scrape, the asyncio event loop yields to the test coroutine. The tail loop's `events_appended_total.inc()` precedes `_update_task_tokens.set()` in `update_for()` — currently safe because single-task asyncio doesn't yield between them, but fragile to future refactors. Fix: add inline comment: `# 151 lower bound assumes asyncio single-task tail loop never yields between events_appended_total.inc() and _update_task_tokens.set() inside update_for(). If the tail loop is ever refactored to await mid-envelope, change lower bound to relax to range or add explicit synchronization barrier.`
+
+- [x] [Review][Patch] **P1-L2 — `_wait_for_total_appended` timeout error message omits last observed sum, blinds debugging window** [tests/integration/test_metrics_cardinality.py:197-198] — Solo LOW: E2. On 30s CI timeout for AC3, the error says "did not reach 20000 within 30s" but not "actual was 19847" — operator can't tell if tail loop is slow vs stuck. Fix: capture `last_observed_sum` in the polling loop, include in `AssertionError` message: `f"events_appended_total summed across families did not reach {expected} within {timeout_s}s; last observed sum: {last_observed_sum}"`.
+
+- [x] [Review][Patch] **P1-L3 — AC1 spec import list overclaims; only `_EVENT_FAMILIES`, `MetricsState`, `build_collectors` imported at module level** [spec AC1 line 22 + tests/integration/test_metrics_cardinality.py:53-57] — Solo LOW: A-minor-1. Spec lists `_ACTOR_KINDS`, `_TASK_LIFECYCLE_EVENT_TYPES`, `_SESSION_PHASES` but implementation only imports them locally inside `test_actor_kind_startup_assertion_catches_drift`. Implementation is cleaner. Fix: amend spec AC1 imports list to match actual (3 symbols at module level, 1 local import for AC6).
+
+- [x] [Review][Patch] **P1-L4 — ADR-0005 "Steady-state bound assertion" section may confuse unit-test (`<= 51`) vs HTTP-path (`<= 52`) contexts** [docs/adr/0005-...md lines 296-302 + 318-320] — Solo LOW: A-minor-2. Unit test at `<= 51` is correct for the pre-persist context; CI gate at `<= 52` is correct for full HTTP path. The two should be explicitly distinguished in the ADR. Fix: add a one-paragraph note distinguishing "pre-persist baseline (51)" vs "post-persist steady state (52)" with cross-reference to each test.
+
+- [x] [Review][Patch] **P1-L5 — Spec AC4 step 2 says `task.execution.started` but implementation used `task.budget_exceeded` to materialize gauge children; documented inline but spec not amended** [spec AC4 step 2 line 76 + tests/integration/test_metrics_cardinality.py + DAR Surprises] — Solo LOW: A-minor-3. A future executor reading AC4 in isolation would write the wrong envelope type. Fix: amend spec AC4 step 2 to read: "Emit 100 envelopes with `token_usage`/`tokens_used` populated (use `task.execution.started` if payload supports tokens, OR `task.budget_exceeded` per the actual implementation deviation — see DAR Surprises)."
+
+- [x] [Review][Patch] **P1-L6 — Spec AC9/D5 rationale incorrect: `mypy.ini` has `[mypy-tests.*] ignore_errors = True`; `tests/integration/` is NOT in strict scope by default** [spec AC9 + D5] — Solo LOW: A-missing-2. D5 conclusion ("mypy strict scope unchanged") is right but stated reason ("`tests/integration/` already in strict scope per Story 10.4 baseline") is wrong — could mislead future executors. Fix: amend D5 rationale: "tests/integration/ is excluded from strict scope via `[mypy-tests.*] ignore_errors = True` in mypy.ini; Story 10.5's test file inherits this, so mypy --strict baseline stays at 126 source files."
+
+- [x] [Review][Patch] **P1-L7 — `_count_canonical_timeseries(body)` helper not unit-tested; a bug in the `_created` filter would silently inflate/deflate all cardinality counts** [tests/integration/test_metrics_cardinality.py:_count_canonical_timeseries] — Solo LOW: B-missing. The load-bearing helper has no direct test. Fix: add `test_count_canonical_timeseries_filters_created_metadata` — construct a synthetic prometheus exposition body with both `_created` and non-`_created` samples, assert the helper returns the expected non-`_created` count.
+
+- [x] [Review][Patch] **P1-L8 — `task.stop_requested` terminal cleanup path not exercised by any test; only `task.completed` used** [tests/integration/test_metrics_cardinality.py — all tests] — Solo LOW: B-missing. `_update_task_lifecycle_and_clear_task_gauge` handles both terminal events; AC3 + AC4 only exercise `task.completed`. Fix: add `test_task_stop_requested_also_cleans_gauge` — emit `task.execution.started` + `task.stop_requested`, assert gauge child removed (mirrors AC3 cleanup invariant for the second terminal path).
+
+- [x] [Review][Patch] **P1-L9 — Ghost-gauge regression path not tested; `task.budget_exceeded` after `task.completed` for same task_id is the scenario `_terminated_task_ids_set` was built to prevent** [tests/integration/test_metrics_cardinality.py — no test] — Solo LOW: B-missing + E-missing. Story 10.4 P1-H3 added the `_terminated_task_ids_set` ghost-gauge guard. No Story 10.5 test exercises this out-of-order sequence at integration level. Fix: add `test_ghost_gauge_prevented_by_terminated_task_ids` — emit `task.execution.started` (gauge materializes) → `task.completed` (gauge cleared, task_id remembered) → `task.budget_exceeded` for same task_id; assert gauge NOT re-created (`task_tokens_spent._metrics` empty).
+
+### Deferred (none — all 17 addressed in this pass per "fix all issues even minors")
 
 ---
 

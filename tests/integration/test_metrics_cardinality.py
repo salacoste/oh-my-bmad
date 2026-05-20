@@ -27,7 +27,12 @@ and ``events`` packages only — NO ``services/registry-*`` imports.
 
 Per Story 10.4 P1-M2 lesson: cardinality is always counted via
 ``prometheus_client.parser.text_string_to_metric_families`` on the
-``/metrics`` body — NEVER via the private ``counter._value.get()`` API.
+``/metrics`` body — NEVER via the private ``counter._value.get()`` API
+— EXCEPT ``._metrics`` for child-count assertions where no public
+alternative exists (per Story 10.5 P1-M1).  Containment: pin
+``prometheus-client>=0.20,<1.0`` in dev-deps so a breaking-change
+release cannot silently invalidate these assertions; the inline
+comments at each ``._metrics`` usage flag the exception explicitly.
 """
 
 from __future__ import annotations
@@ -187,14 +192,20 @@ async def _wait_for_total_appended(
     """
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
     deadline = asyncio.get_running_loop().time() + timeout_s
+    last_observed_sum: float = 0.0
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         while asyncio.get_running_loop().time() < deadline:
             r = await client.get("/metrics")
-            if r.status_code == 200 and _parse_appended_sum(r.text) >= expected:
-                return
+            if r.status_code == 200:
+                last_observed_sum = _parse_appended_sum(r.text)
+                if last_observed_sum >= expected:
+                    return
             await asyncio.sleep(0.01)
+    # P1-L2 — surface last observed sum so a CI timeout distinguishes
+    # "tail loop is slow" from "tail loop is stuck at N envelopes".
     raise AssertionError(
-        f"events_appended_total summed across families did not reach {expected} within {timeout_s}s"
+        f"events_appended_total summed across families did not reach {expected} "
+        f"within {timeout_s}s; last observed sum: {last_observed_sum}"
     )
 
 
@@ -275,50 +286,98 @@ async def test_baseline_cardinality_at_steady_state(
 async def test_cardinality_under_10k_varying_task_ids(
     cardinality_test_app: tuple[FastAPI, Path],
 ) -> None:
-    """AC3 — 10K distinct task_id pairs (started + completed) → baseline.
+    """AC3 — 10_001 distinct task_id pairs (started + completed) → baseline.
 
-    Emits 20000 envelopes (10000 pairs) into the test event-log; the tail
-    loop's synchronous cleanup on ``task.completed`` removes every per-
-    task gauge child by scrape time.  The ``_terminated_task_ids`` deque
-    is bounded at ``maxlen=10_000`` (Story 10.4 P1-H3) — this test
-    exercises that exact bound.
+    Emits 20_002 envelopes (10_001 pairs) into the test event-log so the
+    ``_terminated_task_ids`` LRU (``maxlen=10_000``, Story 10.4 P1-H3)
+    is forced into its eviction path at least once.  Two-phase
+    verification (P1-H1 pass-1 review fix):
+
+      Phase 1 — drain the 10_001 ``task.execution.started`` envelopes
+                (each carrying ``tokens_used``) and assert exactly
+                10_000 per-task gauge children materialise BEFORE any
+                terminator is processed.  This proves the cleanup
+                invariant has real work to do.  Asserting on 10_000
+                (not 10_001) is correct here: by the time we observe
+                the post-Phase-1 state, the tail loop may already have
+                started consuming the contiguous block of completers
+                that the writer wrote AFTER the starters; see inline
+                comment below for the workaround.
+
+      Phase 2 — emit the matching 10_001 ``task.completed`` terminators;
+                wait for the full 20_002 envelope drain; assert zero
+                per-task gauge children AND that
+                ``_terminated_task_ids_set`` is at the LRU bound
+                (``== 10_000``, exact — proves the eviction path
+                fired).
 
     Wall-clock budget: 30 seconds on a typical CI runner (D4 from spec).
+
+    Per Story 10.5 P1-H1 review patch: each ``task.execution.started``
+    payload carries ``tokens_used=i`` so the per-task gauge children
+    actually materialise.  Without this field the gauge updater is a
+    no-op (``tokens is None`` branch) and the cleanup assertion below
+    would be vacuously satisfied — masking a P1-H3 LRU regression.
     """
     app, event_dir = cardinality_test_app
     log_path = _today_log_path(event_dir)
+    state: MetricsState = app.state.metrics
 
-    # Build 20K envelopes ahead-of-time so writing dominates the wall-clock,
-    # not envelope construction.  Each task_id is a distinct UUID-like
-    # string; pairs are emitted contiguously so the cleanup happens
-    # synchronously in the tail loop.
-    envs: list[EventEnvelope] = []
-    for i in range(10000):
-        task_id = f"t-cardinality-10k-{i:08d}"
-        envs.append(
-            _make_envelope(
-                "task.execution.started",
-                event_id_index=2 * i,
-                payload={"task_id": task_id},
-            )
-        )
-        envs.append(
-            _make_envelope(
-                "task.completed",
-                event_id_index=2 * i + 1,
-                payload={
-                    "task_id": task_id,
-                    "summary": "10K-test",
-                    "files_changed": 0,
-                    "lines_added": 0,
-                    "lines_removed": 0,
-                },
-            )
-        )
-    _write_envelopes(log_path, envs)
+    # Per P1-M2 — 10_001 pairs (not 10_000) forces at least one LRU
+    # eviction cycle.  The deque ``maxlen=10_000`` evicts the oldest
+    # entry on the 10_001st append; without this we'd have a full deque
+    # but the eviction code path stays unexercised.
+    n_pairs = 10_001
 
-    # Wait for the tail loop to drain all 20K envelopes.
-    await _wait_for_total_appended(app, 20000.0, timeout_s=30.0)
+    # Phase 1: write only the starters first.  Each carries
+    # ``tokens_used=i`` so ``_update_task_tokens`` materialises a per-
+    # task gauge child.  Without this field, gauge children are NEVER
+    # created and the Phase-2 cleanup assertion would be vacuous (P1-H1
+    # review fix).
+    started_envs: list[EventEnvelope] = [
+        _make_envelope(
+            "task.execution.started",
+            event_id_index=2 * i,
+            payload={"task_id": f"t-cardinality-10k-{i:08d}", "tokens_used": i},
+        )
+        for i in range(n_pairs)
+    ]
+    _write_envelopes(log_path, started_envs)
+    await _wait_for_total_appended(app, float(n_pairs), timeout_s=30.0)
+
+    # Pre-cleanup assertion: at least 10_000 per-task gauge children
+    # should be alive (10_001 minted minus at most 1 not-yet-processed).
+    # We assert ``>= 10_000`` (not exactly 10_001) because the tail loop
+    # may yield mid-batch — the load-bearing invariant is "gauges DID
+    # materialise" so the Phase-2 cleanup has real work.  P1-H1 review
+    # patch — without this, the post-cleanup assertion was vacuously
+    # true.
+    alive_before = len(list(state.task_tokens_spent._metrics))  # noqa: SLF001 — P1-M1 private API exception (no public child-count surface)
+    assert alive_before >= 10_000, (
+        f"per-task gauge children did not materialise as expected before "
+        f"cleanup: got {alive_before}, expected >= 10_000.  This means the "
+        f"P1-H1 cleanup invariant below would be vacuously satisfied — the "
+        f"test would not catch a P1-H3 LRU regression."
+    )
+
+    # Phase 2: write the 10_001 terminators.
+    completed_envs: list[EventEnvelope] = [
+        _make_envelope(
+            "task.completed",
+            event_id_index=2 * i + 1,
+            payload={
+                "task_id": f"t-cardinality-10k-{i:08d}",
+                "summary": "10K-test",
+                "files_changed": 0,
+                "lines_added": 0,
+                "lines_removed": 0,
+            },
+        )
+        for i in range(n_pairs)
+    ]
+    _write_envelopes(log_path, completed_envs)
+    # Wait for the tail loop to drain all 20_002 envelopes.
+    await _wait_for_total_appended(app, float(2 * n_pairs), timeout_s=30.0)
 
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -328,41 +387,50 @@ async def test_cardinality_under_10k_varying_task_ids(
 
     count = _count_canonical_timeseries(body)
     breakdown = _family_breakdown(body)
-    # Note: the tail loop also persists the cursor, which materialises a
-    # single ``metrics_subscriber_cursor_offset_bytes{path=...}`` child.
-    # So the expected steady-state count post-drain is 51 (baseline) + 1
-    # (cursor-offset child) = 52.  AC3 self-verification says "<= 51"; we
-    # tighten to "<= 52" to account for the persist-time gauge child.
-    # The CRITICAL invariant is that NO per-task gauge children leaked.
+    # P1-H2 review patch — post-drain bound is <= 52 (NOT <= 51 as spec
+    # D1 originally stated — this is one unit MORE PERMISSIVE than the
+    # spec baseline).  Reason: ``persist_every_n_events=1`` + the first
+    # envelope causes the tail loop to persist the cursor, materialising
+    # one ``omb_metrics_subscriber_cursor_offset_bytes{path=...}`` child.
+    # The critical zero-leak invariant (``task_tokens_spent._metrics``
+    # empty) is asserted separately below.
     assert count <= 52, (
         f"10K cardinality drift: got {count} canonical timeseries, expected <= 52 "
         f"(51 baseline + 1 cursor-offset path child). Breakdown: {breakdown}"
     )
 
     # Critical: the per-task gauge has zero labelled children after
-    # cleanup.  This is the load-bearing P1-H3 invariant.
-    state: MetricsState = app.state.metrics
-    assert len(list(state.task_tokens_spent._metrics)) == 0, (  # noqa: SLF001
-        f"task_tokens_spent leaked {len(list(state.task_tokens_spent._metrics))} "  # noqa: SLF001
-        f"gauge children after 10K cleanup"
+    # cleanup.  This is the load-bearing P1-H3 invariant — and per P1-H1
+    # is no longer vacuously true (gauges DID materialise in Phase 1).
+    leaked = len(list(state.task_tokens_spent._metrics))  # noqa: SLF001 — P1-M1 private API exception (no public child-count surface)
+    assert leaked == 0, (
+        f"task_tokens_spent leaked {leaked} gauge children after "
+        f"{n_pairs}-pair cleanup (P1-H3 LRU regression)"
     )
 
-    # The ``_terminated_task_ids`` LRU is bounded at maxlen=10_000 — after
-    # 10K completions the set MUST NOT exceed that bound.
-    assert len(state._terminated_task_ids_set) <= 10_000, (  # noqa: SLF001
-        f"_terminated_task_ids_set grew to {len(state._terminated_task_ids_set)} > 10_000"  # noqa: SLF001
+    # P1-M2 review patch — exact LRU bound after 10_001 completions.
+    # The deque ``maxlen=10_000`` MUST have evicted exactly 1 entry,
+    # leaving the companion set at exactly 10_000.  ``== 10_000`` (not
+    # ``<= 10_000``) is load-bearing: it proves the eviction path
+    # (``_remember_terminated_task`` when ``len == maxlen``) actually
+    # fired.
+    terminated_count = len(state._terminated_task_ids_set)  # noqa: SLF001 — P1-M1 private API exception (no public set-size surface)
+    assert terminated_count == 10_000, (
+        f"_terminated_task_ids_set size = {terminated_count}; "
+        f"expected exact 10_000 (LRU eviction path must have fired "
+        f"on the 10_001st completion — P1-M2 review patch)"
     )
 
-    # Proof we actually processed the 20K envelopes (not just a subset).
+    # Proof we actually processed the 20_002 envelopes (not just a subset).
     for family in text_string_to_metric_families(body):
         for sample in family.samples:
             if (
                 sample.name == "omb_events_appended_total"
                 and sample.labels.get("event_family") == "task"
             ):
-                assert float(sample.value) >= 20000.0, (
+                assert float(sample.value) >= float(2 * n_pairs), (
                     f"events_appended_total{{event_family=task}} = {sample.value}; "
-                    f"expected >= 20000 (10K started + 10K completed)"
+                    f"expected >= {2 * n_pairs} ({n_pairs} started + {n_pairs} completed)"
                 )
                 break
 
@@ -428,6 +496,16 @@ async def test_cardinality_with_n_concurrent_active_tasks(
     # Baseline (51) + cursor-offset path child (1 — tail loop persists) +
     # N per-task gauge children = 51 + 1 + 100 = 152.
     # We assert >= 151 (baseline+N) and <= 152 (with one persist-cycle).
+    # P1-L1 review patch — the 151 lower bound assumes the asyncio
+    # single-task tail loop never yields between
+    # ``events_appended_total.inc()`` and ``_update_task_tokens.set()``
+    # inside ``update_for()``.  This invariant holds today (single-task
+    # asyncio + no ``await`` inside ``update_for``) but is fragile to
+    # future refactors.  If the tail loop is ever refactored to ``await``
+    # mid-envelope, relax the lower bound or add an explicit
+    # synchronisation barrier (e.g. drain to ``events_appended_total ==
+    # 2N`` AND then poll until ``len(state.task_tokens_spent._metrics)
+    # >= N``).
     assert 151 <= count_mid <= 152, (
         f"mid-flight cardinality drift: got {count_mid}, expected 151..152 "
         f"(51 baseline + {n_tasks} per-task gauges +/- 1 cursor-offset path child). "
@@ -463,6 +541,7 @@ async def test_cardinality_with_n_concurrent_active_tasks(
     )
 
     state: MetricsState = app.state.metrics
+    # noqa: SLF001 — P1-M1 private API exception (no public child-count surface)
     assert len(list(state.task_tokens_spent._metrics)) == 0, (  # noqa: SLF001
         "per-task gauge children leaked after full N=100 cleanup"
     )
@@ -618,8 +697,206 @@ async def test_envelope_with_unknown_family_falls_to_unknown_bucket(
 
     # Cardinality stays at baseline (per-task gauge has zero children
     # since no token-bearing envelope was dispatched).
+    # P1-M3 review patch — exact ``== 51`` (not ``<= 52``) is correct
+    # here because AC7 bypasses JSONL: it calls ``update_for`` directly.
+    # The tail loop processes 0 bytes, no cursor persist fires, so no
+    # ``omb_metrics_subscriber_cursor_offset_bytes{path=...}`` child
+    # materialises.  If a future fixture change ever pre-warms the log
+    # with a real envelope (or wires this test through
+    # ``LifespanManager + log writes``), relax to ``<= 52``.
     count = _count_canonical_timeseries(body)
     assert count == 51, (
         f"AC7 cardinality drift: got {count}, expected 51 (no novel families "
         f"created). Breakdown: {_family_breakdown(body)}"
+    )
+
+
+# ===========================================================================
+# P1-L7 — Unit test for the ``_count_canonical_timeseries`` helper itself.
+# ===========================================================================
+
+
+@pytest.mark.integration
+def test_count_canonical_timeseries_filters_created_metadata() -> None:
+    """P1-L7 — ``_count_canonical_timeseries`` filters ``_created`` samples.
+
+    The load-bearing helper used by every other test in this file
+    deserves a direct unit test — a bug in the ``_created`` filter would
+    silently inflate or deflate every cardinality count and the failure
+    mode would manifest as confusing AC drift rather than a clear
+    "helper is broken" signal.
+
+    Construct a synthetic Prometheus exposition body with both
+    ``_created`` metadata samples (TYPE-counter sidecars emitted by
+    ``prometheus_client`` for every counter labelset) and non-
+    ``_created`` canonical samples; assert the helper returns the
+    non-``_created`` count exactly.
+    """
+    # Synthetic exposition body: 3 canonical counter samples + 3
+    # ``_created`` metadata samples + 1 canonical gauge sample = 4
+    # canonical timeseries.  The ``_created`` filter MUST exclude the
+    # 3 metadata lines without touching the 4 canonical ones.
+    body = """\
+# HELP omb_events_appended_total events appended
+# TYPE omb_events_appended_total counter
+omb_events_appended_total{event_family="task"} 5.0
+omb_events_appended_total_created{event_family="task"} 1.7e9
+omb_events_appended_total{event_family="session"} 3.0
+omb_events_appended_total_created{event_family="session"} 1.7e9
+omb_events_appended_total{event_family="unknown"} 0.0
+omb_events_appended_total_created{event_family="unknown"} 1.7e9
+# HELP omb_lag_seconds tail-loop lag
+# TYPE omb_lag_seconds gauge
+omb_lag_seconds 0.001
+"""
+    count = _count_canonical_timeseries(body)
+    assert count == 4, (
+        f"_count_canonical_timeseries miscount: got {count}, expected 4 "
+        f"(3 canonical counter samples + 1 canonical gauge sample; the 3 "
+        f"_created metadata samples must be filtered)."
+    )
+
+
+# ===========================================================================
+# P1-L8 — ``task.stop_requested`` terminal cleanup mirrors ``task.completed``.
+# ===========================================================================
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_task_stop_requested_also_cleans_gauge(
+    cardinality_test_app: tuple[FastAPI, Path],
+) -> None:
+    """P1-L8 — ``task.stop_requested`` clears the per-task gauge child.
+
+    ``_update_task_lifecycle_and_clear_task_gauge`` is wired for BOTH
+    terminal envelope types (``task.completed`` and
+    ``task.stop_requested``).  AC3 / AC4 only exercise ``task.completed``
+    so the ``task.stop_requested`` cleanup path is untested at
+    integration level.  This test fingerprints that path.
+
+    Sequence: emit ``task.execution.started`` with ``tokens_used`` (so a
+    per-task gauge child materialises) → emit ``task.stop_requested``
+    for the same task_id; assert the gauge child is removed.
+    """
+    app, event_dir = cardinality_test_app
+    log_path = _today_log_path(event_dir)
+    state: MetricsState = app.state.metrics
+    task_id = "t-stop-requested-fingerprint-0001"
+
+    # Phase 1: materialise a per-task gauge child.
+    started_env = _make_envelope(
+        "task.execution.started",
+        event_id_index=500_000,
+        payload={"task_id": task_id, "tokens_used": 42},
+    )
+    _write_envelopes(log_path, [started_env])
+    await _wait_for_total_appended(app, 1.0, timeout_s=15.0)
+
+    # Sanity: gauge child IS alive before the terminator.
+    alive_before = len(list(state.task_tokens_spent._metrics))  # noqa: SLF001 — P1-M1 private API exception (no public child-count surface)
+    assert alive_before == 1, (
+        f"per-task gauge child did not materialise after task.execution.started "
+        f"with tokens_used: got {alive_before} children, expected 1.  This means "
+        f"the cleanup path below would be vacuously satisfied."
+    )
+
+    # Phase 2: terminate via ``task.stop_requested`` (NOT task.completed).
+    stop_env = _make_envelope(
+        "task.stop_requested",
+        event_id_index=500_001,
+        payload={"task_id": task_id, "reason": "test-fingerprint"},
+    )
+    _write_envelopes(log_path, [stop_env])
+    await _wait_for_total_appended(app, 2.0, timeout_s=15.0)
+
+    # Gauge child MUST be cleaned (same invariant as task.completed).
+    leaked = len(list(state.task_tokens_spent._metrics))  # noqa: SLF001 — P1-M1 private API exception (no public child-count surface)
+    assert leaked == 0, (
+        f"task_tokens_spent leaked {leaked} gauge children after "
+        f"task.stop_requested cleanup (terminal-path regression)"
+    )
+    # And the task_id is remembered in the ghost-gauge guard set.
+    assert task_id in state._terminated_task_ids_set, (  # noqa: SLF001 — P1-M1 private API exception (no public set-membership surface)
+        f"task_id {task_id!r} not in _terminated_task_ids_set after "
+        f"task.stop_requested — ghost-gauge guard not armed"
+    )
+
+
+# ===========================================================================
+# P1-L9 — Ghost-gauge prevention: ``task.budget_exceeded`` after terminator.
+# ===========================================================================
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_ghost_gauge_prevented_by_terminated_task_ids(
+    cardinality_test_app: tuple[FastAPI, Path],
+) -> None:
+    """P1-L9 — out-of-order ``task.budget_exceeded`` MUST NOT resurrect gauge.
+
+    Fingerprints Story 10.4 P1-H3's ghost-gauge guard at the integration
+    layer.  Sequence:
+
+      1. ``task.execution.started`` (with ``tokens_used``) →
+         per-task gauge child materialises.
+      2. ``task.completed`` → gauge child cleared, task_id appended to
+         ``_terminated_task_ids_set``.
+      3. ``task.budget_exceeded`` for the SAME task_id (out-of-order
+         arrival simulating replay or clock skew).
+
+    Without the guard added in Story 10.4 P1-H3, step 3 would call
+    ``state.task_tokens_spent.labels(task_id=...).set(...)`` and
+    resurrect a gauge child with no subsequent cleanup — a monotonic
+    cardinality leak.  The guard short-circuits via the
+    ``_terminated_task_ids_set`` membership check.
+    """
+    app, event_dir = cardinality_test_app
+    log_path = _today_log_path(event_dir)
+    state: MetricsState = app.state.metrics
+    task_id = "t-ghost-gauge-fingerprint-0001"
+
+    started_env = _make_envelope(
+        "task.execution.started",
+        event_id_index=600_000,
+        payload={"task_id": task_id, "tokens_used": 10},
+    )
+    completed_env = _make_envelope(
+        "task.completed",
+        event_id_index=600_001,
+        payload={
+            "task_id": task_id,
+            "summary": "ghost-gauge-test",
+            "files_changed": 0,
+            "lines_added": 0,
+            "lines_removed": 0,
+        },
+    )
+    # Out-of-order token-bearing envelope arrives AFTER the terminator.
+    budget_env = _make_envelope(
+        "task.budget_exceeded",
+        event_id_index=600_002,
+        payload={
+            "task_id": task_id,
+            "token_limit": 100,
+            "tokens_used": 99,
+            "step": 1,
+        },
+    )
+    _write_envelopes(log_path, [started_env, completed_env, budget_env])
+    await _wait_for_total_appended(app, 3.0, timeout_s=15.0)
+
+    # Critical: the gauge MUST NOT have a child for this task_id.
+    # The Story 10.4 P1-H3 guard inside ``_update_task_tokens`` short-
+    # circuits because the task_id is in ``_terminated_task_ids_set``.
+    leaked = len(list(state.task_tokens_spent._metrics))  # noqa: SLF001 — P1-M1 private API exception (no public child-count surface)
+    assert leaked == 0, (
+        f"ghost-gauge regression: task_tokens_spent has {leaked} children "
+        f"after out-of-order task.budget_exceeded; the _terminated_task_ids "
+        f"guard (Story 10.4 P1-H3) must short-circuit but did not."
+    )
+    # And the task_id is still in the guard set (the guard fired).
+    assert task_id in state._terminated_task_ids_set, (  # noqa: SLF001 — P1-M1 private API exception (no public set-membership surface)
+        f"task_id {task_id!r} dropped from _terminated_task_ids_set — "
+        f"future ghost-gauge events would not be guarded"
     )

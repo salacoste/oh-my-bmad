@@ -247,8 +247,11 @@ lifecycle, secret-access counters, event-log append-rate counter, per-
 task token-spend gauge).  Steady-state cardinality post-Story-10.4
 sits at ~50 timeseries — well under the operator-dashboard pain point
 (thousands).  The discipline below MUST hold for every future metric
-extension; the Story 10.5 regression test (10K varying task_ids ≤ 200
-timeseries) enforces it programmatically.
+extension; the Story 10.5 regression test (10_001 varying ``task_id``
+pairs through the full ``/metrics`` HTTP scrape path → ≤ 52 timeseries
+post-drain: 51 baseline + 1 cursor-offset path child after the first
+tail-loop persist — see Story 10.5 DAR Surprises) enforces it
+programmatically.
 
 ### Bounded-enum policy (load-bearing)
 
@@ -299,6 +302,20 @@ envelopes through the dispatch table and asserts
 ``len(<canonical_timeseries>) <= 51`` (where canonical timeseries
 filters out ``_created`` bookkeeping samples).
 
+**Pre-persist (51) vs post-persist (52) — context-dependent bound
+(Story 10.5 pass-1 P1-L4):** the unit test above asserts ``<= 51``
+because it calls ``update_for`` directly against an in-process
+``MetricsState`` — the cursor-persistence path never fires, so no
+``omb_metrics_subscriber_cursor_offset_bytes{path=...}`` labelled child
+materialises.  The integration tests in
+``tests/integration/test_metrics_cardinality.py`` assert ``<= 52`` (one
+unit more permissive) because they exercise the FULL HTTP path: the
+tail loop runs, the cursor is persisted after the first envelope, and a
+single cursor-offset path child appears in the exposition.  The two
+contexts share an invariant ("per-task gauge children are zero
+post-cleanup") but differ on the cursor-offset child — DO NOT
+conflate.  See cross-references in §CI regression gate below.
+
 ### CI regression gate (Story 10.5 amendment, 2026-05-20)
 
 The runtime contract is enforced by
@@ -306,18 +323,24 @@ The runtime contract is enforced by
 integration suite that exercises the FULL ``/metrics`` HTTP scrape
 path via ``httpx.AsyncClient + ASGITransport`` against
 ``build_app(...)`` (the same path Prometheus scrape would take).
-Seven tests fingerprint the load-bearing invariants documented above:
+Nine tests fingerprint the load-bearing invariants documented above
+(six AC-derived + three pass-1 review additions — Story 10.5 P1-L7,
+P1-L8, P1-L9):
 
 1. ``test_baseline_cardinality_at_steady_state`` — asserts exact 51
    canonical timeseries on a fresh ``build_app`` with no envelopes
    emitted.  Per-family breakdown surfaces in the failure message so
    any drift is immediately diagnosable.
 2. ``test_cardinality_under_10k_varying_task_ids`` (``@pytest.mark.slow``)
-   — emits 20000 envelopes (10K distinct ``task_id`` pairs of
-   ``task.execution.started`` + ``task.completed``); asserts cardinality
-   returns to baseline after synchronous tail-loop cleanup and that
-   the ``_terminated_task_ids`` LRU stays at its 10K bound.  Wall-clock
-   budget: 30 seconds (D4).
+   — emits 20_002 envelopes (10_001 distinct ``task_id`` pairs of
+   ``task.execution.started`` + ``task.completed``; 10_001 pairs forces
+   the ``_terminated_task_ids`` LRU eviction path to fire — Story 10.5
+   P1-M2 pass-1 fix).  Each ``task.execution.started`` carries
+   ``tokens_used`` so per-task gauge children materialise — without
+   this the cleanup assertion was vacuously true (P1-H1 pass-1 fix).
+   Asserts cardinality ≤ 52 post-drain and that
+   ``_terminated_task_ids_set`` is at exactly 10_000 (the LRU bound).
+   Wall-clock budget: 30 seconds (D4).
 3. ``test_cardinality_with_n_concurrent_active_tasks`` — fingerprints
    the operational ``N ~ 100`` active-task ceiling: 100 distinct active
    tasks → baseline + 100 per-task gauge children; after full cleanup
@@ -333,6 +356,18 @@ Seven tests fingerprint the load-bearing invariants documented above:
    50 distinct novel envelope families fold into the pre-populated
    ``"unknown"`` ``event_family`` bucket; no novel labelled children
    are materialised.
+7. ``test_count_canonical_timeseries_filters_created_metadata`` —
+   pass-1 P1-L7: direct unit test for the
+   ``_count_canonical_timeseries`` helper used by every other test;
+   guarantees a regression in the ``_created`` metadata filter is
+   caught with a clear signal rather than masquerading as an AC drift.
+8. ``test_task_stop_requested_also_cleans_gauge`` — pass-1 P1-L8:
+   fingerprints the SECOND terminal envelope cleanup path
+   (``task.stop_requested``), which AC3 / AC4 do not exercise.
+9. ``test_ghost_gauge_prevented_by_terminated_task_ids`` — pass-1
+   P1-L9: out-of-order ``task.budget_exceeded`` after ``task.completed``
+   MUST NOT resurrect the gauge child; fingerprints the Story 10.4
+   P1-H3 guard at the integration level.
 
 If a future contributor accidentally introduces a high-cardinality
 label (e.g., ``actor_id`` instead of ``actor_kind``, or ``task_id``
