@@ -52,6 +52,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
+from urllib.parse import quote
 
 import cachetools
 import httpx
@@ -70,7 +71,7 @@ from events import (
     new_event_id,
     new_uuid7,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from clawhip_daemon.adapters.telegram_outbound import TelegramOutbound
 
@@ -127,6 +128,31 @@ class _TaskBindingResponse(BaseModel):
     reply_to_message_id: int | None = Field(default=None)
 
 
+def _render_task_thread_link(chat_id: int, message_id: int, task_id: str) -> str:
+    """Story 11.3 review P8: HTML anchor for the original task thread.
+
+    Supergroup chat IDs in Telegram are negative int64 values that need the
+    ``-100`` prefix stripped before they can be embedded in a public
+    ``https://t.me/c/<short>/<msg>`` link. Private chats use the
+    ``tg://openmessage`` scheme. All embedded components are URL-encoded
+    via :func:`urllib.parse.quote` so a stray character cannot break the
+    resulting hyperlink.
+    """
+    safe_task = html.escape(task_id)
+    msg_quoted = quote(str(message_id), safe="")
+    if chat_id < 0:
+        # Telegram supergroup convention: external short id strips the
+        # -100<prefix> from the negative chat_id (chat_id - 1_000_000_000_000
+        # in absolute value).
+        short = abs(chat_id) - 1_000_000_000_000
+        short_quoted = quote(str(short), safe="")
+        href = f"https://t.me/c/{short_quoted}/{msg_quoted}"
+    else:
+        chat_quoted = quote(str(chat_id), safe="")
+        href = f"tg://openmessage?chat_id={chat_quoted}&message_id={msg_quoted}"
+    return f'<a href="{href}">task {safe_task}</a>'
+
+
 class _InboxStateResponse(BaseModel):
     """Typed parse of GET /v1/approvals/inbox/{operator_chat_id} (Story 11.3 D5).
 
@@ -134,15 +160,20 @@ class _InboxStateResponse(BaseModel):
     clawhip-daemon needs to make the routing decision: only
     ``inbox_thread_id`` is consumed today, but ``opened_at`` /
     ``opened_by_actor_id`` are kept in the wire model for forensic logging
-    and forward-compat with future renderers. ``extra="ignore"`` so
-    new fields don't break the sink.
+    and forward-compat with future renderers.
+
+    Story 11.3 review P15: ``frozen=True`` + ``strict=True`` align with the
+    codebase-wide pydantic-model convention (no accidental mutation; no
+    coercion from non-int/str types). ``opened_at`` uses ``AwareDatetime``
+    so naive timestamps are rejected at parse time, matching the Story
+    11.2 KeyRotatedPayload pattern.
     """
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(frozen=True, strict=True, extra="ignore")
 
     operator_chat_id: int
     inbox_thread_id: int
-    opened_at: datetime
+    opened_at: AwareDatetime
     opened_by_actor_id: str
 
 
@@ -304,7 +335,12 @@ class RegistryAPIReadClient:
         response.raise_for_status()
 
         try:
-            inbox = _InboxStateResponse.model_validate(response.json())
+            # Story 11.3 review P15: ``_InboxStateResponse`` is strict, so
+            # parse from raw JSON bytes (pydantic converts the ISO string
+            # to ``AwareDatetime`` during JSON decoding) rather than from
+            # ``response.json()`` whose plain dict would be rejected by
+            # the strict ``AwareDatetime`` validator.
+            inbox = _InboxStateResponse.model_validate_json(response.content)
         except pydantic.ValidationError:
             _log.warning(
                 "telegram_sink: registry-api inbox response parse failed",
@@ -2079,13 +2115,22 @@ class TelegramSink:
             )
             if pinned_thread_id is not None:
                 target_thread_id = pinned_thread_id
-                text = (
-                    f"{text}\n\n"
-                    f"↩ Original task thread: "
-                    f'<a href="tg://openmessage?chat_id={chat_id}'
-                    f'&message_id={reply_to_message_id}">'
-                    f"task {html.escape(task_id)}</a>"
-                )
+                # Story 11.3 review P8 cluster:
+                # (a) only render the footer when ``reply_to_message_id``
+                #     is not None — otherwise the URL contains literal
+                #     "None" and is a broken link;
+                # (b) for supergroup chat_ids (negative int64) emit a
+                #     ``https://t.me/c/<abs(chat_id) - 1000000000000>/<msg>``
+                #     deep link — Telegram supergroup IDs encode that way
+                #     and ``tg://openmessage`` is unreliable for them;
+                # (c) URL-encode all path/query components so a stray
+                #     character cannot break the link.
+                if reply_to_message_id is not None:
+                    text = (
+                        f"{text}\n\n"
+                        f"↩ Original task thread: "
+                        f"{_render_task_thread_link(chat_id, reply_to_message_id, task_id)}"
+                    )
 
         await self._outbound.send_to_thread(
             chat_id=chat_id,

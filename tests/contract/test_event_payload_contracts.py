@@ -288,7 +288,13 @@ def test_approval_inbox_opened_registered_at_1_1_0() -> None:
 
 
 def test_approval_inbox_opened_fixture_parses() -> None:
-    """Story 11.3 AC3 — frozen JSON fixture round-trips through EventEnvelope."""
+    """Story 11.3 AC3 — frozen JSON fixture round-trips through EventEnvelope.
+
+    Story 11.3 review P31: also asserts the re-serialized envelope keeps the
+    same KEY SET as the fixture (structural fidelity) — ms-precision
+    serialization differences are not flagged here because canonical
+    timestamp formatting is a separate contract (Story 2.1).
+    """
     blob = _load_fixture("approval.inbox_opened.v1.1.0.json")
     env = EventEnvelope.model_validate_json(blob)
     assert env.type == "approval.inbox_opened"
@@ -296,6 +302,15 @@ def test_approval_inbox_opened_fixture_parses() -> None:
     expected_payload = json.loads(blob)["payload"]
     payload_data = env.payload if isinstance(env.payload, dict) else env.payload.model_dump()
     assert payload_data == expected_payload
+    # P31: structural equality on top-level keys + nested payload keys
+    # (catches accidental field drops without coupling to timestamp format).
+    expected = json.loads(blob)
+    actual = json.loads(env.model_dump_json())
+    assert set(expected.keys()) == set(actual.keys())
+    assert set(expected["payload"].keys()) == set(actual["payload"].keys())
+    assert actual["payload"]["operator_chat_id"] == expected["payload"]["operator_chat_id"]
+    assert actual["payload"]["inbox_thread_id"] == expected["payload"]["inbox_thread_id"]
+    assert actual["payload"]["opened_by_actor_id"] == expected["payload"]["opened_by_actor_id"]
 
 
 def test_approval_inbox_opened_rejects_negative_thread_id() -> None:

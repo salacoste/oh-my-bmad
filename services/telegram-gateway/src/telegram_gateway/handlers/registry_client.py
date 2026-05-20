@@ -735,8 +735,12 @@ class RegistryAPIClient:
 
         try:
             data = response.json()
-            raw_status = data.get("idempotency_status") or response.headers.get(
-                "X-Idempotency-Status", "applied"
+            # Story 11.3 review P25: HTTP idempotency convention treats the
+            # response HEADER as authoritative — the body field is a mirror
+            # of it. Read the header first; fall back to the body only when
+            # the header is absent.
+            raw_status = response.headers.get("X-Idempotency-Status") or data.get(
+                "idempotency_status", "applied"
             )
             idempotency_status: Literal["applied", "replayed"] = (
                 "replayed" if raw_status == "replayed" else "applied"

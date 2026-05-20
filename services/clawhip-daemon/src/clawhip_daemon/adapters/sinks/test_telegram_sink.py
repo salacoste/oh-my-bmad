@@ -3669,7 +3669,9 @@ def _make_sink_with_inbox(
                 json={
                     "operator_chat_id": -1001,
                     "inbox_thread_id": inbox_thread_id,
-                    "opened_at": "2026-05-20T12:00:00.000+00:00",
+                    # Story 11.3 review P34: use FROZEN_EPOCH (Story 10.5
+                    # hotfix convention) instead of a hardcoded literal.
+                    "opened_at": FROZEN_EPOCH.isoformat(),
                     "opened_by_actor_id": "operator",
                 },
                 request=req,
@@ -3714,7 +3716,10 @@ async def test_telegram_sink_routes_to_pinned_inbox_when_open() -> None:
     assert call_kwargs["reply_to_message_id"] == 777
     # Link-back footer present in the message body.
     assert "↩ Original task thread:" in call_kwargs["text"]
-    assert "message_id=42" in call_kwargs["text"]
+    # Story 11.3 review P8: supergroup chat_id (-1001) yields a
+    # ``https://t.me/c/<short>/<msg>`` deep link (short = abs(chat_id) - 1e12).
+    assert "https://t.me/c/" in call_kwargs["text"]
+    assert "/42" in call_kwargs["text"]
 
 
 @pytest.mark.asyncio

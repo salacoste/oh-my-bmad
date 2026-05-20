@@ -14,6 +14,7 @@
     "opened_at": "1970-01-01T00:00:00.000+00:00",
     "opened_by_actor_id": "fixture-operator"
   },
+  "parent_event_id": null,
   "trace_id": "00000000-0000-7000-8000-000000000021",
   "request_id": "00000000-0000-7000-8000-000000000022",
   "extensions": {}

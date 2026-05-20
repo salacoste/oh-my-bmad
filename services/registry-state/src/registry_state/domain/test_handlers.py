@@ -2433,3 +2433,24 @@ async def test_approval_inbox_materializer_handles_chat_id_collision_with_new_th
     assert row is not None
     assert row.inbox_thread_id == 99, "thread_id must be updated to the latest value"
     assert row.opened_by_actor_id == "operator-second"
+
+
+def test_approval_inbox_extract_ids_returns_none_for_task_and_session() -> None:
+    """Story 11.3 review P9 + P33: ``approval.inbox_opened`` is NOT task-scoped.
+
+    The materializer's ``_extract_ids`` checks ``data.get("task_id")`` for any
+    envelope whose type starts with ``"approval."``. Because the
+    ``ApprovalInboxOpenedPayload`` has no ``task_id`` field, ``data.get(...)``
+    returns ``None`` and the resulting ``events.task_id`` column for the row
+    is NULL. This unit test pins that contract so future event-row writers
+    cannot accidentally widen the extraction without updating the schema.
+    """
+    from registry_state.domain.materializer import _extract_ids
+
+    env = _make_approval_inbox_opened_envelope(
+        operator_chat_id=-1001234567890,
+        inbox_thread_id=42,
+    )
+    task_id, session_id = _extract_ids(env)
+    assert task_id is None, "approval.inbox_opened events MUST have task_id IS NULL"
+    assert session_id is None, "approval.inbox_opened events MUST have session_id IS NULL"

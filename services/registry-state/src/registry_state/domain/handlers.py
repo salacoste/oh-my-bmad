@@ -22,8 +22,9 @@ signatures.
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime
-from typing import cast
+from typing import Protocol, cast
 
 from events.envelope import EventEnvelope
 from pydantic import BaseModel
@@ -634,12 +635,31 @@ async def handle_approval_inbox_opened(session: AsyncSession, envelope: EventEnv
     await session.execute(stmt)
 
 
-def register_default_handlers(materializer: object) -> None:
+class MaterializerProtocol(Protocol):
+    """Story 11.3 review P28: structural type for the materializer-registration surface.
+
+    ``register_default_handlers`` previously accepted ``object`` to avoid a
+    circular import; the Protocol expresses the actual structural shape
+    (a single ``register_handler`` method) without re-introducing the
+    cycle. The runtime ``isinstance(Materializer)`` check is preserved as
+    the production safety net under ``python -O``.
+    """
+
+    def register_handler(
+        self,
+        event_type: str,
+        handler: Callable[[AsyncSession, EventEnvelope], Awaitable[None]],
+    ) -> None: ...
+
+
+def register_default_handlers(materializer: MaterializerProtocol) -> None:
     """Register all built-in task-event handlers onto *materializer*.
 
-    Accepts ``object`` to avoid a circular import with ``materializer.py``
-    at the type level; the runtime type is ``Materializer``.  Callers
-    (``app/main.py``) pass a live ``Materializer`` instance.
+    Accepts :class:`MaterializerProtocol` (Story 11.3 review P28) to keep
+    the static interface as narrow as the function actually uses, while
+    avoiding a circular import with ``materializer.py``. The runtime type
+    is still ``Materializer``; the ``isinstance`` check below defends
+    against duck-typed callers under ``python -O``.
 
     Raises:
         TypeError: If *materializer* is not a ``Materializer`` instance.

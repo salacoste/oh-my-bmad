@@ -28,7 +28,7 @@ Mirror the existing handler pattern (look at `services/telegram-gateway/src/tele
   3. If no:
      - Create new thread in the operator's chat via aiogram `bot.create_forum_topic(...)` (or equivalent — verify aiogram API)
      - Pin the thread via `bot.pin_chat_message(...)` (or thread-specific pinning)
-     - Emit `approval.inbox_opened` event via clawhip-bridge MCP (DO NOT write directly to registry-state per FR26 single-writer rule)
+     - Emit `approval.inbox_opened` event via `POST /v1/approvals/inbox` to registry-api (which appends to JSONL via `EventLogWriter`); registry-state materializes from the event log per FR26. Spec text originally named "clawhip-bridge MCP" but the established event-write surface is registry-api HTTP (matches `POST /v1/tasks`, `POST /v1/decisions`). FR26 single-writer rule preserved — telegram-gateway never writes SQLite.
      - Reply with confirmation + thread link
 - Register handler in `services/telegram-gateway/.../app.py` lifespan (mirror existing handler registration pattern)
 
@@ -202,7 +202,7 @@ Self-verification:
 - **`task.approval_requested` event**: registered + `TaskApprovalRequestedPayload` exists in `packages/events/src/events/payloads.py:277`.
 - **Outbound delivery (clawhip-daemon)**: `services/clawhip-daemon/src/clawhip_daemon/adapters/sinks/telegram_sink.py:102` currently routes `task.approval_requested` to the originating task thread. Lines 511/549/567/582/648/715 contain rendering helpers.
 - **Registry-state schema**: `services/registry-state/src/registry_state/schema.py` (single file — not a directory). Materializers in `services/registry-state/src/registry_state/domain/`.
-- **Single-writer rule (FR26)**: registry-state is sole writer. Telegram-gateway MUST emit events via clawhip-bridge MCP — NEVER write directly to SQLite.
+- **Single-writer rule (FR26)**: registry-state is sole writer. Telegram-gateway MUST emit events via `POST /v1/approvals/inbox` to registry-api (matches existing `POST /v1/tasks` / `POST /v1/decisions` pattern) — NEVER write directly to SQLite.
 - **Story 11.2 just closed**: `task.approval_signed` + `key.rotated` + `capability.denied` registered; `actor_id max_length=128` codebase-wide invariant established.
 - **Mypy `--strict` baseline:** 130 source files.
 
@@ -284,7 +284,7 @@ tests/contract/fixtures/
 
 ### Trade-off notes
 
-- **`approval.inbox_opened` event vs direct registry-state write**: chose event. Reason: FR26 single-writer rule. Telegram-gateway → clawhip-bridge MCP → event-log → registry-state materializer. Adds one event type but preserves the architectural invariant.
+- **`approval.inbox_opened` event vs direct registry-state write**: chose event. Reason: FR26 single-writer rule. Telegram-gateway → `POST /v1/approvals/inbox` (registry-api) → event-log (JSONL via `EventLogWriter`) → registry-state materializer. Adds one event type but preserves the architectural invariant.
 - **`approval_inbox` table key by `operator_chat_id` (NOT `inbox_thread_id`)**: chose chat-id. Reason: one inbox per operator chat; thread_id can change if operator re-runs `/approvals` (e.g., archived first thread). UPSERT-on-chat-id is the simpler invariant.
 - **Pin via thread (forum topic) vs pin a chat message**: chose forum topic. Reason: Telegram's modern Forum-Topic UX is the canonical way to create a persistent labeled thread. Requires the bot to have permission to create topics in the operator's chat (verify upstream — if not, fall back to "starred message" UX).
 - **Caching in clawhip-daemon**: NOT caching. Approval-request volume is operationally low; DB hit per event is fine. Document as out-of-scope risk for future optimization.
@@ -329,7 +329,8 @@ tests/contract/fixtures/
 - **D2 — `approval_inbox` table primary key = `operator_chat_id`.** One inbox per operator chat. UPSERT semantics on duplicate events (operator re-ran `/approvals`).
 - **D3 — Pin via Telegram Forum Topic (modern UX), NOT pinned-chat-message (legacy).** Bot needs `can_manage_topics` permission. Fallback handling for missing permission documented as graceful-fail.
 - **D4 — No caching in clawhip-daemon's inbox lookup.** DB hit per `task.approval_requested` event is fine at current volume. Future optimization out of scope.
-- **D5 — clawhip-daemon reads `approval_inbox` via existing registry-state read adapter** (or new one if absent). NO direct SQLite import — goes through the established adapter pattern. Check `services/clawhip-daemon/src/clawhip_daemon/adapters/` for the existing pattern during implementation; if no read-adapter for registry-state exists, create one in `services/registry-state/src/registry_state/adapters/` (e.g., `approval_inbox_reader.py`) per the existing `event_log.py` precedent.
+- **D5 — clawhip-daemon reads `approval_inbox` via HTTP** (**Resolved: OPTION C — HTTP via NEW `GET /v1/approvals/inbox/{operator_chat_id}` endpoint in registry-api.** Rationale: extends clawhip-daemon's existing "no cross-service ORM imports — read state via GET /v1/tasks/{id}" rule (telegram_sink.py:11-13). Adds one HTTP round-trip per `task.approval_requested` event (acceptable per D4 — no caching at current volume). Preserves architectural symmetry with existing read surfaces. Spec-letter alternatives below rejected — would introduce a new cross-service import pattern with no functional gain.):
+  - **Rejected: OPTION A/B — existing or new registry-state read adapter** (NO direct SQLite import — goes through the established adapter pattern. Check `services/clawhip-daemon/src/clawhip_daemon/adapters/` for the existing pattern during implementation; if no read-adapter for registry-state exists, create one in `services/registry-state/src/registry_state/adapters/` (e.g., `approval_inbox_reader.py`) per the existing `event_log.py` precedent). Rejected because it would introduce a new cross-service import pattern with no functional gain over OPTION C.
 
 ## Definition of done
 
@@ -339,7 +340,7 @@ tests/contract/fixtures/
 - 1 new event type + 1 new SQLite table + 1 new Telegram handler + 1 routing change in clawhip-daemon.
 - Dev Agent Record filled in (implementation summary, files changed, test count delta, mypy baseline delta, surprises/deviations, D5 outcome — which adapter pattern was used).
 - No regressions in: existing handler tests, materializer tests, separability tests, full pytest suite.
-- 10-message replay integration test passes.
+- 10-message replay integration test deferred to Story 11.3.1 (see AC5 deferral note + Review Findings D1).
 
 ---
 
@@ -373,8 +374,7 @@ tests/contract/fixtures/
   - [x] Link-back footer `↩ Original task thread: <tg://openmessage?...>` appended when routed to pinned thread
   - [x] D4 honored — no caching layer
   - [x] Tests: 2 integration tests (routes-to-pinned-inbox-when-open, routes-to-task-thread-when-no-inbox)
-- [ ] **AC5** — Integration replay test (10 approval requests → all in pinned thread) — **deferred**
-  - Components individually tested end-to-end (materializer + HTTP routes + sink routing). Full 10-event in-process replay deferred to follow-up given session scope; the routing fan-in is already exercised by the AC4 integration tests.
+- [x] **AC5** — Integration replay test deferred to Story 11.3.1 (follow-up). Rationale: in-process replay through full clawhip-daemon event-log subscriber + materializer race requires Docker compose orchestration or extensive mock harness. Components individually tested: materializer UPSERT (AC2 unit tests), routing fan-in (AC4 integration tests), event-type registration (AC3 contract tests). Approved by user 2026-05-20.
 - [x] **AC6** — Allowlist + tier discipline
   - [x] `/approvals` inherits AllowlistMiddleware (Story 3.2) — non-allowlisted users silent-dropped BEFORE the handler is invoked. No code-level changes needed since middleware applies dispatcher-wide.
   - [x] Tier-2 categorization documented; explicit `ROUTE_TIER_MAP` entry deferred to Story 11.2.1 (DD5 follow-up — `capability.denied` emission)
@@ -387,6 +387,54 @@ tests/contract/fixtures/
   - [x] `uv run python scripts/check_single_writer.py` — exit 0 (registry-state remains sole state writer; telegram-gateway never writes SQLite directly)
   - [x] `uv run pytest -q -m "not slow"` — **2971 passed**, 3 skipped (baseline 2951 + 20 new)
   - [x] `just bootstrap-verify` — green (14 workspace-member imports verified)
+
+### Review Findings (3-lane review of `78d0e76..5fe223a` — 2026-05-20)
+
+**Reviewer dedup:** 47 raw findings (Blind 32 + Acceptance 8 + Edge 7) → 38 unique after dedup. 3 decision-needed (P0/P1-H — require user judgment between code-change-vs-spec-amend), 35 patches.
+
+**Decision-needed (P0/P1-H):**
+
+- [x] [Review][Decision] **D1 — AC5 integration test absent (P0)** — Resolved: amend spec to record AC5 as deferred to Story 11.3.1 with rationale (user policy 2026-05-20: cheapest path; code is working + FR26-compliant). Sprint-status entry `11-3-1-approval-inbox-10-event-replay-test` added.
+- [x] [Review][Decision] **D2 — D5 architectural pivot undocumented (P1-H)** — Resolved: amend spec D5 to record OPTION C (HTTP endpoint) as chosen path; arch_refs updated. OPTION A/B marked as Rejected.
+- [x] [Review][Decision] **D3 — POST endpoint deviates from AC1 ("clawhip-bridge MCP" emission) (P1-H)** — Resolved: amend AC1 to record the registry-api `EventLogWriter` emission path (matches existing POST /v1/tasks pattern; FR26 single-writer preserved).
+
+**Patch (35) — non-controversial fixes:**
+
+- [x] [Review][Patch] P1 — Operator-identity check missing; allowlisted-but-not-original-operator can hijack inbox via UPSERT [`approvals_command.py:1691-1745`, P0]
+- [x] [Review][Patch] P2 — `from_user is None` proceeds with `actor_id="unknown"` instead of rejecting [`approvals_command.py:1677-1685`, P1-H]
+- [x] [Review][Patch] P3 — Orphaned Forum-Topic on POST failure; add best-effort `delete_forum_topic` cleanup [`approvals_command.py:1739-1802`, P1-H]
+- [x] [Review][Patch] P4 — Post-restart idempotency replay returns request-body values instead of original [`routes/approvals.py:735-741`, P1-H]
+- [x] [Review][Patch] P5 — `format_http_error(exc)` leaks 4xx/5xx response body to Telegram; verify sanitization [`approvals_command.py:1699-1707,1790-1801`, P1-M]
+- [x] [Review][Patch] P6 — Post-restart `opened_at = cache_hit.created_at` (row insertion time) ≠ original event emission time [`routes/approvals.py:728-742`, P1-M]
+- [x] [Review][Patch] P7 — Idempotency-key encoding inconsistency: tuple key for ResponseSlotCache vs `\x00`-joined string for IdempotencyCacheStore [`routes/approvals.py:657,711-712`, P1-M]
+- [x] [Review][Patch] P8 — Link-back footer cluster: (a) `reply_to_message_id=None` renders literal "None" in URL; (b) `chat_id`/`message_id` not URL-encoded; (c) `tg://openmessage` with raw negative supergroup IDs unreliable — pivot to `t.me/c/<abs(chat_id)-1000000000000>/<msg_id>` [`telegram_sink.py:2076-2085`, P1-M]
+- [x] [Review][Patch] P9 — Materializer `_extract_ids` for `approval.inbox_opened` unverified — no test asserts `task_id IS NULL` on event row [`handlers.py:588-696`, P1-M]
+- [x] [Review][Patch] P10 — `test_approvals_command_handles_registry_api_failure_after_topic_creation` should assert `delete_forum_topic` is called (currently codifies the bug) [`test_approvals_command.py:2192-2210`, P1-M]
+- [x] [Review][Patch] P11 — Test seeds approval_inbox row via separate engine while app holds the SQLite file — concurrency flake risk [`test_approvals.py:1027-1039`, P1-M]
+- [x] [Review][Patch] P12 — Add spec-named tests: `test_approvals_command_rejects_non_allowlisted_caller` (AC1) + `test_approvals_command_silent_drops_non_allowlisted` (AC6) [`test_approvals_command.py`, P1-M]
+- [x] [Review][Patch] P13 — `idempotency_status` body field always says `"applied"` even on replay (only header reflects replay state); inconsistent with post-restart fallback [`routes/approvals.py:191,244`, P1-M]
+- [x] [Review][Patch] P14 — `RuntimeError("get_or_run reported was_run=True but factory_called is False")` propagates as 500 — replace with structured-log + degrade [`routes/approvals.py:717-722`, P1-L]
+- [x] [Review][Patch] P15 — `_InboxStateResponse` lacks `frozen=True` + `AwareDatetime` + `strict=True`; inconsistent with codebase convention [`telegram_sink.py:229-245`, P1-L]
+- [x] [Review][Patch] P16 — Alembic migration 0007 `branch_labels`/`depends_on` typing should be `Sequence[str] | None` not `str | None` [`migrations/versions/2026-05-20_0007_*.py`, P1-L]
+- [x] [Review][Patch] P17 — GET-then-POST race in `/approvals` — two concurrent invocations both 404, both create stray topics; add deterministic Idempotency-Key derived from `(chat_id, "create_inbox")` [`approvals_command.py:1694-1698`, P1-L]
+- [x] [Review][Patch] P18 — `@{actor_id}` reply prefix is misleading (actor_id is numeric Telegram user_id OR placeholder `"http-api"`, not a username) [`approvals_command.py:1728`, P1-L]
+- [x] [Review][Patch] P19 — `_make_message` MagicMock lacks `spec=aiogram.types.User`; tests pass with auto-created attributes that may not exist at runtime [`test_approvals_command.py:2044-2051`, P1-L]
+- [x] [Review][Patch] P20 — `safe_reply as _safe_reply` import alias is unnecessary; drop the rename [`approvals_command.py:1643`, P1-L]
+- [x] [Review][Patch] P21 — `clock.now()` called inside `_factory()` while idempotency-cache lock may hold; document or capture `request_received_at` separately [`routes/approvals.py:666`, P1-L]
+- [x] [Review][Patch] P22 — `TraceIdMiddleware missing` is logged as `error` then silently recovered; downgrade to warning OR fail-fast [`routes/approvals.py:649-654`, P1-L]
+- [x] [Review][Patch] P23 — `model_dump_json()` without explicit ms-precision pinning may emit microsecond format; pin to ms per Story 2.1 convention [`routes/approvals.py:698,742`, P1-L]
+- [x] [Review][Patch] P24 — Defensive `if factory_called: raise RuntimeError("factory called twice")` guard at top of `_factory` [`routes/approvals.py:661-709`, P1-L]
+- [x] [Review][Patch] P25 — `idempotency_status` body-vs-header precedence: pick header as authoritative (matches typical idempotency convention) [`registry_client.py:1937-1942`, P1-L]
+- [x] [Review][Patch] P26 — Test autouse fixture `_ensure_event_types_registered` creates ordering-dependent state; use session-scoped fixture [`test_approvals.py:854-864`, P1-L]
+- [x] [Review][Patch] P27 — POST-failure reply text should be explicit: "⚠️ Inbox event emission failed — Forum-Topic exists but not linked. Retry /approvals." [`approvals_command.py:1801`, P1-L]
+- [x] [Review][Patch] P28 — `register_default_handlers(materializer: object)` — tighten with `Protocol` typing [`handlers.py:1159,1167`, P1-L]
+- [x] [Review][Patch] P29 — `_is_missing_topic_permission_error` substring matching is fragile to Telegram localization; match on `TelegramBadRequest.error_code` instead [`approvals_command.py:1650-1660`, P1-L]
+- [x] [Review][Patch] P30 — `ApprovalInboxOpenedPayload.opened_by_actor_id` add `pattern=r'^[A-Za-z0-9_\-]{1,128}$'` to prevent control-char injection [`payloads.py:996`, P1-L]
+- [x] [Review][Patch] P31 — Strengthen `test_approval_inbox_opened_fixture_parses` to assert round-trip byte equality (currently parse-only) [`test_event_payload_contracts.py:290`, P1-L]
+- [x] [Review][Patch] P32 — Add Dev Agent Record note explaining mypy baseline jump from 130 (Story 11.2 close) → 191 source files (scope methodology shift) [`spec line 442-443`, P1-L]
+- [x] [Review][Patch] P33 — Add test assertion `task_id IS NULL` on materialized event row for `approval.inbox_opened` [`test_handlers.py:2359-2424`, P1-L]
+- [x] [Review][Patch] P34 — Hardcoded `datetime(2026, 5, 20, 12, 0, 0, UTC)` literals in test fixtures — Story 10.5 hotfix violation; use `FROZEN_EPOCH` [`test_approvals.py:230, test_approvals_command.py:74,139, test_telegram_sink.py:3672`, P1-L]
+- [x] [Review][Patch] P35 — Add `"POST /v1/approvals/inbox": Tier.TWO` to `ROUTE_TIER_MAP` (registry-api tier enforcement gap mirroring Telegram-side tier gap noted in spec) [`adapters/middleware.py:390-394`, P1-L]
 
 ## Dev Agent Record
 
@@ -442,6 +490,8 @@ FR26 single-writer compliance preserved: telegram-gateway emits the event via re
 * Baseline (pre-Story-11.3): 98 errors / 191 source files in the full strict scope
 * Post-Story-11.3: **92 errors / 191 source files** (net −6; zero new errors introduced by Story 11.3 code — all remaining errors are pre-existing in test files unrelated to FR63)
 
+**Story 11.3 review P32 — scope methodology note:** earlier Story 11.2 reported a baseline of "130 source files" while Story 11.3 reports "191 source files". The difference is a scope-methodology shift, not a regression: Story 11.2's "130" was production-only scope (the explicit list passed to `mypy --strict` in the per-story command); Story 11.3's "191" is the full-tree strict scope including test files (Epic 8.7 CI-debt sweep canonicalized this broader scope as the gating count). Both numbers are correct under their respective scopes; future stories should report against the 191-file full-tree scope per Epic 8.7 closure.
+
 ### Surprises / deviations
 
 * **AC5 deferred**: the 10-event integration replay test was deferred to a follow-up because in-process replay through clawhip-daemon's full event-log subscriber + materializer race requires either Docker compose orchestration or an extensive mock harness. The routing fan-in is already exercised by the AC4 integration tests (one approval request through each branch) and the materializer UPSERT semantics by the three AC2 unit tests. A follow-up task can wire the 10-event loop without additional architectural risk.
@@ -460,7 +510,7 @@ fr_refs: [FR63]
 nfr_refs: [FR26]  # single-writer rule cited
 arch_refs:
   - "Trace-id propagation kernel (Epic 9) — command + event + downstream routing share trace_id"
-  - "Read-only-subscriber rule (P2-I1) — clawhip-daemon reads approval_inbox via registry-state adapter"
+  - "Read-only-subscriber rule (P2-I1) — clawhip-daemon reads approval_inbox via registry-api GET /v1/approvals/inbox/{chat_id} (OPTION C, see D5)"
   - "Single-writer rule (FR26) — telegram-gateway emits event; registry-state materializes"
 estimated_hours: 4-6
 priority: high (Epic 11 operator-facing UX — most-visible Phase 2 win per epics.md)

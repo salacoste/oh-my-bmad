@@ -28,6 +28,7 @@ writes SQLite directly.
 
 from __future__ import annotations
 
+import json as _json
 from datetime import datetime
 from typing import Literal
 
@@ -147,7 +148,10 @@ async def post_open_inbox(
 
     trace_id_val = getattr(request.state, "trace_id", None)
     if trace_id_val is None:
-        log.error("TraceIdMiddleware missing from stack — minting standalone trace_id")
+        # Story 11.3 review P22: downgrade to WARNING — standalone trace_id
+        # minting is a recovery path, not a hard error. Tests that call the
+        # endpoint without the middleware should not log noise at ERROR.
+        log.warning("TraceIdMiddleware missing from stack — minting standalone trace_id")
         trace_id: str = new_uuid7(clock=clock)
     else:
         trace_id = trace_id_val
@@ -159,9 +163,21 @@ async def post_open_inbox(
 
     async def _factory() -> str:
         nonlocal factory_called
+        # Story 11.3 review P24: defensive guard — factory must only run
+        # once per cache key. If it fires twice, the cache invariant is
+        # broken (concurrent loser callers visible mid-population).
+        if factory_called:
+            raise RuntimeError(
+                "approval-inbox idempotency factory called twice — cache invariant violated"
+            )
         factory_called = True
 
         event_id = new_event_id(clock=clock)
+        # Story 11.3 review P21: ``opened_at`` is captured here under the
+        # idempotency-cache per-key lock. It reflects factory-exec time,
+        # NOT request-arrival time. Under cache contention these may differ
+        # by single-digit milliseconds — acceptable for ``opened_at``
+        # semantics (audit-grade "when did the operator open the inbox").
         opened_at = clock.now()
 
         payload = ApprovalInboxOpenedPayload(
@@ -194,6 +210,10 @@ async def post_open_inbox(
             event_id=event_id,
             idempotency_status="applied",
         )
+        # Story 11.3 review P23: ms-precision serialization is enforced by
+        # EventEnvelope's pydantic serializer (Story 2.1 convention); the
+        # response body inherits it via ``OpenInboxResponse.opened_at``
+        # which is ``AwareDatetime``.
         body_bytes = response_model.model_dump_json().encode("utf-8")
 
         # Same pattern as POST /v1/tasks — store the bytes in the
@@ -215,9 +235,19 @@ async def post_open_inbox(
 
     if was_run:
         if not factory_called:
-            raise RuntimeError(
-                "get_or_run reported was_run=True but factory_called is False — "
-                "side-channel cache invariant violated"
+            # Story 11.3 review P14: structured log + degrade to 410 Gone
+            # rather than raising 500 — the invariant violation is logged
+            # for ops but the client gets a clear, retryable signal.
+            log.error(
+                "approval-inbox idempotency cache invariant violated",
+                actor_id=actor_id,
+                idempotency_key=idempotency_key,
+            )
+            raise HTTPException(
+                status_code=410,
+                detail=(
+                    "Idempotency cache invariant violated; please retry with a new Idempotency-Key."
+                ),
             )
         slot = response_body_cache[cache_key]
         body_bytes = slot.body
@@ -225,22 +255,35 @@ async def post_open_inbox(
     else:
         slot_or_none = response_body_cache.get(cache_key)
         if slot_or_none is None:
-            # Post-restart fallback: rebuild a minimal body from the cached
-            # event_id. ``operator_chat_id`` / ``inbox_thread_id`` /
-            # ``opened_at`` are not recoverable without JSONL replay, but
-            # the client is the operator-facing ``/approvals`` command
-            # which already has the inputs locally — same trade-off as
-            # POST /v1/tasks' degraded-replay path.
-            fallback = OpenInboxResponse(
-                operator_chat_id=body.operator_chat_id,
-                inbox_thread_id=body.inbox_thread_id,
-                opened_at=cache_hit.created_at,
-                event_id=cache_hit.result_event_id,
-                idempotency_status="replayed",
+            # Story 11.3 review P4 + P6: post-restart replay cannot recover
+            # the original ``opened_at`` / ``operator_chat_id`` /
+            # ``inbox_thread_id`` (the side-channel response cache was lost
+            # on restart, and the IdempotencyCacheStore row only carries
+            # ``result_event_id`` / ``created_at`` where ``created_at`` is
+            # the cache-row insertion time, NOT the original event
+            # ``opened_at``). Returning request-body values mixed with the
+            # cached event_id would silently misreport the event timestamp.
+            # 410 Gone is the honest response: the original result is no
+            # longer recoverable; the client should retry with a new key.
+            raise HTTPException(
+                status_code=410,
+                detail=(
+                    "Idempotency-Key replay after restart: original response "
+                    "not recoverable — please retry with a new key."
+                ),
             )
-            body_bytes = fallback.model_dump_json().encode("utf-8")
-        else:
+        # Story 11.3 review P13: re-serialize the cached body with
+        # ``idempotency_status="replayed"`` so the body field reflects
+        # the actual replay state (matches the X-Idempotency-Status
+        # header). Cached bytes are JSON; parse → patch → re-encode.
+        try:
+            cached_payload = _json.loads(slot_or_none.body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            # Cache corruption — keep original bytes; header still says replayed.
             body_bytes = slot_or_none.body
+        else:
+            cached_payload["idempotency_status"] = "replayed"
+            body_bytes = _json.dumps(cached_payload, separators=(",", ":")).encode("utf-8")
         status_value = "replayed"
 
     headers: dict[str, str] = {"X-Idempotency-Status": status_value}

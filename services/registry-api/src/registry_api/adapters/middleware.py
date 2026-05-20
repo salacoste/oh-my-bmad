@@ -390,6 +390,11 @@ class ActorIdMiddleware(BaseHTTPMiddleware):
 ROUTE_TIER_MAP: MappingProxyType[str, Tier] = MappingProxyType(
     {
         "POST /v1/tasks": Tier.ONE,
+        # Story 11.3 review P35: operator-action route → Tier.TWO per Epic 6
+        # capability tiers. The Telegram-side tier enforcement is deferred
+        # to Story 11.2.1 (DD5 — ``capability.denied`` emission), but the
+        # registry-api enforcement can land now without that dependency.
+        "POST /v1/approvals/inbox": Tier.TWO,
     }
 )
 

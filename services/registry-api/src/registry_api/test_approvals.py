@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncGenerator
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -55,17 +54,25 @@ def _ensure_event_types_registered() -> None:
     level ``register()`` calls in ``event_types.py`` only run ONCE per
     process. We call ``ensure_registered()`` per-test to restore the
     canonical set including Story 11.3's ``approval.inbox_opened``.
+
+    Story 11.3 review P26: a session-scoped variant was evaluated but the
+    cross-file ``unregister_all()`` teardown forces a per-test
+    re-registration to remain safe. ``ensure_registered()`` is idempotent
+    (Story 2.1 ``register()`` contract), so the per-test cost is negligible.
     """
     ensure_registered()
 
 
 @pytest_asyncio.fixture
-async def app_client(tmp_path: Path) -> AsyncGenerator[tuple[AsyncClient, Path, Path], None]:
+async def app_client(
+    tmp_path: Path,
+) -> AsyncGenerator[tuple[AsyncClient, Path, Path, object], None]:
     """Build an in-process registry-api with a fresh SQLite + JSONL store.
 
-    Yields ``(client, db_path, events_dir)`` so tests can directly seed
-    the ``approval_inbox`` table (for GET tests) and inspect the JSONL
-    log (for POST tests) without going through the materializer.
+    Yields ``(client, db_path, events_dir, session_maker)``: tests use the
+    same ``session_maker`` the GET endpoint uses so writer + reader share
+    the lifespan-owned engine (Story 11.3 review P11 — avoids racing a
+    second engine on the same SQLite file).
     """
     db_path = tmp_path / "state.sqlite3"
     db_url = f"sqlite+aiosqlite:///{db_path}"
@@ -85,7 +92,11 @@ async def app_client(tmp_path: Path) -> AsyncGenerator[tuple[AsyncClient, Path, 
             transport=ASGITransport(app=manager.app), base_url="http://testserver"
         ) as client,
     ):
-        yield client, db_path, events_dir
+        # ``app.state.session_maker`` is wired during lifespan startup
+        # (LifespanManager runs the lifespan callable but does NOT wrap
+        # the FastAPI instance itself, so we reference the outer ``app``).
+        session_maker = app.state.session_maker
+        yield client, db_path, events_dir, session_maker
 
 
 def _read_jsonl_envelopes(events_dir: Path) -> list[dict[str, object]]:
@@ -111,10 +122,10 @@ class TestPostInbox:
     @pytest.mark.asyncio
     async def test_post_returns_201_and_emits_event(
         self,
-        app_client: tuple[AsyncClient, Path, Path],
+        app_client: tuple[AsyncClient, Path, Path, object],
     ) -> None:
         """First POST → 201 with applied status; JSONL has exactly one envelope."""
-        client, _, events_dir = app_client
+        client, _, events_dir, _ = app_client
         r = await client.post(
             "/v1/approvals/inbox",
             json={"operator_chat_id": -1001234567890, "inbox_thread_id": 42},
@@ -142,10 +153,10 @@ class TestPostInbox:
     @pytest.mark.asyncio
     async def test_post_is_idempotent_on_replay(
         self,
-        app_client: tuple[AsyncClient, Path, Path],
+        app_client: tuple[AsyncClient, Path, Path, object],
     ) -> None:
         """Same Idempotency-Key → 201 with X-Idempotency-Status: replayed; only one event."""
-        client, _, events_dir = app_client
+        client, _, events_dir, _ = app_client
         body_json = {"operator_chat_id": -1001234567890, "inbox_thread_id": 42}
         key = new_idempotency_key()
         headers = {"Idempotency-Key": key}
@@ -157,8 +168,17 @@ class TestPostInbox:
         assert r2.status_code == 201
         assert r1.headers["x-idempotency-status"] == "applied"
         assert r2.headers["x-idempotency-status"] == "replayed"
-        # Byte-identical body on replay (cache hit returns the original).
-        assert r1.content == r2.content
+        # Story 11.3 review P13: the body's ``idempotency_status`` field
+        # now mirrors the header on replay (was always "applied" pre-P13).
+        body1 = r1.json()
+        body2 = r2.json()
+        assert body1["idempotency_status"] == "applied"
+        assert body2["idempotency_status"] == "replayed"
+        # The non-status fields are byte-identical on replay (event_id,
+        # opened_at, operator_chat_id, inbox_thread_id all match).
+        body1_no_status = {k: v for k, v in body1.items() if k != "idempotency_status"}
+        body2_no_status = {k: v for k, v in body2.items() if k != "idempotency_status"}
+        assert body1_no_status == body2_no_status
 
         envelopes = _read_jsonl_envelopes(events_dir)
         assert len(envelopes) == 1, "Idempotency dedup must not append a second envelope"
@@ -166,10 +186,10 @@ class TestPostInbox:
     @pytest.mark.asyncio
     async def test_post_rejects_zero_inbox_thread_id(
         self,
-        app_client: tuple[AsyncClient, Path, Path],
+        app_client: tuple[AsyncClient, Path, Path, object],
     ) -> None:
         """``inbox_thread_id == 0`` must yield 422 — Telegram thread_ids are >= 1."""
-        client, _, _ = app_client
+        client, _, _, _ = app_client
         r = await client.post(
             "/v1/approvals/inbox",
             json={"operator_chat_id": -1001234567890, "inbox_thread_id": 0},
@@ -180,10 +200,10 @@ class TestPostInbox:
     @pytest.mark.asyncio
     async def test_post_rejects_negative_inbox_thread_id(
         self,
-        app_client: tuple[AsyncClient, Path, Path],
+        app_client: tuple[AsyncClient, Path, Path, object],
     ) -> None:
         """Negative ``inbox_thread_id`` must yield 422."""
-        client, _, _ = app_client
+        client, _, _, _ = app_client
         r = await client.post(
             "/v1/approvals/inbox",
             json={"operator_chat_id": -1001234567890, "inbox_thread_id": -5},
@@ -201,33 +221,40 @@ class TestGetInbox:
     @pytest.mark.asyncio
     async def test_get_returns_404_when_no_inbox_open(
         self,
-        app_client: tuple[AsyncClient, Path, Path],
+        app_client: tuple[AsyncClient, Path, Path, object],
     ) -> None:
         """No row → 404 with problem+json body."""
-        client, _, _ = app_client
+        client, _, _, _ = app_client
         r = await client.get("/v1/approvals/inbox/-1001234567890")
         assert r.status_code == 404
 
     @pytest.mark.asyncio
     async def test_get_returns_row_when_seeded(
         self,
-        app_client: tuple[AsyncClient, Path, Path],
+        app_client: tuple[AsyncClient, Path, Path, object],
     ) -> None:
-        """Seeded row → 200 with all 4 fields."""
-        client, db_path, _ = app_client
+        """Seeded row → 200 with all 4 fields.
 
-        # Seed the approval_inbox row directly (bypassing the materializer
-        # so the test is hermetic — the materializer is exercised separately
-        # in test_handlers.py).
+        Story 11.3 review P11: registry-api's lifespan engine is read-only,
+        so seeding goes through a SHORT-LIVED writable engine that is
+        disposed immediately. The write completes (and is fsync'd by
+        SQLite WAL) BEFORE the GET fires, so this is not the
+        race-with-lifespan-engine pattern P11 warned about — it's the
+        same idiom registry-state's writable cache_engine uses. We keep
+        a comment so future readers don't reach for ``session_maker``
+        (which is intentionally read-only).
+        """
+        client, db_path, _, _ = app_client
         db_url = f"sqlite+aiosqlite:///{db_path}"
-        engine = create_engine(db_url)
+        engine = create_engine(db_url, read_only=False)
         async with engine.begin() as conn:
             await conn.execute(
                 ApprovalInbox.__table__.insert(),  # type: ignore[attr-defined]  # SQLAlchemy stubs: Table.__table__ resolves at runtime
                 {
                     "operator_chat_id": -1001234567890,
                     "inbox_thread_id": 42,
-                    "opened_at": datetime(2026, 5, 20, 12, 0, 0, tzinfo=UTC),
+                    # Story 11.3 review P34: FROZEN_EPOCH.
+                    "opened_at": FROZEN_EPOCH,
                     "opened_by_actor_id": "operator-test",
                 },
             )
@@ -239,4 +266,4 @@ class TestGetInbox:
         assert body["operator_chat_id"] == -1001234567890
         assert body["inbox_thread_id"] == 42
         assert body["opened_by_actor_id"] == "operator-test"
-        assert body["opened_at"].startswith("2026-05-20T12:00:00")
+        assert body["opened_at"].startswith(FROZEN_EPOCH.isoformat()[:19])

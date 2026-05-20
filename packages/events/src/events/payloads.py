@@ -1034,7 +1034,13 @@ class ApprovalInboxOpenedPayload(BaseModel):
     # is always >= 1 (Telegram Bot API contract).
     inbox_thread_id: int = Field(ge=1, le=2**63 - 1)
     opened_at: AwareDatetime
-    opened_by_actor_id: str = Field(min_length=1, max_length=128)
+    # Story 11.3 review P30: ``opened_by_actor_id`` restricted to
+    # ``[A-Za-z0-9_-]`` so control characters / pipe injection / shell
+    # metacharacters cannot reach downstream renderers. Matches the
+    # Story 11.1 P1-H3 actor_id pattern discipline.
+    opened_by_actor_id: str = Field(
+        min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_\-]{1,128}$"
+    )
 
 
 class CapabilityDeniedPayload(BaseModel):

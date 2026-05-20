@@ -35,14 +35,19 @@ No secondary index: the only query pattern is point-lookup by
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
+# Story 11.3 review P16: ``branch_labels`` / ``depends_on`` are Sequence-typed
+# per Alembic's runtime contract — single-string forms work but type-check
+# cleaner as ``Sequence[str] | None``.
 revision: str = "0007"
 down_revision: str | None = "0006"
-branch_labels: str | None = None
-depends_on: str | None = None
+branch_labels: Sequence[str] | None = None
+depends_on: Sequence[str] | None = None
 
 
 def upgrade() -> None:

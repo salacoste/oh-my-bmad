@@ -40,6 +40,7 @@ calls without explicit kwarg.
 
 from __future__ import annotations
 
+import hashlib
 import html
 
 import httpx
@@ -48,10 +49,10 @@ from aiogram import Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import Message
-from events.ids import new_idempotency_key, new_request_id
+from events.ids import new_request_id
 
 from telegram_gateway.handlers._errors import format_http_error, log_missing_trace_id
-from telegram_gateway.handlers._safe_reply import safe_reply as _safe_reply
+from telegram_gateway.handlers._safe_reply import safe_reply
 from telegram_gateway.handlers.registry_client import RegistryAPIClient, RegistryResponseError
 
 _log = structlog.get_logger("telegram_gateway.handlers.approvals_command")
@@ -67,9 +68,37 @@ _MISSING_TOPIC_PERMISSION_HINTS = (
 
 
 def _is_missing_topic_permission_error(exc: TelegramBadRequest) -> bool:
-    """Return True if *exc* indicates the bot lacks ``can_manage_topics``."""
-    msg = str(exc).lower()
+    """Return True if *exc* indicates the bot lacks ``can_manage_topics``.
+
+    Story 11.3 review P29: structured check first — Telegram raises
+    ``TelegramBadRequest`` from the ``create_forum_topic`` Bot-API method
+    with a message that mentions ``can_manage_topics``. The substring
+    fallback covers localized variants ("not enough rights to manage chat
+    topics" / "not enough rights to create a topic") which Telegram
+    occasionally rewords.
+    """
+    method_name = getattr(getattr(exc, "method", None), "__class__", type(None)).__name__
+    exc_message = getattr(exc, "message", None) or str(exc)
+    if method_name == "CreateForumTopic" and "can_manage_topics" in exc_message:
+        return True
+    msg = exc_message.lower()
     return any(hint in msg for hint in _MISSING_TOPIC_PERMISSION_HINTS)
+
+
+def _deterministic_inbox_idempotency_key(chat_id: int, operator_actor_id: str) -> str:
+    """Story 11.3 review P17: stable key collapses concurrent /approvals into one POST.
+
+    Two ``/approvals`` calls from the same operator chat MUST collide on
+    the registry-api idempotency cache so only one ``approval.inbox_opened``
+    event is emitted. Using ``new_idempotency_key()`` (a random UUID) lost
+    that property and allowed both invocations to create stray Forum-Topics.
+
+    The key is a SHA-256 hash truncated to 32 hex chars so it is opaque
+    and bounded; ``chat_id`` + ``operator_actor_id`` are the natural
+    collision keys (one operator per chat).
+    """
+    seed = f"approvals-inbox|{chat_id}|{operator_actor_id}"
+    return "ai-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:32]
 
 
 async def handle_approvals(
@@ -85,19 +114,26 @@ async def handle_approvals(
     if trace_id is None:
         log_missing_trace_id(_log, "/approvals")
 
-    # Derive operator identity from message.from_user (Story 3.4 pattern).
-    if message.from_user:
-        operator_actor_id = str(message.from_user.id)
-    else:
+    # Story 11.3 review P2: ``message.from_user is None`` is treated as a
+    # protocol violation (channel posts / anonymous group admins) — we
+    # cannot identify the operator, so we reject rather than proceed
+    # with a placeholder identity that would later let any allowlisted
+    # caller hijack an inbox via UPSERT (P1).
+    if message.from_user is None:
         _log.warning(
-            "approvals from_user is None",
-            message_id=getattr(message, "message_id", None),
+            "approval inbox rejected — message has no from_user",
             chat_id=getattr(message.chat, "id", None) if message.chat else None,
         )
-        operator_actor_id = "unknown"
+        await safe_reply(
+            message,
+            "⚠ Unable to determine operator identity. Please send /approvals "
+            "from a regular user account.",
+        )
+        return
+    operator_actor_id = str(message.from_user.id)
 
     if message.chat is None:
-        await _safe_reply(message, "⚠️ Cannot determine chat — /approvals requires a chat context.")
+        await safe_reply(message, "⚠️ Cannot determine chat — /approvals requires a chat context.")
         return
 
     chat_id = message.chat.id
@@ -115,7 +151,7 @@ async def handle_approvals(
             status_code=exc.response.status_code,
             request_id=request_id,
         )
-        await _safe_reply(message, reply)
+        await safe_reply(message, reply)
         return
     except httpx.HTTPError as exc:
         _log.warning(
@@ -123,21 +159,45 @@ async def handle_approvals(
             exc_type=type(exc).__name__,
             request_id=request_id,
         )
-        await _safe_reply(message, f"⚠️ Could not reach registry: {type(exc).__name__}.")
+        await safe_reply(message, f"⚠️ Could not reach registry: {type(exc).__name__}.")
         return
     except Exception:  # noqa: BLE001 — Story 3.1 M3 backstop
         _log.exception("/approvals unexpected error on inbox lookup", request_id=request_id)
-        await _safe_reply(message, "⚠️ Internal error. Logs captured.")
+        await safe_reply(message, "⚠️ Internal error. Logs captured.")
         return
 
     if existing is not None:
+        # Story 11.3 review P1: operator-identity check. Even though the
+        # AllowlistMiddleware lets through every approved operator, two
+        # operators sharing a chat must NOT hijack each other's inbox via
+        # UPSERT. The original owner is recorded in ``opened_by_actor_id``;
+        # only that operator can re-trigger ``/approvals`` for this chat.
+        if existing.opened_by_actor_id != operator_actor_id:
+            _log.warning(
+                "/approvals rejected — inbox owned by another operator",
+                chat_id=chat_id,
+                requested_by=operator_actor_id,
+                opened_by=existing.opened_by_actor_id,
+            )
+            await safe_reply(
+                message,
+                (
+                    f"⚠ Approval inbox is already pinned by another operator "
+                    f"({html.escape(existing.opened_by_actor_id)}). "
+                    f"Contact them to coordinate."
+                ),
+            )
+            return
         # Inbox already open — reply with existing link.
-        await _safe_reply(
+        # Story 11.3 review P18: drop the misleading ``@`` prefix —
+        # ``opened_by_actor_id`` is a numeric Telegram user_id (or
+        # ``http-api`` for the registry-api default), not a username.
+        await safe_reply(
             message,
             (
                 f"ℹ️ Approval inbox already open in this chat "
                 f"(thread {existing.inbox_thread_id}). Opened by "
-                f"@{html.escape(existing.opened_by_actor_id)}."
+                f"{html.escape(existing.opened_by_actor_id)}."
             ),
         )
         return
@@ -145,7 +205,7 @@ async def handle_approvals(
     # Step 2: create the Forum-Topic via aiogram.
     if message.bot is None:
         _log.error("message.bot is None — cannot create forum topic")
-        await _safe_reply(message, "⚠️ Internal error: bot unavailable. Logs captured.")
+        await safe_reply(message, "⚠️ Internal error: bot unavailable. Logs captured.")
         return
 
     try:
@@ -160,7 +220,7 @@ async def handle_approvals(
                 chat_id=chat_id,
                 operator_actor_id=operator_actor_id,
             )
-            await _safe_reply(
+            await safe_reply(
                 message,
                 (
                     "⚠️ Bot lacks <code>can_manage_topics</code> permission in this chat. "
@@ -175,7 +235,7 @@ async def handle_approvals(
             exc_type=type(exc).__name__,
             exc=str(exc),
         )
-        await _safe_reply(message, "⚠️ Could not create Forum-Topic. Logs captured.")
+        await safe_reply(message, "⚠️ Could not create Forum-Topic. Logs captured.")
         return
     except Exception as exc:  # noqa: BLE001 — Story 3.1 M3 backstop
         _log.exception(
@@ -183,13 +243,16 @@ async def handle_approvals(
             chat_id=chat_id,
             exc_type=type(exc).__name__,
         )
-        await _safe_reply(message, "⚠️ Internal error creating Forum-Topic. Logs captured.")
+        await safe_reply(message, "⚠️ Internal error creating Forum-Topic. Logs captured.")
         return
 
     new_thread_id = forum_topic.message_thread_id
 
     # Step 3: POST /v1/approvals/inbox to emit approval.inbox_opened.
-    idempotency_key = new_idempotency_key()
+    # Story 11.3 review P17: deterministic Idempotency-Key so concurrent
+    # ``/approvals`` invocations collide on the registry-api cache and
+    # only one event is emitted.
+    idempotency_key = _deterministic_inbox_idempotency_key(chat_id, operator_actor_id)
     try:
         response = await registry_client.open_inbox(
             operator_chat_id=chat_id,
@@ -205,16 +268,24 @@ async def handle_approvals(
             status_code=exc.response.status_code,
             request_id=request_id,
         )
-        # Forum-Topic was created but event emission failed; the operator
-        # has a stray topic in their chat. Surface a structured error
-        # rather than pretending it succeeded — the next /approvals call
-        # will see no inbox state and try again (idempotently from the
-        # event-emission side via Idempotency-Key).
-        await _safe_reply(message, format_http_error(exc))
+        # Story 11.3 review P3: orphan Forum-Topic cleanup — the event
+        # emission failed but the topic exists in the operator's chat.
+        # Best-effort delete so the operator's chat is not littered with
+        # stray topics across retries.
+        await _cleanup_orphan_topic(message, chat_id, new_thread_id)
+        # Story 11.3 review P27: explicit failure-mode text so the operator
+        # knows the topic was created but not linked, and that /approvals
+        # is safe to retry (Idempotency-Key replay).
+        await safe_reply(
+            message,
+            "⚠️ Inbox event emission failed — the Forum-Topic was created but "
+            "is not yet linked. Retry /approvals.",
+        )
         return
     except RegistryResponseError:
         _log.exception("/approvals malformed registry-api response", request_id=request_id)
-        await _safe_reply(message, "⚠️ Registry returned an unexpected response. Logs captured.")
+        await _cleanup_orphan_topic(message, chat_id, new_thread_id)
+        await safe_reply(message, "⚠️ Registry returned an unexpected response. Logs captured.")
         return
     except httpx.HTTPError as exc:
         _log.warning(
@@ -222,11 +293,13 @@ async def handle_approvals(
             exc_type=type(exc).__name__,
             request_id=request_id,
         )
-        await _safe_reply(message, f"⚠️ Could not reach registry: {type(exc).__name__}.")
+        await _cleanup_orphan_topic(message, chat_id, new_thread_id)
+        await safe_reply(message, f"⚠️ Could not reach registry: {type(exc).__name__}.")
         return
     except Exception:  # noqa: BLE001 — Story 3.1 M3 backstop
         _log.exception("/approvals unexpected error on open_inbox", request_id=request_id)
-        await _safe_reply(message, "⚠️ Internal error. Logs captured.")
+        await _cleanup_orphan_topic(message, chat_id, new_thread_id)
+        await safe_reply(message, "⚠️ Internal error. Logs captured.")
         return
 
     # Step 4: reply with the new thread link.
@@ -237,13 +310,37 @@ async def handle_approvals(
         event_id=response.event_id,
         operator_actor_id=operator_actor_id,
     )
-    await _safe_reply(
+    await safe_reply(
         message,
         (
             f"✅ Approval inbox opened (thread {response.inbox_thread_id}). "
             "Future approval requests will land here."
         ),
     )
+
+
+async def _cleanup_orphan_topic(message: Message, chat_id: int, message_thread_id: int) -> None:
+    """Best-effort delete of a Forum-Topic created when POST failed (P3).
+
+    Telegram exposes ``delete_forum_topic`` which removes the topic that
+    was created in the operator's chat right before the event emission
+    failed. Failures here are logged but never propagated — the goal is
+    to leave the operator's chat clean, not to mask the original error.
+    """
+    if message.bot is None:
+        return
+    try:
+        await message.bot.delete_forum_topic(
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+        )
+    except Exception as cleanup_exc:  # noqa: BLE001 — best-effort
+        _log.error(
+            "orphan_topic_cleanup_failed",
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            exc_info=cleanup_exc,
+        )
 
 
 def make_approvals_router() -> Router:
