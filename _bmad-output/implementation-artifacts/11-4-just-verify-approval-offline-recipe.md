@@ -1,6 +1,6 @@
 # Story 11.4 — `just verify-approval` offline recipe
 
-Status: **review** (CI pending @ pre-commit)
+Status: **done** (CI green @ 0a82477 — main `ci` workflow passed; nightly failures are pre-existing Story 11.3.2 closure-debt unrelated to FR65)
 
 ## Story
 
