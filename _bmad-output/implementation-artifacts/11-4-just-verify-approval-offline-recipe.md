@@ -1,0 +1,362 @@
+# Story 11.4 — `just verify-approval` offline recipe
+
+Status: **ready-for-dev**
+
+## Story
+
+**As** the platform operator
+**I want** a `just verify-approval <event_id>` recipe that re-computes the HMAC of a stored `task.approval_signed` event using my local `OPERATOR_HMAC_KEY` and prints a structured match/mismatch report
+**so that** I can independently audit any approval forever — even months later, even with the Platform stack offline, even from a frozen archived JSONL — and detect tampering or key-drift incidents with concrete next-step guidance (FR65, NFR-S10).
+
+Story 11.4 ships the operator-facing **offline verification** of Story 11.1's signed approvals. Three moving parts:
+
+1. **`scripts/verify_approval.py`** — pure-Python CLI tool that reads a frozen JSONL log directory, locates an event by `event_id`, recomputes the HMAC via Story 11.1's `compute_approval_hmac` (single source of truth — D3 in 11.1), and emits structured match/mismatch.
+2. **`Justfile` recipe** — `just verify-approval EVENT_ID [LOG_DIR]` wraps the CLI with sensible defaults so an operator types one short command.
+3. **Integration tests** — verify fresh signed approvals; deliberately mutate `hmac_sha256` and assert the verifier reports a clear mismatch with investigation guidance.
+
+The recipe MUST work with the Platform stack stopped (no registry-api, no registry-state, no Docker). It only needs Python ≥3.12, the project's installed venv (`uv run`), and read-access to the JSONL log directory + `OPERATOR_HMAC_KEY` env var.
+
+## Acceptance criteria
+
+### AC1 — `scripts/verify_approval.py` CLI tool
+
+New module: `scripts/verify_approval.py` (mirrors `scripts/check_imports.py` / `scripts/check_single_writer.py` placement convention).
+
+CLI signature (argparse, single positional + flags — match existing scripts style):
+
+```
+usage: verify_approval.py [-h] [--log-dir PATH] [--json] [--key-file PATH] EVENT_ID
+
+Verify the HMAC of a task.approval_signed event from the JSONL log.
+
+positional arguments:
+  EVENT_ID            UUIDv7 event_id of the task.approval_signed event to verify
+
+options:
+  -h, --help          show this help message and exit
+  --log-dir PATH      JSONL log directory (default: $REGISTRY_EVENT_LOG_DIR or
+                      /var/lib/oh-my-bmad/registry/events)
+  --json              Emit JSON output (machine-readable); default is human text
+  --key-file PATH     Read OPERATOR_HMAC_KEY from file instead of env (operator
+                      may keep old keys in offline backup files for archive
+                      verification; never logged)
+```
+
+Pure-Python ONLY — no FastAPI, no SQLAlchemy, no httpx imports. The script MUST:
+
+1. Resolve `OPERATOR_HMAC_KEY` from either `--key-file PATH` (preferred for archive verification) or `os.environ["OPERATOR_HMAC_KEY"]`. Validate ≥32 bytes (matches `ApprovalSigningSettings._enforce_min_length` from Story 11.1).
+2. Resolve `EVENT_ID` lookup: scan all `*.jsonl` files in `--log-dir` (sorted by name; per-day file pattern from Story 2.4). Find the first event with `envelope["event_id"] == EVENT_ID`. If multiple files contain the same event_id (should never happen — UUIDv7 monotonic + per-day rotation makes collision impossible), emit a structured error.
+3. Validate the located envelope is `type == "task.approval_signed"`. Other event types → structured error (`"event_type_mismatch"` reason).
+4. Extract payload fields: `task_id`, `decision_id`, `action`, `decided_at`, `actor_id`, `hmac_sha256` (NOT `override` — per FR64 wording, not in canonical signing string).
+5. Re-compute the expected HMAC via `compute_approval_hmac(key=SecretStr(loaded_key), task_id=task_id, action=action, timestamp=datetime.fromisoformat(decided_at), actor_id=actor_id)`.
+6. Compare via `hmac.compare_digest(expected, payload["hmac_sha256"])` (constant-time per Story 11.1 future-risk note).
+7. Emit output (see AC4 for format).
+
+Self-verification:
+- `uv run python scripts/verify_approval.py --help` → exits 0, prints usage.
+- `uv run python scripts/verify_approval.py NONEXISTENT-EVENT --log-dir /tmp/empty` → exits 2 (event-not-found) with structured error.
+- Test `test_verify_approval_cli_returns_match_on_valid_signature` (see AC6).
+- Test `test_verify_approval_cli_returns_mismatch_on_corrupted_hmac` (see AC6).
+
+### AC2 — Verifier imports `compute_approval_hmac` from Story 11.1 (single source of truth)
+
+The script MUST `from registry_api.adapters.approval_signing import compute_approval_hmac` — NOT re-implement the HMAC logic. This is the D3 commitment from Story 11.1 (verifier is downstream consumer of the same pure function).
+
+If a future refactor moves `compute_approval_hmac` to a shared package (e.g., `packages/events/src/events/approval_signing.py`), update this import and Story 11.1's docstring in lock-step. **Until then: registry-api import is correct.**
+
+Constraint per Story 11.1 D3: **NEVER fork the HMAC computation.** Even tiny changes (e.g., bytewise vs string compare, ISO format) would invisibly break the offline verification contract for previously-signed approvals.
+
+`scripts/check_imports.py` exemption: `scripts/` imports from `services/` are already exempted (see existing `scripts/emit_signature_rejected.py:1` precedent). No new exemption needed.
+
+Self-verification:
+- `grep -nE "from registry_api.adapters.approval_signing import compute_approval_hmac" scripts/verify_approval.py` returns exactly one line.
+- `grep -nE "hmac.new\|hashlib" scripts/verify_approval.py` returns ZERO lines (the only HMAC machinery comes via the imported function).
+- `uv run python scripts/check_imports.py` exits 0.
+
+### AC3 — JSONL log reader: streaming, no-mmap, no-buffer-bomb
+
+The log directory may contain many days of events (per-day JSONL files — Story 2.4 `EventLogWriter`). The reader MUST:
+
+- Stream file-by-file in **sorted order** (lexicographic = chronological per `YYYY-MM-DD.jsonl` naming).
+- For each file, stream line-by-line (`for line in f:`); do NOT `.read()` the whole file (some operators may have multi-GB archives).
+- For each line, `json.loads(line)` → check `envelope.get("event_id") == EVENT_ID`. On match, STOP (do not continue scanning — first match wins).
+- Skip blank lines (recovery from EventLogWriter partial-write — Story 2.4 invariant) without raising.
+- Skip `json.JSONDecodeError` lines with a structured warning (per-line decode error MUST NOT abort the scan — partial corruption recovery).
+- Total scan time bound: < 1 second per 100k events on a frozen archive (NFR — operator UX target).
+
+Self-verification:
+- Test `test_verify_approval_finds_event_in_first_file` — single 100-event file, verify search hits.
+- Test `test_verify_approval_finds_event_in_third_of_three_files` — three files, target in latest; verify cross-file scan works.
+- Test `test_verify_approval_skips_blank_lines` — interpolate empty lines; verify scan does not raise.
+- Test `test_verify_approval_skips_decode_errors_with_warning` — interpolate malformed `{"oops}` line; verify scan continues + emits stderr warning.
+
+### AC4 — Output format: structured human + machine modes
+
+**Default human mode** (TTY, `--json` absent):
+
+On MATCH:
+```
+✓ HMAC verification PASSED
+  event_id:    01HZX...   (UUIDv7)
+  type:        task.approval_signed
+  task_id:     T-2026-04-22-001
+  action:      approve
+  decided_at:  2026-05-20T18:42:15.123+00:00
+  actor_id:    http-api
+  signature:   40a928fd23a98785a4beadcd450051b807f1eb4d77599ad369a7b54a4b79ef36 (matches)
+```
+
+On MISMATCH:
+```
+✗ HMAC verification FAILED
+  event_id:        01HZX...
+  task_id:         T-2026-04-22-001
+  action:          approve
+  decided_at:      2026-05-20T18:42:15.123+00:00
+  actor_id:        http-api
+  stored hmac:     40a928fd23a98785a4beadcd450051b807f1eb4d77599ad369a7b54a4b79ef36
+  recomputed hmac: 1b9aff32cc6e91...
+  reason:          signature_mismatch — stored HMAC does not match recomputation
+
+Investigation next steps:
+  1. Verify OPERATOR_HMAC_KEY matches the key in effect when this event was signed
+     (check key.rotated events around decided_at — Story 11.5).
+  2. If key is correct, the event payload may have been tampered with — diff the
+     stored envelope against any backup copy.
+  3. If you rotated keys, retry with the prior key via --key-file PATH.
+```
+
+On EVENT-NOT-FOUND, EVENT-TYPE-MISMATCH, KEY-INVALID, LOG-DIR-MISSING, etc. — each error has a distinct **reason code** (snake_case) and a contextual next-step. See AC5.
+
+**Machine mode** (`--json`):
+
+```json
+{
+  "status": "match" | "mismatch" | "error",
+  "reason": "signature_match" | "signature_mismatch" | "event_not_found" | ...,
+  "event_id": "01HZX...",
+  "event_type": "task.approval_signed" | null,
+  "task_id": "T-..." | null,
+  "stored_hmac": "..." | null,
+  "recomputed_hmac": "..." | null,
+  "investigation_steps": ["...", "..."]
+}
+```
+
+JSON output goes to stdout; warnings (skipped malformed lines) go to stderr.
+
+**Exit codes:**
+- `0` — match
+- `1` — mismatch (HMAC re-computation differs from stored)
+- `2` — event not found OR event type mismatch
+- `3` — key invalid (missing, <32 bytes, file-read error)
+- `4` — log-dir missing or unreadable
+- `5` — internal error (bug; should never happen)
+
+Self-verification:
+- Test `test_verify_approval_human_output_on_match`.
+- Test `test_verify_approval_human_output_on_mismatch_includes_next_steps`.
+- Test `test_verify_approval_json_output_match` — parses output, validates schema.
+- Test `test_verify_approval_json_output_mismatch` — same.
+- Test `test_verify_approval_exits_with_correct_code` — runs CLI in subprocess, asserts exit code for each scenario.
+
+### AC5 — Reason codes enumerated
+
+The verifier emits exactly ONE of these reason codes:
+
+| Reason code | Trigger | Next-step guidance |
+|---|---|---|
+| `signature_match` | HMAC re-comp matches stored value | (none — success) |
+| `signature_mismatch` | HMAC re-comp differs | Verify key + rotation; diff payload against backup |
+| `event_not_found` | EVENT_ID absent from all scanned files | Confirm event_id; check date range covered by --log-dir |
+| `event_type_mismatch` | Found event but `type != "task.approval_signed"` | Confirm caller passed the SIGNATURE event_id (not the `approval.granted` sibling — they have distinct event_ids per Story 11.1 paired-event ordering) |
+| `payload_missing_field` | Envelope is `task.approval_signed` but payload omits a required field | Possible schema-version regression; report to platform team |
+| `key_missing` | No `OPERATOR_HMAC_KEY` env var AND no `--key-file` | Set env or pass `--key-file PATH` |
+| `key_too_short` | Key < 32 bytes (UTF-8 encoded) | Regenerate per FR64 / Story 11.5 ADR-0006 |
+| `key_file_unreadable` | `--key-file PATH` failed to open | Check file path + permissions |
+| `log_dir_missing` | `--log-dir` does not exist | Check path; default is `/var/lib/oh-my-bmad/registry/events` |
+| `log_dir_unreadable` | Directory exists but cannot be listed | Check permissions; operator may need sudo |
+| `internal_error` | Unexpected exception (bug) | File a bug report with full traceback (stderr) |
+
+Self-verification:
+- Test `test_verify_approval_emits_correct_reason_code` parameterized over all 11 reason codes — assert each error path emits the documented code.
+
+### AC6 — Integration tests: fresh approval + deliberately-corrupted approval
+
+Two end-to-end integration tests must exist in `tests/integration/test_verify_approval_offline_recipe.py`:
+
+**Test 1 — fresh approval verifies green:**
+
+```python
+def test_just_verify_approval_succeeds_against_fresh_signed_approval(tmp_path):
+    """Story 11.4 AC6: write a freshly-signed event to a temp JSONL log,
+    invoke the verifier CLI in a subprocess, assert exit 0 + signature_match."""
+    # 1. Generate a 32-byte test key.
+    # 2. Build a TaskApprovalSignedPayload using compute_approval_hmac for ground truth.
+    # 3. Wrap in EventEnvelope, write canonical-JSON to tmp_path/"2026-05-21.jsonl".
+    # 4. Invoke: subprocess.run([sys.executable, "scripts/verify_approval.py", event_id,
+    #                             "--log-dir", tmp_path, "--json"],
+    #                            env={**os.environ, "OPERATOR_HMAC_KEY": key.decode()})
+    # 5. Assert returncode == 0 + json.loads(stdout)["status"] == "match".
+```
+
+**Test 2 — corrupted hmac produces structured mismatch:**
+
+```python
+def test_just_verify_approval_detects_corrupted_hmac(tmp_path):
+    """Story 11.4 AC6: write a signed event, mutate the hmac_sha256 field,
+    invoke the verifier, assert exit 1 + signature_mismatch + investigation steps."""
+    # Same scaffold as test 1 but:
+    # - Flip a hex char in payload["hmac_sha256"] before writing the JSONL.
+    # - Assert returncode == 1.
+    # - Assert json.loads(stdout)["reason"] == "signature_mismatch".
+    # - Assert len(json.loads(stdout)["investigation_steps"]) >= 3.
+```
+
+**Test 3 — 1-month-old approval verifies (Epic 11 acceptance gate):**
+
+```python
+def test_just_verify_approval_against_one_month_old_log(tmp_path):
+    """Epic 11 acceptance gate (epics.md line 2433) — simulated 1-month-old
+    approval verifies offline with no Platform stack running."""
+    # Same scaffold but date the JSONL file 30 days in the past
+    # (filename: "2026-04-21.jsonl") and assert verifier still locates + verifies.
+```
+
+Self-verification:
+- All three tests pass under `uv run pytest -q tests/integration/test_verify_approval_offline_recipe.py`.
+- Tests do NOT spawn the registry-api / registry-state stack (verify by asserting no FastAPI/SQLAlchemy import inside the test module).
+
+### AC7 — `Justfile` recipe
+
+Add to `Justfile`:
+
+```just
+# Verify the HMAC of a task.approval_signed event from the JSONL log (FR65, Story 11.4).
+# Works offline — Platform stack not required. Requires OPERATOR_HMAC_KEY env var
+# (or --key-file PATH for archived-key verification).
+#
+# Usage:
+#   just verify-approval EVENT_ID                          # uses default log dir
+#   just verify-approval EVENT_ID /path/to/log/dir         # custom log dir
+#   just verify-approval EVENT_ID /path/to/log/dir --json  # machine-readable
+verify-approval EVENT_ID LOG_DIR='/var/lib/oh-my-bmad/registry/events' *FLAGS='':
+    uv run python scripts/verify_approval.py {{EVENT_ID}} --log-dir {{LOG_DIR}} {{FLAGS}}
+```
+
+Self-verification:
+- `just --list 2>&1 | grep verify-approval` returns the recipe.
+- `just verify-approval --help` → forwards to argparse help.
+- Manual smoke: emit a real `task.approval_signed` via `POST /v1/tasks/{id}/decisions` then run `just verify-approval <event_id>` against the live log dir — expect match.
+
+### AC8 — Validation gates
+
+- `uv run ruff check . && uv run ruff format --check .` — clean
+- `uv run mypy --strict scripts/ services/registry-api packages/events tests/` — zero new errors (script must pass strict mode)
+- `uv run python scripts/check_imports.py` — exit 0 (scripts→services import already exempted)
+- `uv run python scripts/check_event_registry.py` — exit 0 (no new event types in this story)
+- `uv run python scripts/check_single_writer.py` — exit 0 (verifier is read-only; no SQLite writes)
+- `uv run pytest -q -m "not slow" tests/integration/test_verify_approval_offline_recipe.py services/registry-api/src/registry_api/test_approval_signing.py` — all pass (re-run 11.1 unit tests to confirm no regression in `compute_approval_hmac`)
+- `uv run pytest -q -m "not slow"` — full suite still passes (expected baseline 2990 → ~2995)
+- `just bootstrap-verify` — green
+
+## Decisions (resolve BEFORE implementation per AI-3 cadence rule)
+
+### D1 — Script location: `scripts/verify_approval.py` vs `services/registry-api/cli/verify.py`
+
+**Options:**
+- **(a) `scripts/verify_approval.py`** — matches `scripts/check_imports.py`, `scripts/emit_signature_rejected.py` precedent. Justfile recipes already invoke scripts/ tools.
+- (b) `services/registry-api/src/registry_api/cli/verify.py` + `pyproject.toml` entry point — packaged as installable command. More effort; only useful if we plan to ship the verifier as a standalone wheel.
+
+**Resolved: (a) `scripts/verify_approval.py`.** Mirrors existing convention; Justfile already wraps scripts. Story 11.5 ADR-0006 may upgrade to entry-point form if operators request `pip install oh-my-bmad-verify` as a standalone tool.
+
+### D2 — Key loading: env var vs `.env` file vs explicit `--key-file`
+
+**Options:**
+- **(a) Env var primary + `--key-file PATH` for archived keys** — operator typically has current key in `OPERATOR_HMAC_KEY`; archived keys live in offline backup files.
+- (b) Always read `.env` — assumes operator has the deployment's `.env` accessible.
+- (c) Always `--key-file PATH` — most explicit; no env-var coupling.
+
+**Resolved: (a).** Matches existing `ApprovalSigningSettings` pattern (env-var primary). `--key-file PATH` is the escape hatch for archive verification of pre-rotation approvals (per FR65a Story 11.5). Verifier MUST NOT log the key (NFR-S10).
+
+### D3 — JSONL log location default
+
+**Options:**
+- **(a) Hardcoded `/var/lib/oh-my-bmad/registry/events`** — matches `EventLogWriter` default in `services/registry-state/src/registry_state/adapters/event_log.py:232`.
+- (b) `$REGISTRY_EVENT_LOG_DIR` env var with the same fallback — more flexible for operators with non-default deployment paths.
+
+**Resolved: (a) hardcoded default + `--log-dir PATH` flag override.** Matches the established default; `--log-dir` flag covers non-default deployments + archive verification (any directory the operator has read access to). Env-var indirection rejected — adds surface area for no benefit (operator can `just verify-approval EVT $REGISTRY_EVENT_LOG_DIR` if they want env-based).
+
+### D4 — Output format: text-only / JSON-only / both
+
+**Options:**
+- **(a) Text default + `--json` flag** — operator-friendly out of the box; JSON for `jq` / scripting.
+- (b) JSON default + `--text` flag — better for CI pipelines; operators usually want machine output too.
+- (c) Both always (text to stdout, JSON to stderr) — wasteful + confusing.
+
+**Resolved: (a).** Operators run this manually during incident response; text output is the primary UX. `--json` covers CI/automation. Stderr reserved for warnings (skipped malformed lines, key-fallback notices).
+
+### D5 — Verifier auth model: does the verifier need to validate other envelope fields (schema_version, trace_id, etc.) or ONLY the HMAC?
+
+**Options:**
+- **(a) HMAC-ONLY** — verifier checks signature; other envelope integrity is out of scope. Operator can use `jq` or a separate `validate-envelope` tool for schema-level checks.
+- (b) HMAC + schema validation — full `EventEnvelope.model_validate_json(line)` round-trip. Heavier dependency (pydantic + EventEnvelope import); rejects events with valid HMAC but malformed envelope.
+
+**Resolved: (a) HMAC-ONLY.** Story 11.4's stated scope per Epic 11 is "verifies fresh approval; deliberately corrupting HMAC produces clear mismatch" — narrow + focused. Envelope-schema validation is a separate concern (every other tool that reads events already pydantic-validates). If a payload field is missing, AC5's `payload_missing_field` reason code covers it without forcing a full schema parse.
+
+## Constraints
+
+- **Pure-Python script** — no FastAPI / SQLAlchemy / httpx imports. Only deps: stdlib (`argparse`, `hmac`, `hashlib`, `json`, `pathlib`, `sys`, `datetime`) + `pydantic` (for SecretStr) + `registry_api.adapters.approval_signing.compute_approval_hmac`.
+- **Single source of truth (D3 of Story 11.1)** — verifier imports `compute_approval_hmac` directly. Forbidden to re-implement.
+- **Constant-time comparison** — `hmac.compare_digest(expected, stored)` (NEVER `==`). Story 11.1 future-risk note explicitly mandates this for the verifier.
+- **NFR-S10 key isolation** — verifier MUST NOT log the key value at any level (DEBUG, INFO, WARNING, ERROR). Log only "key loaded (32 bytes)" or "key loaded (<min>)" — never the key bytes themselves. `tests/integration/test_hmac_key_isolation.py` (Epic 11 acceptance gate) grep-checks log output.
+- **Exit code stability** — once shipped, exit codes 0/1/2/3/4/5 are a **public contract** for operator scripts. Future changes require an ADR + Story 11.5+ amendment.
+- **Offline-first** — script MUST NOT make network calls. Static analysis: `grep -nE "httpx\|requests\|urllib" scripts/verify_approval.py` → ZERO hits.
+- **Streaming reader** — bounded memory: ≤16 MiB resident regardless of log size. Tested via `tests/integration/test_verify_approval_offline_recipe.py::test_verify_approval_handles_large_log_directory` (synthetic 100k-event log).
+
+## Frontmatter
+
+```yaml
+---
+story_id: 11.4
+story_key: 11-4-just-verify-approval-offline-recipe
+parent_epic: 11
+phase: 2
+fr_refs: [FR65]
+nfr_refs: [NFR-S10]
+arch_refs:
+  - "Story 11.1 compute_approval_hmac pure function — single source of truth for HMAC computation (verifier imports verbatim per Story 11.1 D3)"
+  - "Story 2.4 EventLogWriter per-day JSONL log files — verifier reads in sorted order"
+  - "FR26 single-writer rule preserved — verifier is read-only; no SQLite writes, no event emissions"
+estimated_hours: 2-4
+priority: high (Epic 11 acceptance gate — epics.md line 2433: 'Offline just verify-approval works against simulated 1-month-old approval')
+blocks:
+  - 11-5-key-rotation-flow-key-rotated-event (Story 11.5 uses verifier in its key-rotation integration test)
+  - epic-11-retrospective
+---
+```
+
+## Context
+
+- **Phase:** 2
+- **FR refs:** FR65 (offline HMAC verification recipe)
+- **NFR refs:** NFR-S10 (key isolation — never logged)
+- **Direct deps (must be `done`):** Story 11.1 (HMAC pure function + golden vector test prove canonical-format external-tool compat), Story 11.2 (`task.approval_signed` registered + payload model). Both DONE @ 2026-05-20.
+- **Test count baseline:** 2990 (pass-2 Story 11.3 close)
+- **Mypy --strict baseline:** 92 errors / 191 source files (see Story 11.3 P32 note — full-tree scope)
+- **Estimated +tests:** ~10-12 (3 AC6 integration + 5 AC4 output-format + 2 AC3 reader edge cases + 2 AC5 reason-code parameterized)
+- **Estimated complexity:** LOW. Single new file (`scripts/verify_approval.py`) + Justfile addition + integration test module. No new event types, no new DB schema, no new services touched. 1-pass review cadence expected.
+
+## Definition of Done
+
+- All 8 ACs met; self-verification commands in each AC pass.
+- `sprint-status.yaml` `11-4-just-verify-approval-offline-recipe: backlog → done` (after CI green).
+- Spec Status `**done** (CI green @ <sha>)`.
+- Golden-vector compat: a HMAC computed by `scripts/verify_approval.py` MUST byte-equal the golden vector `40a928fd23a98785a4beadcd450051b807f1eb4d77599ad369a7b54a4b79ef36` from Story 11.1 (`test_approval_signing.py::test_compute_approval_hmac_known_vector_external_verification`) given the same inputs. Add `test_verify_approval_cli_matches_story_11_1_golden_vector` to integration tests.
+- Epic 11 acceptance gate (epics.md line 2433): `just verify-approval` works offline against simulated 1-month-old approval (AC6 Test 3 satisfies this).
+- Dev Agent Record filled in (implementation summary, files changed, test count delta, mypy baseline delta, surprises/deviations).
+- No regressions in: existing `services/registry-api/src/registry_api/test_approval_signing.py` (re-run as smoke).
+
+## Tasks / Subtasks
+
+_(populated by dev agent)_
