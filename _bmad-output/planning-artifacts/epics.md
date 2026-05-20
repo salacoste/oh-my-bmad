@@ -2386,7 +2386,7 @@ If any item above is not green/complete, Phase 1 has not shipped. The three arch
 ### Story 10.6: Separability test S-4 + add to compose stack
 - **FRs:** FR62a; NFR-M4/M5 discipline.
 - **Scope:** Add `metrics-subscriber` to `docker-compose.yml` with `condition: service_healthy` on registry-state. Add `tests/separability/test_metrics_subscriber_optional.py` — spin up with `OMB_METRICS_DISABLED=1`, assert rest of stack starts + serves identically.
-- **AC:** Stack reaches 8/8 healthy with subscriber enabled; 7/7 with it disabled; both pass `bootstrap-verify`.
+- **AC:** Stack reaches 7/7 healthy with subscriber enabled; 6/6 with it disabled; both pass `bootstrap-verify`.
 
 ### Epic 10 acceptance gate
 - ✅ `/metrics` returns documented metric set — Story 10.4 done (full FR62 set, ~51 timeseries).

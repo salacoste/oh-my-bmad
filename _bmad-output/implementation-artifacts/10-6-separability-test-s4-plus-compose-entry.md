@@ -68,6 +68,7 @@ Reference: `services/registry-api/Dockerfile` — same layout (FastAPI + uvicorn
 
 Self-verification:
 - `test -f services/metrics-subscriber/Dockerfile`.
+- **Prerequisite:** `docker image inspect oh-my-bmad-base:local || just build-base` (P1-H4: the Dockerfile is a thin override of `oh-my-bmad-base:local` per D7; without that base image, the next step fails with `pull access denied`).
 - `docker build -t test-metrics-subscriber:dev -f services/metrics-subscriber/Dockerfile .` succeeds locally.
 - Container starts when given `OMB_METRICS_EVENT_LOG_DIR` pointing to a valid (possibly empty) directory.
 
@@ -81,7 +82,7 @@ Update `.env.example` (or the project's environment template) with the new UID/G
 
 Self-verification:
 - `grep -F "OMB_METRICS_UID" .env.example` returns the new line.
-- `docker compose config metrics-subscriber | grep user:` shows `10003:10000` resolved.
+- `docker compose config metrics-subscriber | grep -E "OMB_METRICS_UID|OMB_METRICS_GID"` — env vars appear in the env block (consumed by the Dockerfile `useradd --uid` baked at build time per D7 + P1-L2; the spec's original `user:` directive grep no longer applies because the service follows the project convention of letting the Dockerfile `USER` be authoritative).
 
 ### AC4 — Separability overlay `tests/separability/docker-compose.s4.yml` (NEW)
 
@@ -145,7 +146,7 @@ Mirror `tests/separability/test_s1_cold_worker_swap.py` pattern (~400 lines). Tw
 **Phase 2 — overlay stack WITHOUT metrics-subscriber (uses `tests/separability/docker-compose.s4.yml`):**
 1. Bring up via `docker compose -f tests/separability/docker-compose.s4.yml up -d --wait`.
 2. Wait for healthy state — 6 services must reach `Up (healthy)`; `metrics-subscriber` MUST NOT appear in `docker compose ps`.
-3. Hit `http://registry-api:8080/v1/health` — assert 200 (same as Phase 1).
+3. Hit `/v1/health` via `docker compose exec -T registry-api python -c "import urllib.request; urlopen(\"http://localhost:8080/v1/health\").status"` — assert 200. **P1-L4 amendment:** the root compose has no host port published per P2-I5 (Surprise #5), so an in-container exec is required. The Phase 2 overlay DOES publish a host port and the implementation uses `httpx` against that mapped port — equivalent semantics either way.
 4. Submit a synthetic task via `POST http://registry-api:8080/v1/tasks` — assert 201 (proves the spine still serves identically without the subscriber).
 5. Confirm no error in `worker-wrapper` / `clawhip-daemon` logs about missing `metrics-subscriber` (use `docker compose logs <service>` and grep).
 6. Tear down.
@@ -324,6 +325,7 @@ _bmad-output/planning-artifacts/epics.md        # MINOR: tick off Epic 10 accept
 - **D4 — `depends_on: registry-state: service_healthy`** ONLY. NO `depends_on` on other services (P2-I3 derived projection — subscriber's only dependency is JSONL file availability gated by registry-state's healthcheck).
 - **D5 — UID 10003, GID 10000.** Next free UID after existing service assignments; shared `oh-my-bmad` group.
 - **D6 — Wall-clock budget: 3 minutes total** for S-4 test (60s per phase + drain + assertions). Mark `@pytest.mark.slow` so it runs in the slow CI gate, not the inner loop.
+- **D7 — Dockerfile thin-override (`FROM oh-my-bmad-base:local`) instead of spec D5's multi-stage `python:3.12-slim-bookworm`.** Rationale: consistency with `services/registry-api/Dockerfile` (Surprise #1 in DAR mirrored that pattern); centralizes Python + uv install in `build-base`; reduces per-service image size via shared layer. Trade-off: requires `just build-base` prerequisite. Future CI runners without the base image fail-fast with `pull access denied` (mitigated by AC2 self-verification + P1-M4 pre-flight check). Added by Story 10.6 pass-1 review (P1-H4) — promotes the executor's deviation from a "Surprise" to a resolved architectural Decision.
 
 ## Definition of done
 
@@ -381,6 +383,52 @@ created_by: bmad-create-story skill
 - [x] **AC7** — Epic 10 acceptance gate block in `_bmad-output/planning-artifacts/epics.md` updated; all 4 items ticked off with story refs.
 - [x] **AC8** — Mypy `--strict` baseline unchanged at 126 source files. Test file lives in `tests/separability/` (outside strict scope per `mypy.ini` `[mypy-tests.*] ignore_errors = True`).
 - [x] **AC9** — All validation gates green locally: `ruff check`, `ruff format --check`, `mypy --strict`, `check_imports`, `check_event_registry`, `check_single_writer`, `pytest -m "not slow"` (2907 passed), `bootstrap-verify`, both `docker compose config` resolve cleanly. S-4 slow test collected (deferred Docker-stack execution to CI).
+
+---
+
+## Review Findings — pass-1 (2026-05-20)
+
+Pass-1 adversarial review on diff `a1fa775..361a257` (8 files, +941 / −8 lines). Three parallel reviewers (Sonnet): Blind Hunter (5 findings — 2 MAJOR + 3 minor), Edge Case Hunter (6 findings — 2 MAJOR + 4 minor), Acceptance Auditor (5 findings — 2 MAJOR + 3 minor). All three verdicts: **REVISE**.
+
+After dedup → **13 unique findings** (4 MAJOR, 4 MED, 5 LOW). Multi-lane convergences:
+- **subprocess.run без `timeout=`**: B1 + E1 (8 calls)
+- **Orphaned `OMB_METRICS_UID`/`GID` env vars + misleading comment**: B3 + A4
+
+All 13 close per "fix all issues even minors" standing policy.
+
+### Patch — MAJOR (4)
+
+- [x] [Review][Patch] **P1-H1 — 8 `subprocess.run` calls without `timeout=` in `test_s4_metrics_subscriber_optional.py` (CI hang risk; both `down -v` teardowns affected)** [tests/separability/test_s4_metrics_subscriber_optional.py:102, 161, 201, 244, 315, 422, 447, 518] — **2-lane: B1 + E1**. Edge Case Hunter found 8 unbounded subprocess calls; Blind Hunter independently narrowed to `_grep_logs_for_missing_subscriber:244` as highest-risk because it streams unbounded `docker compose logs` (no `--tail`) on a 180s-old stack producing tens of thousands of JSON log lines. Worst-case: `finally` teardown blocks hang → orphan containers + volumes on every subsequent CI test run. Fix: (a) add `timeout=300` (5 min) to `up`/`down` calls (lines 315, 422, 447, 518); (b) add `timeout=60` to `ps`/`logs`/`port` polling calls (102, 161, 201, 244); (c) for `_grep_logs_for_missing_subscriber:244` ALSO add `"--tail", "200"` to the compose args (200 lines of recent logs is sufficient for the grep target). On `subprocess.TimeoutExpired`, log + re-raise (do NOT swallow). Note: S-1/S-2/S-3 have the same gap as inherited pattern — fix THIS test only (don't widen blast radius).
+
+- [x] [Review][Patch] **P1-H2 — `_docker_available()` only probes `docker info`, doesn't verify compose v2 plugin** [tests/separability/test_s4_metrics_subscriber_optional.py:266-285] — Solo MAJOR: E2. Test body exclusively uses `docker compose ...` (v2 plugin). On systems with Docker Engine but missing/broken compose plugin: `docker info` passes, skipif allows execution, test fails opaquely with `docker: 'compose' is not a docker command` at line 315. Fix: extend `_docker_available()` to also run `subprocess.run(["docker", "compose", "version"], ...)` and return False if either check fails. Update skip reason: `"requires Docker + compose v2 plugin"`.
+
+- [x] [Review][Patch] **P1-H3 — AC3 self-verification clause permanently broken: refs UID 10003 + `user:` directive that was intentionally omitted** [_bmad-output/implementation-artifacts/10-6-...md AC3 line 84] — Solo MAJOR: A1. Spec AC3 self-verification says `docker compose config metrics-subscriber | grep user: shows 10003:10000 resolved`. Reality: (a) UID is 10008 (D5 deviation documented in Surprise #1); (b) `user:` directive omitted per existing service convention (Dockerfile USER is authoritative — Surprise #3). Clause as written never passes. Fix: update AC3 self-verification to: `grep -F "OMB_METRICS_UID" .env.example` (already verifiable) + `docker compose config metrics-subscriber | grep -E "OMB_METRICS_UID|OMB_METRICS_GID"` showing the env block where they're actually consumed.
+
+- [x] [Review][Patch] **P1-H4 — Dockerfile thin-override deviation not promoted to a resolved Decision (D7); latent runtime dependency on `oh-my-bmad-base:local`** [services/metrics-subscriber/Dockerfile + spec Decisions block] — Solo MAJOR: A2. Spec AC2 prescribed multi-stage `python:3.12-slim-bookworm` + `uv sync --frozen --no-dev --package metrics-subscriber`. Reality: 19-line thin override `FROM oh-my-bmad-base:local` mirroring `services/registry-api/Dockerfile`. Surprise #1 in DAR notes the mirror but doesn't promote to a Decision. CI/contributor friction: without prior `just build-base`, `docker compose build` fails with `pull access denied`. Fix: (a) add D7 to the Decisions block: "Dockerfile thin-override (`FROM oh-my-bmad-base:local`) instead of spec's multi-stage `python:3.12-slim-bookworm`. Rationale: consistency with registry-api/Dockerfile pattern; build-base centralizes Python toolchain + uv install; reduces per-service image size via shared layer. Trade-off: requires `just build-base` prerequisite; documented in AC2 self-verification."; (b) amend AC2 self-verification to add prerequisite check: `docker image inspect oh-my-bmad-base:local || just build-base`.
+
+### Patch — MED (4)
+
+- [x] [Review][Patch] **P1-M1 — epics.md acceptance gate states "8/8 healthy with subscriber enabled; 7/7 with it disabled" — both off-by-one** [_bmad-output/planning-artifacts/epics.md:2389] — Solo MED: B2. Root compose has 7 default-on services (6 producers + metrics-subscriber); migrator is profile-gated. Test asserts `expected_phase1 = 7` and `expected_phase2 = 6`. Epic AC says 8/8 and 7/7 — wrong. Acceptance gate doc contradicts test + compose file. Fix: change to `"Stack reaches 7/7 healthy with subscriber enabled; 6/6 with it disabled; both pass bootstrap-verify."`.
+
+- [x] [Review][Patch] **P1-M2 — `_grep_logs_for_missing_subscriber` searches `"metrics-subscriber"` but producers may log container name `omb-metrics-subscriber`** [tests/separability/test_s4_metrics_subscriber_optional.py:_grep_logs_for_missing_subscriber] — Solo MED: E6. False-negative risk: if any producer logs `omb-metrics-subscriber` (container name from `container_name:` directive), the grep misses it. Fix: extend regex to match BOTH forms: `(metrics-subscriber|omb-metrics-subscriber)`. Update the function's docstring.
+
+- [x] [Review][Patch] **P1-M3 — Phase 1 doesn't POST `/v1/tasks` — asymmetric coverage with Phase 2** [tests/separability/test_s4_metrics_subscriber_optional.py Phase 1 block] — Solo MED: E4. Phase 1 only probes `/healthz`, `/metrics`, `/v1/health` (read-only). Phase 2 does the write test. If subscriber somehow breaks the write path (e.g., volume mount competition, file lock), Phase 1 wouldn't catch it. Fix: add a `POST /v1/tasks` exec-probe in Phase 1 using `urllib.request` (consistent with other Phase 1 probes — avoids needing host-mapped port).
+
+- [x] [Review][Patch] **P1-M4 — `oh-my-bmad-base:local` prerequisite undocumented at test-harness level** [tests/separability/test_s4_metrics_subscriber_optional.py + spec AC2] — Solo MED: E5. Phase 1 calls `docker compose up -d` which triggers build for metrics-subscriber. If `oh-my-bmad-base:local` is absent: opaque `pull access denied` error. No CI pre-step assertion. Fix: at top of Phase 1, add `subprocess.run(["docker", "image", "inspect", "oh-my-bmad-base:local"], check=False, timeout=10, capture_output=True)` — on non-zero, call `pytest.fail(reason="prerequisite missing: run 'just build-base' first")`. Also covered by P1-H4's AC2 self-verification update.
+
+### Patch — LOW (5)
+
+- [x] [Review][Patch] **P1-L1 — Docstring wall-clock budget claim is wrong: "~3 minutes total" but `_HEALTHCHECK_TIMEOUT_S=180.0` → actual ~6+ minutes** [tests/separability/test_s4_metrics_subscriber_optional.py:30] — Solo LOW: E3. CI teams setting 4-min job timeouts based on docstring get false timeouts. Fix: update docstring to `"Wall-clock budget: ~7 minutes total (D6 — 180s healthcheck budget per phase + teardown + assertion overhead)"`.
+
+- [x] [Review][Patch] **P1-L2 — Orphaned `OMB_METRICS_UID`/`GID` env vars in `.env.example` + misleading "Consumed by ..." comment** [.env.example + DAR] — **2-lane: B3 + A4**. Spec D5 said `user: "${OMB_METRICS_UID:-10003}:..."` would consume the var. Executor omitted `user:` directive (Surprise #3) — orphaning the env vars. Comment says "Consumed by tests/separability/docker-compose.s4.yml" but overlay has NO metrics-subscriber block. Fix: either (a) delete both `OMB_METRICS_UID`/`OMB_METRICS_GID` from `.env.example` AND remove the corresponding `useradd --uid` hardcoding from Dockerfile (replace with `ARG OMB_METRICS_UID=10008` consumed by Dockerfile), OR (b) keep the vars + retitle comment to "documentation only — not consumed at runtime; UID baked into Dockerfile via ARG. Present for operational reference + future S-4 parity." **Decision: (b)** — minimal blast radius, preserves convention with `OMB_S3_UID` etc.
+
+- [x] [Review][Patch] **P1-L3 — AC5 cardinality smoke assertion weaker than prescribed** [tests/separability/test_s4_metrics_subscriber_optional.py:392] — Solo LOW: A3. Spec asked `"sanity-check baseline cardinality ≤ 52"`. Implementation: `assert "# HELP" in proc_metrics.stdout or "# TYPE" in proc_metrics.stdout` — any non-empty exposition passes. If subscriber silently regresses to 1 timeseries, assertion still passes. Story 10.5's regression test is the load-bearing gate; this is just a smoke. Fix: add `_count_canonical_timeseries(proc_metrics.stdout) <= 52` smoke assertion (reuse helper from `tests/integration/test_metrics_cardinality.py` — import via package or duplicate the 6-line function with a comment cross-referencing Story 10.5 as authoritative).
+
+- [x] [Review][Patch] **P1-L4 — AC5 Phase 1 spec said `http://registry-api:8080/v1/health` via docker network; impl uses `docker compose exec -T` — drift not amended in spec** [spec AC5 step 3] — Solo LOW: A5. Implementation correct per P2-I5 (no host ports); but spec AC5 step 3 wording not updated. Fix: amend spec AC5 step 3 wording: `"Hit /v1/health via docker compose exec -T registry-api python -c 'urllib.request.urlopen(...).status' (root compose has no host port per P2-I5 — overlay's port mapping is overlay-only)"`. Reference Surprise #5.
+
+- [x] [Review][Patch] **P1-L5 — `_grep_logs_for_missing_subscriber` only checks 4 of 6 producer services; `telegram-gateway` + `orchestrator-adapter` silently excluded** [tests/separability/test_s4_metrics_subscriber_optional.py] — Solo LOW: B-missing. The comment says "producer services" but excludes 2 with no documented rationale. Fix: either (a) extend the check to all 6 producer services, OR (b) add an inline comment explaining the exclusion (e.g., "telegram-gateway and orchestrator-adapter don't log envelope details — only command-handling traces — so the grep wouldn't match even if a hidden dependency existed").
+
+### Deferred (none — all 13 addressed in this pass per "fix all issues even minors")
 
 ---
 

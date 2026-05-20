@@ -27,8 +27,11 @@ Mirrors the S-1/S-2/S-3 separability conventions:
     --remove-orphans` runs even on assertion failure (volume cleanup
     is critical — `oh-my-bmad-data` named volume contamination
     between phases would mask defects).
-  - Wall-clock budget: ~3 minutes total (D6 — 60s healthcheck timeout
-    per phase + assertions + tear-down overhead).
+  - Wall-clock budget: ~7 minutes total (D6 — 180s healthcheck budget
+    per phase + teardown + assertion overhead). P1-L1 review patch:
+    previous docstring claim of "~3 minutes" was wrong — actual budget
+    is dominated by ``_HEALTHCHECK_TIMEOUT_S=180.0`` per phase plus
+    teardown. CI job budgets should be sized accordingly (~7 min, not 4).
 """
 
 from __future__ import annotations
@@ -45,8 +48,30 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from prometheus_client.parser import text_string_to_metric_families
 
 _log = logging.getLogger(__name__)
+
+
+# P1-L3 review patch — duplicate of the 6-line helper from
+# ``tests/integration/test_metrics_cardinality.py`` (kept inline to avoid
+# importing across the test-package boundary). Story 10.5 owns the
+# cardinality regression gate; this helper backs only the lightweight
+# smoke check in Phase 1.
+def _count_canonical_timeseries(body: str) -> int:
+    """Count canonical Prometheus timeseries in ``body``.
+
+    Filters out the ``_created`` bookkeeping samples that
+    ``prometheus_client`` emits alongside every Counter labelset (per
+    Story 10.4 — ``_created`` is metadata, not a real indexed timeseries).
+    """
+    count = 0
+    for family in text_string_to_metric_families(body):
+        for sample in family.samples:
+            if not sample.name.endswith("_created"):
+                count += 1
+    return count
+
 
 _REPO_ROOT: Path = Path(__file__).resolve().parents[2]
 _ROOT_COMPOSE_FILE: Path = _REPO_ROOT / "docker-compose.yml"
@@ -99,12 +124,15 @@ def _wait_for_all_healthy(
     last_state: list[dict[str, Any]] = []
     expected_set = set(expected_services)
     while time.monotonic() < deadline:
+        # P1-H1: bounded poll — `ps` should return in <1s; 60s upper bound prevents
+        # CI hang on a stalled Docker socket. TimeoutExpired propagates (no swallow).
         proc = subprocess.run(
             _compose_cmd(project, compose_file, "ps", "--format", "json"),
             check=False,
             env=env,
             capture_output=True,
             text=True,
+            timeout=60,
         )
         if proc.returncode != 0:
             time.sleep(1.0)
@@ -158,12 +186,14 @@ def _resolve_mapped_port(
     deadline = time.monotonic() + timeout_s
     last_err: str | None = None
     while time.monotonic() < deadline:
+        # P1-H1: 60s timeout — `docker compose port` is normally <1s.
         proc = subprocess.run(
             _compose_cmd(project, compose_file, "port", service, str(port)),
             check=False,
             env=env,
             capture_output=True,
             text=True,
+            timeout=60,
         )
         if proc.returncode == 0 and proc.stdout.strip():
             line = proc.stdout.strip().splitlines()[0]
@@ -198,12 +228,14 @@ def _wait_for_socket(host: str, port: int, *, timeout_s: float = 30.0) -> None:
 
 
 def _list_services_in_ps(project: str, compose_file: Path, env: dict[str, str]) -> list[str]:
+    # P1-H1: 60s timeout — `ps --format json` is a fast read against the Docker socket.
     proc = subprocess.run(
         _compose_cmd(project, compose_file, "ps", "--format", "json"),
         check=False,
         env=env,
         capture_output=True,
         text=True,
+        timeout=60,
     )
     if proc.returncode != 0:
         return []
@@ -239,21 +271,37 @@ def _grep_logs_for_missing_subscriber(
     Phase 2 asserts producer-service logs do NOT contain any
     "connection refused to metrics-subscriber" or similar error, which
     would indicate a hidden dependency. The grep is intentionally
-    broad (any mention of `metrics-subscriber` + error vocabulary).
+    broad (any mention of the service NAME *or* its CONTAINER NAME +
+    error vocabulary):
+
+      * service name form: ``metrics-subscriber`` (used in compose
+        DNS + service references);
+      * container name form: ``omb-metrics-subscriber`` (set by the
+        root compose ``container_name:`` directive).
+
+    P1-M2 review patch — both forms are now matched (false-negative
+    hardening: a producer that logs the container name would have
+    previously slipped past the grep).
     """
+    # P1-H1: bounded `logs` call. `--tail 200` caps the byte-volume even on a
+    # 180s-old stack with verbose producers (worst case ~tens of thousands of
+    # JSON log lines). 60s timeout is a hard upper bound — `logs --tail 200`
+    # against the local Docker socket is normally <1s.
     proc = subprocess.run(
-        _compose_cmd(project, compose_file, "logs", "--no-color", service),
+        _compose_cmd(project, compose_file, "logs", "--no-color", "--tail", "200", service),
         check=False,
         env=env,
         capture_output=True,
         text=True,
+        timeout=60,
     )
     if proc.returncode != 0:
         return []
     flagged: list[str] = []
     for line in proc.stdout.splitlines():
         lower = line.lower()
-        if "metrics-subscriber" not in lower:
+        # P1-M2: match BOTH service name and container name forms.
+        if "metrics-subscriber" not in lower and "omb-metrics-subscriber" not in lower:
             continue
         if any(
             tok in lower
@@ -271,9 +319,16 @@ def _docker_available() -> bool:
     collection time). The conftest fixture remains the canonical
     exit-gate for tests that pass through fixture setup; this marker
     just lets us skip *before* fixture setup runs.
+
+    P1-H2 review patch — also verifies the ``docker compose`` v2 plugin
+    is installed. The test body exclusively uses ``docker compose ...``
+    (v2 form); on systems with Docker Engine but a broken/missing
+    compose plugin, the previous one-probe check would let the test
+    execute and then fail opaquely at the first ``docker compose up``.
+    The two-probe form gives a clean skip instead.
     """
     try:
-        proc = subprocess.run(
+        proc_info = subprocess.run(
             ["docker", "info"],
             capture_output=True,
             timeout=10.0,
@@ -282,14 +337,26 @@ def _docker_available() -> bool:
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
-    return proc.returncode == 0
+    if proc_info.returncode != 0:
+        return False
+    try:
+        proc_compose = subprocess.run(
+            ["docker", "compose", "version"],
+            capture_output=True,
+            timeout=10.0,
+            check=False,
+            text=True,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+    return proc_compose.returncode == 0
 
 
 @pytest.mark.separability
 @pytest.mark.slow
 @pytest.mark.skipif(
     not _docker_available(),
-    reason="S-4 separability requires Docker — install or run via CI",
+    reason="S-4 separability requires Docker + compose v2 plugin — install or run via CI",
 )
 def test_metrics_subscriber_is_optional_not_a_hidden_dependency(
     tmp_path: Path,
@@ -305,6 +372,25 @@ def test_metrics_subscriber_is_optional_not_a_hidden_dependency(
     `down -v` discipline airtight.
     """
     # ─── Phase 1 — root compose (7 services incl. metrics-subscriber) ──
+    # P1-M4 review patch — prerequisite check for the base image. The
+    # metrics-subscriber Dockerfile is a thin override of
+    # ``oh-my-bmad-base:local`` (see D7 in spec). Without that base
+    # image present, ``docker compose up`` would fail with an opaque
+    # ``pull access denied`` error mid-flight. Fail fast with a clear
+    # remediation message instead.
+    base_check = subprocess.run(
+        ["docker", "image", "inspect", "oh-my-bmad-base:local"],
+        check=False,
+        capture_output=True,
+        timeout=10,
+    )
+    if base_check.returncode != 0:
+        pytest.fail(
+            "prerequisite missing: run 'just build-base' first to build the "
+            "oh-my-bmad-base:local image required by "
+            "services/metrics-subscriber/Dockerfile"
+        )
+
     phase1_project = f"omb-s4p1-{uuid4().hex[:8]}"
     phase1_env = os.environ.copy()
     # The root compose binds the `oh-my-bmad-data` *named volume*
@@ -312,12 +398,15 @@ def test_metrics_subscriber_is_optional_not_a_hidden_dependency(
     # its own volume so `down -v` cleanly tears it down without
     # touching any host bind-mount tree.
     try:
+        # P1-H1: 5-minute timeout on `up -d` — covers cold-cache image pulls
+        # + build + initial healthcheck arming. TimeoutExpired propagates.
         proc_up = subprocess.run(
             _compose_cmd(phase1_project, _ROOT_COMPOSE_FILE, "up", "-d"),
             check=False,
             env=phase1_env,
             capture_output=True,
             text=True,
+            timeout=300,
         )
         if proc_up.returncode != 0:
             pytest.fail(
@@ -393,6 +482,36 @@ def test_metrics_subscriber_is_optional_not_a_hidden_dependency(
             f"Phase 1: /metrics output does not look like Prometheus exposition "
             f"format; first 200 bytes={proc_metrics.stdout!r}"
         )
+        # P1-L3 review patch — sanity-check baseline cardinality <= 52.
+        # Story 10.5 owns the cardinality regression gate; this is a smoke
+        # check only. The `proc_metrics` `python -c` printed only the
+        # first 200 bytes via slicing — re-fetch the full body for the
+        # cardinality count.
+        proc_metrics_full = subprocess.run(
+            _compose_cmd(
+                phase1_project,
+                _ROOT_COMPOSE_FILE,
+                "exec",
+                "-T",
+                "metrics-subscriber",
+                "python",
+                "-c",
+                "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:9090/metrics', timeout=2).read().decode(), end='')",
+            ),
+            check=False,
+            env=phase1_env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if proc_metrics_full.returncode == 0 and proc_metrics_full.stdout:
+            ts_count = _count_canonical_timeseries(proc_metrics_full.stdout)
+            assert ts_count <= 52, (
+                f"Phase 1: cardinality smoke check failed — "
+                f"{ts_count} canonical timeseries > 52 budget. Story 10.5 "
+                f"owns the authoritative regression gate; this is a smoke "
+                f"backstop."
+            )
 
         # Also confirm registry-api still serves its own /v1/health
         # — proves the spine path is unaffected by the subscriber's
@@ -418,13 +537,62 @@ def test_metrics_subscriber_is_optional_not_a_hidden_dependency(
             f"Phase 1: registry-api /v1/health probe failed "
             f"(rc={proc_api_health.returncode}); stderr={proc_api_health.stderr!r}"
         )
+
+        # P1-M3 review patch — Phase 1 POST /v1/tasks write-path probe.
+        # Phase 2 exercises the write path; without symmetric coverage
+        # in Phase 1, a regression that breaks writes ONLY when the
+        # subscriber is present (e.g., volume contention, file-lock) would
+        # slip past. The body uses S-1's canonical shape ({"title": ...} →
+        # 201 with task_id in JSON body). A unique idempotency-key-style
+        # title per test run avoids cross-run collisions.
+        phase1_idem = f"s4-phase1-{uuid4()}"
+        phase1_post_script = (
+            "import json, urllib.request, sys\n"
+            "req = urllib.request.Request(\n"
+            "    'http://127.0.0.1:8080/v1/tasks',\n"
+            f"    data=json.dumps({{'title': '{phase1_idem}'}}).encode(),\n"
+            "    headers={'Content-Type': 'application/json'},\n"
+            "    method='POST',\n"
+            ")\n"
+            "with urllib.request.urlopen(req, timeout=5) as r:\n"
+            "    body = r.read().decode()\n"
+            "    print(r.status)\n"
+            "    print(body)\n"
+            "    sys.exit(0 if r.status == 201 else 1)\n"
+        )
+        proc_post = subprocess.run(
+            _compose_cmd(
+                phase1_project,
+                _ROOT_COMPOSE_FILE,
+                "exec",
+                "-T",
+                "registry-api",
+                "python",
+                "-c",
+                phase1_post_script,
+            ),
+            check=False,
+            env=phase1_env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert proc_post.returncode == 0, (
+            f"Phase 1: POST /v1/tasks expected 201 but the exec probe failed "
+            f"(rc={proc_post.returncode}); stdout={proc_post.stdout!r}; "
+            f"stderr={proc_post.stderr!r}"
+        )
     finally:
+        # P1-H1: 5-minute timeout on `down -v --remove-orphans` — covers
+        # volume cleanup on contended hosts. TimeoutExpired propagates;
+        # cleanup failure is preferable to silent CI hang.
         proc_down = subprocess.run(
             _compose_cmd(phase1_project, _ROOT_COMPOSE_FILE, "down", "-v", "--remove-orphans"),
             check=False,
             env=phase1_env,
             capture_output=True,
             text=True,
+            timeout=300,
         )
         if proc_down.returncode != 0:
             _log.warning(
@@ -444,12 +612,14 @@ def test_metrics_subscriber_is_optional_not_a_hidden_dependency(
     phase2_env["OMB_S4_DATA_DIR"] = str(data_dir)
 
     try:
+        # P1-H1: 5-minute timeout on `up -d`.
         proc_up = subprocess.run(
             _compose_cmd(phase2_project, _S4_COMPOSE_FILE, "up", "-d"),
             check=False,
             env=phase2_env,
             capture_output=True,
             text=True,
+            timeout=300,
         )
         if proc_up.returncode != 0:
             pytest.fail(
@@ -504,8 +674,14 @@ def test_metrics_subscriber_is_optional_not_a_hidden_dependency(
 
         # Confirm no producer service log mentions a missing
         # metrics-subscriber error (would indicate hidden coupling).
+        # P1-L5 review patch — iterate ALL 6 producer services (was 4;
+        # `telegram-gateway` and `orchestrator-adapter` were previously
+        # excluded with no rationale). All 6 producers are checked now;
+        # no exclusions. The matcher matches both `metrics-subscriber`
+        # (service name) and `omb-metrics-subscriber` (container name)
+        # forms per P1-M2.
         flagged_lines: list[str] = []
-        for svc in ("worker-wrapper", "clawhip-daemon", "registry-api", "registry-state"):
+        for svc in _PRODUCER_SERVICES:
             flagged_lines.extend(
                 _grep_logs_for_missing_subscriber(phase2_project, _S4_COMPOSE_FILE, phase2_env, svc)
             )
@@ -515,12 +691,14 @@ def test_metrics_subscriber_is_optional_not_a_hidden_dependency(
             + "\n".join(flagged_lines[:20])
         )
     finally:
+        # P1-H1: 5-minute timeout on `down -v --remove-orphans`.
         proc_down = subprocess.run(
             _compose_cmd(phase2_project, _S4_COMPOSE_FILE, "down", "-v", "--remove-orphans"),
             check=False,
             env=phase2_env,
             capture_output=True,
             text=True,
+            timeout=300,
         )
         if proc_down.returncode != 0:
             _log.warning(
