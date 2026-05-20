@@ -21,6 +21,7 @@ from events import (
     ApprovalRejectedPayload,
     BudgetOverridePayload,
     LicenseOverridePayload,
+    TaskApprovalSignedPayload,
     TaskRetryRequestedPayload,
     TaskStopRequestedPayload,
 )
@@ -36,9 +37,11 @@ from registry_state.schema import Event, Task  # noqa: IMP001 — services→ser
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from registry_api.adapters.approval_signing import compute_approval_hmac
 from registry_api.adapters.errors import ProblemDetails
 from registry_api.lifecycle import ACTION_VALID_STATES
 from registry_api.routes.tasks import ResponseSlot, ResponseSlotCache
+from registry_api.settings import ApprovalSigningSettings
 
 log = logging.getLogger("registry_api.routes.decisions")
 
@@ -277,8 +280,21 @@ async def post_decision(
         decided_at = clock.now()
 
         # AC-4: emit the correct event type per action.
-        event_type, payload = _build_event(body, task_id, decision_id, actor_id)
+        # Story 11.1 (FR64): _build_event may return [primary] OR
+        # [primary, task.approval_signed] when the action is "approve"
+        # AND OPERATOR_HMAC_KEY is set. The primary event MUST be appended
+        # first; the signed sibling carries the same decided_at + trace_id.
+        signing_settings: ApprovalSigningSettings = app.state.signing_settings
+        primary_pair, signed_pair = _build_event(
+            body=body,
+            task_id=task_id,
+            decision_id=decision_id,
+            actor_id=actor_id,
+            decided_at=decided_at,
+            signing_settings=signing_settings,
+        )
 
+        event_type, payload = primary_pair
         envelope = EventEnvelope.create(
             event_id=event_id,
             type=event_type,
@@ -292,6 +308,50 @@ async def post_decision(
             parent_event_id=None,
         )
         await writer.append(envelope)
+
+        # Story 11.1 (FR64 / NFR-S10): emit the paired task.approval_signed
+        # sibling AFTER approval.granted so that downstream verification
+        # (Story 11.4 ``just verify-approval``) finds the signed event AFTER
+        # the granted parent in tail order. Same decided_at and trace_id so
+        # the pair is operator-correlatable and the HMAC input is
+        # reproducible offline.
+        if signed_pair is not None:
+            signed_type, signed_payload = signed_pair
+            signed_event_id = new_event_id(clock=clock)
+            signed_envelope = EventEnvelope.create(
+                event_id=signed_event_id,
+                type=signed_type,
+                schema_version="1.0.0",
+                emitted_at=decided_at,
+                emitted_at_monotonic_ns=clock.monotonic_ns(),
+                actor=actor,
+                payload=signed_payload,
+                request_id=request_id,
+                trace_id=trace_id,
+                parent_event_id=event_id,
+            )
+            await writer.append(signed_envelope)
+            # AC6: structured INFO log with 8-char HMAC prefix only.
+            # Bloat avoidance + correlation sufficient at 32 bits of entropy.
+            # The full HMAC is in the event payload; the prefix lets operators
+            # correlate logs↔events without exfiltrating the signing input.
+            log.info(
+                "approval_signed task_id=%s decision_id=%s actor_id=%s hmac_sha256_prefix=%s",
+                task_id,
+                decision_id,
+                actor_id,
+                signed_payload.hmac_sha256[:8],
+            )
+        elif body.action == "approve":
+            # AC1 / D2: missing key → emit approval.granted ONLY and warn.
+            # No HMAC value is logged (there is none); no key state leaks to
+            # the client (the response shape is unchanged). NFR-S10 preserved.
+            log.warning(
+                "approval_signing_disabled_missing_hmac_key task_id=%s decision_id=%s actor_id=%s",
+                task_id,
+                decision_id,
+                actor_id,
+            )
 
         # AC-8: license override branch — emit second audit event.
         # Accepted risk: two sequential writer.append calls with no
@@ -452,14 +512,49 @@ _DecisionPayload = (
 
 
 def _build_event(
+    *,
     body: DecisionRequest,
     task_id: str,
     decision_id: str,
     actor_id: str,
-) -> tuple[str, _DecisionPayload]:
-    """Return ``(event_type, payload_model)`` for the given action."""
+    decided_at: datetime,
+    signing_settings: ApprovalSigningSettings,
+) -> tuple[
+    tuple[str, _DecisionPayload],
+    tuple[str, TaskApprovalSignedPayload] | None,
+]:
+    """Return primary + optional task.approval_signed sibling pair.
+
+    Story 6.4 (original): returned a single ``(event_type, payload)`` tuple.
+    Story 11.1 extends to also return a paired ``task.approval_signed``
+    sibling when ``body.action == "approve"`` AND
+    ``signing_settings.operator_hmac_key`` is set (FR64 / NFR-S10).
+
+    The ``decided_at`` is passed in (NOT recomputed inside this function) so
+    the HMAC signing input matches the primary event's ``emitted_at`` exactly
+    — this is what makes offline verification (Story 11.4) deterministic.
+    Per FR64, only the ``approve`` action is signed; reject/stop/retry never
+    return a signed sibling.
+
+    Args:
+        body: Validated decision request body.
+        task_id: Target task identifier (UUIDv7-shaped, ``t-`` prefix).
+        decision_id: Newly minted decision identifier (``d-`` prefix).
+        actor_id: Operator identifier from middleware (allowlist-validated).
+        decided_at: Decision timestamp; same instant used for envelope
+            ``emitted_at`` AND HMAC signing input.
+        signing_settings: ApprovalSigningSettings carrying the operator
+            HMAC key (or ``None`` when signing is disabled). ``None``
+            keeps approvals operational (D2 in Story 11.1 spec).
+
+    Returns:
+        Two-tuple ``(primary_pair, signed_pair_or_none)``. The caller
+        appends both to the event log IN ORDER (primary first), with the
+        signed sibling sharing ``decided_at`` + ``trace_id``.
+    """
+    primary: tuple[str, _DecisionPayload]
     if body.action == "approve":
-        return (
+        primary = (
             "approval.granted",
             ApprovalGrantedPayload(
                 task_id=task_id,
@@ -468,8 +563,8 @@ def _build_event(
                 override=body.override,
             ),
         )
-    if body.action == "reject":
-        return (
+    elif body.action == "reject":
+        primary = (
             "approval.rejected",
             ApprovalRejectedPayload(
                 task_id=task_id,
@@ -478,24 +573,51 @@ def _build_event(
                 reason=body.reason,
             ),
         )
-    if body.action == "stop":
-        return (
+    elif body.action == "stop":
+        primary = (
             "task.stop_requested",
             TaskStopRequestedPayload(
                 task_id=task_id,
                 actor_id=actor_id,
             ),
         )
-    # retry
-    return (
-        "task.retry_requested",
-        TaskRetryRequestedPayload(
-            task_id=task_id,
-            decision_id=decision_id,
-            actor_id=actor_id,
-            hint=body.hint,
-        ),
+    else:
+        # retry
+        primary = (
+            "task.retry_requested",
+            TaskRetryRequestedPayload(
+                task_id=task_id,
+                decision_id=decision_id,
+                actor_id=actor_id,
+                hint=body.hint,
+            ),
+        )
+
+    # Story 11.1 (FR64): only ``approve`` is signed. reject/stop/retry never
+    # emit a task.approval_signed sibling.
+    if body.action != "approve":
+        return (primary, None)
+    if signing_settings.operator_hmac_key is None:
+        # D2 — missing key → caller emits a structured warning and skips
+        # signing. Approvals remain operational (safety trade-off).
+        return (primary, None)
+
+    hmac_value = compute_approval_hmac(
+        key=signing_settings.operator_hmac_key,
+        task_id=task_id,
+        action="approve",
+        timestamp=decided_at,
+        actor_id=actor_id,
     )
+    signed_payload = TaskApprovalSignedPayload(
+        task_id=task_id,
+        decision_id=decision_id,
+        actor_id=actor_id,
+        action="approve",
+        timestamp=decided_at,
+        hmac_sha256=hmac_value,
+    )
+    return (primary, ("task.approval_signed", signed_payload))
 
 
 __all__ = [

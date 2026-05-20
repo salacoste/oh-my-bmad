@@ -40,6 +40,7 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     SessionStartedPayload,
     SinkDeliveryFailedPayload,
     TaskApprovalRequestedPayload,
+    TaskApprovalSignedPayload,
     TaskBlockerRaisedPayload,
     TaskBudgetExceededPayload,
     TaskCompletedPayload,
@@ -104,6 +105,7 @@ __all__ = [
     "SessionStartedPayload",
     "SinkDeliveryFailedPayload",
     "TaskApprovalRequestedPayload",
+    "TaskApprovalSignedPayload",
     "TaskBlockerRaisedPayload",
     "TaskBudgetExceededPayload",
     "TaskCompletedPayload",
@@ -243,6 +245,11 @@ def ensure_registered() -> None:
     register("approval.granted", "1.1.0", ApprovalGrantedPayload)
     register("approval.rejected", "1.0.0", ApprovalRejectedPayload)
     register("approval.rejected", "1.1.0", ApprovalRejectedPayload)
+    # Story 11.1 — HMAC-signed approval sibling event (FR64 / NFR-S10).
+    # Minimal registration at 1.0.0; Story 11.2 refines payload constraints
+    # and bumps to 1.1.0 (additive, with full Pydantic Field tightening +
+    # contract-fixture forward-compat pair).
+    register("task.approval_signed", "1.0.0", TaskApprovalSignedPayload)
     register("task.retry_requested", "1.0.0", TaskRetryRequestedPayload)
     register("task.retry_requested", "1.1.0", TaskRetryRequestedPayload)
     register("tier3.license_override", "1.0.0", LicenseOverridePayload)

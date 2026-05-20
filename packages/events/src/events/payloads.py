@@ -897,6 +897,35 @@ class TaskLicenseFlaggedPayload(BaseModel):
     detected_licenses: list[str] = Field(min_length=1, max_length=100)
 
 
+class TaskApprovalSignedPayload(BaseModel):
+    """Sibling event emitted alongside ``approval.granted`` carrying HMAC signature.
+
+    Story 11.1 (FR64 / NFR-S10) — minimal surface registered at schema_version
+    ``1.0.0``. Story 11.2 will refine:
+
+    * bumps to schema_version ``1.1.0``
+    * tightens ``hmac_sha256`` to ``Field(min_length=64, max_length=64, pattern="^[0-9a-f]{64}$")``
+    * adds contract-fixture forward-compat pair
+    * tightens ``task_id`` / ``decision_id`` / ``actor_id`` patterns
+
+    See ADR-0006 (to be drafted in Story 11.5) for signing / verification protocol.
+
+    Ordering invariant (per Story 11.1): the paired ``approval.granted`` event
+    MUST be appended to the event log BEFORE this ``task.approval_signed``
+    event so that downstream verification (``just verify-approval``, Story
+    11.4) can find the signed sibling AFTER the granted parent in tail order.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    task_id: str
+    decision_id: str
+    actor_id: str
+    action: Literal["approve"]
+    timestamp: AwareDatetime
+    hmac_sha256: str
+
+
 __all__ = [
     "TELEGRAM_REJECTED_SCHEMA_VERSION",
     "AcceptedCommand",
@@ -919,6 +948,7 @@ __all__ = [
     "SessionStartedPayload",
     "SinkDeliveryFailedPayload",
     "TaskApprovalRequestedPayload",
+    "TaskApprovalSignedPayload",
     "TaskBlockerRaisedPayload",
     "TaskBudgetExceededPayload",
     "TaskCompletedPayload",

@@ -87,6 +87,7 @@ from registry_api.routes.tasks import (
 from registry_api.routes.trace import (
     router as trace_router,
 )
+from registry_api.settings import ApprovalSigningSettings
 
 # Idempotency-cache TTL — 7 days per FR28 (Architecture line 205). The cache is
 # created by the registry-state schema (``IdempotencyCache`` ORM model) and
@@ -113,6 +114,7 @@ def build_app(
     db_url: str,
     clock: Clock,
     actor_kind: ActorKind = "operator",
+    signing_settings: ApprovalSigningSettings | None = None,
 ) -> FastAPI:
     """Build and return the wired-up FastAPI application.
 
@@ -129,6 +131,13 @@ def build_app(
                   ``FrozenClock`` / ``TickingClock`` in tests).
         actor_kind: Actor kind for tier enforcement (Story 6.3). Phase 1
                   defaults to ``"operator"`` — the HTTP API is operator-facing.
+        signing_settings: Optional :class:`ApprovalSigningSettings` carrying
+                  the operator HMAC key (Story 11.1 / FR64). When ``None``,
+                  the factory constructs one via ``.from_env()`` (reads
+                  ``OPERATOR_HMAC_KEY``). Tests inject explicit instances
+                  to avoid env-var coupling. Hot-reload is NOT supported —
+                  the key is read once here and survives until process
+                  restart (Story 11.5 will add rotation).
 
     Returns:
         Fully configured ``FastAPI`` instance ready for ``uvicorn.run``.
@@ -217,6 +226,19 @@ def build_app(
                 ttl=_IDEMPOTENCY_TTL_SECONDS,
             )
             app.state.idempotency_response_cache = response_body_cache
+
+            # Story 11.1 (FR64 / NFR-S10): load approval-signing settings.
+            # If the caller passed an explicit instance (tests do this), use
+            # it directly; otherwise read OPERATOR_HMAC_KEY from the env.
+            # Hot-reload is NOT supported — operators must restart to pick
+            # up a rotated key (Story 11.5 will formalize the rotation flow
+            # with a key.rotated audit event).
+            resolved_signing = (
+                signing_settings
+                if signing_settings is not None
+                else ApprovalSigningSettings.from_env()
+            )
+            app.state.signing_settings = resolved_signing
 
             # Writer last — F13 note: EventLogWriter.__init__ calls
             # base_dir.mkdir(parents=True, exist_ok=True) so a non-existent

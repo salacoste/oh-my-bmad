@@ -10,6 +10,10 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.30",
     "pydantic>=2.8",
+    # Story 11.1 — env-var loading for OPERATOR_HMAC_KEY (FR64 / NFR-S10).
+    # First pydantic-settings consumer in registry-api; previously all
+    # config was threaded through ``build_app(...)`` keywords.
+    "pydantic-settings>=2.0",
     "events>=0.3.0",
     "registry-state>=0.5.0",
     "idempotency>=0.2.0,<0.3.0",

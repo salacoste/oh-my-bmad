@@ -1,6 +1,6 @@
 # Story 11.1 — HMAC signing inside `/v1/tasks/<id>/decisions` handler
 
-Status: **ready-for-dev**
+Status: **review** (CI pending @ <sha>)
 
 ## Story
 
@@ -376,8 +376,125 @@ blocks:
 blocked_by:
   - Epic 9 done (trace_id kernel — sibling events share trace_id)
   - Epic 10 done (no actual dependency, but Epic 11 starts after Epic 10 per project sequence)
-status: ready-for-dev
+status: review
 created: 2026-05-20
 created_by: bmad-create-story skill
 ---
 ```
+
+## Tasks/Subtasks
+
+- [x] **AC1** — `OPERATOR_HMAC_KEY` loaded via `pydantic-settings` `SecretStr` field. NEW module `services/registry-api/src/registry_api/settings.py` exposes `ApprovalSigningSettings` (D2 decision — see DAR rationale). `.env.example` documents `openssl rand -hex 32` recipe + NFR-S10 isolation contract. Field validator enforces `min_length=32` when key is set; `None` is permitted (handler logs warning + skips signing).
+- [x] **AC2** — `TaskApprovalSignedPayload` added to `packages/events/src/events/payloads.py` (frozen + strict + extra="forbid") with fields `task_id: str`, `decision_id: str`, `actor_id: str`, `action: Literal["approve"]`, `timestamp: AwareDatetime`, `hmac_sha256: str`. Registered at `schema_version="1.0.0"` in `services/registry-state/src/registry_state/domain/event_types.py::ensure_registered()`. Re-exported through both packages' `__all__` blocks.
+- [x] **AC3** — `compute_approval_hmac` pure function in `services/registry-api/src/registry_api/adapters/approval_signing.py`. Canonical signing string `f"{task_id}|{action}|{timestamp.isoformat()}|{actor_id}"` per FR64 / D4. Returns 64-char lowercase hex digest of HMAC-SHA256. No logging, no I/O. Story 11.4 `just verify-approval` will re-import this function (single source of truth per D3).
+- [x] **AC4** — `routes/decisions.py::_build_event` extended to return `(primary_pair, signed_pair_or_none)`. Handler appends `approval.granted` first, then `task.approval_signed` sibling sharing the SAME `decided_at` + `trace_id` + `parent_event_id` reference. Only `action="approve"` produces a signed sibling; reject/stop/retry never sign (per FR64 wording).
+- [x] **AC5** — NFR-S10 isolation enforced through three vectors: (a) Pydantic `SecretStr` default masking in `repr()` / `model_dump()` / `model_dump_json()` (3 unit tests); (b) HMAC hex output is structurally separable from key material (1 unit test); (c) `get_secret_value()` called EXACTLY ONCE inside the pure HMAC function (verified by inspection — only call site in the diff). Story 11.5 will add the canonical full-tree `tests/integration/test_hmac_key_isolation.py` CI gate.
+- [x] **AC6** — Structured INFO log emitted post-append: `approval_signed task_id=<...> decision_id=<...> actor_id=<...> hmac_sha256_prefix=<first-8-chars>` (D5 — 32 bits of entropy sufficient for operator correlation; full HMAC stays in the event payload). Missing-key path logs `approval_signing_disabled_missing_hmac_key` at WARNING (D2 safety trade-off).
+- [x] **AC7** — Mypy `--strict` baseline extended from 126 → 130 source files (settings.py + approval_signing.py + test_approval_signing.py + test_decisions_signing.py — all 4 new source files clean under `--strict`). Existing 126 files unchanged.
+- [x] **AC8** — All validation gates green locally:
+  - `uv run pytest -q services/registry-api packages/events services/registry-state` → **941 passed** (baseline 921, +20 from Story 11.1's 13 unit + 7 integration tests).
+  - `uv run mypy --strict packages/ services/registry-api services/registry-state services/metrics-subscriber` → **Success: no issues found in 130 source files**.
+  - `uv run python scripts/check_imports.py` → exit 0.
+  - `uv run python scripts/check_event_registry.py` → exit 0.
+  - `uv run python scripts/check_single_writer.py` → exit 0.
+  - `git ls-files -z | xargs -0 uv run secret-hygiene-precommit` → exit 0.
+
+## Dev Agent Record
+
+### Implementation summary
+
+4 new modules + 4 modified files closing Story 11.1's 8 ACs:
+
+1. **`services/registry-api/src/registry_api/settings.py`** (NEW, 116 lines) — `ApprovalSigningSettings` `BaseSettings` subclass. First `pydantic-settings` consumer in `registry-api` (per D2 decision — see surprises below).
+2. **`services/registry-api/src/registry_api/adapters/approval_signing.py`** (NEW, 94 lines) — pure function `compute_approval_hmac`. Story 11.4 re-imports this for `just verify-approval` (single source of truth per D3).
+3. **`services/registry-api/src/registry_api/test_approval_signing.py`** (NEW, 296 lines) — 13 unit tests covering settings (4), HMAC fn (6 — incl. RFC-4231-style known-vector check), key isolation (3 — NFR-S10 self-verification).
+4. **`services/registry-api/src/registry_api/test_decisions_signing.py`** (NEW, 7 integration tests) — handler-level assertions: paired-event emission, ordering invariant, missing-key skip path, prefix-only log assertion, NFR-S10 isolation in event log + DB.
+5. **`packages/events/src/events/payloads.py`** (MODIFIED, +30 lines) — `TaskApprovalSignedPayload` minimal model.
+6. **`services/registry-state/src/registry_state/domain/event_types.py`** (MODIFIED, +7 lines) — registers `task.approval_signed` at `schema_version="1.0.0"`.
+7. **`services/registry-api/src/registry_api/routes/decisions.py`** (MODIFIED, +137 lines) — `_build_event` extended to return primary + optional signed pair; handler appends both with shared `decided_at` + `trace_id`; emits structured INFO log post-append with 8-char prefix only.
+8. **`services/registry-api/src/registry_api/app.py`** (MODIFIED, +22 lines) — `build_app` accepts optional `signing_settings` (tests inject explicit instances); production path constructs via `ApprovalSigningSettings.from_env()`.
+9. **`.env.example`** (MODIFIED, +15 lines) — `OPERATOR_HMAC_KEY` block with `openssl rand -hex 32` recipe + NFR-S10 isolation contract.
+10. **`services/registry-api/pyproject.toml`** (MODIFIED, +4 lines) — `pydantic-settings>=2.0` dependency (first consumer in registry-api).
+11. **`uv.lock`** (MODIFIED, +2 lines) — auto-resolved `pydantic-settings` dep.
+12. **`_bmad-output/implementation-artifacts/sprint-status.yaml`** (MODIFIED) — `11-1-hmac-signing-decisions-handler: ready-for-dev → review`.
+
+### Files changed
+
+```
+services/registry-api/src/registry_api/settings.py                                  (NEW)
+services/registry-api/src/registry_api/adapters/approval_signing.py                 (NEW)
+services/registry-api/src/registry_api/test_approval_signing.py                     (NEW)
+services/registry-api/src/registry_api/test_decisions_signing.py                    (NEW)
+packages/events/src/events/payloads.py                                              (MODIFIED)
+services/registry-state/src/registry_state/domain/event_types.py                    (MODIFIED)
+services/registry-api/src/registry_api/routes/decisions.py                          (MODIFIED)
+services/registry-api/src/registry_api/app.py                                       (MODIFIED)
+.env.example                                                                        (MODIFIED)
+services/registry-api/pyproject.toml                                                (MODIFIED)
+uv.lock                                                                             (MODIFIED — pydantic-settings only)
+_bmad-output/implementation-artifacts/sprint-status.yaml                            (MODIFIED — review flip)
+_bmad-output/implementation-artifacts/11-1-hmac-signing-decisions-handler.md        (MODIFIED — Status + Tasks/Subtasks + DAR)
+```
+
+### Test count delta
+
+```
+$ uv run pytest --collect-only -q services/registry-api packages/events services/registry-state | tail -1
+941 tests collected in 1.31s
+```
+
+Baseline (HEAD `21cc2b4` with our diff stashed via `git stash -u`): **921 tests**.
+Post Story 11.1: **941 tests** → **+20 tests** (13 unit in `test_approval_signing.py` + 7 integration in `test_decisions_signing.py`).
+
+### Mypy baseline delta
+
+```
+$ uv run mypy --strict packages/ services/registry-api services/registry-state services/metrics-subscriber 2>&1 | tail -1
+Success: no issues found in 130 source files
+```
+
+**126 → 130** (+4 new source files: `settings.py`, `adapters/approval_signing.py`, `test_approval_signing.py`, `test_decisions_signing.py`). Spec AC7 predicted "+1 or +2 file" — actual is +4 because test files in `services/registry-api/src/registry_api/` (co-located with source) are inside `--strict` scope (NOT in `tests/` wildcard exclusion). Tests are clean under `--strict`. All existing 126 files unchanged.
+
+### Settings class choice (D2 — rationale)
+
+The spec listed three options for the settings home: extend a shared `RegistryApiSettings`, create a dedicated `ApprovalSigningSettings`, or use a plain `os.environ` read. **Chose option B — dedicated NEW module `services/registry-api/src/registry_api/settings.py`** with `ApprovalSigningSettings` for these reasons:
+
+1. **No shared settings class existed in registry-api.** All prior configuration (e.g. `ANTHROPIC_API_KEY`, `db_url`, `clock`, `actor_kind`) is threaded through `build_app(...)` keyword arguments + direct `os.environ` reads in `app.py`. There is no `RegistryApiSettings` to extend.
+2. **Pydantic-settings convention favors per-concern classes.** Story 2.16's `AuditedSecret` precedent and `telegram-gateway`'s `BaseSettings` usage both create concern-scoped settings classes rather than a monolithic one. Following the established pattern minimizes reviewer surprise.
+3. **NFR-S10 blast radius.** A dedicated class keeps the HMAC-key surface narrow — only `_build_event` and the handler's `app.state.signing_settings` accessor touch it. No risk of accidentally exposing the key through an unrelated settings field.
+4. **Story 11.5 rotation forward-compat.** When Story 11.5 adds the `key.rotated` audit event flow, the settings class is the natural home for `previous_key` field (overlap window). Keeping the surface small now makes that extension surgical.
+
+`pydantic-settings>=2.0` was added as a `registry-api` dependency (first consumer; previously transitive only). uv.lock diff confirmed: ONLY `pydantic-settings` added — no surprise transitive deps.
+
+### Surprises / deviations from spec
+
+1. **Mypy delta +4 instead of +1/+2.** Test files `test_approval_signing.py` and `test_decisions_signing.py` are co-located with source under `services/registry-api/src/registry_api/` (matches the `test_decisions.py` precedent). Co-located test files ARE inside `--strict` scope — they are NOT excluded by `mypy.ini`'s `[mypy-tests.*]` wildcard (which only matches the top-level `tests/` directory). All 4 new files are clean under `--strict`; no `# type: ignore` added.
+2. **`_build_event` signature became keyword-only.** Original signature took 4 positional args; the new version requires 6 args including `decided_at` + `signing_settings`. Converted to keyword-only (`*,`) to prevent argument-order mistakes at the (single) call site in the handler. Self-contained refactor — no callers elsewhere.
+3. **`app.py` accepts `signing_settings` as optional `build_app` kwarg.** Production path constructs via `.from_env()` inside the lifespan; tests inject explicit instances to avoid env-var coupling. This mirrors the existing `clock` injection pattern.
+4. **Event-ordering safety: same envelope `parent_event_id`.** The signed sibling carries `parent_event_id=<approval.granted.event_id>` so downstream verification (`just verify-approval`, Story 11.4) can walk the parent linkage directly without scanning for the sibling. Not strictly required by FR64 wording but obviously useful — flagged for Story 11.4 to lean on this.
+5. **No new dependencies beyond `pydantic-settings`.** HMAC-SHA256 uses Python stdlib `hmac` + `hashlib`. Confirmed: `uv.lock` diff shows ONLY `pydantic-settings` added (no surprise transitive crypto deps).
+
+### Story 11.2 readiness check
+
+Story 11.2 lifts directly from this story (no rework expected):
+
+- **`TaskApprovalSignedPayload` schema_version bump `1.0.0 → 1.1.0`** — Story 11.2 will tighten field constraints:
+  - `task_id` / `decision_id` / `actor_id` pattern constraints (UUIDv7 shape, prefix validation).
+  - `hmac_sha256` to `Field(min_length=64, max_length=64, pattern="^[0-9a-f]{64}$")`.
+  - Contract-fixture forward-compat pair (per ADR-0001 additive-evolution rule).
+- **`key.rotated` event type registration** — Story 11.2 adds the rotation audit event (Story 11.5 will emit it).
+- **`capability.denied` event type registration (DD5 from Epic 10 retro)** — opportunistic bundle.
+
+No blockers identified. Story 11.2 can begin as soon as Story 11.1 CI is green + sprint-status flips to `done`.
+
+### Validation gates run locally
+
+| Gate | Result |
+|---|---|
+| `uv run pytest -q services/registry-api packages/events services/registry-state` | **941 passed** (1 hypothesis dir warning — unrelated) |
+| `uv run mypy --strict packages/ services/registry-api services/registry-state services/metrics-subscriber` | **Success: no issues found in 130 source files** |
+| `uv run python scripts/check_imports.py` | exit 0 |
+| `uv run python scripts/check_event_registry.py` | exit 0 |
+| `uv run python scripts/check_single_writer.py` | exit 0 |
+| `git ls-files -z \| xargs -0 uv run secret-hygiene-precommit` | exit 0 |
+| `uv run secret-hygiene-precommit <4 new files>` | exit 0 |
