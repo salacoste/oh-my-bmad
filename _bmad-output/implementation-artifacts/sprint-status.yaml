@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-20T14:00:00Z
+last_updated: 2026-05-20T14:30:00Z
 current_phase: 2  # Phase 2 opened by ADR-0003 (docs/adr/0003-phase-2-gate.md), 2026-05-15
 
 development_status:
@@ -284,8 +284,8 @@ development_status:
   # phase: 2 · ADR-0006
   # FR63–FR65a · NFR-S10
   # =========================================================================
-  epic-11: backlog
-  11-1-hmac-signing-decisions-handler: backlog  # phase: 2 · FR64
+  epic-11: in-progress  # 2026-05-20 — Story 11.1 spec authored (HMAC signing in decisions handler, FR64+NFR-S10)
+  11-1-hmac-signing-decisions-handler: ready-for-dev  # phase: 2 · FR64 + NFR-S10 · 8 ACs · OPERATOR_HMAC_KEY (SecretStr) + compute_approval_hmac pure fn + paired task.approval_signed sibling emission + minimal payload registration (Story 11.2 refines)
   11-2-register-approval-signed-key-rotated-events: backlog  # phase: 2 · FR64, FR65a · new event types
   11-3-approvals-pinned-thread-handler: backlog  # phase: 2 · FR63
   11-4-just-verify-approval-offline-recipe: backlog  # phase: 2 · FR65
