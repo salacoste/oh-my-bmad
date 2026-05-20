@@ -68,3 +68,6 @@ _bmad-output/test-artifacts/*.json
 
 # Marketing drafts (articles, X threads, etc.) — local only, not for repo.
 marketing/
+
+# Playwright MCP page-snapshot artifacts — transient CI-debug dumps.
+.playwright-mcp/
