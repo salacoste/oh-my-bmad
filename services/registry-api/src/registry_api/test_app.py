@@ -628,6 +628,52 @@ class TestMiddleware:
         assert r.json()["actor_id"] == "http-api"
 
     @pytest.mark.asyncio
+    async def test_actor_id_middleware_honors_x_actor_id_header(
+        self, tmp_path: Path, fixed_clock: FrozenClock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Story 11.3 PD1: X-Actor-Id header from trusted callers populates request.state.actor_id.
+
+        Pass-1 P1 owner-check (compares opened_by_actor_id vs str(from_user.id))
+        was broken in Phase 1 because middleware hardcoded "http-api"; PD1
+        teaches middleware to honor X-Actor-Id sent by internal callers
+        (telegram-gateway handlers/registry_client.py:719). Invalid headers
+        (regex mismatch) fall back to "http-api" with a structured log warning.
+        """
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+
+        events_dir = tmp_path / "events"
+        app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+
+        @app.get("/debug/actor-header")
+        async def _actor_header_echo(request: Request) -> JSONResponse:
+            return JSONResponse({"actor_id": request.state.actor_id})
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://testserver"
+            ) as client,
+        ):
+            # Valid numeric Telegram ID
+            r = await client.get("/debug/actor-header", headers={"X-Actor-Id": "12345"})
+            assert r.status_code == 200
+            assert r.json()["actor_id"] == "12345"
+
+            # Absence of header → fallback to "http-api"
+            r = await client.get("/debug/actor-header")
+            assert r.status_code == 200
+            assert r.json()["actor_id"] == "http-api"
+
+            # Invalid pattern (contains pipe → shell metacharacter) → fallback + log warning
+            with caplog.at_level("WARNING", logger="registry_api.adapters.middleware"):
+                r = await client.get("/debug/actor-header", headers={"X-Actor-Id": "bad|injection"})
+            assert r.status_code == 200
+            assert r.json()["actor_id"] == "http-api"
+            assert any(rec.message == "actor_id_header_invalid" for rec in caplog.records)
+
+    @pytest.mark.asyncio
     async def test_request_id_middleware_regenerates_malformed_header(
         self, post_client: AsyncClient, caplog: pytest.LogCaptureFixture
     ) -> None:

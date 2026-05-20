@@ -1,6 +1,6 @@
 # Story 11.3 — `/approvals` Telegram command opens pinned-thread inbox
 
-Status: **done** (CI green @ 14f908a — pass-1 review batch: 35 patches + 3 spec amendments)
+Status: **review** (pass-2 CI pending @ pre-commit — 22 fixes incl. 2 P0 regressions caught by pass-2)
 
 ## Story
 
@@ -23,7 +23,7 @@ Mirror the existing handler pattern (look at `services/telegram-gateway/src/tele
 - `async def handle_approvals(message: aiogram.types.Message, ...) -> None` signature
 - Allowlist middleware (existing Story 3.2 pattern) gates access
 - On invocation:
-  1. Check if operator already has a pinned inbox (via registry-state read — see AC2 schema)
+  1. Check if operator already has a pinned inbox (via registry-state read — see AC2 schema) (via `GET /v1/approvals/inbox/{chat_id}` to registry-api per D5 OPTION C)
   2. If yes: reply "You already have an approval inbox pinned at <thread-link>"
   3. If no:
      - Create new thread in the operator's chat via aiogram `bot.create_forum_topic(...)` (or equivalent — verify aiogram API)
@@ -204,7 +204,7 @@ Self-verification:
 - **Registry-state schema**: `services/registry-state/src/registry_state/schema.py` (single file — not a directory). Materializers in `services/registry-state/src/registry_state/domain/`.
 - **Single-writer rule (FR26)**: registry-state is sole writer. Telegram-gateway MUST emit events via `POST /v1/approvals/inbox` to registry-api (matches existing `POST /v1/tasks` / `POST /v1/decisions` pattern) — NEVER write directly to SQLite.
 - **Story 11.2 just closed**: `task.approval_signed` + `key.rotated` + `capability.denied` registered; `actor_id max_length=128` codebase-wide invariant established.
-- **Mypy `--strict` baseline:** 130 source files.
+- **Mypy `--strict` baseline:** 130 source files (see P32 note in Dev Agent Record — full-tree scope is 191).
 
 ### Architecture compliance
 
@@ -436,6 +436,38 @@ tests/contract/fixtures/
 - [x] [Review][Patch] P34 — Hardcoded `datetime(2026, 5, 20, 12, 0, 0, UTC)` literals in test fixtures — Story 10.5 hotfix violation; use `FROZEN_EPOCH` [`test_approvals.py:230, test_approvals_command.py:74,139, test_telegram_sink.py:3672`, P1-L]
 - [x] [Review][Patch] P35 — Add `"POST /v1/approvals/inbox": Tier.TWO` to `ROUTE_TIER_MAP` (registry-api tier enforcement gap mirroring Telegram-side tier gap noted in spec) [`adapters/middleware.py:390-394`, P1-L]
 
+### Pass-2 Review Findings (3-lane review of `5fe223a..14f908a` — 2026-05-21)
+
+**Reviewer dedup:** 36 raw findings (Blind 10 + Acceptance 12 + Edge 14) → 22 unique. Pass-2 caught **2 P0 regressions** introduced by pass-1 batch itself + ~20 secondary defects.
+
+**Decision-needed (1):**
+
+- [x] [Review][Decision] **PD1 — P1 operator-identity check broken in Phase 1 (P0)** — `ActorIdMiddleware` hardcodes `request.state.actor_id = "http-api"` (Phase 1), so registry-api persists `opened_by_actor_id = "http-api"` ALWAYS. Pass-1 P1 then compares this vs `str(from_user.id)` (numeric Telegram ID), so EVERY operator hits "owned by another operator" rejection. Tests pass only because they stub registry client to return matching actor_id. Fix options: (a) teach `ActorIdMiddleware` to honor `X-Actor-Id` header from internal callers (registry_client.py already sends it; trivial middleware fix); (b) neuter P1 owner-check in Phase 1 + structured log warning; (c) document as Phase-2-only feature deferred to Story 6.1+. RECOMMENDED: (a) — the header is already wired. **Applied: option (a) — middleware reads header, validates against `^[A-Za-z0-9_-]{1,128}$`, falls back to "http-api" with warning log. Integration test added.**
+
+**Pass-2 patches (21):**
+
+- [x] [Review][Patch] PP1 — P17 deterministic key + P4 410 Gone create unrecoverable loop on post-restart with materializer lag (gateway can't generate new key) — fix: on POST 410, gateway falls back to `new_idempotency_key()` retry once before surfacing error [`approvals_command.py + routes/approvals.py`, P0]
+- [x] [Review][Patch] PP2 — P8 `t.me/c/` math broken for basic-group negative chat_ids (e.g. `chat_id=-1` → `short=-999999999999` → broken link); guard with `chat_id < -1_000_000_000_000` before applying supergroup transform; skip footer otherwise [`telegram_sink.py:131-153`, P1-H]
+- [x] [Review][Patch] PP3 — P12 placebo tests (`test_approvals_command_rejects_non_allowlisted_caller` + `..._silent_drops_non_allowlisted`) are tautological — never invoke handler/middleware, just assert mocks aren't called. Either DELETE both tests + amend P12 to "intentionally not added; coverage via test_allowlist.py", OR write real dispatcher-chain tests [`test_approvals_command.py:308-347`, P1-H]
+- [x] [Review][Patch] PP4 — No `/approvals --reopen` flag or topic-existence probe — if operator manually deletes the pinned topic, they're locked out until 7-day TTL OR manual SQLite row delete. Add `--reopen` flag or topic-existence verify before "already open" reply [`approvals_command.py:104-204`, P1-H]
+- [x] [Review][Patch] PP5 — P3 cleanup runs on `httpx.HTTPError` including timeouts; server may have persisted event before timeout. Don't delete on indeterminate state — reserve cleanup for explicit 4xx; surface "indeterminate, contact ops" for timeouts/5xx [`approvals_command.py:~960-1003`, P1-M]
+- [x] [Review][Patch] PP6 — 410 Gone is undocumented in AC — clients (incl. RegistryAPIClient.open_inbox) don't semantically distinguish 410 from generic POST failure. Either add "API response codes" subsection listing 201/410/422/5xx, OR distinguish 410-gone (post-restart) from 503-retry (invariant violation) [`AC1` + `routes/approvals.py:236-274`, P1-M] — **Resolved via PP10 split (410 reserved for post-restart gone; 503 for invariant violation). Spec text cleanup applied.**
+- [x] [Review][Patch] PP7 — P5 stale checkbox — GET-failure path still calls `format_http_error(exc)` (`approvals_command.py:148`); only POST path was rewritten to use fixed string. Either sanitize GET path OR amend P5 scope to POST-only [`approvals_command.py:148`, P1-M]
+- [x] [Review][Patch] PP8 — P7 stale checkbox — `cache_key = (actor_id, idempotency_key)` (tuple) and `f"{actor_id}\x00{idempotency_key}"` (string) coexist unchanged. Either unify encoding OR amend P7 to "deliberately preserved — different cache backends require different key shapes" with inline comment [`routes/approvals.py:160,222`, P1-M]
+- [x] [Review][Patch] PP9 — P13 re-serialization uses stdlib `json.dumps(..., separators=(",", ":"))` not `OpenInboxResponse(...).model_dump_json()`. Reconstruct via pydantic for byte-stability [`routes/approvals.py:445-456`, P1-M]
+- [x] [Review][Patch] PP10 — P14 410 status code conflates "post-restart gone forever" vs "invariant violation (server bug)". Use 410 only for gone; use 503 + Retry-After for invariant violation [`routes/approvals.py:236-245`, P1-M]
+- [x] [Review][Patch] PP11 — P29 patch description says "match on `TelegramBadRequest.error_code`" but implementation uses `exc.method.__class__.__name__ == "CreateForumTopic"` + substring. Either amend P29 description OR genuinely check `getattr(exc, "code", None)` [`approvals_command.py:70-85`, P1-M] — **Resolved as option A (amend description): aiogram TelegramBadRequest doesn't expose stable error_code for can_manage_topics; class-name + substring is the most stable signal available. P29 description updated accordingly.**
+- [x] [Review][Patch] PP12 — No test for P4 410-on-post-restart path. Add `test_post_returns_410_when_response_slot_cache_missing_but_idempotency_row_present` (flush `app.state.idempotency_response_cache` between two POSTs) [`test_approvals.py`, P1-M]
+- [x] [Review][Patch] PP13 — No test for P15 `_InboxStateResponse` naive-datetime rejection. Add one-line test: build JSON with `"opened_at": "2026-05-21T12:00:00"` (no tz), assert `ValidationError` [`test_telegram_sink.py`, P1-M]
+- [x] [Review][Patch] PP14 — No test for P35 ROUTE_TIER_MAP entry. Add `test_post_open_inbox_requires_tier_2` mirroring `POST /v1/tasks/{id}/decisions` Story 6.4 pattern [`test_approvals.py`, P1-M]
+- [x] [Review][Patch] PP15 — P3 cleanup may itself fail (Telegram 429); reply text "Retry /approvals" then misleads — recursive orphan accumulation. Verify `delete_forum_topic` succeeded before "retry" advice; else surface "contact ops" copy [`approvals_command.py:322-343`, P1-M]
+- [x] [Review][Patch] PP16 — P16 migration typing inconsistency: 0007 now uses `Sequence[str] | None` but 0001-0006 still use `str | None`. Either backport 0001-0006 to match OR revert 0007 [`migrations/versions/*.py`, P1-L] — **Reverted 0007 to `str | None` to match 0001-0006. Story 11.3.3 backlog item filed for sweep.**
+- [x] [Review][Patch] PP17 — P31 description says "round-trip byte equality" but implementation uses structural fidelity (key-set comparison). Amend P31 description to match shipped reality [`spec P31 + test_event_payload_contracts.py`, P1-L] — **Amended: "Round-trip strengthened to structural-key equality (catches field drops without coupling to timestamp format). Byte-equality would require canonical JSON serialization across pydantic v2 + stdlib boundary."**
+- [x] [Review][Patch] PP18 — P23 patch is comment-only ("ms-precision inherited from EventEnvelope serializer"). Either add explicit `model_config` ser config OR amend P23 description to "no change needed — documented" [`spec P23`, P1-L] — **Amended: "No code change — ms-precision serialization inherited from EventEnvelope's pydantic v2 serializer per Story 2.1 convention. Documented inline."**
+- [x] [Review][Patch] PP19 — P10 test name mismatch — actual test is `test_approval_inbox_extract_ids_returns_none_for_task_and_session` (function-level), not `..._materializer_event_row_has_null_task_id` (row-level). Either rename + add row-level SELECT assertion OR document why function-level is sufficient [`test_handlers.py:2438`, P1-L]
+- [x] [Review][Patch] PP20 — P24 inner `RuntimeError("factory called twice")` propagates as 500 (no handler). Wrap in `HTTPException(status_code=503, ...)` to match P14 outer-guard hygiene [`routes/approvals.py:160-228`, P1-L]
+- [x] [Review][Patch] PP21 — Spec internal inconsistencies post-D2/D3 amendments: AC1 line 26 still says "registry-state read"; spec line 207 Context still cites 130 mypy baseline; DAR line 498 contradicts P12 `[x]`. Three small spec-text cleanups [`spec lines 26, 207, 498`, P1-L]
+
 ## Dev Agent Record
 
 ### Implementation summary
@@ -495,8 +527,8 @@ FR26 single-writer compliance preserved: telegram-gateway emits the event via re
 ### Surprises / deviations
 
 * **AC5 deferred**: the 10-event integration replay test was deferred to a follow-up because in-process replay through clawhip-daemon's full event-log subscriber + materializer race requires either Docker compose orchestration or an extensive mock harness. The routing fan-in is already exercised by the AC4 integration tests (one approval request through each branch) and the materializer UPSERT semantics by the three AC2 unit tests. A follow-up task can wire the 10-event loop without additional architectural risk.
-* **AC6 tier-2 routing**: AllowlistMiddleware applies dispatcher-wide so non-allowlisted callers cannot reach the handler. No explicit `test_approvals_command_silent_drops_non_allowlisted` was added — the middleware's existing test coverage (`test_allowlist.py`) already covers all message-types including `/approvals` by virtue of testing the dispatcher chain, not per-handler.
 * **D5 architecture**: chose HTTP over a new direct registry-state import to preserve clawhip-daemon's existing "no cross-service ORM" rule. This adds one HTTP round-trip per `task.approval_requested` event — acceptable per D4 (no caching at current volume).
+  _(Pass-2 PP3 note: the AC6 tier-2 routing Surprises bullet was deleted. PP3 removed the two tautological placebo tests; allowlist coverage is owned by Story 3.2's test_allowlist.py.)_
 
 ## Frontmatter
 

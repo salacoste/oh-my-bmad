@@ -109,6 +109,13 @@ _UUIDV7_BARE_RE = re.compile(
     r"\A[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z"
 )
 
+# Story 11.3 PD1: ``X-Actor-Id`` header validation pattern. Mirrors the
+# Story 11.3 P30 ``opened_by_actor_id`` pydantic validator in
+# ``packages/events/src/events/payloads.py:1042`` so middleware and event
+# payload share a single validation discipline. Control characters / pipe
+# injection / shell metacharacters cannot reach downstream renderers.
+_ACTOR_ID_HEADER_RE = re.compile(r"\A[A-Za-z0-9_\-]{1,128}\Z")
+
 # Story 9.2 pass-1 review A1: the local ``_TRACE_ID_TELEGRAM_RE`` / ``_INT64_MAX``
 # constants and ``_is_valid_trace_id`` helper were promoted to public symbols
 # in ``events.envelope`` (``TRACE_ID_TELEGRAM_RE`` / ``INT64_MAX_UPDATE_ID`` /
@@ -368,17 +375,45 @@ class IdempotencyKeyMiddleware(BaseHTTPMiddleware):
 
 
 class ActorIdMiddleware(BaseHTTPMiddleware):
-    """Phase 1 placeholder: hardcode ``request.state.actor_id = "http-api"``.
+    """Phase 1: honor ``X-Actor-Id`` header from trusted internal callers.
 
-    Real actor identity (Telegram user ID, console operator, etc.) lands in
-    Story 6.1+ when authentication / policy enforcement is added. For Phase 1
-    all requests are treated as coming from the generic HTTP operator.
+    Story 11.3 PD1 — pass-1 hardcoded ``request.state.actor_id = "http-api"``
+    broke the Story 11.3 P1 owner-check end-to-end: every operator was
+    rejected because registry-api persisted ``opened_by_actor_id = "http-api"``
+    rather than the operator's Telegram user-ID. Phase 1 fix: trust the
+    ``X-Actor-Id`` header from allowlisted internal callers
+    (telegram-gateway ``handlers/registry_client.py:719`` already sends it;
+    console-cli sends it too). Public auth lands in Story 6.1+ which will
+    swap this for a real token-derived actor.
 
-    TODO(Story 6.1+): replace hardcoded actor_id with real auth token parsing.
+    Validation mirrors the Story 11.3 P30 ``opened_by_actor_id`` pattern
+    (``^[A-Za-z0-9_-]{1,128}$``) so a hostile header cannot smuggle control
+    characters / pipe injection / shell metacharacters into the event
+    payload validator. On invalid header, fall back to ``"http-api"`` with
+    a structured-log warning.
+
+    TODO(Story 6.1+): replace header-trust with real auth token parsing.
     """
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        request.state.actor_id = "http-api"
+        # Story 11.3 PD1 — honor X-Actor-Id from trusted internal callers in Phase 1.
+        # All callers are allowlisted internal services (registry_client.py:719 already sends it);
+        # public auth lands in Story 6.1+ which will swap this for a real token-derived actor.
+        header_value = request.headers.get("X-Actor-Id")
+        if header_value is None:
+            request.state.actor_id = "http-api"
+        elif _ACTOR_ID_HEADER_RE.match(header_value):
+            request.state.actor_id = header_value
+        else:
+            _log.warning(
+                "actor_id_header_invalid",
+                extra={
+                    "header_value_len": len(header_value),
+                    "path": request.url.path,
+                    "method": request.method,
+                },
+            )
+            request.state.actor_id = "http-api"
         return await call_next(request)
 
 

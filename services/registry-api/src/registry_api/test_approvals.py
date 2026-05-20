@@ -267,3 +267,129 @@ class TestGetInbox:
         assert body["inbox_thread_id"] == 42
         assert body["opened_by_actor_id"] == "operator-test"
         assert body["opened_at"].startswith(FROZEN_EPOCH.isoformat()[:19])
+
+
+# ---------------------------------------------------------------------------
+# Story 11.3 PP12 — 410 on post-restart cache eviction
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def app_client_with_state(
+    tmp_path: Path,
+) -> AsyncGenerator[tuple[AsyncClient, object], None]:
+    """Like ``app_client`` but also yields the app for state introspection.
+
+    PP12 needs to clear ``app.state.idempotency_response_cache`` between
+    two POSTs to simulate a post-restart cache eviction; this fixture
+    exposes the app handle.
+    """
+    db_path = tmp_path / "state.sqlite3"
+    db_url = f"sqlite+aiosqlite:///{db_path}"
+    engine = create_engine(db_url)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    await engine.dispose()
+
+    events_dir = tmp_path / "events"
+    clock = FrozenClock(mono_ns=1_000_000, now=FROZEN_EPOCH)
+    app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+
+    async with (
+        LifespanManager(app) as manager,
+        AsyncClient(
+            transport=ASGITransport(app=manager.app), base_url="http://testserver"
+        ) as client,
+    ):
+        yield client, app
+
+
+@pytest.mark.asyncio
+async def test_post_returns_410_when_response_slot_cache_missing_but_idempotency_row_present(
+    app_client_with_state: tuple[AsyncClient, object],
+) -> None:
+    """PP12: post-restart cache eviction → 410 Gone (not 500, not stale 201).
+
+    Simulates the post-restart scenario where the SQLite idempotency row
+    is intact (so ``get_or_run`` reports cache-hit → was_run=False) but
+    the in-memory ``ResponseSlotCache`` is empty (slot lost on process
+    restart). The endpoint must return 410 with a clear "retry with a
+    new key" message so the gateway's PP1 retry can recover.
+    """
+    client, app = app_client_with_state
+    body_json = {"operator_chat_id": -1001234567890, "inbox_thread_id": 42}
+    key = new_idempotency_key()
+    headers = {"Idempotency-Key": key}
+
+    r1 = await client.post("/v1/approvals/inbox", json=body_json, headers=headers)
+    assert r1.status_code == 201
+
+    # Simulate the post-restart cache loss: persistent SQLite row stays,
+    # in-memory slot cache is cleared.
+    app.state.idempotency_response_cache.clear()  # type: ignore[attr-defined]
+
+    r2 = await client.post("/v1/approvals/inbox", json=body_json, headers=headers)
+    assert r2.status_code == 410, r2.text
+    assert "retry with a new key" in r2.text.lower() or "not recoverable" in r2.text.lower()
+
+
+# ---------------------------------------------------------------------------
+# Story 11.3 PP14 — POST /v1/approvals/inbox requires Tier.TWO
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_post_open_inbox_requires_tier_2(tmp_path: Path) -> None:
+    """PP14: ROUTE_TIER_MAP entry enforces tier on POST /v1/approvals/inbox.
+
+    Story 11.3 P35 added ``"POST /v1/approvals/inbox": Tier.TWO`` to
+    ``ROUTE_TIER_MAP``. PP14 closes the coverage gap by elevating the
+    route to Tier.THREE (above worker's max of TWO) and asserting that a
+    worker actor is denied with the canonical 403 + problem+json body
+    (mirrors :class:`TestTierEnforcementMiddleware.test_tier_denied_returns_403_problem_json`
+    in ``test_middleware.py``).
+    """
+    from unittest.mock import patch
+
+    from capabilities import Tier
+
+    db_path = tmp_path / "state.sqlite3"
+    db_url = f"sqlite+aiosqlite:///{db_path}"
+    engine = create_engine(db_url)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    await engine.dispose()
+
+    events_dir = tmp_path / "events"
+    clock = FrozenClock(mono_ns=1_000_000, now=FROZEN_EPOCH)
+
+    # Elevate POST /v1/approvals/inbox to Tier.THREE (worker max is TWO).
+    with patch(
+        "registry_api.adapters.middleware.ROUTE_TIER_MAP",
+        {"POST /v1/approvals/inbox": Tier.THREE},
+    ):
+        app = build_app(
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=clock,
+            actor_kind="worker",
+        )
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://testserver"
+            ) as client,
+        ):
+            r = await client.post(
+                "/v1/approvals/inbox",
+                json={"operator_chat_id": -1001234567890, "inbox_thread_id": 42},
+                headers={"Idempotency-Key": new_idempotency_key()},
+            )
+    assert r.status_code == 403, r.text
+    body = r.json()
+    assert body["type"] == "/errors/forbidden"
+    assert body["status"] == 403
+    # PP14 also closes Story 11.2.1 DD5 follow-up — a ``capability.denied``
+    # signal is emitted via the tier_enforcement_denied log line. The
+    # registry-api ``handle_capability_denied`` exception handler logs it
+    # (see adapters/errors.py:323); we assert the status-code surface here.

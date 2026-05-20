@@ -2454,3 +2454,52 @@ def test_approval_inbox_extract_ids_returns_none_for_task_and_session() -> None:
     task_id, session_id = _extract_ids(env)
     assert task_id is None, "approval.inbox_opened events MUST have task_id IS NULL"
     assert session_id is None, "approval.inbox_opened events MUST have session_id IS NULL"
+
+
+@pytest.mark.asyncio
+async def test_approval_inbox_materializer_event_row_has_null_task_id() -> None:
+    """Story 11.3 PP19 (renamed from the P10 function-level test).
+
+    Pass-1 P10's function-level ``_extract_ids`` check verified the
+    extraction logic but did NOT prove the column actually ends up NULL
+    in the ``events`` table. PP19 closes the gap by running the full
+    Materializer.apply pipeline against an in-memory SQLite and
+    SELECTing the ``task_id`` / ``session_id`` columns on the persisted
+    row.
+    """
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import StaticPool
+
+    from registry_state.adapters.sqlite_store import get_session
+    from registry_state.domain.event_types import ensure_registered
+    from registry_state.domain.materializer import Materializer
+
+    ensure_registered()
+
+    eng = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    async with eng.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    sm = get_session(eng)
+    materializer = Materializer(session_maker=sm)
+    materializer.register_handler("approval.inbox_opened", handle_approval_inbox_opened)
+
+    env = _make_approval_inbox_opened_envelope(
+        operator_chat_id=-1001234567890,
+        inbox_thread_id=42,
+    )
+    await materializer.apply(env)
+
+    async with sm() as session:
+        result = await session.execute(
+            text("SELECT task_id, session_id FROM events WHERE id = :eid"),
+            {"eid": env.event_id},
+        )
+        row = result.one()
+    await eng.dispose()
+
+    assert row.task_id is None, "events.task_id MUST be NULL for approval events"
+    assert row.session_id is None, "events.session_id MUST be NULL for approval events"

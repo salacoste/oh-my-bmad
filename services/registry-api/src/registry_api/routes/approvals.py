@@ -157,6 +157,11 @@ async def post_open_inbox(
         trace_id = trace_id_val
     actor_id: str = getattr(request.state, "actor_id", "http-api")
 
+    # Story 11.3 PP8 (pass-2): the dual encoding below is deliberate —
+    # ``ResponseSlotCache`` uses tuple keys (asyncio-safe, in-memory only);
+    # ``IdempotencyCacheStore`` (persistent SQLite) uses string keys for
+    # SQLite-compatibility. Both encodings derive from the same
+    # ``(actor_id, idempotency_key)`` tuple and stay in lockstep.
     cache_key = (actor_id, idempotency_key)
     factory_called: bool = False
     captured: dict[str, str | int | datetime] = {}
@@ -166,9 +171,18 @@ async def post_open_inbox(
         # Story 11.3 review P24: defensive guard — factory must only run
         # once per cache key. If it fires twice, the cache invariant is
         # broken (concurrent loser callers visible mid-population).
+        # Story 11.3 PP20: wrap the bare ``RuntimeError`` in an
+        # ``HTTPException(503)`` so it does not propagate as a generic
+        # 500 (no handler) and so the client sees a Retry-After hint
+        # matching the P14 outer-guard hygiene.
         if factory_called:
-            raise RuntimeError(
-                "approval-inbox idempotency factory called twice — cache invariant violated"
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "approval-inbox idempotency factory called twice — "
+                    "cache invariant violated; please retry."
+                ),
+                headers={"Retry-After": "5"},
             )
         factory_called = True
 
@@ -235,19 +249,21 @@ async def post_open_inbox(
 
     if was_run:
         if not factory_called:
-            # Story 11.3 review P14: structured log + degrade to 410 Gone
-            # rather than raising 500 — the invariant violation is logged
-            # for ops but the client gets a clear, retryable signal.
+            # Story 11.3 PP10 (pass-2): differentiate from the post-restart
+            # 410 below. 410 Gone is reserved for "the resource genuinely
+            # vanished" (cache row exists, in-memory slot lost on restart);
+            # 503 Service Unavailable + Retry-After is the right code for
+            # an invariant violation (server-side bug) because the client
+            # should retry the SAME key after the server recovers.
             log.error(
                 "approval-inbox idempotency cache invariant violated",
                 actor_id=actor_id,
                 idempotency_key=idempotency_key,
             )
             raise HTTPException(
-                status_code=410,
-                detail=(
-                    "Idempotency cache invariant violated; please retry with a new Idempotency-Key."
-                ),
+                status_code=503,
+                detail=("Idempotency cache invariant violated; please retry."),
+                headers={"Retry-After": "5"},
             )
         slot = response_body_cache[cache_key]
         body_bytes = slot.body
@@ -272,18 +288,22 @@ async def post_open_inbox(
                     "not recoverable — please retry with a new key."
                 ),
             )
-        # Story 11.3 review P13: re-serialize the cached body with
-        # ``idempotency_status="replayed"`` so the body field reflects
-        # the actual replay state (matches the X-Idempotency-Status
-        # header). Cached bytes are JSON; parse → patch → re-encode.
+        # Story 11.3 review P13 + PP9 (pass-2): reconstruct the cached
+        # body via the typed ``OpenInboxResponse`` pydantic model so the
+        # response bytes go through the SAME serializer as the
+        # initial-write path. This eliminates any drift between
+        # stdlib-``json.dumps`` and pydantic v2's model_dump_json (e.g.
+        # ms-precision timestamps, NaN handling, key ordering).
         try:
             cached_payload = _json.loads(slot_or_none.body.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
             # Cache corruption — keep original bytes; header still says replayed.
             body_bytes = slot_or_none.body
         else:
-            cached_payload["idempotency_status"] = "replayed"
-            body_bytes = _json.dumps(cached_payload, separators=(",", ":")).encode("utf-8")
+            replayed_response = OpenInboxResponse(
+                **{**cached_payload, "idempotency_status": "replayed"}
+            )
+            body_bytes = replayed_response.model_dump_json().encode("utf-8")
         status_value = "replayed"
 
     headers: dict[str, str] = {"X-Idempotency-Status": status_value}

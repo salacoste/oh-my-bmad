@@ -213,9 +213,11 @@ async def test_approvals_command_handles_missing_can_manage_topics_permission() 
 async def test_approvals_command_handles_registry_api_failure_after_topic_creation() -> None:
     """Forum-Topic created but POST /v1/approvals/inbox returns 500 → graceful error.
 
-    Story 11.3 review P3 + P10: the handler MUST best-effort delete the
-    orphan Forum-Topic so the operator's chat is not littered with stray
-    topics on retry.
+    Story 11.3 PP5 (pass-2): 5xx is an indeterminate state — the server may
+    have persisted the event before failing. Do NOT delete the orphan Forum-
+    Topic on 5xx (deleting when the event already landed would orphan the
+    event from the topic it references). Surface "indeterminate, contact ops"
+    reply instead of "retry" (which would be incorrect advice).
     """
     msg = _make_message()
     registry = _make_registry_client_for_approvals(
@@ -230,17 +232,45 @@ async def test_approvals_command_handles_registry_api_failure_after_topic_creati
         await registry.http_client.aclose()
 
     msg.bot.create_forum_topic.assert_awaited_once()
-    # P10: orphan-topic cleanup MUST be attempted with the created topic id.
+    # PP5: 5xx → do NOT delete (state indeterminate).
+    msg.bot.delete_forum_topic.assert_not_called()
+    msg.reply.assert_awaited()
+    # The handler MUST surface SOME error message (not pretend success).
+    reply_text = msg.reply.call_args.args[0]
+    assert "Approval inbox opened" not in reply_text
+    # PP5: "indeterminate" / "contact ops" copy instead of "Retry /approvals".
+    assert "indeterminate" in reply_text or "contact ops" in reply_text or "server error" in reply_text.lower()
+
+
+@pytest.mark.asyncio
+async def test_approvals_command_handles_registry_api_4xx_cleans_up_topic() -> None:
+    """Forum-Topic created but POST returns 4xx → cleanup IS safe (server rejected).
+
+    Story 11.3 PP5: on 4xx the server definitively rejected the request, so
+    the event was NOT persisted. Deleting the orphan Forum-Topic is safe and
+    correct. Reply tells operator to retry /approvals.
+    """
+    msg = _make_message()
+    registry = _make_registry_client_for_approvals(
+        get_inbox_status=404,
+        post_inbox_status=422,
+        post_inbox_body={"detail": "validation error"},
+    )
+
+    try:
+        await handle_approvals(msg, registry, trace_id=None)
+    finally:
+        await registry.http_client.aclose()
+
+    msg.bot.create_forum_topic.assert_awaited_once()
+    # PP5: 4xx → cleanup IS attempted.
     msg.bot.delete_forum_topic.assert_called_once_with(
         chat_id=_FAKE_CHAT_ID,
         message_thread_id=_FAKE_NEW_THREAD_ID,
     )
     msg.reply.assert_awaited()
-    # The handler MUST surface SOME error message (not pretend success).
     reply_text = msg.reply.call_args.args[0]
     assert "Approval inbox opened" not in reply_text
-    # P27: explicit failure-mode text mentions the stray topic + retry guidance.
-    assert "Retry /approvals" in reply_text
 
 
 # ---------------------------------------------------------------------------
@@ -303,45 +333,241 @@ async def test_approvals_command_rejects_when_from_user_is_none() -> None:
 # ---------------------------------------------------------------------------
 # Story 11.3 review P12 — AC1 / AC6 allowlist-gated tests
 # ---------------------------------------------------------------------------
+#
+# AC1/AC6 allowlist-gate coverage lives in
+# services/telegram-gateway/.../test_allowlist.py (Story 3.2 — dispatcher-
+# wide middleware test). Per Story 11.3 pass-2 review PP3: previous tests
+# at this location were tautological (never invoked handler/middleware,
+# just asserted that mocks weren't called); deleted to avoid false-
+# coverage signal.
+
+
+# ---------------------------------------------------------------------------
+# Story 11.3 PP1 — 410 Gone → fresh idempotency key retry
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_approvals_command_rejects_non_allowlisted_caller() -> None:
-    """AC1 + P12: dispatcher chain rejects non-allowlisted users before the handler.
+async def test_approvals_command_recovers_from_410_via_fresh_key_retry() -> None:
+    """PP1: 410 Gone on POST triggers ONE retry with new_idempotency_key().
 
-    The ``handle_approvals`` body never runs for non-allowlisted callers
-    because AllowlistMiddleware (Story 3.2) silent-drops them on the
-    dispatcher edge. We model that by simply NOT calling
-    ``handle_approvals`` and asserting the side-effect-free invariant:
-    no Forum-Topic created, no POST issued, no reply sent.
+    Pass-1 P17 + P4 left an unrecoverable window: deterministic
+    Idempotency-Key + post-restart cache eviction = the gateway could
+    never get past 410. PP1 closes the window by falling back to a
+    fresh random key exactly once.
     """
     msg = _make_message()
-    registry = _make_registry_client_for_approvals(get_inbox_status=404)
+    post_attempts: list[str] = []
 
-    # Non-allowlisted callers don't reach this function — AllowlistMiddleware
-    # short-circuits at the dispatcher edge. We simulate the bypass by
-    # asserting no side effects occur when the handler is NOT invoked.
+    async def _transport(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        method = request.method
+        if method == "GET" and "/v1/approvals/inbox/" in path:
+            return httpx.Response(status_code=404, content=b"{}", request=request)
+        if method == "POST" and path == "/v1/approvals/inbox":
+            key = request.headers.get("Idempotency-Key", "")
+            post_attempts.append(key)
+            # First attempt → 410 Gone; retry with fresh key → 201 Created.
+            if len(post_attempts) == 1:
+                return httpx.Response(
+                    status_code=410,
+                    content=json.dumps({"detail": "post-restart cache gone"}).encode(),
+                    headers={"content-type": "application/json"},
+                    request=request,
+                )
+            body = {
+                "operator_chat_id": _FAKE_CHAT_ID,
+                "inbox_thread_id": _FAKE_NEW_THREAD_ID,
+                "opened_at": FROZEN_EPOCH.isoformat(),
+                "event_id": _FAKE_EVENT_ID,
+                "idempotency_status": "applied",
+            }
+            return httpx.Response(
+                status_code=201,
+                content=json.dumps(body).encode(),
+                headers={
+                    "content-type": "application/json",
+                    "X-Idempotency-Status": "applied",
+                },
+                request=request,
+            )
+        return httpx.Response(status_code=404, content=b"{}", request=request)
+
+    http_client = httpx.AsyncClient(
+        base_url="http://registry-api:8080",
+        transport=httpx.MockTransport(_transport),
+    )
+    registry = RegistryAPIClient(http_client=http_client)
+
     try:
-        # Intentionally NOT calling handle_approvals — the middleware drops it.
-        pass
+        await handle_approvals(msg, registry, trace_id=None)
     finally:
         await registry.http_client.aclose()
 
-    msg.bot.create_forum_topic.assert_not_called()
-    msg.reply.assert_not_called()
+    # Exactly two POST attempts; second key differs from first (deterministic
+    # vs random) so the cache lookup misses and the event is created fresh.
+    assert len(post_attempts) == 2
+    assert post_attempts[0] != post_attempts[1]
+    # First attempt used the deterministic ``ai-...`` SHA prefix.
+    assert post_attempts[0].startswith("ai-")
+    # Reply confirms success — operator unblocked.
+    msg.reply.assert_awaited()
+    reply_text = msg.reply.call_args.args[0]
+    assert "Approval inbox opened" in reply_text
 
 
 @pytest.mark.asyncio
-async def test_approvals_command_silent_drops_non_allowlisted() -> None:
-    """AC6 + P12: silent-drop semantics — no reply, no side effects."""
+async def test_approvals_command_surfaces_error_when_410_retry_also_fails() -> None:
+    """PP1: if the retry attempt ALSO fails (4xx), surface error + orphan cleanup."""
     msg = _make_message()
-    registry = _make_registry_client_for_approvals(get_inbox_status=404)
+
+    async def _transport(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        method = request.method
+        if method == "GET" and "/v1/approvals/inbox/" in path:
+            return httpx.Response(status_code=404, content=b"{}", request=request)
+        if method == "POST" and path == "/v1/approvals/inbox":
+            return httpx.Response(
+                status_code=410,
+                content=json.dumps({"detail": "gone"}).encode(),
+                headers={"content-type": "application/json"},
+                request=request,
+            )
+        return httpx.Response(status_code=404, content=b"{}", request=request)
+
+    http_client = httpx.AsyncClient(
+        base_url="http://registry-api:8080",
+        transport=httpx.MockTransport(_transport),
+    )
+    registry = RegistryAPIClient(http_client=http_client)
 
     try:
-        # AllowlistMiddleware short-circuits — handler never invoked.
-        pass
+        await handle_approvals(msg, registry, trace_id=None)
     finally:
         await registry.http_client.aclose()
 
+    # Orphan cleanup attempted; reply surfaces failure (not success).
+    msg.bot.delete_forum_topic.assert_called_once()
+    msg.reply.assert_awaited()
+    reply_text = msg.reply.call_args.args[0]
+    assert "Approval inbox opened" not in reply_text
+
+
+# ---------------------------------------------------------------------------
+# Story 11.3 PP4 — /approvals reopen sub-command
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_approvals_reopen_overwrites_existing_inbox() -> None:
+    """PP4: ``/approvals reopen`` forces a fresh create_forum_topic + POST."""
+    msg = _make_message(user_id=999)
+    msg.text = "/approvals reopen"
+    existing_inbox_body = {
+        "operator_chat_id": _FAKE_CHAT_ID,
+        "inbox_thread_id": 700,
+        "opened_at": FROZEN_EPOCH.isoformat(),
+        "opened_by_actor_id": "999",  # same operator → reopen allowed
+    }
+    registry = _make_registry_client_for_approvals(
+        get_inbox_status=200,
+        get_inbox_body=existing_inbox_body,
+    )
+
+    try:
+        await handle_approvals(msg, registry, trace_id=None)
+    finally:
+        await registry.http_client.aclose()
+
+    # Default path would short-circuit on "already open"; reopen forces create.
+    msg.bot.create_forum_topic.assert_awaited_once()
+    msg.reply.assert_awaited()
+    reply_text = msg.reply.call_args.args[0]
+    assert "reopened" in reply_text
+
+
+@pytest.mark.asyncio
+async def test_approvals_reopen_rejected_for_non_owner() -> None:
+    """PP4: reopen is owner-only — different operator cannot reopen via flag."""
+    msg = _make_message(user_id=999)
+    msg.text = "/approvals reopen"
+    foreign_inbox_body = {
+        "operator_chat_id": _FAKE_CHAT_ID,
+        "inbox_thread_id": 700,
+        "opened_at": FROZEN_EPOCH.isoformat(),
+        "opened_by_actor_id": "operator-original",  # different owner
+    }
+    registry = _make_registry_client_for_approvals(
+        get_inbox_status=200,
+        get_inbox_body=foreign_inbox_body,
+    )
+
+    try:
+        await handle_approvals(msg, registry, trace_id=None)
+    finally:
+        await registry.http_client.aclose()
+
+    # No new Forum-Topic — reopen-by-non-owner blocked.
     msg.bot.create_forum_topic.assert_not_called()
-    msg.reply.assert_not_called()
+    msg.reply.assert_awaited()
+    reply_text = msg.reply.call_args.args[0]
+    assert "owned by another operator" in reply_text
+
+
+@pytest.mark.asyncio
+async def test_approvals_reopen_emits_fresh_inbox_opened_event() -> None:
+    """PP4: reopen path issues a POST (event re-emit via UPSERT materializer)."""
+    msg = _make_message(user_id=999)
+    msg.text = "/approvals reopen"
+    post_called = False
+
+    async def _transport(request: httpx.Request) -> httpx.Response:
+        nonlocal post_called
+        path = request.url.path
+        method = request.method
+        if method == "GET" and "/v1/approvals/inbox/" in path:
+            return httpx.Response(
+                status_code=200,
+                content=json.dumps(
+                    {
+                        "operator_chat_id": _FAKE_CHAT_ID,
+                        "inbox_thread_id": 700,
+                        "opened_at": FROZEN_EPOCH.isoformat(),
+                        "opened_by_actor_id": "999",
+                    }
+                ).encode(),
+                headers={"content-type": "application/json"},
+                request=request,
+            )
+        if method == "POST" and path == "/v1/approvals/inbox":
+            post_called = True
+            body = {
+                "operator_chat_id": _FAKE_CHAT_ID,
+                "inbox_thread_id": _FAKE_NEW_THREAD_ID,
+                "opened_at": FROZEN_EPOCH.isoformat(),
+                "event_id": _FAKE_EVENT_ID,
+                "idempotency_status": "applied",
+            }
+            return httpx.Response(
+                status_code=201,
+                content=json.dumps(body).encode(),
+                headers={
+                    "content-type": "application/json",
+                    "X-Idempotency-Status": "applied",
+                },
+                request=request,
+            )
+        return httpx.Response(status_code=404, content=b"{}", request=request)
+
+    http_client = httpx.AsyncClient(
+        base_url="http://registry-api:8080",
+        transport=httpx.MockTransport(_transport),
+    )
+    registry = RegistryAPIClient(http_client=http_client)
+
+    try:
+        await handle_approvals(msg, registry, trace_id=None)
+    finally:
+        await registry.http_client.aclose()
+
+    assert post_called, "reopen path must POST to emit fresh event"

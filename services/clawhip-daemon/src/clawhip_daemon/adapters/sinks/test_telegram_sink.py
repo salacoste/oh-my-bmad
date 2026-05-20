@@ -62,11 +62,13 @@ from clawhip_daemon.adapters.sinks.telegram_sink import (
     TelegramSink,
     _build_diff_stats_line,
     _build_pr_line,
+    _InboxStateResponse,
     _render,
     _render_blocker_raised,
     _render_completed,
     _render_plan_ready,
     _render_self_recovered,
+    _render_task_thread_link,
     detect_overnight_restart,
 )
 
@@ -3667,7 +3669,7 @@ def _make_sink_with_inbox(
             return httpx.Response(
                 status_code=200,
                 json={
-                    "operator_chat_id": -1001,
+                    "operator_chat_id": -1_001_000_000_000,
                     "inbox_thread_id": inbox_thread_id,
                     # Story 11.3 review P34: use FROZEN_EPOCH (Story 10.5
                     # hotfix convention) instead of a hardcoded literal.
@@ -3697,12 +3699,18 @@ async def test_telegram_sink_routes_to_pinned_inbox_when_open() -> None:
     ``approval_inbox``, the sink must:
     * deliver to ``inbox_thread_id`` (NOT the originating task thread);
     * include the "↩ Original task thread: …" link-back footer.
+
+    Story 11.3 PP2: use a real Telegram supergroup chat_id
+    (``<= -1_000_000_000_000``) so the ``t.me/c/`` link is rendered.
+    The old ``-1001`` was a basic-group ID whose ``t.me/c/`` math
+    produces a broken negative short, so PP2 now skips the footer for it.
     """
     outbound_mock = MagicMock()
     outbound_mock.send_to_thread = AsyncMock()
     sink = _make_sink_with_inbox(
         outbound=outbound_mock,
-        binding_response={"chat_id": -1001, "reply_to_message_id": 42},
+        # -1_001_000_000_000 is a typical Telegram supergroup id.
+        binding_response={"chat_id": -1_001_000_000_000, "reply_to_message_id": 42},
         inbox_thread_id=777,  # operator opened pinned inbox at thread 777
     )
 
@@ -3711,12 +3719,12 @@ async def test_telegram_sink_routes_to_pinned_inbox_when_open() -> None:
 
     outbound_mock.send_to_thread.assert_called_once()
     call_kwargs = outbound_mock.send_to_thread.call_args[1]
-    assert call_kwargs["chat_id"] == -1001
+    assert call_kwargs["chat_id"] == -1_001_000_000_000
     # Routed to the pinned inbox thread, NOT the originating task thread (42).
     assert call_kwargs["reply_to_message_id"] == 777
     # Link-back footer present in the message body.
     assert "↩ Original task thread:" in call_kwargs["text"]
-    # Story 11.3 review P8: supergroup chat_id (-1001) yields a
+    # Story 11.3 review P8 / PP2: supergroup chat_id yields a
     # ``https://t.me/c/<short>/<msg>`` deep link (short = abs(chat_id) - 1e12).
     assert "https://t.me/c/" in call_kwargs["text"]
     assert "/42" in call_kwargs["text"]
@@ -3734,7 +3742,7 @@ async def test_telegram_sink_routes_to_task_thread_when_no_inbox() -> None:
     outbound_mock.send_to_thread = AsyncMock()
     sink = _make_sink_with_inbox(
         outbound=outbound_mock,
-        binding_response={"chat_id": -1001, "reply_to_message_id": 42},
+        binding_response={"chat_id": -1_001_000_000_000, "reply_to_message_id": 42},
         inbox_thread_id=None,  # 404 — no pinned inbox open.
     )
 
@@ -3743,8 +3751,77 @@ async def test_telegram_sink_routes_to_task_thread_when_no_inbox() -> None:
 
     outbound_mock.send_to_thread.assert_called_once()
     call_kwargs = outbound_mock.send_to_thread.call_args[1]
-    assert call_kwargs["chat_id"] == -1001
+    assert call_kwargs["chat_id"] == -1_001_000_000_000
     # Backwards-compat: routed to the originating task thread.
     assert call_kwargs["reply_to_message_id"] == 42
     # No link-back footer when delivered to the task thread.
     assert "↩ Original task thread:" not in call_kwargs["text"]
+
+
+# ===========================================================================
+# Story 11.3 PP2 — _render_task_thread_link basic-group guard boundaries
+# ===========================================================================
+
+
+def test_render_task_thread_link_supergroup_at_boundary() -> None:
+    """PP2: chat_id == -1_000_000_000_000 is the supergroup boundary.
+
+    Anything chat_id <= -1e12 is a Telegram supergroup; subtract 1e12 from
+    abs(chat_id) to derive the public ``t.me/c/<short>/<msg>`` short id.
+    At the exact boundary the short id is 0 — Telegram accepts that.
+    """
+    link = _render_task_thread_link(-1_000_000_000_000, 42, "task-001")
+    assert link is not None
+    assert "https://t.me/c/0/42" in link
+
+
+def test_render_task_thread_link_supergroup_typical() -> None:
+    """PP2: chat_id == -1_000_000_000_001 (typical supergroup) renders correctly."""
+    link = _render_task_thread_link(-1_000_000_000_001, 42, "task-001")
+    assert link is not None
+    assert "https://t.me/c/1/42" in link
+
+
+def test_render_task_thread_link_basic_group_returns_none() -> None:
+    """PP2: basic-group chat_id == -1 (range (-1e12, 0)) skips footer.
+
+    Without the guard, the supergroup math (abs(-1) - 1e12 = -999999999999)
+    would produce a broken ``t.me/c/-999999999999/42`` URL.
+    """
+    link = _render_task_thread_link(-1, 42, "task-001")
+    assert link is None
+
+
+def test_render_task_thread_link_basic_group_negative_renders_none() -> None:
+    """PP2: chat_id == -999_999_999_999 (just inside basic-group range)."""
+    link = _render_task_thread_link(-999_999_999_999, 42, "task-001")
+    assert link is None
+
+
+def test_render_task_thread_link_private_chat_renders_tg_scheme() -> None:
+    """PP2: positive chat_id is a private DM — uses tg://openmessage scheme."""
+    link = _render_task_thread_link(12345, 42, "task-001")
+    assert link is not None
+    assert "tg://openmessage?chat_id=12345&message_id=42" in link
+
+
+# ===========================================================================
+# Story 11.3 PP13 — _InboxStateResponse naive-datetime rejection
+# ===========================================================================
+
+
+def test_inbox_state_response_rejects_naive_datetime() -> None:
+    """PP13: AwareDatetime contract rejects naive timestamps at parse time.
+
+    Pass-1 P15 switched ``opened_at`` to AwareDatetime to mirror Story 11.2
+    KeyRotatedPayload discipline; PP13 adds an explicit regression test so
+    a future refactor cannot silently relax the constraint.
+    """
+    from pydantic import ValidationError
+
+    naive_json = (
+        b'{"operator_chat_id": -1001, "inbox_thread_id": 777, '
+        b'"opened_at": "2026-05-21T12:00:00", "opened_by_actor_id": "test"}'
+    )
+    with pytest.raises(ValidationError):
+        _InboxStateResponse.model_validate_json(naive_json)

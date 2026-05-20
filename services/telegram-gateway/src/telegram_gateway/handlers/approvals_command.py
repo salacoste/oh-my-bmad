@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+from typing import Literal
 
 import httpx
 import structlog
@@ -49,11 +50,15 @@ from aiogram import Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import Message
-from events.ids import new_request_id
+from events.ids import new_idempotency_key, new_request_id
 
-from telegram_gateway.handlers._errors import format_http_error, log_missing_trace_id
+from telegram_gateway.handlers._errors import log_missing_trace_id
 from telegram_gateway.handlers._safe_reply import safe_reply
-from telegram_gateway.handlers.registry_client import RegistryAPIClient, RegistryResponseError
+from telegram_gateway.handlers.registry_client import (
+    OpenInboxResponseLocal,
+    RegistryAPIClient,
+    RegistryResponseError,
+)
 
 _log = structlog.get_logger("telegram_gateway.handlers.approvals_command")
 
@@ -110,6 +115,11 @@ async def handle_approvals(
 
     Always returns normally — exceptions are surfaced as Telegram replies
     so the webhook never retries (Story 3.1 M3 contract).
+
+    Story 11.3 PP4: ``/approvals reopen`` sub-command forces a new
+    Forum-Topic + fresh ``approval.inbox_opened`` event (materializer
+    UPSERT transitions state). Use when the operator manually deleted
+    the pinned topic but the registry-state row is still present.
     """
     if trace_id is None:
         log_missing_trace_id(_log, "/approvals")
@@ -138,6 +148,19 @@ async def handle_approvals(
 
     chat_id = message.chat.id
 
+    # Story 11.3 PP4: parse ``/approvals reopen`` sub-command. If the
+    # operator passes ``reopen`` as the first arg, skip the "already
+    # open" reply and force a fresh Forum-Topic + UPSERT. Argument
+    # parsing is intentionally tolerant of leading whitespace and
+    # additional args (ignored).
+    raw_text = (message.text or "").strip()
+    is_reopen = False
+    if raw_text.startswith("/approvals"):
+        # Strip the command token (preserve original casing for the rest).
+        tail = raw_text[len("/approvals") :].strip()
+        if tail.split()[:1] == ["reopen"]:
+            is_reopen = True
+
     # Step 1: check existing inbox state via registry-api.
     request_id = new_request_id()
     try:
@@ -145,13 +168,21 @@ async def handle_approvals(
             operator_chat_id=chat_id, request_id=request_id
         )
     except httpx.HTTPStatusError as exc:
-        reply = format_http_error(exc)
+        # Story 11.3 PP7: mirror the POST-path sanitization — never echo
+        # raw httpx body text into the operator's chat (could leak stack
+        # traces or DSN fragments on a misconfigured 5xx).
         _log.warning(
             "registry-api HTTP error on /approvals get_pinned_inbox",
             status_code=exc.response.status_code,
             request_id=request_id,
         )
-        await safe_reply(message, reply)
+        await safe_reply(
+            message,
+            (
+                f"⚠ Registry API returned {exc.response.status_code} on inbox "
+                f"state check. Try again or contact ops."
+            ),
+        )
         return
     except httpx.HTTPError as exc:
         _log.warning(
@@ -166,7 +197,7 @@ async def handle_approvals(
         await safe_reply(message, "⚠️ Internal error. Logs captured.")
         return
 
-    if existing is not None:
+    if existing is not None and not is_reopen:
         # Story 11.3 review P1: operator-identity check. Even though the
         # AllowlistMiddleware lets through every approved operator, two
         # operators sharing a chat must NOT hijack each other's inbox via
@@ -198,6 +229,26 @@ async def handle_approvals(
                 f"ℹ️ Approval inbox already open in this chat "
                 f"(thread {existing.inbox_thread_id}). Opened by "
                 f"{html.escape(existing.opened_by_actor_id)}."
+            ),
+        )
+        return
+
+    # Story 11.3 PP4: when ``reopen`` is in effect and an existing inbox
+    # row is owned by a different operator, refuse — same as the
+    # default path. Owner-only re-open prevents hijack via reopen.
+    if existing is not None and is_reopen and existing.opened_by_actor_id != operator_actor_id:
+        _log.warning(
+            "/approvals reopen rejected — inbox owned by another operator",
+            chat_id=chat_id,
+            requested_by=operator_actor_id,
+            opened_by=existing.opened_by_actor_id,
+        )
+        await safe_reply(
+            message,
+            (
+                f"⚠ Approval inbox is owned by another operator "
+                f"({html.escape(existing.opened_by_actor_id)}); "
+                f"cannot reopen."
             ),
         )
         return
@@ -253,54 +304,19 @@ async def handle_approvals(
     # ``/approvals`` invocations collide on the registry-api cache and
     # only one event is emitted.
     idempotency_key = _deterministic_inbox_idempotency_key(chat_id, operator_actor_id)
-    try:
-        response = await registry_client.open_inbox(
-            operator_chat_id=chat_id,
-            inbox_thread_id=new_thread_id,
-            idempotency_key=idempotency_key,
-            operator_actor_id=operator_actor_id,
-            request_id=request_id,
-            trace_id=trace_id,
-        )
-    except httpx.HTTPStatusError as exc:
-        _log.warning(
-            "/approvals registry-api error on open_inbox",
-            status_code=exc.response.status_code,
-            request_id=request_id,
-        )
-        # Story 11.3 review P3: orphan Forum-Topic cleanup — the event
-        # emission failed but the topic exists in the operator's chat.
-        # Best-effort delete so the operator's chat is not littered with
-        # stray topics across retries.
-        await _cleanup_orphan_topic(message, chat_id, new_thread_id)
-        # Story 11.3 review P27: explicit failure-mode text so the operator
-        # knows the topic was created but not linked, and that /approvals
-        # is safe to retry (Idempotency-Key replay).
-        await safe_reply(
-            message,
-            "⚠️ Inbox event emission failed — the Forum-Topic was created but "
-            "is not yet linked. Retry /approvals.",
-        )
+    response, post_error = await _post_inbox_with_410_retry(
+        registry_client=registry_client,
+        chat_id=chat_id,
+        new_thread_id=new_thread_id,
+        idempotency_key=idempotency_key,
+        operator_actor_id=operator_actor_id,
+        request_id=request_id,
+        trace_id=trace_id,
+    )
+    if post_error is not None:
+        await _handle_post_error(message, post_error, chat_id, new_thread_id, request_id)
         return
-    except RegistryResponseError:
-        _log.exception("/approvals malformed registry-api response", request_id=request_id)
-        await _cleanup_orphan_topic(message, chat_id, new_thread_id)
-        await safe_reply(message, "⚠️ Registry returned an unexpected response. Logs captured.")
-        return
-    except httpx.HTTPError as exc:
-        _log.warning(
-            "/approvals registry-api network error on open_inbox",
-            exc_type=type(exc).__name__,
-            request_id=request_id,
-        )
-        await _cleanup_orphan_topic(message, chat_id, new_thread_id)
-        await safe_reply(message, f"⚠️ Could not reach registry: {type(exc).__name__}.")
-        return
-    except Exception:  # noqa: BLE001 — Story 3.1 M3 backstop
-        _log.exception("/approvals unexpected error on open_inbox", request_id=request_id)
-        await _cleanup_orphan_topic(message, chat_id, new_thread_id)
-        await safe_reply(message, "⚠️ Internal error. Logs captured.")
-        return
+    assert response is not None  # paired with post_error being None
 
     # Step 4: reply with the new thread link.
     _log.info(
@@ -309,31 +325,244 @@ async def handle_approvals(
         inbox_thread_id=response.inbox_thread_id,
         event_id=response.event_id,
         operator_actor_id=operator_actor_id,
+        reopen=is_reopen,
     )
-    await safe_reply(
-        message,
-        (
-            f"✅ Approval inbox opened (thread {response.inbox_thread_id}). "
-            "Future approval requests will land here."
-        ),
-    )
+    if is_reopen:
+        await safe_reply(
+            message,
+            (
+                f"✅ Approval inbox reopened (thread {response.inbox_thread_id}). "
+                "Future approval requests will land here."
+            ),
+        )
+    else:
+        await safe_reply(
+            message,
+            (
+                f"✅ Approval inbox opened (thread {response.inbox_thread_id}). "
+                "Future approval requests will land here."
+            ),
+        )
+    return
 
 
-async def _cleanup_orphan_topic(message: Message, chat_id: int, message_thread_id: int) -> None:
+# ---------------------------------------------------------------------------
+# POST helpers: PP1 (410 retry), PP5 (status-class branching), PP15 (cleanup verify)
+# ---------------------------------------------------------------------------
+
+
+class _PostError:
+    """Tagged failure outcome from :func:`_post_inbox_with_410_retry`.
+
+    The handler maps each ``kind`` to a distinct cleanup + reply policy
+    per Story 11.3 PP5 (don't delete orphan topics on indeterminate
+    states like 5xx / timeouts).
+    """
+
+    __slots__ = ("kind", "status_code", "exc_type_name")
+
+    def __init__(
+        self,
+        kind: Literal[
+            "client_error",  # 4xx (except 410-after-retry, which is "client_error")
+            "server_error",  # 5xx
+            "network_error",  # connect/timeout
+            "malformed_response",  # RegistryResponseError
+            "unexpected",  # backstop
+        ],
+        *,
+        status_code: int | None = None,
+        exc_type_name: str | None = None,
+    ) -> None:
+        self.kind = kind
+        self.status_code = status_code
+        self.exc_type_name = exc_type_name
+
+
+async def _post_inbox_with_410_retry(
+    *,
+    registry_client: RegistryAPIClient,
+    chat_id: int,
+    new_thread_id: int,
+    idempotency_key: str,
+    operator_actor_id: str,
+    request_id: str,
+    trace_id: str | None,
+) -> tuple[OpenInboxResponseLocal | None, _PostError | None]:
+    """Issue POST /v1/approvals/inbox with Story 11.3 PP1 410-retry.
+
+    Pass-1 P17 + P4 left an unrecoverable window: deterministic
+    Idempotency-Key + post-restart cache eviction = the gateway could
+    never get past 410 Gone. PP1 closes the window by falling back to
+    :func:`new_idempotency_key` exactly once on 410, ensuring forward
+    progress without leaking a corrupt slot.
+    """
+
+    async def _attempt(key: str) -> OpenInboxResponseLocal:
+        return await registry_client.open_inbox(
+            operator_chat_id=chat_id,
+            inbox_thread_id=new_thread_id,
+            idempotency_key=key,
+            operator_actor_id=operator_actor_id,
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+
+    try:
+        response = await _attempt(idempotency_key)
+        return response, None
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 410:
+            # PP1: 410 Gone — registry-api lost the in-memory slot after a
+            # restart while the SQLite idempotency row remained. Retry
+            # ONCE with a fresh random key so the operator is unblocked.
+            _log.warning(
+                "/approvals POST 410 — retrying with fresh idempotency key",
+                chat_id=chat_id,
+                request_id=request_id,
+            )
+            try:
+                response = await _attempt(new_idempotency_key())
+                return response, None
+            except httpx.HTTPStatusError as retry_exc:
+                status = retry_exc.response.status_code
+                _log.warning(
+                    "/approvals registry-api HTTP error on 410-retry",
+                    status_code=status,
+                    request_id=request_id,
+                )
+                if 400 <= status < 500:
+                    return None, _PostError("client_error", status_code=status)
+                return None, _PostError("server_error", status_code=status)
+            except RegistryResponseError:
+                _log.exception(
+                    "/approvals malformed response on 410 retry",
+                    request_id=request_id,
+                )
+                return None, _PostError("malformed_response")
+            except httpx.HTTPError as retry_net_exc:
+                return None, _PostError("network_error", exc_type_name=type(retry_net_exc).__name__)
+        status = exc.response.status_code
+        _log.warning(
+            "/approvals registry-api HTTP error on open_inbox",
+            status_code=status,
+            request_id=request_id,
+        )
+        if 400 <= status < 500:
+            return None, _PostError("client_error", status_code=status)
+        return None, _PostError("server_error", status_code=status)
+    except RegistryResponseError:
+        _log.exception("/approvals malformed registry-api response", request_id=request_id)
+        return None, _PostError("malformed_response")
+    except httpx.HTTPError as exc:
+        _log.warning(
+            "/approvals registry-api network error on open_inbox",
+            exc_type=type(exc).__name__,
+            request_id=request_id,
+        )
+        return None, _PostError("network_error", exc_type_name=type(exc).__name__)
+    except Exception:  # noqa: BLE001 — Story 3.1 M3 backstop
+        _log.exception(
+            "/approvals unexpected error on open_inbox",
+            request_id=request_id,
+        )
+        return None, _PostError("unexpected")
+
+
+async def _handle_post_error(
+    message: Message,
+    err: _PostError,
+    chat_id: int,
+    new_thread_id: int,
+    request_id: str,
+) -> None:
+    """Map a :class:`_PostError` to a cleanup + reply policy (PP5 + PP15).
+
+    PP5: cleanup is ONLY safe on 4xx (server explicitly rejected) — on
+    5xx / timeouts the server may have persisted the event before
+    failing, so deleting the topic would orphan the event.
+
+    PP15: when cleanup runs, verify ``delete_forum_topic`` succeeded
+    before telling the operator to retry — a failed cleanup means the
+    chat is dirty AND the next /approvals will create yet another
+    orphan.
+    """
+    if err.kind == "client_error":
+        cleanup_succeeded = await _cleanup_orphan_topic(message, chat_id, new_thread_id)
+        if cleanup_succeeded:
+            await safe_reply(
+                message,
+                "⚠️ Inbox event emission failed — Forum-Topic was deleted. Retry /approvals.",
+            )
+        else:
+            await safe_reply(
+                message,
+                "⚠️ Inbox event emission failed AND the temporary Forum-Topic "
+                "could not be deleted — contact ops to clean up.",
+            )
+        return
+    if err.kind == "server_error":
+        # PP5: 5xx — server-side error, state indeterminate. Don't cleanup.
+        await safe_reply(
+            message,
+            "⚠️ Registry API returned a server error; inbox state is indeterminate — contact ops.",
+        )
+        return
+    if err.kind == "network_error":
+        # PP5: timeout / connect failure — state indeterminate. Don't cleanup.
+        exc_name = err.exc_type_name or "NetworkError"
+        await safe_reply(
+            message,
+            f"⚠️ Registry API unreachable ({exc_name}); inbox state is indeterminate — contact ops.",
+        )
+        return
+    if err.kind == "malformed_response":
+        cleanup_succeeded = await _cleanup_orphan_topic(message, chat_id, new_thread_id)
+        if cleanup_succeeded:
+            await safe_reply(
+                message,
+                "⚠️ Registry returned an unexpected response; Forum-Topic was "
+                "deleted. Logs captured.",
+            )
+        else:
+            await safe_reply(
+                message,
+                "⚠️ Registry returned an unexpected response AND Forum-Topic "
+                "cleanup failed — contact ops.",
+            )
+        return
+    # err.kind == "unexpected"
+    cleanup_succeeded = await _cleanup_orphan_topic(message, chat_id, new_thread_id)
+    if cleanup_succeeded:
+        await safe_reply(message, "⚠️ Internal error. Logs captured.")
+    else:
+        await safe_reply(
+            message,
+            "⚠️ Internal error AND Forum-Topic cleanup failed — contact ops.",
+        )
+
+
+async def _cleanup_orphan_topic(message: Message, chat_id: int, message_thread_id: int) -> bool:
     """Best-effort delete of a Forum-Topic created when POST failed (P3).
 
     Telegram exposes ``delete_forum_topic`` which removes the topic that
     was created in the operator's chat right before the event emission
     failed. Failures here are logged but never propagated — the goal is
     to leave the operator's chat clean, not to mask the original error.
+
+    Story 11.3 PP15: returns ``True`` when the delete actually succeeded
+    so the caller can choose a "retry /approvals" reply (safe) versus a
+    "contact ops" reply (cleanup failed → next /approvals would orphan
+    another topic).
     """
     if message.bot is None:
-        return
+        return False
     try:
         await message.bot.delete_forum_topic(
             chat_id=chat_id,
             message_thread_id=message_thread_id,
         )
+        return True
     except Exception as cleanup_exc:  # noqa: BLE001 — best-effort
         _log.error(
             "orphan_topic_cleanup_failed",
@@ -341,6 +570,7 @@ async def _cleanup_orphan_topic(message: Message, chat_id: int, message_thread_i
             message_thread_id=message_thread_id,
             exc_info=cleanup_exc,
         )
+        return False
 
 
 def make_approvals_router() -> Router:

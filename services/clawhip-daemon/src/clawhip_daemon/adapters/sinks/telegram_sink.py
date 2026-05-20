@@ -128,7 +128,7 @@ class _TaskBindingResponse(BaseModel):
     reply_to_message_id: int | None = Field(default=None)
 
 
-def _render_task_thread_link(chat_id: int, message_id: int, task_id: str) -> str:
+def _render_task_thread_link(chat_id: int, message_id: int, task_id: str) -> str | None:
     """Story 11.3 review P8: HTML anchor for the original task thread.
 
     Supergroup chat IDs in Telegram are negative int64 values that need the
@@ -137,16 +137,32 @@ def _render_task_thread_link(chat_id: int, message_id: int, task_id: str) -> str
     ``tg://openmessage`` scheme. All embedded components are URL-encoded
     via :func:`urllib.parse.quote` so a stray character cannot break the
     resulting hyperlink.
+
+    Story 11.3 PP2: basic-group chat_ids (range ``[-1_000_000_000_000, 0)``)
+    do NOT carry the supergroup ``-100`` prefix; subtracting
+    ``1_000_000_000_000`` would yield a negative or zero ``short`` and
+    produce a broken ``t.me/c/`` URL. Returns ``None`` in that case so the
+    caller can skip the footer entirely + emit a structured-log warning.
+    Returns ``None`` only for basic groups; supergroups (chat_id <=
+    -1_000_000_000_000) and private chats (chat_id > 0) always render.
     """
     safe_task = html.escape(task_id)
     msg_quoted = quote(str(message_id), safe="")
-    if chat_id < 0:
+    if chat_id <= -1_000_000_000_000:
         # Telegram supergroup convention: external short id strips the
         # -100<prefix> from the negative chat_id (chat_id - 1_000_000_000_000
         # in absolute value).
         short = abs(chat_id) - 1_000_000_000_000
         short_quoted = quote(str(short), safe="")
         href = f"https://t.me/c/{short_quoted}/{msg_quoted}"
+    elif chat_id < 0:
+        # Basic group / DM impostor — cannot render a working link.
+        _log.warning(
+            "task_thread_link_skipped_basic_group",
+            chat_id=chat_id,
+            task_id=task_id,
+        )
+        return None
     else:
         chat_quoted = quote(str(chat_id), safe="")
         href = f"tg://openmessage?chat_id={chat_quoted}&message_id={msg_quoted}"
@@ -2126,11 +2142,12 @@ class TelegramSink:
                 # (c) URL-encode all path/query components so a stray
                 #     character cannot break the link.
                 if reply_to_message_id is not None:
-                    text = (
-                        f"{text}\n\n"
-                        f"↩ Original task thread: "
-                        f"{_render_task_thread_link(chat_id, reply_to_message_id, task_id)}"
-                    )
+                    # Story 11.3 PP2: link renderer returns None for basic-group
+                    # chat_ids (range (-1e12, 0)) where the supergroup ``-100``
+                    # math would yield a broken ``t.me/c/`` URL.
+                    link = _render_task_thread_link(chat_id, reply_to_message_id, task_id)
+                    if link is not None:
+                        text = f"{text}\n\n↩ Original task thread: {link}"
 
         await self._outbound.send_to_thread(
             chat_id=chat_id,
