@@ -1,6 +1,6 @@
 # Story 10.5 — Cardinality discipline + regression test
 
-Status: **review** (CI pending @ 18c8b79)
+Status: **done** (CI green @ `d37f181` (run 26149907490) — confirmed 2026-05-20; impl `18c8b79` + `32ccd9a`; pass-1 review batch: 17/17 closed = 2H + 6M + 9L; hotfix `d37f181` resolved date-rollover flake blocking CI)
 
 ## Story
 
