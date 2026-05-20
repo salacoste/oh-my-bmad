@@ -90,11 +90,12 @@ __all__ = [
     "CapabilityDenied",
     "Clock",
     "CursorSchemaVersionError",
-    # Story 11.2 — re-exports are already pulled in via the
-    # ``from events.payloads import *`` star-import above; the explicit
-    # entries below are kept for static-analysis clarity. ``KeyRotatedPayload``
-    # and ``CapabilityDeniedPayload`` (added in payloads.py for FR65a + DD5)
-    # ride in via ``*_payloads_all`` at the bottom of this __all__.
+    # Story 11.2 — no explicit entries added: KeyRotatedPayload and
+    # CapabilityDeniedPayload ride in solely via ``*_payloads_all`` spliced
+    # at the bottom of __all__ (see ``__all__ += _payloads_all`` below).
+    # The pre-existing ``CapabilityDenied`` entry on line 90 is an unrelated
+    # exception class imported from ``events.errors`` — NOT the new
+    # ``CapabilityDeniedPayload`` (P1-L2 disambiguation).
     "DeploymentSignatureRejectedPayload",
     "EventEnvelope",
     "EventLogReader",

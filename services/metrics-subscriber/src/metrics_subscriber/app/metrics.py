@@ -200,6 +200,8 @@ _EVENT_FAMILIES: Final[tuple[str, ...]] = (
     "file",
     "telegram",
     "deployment",
+    "key",  # Story 11.2 — key.rotated (FR65a)
+    "capability",  # Story 11.2 — capability.denied (DD5 from Epic 10 retro)
     "unknown",
 )
 
@@ -220,6 +222,13 @@ _CAPABILITY_TIERS: Final[tuple[str, ...]] = ("tier1", "tier2", "tier3")
 
 #: Bounded enum of capability boundaries (Story 10.4 AC8 — DEFERRED).
 _CAPABILITY_BOUNDARIES: Final[tuple[str, ...]] = ("mcp", "http")
+
+#: O(1) membership-test set companions for the capability enums — used by
+#: :func:`_update_capability_denied` (Story 11.2 P1-H3) to defensively
+#: skip out-of-enum tier/boundary values (Pydantic validation upstream
+#: prevents this in production; defense-in-depth at the subscriber).
+_CAPABILITY_TIERS_SET: Final[frozenset[str]] = frozenset(_CAPABILITY_TIERS)
+_CAPABILITY_BOUNDARIES_SET: Final[frozenset[str]] = frozenset(_CAPABILITY_BOUNDARIES)
 
 
 @dataclass(slots=True)
@@ -543,6 +552,25 @@ def _update_secret_accessed(state: MetricsState, envelope: EventEnvelope) -> Non
     state.secret_accessed_total.labels(actor_kind=kind).inc()
 
 
+def _update_capability_denied(state: MetricsState, envelope: EventEnvelope) -> None:
+    """Increment ``omb_capability_denied_total{tier, boundary}`` from ``capability.denied`` payload.
+
+    Story 11.2 P1-H3 — wires DD5 (Epic 10 retro) capability counter to the
+    `capability.denied` event registered in this same story. Story 10.4
+    pre-populated 6 zero-value combinations; emission is deferred to
+    Story 11.2.1 (capability.denied emission follow-up).
+
+    Defensive: skip silently if ``tier`` / ``boundary`` fall outside the
+    Story 10.4 bounded enums. Pydantic ``CapabilityDeniedPayload`` Literal
+    types enforce the invariant upstream in production; the guard preserves
+    bounded-enum cardinality contract under schema_version drift.
+    """
+    tier = _payload_get(envelope, "tier")
+    boundary = _payload_get(envelope, "boundary")
+    if tier in _CAPABILITY_TIERS_SET and boundary in _CAPABILITY_BOUNDARIES_SET:
+        state.capability_denied_total.labels(tier=tier, boundary=boundary).inc()
+
+
 #: Story 10.4 AC6 — immutable event_type → updater dispatch table.
 #:
 #: Keys: 15 task lifecycle + 5 session + 1 secret = 21 entries.
@@ -581,6 +609,8 @@ _DISPATCH: Final[dict[str, EventMetricUpdater]] = {
     "session.reconnecting": _update_session_lifecycle,
     # Secret access.
     "secret.accessed": _update_secret_accessed,
+    # Capability denial (Story 11.2 P1-H3 — wires DD5 counter; emission in 11.2.1).
+    "capability.denied": _update_capability_denied,
 }
 
 

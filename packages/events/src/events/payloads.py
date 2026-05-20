@@ -7,6 +7,11 @@ circular-import constraint documented there.
 
 All models use ``ConfigDict(frozen=True, strict=True, extra="forbid")``
 matching the Story 2.1 discipline.
+
+All ``actor_id`` fields enforce ``Field(min_length=1, max_length=128)`` for
+log-bloat protection in append-only audit events (Story 11.2 pass-1 review
+P1-H1 — extends invariant codebase-wide including Story 11.1's
+``TaskApprovalSignedPayload.actor_id`` inheritance gap).
 """
 
 from __future__ import annotations
@@ -928,7 +933,8 @@ class TaskApprovalSignedPayload(BaseModel):
     # P1-H2 field constraints: explicit no-pipe on canonical-string fields.
     task_id: str = Field(min_length=1, pattern=r"^[a-zA-Z0-9_:.-]+$")
     decision_id: str = Field(min_length=1, pattern=r"^[a-zA-Z0-9_:.-]+$")
-    actor_id: str = Field(min_length=1)  # pattern extended in Story 6.1+
+    # pattern extended in Story 6.1+; max_length=128 per Story 11.2 pass-1 P1-H1.
+    actor_id: str = Field(min_length=1, max_length=128)
     action: Literal["approve"]
     timestamp: AwareDatetime
     hmac_sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
@@ -976,7 +982,7 @@ class KeyRotatedPayload(BaseModel):
     rotated_at: AwareDatetime
     previous_key_fingerprint: str = Field(min_length=16, max_length=16, pattern=r"^[0-9a-f]{16}$")
     new_key_fingerprint: str = Field(min_length=16, max_length=16, pattern=r"^[0-9a-f]{16}$")
-    actor_id: str = Field(min_length=1)
+    actor_id: str = Field(min_length=1, max_length=128)  # max_length=128 per pass-1 P1-H1
 
     @model_validator(mode="after")
     def _reject_no_op_rotation(self) -> KeyRotatedPayload:
@@ -1024,7 +1030,7 @@ class CapabilityDeniedPayload(BaseModel):
 
     tier: Literal["tier1", "tier2", "tier3"]
     boundary: Literal["mcp", "http"]
-    actor_id: str = Field(min_length=1)
+    actor_id: str = Field(min_length=1, max_length=128)  # max_length=128 per pass-1 P1-H1
     attempted_action: str = Field(min_length=1)
     reason: str | None = Field(default=None, min_length=1, max_length=4096)
 

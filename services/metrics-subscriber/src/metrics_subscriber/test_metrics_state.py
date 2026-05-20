@@ -478,12 +478,12 @@ def test_task_gauge_cleanup_then_resurrect_is_idempotent() -> None:
 
 
 def test_dispatch_table_size_meets_minimum() -> None:
-    """AC6 — exactly 21 entries.
+    """AC6 — exactly 22 entries.
 
     Breakdown: 10 lifecycle-only + 3 token-bearing + 2 terminal +
-    5 session + 1 secret = 21.
+    5 session + 1 secret + 1 capability (Story 11.2 P1-H3) = 22.
     """
-    assert len(_DISPATCH) == 21, f"dispatch table has {len(_DISPATCH)} entries, expected == 21"
+    assert len(_DISPATCH) == 22, f"dispatch table has {len(_DISPATCH)} entries, expected == 22"
 
 
 def test_dispatch_table_covers_all_task_lifecycle_event_types() -> None:
@@ -517,6 +517,88 @@ def test_dispatch_unknown_envelope_type_only_increments_appended_counter() -> No
     # The events_appended counter recorded the unknown family.
     value = _metric_value(body, "omb_events_appended_total", labels={"event_family": "unknown"})
     assert value == 1.0
+
+
+def test_dispatch_capability_denied_increments_counter_by_tier_boundary() -> None:
+    """Story 11.2 P1-H3 — capability.denied envelope increments tier/boundary cell.
+
+    Wires DD5 (Epic 10 retro) ``omb_capability_denied_total`` counter to
+    the ``capability.denied`` event registered in Story 11.2. Emission is
+    deferred to Story 11.2.1; this test validates the dispatch path so
+    when emission lands the metric increments correctly.
+    """
+    registry = CollectorRegistry()
+    state = build_collectors(registry)
+    update_for(
+        state,
+        _make_envelope(
+            "capability.denied",
+            payload={
+                "tier": "tier2",
+                "boundary": "http",
+                "actor_id": "operator-1",
+                "attempted_action": "task.create",
+            },
+        ),
+    )
+    body = generate_latest(registry)
+    value = _metric_value(
+        body,
+        "omb_capability_denied_total",
+        labels={"tier": "tier2", "boundary": "http"},
+    )
+    assert value == 1.0, "capability.denied should increment {tier=tier2, boundary=http}"
+    # Other tier/boundary cells remain at the pre-populated zero.
+    assert (
+        _metric_value(
+            body,
+            "omb_capability_denied_total",
+            labels={"tier": "tier1", "boundary": "mcp"},
+        )
+        == 0.0
+    )
+    # The family counter also incremented under the "capability" bucket.
+    assert (
+        _metric_value(body, "omb_events_appended_total", labels={"event_family": "capability"})
+        == 1.0
+    )
+
+
+def test_dispatch_capability_denied_defensive_skip_on_unknown_tier() -> None:
+    """Story 11.2 P1-H3 — out-of-enum tier/boundary skips increment silently.
+
+    Pydantic Literal types prevent this in production; defense-in-depth
+    at the subscriber preserves the bounded-enum cardinality contract.
+    """
+    registry = CollectorRegistry()
+    state = build_collectors(registry)
+    update_for(
+        state,
+        _make_envelope(
+            "capability.denied",
+            payload={
+                "tier": "tier99",  # not in _CAPABILITY_TIERS
+                "boundary": "http",
+                "actor_id": "operator-1",
+                "attempted_action": "task.create",
+            },
+        ),
+    )
+    body = generate_latest(registry)
+    # No labelled child created for {tier=tier99, boundary=http}.
+    assert (
+        _metric_value(
+            body,
+            "omb_capability_denied_total",
+            labels={"tier": "tier99", "boundary": "http"},
+        )
+        is None
+    ), "out-of-enum tier must NOT materialise a labelled child"
+    # The family counter still records the envelope (P1-H1 contract).
+    assert (
+        _metric_value(body, "omb_events_appended_total", labels={"event_family": "capability"})
+        == 1.0
+    )
 
 
 def test_events_appended_unknown_family_falls_through_to_unknown_bucket() -> None:
@@ -588,13 +670,15 @@ def test_cardinality_at_steady_state_is_bounded() -> None:
                            this test) + parse_skip_total (4) = 6
       Story 10.4 counters: task_lifecycle (15) + session (5) +
                            secret_accessed (5) + events_appended
-                           (12 — 11 registered families + ``"unknown"``
-                           fallback bucket per P1-H1) + idempotency (2) +
-                           capability (6) = 45
+                           (14 — 11 base families + ``"unknown"`` fallback
+                           bucket per P1-H1 + ``"key"`` + ``"capability"``
+                           per Story 11.2 P1-H2) + idempotency (2) +
+                           capability (6) = 47
       task_tokens_spent  : 0 after cleanup (terminal events ran).
 
-      Total = 51 — bound widened by +1 vs Story 10.4 dev complete to
-      accommodate the P1-H1 ``"unknown"`` fallback bucket; "timeseries"
+      Total = 53 — bound widened by +2 vs Story 10.4 P1-H1 cardinality
+      (was 51) to accommodate the two new Story 11.2 P1-H2 event-family
+      pre-populated samples (``"key"`` + ``"capability"``); "timeseries"
       = canonical samples post-``_created`` filter per P1-L4 wording.
     """
     registry = CollectorRegistry()
@@ -641,8 +725,8 @@ def test_cardinality_at_steady_state_is_bounded() -> None:
         for sample in family.samples
         if not sample.name.endswith("_created")
     )
-    assert canonical_timeseries <= 51, (
-        f"cardinality {canonical_timeseries} exceeds AC10 steady-state bound of 51; "
+    assert canonical_timeseries <= 53, (
+        f"cardinality {canonical_timeseries} exceeds AC10 steady-state bound of 53; "
         f"families: {[(f.name, len(f.samples)) for f in timeseries]}"
     )
 
@@ -687,8 +771,8 @@ def test_cardinality_under_burst_cleanup() -> None:
         for sample in family.samples
         if not sample.name.endswith("_created")
     )
-    assert canonical_timeseries <= 51, (
-        f"cardinality {canonical_timeseries} exceeds AC10 burst-cleanup bound of 51"
+    assert canonical_timeseries <= 53, (
+        f"cardinality {canonical_timeseries} exceeds AC10 burst-cleanup bound of 53"
     )
 
 

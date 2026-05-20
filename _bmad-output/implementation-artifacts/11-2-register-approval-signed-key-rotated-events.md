@@ -1,6 +1,6 @@
 # Story 11.2 — Register `task.approval_signed` + `key.rotated` event types
 
-Status: **review** (CI pending @ f28842b)
+Status: **review** (pass-1 batch applied; CI pending @ <pass-1-batch-sha>)
 
 ## Story
 
@@ -29,7 +29,7 @@ Constraints:
 - **`emitter_schema_version`** in event emissions remains at `1.1.0` (Story 11.1 already emits at the current envelope schema_version which is `1.1.0` per P2-I2). Verify the existing emission site in `services/registry-api/src/registry_api/routes/decisions.py` produces envelopes with `schema_version="1.1.0"`.
 
 Self-verification:
-- `uv run python -c "from events.schema_registry import EVENT_TYPES; assert ('task.approval_signed', '1.1.0') in [(k, v) for ... ]"` (or equivalent introspection — verify both 1.0.0 AND 1.1.0 registered).
+- `uv run python -c "from events.schema_registry import REGISTRY; assert ('task.approval_signed', '1.0.0') in REGISTRY and ('task.approval_signed', '1.1.0') in REGISTRY"` (verify both 1.0.0 AND 1.1.0 registered — `REGISTRY` is `dict[tuple[str, str], type[BaseModel]]` so tuple-membership check is canonical; pass-1 P1-M3 fix vs prior `EVENT_TYPES` symbol typo).
 - Test `test_task_approval_signed_registered_at_both_schema_versions` in `tests/contract/` (mirroring existing test patterns there).
 
 ### AC2 — Register `key.rotated` event type + `KeyRotatedPayload` (NEW)
@@ -364,6 +364,17 @@ Note for future reviewers: if Story 11.2.x emission lands and the metric label v
 * **`__init__.py` re-export is implicit, not explicit.** Spec AC2 says "Re-export from `__init__.py` `__all__`". The existing star-import (`from events.payloads import *`) followed by `*_payloads_all` at the bottom of the public `__all__` already covers the two new classes. No explicit per-class import was needed; added a comment block explaining the indirection so future readers can verify the re-export contract without grepping for the names.
 * **17 pre-existing test failures in partial spec command (`packages/events + services/registry-api` co-run).** The spec command `uv run pytest -x -q packages/events services/registry-state services/registry-api tests/contract` triggers a registration-isolation issue when packages/events tests run before services/registry-api (the `EventEnvelope.create` call in registry-api routes/tasks.py fails because `task.created` 1.1.0 isn't registered in that pytest session). **Pre-existing on HEAD 005c512 — Story 11.2 introduces ZERO new failures.** Verified by `git stash + same command`. The CI gate (`pytest -m "not slow"` single invocation from project root) passes cleanly (2944/2944) because the per-service conftest registration chain initializes correctly when all tests are collected together. Not blocking for Story 11.2 finalization — flagging as a latent technical-debt item for a future CI hygiene story.
 
+  **Stash-verification evidence** (pass-1 P1-L3 retro-fix):
+  ```text
+  # On HEAD 005c512 with Story 11.2 changes stashed (`git stash push -u`):
+  $ uv run pytest -x -q packages/events services/registry-state services/registry-api tests/contract 2>&1 | tail -5
+  ... 17 failed, ... passed
+  # Categories: registration-isolation in registry-api conftest — task.created 1.1.0
+  # not registered in cross-service pytest session. Known per Story 8-7-5 backlog
+  # item ``test-isolation-conftest``. Same 17 failures reproduce after `git stash pop`
+  # → ZERO new failures attributable to Story 11.2.
+  ```
+
 ### Story 11.4 readiness check
 
 `TaskApprovalSignedPayload` is now registered at schema_version `1.1.0` per AC1. The frozen JSON fixture `tests/contract/fixtures/task.approval_signed.v1.1.0.json` gives Story 11.4's `just verify-approval` recipe a stable parsing target. Story 11.1 P1-H2 Field constraints (HMAC 64-hex, no-pipe IDs) are preserved unchanged. **Story 11.4 unblocked.**
@@ -438,3 +449,48 @@ created: 2026-05-20
 created_by: bmad-create-story skill
 ---
 ```
+
+---
+
+## Review Findings — pass-1 (2026-05-20)
+
+Pass-1 adversarial review on diff `005c512..ae1a650` (9 files, +497 / −6 lines). Three parallel reviewers (Sonnet): Blind Hunter (4 findings — 1 MAJOR + 3 minor), Edge Case Hunter (7 findings — 2 MAJOR + 3 minor + observations), Acceptance Auditor (3 findings — 3 LOW + observations, ACCEPT-WITH-RESERVATIONS). Verdicts: 2× REVISE + 1× ACCEPT-with-reservations.
+
+After dedup → **11 unique findings** (3 HIGH, 3 MED, 5 LOW). Standout convergences:
+- **`actor_id` `max_length=128` cap missing** (B1) — codebase-wide invariant break + Story 11.1 TaskApprovalSignedPayload audit opportunity
+- **`_EVENT_FAMILIES` + `_DISPATCH` integration gap with metrics-subscriber** (E1 + E2) — Story 11.2 registered events that the deployed metrics subscriber doesn't recognize
+
+All 11 close per "fix all issues even minors" standing policy.
+
+### Patch — HIGH (3)
+
+- [x] [Review][Patch] **P1-H1 — `KeyRotatedPayload.actor_id` + `CapabilityDeniedPayload.actor_id` missing `max_length=128` cap; breaks codebase-wide 128-char invariant + log-bloat risk in append-only audit events** [packages/events/src/events/payloads.py:979 + :1027] — Solo MAJOR: B1. Every other `actor_id` in payloads.py uses `Field(min_length=1, max_length=128)` (lines 514/814/828/843/858/873). The 2 new payloads + the inherited `TaskApprovalSignedPayload:931` (Story 11.1 P1-H2 carry) have only `min_length=1`. Unbounded `actor_id` = 10MB service-account ID lands in append-only event log. Fix: (a) add `max_length=128` to `KeyRotatedPayload.actor_id` and `CapabilityDeniedPayload.actor_id`; (b) **also audit + fix `TaskApprovalSignedPayload.actor_id:931`** for the same gap (Story 11.1 inheritance — Skeptic-note convergence). Add test `test_actor_id_rejects_oversized_string` parameterized over all 3 payload classes. Document the codebase-wide convention in a top-of-file comment.
+
+- [x] [Review][Patch] **P1-H2 — `_EVENT_FAMILIES` missing `"key"` + `"capability"` entries → silent routing to `"unknown"` bucket** [services/metrics-subscriber/src/metrics_subscriber/app/metrics.py:191-204] — Solo MAJOR: E1. When Story 11.5 emits `key.rotated` or any future story emits `capability.denied`, `update_for` derives family prefix `"key"` / `"capability"`, finds neither in `_EVENT_FAMILIES_SET`, routes to `"unknown"` bucket. `omb_events_appended_total{event_family="unknown"}` becomes a mixed bag — operators can't decompose. Story 10.4's docstring (lines 184-203) explicitly says "a future story registers an event in a new family MUST also extend _EVENT_FAMILIES". Story 11.2 IS that story. Fix: add `"key"` and `"capability"` to `_EVENT_FAMILIES` tuple in `metrics.py:191-204`. Add comments attributing each to Story 11.2. No `_DISPATCH` entry needed yet for `key` family (emission deferred to 11.5); `capability` dispatch entry is P1-H3.
+
+- [x] [Review][Patch] **P1-H3 — `_DISPATCH` missing `capability.denied` entry → `omb_capability_denied_total` will remain at zero forever post-emission** [services/metrics-subscriber/src/metrics_subscriber/app/metrics.py:553-584] — Solo MAJOR: E2. Dedicated counter `omb_capability_denied_total{tier, boundary}` was pre-populated by Story 10.4 with 6 zero-value combinations. Story 11.2 registered the event type. But `_DISPATCH` has NO entry for `capability.denied` → `update_for` skips to family counter, never calls `state.capability_denied_total.labels(tier=..., boundary=...).inc()`. The whole point of DD5 bundling was to register schema AND establish metric surface together; otherwise the follow-up story re-derives the wiring from scratch. Fix: (a) add `_update_capability_denied` helper in metrics.py: `def _update_capability_denied(state, envelope): tier = _payload_get(envelope, "tier"); boundary = _payload_get(envelope, "boundary"); if tier and boundary: state.capability_denied_total.labels(tier=tier, boundary=boundary).inc()`; (b) wire `"capability.denied": _update_capability_denied` in `_DISPATCH`; (c) add unit test `test_dispatch_capability_denied_increments_counter_by_tier_boundary`.
+
+### Patch — MED (3)
+
+- [x] [Review][Patch] **P1-M1 — `dict(env.payload)` with `# type: ignore[arg-type]` in fixture round-trip tests masks union-type ambiguity → potential false-green if `env.payload` ever becomes BaseModel** [tests/contract/test_event_payload_contracts.py — 3 `_fixture_parses` tests] — Solo MED: A1. `env.payload` is typed `dict[str, Any] | BaseModel`. Current path is `dict` so works at runtime. If future change makes payload BaseModel, `dict()` produces `{}` (no iter) and assertion silently passes. Fix: replace with `payload_data = env.payload if isinstance(env.payload, dict) else env.payload.model_dump()`. Drop the `type: ignore`. Two lines per test.
+
+- [x] [Review][Patch] **P1-M2 — Two different follow-up story refs for `capability.denied` emission ambiguity** [event_types.py:266-271 + DAR + spec D5] — Solo MED: E-ambiguity. Spec D5 says emission deferred to "follow-up story (likely Story 11.2.x or Epic 12.x)". DAR cites "Story 11.2.1 — capability.denied emission". event_types.py comment lines 266-271 hedge similarly. Decision needed: NAME the follow-up story canonically (e.g., create new backlog entry `11-2-1-capability-denied-emission` in sprint-status.yaml) OR fold into existing Epic 12 budget enforcement story (e.g., 12.0 capability event emission). Fix: pick ONE and update spec D5 + DAR + event_types.py comments to reference it consistently. **Recommend creating new `11-2-1` backlog entry** — keeps the DD5 lineage explicit + visible in sprint-status.
+
+- [x] [Review][Patch] **P1-M3 — AC1 self-verification clause refs `EVENT_TYPES` but actual exported name is `REGISTRY`** [_bmad-output/implementation-artifacts/11-2-...md AC1 self-verification block] — Solo MED: A-missing. Clause as written `from events.schema_registry import EVENT_TYPES; assert ('task.approval_signed', '1.1.0') in [(k, v) for ... ]` is non-executable — the symbol is `REGISTRY` not `EVENT_TYPES`. Test covers it via different mechanism, but Story 11.4's author copying clause will be confused. Fix: update AC1 self-verification to use the actual exported symbol: `from events.schema_registry import REGISTRY; assert ("task.approval_signed", "1.1.0") in REGISTRY` (or whatever the actual dict-access pattern is — verify against `packages/events/src/events/schema_registry.py`).
+
+### Patch — LOW (5)
+
+- [x] [Review][Patch] **P1-L1 — `__init__.py:94-97` comment misleading: "explicit entries below are kept" but no explicit entries added** [packages/events/src/events/__init__.py:94-97] — Solo LOW: B2. Comment claims explicit entries when both classes ride in via `*_payloads_all` only. Future reviewer greps `KeyRotatedPayload` in `__init__.py`, finds only the comment, hunts for non-existent entries. Fix: replace with `"no explicit entries added — KeyRotatedPayload and CapabilityDeniedPayload ride in solely via *_payloads_all spliced at the bottom of __all__"`.
+
+- [x] [Review][Patch] **P1-L2 — DAR explanation inaccuracy: `__init__.py:18` `CapabilityDenied` is an older class (without Payload suffix), not the new `CapabilityDeniedPayload`** [_bmad-output/implementation-artifacts/11-2-...md DAR Mypy section] — Solo LOW: A2. Cosmetic clarification. Fix: add one sentence to DAR clarifying that star-import via `_payloads_all` picks up both NEW classes; the existing `CapabilityDenied` explicit import on line 18 is a pre-existing unrelated exception class import.
+
+- [x] [Review][Patch] **P1-L3 — DAR Surprise #4 "17 pre-existing failures" lacks stash-verification evidence** [_bmad-output/implementation-artifacts/11-2-...md DAR Surprises #4] — Solo LOW: A3. Plausible claim (matches Story 8-7-5 backlog issue — `test-isolation-conftest`) but no output excerpt. Future reviewer can't distinguish "verified" from "assumed". Fix: add 3-line evidence block to DAR showing failing test names OR at minimum the categories (e.g., "registration-isolation in registry-api conftest — known per Story 8-7-5 backlog"). Documentation-only fix.
+
+- [x] [Review][Patch] **P1-L4 — `key.rotated` registered only at 1.1.0 (no 1.0.0 predecessor) — intentional but uncommented; asymmetry vs `task.approval_signed` (both 1.0.0 + 1.1.0) and `capability.denied` (1.1.0 only) confuses readers** [services/registry-state/src/registry_state/domain/event_types.py:264] — Solo LOW: E-minor-1. Fix: add one-line comment `# Born at 1.1.0 (no v1.0.0 predecessor; same applies to capability.denied below)`.
+
+- [x] [Review][Patch] **P1-L5 — Missing tests: naive datetime rejection (`KeyRotatedPayload.rotated_at`), `reason=None` round-trip (`CapabilityDeniedPayload`), `actor_id` length cap (covered by P1-H1 fix)** [tests/contract/test_event_payload_contracts.py] — Solo LOW: E-missing-1/2 + B-missing. Add 3 tests:
+  - `test_key_rotated_rejects_naive_datetime` — construct payload with `datetime.now()` (no tz); assert `ValidationError`.
+  - `test_capability_denied_with_reason_none_round_trips` — fixture variant with `"reason": null`; assert validation succeeds.
+  - `test_actor_id_rejects_oversized_string` — parameterized over 3 payload classes (covered by P1-H1 fix; can combine).
+
+### Deferred (none — all 11 addressed in this pass per "fix all issues even minors")

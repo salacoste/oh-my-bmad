@@ -3,7 +3,9 @@
 CI-enforced regression tests that fingerprint the cardinality invariants
 shipped in Story 10.4:
 
-  * AC2 — baseline cardinality at steady state == 51 timeseries (exact).
+  * AC2 — baseline cardinality at steady state == 53 timeseries (exact;
+    Story 11.2 pass-1 P1-H2 added ``key`` + ``capability`` to ``_EVENT_FAMILIES``,
+    bumping the baseline 51 → 53).
   * AC3 — 10K varying task_ids → cardinality returns to baseline after
     synchronous tail-loop cleanup (slow marker).
   * AC4 — N=100 concurrent active tasks → cardinality bounded by baseline
@@ -94,7 +96,7 @@ def _family_breakdown(body: str) -> list[tuple[str, int]]:
     """Return ``[(family_name, canonical_sample_count), ...]`` for diagnostics.
 
     Used to produce informative assertion failure messages — if the
-    baseline drifts away from 51, the per-family breakdown shows exactly
+    baseline drifts away from 53, the per-family breakdown shows exactly
     which family contributed unexpected children.
     """
     breakdown: list[tuple[str, int]] = []
@@ -231,7 +233,7 @@ async def cardinality_test_app(
 
 
 # ===========================================================================
-# AC2 — Baseline cardinality at steady state == 51 timeseries (exact).
+# AC2 — Baseline cardinality at steady state == 53 timeseries (exact).
 # ===========================================================================
 
 
@@ -240,24 +242,31 @@ async def cardinality_test_app(
 async def test_baseline_cardinality_at_steady_state(
     cardinality_test_app: tuple[FastAPI, Path],
 ) -> None:
-    """AC2 — fresh ``build_app`` exposes exactly 51 canonical timeseries.
+    """AC2 — fresh ``build_app`` exposes exactly 53 canonical timeseries.
 
-    Breakdown (per Story 10.4 DAR + ADR-0005 §Cardinality):
+    Breakdown (per Story 10.4 DAR + ADR-0005 §Cardinality, updated by
+    Story 11.2 pass-1 P1-H2 to include the ``key`` and ``capability``
+    event families newly registered in this story):
 
       Story 10.3 baseline (lag, bytes_behind, parse_skip × 4)   =  6
       Task lifecycle (15 event types)                           = 15
       Session lifecycle (5 phases)                              =  5
       Secret accessed (5 ActorKind values)                      =  5
-      Event family (11 registered + 1 ``unknown`` fallback)     = 12
+      Event family (13 registered + 1 ``unknown`` fallback)     = 14
       Idempotency cache (2 outcomes — DEFERRED preview)         =  2
       Capability denied (3 tiers × 2 boundaries — DEFERRED)     =  6
       ─────────────────────────────────────────────────────────
-                                                                = 51
+                                                                = 53
+
+    Story 11.2 P1-H2 added ``key`` (Story 11.5 ``key.rotated`` emission)
+    and ``capability`` (Story 11.2.1 ``capability.denied`` emission) to
+    ``_EVENT_FAMILIES`` — bumping the family count from 12 → 14 and the
+    total canonical-timeseries count from 51 → 53.
 
     No envelopes emitted; per-task gauge has zero labelled children.
     Cursor-offset gauge has zero labelled children until the tail loop
     persists (no envelopes, no persist).  The bound is EXACT — any drift
-    from 51 must be reconciled against this breakdown.
+    from 53 must be reconciled against this breakdown.
     """
     app, _ = cardinality_test_app
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
@@ -267,11 +276,11 @@ async def test_baseline_cardinality_at_steady_state(
         body = r.text
     count = _count_canonical_timeseries(body)
     breakdown = _family_breakdown(body)
-    assert count == 51, (
-        f"baseline cardinality drift: got {count} canonical timeseries, expected 51. "
+    assert count == 53, (
+        f"baseline cardinality drift: got {count} canonical timeseries, expected 53. "
         f"Breakdown: {breakdown}. "
-        f"Expected: 6 baseline + 15 task + 5 session + 5 secret + 12 family "
-        f"+ 2 idempotency + 6 capability = 51."
+        f"Expected: 6 baseline + 15 task + 5 session + 5 secret + 14 family "
+        f"+ 2 idempotency + 6 capability = 53."
     )
 
 
@@ -387,16 +396,16 @@ async def test_cardinality_under_10k_varying_task_ids(
 
     count = _count_canonical_timeseries(body)
     breakdown = _family_breakdown(body)
-    # P1-H2 review patch — post-drain bound is <= 52 (NOT <= 51 as spec
-    # D1 originally stated — this is one unit MORE PERMISSIVE than the
-    # spec baseline).  Reason: ``persist_every_n_events=1`` + the first
-    # envelope causes the tail loop to persist the cursor, materialising
-    # one ``omb_metrics_subscriber_cursor_offset_bytes{path=...}`` child.
-    # The critical zero-leak invariant (``task_tokens_spent._metrics``
-    # empty) is asserted separately below.
-    assert count <= 52, (
-        f"10K cardinality drift: got {count} canonical timeseries, expected <= 52 "
-        f"(51 baseline + 1 cursor-offset path child). Breakdown: {breakdown}"
+    # P1-H2 review patch — post-drain bound is <= 54 (NOT <= 53 as Story
+    # 11.2 pass-1 P1-H2 baseline — this is one unit MORE PERMISSIVE than
+    # the bumped baseline).  Reason: ``persist_every_n_events=1`` + the
+    # first envelope causes the tail loop to persist the cursor,
+    # materialising one ``omb_metrics_subscriber_cursor_offset_bytes{path=...}``
+    # child.  The critical zero-leak invariant
+    # (``task_tokens_spent._metrics`` empty) is asserted separately below.
+    assert count <= 54, (
+        f"10K cardinality drift: got {count} canonical timeseries, expected <= 54 "
+        f"(53 baseline + 1 cursor-offset path child). Breakdown: {breakdown}"
     )
 
     # Critical: the per-task gauge has zero labelled children after
@@ -493,10 +502,10 @@ async def test_cardinality_with_n_concurrent_active_tasks(
         body = r.text
         count_mid = _count_canonical_timeseries(body)
 
-    # Baseline (51) + cursor-offset path child (1 — tail loop persists) +
-    # N per-task gauge children = 51 + 1 + 100 = 152.
-    # We assert >= 151 (baseline+N) and <= 152 (with one persist-cycle).
-    # P1-L1 review patch — the 151 lower bound assumes the asyncio
+    # Baseline (53) + cursor-offset path child (1 — tail loop persists) +
+    # N per-task gauge children = 53 + 1 + 100 = 154.
+    # We assert >= 153 (baseline+N) and <= 154 (with one persist-cycle).
+    # P1-L1 review patch — the lower bound assumes the asyncio
     # single-task tail loop never yields between
     # ``events_appended_total.inc()`` and ``_update_task_tokens.set()``
     # inside ``update_for()``.  This invariant holds today (single-task
@@ -506,9 +515,9 @@ async def test_cardinality_with_n_concurrent_active_tasks(
     # synchronisation barrier (e.g. drain to ``events_appended_total ==
     # 2N`` AND then poll until ``len(state.task_tokens_spent._metrics)
     # >= N``).
-    assert 151 <= count_mid <= 152, (
-        f"mid-flight cardinality drift: got {count_mid}, expected 151..152 "
-        f"(51 baseline + {n_tasks} per-task gauges +/- 1 cursor-offset path child). "
+    assert 153 <= count_mid <= 154, (
+        f"mid-flight cardinality drift: got {count_mid}, expected 153..154 "
+        f"(53 baseline + {n_tasks} per-task gauges +/- 1 cursor-offset path child). "
         f"Breakdown: {_family_breakdown(body)}"
     )
 
@@ -534,9 +543,9 @@ async def test_cardinality_with_n_concurrent_active_tasks(
         r = await client.get("/metrics")
         body = r.text
         count_after = _count_canonical_timeseries(body)
-    assert count_after <= 52, (
-        f"post-drain cardinality drift: got {count_after}, expected <= 52 "
-        f"(51 baseline + 1 cursor-offset path child). "
+    assert count_after <= 54, (
+        f"post-drain cardinality drift: got {count_after}, expected <= 54 "
+        f"(53 baseline + 1 cursor-offset path child). "
         f"Breakdown: {_family_breakdown(body)}"
     )
 
@@ -586,10 +595,10 @@ async def test_deliberate_unbounded_label_violation_fails(
         r = await client.get("/metrics")
         body = r.text
     count = _count_canonical_timeseries(body)
-    # 51 baseline + 200 novel labelled children = 251.
-    assert count >= 51 + leak_count, (
+    # 53 baseline + 200 novel labelled children = 253.
+    assert count >= 53 + leak_count, (
         f"deliberate violation did NOT materialise the cardinality leak: "
-        f"got {count} canonical timeseries, expected >= {51 + leak_count}. "
+        f"got {count} canonical timeseries, expected >= {53 + leak_count}. "
         f"This means the gate would NOT detect a real cardinality regression."
     )
 
@@ -697,16 +706,16 @@ async def test_envelope_with_unknown_family_falls_to_unknown_bucket(
 
     # Cardinality stays at baseline (per-task gauge has zero children
     # since no token-bearing envelope was dispatched).
-    # P1-M3 review patch — exact ``== 51`` (not ``<= 52``) is correct
+    # P1-M3 review patch — exact ``== 53`` (not ``<= 54``) is correct
     # here because AC7 bypasses JSONL: it calls ``update_for`` directly.
     # The tail loop processes 0 bytes, no cursor persist fires, so no
     # ``omb_metrics_subscriber_cursor_offset_bytes{path=...}`` child
     # materialises.  If a future fixture change ever pre-warms the log
     # with a real envelope (or wires this test through
-    # ``LifespanManager + log writes``), relax to ``<= 52``.
+    # ``LifespanManager + log writes``), relax to ``<= 54``.
     count = _count_canonical_timeseries(body)
-    assert count == 51, (
-        f"AC7 cardinality drift: got {count}, expected 51 (no novel families "
+    assert count == 53, (
+        f"AC7 cardinality drift: got {count}, expected 53 (no novel families "
         f"created). Breakdown: {_family_breakdown(body)}"
     )
 

@@ -261,12 +261,14 @@ def ensure_registered() -> None:
     # Story 11.2 — key.rotated audit event (FR65a / NFR-S10). Story 11.5's
     # key-rotation detector emits when OPERATOR_HMAC_KEY's fingerprint
     # changes. Pure schema registration here; emission deferred to 11.5.
+    # Born at 1.1.0 (no v1.0.0 predecessor; same applies to capability.denied
+    # below — both are NEW event types introduced in Phase 2).
     register("key.rotated", "1.1.0", KeyRotatedPayload)
     # Story 11.2 — capability.denied audit event (Epic 10 retro DD5).
     # Registration unblocks Story 10.4's preview counter
     # ``omb_capability_denied_total{tier,boundary}`` (currently
-    # pre-populated at 0). Emission deferred to a follow-up story
-    # (likely 11.2.x or Epic 12.x — requires TierEnforcementMiddleware
+    # pre-populated at 0). Emission deferred to Story 11.2.1
+    # (capability.denied emission — requires TierEnforcementMiddleware
     # + MCP capability-handler wiring; out of scope for 11.2 per D5).
     register("capability.denied", "1.1.0", CapabilityDeniedPayload)
     register("task.retry_requested", "1.0.0", TaskRetryRequestedPayload)

@@ -42,7 +42,12 @@ import pytest
 # schema registry would be empty and ``EventEnvelope.create`` /
 # ``REGISTRY`` lookups would miss the Story 11.2 entries.
 import registry_state.domain.event_types  # noqa: F401, IMP001 — test
-from events import CapabilityDeniedPayload, EventEnvelope, KeyRotatedPayload
+from events import (
+    CapabilityDeniedPayload,
+    EventEnvelope,
+    KeyRotatedPayload,
+    TaskApprovalSignedPayload,
+)
 from events.schema_registry import REGISTRY
 
 # D4: direct cross-service import from metrics-subscriber is permitted
@@ -87,10 +92,12 @@ def test_task_approval_signed_fixture_parses() -> None:
     env = EventEnvelope.model_validate_json(blob)
     assert env.type == "task.approval_signed"
     assert env.schema_version == "1.1.0"
-    # Deep-equal payload field-by-field. ``env.payload`` is a frozen dict
-    # view of the JSON object; compare against the original parsed dict.
+    # Deep-equal payload field-by-field. ``env.payload`` is typed
+    # ``dict[str, Any] | BaseModel``; use isinstance-guarded branch to
+    # support both shapes without masking type ambiguity (P1-M1).
     expected_payload = json.loads(blob)["payload"]
-    assert dict(env.payload) == expected_payload  # type: ignore[arg-type]
+    payload_data = env.payload if isinstance(env.payload, dict) else env.payload.model_dump()
+    assert payload_data == expected_payload
 
 
 # ---------------------------------------------------------------------------
@@ -111,12 +118,10 @@ def test_key_rotated_fixture_parses() -> None:
     assert env.type == "key.rotated"
     assert env.schema_version == "1.1.0"
     expected_payload = json.loads(blob)["payload"]
-    assert dict(env.payload) == expected_payload  # type: ignore[arg-type]
+    payload_data = env.payload if isinstance(env.payload, dict) else env.payload.model_dump()
+    assert payload_data == expected_payload
     # Fingerprints differ (D3 invariant honored in the fixture).
-    assert (
-        env.payload["previous_key_fingerprint"]  # type: ignore[index]
-        != env.payload["new_key_fingerprint"]  # type: ignore[index]
-    )
+    assert payload_data["previous_key_fingerprint"] != payload_data["new_key_fingerprint"]
 
 
 def test_key_rotated_rejects_same_fingerprint() -> None:
@@ -155,7 +160,8 @@ def test_capability_denied_fixture_parses() -> None:
     assert env.type == "capability.denied"
     assert env.schema_version == "1.1.0"
     expected_payload = json.loads(blob)["payload"]
-    assert dict(env.payload) == expected_payload  # type: ignore[arg-type]
+    payload_data = env.payload if isinstance(env.payload, dict) else env.payload.model_dump()
+    assert payload_data == expected_payload
 
 
 def test_capability_denied_payload_tier_enum_matches_story_10_4_metrics() -> None:
@@ -186,3 +192,105 @@ def test_capability_denied_payload_tier_enum_matches_story_10_4_metrics() -> Non
         f"_CAPABILITY_BOUNDARIES {set(_CAPABILITY_BOUNDARIES)!r}. "
         "Sync both ends."
     )
+
+
+# ---------------------------------------------------------------------------
+# Pass-1 review additions — P1-H1 (actor_id cap) + P1-L5 (missing tests).
+# ---------------------------------------------------------------------------
+
+
+_ACTOR_ID_OVERSIZED = "a" * 129  # one over the 128-char invariant.
+
+
+def _construct_for_actor_id(payload_cls: type, actor_id: str) -> object:
+    """Build a minimal-valid instance of *payload_cls* with the given *actor_id*.
+
+    Each Story 11.x payload class has distinct required fields; this helper
+    centralises the construction logic for the parametrised P1-H1 test so
+    the asserted invariant (``ValidationError`` on oversized actor_id) is
+    isolated from per-class shape boilerplate.
+    """
+    from datetime import UTC, datetime
+
+    if payload_cls is TaskApprovalSignedPayload:
+        return payload_cls(
+            task_id="t-00000000-0000-7000-8000-000000000001",
+            decision_id="d-00000000-0000-7000-8000-000000000002",
+            actor_id=actor_id,
+            action="approve",
+            timestamp=datetime(2026, 5, 20, 12, 0, 0, tzinfo=UTC),
+            hmac_sha256="0" * 64,
+        )
+    if payload_cls is KeyRotatedPayload:
+        return payload_cls(
+            rotated_at=datetime(2026, 5, 20, 12, 0, 0, tzinfo=UTC),
+            previous_key_fingerprint="0123456789abcdef",
+            new_key_fingerprint="fedcba9876543210",
+            actor_id=actor_id,
+        )
+    if payload_cls is CapabilityDeniedPayload:
+        return payload_cls(
+            tier="tier1",
+            boundary="http",
+            actor_id=actor_id,
+            attempted_action="task.create",
+        )
+    raise AssertionError(f"unhandled payload class in test helper: {payload_cls!r}")
+
+
+@pytest.mark.parametrize(
+    "payload_cls",
+    [TaskApprovalSignedPayload, KeyRotatedPayload, CapabilityDeniedPayload],
+)
+def test_actor_id_rejects_oversized_string(payload_cls: type) -> None:
+    """Pass-1 P1-H1 — every ``actor_id`` field enforces ``max_length=128``.
+
+    Codebase-wide invariant (see ``payloads.py`` module docstring).
+    Closes Story 11.1 inheritance gap on ``TaskApprovalSignedPayload`` +
+    applies same cap to Story 11.2's new ``KeyRotatedPayload`` and
+    ``CapabilityDeniedPayload``. Protects append-only audit log from
+    bloat-injection via unbounded service-account identifiers.
+    """
+    with pytest.raises(ValidationError, match="actor_id"):
+        _construct_for_actor_id(payload_cls, _ACTOR_ID_OVERSIZED)
+
+
+def test_key_rotated_rejects_naive_datetime() -> None:
+    """Pass-1 P1-L5 — ``KeyRotatedPayload.rotated_at`` is :class:`AwareDatetime`.
+
+    Pydantic ``AwareDatetime`` rejects naive ``datetime`` values (no
+    ``tzinfo``). Audit-log timestamps MUST carry timezone info — naive
+    timestamps break cross-deployment ordering invariants when JSONL files
+    move between hosts in different local timezones.
+    """
+    from datetime import datetime
+
+    with pytest.raises(ValidationError, match=r"(?i)tz|timezone|aware|naive"):
+        KeyRotatedPayload(
+            rotated_at=datetime(2026, 5, 20, 12, 0, 0),  # noqa: DTZ001 — naive on purpose
+            previous_key_fingerprint="0123456789abcdef",
+            new_key_fingerprint="fedcba9876543210",
+            actor_id="operator",
+        )
+
+
+def test_capability_denied_with_reason_none_round_trips() -> None:
+    """Pass-1 P1-L5 — ``CapabilityDeniedPayload.reason`` is optional.
+
+    The field defaults to ``None``; explicit ``reason=None`` construction
+    must validate cleanly. Locks the optionality contract — a future
+    pattern-tightening migration that accidentally drops ``None`` from
+    the allowed values would fail this test immediately.
+    """
+    payload = CapabilityDeniedPayload(
+        tier="tier1",
+        boundary="mcp",
+        actor_id="operator",
+        attempted_action="task.create",
+        reason=None,
+    )
+    assert payload.reason is None
+    # Round-trip through model_dump → model_validate to confirm the
+    # nullable shape survives the serialization boundary.
+    round_tripped = CapabilityDeniedPayload.model_validate(payload.model_dump())
+    assert round_tripped.reason is None
