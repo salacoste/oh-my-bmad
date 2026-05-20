@@ -359,4 +359,13 @@ blocks:
 
 ## Tasks / Subtasks
 
-_(populated by dev agent)_
+- [x] Phase 0: Sprint status flip + Tasks block
+- [x] Phase 1: `scripts/verify_approval.py` CLI tool (AC1, AC2, AC3, AC4, AC5)
+  - [x] AC1: CLI signature with argparse (EVENT_ID positional + --log-dir/--json/--key-file)
+  - [x] AC2: Import `compute_approval_hmac` from `registry_api.adapters.approval_signing`
+  - [x] AC3: Streaming JSONL reader (sorted, line-by-line, skip blanks, skip decode errors)
+  - [x] AC4: Human text + JSON output modes; 6 exit codes
+  - [x] AC5: All 11 reason codes reachable
+- [x] Phase 2: Justfile recipe (AC7)
+- [x] Phase 3: Integration tests (AC6) — `tests/integration/test_verify_approval_offline_recipe.py`
+- [x] Phase 4: Validation gates (AC8) — ruff, mypy, check_imports, full test suite
