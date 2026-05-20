@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Generator, Iterator, MutableMapping
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -47,6 +47,7 @@ def captured_log_events() -> Iterator[list[MutableMapping[str, Any]]]:
 
 
 _TODAY = datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC)
+_TODAY_DATE: date = datetime.now(UTC).date()
 
 
 @pytest.mark.asyncio
@@ -63,7 +64,7 @@ async def test_main_exit_2_on_schema_version_refused(
         json.dumps(
             {
                 "schema_version": "9999",  # unknown
-                "path": str(events_dir / "2026-05-19.jsonl"),
+                "path": str(events_dir / f"{_TODAY_DATE.isoformat()}.jsonl"),
                 "offset": 0,
             }
         )
@@ -98,7 +99,7 @@ async def test_main_exit_3_on_corrupt_region_detected(
     events_dir = tmp_path / "events"
     cursor_path = tmp_path / "metrics" / "cursor.json"
     events_dir.mkdir(parents=True)
-    log_path = events_dir / "2026-05-19.jsonl"
+    log_path = events_dir / f"{_TODAY_DATE.isoformat()}.jsonl"
     # 200 contiguous garbage lines → trips threshold (default 100).
     log_path.write_bytes(b"{not json line\n" * 200)
     settings = MetricsSubscriberSettings(
@@ -129,7 +130,7 @@ async def test_main_exit_3_corrupt_region_restart_loop_does_not_crash(
     events_dir = tmp_path / "events"
     cursor_path = tmp_path / "metrics" / "cursor.json"
     events_dir.mkdir(parents=True)
-    log_path = events_dir / "2026-05-19.jsonl"
+    log_path = events_dir / f"{_TODAY_DATE.isoformat()}.jsonl"
     log_path.write_bytes(b"{not json line\n" * 200)
     settings = MetricsSubscriberSettings(
         event_log_dir=events_dir,
@@ -262,7 +263,7 @@ async def test_main_exit_3_with_valid_prefix_then_garbage_persists_at_corruption
     events_dir = tmp_path / "events"
     cursor_path = tmp_path / "metrics" / "cursor.json"
     events_dir.mkdir(parents=True)
-    log_path = events_dir / "2026-05-19.jsonl"
+    log_path = events_dir / f"{_TODAY_DATE.isoformat()}.jsonl"
     # 5 valid + 200 garbage lines.  Threshold default 100 → trips on
     # the 100th garbage line.  ``exc.offset`` must equal the byte
     # position immediately AFTER the 5th valid envelope.
@@ -330,7 +331,7 @@ async def test_main_exit_3_persist_failure_still_returns_3_with_warning(
     events_dir = tmp_path / "events"
     cursor_path = tmp_path / "metrics" / "cursor.json"
     events_dir.mkdir(parents=True)
-    log_path = events_dir / "2026-05-19.jsonl"
+    log_path = events_dir / f"{_TODAY_DATE.isoformat()}.jsonl"
     log_path.write_bytes(b"{not json line\n" * 200)
     settings = MetricsSubscriberSettings(
         event_log_dir=events_dir,

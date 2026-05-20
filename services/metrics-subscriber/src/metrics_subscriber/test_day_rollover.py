@@ -120,10 +120,14 @@ async def test_day_rollover_transitions_to_new_file(tmp_path: Path) -> None:
     cursor_path = tmp_path / "metrics" / "cursor.json"
     events_dir.mkdir(parents=True)
 
-    day0 = datetime(2026, 5, 19, 23, 59, 0, tzinfo=UTC)
-    day1 = day0 + timedelta(minutes=2)  # → 2026-05-20 00:01:00 UTC
-    day0_path = events_dir / "2026-05-19.jsonl"
-    day1_path = events_dir / "2026-05-20.jsonl"
+    today_date = datetime.now(UTC).date()
+    yesterday_date = today_date - timedelta(days=1)
+    day0 = datetime(
+        yesterday_date.year, yesterday_date.month, yesterday_date.day, 23, 59, 0, tzinfo=UTC
+    )
+    day1 = day0 + timedelta(minutes=2)  # → today 00:01:00 UTC
+    day0_path = events_dir / f"{yesterday_date.isoformat()}.jsonl"
+    day1_path = events_dir / f"{today_date.isoformat()}.jsonl"
 
     day0_envs = [_make_envelope(f"d0-{i}", mono_seed=i) for i in range(100)]
     _write_envelopes(day0_path, day0_envs)
@@ -217,9 +221,13 @@ async def test_day_rollover_writer_appending_past_reader_clock_does_not_drop_eve
     """
     events_dir = tmp_path / "events"
     events_dir.mkdir(parents=True)
-    day0 = datetime(2026, 5, 19, 23, 59, 30, tzinfo=UTC)
+    today_date = datetime.now(UTC).date()
+    yesterday_date = today_date - timedelta(days=1)
+    day0 = datetime(
+        yesterday_date.year, yesterday_date.month, yesterday_date.day, 23, 59, 30, tzinfo=UTC
+    )
     day1 = day0 + timedelta(minutes=2)
-    yesterday_path = events_dir / "2026-05-19.jsonl"
+    yesterday_path = events_dir / f"{yesterday_date.isoformat()}.jsonl"
 
     envs = [_make_envelope(f"e{i}", mono_seed=i) for i in range(10)]
     _write_envelopes(yesterday_path, envs[:5])  # 5 initial events
@@ -281,10 +289,14 @@ async def test_restart_after_midnight_completes_within_5s(tmp_path: Path) -> Non
     """
     events_dir = tmp_path / "events"
     events_dir.mkdir(parents=True)
-    yesterday = datetime(2026, 5, 18, 23, 59, 30, tzinfo=UTC)
-    today = yesterday + timedelta(minutes=2)  # → 2026-05-19 00:01:30 UTC
-    yesterday_path = events_dir / "2026-05-18.jsonl"
-    today_path = events_dir / "2026-05-19.jsonl"
+    today_date = datetime.now(UTC).date()
+    yesterday_date = today_date - timedelta(days=1)
+    yesterday = datetime(
+        yesterday_date.year, yesterday_date.month, yesterday_date.day, 23, 59, 30, tzinfo=UTC
+    )
+    today = yesterday + timedelta(minutes=2)  # → today 00:01:30 UTC
+    yesterday_path = events_dir / f"{yesterday_date.isoformat()}.jsonl"
+    today_path = events_dir / f"{today_date.isoformat()}.jsonl"
 
     # Yesterday fully drained; today already has a fresh event.
     yesterday_envs = [_make_envelope(f"y{i}", mono_seed=i) for i in range(3)]

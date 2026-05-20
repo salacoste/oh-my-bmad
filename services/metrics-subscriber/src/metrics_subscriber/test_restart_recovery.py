@@ -72,7 +72,8 @@ def _isolated_registry() -> Generator[None, None, None]:
 _ACTOR_SYS = Actor(kind="system", id="restart-test")
 _ACTOR_USER = Actor(kind="operator", id="alice")
 _TRACE_ID = "01917e5c-a7d1-7000-8abc-000000000000"
-_FIXED_NOW = datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC)
+_today = datetime.now(UTC).date()
+_FIXED_NOW = datetime(_today.year, _today.month, _today.day, 12, 0, 0, tzinfo=UTC)
 
 
 class _FixedClock(Clock):
