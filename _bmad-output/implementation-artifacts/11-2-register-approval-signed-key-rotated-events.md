@@ -1,6 +1,6 @@
 # Story 11.2 — Register `task.approval_signed` + `key.rotated` event types
 
-Status: **review** (pass-1 batch applied; CI pending @ c9adf7e)
+Status: **done** (CI green @ `4382af7` (run 26167849514) — confirmed 2026-05-20; impl `f28842b` + `ae1a650`; pass-1 review batch `c9adf7e` + `4382af7`: 11/11 closed = 3 HIGH + 3 MED + 5 LOW. DD5 from Epic 10 retro closed via `capability.denied` registration + dispatch wiring; emission deferred to new Story 11.2.1.)
 
 ## Story
 
