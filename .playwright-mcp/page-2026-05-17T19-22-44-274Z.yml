@@ -1,0 +1,351 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - link "Skip to content" [ref=e4] [cursor=pointer]:
+      - /url: "#start-of-content"
+    - banner [ref=e6]:
+      - heading "Navigation Menu" [level=2] [ref=e7]
+      - generic [ref=e8]:
+        - link "Homepage" [ref=e10] [cursor=pointer]:
+          - /url: /
+          - img [ref=e11]
+        - generic [ref=e13]:
+          - navigation "Global" [ref=e16]:
+            - list [ref=e17]:
+              - listitem [ref=e18]:
+                - button "Platform" [ref=e20] [cursor=pointer]:
+                  - text: Platform
+                  - img [ref=e21]
+              - listitem [ref=e23]:
+                - button "Solutions" [ref=e25] [cursor=pointer]:
+                  - text: Solutions
+                  - img [ref=e26]
+              - listitem [ref=e28]:
+                - button "Resources" [ref=e30] [cursor=pointer]:
+                  - text: Resources
+                  - img [ref=e31]
+              - listitem [ref=e33]:
+                - button "Open Source" [ref=e35] [cursor=pointer]:
+                  - text: Open Source
+                  - img [ref=e36]
+              - listitem [ref=e38]:
+                - button "Enterprise" [ref=e40] [cursor=pointer]:
+                  - text: Enterprise
+                  - img [ref=e41]
+              - listitem [ref=e43]:
+                - link "Pricing" [ref=e44] [cursor=pointer]:
+                  - /url: https://github.com/pricing
+                  - generic [ref=e45]: Pricing
+          - generic [ref=e46]:
+            - button "Search or jump to…" [ref=e49] [cursor=pointer]:
+              - img [ref=e51]
+            - link "Sign in" [ref=e54] [cursor=pointer]:
+              - /url: /login?return_to=https%3A%2F%2Fgithub.com%2Fsalacoste%2Foh-my-bmad%2Factions%2Fruns%2F25959873508
+            - link "Sign up" [ref=e55] [cursor=pointer]:
+              - /url: /signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E%2Factions%2Fworkflow_runs%2Fshow&source=header-repo&source_repo=salacoste%2Foh-my-bmad
+            - button "Appearance settings" [ref=e58] [cursor=pointer]:
+              - img
+  - main [ref=e62]:
+    - generic [ref=e63]:
+      - generic [ref=e64]:
+        - generic [ref=e65]:
+          - generic [ref=e67]:
+            - img [ref=e68]
+            - link "salacoste" [ref=e71] [cursor=pointer]:
+              - /url: /salacoste
+            - generic [ref=e72]: /
+            - strong [ref=e73]:
+              - link "oh-my-bmad" [ref=e74] [cursor=pointer]:
+                - /url: /salacoste/oh-my-bmad
+            - generic [ref=e75]: Public
+          - generic [ref=e76]:
+            - list:
+              - listitem [ref=e77]:
+                - link "You must be signed in to change notification settings" [ref=e78] [cursor=pointer]:
+                  - /url: /login?return_to=%2Fsalacoste%2Foh-my-bmad
+                  - img [ref=e79]
+                  - text: Notifications
+              - listitem [ref=e81]:
+                - link "Fork 0" [ref=e82] [cursor=pointer]:
+                  - /url: /login?return_to=%2Fsalacoste%2Foh-my-bmad
+                  - img [ref=e83]
+                  - text: Fork
+                  - generic "0" [ref=e85]
+              - listitem [ref=e86]:
+                - link "You must be signed in to star a repository" [ref=e88] [cursor=pointer]:
+                  - /url: /login?return_to=%2Fsalacoste%2Foh-my-bmad
+                  - img [ref=e89]
+                  - text: Star
+                  - generic "0 users starred this repository" [ref=e91]: "0"
+        - navigation "Repository" [ref=e92]:
+          - list [ref=e93]:
+            - listitem [ref=e94]:
+              - link "Code" [ref=e95] [cursor=pointer]:
+                - /url: /salacoste/oh-my-bmad
+                - img [ref=e96]
+                - generic [ref=e98]: Code
+            - listitem [ref=e99]:
+              - link "Issues" [ref=e100] [cursor=pointer]:
+                - /url: /salacoste/oh-my-bmad/issues
+                - img [ref=e101]
+                - generic [ref=e104]: Issues
+            - listitem [ref=e105]:
+              - link "Pull requests" [ref=e106] [cursor=pointer]:
+                - /url: /salacoste/oh-my-bmad/pulls
+                - img [ref=e107]
+                - generic [ref=e109]: Pull requests
+            - listitem [ref=e110]:
+              - link "Actions" [ref=e111] [cursor=pointer]:
+                - /url: /salacoste/oh-my-bmad/actions
+                - img [ref=e112]
+                - generic [ref=e114]: Actions
+            - listitem [ref=e115]:
+              - link "Security and quality" [ref=e116] [cursor=pointer]:
+                - /url: /salacoste/oh-my-bmad/security
+                - img [ref=e117]
+                - generic [ref=e119]: Security and quality
+            - listitem [ref=e120]:
+              - link "Insights" [ref=e121] [cursor=pointer]:
+                - /url: /salacoste/oh-my-bmad/pulse
+                - img [ref=e122]
+                - generic [ref=e124]: Insights
+      - generic [ref=e129]:
+        - generic [ref=e132]:
+          - link "ci" [ref=e135] [cursor=pointer]:
+            - /url: /salacoste/oh-my-bmad/actions/workflows/ci.yml
+            - img [ref=e136]
+            - generic [ref=e138]: ci
+          - generic [ref=e139]:
+            - generic [ref=e140]:
+              - img "failed:" [ref=e144]
+              - 'heading "fix(epic-8.7): tolerate aiosqlite daemon-thread SIGABRT in CI pytest … #37" [level=1] [ref=e146]':
+                - generic [ref=e147]: "fix(epic-8.7): tolerate aiosqlite daemon-thread SIGABRT in CI pytest … #37"
+            - link "Sign in to view logs" [ref=e150] [cursor=pointer]:
+              - /url: /login?return_to=https%3A%2F%2Fgithub.com%2Fsalacoste%2Foh-my-bmad%2Factions%2Fruns%2F25959873508
+        - generic [ref=e151]:
+          - navigation "Workflow run" [ref=e157]:
+            - list [ref=e158]:
+              - listitem [ref=e159]:
+                - link "Summary" [ref=e160] [cursor=pointer]:
+                  - /url: /salacoste/oh-my-bmad/actions/runs/25959873508
+                  - generic:
+                    - img
+                  - generic [ref=e162]: Summary
+              - generic [ref=e163]:
+                - heading "All jobs" [level=4] [ref=e164]
+                - button "Filter by job status" [ref=e165] [cursor=pointer]:
+                  - img [ref=e166]
+              - listitem [ref=e168]
+              - listitem [ref=e169]:
+                - list [ref=e170]:
+                  - listitem [ref=e171]:
+                    - generic "Loading" [ref=e172]:
+                      - generic [ref=e176]:
+                        - img [ref=e177]
+                        - generic [ref=e180]: Loading
+              - listitem [ref=e181]
+              - listitem [ref=e182]:
+                - heading "Run details" [level=3] [ref=e184]
+                - list "Run details" [ref=e185]:
+                  - listitem [ref=e186]:
+                    - link "Usage" [ref=e187] [cursor=pointer]:
+                      - /url: /salacoste/oh-my-bmad/actions/runs/25959873508/usage
+                      - generic:
+                        - img
+                      - generic [ref=e189]: Usage
+                  - listitem [ref=e190]:
+                    - link "Workflow file" [ref=e191] [cursor=pointer]:
+                      - /url: /salacoste/oh-my-bmad/actions/runs/25959873508/workflow
+                      - generic:
+                        - img
+                      - generic [ref=e193]: Workflow file
+          - generic [ref=e195]:
+            - region "Workflow run summary" [ref=e196]:
+              - generic [ref=e197]:
+                - generic [ref=e198]:
+                  - generic [ref=e199]: Triggered via push May 16, 2026 10:41yesterday
+                  - generic [ref=e200]:
+                    - link "@salacoste salacoste" [ref=e201] [cursor=pointer]:
+                      - /url: /salacoste
+                      - img "@salacoste" [ref=e202]
+                      - text: salacoste
+                    - generic [ref=e203]:
+                      - generic [ref=e204]: pushed
+                      - link "011ced6" [ref=e205] [cursor=pointer]:
+                        - /url: /salacoste/oh-my-bmad/commit/011ced6cf56580962cd26fd431d567f5db504a5e
+                        - img [ref=e206]
+                        - text: 011ced6
+                    - link "main" [ref=e208] [cursor=pointer]:
+                      - /url: /salacoste/oh-my-bmad/tree/refs/heads/main
+                - generic [ref=e209]:
+                  - generic [ref=e210]: Status
+                  - text: Failure
+                - generic [ref=e211]:
+                  - generic [ref=e212]: Total duration
+                  - link "2m 28s" [ref=e213] [cursor=pointer]:
+                    - /url: /salacoste/oh-my-bmad/actions/runs/25959873508/usage
+                - generic [ref=e214]:
+                  - generic [ref=e215]: Artifacts
+                  - text: –
+            - region "Workflow run graph" [ref=e216]:
+              - generic [ref=e218]:
+                - generic [ref=e220]:
+                  - heading "ci.yml" [level=2] [ref=e221]:
+                    - link "ci.yml" [ref=e222] [cursor=pointer]:
+                      - /url: /salacoste/oh-my-bmad/actions/runs/25959873508/workflow
+                  - generic [ref=e223]: "on: push"
+                - generic [ref=e225]:
+                  - generic [ref=e226]:
+                    - img
+                    - img
+                    - 'link "failed: PR gate (ruff + mypy + pytest) 2m 24s" [ref=e230] [cursor=pointer]':
+                      - /url: /salacoste/oh-my-bmad/actions/runs/25959873508/job/76313261570
+                      - generic [ref=e232]:
+                        - img "failed:" [ref=e234]
+                        - generic [ref=e237]: PR gate (ruff + mypy + pytest)
+                        - generic [ref=e238]: 2m 24s
+                  - generic [ref=e239]:
+                    - paragraph [ref=e240]: Oh hello! Nice to see you.
+                    - paragraph [ref=e241]:
+                      - text: Made with ❤️ by
+                      - link [ref=e242] [cursor=pointer]:
+                        - /url: https://actions.github.io/humans.txt
+                        - text: humans.txt
+                - generic [ref=e243]:
+                  - button "Fit to window" [disabled] [ref=e244]:
+                    - img
+                  - generic [ref=e245]:
+                    - button "Zoom out" [disabled] [ref=e247]:
+                      - img
+                    - button "Zoom in" [disabled] [ref=e249]:
+                      - img
+            - region "Annotations" [ref=e250]:
+              - generic [ref=e251]:
+                - generic [ref=e253]:
+                  - heading "Annotations" [level=2] [ref=e254]
+                  - generic [ref=e255]: 10 errors and 3 warnings
+                - table [ref=e256]:
+                  - rowgroup [ref=e257]:
+                    - row "PR gate (ruff + mypy + pytest) Event loop is closed" [ref=e258]:
+                      - cell "PR gate (ruff + mypy + pytest) Event loop is closed" [ref=e259]:
+                        - generic [ref=e260]:
+                          - img [ref=e262]
+                          - generic [ref=e264]:
+                            - link "PR gate (ruff + mypy + pytest)" [ref=e265] [cursor=pointer]:
+                              - /url: /salacoste/oh-my-bmad/actions/runs/25959873508/job/76313261570#step:13:541
+                              - strong [ref=e266]: PR gate (ruff + mypy + pytest)
+                            - generic [ref=e269]: Event loop is closed
+                    - row "PR gate (ruff + mypy + pytest) Event loop is closed" [ref=e270]:
+                      - cell "PR gate (ruff + mypy + pytest) Event loop is closed" [ref=e271]:
+                        - generic [ref=e272]:
+                          - img [ref=e274]
+                          - generic [ref=e276]:
+                            - link "PR gate (ruff + mypy + pytest)" [ref=e277] [cursor=pointer]:
+                              - /url: /salacoste/oh-my-bmad/actions/runs/25959873508/job/76313261570#step:13:541
+                              - strong [ref=e278]: PR gate (ruff + mypy + pytest)
+                            - generic [ref=e281]: Event loop is closed
+                    - row "PR gate (ruff + mypy + pytest) Event loop is closed" [ref=e282]:
+                      - cell "PR gate (ruff + mypy + pytest) Event loop is closed" [ref=e283]:
+                        - generic [ref=e284]:
+                          - img [ref=e286]
+                          - generic [ref=e288]:
+                            - link "PR gate (ruff + mypy + pytest)" [ref=e289] [cursor=pointer]:
+                              - /url: /salacoste/oh-my-bmad/actions/runs/25959873508/job/76313261570#step:13:541
+                              - strong [ref=e290]: PR gate (ruff + mypy + pytest)
+                            - generic [ref=e293]: Event loop is closed
+                    - row "PR gate (ruff + mypy + pytest) Event loop is closed" [ref=e294]:
+                      - cell "PR gate (ruff + mypy + pytest) Event loop is closed" [ref=e295]:
+                        - generic [ref=e296]:
+                          - img [ref=e298]
+                          - generic [ref=e300]:
+                            - link "PR gate (ruff + mypy + pytest)" [ref=e301] [cursor=pointer]:
+                              - /url: /salacoste/oh-my-bmad/actions/runs/25959873508/job/76313261570#step:13:541
+                              - strong [ref=e302]: PR gate (ruff + mypy + pytest)
+                            - generic [ref=e305]: Event loop is closed
+                    - row "PR gate (ruff + mypy + pytest) Event loop is closed" [ref=e306]:
+                      - cell "PR gate (ruff + mypy + pytest) Event loop is closed" [ref=e307]:
+                        - generic [ref=e308]:
+                          - img [ref=e310]
+                          - generic [ref=e312]:
+                            - link "PR gate (ruff + mypy + pytest)" [ref=e313] [cursor=pointer]:
+                              - /url: /salacoste/oh-my-bmad/actions/runs/25959873508/job/76313261570#step:13:541
+                              - strong [ref=e314]: PR gate (ruff + mypy + pytest)
+                            - generic [ref=e317]: Event loop is closed
+                    - row "PR gate (ruff + mypy + pytest) Event loop is closed" [ref=e318]:
+                      - cell "PR gate (ruff + mypy + pytest) Event loop is closed" [ref=e319]:
+                        - generic [ref=e320]:
+                          - img [ref=e322]
+                          - generic [ref=e324]:
+                            - link "PR gate (ruff + mypy + pytest)" [ref=e325] [cursor=pointer]:
+                              - /url: /salacoste/oh-my-bmad/actions/runs/25959873508/job/76313261570#step:13:541
+                              - strong [ref=e326]: PR gate (ruff + mypy + pytest)
+                            - generic [ref=e329]: Event loop is closed
+                    - row "PR gate (ruff + mypy + pytest) Event loop is closed" [ref=e330]:
+                      - cell "PR gate (ruff + mypy + pytest) Event loop is closed" [ref=e331]:
+                        - generic [ref=e332]:
+                          - img [ref=e334]
+                          - generic [ref=e336]:
+                            - link "PR gate (ruff + mypy + pytest)" [ref=e337] [cursor=pointer]:
+                              - /url: /salacoste/oh-my-bmad/actions/runs/25959873508/job/76313261570#step:13:541
+                              - strong [ref=e338]: PR gate (ruff + mypy + pytest)
+                            - generic [ref=e341]: Event loop is closed
+                    - row "PR gate (ruff + mypy + pytest) Event loop is closed" [ref=e342]:
+                      - cell "PR gate (ruff + mypy + pytest) Event loop is closed" [ref=e343]:
+                        - generic [ref=e344]:
+                          - img [ref=e346]
+                          - generic [ref=e348]:
+                            - link "PR gate (ruff + mypy + pytest)" [ref=e349] [cursor=pointer]:
+                              - /url: /salacoste/oh-my-bmad/actions/runs/25959873508/job/76313261570#step:13:541
+                              - strong [ref=e350]: PR gate (ruff + mypy + pytest)
+                            - generic [ref=e353]: Event loop is closed
+                    - row "PR gate (ruff + mypy + pytest) Event loop is closed" [ref=e354]:
+                      - cell "PR gate (ruff + mypy + pytest) Event loop is closed" [ref=e355]:
+                        - generic [ref=e356]:
+                          - img [ref=e358]
+                          - generic [ref=e360]:
+                            - link "PR gate (ruff + mypy + pytest)" [ref=e361] [cursor=pointer]:
+                              - /url: /salacoste/oh-my-bmad/actions/runs/25959873508/job/76313261570#step:13:541
+                              - strong [ref=e362]: PR gate (ruff + mypy + pytest)
+                            - generic [ref=e365]: Event loop is closed
+                    - row "PR gate (ruff + mypy + pytest) Event loop is closed" [ref=e366]:
+                      - cell "PR gate (ruff + mypy + pytest) Event loop is closed" [ref=e367]:
+                        - generic [ref=e368]:
+                          - img [ref=e370]
+                          - generic [ref=e372]:
+                            - link "PR gate (ruff + mypy + pytest)" [ref=e373] [cursor=pointer]:
+                              - /url: /salacoste/oh-my-bmad/actions/runs/25959873508/job/76313261570#step:13:541
+                              - strong [ref=e374]: PR gate (ruff + mypy + pytest)
+                            - generic [ref=e377]: Event loop is closed
+                    - 'row "PR gate (ruff + mypy + pytest) Node.js 20 actions are deprecated. The following actions are running on Node.js 20 and may not work as expected: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39. Actions will be forced to run with Node.js 24 by default starting June 2nd, 2026. Node.js 20 will be removed from the runner on September 16th, 2026. Please check if updated versions of these actions are available that support Node.js 24. To opt into Node.js 24 now, set the FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true environment variable on the runner or in your workflow file. Once Node.js 24 becomes the default, you can temporarily opt out by setting ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/ Show more" [ref=e378]':
+                      - 'cell "PR gate (ruff + mypy + pytest) Node.js 20 actions are deprecated. The following actions are running on Node.js 20 and may not work as expected: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39. Actions will be forced to run with Node.js 24 by default starting June 2nd, 2026. Node.js 20 will be removed from the runner on September 16th, 2026. Please check if updated versions of these actions are available that support Node.js 24. To opt into Node.js 24 now, set the FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true environment variable on the runner or in your workflow file. Once Node.js 24 becomes the default, you can temporarily opt out by setting ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/ Show more" [ref=e379]':
+                        - generic [ref=e380]:
+                          - img [ref=e382]
+                          - generic [ref=e384]:
+                            - link "PR gate (ruff + mypy + pytest)" [ref=e385] [cursor=pointer]:
+                              - /url: /salacoste/oh-my-bmad/actions/runs/25959873508/job/76313261570#step:27:2
+                              - strong [ref=e386]: PR gate (ruff + mypy + pytest)
+                            - generic [ref=e387]:
+                              - generic [ref=e389]:
+                                - text: "Node.js 20 actions are deprecated. The following actions are running on Node.js 20 and may not work as expected: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39. Actions will be forced to run with Node.js 24 by default starting June 2nd, 2026. Node.js 20 will be removed from the runner on September 16th, 2026. Please check if updated versions of these actions are available that support Node.js 24. To opt into Node.js 24 now, set the FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true environment variable on the runner or in your workflow file. Once Node.js 24 becomes the default, you can temporarily opt out by setting ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true. For more information see:"
+                                - link "https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/" [ref=e390] [cursor=pointer]:
+                                  - /url: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+                              - button "Show more" [ref=e391] [cursor=pointer]
+                    - 'row "PR gate (ruff + mypy + pytest) Failed to restore: Cache service responded with 400" [ref=e392]':
+                      - 'cell "PR gate (ruff + mypy + pytest) Failed to restore: Cache service responded with 400" [ref=e393]':
+                        - generic [ref=e394]:
+                          - img [ref=e396]
+                          - generic [ref=e398]:
+                            - link "PR gate (ruff + mypy + pytest)" [ref=e399] [cursor=pointer]:
+                              - /url: /salacoste/oh-my-bmad/actions/runs/25959873508/job/76313261570#step:3:21
+                              - strong [ref=e400]: PR gate (ruff + mypy + pytest)
+                            - generic [ref=e403]: "Failed to restore: Cache service responded with 400"
+                    - row "PR gate (ruff + mypy + pytest) Unexpected input(s) 'python-version', valid inputs are ['version', 'checksum', 'github-token', 'enable-cache', 'cache-dependency-glob', 'cache-suffix', 'cache-local-path', 'prune-cache', 'tool-dir', 'tool-bin-dir'] Show more" [ref=e404]:
+                      - cell "PR gate (ruff + mypy + pytest) Unexpected input(s) 'python-version', valid inputs are ['version', 'checksum', 'github-token', 'enable-cache', 'cache-dependency-glob', 'cache-suffix', 'cache-local-path', 'prune-cache', 'tool-dir', 'tool-bin-dir'] Show more" [ref=e405]:
+                        - generic [ref=e406]:
+                          - img [ref=e408]
+                          - generic [ref=e410]:
+                            - link "PR gate (ruff + mypy + pytest)" [ref=e411] [cursor=pointer]:
+                              - /url: /salacoste/oh-my-bmad/actions/runs/25959873508/job/76313261570#step:3:1
+                              - strong [ref=e412]: PR gate (ruff + mypy + pytest)
+                            - generic [ref=e413]:
+                              - generic [ref=e415]: Unexpected input(s) 'python-version', valid inputs are ['version', 'checksum', 'github-token', 'enable-cache', 'cache-dependency-glob', 'cache-suffix', 'cache-local-path', 'prune-cache', 'tool-dir', 'tool-bin-dir']
+                              - button "Show more" [ref=e416] [cursor=pointer]

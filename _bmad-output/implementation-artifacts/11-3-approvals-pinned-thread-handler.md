@@ -1,6 +1,6 @@
 # Story 11.3 — `/approvals` Telegram command opens pinned-thread inbox
 
-Status: **review** (CI pending @ pre-commit)
+Status: **done** (CI green @ 14f908a — pass-1 review batch: 35 patches + 3 spec amendments)
 
 ## Story
 
