@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-20T15:00:00Z
+last_updated: 2026-05-20T15:30:00Z
 current_phase: 2  # Phase 2 opened by ADR-0003 (docs/adr/0003-phase-2-gate.md), 2026-05-15
 
 development_status:
@@ -285,7 +285,7 @@ development_status:
   # FR63–FR65a · NFR-S10
   # =========================================================================
   epic-11: in-progress  # 2026-05-20 — Story 11.1 spec authored (HMAC signing in decisions handler, FR64+NFR-S10)
-  11-1-hmac-signing-decisions-handler: review  # phase: 2 · FR64 + NFR-S10 · 8 ACs done 2026-05-20 · OPERATOR_HMAC_KEY (SecretStr) + compute_approval_hmac pure fn + paired task.approval_signed sibling emission + minimal payload registration · pass-1 review batch 2026-05-20: 15 fixes (pipe-injection guard, Field constraints, openssl golden vector, append fault tolerance, structlog migration, empty-key normalisation, byte-count validation, capture_logs, microsecond test, retry coverage) · 941→950 tests · mypy 130→130 (0 errors, 130 files) · impl @ 2e58639; pass-1 batch @ ff19617; sprint-status flips to done after green
+  11-1-hmac-signing-decisions-handler: done  # phase: 2 · FR64 + NFR-S10 · 8 ACs + pass-1: 15/15 closed (5 MAJOR + 5 MED + 5 LOW); 950 tests; mypy 130 src files; CI green @ 8eb760f (run 26163427367); golden vector 40a928fd...79ef36 proves canonical-format external compat for Story 11.4
   11-2-register-approval-signed-key-rotated-events: backlog  # phase: 2 · FR64, FR65a · new event types
   11-3-approvals-pinned-thread-handler: backlog  # phase: 2 · FR63
   11-4-just-verify-approval-offline-recipe: backlog  # phase: 2 · FR65

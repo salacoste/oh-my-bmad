@@ -1,6 +1,6 @@
 # Story 11.1 — HMAC signing inside `/v1/tasks/<id>/decisions` handler
 
-Status: **review** (CI pending @ 2e58639; pass-1 review batch applied — awaiting green)
+Status: **done** (CI green @ `8eb760f` (run 26163427367) — confirmed 2026-05-20; impl `37cbdfa` + `2e58639`; pass-1 review batch `ff19617` + `8eb760f`: 15/15 closed = 5 MAJOR + 5 MED + 5 LOW. **First Epic 11 story shipped.**)
 
 ## Story
 
