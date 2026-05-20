@@ -153,6 +153,67 @@ services:
       - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
     healthcheck: *healthcheck
 
+  # Story 10.6 / FR62a / NFR-M4/M5 — derived-metrics subscriber.
+  # Internal-only per P2-I5 (NO `ports:` block) — operator scrapes via
+  # SSH tunnel or co-located Prometheus container on the same docker
+  # network. Read-only consumer of the JSONL event log written by
+  # registry-state (P2-I1). `depends_on: registry-state` ONLY (P2-I3 —
+  # subscriber is decoupled from registry-api / worker-wrapper /
+  # clawhip-daemon by design; only the JSONL availability gates it).
+  #
+  # Healthcheck overrides the shared `*healthcheck` anchor (which uses
+  # the `/tmp/ready` file-touch convention) — metrics-subscriber's
+  # FastAPI surface exposes a JSON `/healthz` probe (Story 10.3) which
+  # is purpose-built for compose `service_healthy` gating without
+  # touching `/metrics` (a hot path under Prometheus scrape; D3).
+  #
+  # `restart: unless-stopped` means the subscriber retries on exit
+  # codes 2 (cursor schema refused) and 3 (corrupt region) — these
+  # are non-transient and will loop, but the matrix is documented in
+  # __main__.py and a structured `metrics_subscriber_lifespan_failure`
+  # log fires before each exit so operators can intervene.
+  metrics-subscriber:
+    container_name: omb-metrics-subscriber
+    build:
+      context: .
+      dockerfile: services/metrics-subscriber/Dockerfile
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-metrics-subscriber:${OMB_VERSION:-dev}
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *common-env
+      OMB_METRICS_EVENT_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+      OMB_METRICS_CURSOR_PATH: /var/lib/oh-my-bmad/metrics-subscriber/cursor.json
+      OMB_METRICS_POLL_INTERVAL_S: "${OMB_METRICS_POLL_INTERVAL_S:-0.5}"
+      OMB_METRICS_METRICS_HOST: "0.0.0.0"
+      OMB_METRICS_METRICS_PORT: "9090"
+      OMB_METRICS_RUN_MODE: server
+    depends_on:
+      registry-state:
+        condition: service_healthy
+    init: true
+    restart: unless-stopped
+    networks: [oh-my-bmad-net]
+    volumes:
+      - oh-my-bmad-data:/var/lib/oh-my-bmad
+    healthcheck:
+      # D3 — probe /healthz over loopback (NOT /metrics — hot path
+      # under Prometheus scrape would skew benchmark numbers and add
+      # noise to access logs). The shared `*healthcheck` anchor uses
+      # `test -f /tmp/ready`; metrics-subscriber's FastAPI surface
+      # does not touch that file, so we override per-service to
+      # exercise the real readiness route.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:9090/healthz', timeout=2); sys.exit(0 if r.status==200 else 1)"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
   # Story 2.14 / FR22 / FR50 / NFR-M3 — schema-evolution migrator.
   # One-shot semantics: ``restart: "no"`` so a successful run exits cleanly.
   # ``profiles: ["migrate"]`` keeps it OFF by default — the operator's

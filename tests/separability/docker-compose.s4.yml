@@ -1,0 +1,177 @@
+# Story 10.6 — S-4 separability harness compose overlay (FR62a / NFR-M4/M5).
+#
+# Self-contained 6-service stack mirroring docker-compose.yml MINUS the
+# metrics-subscriber service. Used by
+# tests/separability/test_s4_metrics_subscriber_optional.py (Phase 2) to
+# prove that REMOVING the metrics-subscriber does NOT introduce any new
+# hidden dependency in the producer services (NFR-M4/M5 discipline
+# extended; FR62a satisfied — adding the subscriber to the stack must
+# not retroactively make the rest of the stack require it).
+#
+# Phase 1 of the same test uses the ROOT docker-compose.yml (which DOES
+# include metrics-subscriber, default-ON per Epic 10 goal). Phase 2 uses
+# THIS overlay (without metrics-subscriber). Both phases must reach
+# healthy state and serve identical HTTP responses on registry-api's
+# /v1/health + POST /v1/tasks.
+#
+# Decision D1 (Path A overlay) — chosen over `profiles:` (Path B) to
+# match S-1/S-2/S-3 convention; cleaner Docker semantics; no env-var
+# pollution. The root docker-compose.yml ships metrics-subscriber
+# ENABLED-by-default; this overlay is the "without it" inverse.
+#
+# Bind-mount pattern: ${OMB_S4_DATA_DIR} is exported by the harness so
+# each test invocation gets a clean tmpfs root (mirrors S-1's
+# OMB_S1_DATA_DIR convention; eliminates inter-test data contamination
+# without needing `docker volume rm` between phases).
+
+services:
+  registry-api:
+    container_name: omb-s4-registry-api
+    build:
+      context: ../..
+      dockerfile: services/registry-api/Dockerfile
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-registry-api:${OMB_VERSION:-dev}
+    environment:
+      ENV: test
+      REGISTRY_API_HOST: 0.0.0.0
+      REGISTRY_API_PORT: "8080"
+      REGISTRY_API_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+      REGISTRY_API_DB_URL: sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3
+      REGISTRY_DB_PATH: /var/lib/oh-my-bmad/registry/state.sqlite3
+    init: true
+    restart: "no"
+    networks: [oh-my-bmad-net]
+    ports:
+      - "8080"
+    volumes:
+      - ${OMB_S4_DATA_DIR:?OMB_S4_DATA_DIR must be exported by the harness}:/var/lib/oh-my-bmad
+    depends_on:
+      registry-state:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket,sys; s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1', 8080)); s.close()"
+      interval: 1s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+
+  registry-state:
+    container_name: omb-s4-registry-state
+    build:
+      context: ../..
+      dockerfile: services/registry-state/Dockerfile
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-registry-state:${OMB_VERSION:-dev}
+    environment:
+      ENV: test
+      REGISTRY_STATE_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+      REGISTRY_STATE_DB_URL: sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3
+      REGISTRY_STATE_AUTO_CREATE_SCHEMA: "1"
+      REGISTRY_DB_PATH: /var/lib/oh-my-bmad/registry/state.sqlite3
+    init: true
+    restart: "no"
+    networks: [oh-my-bmad-net]
+    volumes:
+      - ${OMB_S4_DATA_DIR:?OMB_S4_DATA_DIR must be exported by the harness}:/var/lib/oh-my-bmad
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+
+  telegram-gateway:
+    container_name: omb-s4-telegram-gateway
+    build:
+      context: ../..
+      dockerfile: services/telegram-gateway/Dockerfile
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-telegram-gateway:${OMB_VERSION:-dev}
+    environment:
+      ENV: test
+      TELEGRAM_BOT_TOKEN: ""
+      TG_ALLOWLIST_USER_IDS: "[]"
+    init: true
+    restart: "no"
+    networks: [oh-my-bmad-net]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+
+  orchestrator-adapter:
+    container_name: omb-s4-orchestrator-adapter
+    build:
+      context: ../..
+      dockerfile: services/orchestrator-adapter/Dockerfile
+    image: ${ORCHESTRATOR_IMAGE:-${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-orchestrator-adapter:${OMB_VERSION:-dev}}
+    environment:
+      ENV: test
+      ANTHROPIC_API_KEY: ""
+    init: true
+    restart: "no"
+    networks: [oh-my-bmad-net]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+
+  worker-wrapper:
+    container_name: omb-s4-worker-wrapper
+    build:
+      context: ../..
+      dockerfile: services/worker-wrapper/Dockerfile
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-worker-wrapper:${OMB_VERSION:-dev}
+    environment:
+      ENV: test
+      ANTHROPIC_API_KEY: ""
+      GITHUB_TOKEN: ""
+      REGISTRY_DB_PATH: /var/lib/oh-my-bmad/registry/state.sqlite3
+    init: true
+    restart: "no"
+    networks: [oh-my-bmad-net]
+    volumes:
+      - ${OMB_S4_DATA_DIR:?OMB_S4_DATA_DIR must be exported by the harness}:/var/lib/oh-my-bmad:ro
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+
+  clawhip-daemon:
+    container_name: omb-s4-clawhip-daemon
+    build:
+      context: ../..
+      dockerfile: services/clawhip-daemon/Dockerfile
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-clawhip-daemon:${OMB_VERSION:-dev}
+    environment:
+      ENV: test
+      REGISTRY_DB_PATH: /var/lib/oh-my-bmad/registry/state.sqlite3
+    init: true
+    restart: "no"
+    networks: [oh-my-bmad-net]
+    volumes:
+      - ${OMB_S4_DATA_DIR:?OMB_S4_DATA_DIR must be exported by the harness}:/var/lib/oh-my-bmad:ro
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+
+  # NO metrics-subscriber — that's the point of this overlay.
+  # The test (test_s4_metrics_subscriber_optional.py Phase 2) asserts
+  # that all 6 services above reach `Up (healthy)` and that
+  # registry-api serves /v1/health + POST /v1/tasks identically to
+  # Phase 1 (root compose with 7 services including metrics-subscriber).
+
+networks:
+  oh-my-bmad-net:
+    driver: bridge

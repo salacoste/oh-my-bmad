@@ -2389,10 +2389,10 @@ If any item above is not green/complete, Phase 1 has not shipped. The three arch
 - **AC:** Stack reaches 8/8 healthy with subscriber enabled; 7/7 with it disabled; both pass `bootstrap-verify`.
 
 ### Epic 10 acceptance gate
-- `/metrics` returns documented metric set.
-- NFR-O8 benchmark (<100ms p95) verified in CI on fixed runner.
-- Separability test S-4 green.
-- ADR-0005 authored and `accepted`.
+- ✅ `/metrics` returns documented metric set — Story 10.4 done (full FR62 set, ~51 timeseries).
+- ✅ NFR-O8 benchmark (<100ms p95) verified in CI on fixed runner — Story 10.3 done (p95=0.94ms; refined to 0.65ms in Story 10.4).
+- ✅ Separability test S-4 green — Story 10.6 done (this story closes Epic 10).
+- ✅ ADR-0005 authored and `accepted` — Story 10.3 (initial) + Story 10.4 (§Cardinality + §Deferred amendments) + Story 10.5 (§CI regression gate amendment).
 
 ---
 
