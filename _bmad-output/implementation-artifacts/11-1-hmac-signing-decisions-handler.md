@@ -1,6 +1,6 @@
 # Story 11.1 — HMAC signing inside `/v1/tasks/<id>/decisions` handler
 
-Status: **review** (CI pending @ 37cbdfa)
+Status: **review** (CI pending @ 2e58639; pass-1 review batch applied — awaiting green)
 
 ## Story
 
@@ -498,3 +498,77 @@ No blockers identified. Story 11.2 can begin as soon as Story 11.1 CI is green +
 | `uv run python scripts/check_single_writer.py` | exit 0 |
 | `git ls-files -z \| xargs -0 uv run secret-hygiene-precommit` | exit 0 |
 | `uv run secret-hygiene-precommit <4 new files>` | exit 0 |
+
+---
+
+## Review Findings — pass-1 (2026-05-20)
+
+Pass-1 adversarial review on diff `21cc2b4..2e58639` (13 files, +1224 / −21 lines). Three parallel reviewers (Sonnet, security-sensitive review): Blind Hunter (6 findings — 3 MAJOR + 3 minor), Edge Case Hunter (6 findings — 2 MAJOR + 4 minor), Acceptance Auditor (6 findings — 2 MAJOR + 4 minor, ACCEPT-WITH-RESERVATIONS). Verdicts: 2× REVISE + 1× ACCEPT-with-reservations.
+
+After dedup → **15 unique findings** (5 MAJOR/HIGH-priority, 5 MED, 5 LOW). Multi-lane convergences:
+- **`|`-injection в canonical signing string**: B1 + E1 (2-lane MAJOR)
+- **HMAC verification path quality** (golden-vector + structlog): B3 + A1 + A2
+- **`_enforce_min_length` validator `.get_secret_value()` exception**: B-minor-3 + A-skeptic note
+
+All 15 close per "fix all issues even minors" standing policy.
+
+### Patch — HIGH (5)
+
+- [x] [Review][Patch] **P1-H1 — Pipe-injection vulnerability in canonical signing string; latent now (actor_id hardcoded "http-api"), but Story 6.1+ JWT/auth makes it exploitable** [services/registry-api/src/registry_api/adapters/approval_signing.py:63-64, 86] — **2-lane: B1 + E1**. Canonical: `f"{task_id}|{action}|{timestamp.isoformat()}|{actor_id}"`. If `actor_id` contains `|` (real-world JWT `sub` like `org|alice` is common), two distinct `(task_id, action, timestamp, actor_id)` tuples produce the same canonical string → same HMAC → forged signing record. Code comment acknowledges and defers to "future change" — UNACCEPTABLE for crypto contract that downstream stories (11.4 verifier, 11.5 rotation) depend on. Fix: in `compute_approval_hmac`, add `if any("|" in v for v in (task_id, decision_id, actor_id) if isinstance(v, str)): raise ValueError("pipe character forbidden in HMAC inputs — Story 11.1 P1-H1")` immediately before `canonical = ...`. Add test `test_compute_approval_hmac_rejects_pipe_in_actor_id` asserting `ValueError` raised. Apply same guard to `task_id`/`decision_id` (defense-in-depth — upstream validation may relax).
+
+- [x] [Review][Patch] **P1-H2 — `TaskApprovalSignedPayload` accepts any string for `hmac_sha256`/`task_id`/`decision_id`; schema not a contract** [packages/events/src/events/payloads.py:921-926] — Solo MAJOR: B2. Docstring defers `Field(min_length=64, max_length=64, pattern="^[0-9a-f]{64}$")` to Story 11.2. **Reject:** shipping a payload class without HMAC format validation creates a window where any refactor producing bad HMAC values lands silently in the event log. The "Story 11.2 will tighten" rationale doesn't apply because the invariant is established by Story 11.1's contract. Fix NOW (one-line additions):
+  - `hmac_sha256: str = Field(min_length=64, max_length=64, pattern="^[0-9a-f]{64}$")`
+  - `task_id: str = Field(pattern=r"^[a-zA-Z0-9_-]+$")` — explicit no-pipe (P1-H1 defense-in-depth)
+  - Update docstring to note Story 11.2 will bump schema_version to 1.1.0 ONLY (constraints already in 1.0.0).
+
+- [x] [Review][Patch] **P1-H3 — `_manual_hmac` "independent reference" is structurally identical to `compute_approval_hmac`; no external golden-vector** [services/registry-api/src/registry_api/test_approval_signing.py:102-124] — Solo MAJOR: B3. Both functions use the same canonical formula + delimiter + library. A refactor changing delimiter in BOTH functions still passes the test. Story 11.4 offline verifier (`just verify-approval`) will silently fail in production. Fix: add ONE test case with a HARDCODED expected hex digest, computed once via `openssl dgst -hmac KEY -sha256` and stored as comment-documented constant. Example:
+  ```python
+  # _EXPECTED_HMAC computed via:
+  #   echo -n 'test-task|approve|2026-01-01T00:00:00+00:00|test-actor' | \
+  #     openssl dgst -hmac 'test-key-for-known-vector-must-be-32-chars-min' -sha256 -hex
+  _EXPECTED_HMAC = "<actual_64char_hex>"
+  ```
+  Proves canonical format is stable against external tooling (Story 11.4's CLI verifier).
+
+- [x] [Review][Patch] **P1-H4 — Half-state on `task.approval_signed` append failure: `KeyError` at line 451 because `captured["status_code"]` not populated** [services/registry-api/src/registry_api/routes/decisions.py:318-333, 451] — Solo MAJOR: E2. If `await writer.append(signed_envelope)` raises (disk full, lock timeout), the handler propagates 500 to client. `approval.granted` already landed → durable approval exists. BUT: `_factory` raised BEFORE `captured` was populated → next idempotency-cache lookup hits `KeyError`. Operator sees confusing 500 on retry while approval exists in log. License/budget half-state IS documented (line 357-360) but signing-sibling half-state is NOT. Fix:
+  ```python
+  try:
+      await writer.append(signed_envelope)
+  except Exception as exc:  # pragma: no cover — explicit broad-catch with structured log
+      log.warning(
+          "approval_signed_emit_failed_approval_durable",
+          task_id=task_id, decision_id=decision_id,
+          error_type=type(exc).__name__,
+      )
+      # Don't re-raise: the approval itself is durable. HMAC can be
+      # recomputed offline via just verify-approval (Story 11.4).
+  ```
+  Add `test_approval_signed_append_failure_does_not_crash_handler` mocking `writer.append` to raise on second call; assert 202 returned, `approval.granted` durable, warning logged.
+
+- [x] [Review][Patch] **P1-H5 — AC6 log format uses stdlib `%s` positional args instead of structlog keyword-arg structured form; breaks NFR-S10 grep-isolation guarantee + downstream log-pipeline parsing** [services/registry-api/src/registry_api/routes/decisions.py:approval_signed log call] — Solo MAJOR: A2. Spec mandated `log.info("approval_signed", task_id=task_id, decision_id=decision_id, actor_id=actor_id, hmac_sha256_prefix=hmac_value[:8])` (keyword-arg structlog). Actual: `log.info("approval_signed task_id=%s decision_id=%s ...", task_id, ...)` — stdlib `%s` interpolation. Grafana/Loki/CloudWatch fail to parse fields. AC5 isolation test `test_hmac_key_isolation_no_leak_in_logs` checks `record.getMessage()` — works for stdlib but would MISS a key appearing only in structlog bound-context fields after migration. Fix: replace `log = logging.getLogger(__name__)` with `log = structlog.get_logger(__name__)` at top of `decisions.py`; use keyword-arg form per spec. Verify other log calls in same file also adopt structlog (if mixed, document deviation).
+
+### Patch — MED (5)
+
+- [x] [Review][Patch] **P1-M1 — AC5 `test_hmac_key_isolation_no_leak_in_logs` uses `caplog`/stdlib not `structlog.testing.capture_logs()` as spec mandated** [services/registry-api/src/registry_api/test_decisions_signing.py:310] — Solo MED: A1. Currently passes (stdlib log captured), but if production migrates to structlog (per P1-H5), `caplog` stops intercepting → false-green. Fix: replace `caplog` approach with `structlog.testing.capture_logs()` context manager; iterate captured event dicts (not log records) and assert key sentinel absent. Couples with P1-H5 — apply together.
+
+- [x] [Review][Patch] **P1-M2 — Empty-string `OPERATOR_HMAC_KEY=""` accepted as `SecretStr("")`, hits length check with confusing error; intent "empty = unset" not met** [services/registry-api/src/registry_api/settings.py:96-102] — Solo MED: E3. Pydantic parses `OPERATOR_HMAC_KEY=""` as `SecretStr("")` (NOT `None`), then `_enforce_min_length` rejects with "too short" error. Operator's intent ("no key configured") becomes "key configured but invalid". Fix: in the validator, add `if not raw.strip(): return None` before length check — treats empty/whitespace as unset. Add test `test_settings_operator_hmac_key_empty_string_treated_as_unset`.
+
+- [x] [Review][Patch] **P1-M3 — No test for microsecond-precision timestamp; `SystemClock.now()` returns sub-second precision; Story 11.4 offline verifier must use payload.timestamp not recompute** [services/registry-api/src/registry_api/test_approval_signing.py + tests/integration of Story 11.4] — Solo MED: E4. `FrozenClock(now=FROZEN_EPOCH)` in tests has zero microseconds. Production `datetime.now(UTC)` includes microseconds. `isoformat()` produces `"2026-01-01T00:00:00.123456+00:00"` with microseconds. The implementation handles this correctly (canonical string includes them, Story 11.4 reads payload.timestamp not recomputes) but no test proves round-trip determinism. Fix: add `test_compute_approval_hmac_microsecond_precision_timestamp_round_trips` using `datetime(2026, 5, 20, 12, 0, 0, 123456, tzinfo=UTC)`. Assert HMAC deterministic + matches manual recompute with same ISO string.
+
+- [x] [Review][Patch] **P1-M4 — `min_length=32` validates character count (not byte count); non-ASCII keys exceed 32 bytes but docstring says "32 bytes / 256 bits"** [services/registry-api/src/registry_api/settings.py + adapters/approval_signing.py docstring] — Solo MED: E5. For documented recipe (`openssl rand -hex 32` = pure ASCII = 64 chars = 64 bytes), this works. But docstring claim is technically incorrect. Operator pasting non-ASCII key (e.g., raw binary mis-decoded as Latin-1) gets >32 bytes for ≥32 characters. Fix: either (a) update docstring to say "minimum 32 characters / typically 32-64 bytes when ASCII"; OR (b) tighten validator: `if len(raw.encode("utf-8")) < 32: raise ValueError(...)`. Option (b) is the actual NFR-S10 intent. Apply (b) + update docstring.
+
+- [x] [Review][Patch] **P1-M5 — `_TID_AWAITING` test seed uses `status="awaiting_approval"` but may not be in `ACTION_VALID_STATES["approve"]`; test fails loudly but seed logic incorrect** [services/registry-api/src/registry_api/test_decisions_signing.py:294] — Solo MED: E6. Self-catching bug — if `awaiting_approval` not in `ACTION_VALID_STATES["approve"]`, POST returns 409 not 202; assertion `r.status_code == 202` fails loudly. But the SEED is wrong. Fix: verify `ACTION_VALID_STATES["approve"]` actually permits `awaiting_approval` (likely YES per Phase 1 design); if NOT, change second TID to another `plan_ready`-state task. Either way, document in test docstring which states are valid.
+
+### Patch — LOW (5)
+
+- [x] [Review][Patch] **P1-L1 — Spec Status SHA mismatch: `@ 37cbdfa` (impl commit) vs actual diff range end `2e58639` (SHA-stamp commit)** [_bmad-output/implementation-artifacts/11-1-hmac-signing-decisions-handler.md line 3] — Solo LOW: A-minor-1. Cosmetic. Fix: update to `@ 2e58639` OR add both commits with explanation. Story 10.4 P1-H5 pattern: spec+sprint-status should cite same SHA (the impl SHA is canonical).
+
+- [x] [Review][Patch] **P1-L2 — Hardcoded `datetime(2026, 1, 1, tzinfo=UTC)` test seed value (AI-4 anti-pattern carry-forward)** [services/registry-api/src/registry_api/test_decisions_signing.py:63] — Solo LOW: B-minor-2. Not an assertion date (just a seed), low-risk. But Epic 10 retro AI-4 said audit project for hardcoded dates. Fix: use `datetime.now(UTC).replace(microsecond=0)` OR `FROZEN_EPOCH` constant. Don't bikeshed — pick one consistent with existing test patterns.
+
+- [x] [Review][Patch] **P1-L3 — `_enforce_min_length` validator calls `.get_secret_value()` — docstring claim "only `compute_approval_hmac` calls it" inaccurate** [services/registry-api/src/registry_api/settings.py:96 + docstring] — **2-lane: B-minor-3 + A-skeptic**. Functionally fine (value stays in-frame, not logged), but docstring + DAR claim is wrong. Fix: update settings module docstring + DAR to say "`.get_secret_value()` called in EXACTLY TWO places: the `_enforce_min_length` validator (transient frame-local) and `compute_approval_hmac` (pure function)". Document the safety reasoning explicitly so future reviewers don't flag the validator as a NFR-S10 violation.
+
+- [x] [Review][Patch] **P1-L4 — Missing test for `retry` action does not emit `task.approval_signed`** [services/registry-api/src/registry_api/test_decisions_signing.py] — Solo LOW: B-missing. Coverage gap: spec said only `approve` emits signed sibling. `reject` + `stop` tests exist; `retry` does not. Fix: add `test_retry_action_does_not_emit_signed_event` (mirror `test_reject_action_does_not_emit_signed_event` pattern).
+
+- [x] [Review][Patch] **P1-L5 — Missing test: `actor_id` containing `|` rejected (P1-H1 fingerprint)** [services/registry-api/src/registry_api/test_approval_signing.py] — Solo LOW: E-missing. After P1-H1's guard lands, add a test that catches future regression of the guard. Fix: `test_compute_approval_hmac_rejects_pipe_in_actor_id` with `actor_id="alice|approve|2026-01-01T00:00:00+00:00|bob"` and assert `ValueError` raised. Locks the canonical-string invariant for Story 6.1+ contributors.
+
+### Deferred (none — all 15 addressed in this pass per "fix all issues even minors")

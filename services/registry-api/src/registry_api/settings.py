@@ -15,13 +15,19 @@ Design notes:
   no ``REGISTRY_API_`` prefix is applied).
 * **``SecretStr`` wrapping** — Pydantic's :class:`SecretStr` masks the
   value in ``repr()`` / ``model_dump()`` / log records by default
-  (NFR-S10 isolation). Only :func:`compute_approval_hmac` is allowed to
-  call ``.get_secret_value()``.
-* **``min_length=32`` on the inner string** — enforced via Pydantic
-  ``Field`` when the env-var IS set. 32 bytes / 256 bits is the
-  HMAC-SHA256 minimum for a non-trivial keyspace.  Recommendation
-  documented in ``.env.example``: ``openssl rand -hex 32`` (64 hex
-  characters).
+  (NFR-S10 isolation). ``.get_secret_value()`` is called in EXACTLY TWO
+  places: the ``_enforce_min_length`` validator (transient frame-local,
+  not logged — safe per NFR-S10) AND :func:`compute_approval_hmac` (pure
+  function, value stays in-frame — safe per NFR-S10).  Both are safe;
+  future reviewers should not flag the validator as a NFR-S10 violation
+  (P1-L3 clarification).
+* **32 bytes (UTF-8 encoded) / 256 bits minimum** — enforced via
+  ``_enforce_min_length`` byte-count check (P1-M4).  For the canonical
+  recipe (``openssl rand -hex 32`` → 64 ASCII hex chars = 64 bytes) the
+  byte count equals the character count.  The byte-count validation is
+  the correct cryptographic invariant.  Empty/whitespace env-var values
+  are normalised to ``None`` (P1-M2 — "unset" semantics) before the
+  length check fires.
 * **``default=None``** — a missing key is NOT a startup error.  The
   ``/decisions`` handler logs ``approval_signing_disabled_missing_hmac_key``
   and emits ``approval.granted`` WITHOUT a paired
@@ -80,25 +86,48 @@ class ApprovalSigningSettings(BaseSettings):
     @field_validator("operator_hmac_key", mode="after")
     @classmethod
     def _enforce_min_length(cls, value: SecretStr | None) -> SecretStr | None:
-        """Reject too-short keys (≥ 32 chars) when the env-var IS set.
+        """Normalise and validate OPERATOR_HMAC_KEY when set.
 
         Pydantic ``Field(min_length=...)`` on ``SecretStr | None`` is
         permissive on ``None`` but applies to the inner string.  We
-        re-implement it as a ``field_validator`` so the error message
-        names the env-var (operator-facing clarity).  ``None`` (unset)
-        is explicitly permitted — the handler emits a warning and skips
-        signing in that case.
+        re-implement as a ``field_validator`` for three reasons:
+
+        1. **Operator-facing error message** — names the env-var explicitly.
+        2. **Empty/whitespace normalisation (P1-M2)** — ``OPERATOR_HMAC_KEY=""``
+           is parsed by Pydantic as ``SecretStr("")`` (not ``None``).  We
+           normalise empty/whitespace values to ``None`` so operators who
+           clear the env-var get the expected "signing disabled" path
+           rather than a confusing "too short" validation error.
+        3. **Byte-count validation (P1-M4)** — enforces 32 bytes (UTF-8
+           encoded) / 256 bits minimum rather than 32 characters.  For the
+           canonical recipe (``openssl rand -hex 32`` → 64 ASCII hex chars)
+           character count equals byte count.  Byte-count is the correct
+           cryptographic invariant.
+
+        ``None`` (unset) is explicitly permitted — the handler emits a
+        warning and skips signing in that case.
+
+        Security note: ``.get_secret_value()`` is called here (transient
+        frame-local — value is NOT logged) and in :func:`compute_approval_hmac`
+        (pure function — value stays in-frame).  Both call sites are safe
+        per NFR-S10.  See module docstring for full accounting (P1-L3).
         """
         if value is None:
             return None
         # SecretStr stores the raw string; access via get_secret_value()
-        # ONLY for the length check.  The value is not logged.
+        # ONLY for normalisation + length check.  The value is not logged.
         raw = value.get_secret_value()
-        if len(raw) < 32:
+        # P1-M2: empty/whitespace → treat as unset.
+        if not raw.strip():
+            return None
+        # P1-M4: enforce byte count (cryptographic invariant), not char count.
+        raw_bytes = raw.encode("utf-8")
+        if len(raw_bytes) < 32:
             raise ValueError(
-                "OPERATOR_HMAC_KEY must be at least 32 characters when set "
-                "(recommend 64-char hex from `openssl rand -hex 32`); "
-                f"got length={len(raw)}"
+                "OPERATOR_HMAC_KEY must be at least 32 BYTES (UTF-8 encoded) "
+                "/ 256 bits minimum when set "
+                "(recommend 64-char hex from `openssl rand -hex 32` — 64 bytes); "
+                f"got {len(raw_bytes)} bytes"
             )
         return value
 

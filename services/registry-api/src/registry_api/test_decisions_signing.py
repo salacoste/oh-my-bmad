@@ -8,13 +8,13 @@ and AC6 (8-char prefix log discipline). Settings + pure-fn tests live in
 from __future__ import annotations
 
 import json
-import logging
 from collections.abc import AsyncGenerator
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 import pytest_asyncio
+import structlog.testing
 from asgi_lifespan import LifespanManager
 from events import FROZEN_EPOCH, FrozenClock
 from httpx import ASGITransport, AsyncClient
@@ -43,8 +43,13 @@ def _ensure_event_types_registered() -> None:
 
 _FROZEN_MONO_NS = 1_000_000
 _TID_PLAN_READY = "t-00000000-0000-7000-8000-000000000001"
+# P1-M5: ACTION_VALID_STATES["approve"] = {"plan_ready", "awaiting_approval", "blocked"}.
+# _TID_AWAITING is seeded with status="awaiting_approval" — a valid pre-state for
+# "approve", "reject", and "stop" actions (verified in lifecycle.py).
 _TID_AWAITING = "t-00000000-0000-7000-8000-000000000002"
 _TID_EXECUTING = "t-00000000-0000-7000-8000-000000000003"
+# P1-L4: retry requires status in {"blocked", "failed"}.
+_TID_BLOCKED = "t-00000000-0000-7000-8000-000000000004"
 
 # AC5 sentinel — 64-char hex (matches `openssl rand -hex 32` shape, but
 # distinct so test assertions can grep for absence).
@@ -60,17 +65,18 @@ async def _seed_tables_with_tasks(db_url: str) -> None:
     engine = create_engine(db_url)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        now = datetime(2026, 1, 1, tzinfo=UTC)
+        # P1-L2: use FROZEN_EPOCH (canonical test baseline) instead of hardcoded datetime.
         op = {
             "actor_kind": "operator",
             "actor_id": "test-op",
-            "created_at": now,
-            "updated_at": now,
+            "created_at": FROZEN_EPOCH,
+            "updated_at": FROZEN_EPOCH,
         }
         rows = [
             {"id": _TID_PLAN_READY, "status": "plan_ready", "title": "Plan ready", **op},
             {"id": _TID_AWAITING, "status": "awaiting_approval", "title": "Awaiting", **op},
             {"id": _TID_EXECUTING, "status": "executing", "title": "Executing", **op},
+            {"id": _TID_BLOCKED, "status": "blocked", "title": "Blocked", **op},
         ]
         for row in rows:
             await conn.execute(Task.__table__.insert(), row)  # type: ignore[attr-defined]  # SQLAlchemy stubs return FromClause; Table.__table__ resolves at runtime
@@ -218,10 +224,9 @@ class TestApproveEmitsPairedSignedEvent:
     async def test_approve_handler_skips_signed_event_when_no_key(
         self,
         unsigned_client: AsyncClient,
-        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """AC4 / D2: approve without key → only approval.granted + warning."""
-        with caplog.at_level(logging.WARNING, logger="registry_api.routes.decisions"):
+        with structlog.testing.capture_logs() as cap:
             r = await unsigned_client.post(
                 f"/v1/tasks/{_TID_PLAN_READY}/decisions",
                 json={"action": "approve"},
@@ -233,11 +238,8 @@ class TestApproveEmitsPairedSignedEvent:
         types = [e["type"] for e in events]
         assert types == ["approval.granted"]
 
-        # Structured warning was emitted.
-        assert any(
-            "approval_signing_disabled_missing_hmac_key" in record.message
-            for record in caplog.records
-        )
+        # Structured warning was emitted (structlog keyword-arg form, P1-H5).
+        assert any(ev.get("event") == "approval_signing_disabled_missing_hmac_key" for ev in cap)
 
     @pytest.mark.asyncio
     async def test_approve_handler_reject_action_does_not_emit_signed_event(
@@ -310,22 +312,28 @@ class TestHmacKeyIsolation:
     async def test_hmac_key_isolation_no_leak_in_logs(
         self,
         signing_client: AsyncClient,
-        caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """AC5: full caplog grep — key never appears in any log record."""
-        with caplog.at_level(logging.DEBUG):
+        """AC5 / P1-M1: capture_logs() grep — key never appears in any structlog event.
+
+        Uses structlog.testing.capture_logs() instead of caplog (P1-M1): after
+        the P1-H5 structlog migration, caplog captures stdlib log records but
+        structlog events are emitted via structlog's own pipeline and may bypass
+        caplog depending on configuration.  capture_logs() is the correct tool
+        for structlog event interception.
+        """
+        with structlog.testing.capture_logs() as cap:
             r = await signing_client.post(
                 f"/v1/tasks/{_TID_PLAN_READY}/decisions",
                 json={"action": "approve"},
             )
-            assert r.status_code == 202
+        assert r.status_code == 202
 
-        for record in caplog.records:
-            # Check both the formatted message AND the raw args (defensive
-            # against future code that passes the key as a logger arg).
-            assert _HMAC_KEY_VALUE not in record.getMessage()
-            for arg in record.args or ():
-                assert _HMAC_KEY_VALUE not in str(arg)
+        # Full event-dict grep: key must not appear in any field of any event.
+        for event_dict in cap:
+            for key, value in event_dict.items():
+                assert _HMAC_KEY_VALUE not in str(value), (
+                    f"HMAC key sentinel leaked in structlog event field {key!r}"
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -340,31 +348,32 @@ class TestApprovalSignedLogDiscipline:
     async def test_approval_signed_log_event_emitted_with_8char_prefix(
         self,
         signing_client: AsyncClient,
-        caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """AC6: log message includes ``hmac_sha256_prefix=<8 hex chars>``.
+        """AC6: structlog event 'approval_signed' has hmac_sha256_prefix field (8 hex chars).
 
         The full 64-char HMAC MUST NOT appear at INFO — that's bloat.
         Operators can correlate via the prefix; full HMAC lives in events.
+        Uses structlog.testing.capture_logs() (P1-H5 migration: decisions.py
+        now uses structlog keyword-arg form, not stdlib %s interpolation).
         """
-        with caplog.at_level(logging.INFO, logger="registry_api.routes.decisions"):
+        with structlog.testing.capture_logs() as cap:
             r = await signing_client.post(
                 f"/v1/tasks/{_TID_PLAN_READY}/decisions",
                 json={"action": "approve"},
             )
-            assert r.status_code == 202
+        assert r.status_code == 202
 
-        # Find the approval_signed log.
-        signed_records = [r for r in caplog.records if "approval_signed" in r.getMessage()]
-        assert len(signed_records) >= 1
-        msg = signed_records[0].getMessage()
-        assert "hmac_sha256_prefix=" in msg
+        # Find the approval_signed structlog event.
+        signed_events = [ev for ev in cap if ev.get("event") == "approval_signed"]
+        assert len(signed_events) >= 1, (
+            f"No 'approval_signed' structlog event found; got {[ev.get('event') for ev in cap]}"
+        )
+        ev = signed_events[0]
 
-        # Extract the 8 hex chars after the prefix marker.
-        prefix_part = msg.split("hmac_sha256_prefix=", 1)[1]
-        # The prefix is followed by EOL or whitespace.
-        prefix_value = prefix_part.split()[0] if prefix_part.split() else prefix_part
-        assert len(prefix_value) == 8
+        # Keyword field hmac_sha256_prefix present and 8 hex chars.
+        assert "hmac_sha256_prefix" in ev, f"hmac_sha256_prefix missing from event: {ev}"
+        prefix_value = str(ev["hmac_sha256_prefix"])
+        assert len(prefix_value) == 8, f"expected 8 hex chars, got {prefix_value!r}"
         assert all(c in "0123456789abcdef" for c in prefix_value)
 
         # Cross-check: the full HMAC from the event log starts with this prefix.
@@ -375,5 +384,117 @@ class TestApprovalSignedLogDiscipline:
         assert isinstance(signed_payload, dict)
         full_hmac = str(signed_payload["hmac_sha256"])
         assert full_hmac.startswith(prefix_value)
-        # And the full 64-char HMAC is NOT in the log message (only prefix).
-        assert full_hmac not in msg
+        # And the full 64-char HMAC is NOT in the structlog event (only prefix).
+        for key, value in ev.items():
+            assert full_hmac not in str(value), f"Full HMAC leaked in structlog field {key!r}"
+
+
+# ---------------------------------------------------------------------------
+# P1-L4 — retry action does not emit task.approval_signed
+# ---------------------------------------------------------------------------
+
+
+class TestRetryActionDoesNotEmitSignedEvent:
+    """P1-L4: retry is NOT signed (mirrors test_reject / test_stop pattern)."""
+
+    @pytest.mark.asyncio
+    async def test_retry_action_does_not_emit_signed_event(
+        self,
+        signing_client: AsyncClient,
+    ) -> None:
+        """P1-L4 / FR64: retry is NOT signed even when key is set.
+
+        Spec: only 'approve' emits task.approval_signed sibling.
+        reject + stop tests already cover this; retry is the missing case.
+        """
+        r = await signing_client.post(
+            f"/v1/tasks/{_TID_BLOCKED}/decisions",
+            json={"action": "retry"},
+        )
+        assert r.status_code == 200
+
+        events_dir: Path = signing_client._events_dir  # type: ignore[attr-defined]
+        events = _read_jsonl_events(events_dir)
+        types = [e["type"] for e in events]
+        assert types == ["task.retry_requested"]
+        assert "task.approval_signed" not in types
+
+
+# ---------------------------------------------------------------------------
+# P1-H4 — approval_signed append failure is non-fatal
+# ---------------------------------------------------------------------------
+
+
+class TestApprovalSignedAppendFailureNonFatal:
+    """P1-H4: if task.approval_signed append raises, approval.granted is durable."""
+
+    @pytest.mark.asyncio
+    async def test_approval_signed_append_failure_does_not_crash_handler(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """P1-H4: second writer.append (signed sibling) failure → 202, warning logged.
+
+        approval.granted is already durable when the signed sibling append
+        fires.  A failure there must not re-raise (which would 500 the client
+        and leave a confusing half-state).  The HMAC can be recomputed offline
+        via just verify-approval (Story 11.4).
+
+        Uses a fresh fixture (not signing_client) so we can intercept
+        app.state.writer.append after lifespan starts.
+        """
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables_with_tasks(db_url)
+        events_dir = tmp_path / "events"
+        clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
+        signing_settings = ApprovalSigningSettings(operator_hmac_key=_HMAC_KEY)
+        app = build_app(
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=clock,
+            signing_settings=signing_settings,
+        )
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app),
+                base_url="http://testserver",
+            ) as client,
+        ):
+            # Intercept the live writer instance's append method.
+            # app.state is populated during lifespan; access via the original
+            # app object (manager.app is the lifespan-wrapped callable, not
+            # the FastAPI instance that carries .state).
+            writer = app.state.writer
+            real_append = writer.append
+            call_count = 0
+
+            async def _failing_append(envelope: object) -> None:
+                nonlocal call_count
+                call_count += 1
+                if call_count == 2:
+                    raise OSError("simulated disk full — P1-H4 test")
+                await real_append(envelope)
+
+            writer.append = _failing_append  # noqa: F821 — runtime monkey-patch for test isolation
+
+            with structlog.testing.capture_logs() as cap:
+                r = await client.post(
+                    f"/v1/tasks/{_TID_PLAN_READY}/decisions",
+                    json={"action": "approve"},
+                )
+
+        # Handler must still return 202 (approval.granted is durable).
+        assert r.status_code == 202, f"Expected 202, got {r.status_code}: {r.text}"
+
+        # Warning was emitted with the correct event name.
+        warning_events = [
+            ev for ev in cap if ev.get("event") == "approval_signed_emit_failed_approval_durable"
+        ]
+        assert len(warning_events) >= 1, (
+            f"Expected 'approval_signed_emit_failed_approval_durable' warning; "
+            f"got events: {[ev.get('event') for ev in cap]}"
+        )
+        assert warning_events[0].get("error_type") == "OSError"

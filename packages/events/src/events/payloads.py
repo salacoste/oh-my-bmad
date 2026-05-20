@@ -900,13 +900,20 @@ class TaskLicenseFlaggedPayload(BaseModel):
 class TaskApprovalSignedPayload(BaseModel):
     """Sibling event emitted alongside ``approval.granted`` carrying HMAC signature.
 
-    Story 11.1 (FR64 / NFR-S10) — minimal surface registered at schema_version
-    ``1.0.0``. Story 11.2 will refine:
+    Story 11.1 P1-H2 applied full Field constraints at schema_version ``1.0.0``.
+    Story 11.2 will bump schema_version ``1.0.0`` → ``1.1.0`` (additive — same
+    payload shape) and add contract-fixture forward-compat pair. The Field
+    constraints here (HMAC format, no-pipe patterns) are Story 11.1 invariants,
+    not deferred to 11.2.
 
-    * bumps to schema_version ``1.1.0``
-    * tightens ``hmac_sha256`` to ``Field(min_length=64, max_length=64, pattern="^[0-9a-f]{64}$")``
-    * adds contract-fixture forward-compat pair
-    * tightens ``task_id`` / ``decision_id`` / ``actor_id`` patterns
+    Field constraints (P1-H2):
+
+    * ``task_id`` / ``decision_id``: alphanumeric + ``_:.-`` only (explicit
+      no-pipe — defense-in-depth against canonical-string injection, P1-H1).
+    * ``actor_id``: non-empty string (pattern constrained to Story 6.1+ JWT
+      sub format when auth lands; not further restricted here).
+    * ``hmac_sha256``: exactly 64 lowercase hex characters (HMAC-SHA256
+      hexdigest contract).
 
     See ADR-0006 (to be drafted in Story 11.5) for signing / verification protocol.
 
@@ -918,12 +925,13 @@ class TaskApprovalSignedPayload(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
-    task_id: str
-    decision_id: str
-    actor_id: str
+    # P1-H2 field constraints: explicit no-pipe on canonical-string fields.
+    task_id: str = Field(min_length=1, pattern=r"^[a-zA-Z0-9_:.-]+$")
+    decision_id: str = Field(min_length=1, pattern=r"^[a-zA-Z0-9_:.-]+$")
+    actor_id: str = Field(min_length=1)  # pattern extended in Story 6.1+
     action: Literal["approve"]
     timestamp: AwareDatetime
-    hmac_sha256: str
+    hmac_sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
 
 
 __all__ = [

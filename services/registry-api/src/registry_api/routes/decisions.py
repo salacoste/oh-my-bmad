@@ -12,10 +12,10 @@ and the side-channel ``ResponseSlotCache`` preserves byte-identical replays.
 from __future__ import annotations
 
 import json
-import logging
 from datetime import datetime
 from typing import Literal
 
+import structlog
 from events import (
     ApprovalGrantedPayload,
     ApprovalRejectedPayload,
@@ -43,7 +43,7 @@ from registry_api.lifecycle import ACTION_VALID_STATES
 from registry_api.routes.tasks import ResponseSlot, ResponseSlotCache
 from registry_api.settings import ApprovalSigningSettings
 
-log = logging.getLogger("registry_api.routes.decisions")
+log = structlog.get_logger("registry_api.routes.decisions")
 
 IdempotencyStatus = Literal["applied", "replayed"]
 
@@ -330,27 +330,43 @@ async def post_decision(
                 trace_id=trace_id,
                 parent_event_id=event_id,
             )
-            await writer.append(signed_envelope)
-            # AC6: structured INFO log with 8-char HMAC prefix only.
-            # Bloat avoidance + correlation sufficient at 32 bits of entropy.
-            # The full HMAC is in the event payload; the prefix lets operators
-            # correlate logs↔events without exfiltrating the signing input.
-            log.info(
-                "approval_signed task_id=%s decision_id=%s actor_id=%s hmac_sha256_prefix=%s",
-                task_id,
-                decision_id,
-                actor_id,
-                signed_payload.hmac_sha256[:8],
-            )
+            try:
+                await writer.append(signed_envelope)
+            except Exception as exc:  # pragma: no cover — explicit broad-catch with structured log
+                # P1-H4: approval.granted is already durable (appended above).
+                # If the signed sibling append fails (disk full, lock timeout),
+                # we log a warning and continue — the approval itself is NOT
+                # rolled back. The HMAC can be recomputed offline via
+                # just verify-approval (Story 11.4). Do NOT re-raise: the
+                # operator's approval decision must not be lost due to a
+                # signing-audit side-effect failure.
+                log.warning(
+                    "approval_signed_emit_failed_approval_durable",
+                    task_id=task_id,
+                    decision_id=decision_id,
+                    error_type=type(exc).__name__,
+                )
+            else:
+                # AC6: structured INFO log with 8-char HMAC prefix only.
+                # Bloat avoidance + correlation sufficient at 32 bits of entropy.
+                # The full HMAC is in the event payload; the prefix lets operators
+                # correlate logs↔events without exfiltrating the signing input.
+                log.info(
+                    "approval_signed",
+                    task_id=task_id,
+                    decision_id=decision_id,
+                    actor_id=actor_id,
+                    hmac_sha256_prefix=signed_payload.hmac_sha256[:8],
+                )
         elif body.action == "approve":
             # AC1 / D2: missing key → emit approval.granted ONLY and warn.
             # No HMAC value is logged (there is none); no key state leaks to
             # the client (the response shape is unchanged). NFR-S10 preserved.
             log.warning(
-                "approval_signing_disabled_missing_hmac_key task_id=%s decision_id=%s actor_id=%s",
-                task_id,
-                decision_id,
-                actor_id,
+                "approval_signing_disabled_missing_hmac_key",
+                task_id=task_id,
+                decision_id=decision_id,
+                actor_id=actor_id,
             )
 
         # AC-8: license override branch — emit second audit event.
@@ -403,9 +419,8 @@ async def post_decision(
                     old_limit = be_data.get("token_limit", _DEFAULT_TOKEN_LIMIT)
                 except (json.JSONDecodeError, TypeError):
                     log.warning(
-                        "Malformed payload_json for budget_exceeded event, "
-                        "using default limit (task_id=%s)",
-                        task_id,
+                        "malformed_budget_exceeded_payload_json_using_default_limit",
+                        task_id=task_id,
                     )
                     old_limit = _DEFAULT_TOKEN_LIMIT
             else:
