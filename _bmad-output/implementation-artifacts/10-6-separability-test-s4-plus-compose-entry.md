@@ -1,6 +1,6 @@
 # Story 10.6 — Separability test S-4 + add metrics-subscriber to compose stack
 
-Status: **review** (CI pending @ next-sha)
+Status: **review** (CI pending @ c9c5cbc)
 
 ## Story
 
