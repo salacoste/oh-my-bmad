@@ -475,3 +475,14 @@ release-local version="dev":
     echo "✓ release-local {{version}} complete"
     echo "  Base OCI archive: /tmp/omb-base-{{version}}.tar"
     echo "  Real release builds a base-FROM chain; this is a syntax/shape check only."
+
+# Verify the HMAC of a task.approval_signed event from the JSONL log (FR65, Story 11.4).
+# Works offline — Platform stack not required. Requires OPERATOR_HMAC_KEY env var
+# (or --key-file PATH for archived-key verification).
+#
+# Usage:
+#   just verify-approval EVENT_ID                          # uses default log dir
+#   just verify-approval EVENT_ID /path/to/log/dir         # custom log dir
+#   just verify-approval EVENT_ID /path/to/log/dir --json  # machine-readable
+verify-approval EVENT_ID LOG_DIR='/var/lib/oh-my-bmad/registry/events' *FLAGS='':
+    uv run python scripts/verify_approval.py {{EVENT_ID}} --log-dir {{LOG_DIR}} {{FLAGS}}

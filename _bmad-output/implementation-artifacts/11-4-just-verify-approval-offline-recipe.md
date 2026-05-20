@@ -1,6 +1,6 @@
 # Story 11.4 — `just verify-approval` offline recipe
 
-Status: **ready-for-dev**
+Status: **review** (CI pending @ pre-commit)
 
 ## Story
 
@@ -369,3 +369,37 @@ blocks:
 - [x] Phase 2: Justfile recipe (AC7)
 - [x] Phase 3: Integration tests (AC6) — `tests/integration/test_verify_approval_offline_recipe.py`
 - [x] Phase 4: Validation gates (AC8) — ruff, mypy, check_imports, full test suite
+
+## Dev Agent Record
+
+**Implementation summary**: Shipped `scripts/verify_approval.py` (pure-Python offline HMAC
+verifier), `just verify-approval` Justfile recipe, and 28 integration tests. Verifier
+imports `compute_approval_hmac` verbatim from Story 11.1 (D3 SSoT). All 11 reason codes
+and 6 exit codes implemented. Streaming JSONL reader (no buffer-bomb). Constant-time
+`hmac.compare_digest` comparison. NFR-S10 key isolation (byte count logged, never key
+value). Epic 11 acceptance gate satisfied: simulated 1-month-old approval verifies offline.
+
+**Files changed**:
+- `scripts/verify_approval.py` — new (pure-Python CLI, ~290 lines)
+- `tests/integration/test_verify_approval_offline_recipe.py` — new (28 tests, ~530 lines)
+- `Justfile` — appended `verify-approval` recipe
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` — status transitions
+- `_bmad-output/implementation-artifacts/11-4-just-verify-approval-offline-recipe.md` — spec updates
+
+**Test count delta**: 2990 → 3018 (+28)
+
+**Mypy --strict delta**: 92 errors / 191 source files (unchanged — zero new errors in new files)
+
+**check_single_writer.py**: exit 0 (verifier is read-only)
+
+**Golden-vector match**: `test_verify_approval_cli_matches_story_11_1_golden_vector` asserts
+CLI re-computation equals `40a928fd23a98785a4beadcd450051b807f1eb4d77599ad369a7b54a4b79ef36`
+
+**Surprises / deviations**:
+- D3 resolution: ordered log-dir/event scan BEFORE key loading so AC1 self-verification
+  (`NONEXISTENT-EVENT --log-dir /tmp/empty → exit 2`) works without OPERATOR_HMAC_KEY set.
+  Spec implied key-first ordering but AC1 test requires event-first. No spec change needed
+  (D2 is about key source preference, not ordering vs. event scan).
+- ruff reformatted the `from registry_api... import compute_approval_hmac` into a
+  parenthesized block; the `# noqa: IMP001` comment stays on the `compute_approval_hmac,`
+  line inside the block — `check_imports.py` still exits 0 (has_noqa scans the source line).
