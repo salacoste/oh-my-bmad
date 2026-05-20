@@ -239,7 +239,8 @@ async def test_approvals_command_handles_registry_api_failure_after_topic_creati
     reply_text = msg.reply.call_args.args[0]
     assert "Approval inbox opened" not in reply_text
     # PP5: "indeterminate" / "contact ops" copy instead of "Retry /approvals".
-    assert "indeterminate" in reply_text or "contact ops" in reply_text or "server error" in reply_text.lower()
+    lower = reply_text.lower()
+    assert "indeterminate" in reply_text or "contact ops" in reply_text or "server error" in lower
 
 
 @pytest.mark.asyncio
