@@ -1,6 +1,6 @@
 # Story 11.2 — Register `task.approval_signed` + `key.rotated` event types
 
-Status: **review** (pass-1 batch applied; CI pending @ <pass-1-batch-sha>)
+Status: **review** (pass-1 batch applied; CI pending @ c9adf7e)
 
 ## Story
 
