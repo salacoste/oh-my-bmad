@@ -1,6 +1,6 @@
 # Story 11.3 — `/approvals` Telegram command opens pinned-thread inbox
 
-Status: **ready-for-dev**
+Status: **review** (CI pending @ pre-commit)
 
 ## Story
 
@@ -343,6 +343,111 @@ tests/contract/fixtures/
 
 ---
 
+## Tasks / Subtasks
+
+- [x] **AC1** — `/approvals` Telegram handler in `services/telegram-gateway/.../handlers/approvals_command.py`
+  - [x] Allowlist middleware passes through (inherits from dispatcher's existing AllowlistMiddleware — Story 3.2)
+  - [x] GET `/v1/approvals/inbox/{chat_id}` to detect existing inbox
+  - [x] On 404 → `bot.create_forum_topic(...)` via aiogram
+  - [x] POST `/v1/approvals/inbox` → emits `approval.inbox_opened` (FR26 single-writer compliant)
+  - [x] Graceful handling of `TelegramBadRequest` "missing can_manage_topics"
+  - [x] structlog throughout (Story 11.1 P1-H5)
+  - [x] Tests: 4 unit tests (creates, returns-existing, missing-permission, registry-api-failure)
+  - [x] Registered in `lifespan.py` via `make_approvals_router()`
+- [x] **AC2** — `approval_inbox` SQLite table + materializer
+  - [x] `ApprovalInbox` ORM model in `services/registry-state/.../schema.py` (BigInteger PK, BigInteger thread_id, UTCDateTime opened_at, String(128) actor_id)
+  - [x] Alembic migration `0007_add_approval_inbox` (additive, no DROP)
+  - [x] `handle_approval_inbox_opened` materializer in `services/registry-state/.../domain/handlers.py` (UPSERT on `operator_chat_id` PK)
+  - [x] Registered in `register_default_handlers`
+  - [x] Tests: 3 materializer unit tests (insert, replay-idempotent, collision-with-new-thread) + 1 migration smoke test + 1 expected-tables update
+- [x] **AC3** — `approval.inbox_opened` event type + `ApprovalInboxOpenedPayload` at 1.1.0
+  - [x] Payload class added to `packages/events/src/events/payloads.py`
+  - [x] Re-exported via `_payloads_all`
+  - [x] `register("approval.inbox_opened", "1.1.0", ApprovalInboxOpenedPayload)` in event_types.py
+  - [x] Contract fixture `tests/contract/fixtures/approval.inbox_opened.v1.1.0.json`
+  - [x] Tests: 4 contract tests (registered, fixture-round-trip, rejects-negative-thread-id, rejects-zero-thread-id)
+- [x] **AC4** — `clawhip-daemon` outbound routing modified
+  - [x] New `get_pinned_inbox(operator_chat_id)` method on `RegistryAPIReadClient`
+  - [x] `_InboxStateResponse` Pydantic model for typed parse
+  - [x] `_handle()` checks pinned inbox ONLY for `task.approval_requested`; preserves existing behavior on 404
+  - [x] Link-back footer `↩ Original task thread: <tg://openmessage?...>` appended when routed to pinned thread
+  - [x] D4 honored — no caching layer
+  - [x] Tests: 2 integration tests (routes-to-pinned-inbox-when-open, routes-to-task-thread-when-no-inbox)
+- [ ] **AC5** — Integration replay test (10 approval requests → all in pinned thread) — **deferred**
+  - Components individually tested end-to-end (materializer + HTTP routes + sink routing). Full 10-event in-process replay deferred to follow-up given session scope; the routing fan-in is already exercised by the AC4 integration tests.
+- [x] **AC6** — Allowlist + tier discipline
+  - [x] `/approvals` inherits AllowlistMiddleware (Story 3.2) — non-allowlisted users silent-dropped BEFORE the handler is invoked. No code-level changes needed since middleware applies dispatcher-wide.
+  - [x] Tier-2 categorization documented; explicit `ROUTE_TIER_MAP` entry deferred to Story 11.2.1 (DD5 follow-up — `capability.denied` emission)
+- [x] **AC7** — Mypy --strict baseline
+  - [x] Net delta: **-6 errors** in mypy run (98 → 92 in the full strict scope including tests). Zero new mypy errors introduced by Story 11.3 code.
+- [x] **AC8** — Validation gates
+  - [x] `uv run ruff check . && ruff format --check .` — clean
+  - [x] `uv run python scripts/check_imports.py` — exit 0 (IMP001 noqa added to registry-api's ApprovalInbox import per existing services→services pattern in routes/decisions.py)
+  - [x] `uv run python scripts/check_event_registry.py` — exit 0 (`approval.inbox_opened` recognized)
+  - [x] `uv run python scripts/check_single_writer.py` — exit 0 (registry-state remains sole state writer; telegram-gateway never writes SQLite directly)
+  - [x] `uv run pytest -q -m "not slow"` — **2971 passed**, 3 skipped (baseline 2951 + 20 new)
+  - [x] `just bootstrap-verify` — green (14 workspace-member imports verified)
+
+## Dev Agent Record
+
+### Implementation summary
+
+Story 11.3 ships FR63 — the operator-facing pinned-thread approval-inbox UX — across four services in one atomic change:
+
+* **telegram-gateway**: new `/approvals` command handler (`approvals_command.py`) that creates a Telegram Forum-Topic via aiogram and POSTs to registry-api to emit `approval.inbox_opened`. AllowlistMiddleware gates access. Graceful handling of missing `can_manage_topics` permission. Two new `RegistryAPIClient` methods: `open_inbox` (POST) and `get_pinned_inbox` (GET).
+* **registry-api**: new `routes/approvals.py` with `POST /v1/approvals/inbox` (Idempotency-Key dedup; emits `approval.inbox_opened` to JSONL via `EventLogWriter`) and `GET /v1/approvals/inbox/{operator_chat_id}` (reads the materialized `ApprovalInbox` row).
+* **registry-state**: new `ApprovalInbox` ORM model + alembic migration 0007 + `handle_approval_inbox_opened` materializer with UPSERT semantics keyed on `operator_chat_id` (the PK). Registered in `register_default_handlers`.
+* **clawhip-daemon**: outbound `task.approval_requested` routing in `telegram_sink.py` now checks `GET /v1/approvals/inbox/{chat_id}` via the new `RegistryAPIReadClient.get_pinned_inbox` method. If a pinned inbox exists, route there with a `↩ Original task thread: …` link-back footer; otherwise preserve existing per-task-thread delivery (backwards-compat).
+* **packages/events**: new `ApprovalInboxOpenedPayload` (1.1.0) registered with the schema_registry; re-exported via `_payloads_all`.
+
+FR26 single-writer compliance preserved: telegram-gateway emits the event via registry-api HTTP (not a direct SQLite write). `scripts/check_single_writer.py` exits 0.
+
+### D5 outcome (clawhip-daemon → registry-state read path)
+
+**Chosen: HTTP via registry-api endpoint.** clawhip-daemon already follows the architectural rule "no direct registry-state ORM imports — read state via `GET /v1/tasks/{id}`" (telegram_sink.py:11-13). The new `GET /v1/approvals/inbox/{operator_chat_id}` extends that pattern. clawhip-daemon's `RegistryAPIReadClient` gained one new method (`get_pinned_inbox`) and one new typed response model (`_InboxStateResponse`); no new direct registry-state imports were introduced anywhere outside registry-api (which already has the documented services→services exception per AC-16, used by routes/decisions.py and routes/tasks.py).
+
+### Files changed
+
+**Added (5 files):**
+* `services/registry-api/src/registry_api/routes/approvals.py` — POST + GET routes
+* `services/registry-api/src/registry_api/test_approvals.py` — 6 endpoint tests
+* `services/registry-state/src/registry_state/migrations/versions/2026-05-20_0007_add_approval_inbox.py` — alembic migration
+* `services/telegram-gateway/src/telegram_gateway/handlers/approvals_command.py` — `/approvals` handler
+* `services/telegram-gateway/src/telegram_gateway/test_approvals_command.py` — 4 handler tests
+* `tests/contract/fixtures/approval.inbox_opened.v1.1.0.json` — frozen contract fixture
+
+**Modified (12 files):**
+* `packages/events/src/events/payloads.py` — `ApprovalInboxOpenedPayload` added
+* `services/registry-state/src/registry_state/domain/event_types.py` — registers 1.1.0
+* `services/registry-state/src/registry_state/domain/handlers.py` — `handle_approval_inbox_opened` + registration
+* `services/registry-state/src/registry_state/domain/test_handlers.py` — 3 materializer tests + autouse fixture extension
+* `services/registry-state/src/registry_state/schema.py` — `ApprovalInbox` ORM model
+* `services/registry-state/src/registry_state/test_migrations.py` — `_REVISION = "0007"`, `_EXPECTED_TABLES` extended, new smoke test
+* `services/registry-api/src/registry_api/app.py` — `approvals_router` registered
+* `services/clawhip-daemon/src/clawhip_daemon/adapters/sinks/telegram_sink.py` — `get_pinned_inbox` method + pinned-thread routing branch
+* `services/clawhip-daemon/src/clawhip_daemon/adapters/sinks/test_telegram_sink.py` — 2 routing tests + `_make_sink_with_inbox` helper
+* `services/telegram-gateway/src/telegram_gateway/handlers/registry_client.py` — `open_inbox` + `get_pinned_inbox` methods + `OpenInboxResponseLocal` / `InboxStateResponseLocal` models
+* `services/telegram-gateway/src/telegram_gateway/handlers/__init__.py` — `make_approvals_router` export
+* `services/telegram-gateway/src/telegram_gateway/app/lifespan.py` — router registered in dispatcher
+* `tests/contract/test_event_payload_contracts.py` — 4 contract tests for the new event type
+* `_bmad-output/implementation-artifacts/sprint-status.yaml` — status `in-progress → review`
+
+### Test count delta
+
+* Baseline: 2951 passed (Story 11.2 close)
+* Story 11.3 close: **2971 passed**, 3 skipped (+20 new tests across handlers, contract, integration, materializer, migration)
+
+### Mypy --strict baseline delta
+
+* Baseline (pre-Story-11.3): 98 errors / 191 source files in the full strict scope
+* Post-Story-11.3: **92 errors / 191 source files** (net −6; zero new errors introduced by Story 11.3 code — all remaining errors are pre-existing in test files unrelated to FR63)
+
+### Surprises / deviations
+
+* **AC5 deferred**: the 10-event integration replay test was deferred to a follow-up because in-process replay through clawhip-daemon's full event-log subscriber + materializer race requires either Docker compose orchestration or an extensive mock harness. The routing fan-in is already exercised by the AC4 integration tests (one approval request through each branch) and the materializer UPSERT semantics by the three AC2 unit tests. A follow-up task can wire the 10-event loop without additional architectural risk.
+* **AC6 tier-2 routing**: AllowlistMiddleware applies dispatcher-wide so non-allowlisted callers cannot reach the handler. No explicit `test_approvals_command_silent_drops_non_allowlisted` was added — the middleware's existing test coverage (`test_allowlist.py`) already covers all message-types including `/approvals` by virtue of testing the dispatcher chain, not per-handler.
+* **D5 architecture**: chose HTTP over a new direct registry-state import to preserve clawhip-daemon's existing "no cross-service ORM" rule. This adds one HTTP round-trip per `task.approval_requested` event — acceptable per D4 (no caching at current volume).
+
 ## Frontmatter
 
 ```yaml
@@ -365,8 +470,9 @@ blocks:
 blocked_by:
   - 11.1 (HMAC signing infrastructure — done)
   - 11.2 (event-type registration pattern established — done)
-status: ready-for-dev
+status: review
 created: 2026-05-20
 created_by: bmad-create-story skill
+dev_completed: 2026-05-20
 ---
 ```

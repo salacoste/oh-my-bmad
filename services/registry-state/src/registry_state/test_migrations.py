@@ -24,9 +24,19 @@ from pathlib import Path
 from alembic import command
 from alembic.config import Config
 
-# Expected tables and indexes defined by the initial migration (revision 0001).
+# Expected tables and indexes defined by the initial migration (revision 0001)
+# plus subsequent additive migrations. ``approval_inbox`` added by migration
+# 0007 (Story 11.3 / FR63 — operator-facing approval-inbox routing).
 _EXPECTED_TABLES = frozenset(
-    ["tasks", "sessions", "events", "idempotency_cache", "snapshots", "alembic_version"]
+    [
+        "tasks",
+        "sessions",
+        "events",
+        "idempotency_cache",
+        "snapshots",
+        "approval_inbox",
+        "alembic_version",
+    ]
 )
 _EXPECTED_INDEXES = frozenset(
     [
@@ -42,8 +52,9 @@ _EXPECTED_INDEXES = frozenset(
 # Tracks the latest alembic head revision. Bump when a new migration is added.
 # History: 0001 initial → 0002 task thread binding → 0003 session compound index
 # → 0004 add task state columns (Story 8.x) → 0005 add event trace_id (Story 9.7)
-# → 0006 add event trace_id_synthetic_source + extensions (Story 9.8 D6+D7).
-_REVISION = "0006"
+# → 0006 add event trace_id_synthetic_source + extensions (Story 9.8 D6+D7)
+# → 0007 add approval_inbox table (Story 11.3 AC2 / FR63).
+_REVISION = "0007"
 _INI_PATH = str(Path(__file__).parent.parent.parent / "alembic.ini")
 
 
@@ -101,7 +112,11 @@ def _sqlite_master_snapshot(path: str) -> list[tuple[str, str, str]]:
 
 
 def test_upgrade_head_on_empty_db_creates_all_tables_and_indexes() -> None:
-    """AC-6: upgrade head on empty DB creates 5 app tables + alembic_version + 6 indexes."""
+    """AC-6: upgrade head on empty DB creates 6 app tables + alembic_version + 6 indexes.
+
+    Story 11.3 (FR63) added ``approval_inbox`` via migration 0007 so the
+    expected table count moved from 5 → 6 application tables.
+    """
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "state.sqlite3")
         url = f"sqlite+aiosqlite:///{db_path}"
@@ -236,3 +251,41 @@ def test_migration_0006_preserves_existing_rows_with_null() -> None:
         assert row == (None, None), "pre-9.8 row must have NULL on both new columns; got " + repr(
             row
         )
+
+
+def test_migration_0007_adds_approval_inbox_table() -> None:
+    """Story 11.3 / FR63: migration 0007 adds the ``approval_inbox`` table.
+
+    Smoke test: upgrade head on an empty DB and assert the new table exists
+    with the expected 4-column shape (operator_chat_id PK, inbox_thread_id,
+    opened_at, opened_by_actor_id) all NOT NULL.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = str(Path(tmpdir) / "state.sqlite3")
+        url = f"sqlite+aiosqlite:///{db_path}"
+        _run_upgrade(url)
+
+        conn = sqlite3.connect(db_path)
+        try:
+            cur = conn.cursor()
+            cur.execute("PRAGMA table_info(approval_inbox)")
+            cols = {row[1]: row for row in cur.fetchall()}
+        finally:
+            conn.close()
+
+        # All 4 columns must exist.
+        assert set(cols) == {
+            "operator_chat_id",
+            "inbox_thread_id",
+            "opened_at",
+            "opened_by_actor_id",
+        }, f"unexpected approval_inbox columns: {set(cols)}"
+        # PRAGMA table_info: (cid, name, type, notnull, dflt_value, pk).
+        # All four columns must be NOT NULL (notnull == 1).
+        for name, row in cols.items():
+            assert row[3] == 1, f"approval_inbox.{name} must be NOT NULL"
+        # operator_chat_id is the PRIMARY KEY (pk == 1).
+        assert cols["operator_chat_id"][5] == 1, "operator_chat_id must be PRIMARY KEY"
+        # No other column is a PK.
+        for name in ("inbox_thread_id", "opened_at", "opened_by_actor_id"):
+            assert cols[name][5] == 0, f"{name} must not be part of PRIMARY KEY"

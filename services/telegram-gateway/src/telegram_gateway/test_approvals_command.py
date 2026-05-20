@@ -1,0 +1,209 @@
+"""Tests for /approvals command handler (Story 11.3 AC1 / FR63).
+
+Coverage:
+
+* ``test_approvals_command_creates_pinned_thread_when_none_exists`` —
+  no existing inbox, ``create_forum_topic`` succeeds, POST to
+  registry-api emits ``approval.inbox_opened``, reply confirms.
+* ``test_approvals_command_returns_existing_thread_link_when_inbox_already_open``
+  — existing inbox row → no new thread, reply references existing.
+* ``test_approvals_command_handles_missing_can_manage_topics_permission``
+  — aiogram raises ``TelegramBadRequest`` with permission error →
+  actionable reply, no POST attempted.
+* ``test_approvals_command_handles_registry_api_failure`` — POST 5xx
+  after Forum-Topic creation → structured error reply (does NOT crash).
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock
+
+import httpx
+import pytest
+from aiogram.exceptions import TelegramBadRequest
+
+from telegram_gateway.handlers.approvals_command import handle_approvals
+from telegram_gateway.handlers.registry_client import RegistryAPIClient
+
+_FAKE_CHAT_ID = -1001234567890
+_FAKE_NEW_THREAD_ID = 42
+_FAKE_EVENT_ID = "e-00000000-0000-7000-8000-000000000020"
+
+
+def _make_message(
+    *,
+    chat_id: int = _FAKE_CHAT_ID,
+    user_id: int = 999,
+    new_thread_id: int = _FAKE_NEW_THREAD_ID,
+    create_forum_topic_raises: BaseException | None = None,
+) -> MagicMock:
+    """Build an aiogram Message mock with a mocked bot for /approvals tests."""
+    msg = MagicMock()
+    msg.text = "/approvals"
+    msg.message_id = 100
+    msg.chat.id = chat_id
+    msg.from_user.id = user_id
+    msg.from_user.username = "operator-x"
+    msg.from_user.first_name = "Operator"
+    msg.reply = AsyncMock(return_value=None)
+
+    forum_topic = MagicMock()
+    forum_topic.message_thread_id = new_thread_id
+    forum_topic.name = "Approvals Inbox"
+
+    if create_forum_topic_raises is not None:
+        msg.bot.create_forum_topic = AsyncMock(side_effect=create_forum_topic_raises)
+    else:
+        msg.bot.create_forum_topic = AsyncMock(return_value=forum_topic)
+    return msg
+
+
+def _make_registry_client_for_approvals(
+    *,
+    get_inbox_status: int = 404,
+    get_inbox_body: dict[str, object] | None = None,
+    post_inbox_status: int = 201,
+    post_inbox_body: dict[str, object] | None = None,
+) -> RegistryAPIClient:
+    """Build a RegistryAPIClient whose transport routes by (method, path)."""
+    default_post_body = {
+        "operator_chat_id": _FAKE_CHAT_ID,
+        "inbox_thread_id": _FAKE_NEW_THREAD_ID,
+        "opened_at": datetime(2026, 5, 20, 12, 0, 0, tzinfo=UTC).isoformat(),
+        "event_id": _FAKE_EVENT_ID,
+        "idempotency_status": "applied",
+    }
+
+    async def _transport(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        method = request.method
+        if method == "GET" and "/v1/approvals/inbox/" in path:
+            if get_inbox_status == 200 and get_inbox_body is not None:
+                return httpx.Response(
+                    status_code=200,
+                    content=json.dumps(get_inbox_body).encode(),
+                    headers={"content-type": "application/json"},
+                    request=request,
+                )
+            return httpx.Response(status_code=404, content=b"{}", request=request)
+        if method == "POST" and path == "/v1/approvals/inbox":
+            body = post_inbox_body if post_inbox_body is not None else default_post_body
+            return httpx.Response(
+                status_code=post_inbox_status,
+                content=json.dumps(body).encode(),
+                headers={
+                    "content-type": "application/json",
+                    "X-Idempotency-Status": str(body.get("idempotency_status", "applied")),
+                },
+                request=request,
+            )
+        return httpx.Response(status_code=404, content=b"{}", request=request)
+
+    http_client = httpx.AsyncClient(
+        base_url="http://registry-api:8080",
+        transport=httpx.MockTransport(_transport),
+    )
+    return RegistryAPIClient(http_client=http_client)
+
+
+@pytest.mark.asyncio
+async def test_approvals_command_creates_pinned_thread_when_none_exists() -> None:
+    """Story 11.3 AC1: no existing inbox → create_forum_topic + POST + reply."""
+    msg = _make_message()
+    registry = _make_registry_client_for_approvals(get_inbox_status=404)
+
+    try:
+        await handle_approvals(msg, registry, trace_id=None)
+    finally:
+        await registry.http_client.aclose()
+
+    msg.bot.create_forum_topic.assert_awaited_once()
+    call_kwargs = msg.bot.create_forum_topic.call_args.kwargs
+    assert call_kwargs["chat_id"] == _FAKE_CHAT_ID
+    # Reply confirms the new inbox.
+    msg.reply.assert_awaited()
+    reply_text = msg.reply.call_args.args[0]
+    assert "Approval inbox opened" in reply_text
+    assert str(_FAKE_NEW_THREAD_ID) in reply_text
+
+
+@pytest.mark.asyncio
+async def test_approvals_command_returns_existing_thread_link_when_inbox_already_open() -> None:
+    """Story 11.3 AC1: existing inbox row → NO new thread; reply references existing."""
+    msg = _make_message()
+    existing_inbox_body = {
+        "operator_chat_id": _FAKE_CHAT_ID,
+        "inbox_thread_id": 777,
+        "opened_at": datetime(2026, 5, 19, 9, 0, 0, tzinfo=UTC).isoformat(),
+        "opened_by_actor_id": "operator-prev",
+    }
+    registry = _make_registry_client_for_approvals(
+        get_inbox_status=200,
+        get_inbox_body=existing_inbox_body,
+    )
+
+    try:
+        await handle_approvals(msg, registry, trace_id=None)
+    finally:
+        await registry.http_client.aclose()
+
+    # No new Forum-Topic created.
+    msg.bot.create_forum_topic.assert_not_called()
+    # Reply references the existing inbox.
+    msg.reply.assert_awaited()
+    reply_text = msg.reply.call_args.args[0]
+    assert "already open" in reply_text
+    assert "777" in reply_text
+
+
+@pytest.mark.asyncio
+async def test_approvals_command_handles_missing_can_manage_topics_permission() -> None:
+    """Story 11.3 out-of-scope risk: missing permission → actionable reply, no POST.
+
+    aiogram's ``create_forum_topic`` raises ``TelegramBadRequest`` with text
+    like "Bad Request: not enough rights to manage chat topics". We catch
+    and surface a graceful error.
+    """
+    # TelegramBadRequest has its own constructor; using model_construct via
+    # subclass isn't trivially exposed — use a direct instance.
+    fake_exc = TelegramBadRequest(
+        method=MagicMock(),
+        message="Bad Request: not enough rights to manage chat topics",
+    )
+    msg = _make_message(create_forum_topic_raises=fake_exc)
+    registry = _make_registry_client_for_approvals(get_inbox_status=404)
+
+    try:
+        await handle_approvals(msg, registry, trace_id=None)
+    finally:
+        await registry.http_client.aclose()
+
+    msg.bot.create_forum_topic.assert_awaited_once()
+    msg.reply.assert_awaited()
+    reply_text = msg.reply.call_args.args[0]
+    assert "can_manage_topics" in reply_text
+    assert "permission" in reply_text.lower()
+
+
+@pytest.mark.asyncio
+async def test_approvals_command_handles_registry_api_failure_after_topic_creation() -> None:
+    """Forum-Topic created but POST /v1/approvals/inbox returns 500 → graceful error."""
+    msg = _make_message()
+    registry = _make_registry_client_for_approvals(
+        get_inbox_status=404,
+        post_inbox_status=500,
+        post_inbox_body={"detail": "internal error"},
+    )
+
+    try:
+        await handle_approvals(msg, registry, trace_id=None)
+    finally:
+        await registry.http_client.aclose()
+
+    msg.bot.create_forum_topic.assert_awaited_once()
+    msg.reply.assert_awaited()
+    # The handler MUST surface SOME error message (not pretend success).
+    reply_text = msg.reply.call_args.args[0]
+    assert "Approval inbox opened" not in reply_text

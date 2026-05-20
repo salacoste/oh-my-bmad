@@ -274,6 +274,71 @@ def test_key_rotated_rejects_naive_datetime() -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# Story 11.3 — approval.inbox_opened registration + fixture + payload contract
+# ---------------------------------------------------------------------------
+
+
+def test_approval_inbox_opened_registered_at_1_1_0() -> None:
+    """Story 11.3 AC3 — approval.inbox_opened registered at schema_version 1.1.0."""
+    from events import ApprovalInboxOpenedPayload
+
+    assert ("approval.inbox_opened", "1.1.0") in REGISTRY
+    assert REGISTRY[("approval.inbox_opened", "1.1.0")] is ApprovalInboxOpenedPayload
+
+
+def test_approval_inbox_opened_fixture_parses() -> None:
+    """Story 11.3 AC3 — frozen JSON fixture round-trips through EventEnvelope."""
+    blob = _load_fixture("approval.inbox_opened.v1.1.0.json")
+    env = EventEnvelope.model_validate_json(blob)
+    assert env.type == "approval.inbox_opened"
+    assert env.schema_version == "1.1.0"
+    expected_payload = json.loads(blob)["payload"]
+    payload_data = env.payload if isinstance(env.payload, dict) else env.payload.model_dump()
+    assert payload_data == expected_payload
+
+
+def test_approval_inbox_opened_rejects_negative_thread_id() -> None:
+    """Story 11.3 AC3 — ``inbox_thread_id`` must be ``>= 1`` (Telegram contract).
+
+    Telegram Forum-Topic ``message_thread_id`` is always positive int64. A
+    negative value would either be a deserialization bug or an attempt to
+    inject a sentinel value the downstream router would misinterpret.
+    """
+    from datetime import UTC, datetime
+
+    from events import ApprovalInboxOpenedPayload
+
+    with pytest.raises(ValidationError, match="inbox_thread_id"):
+        ApprovalInboxOpenedPayload(
+            operator_chat_id=-1001234567890,
+            inbox_thread_id=-1,  # invalid — must be >= 1
+            opened_at=datetime.now(UTC),
+            opened_by_actor_id="operator",
+        )
+
+
+def test_approval_inbox_opened_rejects_zero_thread_id() -> None:
+    """Story 11.3 AC3 — ``inbox_thread_id == 0`` is invalid (Telegram contract).
+
+    Telegram thread_ids are >= 1; zero is sometimes used as a sentinel
+    meaning "no thread" / "general" but it cannot be a valid pinned-inbox
+    target — the row would route approval requests to the chat's general
+    thread instead of a dedicated Forum-Topic.
+    """
+    from datetime import UTC, datetime
+
+    from events import ApprovalInboxOpenedPayload
+
+    with pytest.raises(ValidationError, match="inbox_thread_id"):
+        ApprovalInboxOpenedPayload(
+            operator_chat_id=-1001234567890,
+            inbox_thread_id=0,  # invalid — must be >= 1
+            opened_at=datetime.now(UTC),
+            opened_by_actor_id="operator",
+        )
+
+
 def test_capability_denied_with_reason_none_round_trips() -> None:
     """Pass-1 P1-L5 — ``CapabilityDeniedPayload.reason`` is optional.
 

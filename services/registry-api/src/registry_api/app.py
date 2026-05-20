@@ -68,6 +68,9 @@ from registry_api.adapters.middleware import (
     TierEnforcementMiddleware,
     TraceIdMiddleware,
 )
+from registry_api.routes.approvals import (
+    router as approvals_router,
+)
 from registry_api.routes.decisions import (
     router as decisions_router,
 )
@@ -305,6 +308,11 @@ def build_app(
     app.include_router(decisions_router, prefix="/v1")
     # Story 9.7 / FR59a — /trace/{trace_id} operator query.
     app.include_router(trace_router, prefix="/v1")
+    # Story 11.3 / FR63 — /approvals/inbox endpoints for operator-facing
+    # pinned-thread routing (telegram-gateway emits via POST; clawhip-daemon
+    # reads via GET to decide whether to route ``task.approval_requested``
+    # to the operator's pinned Forum-Topic inbox).
+    app.include_router(approvals_router, prefix="/v1")
 
     return app
 

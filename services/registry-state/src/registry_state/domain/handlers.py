@@ -36,6 +36,7 @@ from registry_state.domain.errors import MaterializerError
 from registry_state.domain.event_types import (
     AgentReasoningBreadcrumbPayload,
     ApprovalGrantedPayload,
+    ApprovalInboxOpenedPayload,
     ApprovalRejectedPayload,
     BudgetOverridePayload,
     FileEditedPayload,
@@ -56,8 +57,8 @@ from registry_state.domain.event_types import (
     Tier3ActionAttemptedPayload,
     Tier3ActionPerformedPayload,
 )
+from registry_state.schema import ApprovalInbox, Task
 from registry_state.schema import Session as SessionRow
-from registry_state.schema import Task
 
 _log = logging.getLogger("registry_state.domain.handlers")
 
@@ -583,6 +584,56 @@ async def handle_agent_reasoning_breadcrumb(
     )
 
 
+# ---------------------------------------------------------------------------
+# Story 11.3 — approval.inbox_opened handler (FR63)
+# ---------------------------------------------------------------------------
+
+
+async def handle_approval_inbox_opened(session: AsyncSession, envelope: EventEnvelope) -> None:
+    """UPSERT a row in ``approval_inbox`` for ``approval.inbox_opened`` events.
+
+    Story 11.3 AC2 — operator opened (or re-opened) a pinned Forum-Topic
+    inbox via the ``/approvals`` Telegram command. The materialized row
+    drives outbound routing in clawhip-daemon: subsequent
+    ``task.approval_requested`` events for tasks owned by this operator
+    chat are delivered into ``inbox_thread_id`` instead of the
+    originating task thread (FR63).
+
+    UPSERT semantics keyed on ``operator_chat_id`` (the PK): re-running
+    ``/approvals`` after archiving the previous inbox replaces the row
+    in place with the new ``inbox_thread_id`` + refreshed
+    ``opened_at`` / ``opened_by_actor_id``. Idempotent replay of the
+    same envelope is a no-op (same values written).
+
+    No FK touch and no Task row update — this event is operator-session-
+    scoped, not task-scoped. The materializer's ``_extract_ids`` returns
+    ``(None, None)`` for ``approval.inbox_opened`` (the ``approval.``
+    prefix uses ``task_id`` extraction logic, but the payload has no
+    ``task_id`` field — :meth:`dict.get` returns ``None`` and the event
+    row's ``task_id`` column is NULL).
+    """
+    payload = _hydrate(envelope.payload, ApprovalInboxOpenedPayload)
+    assert isinstance(payload, ApprovalInboxOpenedPayload)
+    stmt = (
+        sqlite_insert(ApprovalInbox)
+        .values(
+            operator_chat_id=payload.operator_chat_id,
+            inbox_thread_id=payload.inbox_thread_id,
+            opened_at=payload.opened_at,
+            opened_by_actor_id=payload.opened_by_actor_id,
+        )
+        .on_conflict_do_update(
+            index_elements=["operator_chat_id"],
+            set_=dict(
+                inbox_thread_id=payload.inbox_thread_id,
+                opened_at=payload.opened_at,
+                opened_by_actor_id=payload.opened_by_actor_id,
+            ),
+        )
+    )
+    await session.execute(stmt)
+
+
 def register_default_handlers(materializer: object) -> None:
     """Register all built-in task-event handlers onto *materializer*.
 
@@ -641,11 +692,14 @@ def register_default_handlers(materializer: object) -> None:
         "agent.reasoning.step_summary",
         handle_agent_reasoning_breadcrumb,
     )
+    # Story 11.3 — approval.inbox_opened handler (FR63).
+    materializer.register_handler("approval.inbox_opened", handle_approval_inbox_opened)
 
 
 __all__ = [
     "handle_agent_reasoning_breadcrumb",
     "handle_approval_granted",
+    "handle_approval_inbox_opened",
     "handle_approval_rejected",
     "handle_file_edited",
     "handle_task_approval_requested",

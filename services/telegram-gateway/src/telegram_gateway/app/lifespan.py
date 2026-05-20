@@ -103,6 +103,7 @@ from telegram_gateway.app.middleware import AllowlistMiddleware
 from telegram_gateway.app.rate_limit import PerActorRateLimitMiddleware
 from telegram_gateway.handlers import (
     make_agent_router,
+    make_approvals_router,
     make_approve_router,
     make_logs_router,
     make_ping_router,
@@ -333,6 +334,8 @@ def make_lifespan(
             # across test lifespans that each build a new Dispatcher.
             dp.include_router(make_task_router())
             dp.include_router(make_approve_router())
+            # Story 11.3 / FR63 — /approvals operator pinned-thread handler.
+            dp.include_router(make_approvals_router())
             dp.include_router(make_ping_router())
             dp.include_router(make_status_router())
             dp.include_router(make_logs_router())

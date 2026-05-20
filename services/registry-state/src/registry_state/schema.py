@@ -215,6 +215,45 @@ class IdempotencyCache(Base):
     request_id_on_first_hit: Mapped[str] = mapped_column(String(36), nullable=False)
 
 
+class ApprovalInbox(Base):
+    """One row per operator chat with an open approval inbox (Story 11.3 AC2).
+
+    Materialized by the registry-state event subscriber from
+    ``approval.inbox_opened`` events (FR63). Read via registry-api by
+    clawhip-daemon (outbound delivery) to determine routing for
+    ``task.approval_requested`` events — when a row exists for the
+    operator's chat, the approval request is delivered into the pinned
+    ``inbox_thread_id`` (Forum-Topic) instead of the originating task
+    thread. Also read by the ``/approvals`` Telegram handler to detect
+    whether an operator already has an inbox open.
+
+    Primary key = ``operator_chat_id`` (one inbox per operator chat —
+    UPSERT semantics on duplicate ``approval.inbox_opened`` events; the
+    operator re-running ``/approvals`` replaces the row in place rather
+    than producing two pinned threads). The ``inbox_thread_id`` and
+    ``opened_at`` / ``opened_by_actor_id`` fields are refreshed on each
+    replay so the row always reflects the operator's latest pinned
+    Forum-Topic.
+
+    Column type notes:
+
+    * ``operator_chat_id`` and ``inbox_thread_id`` are ``BigInteger``
+      because Telegram supergroup chat ids and forum-topic message
+      thread ids both routinely exceed ``2**31``.
+    * ``opened_at`` uses :class:`UTCDateTime` to preserve the timezone
+      round-trip (matches the Story 2.1 ms-precision UTC convention).
+    * ``opened_by_actor_id`` is ``String(128)`` per the Story 11.2 P1-H1
+      codebase-wide ``actor_id`` length invariant.
+    """
+
+    __tablename__ = "approval_inbox"
+
+    operator_chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    inbox_thread_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    opened_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    opened_by_actor_id: Mapped[str] = mapped_column(String(128), nullable=False)
+
+
 class Snapshot(Base):
     """Materialized state snapshot. Schema only — capture + replay logic is Story 2.6.
 
@@ -264,6 +303,7 @@ Index("ix_tasks_status_updated_at", Task.status, Task.updated_at)
 Index("ix_events_trace_id", Event.trace_id)
 
 __all__ = [
+    "ApprovalInbox",
     "Base",
     "Event",
     "IdempotencyCache",

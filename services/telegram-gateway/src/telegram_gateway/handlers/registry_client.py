@@ -199,6 +199,39 @@ class LogsDigestResponseLocal(BaseModel):
     line_count: int = Field(ge=1, le=20)
 
 
+class OpenInboxResponseLocal(BaseModel):
+    """Local mirror of registry-api's ``OpenInboxResponse`` (Story 11.3 / FR63).
+
+    Returned by ``POST /v1/approvals/inbox``. Source-of-truth:
+    ``services/registry-api/src/registry_api/routes/approvals.py``
+    (Story 11.3). Architecture note: local redefinition keeps the
+    cross-service contract as HTTP/JSON.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    operator_chat_id: int
+    inbox_thread_id: int
+    opened_at: datetime
+    event_id: str
+    idempotency_status: Literal["applied", "replayed"] = "applied"
+
+
+class InboxStateResponseLocal(BaseModel):
+    """Local mirror of registry-api's ``InboxStateResponse`` (Story 11.3 / FR63).
+
+    Returned by ``GET /v1/approvals/inbox/{operator_chat_id}``. Source-of-
+    truth: ``services/registry-api/src/registry_api/routes/approvals.py``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    operator_chat_id: int
+    inbox_thread_id: int
+    opened_at: datetime
+    opened_by_actor_id: str
+
+
 class RegistryResponseError(httpx.HTTPError):
     """Raised when registry-api returns a 2xx response with an unexpected/malformed body.
 
@@ -658,14 +691,106 @@ class RegistryAPIClient:
         except (_json.JSONDecodeError, ValueError) as exc:
             raise RegistryResponseError(f"registry-api returned malformed body: {exc}") from exc
 
+    async def open_inbox(
+        self,
+        *,
+        operator_chat_id: int,
+        inbox_thread_id: int,
+        idempotency_key: str,
+        operator_actor_id: str,
+        request_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> OpenInboxResponseLocal:
+        """POST /v1/approvals/inbox — emit ``approval.inbox_opened`` (Story 11.3).
+
+        Used by the ``/approvals`` Telegram handler after aiogram successfully
+        creates a Forum-Topic in the operator's chat. registry-api appends
+        the event to JSONL; the registry-state materializer UPSERTs the
+        ``approval_inbox`` row asynchronously.
+
+        FR26 single-writer compliance: telegram-gateway never writes
+        SQLite directly. The HTTP POST is the only state-mutation surface.
+
+        Returns:
+            :class:`OpenInboxResponseLocal` on HTTP 201.
+        """
+        headers: dict[str, str] = {
+            "Idempotency-Key": idempotency_key,
+            "X-Actor-Id": operator_actor_id,
+        }
+        if request_id is not None:
+            headers["X-Request-ID"] = request_id
+        if trace_id is not None and trace_id != "":
+            headers["X-Trace-Id"] = trace_id
+
+        response = await self._http_client.post(
+            "/v1/approvals/inbox",
+            json={
+                "operator_chat_id": operator_chat_id,
+                "inbox_thread_id": inbox_thread_id,
+            },
+            headers=headers,
+        )
+        response.raise_for_status()
+
+        try:
+            data = response.json()
+            raw_status = data.get("idempotency_status") or response.headers.get(
+                "X-Idempotency-Status", "applied"
+            )
+            idempotency_status: Literal["applied", "replayed"] = (
+                "replayed" if raw_status == "replayed" else "applied"
+            )
+            return OpenInboxResponseLocal(
+                operator_chat_id=data["operator_chat_id"],
+                inbox_thread_id=data["inbox_thread_id"],
+                opened_at=data["opened_at"],
+                event_id=data["event_id"],
+                idempotency_status=idempotency_status,
+            )
+        except (_json.JSONDecodeError, KeyError, ValidationError, ValueError) as exc:
+            raise RegistryResponseError(f"registry-api returned malformed body: {exc}") from exc
+
+    async def get_pinned_inbox(
+        self,
+        *,
+        operator_chat_id: int,
+        request_id: str | None = None,
+    ) -> InboxStateResponseLocal | None:
+        """GET /v1/approvals/inbox/{operator_chat_id} — return row or None on 404.
+
+        Used by ``/approvals`` to detect "operator already has an inbox open"
+        before attempting to create a new Forum-Topic. Returns ``None`` on
+        404 (no inbox yet) so callers branch cleanly.
+        """
+        headers: dict[str, str] = {}
+        if request_id is not None:
+            headers["X-Request-ID"] = request_id
+
+        response = await self._http_client.get(
+            f"/v1/approvals/inbox/{operator_chat_id}",
+            headers=headers,
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+
+        try:
+            data = response.json()
+            return InboxStateResponseLocal.model_validate(data)
+        except (_json.JSONDecodeError, ValidationError, ValueError) as exc:
+            raise RegistryResponseError(f"registry-api returned malformed body: {exc}") from exc
+
 
 __all__ = [
     "ActorLocal",
     "CreateTaskResponseLocal",
     "DecisionResponseLocal",
     "HealthResponseLocal",
+    "InboxStateResponseLocal",
     "LastEventLocal",
     "LogsDigestResponseLocal",
+    "OpenInboxResponseLocal",
     "RegistryAPIClient",
     "RegistryResponseError",
     "TaskResponseLocal",

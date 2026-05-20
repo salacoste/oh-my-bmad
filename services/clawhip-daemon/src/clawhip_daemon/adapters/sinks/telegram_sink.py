@@ -127,6 +127,25 @@ class _TaskBindingResponse(BaseModel):
     reply_to_message_id: int | None = Field(default=None)
 
 
+class _InboxStateResponse(BaseModel):
+    """Typed parse of GET /v1/approvals/inbox/{operator_chat_id} (Story 11.3 D5).
+
+    Mirrors the columns of registry-state's ``ApprovalInbox`` table that
+    clawhip-daemon needs to make the routing decision: only
+    ``inbox_thread_id`` is consumed today, but ``opened_at`` /
+    ``opened_by_actor_id`` are kept in the wire model for forensic logging
+    and forward-compat with future renderers. ``extra="ignore"`` so
+    new fields don't break the sink.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    operator_chat_id: int
+    inbox_thread_id: int
+    opened_at: datetime
+    opened_by_actor_id: str
+
+
 # ---------------------------------------------------------------------------
 # M15: EventLogReader — thin adapter over the JSONL file scan
 # ---------------------------------------------------------------------------
@@ -232,6 +251,67 @@ class RegistryAPIReadClient:
             )
             return None, None
         return binding.chat_id, binding.reply_to_message_id
+
+    async def get_pinned_inbox(
+        self,
+        operator_chat_id: int,
+        *,
+        request_id: str | None = None,
+    ) -> int | None:
+        """GET /v1/approvals/inbox/{operator_chat_id} and return inbox_thread_id.
+
+        Story 11.3 / FR63 — clawhip-daemon's routing decision for
+        ``task.approval_requested`` events. If the operator opened a
+        pinned Forum-Topic via ``/approvals``, return its
+        ``inbox_thread_id``; otherwise return ``None`` (backwards-compat:
+        approval delivered to the originating task thread).
+
+        Returns:
+            ``inbox_thread_id`` (>= 1) when a row exists in
+            registry-state's ``approval_inbox`` table for this chat;
+            ``None`` on 404 (no inbox opened yet) OR on transient
+            5xx / transport errors. We intentionally treat 5xx as
+            ``None`` (degrade-to-old-behavior, never block delivery
+            on a missed cache lookup — D4: no caching layer, so
+            transient errors are unrecoverable in this call).
+        """
+        headers: dict[str, str] = {}
+        if request_id is not None:
+            headers["X-Request-ID"] = request_id
+
+        url = f"{self._base_url}/v1/approvals/inbox/{operator_chat_id}"
+        try:
+            response = await self._http_client.get(url, headers=headers)
+        except httpx.HTTPError as exc:
+            _log.warning(
+                "telegram_sink: pinned-inbox lookup transport error — falling back",
+                operator_chat_id=operator_chat_id,
+                exc_type=type(exc).__name__,
+            )
+            return None
+
+        if response.status_code == 404:
+            # No inbox open — caller falls back to per-task-thread delivery.
+            return None
+        if response.status_code >= 500:
+            _log.warning(
+                "telegram_sink: pinned-inbox lookup 5xx — falling back",
+                operator_chat_id=operator_chat_id,
+                status_code=response.status_code,
+            )
+            return None
+
+        response.raise_for_status()
+
+        try:
+            inbox = _InboxStateResponse.model_validate(response.json())
+        except pydantic.ValidationError:
+            _log.warning(
+                "telegram_sink: registry-api inbox response parse failed",
+                operator_chat_id=operator_chat_id,
+            )
+            return None
+        return inbox.inbox_thread_id
 
     async def get_task_events(self, task_id: str, *, limit: int = 1000) -> list[dict]:
         """GET /v1/tasks/{task_id}/events and return event envelope dicts."""
@@ -1984,9 +2064,32 @@ class TelegramSink:
                 exc=str(exc),
             )
             text = f"Task {html.escape(task_id)}: {html.escape(envelope.type)}"
+
+        # Story 11.3 / FR63 — approval-inbox routing.
+        # For ``task.approval_requested`` ONLY, check whether the operator
+        # opened a pinned Forum-Topic inbox via ``/approvals``. If yes,
+        # deliver into the pinned thread with a "↩ Original task thread"
+        # link-back footer instead of the originating task thread. If no
+        # (404), preserve the existing per-task-thread delivery. D4: no
+        # caching — DB hit per approval request is fine at current volume.
+        target_thread_id = reply_to_message_id
+        if envelope.type == "task.approval_requested":
+            pinned_thread_id = await self._registry_client.get_pinned_inbox(
+                chat_id, request_id=envelope.request_id
+            )
+            if pinned_thread_id is not None:
+                target_thread_id = pinned_thread_id
+                text = (
+                    f"{text}\n\n"
+                    f"↩ Original task thread: "
+                    f'<a href="tg://openmessage?chat_id={chat_id}'
+                    f'&message_id={reply_to_message_id}">'
+                    f"task {html.escape(task_id)}</a>"
+                )
+
         await self._outbound.send_to_thread(
             chat_id=chat_id,
-            reply_to_message_id=reply_to_message_id,
+            reply_to_message_id=target_thread_id,
             text=text,
         )
 

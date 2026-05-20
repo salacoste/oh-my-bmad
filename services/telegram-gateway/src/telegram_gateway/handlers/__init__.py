@@ -8,6 +8,7 @@ Future handlers:
 """
 
 from telegram_gateway.handlers.agent_command import make_agent_router
+from telegram_gateway.handlers.approvals_command import make_approvals_router
 from telegram_gateway.handlers.approve_command import make_approve_router
 from telegram_gateway.handlers.logs_command import make_logs_router
 from telegram_gateway.handlers.ping_command import make_ping_router
@@ -21,6 +22,7 @@ from telegram_gateway.handlers.task_command import make_task_router
 # model. Tests import it directly from telegram_gateway.handlers.registry_client.
 __all__ = [
     "make_agent_router",
+    "make_approvals_router",
     "make_approve_router",
     "make_logs_router",
     "make_ping_router",

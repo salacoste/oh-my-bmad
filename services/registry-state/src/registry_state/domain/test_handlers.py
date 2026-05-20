@@ -55,6 +55,7 @@ from registry_state.domain.handlers import (
     _close_active_session_for_task,
     handle_agent_reasoning_breadcrumb,
     handle_approval_granted,
+    handle_approval_inbox_opened,
     handle_approval_rejected,
     handle_file_edited,
     handle_task_approval_requested,
@@ -137,6 +138,11 @@ def _ensure_event_types_registered() -> None:
     _reg("agent.reasoning.plan_drafted", "1.0.0", AgentReasoningBreadcrumbPayload)
     _reg("agent.reasoning.tool_call_rationale", "1.0.0", AgentReasoningBreadcrumbPayload)
     _reg("agent.reasoning.step_summary", "1.0.0", AgentReasoningBreadcrumbPayload)
+    # Story 11.3 — approval.inbox_opened event type (FR63). Imported lazily
+    # to keep this fixture's top-of-file imports minimal.
+    from registry_state.domain.event_types import ApprovalInboxOpenedPayload as _AIOpened
+
+    _reg("approval.inbox_opened", "1.1.0", _AIOpened)
 
 
 @pytest.fixture
@@ -2306,3 +2312,124 @@ async def test_compound_index_exists(
     index_names = {idx.name for idx in SessionRow.__table__.indexes}  # type: ignore[attr-defined]  # SQLAlchemy stubs return FromClause; Table.__table__ resolves at runtime
     assert "ix_sessions_task_id_status" in index_names
     assert "ix_sessions_task_id" not in index_names
+
+
+# ===========================================================================
+# Story 11.3 — handle_approval_inbox_opened (FR63)
+# ===========================================================================
+
+
+def _make_approval_inbox_opened_envelope(
+    *,
+    operator_chat_id: int = -1001234567890,
+    inbox_thread_id: int = 42,
+    actor_id: str = "operator-test",
+    mono_ns: int = 5_000_000,
+    seed: int = 11,
+) -> EventEnvelope:
+    """Build an ``approval.inbox_opened`` envelope for materializer tests.
+
+    Uses the standard FrozenClock / seeded RNG pair so event_ids / trace_ids
+    are deterministic. ``opened_at`` is pinned to ``FROZEN_EPOCH`` so
+    UPSERT-vs-replay assertions can compare timestamps directly.
+    """
+    from registry_state.domain.event_types import ApprovalInboxOpenedPayload
+
+    rng = Random(seed)
+    clk = FrozenClock(mono_ns=mono_ns, now=FROZEN_EPOCH)
+    return EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        type="approval.inbox_opened",
+        schema_version="1.1.0",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=Actor(kind="operator", id=actor_id),
+        payload=ApprovalInboxOpenedPayload(
+            operator_chat_id=operator_chat_id,
+            inbox_thread_id=inbox_thread_id,
+            opened_at=FROZEN_EPOCH,
+            opened_by_actor_id=actor_id,
+        ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+
+
+@pytest.mark.asyncio
+async def test_approval_inbox_materializer_inserts_on_first_event(
+    db_session: AsyncSession,
+) -> None:
+    """Story 11.3 AC2: first ``approval.inbox_opened`` event inserts a new row."""
+    from registry_state.schema import ApprovalInbox
+
+    env = _make_approval_inbox_opened_envelope(
+        operator_chat_id=-1001234567890,
+        inbox_thread_id=42,
+        actor_id="operator-test",
+    )
+    await handle_approval_inbox_opened(db_session, env)
+
+    row = await db_session.get(ApprovalInbox, -1001234567890)
+    assert row is not None, "approval_inbox row must exist after first event"
+    assert row.inbox_thread_id == 42
+    assert row.opened_by_actor_id == "operator-test"
+
+
+@pytest.mark.asyncio
+async def test_approval_inbox_materializer_upserts_on_replay(
+    db_session: AsyncSession,
+) -> None:
+    """Story 11.3 AC2: replaying the same event produces exactly one row (UPSERT)."""
+    env = _make_approval_inbox_opened_envelope(
+        operator_chat_id=-1001234567890,
+        inbox_thread_id=42,
+    )
+    await handle_approval_inbox_opened(db_session, env)
+    await handle_approval_inbox_opened(db_session, env)  # idempotent replay
+
+    result = await db_session.execute(
+        text("SELECT COUNT(*) FROM approval_inbox WHERE operator_chat_id = :cid"),
+        {"cid": -1001234567890},
+    )
+    assert result.scalar() == 1, "replay must not duplicate rows"
+
+
+@pytest.mark.asyncio
+async def test_approval_inbox_materializer_handles_chat_id_collision_with_new_thread(
+    db_session: AsyncSession,
+) -> None:
+    """Story 11.3 AC2: operator opens a NEW inbox — row updates in place, no duplicate.
+
+    Operator re-runs ``/approvals`` after archiving the previous Forum-Topic.
+    The second event carries the same ``operator_chat_id`` but a new
+    ``inbox_thread_id``; the UPSERT must replace ``inbox_thread_id`` in
+    place rather than producing two rows (which would break the
+    ``operator_chat_id``-PK invariant anyway).
+    """
+    from registry_state.schema import ApprovalInbox
+
+    env_first = _make_approval_inbox_opened_envelope(
+        operator_chat_id=-1001234567890,
+        inbox_thread_id=42,
+        actor_id="operator-first",
+        seed=11,
+    )
+    env_second = _make_approval_inbox_opened_envelope(
+        operator_chat_id=-1001234567890,
+        inbox_thread_id=99,  # NEW thread id — operator opened a new inbox.
+        actor_id="operator-second",
+        seed=22,
+    )
+    await handle_approval_inbox_opened(db_session, env_first)
+    await handle_approval_inbox_opened(db_session, env_second)
+
+    # Exactly one row; latest values present.
+    result = await db_session.execute(
+        text("SELECT COUNT(*) FROM approval_inbox WHERE operator_chat_id = :cid"),
+        {"cid": -1001234567890},
+    )
+    assert result.scalar() == 1
+    row = await db_session.get(ApprovalInbox, -1001234567890)
+    assert row is not None
+    assert row.inbox_thread_id == 99, "thread_id must be updated to the latest value"
+    assert row.opened_by_actor_id == "operator-second"

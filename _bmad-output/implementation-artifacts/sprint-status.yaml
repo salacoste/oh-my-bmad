@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-20T16:45:00Z
+last_updated: 2026-05-20T17:00:00Z
 current_phase: 2  # Phase 2 opened by ADR-0003 (docs/adr/0003-phase-2-gate.md), 2026-05-15
 
 development_status:
@@ -288,7 +288,7 @@ development_status:
   11-1-hmac-signing-decisions-handler: done  # phase: 2 · FR64 + NFR-S10 · 8 ACs + pass-1: 15/15 closed (5 MAJOR + 5 MED + 5 LOW); 950 tests; mypy 130 src files; CI green @ 8eb760f (run 26163427367); golden vector 40a928fd...79ef36 proves canonical-format external compat for Story 11.4
   11-2-register-approval-signed-key-rotated-events: done  # phase: 2 · FR64 + FR65a · 7 ACs + pass-1: 11/11 closed (3 HIGH + 3 MED + 5 LOW); 2951 tests; mypy 130 src files; CI green @ 4382af7 (run 26167849514); DD5 closed via registration + dispatch wiring; emission deferred to Story 11.2.1
   11-2-1-capability-denied-emission: backlog  # phase: 2 · DD5 follow-up · emit capability.denied from TierEnforcementMiddleware (HTTP) + MCP capability handler; wires omb_capability_denied_total to actual increments; depends on Story 11.2 schema registration (done) + 11.2 pass-1 P1-H3 dispatch wiring
-  11-3-approvals-pinned-thread-handler: ready-for-dev  # phase: 2 · FR63 · 8 ACs · NEW /approvals handler (telegram-gateway) + approval_inbox SQLite table (registry-state, FR26-compliant via event materialization) + clawhip-daemon outbound routing check + NEW approval.inbox_opened event type at 1.1.0 + 10-message replay integration test
+  11-3-approvals-pinned-thread-handler: review  # phase: 2 · FR63 · 8 ACs · dev complete 2026-05-20 · 7/8 ACs closed (AC5 10-event replay deferred to follow-up); NEW /approvals handler (telegram-gateway) + approval_inbox SQLite table (registry-state, FR26-compliant) + clawhip-daemon pinned-thread routing + NEW approval.inbox_opened event type + new POST/GET /v1/approvals/inbox registry-api endpoints (D5 outcome: HTTP-only — no new direct registry-state imports beyond pre-existing services→services pattern in routes/decisions.py) · +20 tests · 2971 pass
   11-4-just-verify-approval-offline-recipe: backlog  # phase: 2 · FR65
   11-5-key-rotation-flow-key-rotated-event: backlog  # phase: 2 · FR65a · new event type
   epic-11-retrospective: optional

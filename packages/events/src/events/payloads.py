@@ -993,6 +993,50 @@ class KeyRotatedPayload(BaseModel):
         return self
 
 
+class ApprovalInboxOpenedPayload(BaseModel):
+    """Operator opened a pinned approval inbox via the ``/approvals`` command (Story 11.3).
+
+    Drives the registry-state ``approval_inbox`` table (Story 11.3 AC2):
+    one row per ``operator_chat_id`` with the operator's pinned Forum-Topic
+    inbox thread. Read by clawhip-daemon (via registry-api HTTP — D5
+    outcome below) to route ``task.approval_requested`` events to the
+    pinned inbox instead of the originating task thread (FR63).
+
+    Idempotent: re-emitting for the same ``operator_chat_id`` replaces
+    the previous ``inbox_thread_id`` (operator opened a NEW inbox; the
+    old one is deprecated). UPSERT semantics in the materializer.
+
+    Field rules (Story 11.3 AC3):
+
+    * ``operator_chat_id`` — bounded to int64 range (Telegram chat ids
+      can be negative for supergroups, so the lower bound is ``-2**63``,
+      not ``1``).
+    * ``inbox_thread_id`` — bounded to ``>= 1`` and ``< 2**63`` (Telegram
+      thread ids are positive int64).
+    * ``opened_at`` — :class:`pydantic.AwareDatetime`; naive timestamps
+      rejected at the payload boundary.
+    * ``opened_by_actor_id`` — non-empty string, ``max_length=128`` per
+      Story 11.2 P1-H1 codebase-wide invariant.
+
+    No ``task_id`` field: this event is operator-session-scoped, not
+    task-scoped. The materializer's ``_extract_ids`` returns ``(None,
+    None)`` accordingly — the ``approval.inbox_opened`` event row in
+    the ``events`` table has ``task_id IS NULL``.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    # Telegram chat_id is int64; supergroups have negative ids. Bounded
+    # to the int64 range for canonical-JSON portability across SQLite
+    # BIGINT columns.
+    operator_chat_id: int = Field(ge=-(2**63), le=2**63 - 1)
+    # Telegram thread_id is positive int64; ``forum_topic.message_thread_id``
+    # is always >= 1 (Telegram Bot API contract).
+    inbox_thread_id: int = Field(ge=1, le=2**63 - 1)
+    opened_at: AwareDatetime
+    opened_by_actor_id: str = Field(min_length=1, max_length=128)
+
+
 class CapabilityDeniedPayload(BaseModel):
     """Audit event recording a capability-tier denial at the MCP / HTTP boundary.
 
@@ -1040,6 +1084,7 @@ __all__ = [
     "AcceptedCommand",
     "AgentReasoningBreadcrumbPayload",
     "ApprovalGrantedPayload",
+    "ApprovalInboxOpenedPayload",
     "BudgetOverridePayload",
     "ApprovalRejectedPayload",
     "CapabilityDeniedPayload",

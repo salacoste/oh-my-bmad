@@ -3634,3 +3634,112 @@ class TestCollapseNewlinesUnicode:
         from clawhip_daemon.adapters.sinks.telegram_sink import _collapse_newlines
 
         assert _collapse_newlines("hello world") == "hello world"
+
+
+# ===========================================================================
+# Story 11.3 — FR63 pinned-inbox routing for task.approval_requested
+# ===========================================================================
+
+
+def _make_sink_with_inbox(
+    *,
+    outbound: object,
+    binding_response: dict[str, object],
+    inbox_thread_id: int | None,
+) -> TelegramSink:
+    """Build a TelegramSink whose http_client routes based on URL.
+
+    Story 11.3 routing tests need two distinct HTTP responses:
+    * ``GET /v1/tasks/{task_id}`` → binding (chat_id + reply_to_message_id)
+    * ``GET /v1/approvals/inbox/{chat_id}`` → inbox row OR 404
+
+    If *inbox_thread_id* is None, the inbox endpoint returns 404.
+    Otherwise it returns a row whose ``inbox_thread_id`` is the supplied
+    value.
+    """
+    import httpx
+
+    async def _registry_get(url: str, **kwargs: object) -> httpx.Response:
+        req = httpx.Request("GET", url)
+        if "/approvals/inbox/" in url:
+            if inbox_thread_id is None:
+                return httpx.Response(status_code=404, json={"detail": "no inbox"}, request=req)
+            return httpx.Response(
+                status_code=200,
+                json={
+                    "operator_chat_id": -1001,
+                    "inbox_thread_id": inbox_thread_id,
+                    "opened_at": "2026-05-20T12:00:00.000+00:00",
+                    "opened_by_actor_id": "operator",
+                },
+                request=req,
+            )
+        # Default: task binding lookup.
+        return httpx.Response(status_code=200, json=binding_response, request=req)
+
+    http_client = MagicMock(spec=httpx.AsyncClient)
+    http_client.get = AsyncMock(side_effect=_registry_get)
+    return TelegramSink(
+        base_dir=Path("/nonexistent"),
+        registry_api_url="http://registry-api:8080",
+        http_client=http_client,
+        outbound=outbound,  # type: ignore[arg-type]
+    )
+
+
+@pytest.mark.asyncio
+async def test_telegram_sink_routes_to_pinned_inbox_when_open() -> None:
+    """Story 11.3 AC4: ``task.approval_requested`` routes to pinned inbox if open.
+
+    When the operator has run ``/approvals`` and a row exists in
+    ``approval_inbox``, the sink must:
+    * deliver to ``inbox_thread_id`` (NOT the originating task thread);
+    * include the "↩ Original task thread: …" link-back footer.
+    """
+    outbound_mock = MagicMock()
+    outbound_mock.send_to_thread = AsyncMock()
+    sink = _make_sink_with_inbox(
+        outbound=outbound_mock,
+        binding_response={"chat_id": -1001, "reply_to_message_id": 42},
+        inbox_thread_id=777,  # operator opened pinned inbox at thread 777
+    )
+
+    env = _approval_envelope()
+    await sink._handle(env)
+
+    outbound_mock.send_to_thread.assert_called_once()
+    call_kwargs = outbound_mock.send_to_thread.call_args[1]
+    assert call_kwargs["chat_id"] == -1001
+    # Routed to the pinned inbox thread, NOT the originating task thread (42).
+    assert call_kwargs["reply_to_message_id"] == 777
+    # Link-back footer present in the message body.
+    assert "↩ Original task thread:" in call_kwargs["text"]
+    assert "message_id=42" in call_kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_telegram_sink_routes_to_task_thread_when_no_inbox() -> None:
+    """Story 11.3 AC4: backwards-compat — no pinned inbox → originating task thread.
+
+    Operators who have NOT run ``/approvals`` still receive approval
+    requests in the originating task thread. The 404 from
+    ``GET /v1/approvals/inbox/{chat_id}`` is the cue.
+    """
+    outbound_mock = MagicMock()
+    outbound_mock.send_to_thread = AsyncMock()
+    sink = _make_sink_with_inbox(
+        outbound=outbound_mock,
+        binding_response={"chat_id": -1001, "reply_to_message_id": 42},
+        inbox_thread_id=None,  # 404 — no pinned inbox open.
+    )
+
+    env = _approval_envelope()
+    await sink._handle(env)
+
+    outbound_mock.send_to_thread.assert_called_once()
+    call_kwargs = outbound_mock.send_to_thread.call_args[1]
+    assert call_kwargs["chat_id"] == -1001
+    # Backwards-compat: routed to the originating task thread.
+    assert call_kwargs["reply_to_message_id"] == 42
+    # No link-back footer when delivered to the task thread.
+    assert "↩ Original task thread:" not in call_kwargs["text"]

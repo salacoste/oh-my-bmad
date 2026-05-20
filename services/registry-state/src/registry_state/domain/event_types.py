@@ -24,6 +24,7 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     AcceptedCommand,
     AgentReasoningBreadcrumbPayload,
     ApprovalGrantedPayload,
+    ApprovalInboxOpenedPayload,
     ApprovalRejectedPayload,
     BudgetOverridePayload,
     CapabilityDeniedPayload,
@@ -91,6 +92,7 @@ __all__ = [
     "AcceptedCommand",
     "AgentReasoningBreadcrumbPayload",
     "ApprovalGrantedPayload",
+    "ApprovalInboxOpenedPayload",
     "ApprovalRejectedPayload",
     "BudgetOverridePayload",
     "CapabilityDeniedPayload",
@@ -271,6 +273,14 @@ def ensure_registered() -> None:
     # (capability.denied emission — requires TierEnforcementMiddleware
     # + MCP capability-handler wiring; out of scope for 11.2 per D5).
     register("capability.denied", "1.1.0", CapabilityDeniedPayload)
+    # Story 11.3 — approval.inbox_opened event (FR63). Emitted by
+    # telegram-gateway's ``/approvals`` handler when the operator opens
+    # a pinned Forum-Topic inbox; materialized by registry-state into
+    # the ``approval_inbox`` table (Story 11.3 AC2) so clawhip-daemon
+    # can route ``task.approval_requested`` to the pinned thread.
+    # Born at 1.1.0 (no v1.0.0 predecessor; NEW event type introduced
+    # in Phase 2, same convention as key.rotated + capability.denied).
+    register("approval.inbox_opened", "1.1.0", ApprovalInboxOpenedPayload)
     register("task.retry_requested", "1.0.0", TaskRetryRequestedPayload)
     register("task.retry_requested", "1.1.0", TaskRetryRequestedPayload)
     register("tier3.license_override", "1.0.0", LicenseOverridePayload)
