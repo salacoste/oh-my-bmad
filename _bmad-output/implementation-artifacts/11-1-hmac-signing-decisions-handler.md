@@ -1,6 +1,6 @@
 # Story 11.1 — HMAC signing inside `/v1/tasks/<id>/decisions` handler
 
-Status: **review** (CI pending @ <sha>)
+Status: **review** (CI pending @ 37cbdfa)
 
 ## Story
 
