@@ -1,6 +1,6 @@
 # Story 11.3 — `/approvals` Telegram command opens pinned-thread inbox
 
-Status: **review** (pass-2 CI pending @ pre-commit — 22 fixes incl. 2 P0 regressions caught by pass-2)
+Status: **done** (CI green @ 70944a7 — pass-2 review batch: 22 fixes incl. 2 P0 regressions caught by pass-2; +1 ruff fix follow-up)
 
 ## Story
 
