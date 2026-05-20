@@ -934,6 +934,101 @@ class TaskApprovalSignedPayload(BaseModel):
     hmac_sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
 
 
+# ---------------------------------------------------------------------------
+# Story 11.2 — key-rotation + capability-denial audit payloads
+# (FR65a / NFR-S10 / Epic 10 retro DD5).
+# ---------------------------------------------------------------------------
+
+
+class KeyRotatedPayload(BaseModel):
+    """Audit event recording that the operator's HMAC signing key has been rotated.
+
+    Emitted exactly once per actual rotation by Story 11.5's key-rotation
+    detector (compares fingerprint of current ``OPERATOR_HMAC_KEY`` against
+    last-known fingerprint persisted in registry-state).
+
+    Per FR65a: pre-rotation approvals remain verifiable ONLY via the prior
+    key — operator's responsibility to retain it for audit-window duration.
+    The ``key.rotated`` event records the rotation timestamp + fingerprints
+    (NEVER the keys themselves — NFR-S10 isolation: keys NEVER appear in
+    events/logs/snapshots/registry).
+
+    Field rules (Story 11.2 D2, D3):
+
+    * ``rotated_at`` — :class:`pydantic.AwareDatetime`; naive timestamps
+      rejected at the payload boundary.
+    * ``previous_key_fingerprint`` / ``new_key_fingerprint`` — exactly 16
+      lowercase hex chars (D2: ``SHA-256(key_bytes)[:16]`` = 64 bits;
+      operator-readable in audit logs, collision-safe for single-operator
+      key populations). Story 11.5 owns the fingerprint computation.
+    * Cross-field invariant (D3): ``previous_key_fingerprint`` MUST differ
+      from ``new_key_fingerprint``. Equality is not a rotation — it would
+      either be a detection bug or a replay-attack attempting to emit a
+      no-op rotation event. Reject at model boundary.
+    * ``actor_id`` — non-empty string; constrained to ``min_length=1`` only
+      (NOT the Story 11.1 no-pipe pattern) because the rotation actor may
+      be a richer service-account identifier than ``approval.granted``
+      operator strings.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    rotated_at: AwareDatetime
+    previous_key_fingerprint: str = Field(min_length=16, max_length=16, pattern=r"^[0-9a-f]{16}$")
+    new_key_fingerprint: str = Field(min_length=16, max_length=16, pattern=r"^[0-9a-f]{16}$")
+    actor_id: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _reject_no_op_rotation(self) -> KeyRotatedPayload:
+        if self.previous_key_fingerprint == self.new_key_fingerprint:
+            raise ValueError(
+                "previous_key_fingerprint must differ from new_key_fingerprint (no-op rotation)"
+            )
+        return self
+
+
+class CapabilityDeniedPayload(BaseModel):
+    """Audit event recording a capability-tier denial at the MCP / HTTP boundary.
+
+    Emitted by ``TierEnforcementMiddleware`` (HTTP) or capability-handler
+    decorators (MCP) when a request exceeds the actor's permitted tier.
+    Story 10.4 reserved ``omb_capability_denied_total{tier, boundary}``
+    counter as a preview-only metric with pre-populated zero values
+    pending this event type. Emission wiring deferred (out of scope for
+    Story 11.2 — see DAR; tracked as DD5 half-done state).
+
+    Per Epic 10 retro DD5 — registered here as the natural bundling
+    opportunity with other Epic 11 event type registrations.
+
+    Field rules:
+
+    * ``tier`` / ``boundary`` — bounded ``Literal`` values that MUST stay
+      in sync with Story 10.4's ``_CAPABILITY_TIERS`` /
+      ``_CAPABILITY_BOUNDARIES`` constants in
+      ``metrics-subscriber/app/metrics.py``. The enum-drift contract test
+      ``test_capability_denied_payload_tier_enum_matches_story_10_4_metrics``
+      catches any future divergence.
+    * ``actor_id`` — ``min_length=1`` only; could be UUID, hostname,
+      opaque MCP client ID. Story 6.1+ may tighten when real auth lands.
+    * ``attempted_action`` — opaque string (e.g. ``task.create``,
+      ``decision.approve``); deliberately UNCONSTRAINED beyond
+      ``min_length=1`` because MCP methods are ad-hoc strings and
+      enum-ing them would force schema_version bumps every time MCP
+      adds a method.
+    * ``reason`` — optional operator-facing explanation (e.g.
+      "license-flagged paths"). Bounded to 4096 chars to match the
+      sibling ``Tier3ActionAttemptedPayload.reason`` cap.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    tier: Literal["tier1", "tier2", "tier3"]
+    boundary: Literal["mcp", "http"]
+    actor_id: str = Field(min_length=1)
+    attempted_action: str = Field(min_length=1)
+    reason: str | None = Field(default=None, min_length=1, max_length=4096)
+
+
 __all__ = [
     "TELEGRAM_REJECTED_SCHEMA_VERSION",
     "AcceptedCommand",
@@ -941,8 +1036,10 @@ __all__ = [
     "ApprovalGrantedPayload",
     "BudgetOverridePayload",
     "ApprovalRejectedPayload",
+    "CapabilityDeniedPayload",
     "DiffSummary",
     "FileEditedPayload",
+    "KeyRotatedPayload",
     "LicenseOverridePayload",
     "PlanStep",
     "PreCheckOutcome",

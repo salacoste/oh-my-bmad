@@ -1,0 +1,21 @@
+{
+  "event_id": "e-00000000-0000-7000-8000-000000000020",
+  "schema_version": "1.1.0",
+  "type": "capability.denied",
+  "emitted_at": "1970-01-01T00:00:00.000+00:00",
+  "emitted_at_monotonic_ns": 0,
+  "actor": {
+    "kind": "system",
+    "id": "fixture-tier-enforcer"
+  },
+  "payload": {
+    "tier": "tier2",
+    "boundary": "http",
+    "actor_id": "fixture-mcp-client",
+    "attempted_action": "decision.approve",
+    "reason": "actor permitted tier1 only"
+  },
+  "trace_id": "00000000-0000-7000-8000-000000000021",
+  "request_id": "00000000-0000-7000-8000-000000000022",
+  "extensions": {}
+}

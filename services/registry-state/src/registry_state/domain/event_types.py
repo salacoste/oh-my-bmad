@@ -26,8 +26,10 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     ApprovalGrantedPayload,
     ApprovalRejectedPayload,
     BudgetOverridePayload,
+    CapabilityDeniedPayload,
     DiffSummary,
     FileEditedPayload,
+    KeyRotatedPayload,
     LicenseOverridePayload,
     PreCheckOutcome,
     PreCheckResults,
@@ -91,8 +93,10 @@ __all__ = [
     "ApprovalGrantedPayload",
     "ApprovalRejectedPayload",
     "BudgetOverridePayload",
+    "CapabilityDeniedPayload",
     "DiffSummary",
     "FileEditedPayload",
+    "KeyRotatedPayload",
     "LicenseOverridePayload",
     "PreCheckOutcome",
     "PreCheckResults",
@@ -246,10 +250,25 @@ def ensure_registered() -> None:
     register("approval.rejected", "1.0.0", ApprovalRejectedPayload)
     register("approval.rejected", "1.1.0", ApprovalRejectedPayload)
     # Story 11.1 — HMAC-signed approval sibling event (FR64 / NFR-S10).
-    # Minimal registration at 1.0.0; Story 11.2 refines payload constraints
-    # and bumps to 1.1.0 (additive, with full Pydantic Field tightening +
-    # contract-fixture forward-compat pair).
+    # Minimal registration at 1.0.0; Story 11.2 bumps to 1.1.0 (additive —
+    # same payload class, Story 11.1 P1-H2 already applied Field
+    # constraints; the 1.1.0 entry documents the constraints as the
+    # canonical schema_version-1.1.0 surface for Story 11.4's
+    # ``just verify-approval`` recipe + the contract-fixture forward-compat
+    # pair under ``tests/contract/fixtures/``).
     register("task.approval_signed", "1.0.0", TaskApprovalSignedPayload)
+    register("task.approval_signed", "1.1.0", TaskApprovalSignedPayload)
+    # Story 11.2 — key.rotated audit event (FR65a / NFR-S10). Story 11.5's
+    # key-rotation detector emits when OPERATOR_HMAC_KEY's fingerprint
+    # changes. Pure schema registration here; emission deferred to 11.5.
+    register("key.rotated", "1.1.0", KeyRotatedPayload)
+    # Story 11.2 — capability.denied audit event (Epic 10 retro DD5).
+    # Registration unblocks Story 10.4's preview counter
+    # ``omb_capability_denied_total{tier,boundary}`` (currently
+    # pre-populated at 0). Emission deferred to a follow-up story
+    # (likely 11.2.x or Epic 12.x — requires TierEnforcementMiddleware
+    # + MCP capability-handler wiring; out of scope for 11.2 per D5).
+    register("capability.denied", "1.1.0", CapabilityDeniedPayload)
     register("task.retry_requested", "1.0.0", TaskRetryRequestedPayload)
     register("task.retry_requested", "1.1.0", TaskRetryRequestedPayload)
     register("tier3.license_override", "1.0.0", LicenseOverridePayload)

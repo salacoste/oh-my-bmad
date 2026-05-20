@@ -1,6 +1,6 @@
 # Story 11.2 — Register `task.approval_signed` + `key.rotated` event types
 
-Status: **ready-for-dev**
+Status: **review** (CI pending @ &lt;new-sha&gt;)
 
 ## Story
 
@@ -290,6 +290,125 @@ tests/contract/
 - Dev Agent Record filled in (implementation summary, files changed, test count delta, mypy baseline delta, surprises/deviations, D4 outcome, Story 11.4/11.5 readiness check).
 - DD5 half-done state documented (event registered; emission deferred — what story closes it?).
 - No regressions in existing tests.
+
+---
+
+## Tasks/Subtasks
+
+- [x] **AC1** — Bump `task.approval_signed` 1.0.0 → 1.1.0 (additive registration in `event_types.py`)
+- [x] **AC2** — Register `key.rotated` 1.1.0 + add `KeyRotatedPayload` to `packages/events/src/events/payloads.py` (D3 cross-field validator rejecting same-fingerprint)
+- [x] **AC3** — Register `capability.denied` 1.1.0 + add `CapabilityDeniedPayload` (DD5 bundling; bounded `tier` / `boundary` `Literal`s)
+- [x] **AC4** — Contract-fixture forward-compat pairs (3 JSON fixtures under `tests/contract/fixtures/` + `test_event_payload_contracts.py` with 8 tests)
+- [x] **AC5** — Schema-registry checks remain green (`check_event_registry.py`, `check_imports.py`, `check_single_writer.py`)
+- [x] **AC6** — Mypy `--strict` baseline preserved (130 source files, JSON fixtures non-mypy-scoped, contract test file under `tests/` outside strict scope)
+- [x] **AC7** — Validation gates green (ruff/format/mypy/imports/registry/single-writer/`pytest -m "not slow"` 2944 passed/3 skipped/0 failed/`just bootstrap-verify` 14/14 imports)
+
+## Dev Agent Record
+
+### Implementation summary
+
+Story 11.2 is a pure additive schema-registration story. No middleware, no emitters, no envelope changes. The work landed in three layers:
+
+1. **Pydantic models** — added `KeyRotatedPayload` and `CapabilityDeniedPayload` to `packages/events/src/events/payloads.py` per D2/D3 (fingerprint format + no-op-rotation reject) and AC3 (bounded `Literal` enums for `tier` / `boundary`).
+2. **Registry registration** — added 3 `register()` calls in `services/registry-state/src/registry_state/domain/event_types.py` (`task.approval_signed` 1.1.0 additive bump alongside Story 11.1's 1.0.0; new `key.rotated` 1.1.0; new `capability.denied` 1.1.0).
+3. **Contract tests + fixtures** — created `tests/contract/fixtures/` with 3 frozen JSON envelope fixtures and `tests/contract/test_event_payload_contracts.py` with 8 tests covering registration, fixture round-trip, D3 cross-field reject, and the AC3 enum-drift contract (load-bearing for DD5).
+
+### Files changed
+
+| Path | Change |
+|---|---|
+| `packages/events/src/events/payloads.py` | +2 payload classes, 2 lines added to `__all__` |
+| `packages/events/src/events/__init__.py` | Comment-only — `KeyRotatedPayload` + `CapabilityDeniedPayload` flow through the existing `from events.payloads import *` star-import (re-export already covered by `*_payloads_all` at the bottom of `__all__`) |
+| `services/registry-state/src/registry_state/domain/event_types.py` | +3 `register()` calls + 2 import additions in `__all__` |
+| `tests/contract/test_event_payload_contracts.py` | NEW — 8 tests (registration × 3, fixture round-trip × 3, D3 cross-field reject × 1, AC3 enum-drift contract × 1) |
+| `tests/contract/fixtures/task.approval_signed.v1.1.0.json` | NEW envelope fixture |
+| `tests/contract/fixtures/key.rotated.v1.1.0.json` | NEW envelope fixture |
+| `tests/contract/fixtures/capability.denied.v1.1.0.json` | NEW envelope fixture |
+| `_bmad-output/implementation-artifacts/11-2-register-approval-signed-key-rotated-events.md` | Status `ready-for-dev` → `review` + Tasks/Subtasks + Dev Agent Record (this section) |
+| `_bmad-output/implementation-artifacts/sprint-status.yaml` | Annotation `in-progress` → `review` for `11-2-register-approval-signed-key-rotated-events` |
+
+### Test count delta
+
+```
+$ uv run pytest --collect-only -q packages/events services/registry-state services/registry-api tests/contract
+# pre-11.2 (HEAD 005c512):   980 tests collected
+# post-11.2:                 988 tests collected   (+8)
+```
+
+The +8 comes from `tests/contract/test_event_payload_contracts.py`. Full suite `pytest -m "not slow"` shows 2944 passed / 3 skipped (matching CI invariants).
+
+### Mypy baseline delta
+
+```
+$ uv run mypy --strict packages/ services/registry-api services/registry-state services/metrics-subscriber
+Success: no issues found in 130 source files
+```
+
+**130 → 130 (no delta).** The new contract test file lives under `tests/contract/` which is outside the mypy `--strict` scope (`packages/`, `services/registry-api`, `services/registry-state`, `services/metrics-subscriber`). The 3 JSON fixtures are not Python source files. The 2 new payload classes are added to existing `payloads.py` which is already in the strict-scope count — they don't change the file count.
+
+### D4 outcome
+
+**OPTION C — import allowed as-is.** Verified `scripts/check_imports.py`:
+
+* `SCAN_ROOTS` is `[packages/, services/, mcp-servers/]` — `tests/` is **not** scanned.
+* `EXTRA_SKIP = {"tests", "scripts", "migrator", "fixtures"}` is additionally applied within those roots.
+
+Therefore `tests/contract/test_event_payload_contracts.py` may directly import from BOTH `events.payloads` AND `metrics_subscriber.app.metrics` without violating the cross-service import rule. **No enum extraction or refactor was needed.** The enum-drift contract test (`test_capability_denied_payload_tier_enum_matches_story_10_4_metrics`) reads `_CAPABILITY_TIERS` / `_CAPABILITY_BOUNDARIES` from `metrics_subscriber.app.metrics` at runtime and asserts against `get_args(CapabilityDeniedPayload.model_fields["tier"].annotation)` etc. — keeping Story 10.4 as the single source of truth.
+
+Note for future reviewers: if Story 11.2.x emission lands and the metric label values need to be referenced from inside a non-test service (e.g. the emitting middleware in `services/registry-api/`), this OPTION C arrangement is no longer sufficient — a follow-up will need to extract the enum constants to a shared location (`packages/events/src/events/_capability_enums.py` was the originally-floated location). D4 OPTION C is good for the test-only, non-emitting state shipped in Story 11.2.
+
+### Surprises / deviations from spec
+
+* **`KeyRotatedPayload.rotated_at` uses `AwareDatetime`, not raw `datetime`.** Spec AC2 sample code uses `datetime`. Switched to `pydantic.AwareDatetime` to match the codebase convention (Stories 2.10 / 3.11 H8 / 5.2 — all timestamp payload fields reject naive datetimes at the payload boundary). Strictly additive over the spec.
+* **`CapabilityDeniedPayload.reason` gained explicit bounds** (`min_length=1, max_length=4096`). Spec only said `str | None = None`. Added bounds to match the sibling `Tier3ActionAttemptedPayload.reason` cap and to defend producers from emitting empty strings that render as a useless `Reason:` label with no value.
+* **`__init__.py` re-export is implicit, not explicit.** Spec AC2 says "Re-export from `__init__.py` `__all__`". The existing star-import (`from events.payloads import *`) followed by `*_payloads_all` at the bottom of the public `__all__` already covers the two new classes. No explicit per-class import was needed; added a comment block explaining the indirection so future readers can verify the re-export contract without grepping for the names.
+* **17 pre-existing test failures in partial spec command (`packages/events + services/registry-api` co-run).** The spec command `uv run pytest -x -q packages/events services/registry-state services/registry-api tests/contract` triggers a registration-isolation issue when packages/events tests run before services/registry-api (the `EventEnvelope.create` call in registry-api routes/tasks.py fails because `task.created` 1.1.0 isn't registered in that pytest session). **Pre-existing on HEAD 005c512 — Story 11.2 introduces ZERO new failures.** Verified by `git stash + same command`. The CI gate (`pytest -m "not slow"` single invocation from project root) passes cleanly (2944/2944) because the per-service conftest registration chain initializes correctly when all tests are collected together. Not blocking for Story 11.2 finalization — flagging as a latent technical-debt item for a future CI hygiene story.
+
+### Story 11.4 readiness check
+
+`TaskApprovalSignedPayload` is now registered at schema_version `1.1.0` per AC1. The frozen JSON fixture `tests/contract/fixtures/task.approval_signed.v1.1.0.json` gives Story 11.4's `just verify-approval` recipe a stable parsing target. Story 11.1 P1-H2 Field constraints (HMAC 64-hex, no-pipe IDs) are preserved unchanged. **Story 11.4 unblocked.**
+
+### Story 11.5 readiness check
+
+`KeyRotatedPayload` registered at schema_version `1.1.0` with:
+
+* `previous_key_fingerprint` / `new_key_fingerprint`: exactly 16 lowercase hex chars (D2: `SHA-256(key_bytes)[:16]`)
+* D3 cross-field reject of `previous == new`
+* `AwareDatetime` on `rotated_at`
+* NFR-S10 isolation — fingerprints only, never key bytes
+
+Story 11.5's key-rotation detector implements the fingerprint computation, persistence, and emission. **Story 11.5 unblocked on the schema side.** ADR-0006 is still Story 11.5's scope.
+
+### DD5 half-done state
+
+Story 11.2 registers `capability.denied` at 1.1.0 and ships:
+
+* `CapabilityDeniedPayload` Pydantic model (bounded `Literal` enums for `tier` and `boundary`)
+* Schema-registry entry
+* Contract-fixture forward-compat pair
+* Enum-drift contract test against Story 10.4's `omb_capability_denied_total{tier, boundary}` label values
+
+**Still deferred (DD5 half-done):**
+
+* Actual emission of `capability.denied` events from the HTTP `TierEnforcementMiddleware` (`services/registry-api/src/registry_api/adapters/middleware.py:446`)
+* Actual emission from MCP capability handlers
+* Wiring `omb_capability_denied_total` counter increments to the new emissions
+
+**Recommended next story:** Either a dedicated `Story 11.2.1 — capability.denied emission` (cleanest) OR fold into Epic 12 scope when the MCP capability handler work lands. Until that story closes, the `omb_capability_denied_total{tier=*, boundary=*}` counter remains at 0 indefinitely (pre-populated zero samples from Story 10.4 still satisfy the preview-counter contract; no operational regression).
+
+### Validation evidence
+
+```
+ruff check .                                            All checks passed!
+ruff format --check .                                   355 files already formatted
+mypy --strict packages/ services/{registry-api,registry-state,metrics-subscriber}
+                                                        Success: no issues found in 130 source files
+scripts/check_imports.py                                exit 0
+scripts/check_event_registry.py                         exit 0
+scripts/check_single_writer.py                          exit 0
+pytest -m "not slow" (CI-equivalent)                    2944 passed, 3 skipped, 30 deselected
+just bootstrap-verify                                   ✓ bootstrap OK (14 workspace-member imports verified)
+```
 
 ---
 
