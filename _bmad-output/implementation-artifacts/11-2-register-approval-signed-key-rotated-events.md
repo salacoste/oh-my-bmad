@@ -1,6 +1,6 @@
 # Story 11.2 — Register `task.approval_signed` + `key.rotated` event types
 
-Status: **review** (CI pending @ &lt;new-sha&gt;)
+Status: **review** (CI pending @ f28842b)
 
 ## Story
 

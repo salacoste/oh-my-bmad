@@ -286,7 +286,7 @@ development_status:
   # =========================================================================
   epic-11: in-progress  # 2026-05-20 — Story 11.1 spec authored (HMAC signing in decisions handler, FR64+NFR-S10)
   11-1-hmac-signing-decisions-handler: done  # phase: 2 · FR64 + NFR-S10 · 8 ACs + pass-1: 15/15 closed (5 MAJOR + 5 MED + 5 LOW); 950 tests; mypy 130 src files; CI green @ 8eb760f (run 26163427367); golden vector 40a928fd...79ef36 proves canonical-format external compat for Story 11.4
-  11-2-register-approval-signed-key-rotated-events: review  # phase: 2 · FR64 + FR65a · 7 ACs · dev complete 2026-05-20 · bumps task.approval_signed 1.0.0 → 1.1.0 (additive) + registers key.rotated (NEW) + bundles DD5 capability.denied registration · pure schema additions · 988 tests collected (+8) · mypy 130 src files (no delta) · pytest -m "not slow" 2944 passed · D4 OPTION C (tests/ outside check_imports.py scan roots) · DD5 emission deferred to follow-up story · CI pending @ <new-sha>
+  11-2-register-approval-signed-key-rotated-events: review  # phase: 2 · FR64 + FR65a · 7 ACs · dev complete 2026-05-20 · bumps task.approval_signed 1.0.0 → 1.1.0 (additive) + registers key.rotated (NEW) + bundles DD5 capability.denied registration · pure schema additions · 988 tests collected (+8) · mypy 130 src files (no delta) · pytest -m "not slow" 2944 passed · D4 OPTION C (tests/ outside check_imports.py scan roots) · DD5 emission deferred to follow-up story · CI pending @ f28842b
   11-3-approvals-pinned-thread-handler: backlog  # phase: 2 · FR63
   11-4-just-verify-approval-offline-recipe: backlog  # phase: 2 · FR65
   11-5-key-rotation-flow-key-rotated-event: backlog  # phase: 2 · FR65a · new event type
