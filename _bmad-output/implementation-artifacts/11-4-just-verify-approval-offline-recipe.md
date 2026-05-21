@@ -1,6 +1,6 @@
 # Story 11.4 — `just verify-approval` offline recipe
 
-Status: **review** (pass-1 CI pending @ pre-commit — 22 fixes incl. 3 P0 regressions + Story 11.1 hotfix for PP2/PP3)
+Status: **done** (CI green @ 1a90b72 — pass-1 review batch: 22 fixes incl. 3 P0 regressions + Story 11.1 PP2/PP3 cross-story hotfixes)
 
 ## Story
 
