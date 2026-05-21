@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-21T09:00:00Z
+last_updated: 2026-05-21T11:00:00Z
 current_phase: 2  # Phase 2 opened by ADR-0003 (docs/adr/0003-phase-2-gate.md), 2026-05-15
 
 development_status:
@@ -303,7 +303,7 @@ development_status:
   # FR66–FR68a · NFR-R8
   # =========================================================================
   epic-12: backlog
-  12-1-budget-supervisor-worker-wrapper: review  # phase: 2 · FR66 + NFR-R8 + FR26 · spec authored 2026-05-21 · 6 ACs + 5 Decisions (all resolved); MEDIUM complexity (new domain/budget_supervisor.py + ClaudeCodeRunner.terminate_with_grace + lifespan wiring + integration latency test); Phase 1 task.budget_exceeded event already registered (event_types.py:236-238); per Epic 11 retro L1 → MANDATORY 3-lane pass-2 review regardless of complexity (cross-cutting subprocess control + event subscriber + lifespan task); D3 verified 2026-05-21 — producer at services/orchestrator-adapter/src/orchestrator_adapter/app/main.py:361-368 via build_budget_exceeded_payload + _emit_event after token tracker.is_exceeded; dev started 2026-05-21; dev completed 2026-05-21; pass-1 review 3-lane 22-finding batch applied 2026-05-21 (1 P0 + 5 P1-H + 9 P1-M + 7 P1-L); 3073→3083 tests (+10); mypy 42→42; all gates green locally; CI pending @ pre-commit; keep review until CI green
+  12-1-budget-supervisor-worker-wrapper: done  # phase: 2 · FR66 + NFR-R8 + FR26 · 6 ACs · pass-1 review CI green @ e4183dd (run 26251903326) 2026-05-21 · 22 fixes batch-applied (1 P0 lifecycle-corruption when runner.run() raises while budget triggered + 5 P1-H reliability incl. PP2 asyncio.to_thread wrap, PP3 single-pass scan, PP4 deadlock ceiling, PP5 ProcessLookupError defense, PP6 7s join timeout >grace + 9 P1-M incl. PP8 cold-start + SIGKILL escalation latency tests, PP13 AST-based spawn allowlist + 7 P1-L); D3 verified — producer at orchestrator-adapter/main.py:361-368 (Acceptance Auditor refuted Edge F4 "dead code" claim — event flow is correct); 3073→3083 tests (+10); mypy 42 errors unchanged; check_single_writer.py exit 0; Epic 11 retro L1 mandate validated — pass-1 review caught 1 P0 + 5 P1-H that executor's local validation missed
   12-2-budget-enforcement-triggered-event: backlog  # phase: 2 · FR67 · new event type
   12-3-approve-override-budget-event: backlog  # phase: 2 · FR68 · new event type
   12-4-per-task-budget-policy-storage: backlog  # phase: 2 · FR68a
