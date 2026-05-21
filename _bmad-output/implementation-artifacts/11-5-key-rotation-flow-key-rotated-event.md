@@ -1,6 +1,6 @@
 # Story 11.5 — Key rotation flow + `key.rotated` emission
 
-Status: **review** (CI pending @ pre-commit)
+Status: **done** (CI green @ ba3f880 — Story 11.5 ships; Epic 11 acceptance gate closed)
 
 ## Story
 
