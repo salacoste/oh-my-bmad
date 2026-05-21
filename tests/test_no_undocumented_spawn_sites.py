@@ -120,7 +120,9 @@ _ALLOWLIST: dict[str, dict[int, str]] = {
     # worker-wrapper: spawns Claude Code subprocess.
     # Story 9.6 — propagates WORKER_TRACE_ID through env (FR59 / PH0).
     _rel("services/worker-wrapper/src/worker_wrapper/adapters/claude_code_runner.py"): {
-        151: "asyncio.create_subprocess_exec",
+        # Line shifted from 151 in Story 12.1 (added _TerminationResult
+        # dataclass + terminate_with_grace method above the _spawn call).
+        175: "asyncio.create_subprocess_exec",
     },
     # orchestrator-adapter: spawns OMC node subprocess.
     # Story 9.6 — propagates OMB_TRACE_ID through env (FR59 / TH3).

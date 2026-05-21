@@ -24,6 +24,7 @@ from worker_wrapper.adapters.claude_code_runner import (
     _TEST_PATTERN,
     ClaudeCodeRunner,
     ExtractedEvent,
+    _TerminationResult,
 )
 from worker_wrapper.app.config import WorkerSettings
 
@@ -1010,3 +1011,97 @@ class TestRunnerReasoningExtraction:
         with patch.object(runner, "_spawn", return_value=proc2):
             result2 = await runner.run("task 2", Path("/w"))
         assert len(result2.reasoning) == 0
+
+
+class TestTerminateWithGrace:
+    """Story 12.1 AC2 — public ``terminate_with_grace`` SIGTERM→SIGKILL path.
+
+    Tests use real ``asyncio.create_subprocess_exec`` children spawning short
+    Python scripts so the SIGTERM / SIGKILL dispatch is exercised against
+    real OS signals (Epic 11 retro L6 — fixture realism).
+    """
+
+    @pytest.mark.asyncio
+    async def test_terminate_with_grace_sigterm_succeeds(self) -> None:
+        """SIGTERM-respecting child exits within grace period → method=sigterm."""
+        import sys
+
+        runner = ClaudeCodeRunner(_settings())
+        # Default-Python child sleeps 60s but exits on SIGTERM (Python's
+        # default SIGTERM handler raises SystemExit).
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-c",
+            "import time; time.sleep(60)",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        runner._process = proc
+
+        result = await runner.terminate_with_grace(grace_period_s=5.0)
+
+        assert isinstance(result, _TerminationResult)
+        assert result.method == "sigterm"
+        assert result.elapsed_s < 2.0
+        assert result.exit_code is not None
+        assert result.exit_code != 0  # non-zero — SIGTERM-driven exit
+
+    @pytest.mark.asyncio
+    async def test_terminate_with_grace_sigkill_escalation(self) -> None:
+        """SIGTERM-ignoring child triggers SIGKILL escalation after grace timeout."""
+        import sys
+
+        runner = ClaudeCodeRunner(_settings())
+        # Child installs SIG_IGN for SIGTERM, prints a sentinel, then sleeps.
+        # We must wait for the sentinel on stdout BEFORE sending SIGTERM —
+        # otherwise the race "SIGTERM arrives before signal.signal() runs"
+        # collapses to the default-SIGTERM-handler exit (sigterm path) and the
+        # SIGKILL escalation never fires.
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-u",  # unbuffered stdout — sentinel must flush before time.sleep
+            "-c",
+            (
+                "import signal, sys, time; "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "print('READY', flush=True); "
+                "time.sleep(60)"
+            ),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            assert proc.stdout is not None
+            # Read the READY sentinel; tolerate 2s for slow CI cold-start.
+            sentinel = await asyncio.wait_for(proc.stdout.readline(), timeout=2.0)
+            assert sentinel.strip() == b"READY", (
+                f"child failed to install SIGTERM handler: got {sentinel!r}"
+            )
+            runner._process = proc
+
+            # Short grace period to keep the test fast (the SIGKILL path
+            # doesn't care about grace duration — what matters is escalation).
+            result = await runner.terminate_with_grace(grace_period_s=0.5)
+        finally:
+            # Defensive — ensure no leak if the test asserts blow up.
+            if proc.returncode is None:
+                proc.kill()
+                await proc.wait()
+
+        assert result.method == "sigkill"
+        # elapsed covers the full grace window plus tiny kill+wait overhead.
+        assert result.elapsed_s >= 0.5
+        assert result.elapsed_s < 2.0  # generous upper bound for CI slow runners
+        assert result.exit_code is not None  # SIGKILL'd process has a returncode
+
+    @pytest.mark.asyncio
+    async def test_terminate_with_grace_noop_when_no_process(self) -> None:
+        """No subprocess attached → method=noop, near-zero elapsed."""
+        runner = ClaudeCodeRunner(_settings())
+        assert runner._process is None  # sanity
+
+        result = await runner.terminate_with_grace(grace_period_s=5.0)
+
+        assert result.method == "noop"
+        assert result.elapsed_s < 0.1
+        assert result.exit_code is None

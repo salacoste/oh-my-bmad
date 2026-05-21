@@ -49,6 +49,10 @@ from worker_wrapper.adapters.lifecycle_manager import LifecycleManager
 from worker_wrapper.adapters.mcp_clients import MCPClientGroup
 from worker_wrapper.app.config import WorkerSettings
 from worker_wrapper.domain.approval_gate import needs_approval
+from worker_wrapper.domain.budget_supervisor import (
+    _BudgetSupervisorResult,
+    watch_for_budget_exceeded,
+)
 from worker_wrapper.domain.lifecycle import LifecycleEvent, LifecycleFSM, WorkerState
 from worker_wrapper.domain.worktree_lock import acquire_lock, release_lock
 
@@ -471,7 +475,79 @@ async def run_task(
     )
 
     runner = ClaudeCodeRunner(settings)
-    result = await runner.run(prompt, worktree_path)
+
+    # Story 12.1 — spawn the budget supervisor as a shadow asyncio task that
+    # subscribes to ``task.budget_exceeded`` events for this task_id and
+    # SIGTERMs ``runner`` if the producer (orchestrator-adapter) signals a
+    # budget breach. The shadow is retired cleanly on natural runner exit via
+    # ``budget_cancel`` (Decision D4 — runner-first cancel ordering).
+    #
+    # Skip the supervisor when ``event_log_dir`` is not configured — in that
+    # case no event log exists for the supervisor to tail. Production workers
+    # always configure ``event_log_dir``; this fallback preserves backwards
+    # compatibility for tests / minimal-config runs.
+    budget_supervisor_task: asyncio.Task[_BudgetSupervisorResult] | None = None
+    budget_cancel = asyncio.Event()
+    if settings.event_log_dir:
+        budget_event_log_dir = Path(settings.event_log_dir)
+
+        async def _terminate_for_budget() -> None:
+            term_result = await runner.terminate_with_grace(grace_period_s=5.0)
+            log.info(
+                "budget_termination",
+                task_id=task_id,
+                method=term_result.method,
+                elapsed_s=term_result.elapsed_s,
+                exit_code=term_result.exit_code,
+            )
+
+        budget_supervisor_task = asyncio.create_task(
+            watch_for_budget_exceeded(
+                task_id=task_id,
+                event_log_dir=budget_event_log_dir,
+                terminate_callback=_terminate_for_budget,
+                clock=SystemClock(),
+                cancel_event=budget_cancel,
+            ),
+            name=f"budget-supervisor-{task_id}",
+        )
+
+    try:
+        result = await runner.run(prompt, worktree_path)
+    finally:
+        # Decision D4: runner-first cancel — signal the supervisor to exit
+        # cleanly, then join with a short timeout. If the supervisor already
+        # fired the termination, ``await`` returns its triggered result.
+        budget_result: _BudgetSupervisorResult | None = None
+        if budget_supervisor_task is not None:
+            budget_cancel.set()
+            try:
+                budget_result = await asyncio.wait_for(
+                    budget_supervisor_task,
+                    timeout=1.0,
+                )
+            except TimeoutError:
+                log.warning("budget_supervisor_join_timeout", task_id=task_id)
+                budget_supervisor_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await budget_supervisor_task
+
+    if budget_result is not None and budget_result.triggered:
+        # Story 12.1 — task was terminated by budget enforcement.
+        # ``task.completed`` is NOT emitted; Story 12.2 will emit
+        # ``task.budget_enforcement_triggered`` here (FR67) with the
+        # detection / termination latency breakdown captured below.
+        await mgr.handle_event(LifecycleEvent.TASK_FAILED)
+        log.info(
+            "budget_enforced_task_terminated",
+            task_id=task_id,
+            event_id=budget_result.event_id,
+            tokens_used=budget_result.tokens_used,
+            token_limit=budget_result.token_limit,
+            detection_latency_s=budget_result.detection_latency_s,
+            termination_latency_s=budget_result.termination_latency_s,
+        )
+        return
 
     push_event = needs_approval(result.events)
     if push_event is None:

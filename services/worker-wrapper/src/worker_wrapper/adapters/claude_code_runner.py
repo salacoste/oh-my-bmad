@@ -16,9 +16,10 @@ import asyncio
 import json
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import structlog
 
@@ -67,6 +68,29 @@ class ClaudeCodeResult:
     events: list[ExtractedEvent] = field(default_factory=list)
     reasoning: list[ReasoningBreadcrumb] = field(default_factory=list)
     stderr: str = ""
+
+
+@dataclass(frozen=True)
+class _TerminationResult:
+    """Outcome of a graceful subprocess termination (Story 12.1 AC2).
+
+    Returned by :meth:`ClaudeCodeRunner.terminate_with_grace`. Fields:
+
+    - ``method``: which signal-path the termination took.
+
+      * ``"noop"``  — no live subprocess (e.g. already exited / never spawned).
+      * ``"sigterm"`` — subprocess exited within ``grace_period_s`` after SIGTERM.
+      * ``"sigkill"`` — subprocess survived SIGTERM grace and was SIGKILLed.
+
+    - ``elapsed_s``: wall-clock duration of ``terminate_with_grace`` (via
+      :func:`time.monotonic`). For ``"noop"``, ~0.0.
+    - ``exit_code``: subprocess returncode (``None`` only on ``"noop"`` when
+      no process ever ran).
+    """
+
+    method: Literal["noop", "sigterm", "sigkill"]
+    elapsed_s: float
+    exit_code: int | None
 
 
 class ClaudeCodeRunner:
@@ -384,6 +408,85 @@ class ClaudeCodeRunner:
             await self._shutdown_process(self._process)
             self._process = None
 
+    async def terminate_with_grace(
+        self,
+        *,
+        grace_period_s: float = 5.0,
+    ) -> _TerminationResult:
+        """Terminate the subprocess with SIGTERM → wait → SIGKILL escalation.
+
+        Story 12.1 AC2 — public termination callback used by
+        :func:`worker_wrapper.domain.budget_supervisor.watch_for_budget_exceeded`
+        when a ``task.budget_exceeded`` event arrives during task execution.
+
+        Semantics:
+
+        1. If no live subprocess is attached (``self._process is None`` or it
+           has already exited), return immediately with ``method="noop"``.
+        2. Send SIGTERM via :meth:`asyncio.subprocess.Process.terminate`.
+        3. Wait up to ``grace_period_s`` for the subprocess to exit.
+        4. On grace timeout: escalate to SIGKILL via
+           :meth:`asyncio.subprocess.Process.kill`, then wait uncapped (the
+           kernel guarantees SIGKILL delivery is O(1)).
+
+        Wall-clock duration is measured via :func:`time.monotonic` (no clock
+        injection on this adapter today; the budget supervisor measures its
+        own latencies via an injected ``Clock`` for testability).
+
+        Args:
+            grace_period_s: Seconds to wait for SIGTERM-driven exit before
+                escalating to SIGKILL. Default 5.0 per NFR-R8.
+
+        Returns:
+            ``_TerminationResult`` describing the method used, elapsed
+            wall-clock seconds, and the subprocess exit code (if any).
+        """
+        log = structlog.get_logger(__name__)
+        start = time.monotonic()
+        process = self._process
+        if process is None or process.returncode is not None:
+            elapsed = time.monotonic() - start
+            return _TerminationResult(
+                method="noop",
+                elapsed_s=elapsed,
+                exit_code=process.returncode if process is not None else None,
+            )
+
+        log.info(
+            "claude_code_terminate_with_grace",
+            pid=process.pid,
+            grace_period_s=grace_period_s,
+        )
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=grace_period_s)
+            elapsed = time.monotonic() - start
+            log.info(
+                "claude_code_sigterm_succeeded",
+                pid=process.pid,
+                elapsed_s=elapsed,
+                exit_code=process.returncode,
+            )
+            return _TerminationResult(
+                method="sigterm",
+                elapsed_s=elapsed,
+                exit_code=process.returncode,
+            )
+        except TimeoutError:
+            log.warning(
+                "claude_code_sigkill_escalation",
+                pid=process.pid,
+                grace_period_s=grace_period_s,
+            )
+            process.kill()
+            await process.wait()
+            elapsed = time.monotonic() - start
+            return _TerminationResult(
+                method="sigkill",
+                elapsed_s=elapsed,
+                exit_code=process.returncode,
+            )
+
 
 def contextlib_suppress() -> Any:
     """Return ``contextlib.suppress(Exception)`` — avoids module-level import."""
@@ -397,4 +500,5 @@ __all__ = [
     "ClaudeCodeRunner",
     "ExtractedEvent",
     "ReasoningBreadcrumb",
+    "_TerminationResult",
 ]

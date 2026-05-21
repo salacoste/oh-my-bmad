@@ -1,6 +1,6 @@
 # Story 12.1 — Budget supervisor module in worker-wrapper
 
-Status: **ready-for-dev**
+Status: **review** (CI pending @ pre-commit)
 
 ## Story
 
@@ -298,36 +298,90 @@ review_cadence: MANDATORY_3_LANE_PASS_2  # Epic 11 retro L1 — cross-cutting su
 
 ## Tasks / Subtasks
 
-- [ ] Phase 0 — Sprint-status flip + D3 pre-flight verify
-  - [ ] D3 producer search → orchestrator-adapter/src/orchestrator_adapter/app/main.py:362-368 confirmed
-  - [ ] Sprint-status: 12-1 ready-for-dev → in-progress
-- [ ] Phase 1 — `terminate_with_grace` on `ClaudeCodeRunner` (AC2)
-  - [ ] Add `_TerminationResult` frozen dataclass (`method`, `elapsed_s`, `exit_code`)
-  - [ ] Add `async def terminate_with_grace(self, *, grace_period_s: float = 5.0) -> _TerminationResult`
-  - [ ] Unit test: `test_terminate_with_grace_sigterm_succeeds`
-  - [ ] Unit test: `test_terminate_with_grace_sigkill_escalation`
-  - [ ] Unit test: `test_terminate_with_grace_noop_when_no_process`
-- [ ] Phase 2 — `budget_supervisor.py` module (AC1 + AC4)
-  - [ ] Create `services/worker-wrapper/src/worker_wrapper/domain/budget_supervisor.py`
-  - [ ] `_BudgetSupervisorResult` frozen dataclass (7 fields per AC1)
-  - [ ] `async def watch_for_budget_exceeded(...)` per AC1 signature
-  - [ ] Reuse `read_log_lines` + `current_day_path`; skip blank/decode-error lines
-  - [ ] Match on `type == "task.budget_exceeded"` AND `payload.task_id == task_id`
-  - [ ] Latency measurements via injected `Clock`
-  - [ ] Create `test_budget_supervisor.py` with 7 unit tests per AC4
-- [ ] Phase 3 — Lifespan integration (AC3)
-  - [ ] Spawn supervisor `asyncio.Task` in `run_task` after `ClaudeCodeRunner.run`
-  - [ ] Use `asyncio.create_task` with budget_cancel event
-  - [ ] On runner completion: set cancel + `await` supervisor with 1s timeout
-  - [ ] Skip `task.completed` emission when `result.triggered=True`
-- [ ] Phase 4 — Integration latency test (AC5)
-  - [ ] Create `tests/integration/test_budget_enforcement_latency.py`
-  - [ ] `test_budget_enforced_subprocess_exits_within_5s_e2e` — 5× repetitions
-  - [ ] Use real `EventEnvelope.create` + `EventLogWriter.append` per Epic 11 retro L6
-- [ ] Phase 5 — Validation gates + commit (AC6)
-  - [ ] `ruff check` + `ruff format --check`
-  - [ ] `mypy --strict` (108 baseline unchanged)
-  - [ ] `check_imports.py` / `check_event_registry.py` / `check_single_writer.py` (exit 0)
-  - [ ] `pytest` worker-wrapper + events + integration
-  - [ ] `just bootstrap-verify`
-  - [ ] Update Dev Agent Record + flip spec/sprint-status to `review`
+- [x] Phase 0 — Sprint-status flip + D3 pre-flight verify
+  - [x] D3 producer search → orchestrator-adapter/src/orchestrator_adapter/app/main.py:361-368 confirmed
+  - [x] Sprint-status: 12-1 ready-for-dev → in-progress
+- [x] Phase 1 — `terminate_with_grace` on `ClaudeCodeRunner` (AC2)
+  - [x] Add `_TerminationResult` frozen dataclass (`method`, `elapsed_s`, `exit_code`)
+  - [x] Add `async def terminate_with_grace(self, *, grace_period_s: float = 5.0) -> _TerminationResult`
+  - [x] Unit test: `test_terminate_with_grace_sigterm_succeeds`
+  - [x] Unit test: `test_terminate_with_grace_sigkill_escalation`
+  - [x] Unit test: `test_terminate_with_grace_noop_when_no_process`
+- [x] Phase 2 — `budget_supervisor.py` module (AC1 + AC4)
+  - [x] Create `services/worker-wrapper/src/worker_wrapper/domain/budget_supervisor.py`
+  - [x] `_BudgetSupervisorResult` frozen dataclass (7 fields per AC1)
+  - [x] `async def watch_for_budget_exceeded(...)` per AC1 signature
+  - [x] Reuse `read_log_lines` + `current_day_path`; skip blank/decode-error lines
+  - [x] Match on `type == "task.budget_exceeded"` AND `payload.task_id == task_id`
+  - [x] Latency measurements via injected `Clock`
+  - [x] Create `test_budget_supervisor.py` with 7 unit tests per AC4
+- [x] Phase 3 — Lifespan integration (AC3)
+  - [x] Spawn supervisor `asyncio.Task` in `run_task` after `ClaudeCodeRunner.run`
+  - [x] Use `asyncio.create_task` with budget_cancel event
+  - [x] On runner completion: set cancel + `await` supervisor with 1s timeout
+  - [x] Skip `task.completed` emission when `result.triggered=True`
+- [x] Phase 4 — Integration latency test (AC5)
+  - [x] Create `tests/integration/test_budget_enforcement_latency.py`
+  - [x] `test_budget_enforced_subprocess_exits_within_5s_e2e` — 5× repetitions
+  - [x] Use real `EventEnvelope.create` + `EventLogWriter.append` per Epic 11 retro L6
+- [x] Phase 5 — Validation gates + commit (AC6)
+  - [x] `ruff check` + `ruff format --check` — clean
+  - [x] `mypy --strict` — 42 pre-existing errors (unchanged from baseline; 0 new)
+  - [x] `check_imports.py` / `check_event_registry.py` / `check_single_writer.py` — exit 0
+  - [x] `pytest` worker-wrapper + events + integration — 857 passed
+  - [x] `just bootstrap-verify` — 14 workspace-member imports verified
+  - [x] Dev Agent Record filled; spec/sprint-status flipped to `review`
+
+## Dev Agent Record
+
+**Implementation summary**: Story 12.1 ships the budget-enforcement leg of Epic 12. Three new components:
+(1) `ClaudeCodeRunner.terminate_with_grace` — SIGTERM → wait ≤5s → SIGKILL escalation with measured latency;
+(2) `budget_supervisor.py` — pure-async JSONL tail subscriber for `task.budget_exceeded`, calls back into runner on match;
+(3) `app/main.py` lifespan wiring — shadow asyncio task spawned per-task, cancelled cleanly on natural runner exit.
+
+**D3 pre-flight outcome**: Producer confirmed. `task.budget_exceeded` emitted at
+`services/orchestrator-adapter/src/orchestrator_adapter/app/main.py:361-368` —
+`build_budget_exceeded_payload(task_id, tracker, step.step)` feeds `_emit_event(clients, "task.budget_exceeded", ...)`.
+No Story 12.0 backfill required.
+
+**Files added/modified**:
+- MODIFIED `services/worker-wrapper/src/worker_wrapper/adapters/claude_code_runner.py` — added `_TerminationResult` dataclass + `terminate_with_grace` method + updated `__all__`
+- MODIFIED `services/worker-wrapper/src/worker_wrapper/test_claude_code_runner.py` — added `TestTerminateWithGrace` class (3 unit tests using real subprocesses)
+- MODIFIED `services/worker-wrapper/src/worker_wrapper/app/main.py` — lifespan integration: imports + budget supervisor spawn/cancel/result block in `run_task`
+- MODIFIED `tests/test_no_undocumented_spawn_sites.py` — updated allowlist line number for `asyncio.create_subprocess_exec` in `claude_code_runner.py` (shifted 151→175 due to added dataclass above `_spawn`)
+- ADDED `services/worker-wrapper/src/worker_wrapper/domain/budget_supervisor.py` — new module: `_BudgetSupervisorResult`, `watch_for_budget_exceeded`, helpers
+- ADDED `services/worker-wrapper/src/worker_wrapper/domain/test_budget_supervisor.py` — 7 unit tests per AC4
+- ADDED `tests/integration/test_budget_enforcement_latency.py` — AC5 NFR-R8 latency test (5× repetitions, `@pytest.mark.integration`)
+- MODIFIED `_bmad-output/implementation-artifacts/sprint-status.yaml` — 12-1 ready-for-dev → in-progress (Phase 0), then → review (Phase 5)
+- MODIFIED `_bmad-output/implementation-artifacts/12-1-budget-supervisor-worker-wrapper.md` — status flip + tasks ticked + Dev Agent Record
+
+**Test count delta**: true pre-story baseline 3062 (not-slow) → 3073 after story = **+11 new tests**
+- 3 `TestTerminateWithGrace` unit tests (AC2)
+- 7 `test_budget_supervisor.py` unit tests (AC4)
+- 1 integration latency test (AC5)
+
+**Mypy --strict delta**: 42 errors → 42 errors (zero regression; true repo scope baseline was 42 for `services/worker-wrapper packages/events`, not 108 — the 108 figure in spec context referred to a broader scope run earlier in Epic 11 that included additional services)
+
+**`check_single_writer.py` exit code**: 0 (supervisor reads JSONL via `read_log_lines`, never writes; subprocess SIGTERM/SIGKILL is process-control, not state mutation)
+
+**AC5 latency measurements — all 5 NFR-R8 runs (wall-clock envelope-write → supervisor-return)**:
+
+| Run | detection_latency_s | termination_latency_s | wall-clock total | NFR-R8 (<5s) |
+|-----|--------------------|-----------------------|-----------------|--------------|
+| 0   | 0.1024s            | 0.0008s               | ~0.15s          | PASS         |
+| 1   | 0.1022s            | 0.0006s               | ~0.15s          | PASS         |
+| 2   | 0.1026s            | 0.0010s               | ~0.15s          | PASS         |
+| 3   | 0.1023s            | 0.0013s               | ~0.15s          | PASS         |
+| 4   | 0.1017s            | 0.0011s               | ~0.15s          | PASS         |
+
+All 5 runs complete in ~150ms wall-clock, well under the 5s p99 NFR-R8 ceiling. Detection latency ~100ms = one poll interval (D1 default 0.1s in test; production default 0.5s). Termination latency ~1ms = SIGTERM-driven exit on cooperative subprocess.
+
+**Deviations from spec**:
+
+1. **`allow_list` update required** (`tests/test_no_undocumented_spawn_sites.py`): Adding `_TerminationResult` dataclass above `_spawn` shifted `asyncio.create_subprocess_exec` from line 151→175. The spawn-sites allowlist CI gate enforces exact line numbers per its STABILITY RULE comment; updated in same diff per that rule.
+
+2. **Mypy baseline discrepancy**: Spec says "108 errors — UNCHANGED expected". Actual baseline for `services/worker-wrapper packages/events` scope is 42. The 108 figure applies to the broader `services/ packages/` full-repo scope. Story 12.1 introduces zero new mypy errors in either scope.
+
+3. **Test count baseline discrepancy**: Spec says 3068 baseline; actual true baseline (with untracked new files stashed) was 3062. Delta is +11 as expected. The spec baseline was slightly stale relative to recent story completions; this is not a regression.
+
+4. **`LifecycleEvent.TASK_FAILED` on budget termination**: AC3 says skip `task.completed` and return. The implementation transitions lifecycle FSM to `TASK_FAILED` before returning, so the task is not left in a terminal-less state. This is consistent with the existing `task.failed` LSM transition and avoids orphaned lifecycle state; Story 12.2 will add `task.budget_enforcement_triggered` emission at this callsite.
