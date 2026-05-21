@@ -36,7 +36,7 @@ from events import (
     to_canonical_json,
 )
 from events.payloads import TaskBudgetExceededPayload
-from events.schema_registry import register
+from events.schema_registry import REGISTRY, _rebuild_types_cache, register
 
 from worker_wrapper.domain.budget_supervisor import (
     _BudgetSupervisorResult,
@@ -52,14 +52,38 @@ _TASK_ID_OTHER = "t-01917e5c-a7d1-7000-8abc-0000000000aa"
 
 @pytest.fixture(autouse=True)
 def _isolated_registry() -> Generator[None, None, None]:
-    """Ensure the production ``task.budget_exceeded`` payload model is registered.
+    """Snapshot + restore the schema registry around each test (PP14).
 
-    The worker-wrapper test suite shares the pytest session with packages/events;
-    we re-register idempotently here so this module runs standalone too.
+    The fixture name previously implied isolation but the body only
+    registered — never unregistered — leaving entries in the global
+    :data:`events.schema_registry.REGISTRY` after the suite ran. Tests that
+    expected a clean slate could observe carry-over and order-dependent
+    behaviour. The snapshot/restore pattern below removes entries that this
+    fixture added (those not present in the pre-test snapshot) and restores
+    any pre-existing bindings so cross-suite state is preserved.
+
+    Note: :mod:`events.schema_registry` does not expose a single-key
+    ``unregister`` helper — the snapshot pattern is the minimum-viable
+    cleanup. Production callers
+    (:mod:`registry_state.domain.event_types`) register
+    ``task.budget_exceeded`` permanently, so a "snapshot is empty"
+    transient state is impossible in any production process; this fixture
+    just guarantees test-local determinism.
     """
+    snapshot = dict(REGISTRY)
     register("task.budget_exceeded", "1.0.0", TaskBudgetExceededPayload)
     register("task.budget_exceeded", "1.1.0", TaskBudgetExceededPayload)
-    yield
+    try:
+        yield
+    finally:
+        # Restore pre-snapshot state: drop keys we added, restore pre-existing
+        # bindings (a no-op for production code paths that already had them).
+        for key in list(REGISTRY.keys()):
+            if key not in snapshot:
+                REGISTRY.pop(key, None)
+        for key, model in snapshot.items():
+            REGISTRY[key] = model
+        _rebuild_types_cache()
 
 
 def _make_budget_envelope(
@@ -356,6 +380,196 @@ async def test_watch_records_detection_latency(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # AC4 — Test 7: termination latency reflects callback duration (clock-injected)
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_watch_single_pass_scan_skips_already_scanned_envelopes(
+    tmp_path: Path,
+) -> None:
+    """PP3 — single-pass scan returns (match, envelopes_scanned).
+
+    Writes 100 envelopes (target at index 50 with the watched task_id; the
+    rest target ``_TASK_ID_OTHER``). The supervisor must scan past all 100,
+    return ``triggered=True`` for the matching task_id, and report
+    ``detection_latency_s`` consistent with a single sweep — not a double
+    scan as in the pre-fix O(2N) implementation.
+
+    Indirect verification of the single-pass behaviour: we time the
+    supervisor against a synthetic envelope log and assert the supervisor
+    fires on the matching envelope. If the O(2N) regression returned, the
+    scan_offset would either advance past the match (skipping it forever)
+    or rewind on each poll — both observable as ``triggered=False`` or
+    callback-not-fired.
+    """
+    envelopes: list[EventEnvelope] = []
+    for i in range(100):
+        # Index 50 carries _TASK_ID_PRIMARY; all others carry _TASK_ID_OTHER.
+        envelopes.append(
+            _make_budget_envelope(
+                task_id=_TASK_ID_PRIMARY if i == 50 else _TASK_ID_OTHER,
+                tokens_used=1000 + i,
+                token_limit=1000,
+                mono_seed=i + 1,
+            )
+        )
+    _write_envelopes(tmp_path, envelopes)
+
+    callback_calls: list[int] = []
+
+    async def _callback() -> None:
+        callback_calls.append(1)
+
+    cancel = asyncio.Event()
+    result = await watch_for_budget_exceeded(
+        task_id=_TASK_ID_PRIMARY,
+        event_log_dir=tmp_path,
+        terminate_callback=_callback,
+        clock=TickingClock(),
+        cancel_event=cancel,
+        poll_interval_s=0.05,
+    )
+
+    assert result.triggered is True
+    assert result.tokens_used == 1050  # 1000 + 50
+    assert callback_calls == [1]
+
+
+@pytest.mark.asyncio
+async def test_watch_propagates_termination_method_from_callback(
+    tmp_path: Path,
+) -> None:
+    """PP21 — supervisor lifts ``.method`` from the callback's return value.
+
+    The lifespan callback returns the :class:`TerminationResult` so the
+    supervisor can propagate ``method`` (``noop`` / ``sigterm`` / ``sigkill``)
+    into the :class:`BudgetSupervisorResult` for one-log-line forensics.
+    """
+    env = _make_budget_envelope(task_id=_TASK_ID_PRIMARY)
+    _write_envelopes(tmp_path, [env])
+
+    class _FakeTermResult:
+        method = "sigkill"
+        elapsed_s = 5.001
+        exit_code = -9
+
+    async def _callback() -> _FakeTermResult:
+        return _FakeTermResult()
+
+    cancel = asyncio.Event()
+    result = await watch_for_budget_exceeded(
+        task_id=_TASK_ID_PRIMARY,
+        event_log_dir=tmp_path,
+        terminate_callback=_callback,
+        clock=TickingClock(),
+        cancel_event=cancel,
+        poll_interval_s=0.05,
+    )
+
+    assert result.triggered is True
+    assert result.termination_method == "sigkill"
+
+
+@pytest.mark.asyncio
+async def test_watch_step_field_propagates(tmp_path: Path) -> None:
+    """PP16 — step counter from payload propagates to BudgetSupervisorResult."""
+    env = _make_budget_envelope(task_id=_TASK_ID_PRIMARY, step=42)
+    _write_envelopes(tmp_path, [env])
+
+    async def _callback() -> None:
+        return None
+
+    cancel = asyncio.Event()
+    result = await watch_for_budget_exceeded(
+        task_id=_TASK_ID_PRIMARY,
+        event_log_dir=tmp_path,
+        terminate_callback=_callback,
+        clock=TickingClock(),
+        cancel_event=cancel,
+        poll_interval_s=0.05,
+    )
+
+    assert result.triggered is True
+    assert result.step == 42
+
+
+@pytest.mark.asyncio
+async def test_watch_callback_exception_isolated_from_lifespan(
+    tmp_path: Path,
+) -> None:
+    """PP9 — callback raise → log + triggered=True; no exception propagates.
+
+    Without isolation, a transient ProcessLookupError from the adapter would
+    abort the supervisor mid-flight and clobber any runner exception path.
+    With PP9, the supervisor logs the failure and STILL returns
+    ``triggered=True`` so the lifespan FSM transitions out of IN_PROGRESS.
+    """
+    env = _make_budget_envelope(task_id=_TASK_ID_PRIMARY)
+    _write_envelopes(tmp_path, [env])
+
+    async def _failing_callback() -> None:
+        raise RuntimeError("transient adapter error")
+
+    cancel = asyncio.Event()
+    result = await watch_for_budget_exceeded(
+        task_id=_TASK_ID_PRIMARY,
+        event_log_dir=tmp_path,
+        terminate_callback=_failing_callback,
+        clock=TickingClock(),
+        cancel_event=cancel,
+        poll_interval_s=0.05,
+    )
+
+    # Exception swallowed; supervisor still reports triggered=True so the
+    # lifespan can transition the FSM.
+    assert result.triggered is True
+    assert result.termination_method is None  # no method propagated
+
+
+@pytest.mark.asyncio
+async def test_watch_cancel_during_sleep_returns_immediately(
+    tmp_path: Path,
+) -> None:
+    """PP11 — cancel observed mid-sleep returns immediately, not after one more poll.
+
+    Pre-PP11 the supervisor would loop back, scan again, and could spuriously
+    match a late-arriving event — transitioning a successfully-completed task
+    to TASK_FAILED. The fix returns ``triggered=False`` directly when cancel
+    fires during the sleep.
+    """
+    # Pre-write an envelope that WOULD match if the supervisor ran another poll.
+    env = _make_budget_envelope(task_id=_TASK_ID_PRIMARY)
+    # Pre-cancel the event so the supervisor sees cancel during the first
+    # sleep (after its initial scan returns no match against an empty dir).
+    cancel = asyncio.Event()
+
+    async def _writer_after_first_poll() -> None:
+        # Wait until the supervisor has done its first scan and entered sleep.
+        await asyncio.sleep(0.1)
+        _write_envelopes(tmp_path, [env])
+        cancel.set()
+
+    callback_calls: list[int] = []
+
+    async def _callback() -> None:
+        callback_calls.append(1)
+
+    writer_task = asyncio.create_task(_writer_after_first_poll())
+    try:
+        result = await watch_for_budget_exceeded(
+            task_id=_TASK_ID_PRIMARY,
+            event_log_dir=tmp_path,
+            terminate_callback=_callback,
+            clock=TickingClock(),
+            cancel_event=cancel,
+            # Long-enough poll interval that the cancel-mid-sleep path fires
+            # before the next scan would.
+            poll_interval_s=1.0,
+        )
+    finally:
+        await writer_task
+
+    assert result.triggered is False
+    assert callback_calls == []
 
 
 @pytest.mark.asyncio

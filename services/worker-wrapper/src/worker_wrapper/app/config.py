@@ -84,6 +84,13 @@ class WorkerSettings(BaseSettings):
     approval_timeout_s: float = Field(default=3600.0, gt=0)
     event_log_dir: str = ""
 
+    # Story 12.1 pass-1 review PP4 — defensive ceiling on ``runner.run()`` to
+    # prevent a deadlock when the budget supervisor has SIGKILLed the
+    # subprocess but the runner's stdout-read loop fails to observe EOF
+    # cleanly. Well above ``claude_timeout_s`` so it only trips on pathological
+    # subprocess hangs (process killed but pipe-reader stuck in syscall).
+    task_overall_timeout_s: float = Field(default=900.0, gt=0)
+
     # GitHub API settings (Story 5.7).
     github_token: SecretStr = SecretStr("")
     github_api_base_url: str = "https://api.github.com"

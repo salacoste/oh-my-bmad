@@ -116,13 +116,24 @@ def _rel(p: str) -> str:
 # 10 (currently 3 files / 4 entries) OR (b) line-number drift breaks CI
 # more than once. Until then: STABILITY RULE — any edit to an allowlisted
 # file MUST update the corresponding line number here in the same commit.
+#
+# Story 12.1 pass-1 PP13 — function-name allowlist (``_FUNC_ALLOWLIST``)
+# added alongside the legacy line-keyed map. A spawn site whose enclosing
+# function (or module-level scope when ``None``) matches an entry in the
+# function map is accepted regardless of line drift; the legacy line map
+# remains for cases where function context is ambiguous (module-level
+# top-of-file calls, lambdas). New entries SHOULD prefer ``_FUNC_ALLOWLIST``
+# so future edits above the spawn site (like Story 12.1's 151→175 drift)
+# do not break CI.
 _ALLOWLIST: dict[str, dict[int, str]] = {
     # worker-wrapper: spawns Claude Code subprocess.
     # Story 9.6 — propagates WORKER_TRACE_ID through env (FR59 / PH0).
     _rel("services/worker-wrapper/src/worker_wrapper/adapters/claude_code_runner.py"): {
-        # Line shifted from 151 in Story 12.1 (added _TerminationResult
-        # dataclass + terminate_with_grace method above the _spawn call).
-        175: "asyncio.create_subprocess_exec",
+        # Line shifted from 151 → 175 (Story 12.1) → 187 (Story 12.1 pass-1
+        # review: added PP18 alias + PP5 ProcessLookupError defense).
+        # PP13 — function-keyed entry in _FUNC_ALLOWLIST below is preferred;
+        # this line entry is retained as defence-in-depth.
+        187: "asyncio.create_subprocess_exec",
     },
     # orchestrator-adapter: spawns OMC node subprocess.
     # Story 9.6 — propagates OMB_TRACE_ID through env (FR59 / TH3).
@@ -140,17 +151,50 @@ _ALLOWLIST: dict[str, dict[int, str]] = {
 }
 
 
+# PP13 — function-keyed allowlist. Maps ``rel_path`` → mapping of
+# ``enclosing_func_name`` → expected primitive name. ``enclosing_func_name``
+# is the name of the function (or method) whose body contains the call
+# node, as captured by ``_SpawnVisitor._func_stack``. Module-level calls
+# (no enclosing function) use the special key ``"<module>"``. Matches
+# survive line drift caused by edits ABOVE the spawn site.
+_FUNC_ALLOWLIST: dict[str, dict[str, str]] = {
+    _rel("services/worker-wrapper/src/worker_wrapper/adapters/claude_code_runner.py"): {
+        "_spawn": "asyncio.create_subprocess_exec",
+    },
+    _rel("services/orchestrator-adapter/src/orchestrator_adapter/adapters/omc_runner.py"): {
+        "_spawn": "asyncio.create_subprocess_exec",
+    },
+    _rel("scripts/sync_upstream.py"): {
+        # Both ``subprocess.run`` calls live in ``main()`` — the maintenance
+        # script's single entry-point. PP13 — function-name accepted ALONGSIDE
+        # the legacy line entries; both calls share the same enclosing scope
+        # so this single key covers both.
+        "main": "subprocess.run",
+    },
+}
+
+
 # ---------------------------------------------------------------------------
 # AST walker (mirrors registry-state ratchet, pass-3 TH3)
 # ---------------------------------------------------------------------------
 
 
 class _SpawnVisitor(ast.NodeVisitor):
-    """AST walker that detects forbidden spawn primitives."""
+    """AST walker that detects forbidden spawn primitives.
+
+    PP13 — additionally records the enclosing function name for each
+    offender so the allowlist can key on ``(line, primitive, func_name)``.
+    Function-name keys are stable across edits ABOVE the spawn site
+    (the historical fragility — Story 12.1 had to bump line 151→175 just
+    by adding a dataclass above ``_spawn``); line-number keys remain as
+    the primary anchor for ratchet compat.
+    """
 
     def __init__(self) -> None:
         self._import_aliases: dict[str, str] = {}
-        self.offenders: list[tuple[int, str]] = []
+        # PP13 — list of (line, primitive_name, enclosing_func_name | None).
+        self.offenders: list[tuple[int, str, str | None]] = []
+        self._func_stack: list[str] = []
 
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
@@ -168,6 +212,20 @@ class _SpawnVisitor(ast.NodeVisitor):
             canonical = f"{mod}.{bare}" if canonical is None and mod else canonical or bare
             self._import_aliases[local] = canonical
         self.generic_visit(node)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._func_stack.append(node.name)
+        try:
+            self.generic_visit(node)
+        finally:
+            self._func_stack.pop()
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._func_stack.append(node.name)
+        try:
+            self.generic_visit(node)
+        finally:
+            self._func_stack.pop()
 
     def _resolve_call_name(self, node: ast.expr) -> str | None:
         if isinstance(node, ast.Name):
@@ -187,11 +245,12 @@ class _SpawnVisitor(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:
         name = self._resolve_call_name(node.func)
         if name is not None and name in _FORBIDDEN_DOTTED:
-            self.offenders.append((node.lineno, name))
+            enclosing = self._func_stack[-1] if self._func_stack else None
+            self.offenders.append((node.lineno, name, enclosing))
         self.generic_visit(node)
 
 
-def _scan_file(path: Path) -> list[tuple[int, str]]:
+def _scan_file(path: Path) -> list[tuple[int, str, str | None]]:
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"))
     except SyntaxError:
@@ -285,6 +344,40 @@ def test_no_undocumented_spawn_sites() -> None:
     """
     undocumented: list[str] = []
 
+    def _check(rel: str, hits: list[tuple[int, str, str | None]]) -> None:
+        """Apply both line- and function-keyed allowlists; collect offenders."""
+        line_allowed: dict[int, str] = _ALLOWLIST.get(rel, {})
+        func_allowed: dict[str, str] = _FUNC_ALLOWLIST.get(rel, {})
+        for lineno, spawn_name, enclosing in hits:
+            # PP13 — function-keyed path accepts the entry regardless of line
+            # drift. Use the literal sentinel "<module>" for module-level calls
+            # so the key is explicit + non-None.
+            func_key = enclosing if enclosing is not None else "<module>"
+            if func_key in func_allowed:
+                if func_allowed[func_key] == spawn_name:
+                    continue
+                undocumented.append(
+                    f"{rel}:{lineno} -> {spawn_name} (in {func_key})  "
+                    f"[primitive name mismatch in func allowlist; "
+                    f"expects {func_allowed[func_key]!r}]"
+                )
+                continue
+            # Fall back to line-keyed allowlist for legacy entries.
+            if lineno in line_allowed:
+                if line_allowed[lineno] == spawn_name:
+                    continue
+                undocumented.append(
+                    f"{rel}:{lineno} -> {spawn_name}  "
+                    f"[primitive name mismatch; allowlist expects "
+                    f"{line_allowed[lineno]!r} at this line; refactor drift?]"
+                )
+                continue
+            undocumented.append(
+                f"{rel}:{lineno} -> {spawn_name} (in {func_key})  "
+                f"[not in allowlist; add to _ALLOWLIST or _FUNC_ALLOWLIST "
+                f"or remove the spawn]"
+            )
+
     # Scan rooted subdirectories
     for root_name in _SCAN_ROOTS:
         root = _REPO_ROOT / root_name
@@ -299,22 +392,7 @@ def test_no_undocumented_spawn_sites() -> None:
             hits = _scan_file(py)
             if not hits:
                 continue
-            allowed: dict[int, str] = _ALLOWLIST.get(rel, {})
-            for lineno, spawn_name in hits:
-                # Pass-3 UH-6: lineno present AND primitive name matches.
-                # A refactor that swaps Popen → os.fork at the same line is
-                # caught by the name check rather than passing silently.
-                if lineno not in allowed:
-                    undocumented.append(
-                        f"{rel}:{lineno} -> {spawn_name}  "
-                        f"[not in allowlist; add to _ALLOWLIST or remove the spawn]"
-                    )
-                elif allowed[lineno] != spawn_name:
-                    undocumented.append(
-                        f"{rel}:{lineno} -> {spawn_name}  "
-                        f"[primitive name mismatch; allowlist expects "
-                        f"{allowed[lineno]!r} at this line; refactor drift?]"
-                    )
+            _check(rel, hits)
 
     # Also scan root-level *.py files (PH-B8: top-level scripts)
     for py in sorted(_REPO_ROOT.glob("*.py")):
@@ -324,24 +402,13 @@ def test_no_undocumented_spawn_sites() -> None:
         hits = _scan_file(py)
         if not hits:
             continue
-        allowed = _ALLOWLIST.get(rel, {})
-        for lineno, spawn_name in hits:
-            if lineno not in allowed:
-                undocumented.append(
-                    f"{rel}:{lineno} -> {spawn_name}  "
-                    f"[not in allowlist; add to _ALLOWLIST or remove the spawn]"
-                )
-            elif allowed[lineno] != spawn_name:
-                undocumented.append(
-                    f"{rel}:{lineno} -> {spawn_name}  "
-                    f"[primitive name mismatch; allowlist expects "
-                    f"{allowed[lineno]!r} at this line; refactor drift?]"
-                )
+        _check(rel, hits)
 
     assert not undocumented, (
-        "Undocumented spawn sites found — add to _ALLOWLIST in "
-        "tests/test_no_undocumented_spawn_sites.py and propagate trace_id "
-        "through the subprocess env (Epic 9 / FR59):\n" + "\n".join(f"  {s}" for s in undocumented)
+        "Undocumented spawn sites found — add to _ALLOWLIST or "
+        "_FUNC_ALLOWLIST in tests/test_no_undocumented_spawn_sites.py and "
+        "propagate trace_id through the subprocess env (Epic 9 / FR59):\n"
+        + "\n".join(f"  {s}" for s in undocumented)
     )
 
 
@@ -362,7 +429,7 @@ def test_ast_walker_detects_aliased_popen() -> None:
     v = _SpawnVisitor()
     v.visit(tree)
     assert v.offenders, "aliased Popen should be flagged"
-    assert any(name == "subprocess.Popen" for _, name in v.offenders)
+    assert any(name == "subprocess.Popen" for _, name, _enc in v.offenders)
 
 
 def test_ast_walker_detects_asyncio_create_subprocess() -> None:
@@ -376,7 +443,44 @@ def test_ast_walker_detects_asyncio_create_subprocess() -> None:
     tree = ast.parse(fixture)
     v = _SpawnVisitor()
     v.visit(tree)
-    assert any(name == "asyncio.create_subprocess_exec" for _, name in v.offenders)
+    assert any(name == "asyncio.create_subprocess_exec" for _, name, _enc in v.offenders)
+
+
+def test_ast_walker_captures_enclosing_func_name() -> None:
+    """PP13 — _SpawnVisitor records the enclosing function name."""
+    fixture = textwrap.dedent(
+        """
+        import asyncio
+
+        async def _spawn():
+            await asyncio.create_subprocess_exec("ls")
+
+        async def _other():
+            pass
+        """
+    )
+    tree = ast.parse(fixture)
+    v = _SpawnVisitor()
+    v.visit(tree)
+    matches = [
+        (name, enc) for _line, name, enc in v.offenders if name == "asyncio.create_subprocess_exec"
+    ]
+    assert matches == [("asyncio.create_subprocess_exec", "_spawn")]
+
+
+def test_ast_walker_module_scope_offender_has_none_enclosing() -> None:
+    """PP13 — top-level spawn (no enclosing function) → enclosing is None."""
+    fixture = textwrap.dedent(
+        """
+        import subprocess
+        subprocess.run(["ls"])
+        """
+    )
+    tree = ast.parse(fixture)
+    v = _SpawnVisitor()
+    v.visit(tree)
+    matches = [enc for _line, name, enc in v.offenders if name == "subprocess.run"]
+    assert matches == [None]
 
 
 def test_ast_walker_clean_code_passes() -> None:
@@ -426,7 +530,7 @@ def test_allowlisted_lines_contain_real_spawn_calls() -> None:
         path = _REPO_ROOT / rel
         if not path.is_file():
             continue
-        scanned: dict[int, str] = {lineno: name for lineno, name in _scan_file(path)}
+        scanned: dict[int, str] = {lineno: name for lineno, name, _enc in _scan_file(path)}
         for line, expected_name in lines_map.items():
             if line not in scanned:
                 stale.append(
@@ -439,6 +543,32 @@ def test_allowlisted_lines_contain_real_spawn_calls() -> None:
                     f"{scanned[line]!r} (refactor swap; update _ALLOWLIST or revert swap)"
                 )
     assert not stale, "Stale allowlist entries:\n" + "\n".join(f"  {s}" for s in stale)
+
+
+def test_func_allowlist_entries_match_real_spawn_sites() -> None:
+    """PP13 — every entry in _FUNC_ALLOWLIST must correspond to a real spawn
+    call in the named function. Catches stale function-key entries after
+    refactors that rename or remove the enclosing function.
+    """
+    stale: list[str] = []
+    for rel, func_map in _FUNC_ALLOWLIST.items():
+        path = _REPO_ROOT / rel
+        if not path.is_file():
+            stale.append(f"{rel} — file missing entirely")
+            continue
+        scanned_funcs: dict[str, set[str]] = {}
+        for _line, primitive_name, enclosing in _scan_file(path):
+            key = enclosing if enclosing is not None else "<module>"
+            scanned_funcs.setdefault(key, set()).add(primitive_name)
+        for func_key, expected_name in func_map.items():
+            present = scanned_funcs.get(func_key, set())
+            if expected_name not in present:
+                stale.append(
+                    f"{rel} :: {func_key} — no spawn call to "
+                    f"{expected_name!r} in this function "
+                    f"(found: {sorted(present)!r}); update _FUNC_ALLOWLIST"
+                )
+    assert not stale, "Stale func allowlist entries:\n" + "\n".join(f"  {s}" for s in stale)
 
 
 # PH-B8/E5 self-tests — verify new scan behaviour
@@ -462,7 +592,7 @@ def test_ast_walker_detects_from_subprocess_import_run() -> None:
     tree = ast.parse(fixture_dotted)
     v = _SpawnVisitor()
     v.visit(tree)
-    assert any(name == "subprocess.run" for _, name in v.offenders), (
+    assert any(name == "subprocess.run" for _, name, _enc in v.offenders), (
         "subprocess.run dotted form should be flagged"
     )
 
@@ -503,4 +633,4 @@ def test_scripts_root_spawn_would_be_flagged(tmp_path: Path) -> None:
     )
     hits = _scan_file(_Path(fake_script))
     assert hits, "Popen in a script file should be detected"
-    assert any(name == "subprocess.Popen" for _, name in hits)
+    assert any(name == "subprocess.Popen" for _, name, _enc in hits)

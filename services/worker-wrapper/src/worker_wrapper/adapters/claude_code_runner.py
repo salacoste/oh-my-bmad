@@ -71,7 +71,7 @@ class ClaudeCodeResult:
 
 
 @dataclass(frozen=True)
-class _TerminationResult:
+class TerminationResult:
     """Outcome of a graceful subprocess termination (Story 12.1 AC2).
 
     Returned by :meth:`ClaudeCodeRunner.terminate_with_grace`. Fields:
@@ -86,11 +86,23 @@ class _TerminationResult:
       :func:`time.monotonic`). For ``"noop"``, ~0.0.
     - ``exit_code``: subprocess returncode (``None`` only on ``"noop"`` when
       no process ever ran).
+
+    PP18 — public dataclass; the leading-underscore name (``_TerminationResult``)
+    was a Story 12.1 pass-1 review finding (underscore-public-export
+    contradiction). Renamed; ``_TerminationResult`` retained as a
+    backwards-compat alias for the single in-tree importer (the integration
+    test imports it via ``from worker_wrapper.adapters.claude_code_runner
+    import _TerminationResult``).
     """
 
     method: Literal["noop", "sigterm", "sigkill"]
     elapsed_s: float
     exit_code: int | None
+
+
+# PP18 — backwards-compat alias; existing callers (integration test) keep
+# importing the underscore-prefixed name.
+_TerminationResult = TerminationResult
 
 
 class ClaudeCodeRunner:
@@ -412,7 +424,7 @@ class ClaudeCodeRunner:
         self,
         *,
         grace_period_s: float = 5.0,
-    ) -> _TerminationResult:
+    ) -> TerminationResult:
         """Terminate the subprocess with SIGTERM → wait → SIGKILL escalation.
 
         Story 12.1 AC2 — public termination callback used by
@@ -438,7 +450,7 @@ class ClaudeCodeRunner:
                 escalating to SIGKILL. Default 5.0 per NFR-R8.
 
         Returns:
-            ``_TerminationResult`` describing the method used, elapsed
+            :class:`TerminationResult` describing the method used, elapsed
             wall-clock seconds, and the subprocess exit code (if any).
         """
         log = structlog.get_logger(__name__)
@@ -446,7 +458,7 @@ class ClaudeCodeRunner:
         process = self._process
         if process is None or process.returncode is not None:
             elapsed = time.monotonic() - start
-            return _TerminationResult(
+            return TerminationResult(
                 method="noop",
                 elapsed_s=elapsed,
                 exit_code=process.returncode if process is not None else None,
@@ -457,7 +469,22 @@ class ClaudeCodeRunner:
             pid=process.pid,
             grace_period_s=grace_period_s,
         )
-        process.terminate()
+        # PP5 — TOCTOU race: subprocess may die between the ``returncode``
+        # check above and the ``terminate()`` call below. Absence of the
+        # process IS the desired post-condition; swallow and short-circuit.
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            log.info(
+                "claude_code_terminate_already_exited",
+                pid=process.pid,
+                exit_code=process.returncode,
+            )
+            return TerminationResult(
+                method="noop",
+                elapsed_s=time.monotonic() - start,
+                exit_code=process.returncode,
+            )
         try:
             await asyncio.wait_for(process.wait(), timeout=grace_period_s)
             elapsed = time.monotonic() - start
@@ -467,7 +494,7 @@ class ClaudeCodeRunner:
                 elapsed_s=elapsed,
                 exit_code=process.returncode,
             )
-            return _TerminationResult(
+            return TerminationResult(
                 method="sigterm",
                 elapsed_s=elapsed,
                 exit_code=process.returncode,
@@ -478,10 +505,27 @@ class ClaudeCodeRunner:
                 pid=process.pid,
                 grace_period_s=grace_period_s,
             )
-            process.kill()
+            # PP5 — second TOCTOU window: subprocess may die during the grace
+            # period (cooperative SIGTERM finally landed, race lost to our
+            # wait_for timeout). The reap below covers both branches.
+            try:
+                process.kill()
+            except ProcessLookupError:
+                log.info(
+                    "claude_code_sigkill_target_already_exited",
+                    pid=process.pid,
+                )
+                await process.wait()
+                # The grace window elapsed cleanly via SIGTERM after all;
+                # classify accordingly so operators don't misread an escalation.
+                return TerminationResult(
+                    method="sigterm",
+                    elapsed_s=time.monotonic() - start,
+                    exit_code=process.returncode,
+                )
             await process.wait()
             elapsed = time.monotonic() - start
-            return _TerminationResult(
+            return TerminationResult(
                 method="sigkill",
                 elapsed_s=elapsed,
                 exit_code=process.returncode,
@@ -500,5 +544,7 @@ __all__ = [
     "ClaudeCodeRunner",
     "ExtractedEvent",
     "ReasoningBreadcrumb",
+    # PP18 — public name; underscore-prefixed alias kept for one in-tree caller.
+    "TerminationResult",
     "_TerminationResult",
 ]

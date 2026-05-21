@@ -44,7 +44,7 @@ from mcp import ClientSession
 from secret_hygiene.license_scan import scan_files_for_licenses
 
 from worker_wrapper.adapters.approval_waiter import ApprovalWaiter
-from worker_wrapper.adapters.claude_code_runner import ClaudeCodeRunner
+from worker_wrapper.adapters.claude_code_runner import ClaudeCodeResult, ClaudeCodeRunner
 from worker_wrapper.adapters.lifecycle_manager import LifecycleManager
 from worker_wrapper.adapters.mcp_clients import MCPClientGroup
 from worker_wrapper.app.config import WorkerSettings
@@ -488,11 +488,19 @@ async def run_task(
     # compatibility for tests / minimal-config runs.
     budget_supervisor_task: asyncio.Task[_BudgetSupervisorResult] | None = None
     budget_cancel = asyncio.Event()
+    # Grace period MUST agree with the join timeout below — the supervisor's
+    # callback can spend up to ``grace_period_s`` inside ``terminate_with_grace``
+    # before returning; the join must wait at least that long (PP6).
+    budget_grace_period_s: float = 5.0
     if settings.event_log_dir:
         budget_event_log_dir = Path(settings.event_log_dir)
 
-        async def _terminate_for_budget() -> None:
-            term_result = await runner.terminate_with_grace(grace_period_s=5.0)
+        async def _terminate_for_budget() -> object:
+            # Return the TerminationResult so the supervisor can propagate
+            # ``method`` into its BudgetSupervisorResult (PP21).
+            term_result = await runner.terminate_with_grace(
+                grace_period_s=budget_grace_period_s,
+            )
             log.info(
                 "budget_termination",
                 task_id=task_id,
@@ -500,6 +508,7 @@ async def run_task(
                 elapsed_s=term_result.elapsed_s,
                 exit_code=term_result.exit_code,
             )
+            return term_result
 
         budget_supervisor_task = asyncio.create_task(
             watch_for_budget_exceeded(
@@ -512,31 +521,77 @@ async def run_task(
             name=f"budget-supervisor-{task_id}",
         )
 
+    # PP1 (P0) — separate capture of any runner exception. Previously
+    # ``budget_result`` was only declared inside the ``finally`` clause, so
+    # an exception raised by ``runner.run()`` (BrokenPipeError when the
+    # supervisor SIGTERMs Claude Code mid-stream, CancelledError, etc.)
+    # propagated past the post-finally block and the ``triggered=True`` path
+    # was never reached — the lifecycle FSM stayed in IN_PROGRESS and no
+    # audit event was emitted. The runner-raised case is now captured
+    # explicitly; budget-enforced paths run BEFORE any re-raise.
+    runner_raised: BaseException | None = None
+    result: ClaudeCodeResult | None = None
+    budget_result: _BudgetSupervisorResult | None = None
     try:
-        result = await runner.run(prompt, worktree_path)
+        # PP4 — defensive ceiling on ``runner.run()``. If the supervisor
+        # SIGKILLs the subprocess but the runner's stdout reader fails to
+        # observe EOF (rare kernel/pipe-state edge), the await would hang
+        # forever and wedge the worker. ``task_overall_timeout_s`` defaults
+        # to 900s — far above ``claude_timeout_s`` so this only trips on
+        # pathological hangs, never on healthy long runs.
+        result = await asyncio.wait_for(
+            runner.run(prompt, worktree_path),
+            timeout=settings.task_overall_timeout_s,
+        )
+    except BaseException as exc:  # noqa: BLE001 — capture-and-rethrow guarded below
+        runner_raised = exc
     finally:
         # Decision D4: runner-first cancel — signal the supervisor to exit
-        # cleanly, then join with a short timeout. If the supervisor already
-        # fired the termination, ``await`` returns its triggered result.
-        budget_result: _BudgetSupervisorResult | None = None
+        # cleanly, then join. PP6 — join timeout MUST exceed the supervisor's
+        # grace period (the supervisor may be mid-``terminate_with_grace``
+        # when the cancel fires). 7.0s = 5s grace + 2s buffer.
         if budget_supervisor_task is not None:
             budget_cancel.set()
             try:
                 budget_result = await asyncio.wait_for(
                     budget_supervisor_task,
-                    timeout=1.0,
+                    timeout=budget_grace_period_s + 2.0,
                 )
             except TimeoutError:
                 log.warning("budget_supervisor_join_timeout", task_id=task_id)
                 budget_supervisor_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await budget_supervisor_task
+            except Exception as supervisor_exc:  # noqa: BLE001 — PP9 isolation
+                # Supervisor itself raised on join (e.g. a future-set
+                # exception path). Log loudly but DO NOT clobber any
+                # in-flight runner exception — the lifespan still owns
+                # error reporting.
+                log.error(
+                    "budget_supervisor_join_raised",
+                    task_id=task_id,
+                    error_type=type(supervisor_exc).__name__,
+                    error=str(supervisor_exc),
+                )
+                budget_result = None
 
     if budget_result is not None and budget_result.triggered:
         # Story 12.1 — task was terminated by budget enforcement.
         # ``task.completed`` is NOT emitted; Story 12.2 will emit
         # ``task.budget_enforcement_triggered`` here (FR67) with the
         # detection / termination latency breakdown captured below.
+        #
+        # PP1 — if the runner ALSO raised (the common case: the supervisor's
+        # SIGTERM caused BrokenPipeError on the stdout reader), treat the
+        # exception as the expected cascade of budget enforcement and log it
+        # for forensics rather than re-raising.
+        if runner_raised is not None:
+            log.info(
+                "runner_raised_after_budget_enforcement",
+                task_id=task_id,
+                exc_type=type(runner_raised).__name__,
+                exc_str=str(runner_raised),
+            )
         await mgr.handle_event(LifecycleEvent.TASK_FAILED)
         log.info(
             "budget_enforced_task_terminated",
@@ -544,10 +599,20 @@ async def run_task(
             event_id=budget_result.event_id,
             tokens_used=budget_result.tokens_used,
             token_limit=budget_result.token_limit,
+            step=budget_result.step,
             detection_latency_s=budget_result.detection_latency_s,
             termination_latency_s=budget_result.termination_latency_s,
+            termination_method=budget_result.termination_method,
         )
         return
+
+    # PP1 — no budget enforcement fired. Re-raise any runner exception now;
+    # the natural-completion path below is only reached on a clean result.
+    if runner_raised is not None:
+        raise runner_raised
+    # Narrow the Optional[ClaudeCodeResult] for the natural-completion path;
+    # ``result`` is non-None whenever ``runner_raised`` is None.
+    assert result is not None  # narrowing assert — guarded by raise above
 
     push_event = needs_approval(result.events)
     if push_event is None:

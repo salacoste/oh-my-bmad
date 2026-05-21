@@ -1,6 +1,6 @@
 # Story 12.1 — Budget supervisor module in worker-wrapper
 
-Status: **review** (CI pending @ pre-commit)
+Status: **review** (pass-1 CI pending @ pre-commit — 22 fixes incl. 1 P0 + 5 P1-H + 9 P1-M + 7 P1-L)
 
 ## Story
 
@@ -121,12 +121,19 @@ When `runner.run()` completes naturally (or raises), set `budget_cancel.set()` +
 
 If the supervisor's task completes FIRST (because it triggered a termination), `runner.run()` will see the SIGTERM/SIGKILL via subprocess exit; capture its returncode + emit `task.budget_enforcement_triggered` is **Story 12.2 scope** — NOT this story. Story 12.1 just terminates; Story 12.2 emits the audit event.
 
-For Story 12.1: ALSO update the existing `task.completed` emission path to skip emission when `_BudgetSupervisorResult.triggered=True` — that case will emit a different event via Story 12.2's path. Add a TODO marker if Story 12.2 hasn't landed:
+For Story 12.1: ALSO update the existing `task.completed` emission path to skip emission when `_BudgetSupervisorResult.triggered=True` — that case will emit a different event via Story 12.2's path.
+
+**PP15 amendment (2026-05-21):** After budget enforcement fires (supervisor `triggered=True`), transition lifecycle FSM to `LifecycleEvent.TASK_FAILED` BEFORE the early `return`. This prevents orphaned lifecycle state when the runner exception path runs (PP1 P0 fix). The `LifecycleEvent.TASK_FAILED` handler must NOT emit a `task.failed` JSONL event (verified during PP1 implementation — `mgr.handle_event` only does state transition + sidecar persist for this event; no JSONL write) — only state transition. Story 12.2 will refine this with a distinct `LifecycleEvent.TASK_BUDGET_ENFORCED` + emit `task.budget_enforcement_triggered` at this callsite. The Acceptance Auditor O3 ratified this deviation as a correctness improvement over the original AC3 wording.
+
+The lifespan MUST also capture any runner exception with `runner_raised: BaseException | None = None` BEFORE the `finally` block so the budget-triggered handling path is reachable even when `runner.run()` raises (the common SIGTERM-cascade case: BrokenPipeError on stdout pipe). See PP1 implementation in `app/main.py`.
+
+The join timeout on the budget supervisor task MUST exceed `grace_period_s` (PP6). Join timeout = `grace_period_s + 2.0` (7s total for the default 5s grace).
 
 ```python
 if budget_result and budget_result.triggered:
     # Story 12.1 — terminated by budget enforcement; task.completed NOT emitted.
     # Story 12.2 will emit task.budget_enforcement_triggered here (FR67).
+    await mgr.handle_event(LifecycleEvent.TASK_FAILED)
     _log.info("budget_enforced_task_terminated", task_id=task_id, ...)
     return
 ```
@@ -332,6 +339,44 @@ review_cadence: MANDATORY_3_LANE_PASS_2  # Epic 11 retro L1 — cross-cutting su
   - [x] `just bootstrap-verify` — 14 workspace-member imports verified
   - [x] Dev Agent Record filled; spec/sprint-status flipped to `review`
 
+### Pass-1 Review Findings (3-lane mandatory pass-2 per Epic 11 retro L1 — review of `fa3f03d..e98d50f` 2026-05-21)
+
+**Reviewer dedup:** 43 raw findings (Blind 25 + Edge 14 + Acceptance 4 LOW) → **22 unique**. 1 P0 confirmed by 2-lane convergence. Acceptance D3-producer verification REFUTED Edge F4 "dead code" architectural claim (event flow is correct: orchestrator-adapter consumes worker-wrapper's token events, emits `task.budget_exceeded` keyed on same task_id; supervisor consumes that). Edge F4 dismissed.
+
+**P0 finding:**
+
+- [x] [Review][Patch] PP1 — **Lifecycle corruption when `runner.run()` raises** (Blind F1 + Edge F1, 2-lane convergence) — `budget_result` declared INSIDE `try/finally`'s finally clause; on runner exception path, `if budget_result.triggered` check (line 535) is never reached because exception propagates past the post-finally block. Supervisor-triggered SIGTERM commonly CAUSES `runner.run()` to raise (BrokenPipeError on subprocess stdout pipe, CancelledError, etc.) — this is the COMMON path, not edge case. Result: budget enforcement fires but lifecycle FSM stays in IN_PROGRESS, no `task.failed` event emitted, exception leaks. Fix: wrap with explicit `runner_raised` capture; handle budget-triggered case BEFORE re-raising runner exception [`services/worker-wrapper/src/worker_wrapper/app/main.py:516-540`, P0]
+
+**P1-H findings:**
+
+- [x] [Review][Patch] PP2 — `read_log_lines` called directly on event loop (Edge F3) — supervisor docstring claims "Pure async; no blocking I/O on event loop" but `read_log_lines` opens file + synchronously iterates+parses. Sibling `ApprovalWaiter._scan_today` uses `await asyncio.to_thread(...)` (approval_waiter.py:76). For multi-MB JSONL on busy systems, supervisor blocks event loop on every poll → starves runner's stdout reader → regresses Claude Code UX. Fix: wrap both `_scan_for_match` and `_last_scanned_idx` calls in `asyncio.to_thread` [`services/worker-wrapper/src/worker_wrapper/domain/budget_supervisor.py:155-217`, P1-H]
+- [x] [Review][Patch] PP3 — O(N) double-scan per poll (Blind F4 + Edge F2) — `_scan_for_match` iterates envelopes once (O(n)), then `_last_scanned_idx` iterates AGAIN to count (another O(n)). 2× file I/O per 0.5s poll. Also non-atomic: new envelope arriving between scans can be skipped on next poll. Fix: refactor `_scan_for_match` to return `(match | None, envelopes_scanned: int)`; eliminate `_last_scanned_idx`. Mirror ApprovalWaiter pattern [`budget_supervisor.py:295-313 + 563-565`, P1-H]
+- [x] [Review][Patch] PP4 — Deadlock potential: supervisor SIGKILLs subprocess but `runner.run()` may hang (Blind F3) — if runner's read loop doesn't see EOF cleanly after SIGKILL, `await runner.run()` blocks forever → lifespan `finally` never runs → process wedged. Fix: add `asyncio.wait_for` ceiling around `await runner.run(...)` with timeout = 2× grace_period_s. Add regression test [`app/main.py:516`, P1-H]
+- [x] [Review][Patch] PP5 — `ProcessLookupError` TOCTOU race in `terminate_with_grace` (Blind F7/F8 + Edge F9) — `process.terminate()` after `returncode` check can raise if subprocess died in the race window. Also `process.kill()` after SIGTERM grace can raise. Both bubble up to supervisor callback, abort it mid-flight, propagate to lifespan with masked exception. Fix: wrap both `terminate()` and `kill()` in `try/except ProcessLookupError: pass` (process absence IS desired post-condition) [`adapters/claude_code_runner.py:434-446`, P1-H]
+- [x] [Review][Patch] PP6 — 1s join timeout < 5s grace = cancel race (Blind F22/F23 + Edge F5) — lifespan does `await asyncio.wait_for(budget_supervisor_task, timeout=1.0)` but supervisor may be mid-`terminate_with_grace(grace_period_s=5.0)`. Timeout cancels supervisor mid-`process.wait()`, leaves zombie subprocess + lost `triggered=True` result. Fix: raise join timeout to `grace_period_s + 2.0` (~7s) [`app/main.py:524-528`, P1-H]
+
+**P1-M findings:**
+
+- [x] [Review][Patch] PP7 — Cross-day rotation bug (Edge F7) — envelope written 23:59:59 to yesterday's JSONL; supervisor polling at 00:00:00.05 polls TODAY only → loses event forever. ApprovalWaiter has same bug acknowledged as Phase-1 limitation; supervisor docstring incorrectly claims "Cross-day rotation: re-resolves current_day_path each poll" without scanning yesterday. Fix: on first poll, scan yesterday's path too; on subsequent polls today-only. OR explicitly document as known limitation matching ApprovalWaiter [`budget_supervisor.py:155-217`, P1-M]
+- [x] [Review][Patch] PP8 — AC5 test elides realistic latency measurement (Blind F18 + Edge F6) — 50ms warmup before `t0` (favorable supervisor start), happy-path SIGTERM only (no SIGKILL escalation path tested), unique task_id per iteration (no dedup behavior). Reported "0.15s/run" is best-case. Fix: add separate cold-start test (envelope BEFORE supervisor spawn); add SIGKILL-escalation test using `signal.SIG_IGN` for SIGTERM (harness already exists in `test_terminate_with_grace_sigkill_escalation`) [`tests/integration/test_budget_enforcement_latency.py:1382-1467`, P1-M]
+- [x] [Review][Patch] PP9 — Supervisor exception in `finally` clobbers runner exception (Blind F7) — if `await terminate_callback()` raises (e.g., ProcessLookupError from PP5 before fix), the exception clobbers any in-flight runner exception, masking root cause. Fix: wrap callback in `try/except`; on exception, set `triggered=True` with error field, log but don't propagate [`budget_supervisor.py:577-596`, P1-M]
+- [x] [Review][Patch] PP10 — fdatasync race on offset accounting (Blind F5) — writer fdatasync vs reader race may leave a partial line; `_scan_for_match` skips it; `_last_scanned_idx` may count differently → offsets get out of sync → lost match. Fix: subsumed by PP3 (single-pass scan eliminates dual-counting). Add unit test simulating writer-during-read race [`budget_supervisor.py:618-680`, P1-M]
+- [x] [Review][Patch] PP11 — Cancel-event sleep loops one more time (Blind F23 + Edge F11) — `wait_for(cancel_event.wait(), timeout)` else-branch `continue`s instead of returning. Triggers one more scan after cancel set; can spuriously fire `triggered=True` on late-arriving event → wrong lifecycle transition (TASK_FAILED on a successfully-completed task). Fix: in else-branch, `return _BudgetSupervisorResult(triggered=False)` directly [`budget_supervisor.py:598-606`, P1-M]
+- [x] [Review][Patch] PP12 — Lifespan integration test gap (Blind F2) — no test exercises "runner.run() exception + supervisor triggered=True simultaneously". This is the PP1 P0 scenario. Add `test_lifespan_handles_runner_exception_when_supervisor_fires_budget_enforcement` [`tests/integration/test_budget_enforcement_latency.py`, P1-M]
+- [x] [Review][Patch] PP13 — `test_no_undocumented_spawn_sites.py` hardcoded line allowlist fragile (Blind F19) — bump 151→175 invites bypass; future stories must remember to update. Fix: replace line-number allowlist with AST-based detection (find actual `asyncio.create_subprocess_exec` call inside `_spawn` function) [`tests/test_no_undocumented_spawn_sites.py:1517-1521`, P1-M]
+- [x] [Review][Patch] PP14 — `_isolated_registry` fixture doesn't isolate (Blind F25) — registers into global registry, never unregisters. Tests have order dependency. Fix: yield/teardown that unregisters, OR rename fixture to `_ensure_registry` to match actual behavior [`test_budget_supervisor.py:792-801 + test_budget_enforcement_latency.py:1326-1331`, P1-M]
+- [x] [Review][Patch] PP15 — TASK_FAILED transition deviation from spec (Blind F24) — Dev Agent Record deviation #4 documents adding `LifecycleEvent.TASK_FAILED` before early-return, contradicting AC3 wording. Acceptance Auditor O3 ratifies as correctness improvement. Resolution: verify `mgr.handle_event(TASK_FAILED)` does NOT emit `task.failed` event (only state transition); confirm Story 12.2 spec covers FSM transition replacement. If spec is wrong, update AC3 wording [`app/main.py:540` + Story 12.1 spec AC3, P1-M]
+
+**P1-L findings:**
+
+- [x] [Review][Patch] PP16 — `_BudgetSupervisorResult` missing `step` field (Edge F10) — producer's `TaskBudgetExceededPayload.step` not propagated; Story 12.2 will need it for `task.budget_enforcement_triggered`. Add `step: int | None = None` field [`budget_supervisor.py:54-85`, P1-L]
+- [x] [Review][Patch] PP17 — `_safe_payload` Pydantic-vs-dict sibling contradiction (Edge F8 + Blind F9) — supervisor handles both BaseModel and dict; ApprovalWaiter only handles dict. One sibling has wrong understanding of `read_log_lines` return type. Empirical verification needed; unify. Fix per investigation: if BaseModel, file P1 against ApprovalWaiter; if dict, simplify supervisor [`budget_supervisor.py:721-724 + approval_waiter.py:138-143`, P1-L]
+- [x] [Review][Patch] PP18 — `__all__` exports `_TerminationResult` / `_BudgetSupervisorResult` (private names) (Blind F15) — underscore-prefix + public-export contradiction. Either rename (drop underscore) or remove from `__all__` [`claude_code_runner.py:500-504 + budget_supervisor.py:730-733`, P1-L]
+- [x] [Review][Patch] PP19 — Integration test cleanup race (Blind F17) — subprocess spawned BEFORE `try/finally`; if pre-try-block code raises, subprocess leaks. Fix: move `proc = create_subprocess_exec(...)` INSIDE `try:` OR use `AsyncExitStack` [`test_budget_enforcement_latency.py:1397-1453`, P1-L]
+- [x] [Review][Patch] PP20 — `test_terminate_with_grace_sigterm_succeeds` asserts `exit_code != 0` (Blind F20) — Python's SIGTERM exit code is platform-dependent. Fix: assert `exit_code is not None` only OR specifically `in (-15, 143, 1)` [`test_claude_code_runner.py:1199-1200`, P1-L]
+- [x] [Review][Patch] PP21 — `_terminate_for_budget` discards `_TerminationResult` (Blind F14) — `term_result.method` (sigterm/sigkill/noop) logged but not propagated to `_BudgetSupervisorResult`. Operator can't tell from final log whether SIGTERM was clean or escalated to SIGKILL. Fix: add `termination_method: Literal["noop","sigterm","sigkill"] | None = None` to result; populate from callback return [`app/main.py:324-332 + budget_supervisor.py:54-85`, P1-L]
+- [x] [Review][Patch] PP22 — Read iterator file handle ownership (Blind F21) — `read_log_lines` returns iterator; supervisor abandons it on match-return or exception. Relies on Python GC for file close. Long-running supervisor with hourly polling may leak FDs. Verify `read_log_lines` is context-manager friendly OR wrap in `with closing(iter):` [`budget_supervisor.py:634-680`, P1-L]
+
 ## Dev Agent Record
 
 **Implementation summary**: Story 12.1 ships the budget-enforcement leg of Epic 12. Three new components:
@@ -385,3 +430,72 @@ All 5 runs complete in ~150ms wall-clock, well under the 5s p99 NFR-R8 ceiling. 
 3. **Test count baseline discrepancy**: Spec says 3068 baseline; actual true baseline (with untracked new files stashed) was 3062. Delta is +11 as expected. The spec baseline was slightly stale relative to recent story completions; this is not a regression.
 
 4. **`LifecycleEvent.TASK_FAILED` on budget termination**: AC3 says skip `task.completed` and return. The implementation transitions lifecycle FSM to `TASK_FAILED` before returning, so the task is not left in a terminal-less state. This is consistent with the existing `task.failed` LSM transition and avoids orphaned lifecycle state; Story 12.2 will add `task.budget_enforcement_triggered` emission at this callsite.
+
+---
+
+### Pass-1 Batch Outcomes (2026-05-21 — 22 fixes applied)
+
+**PP1 (P0) — Lifecycle corruption on runner exception:**
+- Restructured `app/main.py` `run_task` try/except/finally to capture `runner_raised: BaseException | None = None` before the `try`. Budget-triggered path (`if budget_result is not None and budget_result.triggered`) now runs unconditionally from the post-finally scope before any re-raise. Join timeout raised to `budget_grace_period_s + 2.0 = 7.0s` (subsumes PP6). Added `asyncio.wait_for(runner.run(...), timeout=settings.task_overall_timeout_s)` deadlock ceiling (PP4). Integration test `test_lifespan_handles_runner_exception_when_supervisor_fires_budget_enforcement` in `tests/integration/test_budget_enforcement_latency.py`: PASS.
+
+**PP2 — asyncio.to_thread for scan:** `_scan_for_match` refactored as a sync function called via `await asyncio.to_thread(...)` in `watch_for_budget_exceeded`. Mirrors `ApprovalWaiter._scan_today` pattern exactly.
+
+**PP3 — Single-pass scan:** `_scan_for_match` now returns `tuple[_Match | None, int]` (match + envelopes_scanned). `_last_scanned_idx` deleted. Caller uses returned count as `scan_offset` directly. Added unit test `test_watch_single_pass_scan_skips_already_scanned_envelopes` (100-envelope log, target at index 50): PASS.
+
+**PP4 — Deadlock ceiling:** `asyncio.wait_for(runner.run(...), timeout=settings.task_overall_timeout_s)` added. New config field `task_overall_timeout_s: float = Field(default=900.0, gt=0)` in `WorkerSettings`.
+
+**PP5 — ProcessLookupError defence:** `terminate_with_grace` now wraps both `process.terminate()` and `process.kill()` in `try/except ProcessLookupError`. Two new tests: `test_terminate_with_grace_handles_processlookuperror_on_terminate` + `test_terminate_with_grace_handles_processlookuperror_on_kill_during_grace`: both PASS.
+
+**PP6 — Join timeout raised:** Subsumed by PP1 — join timeout now `budget_grace_period_s + 2.0 = 7.0s`.
+
+**PP7 — Cross-day documented:** Module docstring updated with explicit "known Phase-1 limitation" wording matching `ApprovalWaiter` precedent. Story 12.1.1 follow-up noted.
+
+**PP8 — Cold-start + SIGKILL tests added:** `test_budget_enforcement_latency_cold_start` (envelope pre-written before supervisor spawn, wall-clock < 5s asserted) + `test_budget_enforcement_latency_sigkill_escalation` (SIGTERM-ignoring child, grace=1s, `termination_method=="sigkill"` asserted, wall-clock < 5s): both PASS.
+
+**PP9 — Callback exception isolation:** `terminate_callback()` wrapped in `try/except Exception` in `watch_for_budget_exceeded`; logs `budget_supervisor_callback_raised` but does not propagate — returns `triggered=True` with `termination_method=None`. Covered by `test_watch_callback_exception_isolated_from_lifespan`: PASS.
+
+**PP10 — fdatasync race:** Subsumed by PP3 single-pass refactor. No separate test needed.
+
+**PP11 — Cancel mid-sleep returns immediately:** Post-`wait_for` `else` branch now `return BudgetSupervisorResult(triggered=False)` directly (no `continue`). Added `test_watch_cancel_during_sleep_returns_immediately` with 1s poll interval: PASS.
+
+**PP12 — Lifespan integration test:** `test_lifespan_handles_runner_exception_when_supervisor_fires_budget_enforcement` added (see PP1 outcome above).
+
+**PP13 — AST-based spawn-site allowlist:** `_SpawnVisitor` extended to track enclosing function via `_func_stack`. New `_FUNC_ALLOWLIST` dict maps `(rel_path, func_name) → primitive_name`. Main test loop uses `_check()` helper that tries func-name key first, falls back to line key. Legacy `_ALLOWLIST` line entries retained as defence-in-depth. Line 175→187 updated (PP18 alias added above `_spawn`). Two new self-tests: `test_ast_walker_captures_enclosing_func_name` + `test_ast_walker_module_scope_offender_has_none_enclosing` + `test_func_allowlist_entries_match_real_spawn_sites`: all PASS. `test_no_undocumented_spawn_sites.py` total: 11 → 13 tests.
+
+**PP14 — Registry fixture isolation:** Both `_isolated_registry` fixtures (unit test + integration test) now snapshot `REGISTRY` before `register()` calls and restore via explicit teardown in `finally:`. Handles "entries we added" vs "pre-existing entries" correctly. No `unregister` API exposed (none exists); snapshot/restore is the minimum viable approach.
+
+**PP15 — AC3 wording updated:** See PP15 amendment block above in AC3.
+
+**PP16 — `step` field:** Added `step: int | None = None` to `BudgetSupervisorResult` (renamed from `_BudgetSupervisorResult`). `_Match` dataclass also gains `step: int | None`. Populated from `payload.get("step")` in `_scan_for_match`. Test `test_watch_step_field_propagates`: PASS.
+
+**PP17 — `_safe_payload` unified:** Empirical investigation confirmed `read_log_lines` yields envelopes via `model_validate_json` → `_FrozenDict` payload (dict subclass). The `BaseModel.model_dump` branch in the supervisor was dead code. Removed — supervisor now matches `ApprovalWaiter._safe_payload` exactly.
+
+**PP18 — Public dataclass names:** `_TerminationResult` renamed to `TerminationResult` in `claude_code_runner.py`; alias `_TerminationResult = TerminationResult` retained for in-tree callers. `_BudgetSupervisorResult` renamed to `BudgetSupervisorResult` in `budget_supervisor.py`; alias `_BudgetSupervisorResult = BudgetSupervisorResult` retained. Both modules export new public names in `__all__`.
+
+**PP19 — subprocess spawn inside try:** In `_run_one_iteration` in `test_budget_enforcement_latency.py`, `proc = await asyncio.create_subprocess_exec(...)` moved inside the `try:` block. `proc` typed as `asyncio.subprocess.Process | None = None` initialized before; `finally:` guards on `proc is not None`.
+
+**PP20 — Exit code assertion relaxed:** `test_terminate_with_grace_sigterm_succeeds` now asserts `result.exit_code is not None` only (platform-portable). Comment explains platform variance (-15 POSIX / 143 shell / 1 Windows).
+
+**PP21 — `termination_method` propagated:** `_terminate_for_budget` in `app/main.py` changed return type from `None` to `object` and returns `term_result`. `BudgetSupervisorResult` gains `termination_method: Literal["noop","sigterm","sigkill"] | None = None`. `watch_for_budget_exceeded` duck-types `callback_value.method` (avoids domain→adapter import). Log line `budget_enforced_task_terminated` now includes `termination_method`. Test `test_watch_propagates_termination_method_from_callback`: PASS. PP8 SIGKILL test asserts `result.termination_method == "sigkill"`: PASS.
+
+**PP22 — File handle closing:** `_scan_for_match` casts the iterator to `Generator[EventEnvelope, None, None]` (the concrete runtime type from `_read_log_lines_gen`) and wraps iteration in `with contextlib.closing(closeable_iter):`. Handles early return (on match) and exceptions. `import contextlib` + `cast` + `Generator` added to supervisor imports.
+
+**Test count delta:** 3073 (baseline after initial story) → **3083** after pass-1 batch = **+10 new tests**
+- +2 `TestTerminateWithGrace` unit tests (PP5: ProcessLookupError x2)
+- +5 `test_budget_supervisor.py` unit tests (PP3 single-pass, PP9 isolation, PP11 cancel-immediate, PP16 step, PP21 method)
+- +3 integration tests (PP8 cold-start, PP8 SIGKILL escalation, PP1/PP12 lifespan exception)
+- (+2 `test_no_undocumented_spawn_sites.py` self-tests — PP13 func-name detection — counted in existing category above)
+
+**Mypy --strict delta (services/worker-wrapper packages/events):** 42 errors → **42 errors** (zero regression).
+
+**`check_single_writer.py` exit code:** 0 (unchanged — supervisor still reads only).
+
+**Deviations from batch prompt:**
+
+1. **PP6 join timeout** — prompt specified "Verify new code uses ≥7s timeout." Implemented as `budget_grace_period_s + 2.0` where `budget_grace_period_s = 5.0`, giving 7.0s. Matches spec intent.
+
+2. **PP4 regression test** — prompt requested "Add regression test using a subprocess that explicitly hangs after SIGKILL signal arrives but stdout pipe stays open via a parent shell." This test is highly platform-specific (pipe-keep-alive after SIGKILL is a kernel-version-dependent edge case; constructing it reliably in CI would require process group manipulation). Deferred: the `asyncio.wait_for` ceiling itself is the fix; a pathological-hang regression test would be flaky on macOS CI. Filed as follow-up.
+
+3. **PP13 AST refactor scope** — prompt offered two options (full AST refactor OR keep line-based + comment). Implemented the AST path (`_FUNC_ALLOWLIST` + `_func_stack` visitor extension) as the primary, retaining line entries as fallback — this is the stronger option and closes the "future drift bypass" gap permanently.
+
+4. **PP14 fixture isolation** — prompt suggested `unregister("task.budget_exceeded", ...)` which does not exist in `events.schema_registry` (only `unregister_all()` exists). Used snapshot/restore pattern against the `REGISTRY` dict directly instead. This provides equivalent isolation semantics without requiring a new public API.
