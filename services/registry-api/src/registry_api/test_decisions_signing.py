@@ -186,6 +186,15 @@ class TestApproveEmitsPairedSignedEvent:
         # approval events that the /decisions handler emits.
         events = [e for e in all_events if e["type"] != "key.rotated"]
         all_types = [e["type"] for e in all_events]
+        # Story 11.5 PP1 — count key.rotated explicitly. Pre-PP1 the filter
+        # silently stripped ALL key.rotated events; a future multi-emission
+        # bug would pass tests. Asserting exactly one first-boot rotation
+        # event catches regressions of the exactly-once invariant.
+        key_rotated_count = sum(1 for e in all_events if e["type"] == "key.rotated")
+        assert key_rotated_count == 1, (
+            f"expected exactly 1 first-boot key.rotated, got {key_rotated_count} "
+            f"(types: {all_types})"
+        )
         assert len(events) == 2, f"expected 2 approval events, got {all_types}"
 
         granted, signed = events

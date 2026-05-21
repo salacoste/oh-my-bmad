@@ -1,6 +1,6 @@
 # Story 11.5 — Key rotation flow + `key.rotated` emission
 
-Status: **done** (CI green @ ba3f880 — Story 11.5 ships; Epic 11 acceptance gate closed)
+Status: **review** (pass-1 CI pending @ pre-commit — 18 fixes: PD1 event-log dedup + 2 P1-H + 8 P1-M + 8 P1-L)
 
 ## Story
 
@@ -10,7 +10,7 @@ Status: **done** (CI green @ ba3f880 — Story 11.5 ships; Epic 11 acceptance ga
 
 Story 11.5 closes Epic 11. Four moving parts:
 
-1. **Fingerprint helper** — `compute_key_fingerprint(key: SecretStr) → str` returning 16-lowercase-hex `SHA-256(key_bytes)[:16]` (64 bits) per Story 11.2 D2. Lives in `packages/events/src/events/approval_signing.py` alongside `compute_approval_hmac` (single source of truth for HMAC-key crypto).
+1. **Fingerprint helper** — `compute_key_fingerprint(key: SecretStr) → str` returning 16-lowercase-hex `SHA-256(key_bytes).hex()[:16]` (64 bits) per Story 11.2 D2. Lives in `packages/events/src/events/approval_signing.py` alongside `compute_approval_hmac` (single source of truth for HMAC-key crypto).
 2. **Key fingerprint state** — new `KeyFingerprint` ORM model in registry-state (single-row table; the latest fingerprint represents current key in effect). Materialized from `key.rotated` events (the materializer table from Story 11.2 wiring).
 3. **Rotation detector in registry-api lifespan** — startup hook reads current `OPERATOR_HMAC_KEY`, computes fingerprint, compares against last-known fingerprint in registry-state. If different (or absent → first boot with key set) → POST `key.rotated` event via `EventLogWriter`. Exactly-once semantics enforced via fingerprint equality.
 4. **ADR-0006** — written and `accepted`. Documents the signing + verification + rotation protocol end-to-end (canonical signing string + storage canonical form + ms-truncation + offline verifier contract + key-fingerprint rotation marker + key isolation).
@@ -27,7 +27,7 @@ Pure function alongside `compute_approval_hmac` (Story 11.4 PP3 relocation):
 def compute_key_fingerprint(key: SecretStr) -> str:
     """Compute 16-lowercase-hex SHA-256 truncated fingerprint of an HMAC key.
 
-    Per Story 11.2 D2: ``SHA-256(key_bytes)[:8]`` (8 bytes = 16 hex chars =
+    Per Story 11.2 D2: ``SHA-256(key_bytes).hex()[:16]`` (16 hex chars =
     64 bits). Operator-readable in audit logs; collision-safe for the single-
     operator key population this Platform serves.
 
@@ -192,6 +192,8 @@ Self-verification:
 - Test `test_detect_first_boot_emits_event_when_key_set_no_prior_row` — empty table; pass current_key; assert event emitted with `previous=<bootstrap-sentinel>`, `new=<current_fp>` per D1.
 - Test `test_detect_skips_when_current_key_is_none` — empty table; pass None; assert no event emitted, structured log captured.
 - Test `test_detect_emits_exactly_once_per_rotation` — call detector, call again (no `.env` change between calls), assert second call is no-op (idempotency).
+- **PD1 — event-log SSoT lookup**: test `test_detect_reads_most_recent_rotation_from_event_log_when_sqlite_lags` — JSONL log has a prior `key.rotated`; SQLite `KeyFingerprint` table is empty (subscriber lag); detector reads log first ⇒ no duplicate emission.
+- **PD1 — SQLite fallback**: test `test_detect_handles_event_log_missing_falls_back_to_sqlite` — empty log dir; seeded SQLite row; detector falls back to SQLite ⇒ no-op on fingerprint match (snapshot-restored deployment backwards-compat).
 
 ### AC5 — Post-rotation approvals verify against new key only (offline verifier integration)
 
@@ -472,6 +474,34 @@ blocks:
   - [x] mypy --strict
   - [x] check_imports / check_event_registry / check_single_writer
   - [x] full pytest pass
+
+### Pass-1 Review Findings (3-lane review of `7327c8c..ba3f880` — 2026-05-21)
+
+**Reviewer dedup:** 21 raw findings (Blind 11 + Acceptance 1 + Edge 9) → **18 unique**. Zero P0s — cleanest Epic 11 pass-1. 2 P1-H, 8 P1-M, 8 P1-L. Acceptance Auditor delivered a CLEAN REVIEW (all 18 named tests present, all D1-D5 honored, ADR-0006 accepted at 343 lines, DoD all 7 items met). Blind + Edge surfaced real defects (cross-restart race, env-var test pollution, AC8 capture blind spot, fake snapshot test coverage).
+
+**Decision-needed (1) — resolved as event-log dedup:**
+
+- [x] [Review][Decision] **PD1 — F1 cross-restart race resolved via event-log dedup (P1-H)** — registry-api restart faster than subscriber-materializer can emit duplicate `key.rotated` events for one physical rotation. Materializer UPSERT keeps state consistent; JSONL audit log gets duplicates. User chose **OPTION A — implement event-log dedup**: detector now reads most-recent `key.rotated` from JSONL log (SSoT per arch_refs P2-I3) BEFORE consulting SQLite. Real exactly-once guarantee restored.
+
+**Pass-1 patches (17):**
+
+- [x] [Review][Patch] PP1 — F3 Blind: `test_decisions_signing.py` filter strips ALL `key.rotated` events from assertions without counting them; future multi-emission bug would pass tests. Add `assert len([e for e in all_events if e["type"] == "key.rotated"]) == 1` in at least ONE of the 4 affected tests [`services/registry-api/.../test_decisions_signing.py:187,263,281,425`, P1-H]
+- [x] [Review][Patch] PP2 — F2 Edge: pre-existing tests `test_approvals.py:144,184`, `test_app.py:258,284,340`, `test_events.py:549,599` use `build_app(...)` without scrubbing `OPERATOR_HMAC_KEY` env var. CI/dev runs with the var set will fail with off-by-one event counts (rotation detector emits an extra `key.rotated`). Add autouse `conftest.py` fixture at `services/registry-api/src/registry_api/conftest.py` with `monkeypatch.delenv("OPERATOR_HMAC_KEY", raising=False)`. Story 11.5 also affects sibling fixtures [`services/registry-api/.../`, P1-M]
+- [x] [Review][Patch] PP3 — F4 Blind: `current_key=None` with existing prior fingerprint leaves audit trail silent + singleton row stale. Add structured WARNING (not INFO) when `current_key is None AND prior_fp is not None`; include `prior_fp_exists=True` in log; add regression test [`key_rotation.py:750-755`, P1-M]
+- [x] [Review][Patch] PP4 — F5 Blind: bootstrap sentinel `"0000000000000000"` collision not defensively asserted. Add `if fp == "0000000000000000": raise ValueError(...)` in `compute_key_fingerprint`; add unit test pinning the guard [`packages/events/src/events/approval_signing.py:583-584`, P1-M]
+- [x] [Review][Patch] PP5 — F6 Blind: test fixture `_seed_key_fingerprint` uses plain `session.add` (INSERT only) instead of UPSERT semantics — re-calls would FK-violate; also tests an unrealistic flow vs production materializer. Refactor to use `sqlite_insert(KeyFingerprint).values(...).on_conflict_do_update(...)` mirroring `handle_key_rotated` [`test_key_rotation.py:1086-1101`, P1-M]
+- [x] [Review][Patch] PP6 — F7 Blind: `KeyFingerprint.id` PK has no CHECK constraint enforcing `"current"` literal — singleton invariant is convention-only. Add `sa.CheckConstraint("id = 'current'", name="key_fingerprint_singleton")` in migration 0008; update `test_migration_0008_adds_key_fingerprint_table` to assert the constraint [`migrations/2026-05-21_0008_*.py + schema.py`, P1-M]
+- [x] [Review][Patch] PP7 — F8 Blind: `Random(clock.monotonic_ns())` seeding produces IDENTICAL event_id/trace_id if detector runs twice with FrozenClock (no-op short-circuit currently masks). Mix in a per-invocation entropy source (e.g., `Random(clock.monotonic_ns() ^ id(payload))`) OR accept `rng` via DI like other emit sites; add a test exercising the same-clock branch [`key_rotation.py:787-790`, P1-M]
+- [x] [Review][Patch] PP8 — F9 Blind + F3 Edge: AC8 `capture_logs()` blind spot — detector uses stdlib `logging` (correct per project convention); `structlog.testing.capture_logs()` won't see those records. Add parallel `caplog` assertion alongside the existing structlog assertion in `test_operator_hmac_key_never_appears_in_structlog_output`. Also: AC8 `test_operator_hmac_key_never_appears_in_event_log` sanity check `_CANARY_FP in jsonl_content` passes via first-boot `key.rotated` event alone — does NOT prove signing path ran. Add `assert any(json.loads(line)["type"] == "task.approval_signed" for line in jsonl_content.splitlines())` to pin signing-path coverage [`tests/integration/test_hmac_key_isolation.py:220,250,348`, P1-M]
+- [x] [Review][Patch] PP9 — F11 Blind: `test_operator_hmac_key_never_appears_in_snapshot` does not exercise the canary key through any code path before snapshot capture. Materialize at least one event whose payload depends on key-derived data (e.g., emit `approval.granted` + `task.approval_signed` pair) BEFORE calling `policy.capture(...)` so the snapshot actually contains key-derived data the test assertion can validate [`tests/integration/test_hmac_key_isolation.py:2126-2191`, P1-M]
+- [x] [Review][Patch] PP10 — F10 Blind: `LifespanManager` import lacks `pytest.importorskip` guard — Epic 11 acceptance gate hard-deps on `asgi-lifespan`. Add `pytest.importorskip("asgi_lifespan", reason="AC8 lifespan gate requires asgi_lifespan")` at module top [`tests/integration/test_hmac_key_isolation.py:1936`, P1-L]
+- [x] [Review][Patch] PP11 — F4 Edge: canary key in `test_detect_never_logs_key_value` named `"NFR-S10-DETECTOR-CANARY-VAL-32B-X"` but actual byte length is 33. Either trim to 32 bytes + assert `== 32` (matches AC8 canary `"CANARY-KEY-NEVER-LOG-X-32-BYTES!"`) OR rename constant to `...-33B-X` [`test_key_rotation.py:337-339`, P1-L]
+- [x] [Review][Patch] PP12 — F5 Edge: ADR-0006 formula prose contradicts itself — line 144 uses `SHA-256(key_bytes)[:16]` (hex-string slice), line 171 uses `SHA-256(key_bytes)[:8]` (byte-digest slice). Both yield 16 hex chars / 64 bits but the textual ambiguity could mislead third-party verifier implementers. Pick `SHA-256(key_bytes).hex()[:16]` (matches `hashlib.sha256(raw).hexdigest()[:16]` actual impl); update ADR-0006 lines 144+171, `compute_key_fingerprint` docstring, story spec lines 13/30, migration 0008 comment [`docs/adr/0006 + approval_signing.py + spec + migration`, P1-L]
+- [x] [Review][Patch] PP13 — F6 Edge: Story 11.5 AC5 test uses fake event_id shape `01HZX000000000000000A0000A` instead of real `e-<uuidv7>` (Story 11.4 PP6 lesson partial repeat). Use `events.ids.new_event_id(clock=FrozenClock(...), rng=Random(seed))` for realistic event_ids [`test_verify_approval_offline_recipe.py:1257,1264`, P1-L]
+- [x] [Review][Patch] PP14 — F7 Edge: fixture comment at `test_hmac_key_isolation.py:206-209` misrepresents control flow (claims "signing runs before lifecycle gate" when in reality lifecycle precondition validation runs BEFORE `_build_event`). Update comment to: "status_code 202 means signing ran. 400 means body failed validation BEFORE signing. We accept both because lifecycle/validation gates run BEFORE _build_event." [`test_hmac_key_isolation.py:206-209`, P1-L]
+- [x] [Review][Patch] PP15 — F8 Edge: no negative-case test pinning that `KeyRotatedPayload(previous="0000000000000000", new="0000000000000000", ...)` is rejected. Latent — current detector guarantees `previous_fp != current_fp` at emit time, so contract holds via Pydantic validator. Add `with pytest.raises(ValidationError): KeyRotatedPayload(...both zeros...)` regression test [`tests/contract/ or test_payloads.py`, P1-L]
+- [x] [Review][Patch] PP16 — F9 Edge: `test_detect_emits_exactly_once_per_rotation` simulates materializer side-effect via direct `_seed_key_fingerprint` (INSERT) instead of invoking real `handle_key_rotated` UPSERT. Bypasses the materializer; doesn't pin the integrated detector-emit → materializer-UPSERT → detector-read loop. Extend test to actually invoke `handle_key_rotated(session, envelope)` between detector calls [`test_key_rotation.py:300-309`, P1-L]
+- [x] [Review][Patch] PP17 — F1 Acceptance: `KeyRotatedPayload` docstring does not mention the bootstrap sentinel `"0000000000000000"`. Add one sentence around line 974 of `payloads.py` referencing Story 11.5 D1 + ADR-0006 [`packages/events/src/events/payloads.py:947-994`, P1-L]
 
 ## Dev Agent Record
 

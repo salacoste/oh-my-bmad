@@ -141,7 +141,7 @@ the sign side.
 ### Key fingerprint
 
 `compute_key_fingerprint(key: SecretStr) -> str` (Story 11.5 AC1) returns
-`SHA-256(key_bytes)[:16]` = 16 lowercase hex chars = 64 bits.
+`SHA-256(key_bytes).hex()[:16]` = 16 lowercase hex chars = 64 bits.
 
 * **Operator-readable**: short enough to scan in logs and compare visually.
 * **Collision-safe for single-operator key populations**: 2⁻⁶⁴ collision
@@ -158,19 +158,30 @@ the next section.
 (Story 11.5 AC4) runs synchronously in registry-api's lifespan startup
 BEFORE the FastAPI app starts accepting requests. It:
 
-1. Reads the singleton `KeyFingerprint` row from registry-state (PK =
-   literal `"current"`).
+1. Reads the most-recent `key.rotated` event's `new_key_fingerprint`
+   from the JSONL event log (Story 11.5 PD1 — the canonical SSoT per
+   arch_refs P2-I3 derived projection). If the log has no
+   `key.rotated` events, falls back to the singleton `KeyFingerprint`
+   row in registry-state (snapshot-restored-deployment fallback).
 2. Computes the fingerprint of the supplied current
    `OPERATOR_HMAC_KEY` via `compute_key_fingerprint`.
-3. Compares the two. If equal, no-op. If different (or empty table),
-   emits exactly one `key.rotated` event via `EventLogWriter` (FR26
-   single-writer rule — never writes SQLite directly).
+3. Compares the two. If equal, no-op. If different (or empty
+   log+table), emits exactly one `key.rotated` event via
+   `EventLogWriter` (FR26 single-writer rule — never writes SQLite
+   directly).
+
+**Event-log-first lookup (PD1)**: pre-PD1 the detector consulted only
+SQLite, which is a derived projection that the subscriber-materializer
+may lag behind across a fast cross-restart. The JSONL log is the SSoT,
+so the detector reads from the log first to close the duplicate-emission
+window. SQLite is consulted only as a fallback for deployments restored
+from a snapshot where the JSONL log was truncated/rotated out.
 
 **Bootstrap sentinel (D1)**: first boot with no prior fingerprint row
 emits `key.rotated` with `previous_key_fingerprint = "0000000000000000"`
-(16 zero-hex chars). The probability that a real `SHA-256(key)[:8]`
-equals 16 zeros is 2⁻⁶⁴, which is negligible for the single-operator
-key population. `KeyRotatedPayload`'s `previous != new` invariant
+(16 zero-hex chars). The probability that a real
+`SHA-256(key_bytes).hex()[:16]` equals 16 zeros is 2⁻⁶⁴, which is
+negligible for the single-operator key population. `KeyRotatedPayload`'s `previous != new` invariant
 therefore holds. The sentinel is also reserved in
 `compute_key_fingerprint`'s docstring so future call sites know the
 collision-impossible value.

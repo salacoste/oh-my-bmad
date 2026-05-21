@@ -596,3 +596,39 @@ class TestComputeKeyFingerprint:
         # Both are well-formed 16-hex strings.
         assert len(fp_a) == 16
         assert len(fp_b) == 16
+
+    def test_compute_key_fingerprint_rejects_sentinel_collision(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Story 11.5 PP4: sentinel-collision defense.
+
+        The bootstrap sentinel ``"0000000000000000"`` is RESERVED (D1).
+        Even though the probability that a real key's SHA-256 prefix
+        matches is 2⁻⁶⁴, the defensive guard raises ``ValueError`` if
+        it ever does. We can't easily generate a real key with such a
+        SHA-256 prefix, so we patch ``hashlib.sha256`` to force the
+        collision and assert the guard fires.
+        """
+
+        # Patch the events.approval_signing module's view of hashlib so
+        # the function uses our forced digest. We replace the
+        # ``hexdigest`` result with the sentinel padded out to the full
+        # 64 chars (SHA-256 hex length).
+        class _FakeDigest:
+            def hexdigest(self) -> str:
+                # 16 zeros + 48 chars of arbitrary hex; the function
+                # only consumes the first 16.
+                return "0000000000000000" + "a" * 48
+
+        def _fake_sha256(_data: bytes) -> _FakeDigest:
+            return _FakeDigest()
+
+        # Patch ``hashlib.sha256`` at the module level so the
+        # ``events.approval_signing.compute_key_fingerprint`` call uses
+        # our forced digest. ``setattr`` on the imported ``hashlib`` is
+        # the cleanest way that survives mypy --strict (the module
+        # doesn't re-export hashlib as an attribute).
+        monkeypatch.setattr("events.approval_signing.hashlib.sha256", _fake_sha256)
+
+        with pytest.raises(ValueError, match="bootstrap sentinel"):
+            compute_key_fingerprint(SecretStr("any-key-here-32-bytes-padded-out"))

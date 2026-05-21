@@ -142,6 +142,26 @@ def test_key_rotated_rejects_same_fingerprint() -> None:
         )
 
 
+def test_key_rotated_payload_rejects_double_bootstrap_sentinel() -> None:
+    """Story 11.5 PP15: ``previous == new == "0000000000000000"`` rejected.
+
+    Even both-zero sentinels are a no-op rotation. The first-boot
+    detector emits ``previous = "0000000000000000"`` + ``new =
+    <real_fp>``; if a future code path malformed the new fingerprint
+    as the sentinel, the cross-field validator would catch it as a
+    no-op rotation.
+    """
+    from datetime import UTC, datetime
+
+    with pytest.raises(ValidationError, match="previous_key_fingerprint"):
+        KeyRotatedPayload(
+            rotated_at=datetime(2026, 5, 21, 0, 0, 0, tzinfo=UTC),
+            previous_key_fingerprint="0000000000000000",
+            new_key_fingerprint="0000000000000000",
+            actor_id="key-rotation-detector",
+        )
+
+
 # ---------------------------------------------------------------------------
 # AC3 — capability.denied registration + fixture + enum-drift contract.
 # ---------------------------------------------------------------------------

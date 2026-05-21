@@ -24,7 +24,7 @@ Column layout matches :class:`registry_state.schema.KeyFingerprint`:
 * ``id`` (String(16), PRIMARY KEY) — singleton constant ``"current"``;
   enforces one-row semantics at the SQL layer.
 * ``fingerprint`` (String(16), NOT NULL) — 16 lowercase hex chars =
-  SHA-256(key)[:8] = 64 bits. Matches ``KeyRotatedPayload.
+  SHA-256(key_bytes).hex()[:16] = 64 bits. Matches ``KeyRotatedPayload.
   new_key_fingerprint`` field constraint.
 * ``rotated_at`` (DateTime(tz=True), NOT NULL) — timezone-aware via the
   same pattern as ``events.emitted_at`` (UTC text storage; UTC-aware on
@@ -57,6 +57,15 @@ def upgrade() -> None:
         sa.Column("fingerprint", sa.String(16), nullable=False),
         sa.Column("rotated_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("rotated_by_actor_id", sa.String(128), nullable=False),
+        # Story 11.5 PP6 — CHECK constraint enforces the singleton-row
+        # invariant at the SQL layer. Pre-PP6 the constraint was
+        # convention-only (the materializer / rotation detector wrote
+        # ``id="current"`` but nothing prevented a malicious / buggy
+        # SQL path from inserting other ids). The CHECK is cheap on
+        # SQLite (one comparison per write) and matches the
+        # ``KeyFingerprint`` ORM ``__table_args__`` constraint of
+        # the same name.
+        sa.CheckConstraint("id = 'current'", name="ck_key_fingerprint_singleton"),
     )
 
 

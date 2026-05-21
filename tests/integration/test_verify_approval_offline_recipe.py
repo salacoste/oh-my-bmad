@@ -20,9 +20,12 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from random import Random
 
 import pytest
+from events import FROZEN_EPOCH, FrozenClock
 from events.approval_signing import compute_approval_hmac
+from events.ids import new_event_id
 from pydantic import SecretStr
 
 # ---------------------------------------------------------------------------
@@ -1269,8 +1272,12 @@ def test_just_verify_approval_against_pre_rotation_event_with_prior_key(
     assert len(key_b_str.encode("utf-8")) == 32
 
     # Sign event A under key A (decided 2026-04-21, pre-rotation).
+    # Story 11.5 PP13 — use realistic ``e-<uuidv7>`` event_ids (was
+    # fake ULID-shape ``01HZX...`` pre-PP13).
     ts_a = datetime(2026, 4, 21, 10, 0, 0, tzinfo=UTC)
-    event_a_id = "01HZX000000000000000A0000A"
+    event_a_id = new_event_id(
+        clock=FrozenClock(mono_ns=1_000_000, now=FROZEN_EPOCH), rng=Random(0xA)
+    )
     env_a = _make_envelope(
         event_id=event_a_id,
         timestamp=ts_a,
@@ -1278,7 +1285,9 @@ def test_just_verify_approval_against_pre_rotation_event_with_prior_key(
     )
     # Sign event B under key B (decided 2026-05-21, post-rotation).
     ts_b = datetime(2026, 5, 21, 10, 0, 0, tzinfo=UTC)
-    event_b_id = "01HZX000000000000000B0000B"
+    event_b_id = new_event_id(
+        clock=FrozenClock(mono_ns=2_000_000, now=FROZEN_EPOCH), rng=Random(0xB)
+    )
     env_b = _make_envelope(
         event_id=event_b_id,
         timestamp=ts_b,

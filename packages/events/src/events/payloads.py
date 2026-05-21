@@ -964,13 +964,21 @@ class KeyRotatedPayload(BaseModel):
     * ``rotated_at`` — :class:`pydantic.AwareDatetime`; naive timestamps
       rejected at the payload boundary.
     * ``previous_key_fingerprint`` / ``new_key_fingerprint`` — exactly 16
-      lowercase hex chars (D2: ``SHA-256(key_bytes)[:16]`` = 64 bits;
-      operator-readable in audit logs, collision-safe for single-operator
-      key populations). Story 11.5 owns the fingerprint computation.
+      lowercase hex chars (D2: ``SHA-256(key_bytes).hex()[:16]`` = 64
+      bits; operator-readable in audit logs, collision-safe for
+      single-operator key populations). Story 11.5 owns the
+      fingerprint computation.
     * Cross-field invariant (D3): ``previous_key_fingerprint`` MUST differ
       from ``new_key_fingerprint``. Equality is not a rotation — it would
       either be a detection bug or a replay-attack attempting to emit a
       no-op rotation event. Reject at model boundary.
+    * **Bootstrap sentinel (Story 11.5 D1 + PP17)** — first-boot
+      detection emits with ``previous_key_fingerprint = "0000000000000000"``
+      (16 zero-hex chars; collision probability with a real
+      ``SHA-256(key_bytes).hex()[:16]`` is 2⁻⁶⁴). The cross-field
+      validator above still applies — a malformed payload with both
+      fields set to the sentinel is rejected (no-op rotation). See
+      ADR-0006 for the rationale.
     * ``actor_id`` — non-empty string; constrained to ``min_length=1`` only
       (NOT the Story 11.1 no-pipe pattern) because the rotation actor may
       be a richer service-account identifier than ``approval.granted``

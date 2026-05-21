@@ -206,18 +206,43 @@ def compute_key_fingerprint(key: SecretStr) -> str:
     **Bootstrap sentinel (Story 11.5 D1)** — the literal string
     ``"0000000000000000"`` is RESERVED as a sentinel for the first-boot
     rotation event (no prior fingerprint exists). The probability that a
-    real ``SHA-256(key_bytes)[:8]`` equals 16 zero-hex chars is 2⁻⁶⁴, which
-    is negligible for the single-operator key population. ``KeyRotatedPayload``'s
-    ``previous != new`` invariant therefore holds in the first-boot case.
+    real ``SHA-256(key_bytes).hex()[:16]`` equals 16 zero-hex chars is
+    2⁻⁶⁴, which is negligible for the single-operator key population.
+    ``KeyRotatedPayload``'s ``previous != new`` invariant therefore
+    holds in the first-boot case.
+
+    **Story 11.5 PP4 sentinel-collision defense** — even though the
+    collision probability is 2⁻⁶⁴, the function raises ``ValueError`` if
+    the computed fingerprint equals the bootstrap sentinel. Operators
+    must choose a different key. The defensive check ensures audit-log
+    semantics remain unambiguous: the sentinel is reserved for the
+    "no-prior-fingerprint" case and may never appear as a real
+    fingerprint value.
 
     Args:
         key: Operator HMAC signing key (Pydantic SecretStr).
 
     Returns:
         16-character lowercase hex string (e.g., ``"a1b2c3d4e5f6789a"``).
+
+    Raises:
+        ValueError: If the computed fingerprint collides with the
+            bootstrap sentinel ``"0000000000000000"``. See Story 11.5
+            D1 + ADR-0006 for the sentinel rationale.
     """
     raw = key.get_secret_value().encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()[:16]
+    fp = hashlib.sha256(raw).hexdigest()[:16]
+    if fp == "0000000000000000":
+        # Story 11.5 PP4 — defensive guard. The bootstrap sentinel is
+        # reserved (D1); a real fingerprint that happens to collide
+        # would corrupt audit-log semantics. Probability 2⁻⁶⁴.
+        raise ValueError(
+            "computed fingerprint collides with bootstrap sentinel "
+            "'0000000000000000' (probability 2^-64); operator MUST choose "
+            "a different key. See Story 11.5 D1 + ADR-0006 for the "
+            "sentinel rationale."
+        )
+    return fp
 
 
 __all__ = ["compute_approval_hmac", "compute_key_fingerprint"]

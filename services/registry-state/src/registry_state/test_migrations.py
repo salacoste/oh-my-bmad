@@ -300,10 +300,13 @@ def test_migration_0008_adds_key_fingerprint_table() -> None:
 
     Smoke test: upgrade head on an empty DB and assert the new table exists
     with the expected 4-column shape (id PK, fingerprint, rotated_at,
-    rotated_by_actor_id) all NOT NULL. The table is a singleton — the only
-    valid ``id`` is the literal string ``"current"`` (enforced by the
-    materializer / rotation detector at write time, not by a CHECK
-    constraint at the schema layer).
+    rotated_by_actor_id) all NOT NULL.
+
+    Story 11.5 PP6: the table is a singleton — the only valid ``id`` is
+    the literal string ``"current"``. This is now enforced by a
+    ``ck_key_fingerprint_singleton`` CHECK constraint at the schema
+    layer (was convention-only pre-PP6). The constraint is verified by
+    inspecting the SQLite CREATE TABLE DDL.
     """
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "state.sqlite3")
@@ -315,6 +318,12 @@ def test_migration_0008_adds_key_fingerprint_table() -> None:
             cur = conn.cursor()
             cur.execute("PRAGMA table_info(key_fingerprint)")
             cols = {row[1]: row for row in cur.fetchall()}
+            # PP6: assert the CHECK constraint exists.
+            cur.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='key_fingerprint'"
+            )
+            ddl_row = cur.fetchone()
+            ddl = ddl_row[0] if ddl_row else ""
         finally:
             conn.close()
 
@@ -334,6 +343,14 @@ def test_migration_0008_adds_key_fingerprint_table() -> None:
         # No other column is a PK.
         for name in ("fingerprint", "rotated_at", "rotated_by_actor_id"):
             assert cols[name][5] == 0, f"key_fingerprint.{name} must not be part of PRIMARY KEY"
+        # PP6: CHECK constraint must be present in the table DDL.
+        assert "ck_key_fingerprint_singleton" in ddl, (
+            "migration 0008 must declare ck_key_fingerprint_singleton CHECK constraint; "
+            f"DDL: {ddl!r}"
+        )
+        assert "id = 'current'" in ddl, (
+            f"ck_key_fingerprint_singleton must enforce id = 'current'; DDL: {ddl!r}"
+        )
 
 
 def test_migration_0008_round_trip_downgrade_drops_table() -> None:

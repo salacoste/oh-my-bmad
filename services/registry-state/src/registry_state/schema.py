@@ -29,6 +29,7 @@ from typing import Any
 
 from sqlalchemy import (  # noqa: F401 — DateTime used by UTCDateTime impl
     BigInteger,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -279,6 +280,12 @@ class KeyFingerprint(Base):
     """
 
     __tablename__ = "key_fingerprint"
+    # Story 11.5 PP6 — CHECK constraint enforces the singleton-row
+    # invariant at the SQL layer (parallel to migration 0008's
+    # ``sa.CheckConstraint``). Pre-PP6 the singleton invariant was
+    # convention-only; the constraint name matches the migration so
+    # SQLite reports them as a single canonical constraint.
+    __table_args__ = (CheckConstraint("id = 'current'", name="ck_key_fingerprint_singleton"),)
 
     id: Mapped[str] = mapped_column(String(16), primary_key=True, default="current")
     fingerprint: Mapped[str] = mapped_column(String(16), nullable=False)
