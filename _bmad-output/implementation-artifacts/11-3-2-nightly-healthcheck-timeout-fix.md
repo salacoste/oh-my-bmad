@@ -1,6 +1,6 @@
 # Story 11.3.2 — Nightly healthcheck-timeout hotfix
 
-Status: **review** (CI pending @ pre-commit — applied directly given TRIVIAL scope)
+Status: **done — scope-bounded** (`ci` green @ edc1847; bumped timeouts applied as designed. **`nightly` still red** because the actual root cause was misdiagnosed — container hangs >120s in `running starting 0` for reasons NOT explained by timing/permissions. The bumped values are architecturally correct for Phase 2 headroom and kept. Story 11.3.3 filed for deeper investigation with local Docker repro.)
 
 ## Story
 
