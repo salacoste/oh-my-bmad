@@ -1,6 +1,6 @@
 # Story 11.5 — Key rotation flow + `key.rotated` emission
 
-Status: **ready-for-dev**
+Status: **in-progress**
 
 ## Story
 
@@ -436,4 +436,39 @@ blocks:
 
 ## Tasks / Subtasks
 
-_(populated by dev agent)_
+- [ ] AC1 — `compute_key_fingerprint` helper in `packages/events/src/events/approval_signing.py`
+  - [ ] Add `compute_key_fingerprint(key: SecretStr) -> str` (pure, no I/O, 16-hex SHA-256[:16])
+  - [ ] Update `__all__` in `approval_signing.py`
+  - [ ] Re-export from `packages/events/src/events/__init__.py` + `__all__`
+  - [ ] Tests: `test_compute_key_fingerprint_known_vector`, `_is_deterministic`, `_differs_across_keys`
+- [ ] AC2 — `KeyFingerprint` ORM + alembic migration 0008
+  - [ ] Add `KeyFingerprint(Base)` to `services/registry-state/src/registry_state/schema.py`
+  - [ ] Create migration `2026-05-21_0008_add_key_fingerprint.py`
+  - [ ] Extend `_EXPECTED_TABLES` + bump `_REVISION` to `"0008"` in `test_migrations.py`
+  - [ ] Add `test_migration_0008_adds_key_fingerprint_table`
+- [ ] AC3 — `handle_key_rotated` materializer
+  - [ ] Add `handle_key_rotated` to `services/registry-state/src/registry_state/domain/handlers.py`
+  - [ ] Wire via `register_default_handlers`
+  - [ ] Tests: insert / upsert / idempotent-replay / null-task_id (4 tests)
+- [ ] AC4 — Rotation detector in registry-api lifespan
+  - [ ] Create `services/registry-api/src/registry_api/adapters/key_rotation.py`
+  - [ ] D1 sentinel `"0000000000000000"` + D4 actor_id `"key-rotation-detector"`
+  - [ ] D3 synchronous + fail-loud
+  - [ ] Wire into `app.py` lifespan BEFORE `yield`
+  - [ ] Tests: rotation / no-op / first-boot-sentinel / current_key=None / exactly-once (5 tests)
+- [ ] AC5 — Pre-rotation verification investigation steps
+  - [ ] Update `_INVESTIGATION_STEPS["signature_mismatch"]` in `scripts/verify_approval.py` per spec
+  - [ ] Add `test_just_verify_approval_against_pre_rotation_event_with_prior_key` to `tests/integration/test_verify_approval_offline_recipe.py`
+- [ ] AC6 — DEFERRED to backlog Story 11.5.1 (per D-resolution)
+  - [ ] Verify `11-5-1-key-status-telegram-console-surface: backlog` is present in sprint-status.yaml
+- [ ] AC7 — ADR-0006 authored + `accepted`
+  - [ ] Create `docs/adr/0006-approval-signing-and-rotation-protocol.md` (200-400 lines)
+  - [ ] All 5 content sections; status `accepted` 2026-05-21
+- [ ] AC8 — Epic 11 key-isolation grep tests
+  - [ ] Create `tests/integration/test_hmac_key_isolation.py`
+  - [ ] 4 tests, all `@pytest.mark.slow` (D5)
+- [ ] AC9 — Validation gates green
+  - [ ] ruff check / format
+  - [ ] mypy --strict
+  - [ ] check_imports / check_event_registry / check_single_writer
+  - [ ] full pytest pass
