@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-21T08:30:00Z
+last_updated: 2026-05-21T09:00:00Z
 current_phase: 2  # Phase 2 opened by ADR-0003 (docs/adr/0003-phase-2-gate.md), 2026-05-15
 
 development_status:
@@ -303,7 +303,7 @@ development_status:
   # FR66–FR68a · NFR-R8
   # =========================================================================
   epic-12: backlog
-  12-1-budget-supervisor-worker-wrapper: backlog  # phase: 2 · FR66
+  12-1-budget-supervisor-worker-wrapper: ready-for-dev  # phase: 2 · FR66 + NFR-R8 + FR26 · spec authored 2026-05-21 · 6 ACs + 5 Decisions (all resolved); MEDIUM complexity (new domain/budget_supervisor.py + ClaudeCodeRunner.terminate_with_grace + lifespan wiring + integration latency test); Phase 1 task.budget_exceeded event already registered (event_types.py:236-238); per Epic 11 retro L1 → MANDATORY 3-lane pass-2 review regardless of complexity (cross-cutting subprocess control + event subscriber + lifespan task); also will need to verify D3 — task.budget_exceeded producer exists before dev start
   12-2-budget-enforcement-triggered-event: backlog  # phase: 2 · FR67 · new event type
   12-3-approve-override-budget-event: backlog  # phase: 2 · FR68 · new event type
   12-4-per-task-budget-policy-storage: backlog  # phase: 2 · FR68a
