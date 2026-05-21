@@ -25,6 +25,7 @@ from events import (
     TaskRetryRequestedPayload,
     TaskStopRequestedPayload,
 )
+from events.approval_signing import compute_approval_hmac
 from events.budget_policy import calculate_new_limit
 from events.envelope import Actor, EventEnvelope
 from events.ids import new_decision_id, new_event_id, new_uuid7
@@ -37,7 +38,6 @@ from registry_state.schema import Event, Task  # noqa: IMP001 — services→ser
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from registry_api.adapters.approval_signing import compute_approval_hmac
 from registry_api.adapters.errors import ProblemDetails
 from registry_api.lifecycle import ACTION_VALID_STATES
 from registry_api.routes.tasks import ResponseSlot, ResponseSlotCache

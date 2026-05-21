@@ -9,6 +9,7 @@ this module's contracts.
 from __future__ import annotations
 
 from events import schema_registry as _schema_registry
+from events.approval_signing import compute_approval_hmac
 from events.backfill import backfill_trace_id_from_request_id
 from events.canonical import from_canonical_json, to_canonical_json
 from events.clock import FROZEN_EPOCH, Clock, FrozenClock, SystemClock, TickingClock
@@ -90,6 +91,13 @@ __all__ = [
     "CapabilityDenied",
     "Clock",
     "CursorSchemaVersionError",
+    # Story 11.4 PP3 — pure HMAC signer relocated from
+    # services/registry-api/src/registry_api/adapters/approval_signing.py.
+    # The registry-api module now re-exports this symbol as a thin
+    # compatibility shim. New callers (including scripts/verify_approval.py)
+    # MUST import from events directly so the offline verifier does not
+    # transitively pull FastAPI / SQLAlchemy / Anthropic.
+    "compute_approval_hmac",
     # Story 11.2 — no explicit entries added: KeyRotatedPayload and
     # CapabilityDeniedPayload ride in solely via ``*_payloads_all`` spliced
     # at the bottom of __all__ (see ``__all__ += _payloads_all`` below).

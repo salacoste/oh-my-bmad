@@ -432,23 +432,28 @@ class TestCanonicalStringInjectionGuard:
 
 
 # ---------------------------------------------------------------------------
-# P1-M3 — Microsecond-precision timestamp round-trip
+# P1-M3 + Story 11.4 PP2 — Millisecond-precision timestamp truncation
 # ---------------------------------------------------------------------------
 
 
-class TestMicrosecondTimestamp:
-    """P1-M3: HMAC deterministic with sub-second timestamps."""
+class TestMillisecondTimestampTruncation:
+    """P1-M3 (Story 11.1) + PP2 (Story 11.4): HMAC truncates timestamp to
+    ms-precision to match the canonical storage form.
 
-    def test_compute_approval_hmac_microsecond_precision_timestamp_round_trips(
+    Story 11.4 PP2 amended the original P1-M3 contract: sub-millisecond
+    microseconds MUST be truncated before isoformat() so the sign-time
+    canonical string byte-equals what the canonical JSON serializer writes
+    to disk (which truncates µs → ms + Z suffix). Pre-PP2, any production
+    event with non-zero sub-ms µs would fail offline verification because
+    the storage form was ``…789Z`` but the sign-time canonical was
+    ``…789123+00:00``. The P1-M3 tests passed only because all fixtures
+    used ``microsecond=0``.
+    """
+
+    def test_compute_approval_hmac_deterministic_with_sub_ms_microseconds(
         self,
     ) -> None:
-        """P1-M3: HMAC is deterministic with microsecond-precision timestamp.
-
-        Production ``SystemClock.now()`` returns sub-second precision.
-        Story 11.4 offline verifier must read payload.timestamp rather than
-        recompute — this test proves the ISO format includes microseconds
-        and the function is deterministic across calls with the same value.
-        """
+        """P1-M3: HMAC is deterministic with sub-ms microsecond timestamps."""
         ts = datetime(2026, 5, 20, 12, 0, 0, 123456, tzinfo=UTC)
         result_a = compute_approval_hmac(
             key=_TEST_KEY,
@@ -465,16 +470,75 @@ class TestMicrosecondTimestamp:
             actor_id=_TEST_ACTOR_ID,
         )
         assert result_a == result_b  # deterministic
-        # Verify ISO format includes microseconds (confirms Story 11.4 can
-        # reproduce the HMAC from the payload.timestamp field verbatim).
-        assert ".123456" in ts.isoformat()
-        # Confirm microsecond timestamp produces different HMAC from zero-microsecond.
+
+    def test_compute_approval_hmac_truncates_sub_ms_microseconds(self) -> None:
+        """PP2: two timestamps differing only in sub-ms µs MUST produce the
+        same HMAC (because both serialize to identical ms-truncated ISO
+        strings on disk).
+
+        Pre-PP2 this assertion would have FAILED: the function preserved
+        full µs precision, so ``…123456`` ≠ ``…123789`` produced different
+        HMACs. PP2 truncates both to ``…123000`` before isoformat() so
+        the function output is invariant under sub-ms changes.
+        """
+        ts_a = datetime(2026, 5, 20, 12, 0, 0, 123456, tzinfo=UTC)
+        ts_b = datetime(2026, 5, 20, 12, 0, 0, 123789, tzinfo=UTC)
+        ts_c = datetime(2026, 5, 20, 12, 0, 0, 123000, tzinfo=UTC)
+        hmac_a = compute_approval_hmac(
+            key=_TEST_KEY,
+            task_id=_TEST_TASK_ID,
+            action="approve",
+            timestamp=ts_a,
+            actor_id=_TEST_ACTOR_ID,
+        )
+        hmac_b = compute_approval_hmac(
+            key=_TEST_KEY,
+            task_id=_TEST_TASK_ID,
+            action="approve",
+            timestamp=ts_b,
+            actor_id=_TEST_ACTOR_ID,
+        )
+        hmac_c = compute_approval_hmac(
+            key=_TEST_KEY,
+            task_id=_TEST_TASK_ID,
+            action="approve",
+            timestamp=ts_c,
+            actor_id=_TEST_ACTOR_ID,
+        )
+        assert hmac_a == hmac_b == hmac_c, (
+            "PP2: sub-ms microseconds must be truncated before hashing"
+        )
+
+    def test_compute_approval_hmac_differs_across_ms_boundaries(self) -> None:
+        """PP2: timestamps differing at the ms boundary MUST still produce
+        different HMACs (truncation is to ms, not to seconds).
+
+        Regression guard: PP2 should not over-truncate (which would weaken
+        the HMAC by collapsing ms-level differences).
+        """
+        ts_123ms = datetime(2026, 5, 20, 12, 0, 0, 123000, tzinfo=UTC)
+        ts_124ms = datetime(2026, 5, 20, 12, 0, 0, 124000, tzinfo=UTC)
         ts_zero = datetime(2026, 5, 20, 12, 0, 0, 0, tzinfo=UTC)
-        result_zero = compute_approval_hmac(
+        hmac_123 = compute_approval_hmac(
+            key=_TEST_KEY,
+            task_id=_TEST_TASK_ID,
+            action="approve",
+            timestamp=ts_123ms,
+            actor_id=_TEST_ACTOR_ID,
+        )
+        hmac_124 = compute_approval_hmac(
+            key=_TEST_KEY,
+            task_id=_TEST_TASK_ID,
+            action="approve",
+            timestamp=ts_124ms,
+            actor_id=_TEST_ACTOR_ID,
+        )
+        hmac_zero = compute_approval_hmac(
             key=_TEST_KEY,
             task_id=_TEST_TASK_ID,
             action="approve",
             timestamp=ts_zero,
             actor_id=_TEST_ACTOR_ID,
         )
-        assert result_a != result_zero
+        assert hmac_123 != hmac_124, "ms boundary differences must change HMAC"
+        assert hmac_123 != hmac_zero, "ms vs zero differences must change HMAC"

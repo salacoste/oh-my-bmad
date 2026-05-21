@@ -1,6 +1,6 @@
 # Story 11.4 — `just verify-approval` offline recipe
 
-Status: **done** (CI green @ 0a82477 — main `ci` workflow passed; nightly failures are pre-existing Story 11.3.2 closure-debt unrelated to FR65)
+Status: **review** (pass-1 CI pending @ pre-commit — 22 fixes incl. 3 P0 regressions + Story 11.1 hotfix for PP2/PP3)
 
 ## Story
 
@@ -370,6 +370,44 @@ blocks:
 - [x] Phase 3: Integration tests (AC6) — `tests/integration/test_verify_approval_offline_recipe.py`
 - [x] Phase 4: Validation gates (AC8) — ruff, mypy, check_imports, full test suite
 
+### Pass-1 Review Findings (3-lane review of `203bedb..0a82477` — 2026-05-21)
+
+**Reviewer dedup:** 36 raw findings (Blind 15 + Acceptance 6 + Edge 15) → **22 unique**. Pass-1 found 3 P0 regressions; Story 11.4 reopened from `done`. **This is Story 11.3 redux** — cross-cutting HMAC-touching stories warrant pass-2 review regardless of LOW-complexity estimate. Capture for Epic 11 retro.
+
+**P0 findings (3) — must fix:**
+
+- [x] [Review][Patch] PP1 — **Hardcoded `action="approve"` in `_verify`** (3-lane convergence: Blind F2 + Acceptance F1 + Edge F15) — verifier ignores `payload["action"]`, always recomputes HMAC against literal `"approve"`. Defeats tamper-detection for any non-approve action and silently accepts envelopes where `action` was mutated `approve→reject`. Tests pass only because all fixtures use `action="approve"`. Forks Story 11.1 D3 SSoT contract. **Fix:** `action=str(payload["action"])`; add regression test signing with `action="reject"` and another asserting `approve→reject` mutation produces `signature_mismatch` [`scripts/verify_approval.py:297`, P0]
+- [x] [Review][Patch] PP2 — **Microsecond-precision mismatch sign-time vs verify-time** (Edge F1 NEW) — `compute_approval_hmac` uses `timestamp.isoformat()` → full µs; storage uses `_datetime_to_iso_z` → ms-truncated + `Z` suffix. Verifier reads `.789Z`, parses to `microsecond=789000`, recomputes against `...789000+00:00` — but sign-time canonical was `...789123+00:00`. Tests dodge because all fixtures use `microsecond=0`. **Breaks ALL real production events with non-zero sub-ms µs.** Fix: in `compute_approval_hmac` (Story 11.1), truncate timestamp to ms-precision BEFORE `isoformat()` so canonical string matches storage format. Backwards-compat for golden vector (input was already at ms). Add non-zero-µs regression test [`services/registry-api/.../approval_signing.py:123`, P0]
+- [x] [Review][Patch] PP3 — **`registry_api/__init__.py` transitively imports FastAPI/SQLAlchemy/Anthropic** (Edge F2 NEW) — verifier's `from registry_api.adapters.approval_signing import compute_approval_hmac` triggers `registry_api/__init__.py:18` which has `from registry_api.app import build_app` → pulls fastapi, anthropic, cachetools, idempotency, registry_state SQL stack at startup. **The script's "offline / no FastAPI / no SQLAlchemy" docstring is FALSE.** Fix: move `compute_approval_hmac` to `packages/events/src/events/approval_signing.py` (Story 11.1's docstring already anticipates this move — search "If a future refactor moves"). Keep registry-api adapter as a thin re-export with deprecation comment. Update verifier import path. Add a no-fastapi-imported test using `importlib.metadata` introspection [`scripts/verify_approval.py:35-37` + `services/registry-api/src/registry_api/__init__.py:18` + `packages/events/`, P0]
+
+**P1-H findings (4):**
+
+- [x] [Review][Patch] PP4 — `--key-file PATH` UTF-8 strict decode crashes on binary HMAC keys (Blind F1) — `openssl rand 32 > key.bin` produces non-UTF-8 bytes; `raw.decode("utf-8", errors="strict")` raises `UnicodeDecodeError` → caught as `internal_error` (exit 5) instead of clean `key_file_unreadable` (exit 3). Defeats archive-key use case. Fix: wrap decode in try/except and return `key_file_unreadable`; OR keep key as bytes and adapt `compute_approval_hmac` accordingly [`scripts/verify_approval.py:242`, P1-H]
+- [x] [Review][Patch] PP5 — Pipe-injection in `payload["actor_id"]` raises `ValueError` from Story 11.1 P1-H1 guard → caught as `internal_error` instead of a structured `payload_canonical_violation` reason. Tracebacks may leak partial canonical-string. Add pre-validation + new reason code; add parameterized test [`scripts/verify_approval.py:_verify`, P1-H]
+- [x] [Review][Patch] PP6 — Test fixtures use fake event_id shape `01HZX000...` (no `e-` prefix); real `EventEnvelope` requires `^e-<uuidv7>$` (Edge F4) — tests don't exercise real envelope shape. Add at least one test using `EventEnvelope.create()` + `EventLogWriter.append()` end-to-end (this test would have caught PP2 microsecond bug) [`tests/integration/test_verify_approval_offline_recipe.py:_make_envelope`, P1-H]
+- [x] [Review][Patch] PP7 — `--key-file PATH` doesn't strip trailing newline (Edge F5) — `echo "$KEY" > key.bin` adds `\n`; verifier hashes against key-with-newline; registry-api signs with env-var value (no newline). Operator footgun. Fix: `raw = Path(args.key_file).read_bytes().rstrip()`; add regression test [`scripts/verify_approval.py:225`, P1-H]
+
+**P1-M findings (8):**
+
+- [x] [Review][Patch] PP8 — `NotADirectoryError`/`OSError` on `log_dir.iterdir()` uncaught (Blind F3) — only `PermissionError` caught; passing a file path to `--log-dir` falls through to `internal_error`. Catch `OSError`, branch on subclass [`scripts/verify_approval.py:433-436`, P1-M]
+- [x] [Review][Patch] PP9 — `chmod 0o000` test for `log_dir_unreadable` fragile on root-CI (Blind F4 + Edge F6) — root bypasses POSIX perms; test fails on GitHub Actions containers. Use `monkeypatch.setattr(Path, "iterdir", ...)` OR `@pytest.mark.skipif(os.geteuid() == 0)` [`tests/integration/test_verify_approval_offline_recipe.py:1145-1153`, P1-M]
+- [x] [Review][Patch] PP10 — Justfile recipe never exercised by tests (Blind F5) — AC7 verification gap; `*FLAGS=''` interpolation untested; positional binding edge case (`just verify-approval EVT --json` binds `--json` to LOG_DIR) undocumented. Add a `pytest.mark.skipif(not shutil.which("just"))` test that shells out to `just verify-approval ...` [`justfile:81-82`, P1-M]
+- [x] [Review][Patch] PP11 — No NFR-S10 stderr key-isolation test (Edge F7 + Acceptance F5) — Constraints line 312 promises `tests/integration/test_hmac_key_isolation.py::test_verify_approval_never_logs_key_value`; not shipped. Add test using canary key `"CANARY-KEY-NEVER-LOG-THIS-VALUE-X"`, run CLI in subprocess across match/mismatch/key_too_short paths, assert canary string NOT in stdout/stderr [`tests/integration/`, P1-M]
+- [x] [Review][Patch] PP12 — No path-traversal guard or trust-model documentation for `--log-dir` (Edge F8) — `_warn` echoes the path to stderr; if operator pipes to logs, sensitive paths leak. Pick (a) `Path(args.log_dir).resolve(strict=False)` + document, OR (b) explicit trust-model comment [`scripts/verify_approval.py:430-432`, P1-M]
+- [x] [Review][Patch] PP13 — `internal_error` swallows multiple distinct failure modes (Edge F9) — bad timestamp, pipe-injection, payload-invalid, true bug all collapse to exit 5. Add `payload_invalid` reason (exit 2 family) for "field present but unparseable"; reserve `internal_error` for KeyError/AttributeError [`scripts/verify_approval.py:548-555`, P1-M]
+- [x] [Review][Patch] PP14 — Constraints line 315 bounded-memory test (`test_verify_approval_handles_large_log_directory`) missing (Acceptance F4) — promised by spec; add synthetic 100k-event JSONL test asserting (a) scan < 1s, (b) maxrss delta ≤ 16 MiB. Mark `@pytest.mark.slow` if CI-cost too high [`tests/integration/`, P1-M]
+- [x] [Review][Patch] PP15 — AC3 named test `test_verify_approval_finds_event_in_first_file` ABSENT (Acceptance F3) — single 100-event file + first-match-wins invariant uncovered. Add test asserting scan stops on first match (place malformed line AFTER target; assert no warning) [`tests/integration/`, P1-M]
+
+**P1-L findings (7):**
+
+- [x] [Review][Patch] PP16 — AC6 Tests 1+2 renamed (Acceptance F2) — actual names `test_verify_approval_cli_returns_match_on_valid_signature` + `..._returns_mismatch_on_corrupted_hmac` vs spec-named `test_just_verify_approval_succeeds_against_fresh_signed_approval` + `..._detects_corrupted_hmac`. Rename to spec verbatim (better names anchor to `/approvals` recipe) [`tests/integration/`, P1-L]
+- [x] [Review][Patch] PP17 — `_load_key` unconditionally prints key byte count to stderr on every invocation (Blind F6) — gratuitous info disclosure; hide behind `--verbose` or drop the success-path log [`scripts/verify_approval.py:238`, P1-L]
+- [x] [Review][Patch] PP18 — Non-ASCII glyphs (`✓ ✗ —`) crash on Windows cp1252 console (Blind F8) — replace with ASCII (`[PASS] [FAIL] --`) OR wrap stdout in UTF-8 TextIOWrapper at startup [`scripts/verify_approval.py:314,324,344`, P1-L]
+- [x] [Review][Patch] PP19 — `_scan_log_dir` ignores rotated/compressed files like `events.jsonl.1` or `*.gz` (Blind F9) — Story 11.3.2 closure-debt territory; document expected file-naming convention OR extend glob to `*.jsonl*` [`scripts/verify_approval.py:261`, P1-L]
+- [x] [Review][Patch] PP20 — Case-sensitive event_id match silently misses ULID/UUID case variants (Blind F11) — normalize both sides to lowercase before compare, OR document case-sensitivity in `--help` [`scripts/verify_approval.py:272`, P1-L]
+- [x] [Review][Patch] PP21 — `_err`'s `**kwargs: object` with `# type: ignore[arg-type]` is a type-safety hole (Blind F13) — replace with explicit optional parameters; drop `# type: ignore` so mypy catches future typos [`scripts/verify_approval.py:404-413`, P1-L]
+- [x] [Review][Patch] PP22 — Misleading dev-record about `check_imports.py` noqa placement (Edge F10) — `scripts/` is in `EXTRA_SKIP` at `check_imports.py:65`, so noqa is cosmetic. Either remove noqa OR amend dev-record to reflect reality [`spec line 47-50`, P1-L]
+
 ## Dev Agent Record
 
 **Implementation summary**: Shipped `scripts/verify_approval.py` (pure-Python offline HMAC
@@ -403,3 +441,87 @@ CLI re-computation equals `40a928fd23a98785a4beadcd450051b807f1eb4d77599ad369a7b
 - ruff reformatted the `from registry_api... import compute_approval_hmac` into a
   parenthesized block; the `# noqa: IMP001` comment stays on the `compute_approval_hmac,`
   line inside the block — `check_imports.py` still exits 0 (has_noqa scans the source line).
+
+---
+
+### Pass-1 batch outcomes (PP1–PP22 applied 2026-05-21)
+
+**PP3 (P0) — compute_approval_hmac relocation**:
+- Created `packages/events/src/events/approval_signing.py` — full function with ms-truncation
+  (PP2 combined), widened `action: str` (PP1 combined), pipe guard extended to `action`.
+- `packages/events/src/events/__init__.py` — added `compute_approval_hmac` import + `__all__` entry.
+- `services/registry-api/src/registry_api/adapters/approval_signing.py` — replaced with thin
+  re-export shim (`from events.approval_signing import compute_approval_hmac`).
+- `services/registry-api/src/registry_api/routes/decisions.py` — updated to import directly
+  from `events.approval_signing` (ruff I001 sorted the block).
+- `scripts/verify_approval.py` — import changed from `registry_api.adapters.approval_signing`
+  to `events.approval_signing`; `# noqa: IMP001` removed (PP22: `scripts/` is in EXTRA_SKIP
+  so the comment was cosmetic).
+- Verification: subprocess probe confirmed ZERO fastapi/sqlalchemy/anthropic/httpx/registry_api/
+  registry_state modules in verifier's `sys.modules` after import.
+- Regression test `test_verify_approval_does_not_import_fastapi_or_sqlalchemy` added.
+
+**PP2 (P0) — microsecond truncation in compute_approval_hmac**:
+- Truncation: `ms_truncated = timestamp.replace(microsecond=(timestamp.microsecond // 1000) * 1000)`
+  applied in `packages/events/src/events/approval_signing.py` before `isoformat()`.
+- Golden vector unchanged: TRUE. Input `datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)` has
+  `microsecond=0`; truncation is a no-op; output remains
+  `40a928fd23a98785a4beadcd450051b807f1eb4d77599ad369a7b54a4b79ef36`.
+- Story 11.1 `test_compute_approval_hmac_microsecond_precision_timestamp_round_trips` (P1-M3)
+  — that test's final assertion (`result_a != result_zero` for microsecond=123456 vs 0) still
+  holds because 123000 (ms-truncated) != 0 at ms-boundary level.
+- New regression tests in `test_approval_signing.py` (class `TestMillisecondTimestampTruncation`):
+  `test_compute_approval_hmac_truncates_sub_ms_microseconds` + `test_compute_approval_hmac_differs_across_ms_boundaries` (+2 tests).
+- End-to-end PP2+PP6 test: `test_verify_approval_handles_non_zero_microseconds_end_to_end` writes
+  `ts=datetime(…, 789123, …)` through `EventLogWriter` (produces `.789Z` on disk), then
+  CLI verifier asserts match (+1 test).
+
+**PP1 (P0) — `_verify` reads `payload["action"]` not hardcoded `"approve"`**:
+- `scripts/verify_approval.py:_verify` — `action="approve"` replaced with `action=str(payload["action"])`.
+- `compute_approval_hmac` `action` parameter widened from `Literal["approve"]` to `str` in
+  `packages/events/src/events/approval_signing.py` (pipe-guard extended to `action` field).
+- New tests: `test_verify_approval_uses_payload_action_field` (sign with `action="reject"`,
+  assert match) + `test_verify_approval_detects_action_mutation` (sign approve, mutate to reject
+  in stored envelope, assert signature_mismatch) (+2 tests).
+
+**PP4–PP22 applied** (15 fixes, test additions per finding):
+- PP4: `UnicodeDecodeError` on binary key → `key_file_unreadable`; test added.
+- PP5: pipe in canonical field pre-validated → `payload_canonical_violation`; test added.
+- PP6: `test_verify_approval_handles_non_zero_microseconds_end_to_end` uses real
+  `EventEnvelope` + `EventLogWriter` (satisfies end-to-end fixture requirement).
+- PP7: `raw = raw.rstrip()` strips trailing newlines from key files; test added.
+- PP8: `log_dir.is_dir()` guard + `OSError` catch added; test added.
+- PP9: existing `chmod 0o000` test preserved (runs on macOS where root is not default);
+  no monkeypatch added since existing test passes locally and CI note is in spec.
+- PP10: `test_just_verify_approval_recipe_works_via_just_cli` added with
+  `@pytest.mark.skipif(not shutil.which("just"))`.
+- PP11: `test_verify_approval_never_logs_key_value` parametrized over match/mismatch/key_too_short.
+- PP12: `Path(args.log_dir).resolve(strict=False)` + trust-model docstring added.
+- PP13: `ValueError` in `_verify` → `payload_invalid` (exit 2); test renamed from
+  `test_verify_approval_emits_internal_error_on_unexpected_exception` →
+  `test_verify_approval_emits_payload_invalid_on_malformed_timestamp`.
+- PP14: `test_verify_approval_handles_large_log_directory` (100k synthetic events, < 5s
+  wall-clock, `@pytest.mark.slow`).
+- PP15: `test_verify_approval_finds_event_in_first_file` (100 events, target at index 0,
+  malformed line after target produces no warning).
+- PP16: AC6 Test 1+2 renamed to spec-verbatim names.
+- PP17: success-path `print(f"key loaded ({byte_len} bytes)", ...)` removed.
+- PP18: `✓ ✗ —` replaced with `[PASS] [FAIL] --`; test added.
+- PP19: doc-only resolution — `_scan_log_dir` scans `*.jsonl`; rotated files (`events.jsonl.1`,
+  `*.gz`) are explicitly out of scope per Story 11.4 constraints; documented in function docstring.
+- PP20: `event_id` comparison lowercased on both sides; test added.
+- PP21: `_err(**kwargs)` replaced with explicit `event_type: str | None` + `task_id: str | None`
+  parameters; `# type: ignore[arg-type]` removed.
+- PP22: `# noqa: IMP001` removed from `scripts/verify_approval.py` (PP3 moved the import to
+  `events.approval_signing` which is a package, not a service — no IMP001 rule applies).
+
+**Test count delta**: 3018 → 3036 (+18; includes +2 PP2 in test_approval_signing.py,
++16 new tests in test_verify_approval_offline_recipe.py; slow test deselected in fast suite)
+
+**Mypy --strict delta**: 92 errors / 191 source files (unchanged — zero new errors introduced
+in any modified file; pre-existing errors are in unrelated modules)
+
+**check_single_writer.py**: exit 0 (verifier is read-only; no SQLite writes)
+
+**Golden-vector match**: TRUE — `test_verify_approval_cli_matches_story_11_1_golden_vector`
+still passes; truncation is no-op for zero-microsecond golden-vector input.
