@@ -303,7 +303,7 @@ development_status:
   # FR66–FR68a · NFR-R8
   # =========================================================================
   epic-12: backlog
-  12-1-budget-supervisor-worker-wrapper: ready-for-dev  # phase: 2 · FR66 + NFR-R8 + FR26 · spec authored 2026-05-21 · 6 ACs + 5 Decisions (all resolved); MEDIUM complexity (new domain/budget_supervisor.py + ClaudeCodeRunner.terminate_with_grace + lifespan wiring + integration latency test); Phase 1 task.budget_exceeded event already registered (event_types.py:236-238); per Epic 11 retro L1 → MANDATORY 3-lane pass-2 review regardless of complexity (cross-cutting subprocess control + event subscriber + lifespan task); also will need to verify D3 — task.budget_exceeded producer exists before dev start
+  12-1-budget-supervisor-worker-wrapper: in-progress  # phase: 2 · FR66 + NFR-R8 + FR26 · spec authored 2026-05-21 · 6 ACs + 5 Decisions (all resolved); MEDIUM complexity (new domain/budget_supervisor.py + ClaudeCodeRunner.terminate_with_grace + lifespan wiring + integration latency test); Phase 1 task.budget_exceeded event already registered (event_types.py:236-238); per Epic 11 retro L1 → MANDATORY 3-lane pass-2 review regardless of complexity (cross-cutting subprocess control + event subscriber + lifespan task); D3 verified 2026-05-21 — producer at services/orchestrator-adapter/src/orchestrator_adapter/app/main.py:362-368 via build_budget_exceeded_payload + _emit_event after token tracker.is_exceeded; dev started 2026-05-21
   12-2-budget-enforcement-triggered-event: backlog  # phase: 2 · FR67 · new event type
   12-3-approve-override-budget-event: backlog  # phase: 2 · FR68 · new event type
   12-4-per-task-budget-policy-storage: backlog  # phase: 2 · FR68a

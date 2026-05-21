@@ -298,4 +298,36 @@ review_cadence: MANDATORY_3_LANE_PASS_2  # Epic 11 retro L1 — cross-cutting su
 
 ## Tasks / Subtasks
 
-_(populated by dev agent)_
+- [ ] Phase 0 — Sprint-status flip + D3 pre-flight verify
+  - [ ] D3 producer search → orchestrator-adapter/src/orchestrator_adapter/app/main.py:362-368 confirmed
+  - [ ] Sprint-status: 12-1 ready-for-dev → in-progress
+- [ ] Phase 1 — `terminate_with_grace` on `ClaudeCodeRunner` (AC2)
+  - [ ] Add `_TerminationResult` frozen dataclass (`method`, `elapsed_s`, `exit_code`)
+  - [ ] Add `async def terminate_with_grace(self, *, grace_period_s: float = 5.0) -> _TerminationResult`
+  - [ ] Unit test: `test_terminate_with_grace_sigterm_succeeds`
+  - [ ] Unit test: `test_terminate_with_grace_sigkill_escalation`
+  - [ ] Unit test: `test_terminate_with_grace_noop_when_no_process`
+- [ ] Phase 2 — `budget_supervisor.py` module (AC1 + AC4)
+  - [ ] Create `services/worker-wrapper/src/worker_wrapper/domain/budget_supervisor.py`
+  - [ ] `_BudgetSupervisorResult` frozen dataclass (7 fields per AC1)
+  - [ ] `async def watch_for_budget_exceeded(...)` per AC1 signature
+  - [ ] Reuse `read_log_lines` + `current_day_path`; skip blank/decode-error lines
+  - [ ] Match on `type == "task.budget_exceeded"` AND `payload.task_id == task_id`
+  - [ ] Latency measurements via injected `Clock`
+  - [ ] Create `test_budget_supervisor.py` with 7 unit tests per AC4
+- [ ] Phase 3 — Lifespan integration (AC3)
+  - [ ] Spawn supervisor `asyncio.Task` in `run_task` after `ClaudeCodeRunner.run`
+  - [ ] Use `asyncio.create_task` with budget_cancel event
+  - [ ] On runner completion: set cancel + `await` supervisor with 1s timeout
+  - [ ] Skip `task.completed` emission when `result.triggered=True`
+- [ ] Phase 4 — Integration latency test (AC5)
+  - [ ] Create `tests/integration/test_budget_enforcement_latency.py`
+  - [ ] `test_budget_enforced_subprocess_exits_within_5s_e2e` — 5× repetitions
+  - [ ] Use real `EventEnvelope.create` + `EventLogWriter.append` per Epic 11 retro L6
+- [ ] Phase 5 — Validation gates + commit (AC6)
+  - [ ] `ruff check` + `ruff format --check`
+  - [ ] `mypy --strict` (108 baseline unchanged)
+  - [ ] `check_imports.py` / `check_event_registry.py` / `check_single_writer.py` (exit 0)
+  - [ ] `pytest` worker-wrapper + events + integration
+  - [ ] `just bootstrap-verify`
+  - [ ] Update Dev Agent Record + flip spec/sprint-status to `review`
