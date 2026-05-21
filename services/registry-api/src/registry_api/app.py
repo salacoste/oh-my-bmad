@@ -61,6 +61,7 @@ from registry_api.adapters.errors import (
     handle_internal_error,
     handle_validation_error,
 )
+from registry_api.adapters.key_rotation import detect_and_emit_key_rotation
 from registry_api.adapters.middleware import (
     ActorIdMiddleware,
     IdempotencyKeyMiddleware,
@@ -263,6 +264,21 @@ def build_app(
                 app.state.anthropic_client = llm_client
             else:
                 app.state.anthropic_client = None
+
+            # Story 11.5 (FR65a) — detect HMAC key rotation BEFORE serving
+            # requests. Synchronous + fail-loud (D3): if event emission
+            # fails (storage I/O, EventLogWriter poisoned), this raises and
+            # registry-api startup aborts. The audit invariant supersedes
+            # uptime — operators address the storage problem before any
+            # approval traffic flows. Idempotent: if the key fingerprint
+            # matches the last-known value in registry-state, this is a
+            # no-op (no event emitted).
+            await detect_and_emit_key_rotation(
+                current_key=resolved_signing.operator_hmac_key,
+                session_maker=session_maker,
+                event_log_writer=writer,
+                clock=clock,
+            )
 
             yield
 

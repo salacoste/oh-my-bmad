@@ -1237,3 +1237,99 @@ def test_verify_approval_event_id_match_is_case_insensitive(tmp_path: Path) -> N
     assert result.returncode == 0
     data = json.loads(result.stdout)
     assert data["status"] == "match"
+
+
+# ---------------------------------------------------------------------------
+# Story 11.5 AC5 — pre-rotation verification: --key-file accepts archived keys
+# ---------------------------------------------------------------------------
+
+
+def test_just_verify_approval_against_pre_rotation_event_with_prior_key(
+    tmp_path: Path,
+) -> None:
+    """Story 11.5 AC5: pre-rotation approvals verify against prior key only.
+
+    Simulates a real rotation: sign approval A under key A, simulate a
+    rotation, sign approval B under key B.
+
+    Verifies three paths:
+
+    * Key B's event verified with CURRENT key (key B) → match.
+    * Key A's event verified with ``--key-file <key-A-file>`` → match.
+    * Key A's event verified with CURRENT key (key B) → mismatch, and
+      the investigation steps mention key.rotated events.
+    """
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+
+    # Two distinct 32-byte keys.
+    key_a_str = "rotation-test-key-A-32-bytes-pad"
+    key_b_str = "rotation-test-key-B-32-bytes-pad"
+    assert len(key_a_str.encode("utf-8")) == 32
+    assert len(key_b_str.encode("utf-8")) == 32
+
+    # Sign event A under key A (decided 2026-04-21, pre-rotation).
+    ts_a = datetime(2026, 4, 21, 10, 0, 0, tzinfo=UTC)
+    event_a_id = "01HZX000000000000000A0000A"
+    env_a = _make_envelope(
+        event_id=event_a_id,
+        timestamp=ts_a,
+        key_str=key_a_str,
+    )
+    # Sign event B under key B (decided 2026-05-21, post-rotation).
+    ts_b = datetime(2026, 5, 21, 10, 0, 0, tzinfo=UTC)
+    event_b_id = "01HZX000000000000000B0000B"
+    env_b = _make_envelope(
+        event_id=event_b_id,
+        timestamp=ts_b,
+        key_str=key_b_str,
+    )
+    _write_jsonl(log_dir / "2026-04-21.jsonl", [env_a])
+    _write_jsonl(log_dir / "2026-05-21.jsonl", [env_b])
+
+    # Write key A to a file so --key-file can pick it up.
+    key_a_file = tmp_path / "key-A.txt"
+    key_a_file.write_text(key_a_str, encoding="utf-8")
+
+    # ---- 1. Event B with CURRENT key (B) → match.
+    result = _run_cli(event_b_id, "--log-dir", str(log_dir), "--json", key_str=key_b_str)
+    assert result.returncode == 0, f"event B + key B: stderr={result.stderr}"
+    data = json.loads(result.stdout)
+    assert data["status"] == "match"
+
+    # ---- 2. Event A with --key-file pointing at key A → match.
+    env_no_hmac: dict[str, str] = {k: v for k, v in os.environ.items() if k != "OPERATOR_HMAC_KEY"}
+    result_kf = subprocess.run(
+        [
+            sys.executable,
+            str(_SCRIPT),
+            event_a_id,
+            "--log-dir",
+            str(log_dir),
+            "--key-file",
+            str(key_a_file),
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        env=env_no_hmac,
+    )
+    assert result_kf.returncode == 0, f"event A + --key-file key A: stderr={result_kf.stderr}"
+    data_kf = json.loads(result_kf.stdout)
+    assert data_kf["status"] == "match", (
+        f"pre-rotation approval must verify against the prior key; got {data_kf}"
+    )
+
+    # ---- 3. Event A with CURRENT key (B) → mismatch + investigation
+    #         steps mention key.rotated.
+    result_mismatch = _run_cli(event_a_id, "--log-dir", str(log_dir), "--json", key_str=key_b_str)
+    assert result_mismatch.returncode == 1
+    data_mm = json.loads(result_mismatch.stdout)
+    assert data_mm["status"] == "mismatch"
+    assert data_mm["reason"] == "signature_mismatch"
+    # AC5: at least one investigation step references key.rotated.
+    joined_steps = "\n".join(data_mm["investigation_steps"])
+    assert "key.rotated" in joined_steps, (
+        "signature_mismatch investigation steps MUST mention key.rotated "
+        f"(Story 11.5 AC5); got steps={data_mm['investigation_steps']}"
+    )

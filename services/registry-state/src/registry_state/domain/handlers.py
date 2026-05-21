@@ -41,6 +41,7 @@ from registry_state.domain.event_types import (
     ApprovalRejectedPayload,
     BudgetOverridePayload,
     FileEditedPayload,
+    KeyRotatedPayload,
     LicenseOverridePayload,
     TaskApprovalRequestedPayload,
     TaskBlockerRaisedPayload,
@@ -58,7 +59,7 @@ from registry_state.domain.event_types import (
     Tier3ActionAttemptedPayload,
     Tier3ActionPerformedPayload,
 )
-from registry_state.schema import ApprovalInbox, Task
+from registry_state.schema import ApprovalInbox, KeyFingerprint, Task
 from registry_state.schema import Session as SessionRow
 
 _log = logging.getLogger("registry_state.domain.handlers")
@@ -635,6 +636,54 @@ async def handle_approval_inbox_opened(session: AsyncSession, envelope: EventEnv
     await session.execute(stmt)
 
 
+# ---------------------------------------------------------------------------
+# Story 11.5 — key.rotated handler (FR65a)
+# ---------------------------------------------------------------------------
+
+
+async def handle_key_rotated(session: AsyncSession, envelope: EventEnvelope) -> None:
+    """UPSERT the singleton ``key_fingerprint`` row on ``key.rotated`` events.
+
+    Story 11.5 AC3 — registry-api's rotation detector emits ``key.rotated``
+    exactly once per actual rotation (Story 11.5 AC4); this handler
+    materializes the event into the ``key_fingerprint`` singleton row keyed
+    on ``id="current"``. After this row is committed, a subsequent registry-
+    api restart will read the same fingerprint via the rotation detector
+    and short-circuit the emit path (no-op).
+
+    Idempotent replay: re-running the same envelope yields the same final
+    row state (fingerprint, rotated_at, rotated_by_actor_id all overwritten
+    with the payload's values).
+
+    No FK touch and no Task row update — this event is operator-scoped
+    (NOT task-scoped). The materializer's ``_extract_ids`` returns
+    ``(None, None)`` for ``key.rotated`` (the type does not start with
+    ``"task."`` / ``"approval."`` / ``"tier3."``, so the existing
+    extraction logic already produces NULL for both columns; no change
+    needed to ``_extract_ids`` for Story 11.5).
+    """
+    payload = _hydrate(envelope.payload, KeyRotatedPayload)
+    assert isinstance(payload, KeyRotatedPayload)
+    stmt = (
+        sqlite_insert(KeyFingerprint)
+        .values(
+            id="current",
+            fingerprint=payload.new_key_fingerprint,
+            rotated_at=payload.rotated_at,
+            rotated_by_actor_id=payload.actor_id,
+        )
+        .on_conflict_do_update(
+            index_elements=["id"],
+            set_=dict(
+                fingerprint=payload.new_key_fingerprint,
+                rotated_at=payload.rotated_at,
+                rotated_by_actor_id=payload.actor_id,
+            ),
+        )
+    )
+    await session.execute(stmt)
+
+
 class MaterializerProtocol(Protocol):
     """Story 11.3 review P28: structural type for the materializer-registration surface.
 
@@ -714,6 +763,8 @@ def register_default_handlers(materializer: MaterializerProtocol) -> None:
     )
     # Story 11.3 — approval.inbox_opened handler (FR63).
     materializer.register_handler("approval.inbox_opened", handle_approval_inbox_opened)
+    # Story 11.5 — key.rotated handler (FR65a).
+    materializer.register_handler("key.rotated", handle_key_rotated)
 
 
 __all__ = [
@@ -722,6 +773,7 @@ __all__ = [
     "handle_approval_inbox_opened",
     "handle_approval_rejected",
     "handle_file_edited",
+    "handle_key_rotated",
     "handle_task_approval_requested",
     "handle_task_blocker_raised",
     "handle_task_budget_exceeded",

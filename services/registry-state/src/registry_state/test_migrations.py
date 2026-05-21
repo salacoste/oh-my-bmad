@@ -26,7 +26,9 @@ from alembic.config import Config
 
 # Expected tables and indexes defined by the initial migration (revision 0001)
 # plus subsequent additive migrations. ``approval_inbox`` added by migration
-# 0007 (Story 11.3 / FR63 — operator-facing approval-inbox routing).
+# 0007 (Story 11.3 / FR63); ``key_fingerprint`` added by migration 0008
+# (Story 11.5 / FR65a — singleton row tracking the current HMAC signing-key
+# fingerprint for rotation detection).
 _EXPECTED_TABLES = frozenset(
     [
         "tasks",
@@ -35,6 +37,7 @@ _EXPECTED_TABLES = frozenset(
         "idempotency_cache",
         "snapshots",
         "approval_inbox",
+        "key_fingerprint",
         "alembic_version",
     ]
 )
@@ -53,8 +56,9 @@ _EXPECTED_INDEXES = frozenset(
 # History: 0001 initial → 0002 task thread binding → 0003 session compound index
 # → 0004 add task state columns (Story 8.x) → 0005 add event trace_id (Story 9.7)
 # → 0006 add event trace_id_synthetic_source + extensions (Story 9.8 D6+D7)
-# → 0007 add approval_inbox table (Story 11.3 AC2 / FR63).
-_REVISION = "0007"
+# → 0007 add approval_inbox table (Story 11.3 AC2 / FR63)
+# → 0008 add key_fingerprint table (Story 11.5 AC2 / FR65a).
+_REVISION = "0008"
 _INI_PATH = str(Path(__file__).parent.parent.parent / "alembic.ini")
 
 
@@ -289,3 +293,71 @@ def test_migration_0007_adds_approval_inbox_table() -> None:
         # No other column is a PK.
         for name in ("inbox_thread_id", "opened_at", "opened_by_actor_id"):
             assert cols[name][5] == 0, f"{name} must not be part of PRIMARY KEY"
+
+
+def test_migration_0008_adds_key_fingerprint_table() -> None:
+    """Story 11.5 / FR65a: migration 0008 adds the ``key_fingerprint`` table.
+
+    Smoke test: upgrade head on an empty DB and assert the new table exists
+    with the expected 4-column shape (id PK, fingerprint, rotated_at,
+    rotated_by_actor_id) all NOT NULL. The table is a singleton — the only
+    valid ``id`` is the literal string ``"current"`` (enforced by the
+    materializer / rotation detector at write time, not by a CHECK
+    constraint at the schema layer).
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = str(Path(tmpdir) / "state.sqlite3")
+        url = f"sqlite+aiosqlite:///{db_path}"
+        _run_upgrade(url)
+
+        conn = sqlite3.connect(db_path)
+        try:
+            cur = conn.cursor()
+            cur.execute("PRAGMA table_info(key_fingerprint)")
+            cols = {row[1]: row for row in cur.fetchall()}
+        finally:
+            conn.close()
+
+        # All 4 columns must exist.
+        assert set(cols) == {
+            "id",
+            "fingerprint",
+            "rotated_at",
+            "rotated_by_actor_id",
+        }, f"unexpected key_fingerprint columns: {set(cols)}"
+        # PRAGMA table_info: (cid, name, type, notnull, dflt_value, pk).
+        # All four columns must be NOT NULL (notnull == 1).
+        for name, row in cols.items():
+            assert row[3] == 1, f"key_fingerprint.{name} must be NOT NULL"
+        # id is the PRIMARY KEY (pk == 1).
+        assert cols["id"][5] == 1, "key_fingerprint.id must be PRIMARY KEY"
+        # No other column is a PK.
+        for name in ("fingerprint", "rotated_at", "rotated_by_actor_id"):
+            assert cols[name][5] == 0, f"key_fingerprint.{name} must not be part of PRIMARY KEY"
+
+
+def test_migration_0008_round_trip_downgrade_drops_table() -> None:
+    """Story 11.5 AC2: round-trip ``upgrade head`` → ``downgrade -1`` drops the table.
+
+    Belt-and-braces verification that the migration's ``downgrade()`` is
+    symmetric with ``upgrade()`` — a property all our migrations preserve
+    so operators can roll back cleanly.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = str(Path(tmpdir) / "state.sqlite3")
+        url = f"sqlite+aiosqlite:///{db_path}"
+        _run_upgrade(url)
+
+        # Confirm table exists post-upgrade.
+        tables_pre, _, versions_pre = _inspect_db(db_path)
+        assert "key_fingerprint" in tables_pre
+        assert versions_pre == ["0008"]
+
+        # Downgrade one revision.
+        command.downgrade(_make_cfg(url), "-1")
+
+        tables_post, _, versions_post = _inspect_db(db_path)
+        assert "key_fingerprint" not in tables_post, "downgrade -1 must drop key_fingerprint table"
+        assert versions_post == ["0007"], (
+            f"alembic_version must roll back to 0007; got {versions_post}"
+        )

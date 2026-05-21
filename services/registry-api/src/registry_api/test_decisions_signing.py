@@ -180,8 +180,13 @@ class TestApproveEmitsPairedSignedEvent:
         assert r.status_code == 202
 
         events_dir: Path = signing_client._events_dir  # type: ignore[attr-defined]
-        events = _read_jsonl_events(events_dir)
-        assert len(events) == 2, f"expected 2 events, got {[e['type'] for e in events]}"
+        all_events = _read_jsonl_events(events_dir)
+        # Story 11.5: lifespan now emits key.rotated on first boot (rotation
+        # detector). Filter it out so this test remains focused on the paired
+        # approval events that the /decisions handler emits.
+        events = [e for e in all_events if e["type"] != "key.rotated"]
+        all_types = [e["type"] for e in all_events]
+        assert len(events) == 2, f"expected 2 approval events, got {all_types}"
 
         granted, signed = events
         assert granted["type"] == "approval.granted"
@@ -254,7 +259,8 @@ class TestApproveEmitsPairedSignedEvent:
         assert r.status_code == 202
 
         events_dir: Path = signing_client._events_dir  # type: ignore[attr-defined]
-        events = _read_jsonl_events(events_dir)
+        # Story 11.5: filter key.rotated (first-boot event from lifespan startup).
+        events = [e for e in _read_jsonl_events(events_dir) if e["type"] != "key.rotated"]
         types = [e["type"] for e in events]
         assert types == ["approval.rejected"]
         assert "task.approval_signed" not in types
@@ -271,7 +277,8 @@ class TestApproveEmitsPairedSignedEvent:
         )
         assert r.status_code == 200
         events_dir: Path = signing_client._events_dir  # type: ignore[attr-defined]
-        events = _read_jsonl_events(events_dir)
+        # Story 11.5: filter key.rotated (first-boot event from lifespan startup).
+        events = [e for e in _read_jsonl_events(events_dir) if e["type"] != "key.rotated"]
         assert [e["type"] for e in events] == ["task.stop_requested"]
 
 
@@ -414,7 +421,8 @@ class TestRetryActionDoesNotEmitSignedEvent:
         assert r.status_code == 200
 
         events_dir: Path = signing_client._events_dir  # type: ignore[attr-defined]
-        events = _read_jsonl_events(events_dir)
+        # Story 11.5: filter key.rotated (first-boot event from lifespan startup).
+        events = [e for e in _read_jsonl_events(events_dir) if e["type"] != "key.rotated"]
         types = [e["type"] for e in events]
         assert types == ["task.retry_requested"]
         assert "task.approval_signed" not in types

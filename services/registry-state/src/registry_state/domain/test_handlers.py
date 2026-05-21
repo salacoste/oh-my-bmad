@@ -58,6 +58,7 @@ from registry_state.domain.handlers import (
     handle_approval_inbox_opened,
     handle_approval_rejected,
     handle_file_edited,
+    handle_key_rotated,
     handle_task_approval_requested,
     handle_task_blocker_raised,
     handle_task_budget_exceeded,
@@ -2503,3 +2504,166 @@ async def test_approval_inbox_materializer_event_row_has_null_task_id() -> None:
 
     assert row.task_id is None, "events.task_id MUST be NULL for approval events"
     assert row.session_id is None, "events.session_id MUST be NULL for approval events"
+
+
+# ===========================================================================
+# Story 11.5 — handle_key_rotated (FR65a)
+# ===========================================================================
+
+
+def _make_key_rotated_envelope(
+    *,
+    previous_fingerprint: str = "0000000000000000",
+    new_fingerprint: str = "a1b2c3d4e5f6789a",
+    actor_id: str = "key-rotation-detector",
+    mono_ns: int = 6_000_000,
+    seed: int = 42,
+) -> EventEnvelope:
+    """Build a ``key.rotated`` envelope for materializer tests.
+
+    Default values mirror Story 11.5 D1 (bootstrap sentinel) + D4
+    (actor_id = ``"key-rotation-detector"``). The clock + RNG are seeded
+    so event_ids / trace_ids stay deterministic across tests.
+    """
+    from registry_state.domain.event_types import KeyRotatedPayload
+
+    rng = Random(seed)
+    clk = FrozenClock(mono_ns=mono_ns, now=FROZEN_EPOCH)
+    return EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        type="key.rotated",
+        schema_version="1.1.0",
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=Actor(kind="system", id=actor_id),
+        payload=KeyRotatedPayload(
+            previous_key_fingerprint=previous_fingerprint,
+            new_key_fingerprint=new_fingerprint,
+            rotated_at=FROZEN_EPOCH,
+            actor_id=actor_id,
+        ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000001",
+        request_id=new_uuid7(clock=clk, rng=rng),
+    )
+
+
+@pytest.mark.asyncio
+async def test_key_rotated_materializer_inserts_on_first_event(
+    db_session: AsyncSession,
+) -> None:
+    """Story 11.5 AC3: first ``key.rotated`` event inserts the singleton row."""
+    from registry_state.schema import KeyFingerprint
+
+    env = _make_key_rotated_envelope(
+        previous_fingerprint="0000000000000000",
+        new_fingerprint="a1b2c3d4e5f6789a",
+        actor_id="key-rotation-detector",
+    )
+    await handle_key_rotated(db_session, env)
+
+    row = await db_session.get(KeyFingerprint, "current")
+    assert row is not None, "key_fingerprint row must exist after first event"
+    assert row.fingerprint == "a1b2c3d4e5f6789a"
+    assert row.rotated_by_actor_id == "key-rotation-detector"
+
+
+@pytest.mark.asyncio
+async def test_key_rotated_materializer_upserts_on_rotation(
+    db_session: AsyncSession,
+) -> None:
+    """Story 11.5 AC3: a second rotation event UPSERTs the singleton row in place."""
+    from registry_state.schema import KeyFingerprint
+
+    env_first = _make_key_rotated_envelope(
+        previous_fingerprint="0000000000000000",
+        new_fingerprint="a1b2c3d4e5f6789a",
+        actor_id="key-rotation-detector",
+        seed=11,
+    )
+    env_second = _make_key_rotated_envelope(
+        previous_fingerprint="a1b2c3d4e5f6789a",
+        new_fingerprint="deadbeefcafef00d",
+        actor_id="key-rotation-detector",
+        seed=22,
+    )
+    await handle_key_rotated(db_session, env_first)
+    await handle_key_rotated(db_session, env_second)
+
+    # Exactly one row; latest fingerprint present.
+    result = await db_session.execute(text("SELECT COUNT(*) FROM key_fingerprint"))
+    assert result.scalar() == 1, "key_fingerprint must remain a singleton across rotations"
+    row = await db_session.get(KeyFingerprint, "current")
+    assert row is not None
+    assert row.fingerprint == "deadbeefcafef00d", (
+        "fingerprint must be updated to the latest rotation value"
+    )
+
+
+@pytest.mark.asyncio
+async def test_key_rotated_materializer_idempotent_on_replay(
+    db_session: AsyncSession,
+) -> None:
+    """Story 11.5 AC3: same envelope emitted twice yields exactly one row, no drift."""
+    from registry_state.schema import KeyFingerprint
+
+    env = _make_key_rotated_envelope(
+        previous_fingerprint="0000000000000000",
+        new_fingerprint="a1b2c3d4e5f6789a",
+    )
+    await handle_key_rotated(db_session, env)
+    await handle_key_rotated(db_session, env)  # idempotent replay
+
+    result = await db_session.execute(text("SELECT COUNT(*) FROM key_fingerprint"))
+    assert result.scalar() == 1, "replay must not duplicate rows"
+    row = await db_session.get(KeyFingerprint, "current")
+    assert row is not None
+    assert row.fingerprint == "a1b2c3d4e5f6789a"
+
+
+@pytest.mark.asyncio
+async def test_key_rotated_event_row_has_null_task_id() -> None:
+    """Story 11.5 AC3: key.rotated events MUST have task_id IS NULL AND session_id IS NULL.
+
+    Mirrors the Story 11.3 P9/P33 invariant pattern: the event is operator-
+    scoped (rotation of the HMAC signing key), NOT task-scoped. The
+    materializer's ``_extract_ids`` already returns ``(None, None)`` for
+    ``key.rotated`` because the type does not start with ``"task."`` /
+    ``"approval."`` / ``"tier3."``. This test pins the contract end-to-end
+    against the persisted ``events`` row.
+    """
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import StaticPool
+
+    from registry_state.adapters.sqlite_store import get_session as _get_session
+    from registry_state.domain.event_types import ensure_registered
+    from registry_state.domain.materializer import Materializer
+
+    ensure_registered()
+
+    eng = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    async with eng.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    sm = _get_session(eng)
+    materializer = Materializer(session_maker=sm)
+    materializer.register_handler("key.rotated", handle_key_rotated)
+
+    env = _make_key_rotated_envelope(
+        previous_fingerprint="0000000000000000",
+        new_fingerprint="a1b2c3d4e5f6789a",
+    )
+    await materializer.apply(env)
+
+    async with sm() as session:
+        result = await session.execute(
+            text("SELECT task_id, session_id FROM events WHERE id = :eid"),
+            {"eid": env.event_id},
+        )
+        row = result.one()
+    await eng.dispose()
+
+    assert row.task_id is None, "events.task_id MUST be NULL for key.rotated events"
+    assert row.session_id is None, "events.session_id MUST be NULL for key.rotated events"

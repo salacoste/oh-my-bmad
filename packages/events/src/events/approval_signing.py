@@ -187,4 +187,37 @@ def compute_approval_hmac(
     ).hexdigest()
 
 
-__all__ = ["compute_approval_hmac"]
+def compute_key_fingerprint(key: SecretStr) -> str:
+    """Compute 16-lowercase-hex SHA-256 truncated fingerprint of an HMAC key.
+
+    Per Story 11.2 D2: ``SHA-256(key_bytes)[:8]`` (8 bytes = 16 hex chars =
+    64 bits). Operator-readable in audit logs; collision-safe for the single-
+    operator key population this Platform serves.
+
+    Used by Story 11.5 rotation detector to compare current key vs last-known
+    fingerprint persisted in registry-state. NEVER call this in a hot path —
+    only at startup and during key-rotation detection.
+
+    **NFR-S10 isolation** — ``key.get_secret_value()`` is called exactly ONCE
+    here (frame-local, never logged). The returned fingerprint is safe to log
+    and appears in ``key.rotated`` event payloads. The fingerprint is a one-
+    way SHA-256 truncation; the original key cannot be recovered from it.
+
+    **Bootstrap sentinel (Story 11.5 D1)** — the literal string
+    ``"0000000000000000"`` is RESERVED as a sentinel for the first-boot
+    rotation event (no prior fingerprint exists). The probability that a
+    real ``SHA-256(key_bytes)[:8]`` equals 16 zero-hex chars is 2⁻⁶⁴, which
+    is negligible for the single-operator key population. ``KeyRotatedPayload``'s
+    ``previous != new`` invariant therefore holds in the first-boot case.
+
+    Args:
+        key: Operator HMAC signing key (Pydantic SecretStr).
+
+    Returns:
+        16-character lowercase hex string (e.g., ``"a1b2c3d4e5f6789a"``).
+    """
+    raw = key.get_secret_value().encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
+__all__ = ["compute_approval_hmac", "compute_key_fingerprint"]

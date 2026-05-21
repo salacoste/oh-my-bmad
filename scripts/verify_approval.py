@@ -67,11 +67,17 @@ _REASON_CODES = {
 # reason → investigation next-steps
 _INVESTIGATION_STEPS: dict[str, tuple[str, ...]] = {
     "signature_mismatch": (
-        "Verify OPERATOR_HMAC_KEY matches the key in effect when this event was signed"
-        " (check key.rotated events around decided_at -- Story 11.5).",
-        "If key is correct, the event payload may have been tampered with -- diff the"
-        " stored envelope against any backup copy.",
-        "If you rotated keys, retry with the prior key via --key-file PATH.",
+        "Verify OPERATOR_HMAC_KEY matches the key in effect when this event was signed."
+        " Find the most recent key.rotated event before this event's decided_at via:"
+        ' grep \'"type":"key.rotated"\' <log-dir>/*.jsonl -- the previous_key_fingerprint'
+        " field on that event tells you which key was current at signing time (Story 11.5).",
+        "If you rotated keys since this approval was signed, retry with the prior key"
+        " via --key-file PATH. The prior key fingerprint is recorded in the corresponding"
+        " key.rotated event's previous_key_fingerprint field.",
+        "If the prior key is not available, the approval cannot be re-verified -- this is"
+        " by design (FR65a: operator retains pre-rotation keys for audit-window duration).",
+        "If key is correct and no rotation occurred, the event payload may have been"
+        " tampered with -- diff the stored envelope against any backup copy.",
     ),
     "event_not_found": (
         "Confirm the event_id is correct (UUIDv7 of the task.approval_signed event,"

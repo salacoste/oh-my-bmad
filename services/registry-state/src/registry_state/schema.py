@@ -254,6 +254,38 @@ class ApprovalInbox(Base):
     opened_by_actor_id: Mapped[str] = mapped_column(String(128), nullable=False)
 
 
+class KeyFingerprint(Base):
+    """Singleton row tracking the current HMAC signing-key fingerprint (Story 11.5 AC2).
+
+    Materialized from ``key.rotated`` events. Read by registry-api at startup
+    (``adapters/key_rotation.py``) to detect whether ``OPERATOR_HMAC_KEY`` has
+    changed since last boot; if so, emit a fresh ``key.rotated`` event
+    recording the transition (FR65a + NFR-S10).
+
+    Single-row table — primary key is the literal string ``"current"`` so
+    UPSERT semantics on every rotation overwrite the previous row.
+
+    Column type notes:
+
+    * ``id`` is ``String(16)``; the only valid value is ``"current"`` (the
+      table is a singleton and the PK constraint enforces it).
+    * ``fingerprint`` is ``String(16)`` matching ``KeyRotatedPayload.
+      new_key_fingerprint`` field constraint (16 lowercase hex chars =
+      SHA-256[:8] = 64 bits).
+    * ``rotated_at`` uses :class:`UTCDateTime` for the same UTC-aware ms-
+      precision round-trip discipline as the rest of the schema.
+    * ``rotated_by_actor_id`` is ``String(128)`` per the Story 11.2 P1-H1
+      codebase-wide ``actor_id`` length invariant.
+    """
+
+    __tablename__ = "key_fingerprint"
+
+    id: Mapped[str] = mapped_column(String(16), primary_key=True, default="current")
+    fingerprint: Mapped[str] = mapped_column(String(16), nullable=False)
+    rotated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    rotated_by_actor_id: Mapped[str] = mapped_column(String(128), nullable=False)
+
+
 class Snapshot(Base):
     """Materialized state snapshot. Schema only — capture + replay logic is Story 2.6.
 
@@ -307,6 +339,7 @@ __all__ = [
     "Base",
     "Event",
     "IdempotencyCache",
+    "KeyFingerprint",
     "Session",
     "Snapshot",
     "Task",
