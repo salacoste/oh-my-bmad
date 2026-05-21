@@ -34,8 +34,8 @@ from events import FROZEN_EPOCH, FrozenClock
 from events.approval_signing import compute_key_fingerprint
 from events.log_reader import current_day_path, read_log_lines
 from pydantic import SecretStr
-from registry_state.adapters.event_log import (
-    EventLogWriter,  # noqa: IMP001 — test fixture uses registry-state write path for detector; no prod cross-service coupling
+from registry_state.adapters.event_log import (  # noqa: IMP001 — test fixture uses registry-state write path for detector; no prod cross-service coupling
+    EventLogWriter,
 )
 from registry_state.adapters.sqlite_store import (  # noqa: IMP001 — test fixture builds in-memory SQLite; no prod cross-service coupling
     create_engine,
