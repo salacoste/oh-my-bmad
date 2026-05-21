@@ -1,6 +1,6 @@
 # Story 11.5 — Key rotation flow + `key.rotated` emission
 
-Status: **review** (pass-1 CI pending @ pre-commit — 18 fixes: PD1 event-log dedup + 2 P1-H + 8 P1-M + 8 P1-L)
+Status: **done** (CI green @ 5e82d94 — Story 11.5 pass-1 review batch: 18 fixes incl. PD1 event-log dedup for true exactly-once rotation; Epic 11 acceptance gate fully closed)
 
 ## Story
 
