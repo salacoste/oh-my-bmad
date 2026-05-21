@@ -51,4 +51,8 @@ services:
       interval: 1s
       timeout: 3s
       retries: 60
-      start_period: 5s
+      # Story 11.3.2 — bumped from 5s to 30s. Phase 2 import surface
+      # (Stories 11.2 + 11.4 PP3) + CI cold-runner image-rebuild cost
+      # push the /tmp/ready touchpoint past the 5s window. 30s gives
+      # Docker a generous startup grace before healthcheck retries begin.
+      start_period: 30s

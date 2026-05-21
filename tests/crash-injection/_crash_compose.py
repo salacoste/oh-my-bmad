@@ -335,7 +335,12 @@ class CrashHarness:
         else:
             self.kill_graceful()
 
-    def restart(self, *, timeout_s: float = 70.0) -> float:
+    # Story 11.3.2 — bumped from 70s to 120s to match separability tests'
+    # 180s budget and accommodate Phase 2 cold-runner startup cost. The
+    # /tmp/ready sentinel is touched in app/main.py:208 after schema-create
+    # + log-recover. On ubuntu-latest CI runners these can exceed the
+    # original 70s window when image rebuild is involved.
+    def restart(self, *, timeout_s: float = 120.0) -> float:
         """Bring registry-state back up and wait for healthcheck → ``healthy``.
 
         Uses ``compose start registry-state`` first (semantically clearer:

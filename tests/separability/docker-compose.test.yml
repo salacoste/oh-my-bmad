@@ -51,7 +51,10 @@ services:
       interval: 1s
       timeout: 3s
       retries: 60
-      start_period: 5s
+      # Story 11.3.2 — bumped from 5s to 30s. Phase 2 import surface
+      # (Stories 11.2 + 11.4 PP3) + CI cold-runner image-rebuild cost
+      # push the /tmp/ready touchpoint past the 5s window.
+      start_period: 30s
 
   registry-api:
     build:
@@ -96,7 +99,10 @@ services:
       interval: 1s
       timeout: 3s
       retries: 60
-      start_period: 5s
+      # Story 11.3.2 — bumped from 5s to 30s. registry-api lifespan now
+      # includes Story 11.5's synchronous rotation detector (D3 fail-loud)
+      # which reads JSONL log + SQLite before serving requests.
+      start_period: 30s
 
   orchestrator-adapter:
     # No ``build:`` — the S-3 test harness drives the
@@ -135,7 +141,9 @@ services:
       interval: 1s
       timeout: 3s
       retries: 60
-      start_period: 5s
+      # Story 11.3.2 — bumped from 5s to 30s. Matches sibling services'
+      # Phase 2 cold-runner timing budget.
+      start_period: 30s
 
 networks:
   oh-my-bmad-net:
