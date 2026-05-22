@@ -19,7 +19,10 @@ of a list-capture terminal processor and yields the captured records.
 from __future__ import annotations
 
 import copy
+import gc
 import logging
+import threading
+import time
 from collections.abc import Callable, Iterator
 from random import Random
 from typing import Any
@@ -29,6 +32,57 @@ import structlog
 from events import FROZEN_EPOCH, FrozenClock, new_uuid7
 
 from tests._log_capture import CapturedLogList
+
+# ---------------------------------------------------------------------------
+# Story 8.7.6 — aiosqlite daemon-thread drain at session end
+#
+# Combined with asyncio_default_fixture_loop_scope = "module" in pyproject.toml,
+# this fixture eliminates the interpreter-shutdown race that previously required
+# the exit-134 SIGABRT tolerance shim in .github/workflows/ci.yml.
+#
+# Root cause: aiosqlite spawns a daemon worker thread per connection. Each thread
+# holds a reference to its asyncio event loop. When the pytest session ends and
+# the interpreter starts shutdown, daemon threads that haven't yet noticed their
+# loop is closed race the stderr buffer teardown — producing a SIGABRT (exit 134)
+# AFTER pytest has already printed its clean-pass summary line.
+#
+# This fixture waits up to 3s at session end for all aiosqlite worker threads to
+# exit naturally (they exit once their loop closes and they drain their queue).
+# gc.collect() is called first to trigger __del__ on any unreferenced engines,
+# which allows their connection pools to drain. The 3s budget is generous: in
+# practice threads exit within 100-200ms once their loop closes.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _drain_aiosqlite_threads_at_session_end() -> Iterator[None]:
+    """Session-scoped autouse: drain aiosqlite daemon threads before shutdown.
+
+    Story 8.7.6 — pairs with asyncio_default_fixture_loop_scope = "module" in
+    pyproject.toml. Without this drain, daemon threads that reference closed
+    event loops race Python's stderr-buffer teardown at interpreter shutdown,
+    causing SIGABRT (exit 134) on Linux/CI even when all test outcomes are clean.
+
+    The fixture yields immediately (zero overhead during the test session) and
+    runs its drain logic only in the teardown phase, after all tests have
+    completed and all other fixtures have torn down.
+    """
+    yield
+    # Trigger __del__ on unreferenced SQLAlchemy engines so their connection
+    # pools close and signal their aiosqlite worker threads to stop.
+    gc.collect()
+    # Wait for aiosqlite worker threads to exit. aiosqlite names its worker
+    # threads "Thread-N (_connection_worker_thread)" (the default Thread()
+    # naming when no name= kwarg is passed — Python appends the target
+    # function name in parentheses). We wait up to 3s; in practice threads
+    # exit within 100-200ms once their loop closes and they drain their queue.
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        # aiosqlite worker threads are named "Thread-N (_connection_worker_thread)".
+        live = [t for t in threading.enumerate() if "_connection_worker_thread" in t.name]
+        if not live:
+            break
+        time.sleep(0.05)
 
 
 @pytest.fixture
