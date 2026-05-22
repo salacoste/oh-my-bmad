@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-22T11:30:00Z
+last_updated: 2026-05-22T12:00:00Z
 current_phase: 2  # Phase 2 opened by ADR-0003 (docs/adr/0003-phase-2-gate.md), 2026-05-15
 
 development_status:
@@ -246,7 +246,7 @@ development_status:
   8-7-2-mypy-strict-fix: done  # phase: 2 · 58→0 mypy --strict errors across 97 source files (commit 461a01e)
   8-7-3-check-imports-noqa-markers: done  # phase: 2 · 7 IMP001 cross-service violations annotated (commit f948387)
   8-7-4-node-24-sha-pins: done  # phase: 2 · 21 GHA action refs bumped to Node 24 versions (commit 8028380)
-  8-7-5-test-isolation-conftest: backlog  # phase: 2 · centralize ensure_registered() autouse fixture in tests/conftest.py (per-file pattern from 7e4ffec doesn't scale)
+  8-7-5-test-isolation-conftest: ready-for-dev  # phase: 2 · spec authored 2026-05-22 — 5 ACs + 5 Decisions (all resolved); LOW complexity (new root conftest.py + ~10 redundant-fixture removals + docs note); centralizes ensure_registered() autouse in repo-root conftest.py (per-file pattern from 7e4ffec doesn't scale — 10 test files affected by Story 11.4/11.5/12.1 fixture toil); 1-pass review expected (plumbing-only, no Epic 11 retro L1 triggers)
   8-7-6-aiosqlite-teardown: backlog  # phase: 2 · root-fix the aiosqlite daemon-thread SIGABRT; replace exit-134 tolerance shim with proper engine disposal / fixture-loop-scope migration
   epic-8-7-retrospective: done  # phase: 2 · 2026-05-16 retro captures hidden-gate cascade pattern (L1) + module-cache trap (L2) + bash -e gotcha (L3)
 
