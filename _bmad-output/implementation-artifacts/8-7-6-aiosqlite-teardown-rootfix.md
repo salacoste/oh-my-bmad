@@ -1,6 +1,6 @@
 # Story 8.7.6 — aiosqlite daemon-thread teardown root-fix
 
-Status: **review** (CI pending @ pre-commit)
+Status: **done** (CI green @ run 26311644395, commit 5685801)
 
 ## Story
 
@@ -32,7 +32,7 @@ The commit `a0c53bb` workaround wraps the pytest invocation with a bash shim tha
 
 **AC1 — Shim removal.** [x] `.github/workflows/ci.yml`'s `pytest -m "not slow"` step contains a plain `run: uv run pytest -m "not slow"` line — no `set +e`, no exit-code translation, no tee+grep summary inspection. The 15-line block added in commits `011ced6`/`c3d8222`/`a0c53bb` is gone.
 
-**AC2 — CI green on a clean push.** [x] A no-op commit (e.g. `chore: trigger CI`) on main triggers the `ci` workflow and lands in `success` state. The pytest step's raw exit code is 0; the workflow run's `conclusion` field is `"success"`. (Pending CI run on push.)
+**AC2 — CI green on a clean push.** [x] CI run 26311644395 (`fix(epic-8.7.6): add session-end aiosqlite thread drain for Linux CI`, commit 5685801) on Ubuntu 24.04 landed `conclusion: "success"`. The plain `uv run pytest -m "not slow"` step exited 0 with no SIGABRT — no shim required.
 
 **AC3 — Local pytest green.** [x] `uv run pytest -m "not slow"` on `darwin/arm64` Python 3.12 exits 0 (no SIGABRT) over at least 3 consecutive invocations. Results: Run 1 exit 0, Run 2 exit 0, Run 3 exit 0 (all 3087 passed).
 
@@ -183,10 +183,12 @@ priority: medium
 estimated_hours: 2-4 (Option A) / 4-6 (Option B) / 16-24 (Option C)
 blocks: nothing (CI is green via shim; this is hardening)
 blocked_by: nothing
-status: review
+status: done
 created: 2026-05-16
 created_by: bmad/Claude post-Epic-8.7-closure
 implemented: 2026-05-22
 implemented_by: Claude Sonnet 4.6 (executor)
+ci_green: 2026-05-23
+ci_run: 26311644395
 ---
 ```
