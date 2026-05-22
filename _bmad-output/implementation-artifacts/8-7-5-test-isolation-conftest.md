@@ -1,6 +1,6 @@
 # Story 8.7.5 — Centralize `ensure_registered()` autouse fixture in `tests/conftest.py`
 
-Status: **ready-for-dev**
+Status: **review** (CI pending @ pre-commit)
 
 ## Story
 
@@ -283,3 +283,49 @@ review_cadence: 1-PASS (plumbing-only; no subprocess/HMAC/event-log/lifespan)
 - [x] **T3d (AC3/D5)** Add function-scoped teardown to `packages/secret-hygiene/src/secret_hygiene/test_audited_secret.py` calling `ensure_registered()` to restore canonical state after `unregister_all()`
 - [x] **T4 (AC4)** Add schema-registry isolation note to `docs/testing-guide.md`
 - [x] **T5 (AC5)** Run all validation gates and confirm 3087 test count + mypy unchanged
+
+## Dev Agent Record
+
+### Files Added
+- `conftest.py` (repo root) — session-scoped autouse `_ensure_event_types_registered` fixture; Story 8.7.5 centralization
+
+### Files Modified (redundant fixture removals — AC2)
+- `services/registry-api/src/registry_api/test_decisions.py` — removed plain `_ensure_event_types_registered` autouse + orphaned `ensure_registered` import
+- `services/registry-api/src/registry_api/test_decisions_signing.py` — removed plain `_ensure_event_types_registered` autouse + orphaned `ensure_registered` import
+- `services/registry-api/src/registry_api/test_approvals.py` — removed plain `_ensure_event_types_registered` autouse + orphaned `ensure_registered` import
+
+### Files Modified (cleanup isolation — AC3)
+- `packages/events/src/events/test_canonical.py` — added `ensure_registered()` in `_clean_registry` teardown + import with `# noqa: IMP001`
+- `packages/events/src/events/test_schema_registry.py` — added `ensure_registered()` in `_clean_registry` teardown + import with `# noqa: IMP001`
+- `packages/events/src/events/test_envelope.py` — added `ensure_registered()` in `_clean_registry` teardown + import with `# noqa: IMP001`
+- `packages/secret-hygiene/src/secret_hygiene/test_audited_secret.py` — added `ensure_registered()` in `_re_register_secret_accessed` teardown (spec D5) + import with `# noqa: IMP001`
+
+### Files Modified (documentation — AC4)
+- `docs/testing-guide.md` — added "Schema-registry isolation in tests" section
+
+### Files Audited but UNCHANGED (snapshot/restore preserved — spec D3)
+- `services/worker-wrapper/src/worker_wrapper/domain/test_budget_supervisor.py` — KEEP: `_isolated_registry` is snapshot+restore (PP14/PP29/PP36), not plain `ensure_registered()`
+- `tests/integration/test_budget_enforcement_latency.py` — KEEP: mirror of above; snapshot+restore pattern
+- `tests/contract/test_event_payload_contracts.py` — KEEP: no autouse; only REGISTRY lookups in assertions
+- `tests/integration/test_hmac_key_isolation.py` — KEEP: no autouse; inline `ensure_registered()` calls inside pytest-asyncio fixtures serving the app lifespan
+- `tests/integration/test_verify_approval_offline_recipe.py` — KEEP: no autouse; one inline call in test body within `finally` cleanup
+- `packages/events/src/events/test_log_reader.py` — KEEP: autouse `_isolated_registry` registers a test-only type (not `ensure_registered()`)
+- `services/registry-state/src/registry_state/domain/test_handlers.py` — KEEP: autouse registers individual types manually (not calling `ensure_registered()`); two inline calls in test bodies
+- `services/metrics-subscriber/src/metrics_subscriber/test_restart_recovery.py` — KEEP: autouse `_isolated_registry` registers test-only types
+- `services/metrics-subscriber/src/metrics_subscriber/test_day_rollover.py` — KEEP: autouse `_isolated_registry` registers test-only types
+- `services/registry-api/src/registry_api/test_key_rotation.py` — KEEP: no autouse, no `ensure_registered()` at all
+
+### Validation Gate Results
+- `ruff check . && ruff format --check .` → clean (0 errors)
+- `mypy --strict packages/ services/ scripts/` → 212 errors in 47 files (unchanged from baseline; 0 new errors from our changes)
+- `python scripts/check_imports.py` → exit 0 (noqa on `from` line of all 4 cross-boundary imports)
+- `python scripts/check_event_registry.py` → exit 0
+- `python scripts/check_single_writer.py` → exit 0
+- `pytest -x -q -m "not slow"` → 3086 passed, 3 skipped, 34 deselected (+ 1 pre-existing failure in `test_journey_1_overnight_pr` — `ModuleNotFoundError: _build_scripted_worker`, confirmed baseline-identical via `git stash` check)
+- `just bootstrap-verify` → ✓ bootstrap OK (14 workspace-member imports verified)
+- Story 7e4ffec regression: `pytest -x services/registry-api/src/registry_api/test_decisions.py` → 29 passed ✓
+
+### Test Count Delta
+- Baseline: 3087 (3086 passing + 1 pre-existing broken journey test)
+- After: 3087 (3086 passing + 1 pre-existing broken journey test)
+- Delta: 0 (plumbing only — no tests added or removed) ✓

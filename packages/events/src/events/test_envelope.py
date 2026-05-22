@@ -12,6 +12,9 @@ from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
+from registry_state.domain.event_types import (  # noqa: IMP001 — Story 8.7.5: restore canonical registry state after unregister_all() teardown so sibling tests don't see an empty registry
+    ensure_registered,
+)
 
 from events import FrozenClock, new_event_id, new_request_id
 from events.envelope import Actor, ActorKind, EventEnvelope
@@ -64,6 +67,9 @@ def _clean_registry() -> Generator[None, None, None]:
     register("task.created", "1.1.0", _TaskPayload)
     yield
     unregister_all()
+    # Story 8.7.5 — restore canonical registry state after teardown so
+    # tests running later in the session don't see an empty registry.
+    ensure_registered()
 
 
 # ---------------------------------------------------------------------------

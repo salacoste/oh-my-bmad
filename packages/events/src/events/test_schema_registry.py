@@ -11,6 +11,9 @@ from typing import cast
 
 import pytest
 from pydantic import BaseModel
+from registry_state.domain.event_types import (  # noqa: IMP001 — Story 8.7.5: restore canonical registry state after unregister_all() teardown so sibling tests don't see an empty registry
+    ensure_registered,
+)
 
 import events.schema_registry as sr
 from events.schema_registry import (
@@ -38,6 +41,9 @@ def _clean_registry() -> Generator[None, None, None]:
     unregister_all()
     yield
     unregister_all()
+    # Story 8.7.5 — restore canonical registry state after teardown so
+    # tests running later in the session don't see an empty registry.
+    ensure_registered()
 
 
 class TestRegisterNewType:

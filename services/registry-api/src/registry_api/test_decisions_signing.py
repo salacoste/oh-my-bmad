@@ -22,9 +22,6 @@ from pydantic import SecretStr
 from registry_state.adapters.sqlite_store import (  # noqa: IMP001 test fixture builds in-memory SQLite via registry-state's schema; no prod cross-service coupling
     create_engine,
 )
-from registry_state.domain.event_types import (  # noqa: IMP001 — test fixture re-registers canonical event types after sibling tests' unregister_all() (Epic 8 retro debt #3)
-    ensure_registered,
-)
 from registry_state.schema import (  # noqa: IMP001 test fixture imports tables for Base.metadata.create_all seeding
     Base,
     Task,
@@ -33,13 +30,6 @@ from registry_state.schema import (  # noqa: IMP001 test fixture imports tables 
 from registry_api.adapters.approval_signing import compute_approval_hmac
 from registry_api.app import build_app
 from registry_api.settings import ApprovalSigningSettings
-
-
-@pytest.fixture(autouse=True)
-def _ensure_event_types_registered() -> None:
-    """Re-register canonical event types before every test (see test_decisions.py)."""
-    ensure_registered()
-
 
 _FROZEN_MONO_NS = 1_000_000
 _TID_PLAN_READY = "t-00000000-0000-7000-8000-000000000001"

@@ -10,6 +10,9 @@ from datetime import UTC, datetime
 
 import pytest
 from pydantic import BaseModel
+from registry_state.domain.event_types import (  # noqa: IMP001 — Story 8.7.5: restore canonical registry state after unregister_all() teardown so sibling tests don't see an empty registry
+    ensure_registered,
+)
 
 from events.canonical import (
     from_canonical_json,
@@ -41,6 +44,11 @@ def _clean_registry() -> Generator[None, None, None]:
     register("task.created", "1.1.0", _SimplePayload)
     yield
     unregister_all()
+    # Story 8.7.5 — restore canonical registry state after teardown so
+    # tests running later in the session don't see an empty registry.
+    # The root conftest.py session-scoped fixture only fires once; this
+    # function-scoped restore is the per-test recovery mechanism.
+    ensure_registered()
 
 
 def _make_envelope(**overrides: object) -> EventEnvelope:

@@ -34,33 +34,12 @@ from httpx import ASGITransport, AsyncClient
 from registry_state.adapters.sqlite_store import (  # noqa: IMP001 — test fixture builds in-memory SQLite via registry-state's schema; no prod cross-service coupling
     create_engine,
 )
-from registry_state.domain.event_types import (  # noqa: IMP001 — test fixture re-registers canonical event types after sibling tests' unregister_all() (Epic 8 retro debt #3)
-    ensure_registered,
-)
 from registry_state.schema import (  # noqa: IMP001 — test fixture imports ORM models for Base.metadata.create_all seeding
     ApprovalInbox,
     Base,
 )
 
 from registry_api.app import build_app
-
-
-@pytest.fixture(autouse=True)
-def _ensure_event_types_registered() -> None:
-    """Re-register canonical event types before every test.
-
-    Same rationale as ``test_decisions.py``: sibling tests'
-    ``unregister_all()`` autouse fixtures wipe the global registry; module-
-    level ``register()`` calls in ``event_types.py`` only run ONCE per
-    process. We call ``ensure_registered()`` per-test to restore the
-    canonical set including Story 11.3's ``approval.inbox_opened``.
-
-    Story 11.3 review P26: a session-scoped variant was evaluated but the
-    cross-file ``unregister_all()`` teardown forces a per-test
-    re-registration to remain safe. ``ensure_registered()`` is idempotent
-    (Story 2.1 ``register()`` contract), so the per-test cost is negligible.
-    """
-    ensure_registered()
 
 
 @pytest_asyncio.fixture

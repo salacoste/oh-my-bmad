@@ -36,6 +36,9 @@ from events.clock import FROZEN_EPOCH, FrozenClock
 from events.envelope import Actor, EventEnvelope
 from events.schema_registry import register, unregister_all
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
+from registry_state.domain.event_types import (  # noqa: IMP001 — Story 8.7.5: restore canonical registry state in teardown after unregister_all() in test body (spec D5)
+    ensure_registered,
+)
 
 from . import audited_secret as audited_secret_module
 from .audited_secret import (
@@ -98,9 +101,16 @@ _ensure_secret_accessed_registered()
 
 @pytest.fixture(autouse=True)
 def _re_register_secret_accessed() -> Any:
-    """Re-register ``secret.accessed`` before every test in this file."""
+    """Re-register ``secret.accessed`` before every test in this file.
+
+    Teardown (Story 8.7.5 / spec D5): call ``ensure_registered()`` after each
+    test to restore canonical event types that may have been wiped by
+    ``unregister_all()`` in the test body. Prevents sibling tests in the same
+    pytest session from seeing an empty registry.
+    """
     _ensure_secret_accessed_registered()
     yield
+    ensure_registered()
 
 
 # Deterministic class binding (H7): always the local class. The test

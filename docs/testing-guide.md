@@ -138,6 +138,32 @@ or the `@pytest.mark.integration` marker (excluded from `just test`).
 
 ---
 
+## Schema-registry isolation in tests
+
+The root `conftest.py` (repo root, not `tests/conftest.py`) provides a
+session-scoped autouse fixture `_ensure_event_types_registered` that calls
+`ensure_registered()` once per pytest session. New test modules get
+registration "for free" — no boilerplate needed.
+
+If a test deliberately mutates the registry (e.g., `unregister_all()` or
+`register()` with a different class), add a **function-scoped** autouse
+fixture in THAT module to restore state after each test. Do NOT add
+session-scoped fixtures that conflict with the root.
+
+```python
+# In a test module that calls unregister_all():
+from registry_state.domain.event_types import ensure_registered  # noqa: IMP001
+
+@pytest.fixture(autouse=True)
+def _restore_registry() -> Generator[None, None, None]:
+    yield
+    ensure_registered()  # restore canonical types for sibling tests
+```
+
+See Story 7e4ffec (root cause analysis) and Story 8.7.5 (consolidation).
+
+---
+
 ## Recording a contract fixture
 
 Contract tests pin the observed I/O behavior of an upstream-fork adapter. When
