@@ -1,6 +1,6 @@
 # Story 8.7.6 — aiosqlite daemon-thread teardown root-fix
 
-Status: **backlog**
+Status: **ready-for-dev** (spec authored 2026-05-16 commit 3cbacec; promoted from backlog 2026-05-22)
 
 ## Story
 
