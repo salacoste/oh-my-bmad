@@ -52,6 +52,7 @@ from registry_state.adapters.event_log import (
     current_day_path,
     read_log_lines,
 )
+from registry_state.domain.event_types import ensure_registered
 
 # ---------------------------------------------------------------------------
 # Local fixtures — mirror tests/conftest.py exactly (AC-13: no new conftest)
@@ -83,11 +84,19 @@ class _SimplePayload(BaseModel):
 
 @pytest.fixture(autouse=True)
 def _clean_registry() -> Generator[None, None, None]:
-    """Isolate schema-registry state between tests."""
+    """Isolate schema-registry state between tests.
+
+    Story 8.7.5 PP1: teardown MUST restore canonical state via
+    ensure_registered() — otherwise consumer tests (test_decisions,
+    test_approvals, etc.) that run AFTER this file in pytest's
+    collection order will fail with EventSchemaUnknown when
+    instantiating approval events.
+    """
     unregister_all()
     register("task.created", "1.0.0", _SimplePayload)
     yield
     unregister_all()
+    ensure_registered()  # PP1 — restore canonical state for sibling tests
 
 
 # ---------------------------------------------------------------------------

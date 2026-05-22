@@ -17,6 +17,12 @@ Tests cover:
 * POST rejects negative / zero ``inbox_thread_id`` with 422.
 * GET returns 404 when no row exists for *operator_chat_id*.
 * GET returns 200 with the full row when seeded.
+
+NOTE (Story 8.7.5 PP7): Schema-registry registration is handled by the
+repo-root conftest.py session-scoped autouse fixture. If new sibling tests
+in this package call unregister_all(), they MUST add a function-scoped
+teardown calling ensure_registered() to restore canonical state. See
+docs/testing-guide.md "Schema-registry isolation in tests" + Story 7e4ffec.
 """
 
 from __future__ import annotations

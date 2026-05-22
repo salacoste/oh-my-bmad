@@ -3,6 +3,12 @@
 Covers AC4 (paired-event emission), AC5 (NFR-S10 isolation in the event log),
 and AC6 (8-char prefix log discipline). Settings + pure-fn tests live in
 ``test_approval_signing.py``.
+
+NOTE (Story 8.7.5 PP7): Schema-registry registration is handled by the
+repo-root conftest.py session-scoped autouse fixture. If new sibling tests
+in this package call unregister_all(), they MUST add a function-scoped
+teardown calling ensure_registered() to restore canonical state. See
+docs/testing-guide.md "Schema-registry isolation in tests" + Story 7e4ffec.
 """
 
 from __future__ import annotations

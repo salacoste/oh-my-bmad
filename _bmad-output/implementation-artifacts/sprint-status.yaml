@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-22T19:00:00Z
+last_updated: 2026-05-22T20:30:00Z
 current_phase: 2  # Phase 2 opened by ADR-0003 (docs/adr/0003-phase-2-gate.md), 2026-05-15
 
 development_status:
@@ -246,7 +246,7 @@ development_status:
   8-7-2-mypy-strict-fix: done  # phase: 2 · 58→0 mypy --strict errors across 97 source files (commit 461a01e)
   8-7-3-check-imports-noqa-markers: done  # phase: 2 · 7 IMP001 cross-service violations annotated (commit f948387)
   8-7-4-node-24-sha-pins: done  # phase: 2 · 21 GHA action refs bumped to Node 24 versions (commit 8028380)
-  8-7-5-test-isolation-conftest: done  # phase: 2 · 5 ACs · 1-pass dev CI green @ 8079e91 (run 26261575444) 2026-05-22 · LOW complexity plumbing — new repo-root conftest.py with session-scoped autouse _ensure_event_types_registered fixture; 3 redundant per-file fixtures removed (registry-api test_decisions/test_decisions_signing/test_approvals); 4 cleanup-isolation teardowns added (packages/events test_canonical/test_schema_registry/test_envelope + secret-hygiene test_audited_secret per D5); docs/testing-guide.md "Schema-registry isolation" section added; 10 files audited but unchanged (snapshot/restore patterns from Stories 11.4 PP14 / 11.5 / 12.1 PP14/PP29 preserved per D3); test count 3087 unchanged; mypy unchanged; Story 7e4ffec regression check passed (test_decisions.py 29 passed)
+  8-7-5-test-isolation-conftest: review  # phase: 2 · REOPENED from done after pass-1 review caught P0 latent regression 2026-05-22 — Edge Case Hunter live-reproduced Story 7e4ffec regression on HEAD 8079e91: pytest test_event_log.py test_decisions.py → 16 EventSchemaUnknown failures because test_event_log.py:84-90 teardown wipes registry without ensure_registered() restore (MISSED from spec AC2's 12-file audit list). Tests passed in dev validation only because alphabetical pytest collection happened to run consumers before test_event_log.py. Pass-1 review found 1 P0 + 1 P1-H + 3 P1-M + 5 P1-L = 10 unique findings; batch fix pending. Validates Epic 11 retro L1 mandate yet again — even LOW-complexity plumbing benefits from cross-cutting 3-lane review when ≥9 files touched across packages/services boundaries
   8-7-6-aiosqlite-teardown: ready-for-dev  # phase: 2 · spec authored 2026-05-16 commit 3cbacec (148 lines, 5 ACs + 3 approach options A/B/C + decision criteria); promoted from backlog 2026-05-22; root-fix the aiosqlite daemon-thread SIGABRT; replace exit-134 tolerance shim in .github/workflows/ci.yml:67-85 with proper engine disposal / fixture-loop-scope migration (Option A=module-scoped loop, Option B=session-disposer fixture, Option C=sync sqlite — defer A vs B selection to dev kickoff)
   epic-8-7-retrospective: done  # phase: 2 · 2026-05-16 retro captures hidden-gate cascade pattern (L1) + module-cache trap (L2) + bash -e gotcha (L3)
 

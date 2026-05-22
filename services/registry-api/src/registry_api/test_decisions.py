@@ -3,6 +3,12 @@
 Positive tests (AC-11): approve, reject, stop, retry, idempotent replay,
 license override dual event emission.
 Negative tests (AC-12): 404, 409 state mismatch, 422 validation.
+
+NOTE (Story 8.7.5 PP7): Schema-registry registration is handled by the
+repo-root conftest.py session-scoped autouse fixture. If new sibling tests
+in this package call unregister_all(), they MUST add a function-scoped
+teardown calling ensure_registered() to restore canonical state. See
+docs/testing-guide.md "Schema-registry isolation in tests" + Story 7e4ffec.
 """
 
 from __future__ import annotations

@@ -162,6 +162,83 @@ def _restore_registry() -> Generator[None, None, None]:
 
 See Story 7e4ffec (root cause analysis) and Story 8.7.5 (consolidation).
 
+### Snapshot/restore for fine-grained isolation
+
+When a test file registers **additional** types beyond the canonical set (e.g.
+a test-only payload model at a real event-type key), use a **snapshot/restore**
+fixture instead of `unregister_all()`. This preserves other already-registered
+types so sibling test files see no change.
+
+Pattern (`packages/events/src/events/types/test_deployment.py:71`):
+
+```python
+import events.schema_registry as sr
+from events.schema_registry import REGISTRY
+
+@pytest.fixture()
+def _isolated_registry() -> Generator[None, None, None]:
+    """Snapshot REGISTRY around tests that mutate it."""
+    snapshot = dict(REGISTRY)
+    yield
+    REGISTRY.clear()
+    REGISTRY.update(snapshot)
+    sr._rebuild_types_cache()  # noqa: SLF001 — test-only registry rebuild
+```
+
+Use this when:
+- Your test registers a different class at a canonical key (e.g. to force a
+  `ValueError` from `register()`).
+- You need to add test-only extra versions of an existing type.
+- You want to guarantee zero impact on the broader session state.
+
+Cross-refs: `packages/events/src/events/types/test_deployment.py:71`,
+`services/registry-state/src/registry_state/domain/test_failure_detection.py:73`.
+
+### Test-only event types
+
+When testing the **registry mechanics themselves** (registration, lookup, cache
+invalidation) it is cleaner to use synthetic event type names rather than
+mutating the canonical set. The isolation fixture registers a throwaway type
+for the test body and restores canonical state in teardown.
+
+Pattern (`packages/events/src/events/test_schema_registry.py`):
+
+```python
+@pytest.fixture(autouse=True)
+def _clean_registry() -> Generator[None, None, None]:
+    unregister_all()
+    # tests register their own synthetic types via register("foo.bar", ...)
+    yield
+    unregister_all()
+    ensure_registered()  # restore canonical set for sibling tests
+```
+
+Use this when:
+- The test asserts registry semantics directly (idempotency, conflict errors,
+  cache rebuild) and must start with an empty registry.
+- Any co-located production code paths would be confused by extra types.
+
+Cross-refs: `packages/events/src/events/test_schema_registry.py`,
+`packages/events/src/events/test_canonical.py`,
+`services/registry-state/src/registry_state/test_event_log.py`.
+
+The `scripts/check_registry_isolation.py` CI gate enforces that every
+`unregister_all()` call is paired with a restore (Story 8.7.5 PP3).
+
+### pytest-xdist parallel workers not supported
+
+pytest-xdist parallel execution (`-n auto`) is **not currently supported**. The
+session-scoped `_ensure_event_types_registered` fixture in the root `conftest.py`
+creates per-worker registry state, but `unregister_all()`-based fixtures may
+behave unexpectedly under parallel execution because workers share the process-
+global `REGISTRY` dict only within a single worker process — cross-worker
+ordering is non-deterministic.
+
+If xdist support is needed, file a follow-up Story. In the meantime, all CI
+runs use the default sequential mode.
+
+See also: root `conftest.py` comment and `scripts/check_registry_isolation.py`.
+
 ---
 
 ## Recording a contract fixture

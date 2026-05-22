@@ -25,7 +25,6 @@ Covers AC-5 scenarios + AC-1 payload validation + the 7 High / 10 Med /
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import gc
 import logging
 import time
@@ -34,7 +33,7 @@ from typing import Any, Literal
 import pytest
 from events.clock import FROZEN_EPOCH, FrozenClock
 from events.envelope import Actor, EventEnvelope
-from events.schema_registry import register, unregister_all
+from events.schema_registry import register, unregister, unregister_all
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 from registry_state.domain.event_types import (  # noqa: IMP001 — Story 8.7.5: restore canonical registry state in teardown after unregister_all() in test body (spec D5)
     ensure_registered,
@@ -76,24 +75,31 @@ class _LocalSecretAccessedPayload(BaseModel):
 
 
 def _ensure_secret_accessed_registered() -> None:
-    """Idempotently register ``secret.accessed`` for both schema versions.
+    """Idempotently register ``secret.accessed`` for all schema versions.
 
     Called at module import time AND from a function-scoped autouse
     fixture so tests pass even when other co-located tests under
     ``packages/events/`` clear the registry between cases.
 
-    Re-registering the SAME class is a no-op per the Story 2.1 schema
-    registry contract; registering a DIFFERENT class for an already-
-    registered key raises ``ValueError`` — caught and ignored (xdist
-    race tolerance + registry-state-canonical co-existence per L23).
+    Story 8.7.5 PP2 (H7 invariant restoration): after PP1 propagated
+    ``ensure_registered()`` to teardown of more test files (including
+    ``test_event_log.py``), the canonical ``SecretAccessedPayload`` class
+    from ``registry_state`` is now bound at the start of every test in
+    this file. Previously we used ``contextlib.suppress(ValueError)``
+    around ``register()`` — strict register raises ``ValueError`` if
+    the key is already bound to a different class, which left the
+    canonical binding in place instead of the local class. That broke
+    the H7 invariant (tests want the local class bound deterministically
+    so attribute access goes through the local model). Fix: explicitly
+    ``unregister()`` first (drop any canonical binding), THEN
+    ``register()`` the local class. This guarantees the local class
+    wins for the test body.
+
+    Story 9.7 / AC10: 1.1.0 added for envelope-level trace_id bump.
     """
     for _v in ("1.0.0", "1.0.1", "1.1.0"):
-        # Already registered (same class — no-op) or canonical
-        # registry-state class is registered. Either is fine; the
-        # tests don't rely on which class is bound.
-        # Story 9.7 / AC10: 1.1.0 added for envelope-level trace_id bump.
-        with contextlib.suppress(ValueError):
-            register("secret.accessed", _v, _LocalSecretAccessedPayload)
+        unregister("secret.accessed", _v)
+        register("secret.accessed", _v, _LocalSecretAccessedPayload)
 
 
 _ensure_secret_accessed_registered()

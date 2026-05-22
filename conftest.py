@@ -7,6 +7,16 @@ Centralizes session-scoped fixtures that ALL tests across the repo
   ``registry_state.domain.event_types.ensure_registered()`` exactly
   once at session start. Replaces the per-file fixture pattern introduced
   by Story 7e4ffec; this is the Story 8.7.5 consolidation.
+
+NOTE (Story 8.7.5 PP5 — xdist not supported): pytest-xdist parallel workers
+are NOT currently supported. This session-scoped fixture creates per-worker
+registry state but ``unregister_all()``-based test fixtures may behave
+unexpectedly under parallel execution. If you need xdist, file a follow-up
+Story. See docs/testing-guide.md "pytest-xdist parallel workers not supported".
+
+NOTE (Story 8.7.5 PP8 — critical dependency): this module imports from
+``registry_state.domain.event_types``. If that import fails, all tests
+fail-fast — by design. There is no graceful fallback.
 """
 
 from __future__ import annotations

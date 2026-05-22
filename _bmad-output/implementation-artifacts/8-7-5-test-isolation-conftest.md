@@ -1,6 +1,6 @@
 # Story 8.7.5 — Centralize `ensure_registered()` autouse fixture in `tests/conftest.py`
 
-Status: **done** (CI green @ 8079e91 — 1-pass dev; plumbing-only)
+Status: **review** (pass-1 CI pending @ pre-commit — 10 fixes incl. P0 latent regression)
 
 ## Story
 
@@ -63,7 +63,7 @@ Centralizes session-scoped fixtures that ALL tests across the repo
 (services/, packages/, tests/) need. Currently:
 
 - ``_ensure_event_types_registered`` — session-scoped autouse that calls
-  ``services.registry_state.domain.event_types.ensure_registered()`` exactly
+  ``registry_state.domain.event_types.ensure_registered()`` exactly
   once at session start. Replaces the per-file fixture pattern introduced
   by Story 7e4ffec; this is the Story 8.7.5 consolidation.
 """
@@ -283,6 +283,32 @@ review_cadence: 1-PASS (plumbing-only; no subprocess/HMAC/event-log/lifespan)
 - [x] **T3d (AC3/D5)** Add function-scoped teardown to `packages/secret-hygiene/src/secret_hygiene/test_audited_secret.py` calling `ensure_registered()` to restore canonical state after `unregister_all()`
 - [x] **T4 (AC4)** Add schema-registry isolation note to `docs/testing-guide.md`
 - [x] **T5 (AC5)** Run all validation gates and confirm 3087 test count + mypy unchanged
+
+### Pass-1 Review Findings (3-lane review of `ceaf3c3..8079e91` — 2026-05-22)
+
+**Reviewer dedup:** 23 raw findings (Blind 12 + Edge 7 + Acceptance 4) → ~10 unique after dedup. **Edge Hunter caught 1 P0 latent regression that Blind/Acceptance missed — codebase context required to reproduce.** Acceptance Auditor delivered clean spec-conformance verdict; the audit-list completeness criteria did not catch the missing file because spec AC2 list was incomplete.
+
+**P0 (1):**
+
+- [x] [Review][Patch] PP1 — **`test_event_log.py:84-90` teardown wipes registry without `ensure_registered()` restore** (Edge F1) — Story 8.7.5 deleted compensating per-file `ensure_registered()` autouse fixtures from 3 consumers (`test_decisions.py`, `test_decisions_signing.py`, `test_approvals.py`) but `services/registry-state/src/registry_state/test_event_log.py:84-90` was MISSING from spec AC2's 12-file audit list. Its `_clean_registry` fixture calls `unregister_all()` in teardown without restoring canonical state. Reproducible LIVE on `8079e91`: `pytest test_event_log.py test_decisions.py` → 16 failures with `EventSchemaUnknown: unknown event schema ('approval.granted', '1.0.0'); registered types: (empty registry)`. Tests pass only because alphabetical pytest collection happens to run consumers before `test_event_log.py`. **This is the exact bug Story 7e4ffec was created to fix.** Fix: add `ensure_registered()` to `_clean_registry` teardown after `unregister_all()` (line 90) — same pattern Story 8.7.5 applied to `test_canonical.py`/`test_envelope.py`/`test_schema_registry.py` [`services/registry-state/src/registry_state/test_event_log.py:84-90`, **P0**]
+
+**P1-H (1):**
+
+- [x] [Review][Patch] PP2 — **`test_audited_secret.py` H7 invariant weakened** (Blind F4 + Edge F2 2-lane convergence) — D5 teardown calls `ensure_registered()` (PR-1 line 113); next test's setup calls `_ensure_secret_accessed_registered()` which uses **strict** register inside `contextlib.suppress(ValueError)`. When canonical class is already bound, strict register raises `ValueError` (suppressed), so `_LocalSecretAccessedPayload` is NOT re-bound. Tests still pass because they use Python-local variable, but the file's stated H7 invariant ("Deterministic class binding: always the local class") is no longer enforced. Fix: in setup, `unregister("secret.accessed", _v)` BEFORE `register(...)` so local-class always wins; OR document the H7 invariant change in teardown docstring [`packages/secret-hygiene/src/secret_hygiene/test_audited_secret.py:102-113`, P1-H]
+
+**P1-M (3):**
+
+- [x] [Review][Patch] PP3 — **Missing CI gate for `unregister_all()`-without-restore pattern** (Edge F4 + Blind F1) — F1 demonstrates the gap: no static check enforces "if a test calls `unregister_all()`, the teardown must restore via `ensure_registered()` OR snapshot/restore". Manual review missed `test_event_log.py`. Fix: add `scripts/check_registry_isolation.py` that AST-walks test files for `unregister_all()` calls and asserts paired restoration; wire into `just check-all` per existing gate pattern [`scripts/ + .github/workflows/ci.yml`, P1-M]
+- [x] [Review][Patch] PP4 — **docs/testing-guide.md missing snapshot/restore + test-only-type patterns** (Edge F3) — new section only describes session-scoped autouse + function-scoped restore. Doesn't document snapshot/restore (used by `test_budget_supervisor.py`, `test_budget_enforcement_latency.py`) or test-only-payload pattern (used by `test_log_reader.py`, `test_restart_recovery.py`, `test_day_rollover.py`). Fix: add two subsections covering the additional valid patterns with file references [`docs/testing-guide.md:141-163`, P1-M]
+- [x] [Review][Patch] PP5 — **xdist support undocumented** (Blind F2) — root conftest uses session-scoped autouse but no statement on `pytest-xdist` compatibility. If a future contributor enables `-n auto`, each worker gets own session — registry is process-global per-worker, fine in isolation. Fix: document xdist stance in `docs/testing-guide.md` OR add `addopts = -p no:xdist` to `pyproject.toml` if not supported [`docs/testing-guide.md + pyproject.toml`, P1-M]
+
+**P1-L (5):**
+
+- [x] [Review][Patch] PP6 — Spec AC3 file list incomplete — `test_event_log.py` should have been listed alongside `test_canonical.py`/etc. Update spec AC3 to add it, and update Dev Agent Record's "audited but unchanged" list to reflect PP1 fix [`spec`, P1-L]
+- [x] [Review][Patch] PP7 — Removed fixtures lost rationale comments (Blind F5) — `test_decisions_signing.py` etc. had docstrings explaining the per-test pattern. Add module-level comment pointing to root conftest + Story 8.7.5 so future authors don't re-add the pattern [`3 test files`, P1-L]
+- [x] [Review][Patch] PP8 — Cross-service import in root conftest brittle (Edge F7 + Blind F7) — `from registry_state.domain.event_types import ensure_registered` fails entire pytest session if `services/registry-state/` ever moves. Wrap in try/except or document the coupling explicitly [`conftest.py:20`, P1-L]
+- [x] [Review][Patch] PP9 — Test count + mypy scope bookkeeping inconsistencies (Edge F5+F6) — Dev Agent Record says baseline 3087/after 3087 but actual `--co -q -m "not slow"` shows 3086 passed + 34 deselected; mypy "212 unchanged" vs Story 12.1's 42 baseline (different scopes). Fix: re-tabulate baselines with explicit scope annotations [`spec Dev Agent Record`, P1-L]
+- [x] [Review][Patch] PP10 — Cosmetic spec docstring typo (Acceptance F1) — spec line 66 says `services.registry_state.domain.event_types` (wrong); impl uses correct `registry_state.domain.event_types`. Fix spec [`spec line 66`, P1-L]
 
 ## Dev Agent Record
 
