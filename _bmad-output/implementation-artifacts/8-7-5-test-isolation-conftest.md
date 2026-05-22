@@ -272,4 +272,14 @@ review_cadence: 1-PASS (plumbing-only; no subprocess/HMAC/event-log/lifespan)
 
 ## Tasks / Subtasks
 
-_(populated by dev agent)_
+- [x] **T1 (AC1)** Create `/conftest.py` at repo root with session-scoped autouse `_ensure_event_types_registered` fixture
+- [x] **T2 (AC2a)** Remove plain `ensure_registered()` autouse from `services/registry-api/src/registry_api/test_decisions.py`
+- [x] **T2b (AC2b)** Remove plain `ensure_registered()` autouse from `services/registry-api/src/registry_api/test_decisions_signing.py`
+- [x] **T2c (AC2c)** Remove plain `ensure_registered()` autouse from `services/registry-api/src/registry_api/test_approvals.py`
+- [x] **T2d (AC2 audit)** Confirm all other AC2-listed files are SNAPSHOT/RESTORE or test-only-type fixtures — no changes needed
+- [x] **T3a (AC3)** Add `ensure_registered()` teardown to `packages/events/src/events/test_canonical.py` _clean_registry fixture
+- [x] **T3b (AC3)** Add `ensure_registered()` teardown to `packages/events/src/events/test_schema_registry.py` _clean_registry fixture
+- [x] **T3c (AC3)** Add `ensure_registered()` teardown to `packages/events/src/events/test_envelope.py` _clean_registry fixture
+- [x] **T3d (AC3/D5)** Add function-scoped teardown to `packages/secret-hygiene/src/secret_hygiene/test_audited_secret.py` calling `ensure_registered()` to restore canonical state after `unregister_all()`
+- [x] **T4 (AC4)** Add schema-registry isolation note to `docs/testing-guide.md`
+- [x] **T5 (AC5)** Run all validation gates and confirm 3087 test count + mypy unchanged
