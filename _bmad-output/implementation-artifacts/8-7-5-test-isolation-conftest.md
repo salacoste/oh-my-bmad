@@ -1,6 +1,6 @@
 # Story 8.7.5 — Centralize `ensure_registered()` autouse fixture in `tests/conftest.py`
 
-Status: **review** (pass-1 CI pending @ pre-commit — 10 fixes incl. P0 latent regression)
+Status: **done** (CI green @ a6b8f1f — pass-1 review batch: 10 fixes incl. P0 latent regression + new check_registry_isolation.py CI gate)
 
 ## Story
 
