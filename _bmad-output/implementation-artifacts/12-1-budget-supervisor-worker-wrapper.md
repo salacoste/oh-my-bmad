@@ -1,6 +1,6 @@
 # Story 12.1 — Budget supervisor module in worker-wrapper
 
-Status: **review** (pass-2 CI pending @ pre-commit — 22 fixes incl. 4 P1-H lifecycle/exception)
+Status: **done** (CI green @ 12e08f4 — pass-2 review batch: 22 fixes incl. 4 P1-H lifecycle/exception residuals from pass-1)
 
 ## Story
 
