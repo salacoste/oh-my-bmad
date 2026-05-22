@@ -1,6 +1,6 @@
 # Story 8.7.5 — Centralize `ensure_registered()` autouse fixture in `tests/conftest.py`
 
-Status: **review** (CI pending @ pre-commit)
+Status: **done** (CI green @ 8079e91 — 1-pass dev; plumbing-only)
 
 ## Story
 
