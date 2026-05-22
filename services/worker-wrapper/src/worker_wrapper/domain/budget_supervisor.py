@@ -52,13 +52,32 @@ import contextlib
 from collections.abc import Awaitable, Callable, Generator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, Protocol, cast, runtime_checkable
 
 import structlog
 from events import EventEnvelope, current_day_path, read_log_lines
 from events.clock import Clock
 
 logger = structlog.get_logger(__name__)
+
+
+@runtime_checkable
+class _MethodCarrier(Protocol):
+    """PP27 — structural type for objects that carry a ``.method`` attribute.
+
+    Used by :func:`watch_for_budget_exceeded` to type-check the callback's
+    return value before propagating ``method`` onto
+    :class:`BudgetSupervisorResult`. Declared in the domain layer so the
+    supervisor does NOT import the adapter's
+    :class:`worker_wrapper.adapters.claude_code_runner.TerminationResult`
+    (preserves the domain→adapter dependency direction per Decision D2).
+
+    A future refactor that renames the adapter's ``.method`` attribute will
+    fail the :func:`isinstance` check at runtime — louder than the prior
+    silent ``getattr(callback_value, "method", None)`` duck-typing.
+    """
+
+    method: str
 
 
 @dataclass(frozen=True)
@@ -88,6 +107,14 @@ class BudgetSupervisorResult:
       callback's :class:`worker_wrapper.adapters.claude_code_runner.TerminationResult`
       when the callback returns one. ``None`` if the callback is opaque or
       the cancel-clean path was taken.
+    - ``enforcement_failed`` (PP23): ``True`` IFF ``triggered=True`` AND the
+      ``terminate_callback`` raised an exception. The supervisor still
+      reports ``triggered=True`` so the lifespan can transition the FSM out
+      of IN_PROGRESS, but ``enforcement_failed=True`` signals that the
+      subprocess may STILL BE ALIVE — the lifespan SHOULD retry termination
+      directly (typically by calling :meth:`ClaudeCodeRunner.terminate_with_grace`
+      again) before transitioning. Default ``False`` (cancel-clean path and
+      successful-callback path both leave it ``False``).
 
     All latency fields use the injected ``Clock`` so tests can drive them
     deterministically via :class:`events.clock.TickingClock` rather than
@@ -108,10 +135,14 @@ class BudgetSupervisorResult:
     detection_latency_s: float | None = None
     termination_latency_s: float | None = None
     termination_method: Literal["noop", "sigterm", "sigkill"] | None = None
+    enforcement_failed: bool = False
 
 
 # PP18 — backwards-compat alias; callers (lifespan, integration test) keep
-# importing the underscore-prefixed name.
+# importing the underscore-prefixed name. PP39 — alias retained at module
+# scope but DROPPED from ``__all__`` to discourage new use. New callers
+# MUST import :class:`BudgetSupervisorResult` directly. The alias is
+# deprecated and may be removed in a future story.
 _BudgetSupervisorResult = BudgetSupervisorResult
 
 
@@ -189,6 +220,12 @@ async def watch_for_budget_exceeded(
     start_ns = clock.monotonic_ns()
     scan_offset = 0
     last_path: Path | None = None
+    # PP28 — persistent-error-break state. ``_scan_for_match`` may return a
+    # stale ``scan_offset`` on OSError/ValueError so the next poll re-scans
+    # the same prefix. Track consecutive errors here and let the scanner
+    # advance past the problematic region after K=5 errors so disk thrash
+    # and log spam are bounded.
+    scan_state: dict[str, int] = {"consecutive_errors": 0}
 
     while True:
         if cancel_event.is_set():
@@ -206,12 +243,17 @@ async def watch_for_budget_exceeded(
         # caller advances ``scan_offset`` regardless of match outcome,
         # eliminating the prior O(2N) double-iteration and the fdatasync
         # dual-counting race (PP10 subsumed).
+        # PP28 — pass ``scan_state`` so the scanner can break out of an
+        # infinite re-scan loop on persistent OSError/ValueError after K=5
+        # consecutive errors (advances ``scan_offset`` past the problematic
+        # region with a single warning).
         match, envelopes_scanned = await asyncio.to_thread(
             _scan_for_match,
             path=path,
             task_id=task_id,
             scan_offset=scan_offset,
             log=log,
+            scan_state=scan_state,
         )
         scan_offset = envelopes_scanned
         if match is not None:
@@ -228,6 +270,7 @@ async def watch_for_budget_exceeded(
             )
             term_start_ns = clock.monotonic_ns()
             termination_method: Literal["noop", "sigterm", "sigkill"] | None = None
+            enforcement_failed = False
             try:
                 callback_value = await terminate_callback()
             except Exception as exc:  # noqa: BLE001 — PP9 isolation
@@ -235,21 +278,34 @@ async def watch_for_budget_exceeded(
                 # path. Log loudly + emit a structured warning; the lifespan
                 # still sees triggered=True so the FSM transitions and the
                 # task isn't left in IN_PROGRESS.
+                # PP23 — surface enforcement_failed=True so the lifespan
+                # can retry termination directly before transitioning
+                # (the subprocess may still be alive consuming tokens).
+                # PP44 — pass ``exc_info`` so the traceback is retained
+                # for forensics; the prior string-only log discarded it.
                 log.error(
                     "budget_supervisor_callback_raised",
+                    exc_info=exc,
                     task_id=task_id,
                     event_id=match.event_id,
                     error_type=type(exc).__name__,
                     error=str(exc),
                 )
                 callback_value = None
+                enforcement_failed = True
             else:
-                # PP21 — propagate the runner's TerminationResult.method
-                # without importing the adapter here (avoid domain→adapter
-                # dependency). Duck-type on ``.method``.
-                method_attr = getattr(callback_value, "method", None)
-                if method_attr in {"noop", "sigterm", "sigkill"}:
-                    termination_method = method_attr
+                # PP21 / PP27 — propagate the runner's TerminationResult.method
+                # via a domain-side Protocol (``_MethodCarrier``). Avoids both
+                # the prior silent duck-type (``getattr(..., None)``) and a
+                # domain→adapter import. A future rename of ``.method``
+                # surfaces at runtime via the failing isinstance check.
+                if isinstance(callback_value, _MethodCarrier):
+                    method_attr = callback_value.method
+                    if method_attr in {"noop", "sigterm", "sigkill"}:
+                        termination_method = cast(
+                            "Literal['noop', 'sigterm', 'sigkill']",
+                            method_attr,
+                        )
             term_ns = clock.monotonic_ns() - term_start_ns
             termination_latency_s = term_ns / _NS_PER_S
             log.info(
@@ -258,6 +314,7 @@ async def watch_for_budget_exceeded(
                 event_id=match.event_id,
                 termination_latency_s=termination_latency_s,
                 termination_method=termination_method,
+                enforcement_failed=enforcement_failed,
             )
             return BudgetSupervisorResult(
                 triggered=True,
@@ -268,6 +325,7 @@ async def watch_for_budget_exceeded(
                 detection_latency_s=detection_latency_s,
                 termination_latency_s=termination_latency_s,
                 termination_method=termination_method,
+                enforcement_failed=enforcement_failed,
             )
 
         # Sleep with cancel-responsiveness: race the sleep against the cancel
@@ -294,12 +352,16 @@ class _Match:
     step: int | None
 
 
+_SCAN_ERROR_BREAK_THRESHOLD: int = 5
+
+
 def _scan_for_match(
     *,
     path: Path,
     task_id: str,
     scan_offset: int,
     log: structlog.stdlib.BoundLogger,
+    scan_state: dict[str, int] | None = None,
 ) -> tuple[_Match | None, int]:
     """Scan JSONL past ``scan_offset`` for the first matching budget event.
 
@@ -378,6 +440,25 @@ def _scan_for_match(
         # disk are absorbed here and we'll retry on the next poll. PP3 — on
         # error we conservatively return the PRIOR ``scan_offset`` so the
         # next poll re-scans the same region rather than skipping past it.
+        # PP28 — if the same error region recurs ``_SCAN_ERROR_BREAK_THRESHOLD``
+        # consecutive polls, advance past it with one ``persistent_errors``
+        # warning so the supervisor doesn't disk-thrash + log-spam forever.
+        if scan_state is not None:
+            consecutive = scan_state.get("consecutive_errors", 0) + 1
+            scan_state["consecutive_errors"] = consecutive
+            if consecutive >= _SCAN_ERROR_BREAK_THRESHOLD:
+                log.error(
+                    "budget_supervisor_scan_persistent_errors_advancing",
+                    task_id=task_id,
+                    path=str(path),
+                    consecutive_errors=consecutive,
+                    advancing_from=scan_offset,
+                    advancing_to=idx,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                scan_state["consecutive_errors"] = 0
+                return None, idx
         log.warning(
             "budget_supervisor_scan_error",
             task_id=task_id,
@@ -386,6 +467,9 @@ def _scan_for_match(
             error_type=type(exc).__name__,
         )
         return None, scan_offset
+    # Clean pass — reset the persistent-error counter (PP28).
+    if scan_state is not None and scan_state.get("consecutive_errors", 0) != 0:
+        scan_state["consecutive_errors"] = 0
     return None, idx
 
 
@@ -409,8 +493,11 @@ def _safe_payload(envelope: Any) -> dict[str, Any] | None:
 
 
 __all__ = [
-    # PP18 — public name; underscore-prefixed alias kept for in-tree callers.
+    # PP18 — public name only. The underscore alias ``_BudgetSupervisorResult``
+    # is kept at module scope above for backwards-compat with in-tree callers
+    # (lifespan + integration test) but is INTENTIONALLY OMITTED from
+    # ``__all__`` per PP39 — exporting a leading-underscore name undermines
+    # the rename. Deprecated; new callers must use ``BudgetSupervisorResult``.
     "BudgetSupervisorResult",
-    "_BudgetSupervisorResult",
     "watch_for_budget_exceeded",
 ]

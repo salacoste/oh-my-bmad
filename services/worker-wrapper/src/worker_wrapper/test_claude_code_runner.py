@@ -1150,6 +1150,7 @@ class TestTerminateWithGrace:
     @pytest.mark.asyncio
     async def test_terminate_with_grace_handles_processlookuperror_on_kill_during_grace(
         self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """PP5 — TOCTOU: subprocess dies during grace window, kill() raises.
 
@@ -1159,9 +1160,16 @@ class TestTerminateWithGrace:
           * then kill() raises ProcessLookupError (process already gone)
           * second wait() reaps cleanly with a valid returncode
 
-        Result MUST classify as ``sigterm`` (the grace window elapsed cleanly
-        via SIGTERM after all — escalation never landed because the target
-        was already gone).
+        Result MUST classify as ``sigkill`` with
+        ``escalation_landed=False`` (PP34): the grace window DID elapse —
+        the runner entered the escalation branch — but the actual SIGKILL
+        was a no-op because the target had already exited via SIGTERM.
+        NFR-R8 dashboards differentiate this from a true SIGKILL delivery.
+
+        PP38 — uses pytest's ``monkeypatch`` fixture for the
+        ``asyncio.wait_for`` swap so the patch auto-restores even on test
+        failure and does not collide with concurrent tests in the same
+        worker.
         """
 
         class _StubProcess:
@@ -1194,12 +1202,9 @@ class TestTerminateWithGrace:
 
         # asyncio.wait_for raises TimeoutError if wait() returns it; the
         # stub's wait() raises TimeoutError directly which the runner catches.
-        # Because asyncio.wait_for wraps the coro, we patch by using a tiny
-        # grace period and a wait() that raises TimeoutError when awaited.
-        # Simpler approach: monkeypatch asyncio.wait_for inside this test.
+        # Because asyncio.wait_for wraps the coro, patch with pytest's
+        # ``monkeypatch`` fixture (PP38) — auto-restores on exit / failure.
         import asyncio as _asyncio
-
-        original_wait_for = _asyncio.wait_for
 
         async def _wait_for_passthrough(coro, timeout):  # type: ignore[no-untyped-def]
             # Drain the coroutine without enforcing the timeout — let the
@@ -1207,15 +1212,14 @@ class TestTerminateWithGrace:
             # ``except TimeoutError`` branch fires.
             return await coro
 
-        _asyncio.wait_for = _wait_for_passthrough
-        try:
-            result = await runner.terminate_with_grace(grace_period_s=0.01)
-        finally:
-            _asyncio.wait_for = original_wait_for
+        monkeypatch.setattr(_asyncio, "wait_for", _wait_for_passthrough)
+        result = await runner.terminate_with_grace(grace_period_s=0.01)
 
         assert stub._terminate_called
         assert stub._kill_called
-        # SIGTERM classification: the kill() ProcessLookupError means the
-        # subprocess exited cleanly before the SIGKILL would have landed.
-        assert result.method == "sigterm"
+        # PP34 — race-window case: kill() ProcessLookupError → method="sigkill"
+        # (we entered escalation) AND escalation_landed=False (SIGKILL never
+        # actually delivered; subprocess died via SIGTERM in the race window).
+        assert result.method == "sigkill"
+        assert result.escalation_landed is False
         assert result.exit_code == -15

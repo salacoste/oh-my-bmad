@@ -129,11 +129,12 @@ _ALLOWLIST: dict[str, dict[int, str]] = {
     # worker-wrapper: spawns Claude Code subprocess.
     # Story 9.6 — propagates WORKER_TRACE_ID through env (FR59 / PH0).
     _rel("services/worker-wrapper/src/worker_wrapper/adapters/claude_code_runner.py"): {
-        # Line shifted from 151 → 175 (Story 12.1) → 187 (Story 12.1 pass-1
-        # review: added PP18 alias + PP5 ProcessLookupError defense).
+        # Line shifted from 151 → 175 (Story 12.1) → 187 (pass-1 review:
+        # PP18 alias + PP5 defense) → 203 (pass-2 review: PP34 escalation_landed
+        # field added to TerminationResult dataclass shifts all downstream lines).
         # PP13 — function-keyed entry in _FUNC_ALLOWLIST below is preferred;
         # this line entry is retained as defence-in-depth.
-        187: "asyncio.create_subprocess_exec",
+        203: "asyncio.create_subprocess_exec",
     },
     # orchestrator-adapter: spawns OMC node subprocess.
     # Story 9.6 — propagates OMB_TRACE_ID through env (FR59 / TH3).
@@ -158,15 +159,19 @@ _ALLOWLIST: dict[str, dict[int, str]] = {
 # (no enclosing function) use the special key ``"<module>"``. Matches
 # survive line drift caused by edits ABOVE the spawn site.
 _FUNC_ALLOWLIST: dict[str, dict[str, str]] = {
+    # PP35 — entries now use qualified ``Class.method`` keys instead of bare
+    # method names. Distinguishes ``MockRunner._spawn`` (if ever introduced)
+    # from the real production method on ``ClaudeCodeRunner._spawn``.
     _rel("services/worker-wrapper/src/worker_wrapper/adapters/claude_code_runner.py"): {
-        "_spawn": "asyncio.create_subprocess_exec",
+        "ClaudeCodeRunner._spawn": "asyncio.create_subprocess_exec",
     },
     _rel("services/orchestrator-adapter/src/orchestrator_adapter/adapters/omc_runner.py"): {
-        "_spawn": "asyncio.create_subprocess_exec",
+        "OMCRunner._spawn": "asyncio.create_subprocess_exec",
     },
     _rel("scripts/sync_upstream.py"): {
         # Both ``subprocess.run`` calls live in ``main()`` — the maintenance
-        # script's single entry-point. PP13 — function-name accepted ALONGSIDE
+        # script's single entry-point. Top-level function (no class), so no
+        # qualifier prefix per PP35. PP13 — function-name accepted ALONGSIDE
         # the legacy line entries; both calls share the same enclosing scope
         # so this single key covers both.
         "main": "subprocess.run",
@@ -188,13 +193,35 @@ class _SpawnVisitor(ast.NodeVisitor):
     (the historical fragility — Story 12.1 had to bump line 151→175 just
     by adding a dataclass above ``_spawn``); line-number keys remain as
     the primary anchor for ratchet compat.
+
+    PP35 — function names are now qualified with their enclosing class
+    (e.g. ``ClaudeCodeRunner._spawn``, not just ``_spawn``) so a future
+    same-named method in a different class (e.g. ``MockRunner._spawn``)
+    does NOT collide with the existing ``_FUNC_ALLOWLIST`` entry. Module-
+    level methods keep the bare function name. Nested classes are
+    dot-joined left-to-right (outer.inner.method).
+
+    PP41 — KNOWN GAP: alias-of-alias assignments are not detected. A
+    pattern such as::
+
+        b = asyncio.create_subprocess_exec
+        b(...)
+
+    bypasses the visitor because only ``Import`` / ``ImportFrom``
+    statements feed ``_import_aliases``. Adding ``visit_Assign`` for
+    ``Name = Attribute`` aliasing is the next ratchet step; documented
+    here so reviewers don't miss the gap. Real code review must call out
+    any module-level alias rebinding of a forbidden primitive.
     """
 
     def __init__(self) -> None:
         self._import_aliases: dict[str, str] = {}
         # PP13 — list of (line, primitive_name, enclosing_func_name | None).
+        # PP35 — enclosing_func_name is now Class.method (qualified) when
+        # the spawn lives inside a class body.
         self.offenders: list[tuple[int, str, str | None]] = []
         self._func_stack: list[str] = []
+        self._class_stack: list[str] = []
 
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
@@ -213,15 +240,31 @@ class _SpawnVisitor(ast.NodeVisitor):
             self._import_aliases[local] = canonical
         self.generic_visit(node)
 
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        # PP35 — track class nesting so a method's qualified name is
+        # ``Class.method`` rather than just ``method``. Distinguishes
+        # ``MockRunner._spawn`` from ``ClaudeCodeRunner._spawn``.
+        self._class_stack.append(node.name)
+        try:
+            self.generic_visit(node)
+        finally:
+            self._class_stack.pop()
+
+    def _qualify(self, name: str) -> str:
+        """Return ``Class.name`` (or ``Outer.Inner.name``) when inside a class; else ``name``."""
+        if self._class_stack:
+            return ".".join([*self._class_stack, name])
+        return name
+
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        self._func_stack.append(node.name)
+        self._func_stack.append(self._qualify(node.name))
         try:
             self.generic_visit(node)
         finally:
             self._func_stack.pop()
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        self._func_stack.append(node.name)
+        self._func_stack.append(self._qualify(node.name))
         try:
             self.generic_visit(node)
         finally:
@@ -465,7 +508,39 @@ def test_ast_walker_captures_enclosing_func_name() -> None:
     matches = [
         (name, enc) for _line, name, enc in v.offenders if name == "asyncio.create_subprocess_exec"
     ]
+    # PP35 — module-level functions keep their bare name (no class qualifier).
     assert matches == [("asyncio.create_subprocess_exec", "_spawn")]
+
+
+def test_ast_walker_qualifies_class_method_names() -> None:
+    """PP35 — _SpawnVisitor qualifies methods with their enclosing class.
+
+    Two classes with the same method name MUST yield distinct qualified
+    keys so :data:`_FUNC_ALLOWLIST` entries can target one without
+    accidentally allowing the other.
+    """
+    fixture = textwrap.dedent(
+        """
+        import asyncio
+
+        class ClaudeCodeRunner:
+            async def _spawn(self):
+                await asyncio.create_subprocess_exec("claude")
+
+        class MockRunner:
+            async def _spawn(self):
+                await asyncio.create_subprocess_exec("mock")
+        """
+    )
+    tree = ast.parse(fixture)
+    v = _SpawnVisitor()
+    v.visit(tree)
+    enclosing = sorted(
+        enc for _line, name, enc in v.offenders if name == "asyncio.create_subprocess_exec"
+    )
+    assert enclosing == ["ClaudeCodeRunner._spawn", "MockRunner._spawn"], (
+        f"PP35: expected qualified Class.method names; got {enclosing!r}"
+    )
 
 
 def test_ast_walker_module_scope_offender_has_none_enclosing() -> None:

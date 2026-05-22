@@ -539,29 +539,82 @@ async def run_task(
         # forever and wedge the worker. ``task_overall_timeout_s`` defaults
         # to 900s — far above ``claude_timeout_s`` so this only trips on
         # pathological hangs, never on healthy long runs.
-        result = await asyncio.wait_for(
-            runner.run(prompt, worktree_path),
-            timeout=settings.task_overall_timeout_s,
-        )
-    except BaseException as exc:  # noqa: BLE001 — capture-and-rethrow guarded below
+        # PP24 — when the outer ceiling fires, ``wait_for`` cancels the
+        # coroutine but does NOT kill the underlying subprocess. We kill it
+        # here before re-raising so the worker doesn't leak an orphan
+        # process consuming tokens until OS reap.
+        try:
+            result = await asyncio.wait_for(
+                runner.run(prompt, worktree_path),
+                timeout=settings.task_overall_timeout_s,
+            )
+        except TimeoutError:
+            log.error(
+                "runner_overall_timeout_exceeded",
+                task_id=task_id,
+                timeout_s=settings.task_overall_timeout_s,
+            )
+            with contextlib.suppress(Exception):
+                await runner.terminate_with_grace(grace_period_s=5.0)
+            raise
+    except asyncio.CancelledError:
+        # PP25 — graceful shutdown path. ``CancelledError`` is a BaseException
+        # (PEP 654 distinct from Exception in 3.11+) so the old
+        # ``except BaseException`` capture would join the supervisor for up
+        # to 7s before re-raising — turning a shutdown that should be
+        # milliseconds into a 7s pause. Set cancel, do a tight 100ms join,
+        # cancel the supervisor if still running, and re-raise immediately.
+        log.info("run_task_cancelled", task_id=task_id)
+        if budget_supervisor_task is not None:
+            with contextlib.suppress(Exception):  # PP26 — defensive
+                budget_cancel.set()
+            with contextlib.suppress(Exception, asyncio.CancelledError, asyncio.TimeoutError):
+                await asyncio.wait_for(budget_supervisor_task, timeout=0.1)
+            if not budget_supervisor_task.done():
+                budget_supervisor_task.cancel()
+                with contextlib.suppress(Exception, asyncio.CancelledError, asyncio.TimeoutError):
+                    await asyncio.wait_for(budget_supervisor_task, timeout=0.5)
+        raise
+    except Exception as exc:  # noqa: BLE001 — PP25 — narrowed from BaseException
+        # PP25 — runner-side Exception capture. ``CancelledError`` no longer
+        # routes here (handled above); ``KeyboardInterrupt`` / ``SystemExit``
+        # propagate. The captured exception is re-raised after the
+        # budget-enforced path is reachable (PP1).
         runner_raised = exc
     finally:
         # Decision D4: runner-first cancel — signal the supervisor to exit
         # cleanly, then join. PP6 — join timeout MUST exceed the supervisor's
         # grace period (the supervisor may be mid-``terminate_with_grace``
         # when the cancel fires). 7.0s = 5s grace + 2s buffer.
-        if budget_supervisor_task is not None:
-            budget_cancel.set()
+        # NOTE: this finally clause only runs on the normal-exit /
+        # runner-Exception paths; the CancelledError branch above re-raises
+        # before reaching here (PP25).
+        if budget_supervisor_task is not None and not budget_supervisor_task.done():
+            # PP26 — pathological event-loop teardown could raise from
+            # ``Event.set()``; suppress so the original ``runner_raised``
+            # is not masked by Python's finally-overrides-try semantic.
+            with contextlib.suppress(Exception):
+                budget_cancel.set()
             try:
                 budget_result = await asyncio.wait_for(
                     budget_supervisor_task,
                     timeout=budget_grace_period_s + 2.0,
                 )
-            except TimeoutError:
-                log.warning("budget_supervisor_join_timeout", task_id=task_id)
+            except (TimeoutError, asyncio.CancelledError) as join_exc:
+                # PP25 — broader catch: TimeoutError covers the 7s ceiling;
+                # CancelledError covers a stray cancel propagating up.
+                log.warning(
+                    "budget_supervisor_join_timeout_or_cancelled",
+                    task_id=task_id,
+                    exc_type=type(join_exc).__name__,
+                )
                 budget_supervisor_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await budget_supervisor_task
+                # PP30 — ``await supervisor_task`` after ``cancel()`` does
+                # NOT interrupt the in-flight ``asyncio.to_thread`` worker.
+                # Wrap with a hard 2s ceiling so a stuck scan can't wedge
+                # the lifespan finally.
+                with contextlib.suppress(asyncio.CancelledError, Exception, asyncio.TimeoutError):
+                    await asyncio.wait_for(budget_supervisor_task, timeout=2.0)
             except Exception as supervisor_exc:  # noqa: BLE001 — PP9 isolation
                 # Supervisor itself raised on join (e.g. a future-set
                 # exception path). Log loudly but DO NOT clobber any
@@ -574,6 +627,10 @@ async def run_task(
                     error=str(supervisor_exc),
                 )
                 budget_result = None
+        elif budget_supervisor_task is not None:
+            # Task already done — just read its result.
+            with contextlib.suppress(Exception, asyncio.CancelledError):
+                budget_result = budget_supervisor_task.result()
 
     if budget_result is not None and budget_result.triggered:
         # Story 12.1 — task was terminated by budget enforcement.
@@ -581,13 +638,53 @@ async def run_task(
         # ``task.budget_enforcement_triggered`` here (FR67) with the
         # detection / termination latency breakdown captured below.
         #
+        # PP23 — if the supervisor's terminate_callback raised, the
+        # subprocess may STILL BE ALIVE consuming tokens. Retry termination
+        # directly via the runner adapter before transitioning the FSM. The
+        # supervisor returns ``triggered=True`` AND ``enforcement_failed=True``
+        # to signal this; the retry is best-effort (suppressed) — even on
+        # failure we still transition the FSM because the budget decision
+        # has been made.
+        if budget_result.enforcement_failed:
+            log.warning(
+                "budget_enforcement_callback_failed_retrying",
+                task_id=task_id,
+                event_id=budget_result.event_id,
+            )
+            retry_method: str | None = None
+            retry_exit_code: int | None = None
+            try:
+                retry_result = await runner.terminate_with_grace(
+                    grace_period_s=5.0,
+                )
+                retry_method = retry_result.method
+                retry_exit_code = retry_result.exit_code
+            except Exception as retry_exc:  # noqa: BLE001 — best-effort retry
+                log.error(
+                    "budget_enforcement_retry_raised",
+                    exc_info=retry_exc,
+                    task_id=task_id,
+                    event_id=budget_result.event_id,
+                )
+            else:
+                log.info(
+                    "budget_enforcement_retry_completed",
+                    task_id=task_id,
+                    event_id=budget_result.event_id,
+                    method=retry_method,
+                    exit_code=retry_exit_code,
+                )
+        #
         # PP1 — if the runner ALSO raised (the common case: the supervisor's
         # SIGTERM caused BrokenPipeError on the stdout reader), treat the
         # exception as the expected cascade of budget enforcement and log it
         # for forensics rather than re-raising.
+        # PP37 — pass ``exc_info`` so the traceback is retained for
+        # operator-side forensics; the prior string-only log discarded it.
         if runner_raised is not None:
             log.info(
                 "runner_raised_after_budget_enforcement",
+                exc_info=runner_raised,
                 task_id=task_id,
                 exc_type=type(runner_raised).__name__,
                 exc_str=str(runner_raised),
@@ -603,6 +700,7 @@ async def run_task(
             detection_latency_s=budget_result.detection_latency_s,
             termination_latency_s=budget_result.termination_latency_s,
             termination_method=budget_result.termination_method,
+            enforcement_failed=budget_result.enforcement_failed,
         )
         return
 
@@ -612,7 +710,12 @@ async def run_task(
         raise runner_raised
     # Narrow the Optional[ClaudeCodeResult] for the natural-completion path;
     # ``result`` is non-None whenever ``runner_raised`` is None.
-    assert result is not None  # narrowing assert — guarded by raise above
+    # PP40 — converted from ``assert`` to runtime check. Under ``-O`` /
+    # ``PYTHONOPTIMIZE=1`` ``assert`` is stripped so a future refactor that
+    # broke the invariant would silently fall through into the ``None`` deref
+    # below. ``RuntimeError`` is unstrippable and surfaces louder.
+    if result is None:
+        raise RuntimeError("invariant: result must be set when runner did not raise (PP40)")
 
     push_event = needs_approval(result.events)
     if push_event is None:

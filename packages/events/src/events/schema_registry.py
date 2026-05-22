@@ -99,6 +99,22 @@ def unregister_all() -> None:
     _rebuild_types_cache()
 
 
+def unregister(event_type: str, schema_version: str) -> None:
+    """Remove a single ``(event_type, schema_version)`` entry (Story 12.1 PP36).
+
+    Test-only helper for cleaning up registrations added by a fixture.
+    Production code must never call this — registrations are part of the
+    contract surface and removing one at runtime would break in-flight
+    payload validation. The helper exists so test fixtures don't need to
+    reach into the private ``_rebuild_types_cache``.
+
+    No-op when the key is absent (the fixture pattern register-then-
+    unregister tolerates pre-existing registrations).
+    """
+    if REGISTRY.pop((event_type, schema_version), None) is not None:
+        _rebuild_types_cache()
+
+
 # Story 3.9 AC-11 / H7 NOTE: ``task.created`` schema versions (1.0.0, 1.0.1,
 # 1.1.0) are all registered by ``registry_state.domain.event_types`` at its
 # own module-load time. A deferred packages→services import here would

@@ -80,12 +80,24 @@ class TerminationResult:
 
       * ``"noop"``  — no live subprocess (e.g. already exited / never spawned).
       * ``"sigterm"`` — subprocess exited within ``grace_period_s`` after SIGTERM.
-      * ``"sigkill"`` — subprocess survived SIGTERM grace and was SIGKILLed.
+      * ``"sigkill"`` — grace window elapsed; the runner reached the SIGKILL
+        escalation branch. May reflect either an actual SIGKILL delivery
+        (``escalation_landed=True``) OR a target that died in the race
+        window between grace-timeout and our ``process.kill()`` call
+        (``escalation_landed=False``). NFR-R8 dashboards classifying
+        "escalations" should filter on ``method=="sigkill" AND
+        escalation_landed`` to avoid double-counting the race-window case.
 
     - ``elapsed_s``: wall-clock duration of ``terminate_with_grace`` (via
       :func:`time.monotonic`). For ``"noop"``, ~0.0.
     - ``exit_code``: subprocess returncode (``None`` only on ``"noop"`` when
       no process ever ran).
+    - ``escalation_landed`` (PP34): ``True`` iff a SIGKILL was actually
+      delivered. ``False`` for ``"noop"`` / ``"sigterm"`` paths AND for the
+      ``method=="sigkill"`` race-window case (target died via SIGTERM after
+      the grace timeout fired but before our kill() landed — the runner
+      observed ProcessLookupError on kill()). Defaulting to ``False`` keeps
+      the field optional for existing callers.
 
     PP18 — public dataclass; the leading-underscore name (``_TerminationResult``)
     was a Story 12.1 pass-1 review finding (underscore-public-export
@@ -98,10 +110,14 @@ class TerminationResult:
     method: Literal["noop", "sigterm", "sigkill"]
     elapsed_s: float
     exit_code: int | None
+    escalation_landed: bool = False
 
 
 # PP18 — backwards-compat alias; existing callers (integration test) keep
-# importing the underscore-prefixed name.
+# importing the underscore-prefixed name. PP39 — alias retained at module
+# scope but DROPPED from ``__all__`` to discourage new use. New callers
+# MUST import :class:`TerminationResult` directly. The alias is deprecated
+# and may be removed in a future story.
 _TerminationResult = TerminationResult
 
 
@@ -508,6 +524,12 @@ class ClaudeCodeRunner:
             # PP5 — second TOCTOU window: subprocess may die during the grace
             # period (cooperative SIGTERM finally landed, race lost to our
             # wait_for timeout). The reap below covers both branches.
+            # PP34 — when this happens, classify as ``method="sigkill"``
+            # (we DID hit the grace timeout — the escalation branch was
+            # entered) but flag ``escalation_landed=False`` so dashboards
+            # can distinguish actual deliveries from race-window cases.
+            # The prior code mis-classified the race-window case as
+            # ``"sigterm"``, undercounting escalation counters.
             try:
                 process.kill()
             except ProcessLookupError:
@@ -516,12 +538,11 @@ class ClaudeCodeRunner:
                     pid=process.pid,
                 )
                 await process.wait()
-                # The grace window elapsed cleanly via SIGTERM after all;
-                # classify accordingly so operators don't misread an escalation.
                 return TerminationResult(
-                    method="sigterm",
+                    method="sigkill",
                     elapsed_s=time.monotonic() - start,
                     exit_code=process.returncode,
+                    escalation_landed=False,
                 )
             await process.wait()
             elapsed = time.monotonic() - start
@@ -529,6 +550,7 @@ class ClaudeCodeRunner:
                 method="sigkill",
                 elapsed_s=elapsed,
                 exit_code=process.returncode,
+                escalation_landed=True,
             )
 
 
@@ -544,7 +566,10 @@ __all__ = [
     "ClaudeCodeRunner",
     "ExtractedEvent",
     "ReasoningBreadcrumb",
-    # PP18 — public name; underscore-prefixed alias kept for one in-tree caller.
+    # PP18 — public name. PP39 — the underscore alias ``_TerminationResult``
+    # is kept at module scope above for backwards-compat with the integration
+    # test but is INTENTIONALLY OMITTED from ``__all__`` — exporting a
+    # leading-underscore name undermines the rename. Deprecated; new callers
+    # must use ``TerminationResult``.
     "TerminationResult",
-    "_TerminationResult",
 ]

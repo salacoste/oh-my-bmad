@@ -36,7 +36,7 @@ from events import (
     to_canonical_json,
 )
 from events.payloads import TaskBudgetExceededPayload
-from events.schema_registry import REGISTRY, _rebuild_types_cache, register
+from events.schema_registry import REGISTRY, register, unregister
 
 from worker_wrapper.domain.budget_supervisor import (
     _BudgetSupervisorResult,
@@ -52,19 +52,21 @@ _TASK_ID_OTHER = "t-01917e5c-a7d1-7000-8abc-0000000000aa"
 
 @pytest.fixture(autouse=True)
 def _isolated_registry() -> Generator[None, None, None]:
-    """Snapshot + restore the schema registry around each test (PP14).
+    """Snapshot + restore the schema registry around each test (PP14 + PP29 + PP36).
 
-    The fixture name previously implied isolation but the body only
-    registered — never unregistered — leaving entries in the global
-    :data:`events.schema_registry.REGISTRY` after the suite ran. Tests that
-    expected a clean slate could observe carry-over and order-dependent
-    behaviour. The snapshot/restore pattern below removes entries that this
-    fixture added (those not present in the pre-test snapshot) and restores
-    any pre-existing bindings so cross-suite state is preserved.
+    Fixture scope: function (autouse) — each test gets a clean view of the
+    registry's ``task.budget_exceeded`` bindings.
 
-    Note: :mod:`events.schema_registry` does not expose a single-key
-    ``unregister`` helper — the snapshot pattern is the minimum-viable
-    cleanup. Production callers
+    PP36 — uses the public :func:`events.schema_registry.unregister` helper
+    instead of poking the private ``_rebuild_types_cache``.
+
+    PP29 — :func:`events.schema_registry.register` rebuilds the types
+    cache on each successful registration, so the yield-side is already
+    consistent. The restore loop reinstates the pre-snapshot REGISTRY
+    contents (drop test-added keys via :func:`unregister`, then re-register
+    any pre-existing bindings).
+
+    Production callers
     (:mod:`registry_state.domain.event_types`) register
     ``task.budget_exceeded`` permanently, so a "snapshot is empty"
     transient state is impossible in any production process; this fixture
@@ -76,14 +78,17 @@ def _isolated_registry() -> Generator[None, None, None]:
     try:
         yield
     finally:
-        # Restore pre-snapshot state: drop keys we added, restore pre-existing
-        # bindings (a no-op for production code paths that already had them).
+        # Restore pre-snapshot state: drop keys we added (via the public
+        # unregister API per PP36 — rebuilds the types cache automatically),
+        # then re-register any pre-existing bindings the snapshot held.
         for key in list(REGISTRY.keys()):
             if key not in snapshot:
-                REGISTRY.pop(key, None)
+                event_type, schema_version = key
+                unregister(event_type, schema_version)
         for key, model in snapshot.items():
-            REGISTRY[key] = model
-        _rebuild_types_cache()
+            if key not in REGISTRY:
+                event_type, schema_version = key
+                register(event_type, schema_version, model)
 
 
 def _make_budget_envelope(
@@ -523,6 +528,49 @@ async def test_watch_callback_exception_isolated_from_lifespan(
     # lifespan can transition the FSM.
     assert result.triggered is True
     assert result.termination_method is None  # no method propagated
+    # PP23 — surfaces enforcement_failed=True so the lifespan can retry
+    # termination directly before transitioning.
+    assert result.enforcement_failed is True
+
+
+@pytest.mark.asyncio
+async def test_supervisor_reports_enforcement_failed_when_callback_raises(
+    tmp_path: Path,
+) -> None:
+    """PP23 — callback raise leaves the subprocess potentially alive.
+
+    Pair test for PP9 isolation (``test_watch_callback_exception_isolated_from_lifespan``).
+    Where PP9 asserts that the supervisor isolates the failure and still
+    transitions, PP23 asserts the new ``enforcement_failed`` field is
+    surfaced ``True`` so the lifespan retries termination directly.
+
+    Successful callbacks (PP9 sibling test ``test_watch_fires_callback_on_matching_event``)
+    keep ``enforcement_failed=False``.
+    """
+    env = _make_budget_envelope(task_id=_TASK_ID_PRIMARY)
+    _write_envelopes(tmp_path, [env])
+
+    async def _failing_callback() -> None:
+        # Simulate a transient adapter failure (e.g., ProcessLookupError
+        # before the PP5 fix, or a connection issue mid-termination).
+        raise OSError("transient subprocess control failure")
+
+    cancel = asyncio.Event()
+    result = await watch_for_budget_exceeded(
+        task_id=_TASK_ID_PRIMARY,
+        event_log_dir=tmp_path,
+        terminate_callback=_failing_callback,
+        clock=TickingClock(),
+        cancel_event=cancel,
+        poll_interval_s=0.05,
+    )
+
+    # PP9 + PP23 — triggered=True so the FSM transitions; enforcement_failed
+    # so the lifespan knows to retry termination.
+    assert result.triggered is True
+    assert result.enforcement_failed is True
+    # PP21 — no method propagated because callback raised before returning.
+    assert result.termination_method is None
 
 
 @pytest.mark.asyncio

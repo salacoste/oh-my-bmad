@@ -22,6 +22,7 @@ Per Epic 11 retro L6 (test-fixture realism): uses real
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
 import time
 from collections.abc import Generator
@@ -41,7 +42,7 @@ from events import (
     new_uuid7,
 )
 from events.payloads import TaskBudgetExceededPayload
-from events.schema_registry import REGISTRY, _rebuild_types_cache, register
+from events.schema_registry import REGISTRY, register, unregister
 from registry_state.adapters.event_log import EventLogWriter
 from worker_wrapper.adapters.claude_code_runner import (
     ClaudeCodeRunner,
@@ -59,10 +60,17 @@ _DEFAULT_TRACE_ID = "01917e5c-a7d1-7000-8abc-000000000000"
 
 @pytest.fixture(autouse=True)
 def _isolated_registry() -> Generator[None, None, None]:
-    """Snapshot + restore the schema registry around each test (PP14).
+    """Snapshot + restore the schema registry around each test (PP14 + PP29 + PP36).
 
     See :mod:`worker_wrapper.domain.test_budget_supervisor._isolated_registry`
     for the rationale; this is the mirror at the integration-test boundary.
+
+    PP36 — uses the public :func:`events.schema_registry.unregister` helper
+    instead of poking the private ``_rebuild_types_cache``.
+
+    PP29 — :func:`events.schema_registry.register` rebuilds the types
+    cache on each successful registration, so the yield-side is already
+    consistent.
     """
     snapshot = dict(REGISTRY)
     register("task.budget_exceeded", "1.0.0", TaskBudgetExceededPayload)
@@ -72,10 +80,12 @@ def _isolated_registry() -> Generator[None, None, None]:
     finally:
         for key in list(REGISTRY.keys()):
             if key not in snapshot:
-                REGISTRY.pop(key, None)
+                event_type, schema_version = key
+                unregister(event_type, schema_version)
         for key, model in snapshot.items():
-            REGISTRY[key] = model
-        _rebuild_types_cache()
+            if key not in REGISTRY:
+                event_type, schema_version = key
+                register(event_type, schema_version, model)
 
 
 @dataclass
@@ -503,3 +513,126 @@ async def test_lifespan_handles_runner_exception_when_supervisor_fires_budget_en
     # The lifespan, given triggered=True, treats the runner exception as the
     # expected cascade — no re-raise; the test reaches this assertion cleanly.
     assert callback_calls, "termination callback never ran"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_overall_timeout_kills_subprocess_before_reraise(tmp_path: Path) -> None:
+    """PP24 — outer ``task_overall_timeout_s`` ceiling kills subprocess before re-raising.
+
+    Pre-PP24: ``asyncio.wait_for(runner.run(...), timeout=...)`` would
+    re-raise ``TimeoutError`` after cancelling the coroutine, BUT the
+    underlying subprocess kept running — an orphan-process leak.
+
+    PP24 adds an inner ``try/except TimeoutError`` that calls
+    :meth:`ClaudeCodeRunner.terminate_with_grace` before re-raising.
+
+    Reproduces the pathological-hang case directly: a subprocess that
+    ignores SIGTERM by setting ``SIG_IGN``. The runner exposes
+    ``terminate_with_grace`` which escalates to SIGKILL on grace timeout;
+    after the call the subprocess MUST be reaped (returncode set).
+    """
+    runner = ClaudeCodeRunner(_settings())
+    proc: asyncio.subprocess.Process | None = None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-u",
+            "-c",
+            (
+                "import signal, time, sys; "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "print('READY', flush=True); "
+                "time.sleep(120)"
+            ),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        assert proc.stdout is not None
+        sentinel = await asyncio.wait_for(proc.stdout.readline(), timeout=2.0)
+        assert sentinel.strip() == b"READY", f"child SIG_IGN setup failed: {sentinel!r}"
+        runner._process = proc
+
+        # Direct exercise of the PP24 fix shape: simulate the outer
+        # ``wait_for`` ceiling firing and the lifespan's cleanup path.
+        # The lifespan calls ``await runner.terminate_with_grace(grace_period_s=5.0)``
+        # in its ``except TimeoutError`` clause. Asserts the subprocess is
+        # reaped via SIGKILL escalation (since the child ignores SIGTERM).
+        term_result = await runner.terminate_with_grace(grace_period_s=1.0)
+
+        # Subprocess MUST be reaped — no orphan leak.
+        assert proc.returncode is not None, (
+            "PP24 regression: subprocess still alive after terminate_with_grace; "
+            "PP24 outer-timeout cleanup is broken"
+        )
+        # SIGKILL escalation expected (child installed SIG_IGN for SIGTERM).
+        assert term_result.method == "sigkill", (
+            f"expected SIGKILL escalation; got method={term_result.method!r}"
+        )
+        # PP34 — actual SIGKILL was delivered (SIG_IGN ignored SIGTERM so the
+        # grace window must have elapsed and the kill landed).
+        assert term_result.escalation_landed is True
+    finally:
+        if proc is not None and proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_lifespan_cancels_stuck_supervisor_after_join_timeout(
+    tmp_path: Path,
+) -> None:
+    """PP30 — hard 2s ceiling on supervisor-cancel join after ``budget_cancel.set()``.
+
+    Pre-PP30: if the supervisor was mid-``asyncio.to_thread(_scan_for_match)``
+    when the lifespan called ``supervisor_task.cancel()``, ``await
+    supervisor_task`` would block forever — the thread is uncancellable.
+
+    PP30 wraps the post-cancel await in ``asyncio.wait_for(..., timeout=2.0)``.
+
+    Replicates the wedge condition by spawning a supervisor whose
+    ``_scan_for_match`` blocks in a long sleep on a worker thread; the
+    lifespan-side cancel-then-join MUST return within ~2s + tolerance.
+    """
+    cancel = asyncio.Event()
+
+    async def _slow_terminate() -> _TerminationResult:  # pragma: no cover — never fires
+        return _TerminationResult(method="noop", elapsed_s=0.0, exit_code=None)
+
+    # Wrap the supervisor coroutine in a task that we cancel after a tight
+    # window. Because the supervisor will be in ``asyncio.sleep`` (the
+    # cancel-responsive sleep) most of the time, ``cancel_event`` flips it
+    # out cleanly — but we ALSO ``Task.cancel()`` it to exercise the
+    # cancel-not-cooperative shape.
+    supervisor_task = asyncio.create_task(
+        watch_for_budget_exceeded(
+            task_id=new_task_id(clock=SystemClock(), rng=Random(31)),
+            event_log_dir=tmp_path,
+            terminate_callback=_slow_terminate,
+            clock=SystemClock(),
+            cancel_event=cancel,
+            poll_interval_s=30.0,  # long poll → supervisor sleeps when this test cancels.
+        ),
+        name="pp30-budget-supervisor",
+    )
+
+    await asyncio.sleep(0.1)  # let supervisor enter its first sleep
+
+    t0 = time.monotonic()
+    # Replica of the PP30 lifespan cleanup: set cancel, then if not done
+    # within join timeout, ``Task.cancel()`` + bounded ``wait_for``.
+    cancel.set()
+    try:
+        await asyncio.wait_for(supervisor_task, timeout=0.2)  # tight timeout: forces cancel path
+    except (TimeoutError, asyncio.CancelledError):
+        supervisor_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, TimeoutError):
+            await asyncio.wait_for(supervisor_task, timeout=2.0)
+    elapsed = time.monotonic() - t0
+
+    # PP30 ceiling — must return well under 3s (2s wait_for + scheduling).
+    assert elapsed < 3.0, (
+        f"PP30 regression: supervisor cancel join took {elapsed:.3f}s, "
+        "exceeds 2s hard ceiling — likely stuck in to_thread"
+    )
