@@ -68,26 +68,4 @@ jobs:
         run: git ls-files -z | xargs -0 uv run secret-hygiene-precommit
 
       - name: pytest -m "not slow"
-        # Tolerate aiosqlite daemon-thread teardown SIGABRT (exit 134) AFTER
-        # pytest reports a clean pass. The cyextension/aiosqlite stack races
-        # with Python's interpreter shutdown — the test outcomes are already
-        # printed by the time the fatal error fires. We only forgive 134 if
-        # pytest's own summary line shows passed AND zero failed.
-        run: |
-          # GHA runs `bash -e` by default. Disable `-e` so the script
-          # survives pytest exiting 134 and gets to the tolerance check.
-          set +e
-          set -o pipefail
-          uv run pytest -m "not slow" 2>&1 | tee /tmp/pytest-out.log
-          rc=${PIPESTATUS[0]}
-          # Extract the canonical pytest summary line: "=== N passed, M skipped... ===".
-          # Match it, then assert it contains "passed" and does NOT contain "failed".
-          summary=$(grep -E '^=+ [0-9]+ (passed|failed)' /tmp/pytest-out.log | tail -1)
-          if [ "$rc" -eq 134 ] && \
-             echo "$summary" | grep -q 'passed' && \
-             ! echo "$summary" | grep -q 'failed'; then
-            echo "::notice::Tolerating SIGABRT from aiosqlite daemon-thread teardown."
-            echo "::notice::Summary line: $summary"
-            exit 0
-          fi
-          exit "$rc"
+        run: uv run pytest -m "not slow"

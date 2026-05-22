@@ -119,7 +119,7 @@ def _patch_aiogram(monkeypatch: pytest.MonkeyPatch) -> list[int]:
 # ---------------------------------------------------------------------------
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="function")
 async def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> AsyncIterator[AsyncClient]:
     """Minimal ASGI client: valid webhook + no dispatch recorder needed."""
     _setup_env(monkeypatch, tmp_path)
@@ -135,7 +135,7 @@ async def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> AsyncIterat
         yield c
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="function")
 async def client_and_state(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> AsyncIterator[tuple[AsyncClient, Path, list[int]]]:
@@ -381,7 +381,7 @@ async def test_webhook_with_empty_dispatcher_returns_200(
 # ---------------------------------------------------------------------------
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="function")
 async def client_with_recorder(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> AsyncIterator[tuple[AsyncClient, list[EventEnvelope], Path]]:

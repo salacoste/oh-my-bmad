@@ -161,7 +161,7 @@ async def _wait_for_event_appended(
     )
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="function")
 async def test_app_with_event_dir(
     tmp_path: Path,
 ) -> AsyncIterator[tuple[FastAPI, Path]]:

@@ -211,7 +211,7 @@ async def _wait_for_total_appended(
     )
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="function")
 async def cardinality_test_app(
     tmp_path: Path,
 ) -> AsyncIterator[tuple[FastAPI, Path]]:

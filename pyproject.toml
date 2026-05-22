@@ -69,6 +69,18 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests", "packages", "services", "mcp-servers"]
 asyncio_mode = "strict"
+# Story 8.7.6 — module-scoped asyncio loop reduces aiosqlite daemon-thread
+# accumulation from ~2376 (per-test loops) to ~30-50 (per-module loops).
+# Each pytest-asyncio test previously got its own event loop; aiosqlite's
+# Connection.__init__ spawns a daemon worker thread per connection that
+# captures a reference to the current loop. Across 2376 tests with FastAPI
+# app fixtures, thousands of daemon threads accumulated and raced Python's
+# stderr-buffer teardown at interpreter shutdown, causing exit 134 SIGABRT
+# AFTER pytest's clean-pass summary. Reusing one loop per module bounds
+# the worker-thread count and eliminates the teardown race — letting us
+# drop the exit-134 tolerance shim from .github/workflows/ci.yml (commits
+# 011ced6 / c3d8222 / a0c53bb, Epic 8.7 L3 lesson).
+asyncio_default_fixture_loop_scope = "module"
 addopts = "-ra --strict-markers --import-mode=importlib"
 # Story 9.7 pass-1 PM-B12: filterwarnings restored as empty list (not deleted).
 # Story 9.7 pass-2 TM-B11: ratchet future deprecations as errors so we don't
