@@ -163,7 +163,7 @@ async def _seed_task_row(db_url: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="function")  # Story 8.7.6 PP2 — LifespanManager bg state
 async def post_client(
     tmp_path: Path, fixed_clock: FrozenClock
 ) -> AsyncGenerator[AsyncClient, None]:
@@ -193,7 +193,7 @@ async def post_client(
 # ---------------------------------------------------------------------------
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="function")  # Story 8.7.6 PP2 — LifespanManager bg state
 async def get_client(tmp_path: Path, fixed_clock: FrozenClock) -> AsyncGenerator[AsyncClient, None]:
     """Client for GET /v1/tasks/{id} tests — pre-seeds a Task + Event row."""
     db_path = tmp_path / "state.sqlite3"

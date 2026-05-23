@@ -177,7 +177,7 @@ def _make_failing_anthropic_client() -> AsyncMock:
 # ---------------------------------------------------------------------------
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="function")  # Story 8.7.6 PP2 — LifespanManager bg state
 async def digest_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None]:
     """Client with 25 seeded events and mock Anthropic client."""
     db_path = tmp_path / "state.sqlite3"
@@ -206,7 +206,7 @@ async def digest_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None]:
         yield client
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="function")  # Story 8.7.6 PP2 — LifespanManager bg state
 async def large_digest_client(
     tmp_path: Path,
 ) -> AsyncGenerator[AsyncClient, None]:
@@ -234,7 +234,7 @@ async def large_digest_client(
         yield client
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="function")  # Story 8.7.6 PP2 — LifespanManager bg state
 async def no_events_client(
     tmp_path: Path,
 ) -> AsyncGenerator[AsyncClient, None]:
@@ -260,7 +260,7 @@ async def no_events_client(
         yield client
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="function")  # Story 8.7.6 PP2 — LifespanManager bg state
 async def fallback_client(
     tmp_path: Path,
 ) -> AsyncGenerator[AsyncClient, None]:
@@ -288,7 +288,7 @@ async def fallback_client(
         yield client
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="function")  # Story 8.7.6 PP2 — LifespanManager bg state
 async def no_client_configured(
     tmp_path: Path,
 ) -> AsyncGenerator[AsyncClient, None]:

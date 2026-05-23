@@ -142,7 +142,7 @@ async def _seed_task_only(db_url: str, task_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="function")  # Story 8.7.6 PP2 — LifespanManager bg state
 async def events_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None]:
     """Client with 5 seeded events."""
     db_path = tmp_path / "state.sqlite3"

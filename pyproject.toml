@@ -77,9 +77,11 @@ asyncio_mode = "strict"
 # app fixtures, thousands of daemon threads accumulated and raced Python's
 # stderr-buffer teardown at interpreter shutdown, causing exit 134 SIGABRT
 # AFTER pytest's clean-pass summary. Reusing one loop per module bounds
-# the worker-thread count and eliminates the teardown race — letting us
-# drop the exit-134 tolerance shim from .github/workflows/ci.yml (commits
-# 011ced6 / c3d8222 / a0c53bb, Epic 8.7 L3 lesson).
+# the worker-thread count to ~30-50; combined with the pytest_sessionfinish
+# drain hook in repo-root conftest.py (Story 8.7.6 PP1/PP3/PP6), this
+# reduces the teardown race enough to let us drop the exit-134 tolerance
+# shim from .github/workflows/ci.yml (commits 011ced6 / c3d8222 / a0c53bb,
+# Epic 8.7 L3 lesson).
 asyncio_default_fixture_loop_scope = "module"
 addopts = "-ra --strict-markers --import-mode=importlib"
 # Story 9.7 pass-1 PM-B12: filterwarnings restored as empty list (not deleted).

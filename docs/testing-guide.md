@@ -396,3 +396,41 @@ A test file should keep helper code local (not shared) when:
 - The helper returns a different type or has diverged semantics
 - The test needs per-file customization that would require complex parameterization
 - The helper is used by only one test file
+
+## Module-scoped asyncio loops (Story 8.7.6)
+
+The repo's `pytest-asyncio` default fixture loop scope is `"module"` (set in
+`pyproject.toml`). This reduces aiosqlite daemon-thread accumulation
+dramatically and was the root-fix for the exit-134 SIGABRT shim retired in
+Story 8.7.6.
+
+**If your `@pytest_asyncio.fixture` spawns background tasks** (`LifespanManager`,
+`asyncio.Queue` listeners, `asyncio.create_task`, etc.), add
+`loop_scope="function"` to the decorator. Otherwise the fixture's background
+state may leak across tests in the same module:
+
+```python
+@pytest_asyncio.fixture(loop_scope="function")  # Story 8.7.6 — per-test loop
+async def app_client(test_settings: Settings) -> AsyncGenerator[AsyncClient, None]:
+    async with LifespanManager(build_app(test_settings)) as manager:
+        async with AsyncClient(...) as client:
+            yield client
+```
+
+**Symptoms of missing override:**
+- Tests pass in isolation, fail when running the full module
+- `RuntimeError: Loop is closed` at test setup
+- `ResourceWarning: unclosed event loop` at session end
+- Background task accumulation across same-module tests
+
+**Auxiliary defenses (already in place):**
+- Repo-root `conftest.py` `pytest_sessionfinish` hook drains aiosqlite worker
+  threads at session end (Story 8.7.6 PP1/PP3/PP6) — uses defensive
+  `_is_aiosqlite_worker` matcher resilient to upstream thread-naming changes.
+- Repo-root `conftest.py` `_assert_no_leaked_tasks_after_test` autouse warns
+  if a test leaks pending `asyncio.Task` instances (Story 8.7.6 PP7).
+- `tests/integration/test_aiosqlite_drain.py` smoke-tests the basic clean-
+  exit invariant in a subprocess (Story 8.7.6 PP11).
+
+See spec line 59 + Story 8.7.6 PP2 audit for the canonical list of
+`registry-api` fixtures requiring the override.

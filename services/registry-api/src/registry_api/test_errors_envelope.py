@@ -55,7 +55,7 @@ async def _seed_tables(db_url: str) -> None:
     await engine.dispose()
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="function")  # Story 8.7.6 PP2 — LifespanManager bg state
 async def post_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None]:
     db_path = tmp_path / "state.sqlite3"
     db_url = _db_url(db_path)

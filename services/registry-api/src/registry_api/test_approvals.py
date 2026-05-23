@@ -48,7 +48,7 @@ from registry_state.schema import (  # noqa: IMP001 — test fixture imports ORM
 from registry_api.app import build_app
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="function")  # Story 8.7.6 PP2 — LifespanManager fixture
 async def app_client(
     tmp_path: Path,
 ) -> AsyncGenerator[tuple[AsyncClient, Path, Path, object], None]:
@@ -259,7 +259,7 @@ class TestGetInbox:
 # ---------------------------------------------------------------------------
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="function")  # Story 8.7.6 PP2 — LifespanManager fixture
 async def app_client_with_state(
     tmp_path: Path,
 ) -> AsyncGenerator[tuple[AsyncClient, object], None]:

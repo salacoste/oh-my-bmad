@@ -79,7 +79,7 @@ async def _seed_tables_with_tasks(db_url: str) -> None:
     await engine.dispose()
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="function")  # Story 8.7.6 PP2 — LifespanManager bg state
 async def signing_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None]:
     """Client with OPERATOR_HMAC_KEY set via explicit settings injection.
 

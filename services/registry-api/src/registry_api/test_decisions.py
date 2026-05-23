@@ -80,7 +80,7 @@ async def _seed_tables_with_tasks(db_url: str) -> None:
     await engine.dispose()
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="function")  # Story 8.7.6 PP2 — LifespanManager bg state
 async def app_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None]:
     db_path = tmp_path / "state.sqlite3"
     db_url = _db_url(db_path)
@@ -343,7 +343,7 @@ async def _seed_license_flagged_event(db_url: str, task_id: str) -> None:
     await engine.dispose()
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="function")  # Story 8.7.6 PP2 — LifespanManager bg state
 async def flagged_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None]:
     """Client with a plan_ready task that has a license_flagged event."""
     db_path = tmp_path / "state.sqlite3"
@@ -505,7 +505,7 @@ async def _seed_budget_exceeded_event(db_url: str, task_id: str) -> None:
     await engine.dispose()
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="function")  # Story 8.7.6 PP2 — LifespanManager bg state
 async def budget_blocked_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None]:
     """Client with a plan_ready task that has a budget_exceeded event."""
     db_path = tmp_path / "state.sqlite3"
@@ -677,7 +677,7 @@ async def _seed_dual_flags(db_url: str, task_id: str) -> None:
     await engine.dispose()
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="function")  # Story 8.7.6 PP2 — LifespanManager bg state
 async def dual_blocked_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None]:
     """Client with a task that has BOTH license and budget flags."""
     db_path = tmp_path / "state.sqlite3"
