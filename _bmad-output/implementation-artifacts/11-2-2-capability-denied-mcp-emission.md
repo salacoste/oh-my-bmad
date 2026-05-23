@@ -1,6 +1,6 @@
 # Story 11.2.2 — capability.denied MCP-boundary emission
 
-Status: **review** (pass-1 review batch-applied 2026-05-24 — 9 fixes incl. PQ1 feature-flag default-OFF + PQ9 audit-forgery prevention; CI pending @ pre-commit; baseline CI green @ e661d90 (run 26344663869) from pre-review state; Story 11.2.3 filed for FR26 multi-writer architectural fix)
+Status: **done** (pass-1 review CI green @ 0244787 (run 26345623782) 2026-05-24 — 8 fixes batch-applied + PQ9 reverted after CI surfaced regression; PQ1 feature-flag default-OFF mitigates FR26 multi-writer; Story 11.2.3 filed for the permanent architectural fix + dedicated audit-forwarding tool)
 
 ## Story
 
