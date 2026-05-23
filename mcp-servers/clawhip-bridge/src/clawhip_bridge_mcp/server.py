@@ -185,14 +185,17 @@ def build_server(
 
     mcp = FastMCP("clawhip-bridge", lifespan=_lifespan)
 
-    # Story 11.2.2: schema-version overrides for event types whose only
-    # registered version is NOT v1.0.0. Currently scoped to the
+    # Story 11.2.2: schema-version and actor-override config for event types
+    # whose only registered version is NOT v1.0.0. Currently scoped to the
     # ``capability.denied`` audit event (registered at v1.1.0 only —
     # registry-state's ``domain/event_types.py:275``). Future audit-only
     # event types added at v1.1.0+ should be registered here so the
-    # public ``emit_event`` tool selects the correct schema version.
-    non_v1_0_0_schema_versions: dict[str, str] = {
-        "capability.denied": "1.1.0",
+    # public ``emit_event`` tool selects the correct schema version AND
+    # actor identity in one place. Tuple: (schema_version, actor_override).
+    _SYSTEM_EMITTER = Actor(kind="system", id="clawhip-bridge-mcp")
+    _CAPABILITY_DENIED = "capability.denied"
+    _emit_overrides: dict[str, tuple[str, Actor]] = {
+        _CAPABILITY_DENIED: ("1.1.0", _SYSTEM_EMITTER),
     }
 
     # ------------------------------------------------------------------
@@ -294,19 +297,21 @@ def build_server(
                     reason=exc.reason,
                 )
                 # Internal ``_emit`` bypasses ``check_tier`` — see AC3-A above.
-                # schema_version="1.1.0" because ``capability.denied`` is
-                # registered ONLY at v1.1.0 in registry-state's
-                # ``domain/event_types.py:275``. actor_override stamps OQ-2's
-                # system-emitter identity instead of the denied actor.
+                # Uses _CAPABILITY_DENIED / _SYSTEM_EMITTER constants so
+                # schema version, event type, and actor identity stay in
+                # sync with _emit_overrides above.
                 await _emit(
-                    "capability.denied",
+                    _CAPABILITY_DENIED,
                     audit_payload,
                     None,
                     caller_trace_id=caller_trace_id,
                     schema_version="1.1.0",
-                    actor_override=Actor(kind="system", id="clawhip-bridge-mcp"),
+                    actor_override=_SYSTEM_EMITTER,
                 )
             except (asyncio.CancelledError, KeyboardInterrupt):
+                # Defensive: BaseException subclasses never caught by
+                # ``except Exception`` on 3.12+, but explicit re-raise
+                # documents intent and guards against future restructuring.
                 raise
             except Exception as emit_exc:
                 log.error(
@@ -317,6 +322,7 @@ def build_server(
                         "error_type": type(emit_exc).__name__,
                         "error_message": str(emit_exc),
                     },
+                    exc_info=True,
                 )
             raise
 
@@ -351,18 +357,10 @@ def build_server(
             TIER_MAP["emit_event"],
             caller_trace_id=caller_trace_id,
         )
-        # Story 11.2.2: resolve schema version (v1.0.0 default; v1.1.0 for
-        # capability.denied — the only audit-only event type currently
-        # emitted via this tool). When task-registry/session-registry's
-        # decorator routes a capability.denied audit through this surface,
-        # OQ-2 also requires the envelope's ``actor`` field be stamped
-        # ``Actor(kind="system", id="clawhip-bridge-mcp")`` so the audit
-        # record reflects the system-emitter identity (not the calling
-        # MCP server's configured actor).
-        schema_version = non_v1_0_0_schema_versions.get(type, "1.0.0")
-        actor_override = (
-            Actor(kind="system", id="clawhip-bridge-mcp") if type == "capability.denied" else None
-        )
+        # Story 11.2.2: resolve schema version and actor override from the
+        # consolidated _emit_overrides dict. Both concerns evolve together —
+        # adding a new audit-only event type requires a single dict entry.
+        schema_version, actor_override = _emit_overrides.get(type, ("1.0.0", None))
         return await _emit(
             type,
             payload,
