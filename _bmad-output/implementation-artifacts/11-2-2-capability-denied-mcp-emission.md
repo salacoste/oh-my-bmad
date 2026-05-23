@@ -1,6 +1,6 @@
 # Story 11.2.2 — capability.denied MCP-boundary emission
 
-Status: **review** (pass-2 review batch-applied 2026-05-24 — 9 fixes incl. CRITICAL env-allowlist completeness fix that pass-1 missed; CI pending @ pre-commit; pass-1 baseline CI green @ 0244787 (run 26345623782); PQ1 feature-flag default-OFF + Story 11.2.3 architectural carve-out unchanged)
+Status: **done** (pass-2 review CI green @ ddc8828 (run 26346002798) 2026-05-24 — 9 fixes batch-applied incl. CRITICAL env-allowlist completeness that pass-1 missed; PQ1 feature-flag default-OFF + Story 11.2.3 architectural carve-out unchanged; Epic 11 retro L1 validated for the 8th consecutive cross-cutting story)
 
 ## Story
 
