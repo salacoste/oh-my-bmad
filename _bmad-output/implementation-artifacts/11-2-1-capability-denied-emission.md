@@ -1,6 +1,6 @@
 # Story 11.2.1 — capability.denied event emission
 
-Status: **review** (HTTP-only scope; AC1+AC3+AC4(http)+AC5+AC6+AC7+AC8(http)+AC9 closed; CI pending @ pre-commit; MCP-boundary emission deferred to Story 11.2.2)
+Status: **review** (HTTP-only scope; CI green @ 393f69e (run 26340206058) 2026-05-23 — ready for `/bmad-code-review 11-2-1`; AC1+AC3+AC4(http)+AC5+AC6+AC7+AC8(http)+AC9 closed; MCP-boundary deferred to Story 11.2.2)
 
 ## Story
 
@@ -236,7 +236,7 @@ The middleware already calls `_log.warning("tier_enforcement_denied", ...)` (lin
   - [x] Unit: emission failure does NOT block 403 (PD-1).
   - [x] Integration: `tests/integration/test_capability_denied_emission.py` — HTTP → metrics → counter (1 test).
 - [x] Phase 5 — Validation gates: ruff, mypy, check_imports, check_event_registry, check_single_writer, check_registry_isolation, bootstrap-verify, pytest — all green.
-- [ ] Phase 6 — Flip sprint-status to `review`; commit `fix(epic-11.2.1)` + push; run `/bmad-code-review 11-2-1`.
+- [x] Phase 6 — Flip sprint-status to `review`; commit `feat(epic-11.2.1)` + push (commit 393f69e); CI green run 26340206058. Ready for `/bmad-code-review 11-2-1`.
 
 **Deferred to Story 11.2.2:**
 - MCP-side emission (originally AC2 + Phase 3 MCP plumbing)
