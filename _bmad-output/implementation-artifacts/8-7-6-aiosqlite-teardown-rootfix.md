@@ -1,6 +1,6 @@
 # Story 8.7.6 — aiosqlite daemon-thread teardown root-fix
 
-Status: **review** (pass-1 CI pending @ pre-commit — 17 fixes incl. 3 P1-H structural)
+Status: **done** (pass-1 review batch landed; CI green @ e8d3dd4, run 26339093404)
 
 ## Story
 

@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-23T18:00:00Z
+last_updated: 2026-05-23T18:30:00Z
 current_phase: 2  # Phase 2 opened by ADR-0003 (docs/adr/0003-phase-2-gate.md), 2026-05-15
 
 development_status:
@@ -247,7 +247,7 @@ development_status:
   8-7-3-check-imports-noqa-markers: done  # phase: 2 · 7 IMP001 cross-service violations annotated (commit f948387)
   8-7-4-node-24-sha-pins: done  # phase: 2 · 21 GHA action refs bumped to Node 24 versions (commit 8028380)
   8-7-5-test-isolation-conftest: done  # phase: 2 · pass-1 review CI green @ a6b8f1f (run 26309899991) 2026-05-22 · 10 fixes batch-applied (PP1 P0 test_event_log.py teardown restore — Edge live-reproduced 16 failures pre-fix; PP2 P1-H secret-hygiene H7 invariant explicit unregister/register; PP3 P1-M new scripts/check_registry_isolation.py CI gate prevents future recurrence; PP4-PP5 docs/testing-guide.md snapshot/restore + test-only + xdist stance; PP6-PP10 P1-L cleanup); validates Epic 11 retro L1 mandate AGAIN — Edge Case Hunter alone caught P0 (codebase context required); Blind+Edge converged on P1-H; Acceptance gave clean spec-conformance verdict that masked P0 because spec AC2 audit list was incomplete
-  8-7-6-aiosqlite-teardown: review  # phase: 2 · pass-1 review 2026-05-23 batch-applied 17 fixes (3 P1-H structural: PP1 drain relocated to repo-root conftest.py for cross-testpath coverage; PP2 transitive loop_scope="function" audit across 8 additional registry-api LifespanManager fixtures; PP3 defensive `_is_aiosqlite_worker` matcher resilient to upstream thread-name changes; PP4 loud-warn on drain timeout + `OMB_AIOSQLITE_DRAIN_TIMEOUT_S` env; PP5 per-iteration gc.collect; PP6 pytest_sessionfinish hook; PP7 leaked-task autouse assertion; PP10 docs/testing-guide.md Module-scoped asyncio loops section; PP11 tests/integration/test_aiosqlite_drain.py subprocess regression test; PP12-PP15+PP17 doc cleanup) — CI pending @ pre-commit; previous run 26311644395 CI green @ 5685801 remains baseline
+  8-7-6-aiosqlite-teardown: done  # phase: 2 · pass-1 review CI green @ e8d3dd4 (run 26339093404) 2026-05-23 · 17 fixes batch-applied (3 P1-H structural: PP1 drain relocated to repo-root conftest.py for cross-testpath coverage; PP2 transitive loop_scope="function" audit across 8 additional registry-api LifespanManager fixtures; PP3 defensive `_is_aiosqlite_worker` matcher resilient to upstream thread-name changes; PP4 loud-warn on drain timeout + `OMB_AIOSQLITE_DRAIN_TIMEOUT_S` env; PP5 per-iteration gc.collect; PP6 pytest_sessionfinish hook; PP7 leaked-task autouse assertion; PP10 docs/testing-guide.md Module-scoped asyncio loops section; PP11 tests/integration/test_aiosqlite_drain.py subprocess regression test; PP12-PP15+PP17 doc cleanup); validates Epic 11 retro L1 mandate for the 5th consecutive cross-cutting story — pass-1 dev shipping green masked 3 P1-H coverage/robustness residuals
   epic-8-7-retrospective: done  # phase: 2 · 2026-05-16 retro captures hidden-gate cascade pattern (L1) + module-cache trap (L2) + bash -e gotcha (L3)
 
   # =========================================================================
