@@ -237,16 +237,111 @@ The following patterns from Story 11.2.1 MUST be mirrored:
 
 ## Dev Agent Record
 
-_To be filled by executor._
+**Approach selected:** Option A (per-handler decorator from
+``packages/capabilities/src/capabilities/emit.py``). Foundation
+module + 18 unit tests landed in commit 114d171; this pass landed
+phases 3-7 (wiring + integration test).
 
-**Approach selected:**
-**OQ-1 resolution:** (pre-resolved in spec — confirm or override)
-**OQ-2 resolution:**
-**OQ-3 resolution (AC3-A vs AC3-B):**
+**OQ-1 resolution:** Confirmed. No Story 5.12 dependency — Story 11.2.2
+routes through ``clawhip-bridge.emit_event`` (FR26-compliant single
+writer; already live since Story 2.8). The misleading
+sprint-status "blocked on Story 5.12" annotation was cleared in spec
+drafting.
+
+**OQ-2 resolution:** ``Actor(kind="system", id="<server-name>-mcp")``
+per spec. clawhip-bridge stamps ``Actor(kind="system", id="clawhip-bridge-mcp")``
+on capability.denied envelopes via the new ``actor_override`` parameter on
+``_emit`` (server.py:192). task-registry / session-registry route through
+clawhip-bridge.emit_event which applies the same override when
+``type == "capability.denied"``.
+
+**OQ-3 resolution: AC3-A (in-process ``_emit`` bypass).** clawhip-bridge's
+``_check_tier_with_self_emit`` (server.py:240) wraps ``check_tier``; on
+``CapabilityDenied`` it calls ``_emit`` directly with
+``schema_version="1.1.0"`` and ``actor_override=Actor(kind="system",
+id="clawhip-bridge-mcp")``, bypassing tier enforcement for the audit
+envelope itself. The helper is invoked from all 5 ``@mcp.tool()``
+handlers (``emit_event``, ``emit_blocker``, ``emit_summary``,
+``emit_approval_request``, ``emit_completion``).
+
+**OQ-4 resolution: startup-spawn + lifespan-managed MCPClientGroup.**
+task-registry / session-registry now accept optional
+``clawhip_bridge_command`` / ``clawhip_bridge_args`` parameters; when
+provided, ``build_server`` registers a FastMCP lifespan that spawns a
+``ClawhipBridgeClient`` (single-connection variant of MCPClientGroup
+— mcp-servers cannot share code per Story 5.8 import-graph constraint
+so the adapter is duplicated per-server). The lifespan populates an
+``EmitterHolder`` that the tool decorators reference; startup failure
+is fail-loud (BaseException out of ``__aenter__`` propagates); mid-
+request failure (broken pipe etc.) is PD-1 fail-soft per the decorator's
+contract.
+
 **Files modified:**
-**Test count delta:**
-**Mypy delta:**
+- NEW ``mcp-servers/task-registry/src/task_registry_mcp/adapters/__init__.py``
+- NEW ``mcp-servers/task-registry/src/task_registry_mcp/adapters/clawhip_client.py``
+- NEW ``mcp-servers/session-registry/src/session_registry_mcp/adapters/__init__.py``
+- NEW ``mcp-servers/session-registry/src/session_registry_mcp/adapters/clawhip_client.py``
+- NEW ``tests/integration/test_capability_denied_mcp_emission.py``
+- MOD ``mcp-servers/task-registry/src/task_registry_mcp/app/main.py``
+  (lifespan wiring + clawhip_bridge_command/args kwargs)
+- MOD ``mcp-servers/task-registry/src/task_registry_mcp/__main__.py``
+  (3 new env vars: CLAWHIP_BRIDGE_COMMAND/ARGS/DISABLE_AUDIT_EMISSION)
+- MOD ``mcp-servers/task-registry/src/task_registry_mcp/handlers/tools.py``
+  (decorator-wrapping via ``_maybe_wrap`` on all 3 tier-gated handlers)
+- MOD ``mcp-servers/session-registry/src/session_registry_mcp/app/main.py`` (mirror of task-registry)
+- MOD ``mcp-servers/session-registry/src/session_registry_mcp/__main__.py`` (mirror)
+- MOD ``mcp-servers/session-registry/src/session_registry_mcp/handlers/tools.py`` (mirror)
+- MOD ``mcp-servers/clawhip-bridge/src/clawhip_bridge_mcp/server.py``
+  - new ``_check_tier_with_self_emit`` helper (AC3-A)
+  - ``_emit`` parameterized with ``schema_version`` + ``actor_override``
+    (defaults preserve pre-11.2.2 behaviour for the 5 existing tools)
+  - ``emit_event`` tool selects ``schema_version="1.1.0"`` and the
+    system-emitter ``Actor`` for ``type == "capability.denied"``
+
+**Test count delta:** +3 (3 new integration tests in
+``tests/integration/test_capability_denied_mcp_emission.py``). Foundation
+18 unit tests already landed in commit 114d171. Total Story 11.2.2
+contribution = 21 tests (foundation + integration). All 3 pass + 174
+existing task-registry/session-registry/clawhip-bridge tests stay
+green; full ``pytest -m "not slow"`` = 3114 passed, 3 skipped.
+
+**Mypy delta:** canonical strict gate (``mypy --strict packages/
+services/registry-api services/registry-state``) Success: 121 source
+files, 0 errors — unchanged from baseline. MCP servers are not in the
+canonical strict gate (mypy.ini config); pre-existing 28 informational
+errors there are unaffected by this work modulo:
+- 3 NEW informational errors for ``capabilities.emit`` import-untyped
+  (mirrors the pre-existing ``capabilities`` import-untyped — no py.typed
+  marker; out of 11.2.2 scope to add)
+- 2 NEW informational ``no-any-return`` errors in ``handlers/tools.py``'s
+  ``_maybe_wrap`` helper (lambda fallthrough path). Both are confined to
+  the same files that already carry untyped suppressions.
+
 **Deviations from spec:**
+- AC4 integration test uses an in-process emitter adapter (calls
+  clawhip-bridge's ``emit_event`` tool fn directly) instead of a pure
+  stdio MCP-to-MCP subprocess harness. Rationale documented in the test
+  file's module docstring: stdio subprocess plumbing requires
+  process supervision + ready signaling that exceeds the wiring
+  validation the test is meant to provide. The stdio entry point itself
+  is already exercised by each MCP server's existing ``TestEntryPoint``
+  subprocess tests. The in-process variant exercises the full
+  producer→writer→consumer chain (decorator → EmitterHolder →
+  clawhip-bridge emit_event tool → EventLogWriter → JSONL on-disk →
+  metrics-subscriber update_for → Prometheus counter increment).
+- ``_emit`` in clawhip-bridge was extended with two new optional
+  parameters (``schema_version``, ``actor_override``) rather than
+  duplicating the envelope-build logic in
+  ``_check_tier_with_self_emit``. This was necessary because
+  ``capability.denied`` is registered ONLY at v1.1.0
+  (``services/registry-state/src/registry_state/domain/event_types.py:275``);
+  the default ``schema_version="1.0.0"`` would fail
+  ``EventEnvelope.create``. Defaults preserve every existing tool
+  call's pre-11.2.2 behaviour byte-identically.
+- A new ``non_v1_0_0_schema_versions`` map (server.py:189) lives in the
+  clawhip-bridge build_server closure to drive the ``emit_event`` tool's
+  schema-version selection. Future audit-only event types added at
+  v1.1.0+ should be added there.
 
 ## Open questions — RESOLVED Party-mode 2026-05-24
 

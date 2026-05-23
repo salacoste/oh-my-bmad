@@ -3,6 +3,13 @@
 Phase 1: validated stubs. They check tier, validate task_id exists, validate
 parameters, and return ``{"ok": true}``. Actual persistence routes through the
 event spine via clawhip-bridge — deferred to Story 5.12 integration.
+
+Story 11.2.2: every tier-gated handler is wrapped by
+``emit_capability_denied_on_deny`` so a ``CapabilityDenied`` from
+``check_tier`` emits a ``capability.denied`` v1.1.0 audit envelope via
+clawhip-bridge (FR26-compliant single writer) before re-raising. The
+emitter is injected via an ``EmitterHolder`` populated by the FastMCP
+lifespan in ``app/main.py``.
 """
 
 from __future__ import annotations
@@ -12,6 +19,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from capabilities import CallerContext, Tier, check_tier
+from capabilities.emit import emit_capability_denied_on_deny
 from events.envelope import ActorKind, is_valid_trace_id  # noqa: IMP001 — packages/
 from registry_state.schema import (  # noqa: IMP001 — mcp-servers→services allowed per AC-7/Arch
     Event,
@@ -19,6 +27,8 @@ from registry_state.schema import (  # noqa: IMP001 — mcp-servers→services a
 )
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from task_registry_mcp.adapters.clawhip_client import EmitterHolder
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
@@ -106,19 +116,63 @@ async def _validate_task_exists(
         return result.scalar_one_or_none() is not None
 
 
+def _make_actor_id_extractor(actor_id: str) -> Callable[..., str]:
+    """Return a ``get_actor_id`` callable for ``emit_capability_denied_on_deny``.
+
+    The configured ``actor_id`` is the calling actor's identity for the
+    duration of this server process (set at startup from
+    ``TASK_REGISTRY_ACTOR_ID``). Tool kwargs do not carry actor identity
+    — it comes from the server's launch config — so the extractor
+    returns the closed-over value irrespective of args/kwargs.
+    """
+
+    def _get_actor_id(*_args: object, **_kwargs: object) -> str:
+        return actor_id
+
+    return _get_actor_id
+
+
 def register_tools(
     mcp: FastMCP,
     session_maker: async_sessionmaker[AsyncSession],
     actor_kind: ActorKind,
     actor_id: str,
+    emitter_holder: EmitterHolder | None = None,
 ) -> None:
-    """Register 3 bounded-write MCP tools on *mcp*."""
+    """Register 3 bounded-write MCP tools on *mcp*.
+
+    Story 11.2.2: when *emitter_holder* is provided, every tier-gated
+    handler is wrapped with ``emit_capability_denied_on_deny`` so a
+    ``CapabilityDenied`` from ``check_tier`` emits a ``capability.denied``
+    audit envelope via clawhip-bridge before re-raising. When None,
+    the handlers are registered without wrapping (test fixtures that
+    don't need the audit path).
+    """
+
+    get_actor_id = _make_actor_id_extractor(actor_id)
+
+    def _maybe_wrap(
+        tool_name: str,
+    ) -> Callable[
+        [Callable[..., Awaitable[dict[str, object]]]],
+        Callable[..., Awaitable[dict[str, object]]],
+    ]:
+        """Apply the audit-emission decorator iff an emitter holder is wired."""
+        if emitter_holder is None:
+            return lambda fn: fn
+        return emit_capability_denied_on_deny(
+            boundary="mcp",
+            emitter=emitter_holder.emit_event,
+            attempted_action=tool_name,
+            get_actor_id=get_actor_id,
+        )
 
     # ------------------------------------------------------------------
     # Tool: task.add_note
     # ------------------------------------------------------------------
 
     @mcp.tool()
+    @_maybe_wrap("task.add_note")
     async def task_add_note(
         task_id: str,
         note: str,
@@ -168,6 +222,7 @@ def register_tools(
     # ------------------------------------------------------------------
 
     @mcp.tool()
+    @_maybe_wrap("task.attach_artifact")
     async def task_attach_artifact(
         task_id: str,
         artifact_url: str,
@@ -216,6 +271,7 @@ def register_tools(
     # ------------------------------------------------------------------
 
     @mcp.tool()
+    @_maybe_wrap("task.emit_event")
     async def task_emit_event(
         task_id: str,
         event_type: str,

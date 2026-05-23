@@ -17,6 +17,18 @@ TASK_REGISTRY_ACTOR_ID  (REQUIRED)
     Non-empty string identifying the calling actor instance.
     Missing or empty → exit code 2 with stderr message.
 
+TASK_REGISTRY_CLAWHIP_BRIDGE_COMMAND  (OPTIONAL, default ``python``)
+    Story 11.2.2 — command to spawn the clawhip-bridge MCP subprocess
+    for ``capability.denied`` audit emission.
+
+TASK_REGISTRY_CLAWHIP_BRIDGE_ARGS  (OPTIONAL, default ``-m clawhip_bridge_mcp``)
+    Story 11.2.2 — whitespace-separated args for the clawhip-bridge
+    subprocess.
+
+TASK_REGISTRY_DISABLE_AUDIT_EMISSION  (OPTIONAL, default ``0``)
+    Story 11.2.2 — when set to ``1``, audit-emission lifespan is skipped
+    entirely. Useful for test fixtures.
+
 Exit codes
 ----------
 0   Clean shutdown (SIGTERM / SIGINT / EOF on stdin).
@@ -82,12 +94,26 @@ def main() -> None:
         )
         sys.exit(2)
 
+    # -- Optional: Story 11.2.2 clawhip-bridge audit-emission config --
+    disable_audit = os.environ.get("TASK_REGISTRY_DISABLE_AUDIT_EMISSION", "").strip() == "1"
+    clawhip_cmd: str | None = None
+    clawhip_args: list[str] | None = None
+    if not disable_audit:
+        clawhip_cmd = os.environ.get("TASK_REGISTRY_CLAWHIP_BRIDGE_COMMAND", "").strip() or "python"
+        clawhip_args_raw = (
+            os.environ.get("TASK_REGISTRY_CLAWHIP_BRIDGE_ARGS", "").strip()
+            or "-m clawhip_bridge_mcp"
+        )
+        clawhip_args = clawhip_args_raw.split()
+
     from task_registry_mcp.app.main import build_server
 
     mcp = build_server(
         db_path=db_path,
         actor_kind=actor_kind,
         actor_id=actor_id,
+        clawhip_bridge_command=clawhip_cmd,
+        clawhip_bridge_args=clawhip_args,
     )
     mcp.run()
 

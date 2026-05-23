@@ -27,12 +27,14 @@ Architecture notes:
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from pathlib import Path
 
 from capabilities import CallerContext, Tier, check_tier  # noqa: IMP001 — packages/
+from capabilities.emit import build_capability_denied_payload  # noqa: IMP001 — packages/
 from events import (  # noqa: IMP001 — events is packages/
     Actor,
     EventEnvelope,
@@ -42,6 +44,7 @@ from events import (  # noqa: IMP001 — events is packages/
 from events.canonical import to_canonical_json
 from events.clock import Clock
 from events.envelope import ActorKind, is_valid_trace_id
+from events.errors import CapabilityDenied  # noqa: IMP001 — packages/
 from mcp.server.fastmcp import FastMCP
 from registry_state import (  # noqa: IMP001 — mcp-servers→services allowed per AC-7/Arch line 272
     EventLogWriter,
@@ -182,6 +185,16 @@ def build_server(
 
     mcp = FastMCP("clawhip-bridge", lifespan=_lifespan)
 
+    # Story 11.2.2: schema-version overrides for event types whose only
+    # registered version is NOT v1.0.0. Currently scoped to the
+    # ``capability.denied`` audit event (registered at v1.1.0 only —
+    # registry-state's ``domain/event_types.py:275``). Future audit-only
+    # event types added at v1.1.0+ should be registered here so the
+    # public ``emit_event`` tool selects the correct schema version.
+    non_v1_0_0_schema_versions: dict[str, str] = {
+        "capability.denied": "1.1.0",
+    }
+
     # ------------------------------------------------------------------
     # Internal helper: build + write envelope, return result dict
     # ------------------------------------------------------------------
@@ -192,6 +205,8 @@ def build_server(
         parent_event_id: str | None,
         *,
         caller_trace_id: str,
+        schema_version: str = "1.0.0",
+        actor_override: Actor | None = None,
     ) -> dict[str, str]:
         """Build, validate, persist and return an event envelope.
 
@@ -208,15 +223,23 @@ def build_server(
         Story 9.5 pass-1 review T16: ``caller_trace_id`` is enforced kwarg-only
         via the leading ``*,`` separator so positional drift cannot reorder
         the field silently across the 5 callsites.
+
+        Story 11.2.2: ``schema_version`` and ``actor_override`` parameterize
+        the audit-emission path (AC3-A self-deny). ``capability.denied`` is
+        registered ONLY at v1.1.0, so the default v1.0.0 would fail
+        ``EventEnvelope.create`` for that type. ``actor_override`` stamps the
+        envelope's ``actor`` field with the system-emitter identity per
+        OQ-2 (``Actor(kind="system", id="clawhip-bridge-mcp")``) instead of
+        the actor that triggered the denial.
         """
         validate_caller_trace_id(caller_trace_id)
         envelope = EventEnvelope.create(
             event_id=new_event_id(clock=clock),
-            schema_version="1.0.0",
+            schema_version=schema_version,
             type=event_type,  # noqa: EVT001 — type validated by REGISTRY at envelope.create()
             emitted_at=clock.now(),
             emitted_at_monotonic_ns=clock.monotonic_ns(),
-            actor=Actor(kind=actor_kind, id=actor_id),
+            actor=actor_override or Actor(kind=actor_kind, id=actor_id),
             payload=payload,
             parent_event_id=parent_event_id,
             trace_id=caller_trace_id,
@@ -227,6 +250,75 @@ def build_server(
             "event_id": envelope.event_id,
             "emitted_at": envelope.emitted_at.isoformat(),
         }
+
+    # ------------------------------------------------------------------
+    # Story 11.2.2 AC3-A — self-deny audit emission
+    # ------------------------------------------------------------------
+
+    async def _check_tier_with_self_emit(
+        action: str,
+        caller: CallerContext,
+        required_tier: Tier,
+        *,
+        caller_trace_id: str,
+    ) -> None:
+        """Call ``check_tier``; on ``CapabilityDenied`` emit audit via internal ``_emit``.
+
+        Story 11.2.2 AC3-A: clawhip-bridge IS the FR26 single writer, so
+        a denial here cannot route through the standard task/session-registry
+        emission path (no ``emit_event`` MCP-RPC client) — and even if it
+        could, the emission would loop back through ``check_tier`` for the
+        same denied actor, causing infinite recursion.
+
+        Solution: build the ``capability.denied`` payload locally and invoke
+        the in-process ``_emit`` helper directly. ``_emit`` writes to the
+        event log without going through ``check_tier`` (the audit envelope
+        is system-emitted, not actor-emitted — the actor's missing
+        capability is the SUBJECT of the audit, not its gate).
+
+        PD-1 fail-soft: emission failures (writer broken, schema mismatch)
+        are logged at ERROR and SWALLOWED; the original CapabilityDenied
+        is ALWAYS re-raised so MCP transport-level error semantics are
+        preserved (AC6). CancelledError / KeyboardInterrupt propagate
+        explicitly (PP1 mirror discipline).
+        """
+        try:
+            check_tier(action, caller, required_tier)
+        except CapabilityDenied as exc:
+            try:
+                audit_payload = build_capability_denied_payload(
+                    required_tier=required_tier,
+                    boundary="mcp",
+                    actor_id=caller.actor_id,
+                    attempted_action=action,
+                    reason=exc.reason,
+                )
+                # Internal ``_emit`` bypasses ``check_tier`` — see AC3-A above.
+                # schema_version="1.1.0" because ``capability.denied`` is
+                # registered ONLY at v1.1.0 in registry-state's
+                # ``domain/event_types.py:275``. actor_override stamps OQ-2's
+                # system-emitter identity instead of the denied actor.
+                await _emit(
+                    "capability.denied",
+                    audit_payload,
+                    None,
+                    caller_trace_id=caller_trace_id,
+                    schema_version="1.1.0",
+                    actor_override=Actor(kind="system", id="clawhip-bridge-mcp"),
+                )
+            except (asyncio.CancelledError, KeyboardInterrupt):
+                raise
+            except Exception as emit_exc:
+                log.error(
+                    "capability_denied_self_emission_failed",
+                    extra={
+                        "action": action,
+                        "actor_id": caller.actor_id,
+                        "error_type": type(emit_exc).__name__,
+                        "error_message": str(emit_exc),
+                    },
+                )
+            raise
 
     # ------------------------------------------------------------------
     # Tool: emit_event — generic escape hatch validated by REGISTRY
@@ -253,16 +345,31 @@ def build_server(
             ValueError: if ``caller_trace_id`` fails Story 9.1 validation.
         """
         validate_caller_trace_id(caller_trace_id)
-        check_tier(
+        await _check_tier_with_self_emit(
             "emit_event",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id),
             TIER_MAP["emit_event"],
+            caller_trace_id=caller_trace_id,
+        )
+        # Story 11.2.2: resolve schema version (v1.0.0 default; v1.1.0 for
+        # capability.denied — the only audit-only event type currently
+        # emitted via this tool). When task-registry/session-registry's
+        # decorator routes a capability.denied audit through this surface,
+        # OQ-2 also requires the envelope's ``actor`` field be stamped
+        # ``Actor(kind="system", id="clawhip-bridge-mcp")`` so the audit
+        # record reflects the system-emitter identity (not the calling
+        # MCP server's configured actor).
+        schema_version = non_v1_0_0_schema_versions.get(type, "1.0.0")
+        actor_override = (
+            Actor(kind="system", id="clawhip-bridge-mcp") if type == "capability.denied" else None
         )
         return await _emit(
             type,
             payload,
             parent_event_id,
             caller_trace_id=caller_trace_id,
+            schema_version=schema_version,
+            actor_override=actor_override,
         )
 
     # ------------------------------------------------------------------
@@ -285,10 +392,11 @@ def build_server(
                 Invalid values raise ``ValueError``.
         """
         validate_caller_trace_id(caller_trace_id)
-        check_tier(
+        await _check_tier_with_self_emit(
             "emit_blocker",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id),
             TIER_MAP["emit_blocker"],
+            caller_trace_id=caller_trace_id,
         )
         return await _emit(
             "task.blocker_raised",
@@ -313,10 +421,11 @@ def build_server(
                 Invalid values raise ``ValueError``.
         """
         validate_caller_trace_id(caller_trace_id)
-        check_tier(
+        await _check_tier_with_self_emit(
             "emit_summary",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id),
             TIER_MAP["emit_summary"],
+            caller_trace_id=caller_trace_id,
         )
         return await _emit(
             "task.summary_emitted",
@@ -342,10 +451,11 @@ def build_server(
                 Invalid values raise ``ValueError``.
         """
         validate_caller_trace_id(caller_trace_id)
-        check_tier(
+        await _check_tier_with_self_emit(
             "emit_approval_request",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id),
             TIER_MAP["emit_approval_request"],
+            caller_trace_id=caller_trace_id,
         )
         return await _emit(
             "task.approval_requested",
@@ -371,10 +481,11 @@ def build_server(
                 Invalid values raise ``ValueError``.
         """
         validate_caller_trace_id(caller_trace_id)
-        check_tier(
+        await _check_tier_with_self_emit(
             "emit_completion",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id),
             TIER_MAP["emit_completion"],
+            caller_trace_id=caller_trace_id,
         )
         payload: dict[str, object] = {"task_id": task_id, "summary": summary}
         if pr_url is not None:
