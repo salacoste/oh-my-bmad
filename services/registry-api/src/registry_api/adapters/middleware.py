@@ -82,9 +82,20 @@ from events.clock import Clock
 # from ``events.envelope`` so HTTP-side validation stays symmetric with the
 # envelope-side ``_trace_id_shape`` validator. Single source of truth for the
 # Story 9.1 trace_id shape contract (UUIDv7 OR ``tg:<update_id>``).
-from events.envelope import ActorKind, is_valid_trace_id  # noqa: IMP001 — services→packages allowed
+from events.envelope import (  # noqa: IMP001 — services→packages allowed
+    Actor,
+    ActorKind,
+    EventEnvelope,
+    is_valid_trace_id,
+)
 from events.errors import CapabilityDenied
-from events.ids import new_idempotency_key, new_request_id, new_uuid7
+from events.ids import (
+    new_event_id,  # noqa: IMP001 — services→packages allowed
+    new_idempotency_key,
+    new_request_id,
+    new_uuid7,
+)
+from events.payloads import CapabilityDeniedPayload  # noqa: IMP001 — services→packages allowed
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import Response
@@ -483,6 +494,20 @@ class TierEnforcementMiddleware(BaseHTTPMiddleware):
                 "tier_enforcement_denied",
                 extra={"route": route_key, "actor_id": actor_id, "reason": exc.reason},
             )
+            # Story 11.2.1 — emit ``capability.denied`` v1.1.0 audit event so
+            # ``omb_capability_denied_total{tier, boundary=http}`` increments
+            # (closes Epic 10 retro DD5 for the HTTP boundary; MCP boundary
+            # deferred to Story 11.2.2). PD-1 fail-soft: emission errors are
+            # logged and swallowed so an event-log write hiccup CANNOT mask
+            # the 403 deny response — operator priority is "deny first,
+            # observability is best-effort". See spec
+            # ``_bmad-output/implementation-artifacts/11-2-1-capability-denied-emission.md``.
+            await _emit_capability_denied_safe(
+                request=request,
+                exc=exc,
+                required_tier=required_tier,
+                attempted_action=route_key,
+            )
             return _build_capability_denied_response(request, exc)
 
         return await call_next(request)
@@ -494,6 +519,97 @@ class TierEnforcementMiddleware(BaseHTTPMiddleware):
             if route_key == prefix or route_key.startswith(prefix + "/"):
                 return tier
         return None
+
+
+# ---------------------------------------------------------------------------
+# Story 11.2.1 — capability.denied emission helper (HTTP boundary)
+# ---------------------------------------------------------------------------
+
+
+_TIER_INT_TO_LITERAL = {1: "tier1", 2: "tier2", 3: "tier3"}
+
+
+async def _emit_capability_denied_safe(
+    *,
+    request: Request,
+    exc: CapabilityDenied,
+    required_tier: Tier,
+    attempted_action: str,
+) -> None:
+    """Append a ``capability.denied`` v1.1.0 envelope to the event log.
+
+    Story 11.2.1 — HTTP-boundary emission. Reads the lifespan-managed
+    ``EventLogWriter`` from ``request.app.state.writer`` (set in
+    ``registry_api.app.build_app``'s lifespan) and the clock from
+    ``request.app.state.clock``. Returns silently if either is absent
+    (e.g., test fixtures that construct ``TierEnforcementMiddleware``
+    without invoking the real lifespan) — the absence is logged once at
+    INFO so test-only no-emission state is observable.
+
+    **PD-1 fail-soft contract.** Any exception during envelope construction
+    or ``writer.append()`` is caught, logged at ERROR, and SWALLOWED.
+    The 403 deny response is the load-bearing security signal; an
+    event-log write failure (poisoned writer, disk full, schema mismatch)
+    must never block it. Operators detect emission failures via the
+    ``capability_denied_emission_failed`` log line, not via altered
+    HTTP semantics.
+    """
+    writer = getattr(request.app.state, "writer", None)
+    clock = getattr(request.app.state, "clock", None)
+    if writer is None or clock is None:
+        _log.info(
+            "capability_denied_emission_skipped_no_writer",
+            extra={
+                "route": attempted_action,
+                "reason": "request.app.state lacks writer or clock — test fixture without lifespan",
+            },
+        )
+        return
+
+    actor_id = getattr(request.state, "actor_id", "unknown")
+    trace_id = getattr(request.state, "trace_id", None)
+    request_id = getattr(request.state, "request_id", None)
+
+    try:
+        tier_literal = _TIER_INT_TO_LITERAL[int(required_tier)]
+        payload = CapabilityDeniedPayload(
+            tier=tier_literal,  # type: ignore[arg-type]
+            boundary="http",
+            actor_id=actor_id,
+            attempted_action=attempted_action,
+            reason=exc.reason,
+        )
+        # Mint a fresh event_id; reuse the request's trace_id and request_id
+        # so the emitted audit event correlates with the denied request.
+        # Fall back to fresh UUIDv7s if the upstream middlewares didn't
+        # populate them (defensive — should not happen given middleware order).
+        if trace_id is None:
+            trace_id = new_uuid7(clock=clock)
+        if request_id is None:
+            request_id = new_request_id(clock=clock)
+        envelope = EventEnvelope.create(
+            event_id=new_event_id(clock=clock),
+            type="capability.denied",
+            schema_version="1.1.0",
+            emitted_at=clock.now(),
+            emitted_at_monotonic_ns=clock.monotonic_ns(),
+            actor=Actor(kind="system", id="registry-api"),
+            payload=payload,
+            trace_id=trace_id,
+            request_id=request_id,
+        )
+        await writer.append(envelope)
+    except Exception as emit_exc:
+        # PD-1: emission MUST NOT block the 403. Log loudly + swallow.
+        _log.error(
+            "capability_denied_emission_failed",
+            extra={
+                "route": attempted_action,
+                "actor_id": actor_id,
+                "error_type": type(emit_exc).__name__,
+                "error_message": str(emit_exc),
+            },
+        )
 
 
 __all__ = [

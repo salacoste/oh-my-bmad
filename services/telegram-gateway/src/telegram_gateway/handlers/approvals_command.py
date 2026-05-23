@@ -26,11 +26,14 @@ parallel):
   registry-api on a successful POST. Emitting a second envelope from
   the bot would duplicate the audit signal.
 
-Allowlist + tier discipline (Story 11.3 AC6):
+Allowlist + tier discipline (Story 11.3 AC6, closed by Story 11.2.1):
   AllowlistMiddleware (Story 3.2) silent-drops non-allowlisted callers
-  BEFORE reaching this handler. Tier-2 categorization (Epic 6) is
-  documented in the spec; explicit ROUTE_TIER_MAP entry deferred to
-  Story 11.2.1 (DD5 follow-up — ``capability.denied`` emission).
+  BEFORE reaching this handler — the Telegram-side gate is allowlist-only
+  by design. Tier-2 enforcement is SERVER-SIDE via registry-api's
+  ``ROUTE_TIER_MAP["POST /v1/approvals/inbox"] = Tier.TWO``
+  (``services/registry-api/src/registry_api/adapters/middleware.py:432``).
+  On a tier mismatch, ``TierEnforcementMiddleware`` returns RFC 7807 403
+  AND emits a ``capability.denied`` v1.1.0 audit event (Story 11.2.1).
 
 HTML parse mode (Story 3.1 M5): replies use HTML markup; aiogram's
 global ``DefaultBotProperties(parse_mode=ParseMode.HTML)`` from

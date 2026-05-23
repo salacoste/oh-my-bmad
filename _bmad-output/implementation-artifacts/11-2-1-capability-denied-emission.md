@@ -1,6 +1,6 @@
 # Story 11.2.1 — capability.denied event emission
 
-Status: **in-progress** (scope amended 2026-05-23 — HTTP-only; MCP-boundary emission deferred to new Story 11.2.2 pending Story 5.12 `task.emit_event` infrastructure; see OQ-1 resolution below)
+Status: **review** (HTTP-only scope; AC1+AC3+AC4(http)+AC5+AC6+AC7+AC8(http)+AC9 closed; CI pending @ pre-commit; MCP-boundary emission deferred to Story 11.2.2)
 
 ## Story
 
@@ -33,11 +33,11 @@ Epic 10 retro **debt item DD5** identified two coupled gaps:
 
 ## Acceptance criteria
 
-**AC1 — HTTP emission.** [ ] `TierEnforcementMiddleware.dispatch()` in `services/registry-api/src/registry_api/adapters/middleware.py:479-486`, on catching `CapabilityDenied`, appends a `capability.denied` v1.1.0 envelope to the `EventLogWriter` **before** returning the 403 response. Emission must not block the 403 path on transient errors (see PD-1 below).
+**AC1 — HTTP emission.** [x] `TierEnforcementMiddleware.dispatch()` in `services/registry-api/src/registry_api/adapters/middleware.py:479-486`, on catching `CapabilityDenied`, appends a `capability.denied` v1.1.0 envelope to the `EventLogWriter` **before** returning the 403 response. Emission must not block the 403 path on transient errors (see PD-1 below).
 
 **AC2 — MCP emission.** [DEFERRED to Story 11.2.2 — 2026-05-23 scope amendment] MCP-side `capability.denied` emission requires `task.emit_event` infrastructure (currently a Story 5.12 stub at `mcp-servers/task-registry/src/task_registry_mcp/handlers/tools.py:219` — logs at INFO, does NOT write to event log). Building the MCP→event-log path is out of scope for 11.2.1. New backlog entry `11-2-2-capability-denied-mcp-emission` filed; depends on Story 5.12 landing first OR an architecture decision to add `POST /v1/internal/events` on registry-api.
 
-**AC3 — Envelope shape.** [ ] Emitted `CapabilityDeniedPayload` carries:
+**AC3 — Envelope shape.** [x] Emitted `CapabilityDeniedPayload` carries:
 - `tier` ∈ {tier1, tier2, tier3} — the **required** tier for the attempted action (matches the `required_tier` arg of `check_tier`, NOT the actor's max tier; this matches Story 10.4 label semantics).
 - `boundary` ∈ {http, mcp} — http for `TierEnforcementMiddleware`, mcp for MCP handlers.
 - `actor_id` — from `request.state.actor_id` (HTTP) or `CallerContext.actor_id` (MCP).
@@ -47,23 +47,24 @@ Epic 10 retro **debt item DD5** identified two coupled gaps:
 - Envelope `schema_version: "1.1.0"` (matches `event_types.py:275` registration).
 - Envelope `event_id`: UUIDv7 per `EventEnvelope.create()` standard.
 
-**AC4 — Counter increments end-to-end (HTTP).** [ ] Existing unit test `services/metrics-subscriber/src/metrics_subscriber/test_metrics_state.py:522` continues to pass. **New** integration test: emit one HTTP-boundary denial; assert `omb_capability_denied_total{tier=tier2, boundary=http}` increments by 1 after metrics-subscriber materializes the envelope. (MCP-boundary part deferred to Story 11.2.2.)
+**AC4 — Counter increments end-to-end (HTTP).** [x] Existing unit test `services/metrics-subscriber/src/metrics_subscriber/test_metrics_state.py:522` continues to pass. **New** integration test `tests/integration/test_capability_denied_emission.py` emits one HTTP-boundary denial; asserts `omb_capability_denied_total{tier=tier3, boundary=http}` increments by 1 AND `omb_events_appended_total{event_family=capability}` increments by 1 (Story 11.2 P1-H2 family routing). (MCP-boundary part deferred to Story 11.2.2.)
 
-**AC5 — Schema-version compatibility.** [ ] No change to `CapabilityDeniedPayload` or registry entry. Story 11.2.1 is pure producer wiring.
+**AC5 — Schema-version compatibility.** [x] No change to `CapabilityDeniedPayload` or registry entry. Story 11.2.1 is pure producer wiring.
 
-**AC6 — 403 contract preserved.** [ ] All pre-existing tests under `services/registry-api/src/registry_api/test_middleware.py:390+` (TierEnforcementMiddleware tier gate tests) + `test_errors_envelope.py:858+` (`test_403_capability_denied_problem_json_carries_trace_id` etc.) continue to pass byte-for-byte. The 403 RFC 7807 response body / headers MUST NOT change.
+**AC6 — 403 contract preserved.** [x] All pre-existing tests under `services/registry-api/src/registry_api/test_middleware.py:390+` (TierEnforcementMiddleware tier gate tests) + `test_errors_envelope.py:858+` (`test_403_capability_denied_problem_json_carries_trace_id` etc.) continue to pass byte-for-byte. Full pytest -m "not slow" green @ 3092 passed.
 
-**AC7 — Telegram-gateway approvals_command.py TODO closed.** [ ] `services/telegram-gateway/src/telegram_gateway/handlers/approvals_command.py:33` references Story 11.2.1 for "explicit ROUTE_TIER_MAP entry deferred". **Either** add the explicit `POST /v1/approval-inbox` (or whichever route the `/approvals` handler hits) to `ROUTE_TIER_MAP` with `Tier.TWO`, **or** add a comment confirming the route is intentionally allowlisted-only (no tier check) and update the approvals_command.py docstring accordingly.
+**AC7 — Telegram-gateway approvals_command.py TODO closed.** [x] `ROUTE_TIER_MAP["POST /v1/approvals/inbox"] = Tier.TWO` already exists at `middleware.py:432` (added by Story 11.3 review P35). Updated `approvals_command.py:33-39` docstring to explicitly state: Telegram-side gate is allowlist-only by design; tier enforcement is server-side via registry-api; tier-mismatch denials emit `capability.denied` (Story 11.2.1).
 
 **AC8 — Tests added.**
-- [ ] Unit: HTTP middleware emits envelope on `CapabilityDenied` (use `EventLogWriter` fixture from `services/registry-api/src/registry_api/conftest.py` or `test_key_rotation.py:114`).
-- [ ] Unit: HTTP emission failure (PD-1 fail-soft) does NOT block the 403 response.
-- [ ] Unit: schema_version pinned at 1.1.0; envelope shape matches AC3.
-- [ ] Integration: end-to-end counter increment for HTTP boundary.
+- [x] Unit: HTTP middleware emits envelope on `CapabilityDenied` (`test_capability_denied_emits_v1_1_0_envelope_to_event_log`).
+- [x] Unit: HTTP emission failure (PD-1 fail-soft) does NOT block the 403 response (`test_capability_denied_emission_does_not_block_403_on_writer_failure`).
+- [x] Unit: schema_version pinned at 1.1.0 + envelope shape AC3 (covered inside the v1.1.0 unit test above).
+- [x] Unit: no-writer (test-fixture path) returns silently + logs INFO (`test_capability_denied_emission_skipped_when_no_writer`).
+- [x] Integration: end-to-end counter increment for HTTP boundary (`tests/integration/test_capability_denied_emission.py::test_http_capability_denied_emits_envelope_and_increments_counter`).
 - [DEFERRED to Story 11.2.2] Unit: MCP handler emits envelope on `CapabilityDenied` from `check_tier`.
 - [DEFERRED to Story 11.2.2] Integration: end-to-end counter increment for MCP boundary.
 
-**AC9 — All gates green.** [ ] `ruff check`, `ruff format --check`, `uv run mypy --strict packages/ services/registry-api services/registry-state`, `scripts/check_imports.py`, `scripts/check_event_registry.py`, `scripts/check_single_writer.py`, `scripts/check_registry_isolation.py`, `just bootstrap-verify`, `uv run pytest -m "not slow"` — all exit 0.
+**AC9 — All gates green.** [x] `ruff check` ✓; `ruff format --check` ✓ (376 files); `mypy --strict packages/ services/registry-api services/registry-state` ✓ (119 files); `check_imports.py` ✓; `check_event_registry.py` ✓; `check_single_writer.py` ✓; `check_registry_isolation.py` ✓; `just bootstrap-verify` ✓; `uv run pytest -m "not slow"` ✓ (3092 passed / 3 skipped / 35 deselected — zero failures).
 
 ## Approach options
 
@@ -224,17 +225,17 @@ The middleware already calls `_log.warning("tier_enforcement_denied", ...)` (lin
 
 - [x] Phase 0: Flip sprint-status.yaml `11-2-1-capability-denied-emission` → `in-progress`; add new backlog entry `11-2-2-capability-denied-mcp-emission`; commit `chore(sprint-status)`.
 - [x] Phase 1 — OQ-1 RESOLVED (HTTP-only scope; MCP deferred to 11.2.2 — see Open questions).
-- [ ] Phase 2 — HTTP emission:
-  - [ ] Add `_emit_capability_denied` helper in `middleware.py`.
-  - [ ] Plumb `event_log_writer` + `clock` into `TierEnforcementMiddleware` via `build_app`.
-  - [ ] PD-1 fail-soft: emission errors logged + swallowed; 403 path never blocked.
-- [ ] Phase 3 — AC7 close: ROUTE_TIER_MAP entry OR doc fix in `approvals_command.py:33`.
-- [ ] Phase 4 — Tests:
-  - [ ] Unit: HTTP middleware emit (`test_middleware.py::TestCapabilityDeniedEmission`).
-  - [ ] Unit: schema_version pinned at 1.1.0; envelope shape.
-  - [ ] Unit: emission failure does NOT block 403 (PD-1).
-  - [ ] Integration: `tests/integration/test_capability_denied_emission.py` — HTTP → metrics → counter.
-- [ ] Phase 5 — Validation gates: ruff, mypy, check_imports, check_event_registry, check_single_writer, check_registry_isolation, bootstrap-verify, pytest.
+- [x] Phase 2 — HTTP emission:
+  - [x] Add `_emit_capability_denied_safe` helper in `middleware.py`.
+  - [x] Read `event_log_writer` + `clock` from `request.app.state` (cleaner than constructor plumbing — lifespan already exposes them).
+  - [x] PD-1 fail-soft: emission errors logged + swallowed; 403 path never blocked.
+- [x] Phase 3 — AC7 close: `approvals_command.py:33-39` docstring updated; ROUTE_TIER_MAP entry already in place (`middleware.py:432`, Story 11.3 review P35).
+- [x] Phase 4 — Tests:
+  - [x] Unit: HTTP middleware emit (`test_middleware.py::TestCapabilityDeniedEmission` — 3 tests).
+  - [x] Unit: schema_version pinned at 1.1.0; envelope shape (covered).
+  - [x] Unit: emission failure does NOT block 403 (PD-1).
+  - [x] Integration: `tests/integration/test_capability_denied_emission.py` — HTTP → metrics → counter (1 test).
+- [x] Phase 5 — Validation gates: ruff, mypy, check_imports, check_event_registry, check_single_writer, check_registry_isolation, bootstrap-verify, pytest — all green.
 - [ ] Phase 6 — Flip sprint-status to `review`; commit `fix(epic-11.2.1)` + push; run `/bmad-code-review 11-2-1`.
 
 **Deferred to Story 11.2.2:**
@@ -244,15 +245,32 @@ The middleware already calls `_log.warning("tier_enforcement_denied", ...)` (lin
 
 ## Dev Agent Record
 
-_To be filled by executor._
+**Approach selected:** Option A (HTTP-only scope after scope amendment) — emit at the existing `except CapabilityDenied` catch site in `TierEnforcementMiddleware.dispatch()`. **Deviation from spec Dev notes:** the spec proposed plumbing `event_log_writer` + `clock` through `TierEnforcementMiddleware.__init__`. Implementation reads them from `request.app.state.writer` / `request.app.state.clock` instead — the lifespan in `build_app` already exposes them there (used by `key_rotation.py` too). This is cleaner: no constructor change → no test-fixture migration → reads via `getattr(...)` allow graceful no-emission in fixtures that skip the lifespan.
 
-**Approach selected:**
-**Rationale:**
-**Files modified:**
-**Test count delta:**
-**Mypy delta:**
-**OQ-1 resolution:**
+**Rationale (scope amendment):** OQ-1 investigation found `mcp-servers/task-registry/.../handlers/tools.py:219` (`task.emit_event`) is a Story 5.12 stub — logs at INFO, does NOT write to the event log. Closing AC2 in this story would require landing Story 5.12 infrastructure (`task.emit_event` real plumbing, or a new `POST /v1/internal/events` API). User selected **Path A** (HTTP-only now, MCP later) — AC2 carved out to new Story 11.2.2.
+
+**Files modified (7 total):**
+1. `services/registry-api/src/registry_api/adapters/middleware.py` — added `_emit_capability_denied_safe` helper (~90 LOC) + 1-line call inside `TierEnforcementMiddleware.dispatch()`'s `except CapabilityDenied` block. Imports added: `Actor`, `EventEnvelope` from `events.envelope`; `new_event_id` from `events.ids`; `CapabilityDeniedPayload` from `events.payloads`.
+2. `services/telegram-gateway/src/telegram_gateway/handlers/approvals_command.py` — closed AC7 docstring TODO (lines 33-39).
+3. `services/registry-api/src/registry_api/test_middleware.py` — added `TestCapabilityDeniedEmission` class with 3 unit tests.
+4. `tests/integration/test_capability_denied_emission.py` — NEW; 1 integration test (producer → consumer → counter).
+5. `_bmad-output/implementation-artifacts/11-2-1-capability-denied-emission.md` — spec scope amendment + tick boxes + this DAR.
+6. `_bmad-output/implementation-artifacts/sprint-status.yaml` — status flips + 11.2.2 backlog entry.
+
+**Test count delta:** +4 (3 unit + 1 integration). Full suite: 3088 → 3092 passed, zero failures.
+
+**Mypy delta:** 0 errors → 0 errors (119 files under `mypy --strict`).
+
+**OQ-1 resolution:** documented in spec — MCP-boundary scope split out to Story 11.2.2.
+
+**OQ-2 (Actor.kind for envelope) — RESOLVED:** envelope `actor.kind="system"` + `actor.id="registry-api"` (matches Story 11.5 `key.rotated` pattern at `key_rotation.py:301`). The PAYLOAD `actor_id` field carries the denied caller's identity (from `request.state.actor_id`), keeping envelope-actor (who emitted) separate from payload-actor (who was denied).
+
+**OQ-3:** deferred to ops backlog (out of 11.2.1 scope).
+
 **Deviations from spec:**
+- **Constructor plumbing → app.state read** (see Approach above). Cleaner; documented in middleware docstring.
+- **Test split: unit + integration**, not a single end-to-end test. Cross-service import (`registry-api` test importing `metrics_subscriber`) is blocked by `check_imports.py` — integration test moved to `tests/integration/` (outside per-service import graph).
+- **Tier semantics confirmed:** `payload.tier` = required tier (denied threshold), NOT actor's max tier. Matches Story 10.4 counter docstring.
 
 ## Open questions
 

@@ -533,6 +533,192 @@ class TestTierEnforcementMiddleware:
 
 
 # ---------------------------------------------------------------------------
+# Story 11.2.1 — capability.denied emission (HTTP boundary)
+# ---------------------------------------------------------------------------
+
+
+class TestCapabilityDeniedEmission:
+    """Story 11.2.1 — TierEnforcementMiddleware emits ``capability.denied`` on 403.
+
+    Closes Epic 10 retro DD5 for the HTTP boundary. MCP boundary deferred
+    to Story 11.2.2 (depends on Story 5.12 ``task.emit_event`` plumbing).
+    """
+
+    @pytest.mark.asyncio
+    async def test_capability_denied_emits_v1_1_0_envelope_to_event_log(
+        self, tmp_path: Path
+    ) -> None:
+        """AC1+AC3+AC5: 403 path appends a v1.1.0 ``capability.denied`` envelope."""
+        import json
+        from unittest.mock import patch
+
+        from capabilities import Tier
+
+        db_path = tmp_path / "state.sqlite3"
+        db_url_str = _db_url(db_path)
+        await _seed_tables(db_url_str)
+        events_dir = tmp_path / "events"
+        clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
+
+        with patch(
+            "registry_api.adapters.middleware.ROUTE_TIER_MAP",
+            {"POST /v1/tasks": Tier.THREE},
+        ):
+            app = build_app(
+                base_dir=events_dir,
+                db_url=db_url_str,
+                clock=clock,
+                actor_kind="worker",
+            )
+            async with (
+                LifespanManager(app) as manager,
+                AsyncClient(
+                    transport=ASGITransport(app=manager.app),
+                    base_url="http://testserver",
+                ) as client,
+            ):
+                r = await client.post("/v1/tasks", json={"title": "denied"})
+                assert r.status_code == 403
+
+        # Scan JSONL files for the emitted ``capability.denied`` envelope.
+        log_files = sorted(events_dir.glob("*.jsonl"))
+        assert log_files, "no event-log files written"
+        capability_denied_lines = []
+        for log_file in log_files:
+            for line in log_file.read_text().splitlines():
+                if not line.strip():
+                    continue
+                env = json.loads(line)
+                if env.get("type") == "capability.denied":
+                    capability_denied_lines.append(env)
+
+        assert len(capability_denied_lines) == 1, (
+            f"expected exactly 1 capability.denied envelope; got {len(capability_denied_lines)}"
+        )
+        env = capability_denied_lines[0]
+        assert env["schema_version"] == "1.1.0", "schema_version must be 1.1.0"
+        assert env["actor"]["kind"] == "system"
+        assert env["actor"]["id"] == "registry-api"
+
+        payload = env["payload"]
+        assert payload["tier"] == "tier3", "tier should be required (denied) tier"
+        assert payload["boundary"] == "http"
+        assert payload["actor_id"] == "http-api"  # ActorIdMiddleware default
+        assert payload["attempted_action"] == "POST /v1/tasks"
+        assert payload["reason"], "reason must be non-empty"
+
+    @pytest.mark.asyncio
+    async def test_capability_denied_emission_does_not_block_403_on_writer_failure(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """PD-1 fail-soft: writer.append raising MUST NOT change the 403 response."""
+        from unittest.mock import AsyncMock, patch
+
+        from capabilities import Tier
+
+        db_path = tmp_path / "state.sqlite3"
+        db_url_str = _db_url(db_path)
+        await _seed_tables(db_url_str)
+        events_dir = tmp_path / "events"
+        clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
+
+        with patch(
+            "registry_api.adapters.middleware.ROUTE_TIER_MAP",
+            {"POST /v1/tasks": Tier.THREE},
+        ):
+            app = build_app(
+                base_dir=events_dir,
+                db_url=db_url_str,
+                clock=clock,
+                actor_kind="worker",
+            )
+            async with (
+                LifespanManager(app) as manager,
+                AsyncClient(
+                    transport=ASGITransport(app=manager.app),
+                    base_url="http://testserver",
+                ) as client,
+            ):
+                # Patch the lifespan-managed writer to raise on append.
+                broken_writer = AsyncMock()
+                broken_writer.append.side_effect = RuntimeError("simulated disk-full")
+                app.state.writer = broken_writer
+
+                with caplog.at_level(logging.ERROR, logger="registry_api.adapters.middleware"):
+                    r = await client.post("/v1/tasks", json={"title": "denied"})
+
+                # 403 still returned (PD-1 invariant).
+                assert r.status_code == 403
+                body = r.json()
+                assert body["type"] == "/errors/forbidden"
+
+                # Emission failure was logged.
+                emission_failure_logs = [
+                    rec
+                    for rec in caplog.records
+                    if rec.message == "capability_denied_emission_failed"
+                ]
+                assert emission_failure_logs, "PD-1 fail-soft: emission failure must be logged"
+
+    @pytest.mark.asyncio
+    async def test_capability_denied_emission_skipped_when_no_writer(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Test-fixture-without-lifespan path: helper returns silently + logs INFO."""
+        from unittest.mock import patch
+
+        from capabilities import Tier
+
+        db_path = tmp_path / "state.sqlite3"
+        db_url_str = _db_url(db_path)
+        await _seed_tables(db_url_str)
+        events_dir = tmp_path / "events"
+        clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
+
+        with patch(
+            "registry_api.adapters.middleware.ROUTE_TIER_MAP",
+            {"POST /v1/tasks": Tier.THREE},
+        ):
+            app = build_app(
+                base_dir=events_dir,
+                db_url=db_url_str,
+                clock=clock,
+                actor_kind="worker",
+            )
+            async with (
+                LifespanManager(app) as manager,
+                AsyncClient(
+                    transport=ASGITransport(app=manager.app),
+                    base_url="http://testserver",
+                ) as client,
+            ):
+                # Strip the writer to simulate the no-lifespan fixture path.
+                app.state.writer = None
+
+                with caplog.at_level(logging.INFO, logger="registry_api.adapters.middleware"):
+                    r = await client.post("/v1/tasks", json={"title": "denied"})
+
+                assert r.status_code == 403
+                skip_logs = [
+                    rec
+                    for rec in caplog.records
+                    if rec.message == "capability_denied_emission_skipped_no_writer"
+                ]
+                assert skip_logs, "expected explicit INFO log for skipped emission"
+
+
+# NOTE: end-to-end counter-increment integration test (AC4) lives in
+# ``tests/integration/test_capability_denied_emission.py`` because it
+# imports from ``metrics_subscriber.app.metrics`` — a cross-service
+# import that ``scripts/check_imports.py`` correctly blocks inside
+# ``services/registry-api/`` (per FR26 / Architecture line 854 — services
+# never import each other; share via packages/ or event/HTTP contract).
+# Tests under ``tests/integration/`` live outside the per-service import
+# graph and may exercise the producer + consumer ends of the event
+# pipeline together.
+
+
+# ---------------------------------------------------------------------------
 # TraceIdMiddleware — Story 9.2 (FR58 HTTP ingress) tests
 # ---------------------------------------------------------------------------
 
