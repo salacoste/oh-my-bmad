@@ -1,6 +1,6 @@
 # Story 11.2.2 — capability.denied MCP-boundary emission
 
-Status: **in-progress** (Party-mode OQ resolution 2026-05-24 — OQ-1 confirmed, OQ-2 system-stamped, OQ-3 AC3-A, OQ-4 startup-spawn + PD-1)
+Status: **review** (CI green @ e661d90 (run 26344663869) 2026-05-24 — ready for `/bmad-code-review 11-2-2`; all 8 in-scope ACs satisfied; Party-mode OQ resolution OQ-1 confirmed, OQ-2 system-stamped, OQ-3 AC3-A, OQ-4 startup-spawn + PD-1)
 
 ## Story
 
