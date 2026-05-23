@@ -27,36 +27,34 @@ from capabilities import Tier
 from events import FROZEN_EPOCH, FrozenClock
 from events.canonical import from_canonical_json
 from events.envelope import EventEnvelope
+from events.payloads import CapabilityDeniedPayload
 from httpx import ASGITransport, AsyncClient
 from metrics_subscriber.app.metrics import build_collectors, update_for
 from prometheus_client import CollectorRegistry
 from registry_api.app import build_app
-from registry_state.adapters.sqlite_store import create_engine
-from registry_state.schema import Base
+
+# PP8 (pass-1 review): SQLite test helpers now live in
+# ``tests/integration/_db_helpers.py`` so future Story 11.2.2 / 12.x
+# integration tests reuse them rather than re-vending the same 6 lines.
+# Mirrors the existing ``_compose_helpers`` sibling-module pattern.
+from tests.integration._db_helpers import integration_db_url, integration_seed_tables
 
 _FROZEN_MONO_NS = 1_000_000
 
 
-def _db_url(db_path: Path) -> str:
-    return f"sqlite+aiosqlite:///{db_path}"
-
-
-async def _seed_tables(db_url: str) -> None:
-    engine = create_engine(db_url)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    await engine.dispose()
-
-
 @pytest_asyncio.fixture(loop_scope="function")  # Story 8.7.6 PP2 — LifespanManager bg state
 async def denied_app_client(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> AsyncGenerator[tuple[AsyncClient, Path], None]:
-    """Build an app where POST /v1/tasks requires Tier.THREE; worker actor will be denied."""
-    monkeypatch.setenv("REGISTRY_API_TEST_PROBES", "1")
+    """Build an app where POST /v1/tasks requires Tier.THREE; worker actor will be denied.
+
+    PP10 (pass-1 review): removed redundant ``REGISTRY_API_TEST_PROBES=1``
+    monkeypatch — this fixture does NOT register the ``/debug/state``
+    probe (no leaked test surface to gate), so the env var was dead.
+    """
     db_path = tmp_path / "state.sqlite3"
-    db_url = _db_url(db_path)
-    await _seed_tables(db_url)
+    db_url = integration_db_url(db_path)
+    await integration_seed_tables(db_url)
     events_dir = tmp_path / "events"
     clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
 
@@ -71,10 +69,8 @@ async def denied_app_client(
             actor_kind="worker",
         )
         async with (
-            LifespanManager(app) as manager,
-            AsyncClient(
-                transport=ASGITransport(app=manager.app), base_url="http://testserver"
-            ) as client,
+            LifespanManager(app),
+            AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client,
         ):
             yield client, events_dir
 
@@ -104,13 +100,16 @@ async def test_http_capability_denied_emits_envelope_and_increments_counter(
     )
     env = envelopes[0]
     assert env.schema_version == "1.1.0"
-    # ``from_canonical_json`` round-trips payload as a frozen dict (not the
-    # registered Pydantic model — that path is reserved for ``EventEnvelope
-    # .create``). Read fields via dict access.
-    payload = env.payload
-    assert payload["tier"] == "tier3"  # type: ignore[index]
-    assert payload["boundary"] == "http"  # type: ignore[index]
-    assert payload["attempted_action"] == "POST /v1/tasks"  # type: ignore[index]
+    # PP6 (pass-1 review): ``from_canonical_json`` round-trips payload as
+    # a frozen dict (not the registered Pydantic model — that path is
+    # reserved for ``EventEnvelope.create``). Round-trip explicitly
+    # through ``CapabilityDeniedPayload.model_validate`` so a future
+    # field rename / type change fails this test instead of passing
+    # silently via raw dict-indexing.
+    payload = CapabilityDeniedPayload.model_validate(env.payload)
+    assert payload.tier == "tier3"
+    assert payload.boundary == "http"
+    assert payload.attempted_action == "POST /v1/tasks"
 
     # Consumer side: dispatch through the metrics-subscriber materializer.
     registry = CollectorRegistry()

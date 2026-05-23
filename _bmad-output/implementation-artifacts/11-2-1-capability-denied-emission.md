@@ -1,6 +1,6 @@
 # Story 11.2.1 — capability.denied event emission
 
-Status: **review** (HTTP-only scope; CI green @ 393f69e (run 26340206058) 2026-05-23 — ready for `/bmad-code-review 11-2-1`; AC1+AC3+AC4(http)+AC5+AC6+AC7+AC8(http)+AC9 closed; MCP-boundary deferred to Story 11.2.2)
+Status: **review** (pass-1 review batch-applied 2026-05-23 — 11 fixes incl. 3 P1-H robustness; CI pending @ pre-commit; baseline CI green @ 393f69e (run 26340206058) from pre-review state; HTTP-only scope; MCP-boundary deferred to Story 11.2.2)
 
 ## Story
 
@@ -271,6 +271,36 @@ The middleware already calls `_log.warning("tier_enforcement_denied", ...)` (lin
 - **Constructor plumbing → app.state read** (see Approach above). Cleaner; documented in middleware docstring.
 - **Test split: unit + integration**, not a single end-to-end test. Cross-service import (`registry-api` test importing `metrics_subscriber`) is blocked by `check_imports.py` — integration test moved to `tests/integration/` (outside per-service import graph).
 - **Tier semantics confirmed:** `payload.tier` = required tier (denied threshold), NOT actor's max tier. Matches Story 10.4 counter docstring.
+
+## Pass-1 Review Findings (3-lane review of `393f69e..6e575c1` — 2026-05-23)
+
+**Reviewer dedup:** 27 raw findings (Blind 16 + Edge 9 + Acceptance 2) → **11 unique** real findings (3 P0 claims from Blind Hunter were false positives — verified against actual code: tests use isolated `app` per-test; `EventEnvelope.create` uses `type=` not `event_type=`; tests pass on Ubuntu CI). Acceptance Auditor APPROVED with 2 L observations both addressed.
+
+**P1-H (3):**
+
+- [x] [Review][Patch] PP1 — **PD-1 swallow includes `asyncio.CancelledError`** (Blind P1-H + Edge P1-H-A 2-lane) — bare `except Exception` would swallow `BaseException`-derived cancel signals via third-party libraries' `Exception`-derived cancel subclasses. Compare key_rotation.py's fail-LOUD discipline (D3). Fix: explicit `except (asyncio.CancelledError, KeyboardInterrupt): raise` before the broad except [middleware.py:_emit_capability_denied_safe, P1-H]
+- [x] [Review][Patch] PP2 — **Silent trace_id/request_id fallback masks middleware-order regression** (Blind P1-M + Edge P1-H-B 2-lane) — dead defensive code mints fresh UUIDs if upstream middleware skipped; correlation is load-bearing for audit, so silent breakage is operationally invisible. Fix: log WARNING before minting [middleware.py:_emit_capability_denied_safe, P1-H]
+- [x] [Review][Patch] PP3 — **`# type: ignore[arg-type]` on tier literal masks enum-drift risk** (Blind P1-H + Edge P1-M-E + Acceptance L1 3-lane) — silent KeyError if Tier enum gains a new denyable member. Fix: type `_TIER_INT_TO_LITERAL` as `dict[int, _TierLiteral]` so mypy narrows the lookup (cast unnecessary), add `test_tier_int_to_literal_covers_every_denyable_tier_member` contract test asserting `set(_TIER_INT_TO_LITERAL) == {t.value for t in Tier if t != Tier.ZERO}` [middleware.py + test_middleware.py, P1-H]
+
+**P1-M (5):**
+
+- [x] [Review][Patch] PP4 — **`actor_id` None vs "unknown" fallback bug** (Blind P1-M + Edge P1-M-C 2-lane) — `getattr(request.state, "actor_id", "unknown")` only handles ABSENT attribute; if state explicitly sets `actor_id=None`, Pydantic `min_length=1` rejects it → ValidationError caught by PD-1 swallow → audit dropped. Fix: `getattr(...) or "unknown"` [middleware.py:_emit_capability_denied_safe, P1-M]
+- [x] [Review][Patch] PP5 — **`int(required_tier)` couples to IntEnum** (Blind P1-H) — silently breaks if Tier refactors to StrEnum/Enum. Fix: `required_tier.value` [middleware.py:_emit_capability_denied_safe, P1-M]
+- [x] [Review][Patch] PP6 — **Tests assert payload via raw dict-indexing** (Blind P1-M) — `env.payload["tier"]` style; field renames silently slip through. Fix: round-trip via `CapabilityDeniedPayload.model_validate(env.payload)` in both unit + integration tests [test_middleware.py + test_capability_denied_emission.py, P1-M]
+- [x] [Review][Patch] PP7 — **Unit test uses `json.loads`; integration uses `from_canonical_json` — asymmetric** (Edge P1-M-F) — canonical-JSON discipline regression hidden. Fix: use `from_canonical_json` in both [test_middleware.py, P1-M]
+- [ops-backlog] PP11 — **No metric for emission failures** (Edge P1-L) — silent observability paths should themselves be observable. Out of 11.2.1 scope; flagged for ops backlog as new counter `omb_capability_denied_emission_failed_total{boundary}`. Logged in spec OQ-3.
+
+**P1-L (3):**
+
+- [x] [Review][Patch] PP8 — **DRY: `_db_url` / `_seed_tables` duplicated** (Edge P1-L-G) — extracted to `tests/integration/_db_helpers.py` (mirrors existing `_compose_helpers.py` sibling-module pattern; conftest not used because pytest treats it as fixture-special) [_db_helpers.py NEW + test_capability_denied_emission.py, P1-L]
+- [x] [Review][Patch] PP9 — **3 unit tests duplicate 30+ lines of LifespanManager setup** (Blind P1-L) — extracted to `_denied_app_ctx` module-level `pytest_asyncio.fixture` consumed by all 3 tests. ~80 LOC saved [test_middleware.py, P1-L]
+- [x] [Review][Patch] PP10 — **Redundant `REGISTRY_API_TEST_PROBES=1` in integration test** (Blind P1-M) — copy-paste from app_client; this fixture doesn't register `/debug/state`, env var was dead. Fix: removed [test_capability_denied_emission.py, P1-L]
+
+**False positives — NOT applied:**
+
+- Blind P0 "cross-test fixture pollution corrupts `app.state.writer`" — each test owns its own `app` via `LifespanManager` scope; no shared state across tests. Verified: 3 tests run independently in sequence + parallel via pytest-xdist with no leakage.
+- Blind P0 "`EventEnvelope.create` `type=` kwarg vs spec `event_type=`" — verified `envelope.py:401`: `type: str` is the canonical kwarg; spec's narrative example block was illustrative, not literal API.
+- Blind P1-H "Unicode/log injection via unsanitized `actor_id` + `reason`" — `ActorIdMiddleware` already validates `X-Actor-Id` against `_ACTOR_ID_HEADER_RE` before populating `request.state.actor_id` (middleware.py:_ACTOR_ID_HEADER_RE). `reason` comes from `CapabilityDenied.reason` constructed in `capabilities/tiers.py:check_tier` from `f"actor_kind {caller.actor_kind!r} allows Tier.X at most"` — not user-controlled. Pydantic Field max_length=4096 caps any pathological value.
 
 ## Open questions
 

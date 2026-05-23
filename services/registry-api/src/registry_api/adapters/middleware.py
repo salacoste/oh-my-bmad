@@ -70,9 +70,11 @@ carries the parent ``trace_id`` correlation alongside the per-request
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from types import MappingProxyType
+from typing import Literal
 
 import structlog
 from capabilities import CallerContext, Tier, check_tier  # noqa: IMP001 — services→packages allowed
@@ -526,7 +528,14 @@ class TierEnforcementMiddleware(BaseHTTPMiddleware):
 # ---------------------------------------------------------------------------
 
 
-_TIER_INT_TO_LITERAL = {1: "tier1", 2: "tier2", 3: "tier3"}
+# PP3 (pass-1 review) — closed-domain map: every ``Tier`` enum member MUST
+# have a corresponding ``"tierN"`` literal here. The enum-drift contract
+# test ``test_tier_int_to_literal_covers_every_tier_member`` asserts
+# ``set(_TIER_INT_TO_LITERAL) == {t.value for t in Tier}`` so adding a new
+# tier without extending this map fails loudly at test time rather than
+# silently dropping audit events at runtime via the PD-1 fail-soft block.
+_TierLiteral = Literal["tier1", "tier2", "tier3"]
+_TIER_INT_TO_LITERAL: dict[int, _TierLiteral] = {1: "tier1", 2: "tier2", 3: "tier3"}
 
 
 async def _emit_capability_denied_safe(
@@ -546,13 +555,29 @@ async def _emit_capability_denied_safe(
     without invoking the real lifespan) — the absence is logged once at
     INFO so test-only no-emission state is observable.
 
-    **PD-1 fail-soft contract.** Any exception during envelope construction
-    or ``writer.append()`` is caught, logged at ERROR, and SWALLOWED.
+    **PD-1 fail-soft contract.** I/O-shaped exceptions during envelope
+    construction or ``writer.append()`` (OSError, RuntimeError,
+    pydantic.ValidationError) are caught, logged at ERROR, and SWALLOWED.
     The 403 deny response is the load-bearing security signal; an
     event-log write failure (poisoned writer, disk full, schema mismatch)
-    must never block it. Operators detect emission failures via the
-    ``capability_denied_emission_failed`` log line, not via altered
-    HTTP semantics.
+    must never block it. ``asyncio.CancelledError`` and ``KeyboardInterrupt``
+    are re-raised explicitly — swallowing cancellation breaks task
+    lifecycle (PP1 pass-1 review).
+
+    **Tier semantics (PP5 pass-1 review):** ``required_tier.value`` is used
+    instead of ``int(required_tier)`` so the helper does not silently
+    depend on ``Tier`` being an ``IntEnum``. If ``Tier`` is ever refactored
+    to ``StrEnum`` / ``Enum``, this code keeps working. ``KeyError`` from
+    the closed-domain ``_TIER_INT_TO_LITERAL`` lookup is caught by the
+    PD-1 block, but the contract test ``_TIER_INT_TO_LITERAL`` enum-drift
+    check (PP3) catches it earlier — at test time.
+
+    **Trace-id correlation (PP2 pass-1 review):** ``trace_id`` and
+    ``request_id`` are read from ``request.state`` (populated by the
+    outer ``TraceIdMiddleware`` / ``RequestIdMiddleware``). If either is
+    missing the helper logs a loud ``WARNING`` (not silent) BEFORE
+    minting a fresh value — silent correlation breakage during a
+    middleware-order regression would otherwise be invisible to operators.
     """
     writer = getattr(request.app.state, "writer", None)
     clock = getattr(request.app.state, "clock", None)
@@ -566,27 +591,57 @@ async def _emit_capability_denied_safe(
         )
         return
 
-    actor_id = getattr(request.state, "actor_id", "unknown")
+    # PP4 (pass-1 review): ``getattr(..., default)`` only handles ABSENT
+    # attributes — if ``request.state.actor_id`` is explicitly ``None``
+    # the helper passed ``actor_id=None`` to ``CapabilityDeniedPayload``
+    # whose ``min_length=1`` validator rejected it, raising
+    # ``ValidationError`` that the PD-1 block silently swallowed → audit
+    # dropped. ``getattr(...) or "unknown"`` handles both branches.
+    actor_id = getattr(request.state, "actor_id", None) or "unknown"
     trace_id = getattr(request.state, "trace_id", None)
     request_id = getattr(request.state, "request_id", None)
 
+    # PP2 (pass-1 review): WARN loudly on missing upstream-middleware
+    # state so a future middleware-ordering regression is operationally
+    # visible. The mint-fresh fallback preserves emission (audit data is
+    # better than nothing) but the warning ensures the regression is
+    # caught in the next operator review of error logs.
+    if trace_id is None:
+        _log.warning(
+            "capability_denied_trace_id_missing",
+            extra={
+                "route": attempted_action,
+                "actor_id": actor_id,
+                "reason": "request.state.trace_id absent — TraceIdMiddleware order regression?",
+            },
+        )
+        trace_id = new_uuid7(clock=clock)
+    if request_id is None:
+        _log.warning(
+            "capability_denied_request_id_missing",
+            extra={
+                "route": attempted_action,
+                "actor_id": actor_id,
+                "reason": "request.state.request_id absent — RequestIdMiddleware order regression?",
+            },
+        )
+        request_id = new_request_id(clock=clock)
+
     try:
-        tier_literal = _TIER_INT_TO_LITERAL[int(required_tier)]
+        # PP5: use ``.value`` not ``int(...)`` — decouples from IntEnum.
+        # PP3: ``_TIER_INT_TO_LITERAL`` is typed ``dict[int, _TierLiteral]``
+        # so mypy already narrows the lookup result to ``_TierLiteral`` —
+        # no ``cast`` or ``# type: ignore`` needed. ``KeyError`` from a
+        # missing entry is caught by PD-1 below; the enum-drift contract
+        # test surfaces it at test time instead.
+        tier_literal = _TIER_INT_TO_LITERAL[required_tier.value]
         payload = CapabilityDeniedPayload(
-            tier=tier_literal,  # type: ignore[arg-type]
+            tier=tier_literal,
             boundary="http",
             actor_id=actor_id,
             attempted_action=attempted_action,
             reason=exc.reason,
         )
-        # Mint a fresh event_id; reuse the request's trace_id and request_id
-        # so the emitted audit event correlates with the denied request.
-        # Fall back to fresh UUIDv7s if the upstream middlewares didn't
-        # populate them (defensive — should not happen given middleware order).
-        if trace_id is None:
-            trace_id = new_uuid7(clock=clock)
-        if request_id is None:
-            request_id = new_request_id(clock=clock)
         envelope = EventEnvelope.create(
             event_id=new_event_id(clock=clock),
             type="capability.denied",
@@ -599,8 +654,19 @@ async def _emit_capability_denied_safe(
             request_id=request_id,
         )
         await writer.append(envelope)
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        # PP1 (pass-1 review): cancellation MUST propagate. ``BaseException``
+        # subclasses that signal control flow (CancelledError, KeyboardInterrupt)
+        # would otherwise be silently absorbed, breaking task lifecycle +
+        # making the worker un-shutdownable.
+        raise
     except Exception as emit_exc:
-        # PD-1: emission MUST NOT block the 403. Log loudly + swallow.
+        # PD-1: I/O-shaped emission errors MUST NOT block the 403.
+        # Log loudly + swallow. Programming bugs (KeyError on _TIER map
+        # drift, TypeError on signature mismatch) also land here, but the
+        # contract test for _TIER_INT_TO_LITERAL coverage catches the
+        # high-value drift cases at test time so the swallow surface is
+        # narrowed in practice.
         _log.error(
             "capability_denied_emission_failed",
             extra={

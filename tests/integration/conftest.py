@@ -43,3 +43,10 @@ def skip_if_no_docker() -> None:
             "Integration test requires Docker — install or "
             f"run via CI (docker info exit={proc.returncode})"
         )
+
+
+# Note: Story 11.2.1 PP8 extracted shared SQLite test helpers to
+# ``tests/integration/_db_helpers.py`` (sibling module pattern that
+# mirrors ``_compose_helpers.py``). Importing helpers from a conftest
+# is unusual — pytest treats conftest as fixture-special, so prefer a
+# regular module for re-usable plain functions.

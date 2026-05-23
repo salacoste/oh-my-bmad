@@ -537,6 +537,72 @@ class TestTierEnforcementMiddleware:
 # ---------------------------------------------------------------------------
 
 
+@pytest_asyncio.fixture(loop_scope="function")  # Story 8.7.6 PP2 — LifespanManager bg state
+async def _denied_app_ctx(
+    tmp_path: Path,
+) -> AsyncGenerator[tuple[AsyncClient, Path, object], None]:
+    """Story 11.2.1 PP10 (pass-1 review) — DRY fixture for the 3 unit tests.
+
+    Builds a registry-api app where ``POST /v1/tasks`` requires ``Tier.THREE``
+    so a ``worker`` actor (max Tier.TWO) triggers a 403 with capability.denied
+    emission. Yields the client, events_dir (for JSONL scans), and the app
+    handle (for ``app.state`` overrides in PD-1 / no-writer tests).
+    """
+    from unittest.mock import patch
+
+    from capabilities import Tier as _Tier
+
+    db_path = tmp_path / "state.sqlite3"
+    db_url_str = _db_url(db_path)
+    await _seed_tables(db_url_str)
+    events_dir = tmp_path / "events"
+    clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
+
+    with patch(
+        "registry_api.adapters.middleware.ROUTE_TIER_MAP",
+        {"POST /v1/tasks": _Tier.THREE},
+    ):
+        app = build_app(
+            base_dir=events_dir,
+            db_url=db_url_str,
+            clock=clock,
+            actor_kind="worker",
+        )
+        async with (
+            LifespanManager(app),
+            AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client,
+        ):
+            yield client, events_dir, app
+
+
+def test_tier_int_to_literal_covers_every_denyable_tier_member() -> None:
+    """PP3 (pass-1 review) — enum-drift contract.
+
+    If ``Tier`` adds a new denyable member (e.g., ``Tier.FOUR``) without
+    extending ``_TIER_INT_TO_LITERAL``, ``_emit_capability_denied_safe``
+    would raise ``KeyError`` at runtime → caught by the PD-1 swallow →
+    audit silently dropped. This test asserts coverage at test time so
+    drift is caught BEFORE it lands on main.
+
+    ``Tier.ZERO`` (read-only) is INTENTIONALLY excluded from the literal
+    set: ``CapabilityDeniedPayload.tier`` is
+    ``Literal["tier1", "tier2", "tier3"]`` because read-only methods
+    bypass tier enforcement entirely (``middleware.py`` ``_MUTATING_METHODS``
+    short-circuit at the top of ``TierEnforcementMiddleware.dispatch``).
+    A Tier-0 ``capability.denied`` event would be a contradiction.
+    """
+    from capabilities import Tier
+
+    from registry_api.adapters.middleware import _TIER_INT_TO_LITERAL
+
+    denyable_tiers = {t.value for t in Tier if t != Tier.ZERO}
+    assert set(_TIER_INT_TO_LITERAL.keys()) == denyable_tiers, (
+        f"_TIER_INT_TO_LITERAL keys {set(_TIER_INT_TO_LITERAL)} drifted from "
+        f"denyable Tier members {denyable_tiers}. Add the missing ``tierN`` "
+        "literal to _TIER_INT_TO_LITERAL (and to ``CapabilityDeniedPayload.tier``)."
+    )
+
+
 class TestCapabilityDeniedEmission:
     """Story 11.2.1 — TierEnforcementMiddleware emits ``capability.denied`` on 403.
 
@@ -546,165 +612,104 @@ class TestCapabilityDeniedEmission:
 
     @pytest.mark.asyncio
     async def test_capability_denied_emits_v1_1_0_envelope_to_event_log(
-        self, tmp_path: Path
+        self, _denied_app_ctx: tuple[AsyncClient, Path, object]
     ) -> None:
-        """AC1+AC3+AC5: 403 path appends a v1.1.0 ``capability.denied`` envelope."""
-        import json
-        from unittest.mock import patch
+        """AC1+AC3+AC5: 403 path appends a v1.1.0 ``capability.denied`` envelope.
 
-        from capabilities import Tier
+        PP6 (pass-1 review): payload round-tripped through
+        ``CapabilityDeniedPayload.model_validate`` so a future field rename
+        (e.g. ``actor_id`` → ``caller_id``) fails the test instead of
+        passing with stale dict-indexing.
 
-        db_path = tmp_path / "state.sqlite3"
-        db_url_str = _db_url(db_path)
-        await _seed_tables(db_url_str)
-        events_dir = tmp_path / "events"
-        clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
+        PP7 (pass-1 review): envelope read via ``from_canonical_json`` (not
+        raw ``json.loads``) for symmetry with the production reader path.
+        """
+        from events.canonical import from_canonical_json
+        from events.payloads import CapabilityDeniedPayload
 
-        with patch(
-            "registry_api.adapters.middleware.ROUTE_TIER_MAP",
-            {"POST /v1/tasks": Tier.THREE},
-        ):
-            app = build_app(
-                base_dir=events_dir,
-                db_url=db_url_str,
-                clock=clock,
-                actor_kind="worker",
-            )
-            async with (
-                LifespanManager(app) as manager,
-                AsyncClient(
-                    transport=ASGITransport(app=manager.app),
-                    base_url="http://testserver",
-                ) as client,
-            ):
-                r = await client.post("/v1/tasks", json={"title": "denied"})
-                assert r.status_code == 403
+        client, events_dir, _app = _denied_app_ctx
 
-        # Scan JSONL files for the emitted ``capability.denied`` envelope.
+        r = await client.post("/v1/tasks", json={"title": "denied"})
+        assert r.status_code == 403
+
         log_files = sorted(events_dir.glob("*.jsonl"))
         assert log_files, "no event-log files written"
-        capability_denied_lines = []
+        capability_denied_envs = []
         for log_file in log_files:
-            for line in log_file.read_text().splitlines():
-                if not line.strip():
+            for raw in log_file.read_bytes().splitlines():
+                if not raw.strip():
                     continue
-                env = json.loads(line)
-                if env.get("type") == "capability.denied":
-                    capability_denied_lines.append(env)
+                env = from_canonical_json(raw)
+                if env.type == "capability.denied":
+                    capability_denied_envs.append(env)
 
-        assert len(capability_denied_lines) == 1, (
-            f"expected exactly 1 capability.denied envelope; got {len(capability_denied_lines)}"
+        assert len(capability_denied_envs) == 1, (
+            f"expected exactly 1 capability.denied envelope; got {len(capability_denied_envs)}"
         )
-        env = capability_denied_lines[0]
-        assert env["schema_version"] == "1.1.0", "schema_version must be 1.1.0"
-        assert env["actor"]["kind"] == "system"
-        assert env["actor"]["id"] == "registry-api"
+        env = capability_denied_envs[0]
+        assert env.schema_version == "1.1.0", "schema_version must be 1.1.0"
+        assert env.actor.kind == "system"
+        assert env.actor.id == "registry-api"
 
-        payload = env["payload"]
-        assert payload["tier"] == "tier3", "tier should be required (denied) tier"
-        assert payload["boundary"] == "http"
-        assert payload["actor_id"] == "http-api"  # ActorIdMiddleware default
-        assert payload["attempted_action"] == "POST /v1/tasks"
-        assert payload["reason"], "reason must be non-empty"
+        # PP6: round-trip through the canonical Pydantic model so renames /
+        # type changes fail loudly here instead of via raw-dict indexing.
+        payload = CapabilityDeniedPayload.model_validate(env.payload)
+        assert payload.tier == "tier3", "tier should be required (denied) tier"
+        assert payload.boundary == "http"
+        assert payload.actor_id == "http-api", "ActorIdMiddleware default"
+        assert payload.attempted_action == "POST /v1/tasks"
+        assert payload.reason, "reason must be non-empty"
 
     @pytest.mark.asyncio
     async def test_capability_denied_emission_does_not_block_403_on_writer_failure(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+        self,
+        _denied_app_ctx: tuple[AsyncClient, Path, object],
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """PD-1 fail-soft: writer.append raising MUST NOT change the 403 response."""
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import AsyncMock
 
-        from capabilities import Tier
+        client, _events_dir, app = _denied_app_ctx
 
-        db_path = tmp_path / "state.sqlite3"
-        db_url_str = _db_url(db_path)
-        await _seed_tables(db_url_str)
-        events_dir = tmp_path / "events"
-        clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
+        broken_writer = AsyncMock()
+        broken_writer.append.side_effect = RuntimeError("simulated disk-full")
+        app.state.writer = broken_writer  # type: ignore[attr-defined]
 
-        with patch(
-            "registry_api.adapters.middleware.ROUTE_TIER_MAP",
-            {"POST /v1/tasks": Tier.THREE},
-        ):
-            app = build_app(
-                base_dir=events_dir,
-                db_url=db_url_str,
-                clock=clock,
-                actor_kind="worker",
-            )
-            async with (
-                LifespanManager(app) as manager,
-                AsyncClient(
-                    transport=ASGITransport(app=manager.app),
-                    base_url="http://testserver",
-                ) as client,
-            ):
-                # Patch the lifespan-managed writer to raise on append.
-                broken_writer = AsyncMock()
-                broken_writer.append.side_effect = RuntimeError("simulated disk-full")
-                app.state.writer = broken_writer
+        with caplog.at_level(logging.ERROR, logger="registry_api.adapters.middleware"):
+            r = await client.post("/v1/tasks", json={"title": "denied"})
 
-                with caplog.at_level(logging.ERROR, logger="registry_api.adapters.middleware"):
-                    r = await client.post("/v1/tasks", json={"title": "denied"})
+        # 403 still returned (PD-1 invariant).
+        assert r.status_code == 403
+        body = r.json()
+        assert body["type"] == "/errors/forbidden"
 
-                # 403 still returned (PD-1 invariant).
-                assert r.status_code == 403
-                body = r.json()
-                assert body["type"] == "/errors/forbidden"
-
-                # Emission failure was logged.
-                emission_failure_logs = [
-                    rec
-                    for rec in caplog.records
-                    if rec.message == "capability_denied_emission_failed"
-                ]
-                assert emission_failure_logs, "PD-1 fail-soft: emission failure must be logged"
+        emission_failure_logs = [
+            rec for rec in caplog.records if rec.message == "capability_denied_emission_failed"
+        ]
+        assert emission_failure_logs, "PD-1 fail-soft: emission failure must be logged"
 
     @pytest.mark.asyncio
     async def test_capability_denied_emission_skipped_when_no_writer(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+        self,
+        _denied_app_ctx: tuple[AsyncClient, Path, object],
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Test-fixture-without-lifespan path: helper returns silently + logs INFO."""
-        from unittest.mock import patch
+        client, _events_dir, app = _denied_app_ctx
 
-        from capabilities import Tier
+        # Strip the writer to simulate the no-lifespan fixture path.
+        app.state.writer = None  # type: ignore[attr-defined]
 
-        db_path = tmp_path / "state.sqlite3"
-        db_url_str = _db_url(db_path)
-        await _seed_tables(db_url_str)
-        events_dir = tmp_path / "events"
-        clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
+        with caplog.at_level(logging.INFO, logger="registry_api.adapters.middleware"):
+            r = await client.post("/v1/tasks", json={"title": "denied"})
 
-        with patch(
-            "registry_api.adapters.middleware.ROUTE_TIER_MAP",
-            {"POST /v1/tasks": Tier.THREE},
-        ):
-            app = build_app(
-                base_dir=events_dir,
-                db_url=db_url_str,
-                clock=clock,
-                actor_kind="worker",
-            )
-            async with (
-                LifespanManager(app) as manager,
-                AsyncClient(
-                    transport=ASGITransport(app=manager.app),
-                    base_url="http://testserver",
-                ) as client,
-            ):
-                # Strip the writer to simulate the no-lifespan fixture path.
-                app.state.writer = None
-
-                with caplog.at_level(logging.INFO, logger="registry_api.adapters.middleware"):
-                    r = await client.post("/v1/tasks", json={"title": "denied"})
-
-                assert r.status_code == 403
-                skip_logs = [
-                    rec
-                    for rec in caplog.records
-                    if rec.message == "capability_denied_emission_skipped_no_writer"
-                ]
-                assert skip_logs, "expected explicit INFO log for skipped emission"
+        assert r.status_code == 403
+        skip_logs = [
+            rec
+            for rec in caplog.records
+            if rec.message == "capability_denied_emission_skipped_no_writer"
+        ]
+        assert skip_logs, "expected explicit INFO log for skipped emission"
 
 
 # NOTE: end-to-end counter-increment integration test (AC4) lives in
