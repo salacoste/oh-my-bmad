@@ -192,8 +192,8 @@ def build_server(
     # event types added at v1.1.0+ should be registered here so the
     # public ``emit_event`` tool selects the correct schema version AND
     # actor identity in one place. Tuple: (schema_version, actor_override).
-    _SYSTEM_EMITTER = Actor(kind="system", id="clawhip-bridge-mcp")
-    _CAPABILITY_DENIED = "capability.denied"
+    _SYSTEM_EMITTER = Actor(kind="system", id="clawhip-bridge-mcp")  # noqa: N806 — constant role inside the factory closure
+    _CAPABILITY_DENIED = "capability.denied"  # noqa: N806 — constant role inside the factory closure
     _emit_overrides: dict[str, tuple[str, Actor]] = {
         _CAPABILITY_DENIED: ("1.1.0", _SYSTEM_EMITTER),
     }
@@ -351,23 +351,34 @@ def build_server(
             ValueError: if ``caller_trace_id`` fails Story 9.1 validation.
         """
         validate_caller_trace_id(caller_trace_id)
+        # PQ9 (pass-1 review): system-stamped audit event types (those that
+        # would receive an ``actor_override`` via ``_emit_overrides``) MUST
+        # NOT be emittable from the PUBLIC emit_event tool. Otherwise an
+        # MCP client could call
+        # ``emit_event(type="capability.denied", payload={...attacker})``
+        # and the override would stamp ``Actor(kind="system",
+        # id="clawhip-bridge-mcp")`` on the forgery — laundering attacker
+        # input as a system-emitted audit record. Force such types to
+        # the internal ``_emit`` callsite (only reachable via
+        # ``_check_tier_with_self_emit``).
+        if type in _emit_overrides:
+            raise PermissionError(
+                f"event type {type!r} is reserved for system-emitted audit "
+                "records; cannot be invoked via the public emit_event tool"
+            )
         await _check_tier_with_self_emit(
             "emit_event",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id),
             TIER_MAP["emit_event"],
             caller_trace_id=caller_trace_id,
         )
-        # Story 11.2.2: resolve schema version and actor override from the
-        # consolidated _emit_overrides dict. Both concerns evolve together —
-        # adding a new audit-only event type requires a single dict entry.
-        schema_version, actor_override = _emit_overrides.get(type, ("1.0.0", None))
         return await _emit(
             type,
             payload,
             parent_event_id,
             caller_trace_id=caller_trace_id,
-            schema_version=schema_version,
-            actor_override=actor_override,
+            schema_version="1.0.0",
+            actor_override=None,
         )
 
     # ------------------------------------------------------------------

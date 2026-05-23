@@ -94,17 +94,36 @@ def main() -> None:
         )
         sys.exit(2)
 
-    # -- Optional: Story 11.2.2 clawhip-bridge audit-emission config --
-    disable_audit = os.environ.get("TASK_REGISTRY_DISABLE_AUDIT_EMISSION", "").strip() == "1"
+    # -- Story 11.2.2 PQ1 (pass-1 review) — clawhip-bridge audit-emission config.
+    #
+    # FEATURE-FLAG DEFAULT-OFF: ``OMB_MCP_AUDIT_EMISSION_ENABLED=1`` must be
+    # explicitly set to spawn a clawhip-bridge subprocess and emit audit
+    # events on tier denials. Default OFF mitigates the FR26 multi-writer
+    # concern (Story 11.2.2 pass-1 Edge Hunter P0): each MCP server
+    # spawning its own clawhip-bridge subprocess would yield N concurrent
+    # JSONL writers to the event log. Until Story 11.2.3 ships a shared
+    # clawhip-bridge daemon (or file-lock serialization), opt-in only.
+    #
+    # Legacy ``TASK_REGISTRY_DISABLE_AUDIT_EMISSION`` retained as override
+    # (set to "1" to force-disable even when the new flag is on) for
+    # operators rolling back without re-deploying.
+    enable_audit = os.environ.get("OMB_MCP_AUDIT_EMISSION_ENABLED", "").strip() == "1"
+    force_disable_audit = os.environ.get("TASK_REGISTRY_DISABLE_AUDIT_EMISSION", "").strip() == "1"
     clawhip_cmd: str | None = None
     clawhip_args: list[str] | None = None
-    if not disable_audit:
-        clawhip_cmd = os.environ.get("TASK_REGISTRY_CLAWHIP_BRIDGE_COMMAND", "").strip() or "python"
+    if enable_audit and not force_disable_audit:
+        import shlex
+
+        clawhip_cmd = (
+            os.environ.get("TASK_REGISTRY_CLAWHIP_BRIDGE_COMMAND", "").strip()
+            or sys.executable  # PQ-Edge MEDIUM #6: use sys.executable not bare "python"
+        )
         clawhip_args_raw = (
             os.environ.get("TASK_REGISTRY_CLAWHIP_BRIDGE_ARGS", "").strip()
             or "-m clawhip_bridge_mcp"
         )
-        clawhip_args = clawhip_args_raw.split()
+        # PQ8 (pass-1 review): shlex.split handles quoted paths with spaces.
+        clawhip_args = shlex.split(clawhip_args_raw)
 
     from task_registry_mcp.app.main import build_server
 

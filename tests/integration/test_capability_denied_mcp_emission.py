@@ -251,8 +251,17 @@ async def test_mcp_capability_denied_pd1_fail_soft_when_emitter_broken(
     tmp_path: Path,
     fixed_clock: FrozenClock,
     db_session_maker: async_sessionmaker[AsyncSession],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """AC7: emitter exception is swallowed; original CapabilityDenied still re-raises (AC6)."""
+    """AC7: emitter exception is swallowed; original CapabilityDenied still re-raises (AC6).
+
+    PQ4 (pass-1 review): also asserts the emission failure was LOGGED at
+    ERROR (``capability_denied_emission_failed``) — pre-PQ4 the test only
+    verified the re-raise, so a future refactor that narrowed the broad
+    ``except Exception`` would have passed silently while emission failures
+    became unobservable in production.
+    """
+    import logging
 
     class _BrokenEmitter:
         async def emit_event(self, *_a: object, **_kw: object) -> None:
@@ -284,6 +293,7 @@ async def test_mcp_capability_denied_pd1_fail_soft_when_emitter_broken(
     }
     fn = task_mcp._tool_manager._tools["task_add_note"].fn  # type: ignore[attr-defined]
     with (
+        caplog.at_level(logging.ERROR, logger="capabilities.emit"),
         patch("task_registry_mcp.handlers.tools.TIER_MAP", patched_tier_map),
         pytest.raises(CapabilityDenied),  # AC6 must still be honored
     ):
@@ -292,6 +302,16 @@ async def test_mcp_capability_denied_pd1_fail_soft_when_emitter_broken(
             note="denied even with broken emitter",
             caller_trace_id=_VALID_TRACE_ID,
         )
+
+    # PQ4: confirm PD-1 fail-soft logged at ERROR so emission failures are
+    # observable to operators (counter sits at 0 silently otherwise).
+    failure_logs = [
+        rec for rec in caplog.records if rec.message == "capability_denied_emission_failed"
+    ]
+    assert failure_logs, (
+        "PD-1 fail-soft contract: broken emitter must emit "
+        "`capability_denied_emission_failed` log line at ERROR"
+    )
 
 
 @pytest.mark.asyncio

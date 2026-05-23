@@ -93,9 +93,14 @@ def build_server(
         @contextlib.asynccontextmanager
         async def _lifespan(_server: FastMCP) -> AsyncGenerator[None, None]:
             """Spawn the clawhip-bridge stdio client; fail-loud on startup (OQ-4)."""
-            assert clawhip_bridge_command is not None  # mypy narrowing
-            assert clawhip_bridge_args is not None
-            assert emitter_holder is not None
+            # PQ15 (pass-1 review): explicit RuntimeError, not assert — `python -O`
+            # strips asserts. Same discipline as task-registry sibling.
+            if clawhip_bridge_command is None:
+                raise RuntimeError("clawhip_bridge_command must be set when lifespan_fn is wired")
+            if clawhip_bridge_args is None:
+                raise RuntimeError("clawhip_bridge_args must be set when lifespan_fn is wired")
+            if emitter_holder is None:
+                raise RuntimeError("emitter_holder must be initialized when lifespan_fn is wired")
             client = ClawhipBridgeClient(
                 command=clawhip_bridge_command,
                 args=clawhip_bridge_args,
@@ -109,8 +114,10 @@ def build_server(
             try:
                 yield
             finally:
-                emitter_holder.client = None
+                # PQ6 (pass-1 review): null the holder ONLY AFTER ``__aexit__`` —
+                # see task-registry sibling for the rationale.
                 await client.__aexit__(None, None, None)
+                emitter_holder.client = None
 
         lifespan_fn = _lifespan
     else:

@@ -99,9 +99,15 @@ def build_server(
             propagates here so the operator sees a hard error instead of
             silently degrading to no-emission mode.
             """
-            assert clawhip_bridge_command is not None  # mypy narrowing
-            assert clawhip_bridge_args is not None
-            assert emitter_holder is not None
+            # PQ15 (pass-1 review): explicit RuntimeError, not assert — `python -O`
+            # strips asserts. ``-O`` users would otherwise crash later inside
+            # ``ClawhipBridgeClient.__aenter__`` with a less actionable trace.
+            if clawhip_bridge_command is None:
+                raise RuntimeError("clawhip_bridge_command must be set when lifespan_fn is wired")
+            if clawhip_bridge_args is None:
+                raise RuntimeError("clawhip_bridge_args must be set when lifespan_fn is wired")
+            if emitter_holder is None:
+                raise RuntimeError("emitter_holder must be initialized when lifespan_fn is wired")
             client = ClawhipBridgeClient(
                 command=clawhip_bridge_command,
                 args=clawhip_bridge_args,
@@ -115,8 +121,17 @@ def build_server(
             try:
                 yield
             finally:
-                emitter_holder.client = None
+                # PQ6 (pass-1 review): null the holder ONLY AFTER ``__aexit__``
+                # completes — pre-PQ6 order set ``client = None`` first, which
+                # raced any in-flight handler still calling
+                # ``emitter_holder.emit_event``. Sequence now is:
+                # 1. exit MCP server protocol (yield returns)
+                # 2. tear down the stdio client (drain in-flight call_tool)
+                # 3. only then drop the reference (so any handler still in the
+                #    decorator's ``try`` sees a closed-pipe error and falls
+                #    through PD-1, not a "lifespan not wired" RuntimeError).
                 await client.__aexit__(None, None, None)
+                emitter_holder.client = None
 
         lifespan_fn = _lifespan
     else:

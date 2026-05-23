@@ -30,6 +30,32 @@ log = logging.getLogger(__name__)
 
 _INIT_TIMEOUT: float = 30.0
 
+# PQ7 (pass-1 review): env-var allowlist forwarded to the clawhip-bridge
+# subprocess. Keep tight — adding a var here widens the secret-leakage
+# blast radius. Override at ``ClawhipBridgeClient(env=...)`` construction
+# if a deployment needs extra vars.
+_ENV_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "USER",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "PYTHONPATH",  # workspace resolution
+        "PYTHONUNBUFFERED",
+        "REGISTRY_EVENTS_DIR",  # clawhip-bridge event-log path
+        "REGISTRY_DB_PATH",  # clawhip-bridge state SQLite
+        # No HMAC keys, no AWS creds, no OPENAI key. Operators who need
+        # extra vars must override ``env`` at construction time.
+    }
+)
+
+
+def _default_env_allowlist() -> dict[str, str]:
+    """Return a fresh dict of parent-env vars matching ``_ENV_ALLOWLIST``."""
+    return {k: v for k, v in os.environ.items() if k in _ENV_ALLOWLIST}
+
 
 @dataclass
 class ClawhipBridgeClient:
@@ -50,7 +76,15 @@ class ClawhipBridgeClient:
 
     command: str
     args: list[str]
-    env: dict[str, str] = field(default_factory=lambda: dict(os.environ))
+    # PQ7 (pass-1 review): explicit allowlist rather than ``dict(os.environ)`` —
+    # forwarding every parent env-var (AWS creds, OPENAI_API_KEY, *_DATABASE_URL,
+    # OPERATOR_HMAC_KEY) to the spawned clawhip-bridge subprocess widens the
+    # secret-leakage blast radius. The allowlist below covers everything
+    # clawhip-bridge actually needs (PATH for Python resolution, HOME for
+    # asyncio temp paths, and the EVENTS_DIR + REGISTRY_DB_PATH it uses to
+    # locate the event log). Operators who need extra vars can override the
+    # field at construction time.
+    env: dict[str, str] = field(default_factory=lambda: _default_env_allowlist())
     _stack: AsyncExitStack | None = None
     _session: ClientSession | None = None
 

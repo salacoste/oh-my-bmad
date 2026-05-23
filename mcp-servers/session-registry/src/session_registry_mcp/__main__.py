@@ -94,19 +94,28 @@ def main() -> None:
         )
         sys.exit(2)
 
-    # -- Optional: Story 11.2.2 clawhip-bridge audit-emission config --
-    disable_audit = os.environ.get("SESSION_REGISTRY_DISABLE_AUDIT_EMISSION", "").strip() == "1"
+    # -- Story 11.2.2 PQ1 (pass-1 review) — clawhip-bridge audit-emission config.
+    # See task-registry/__main__.py for the rationale; same feature-flag default-OFF
+    # discipline applies here to mitigate FR26 multi-writer until Story 11.2.3
+    # ships a shared clawhip-bridge daemon.
+    enable_audit = os.environ.get("OMB_MCP_AUDIT_EMISSION_ENABLED", "").strip() == "1"
+    force_disable_audit = (
+        os.environ.get("SESSION_REGISTRY_DISABLE_AUDIT_EMISSION", "").strip() == "1"
+    )
     clawhip_cmd: str | None = None
     clawhip_args: list[str] | None = None
-    if not disable_audit:
+    if enable_audit and not force_disable_audit:
+        import shlex
+
         clawhip_cmd = (
-            os.environ.get("SESSION_REGISTRY_CLAWHIP_BRIDGE_COMMAND", "").strip() or "python"
+            os.environ.get("SESSION_REGISTRY_CLAWHIP_BRIDGE_COMMAND", "").strip() or sys.executable
         )
         clawhip_args_raw = (
             os.environ.get("SESSION_REGISTRY_CLAWHIP_BRIDGE_ARGS", "").strip()
             or "-m clawhip_bridge_mcp"
         )
-        clawhip_args = clawhip_args_raw.split()
+        # PQ8 (pass-1 review): shlex.split handles quoted paths with spaces.
+        clawhip_args = shlex.split(clawhip_args_raw)
 
     from session_registry_mcp.app.main import build_server
 

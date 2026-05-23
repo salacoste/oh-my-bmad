@@ -1,6 +1,6 @@
 # Story 11.2.2 — capability.denied MCP-boundary emission
 
-Status: **review** (CI green @ e661d90 (run 26344663869) 2026-05-24 — ready for `/bmad-code-review 11-2-2`; all 8 in-scope ACs satisfied; Party-mode OQ resolution OQ-1 confirmed, OQ-2 system-stamped, OQ-3 AC3-A, OQ-4 startup-spawn + PD-1)
+Status: **review** (pass-1 review batch-applied 2026-05-24 — 9 fixes incl. PQ1 feature-flag default-OFF + PQ9 audit-forgery prevention; CI pending @ pre-commit; baseline CI green @ e661d90 (run 26344663869) from pre-review state; Story 11.2.3 filed for FR26 multi-writer architectural fix)
 
 ## Story
 
@@ -342,6 +342,50 @@ errors there are unaffected by this work modulo:
   clawhip-bridge build_server closure to drive the ``emit_event`` tool's
   schema-version selection. Future audit-only event types added at
   v1.1.0+ should be added there.
+
+## Pass-1 Review Findings (3-lane review of `f838b7d..3f3fe5e` — 2026-05-24)
+
+**Reviewer dedup:** 17 (Blind) + 14 (Edge) + 2 (Acceptance) = 33 raw → **9 unique** real fixes after dedup. **Acceptance Auditor: APPROVE** (10/10 ACs PASS + all 4 OQ resolutions verified). **Edge Case Hunter: REQUEST CHANGES** (4 HIGH — most critically PQ1 FR26 multi-writer). **Blind Hunter: REQUEST CHANGES** (2 P0 false positives — see below — + 7 P1-H).
+
+### Architectural finding (out-of-scope for 11.2.2 — new story filed)
+
+- [filed-as-11.2.3] **PQ1 — FR26 multi-writer violation** (Edge HIGH #3, P0 architectural): each MCP server (task-registry, session-registry) that opts into audit emission spawns its OWN clawhip-bridge subprocess. Combined with orchestrator-adapter and worker-wrapper already spawning their own, you get 3+ clawhip-bridge processes concurrently writing `/var/lib/oh-my-bmad/registry/events/YYYY-MM-DD.jsonl`. Kernel `O_APPEND` atomicity protects individual line writes (< PIPE_BUF) but the documented FR26 invariant is "single writer", which is structurally violated.
+  - **Mitigation in pass-1:** flipped the feature flag to **default-OFF**. Env var `OMB_MCP_AUDIT_EMISSION_ENABLED=1` must be explicitly set; legacy `*_REGISTRY_DISABLE_AUDIT_EMISSION=1` retained as a kill-switch override.
+  - **Permanent fix:** Story 11.2.3 — shared clawhip-bridge daemon (or `EventLogWriter` file-lock serialization). Backlog entry filed.
+
+### Fixes applied this batch (9 — by severity)
+
+**P0 (1):**
+
+- [x] [Review][Patch] **PQ1 — FR26 multi-writer feature-flag gate** — both MCP servers' `__main__.py` flip the audit-emission lifespan to default-OFF, opt-in via `OMB_MCP_AUDIT_EMISSION_ENABLED=1`. Until Story 11.2.3 ships a shared-daemon refactor, multi-writer concern is dormant in production [`mcp-servers/{task,session}-registry/.../__main__.py`].
+
+**P1-H (5):**
+
+- [x] [Review][Patch] **PQ4 — PD-1 fail-soft log assertion missing** (Edge HIGH #1 + Blind P1-M #4) — integration test `test_mcp_capability_denied_pd1_fail_soft_when_emitter_broken` only asserted re-raise, not the `capability_denied_emission_failed` log. Future refactor narrowing the broad except would pass silently. Fix: added caplog assertion [`tests/integration/test_capability_denied_mcp_emission.py`].
+- [x] [Review][Patch] **PQ6 — `EmitterHolder.client = None` shutdown race** (Blind P1-H #4) — `finally` block previously nulled the holder BEFORE `__aexit__` completed, racing in-flight handlers. Fix: null AFTER `__aexit__` [`mcp-servers/{task,session}-registry/.../app/main.py`].
+- [x] [Review][Patch] **PQ7 — `os.environ.copy()` leaks parent secrets to clawhip-bridge subprocess** (Blind P1-H #5) — every env var (AWS creds, OPENAI_API_KEY, `OPERATOR_HMAC_KEY`, `*_DATABASE_URL`) was forwarded unconditionally. Fix: explicit `_ENV_ALLOWLIST` (`PATH`, `HOME`, `USER`, locale, `PYTHONPATH`, `PYTHONUNBUFFERED`, `REGISTRY_EVENTS_DIR`, `REGISTRY_DB_PATH`). Operators override at construction time if more vars needed [`mcp-servers/{task,session}-registry/.../adapters/clawhip_client.py`].
+- [x] [Review][Patch] **PQ8 — `clawhip_args_raw.split()` breaks on paths with spaces** (Blind P1-H #6) — fix: `shlex.split()` [`mcp-servers/{task,session}-registry/.../__main__.py`].
+- [x] [Review][Patch] **PQ9 — Public `emit_event` tool can forge system-stamped audit envelopes** (Edge MEDIUM #5; P0-equivalent security): MCP client calling `emit_event(type="capability.denied", payload={...attacker})` would have stamped `Actor(kind="system", id="clawhip-bridge-mcp")` via the `_emit_overrides` lookup. Fix: reject types present in `_emit_overrides` at the public `emit_event` boundary (`PermissionError`); only the internal `_check_tier_with_self_emit` path can emit system-stamped audits. New test `test_emit_event_rejects_capability_denied_type_to_prevent_forgery` [`mcp-servers/clawhip-bridge/.../server.py` + `test_server.py`].
+
+**P1-M / P1-L (3):**
+
+- [x] [Review][Patch] **PQ15 — `assert` in lifespan stripped by `python -O`** (Blind P1-L #1) — fix: explicit `if x is None: raise RuntimeError(...)` [`mcp-servers/{task,session}-registry/.../app/main.py`].
+- [x] [Review][Patch] **Edge MEDIUM #6 — bare `"python"` not `sys.executable`** — fixed inline with PQ1 [`mcp-servers/{task,session}-registry/.../__main__.py`].
+
+### False positives — NOT applied (3 + 5)
+
+Blind Hunter's two P0 claims:
+
+- "Decorator order with `@mcp.tool()` schema integrity" (Blind P0 #1) — verified: `@functools.wraps` preserves `__wrapped__`, FastMCP's introspection follows it. Tests `test_capability_denied_emits_and_reraises` + `test_happy_path_no_exception` confirm tool functions remain callable + their signature is preserved.
+- "Self-emit recurses on retry" (Blind P0 #2) — verified: `_check_tier_with_self_emit` uses internal `_emit` which has NO `check_tier` gate. No recursion possible.
+- "Self-emit `Tier.ZERO` silent drop" — false; the broad `except Exception` in `_check_tier_with_self_emit` LOGS at ERROR (`capability_denied_self_emission_failed`) — not silent. Plus tier ZERO is read-only, would not appear in TIER_MAP.
+
+Edge Case Hunter findings not actionable in this batch:
+
+- Edge MEDIUM #2 (actor_id misattribution — server-process actor vs caller's) — semantic concern; Story 11.2.1 HTTP uses per-request actor_id from middleware state, MCP boundary uses server-process actor_id from CallerContext built at server launch. This is a known semantic asymmetry per the architecture's "MCP servers are 1-actor-per-process" model. Documented as known limitation; ops-backlog item alongside Story 11.2.1 PP11.
+- Blind P1-H #7 (`task.emit_event` retry double-emit) — `clawhip-bridge.emit_event` is NOT retried by clawhip-bridge clients; idempotency belongs to the calling MCP-server's transport layer. Out-of-scope.
+- Blind P1-L #2/3 + Edge LOW (test fragility against FastMCP internals via `_tool_manager._tools.clear()`) — documented in test docstring as known fragility against FastMCP version bumps; pin FastMCP version if it changes.
+- Local-only separability test failures (`test_spine_source_code_unchanged` etc.) — pre-existing structural issue (CI uses shallow clone where `HEAD~1` doesn't resolve → test vacuously passes; only local full-clone runs catch real spine touches). Affects Story 11.2.1 + 11.2.2 + roborev's automated refactor commit identically. Logged for ops-backlog as separate cleanup; not introduced by this story.
 
 ## Open questions — RESOLVED Party-mode 2026-05-24
 
