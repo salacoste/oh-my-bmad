@@ -121,17 +121,28 @@ def build_server(
             try:
                 yield
             finally:
-                # PQ6 (pass-1 review): null the holder ONLY AFTER ``__aexit__``
-                # completes — pre-PQ6 order set ``client = None`` first, which
-                # raced any in-flight handler still calling
-                # ``emitter_holder.emit_event``. Sequence now is:
+                # PQ6 (pass-1 review) + Pass-2 PP2: null the holder ONLY
+                # AFTER ``__aexit__`` completes — pre-PQ6 order set
+                # ``client = None`` first, which raced any in-flight handler
+                # still calling ``emitter_holder.emit_event``. Sequence:
                 # 1. exit MCP server protocol (yield returns)
                 # 2. tear down the stdio client (drain in-flight call_tool)
-                # 3. only then drop the reference (so any handler still in the
-                #    decorator's ``try`` sees a closed-pipe error and falls
-                #    through PD-1, not a "lifespan not wired" RuntimeError).
-                await client.__aexit__(None, None, None)
-                emitter_holder.client = None
+                # 3. only then drop the reference (so any handler still in
+                #    the decorator's ``try`` sees a closed-pipe error and
+                #    falls through PD-1, not a "lifespan not wired"
+                #    RuntimeError).
+                #
+                # Pass-2 PP2: wrap the ``__aexit__`` call in nested
+                # try/finally so the reference is ALWAYS dropped even if
+                # the stdio teardown itself raises (broken pipe, OSError on
+                # pipe close). Otherwise ``emitter_holder.client`` keeps
+                # pointing at a half-torn-down session, leaking the
+                # reference across lifespan re-entries (multi-test scenarios)
+                # or any handler still holding the holder.
+                try:
+                    await client.__aexit__(None, None, None)
+                finally:
+                    emitter_holder.client = None
 
         lifespan_fn = _lifespan
     else:

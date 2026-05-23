@@ -30,22 +30,55 @@ log = logging.getLogger(__name__)
 
 _INIT_TIMEOUT: float = 30.0
 
-# PQ7 (pass-1 review): env-var allowlist forwarded to the clawhip-bridge
-# subprocess. Keep tight — adding a var here widens the secret-leakage
-# blast radius. Override at ``ClawhipBridgeClient(env=...)`` construction
-# if a deployment needs extra vars.
+# PQ7 (pass-1 review) + Pass-2 Edge CRITICAL: env-var allowlist forwarded
+# to the clawhip-bridge subprocess. Keep tight — adding a var here widens
+# the secret-leakage blast radius. Override at ``ClawhipBridgeClient(env=...)``
+# construction if a deployment needs extra vars.
+#
+# Pass-2 critical fix: pass-1 omitted ``CLAWHIP_BRIDGE_ACTOR_KIND`` and
+# ``CLAWHIP_BRIDGE_ACTOR_ID`` — both REQUIRED by clawhip-bridge's own
+# ``__main__.py``. Without them the spawned subprocess exits 2 and the
+# ``ClientSession.initialize()`` times out (30s) → ``__aenter__`` raises
+# → task-registry refuses to start. Default-OFF feature flag masked this
+# in CI; opt-in would have bricked the server.
+#
+# Mirror discipline: this allowlist MUST stay byte-identical to the
+# session-registry sibling. Contract test
+# ``test_clawhip_client_env_allowlist_byte_identical_across_servers``
+# asserts this at test time.
 _ENV_ALLOWLIST: frozenset[str] = frozenset(
     {
+        # Process basics
         "PATH",
         "HOME",
         "USER",
         "LANG",
         "LC_ALL",
         "LC_CTYPE",
+        # Python interpreter resolution
         "PYTHONPATH",  # workspace resolution
         "PYTHONUNBUFFERED",
-        "REGISTRY_EVENTS_DIR",  # clawhip-bridge event-log path
-        "REGISTRY_DB_PATH",  # clawhip-bridge state SQLite
+        # Temp directories (Python ``tempfile`` checks these before /tmp)
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        # TLS / CA bundles (custom-CA deployments need these for any HTTPS calls)
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        # clawhip-bridge REQUIRED runtime config — without these the
+        # subprocess exits 2 at startup. See
+        # mcp-servers/clawhip-bridge/.../__main__.py:12,16,79
+        "CLAWHIP_BRIDGE_ACTOR_KIND",
+        "CLAWHIP_BRIDGE_ACTOR_ID",
+        "CLAWHIP_BRIDGE_LOG_DIR",
+        # Event-log + SQLite paths (clawhip-bridge spine convention)
+        "REGISTRY_EVENTS_DIR",
+        "REGISTRY_DB_PATH",
+        # Feature-flag mirror (audit emission carries forward to the
+        # subprocess in case clawhip-bridge ever needs to read it).
+        "OMB_MCP_AUDIT_EMISSION_ENABLED",
         # No HMAC keys, no AWS creds, no OPENAI key. Operators who need
         # extra vars must override ``env`` at construction time.
     }

@@ -969,6 +969,10 @@ class TestCallerTraceIdEmitEvent:
         )
         fn = mcp._tool_manager._tools["emit_event"].fn
         # Public emit_event accepts capability.denied (legitimate forwarding).
+        # NB: routes through ``_emit`` → ``EventEnvelope.create`` which DOES
+        # validate payload against ``CapabilityDeniedPayload`` v1.1.0 (the
+        # registered schema). The "forge-able" surface is the payload
+        # *content*, not its shape.
         result = await fn(
             type="capability.denied",
             payload={
@@ -981,9 +985,23 @@ class TestCallerTraceIdEmitEvent:
             caller_trace_id=_VALID_TRACE_ID,
         )
         assert result["event_id"].startswith("e-")
-        # The envelope IS stamped with system actor (correct attribution —
-        # clawhip-bridge is the emitter). Operators audit by cross-checking
-        # payload.actor_id against per-MCP-server logs.
+
+        # Pass-2 PP7 (Blind + Edge MED): assert the envelope actor IS
+        # stamped with the canonical system identity. Pre-PP7 the test
+        # only checked event_id shape — a refactor dropping ``actor_override``
+        # would silently pass. Read the JSONL back and verify.
+        path = current_day_path(tmp_path, fixed_clock.now())
+        envelopes = list(read_log_lines(path))
+        capability_envs = [e for e in envelopes if e.type == "capability.denied"]
+        assert len(capability_envs) == 1, "exactly one capability.denied envelope expected"
+        env = capability_envs[0]
+        assert env.actor.kind == "system", (
+            f"envelope.actor.kind must be 'system' (system-emitter stamp); got {env.actor.kind!r}"
+        )
+        assert env.actor.id == "clawhip-bridge-mcp", (
+            f"envelope.actor.id must be 'clawhip-bridge-mcp'; got {env.actor.id!r}"
+        )
+        assert env.schema_version == "1.1.0", "capability.denied schema is v1.1.0 only"
 
 
 class TestCallerTraceIdTypedEmitTools:

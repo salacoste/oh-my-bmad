@@ -1,6 +1,6 @@
 # Story 11.2.2 — capability.denied MCP-boundary emission
 
-Status: **done** (pass-1 review CI green @ 0244787 (run 26345623782) 2026-05-24 — 8 fixes batch-applied + PQ9 reverted after CI surfaced regression; PQ1 feature-flag default-OFF mitigates FR26 multi-writer; Story 11.2.3 filed for the permanent architectural fix + dedicated audit-forwarding tool)
+Status: **review** (pass-2 review batch-applied 2026-05-24 — 9 fixes incl. CRITICAL env-allowlist completeness fix that pass-1 missed; CI pending @ pre-commit; pass-1 baseline CI green @ 0244787 (run 26345623782); PQ1 feature-flag default-OFF + Story 11.2.3 architectural carve-out unchanged)
 
 ## Story
 
@@ -342,6 +342,32 @@ errors there are unaffected by this work modulo:
   clawhip-bridge build_server closure to drive the ``emit_event`` tool's
   schema-version selection. Future audit-only event types added at
   v1.1.0+ should be added there.
+
+## Pass-2 Review Findings (3-lane review of `3f3fe5e..f7ef2f3` — 2026-05-24)
+
+**Reviewer summary:** Acceptance (4 doc concerns), Blind (1 P0 + 5 P1-H + 4 P1-M + 2 P1-L), Edge (1 CRITICAL + 2 HIGH + 4 MED + 2 LOW). Per Epic 11 retro L1, pass-2 caught residuals introduced by pass-1's OWN refactors — most critically the env-allowlist completeness gap that would have bricked any operator opting in via `OMB_MCP_AUDIT_EMISSION_ENABLED=1`.
+
+### Fixes applied (9)
+
+- [x] [P2-Crit] **PP1-env-allowlist-completeness** (Edge CRITICAL) — `_ENV_ALLOWLIST` now includes `CLAWHIP_BRIDGE_ACTOR_KIND`, `CLAWHIP_BRIDGE_ACTOR_ID`, `CLAWHIP_BRIDGE_LOG_DIR` (REQUIRED by clawhip-bridge's `__main__.py`), `TMPDIR`/`TMP`/`TEMP` (Python tempfile), `SSL_CERT_FILE`/`SSL_CERT_DIR`/`REQUESTS_CA_BUNDLE`/`CURL_CA_BUNDLE` (custom-CA HTTPS), `OMB_MCP_AUDIT_EMISSION_ENABLED`. Pass-1 omitted these — the default-OFF gate masked the bug in CI; opt-in would have bricked the server [`mcp-servers/{task,session}-registry/.../adapters/clawhip_client.py`].
+- [x] [P2-H] **PP2-shutdown-race-still-leaks** (Blind P1-H + Edge HIGH) — `emitter_holder.client = None` was outside the inner try/finally; if `__aexit__` raised the reference leaked. Wrapped in nested try/finally [`{task,session}-registry/.../app/main.py`].
+- [x] [P2-M] **PP4-caplog-logger-filter-brittle** (Blind P1-M) — `caplog.at_level(logging.ERROR, logger="capabilities.emit")` filter would silently fail if the logger name ever changes. Dropped the filter; match by `record.message` only [`tests/integration/test_capability_denied_mcp_emission.py`].
+- [x] [P2-M] **PP6-N806-noqa-workaround** (Blind P1-M) — hoisted `_SYSTEM_EMITTER` + renamed `_CAPABILITY_DENIED` → `_CAPABILITY_DENIED_TYPE` to module scope. Now genuine module-level constants; eliminates the noqa workaround and exposes the canonical system-emitter identity for contract tests [`mcp-servers/clawhip-bridge/.../server.py`].
+- [x] [P2-M] **PP7-known-limitation-test-asserts-actor-stamp** (Blind P1-M + Edge MED) — pre-PP7 the test only checked `event_id.startswith("e-")`. A refactor dropping `actor_override` would silently pass. Now asserts `env.actor.kind == "system"` + `env.actor.id == "clawhip-bridge-mcp"` + `env.schema_version == "1.1.0"` [`mcp-servers/clawhip-bridge/.../test_server.py`].
+- [x] [P2-H] **PP8-allowlist-mirror-identity-contract-test** (Blind P1-L + Edge HIGH) — NEW `tests/contract/test_clawhip_client_env_allowlist_mirror.py` asserts the two adapters' `_ENV_ALLOWLIST` are byte-identical + that both contain the REQUIRED clawhip-bridge env vars. Catches future mirror drift at test time [`tests/contract/`].
+- [x] [P2-M] **PP9-docstring-drift** (Acceptance + Edge MED) — both `__main__.py` docstrings now document `OMB_MCP_AUDIT_EMISSION_ENABLED` (was missing entirely) + correct `default ``python``` → `default ``sys.executable``` + clarify the legacy `*_DISABLE_AUDIT_EMISSION` semantics (no-op without master flag) [`mcp-servers/{task,session}-registry/.../__main__.py`].
+- [x] [P2-M] **PP10-PQ1-default-OFF-test-coverage** (Acceptance) — NEW `TestPQ1FeatureFlagDefaultOff::test_no_lifespan_wired_when_clawhip_args_are_none` pins the default-OFF invariant. Future regression that inverts the boolean fails this test [`mcp-servers/task-registry/.../test_server.py`].
+- [x] [P2-L] **PP15-shlex-lazy-import** (Blind P1-L) — hoisted `import shlex` to module top in both `__main__.py` files [`mcp-servers/{task,session}-registry/.../__main__.py`].
+
+### Not applied / accepted as documentation
+
+- **PP3-env-var precedence semantic clarity** (Blind P0) — addressed by PP9 docstring rewrite that explicitly states the legacy kill-switch has no effect without the master gate.
+- **PP5-_emit_overrides dict key uses literal** (Blind P1-M) — false positive verified: the dict already uses the constant (`_CAPABILITY_DENIED_TYPE: ...`). Pass-1 had it right.
+- **PP11-count framing reconciliation** (Acceptance P1-L) — spec narrative now distinguishes "9 evaluated (8 applied + 1 reverted)" in this pass-2 section.
+- **PP12-DAR addendum** (Acceptance P1-L) — Pass-1 + Pass-2 Review Findings sections themselves document the deltas; explicit "DAR addendum" subsection redundant.
+- **PP13-Story 11.2.3 spec stub** (Acceptance P1-L) — deferred to sprint planning; consistent with other backlog entries that lack spec files.
+- **PP14-test actor_id naming** (Edge MED) — cosmetic; left as `t-forward` (reflects the forwarding-legitimacy framing).
+- **PP16-mirror discipline citation** (Blind P1-L) — Story 11.2.1 PP11 reference is already in spec's actor_id semantic asymmetry note.
 
 ## Pass-1 Review Findings (3-lane review of `f838b7d..3f3fe5e` — 2026-05-24)
 

@@ -114,10 +114,14 @@ def build_server(
             try:
                 yield
             finally:
-                # PQ6 (pass-1 review): null the holder ONLY AFTER ``__aexit__`` —
-                # see task-registry sibling for the rationale.
-                await client.__aexit__(None, None, None)
-                emitter_holder.client = None
+                # PQ6 (pass-1 review) + Pass-2 PP2: see task-registry sibling
+                # for the full rationale. Nested try/finally ensures the
+                # holder reference is ALWAYS dropped even if ``__aexit__``
+                # raises during stdio teardown.
+                try:
+                    await client.__aexit__(None, None, None)
+                finally:
+                    emitter_holder.client = None
 
         lifespan_fn = _lifespan
     else:

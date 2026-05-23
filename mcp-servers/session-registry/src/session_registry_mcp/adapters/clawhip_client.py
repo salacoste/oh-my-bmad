@@ -34,20 +34,41 @@ log = logging.getLogger(__name__)
 
 _INIT_TIMEOUT: float = 30.0
 
-# PQ7 (pass-1 review): env-var allowlist forwarded to the clawhip-bridge
-# subprocess. Mirror of task-registry sibling adapter.
+# PQ7 (pass-1 review) + Pass-2 Edge CRITICAL: env-var allowlist forwarded
+# to the clawhip-bridge subprocess. Byte-identical mirror of task-registry
+# sibling adapter — contract test
+# ``test_clawhip_client_env_allowlist_byte_identical_across_servers``
+# asserts identity at test time so future drift fails loudly.
 _ENV_ALLOWLIST: frozenset[str] = frozenset(
     {
+        # Process basics
         "PATH",
         "HOME",
         "USER",
         "LANG",
         "LC_ALL",
         "LC_CTYPE",
+        # Python interpreter resolution
         "PYTHONPATH",
         "PYTHONUNBUFFERED",
+        # Temp directories
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        # TLS / CA bundles
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        # clawhip-bridge REQUIRED runtime config (subprocess exits 2 without these)
+        "CLAWHIP_BRIDGE_ACTOR_KIND",
+        "CLAWHIP_BRIDGE_ACTOR_ID",
+        "CLAWHIP_BRIDGE_LOG_DIR",
+        # Event-log + SQLite paths
         "REGISTRY_EVENTS_DIR",
         "REGISTRY_DB_PATH",
+        # Feature-flag mirror
+        "OMB_MCP_AUDIT_EMISSION_ENABLED",
     }
 )
 

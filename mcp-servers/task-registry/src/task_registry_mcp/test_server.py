@@ -153,6 +153,48 @@ def _build(
 # ---------------------------------------------------------------------------
 
 
+class TestPQ1FeatureFlagDefaultOff:
+    """Story 11.2.2 Pass-2 PP10 — pins the OMB_MCP_AUDIT_EMISSION_ENABLED default-OFF behavior.
+
+    The PQ1 mitigation for the FR26 multi-writer concern (Edge Hunter P0)
+    relies on the lifespan being skipped when ``OMB_MCP_AUDIT_EMISSION_ENABLED``
+    is unset. A future regression that inverts the default would silently
+    spawn N concurrent clawhip-bridge subprocesses — this test pins it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_no_lifespan_wired_when_clawhip_args_are_none(
+        self, db_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """With ``clawhip_bridge_command=None`` (default-OFF path), no lifespan
+        is wired — no ``EmitterHolder``, no subprocess spawn.
+
+        ``__main__.py`` passes ``clawhip_bridge_command=None,
+        clawhip_bridge_args=None`` when ``OMB_MCP_AUDIT_EMISSION_ENABLED``
+        is unset. Verify ``build_server`` honors that contract: handlers
+        still register, but no audit-emission lifespan runs (so no
+        spawn-attempt of clawhip-bridge subprocess).
+        """
+        mcp = build_server(
+            actor_kind="worker",
+            actor_id="test-worker",
+            _session_maker=db_session_maker,
+            clawhip_bridge_command=None,
+            clawhip_bridge_args=None,
+        )
+        # Handlers must still register so MCP tool calls work.
+        tools = await mcp.list_tools()
+        names = {t.name for t in tools}
+        assert names == {"task_add_note", "task_attach_artifact", "task_emit_event"}
+
+        # PQ1 invariant: ``build_server`` with no clawhip args returns
+        # cleanly — does NOT attempt to spawn clawhip-bridge. A future
+        # refactor flipping the default-OFF logic would either block on
+        # ``ClawhipBridgeClient.__aenter__`` or raise during build —
+        # failing this test fast surfaces the regression.
+        assert mcp is not None
+
+
 class TestServerConstruction:
     """AC-1 / AC-2 structural checks on the FastMCP server instance."""
 

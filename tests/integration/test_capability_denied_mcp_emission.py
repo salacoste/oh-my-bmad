@@ -32,6 +32,7 @@ Test architecture choice (documented in DAR):
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from unittest.mock import patch
 
@@ -261,7 +262,6 @@ async def test_mcp_capability_denied_pd1_fail_soft_when_emitter_broken(
     ``except Exception`` would have passed silently while emission failures
     became unobservable in production.
     """
-    import logging
 
     class _BrokenEmitter:
         async def emit_event(self, *_a: object, **_kw: object) -> None:
@@ -293,7 +293,12 @@ async def test_mcp_capability_denied_pd1_fail_soft_when_emitter_broken(
     }
     fn = task_mcp._tool_manager._tools["task_add_note"].fn  # type: ignore[attr-defined]
     with (
-        caplog.at_level(logging.ERROR, logger="capabilities.emit"),
+        # Pass-2 PP4: drop the logger= filter. The decorator's logger
+        # uses ``logging.getLogger(__name__)`` which resolves to
+        # ``capabilities.emit`` today, but a future package rename
+        # would silently break the assertion. Match by record.message
+        # only — robust to logger-name refactors.
+        caplog.at_level(logging.ERROR),
         patch("task_registry_mcp.handlers.tools.TIER_MAP", patched_tier_map),
         pytest.raises(CapabilityDenied),  # AC6 must still be honored
     ):

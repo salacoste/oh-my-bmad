@@ -17,17 +17,24 @@ SESSION_REGISTRY_ACTOR_ID  (REQUIRED)
     Non-empty string identifying the calling actor instance.
     Missing or empty → exit code 2 with stderr message.
 
-SESSION_REGISTRY_CLAWHIP_BRIDGE_COMMAND  (OPTIONAL, default ``python``)
-    Story 11.2.2 — command to spawn the clawhip-bridge MCP subprocess
-    for ``capability.denied`` audit emission.
+OMB_MCP_AUDIT_EMISSION_ENABLED  (OPTIONAL, default ``0``)
+    Story 11.2.2 PQ1 — master opt-in gate for MCP-boundary capability.denied
+    audit emission. Default OFF mitigates the FR26 multi-writer concern
+    until Story 11.2.3 ships a shared-daemon refactor. Set to ``1`` to enable.
+
+SESSION_REGISTRY_CLAWHIP_BRIDGE_COMMAND  (OPTIONAL, default ``sys.executable``)
+    Story 11.2.2 — command to spawn the clawhip-bridge MCP subprocess.
+    Only consulted when ``OMB_MCP_AUDIT_EMISSION_ENABLED=1``.
 
 SESSION_REGISTRY_CLAWHIP_BRIDGE_ARGS  (OPTIONAL, default ``-m clawhip_bridge_mcp``)
-    Story 11.2.2 — whitespace-separated args for the clawhip-bridge
-    subprocess.
+    Story 11.2.2 — args for the clawhip-bridge subprocess (shlex-parsed).
+    Only consulted when ``OMB_MCP_AUDIT_EMISSION_ENABLED=1``.
 
 SESSION_REGISTRY_DISABLE_AUDIT_EMISSION  (OPTIONAL, default ``0``)
-    Story 11.2.2 — when set to ``1``, audit-emission lifespan is skipped
-    entirely. Useful for test fixtures.
+    Story 11.2.2 — legacy kill-switch. Set to ``1`` to force-disable
+    audit-emission even when ``OMB_MCP_AUDIT_EMISSION_ENABLED=1``. Has
+    NO effect when the master gate is unset — audit emission is already
+    default-OFF.
 
 Exit codes
 ----------
@@ -38,6 +45,7 @@ Exit codes
 from __future__ import annotations
 
 import os
+import shlex
 import sys
 from typing import get_args
 
@@ -105,8 +113,6 @@ def main() -> None:
     clawhip_cmd: str | None = None
     clawhip_args: list[str] | None = None
     if enable_audit and not force_disable_audit:
-        import shlex
-
         clawhip_cmd = (
             os.environ.get("SESSION_REGISTRY_CLAWHIP_BRIDGE_COMMAND", "").strip() or sys.executable
         )

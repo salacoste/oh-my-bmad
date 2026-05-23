@@ -17,17 +17,28 @@ TASK_REGISTRY_ACTOR_ID  (REQUIRED)
     Non-empty string identifying the calling actor instance.
     Missing or empty → exit code 2 with stderr message.
 
-TASK_REGISTRY_CLAWHIP_BRIDGE_COMMAND  (OPTIONAL, default ``python``)
+OMB_MCP_AUDIT_EMISSION_ENABLED  (OPTIONAL, default ``0``)
+    Story 11.2.2 PQ1 — master opt-in gate for MCP-boundary capability.denied
+    audit emission. Default OFF mitigates the FR26 multi-writer concern
+    (each MCP server spawning its own clawhip-bridge subprocess) until
+    Story 11.2.3 ships a shared-daemon refactor. Set to ``1`` to enable.
+
+TASK_REGISTRY_CLAWHIP_BRIDGE_COMMAND  (OPTIONAL, default ``sys.executable``)
     Story 11.2.2 — command to spawn the clawhip-bridge MCP subprocess
-    for ``capability.denied`` audit emission.
+    for ``capability.denied`` audit emission. Only consulted when
+    ``OMB_MCP_AUDIT_EMISSION_ENABLED=1``.
 
 TASK_REGISTRY_CLAWHIP_BRIDGE_ARGS  (OPTIONAL, default ``-m clawhip_bridge_mcp``)
-    Story 11.2.2 — whitespace-separated args for the clawhip-bridge
-    subprocess.
+    Story 11.2.2 — args for the clawhip-bridge subprocess. Parsed via
+    ``shlex.split`` so quoted paths with spaces work. Only consulted when
+    ``OMB_MCP_AUDIT_EMISSION_ENABLED=1``.
 
 TASK_REGISTRY_DISABLE_AUDIT_EMISSION  (OPTIONAL, default ``0``)
-    Story 11.2.2 — when set to ``1``, audit-emission lifespan is skipped
-    entirely. Useful for test fixtures.
+    Story 11.2.2 — legacy kill-switch. Set to ``1`` to force-disable
+    audit-emission even when ``OMB_MCP_AUDIT_EMISSION_ENABLED=1`` is set
+    (useful for operator rollback without re-deploying). Has NO effect
+    when ``OMB_MCP_AUDIT_EMISSION_ENABLED`` is unset — audit emission is
+    already default-OFF without it.
 
 Exit codes
 ----------
@@ -38,6 +49,7 @@ Exit codes
 from __future__ import annotations
 
 import os
+import shlex
 import sys
 from typing import get_args
 
@@ -112,8 +124,6 @@ def main() -> None:
     clawhip_cmd: str | None = None
     clawhip_args: list[str] | None = None
     if enable_audit and not force_disable_audit:
-        import shlex
-
         clawhip_cmd = (
             os.environ.get("TASK_REGISTRY_CLAWHIP_BRIDGE_COMMAND", "").strip()
             or sys.executable  # PQ-Edge MEDIUM #6: use sys.executable not bare "python"

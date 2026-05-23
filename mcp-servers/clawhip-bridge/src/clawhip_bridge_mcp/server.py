@@ -55,6 +55,12 @@ from registry_state import (  # noqa: IMP001 — mcp-servers→services allowed 
 
 log = logging.getLogger(__name__)
 
+# Story 11.2.2 PP6 (pass-2): hoisted from inside ``build_server`` to module
+# scope so they're (a) genuinely module-level constants and (b) reachable
+# from contract tests asserting the canonical system-emitter identity.
+_SYSTEM_EMITTER: Actor = Actor(kind="system", id="clawhip-bridge-mcp")
+_CAPABILITY_DENIED_TYPE: str = "capability.denied"
+
 TIER_MAP: dict[str, Tier] = {
     "emit_event": Tier.ONE,
     "emit_blocker": Tier.ONE,
@@ -192,10 +198,14 @@ def build_server(
     # event types added at v1.1.0+ should be registered here so the
     # public ``emit_event`` tool selects the correct schema version AND
     # actor identity in one place. Tuple: (schema_version, actor_override).
-    _SYSTEM_EMITTER = Actor(kind="system", id="clawhip-bridge-mcp")  # noqa: N806 — constant role inside the factory closure
-    _CAPABILITY_DENIED = "capability.denied"  # noqa: N806 — constant role inside the factory closure
+    #
+    # Pass-2 PP6: hoisted from in-function constants to module scope (see
+    # ``_SYSTEM_EMITTER`` / ``_CAPABILITY_DENIED_TYPE`` at module top) —
+    # eliminates the N806 noqa workaround and exposes the constants for
+    # cross-module use (e.g., contract tests that need to assert the
+    # canonical system-emitter identity).
     _emit_overrides: dict[str, tuple[str, Actor]] = {
-        _CAPABILITY_DENIED: ("1.1.0", _SYSTEM_EMITTER),
+        _CAPABILITY_DENIED_TYPE: ("1.1.0", _SYSTEM_EMITTER),
     }
 
     # ------------------------------------------------------------------
@@ -301,7 +311,7 @@ def build_server(
                 # schema version, event type, and actor identity stay in
                 # sync with _emit_overrides above.
                 await _emit(
-                    _CAPABILITY_DENIED,
+                    _CAPABILITY_DENIED_TYPE,
                     audit_payload,
                     None,
                     caller_trace_id=caller_trace_id,
