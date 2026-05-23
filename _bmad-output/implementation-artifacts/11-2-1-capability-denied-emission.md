@@ -1,6 +1,6 @@
 # Story 11.2.1 — capability.denied event emission
 
-Status: **review** (pass-1 review batch-applied 2026-05-23 — 11 fixes incl. 3 P1-H robustness; CI pending @ pre-commit; baseline CI green @ 393f69e (run 26340206058) from pre-review state; HTTP-only scope; MCP-boundary deferred to Story 11.2.2)
+Status: **done** (pass-1 review CI green @ c9bdd2a (run 26340834289) 2026-05-23 — 11 fixes batch-applied incl. 3 P1-H robustness; HTTP-only scope; MCP-boundary deferred to Story 11.2.2)
 
 ## Story
 
