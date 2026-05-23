@@ -940,49 +940,50 @@ class TestCallerTraceIdEmitEvent:
         assert envelopes[0].trace_id == _VALID_TRACE_ID
 
     @pytest.mark.asyncio
-    async def test_emit_event_rejects_capability_denied_type_to_prevent_forgery(
+    async def test_emit_event_capability_denied_known_limitation(
         self, tmp_path: Path, fixed_clock: FrozenClock
     ) -> None:
-        """PQ9 (pass-1 review) — defense against system-stamped audit forgery.
+        """Story 11.2.2 PQ9 reversal — documents the known forgery limitation.
 
-        Before PQ9, an MCP client could call
-        ``emit_event(type="capability.denied", payload={attacker-data})``
-        and clawhip-bridge would stamp the envelope with
-        ``Actor(kind="system", id="clawhip-bridge-mcp")`` via the
-        ``_emit_overrides`` lookup — laundering attacker input as a
-        system-emitted audit record. PQ9 closes this by rejecting types
-        present in ``_emit_overrides`` at the public ``emit_event``
-        boundary. The internal ``_check_tier_with_self_emit`` path still
-        emits these legitimately via the direct ``_emit`` callsite.
+        Tier-1-or-better callers CAN emit ``capability.denied`` via the
+        PUBLIC ``emit_event`` tool. The envelope ``actor`` is stamped with
+        ``Actor(kind="system", id="clawhip-bridge-mcp")`` by the
+        ``_emit_overrides`` resolution (correct: "clawhip-bridge wrote
+        this record"), but the PAYLOAD content is caller-supplied — so
+        operators MUST cross-check ``payload.actor_id`` /
+        ``payload.attempted_action`` against the tier-gate logs from the
+        originating MCP server.
+
+        This is a known limitation pending Story 11.2.3's proper fix
+        (dedicated ``forward_capability_denied_audit`` tool with caller
+        identity validation). For now, the legitimate task-registry /
+        session-registry forwarding path uses the SAME public tool —
+        blocking ``capability.denied`` here would break audit forwarding.
+
+        This test pins the behavior so a future refactor that tries to
+        re-add forgery protection without first addressing the forwarding
+        path fails this assertion loudly.
         """
         mcp = build_server(
-            base_dir=tmp_path, clock=fixed_clock, actor_kind="system", actor_id="t-forge"
+            base_dir=tmp_path, clock=fixed_clock, actor_kind="system", actor_id="t-forward"
         )
         fn = mcp._tool_manager._tools["emit_event"].fn
-        with pytest.raises(PermissionError, match="reserved for system-emitted audit"):
-            await fn(
-                type="capability.denied",
-                payload={
-                    "tier": "tier2",
-                    "boundary": "mcp",
-                    "actor_id": "attacker",
-                    "attempted_action": "forged_action",
-                    "reason": "forged_reason",
-                },
-                caller_trace_id=_VALID_TRACE_ID,
-            )
-        # No envelope written — rejection is BEFORE _emit.
-        log_files = list(tmp_path.glob("*.jsonl"))
-        for f in log_files:
-            for line in f.read_text().splitlines():
-                if line.strip():
-                    import json as _j
-
-                    env = _j.loads(line)
-                    assert env.get("type") != "capability.denied", (
-                        "forged capability.denied envelope reached the event log — "
-                        "PQ9 guard ineffective"
-                    )
+        # Public emit_event accepts capability.denied (legitimate forwarding).
+        result = await fn(
+            type="capability.denied",
+            payload={
+                "tier": "tier2",
+                "boundary": "mcp",
+                "actor_id": "forwarded-actor",
+                "attempted_action": "forwarded_action",
+                "reason": "forwarded from task-registry",
+            },
+            caller_trace_id=_VALID_TRACE_ID,
+        )
+        assert result["event_id"].startswith("e-")
+        # The envelope IS stamped with system actor (correct attribution —
+        # clawhip-bridge is the emitter). Operators audit by cross-checking
+        # payload.actor_id against per-MCP-server logs.
 
 
 class TestCallerTraceIdTypedEmitTools:

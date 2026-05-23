@@ -351,34 +351,41 @@ def build_server(
             ValueError: if ``caller_trace_id`` fails Story 9.1 validation.
         """
         validate_caller_trace_id(caller_trace_id)
-        # PQ9 (pass-1 review): system-stamped audit event types (those that
-        # would receive an ``actor_override`` via ``_emit_overrides``) MUST
-        # NOT be emittable from the PUBLIC emit_event tool. Otherwise an
-        # MCP client could call
-        # ``emit_event(type="capability.denied", payload={...attacker})``
-        # and the override would stamp ``Actor(kind="system",
-        # id="clawhip-bridge-mcp")`` on the forgery — laundering attacker
-        # input as a system-emitted audit record. Force such types to
-        # the internal ``_emit`` callsite (only reachable via
-        # ``_check_tier_with_self_emit``).
-        if type in _emit_overrides:
-            raise PermissionError(
-                f"event type {type!r} is reserved for system-emitted audit "
-                "records; cannot be invoked via the public emit_event tool"
-            )
         await _check_tier_with_self_emit(
             "emit_event",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id),
             TIER_MAP["emit_event"],
             caller_trace_id=caller_trace_id,
         )
+        # Story 11.2.2: resolve schema version and actor override from the
+        # consolidated _emit_overrides dict. Both concerns evolve together —
+        # adding a new audit-only event type requires a single dict entry.
+        #
+        # PQ9 reversal note (pass-1 review): the initial PQ9 fix rejected
+        # ``type in _emit_overrides`` from the public path to prevent
+        # attacker-forged ``capability.denied`` envelopes stamped with
+        # ``Actor(kind="system", id="clawhip-bridge-mcp")``. That broke
+        # the LEGITIMATE forwarding path used by task-registry /
+        # session-registry MCP servers (their decorator calls this exact
+        # tool to forward audits to the FR26 single-writer surface).
+        # Known limitation: tier-1-or-better callers CAN call
+        # ``emit_event(type="capability.denied", payload={...})``; the
+        # envelope.actor stamp is correct ("clawhip-bridge wrote this")
+        # but the PAYLOAD content is caller-supplied. Operators auditing
+        # the log MUST cross-check ``payload.actor_id`` /
+        # ``payload.attempted_action`` against the tier-gate logs from
+        # the originating MCP server, not trust the envelope.actor alone.
+        # Filed for ops-backlog alongside Story 11.2.3 — proper fix is a
+        # dedicated ``forward_capability_denied_audit`` tool with caller
+        # identity validation.
+        schema_version, actor_override = _emit_overrides.get(type, ("1.0.0", None))
         return await _emit(
             type,
             payload,
             parent_event_id,
             caller_trace_id=caller_trace_id,
-            schema_version="1.0.0",
-            actor_override=None,
+            schema_version=schema_version,
+            actor_override=actor_override,
         )
 
     # ------------------------------------------------------------------
