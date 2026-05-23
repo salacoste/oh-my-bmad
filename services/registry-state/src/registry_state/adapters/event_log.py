@@ -64,8 +64,24 @@ import asyncio
 import contextlib
 import logging
 import os
+import time
+from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
+
+# Story 11.2.3: fcntl is POSIX-only. Linux + macOS support it; Windows
+# does not. The codebase targets Linux (CI) + macOS (dev); Windows is
+# explicitly not a supported runtime. If fcntl is unavailable, the
+# writer still works in single-process mode — but cross-process file
+# locking is silently disabled. We log a WARNING at module load so
+# operators on unsupported platforms see the degradation immediately.
+try:
+    import fcntl as _fcntl
+
+    _FCNTL_AVAILABLE = True
+except ImportError:  # pragma: no cover — Windows-only branch
+    _fcntl = None  # type: ignore[assignment]
+    _FCNTL_AVAILABLE = False
 
 from events import EventEnvelope, to_canonical_json
 
@@ -248,7 +264,13 @@ class EventLogWriter:
       RuntimeError until a fresh writer is constructed.
     """
 
-    def __init__(self, *, base_dir: Path, clock: Clock) -> None:
+    def __init__(
+        self,
+        *,
+        base_dir: Path,
+        clock: Clock,
+        lock_wait_observer: Callable[[float], None] | None = None,
+    ) -> None:
         """Initialise the writer.
 
         Creates *base_dir* (and any parent directories) if it does not exist.
@@ -258,15 +280,36 @@ class EventLogWriter:
         Args:
             base_dir: Root directory for the event log.
             clock: Injected clock (Story 2.2 discipline) that supplies UTC now.
+            lock_wait_observer: Story 11.2.3 — optional callback invoked
+                with the time spent waiting for the inter-process
+                ``fcntl.flock`` lock (milliseconds). When ``None``, no
+                lock-wait observation occurs; production wires this to
+                the ``omb_event_log_lock_wait_ms`` Histogram in
+                ``metrics-subscriber``. The callback receives a single
+                float (ms) and MUST NOT raise — exceptions propagate
+                and poison the writer.
         """
         self._base_dir = base_dir
         self._clock = clock
+        self._lock_wait_observer = lock_wait_observer
         self._fd: int | None = None
         self._current_date: date | None = None
         self._lock: asyncio.Lock = asyncio.Lock()
         self._poisoned: bool = False
         self._closed: bool = False
         base_dir.mkdir(parents=True, exist_ok=True)
+        if not _FCNTL_AVAILABLE:
+            logging.getLogger(__name__).warning(
+                "event_log_fcntl_unavailable",
+                extra={
+                    "reason": (
+                        "Story 11.2.3 file-lock disabled — fcntl module not importable. "
+                        "Multi-process writers are NOT serialized; FR26 single-writer "
+                        "invariant becomes the sole correctness guarantee. Supported "
+                        "runtimes: Linux + macOS."
+                    ),
+                },
+            )
 
     # ------------------------------------------------------------------
     # Public async API
@@ -367,6 +410,32 @@ class EventLogWriter:
         now = self._clock.now()
         self._ensure_current_day(now)
         assert self._fd is not None  # _ensure_current_day guarantees this
+
+        # Story 11.2.3: acquire exclusive fcntl.flock for inter-process
+        # serialization. Without this, concurrent clawhip-bridge subprocesses
+        # writing to the same daily JSONL file rely only on Linux's O_APPEND
+        # atomicity (sub-PIPE_BUF, ~4KB on Linux) — adequate for typical
+        # envelopes but not architecturally clean per FR26.
+        #
+        # flock semantics:
+        # - LOCK_EX: exclusive; blocks until acquired.
+        # - Per-fd lock; kernel serializes across processes opening the
+        #   same inode.
+        # - Released by LOCK_UN OR fd close. We release explicitly in
+        #   finally so the lock-hold window is exactly write+fdatasync.
+        #
+        # On non-fcntl platforms (Windows), this is a no-op — degrades
+        # gracefully back to single-writer (a warning was logged at
+        # writer construction time).
+        lock_start_ns = time.monotonic_ns()
+        if _FCNTL_AVAILABLE:
+            _fcntl.flock(self._fd, _fcntl.LOCK_EX)
+        lock_wait_ms = (time.monotonic_ns() - lock_start_ns) / 1_000_000
+        if self._lock_wait_observer is not None:
+            with contextlib.suppress(Exception):
+                # Observer must not break the write path; swallow defensively.
+                self._lock_wait_observer(lock_wait_ms)
+
         try:
             remaining = data
             while remaining:
@@ -381,6 +450,13 @@ class EventLogWriter:
             # raises immediately until recover() + fresh write cycle runs.
             self._poisoned = True
             raise
+        finally:
+            # Story 11.2.3: release the inter-process flock. Idempotent on
+            # error paths — if acquisition failed (the only way to reach
+            # this finally without holding the lock), LOCK_UN is a no-op.
+            if _FCNTL_AVAILABLE and self._fd is not None:
+                with contextlib.suppress(OSError):
+                    _fcntl.flock(self._fd, _fcntl.LOCK_UN)
 
     def _ensure_current_day(self, now: datetime) -> None:
         """Open (or roll) the fd to the correct per-day file — atomically.
