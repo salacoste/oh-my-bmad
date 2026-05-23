@@ -7,6 +7,11 @@ and HTTP middleware boundaries.
 
 from __future__ import annotations
 
+from capabilities.emit import (
+    CapabilityDeniedEmitter,
+    build_capability_denied_payload,
+    emit_capability_denied_on_deny,
+)
 from capabilities.tiers import (
     CallerContext,
     CapabilityDenied,
@@ -21,8 +26,11 @@ __version__ = "0.1.0"
 __all__ = [
     "CallerContext",
     "CapabilityDenied",
+    "CapabilityDeniedEmitter",
     "CapabilityOk",
     "Tier",
+    "build_capability_denied_payload",
     "check_tier",
     "check_tier_with_approval",
+    "emit_capability_denied_on_deny",
 ]
