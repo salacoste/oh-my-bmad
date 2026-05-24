@@ -276,11 +276,15 @@ async def test_baseline_cardinality_at_steady_state(
         body = r.text
     count = _count_canonical_timeseries(body)
     breakdown = _family_breakdown(body)
-    assert count == 53, (
-        f"baseline cardinality drift: got {count} canonical timeseries, expected 53. "
+    # Story 11.2.3: exact count bumped 53 → 61 to accommodate the new
+    # ``omb_event_log_lock_wait_ms`` Histogram. Bucket count was set in
+    # ``metrics.py``: 5 explicit buckets [0.1, 1, 10, 100, 1000] + ``+Inf``
+    # + ``_count`` + ``_sum`` = 8 series.
+    assert count == 61, (
+        f"baseline cardinality drift: got {count} canonical timeseries, expected 61. "
         f"Breakdown: {breakdown}. "
         f"Expected: 6 baseline + 15 task + 5 session + 5 secret + 14 family "
-        f"+ 2 idempotency + 6 capability = 53."
+        f"+ 2 idempotency + 6 capability + 8 event_log_lock_wait = 61."
     )
 
 
@@ -515,9 +519,11 @@ async def test_cardinality_with_n_concurrent_active_tasks(
     # synchronisation barrier (e.g. drain to ``events_appended_total ==
     # 2N`` AND then poll until ``len(state.task_tokens_spent._metrics)
     # >= N``).
-    assert 153 <= count_mid <= 154, (
-        f"mid-flight cardinality drift: got {count_mid}, expected 153..154 "
-        f"(53 baseline + {n_tasks} per-task gauges +/- 1 cursor-offset path child). "
+    # Story 11.2.3: baseline bumped 53 → 61 (8 new series for the
+    # omb_event_log_lock_wait_ms Histogram).
+    assert 161 <= count_mid <= 162, (
+        f"mid-flight cardinality drift: got {count_mid}, expected 161..162 "
+        f"(61 baseline + {n_tasks} per-task gauges +/- 1 cursor-offset path child). "
         f"Breakdown: {_family_breakdown(body)}"
     )
 
@@ -543,9 +549,10 @@ async def test_cardinality_with_n_concurrent_active_tasks(
         r = await client.get("/metrics")
         body = r.text
         count_after = _count_canonical_timeseries(body)
-    assert count_after <= 54, (
-        f"post-drain cardinality drift: got {count_after}, expected <= 54 "
-        f"(53 baseline + 1 cursor-offset path child). "
+    # Story 11.2.3: baseline bumped 53 → 61 (event_log_lock_wait Histogram).
+    assert count_after <= 62, (
+        f"post-drain cardinality drift: got {count_after}, expected <= 62 "
+        f"(61 baseline + 1 cursor-offset path child). "
         f"Breakdown: {_family_breakdown(body)}"
     )
 
@@ -713,9 +720,11 @@ async def test_envelope_with_unknown_family_falls_to_unknown_bucket(
     # materialises.  If a future fixture change ever pre-warms the log
     # with a real envelope (or wires this test through
     # ``LifespanManager + log writes``), relax to ``<= 54``.
+    # Story 11.2.3: bumped 53 → 61 to include new omb_event_log_lock_wait_ms
+    # Histogram series. See test at line 283 for the breakdown.
     count = _count_canonical_timeseries(body)
-    assert count == 53, (
-        f"AC7 cardinality drift: got {count}, expected 53 (no novel families "
+    assert count == 61, (
+        f"AC7 cardinality drift: got {count}, expected 61 (no novel families "
         f"created). Breakdown: {_family_breakdown(body)}"
     )
 

@@ -99,10 +99,15 @@ class TestServerConstruction:
     """AC-1 / AC-2 structural checks on the FastMCP server instance."""
 
     @pytest.mark.asyncio
-    async def test_build_server_registers_all_5_tools(
+    async def test_build_server_registers_all_6_tools(
         self, tmp_path: Path, fixed_clock: FrozenClock
     ) -> None:
-        """build_server registers exactly 5 emit tools."""
+        """build_server registers exactly 6 emit/forward tools (Story 11.2.3 adds 1).
+
+        Story 11.2.3 AC3 added ``forward_capability_denied_audit`` — the
+        dedicated audit-forwarding surface that closes the PQ9 forgery
+        vector left by Story 11.2.2.
+        """
         mcp = build_server(
             base_dir=tmp_path,
             clock=fixed_clock,
@@ -117,6 +122,7 @@ class TestServerConstruction:
             "emit_summary",
             "emit_approval_request",
             "emit_completion",
+            "forward_capability_denied_audit",
         }
 
     @pytest.mark.asyncio
@@ -673,7 +679,8 @@ class TestTierEnforcement:
             assert result.tier == tier
 
     def test_tier_map_all_tier_one(self) -> None:
-        assert len(TIER_MAP) == 5
+        # Story 11.2.3 AC3: ``forward_capability_denied_audit`` brings TIER_MAP to 6.
+        assert len(TIER_MAP) == 6
         assert all(t == Tier.ONE for t in TIER_MAP.values())
 
     @pytest.mark.asyncio
@@ -940,68 +947,165 @@ class TestCallerTraceIdEmitEvent:
         assert envelopes[0].trace_id == _VALID_TRACE_ID
 
     @pytest.mark.asyncio
-    async def test_emit_event_capability_denied_known_limitation(
+    async def test_emit_event_capability_denied_rejected_now_that_forward_tool_exists(
         self, tmp_path: Path, fixed_clock: FrozenClock
     ) -> None:
-        """Story 11.2.2 PQ9 reversal — documents the known forgery limitation.
+        """Story 11.2.3 AC4 — public ``emit_event`` rejects ``capability.denied``.
 
-        Tier-1-or-better callers CAN emit ``capability.denied`` via the
-        PUBLIC ``emit_event`` tool. The envelope ``actor`` is stamped with
-        ``Actor(kind="system", id="clawhip-bridge-mcp")`` by the
-        ``_emit_overrides`` resolution (correct: "clawhip-bridge wrote
-        this record"), but the PAYLOAD content is caller-supplied — so
-        operators MUST cross-check ``payload.actor_id`` /
-        ``payload.attempted_action`` against the tier-gate logs from the
-        originating MCP server.
+        Replaces Story 11.2.2's ``test_emit_event_capability_denied_known_limitation``.
+        Story 11.2.3 added the dedicated ``forward_capability_denied_audit``
+        tool (AC3); legitimate forwarding now uses that surface. The public
+        ``emit_event`` MUST raise ``PermissionError`` for any type in
+        ``_emit_overrides`` so the PQ9 forgery vector is closed.
 
-        This is a known limitation pending Story 11.2.3's proper fix
-        (dedicated ``forward_capability_denied_audit`` tool with caller
-        identity validation). For now, the legitimate task-registry /
-        session-registry forwarding path uses the SAME public tool —
-        blocking ``capability.denied`` here would break audit forwarding.
-
-        This test pins the behavior so a future refactor that tries to
-        re-add forgery protection without first addressing the forwarding
-        path fails this assertion loudly.
+        Rejection is positioned AFTER ``validate_caller_trace_id`` (so bad
+        input still trips the shape check first) and BEFORE the self-emit
+        tier gate (so the denial does NOT loop back through the
+        denial-of-denial audit path).
         """
         mcp = build_server(
-            base_dir=tmp_path, clock=fixed_clock, actor_kind="system", actor_id="t-forward"
+            base_dir=tmp_path, clock=fixed_clock, actor_kind="system", actor_id="t-reject"
         )
         fn = mcp._tool_manager._tools["emit_event"].fn
-        # Public emit_event accepts capability.denied (legitimate forwarding).
-        # NB: routes through ``_emit`` → ``EventEnvelope.create`` which DOES
-        # validate payload against ``CapabilityDeniedPayload`` v1.1.0 (the
-        # registered schema). The "forge-able" surface is the payload
-        # *content*, not its shape.
+        with pytest.raises(
+            PermissionError,
+            match="forward_capability_denied_audit",
+        ):
+            await fn(
+                type="capability.denied",
+                payload={
+                    "tier": "tier2",
+                    "boundary": "mcp",
+                    "actor_id": "forged-actor",
+                    "attempted_action": "forged_action",
+                    "reason": "should be rejected",
+                },
+                caller_trace_id=_VALID_TRACE_ID,
+            )
+        # No envelope must hit disk — the rejection is pre-emit.
+        path = current_day_path(tmp_path, fixed_clock.now())
+        if path.exists():
+            envelopes = list(read_log_lines(path))
+            assert not any(e.type == "capability.denied" for e in envelopes), (
+                "PQ9 rejection must be pre-emit — no capability.denied envelope expected"
+            )
+
+
+class TestForwardCapabilityDeniedAudit:
+    """Story 11.2.3 AC3 — dedicated audit-forwarding tool unit tests."""
+
+    @pytest.mark.asyncio
+    async def test_forward_capability_denied_audit_writes_envelope(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """Happy path: matched ``caller_actor_kind`` → envelope on disk."""
+        mcp = build_server(
+            base_dir=tmp_path, clock=fixed_clock, actor_kind="worker", actor_id="cb-1"
+        )
+        fn = mcp._tool_manager._tools["forward_capability_denied_audit"].fn
         result = await fn(
-            type="capability.denied",
             payload={
                 "tier": "tier2",
                 "boundary": "mcp",
-                "actor_id": "forwarded-actor",
-                "attempted_action": "forwarded_action",
-                "reason": "forwarded from task-registry",
+                "actor_id": "ignored-caller-supplied-value",
+                "attempted_action": "task.add_note",
+                "reason": "tier-gate denial forwarded",
             },
             caller_trace_id=_VALID_TRACE_ID,
+            caller_actor_kind="worker",
+            caller_actor_id="legit-worker-id",
         )
         assert result["event_id"].startswith("e-")
-
-        # Pass-2 PP7 (Blind + Edge MED): assert the envelope actor IS
-        # stamped with the canonical system identity. Pre-PP7 the test
-        # only checked event_id shape — a refactor dropping ``actor_override``
-        # would silently pass. Read the JSONL back and verify.
         path = current_day_path(tmp_path, fixed_clock.now())
         envelopes = list(read_log_lines(path))
         capability_envs = [e for e in envelopes if e.type == "capability.denied"]
-        assert len(capability_envs) == 1, "exactly one capability.denied envelope expected"
+        assert len(capability_envs) == 1
         env = capability_envs[0]
-        assert env.actor.kind == "system", (
-            f"envelope.actor.kind must be 'system' (system-emitter stamp); got {env.actor.kind!r}"
+        # Envelope actor: canonical system-emitter (OQ-2 stamp).
+        assert env.actor.kind == "system"
+        assert env.actor.id == "clawhip-bridge-mcp"
+        assert env.schema_version == "1.1.0"
+        # Payload actor_id: forced to caller_actor_id (caller cannot forge).
+        assert env.payload["actor_id"] == "legit-worker-id", (  # type: ignore[index]
+            "payload.actor_id must be overwritten by caller_actor_id; "
+            f"got {env.payload['actor_id']!r}"  # type: ignore[index]
         )
-        assert env.actor.id == "clawhip-bridge-mcp", (
-            f"envelope.actor.id must be 'clawhip-bridge-mcp'; got {env.actor.id!r}"
+
+    @pytest.mark.asyncio
+    async def test_forward_capability_denied_audit_rejects_operator_kind(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """AC3: ``operator`` callers are rejected — they emit via HTTP boundary."""
+        mcp = build_server(
+            base_dir=tmp_path, clock=fixed_clock, actor_kind="operator", actor_id="op-1"
         )
-        assert env.schema_version == "1.1.0", "capability.denied schema is v1.1.0 only"
+        fn = mcp._tool_manager._tools["forward_capability_denied_audit"].fn
+        with pytest.raises(PermissionError, match="operator"):
+            await fn(
+                payload={
+                    "tier": "tier2",
+                    "boundary": "mcp",
+                    "actor_id": "x",
+                    "attempted_action": "y",
+                    "reason": "z",
+                },
+                caller_trace_id=_VALID_TRACE_ID,
+                caller_actor_kind="operator",
+                caller_actor_id="op-1",
+            )
+
+    @pytest.mark.asyncio
+    async def test_forward_capability_denied_audit_accepts_arbitrary_non_operator_kind(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """Story 11.2.3 — caller_actor_kind is self-attested (no connection-level
+        credentials over stdio MCP). Any non-``operator`` kind is accepted; the
+        ``operator`` rejection is the load-bearing access control. Stronger
+        caller authentication ships with the Phase 3 Remote-MCP work
+        (Architecture P2-I4). Test pins the trust model so a future
+        refactor that re-introduces a kind-vs-server check fails loudly.
+        """
+        mcp = build_server(
+            base_dir=tmp_path, clock=fixed_clock, actor_kind="worker", actor_id="cb-2"
+        )
+        fn = mcp._tool_manager._tools["forward_capability_denied_audit"].fn
+        # caller claims to be system; server configured as worker — accepted.
+        result = await fn(
+            payload={
+                "tier": "tier2",
+                "boundary": "mcp",
+                "actor_id": "ignored-payload-actor",
+                "attempted_action": "y",
+                "reason": "z",
+            },
+            caller_trace_id=_VALID_TRACE_ID,
+            caller_actor_kind="system",
+            caller_actor_id="upstream-mcp-server",
+        )
+        assert result["event_id"].startswith("e-"), "forward call should succeed"
+
+    @pytest.mark.asyncio
+    async def test_forward_capability_denied_audit_rejects_invalid_trace_id(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """AC3: invalid ``caller_trace_id`` → ValueError (shape check runs first)."""
+        mcp = build_server(
+            base_dir=tmp_path, clock=fixed_clock, actor_kind="worker", actor_id="cb-3"
+        )
+        fn = mcp._tool_manager._tools["forward_capability_denied_audit"].fn
+        with pytest.raises(ValueError, match="Story 9.1 contract"):
+            await fn(
+                payload={
+                    "tier": "tier2",
+                    "boundary": "mcp",
+                    "actor_id": "x",
+                    "attempted_action": "y",
+                    "reason": "z",
+                },
+                caller_trace_id="bad-format",
+                caller_actor_kind="worker",
+                caller_actor_id="cb-3",
+            )
 
 
 class TestCallerTraceIdTypedEmitTools:
@@ -1098,6 +1202,9 @@ _BRIDGE_FR58_TOOLS: frozenset[str] = frozenset(
         "emit_summary",
         "emit_approval_request",
         "emit_completion",
+        # Story 11.2.3 AC3 — dedicated audit-forwarding tool also requires
+        # ``caller_trace_id`` per FR58.
+        "forward_capability_denied_audit",
     }
 )
 

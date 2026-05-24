@@ -105,17 +105,27 @@ async def db_session_maker(tmp_path: Path) -> async_sessionmaker[AsyncSession]:
 
 
 class _InProcessClawhipAdapter:
-    """Adapter exposing ``emit_event(type, payload, ...)`` against an in-process clawhip-bridge.
+    """Adapter shaped like ``ClawhipBridgeClient`` for in-process tests.
 
-    Substitutes for the stdio ``ClawhipBridgeClient`` in tests — calls the
-    clawhip-bridge ``emit_event`` tool fn directly. The decorator's PD-1
-    fail-soft contract treats this as a regular emitter; the on-disk
-    envelope artifact (and downstream counter increment) is identical to
-    the stdio path.
+    Substitutes for the stdio ``ClawhipBridgeClient`` in tests. The
+    decorator's PD-1 fail-soft contract treats this as a regular emitter;
+    the on-disk envelope artifact (and downstream counter increment) is
+    identical to the stdio path.
+
+    Story 11.2.3 AC5: routes ``capability.denied`` envelopes through
+    clawhip-bridge's ``forward_capability_denied_audit`` tool (NOT the
+    generic ``emit_event``, which now rejects audit-only types via the
+    restored PQ9 rejection). All other event types still use
+    ``emit_event``.
     """
 
-    def __init__(self, clawhip_mcp: object) -> None:
-        self._fn = clawhip_mcp._tool_manager._tools["emit_event"].fn  # type: ignore[attr-defined]
+    def __init__(
+        self, clawhip_mcp: object, *, caller_actor_kind: str, caller_actor_id: str
+    ) -> None:
+        self._emit_fn = clawhip_mcp._tool_manager._tools["emit_event"].fn  # type: ignore[attr-defined]
+        self._forward_fn = clawhip_mcp._tool_manager._tools["forward_capability_denied_audit"].fn  # type: ignore[attr-defined]
+        self.caller_actor_kind = caller_actor_kind
+        self.caller_actor_id = caller_actor_id
 
     async def emit_event(
         self,
@@ -125,10 +135,25 @@ class _InProcessClawhipAdapter:
         caller_trace_id: str | None = None,
         parent_event_id: str | None = None,
     ) -> None:
-        await self._fn(
+        await self._emit_fn(
             type=event_type,
             payload=payload,
             caller_trace_id=caller_trace_id or _VALID_TRACE_ID,
+            parent_event_id=parent_event_id,
+        )
+
+    async def forward_capability_denied(
+        self,
+        payload: dict[str, object],
+        *,
+        caller_trace_id: str | None = None,
+        parent_event_id: str | None = None,
+    ) -> None:
+        await self._forward_fn(
+            payload=payload,
+            caller_trace_id=caller_trace_id or _VALID_TRACE_ID,
+            caller_actor_kind=self.caller_actor_kind,
+            caller_actor_id=self.caller_actor_id,
             parent_event_id=parent_event_id,
         )
 
@@ -156,7 +181,11 @@ async def test_mcp_capability_denied_emits_envelope_and_increments_counter(
     # Story 11.2.2 test-only: substitute the stdio ClawhipBridgeClient with an
     # in-process adapter. The adapter exposes ``emit_event`` with the same
     # signature so EmitterHolder.emit_event forwards transparently.
-    emitter_holder.client = _InProcessClawhipAdapter(clawhip_mcp)  # type: ignore[assignment]
+    emitter_holder.client = _InProcessClawhipAdapter(  # type: ignore[assignment]
+        clawhip_mcp,
+        caller_actor_kind="worker",  # matches the task-registry server below
+        caller_actor_id="worker-under-tier",
+    )
 
     # Build task-registry server via the factory (no-emitter path), then
     # clear its tool registry and re-register with the in-process emitter

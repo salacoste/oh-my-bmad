@@ -17,11 +17,14 @@ TASK_REGISTRY_ACTOR_ID  (REQUIRED)
     Non-empty string identifying the calling actor instance.
     Missing or empty → exit code 2 with stderr message.
 
-OMB_MCP_AUDIT_EMISSION_ENABLED  (OPTIONAL, default ``0``)
-    Story 11.2.2 PQ1 — master opt-in gate for MCP-boundary capability.denied
-    audit emission. Default OFF mitigates the FR26 multi-writer concern
-    (each MCP server spawning its own clawhip-bridge subprocess) until
-    Story 11.2.3 ships a shared-daemon refactor. Set to ``1`` to enable.
+OMB_MCP_AUDIT_EMISSION_ENABLED  (OPTIONAL, default ``1``)
+    Story 11.2.3 — master gate for MCP-boundary capability.denied audit
+    emission. Default ON since Story 11.2.3 closed the FR26 multi-writer
+    concern (fcntl file-lock in EventLogWriter) and the PQ9 audit-forgery
+    vector (dedicated forward_capability_denied_audit MCP tool with
+    caller identity validation). Set to ``0`` to disable explicitly;
+    legacy ``TASK_REGISTRY_DISABLE_AUDIT_EMISSION=1`` is the operator
+    kill-switch.
 
 TASK_REGISTRY_CLAWHIP_BRIDGE_COMMAND  (OPTIONAL, default ``sys.executable``)
     Story 11.2.2 — command to spawn the clawhip-bridge MCP subprocess
@@ -119,7 +122,14 @@ def main() -> None:
     # Legacy ``TASK_REGISTRY_DISABLE_AUDIT_EMISSION`` retained as override
     # (set to "1" to force-disable even when the new flag is on) for
     # operators rolling back without re-deploying.
-    enable_audit = os.environ.get("OMB_MCP_AUDIT_EMISSION_ENABLED", "").strip() == "1"
+    # Story 11.2.3 AC6: feature flag now defaults to ON. Story 11.2.2's
+    # pass-1 default-OFF mitigation became redundant once 11.2.3 closed
+    # the FR26 multi-writer concern (fcntl file-lock in EventLogWriter,
+    # commit f1e304d) and the PQ9 audit-forgery vector (dedicated
+    # ``forward_capability_denied_audit`` MCP tool with caller identity
+    # validation). Operators can still kill-switch via
+    # ``TASK_REGISTRY_DISABLE_AUDIT_EMISSION=1``.
+    enable_audit = os.environ.get("OMB_MCP_AUDIT_EMISSION_ENABLED", "1").strip() != "0"
     force_disable_audit = os.environ.get("TASK_REGISTRY_DISABLE_AUDIT_EMISSION", "").strip() == "1"
     clawhip_cmd: str | None = None
     clawhip_args: list[str] | None = None

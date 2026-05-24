@@ -109,14 +109,14 @@ class ClawhipBridgeClient:
 
     command: str
     args: list[str]
-    # PQ7 (pass-1 review): explicit allowlist rather than ``dict(os.environ)`` —
-    # forwarding every parent env-var (AWS creds, OPENAI_API_KEY, *_DATABASE_URL,
-    # OPERATOR_HMAC_KEY) to the spawned clawhip-bridge subprocess widens the
-    # secret-leakage blast radius. The allowlist below covers everything
-    # clawhip-bridge actually needs (PATH for Python resolution, HOME for
-    # asyncio temp paths, and the EVENTS_DIR + REGISTRY_DB_PATH it uses to
-    # locate the event log). Operators who need extra vars can override the
-    # field at construction time.
+    # Story 11.2.3 AC5: caller identity passed at construction time so the
+    # ``forward_capability_denied_audit`` MCP tool can validate that the
+    # caller's claimed actor_kind matches the configured actor_kind
+    # (prevents a worker-configured MCP server from forging an audit
+    # claiming to be on behalf of an operator).
+    caller_actor_kind: str = ""
+    caller_actor_id: str = ""
+    # PQ7 (pass-1 review): explicit allowlist rather than ``dict(os.environ)``.
     env: dict[str, str] = field(default_factory=lambda: _default_env_allowlist())
     _stack: AsyncExitStack | None = None
     _session: ClientSession | None = None
@@ -193,6 +193,48 @@ class ClawhipBridgeClient:
             arguments["parent_event_id"] = parent_event_id
         await self._session.call_tool("emit_event", arguments)
 
+    async def forward_capability_denied(
+        self,
+        payload: dict[str, object],
+        *,
+        caller_trace_id: str | None = None,
+        parent_event_id: str | None = None,
+    ) -> None:
+        """Forward a ``capability.denied`` audit via the dedicated MCP tool.
+
+        Story 11.2.3 AC5 — task-registry / session-registry MCP servers
+        route ``capability.denied`` envelopes through clawhip-bridge's
+        ``forward_capability_denied_audit`` tool (NOT the generic
+        ``emit_event``). That tool validates ``caller_actor_kind`` /
+        ``caller_actor_id`` against the upstream MCP server's
+        configuration AND stamps ``payload.actor_id`` with the
+        validated caller_actor_id — preventing the PQ9 forgery vector
+        that Story 11.2.2 pass-1 documented as a known limitation.
+
+        ``caller_trace_id`` is auto-minted via ``new_uuid7()`` when None
+        (same discipline as ``emit_event``).
+
+        Raises whatever ``ClientSession.call_tool`` raises — caught by
+        the decorator's PD-1 fail-soft block so the original
+        ``CapabilityDenied`` is still re-raised (AC6).
+        """
+        if self._session is None:
+            raise RuntimeError(
+                "ClawhipBridgeClient.forward_capability_denied called before "
+                "__aenter__ (session is None — lifespan not entered)"
+            )
+        if caller_trace_id is None:
+            caller_trace_id = new_uuid7()
+        arguments: dict[str, object] = {
+            "payload": payload,
+            "caller_trace_id": caller_trace_id,
+            "caller_actor_kind": self.caller_actor_kind,
+            "caller_actor_id": self.caller_actor_id,
+        }
+        if parent_event_id is not None:
+            arguments["parent_event_id"] = parent_event_id
+        await self._session.call_tool("forward_capability_denied_audit", arguments)
+
 
 class EmitterHolder:
     """Mutable container exposing a ``CapabilityDeniedEmitter``-shaped callable.
@@ -219,13 +261,23 @@ class EmitterHolder:
         self.client: ClawhipBridgeClient | None = None
 
     async def emit_event(self, event_type: str, payload: dict[str, object]) -> None:
-        """Forward to ``self.client.emit_event``; raise if not yet wired."""
+        """Forward to ``self.client``; route ``capability.denied`` to the dedicated tool.
+
+        Story 11.2.3 AC5: ``capability.denied`` envelopes go through the
+        clawhip-bridge ``forward_capability_denied_audit`` tool (which
+        validates caller identity and forces ``payload.actor_id`` to the
+        validated caller). All other event types continue to use the
+        generic ``emit_event`` tool.
+        """
         if self.client is None:
             raise RuntimeError(
                 "EmitterHolder.emit_event invoked before lifespan wired the "
                 "ClawhipBridgeClient — capability.denied audit dropped (PD-1 fail-soft)"
             )
-        await self.client.emit_event(event_type, payload)
+        if event_type == "capability.denied":
+            await self.client.forward_capability_denied(payload)
+        else:
+            await self.client.emit_event(event_type, payload)
 
 
 __all__ = ["ClawhipBridgeClient", "EmitterHolder"]

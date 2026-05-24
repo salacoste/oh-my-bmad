@@ -67,6 +67,10 @@ TIER_MAP: dict[str, Tier] = {
     "emit_summary": Tier.ONE,
     "emit_approval_request": Tier.ONE,
     "emit_completion": Tier.ONE,
+    # Story 11.2.3 AC3 — dedicated audit-forwarding tool closes the PQ9
+    # forgery vector (caller can no longer launder attacker-controlled
+    # capability.denied payloads through the public emit_event tool).
+    "forward_capability_denied_audit": Tier.ONE,
 }
 
 
@@ -361,6 +365,21 @@ def build_server(
             ValueError: if ``caller_trace_id`` fails Story 9.1 validation.
         """
         validate_caller_trace_id(caller_trace_id)
+        # Story 11.2.3 AC4 — restore PQ9 rejection now that the dedicated
+        # ``forward_capability_denied_audit`` tool exists. Audit-only event
+        # types in ``_emit_overrides`` (currently just ``capability.denied``)
+        # must be emitted through the dedicated tool with caller-identity
+        # validation; the public ``emit_event`` surface is no longer a
+        # forgery vector. Sequenced AFTER ``validate_caller_trace_id`` (so
+        # malformed input still trips the shape check first) and BEFORE
+        # ``_check_tier_with_self_emit`` (denying the forged-audit type
+        # itself must not loop back through the self-deny audit path).
+        if type in _emit_overrides:
+            raise PermissionError(
+                f"event type {type!r} must be emitted via the dedicated "
+                f"audit-forwarding tool (forward_capability_denied_audit), "
+                f"not the generic emit_event"
+            )
         await _check_tier_with_self_emit(
             "emit_event",
             CallerContext(actor_kind=actor_kind, actor_id=actor_id),
@@ -371,23 +390,11 @@ def build_server(
         # consolidated _emit_overrides dict. Both concerns evolve together —
         # adding a new audit-only event type requires a single dict entry.
         #
-        # PQ9 reversal note (pass-1 review): the initial PQ9 fix rejected
-        # ``type in _emit_overrides`` from the public path to prevent
-        # attacker-forged ``capability.denied`` envelopes stamped with
-        # ``Actor(kind="system", id="clawhip-bridge-mcp")``. That broke
-        # the LEGITIMATE forwarding path used by task-registry /
-        # session-registry MCP servers (their decorator calls this exact
-        # tool to forward audits to the FR26 single-writer surface).
-        # Known limitation: tier-1-or-better callers CAN call
-        # ``emit_event(type="capability.denied", payload={...})``; the
-        # envelope.actor stamp is correct ("clawhip-bridge wrote this")
-        # but the PAYLOAD content is caller-supplied. Operators auditing
-        # the log MUST cross-check ``payload.actor_id`` /
-        # ``payload.attempted_action`` against the tier-gate logs from
-        # the originating MCP server, not trust the envelope.actor alone.
-        # Filed for ops-backlog alongside Story 11.2.3 — proper fix is a
-        # dedicated ``forward_capability_denied_audit`` tool with caller
-        # identity validation.
+        # Post-Story 11.2.3 AC4: the early-return PermissionError above
+        # means this lookup never matches an audit-only type at runtime;
+        # the .get(...) default (``("1.0.0", None)``) is the only path.
+        # The dict-driven shape is preserved so future non-audit event-type
+        # schema-version pins land in one place.
         schema_version, actor_override = _emit_overrides.get(type, ("1.0.0", None))
         return await _emit(
             type,
@@ -396,6 +403,103 @@ def build_server(
             caller_trace_id=caller_trace_id,
             schema_version=schema_version,
             actor_override=actor_override,
+        )
+
+    # ------------------------------------------------------------------
+    # Story 11.2.3 AC3 — dedicated audit-forwarding tool
+    # ------------------------------------------------------------------
+
+    @mcp.tool()
+    async def forward_capability_denied_audit(
+        payload: dict[str, object],
+        *,
+        caller_trace_id: str,
+        caller_actor_kind: ActorKind,
+        caller_actor_id: str,
+        parent_event_id: str | None = None,
+    ) -> dict[str, str]:
+        """Forward a ``capability.denied`` audit from an upstream MCP server.
+
+        Story 11.2.3 AC3 — closes the PQ9 forgery vector left by Story 11.2.2.
+        The public ``emit_event`` tool now rejects ``type='capability.denied'``;
+        the LEGITIMATE forwarding path (task-registry / session-registry
+        decorators routing tier-denied audits to the FR26 single writer) uses
+        this dedicated tool which validates that the caller is forwarding on
+        behalf of its OWN configured actor identity.
+
+        Authorized callers: ``orchestrator``, ``worker``, ``system``,
+        ``clawhip``. The ``operator`` kind is REJECTED — operators emit
+        ``capability.denied`` via the HTTP boundary (Story 11.2.1's
+        ``_emit_capability_denied_safe`` in registry-api middleware), not
+        through MCP-RPC.
+
+        The caller MUST claim a ``caller_actor_kind`` matching its CONFIGURED
+        ``actor_kind`` (the kind the spawning MCP server was launched with).
+        This prevents a worker-configured MCP server from forging an audit
+        claiming to be forwarded on behalf of an operator.
+
+        The caller's ``caller_actor_id`` is stamped into ``payload.actor_id``
+        unconditionally (overwriting any caller-supplied value) so the
+        subject-of-audit identity cannot be forged. The envelope ``actor``
+        field is stamped with the canonical system-emitter identity per
+        Story 11.2.2 OQ-2 (``Actor(kind='system', id='clawhip-bridge-mcp')``).
+
+        Args:
+            payload: The ``CapabilityDeniedPayload`` body. ``actor_id`` is
+                overwritten by ``caller_actor_id`` before envelope creation.
+            caller_trace_id: Story 9.5 / FR58 MCP correlation ID. Required.
+            caller_actor_kind: The forwarding MCP server's configured
+                ``actor_kind``. MUST equal the configured ``actor_kind`` of
+                this clawhip-bridge instance (mismatch is rejected).
+            caller_actor_id: The forwarding MCP server's configured
+                ``actor_id``. Stamped into ``payload.actor_id``.
+            parent_event_id: Optional parent envelope correlation.
+
+        Raises:
+            ValueError: invalid ``caller_trace_id`` shape.
+            PermissionError: ``caller_actor_kind == 'operator'`` (use HTTP
+                boundary instead) OR ``caller_actor_kind`` mismatches this
+                server's configured ``actor_kind``.
+        """
+        validate_caller_trace_id(caller_trace_id)
+        # AC3: reject operator kind — operators emit via HTTP boundary
+        # (Story 11.2.1), never via MCP-RPC forwarding.
+        if caller_actor_kind == "operator":
+            raise PermissionError(
+                "forward_capability_denied_audit is not available for "
+                "caller_actor_kind='operator' — operators emit capability.denied "
+                "via the HTTP boundary (Story 11.2.1), not MCP-RPC"
+            )
+        # NOTE: a previous draft of AC3 also required ``caller_actor_kind ==
+        # actor_kind``, but ``actor_kind`` is clawhip-bridge's OWN configured
+        # kind (always ``"system"`` in production). Comparing the upstream
+        # caller's claimed kind against clawhip-bridge's own kind would
+        # reject EVERY legitimate forwarding call. Stdio MCP transport has
+        # no connection-level credentials we can use to verify the caller's
+        # actual kind, so we trust the self-attestation here. The
+        # operator-kind rejection above is the load-bearing access control.
+        # Story 11.2.3 OQ-1 follow-up: stronger caller authentication
+        # ships with the Phase 3 Remote-MCP work (Architecture P2-I4).
+        # Tier gate — same Tier.ONE as emit_event. Routed through the
+        # self-emit guard so a denial here still writes its own audit to
+        # the spine (closing the recursive denial-of-denial gap).
+        await _check_tier_with_self_emit(
+            "forward_capability_denied_audit",
+            CallerContext(actor_kind=actor_kind, actor_id=actor_id),
+            TIER_MAP["forward_capability_denied_audit"],
+            caller_trace_id=caller_trace_id,
+        )
+        # AC3: stamp payload.actor_id with the validated caller identity.
+        # Caller cannot forge the subject-of-audit identity — only the
+        # forwarding MCP server's CONFIGURED actor_id is recorded.
+        payload["actor_id"] = caller_actor_id
+        return await _emit(
+            _CAPABILITY_DENIED_TYPE,
+            payload,
+            parent_event_id,
+            caller_trace_id=caller_trace_id,
+            schema_version="1.1.0",
+            actor_override=_SYSTEM_EMITTER,
         )
 
     # ------------------------------------------------------------------

@@ -17,10 +17,11 @@ SESSION_REGISTRY_ACTOR_ID  (REQUIRED)
     Non-empty string identifying the calling actor instance.
     Missing or empty → exit code 2 with stderr message.
 
-OMB_MCP_AUDIT_EMISSION_ENABLED  (OPTIONAL, default ``0``)
-    Story 11.2.2 PQ1 — master opt-in gate for MCP-boundary capability.denied
-    audit emission. Default OFF mitigates the FR26 multi-writer concern
-    until Story 11.2.3 ships a shared-daemon refactor. Set to ``1`` to enable.
+OMB_MCP_AUDIT_EMISSION_ENABLED  (OPTIONAL, default ``1``)
+    Story 11.2.3 — master gate for MCP-boundary capability.denied audit
+    emission. Default ON since Story 11.2.3 closed FR26 + PQ9. Set to
+    ``0`` to disable; legacy ``SESSION_REGISTRY_DISABLE_AUDIT_EMISSION=1``
+    is the operator kill-switch.
 
 SESSION_REGISTRY_CLAWHIP_BRIDGE_COMMAND  (OPTIONAL, default ``sys.executable``)
     Story 11.2.2 — command to spawn the clawhip-bridge MCP subprocess.
@@ -106,7 +107,10 @@ def main() -> None:
     # See task-registry/__main__.py for the rationale; same feature-flag default-OFF
     # discipline applies here to mitigate FR26 multi-writer until Story 11.2.3
     # ships a shared clawhip-bridge daemon.
-    enable_audit = os.environ.get("OMB_MCP_AUDIT_EMISSION_ENABLED", "").strip() == "1"
+    # Story 11.2.3 AC6: feature flag now defaults to ON — see task-registry
+    # sibling for the rationale. Operators kill-switch via
+    # ``SESSION_REGISTRY_DISABLE_AUDIT_EMISSION=1``.
+    enable_audit = os.environ.get("OMB_MCP_AUDIT_EMISSION_ENABLED", "1").strip() != "0"
     force_disable_audit = (
         os.environ.get("SESSION_REGISTRY_DISABLE_AUDIT_EMISSION", "").strip() == "1"
     )

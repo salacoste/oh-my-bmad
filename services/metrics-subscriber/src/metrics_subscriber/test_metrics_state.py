@@ -725,8 +725,12 @@ def test_cardinality_at_steady_state_is_bounded() -> None:
         for sample in family.samples
         if not sample.name.endswith("_created")
     )
-    assert canonical_timeseries <= 53, (
-        f"cardinality {canonical_timeseries} exceeds AC10 steady-state bound of 53; "
+    # Story 11.2.3 AC2: bound bumped 53 → 62 to accommodate the new
+    # ``omb_event_log_lock_wait_ms`` Histogram (5 explicit buckets
+    # [0.1, 1, 10, 100, 1000] + ``+Inf`` + ``_count`` + ``_sum`` = 8
+    # series; 9 observed empirically including a sampling sample).
+    assert canonical_timeseries <= 62, (
+        f"cardinality {canonical_timeseries} exceeds AC10 steady-state bound of 62; "
         f"families: {[(f.name, len(f.samples)) for f in timeseries]}"
     )
 
@@ -771,8 +775,9 @@ def test_cardinality_under_burst_cleanup() -> None:
         for sample in family.samples
         if not sample.name.endswith("_created")
     )
-    assert canonical_timeseries <= 53, (
-        f"cardinality {canonical_timeseries} exceeds AC10 burst-cleanup bound of 53"
+    # Story 11.2.3: see steady-state bound rationale above.
+    assert canonical_timeseries <= 62, (
+        f"cardinality {canonical_timeseries} exceeds AC10 burst-cleanup bound of 62"
     )
 
 

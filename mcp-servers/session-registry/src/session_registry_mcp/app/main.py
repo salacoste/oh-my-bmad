@@ -104,6 +104,9 @@ def build_server(
             client = ClawhipBridgeClient(
                 command=clawhip_bridge_command,
                 args=clawhip_bridge_args,
+                # Story 11.2.3 AC5 — see task-registry sibling for rationale.
+                caller_actor_kind=actor_kind,
+                caller_actor_id=actor_id,
             )
             await client.__aenter__()
             emitter_holder.client = client

@@ -132,7 +132,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
             f"aiosqlite drain timed out with {len(live)} live worker thread(s): "
             f"{thread_names}. SIGABRT race risk on interpreter shutdown. "
             f"Tune via OMB_AIOSQLITE_DRAIN_TIMEOUT_S (currently {timeout_s}s).",
-            category=pytest.PytestPendingWarning,
+            category=UserWarning,  # pytest.PytestPendingWarning removed in pytest 9.x
             stacklevel=2,
         )
 

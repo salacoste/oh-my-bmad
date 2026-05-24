@@ -45,6 +45,7 @@ Metric inventory (Stories 10.3 + 10.4 combined):
   | ``omb_task_tokens_spent``                   | Gauge   | task_id     |
   | ``omb_idempotency_cache_total``             | Counter | outcome     |
   | ``omb_capability_denied_total``             | Counter | tier,bound  |
+  | ``omb_event_log_lock_wait_ms``              | Histo   | (none)      |
   +---------------------------------------------+---------+-------------+
 
 Cardinality discipline (P2-I3, ADR-0005 §Cardinality):
@@ -108,7 +109,7 @@ from typing import Any, Final, get_args
 import structlog
 from events import EventEnvelope
 from events.envelope import ActorKind
-from prometheus_client import CollectorRegistry, Counter, Gauge
+from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 
 log = structlog.get_logger(__name__)
 
@@ -223,6 +224,12 @@ _CAPABILITY_TIERS: Final[tuple[str, ...]] = ("tier1", "tier2", "tier3")
 #: Bounded enum of capability boundaries (Story 10.4 AC8 — DEFERRED).
 _CAPABILITY_BOUNDARIES: Final[tuple[str, ...]] = ("mcp", "http")
 
+#: Story 11.2.3 AC2 — buckets for ``omb_event_log_lock_wait_ms`` Histogram.
+#: OQ-2 default: ``[0.1, 1, 10, 100, 1000]`` ms covers uncontended (<0.1ms)
+#: through pathologically contended (>1s) regimes. Tune via local timing
+#: measurements if the production lock-wait distribution clusters elsewhere.
+_EVENT_LOG_LOCK_WAIT_BUCKETS: Final[tuple[float, ...]] = (0.1, 1.0, 10.0, 100.0, 1000.0)
+
 #: O(1) membership-test set companions for the capability enums — used by
 #: :func:`_update_capability_denied` (Story 11.2 P1-H3) to defensively
 #: skip out-of-enum tier/boundary values (Pydantic validation upstream
@@ -271,6 +278,10 @@ class MetricsState:
             Story 10.4 D1; pre-populated at zero.
         capability_denied_total: Counter — DEFERRED-preview per
             Story 10.4 D1; pre-populated at zero.
+        event_log_lock_wait_ms: Histogram — Story 11.2.3 AC2.
+            Pre-registered with buckets [0.1, 1, 10, 100, 1000] ms and a
+            single ``observe(0.0)`` so the metric name appears in the
+            scrape surface before any real lock-wait sample arrives.
     """
 
     registry: CollectorRegistry
@@ -287,6 +298,8 @@ class MetricsState:
     # Story 10.4 AC8 — DEFERRED preview counters.
     idempotency_cache_total: Counter
     capability_denied_total: Counter
+    # Story 11.2.3 AC2 — EventLogWriter fcntl.flock lock-wait observability.
+    event_log_lock_wait_ms: Histogram
     # Story 10.4 P1-H3 — bounded LRU of terminated task_ids used by
     # :func:`_update_task_tokens` to prevent the ghost-gauge regression
     # (out-of-order ``task.budget_exceeded`` after the terminal event
@@ -821,6 +834,36 @@ def build_collectors(registry: CollectorRegistry) -> MetricsState:
         for _boundary in _CAPABILITY_BOUNDARIES:
             capability_denied_total.labels(tier=_tier, boundary=_boundary).inc(0)
 
+    # Story 11.2.3 AC2 — EventLogWriter fcntl.flock(LOCK_EX) lock-wait
+    # latency observability. The writer (services/registry-state/.../
+    # event_log.py) is the only producer; it currently does not push
+    # samples cross-process because the writer process IS clawhip-bridge,
+    # which has no scrape endpoint of its own. Pre-registration here keeps
+    # operator dashboards stable for the day the cross-process bridge
+    # ships (Story 11.2.x follow-up). For now, the histogram is observable
+    # only if registry-api (which hosts metrics-subscriber) ever instantiates
+    # an EventLogWriter with this histogram wired as the
+    # ``lock_wait_observer`` callback. Buckets are the OQ-2 default
+    # (see ``_EVENT_LOG_LOCK_WAIT_BUCKETS``).
+    event_log_lock_wait_ms = Histogram(
+        "omb_event_log_lock_wait_ms",
+        (
+            "Time spent waiting for the EventLogWriter fcntl.flock(LOCK_EX) "
+            "inter-process lock, in milliseconds. Story 11.2.3 AC2 — closes "
+            "the FR26 multi-writer concern by serializing concurrent "
+            "clawhip-bridge subprocess writers. Pre-registered with buckets "
+            "[0.1, 1, 10, 100, 1000] ms (OQ-2 default)."
+        ),
+        buckets=_EVENT_LOG_LOCK_WAIT_BUCKETS,
+        registry=registry,
+    )
+    # Story 10.4 pre-population pattern (mirror of capability_denied_total):
+    # observe a single 0.0 sample so the metric NAME appears in
+    # ``generate_latest()`` even before any real write has occurred.
+    # Operator dashboards depending on the metric name therefore see a
+    # stable surface from the first scrape.
+    event_log_lock_wait_ms.observe(0.0)
+
     return MetricsState(
         registry=registry,
         lag_seconds=lag_seconds,
@@ -834,6 +877,7 @@ def build_collectors(registry: CollectorRegistry) -> MetricsState:
         task_tokens_spent=task_tokens_spent,
         idempotency_cache_total=idempotency_cache_total,
         capability_denied_total=capability_denied_total,
+        event_log_lock_wait_ms=event_log_lock_wait_ms,
     )
 
 

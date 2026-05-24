@@ -111,6 +111,11 @@ def build_server(
             client = ClawhipBridgeClient(
                 command=clawhip_bridge_command,
                 args=clawhip_bridge_args,
+                # Story 11.2.3 AC5: pass the server's configured identity
+                # so ``forward_capability_denied_audit`` can validate the
+                # caller's claimed identity matches.
+                caller_actor_kind=actor_kind,
+                caller_actor_id=actor_id,
             )
             await client.__aenter__()
             emitter_holder.client = client

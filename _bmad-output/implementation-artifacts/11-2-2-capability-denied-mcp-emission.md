@@ -444,3 +444,16 @@ predecessor_commits: c9bdd2a (Story 11.2.1 pass-1 review), f838b7d (Story 11.2.1
 ddo: Epic 10 retro DD5 — MCP boundary half of the counter
 ---
 ```
+
+## Post-close updates
+
+- **2026-05-24 (Story 11.2.3 closure):** Story 11.2.3 closed the FR26
+  multi-writer concern (fcntl.flock(LOCK_EX) in EventLogWriter) AND the
+  PQ9 audit-forgery vector (dedicated `forward_capability_denied_audit`
+  MCP tool with `caller_actor_kind` non-operator gate + payload.actor_id
+  override). `OMB_MCP_AUDIT_EMISSION_ENABLED` feature flag default
+  flipped from OFF to ON. The "known limitation" Story 11.2.2 pass-2
+  documented (tier-1 callers could forge `capability.denied` via
+  `emit_event`) is now mitigated — `emit_event` rejects audit-only types
+  in `_emit_overrides` per Story 11.2.3 AC4. Legacy
+  `*_DISABLE_AUDIT_EMISSION=1` remains as operator kill-switch.
