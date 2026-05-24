@@ -608,6 +608,52 @@ class TestShortWriteAndPoison:
         assert recovered[0] == env
 
     @pytest.mark.asyncio
+    async def test_keyboard_interrupt_releases_flock(
+        self,
+        tmp_path: Path,
+        fixed_clock: FrozenClock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """BaseException during write path triggers LOCK_UN in finally.
+
+        Verifies the PP3 restructuring: flock acquisition is inside the
+        try block, so LOCK_UN always runs in finally — even for
+        BaseException (KeyboardInterrupt, SystemExit, etc.).
+        """
+        import fcntl
+
+        from registry_state.adapters import event_log as _elm
+
+        if _elm._fcntl is None:
+            pytest.skip("fcntl not available on this platform")
+
+        env = _make_envelope(clock=fixed_clock)
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+
+        flock_ops: list[int] = []
+        real_flock = fcntl.flock
+
+        def tracking_flock(fd: int, op: int) -> None:
+            flock_ops.append(op)
+            return real_flock(fd, op)
+
+        monkeypatch.setattr(_elm._fcntl, "flock", tracking_flock)
+
+        def interrupting_write(fd: int, data: bytes) -> int:
+            raise KeyboardInterrupt("simulated interrupt")
+
+        monkeypatch.setattr(os, "write", interrupting_write)
+
+        with pytest.raises(KeyboardInterrupt, match="simulated interrupt"):
+            await writer.append(env)
+
+        assert fcntl.LOCK_EX in flock_ops, "LOCK_EX should have been called"
+        assert fcntl.LOCK_UN in flock_ops, (
+            "LOCK_UN must run in finally even after BaseException"
+        )
+        assert writer._poisoned is True
+
+    @pytest.mark.asyncio
     async def test_os_write_short_write_loops_to_completion(
         self,
         tmp_path: Path,

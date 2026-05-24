@@ -441,11 +441,13 @@ class EventLogWriter:
         # platforms so Windows / WSL contributors don't pollute the
         # histogram with zero-wait samples.
         lock_start_ns = 0
+        lock_acquired_ns: int = 0
         locked_fd: int | None = None
         try:
             if _FCNTL_AVAILABLE:
                 lock_start_ns = time.monotonic_ns()
                 _fcntl.flock(self._fd, _fcntl.LOCK_EX)
+                lock_acquired_ns = time.monotonic_ns()
                 locked_fd = self._fd
 
             remaining = data
@@ -470,11 +472,14 @@ class EventLogWriter:
             if locked_fd is not None:
                 with contextlib.suppress(OSError):
                     _fcntl.flock(locked_fd, _fcntl.LOCK_UN)
-            # PP3-Edge: observe lock-wait AFTER LOCK_UN to keep the
-            # hold window minimal. Skipped entirely if flock wasn't
-            # available (avoids polluting the histogram).
+            # PP3-Edge: observe lock-acquisition-wait AFTER LOCK_UN so
+            # observer runtime does not inflate the hold window for other
+            # processes. The value is acquisition wait only (time from
+            # LOCK_EX call to acquisition), NOT total hold duration.
+            # Skipped entirely if flock wasn't available (avoids polluting
+            # the histogram).
             if locked_fd is not None and self._lock_wait_observer is not None:
-                lock_wait_ms = (time.monotonic_ns() - lock_start_ns) / 1_000_000
+                lock_wait_ms = (lock_acquired_ns - lock_start_ns) / 1_000_000
                 with contextlib.suppress(Exception):
                     # Observer must not break the write path; swallow defensively.
                     self._lock_wait_observer(lock_wait_ms)
