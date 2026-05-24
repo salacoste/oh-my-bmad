@@ -616,9 +616,21 @@ class TestShortWriteAndPoison:
     ) -> None:
         """BaseException during write path triggers LOCK_UN in finally.
 
-        Verifies the PP3 restructuring: flock acquisition is inside the
-        try block, so LOCK_UN always runs in finally — even for
+        Verifies the Story 11.2.3 PP3 restructuring: flock acquisition is
+        inside the try block, so LOCK_UN always runs in finally — even for
         BaseException (KeyboardInterrupt, SystemExit, etc.).
+
+        Story 11.3.1 pass-1 review P0 (Edge #7 + Blind #8): the test
+        previously asserted ``LOCK_UN in flock_ops`` using set membership.
+        With the tracking wrapper appending ops BEFORE calling the real
+        flock, the assertion would pass even if the real ``LOCK_UN``
+        syscall errored (production wraps in ``contextlib.suppress(OSError)``).
+        Now: ops are appended AFTER the real flock succeeds, AND the
+        assertion pins exact ordering ``[LOCK_EX, LOCK_UN]`` so a
+        buggy double-release or out-of-order release is caught.
+        Additionally: ``os.write`` monkeypatch is now scoped to the
+        writer's own fd (P1-M Blind #7) so unrelated stdlib writes
+        (logging, asyncio runner) don't crash the test.
         """
         import fcntl
 
@@ -630,25 +642,43 @@ class TestShortWriteAndPoison:
         env = _make_envelope(clock=fixed_clock)
         writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
 
+        # Drive a no-op write so writer._fd is populated, then close so the
+        # actual test path can re-open it on first append. Cleaner: pre-warm
+        # by calling _ensure_current_day directly. Simpler approach: keep the
+        # writer pristine, let append() open its fd, and narrow the
+        # os.write monkeypatch to that fd.
         flock_ops: list[int] = []
         real_flock = fcntl.flock
 
         def tracking_flock(fd: int, op: int) -> None:
+            # Record AFTER successful real_flock so a real-flock failure is
+            # NOT recorded as success in flock_ops.
+            real_flock(fd, op)
             flock_ops.append(op)
-            return real_flock(fd, op)
 
         monkeypatch.setattr(_elm._fcntl, "flock", tracking_flock)  # type: ignore[attr-defined]
 
+        original_write = os.write
+
         def interrupting_write(fd: int, data: bytes) -> int:
-            raise KeyboardInterrupt("simulated interrupt")
+            # P1-M Blind #7: narrow monkeypatch — only interrupt writes to
+            # the writer's fd. Other os.write calls (logging, asyncio
+            # internals) pass through unchanged.
+            if writer._fd is not None and fd == writer._fd:
+                raise KeyboardInterrupt("simulated interrupt")
+            return original_write(fd, data)
 
         monkeypatch.setattr(os, "write", interrupting_write)
 
-        with pytest.raises(KeyboardInterrupt, match="simulated interrupt"):
+        with pytest.raises(KeyboardInterrupt):
             await writer.append(env)
 
-        assert fcntl.LOCK_EX in flock_ops, "LOCK_EX should have been called"
-        assert fcntl.LOCK_UN in flock_ops, "LOCK_UN must run in finally even after BaseException"
+        # P0 (Edge #7 + Blind #8): exact-order assertion. LOCK_EX must
+        # acquire FIRST, LOCK_UN must release LAST, nothing in between,
+        # and the list must NOT contain a duplicate release.
+        assert flock_ops == [fcntl.LOCK_EX, fcntl.LOCK_UN], (
+            f"flock ops must be [LOCK_EX, LOCK_UN] in order; got {flock_ops!r}"
+        )
         assert writer._poisoned is True
 
     @pytest.mark.asyncio

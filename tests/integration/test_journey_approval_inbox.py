@@ -198,7 +198,15 @@ def _make_sink_with_mocked_registry(
     async def _get_pinned_inbox(
         operator_chat_id: int, *, request_id: str | None = None
     ) -> int | None:
-        return pinned_thread_id
+        # Pass-1 review PP1 (Blind #1): branch on operator_chat_id rather
+        # than returning a constant for any chat — pre-PP1 the mock made
+        # the AC3 "routing to pinned" assertion tautological. Now the
+        # routing decision IS exercised: only operator_chat_id == the
+        # SEEDED chat (where the materializer wrote a row) returns the
+        # pinned thread; other chats fall through to per-task binding.
+        if operator_chat_id == _OPERATOR_CHAT_ID:
+            return pinned_thread_id
+        return None
 
     registry_client_mock = MagicMock()
     registry_client_mock.get_task_binding = AsyncMock(side_effect=_get_task_binding)
@@ -219,9 +227,10 @@ def _make_sink_with_mocked_registry(
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="function")  # PP-Edge#9 — Story 8.7.6 PP2 discipline
 async def test_journey_approval_inbox_10_event_replay_all_routed_to_pinned_thread(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Story 11.3.1 AC1+AC2+AC3: 10 approval requests → pinned thread.
 
@@ -245,6 +254,12 @@ async def test_journey_approval_inbox_10_event_replay_all_routed_to_pinned_threa
          task's ``reply_to_message_id`` in the
          ``https://t.me/c/<short>/<msg>`` deep link).
     """
+    # PP-Edge#4: defensively unset the deliver-event-types env var so
+    # ambient CI config can't silently drop task.approval_requested
+    # envelopes at the sink's filter and fail the test for an unrelated
+    # reason.
+    monkeypatch.delenv("CLAWHIP_DAEMON_DELIVER_EVENT_TYPES", raising=False)
+
     # --- 1. Build EventLogWriter + on-disk SQLite ---
     events_dir = tmp_path / "events"
     events_dir.mkdir()
@@ -341,11 +356,12 @@ async def test_journey_approval_inbox_10_event_replay_all_routed_to_pinned_threa
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="function")  # PP-Edge#9 — Story 8.7.6 PP2 discipline
 async def test_journey_approval_inbox_replay_does_not_dedupe_at_sink(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Story 11.3.1 AC5: replaying the same 10 envelopes produces 20 calls.
+    """Story 11.3.1 AC5: re-reading the JSONL log produces 20 calls.
 
     Pins the current behavior: the Telegram sink does NOT dedupe
     duplicate envelopes (idempotency is the materializer's
@@ -353,18 +369,35 @@ async def test_journey_approval_inbox_replay_does_not_dedupe_at_sink(
     feature would intentionally break this assertion, signalling a
     deliberate behavior change.
 
-    No DB seed is needed here — Variant 1 above already exercises the
-    full materializer path; this test focuses narrowly on the no-dedup
-    invariant by passing the same envelope list through ``_handle``
-    twice (mirrors how a reader offset reset would replay events).
+    Pass-1 review PP2 (Blind #2 + Edge #1): the previous version called
+    ``sink._handle`` twice on the in-memory envelope list — a "called
+    twice" test that did NOT exercise the reader-replay path. The
+    spec's AC5 wording says "resetting the sink's EventLogReader
+    offset" — fresh EventLogReader instances start at offset 0 so
+    constructing two readers and feeding both batches through
+    ``_handle`` simulates the offset-reset semantics genuinely.
     """
+    # PP-Edge#4: defensively unset the deliver-event-types env var.
+    monkeypatch.delenv("CLAWHIP_DAEMON_DELIVER_EVENT_TYPES", raising=False)
+
+    from datetime import UTC, datetime
+
+    from registry_state.adapters.event_log import EventLogWriter
+
     events_dir = tmp_path / "events"
     events_dir.mkdir()
+    clock = FrozenClock(now=datetime.now(UTC), mono_ns=1_000_000)
 
-    approval_envelopes = [_make_approval_request_envelope(index=i) for i in range(10)]
+    # Persist 10 approval envelopes to disk via the real EventLogWriter.
+    writer = EventLogWriter(base_dir=events_dir, clock=clock)
+    in_memory_envelopes = [_make_approval_request_envelope(index=i) for i in range(10)]
+    for env in in_memory_envelopes:
+        await writer.append(env)
+    await writer.close()
+
     binding_by_task_id: dict[str, tuple[int, int]] = {
         env.payload.task_id: (_OPERATOR_CHAT_ID, 200 + i)
-        for i, env in enumerate(approval_envelopes)
+        for i, env in enumerate(in_memory_envelopes)
     }
     sink, outbound_mock = _make_sink_with_mocked_registry(
         events_dir=events_dir,
@@ -372,13 +405,22 @@ async def test_journey_approval_inbox_replay_does_not_dedupe_at_sink(
         binding_by_task_id=binding_by_task_id,
     )
 
-    # First pass — 10 calls.
-    for env in approval_envelopes:
+    # First pass — fresh reader (offset 0) reads all 10 from disk.
+    reader_pass_1 = EventLogReader(events_dir)
+    replayed_1 = await reader_pass_1.read_new_envelopes()
+    assert len(replayed_1) == 10, f"first reader pass yielded {len(replayed_1)} envelopes, want 10"
+    for env in replayed_1:
         await sink._handle(env)
     assert outbound_mock.send_to_thread.call_count == 10
 
-    # Second pass — 10 MORE calls (sink does NOT dedupe).
-    for env in approval_envelopes:
+    # Second pass — NEW reader instance (offset reset to 0). Re-reads
+    # the same on-disk envelopes; sink processes them again.
+    reader_pass_2 = EventLogReader(events_dir)
+    replayed_2 = await reader_pass_2.read_new_envelopes()
+    assert len(replayed_2) == 10, (
+        f"second reader pass yielded {len(replayed_2)} envelopes, want 10 (offset should reset)"
+    )
+    for env in replayed_2:
         await sink._handle(env)
     assert outbound_mock.send_to_thread.call_count == 20, (
         f"sink unexpectedly deduplicated replays; expected 20 calls, "

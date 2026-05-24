@@ -1,6 +1,6 @@
 # Story 11.3.1 — 10-event approval-inbox replay integration test
 
-Status: **done** (PR-gate CI green @ e15d31c (run 26348059811) 2026-05-24; nightly failures pre-existing per Story 11.3.3)
+Status: **review** (pass-1 review batch-applied 2026-05-24 — 7 fixes incl. P0 flock-ordering test correctness + P1-H mock realism + P1-H AC5 reader-replay; CI pending @ pre-commit; baseline pass-1 PR-gate CI green @ e15d31c (run 26348059811))
 
 ## Story
 
@@ -292,18 +292,20 @@ test drives `_handle` directly to keep the harness deterministic
 - `test_journey_approval_inbox_10_event_replay_all_routed_to_pinned_thread` (load-bearing Variant 1)
 - `test_journey_approval_inbox_replay_does_not_dedupe_at_sink` (AC5 no-dedup)
 
-**Variant 2 implemented?:** No — deferred per OQ-4. The in-process
-sink-handler flow does NOT construct a deterministic race window:
-`_handle` is a single coroutine that awaits the binding lookup, then
-synchronously awaits the pinned-inbox lookup. Both are mocked locally
-so there is no inter-coroutine interleaving. The race the parent
-Story 11.3 D1 described is between the **materializer write loop**
-(separate subscriber process) and the **sink read loop** — which
-requires multi-process orchestration to exercise. Variant 2 race
-tolerance is documented as covered by Story 11.3 AC4's existing unit
-test `test_telegram_sink_routes_to_task_thread_when_no_inbox` (sink
-falls back to task-thread on 404 / transient 5xx — the exact failure
-mode the race would surface as). Acceptable per spec OQ-4.
+**Variant 2 implemented?:** No — deferred per OQ-4. Pass-1 review
+(Edge #2) corrected the original rationale: the race IS constructible
+in-process between the materializer write loop and the sink read loop
+(both ARE separable coroutines even when colocated). The deferral is
+COST-BASED, not impossibility-based: deterministically constructing
+the race would require seeding `get_pinned_inbox` to return `None`
+first, then flipping the mock mid-stream after N envelopes, and
+asserting the routing split — meaningful but redundant with Story
+11.3 AC4's existing unit test
+`test_telegram_sink_routes_to_task_thread_when_no_inbox` which
+exercises the no-inbox fallback path. The current sink path on 404
+or transient 5xx (`get_pinned_inbox → None`) is the EXACT failure
+mode the race surfaces as; the parent unit test covers it. Spec
+OQ-4 explicitly authorized this deferral.
 
 **Race window observations:** In the in-process harness, the sink
 behaves deterministically: when `get_pinned_inbox` returns
