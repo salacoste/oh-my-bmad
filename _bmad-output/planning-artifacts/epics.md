@@ -2434,6 +2434,28 @@ If any item above is not green/complete, Phase 1 has not shipped. The three arch
 - `OPERATOR_HMAC_KEY` grep-checked to never appear in any event/log/snapshot (`tests/integration/test_hmac_key_isolation.py`).
 - ADR-0006 authored and `accepted`.
 
+**Status: CLOSED** — all 5 stories `done`; acceptance gate fully satisfied (retro `epic-11-retro-2026-05-21.md`). Carry-forward follow-up stories below were born during execution and are tracked in `sprint-status.yaml`, not part of the original gate.
+
+### Epic 11 post-epic carry-forward stories (born during execution)
+
+These follow-up stories were filed during Epic 11 implementation (deferrals, retro
+action items, and discovered debt). They do NOT block the Epic 11 acceptance gate
+(which closed 2026-05-21) but complete the epic's loose ends. Status as of 2026-05-25:
+
+| Story | Scope | Status |
+|---|---|---|
+| 11.2.1 | `capability.denied` HTTP-boundary emission (Epic 10 DD5) | **done** (`c9bdd2a`) |
+| 11.2.2 | `capability.denied` MCP-boundary emission (DD5) | **done** (`ddc8828`) |
+| 11.2.3 | fcntl.flock + `forward_capability_denied_audit` (FR26 + PQ9 + DD5) | **done** (`0ed21d1`) |
+| 11.3.1 | 10-event approval-inbox replay integration test (11.3 AC5) | **done** (`367eca0`) |
+| 11.3.2 | Nightly healthcheck-timeout hotfix (CI knob bumps) | **done — scope-bounded** (`edc1847`); nightly still red, root cause deferred to 11.3.3 |
+| 11.3.3 | Nightly deeper diagnosis (local Docker repro + root cause) | **in-progress — partial** (`f6b4b89`): Fix-A idempotency + Fix-B bind-mount perms + AC2 lifespan trace shipped; Fix-C (Linux-specific 120s healthcheck hang) diagnosis awaits next nightly's phase trace |
+| 11.5.1 | `/key-status` Telegram + console-cli surface (11.5 AC6) | **backlog** |
+
+**Epic 11 retro addendum** (`epic-11-retro-addendum-2026-05-24.md`): 6 new lessons
+(L7–L12) + 5 action items (AI-6–AI-10) crystallized from the carry-forward stream;
+the cross-cutting-story 3-lane review mandate (L1) now has 11 consecutive validations.
+
 ---
 
 ## Epic 12: Per-task budget enforcement loop (κ)
