@@ -1,6 +1,6 @@
 # Story 11.3.1 — 10-event approval-inbox replay integration test
 
-Status: **review** (pass-1 review batch-applied 2026-05-24 — 7 fixes incl. P0 flock-ordering test correctness + P1-H mock realism + P1-H AC5 reader-replay; CI pending @ pre-commit; baseline pass-1 PR-gate CI green @ e15d31c (run 26348059811))
+Status: **done** (pass-1 review CI green @ 367eca0 (run 26348572902) 2026-05-24 — 7 fixes batch-applied; 11th consecutive Epic 11 retro L1 validation)
 
 ## Story
 
