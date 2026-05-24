@@ -407,9 +407,11 @@ async def test_cardinality_under_10k_varying_task_ids(
     # materialising one ``omb_metrics_subscriber_cursor_offset_bytes{path=...}``
     # child.  The critical zero-leak invariant
     # (``task_tokens_spent._metrics`` empty) is asserted separately below.
-    assert count <= 54, (
-        f"10K cardinality drift: got {count} canonical timeseries, expected <= 54 "
-        f"(53 baseline + 1 cursor-offset path child). Breakdown: {breakdown}"
+    # Story 11.2.3 PP1 (pass-1 review, Edge P0 live-reproduced): baseline
+    # bumped 53 → 61 (omb_event_log_lock_wait_ms Histogram +8 series).
+    assert count <= 62, (
+        f"10K cardinality drift: got {count} canonical timeseries, expected <= 62 "
+        f"(61 baseline + 1 cursor-offset path child). Breakdown: {breakdown}"
     )
 
     # Critical: the per-task gauge has zero labelled children after
@@ -602,10 +604,10 @@ async def test_deliberate_unbounded_label_violation_fails(
         r = await client.get("/metrics")
         body = r.text
     count = _count_canonical_timeseries(body)
-    # 53 baseline + 200 novel labelled children = 253.
-    assert count >= 53 + leak_count, (
+    # Story 11.2.3: baseline bumped 53 → 61. 61 + 200 novel labelled children = 261.
+    assert count >= 61 + leak_count, (
         f"deliberate violation did NOT materialise the cardinality leak: "
-        f"got {count} canonical timeseries, expected >= {53 + leak_count}. "
+        f"got {count} canonical timeseries, expected >= {61 + leak_count}. "
         f"This means the gate would NOT detect a real cardinality regression."
     )
 

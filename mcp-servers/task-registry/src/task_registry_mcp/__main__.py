@@ -129,6 +129,15 @@ def main() -> None:
     # ``forward_capability_denied_audit`` MCP tool with caller identity
     # validation). Operators can still kill-switch via
     # ``TASK_REGISTRY_DISABLE_AUDIT_EMISSION=1``.
+    #
+    # PP7 (pass-1 review): documented behavior on empty-string vs unset.
+    # ``unset``  → ON  (default)
+    # ``""``     → ON  (treated as "use default")
+    # ``"1"``    → ON
+    # ``"0"``    → OFF
+    # ``anything else`` → ON (lenient — defensive default-ON for audit)
+    # Operators who want OFF MUST set ``"0"`` explicitly, OR use the
+    # legacy ``TASK_REGISTRY_DISABLE_AUDIT_EMISSION=1`` kill-switch.
     enable_audit = os.environ.get("OMB_MCP_AUDIT_EMISSION_ENABLED", "1").strip() != "0"
     force_disable_audit = os.environ.get("TASK_REGISTRY_DISABLE_AUDIT_EMISSION", "").strip() == "1"
     clawhip_cmd: str | None = None

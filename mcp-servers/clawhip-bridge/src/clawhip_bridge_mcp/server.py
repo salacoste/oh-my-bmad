@@ -311,16 +311,19 @@ def build_server(
                     reason=exc.reason,
                 )
                 # Internal ``_emit`` bypasses ``check_tier`` — see AC3-A above.
-                # Uses _CAPABILITY_DENIED / _SYSTEM_EMITTER constants so
-                # schema version, event type, and actor identity stay in
-                # sync with _emit_overrides above.
+                # PP9 (pass-1 review): derive (schema_version, actor_override)
+                # from ``_emit_overrides`` so all 3 callers (this self-emit
+                # path, ``forward_capability_denied_audit``, and the public
+                # ``emit_event`` rejection check) stay in lock-step with a
+                # single dict entry.
+                _sv, _ao = _emit_overrides[_CAPABILITY_DENIED_TYPE]
                 await _emit(
                     _CAPABILITY_DENIED_TYPE,
                     audit_payload,
                     None,
                     caller_trace_id=caller_trace_id,
-                    schema_version="1.1.0",
-                    actor_override=_SYSTEM_EMITTER,
+                    schema_version=_sv,
+                    actor_override=_ao,
                 )
             except (asyncio.CancelledError, KeyboardInterrupt):
                 # Defensive: BaseException subclasses never caught by
@@ -375,6 +378,19 @@ def build_server(
         # ``_check_tier_with_self_emit`` (denying the forged-audit type
         # itself must not loop back through the self-deny audit path).
         if type in _emit_overrides:
+            # PP6 (pass-1 review): emit a WARNING log line on rejection so
+            # security operators can detect probing. Pre-PP6 the rejection
+            # was unobservable — no envelope, no metric, no log — making
+            # forgery-attempt detection impossible.
+            log.warning(
+                "capability_denied_forgery_attempt_rejected",
+                extra={
+                    "attempted_type": type,
+                    "caller_trace_id": caller_trace_id,
+                    "configured_actor_kind": actor_kind,
+                    "configured_actor_id": actor_id,
+                },
+            )
             raise PermissionError(
                 f"event type {type!r} must be emitted via the dedicated "
                 f"audit-forwarding tool (forward_capability_denied_audit), "
@@ -458,13 +474,26 @@ def build_server(
         Raises:
             ValueError: invalid ``caller_trace_id`` shape.
             PermissionError: ``caller_actor_kind == 'operator'`` (use HTTP
-                boundary instead) OR ``caller_actor_kind`` mismatches this
-                server's configured ``actor_kind``.
+                boundary instead). PP10 (pass-1 review): the previously
+                advertised kind-vs-server-configured-kind mismatch raise was
+                removed during impl (stdio MCP has no connection-level
+                credentials; trust self-attestation per Story 11.2.3 OQ-1
+                deferred to Phase 3 Remote-MCP).
         """
         validate_caller_trace_id(caller_trace_id)
         # AC3: reject operator kind — operators emit via HTTP boundary
         # (Story 11.2.1), never via MCP-RPC forwarding.
         if caller_actor_kind == "operator":
+            # PP6 (pass-1 review): WARN log on rejection so security
+            # operators can detect probing — same discipline as PQ9.
+            log.warning(
+                "capability_denied_forwarding_operator_kind_rejected",
+                extra={
+                    "caller_trace_id": caller_trace_id,
+                    "caller_actor_id": caller_actor_id,
+                    "configured_actor_kind": actor_kind,
+                },
+            )
             raise PermissionError(
                 "forward_capability_denied_audit is not available for "
                 "caller_actor_kind='operator' — operators emit capability.denied "
@@ -492,14 +521,24 @@ def build_server(
         # AC3: stamp payload.actor_id with the validated caller identity.
         # Caller cannot forge the subject-of-audit identity — only the
         # forwarding MCP server's CONFIGURED actor_id is recorded.
-        payload["actor_id"] = caller_actor_id
+        #
+        # PP5 (pass-1 review): non-mutating copy so the caller's dict
+        # is not silently overwritten. The previous in-place mutation
+        # surprised the in-process adapter test path (caller's local
+        # dict would carry the override on retry).
+        forwarded_payload = {**payload, "actor_id": caller_actor_id}
+        # PP9 (pass-1 review): derive schema_version + actor_override
+        # from ``_emit_overrides`` rather than hardcoded literals so
+        # future schema bumps (e.g., 1.1.0 → 1.2.0) touch ONE place
+        # — the dict — not multiple call sites.
+        schema_version, actor_override = _emit_overrides[_CAPABILITY_DENIED_TYPE]
         return await _emit(
             _CAPABILITY_DENIED_TYPE,
-            payload,
+            forwarded_payload,
             parent_event_id,
             caller_trace_id=caller_trace_id,
-            schema_version="1.1.0",
-            actor_override=_SYSTEM_EMITTER,
+            schema_version=schema_version,
+            actor_override=actor_override,
         )
 
     # ------------------------------------------------------------------

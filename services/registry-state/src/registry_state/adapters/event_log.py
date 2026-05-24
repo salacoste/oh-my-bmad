@@ -427,16 +427,27 @@ class EventLogWriter:
         # On non-fcntl platforms (Windows), this is a no-op — degrades
         # gracefully back to single-writer (a warning was logged at
         # writer construction time).
-        lock_start_ns = time.monotonic_ns()
-        if _FCNTL_AVAILABLE:
-            _fcntl.flock(self._fd, _fcntl.LOCK_EX)
-        lock_wait_ms = (time.monotonic_ns() - lock_start_ns) / 1_000_000
-        if self._lock_wait_observer is not None:
-            with contextlib.suppress(Exception):
-                # Observer must not break the write path; swallow defensively.
-                self._lock_wait_observer(lock_wait_ms)
-
+        #
+        # Pass-1 review PP3: flock acquisition INSIDE the try block so the
+        # outer finally always runs LOCK_UN — even if the observer
+        # callback raises BaseException (KeyboardInterrupt, SystemExit,
+        # asyncio.CancelledError on 3.11+). Capture the locked fd in a
+        # local at acquisition time (PP3-Edge defensive nit) so day-roll
+        # in a future refactor cannot point LOCK_UN at a different fd.
+        # PP3-Edge: observe lock-wait AFTER LOCK_UN, not inside the
+        # hold window — observer runtime would otherwise inflate
+        # contention for other processes.
+        # PP3-Blind: skip the timing+observer entirely on non-fcntl
+        # platforms so Windows / WSL contributors don't pollute the
+        # histogram with zero-wait samples.
+        lock_start_ns = 0
+        locked_fd: int | None = None
         try:
+            if _FCNTL_AVAILABLE:
+                lock_start_ns = time.monotonic_ns()
+                _fcntl.flock(self._fd, _fcntl.LOCK_EX)
+                locked_fd = self._fd
+
             remaining = data
             while remaining:
                 n = os.write(self._fd, remaining)
@@ -452,11 +463,21 @@ class EventLogWriter:
             raise
         finally:
             # Story 11.2.3: release the inter-process flock. Idempotent on
-            # error paths — if acquisition failed (the only way to reach
-            # this finally without holding the lock), LOCK_UN is a no-op.
-            if _FCNTL_AVAILABLE and self._fd is not None:
+            # the never-acquired path (``locked_fd is None``). Even if the
+            # caller observed BaseException during write, the LOCK_UN
+            # still runs because this finally has no exception-class
+            # filtering.
+            if locked_fd is not None:
                 with contextlib.suppress(OSError):
-                    _fcntl.flock(self._fd, _fcntl.LOCK_UN)
+                    _fcntl.flock(locked_fd, _fcntl.LOCK_UN)
+            # PP3-Edge: observe lock-wait AFTER LOCK_UN to keep the
+            # hold window minimal. Skipped entirely if flock wasn't
+            # available (avoids polluting the histogram).
+            if locked_fd is not None and self._lock_wait_observer is not None:
+                lock_wait_ms = (time.monotonic_ns() - lock_start_ns) / 1_000_000
+                with contextlib.suppress(Exception):
+                    # Observer must not break the write path; swallow defensively.
+                    self._lock_wait_observer(lock_wait_ms)
 
     def _ensure_current_day(self, now: datetime) -> None:
         """Open (or roll) the fd to the correct per-day file — atomically.

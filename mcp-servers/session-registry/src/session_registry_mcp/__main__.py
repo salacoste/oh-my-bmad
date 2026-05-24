@@ -108,7 +108,8 @@ def main() -> None:
     # discipline applies here to mitigate FR26 multi-writer until Story 11.2.3
     # ships a shared clawhip-bridge daemon.
     # Story 11.2.3 AC6: feature flag now defaults to ON — see task-registry
-    # sibling for the rationale. Operators kill-switch via
+    # sibling for the rationale + PP7 (pass-1 review) empty-string semantics
+    # (unset/empty/"1"/other → ON; "0" → OFF). Operators kill-switch via
     # ``SESSION_REGISTRY_DISABLE_AUDIT_EMISSION=1``.
     enable_audit = os.environ.get("OMB_MCP_AUDIT_EMISSION_ENABLED", "1").strip() != "0"
     force_disable_audit = (

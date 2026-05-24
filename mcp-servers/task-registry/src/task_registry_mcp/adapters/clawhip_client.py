@@ -110,10 +110,17 @@ class ClawhipBridgeClient:
     command: str
     args: list[str]
     # Story 11.2.3 AC5: caller identity passed at construction time so the
-    # ``forward_capability_denied_audit`` MCP tool can validate that the
-    # caller's claimed actor_kind matches the configured actor_kind
-    # (prevents a worker-configured MCP server from forging an audit
-    # claiming to be on behalf of an operator).
+    # ``forward_capability_denied_audit`` MCP tool can stamp
+    # ``payload.actor_id`` with the validated caller identity. Empty
+    # defaults exist only so test fixtures may construct the client
+    # without wiring real values; production-path code goes through
+    # ``app/main.py:build_server`` which always supplies non-empty
+    # ``actor_kind`` / ``actor_id`` (the ``__main__.py`` exits 2 if
+    # either env var is missing). If a future caller forgets to wire
+    # these in a production-shaped path, the resulting empty
+    # ``payload.actor_id`` will be rejected by ``CapabilityDeniedPayload``'s
+    # ``min_length=1`` Pydantic check → caught by the decorator's PD-1
+    # fail-soft block and logged at ERROR (``capability_denied_emission_failed``).
     caller_actor_kind: str = ""
     caller_actor_id: str = ""
     # PQ7 (pass-1 review): explicit allowlist rather than ``dict(os.environ)``.
