@@ -1,6 +1,6 @@
 # Story 11.2.3 — clawhip-bridge multi-writer safety + dedicated audit-forwarding tool
 
-Status: **review** (all 9 ACs satisfied; CI pending @ pre-commit; ready for `/bmad-code-review 11-2-3`)
+Status: **review** (all 9 ACs satisfied; CI green @ 14a5f9e (run 26347222697) 2026-05-24; ready for `/bmad-code-review 11-2-3`)
 
 ## Story
 
