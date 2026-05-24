@@ -2449,7 +2449,8 @@ action items, and discovered debt). They do NOT block the Epic 11 acceptance gat
 | 11.2.3 | fcntl.flock + `forward_capability_denied_audit` (FR26 + PQ9 + DD5) | **done** (`0ed21d1`) |
 | 11.3.1 | 10-event approval-inbox replay integration test (11.3 AC5) | **done** (`367eca0`) |
 | 11.3.2 | Nightly healthcheck-timeout hotfix (CI knob bumps) | **done — scope-bounded** (`edc1847`); nightly still red, root cause deferred to 11.3.3 |
-| 11.3.3 | Nightly deeper diagnosis (local Docker repro + root cause) | **in-progress — partial** (`f6b4b89`): Fix-A idempotency + Fix-B bind-mount perms + AC2 lifespan trace shipped; Fix-C (Linux-specific 120s healthcheck hang) diagnosis awaits next nightly's phase trace |
+| 11.3.3 | Nightly deeper diagnosis (local Docker repro + root cause) | **done** (`cb53279`): Fix-A idempotency + Fix-B bind-mount uid/gid + AC2 lifespan trace → nightly 1/4 → **3/4 green** (run 26373557044). The crash-injection 120s "hang" was the bind-mount uid issue (Fix-B), not a lifespan deadlock. Outstanding: AI-1 review + AC1 recipe + AC5 cache deferred |
+| 11.3.4 | Separability stack task-progression failure | **backlog** — Path B split from 11.3.3; S-3 separability tasks stall at `task.created` (orchestrator/worker lifecycle, unmasked once Fix-B removed the PermissionError); last red nightly job |
 | 11.5.1 | `/key-status` Telegram + console-cli surface (11.5 AC6) | **backlog** |
 
 **Epic 11 retro addendum** (`epic-11-retro-addendum-2026-05-24.md`): 6 new lessons

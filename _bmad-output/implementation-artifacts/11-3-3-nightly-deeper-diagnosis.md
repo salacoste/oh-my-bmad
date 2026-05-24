@@ -1,22 +1,30 @@
 # Story 11.3.3 — Nightly deeper diagnosis (local Docker repro + root-cause analysis)
 
-Status: **in-progress — partial @ `f6b4b89`** (Fix-A + Fix-B + AC2 shipped 2026-05-25; Fix-C diagnosis blocked on next nightly's phase trace)
+Status: **done — diagnostic + Fix-A + Fix-B (nightly 1/4 → 3/4 green @ `cb53279`)**; remaining separability task-progression failure split out to Story 11.3.4 (Path B per D1).
 
-> **WHERE WE STOPPED (resume pointer):**
-> 1. Commit `f6b4b89` on `main` shipped Fix-A (idempotency-replay `--` bug),
->    Fix-B (4× separability/crash-injection bind-mount uid/gid), and AC2
->    (`REGISTRY_STATE_LIFESPAN_TRACE` lifespan trace + nightly docker-logs-on-failure).
-> 2. **NOT pushed yet** — commit is local-only. Next action: `git push`.
-> 3. **To unblock Fix-C:** after push, run `gh workflow run nightly.yml`, wait
->    for the crash-injection job to fail, then read the uploaded
->    `crash-injection-container-logs.txt` artifact — the `lifespan phase:` trace
->    lines reveal WHICH phase hangs >120s on ubuntu-latest (H1/H3/H4 already
->    REFUTED; H2 refuted cross-platform but Linux phase unknown).
-> 4. Expected nightly outcome after this commit: idempotency-replay → PASS
->    (Fix-A); S1/S2/S3 separability → PASS (Fix-B); crash-injection + S4 →
->    still FAIL but now emit the phase trace for Fix-C diagnosis.
-> 5. Once trace identifies the phase: resolve D1 (Path A in-scope fix vs Path B
->    `11-3-4-<root-cause>.md` follow-up), then AC4 + AC5 + AC7.
+> **NIGHTLY VERIFICATION — run 26373557044 @ `cb53279` (2026-05-25):**
+> | Job | Result | Cause |
+> |---|---|---|
+> | Idempotency 100× replay | ✅ PASS | Fix-A (dropped `--`) |
+> | Migrator integration | ✅ PASS | unchanged |
+> | Crash-injection harness | ✅ PASS | **Fix-B** — the 120s "hang" was the bind-mount uid issue, NOT a lifespan deadlock; container couldn't write the bind-mounted SQLite/events as uid 10002 vs host uid 1001, so `/tmp/ready` was never touched |
+> | S-3 separability | ❌ FAIL (NEW symptom) | tasks stall at `task.created`, never reach `task.plan.ready`/`task.completed` — a task-lifecycle-progression issue that was MASKED by the earlier PermissionError; now split to **Story 11.3.4** |
+>
+> **Diagnosis correction:** Fix-C ("Linux-specific lifespan deadlock, H2") was
+> WRONG. The crash-injection 120s hang shared Fix-B's root cause (bind-mount
+> uid). H1/H2/H3/H4 all correctly refuted; the real cause was uid/perm (#5),
+> which Fix-B resolved. AC2 instrumentation remains in-tree (gated) for future use.
+>
+> **WHAT REMAINS (→ Story 11.3.4):** S-3 separability's 5-service stack boots but
+> tasks don't progress past `task.created`. S4 also shows `registry-state is
+> unhealthy` under the ROOT compose (named volume, NOT a Fix-B test-compose).
+> Requires orchestrator-adapter / worker-wrapper lifecycle diagnosis. See
+> `11-3-4-separability-task-progression.md`.
+>
+> **ALSO DEFERRED (carried to 11.3.4 or backlog):**
+> - AC1 formal `just nightly-repro` recipe (manual repro done; recipe not authored)
+> - AC5 image-layer cache strategy (`actions/cache` for Docker layers) — never evaluated
+> - AI-1 3-lane code-review on the 11.3.3 diff — NOT yet run (started, deferred per user checkpoint)
 
 ## Story
 
