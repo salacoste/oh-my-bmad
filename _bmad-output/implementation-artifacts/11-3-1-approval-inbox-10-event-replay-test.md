@@ -1,6 +1,6 @@
 # Story 11.3.1 — 10-event approval-inbox replay integration test
 
-Status: **review**
+Status: **done** (PR-gate CI green @ e15d31c (run 26348059811) 2026-05-24; nightly failures pre-existing per Story 11.3.3)
 
 ## Story
 
