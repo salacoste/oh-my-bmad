@@ -624,7 +624,7 @@ class TestShortWriteAndPoison:
 
         from registry_state.adapters import event_log as _elm
 
-        if _elm._fcntl is None:
+        if _elm._fcntl is None:  # type: ignore[attr-defined]
             pytest.skip("fcntl not available on this platform")
 
         env = _make_envelope(clock=fixed_clock)
@@ -637,7 +637,7 @@ class TestShortWriteAndPoison:
             flock_ops.append(op)
             return real_flock(fd, op)
 
-        monkeypatch.setattr(_elm._fcntl, "flock", tracking_flock)
+        monkeypatch.setattr(_elm._fcntl, "flock", tracking_flock)  # type: ignore[attr-defined]
 
         def interrupting_write(fd: int, data: bytes) -> int:
             raise KeyboardInterrupt("simulated interrupt")
@@ -648,9 +648,7 @@ class TestShortWriteAndPoison:
             await writer.append(env)
 
         assert fcntl.LOCK_EX in flock_ops, "LOCK_EX should have been called"
-        assert fcntl.LOCK_UN in flock_ops, (
-            "LOCK_UN must run in finally even after BaseException"
-        )
+        assert fcntl.LOCK_UN in flock_ops, "LOCK_UN must run in finally even after BaseException"
         assert writer._poisoned is True
 
     @pytest.mark.asyncio
