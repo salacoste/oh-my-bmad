@@ -32,6 +32,13 @@ services:
       # call inside ``run_subscriber`` so the events/tasks tables exist
       # on first boot. NEVER set this in production compose.
       REGISTRY_STATE_AUTO_CREATE_SCHEMA: "1"
+      # Story 11.3.3 AC2: opt into the lifespan phase tracer so the
+      # `docker compose logs registry-state` capture on nightly failure
+      # attributes the >120s healthcheck hang to a specific phase
+      # (engine_create / schema_create / recover_all_logs / handlers_register
+      # / ready_touch). Gated by env-var so production restarts never
+      # emit these lines.
+      REGISTRY_STATE_LIFESPAN_TRACE: "1"
     # EC1: run as the container's expected uid:gid so Linux raw-UID bind-mount
     # writes succeed. On macOS Docker Desktop VirtioFS translates UIDs
     # transparently, but on Linux the host directory must be writable by

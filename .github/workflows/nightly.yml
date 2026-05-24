@@ -79,16 +79,36 @@ jobs:
       - name: Run crash-injection harness
         run: just test-crash
 
+      # Story 11.3.3 AC2: capture container logs + state on failure so the
+      # AC2 REGISTRY_STATE_LIFESPAN_TRACE phase markers (enabled in
+      # tests/crash-injection/docker-compose.test.yml) reveal which lifespan
+      # phase hangs on Linux runners. Mirrors the s3-separability job's
+      # equivalent step. Captures all running + stopped containers.
+      - name: Capture compose logs on failure
+        if: failure()
+        run: |
+          mkdir -p _bmad-output/test-artifacts
+          docker ps -a > _bmad-output/test-artifacts/crash-injection-docker-ps.txt 2>&1 || true
+          for cid in $(docker ps -aq --filter "name=registry-state"); do
+            echo "=== container $cid ===" >> _bmad-output/test-artifacts/crash-injection-container-logs.txt
+            docker logs "$cid" >> _bmad-output/test-artifacts/crash-injection-container-logs.txt 2>&1 || true
+            echo "=== inspect $cid ===" >> _bmad-output/test-artifacts/crash-injection-container-logs.txt
+            docker inspect "$cid" >> _bmad-output/test-artifacts/crash-injection-container-logs.txt 2>&1 || true
+          done
+
       - name: Upload crash-injection summary artifact
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: crash-injection-summary-${{ github.run_id }}
-          path: _bmad-output/test-artifacts/crash-injection-summary-*.json
-          # Fail the upload step (not the whole workflow because of `if: always()`)
-          # when no artifact was produced — silent omission would mask a
-          # broken summary-emit path.
-          if-no-files-found: error
+          path: |
+            _bmad-output/test-artifacts/crash-injection-summary-*.json
+            _bmad-output/test-artifacts/crash-injection-docker-ps.txt
+            _bmad-output/test-artifacts/crash-injection-container-logs.txt
+          # `warn` (not `error`): the summary JSON may be absent when
+          # tests timed out before emitting it (Story 11.3.3 scenario);
+          # we still want the docker-logs / inspect output uploaded.
+          if-no-files-found: warn
           retention-days: 30
 
   idempotency-replay:
@@ -118,10 +138,15 @@ jobs:
 
       - name: Run idempotency 100× replay test
         # Mn9: emit junitxml so the upload step has a flakiness signal beyond
-        # pass/fail. The just recipe forwards extra args after `--`.
+        # pass/fail. Story 11.3.3 Fix-A: the `*ARGS` splat in
+        # `test-idempotency *ARGS` already forwards trailing arguments
+        # without needing an explicit `--` separator. A leading `--`
+        # propagates through to pytest, which treats it as the
+        # option/positional-file separator, causing `--junitxml=...`
+        # to be parsed as a (nonexistent) file path. Drop the `--`.
         run: |
           mkdir -p _bmad-output/test-artifacts
-          just test-idempotency -- --junitxml=_bmad-output/test-artifacts/idempotency-replay-${{ github.run_id }}.xml
+          just test-idempotency --junitxml=_bmad-output/test-artifacts/idempotency-replay-${{ github.run_id }}.xml
 
       - name: Upload idempotency artifact
         if: always()

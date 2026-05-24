@@ -37,6 +37,7 @@ import contextlib
 import logging
 import os
 import signal
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -173,7 +174,21 @@ async def run_subscriber(
                             wrapper) without monkey-patching the module.
     """
     stop = stop_event if stop_event is not None else asyncio.Event()
+    # Story 11.3.3 AC2: opt-in lifespan phase tracer. When
+    # REGISTRY_STATE_LIFESPAN_TRACE=1 is set, emit start/complete logs
+    # around each lifespan phase so the nightly-failure investigation
+    # can attribute the >120s healthcheck hang to a specific phase.
+    # Zero runtime cost when the env var is unset (one os.environ.get
+    # per phase boundary, all `_trace_phase` calls short-circuit). The
+    # gating env var is set in tests/crash-injection/docker-compose.test.yml
+    # so production restarts never emit these lines.
+    _trace = os.environ.get("REGISTRY_STATE_LIFESPAN_TRACE") == "1"
+    _phase_t0 = time.monotonic()
+    if _trace:
+        log.info("lifespan phase: engine_create starting")
     engine = create_engine(db_url)
+    if _trace:
+        log.info("lifespan phase: engine_create complete in %.3fs", time.monotonic() - _phase_t0)
     try:
         # Story 2.11: optional schema bootstrap, gated behind an env var.
         # In production the Alembic migrations are the authoritative source
@@ -185,18 +200,42 @@ async def run_subscriber(
         # events/tasks tables exist on first boot. Tests that inject an
         # in-memory engine already call create_all in their own fixtures
         # and do not need this path.
+        _phase_t0 = time.monotonic()
+        if _trace:
+            log.info(
+                "lifespan phase: schema_create starting (auto_create=%s)",
+                os.environ.get("REGISTRY_STATE_AUTO_CREATE_SCHEMA"),
+            )
         if os.environ.get("REGISTRY_STATE_AUTO_CREATE_SCHEMA") == "1":
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
+        if _trace:
+            log.info(
+                "lifespan phase: schema_create complete in %.3fs", time.monotonic() - _phase_t0
+            )
 
         # Startup contract: trim trailing partial lines across all *.jsonl.
         # Use the free function so we don't construct a full writer just to
         # reach its recovery routine.
+        _phase_t0 = time.monotonic()
+        if _trace:
+            log.info("lifespan phase: recover_all_logs starting base_dir=%s", base_dir)
         await recover_all_logs(base_dir)
+        if _trace:
+            log.info(
+                "lifespan phase: recover_all_logs complete in %.3fs", time.monotonic() - _phase_t0
+            )
 
+        _phase_t0 = time.monotonic()
+        if _trace:
+            log.info("lifespan phase: handlers_register starting")
         session_maker = get_session(engine)
         materializer = materializer_factory(session_maker)
         register_default_handlers(materializer)
+        if _trace:
+            log.info(
+                "lifespan phase: handlers_register complete in %.3fs", time.monotonic() - _phase_t0
+            )
         # Story 2.11: /tmp/ready touchpoint flips the docker-compose healthcheck
         # to "healthy" once the subscriber's startup wiring has completed
         # (engine open, session-maker ready, handlers registered). The
@@ -205,10 +244,15 @@ async def run_subscriber(
         # signal to know when restart is complete. Best-effort: if /tmp is
         # read-only or otherwise unwritable, we log and continue — the
         # subscriber's correctness does not depend on this file.
+        _phase_t0 = time.monotonic()
+        if _trace:
+            log.info("lifespan phase: ready_touch starting")
         try:
             Path("/tmp/ready").touch()  # noqa: S108 — healthcheck signal, not data store
         except OSError as exc:
             log.warning("failed to touch /tmp/ready healthcheck signal: %s", exc)
+        if _trace:
+            log.info("lifespan phase: ready_touch complete in %.3fs", time.monotonic() - _phase_t0)
         snapshot_policy = SnapshotPolicy(
             session_maker=session_maker,
             clock=clock,

@@ -173,8 +173,17 @@ class CrashHarness:
         # uses raw UID mapping (uid 10002 cannot write to host-uid-1001-owned
         # directories). The compose file references these as
         # ``${OMB_HARNESS_UID:-10002}:${OMB_HARNESS_GID:-10000}``.
-        env.setdefault("OMB_HARNESS_UID", str(_CONTAINER_UID))
-        env.setdefault("OMB_HARNESS_GID", str(_CONTAINER_GID))
+        # Story 11.3.3 Fix-B: default to the host process's uid/gid so the
+        # container writes bind-mounted files with ownership the host-side
+        # pytest can read. EventLogWriter (event_log.py:506) creates JSONL
+        # files with mode 0o640 (audit-non-world-readable). When the
+        # container ran as uid 10002 (the original default) and the host
+        # pytest ran as uid 1001 (github-runner), neither "owner" nor "group"
+        # bits matched, producing PermissionError on the host-side jsonl
+        # reads. _CONTAINER_UID/_CONTAINER_GID remain as named constants for
+        # external callers that explicitly want the system-uid path.
+        env.setdefault("OMB_HARNESS_UID", str(os.getuid()))
+        env.setdefault("OMB_HARNESS_GID", str(os.getgid()))
         return env
 
     def _compose_cmd(self, *args: str) -> list[str]:

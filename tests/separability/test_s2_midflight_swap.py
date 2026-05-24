@@ -64,8 +64,11 @@ def _compose_env(data_dir: Path) -> dict[str, str]:
     env = os.environ.copy()
     env["OMB_S2_DATA_DIR"] = str(data_dir)
     env["WORKER_IMAGE"] = _STUB_TAG
-    env.setdefault("OMB_CONTAINER_UID", str(_CONTAINER_UID))
-    env.setdefault("OMB_CONTAINER_GID", str(_CONTAINER_GID))
+    # Story 11.3.3 Fix-B: default to host uid/gid so the container writes
+    # bind-mounted files (incl. 0o640 audit JSONL per event_log.py:506)
+    # with ownership readable by the host-side pytest.
+    env.setdefault("OMB_CONTAINER_UID", str(os.getuid()))
+    env.setdefault("OMB_CONTAINER_GID", str(os.getgid()))
     return env
 
 
