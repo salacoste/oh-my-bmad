@@ -1,6 +1,6 @@
 # Story 11.3.3 — Nightly deeper diagnosis (local Docker repro + root-cause analysis)
 
-Status: **done — diagnostic + Fix-A + Fix-B (nightly 1/4 → 3/4 green @ `cb53279`)**; remaining separability task-progression failure split out to Story 11.3.4 (Path B per D1).
+Status: **done — diagnostic + Fix-A + Fix-B (nightly 1/4 → 3/4 green @ `cb53279`); AI-1 3-lane review discharged (1 P0 + 3 patches applied)**; remaining separability task-progression failure split out to Story 11.3.4 (Path B per D1).
 
 > **NIGHTLY VERIFICATION — run 26373557044 @ `cb53279` (2026-05-25):**
 > | Job | Result | Cause |
@@ -399,6 +399,23 @@ unblocks:
   check_single_writer.
 - 3-lane adversarial review pass-1 complete; findings batch-applied per standing policy
   "fix all issues even minors".
+
+## Review Findings (AI-1 3-lane pass — 2026-05-25, post-nightly @ `cb53279`)
+
+3-lane adversarial review (Blind Hunter / Edge Case Hunter / Acceptance Auditor)
+run after closure to discharge the AI-1 mandate. **Cross-lane convergence** on the
+P0 (all 3 lanes flagged the bundled `env=os.environ.copy()`).
+
+- [x] [Review][Patch] **P0 — `env=os.environ.copy()` leaked secrets past `_ENV_ALLOWLIST`** [services/worker-wrapper + services/orchestrator-adapter `adapters/mcp_clients.py`] — REVERTED to `StdioServerParameters(command, args)` (+ removed `import os`). The full-env copy forwarded `WORKER_ANTHROPIC_API_KEY` / `github_token` into the clawhip-bridge subprocess, bypassing the deliberate Story 11.2.x `_ENV_ALLOWLIST` (clawhip_client.py:82 "No HMAC keys, no AWS creds, no OPENAI key"). Change was unauthorized scope (Constraints §"NO production code outside registry-state AC2"), never on main before `f6b4b89`, and was the H2 suspect for Story 11.3.4 — reverting closes the leak AND clears the 11.3.4 suspect. If separability genuinely needs env propagation, 11.3.4 adds it via the allowlist pattern.
+- [x] [Review][Patch] **P1-H — `os.getuid()/getgid()` Windows-unsafe + `_CONTAINER_UID/GID` dead in s1/s2/s3** [tests/crash-injection/_crash_compose.py + tests/separability/test_s{1,2,3}_*.py] — guarded with `os.getuid() if hasattr(os, "getuid") else _CONTAINER_UID` (and gid). Resolves both the portability crash-at-collection risk AND the dead-constant finding in one (the constant is now the fallback).
+- [x] [Review][Patch] **P1-L — nightly container-log `>>` could concatenate stale data across reruns** [.github/workflows/nightly.yml] — truncate the logfile fresh (`:>`) before the capture loop.
+- [x] [Review][Patch] **P1-L — empty `docker ps` match emitted no signal** [.github/workflows/nightly.yml] — added a "no containers matched" sentinel line so an empty match is distinguishable from "all fine".
+- [x] [Review][Defer] **P1-M — AC1 `just nightly-repro` recipe not authored** — deferred (won't-do): the recipe's purpose was to reproduce the hang, which Fix-B resolved; manual repro already served the diagnosis. Recorded in deferred-work.
+- [x] [Review][Defer] **P1-L — AC5 Docker-layer cache strategy not evaluated** — deferred to backlog: orthogonal optimization, no correctness impact.
+- [x] [Review][Dismiss] **P1-M — AC2 AI-7 `time.sleep(180)` realism check skipped** — dismissed: the hang the trace was built to localize is resolved by Fix-B (crash-injection nightly PASSES); the trace instrumentation was verified to emit correctly-sequenced timing logs (cold boot all 5 phases). Proving it catches an already-fixed hang is low-value.
+- **Refuted/dismissed (noise):** `--` drop is correct (Edge confirmed `test-idempotency *ARGS` forwards directly); env-var name mismatch (each test sets its matching compose var); old-default assertions (none exist); nightly `--filter name=registry-state` matches; AC2 self-verify (≥8 matches → 10, met); AI-1-timing (this review discharges it); status-block accuracy (PASS).
+
+**Validation after patches:** 12 MCP-client tests pass; ruff clean; `mcp_clients.py` mypy-clean (tree baseline 215 test-file errors unchanged); check_imports + check_single_writer + check_event_registry exit 0; nightly.yml valid YAML.
 
 ## Tasks / Subtasks
 

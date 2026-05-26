@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 
@@ -79,7 +78,7 @@ class MCPClientGroup:
         args: list[str],
     ) -> ClientSession:
         log = structlog.get_logger(__name__)
-        params = StdioServerParameters(command=command, args=args, env=os.environ.copy())
+        params = StdioServerParameters(command=command, args=args)
         read, write = await self._stack.enter_async_context(stdio_client(params))
         session = await self._stack.enter_async_context(ClientSession(read, write))
         await asyncio.wait_for(session.initialize(), timeout=_INIT_TIMEOUT)

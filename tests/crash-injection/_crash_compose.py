@@ -180,10 +180,16 @@ class CrashHarness:
         # container ran as uid 10002 (the original default) and the host
         # pytest ran as uid 1001 (github-runner), neither "owner" nor "group"
         # bits matched, producing PermissionError on the host-side jsonl
-        # reads. _CONTAINER_UID/_CONTAINER_GID remain as named constants for
-        # external callers that explicitly want the system-uid path.
-        env.setdefault("OMB_HARNESS_UID", str(os.getuid()))
-        env.setdefault("OMB_HARNESS_GID", str(os.getgid()))
+        # reads. os.getuid/getgid are POSIX-only; fall back to the container's
+        # built-in uid/gid on platforms that lack them (e.g. Windows) — these
+        # Docker-Linux harness tests do not run there, but the import must not
+        # crash at collection time.
+        env.setdefault(
+            "OMB_HARNESS_UID", str(os.getuid() if hasattr(os, "getuid") else _CONTAINER_UID)
+        )
+        env.setdefault(
+            "OMB_HARNESS_GID", str(os.getgid() if hasattr(os, "getgid") else _CONTAINER_GID)
+        )
         return env
 
     def _compose_cmd(self, *args: str) -> list[str]:

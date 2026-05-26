@@ -66,9 +66,15 @@ def _compose_env(data_dir: Path) -> dict[str, str]:
     env["WORKER_IMAGE"] = _STUB_TAG
     # Story 11.3.3 Fix-B: default to host uid/gid so the container writes
     # bind-mounted files (incl. 0o640 audit JSONL per event_log.py:506)
-    # with ownership readable by the host-side pytest.
-    env.setdefault("OMB_CONTAINER_UID", str(os.getuid()))
-    env.setdefault("OMB_CONTAINER_GID", str(os.getgid()))
+    # with ownership readable by the host-side pytest. os.getuid/getgid are
+    # POSIX-only; fall back to the container's built-in uid/gid where absent
+    # (Windows) so import/collection never crashes.
+    env.setdefault(
+        "OMB_CONTAINER_UID", str(os.getuid() if hasattr(os, "getuid") else _CONTAINER_UID)
+    )
+    env.setdefault(
+        "OMB_CONTAINER_GID", str(os.getgid() if hasattr(os, "getgid") else _CONTAINER_GID)
+    )
     return env
 
 

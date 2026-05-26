@@ -89,11 +89,21 @@ jobs:
         run: |
           mkdir -p _bmad-output/test-artifacts
           docker ps -a > _bmad-output/test-artifacts/crash-injection-docker-ps.txt 2>&1 || true
-          for cid in $(docker ps -aq --filter "name=registry-state"); do
-            echo "=== container $cid ===" >> _bmad-output/test-artifacts/crash-injection-container-logs.txt
-            docker logs "$cid" >> _bmad-output/test-artifacts/crash-injection-container-logs.txt 2>&1 || true
-            echo "=== inspect $cid ===" >> _bmad-output/test-artifacts/crash-injection-container-logs.txt
-            docker inspect "$cid" >> _bmad-output/test-artifacts/crash-injection-container-logs.txt 2>&1 || true
+          # Truncate fresh (`:>`) so a cached/retried runner workspace can't
+          # concatenate stale logs from a prior run into this artifact.
+          logfile=_bmad-output/test-artifacts/crash-injection-container-logs.txt
+          : > "$logfile"
+          cids=$(docker ps -aq --filter "name=registry-state")
+          if [ -z "$cids" ]; then
+            # Emit an explicit sentinel so an empty match is distinguishable
+            # from "everything was fine" when reading the artifact.
+            echo "=== no containers matched --filter name=registry-state ===" >> "$logfile"
+          fi
+          for cid in $cids; do
+            echo "=== container $cid ===" >> "$logfile"
+            docker logs "$cid" >> "$logfile" 2>&1 || true
+            echo "=== inspect $cid ===" >> "$logfile"
+            docker inspect "$cid" >> "$logfile" 2>&1 || true
           done
 
       - name: Upload crash-injection summary artifact
