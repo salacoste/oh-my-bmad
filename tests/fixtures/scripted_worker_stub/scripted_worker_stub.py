@@ -472,15 +472,61 @@ SCENARIOS: dict[str, Callable[..., list[dict[str, Any]]]] = {
 
 # --- MCP client helpers ------------------------------------------------------
 
+# Story 11.3.4: with ``StdioServerParameters(env=None)`` the MCP SDK uses
+# ``get_default_environment()`` — a POSIX safe-list (HOME/LOGNAME/PATH/SHELL/
+# TERM/USER) that does NOT include ``CLAWHIP_BRIDGE_*``. The stripped vars made
+# clawhip-bridge exit at startup ("CLAWHIP_BRIDGE_ACTOR_KIND is required").
+# Fix: pass an allowlisted env=. The SDK MERGES it over get_default_environment()
+# (``{**get_default_environment(), **server.env}``), so this list only needs the
+# server-specific vars — the OS basics are still supplied by the SDK default.
+# The set mirrors only what clawhip-bridge's __main__ actually reads (ACTOR_KIND/
+# ACTOR_ID required, LOG_DIR optional) plus launch basics — deliberately narrower
+# than the production ``_ENV_ALLOWLIST`` in clawhip_client.py (which also carries
+# TLS/locale/registry vars its OTHER consumers need; clawhip-bridge does not).
+# This is an INTENTIONAL copy, not shared code: the stub must not import from
+# ``mcp-servers/*`` or ``services/*`` — that's the separability contract it proves
+# (header lines 10-12). HARD CONSTRAINT: never forward HMAC keys, API keys, creds.
+_CLAWHIP_ENV_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        # clawhip-bridge REQUIRED runtime config
+        "CLAWHIP_BRIDGE_ACTOR_KIND",
+        "CLAWHIP_BRIDGE_ACTOR_ID",
+        "CLAWHIP_BRIDGE_LOG_DIR",
+        # OS basics needed for process launch
+        "PATH",
+        "HOME",
+        "PYTHONPATH",
+        "PYTHONUNBUFFERED",
+        # Temp dirs
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+    }
+)
+
+
+def _clawhip_env() -> dict[str, str]:
+    """Return an allowlisted env dict for the clawhip-bridge subprocess."""
+    return {k: v for k, v in os.environ.items() if k in _CLAWHIP_ENV_ALLOWLIST}
+
 
 async def _connect_mcp(
     name: str,
     command: str,
     args: list[str],
     stack: contextlib.AsyncExitStack,
+    *,
+    env: dict[str, str] | None = None,
 ) -> ClientSession:
-    """Connect to one MCP server via stdio subprocess."""
-    params = StdioServerParameters(command=command, args=args)
+    """Connect to one MCP server via stdio subprocess.
+
+    ``env`` (when provided) is the server-specific allowlisted env; the MCP SDK
+    merges it over ``get_default_environment()`` so callers pass only the vars
+    their server needs. ``None`` keeps the SDK default-only env. Kept generic so
+    a future second MCP server supplies its OWN allowlist rather than inheriting
+    clawhip's.
+    """
+    params = StdioServerParameters(command=command, args=args, env=env)
     read, write = await stack.enter_async_context(stdio_client(params))
     session = await stack.enter_async_context(ClientSession(read, write))
     await asyncio.wait_for(session.initialize(), timeout=_MCP_INIT_TIMEOUT)
@@ -618,6 +664,7 @@ async def run_scripted_worker(
             settings.clawhip_bridge_command,
             settings.clawhip_bridge_args,
             stack,
+            env=_clawhip_env(),
         )
 
         # Emit session.started.

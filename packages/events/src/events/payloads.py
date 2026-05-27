@@ -111,6 +111,26 @@ class TaskPlanReadyPayload(BaseModel):
     plan: tuple[PlanStep, ...] = Field(default=())
     estimated_steps: int = Field(default=0, ge=0)
 
+    @field_validator("plan", mode="before")
+    @classmethod
+    def _coerce_plan_to_tuple(cls, v: object) -> object:
+        """Coerce a JSON list into a tuple (Story 11.3.4).
+
+        ``strict=True`` does not coerce list→tuple, but payloads delivered over
+        the MCP/JSON boundary (clawhip-bridge ``emit_event`` →
+        ``EventEnvelope.create`` → ``model_validate``) always arrive as JSON
+        arrays = Python lists. Without this, any ``task.plan.ready`` carrying a
+        populated ``plan`` is rejected at emit with ``tuple_type`` — which the
+        S-1/S-2 separability harness surfaced (the real orchestrator-adapter
+        emits the same way; PR-gate CI never round-trips a populated plan over
+        stdio-JSON). Coercing on *input* keeps the stored value a frozen tuple
+        and leaves ``extra="forbid"`` / strict field validation intact. No-op
+        for tuples and for the empty default.
+        """
+        if isinstance(v, list):
+            return tuple(v)
+        return v
+
 
 class TaskExecutionStartedPayload(BaseModel):
     """Payload for the ``task.execution.started`` event."""

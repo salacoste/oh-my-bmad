@@ -12,6 +12,7 @@ from datetime import UTC
 import pytest
 
 from events.payloads import (
+    PlanStep,
     TaskApprovalRequestedPayload,
     TaskBlockerRaisedPayload,
     TaskBudgetExceededPayload,
@@ -193,3 +194,75 @@ def test_pr_branch_none_is_valid() -> None:
         pr_branch=None,
     )
     assert payload.pr_branch is None
+
+
+# ---------------------------------------------------------------------------
+# TaskPlanReadyPayload.plan — list→tuple coercion (Story 11.3.4)
+#
+# The model is strict=True with ``plan: tuple[PlanStep, ...]``. strict mode
+# does NOT coerce list→tuple, but payloads cross the MCP/JSON boundary as
+# arrays = Python lists (clawhip-bridge emit_event → EventEnvelope.create →
+# model_validate). Without the mode="before" coercion, any plan-bearing
+# task.plan.ready is rejected at emit with tuple_type — the latent production
+# bug the S-1/S-2 separability harness surfaced. The read path is unaffected
+# (from_canonical_json yields a _FrozenDict, no strict re-validation).
+# ---------------------------------------------------------------------------
+
+_GOOD_TASK_ID = "t-01234567-89ab-7def-8abc-0123456789ab"
+
+
+def test_plan_ready_accepts_list_plan_from_json() -> None:
+    """A JSON-origin list of step dicts must be accepted and stored as a tuple."""
+    payload = TaskPlanReadyPayload.model_validate(
+        {
+            "task_id": _GOOD_TASK_ID,
+            "plan_summary": "two steps",
+            "plan": [
+                {"step": 1, "description": "first"},
+                {"step": 2, "description": "second"},
+            ],
+            "estimated_steps": 2,
+        }
+    )
+    assert isinstance(payload.plan, tuple)
+    assert len(payload.plan) == 2
+    assert all(isinstance(s, PlanStep) for s in payload.plan)
+    assert payload.plan[0].step == 1
+
+
+def test_plan_ready_accepts_tuple_plan_unchanged() -> None:
+    """Tuple input still validates (coercion is a no-op for tuples)."""
+    payload = TaskPlanReadyPayload(
+        task_id=_GOOD_TASK_ID,
+        plan_summary="one step",
+        plan=(PlanStep(step=1, description="only"),),
+        estimated_steps=1,
+    )
+    assert isinstance(payload.plan, tuple)
+    assert payload.plan[0].description == "only"
+
+
+def test_plan_ready_default_empty_plan() -> None:
+    """Omitting plan keeps the empty-tuple default (additive-only contract)."""
+    payload = TaskPlanReadyPayload(task_id=_GOOD_TASK_ID, plan_summary="none")
+    assert payload.plan == ()
+
+
+def test_plan_ready_empty_list_coerces_to_empty_tuple() -> None:
+    """A JSON empty array must coerce to the empty tuple, not be rejected."""
+    payload = TaskPlanReadyPayload.model_validate(
+        {"task_id": _GOOD_TASK_ID, "plan_summary": "none", "plan": []}
+    )
+    assert payload.plan == ()
+
+
+def test_plan_ready_still_rejects_invalid_step_under_strict() -> None:
+    """Coercion only fixes the container shape — element validation stays strict."""
+    with pytest.raises(ValueError):
+        TaskPlanReadyPayload.model_validate(
+            {
+                "task_id": _GOOD_TASK_ID,
+                "plan_summary": "bad",
+                "plan": [{"step": 0, "description": "step must be >= 1"}],
+            }
+        )

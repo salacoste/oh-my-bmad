@@ -287,6 +287,7 @@ async def _emit_lifecycle_for_task(
         payload=TaskPlanningStartedPayload(task_id=task_id),
         parent_event_id=parent_event_id,
         request_id=new_request_id(clock=clock),
+        trace_id=task_created_env.trace_id,
     )
     await writer.append(env)
     log.info("emitted task.planning.started for %s (event_id=%s)", task_id, env.event_id)
@@ -305,6 +306,7 @@ async def _emit_lifecycle_for_task(
         ),
         parent_event_id=parent_event_id,
         request_id=new_request_id(clock=clock),
+        trace_id=task_created_env.trace_id,
     )
     await writer.append(env)
     log.info("emitted task.plan.ready for %s (event_id=%s)", task_id, env.event_id)
@@ -321,6 +323,7 @@ async def _emit_lifecycle_for_task(
         payload=TaskExecutionStartedPayload(task_id=task_id, session_id=session_id),
         parent_event_id=parent_event_id,
         request_id=new_request_id(clock=clock),
+        trace_id=task_created_env.trace_id,
     )
     await writer.append(env)
     log.info(
@@ -345,6 +348,7 @@ async def _emit_lifecycle_for_task(
         ),
         parent_event_id=parent_event_id,
         request_id=new_request_id(clock=clock),
+        trace_id=task_created_env.trace_id,
     )
     await writer.append(env)
     log.info("emitted task.completed for %s (event_id=%s)", task_id, env.event_id)

@@ -49,12 +49,40 @@ def test_clawhip_client_env_allowlist_byte_identical_across_servers() -> None:
     )
 
 
+_CLAWHIP_REQUIRED_ENV_VARS = {"CLAWHIP_BRIDGE_ACTOR_KIND", "CLAWHIP_BRIDGE_ACTOR_ID"}
+
+
 def test_clawhip_client_env_allowlist_contains_required_clawhip_vars() -> None:
     """clawhip-bridge ``__main__.py`` exits 2 without these vars — they MUST be forwarded."""
-    required = {"CLAWHIP_BRIDGE_ACTOR_KIND", "CLAWHIP_BRIDGE_ACTOR_ID"}
-    missing = required - _TASK_ALLOWLIST
+    missing = _CLAWHIP_REQUIRED_ENV_VARS - _TASK_ALLOWLIST
     assert not missing, (
         f"_ENV_ALLOWLIST omits clawhip-bridge required env vars: {sorted(missing)}. "
         "Without these, the spawned subprocess exits 2 and "
         "ClientSession.initialize() times out at 30s."
+    )
+
+
+def test_scripted_worker_stub_allowlist_contains_required_clawhip_vars() -> None:
+    """Story 11.3.4: the S-1/S-2 scripted-worker stub ALSO spawns clawhip-bridge.
+
+    Its ``_CLAWHIP_ENV_ALLOWLIST`` is an intentional, separate copy (the stub must
+    not import from ``mcp-servers/*`` — the separability contract it proves), so it
+    is NOT covered by the byte-identical mirror above. This test binds the third
+    copy to the same required-vars invariant: without it, the next time
+    clawhip-bridge gains a required env var the production adapters get fixed (via
+    the mirror test) while the stub silently drifts and S-1/S-2 regress to the
+    ``task.created`` stall this story was opened to fix — a Docker-only,
+    30s-timeout failure with no fast signal. This contract test lives in
+    ``tests/contract/`` precisely so it may cross into ``tests/fixtures/*`` without
+    violating the stub's own no-spine-import rule.
+    """
+    from tests.fixtures.scripted_worker_stub.scripted_worker_stub import (  # noqa: IMP001 — tests/* can cross
+        _CLAWHIP_ENV_ALLOWLIST as _STUB_ALLOWLIST,
+    )
+
+    missing = _CLAWHIP_REQUIRED_ENV_VARS - _STUB_ALLOWLIST
+    assert not missing, (
+        f"scripted-worker-stub _CLAWHIP_ENV_ALLOWLIST omits clawhip-bridge required "
+        f"env vars: {sorted(missing)}. Without these the stub-spawned clawhip-bridge "
+        "exits 2 → S-1/S-2 separability stalls at task.created."
     )
