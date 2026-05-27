@@ -1,10 +1,12 @@
 # Story 11.3.4 — Separability stack task-progression failure (nightly S-3)
 
-Status: **review** (dev-story 2026-05-27 — S1/S2/S3 root-caused + fixed + Docker e2e 6/6
-green; S4 split to Story 11.3.5 per D3. Two root causes: S3 null-orchestrator missing
-required `trace_id`; S1/S2 MCP env-strip dropping `CLAWHIP_BRIDGE_*` + strict-tuple-from-JSON
-`plan` reject (latent production bug fixed via BeforeValidator). Pending: AC5 nightly +
-AI-1 3-lane review.)
+Status: **done** (2026-05-28 — AI-1 3-lane review clean + AC5 nightly CONFIRMED. Nightly run
+26539248575 @ `4b1ef02`: `s3-separability` = 1 failed / 6 passed — **S1/S2/S3 all GREEN on
+CI/Linux** (both end-to-end + the worker-facing/spine sentinels); the sole failure is **S4**
+(`registry-state unhealthy under ROOT compose`), the separate cause split to Story 11.3.5 per
+D3. DoD satisfied via the OR-clause: S1/S2/S3 green + S4 tracked follow-up. Two root causes
+fixed: S3 null-orchestrator missing required `trace_id`; S1/S2 MCP env-strip dropping
+`CLAWHIP_BRIDGE_*` + strict-tuple-from-JSON `plan` reject (latent production bug, BeforeValidator).)
 
 > **CREATE-STORY CORRECTION (2026-05-27):** The 2026-05-25 backlog draft's hypotheses
 > were anchored on the *production* `orchestrator-adapter` / `worker-wrapper` services.
@@ -374,9 +376,9 @@ unblocks:
   - [x] S3: null-orchestrator trace_id propagation + regression test
   - [x] S1/S2: `_clawhip_env()` allowlist (connect) + `TaskPlanReadyPayload.plan` BeforeValidator (emit) + 5+3 regression tests
 - [x] AC4 — No regression: 3006 non-slow pass; events 446; clawhip-emit consumers 189; no `os.environ.copy()`; Fix-A/B/AC2 untouched; SPINE_PATHS sentinel preserved (debugger exclusion reverted)
-- [ ] AC5 — `gh workflow run nightly.yml` → S1/S2/S3 green (S4 tracked in 11.3.5) — POST-COMMIT
-- [x] AC6 — Gates green: ruff/format clean; mypy 0 new errors (2 pre-existing baseline); discipline scripts exit 0; 6 new regression tests pass
-- [ ] AI-1 — 3-lane adversarial review at pass-1 — the `/bmad-code-review` step (post dev-story)
+- [x] AC5 — nightly run 26539248575 @ `4b1ef02`: idempotency + crash-injection + migrator PASS; `s3-separability` = 1 failed/6 passed — **S1/S2/S3 GREEN on CI/Linux**; sole failure = S4 (registry-state unhealthy under ROOT compose) → Story 11.3.5. DoD OR-clause satisfied.
+- [x] AC6 — Gates green: ruff/format clean; mypy 0 new errors (2 pre-existing baseline); discipline scripts exit 0; regression tests pass
+- [x] AI-1 — 3-lane adversarial review complete (`/bmad-code-review` 2026-05-28): clean (1 trivial test patch, ~7 dismissed); Acceptance Auditor full live-verified PASS
 
 ## Definition of Done
 
@@ -459,6 +461,52 @@ refactor). 1 strong + 1 minor applied; the rest refuted against verified repo fa
   raises **`TypeError`**; the docstring is correct.
 
 Post-pass-2 gates: 106 new/touched tests pass; ruff/format clean; `check_imports` exit 0.
+
+### Review Findings — AI-1 3-lane adversarial review (`/bmad-code-review`, 2026-05-28, @ `4b1ef02`)
+
+Canonical 3-lane review discharging the Epic 11 retro **AI-1 mandate** (Blind Hunter =
+`code-reviewer`, diff-only; Edge Case Hunter + Acceptance Auditor = `general-purpose`).
+Reviewed the committed changeset `a0ca050..4b1ef02`. **1 patch applied, ~7 dismissed.**
+The Acceptance Auditor returned a **full live-verified PASS** (re-ran AI-7 by reverting
+`payloads.py` and confirming the test fails pre-fix; verified the SDK env-merge at
+`mcp/client/stdio/__init__.py:127`; confirmed no `os.environ.copy()` reintroduced; SPINE
+sentinel preserved; FR26 + Fix-A/B/AC2 intact; production touch justified + minimally scoped).
+
+- [x] [Review][Patch] **`plan: None` (explicit JSON null) untested fail-loud boundary**
+  [packages/events/src/events/test_payload_validators.py] — added
+  `test_plan_ready_rejects_explicit_null_plan` pinning that an explicit null `plan` is
+  rejected (NOT coerced to the empty-tuple default; `model_dump()` never emits null for
+  `plan`, so null is malformed → fail-loud is correct). Edge-lane finding; no code change.
+- [x] [Review][Dismiss] **SDK env merge-vs-replace assumption (Blind)** — REFUTED: Auditor
+  verified the SDK MERGES `{**get_default_environment(), **server.env}`; OS basics retained.
+  Windows/non-POSIX angle moot (Linux container only).
+- [x] [Review][Dismiss] **`trace_id` None guard (Blind)** — REFUTED: `trace_id` is a
+  required non-Optional `str` (Story 9.7 + `mode="after"` shape validator); cannot be None
+  at the copy point (Edge + Auditor concur).
+- [x] [Review][Dismiss] **`test_emit_lifecycle` ordering assert flaky (Blind)** — REFUTED:
+  Edge confirmed the 4 events append to one day-file; `sorted(rglob)` orders by date; UTC
+  rollover preserves global order; the subset filter is non-vacuous (parent `task.created`
+  is never written to disk).
+- [x] [Review][Dismiss] **validator list-only narrowness (Blind + Edge convergent, AI-10)** —
+  intentional: the JSON boundary always yields `list`; non-list iterables hitting strict
+  rejection is the desired fail-loud behavior. No change.
+- [x] [Review][Dismiss] **Windows `SystemRoot`/`PATHEXT`; secret-test sentinel-narrowness;
+  missing-var test gap (Blind)** — Linux-container only / the substring guard + named-secret
+  test together are adequate. No defect.
+- [x] [Review][Dismiss] **PYTHONPATH retained; schema_version 1.1.0 vs 1.0.0 note (Auditor
+  informational)** — PYTHONPATH consistent with production `_ENV_ALLOWLIST` (deliberate,
+  pass-3); schema_version difference is internally consistent (originating envelope vs
+  emitted lifecycle types). No action.
+
+Post-review gates: 10 plan-ready tests pass (incl. new null test); ruff clean. **AI-1
+mandate discharged — review clean (1 trivial test patch).**
+
+> **AC5 RESOLVED (2026-05-28):** nightly run 26539248575 @ `4b1ef02` confirmed
+> `s3-separability` = **1 failed / 6 passed** — S1/S2/S3 (end-to-end + both source-unchanged
+> sentinels) all GREEN on CI/Linux; the sole failure is S4 (`registry-state unhealthy under
+> ROOT compose`), the cause split to Story 11.3.5. The S1 sentinel passing on CI also
+> confirms the pass-1 revert of the debugger's over-broad SPINE_PATHS exclusion was correct.
+> DoD satisfied via the OR-clause (S1/S2/S3 green + S4 tracked) → story `done`.
 
 ### Debug Log References
 

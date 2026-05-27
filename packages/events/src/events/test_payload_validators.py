@@ -266,3 +266,20 @@ def test_plan_ready_still_rejects_invalid_step_under_strict() -> None:
                 "plan": [{"step": 0, "description": "step must be >= 1"}],
             }
         )
+
+
+def test_plan_ready_rejects_explicit_null_plan() -> None:
+    """Explicit JSON null for ``plan`` is rejected fail-loud — NOT coerced (11.3.4 review).
+
+    ``model_dump()`` never emits null for ``plan`` (empty -> ``[]``, populated ->
+    list of dicts), so a ``"plan": null`` payload is malformed. The mode="before"
+    coercion only converts lists, leaving ``None`` to strict tuple validation,
+    which rejects it. Pinning this documents the deliberate fail-loud boundary
+    rather than silently treating null as the empty-tuple default (which would
+    mask a producer bug). The default empty-tuple applies only when the key is
+    ABSENT (see test_plan_ready_default_empty_plan).
+    """
+    with pytest.raises(ValueError):
+        TaskPlanReadyPayload.model_validate(
+            {"task_id": _GOOD_TASK_ID, "plan_summary": "x", "plan": None}
+        )
