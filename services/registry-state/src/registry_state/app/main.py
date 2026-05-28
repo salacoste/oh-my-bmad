@@ -43,6 +43,7 @@ from pathlib import Path
 
 from events import EventEnvelope
 from events.clock import Clock, SystemClock
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from registry_state.adapters.event_log import (
@@ -138,6 +139,40 @@ def _default_materializer_factory(
     return Materializer(session_maker=session_maker)
 
 
+def _ensure_db_parent_dir(db_url: str) -> None:
+    """Create the SQLite DB file's parent directory before the engine opens it.
+
+    Story 11.3.5: on a fresh named volume (the ROOT ``docker-compose.yml`` path)
+    the DB's ``registry/`` parent does NOT exist and ``sqlite3`` will not create
+    parent directories → ``OperationalError: unable to open database file`` →
+    the lifespan never reaches ``/tmp/ready`` → "unhealthy" (the S-4 separability
+    Phase-1 failure). The test composes (S-1/S-2/S-3) dodge this by setting
+    ``REGISTRY_STATE_LOG_DIR`` so the event-log writer's ``mkdir`` incidentally
+    creates ``registry/``; the production ROOT compose sets only the DB path.
+
+    The created dir is made setgid + group-writable (``2775``) — matching the
+    ``Dockerfile.base`` data-root pattern — so the sibling ``omb``-group writers
+    that share the tree (e.g. the migrator writing ``registry/events``) can write
+    under it regardless of their per-service uid. No-op for in-memory URLs and
+    when the parent already exists (e.g. the migrator/alembic created it first).
+    """
+    try:
+        database = make_url(db_url).database
+    except Exception:  # noqa: BLE001 — malformed URL: let create_engine surface it
+        return
+    if not database or database == ":memory:":
+        return
+    parent = Path(database).parent
+    if parent.exists():
+        return
+    parent.mkdir(parents=True, exist_ok=True)
+    # umask (typically 022) strips the group-write bit from mkdir, so set the
+    # mode explicitly. Best-effort: a pre-existing dir we don't own would raise,
+    # but we only reach here when WE just created it.
+    with contextlib.suppress(OSError):
+        parent.chmod(0o2775)
+
+
 async def run_subscriber(
     *,
     base_dir: Path,
@@ -186,6 +221,9 @@ async def run_subscriber(
     _phase_t0 = time.monotonic()
     if _trace:
         log.info("lifespan phase: engine_create starting")
+    # Story 11.3.5: ensure the DB's parent dir exists (fresh named volume has
+    # no `registry/` subdir → sqlite "unable to open database file").
+    _ensure_db_parent_dir(db_url)
     engine = create_engine(db_url)
     if _trace:
         log.info("lifespan phase: engine_create complete in %.3fs", time.monotonic() - _phase_t0)

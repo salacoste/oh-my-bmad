@@ -62,6 +62,12 @@ services:
     environment:
       <<: *common-env
       REGISTRY_DB_PATH: ${REGISTRY_DB_PATH:-/var/lib/oh-my-bmad/registry/state.sqlite3}
+      # Story 11.3.5: env-driven, default OFF in production (unchanged — schema
+      # comes from the operator/migrator's `alembic upgrade head`, Story 2.14).
+      # Self-contained test stacks (S-4 separability) export =1 to bootstrap the
+      # schema in-process, mirroring the S-1/S-2/S-3 test composes. Empty/unset
+      # → registry-state's `== "1"` check is False → no-op.
+      REGISTRY_STATE_AUTO_CREATE_SCHEMA: ${REGISTRY_STATE_AUTO_CREATE_SCHEMA:-}
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]

@@ -393,6 +393,13 @@ def test_metrics_subscriber_is_optional_not_a_hidden_dependency(
 
     phase1_project = f"omb-s4p1-{uuid4().hex[:8]}"
     phase1_env = os.environ.copy()
+    # Story 11.3.5: the ROOT compose is production-shaped — its schema comes from
+    # the operator/migrator's `alembic upgrade head`, NOT in-process. This
+    # self-contained separability stack has no migrator step, so opt registry-state
+    # into the same in-process schema bootstrap the S-1/S-2/S-3 test composes use.
+    # The ROOT compose reads this via `${REGISTRY_STATE_AUTO_CREATE_SCHEMA:-}`
+    # (default OFF in production); setting it here is test-scoped only.
+    phase1_env["REGISTRY_STATE_AUTO_CREATE_SCHEMA"] = "1"
     # The root compose binds the `oh-my-bmad-data` *named volume*
     # (driver: local) — per-project naming gives each test invocation
     # its own volume so `down -v` cleanly tears it down without

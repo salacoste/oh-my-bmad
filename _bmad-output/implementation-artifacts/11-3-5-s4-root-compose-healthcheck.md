@@ -229,6 +229,140 @@ unblocks:
 - [ ] AC7 — Nightly: all 4 jobs PASS (record run id)
 - [ ] AI-1 — 3-lane adversarial review at pass-1; findings batch-applied ("fix all issues even minors")
 
+## Dev Agent Record
+
+### Agent Model Used
+claude-opus-4-7[1m] (dev-story 2026-05-28)
+
+### Debug Log References
+
+**H6a CONFIRMED (static) — named-volume root-ownership:**
+- `services/registry-state/Dockerfile` is a thin override (FROM `oh-my-bmad-base:local` +
+  `useradd --uid 10002 --gid omb` + `USER` + ENTRYPOINT) — no `/var/lib/oh-my-bmad` creation.
+- `Dockerfile.base` (runtime-base) creates only `/app` group-owned by `omb` + `chmod 2775`
+  (lines 56-59); it does **NOT** create `/var/lib/oh-my-bmad`.
+- ∴ the named volume `oh-my-bmad-data` mounts on a path absent from the image → Docker seeds
+  the fresh volume **root-owned** → registry-state (uid 10002, gid omb 10000) can't write →
+  lifespan never reaches `/tmp/ready` → `unhealthy` (the nightly S-4 Phase-1 error).
+- The S-4 test corroborates the bind-vs-named asymmetry: Phase 2 pre-`chmod 0o777`s its
+  **bind** dir (`test_s4_*.py:608`) so it can pass; Phase 1's **named** volume can't be
+  pre-chmod'd from the host → only Phase 1 fails. Nightly run 26539248575 showed exactly
+  `Phase 1 compose up failed (rc=1) ... container omb-registry-state is unhealthy`.
+
+**FIX APPLIED — `Dockerfile.base`:** extend the existing `/app` group-writable pattern to
+also `mkdir -p /var/lib/oh-my-bmad && chgrp omb && chmod 2775`. Docker seeds a fresh named
+volume from the image dir's ownership/perms, so the volume now mounts `root:omb 2775`;
+setgid makes registry-state/migrator-created subdirs+files inherit the omb group → every
+omb-group service (all `--gid omb`) can read/write regardless of per-service uid. Production
+base-image change (flagged for AI-1 review); fixes fresh-named-volume prod deploys too.
+
+**⚠️ Verification attempt #1 ABORTED (2026-05-28):** a delegated background verifier
+reintroduced the P0 secret leak (`env=dict(os.environ)` in orchestrator-adapter +
+worker-wrapper `mcp_clients.py` — the exact a0ca050 finding) and sprawled across 18 files
+(ROOT compose, MCP security contracts, core spine). **All of its changes were reverted**
+(`git checkout` to `3ef4a90`); the P0 leak is confirmed gone. The H6a base-image fix
+(authored before delegation) was re-applied clean. End-to-end Docker verification is
+**pending** — to be done under close supervision, NOT another unsupervised long agent.
+
+### Supervised Docker verification (2026-05-28) — COMPOUND cause, 3 layers
+
+Local ROOT-compose boot of registry-state (fresh named volume) revealed the failure is
+**three stacked causes**, not one:
+
+1. **H6a — named-volume root-ownership.** CONFIRMED + FIXED. Base-image change makes the
+   data dir `2775`; the fresh named volume now seeds `drwxrwsr-x 0 10000` (verified via
+   `docker run -v <vol> ... ls -lan`). registry-state (omb group) can write the root.
+2. **H6c — DB parent dir `registry/` never created.** CONFIRMED + FIXED. After H6a, the next
+   crash was `sqlite3.OperationalError: unable to open database file` — the volume root was
+   writable but `registry/` (parent of `state.sqlite3`) didn't exist and SQLite won't create
+   parent dirs. The ROOT compose omits `REGISTRY_STATE_LOG_DIR` (the test composes set it, so
+   the log-writer's mkdir incidentally creates `registry/`). FIX: `_ensure_db_parent_dir()` in
+   `registry_state/app/main.py` mkdir's the DB parent `2775` before `create_engine`. Confirmed:
+   `registry/` (`drwxrwsr-x 10002 10000`) + `state.sqlite3` now created.
+3. **H6b — no SQLite schema bootstrap.** CONFIRMED, **decision pending**. Next crash:
+   `sqlite3.OperationalError: no such table: snapshots`. The DB opens but has no tables. The
+   ROOT compose sets no `REGISTRY_STATE_AUTO_CREATE_SCHEMA`; the **migrator is
+   `profiles:["migrate"]`** (NOT started by `docker compose up -d`) and migrates the EVENT LOG
+   (`EVENT_LOG_PATH`), not the DB schema; registry-state has **no `depends_on` migrator**. So
+   nothing runs `Base.metadata.create_all`/`alembic upgrade head` on a plain `up`. The
+   S-1/S-2/S-3 test composes all set `AUTO_CREATE_SCHEMA=1` to self-bootstrap; the S-4 test
+   boots the production ROOT compose which doesn't. **This also implies a fresh production
+   `docker compose up -d` (no `--profile migrate`, no operator alembic step) would hit the
+   same empty-schema crash — a possible production gap, not just a test issue.**
+
+**IMAGE-ARCH NOTE (cost me a cycle):** all Python code lives in the BASE image's venv
+(`uv sync --no-editable --all-packages` in `Dockerfile.base` stage 1); per-service Dockerfiles
+only `useradd`. So ANY `services/*/src` code change requires `just build-base` — rebuilding
+the thin per-service image alone does NOT pick it up.
+
+### Completion Notes List
+- [x] H6a confirmed + FIXED (base-image group-writable `/var/lib/oh-my-bmad`); volume seeds 2775.
+- [x] H6c confirmed + FIXED (`_ensure_db_parent_dir` mkdir's `registry/` 2775 before engine).
+- [ ] H6b (no schema bootstrap) — confirmed; FIX APPROACH PENDING OPERATOR DECISION (test-scoped
+      AUTO_CREATE_SCHEMA opt-in vs production schema-bootstrap fix). Likely also a prod gap.
+- [ ] Re-verify S-4 Phase 1+2 green after H6b fix; then AC5 nightly + AI-1 3-lane review.
+
+### H6b FIXED + SCOPE REVELATION (2026-05-28)
+
+H6b resolved per operator decision (test-scoped AUTO_CREATE_SCHEMA): ROOT compose reads
+`REGISTRY_STATE_AUTO_CREATE_SCHEMA` env (default OFF in prod — unchanged); the S-4 test
+exports `=1`. After all three fixes (H6a + H6c + H6b), **registry-state boots HEALTHY** in
+the ROOT compose (verified: `Up (healthy)`). metrics-subscriber also healthy.
+
+**BUT the full S-4 Phase-1 now reveals pre-existing downstream failures** that were MASKED
+because compose aborted on registry-state first (its `depends_on` failed). With registry-state
+healthy, the 180s wait exposed:
+- **registry-api** — `Restarting (3)` crash loop (mounts the volume `:ro` in the ROOT compose
+  but S-1/S-2/S-3 mount it RW because "registry-api writes JSONL"; likely can't write the
+  event log, OR needs the schema/another config).
+- **clawhip-daemon** — unhealthy.
+- **telegram-gateway** — unhealthy (likely empty `TELEGRAM_BOT_TOKEN` in the test env; the
+  Phase-2 `docker-compose.s4.yml` overlay sets `TELEGRAM_BOT_TOKEN: ""` + `TG_ALLOWLIST_USER_IDS: "[]"`
+  explicitly, but Phase-1 ROOT compose relies on a (absent) `.env`).
+- **orchestrator-adapter / worker-wrapper** — still "starting" at timeout.
+
+These are NOT caused by this story's changes — they are pre-existing ROOT-compose fresh-boot
+gaps. **Implication: the ROOT compose has never booted all-healthy on a fresh volume** (a
+production fresh-deploy concern beyond the documented "registry-state unhealthy" nightly cause).
+This is a materially larger scope than 11.3.5 was filed for (which targeted the registry-state
+failure — now fixed). **Scope decision pending operator** (see below): close 11.3.5 on the
+registry-state fix + split the downstream multi-service boot failures, vs expand 11.3.5.
+
+### Files (in-flight, uncommitted)
+- `Dockerfile.base` (H6a — data-dir 2775) — production base-image fix
+- `services/registry-state/src/registry_state/app/main.py` (H6c — `_ensure_db_parent_dir`) — production fix
+- `docker-compose.yml` (H6b — `REGISTRY_STATE_AUTO_CREATE_SCHEMA` env passthrough, default OFF)
+- `tests/separability/test_s4_metrics_subscriber_optional.py` (H6b — Phase-1 exports `AUTO_CREATE_SCHEMA=1`)
+
+### File List
+- `Dockerfile.base` (modified — pre-create `/var/lib/oh-my-bmad` group-owned by omb + 2775; H6a fix)
+
+### Review Findings (`/code-review` 2026-05-28, pre-verification — verification-GATED)
+
+Reviewed the H6a `Dockerfile.base` diff. 2 real/plausible findings — both are precisely
+what the pending Docker verification disambiguates, so they are **held (not blind-patched)**.
+Rationale: a delegated verifier just reintroduced a P0 by speculatively patching multi-service
+S4 permission/env issues; fixing these without runtime evidence of which write conflicts would
+repeat that. Confirm-then-fix.
+
+- [ ] [Review][Verify-gated] **F1 — multi-writer cross-uid subdir perms** [Dockerfile.base] —
+  setgid 2775 propagates the omb GROUP to new subdirs but NOT group-write (no `umask 002`
+  anywhere → new dirs are 2755, group r-x). `registry/events/` is written by BOTH
+  registry-state (uid 10002) AND the migrator (`EVENT_LOG_PATH=.../registry/events/current.jsonl`,
+  different uid). Whichever creates the shared subdir first (2755) locks the other out (EACCES).
+  **Resolve:** if the S4 run shows a service failing EACCES into a peer-created subdir, fix with
+  evidence (candidates: pre-create the shared `registry/events` group-writable in base; `umask
+  002` in writer entrypoints; or per-service subdir ownership). If S4 passes, non-issue (each
+  writer owns its own subdir + FR26 single-writer holds).
+- [ ] [Review][Verify-gated] **F2 — H6b (schema bootstrap) not addressed** [Dockerfile.base] —
+  the fix is H6a-only; the ROOT compose has no `REGISTRY_STATE_AUTO_CREATE_SCHEMA` (relies on
+  the migrator). If registry-state needs the schema before the migrator runs, it could still
+  fail at a later lifespan phase. **Resolve:** the `REGISTRY_STATE_LIFESPAN_TRACE` output from
+  the S4 run shows whether the stall (if any) is post-volume-write at a schema phase.
+- [x] [Review][Dismiss] non-recursive chmod (fresh `down -v` volume has no subdirs); base
+  placement / all-images-get-the-dir (intentional, ensures consistent seeding); chgrp/chmod
+  order; comment accuracy. No defects.
+
 ## Definition of Done
 
 - S4 Phase 1 + Phase 2 healthy; `s3-separability` nightly job fully PASS (S1/S2/S3/S4).

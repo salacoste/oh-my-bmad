@@ -45,6 +45,17 @@ RUN uv sync --frozen --no-dev --all-packages --no-editable
 # entrypoint. Shared `omb` group (GID 10000) owns `/app` (group-writable) so
 # service users can write runtime state (logs, caches, SQLite WAL) under
 # their home dir without a per-service chown step.
+#
+# Story 11.3.5: also pre-create the `/var/lib/oh-my-bmad` data root group-owned
+# by `omb` + setgid-group-writable (2775), mirroring the `/app` pattern. Docker
+# seeds a FRESH named volume from the image's directory ownership at the mount
+# path; without this the volume mounts ROOT-owned and registry-state (uid 10002,
+# gid omb) cannot write -> lifespan never touches /tmp/ready -> "unhealthy"
+# (the S-4 separability Phase-1 ROOT-compose failure; Fix-B's bind-mount uid
+# override does NOT apply to the named volume). setgid (the leading 2) makes
+# subdirs/files registry-state/migrator create inherit the omb group so EVERY
+# omb-group service can read/write regardless of its per-service uid. Benefits
+# fresh-named-volume production deploys too, not just the S-4 test.
 FROM python:3.12-slim-bookworm AS runtime-base
 # TLS / https support for services that call external APIs (Anthropic,
 # Telegram, GitHub, Node subprocesses, etc.).
@@ -56,7 +67,10 @@ RUN apt-get update \
 RUN groupadd --system --gid 10000 omb \
  && mkdir -p /app \
  && chgrp omb /app \
- && chmod 2775 /app
+ && chmod 2775 /app \
+ && mkdir -p /var/lib/oh-my-bmad \
+ && chgrp omb /var/lib/oh-my-bmad \
+ && chmod 2775 /var/lib/oh-my-bmad
 WORKDIR /app
 # Copy ONLY the venv (not source — wheels built by --no-editable contain
 # the code already) from the builder.
