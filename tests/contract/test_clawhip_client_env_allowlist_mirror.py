@@ -86,3 +86,80 @@ def test_scripted_worker_stub_allowlist_contains_required_clawhip_vars() -> None
         f"env vars: {sorted(missing)}. Without these the stub-spawned clawhip-bridge "
         "exits 2 → S-1/S-2 separability stalls at task.created."
     )
+
+
+# ---------------------------------------------------------------------------
+# Story 11.3.6 — orchestrator-adapter + worker-wrapper MCPClientGroup allowlists.
+#
+# Unlike the registry adapters (which spawn ONLY clawhip-bridge), these two
+# services spawn ALL THREE MCP servers (task-registry, session-registry,
+# clawhip-bridge), so their allowlist is a superset carrying every server's
+# REQUIRED vars. These were env-less before 11.3.6 (the a0ca050 revert), which
+# stripped the required vars → services never reached /tmp/ready on a fresh
+# ROOT-compose boot. The fix forwards an ALLOWLIST (never os.environ.copy).
+# ---------------------------------------------------------------------------
+
+# Required by the three MCP servers' __main__.py (exit 2 if absent).
+_SPAWNER_REQUIRED_ENV_VARS = {
+    "TASK_REGISTRY_DB_PATH",
+    "TASK_REGISTRY_ACTOR_KIND",
+    "TASK_REGISTRY_ACTOR_ID",
+    "SESSION_REGISTRY_DB_PATH",
+    "SESSION_REGISTRY_ACTOR_KIND",
+    "SESSION_REGISTRY_ACTOR_ID",
+    "CLAWHIP_BRIDGE_ACTOR_KIND",
+    "CLAWHIP_BRIDGE_ACTOR_ID",
+}
+
+# Secrets that MUST NEVER be forwarded to an MCP subprocess (the a0ca050 P0).
+_FORBIDDEN_SECRET_ENV_VARS = {
+    "ANTHROPIC_API_KEY",
+    "GITHUB_TOKEN",
+    "OPERATOR_HMAC_KEY",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "OPENAI_API_KEY",
+}
+
+
+def _spawner_allowlists() -> tuple[frozenset[str], frozenset[str]]:
+    from orchestrator_adapter.adapters.mcp_clients import (  # noqa: IMP001 — tests/* can cross
+        _ENV_ALLOWLIST as _ORCH_ALLOWLIST,
+    )
+    from worker_wrapper.adapters.mcp_clients import (  # noqa: IMP001 — tests/* can cross
+        _ENV_ALLOWLIST as _WORKER_ALLOWLIST,
+    )
+
+    return _ORCH_ALLOWLIST, _WORKER_ALLOWLIST
+
+
+def test_spawner_allowlists_byte_identical_across_services() -> None:
+    """orchestrator-adapter and worker-wrapper spawn the same 3 servers → same allowlist."""
+    orch, worker = _spawner_allowlists()
+    assert orch == worker, (
+        "MCPClientGroup._ENV_ALLOWLIST drifted between orchestrator-adapter and worker-wrapper:\n"
+        f"  in orchestrator not in worker: {sorted(orch - worker)}\n"
+        f"  in worker not in orchestrator: {sorted(worker - orch)}\n"
+        "Update both adapters together — mirror discipline (Story 11.3.6)."
+    )
+
+
+def test_spawner_allowlists_contain_all_required_server_vars() -> None:
+    """Every REQUIRED var for the 3 spawned MCP servers must be forwarded."""
+    orch, _ = _spawner_allowlists()
+    missing = _SPAWNER_REQUIRED_ENV_VARS - orch
+    assert not missing, (
+        f"MCPClientGroup._ENV_ALLOWLIST omits MCP-server required vars: {sorted(missing)}. "
+        "Without these the spawned subprocess exits 2 and the service never reaches /tmp/ready."
+    )
+
+
+def test_spawner_allowlists_exclude_secrets() -> None:
+    """a0ca050 P0 guard: no API key / token / HMAC key may be in the forwarded allowlist."""
+    orch, worker = _spawner_allowlists()
+    for name, allowlist in (("orchestrator-adapter", orch), ("worker-wrapper", worker)):
+        leaked = _FORBIDDEN_SECRET_ENV_VARS & allowlist
+        assert not leaked, (
+            f"{name} _ENV_ALLOWLIST leaks secret env vars to MCP subprocesses: "
+            f"{sorted(leaked)}. This is the a0ca050 P0 — NEVER forward secrets."
+        )

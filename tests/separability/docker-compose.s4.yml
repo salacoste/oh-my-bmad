@@ -112,9 +112,33 @@ services:
     environment:
       ENV: test
       ANTHROPIC_API_KEY: ""
+      # Story 11.3.6 (H7b): MCP-subprocess required vars (identity = orchestrator).
+      # Forwarded via the adapters/mcp_clients.py allowlist (never os.environ.copy).
+      TASK_REGISTRY_DB_PATH: /var/lib/oh-my-bmad/registry/state.sqlite3
+      TASK_REGISTRY_ACTOR_KIND: orchestrator
+      TASK_REGISTRY_ACTOR_ID: orchestrator-adapter
+      SESSION_REGISTRY_DB_PATH: /var/lib/oh-my-bmad/registry/state.sqlite3
+      SESSION_REGISTRY_ACTOR_KIND: orchestrator
+      SESSION_REGISTRY_ACTOR_ID: orchestrator-adapter
+      CLAWHIP_BRIDGE_ACTOR_KIND: orchestrator
+      CLAWHIP_BRIDGE_ACTOR_ID: orchestrator-adapter
+      CLAWHIP_BRIDGE_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+      REGISTRY_EVENTS_DIR: /var/lib/oh-my-bmad/registry/events
+      REGISTRY_DB_PATH: /var/lib/oh-my-bmad/registry/state.sqlite3
+      # Story 11.3.6 (H7f): disable nested audit-emission (nested-stdio deadlock).
+      OMB_MCP_AUDIT_EMISSION_ENABLED: "0"
     init: true
     restart: "no"
     networks: [oh-my-bmad-net]
+    # Story 11.3.6 (H7b): RW data volume so the spawned clawhip-bridge can append
+    # the event log; task-registry reads the DB. Wait for registry-state + api.
+    depends_on:
+      registry-state:
+        condition: service_healthy
+      registry-api:
+        condition: service_healthy
+    volumes:
+      - ${OMB_S4_DATA_DIR:?OMB_S4_DATA_DIR must be exported by the harness}:/var/lib/oh-my-bmad
     healthcheck:
       test: ["CMD", "test", "-f", "/tmp/ready"]
       interval: 1s
@@ -133,11 +157,34 @@ services:
       ANTHROPIC_API_KEY: ""
       GITHUB_TOKEN: ""
       REGISTRY_DB_PATH: /var/lib/oh-my-bmad/registry/state.sqlite3
+      # Story 11.3.6 (H7b): MCP-subprocess required vars (identity = worker).
+      # Forwarded via the adapters/mcp_clients.py allowlist (never os.environ.copy).
+      TASK_REGISTRY_DB_PATH: /var/lib/oh-my-bmad/registry/state.sqlite3
+      TASK_REGISTRY_ACTOR_KIND: worker
+      TASK_REGISTRY_ACTOR_ID: worker-wrapper
+      SESSION_REGISTRY_DB_PATH: /var/lib/oh-my-bmad/registry/state.sqlite3
+      SESSION_REGISTRY_ACTOR_KIND: worker
+      SESSION_REGISTRY_ACTOR_ID: worker-wrapper
+      CLAWHIP_BRIDGE_ACTOR_KIND: worker
+      CLAWHIP_BRIDGE_ACTOR_ID: worker-wrapper
+      CLAWHIP_BRIDGE_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+      REGISTRY_EVENTS_DIR: /var/lib/oh-my-bmad/registry/events
+      # Story 11.3.6 (H7f): disable nested audit-emission (nested-stdio deadlock).
+      OMB_MCP_AUDIT_EMISSION_ENABLED: "0"
+      # Story 11.3.6 (H7h): pin ready-file to /tmp/ready (default is per-pid).
+      WORKER_READY_FILE_PATH: /tmp/ready
     init: true
     restart: "no"
     networks: [oh-my-bmad-net]
+    # Story 11.3.6 (H7b): RW (was :ro) so the spawned clawhip-bridge can append
+    # the event log. Wait for registry-state (DB/schema) + registry-api.
+    depends_on:
+      registry-state:
+        condition: service_healthy
+      registry-api:
+        condition: service_healthy
     volumes:
-      - ${OMB_S4_DATA_DIR:?OMB_S4_DATA_DIR must be exported by the harness}:/var/lib/oh-my-bmad:ro
+      - ${OMB_S4_DATA_DIR:?OMB_S4_DATA_DIR must be exported by the harness}:/var/lib/oh-my-bmad
     healthcheck:
       test: ["CMD", "test", "-f", "/tmp/ready"]
       interval: 1s

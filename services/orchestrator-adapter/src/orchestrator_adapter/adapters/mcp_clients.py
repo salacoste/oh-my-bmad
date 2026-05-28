@@ -6,8 +6,9 @@ Same pattern as worker-wrapper ``adapters/mcp_clients.py`` (Story 5.1).
 from __future__ import annotations
 
 import asyncio
+import os
 from contextlib import AsyncExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import structlog
 from mcp import ClientSession, StdioServerParameters
@@ -17,12 +18,78 @@ from orchestrator_adapter.app.config import OrchestratorSettings
 
 _INIT_TIMEOUT: float = 30.0
 
+# Story 11.3.6 — env-var allowlist forwarded to the THREE spawned MCP
+# subprocesses (task-registry, session-registry, clawhip-bridge). Each
+# server's ``__main__.py`` exits 2 if its REQUIRED vars are absent; with an
+# env-less ``StdioServerParameters`` the MCP SDK forwards only
+# ``get_default_environment()`` (a POSIX safe-list), so those required vars
+# are stripped → subprocess exits → ``/tmp/ready`` is never touched →
+# orchestrator-adapter is reported ``unhealthy`` on a fresh ROOT-compose boot.
+#
+# ⚠️ SECURITY (a0ca050 P0): this MUST stay an explicit allowlist. NEVER use
+# ``env=os.environ.copy()`` / ``dict(os.environ)`` — that leaked ANTHROPIC_API_KEY
+# / GITHUB_TOKEN / OPERATOR_HMAC_KEY into the MCP subprocesses (reverted twice).
+# Mirrors the canon ``mcp-servers/task-registry/.../adapters/clawhip_client.py``
+# ``_ENV_ALLOWLIST``, EXPANDED to the per-server required vars because this
+# spawner connects to all three servers (the canon spawns only clawhip-bridge).
+# Kept byte-identical to the worker-wrapper sibling — enforced by
+# ``tests/contract/test_clawhip_client_env_allowlist_mirror.py``.
+_ENV_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        # Process basics
+        "PATH",
+        "HOME",
+        "USER",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        # Python interpreter resolution
+        "PYTHONPATH",
+        "PYTHONUNBUFFERED",
+        # Temp directories (Python ``tempfile`` checks these before /tmp)
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        # TLS / CA bundles (custom-CA deployments)
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        # task-registry REQUIRED (mcp-servers/task-registry/.../__main__.py)
+        "TASK_REGISTRY_DB_PATH",
+        "TASK_REGISTRY_ACTOR_KIND",
+        "TASK_REGISTRY_ACTOR_ID",
+        # session-registry REQUIRED (mcp-servers/session-registry/.../__main__.py)
+        "SESSION_REGISTRY_DB_PATH",
+        "SESSION_REGISTRY_ACTOR_KIND",
+        "SESSION_REGISTRY_ACTOR_ID",
+        # clawhip-bridge REQUIRED (mcp-servers/clawhip-bridge/.../__main__.py)
+        "CLAWHIP_BRIDGE_ACTOR_KIND",
+        "CLAWHIP_BRIDGE_ACTOR_ID",
+        "CLAWHIP_BRIDGE_LOG_DIR",
+        # Shared event-log + SQLite paths (spine convention)
+        "REGISTRY_EVENTS_DIR",
+        "REGISTRY_DB_PATH",
+        # Feature-flag mirror (task/session-registry read this for audit emission)
+        "OMB_MCP_AUDIT_EMISSION_ENABLED",
+        # NO ANTHROPIC_API_KEY, NO GITHUB_TOKEN, NO OPERATOR_HMAC_KEY, NO AWS/OPENAI.
+    }
+)
+
+
+def _default_env_allowlist() -> dict[str, str]:
+    """Return a fresh dict of parent-env vars matching ``_ENV_ALLOWLIST``."""
+    return {k: v for k, v in os.environ.items() if k in _ENV_ALLOWLIST}
+
 
 @dataclass
 class MCPClientGroup:
     """Manages three MCP client connections via stdio subprocesses."""
 
     settings: OrchestratorSettings
+    # Story 11.3.6: explicit allowlist (NEVER os.environ.copy) — forwarded to
+    # every spawned MCP subprocess. Override at construction for tests.
+    env: dict[str, str] = field(default_factory=_default_env_allowlist)
     _stack: AsyncExitStack | None = None
 
     task_registry: ClientSession | None = None
@@ -73,7 +140,9 @@ class MCPClientGroup:
         args: list[str],
     ) -> ClientSession:
         log = structlog.get_logger(__name__)
-        params = StdioServerParameters(command=command, args=args)
+        # Story 11.3.6: forward the allowlisted env so each MCP server gets its
+        # REQUIRED vars. The SDK merges this over get_default_environment().
+        params = StdioServerParameters(command=command, args=args, env=self.env)
         read, write = await self._stack.enter_async_context(stdio_client(params))
         session = await self._stack.enter_async_context(ClientSession(read, write))
         await asyncio.wait_for(session.initialize(), timeout=_INIT_TIMEOUT)
