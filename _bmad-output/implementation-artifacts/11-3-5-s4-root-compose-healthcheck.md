@@ -1,7 +1,15 @@
 # Story 11.3.5 — S4 separability: registry-state unhealthy under ROOT compose
 
-Status: **ready-for-dev** (create-story 2026-05-27 — comprehensive context pass; supersedes
-the 2026-05-25 D3-split stub)
+Status: **done** (2026-05-28 — scoped close per operator) — the story's named cause,
+**registry-state unhealthy under the ROOT compose**, is FIXED + verified healthy + committed
+(`219607d`): 3-layer fix (H6a named-volume `2775` + H6c DB-parent-dir + H6b test-scoped schema
+bootstrap). H6a/H6c are production fixes; H6b is test-scoped (prod schema bootstrap unchanged).
+⚠️ `s3-separability` nightly stays RED — once registry-state was healthy the full ROOT-compose
+boot exposed PRE-EXISTING downstream service failures (registry-api `:ro` + MCP-env on
+orchestrator-adapter/worker-wrapper) → split to **Story 11.3.6** (security-sensitive; complete
+diagnosis carried over). OUTSTANDING for 11.3.5's committed diff: AI-1 3-lane review on the
+H6c (`main.py`) + H6b (compose/test) delta added after the earlier `/code-review` of H6a —
+recommend folding it into 11.3.6's review or a quick standalone pass.
 
 ## Story
 
@@ -328,7 +336,45 @@ This is a materially larger scope than 11.3.5 was filed for (which targeted the 
 failure — now fixed). **Scope decision pending operator** (see below): close 11.3.5 on the
 registry-state fix + split the downstream multi-service boot failures, vs expand 11.3.5.
 
-### Files (in-flight, uncommitted)
+### Downstream failures — COMPLETE diagnosis (2026-05-28) → split to Story 11.3.6
+
+With registry-state healthy, the full ROOT-compose Phase-1 boot exposes pre-existing
+failures in the OTHER services (all masked previously by registry-state's `depends_on`
+abort). Root-caused via local boot + `docker compose logs`:
+
+- **registry-api — `unable to open database file` (crash loop).** Mounts the volume **`:ro`**
+  (docker-compose.yml:50) but it is the event-log WRITER (POST /v1/tasks → task.created) +
+  opens the SQLite DB. The S-1/S-2/S-3 composes mount it RW ("registry-api writes JSONL").
+  Fix candidate: RW mount (+ confirm whether it opens the DB read-only for materialized
+  reads). Also a likely ordering dependency on registry-state creating the DB first.
+- **orchestrator-adapter — MCP subprocess dies (crash loop).** Log:
+  `task-registry: TASK_REGISTRY_DB_PATH is required but not set or empty` →
+  `McpError: Connection closed`. TWO-part cause: (1) the ROOT compose does not set
+  `TASK_REGISTRY_DB_PATH` / `SESSION_REGISTRY_DB_PATH` / `CLAWHIP_BRIDGE_*` on
+  orchestrator-adapter; (2) its `mcp_clients.py` spawns the MCP servers with env-less
+  `StdioServerParameters` (correctly env-less per the a0ca050 P0 revert), so even if set
+  those vars wouldn't reach the subprocess. **CORRECT fix = compose sets the vars + an
+  ALLOWLISTED env propagation in `mcp_clients.py` (mirror `clawhip_client._ENV_ALLOWLIST`
+  and the 11.3.4 scripted-worker `_clawhip_env`). DO NOT use `env=os.environ.copy()` /
+  `dict(os.environ)` — that is the exact P0 the rogue verifier reintroduced.**
+- **worker-wrapper — `TimeoutError` (crash loop).** Same MCP-env root cause: its MCP
+  subprocesses can't start (missing required DB-path env) → MCP init times out.
+- **clawhip-daemon / telegram-gateway — likely benign.** Logs show clean startup
+  (`telegram_sink started`; `Webhook set · ready`); probably slow-healthcheck or
+  eventual-healthy rather than crashing — confirm in 11.3.6.
+
+**SCOPE: split to Story 11.3.6** — this is a distinct, larger "ROOT compose has never booted
+all-healthy on a fresh volume" effort, and the orchestrator/worker part is SECURITY-SENSITIVE
+(the MCP env-propagation that caused the a0ca050 P0). It must be done with fresh context + a
+3-lane review, NOT rushed. **Also likely a production fresh-deploy gap** (registry-api `:ro`,
+orchestrator/worker MCP env) — 11.3.6 should assess production impact, not just the test.
+
+### 11.3.5 outcome
+The documented S-4 cause (registry-state unhealthy) is FIXED + verified + committed
+(`219607d`). `s3-separability` stays RED until 11.3.6 (downstream services). Closing 11.3.5
+on the registry-state fix per the operator's accept of the split.
+
+### Files (COMMITTED @ 219607d)
 - `Dockerfile.base` (H6a — data-dir 2775) — production base-image fix
 - `services/registry-state/src/registry_state/app/main.py` (H6c — `_ensure_db_parent_dir`) — production fix
 - `docker-compose.yml` (H6b — `REGISTRY_STATE_AUTO_CREATE_SCHEMA` env passthrough, default OFF)
