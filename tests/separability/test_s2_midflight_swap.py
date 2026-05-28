@@ -459,6 +459,12 @@ def test_worker_facing_source_code_unchanged() -> None:
         # event_log.py becomes thin re-export shim; main.py uses renamed public imports.
         ":!services/registry-state/src/registry_state/adapters/event_log.py",
         ":!services/registry-state/src/registry_state/app/main.py",
+        # Story 11.3.6 H7b: orchestrator-adapter's mcp_clients.py adds an explicit
+        # env-allowlist forwarded to its spawned MCP subprocesses (P0-adjacent
+        # security fix on the a0ca050 code path — NEVER os.environ.copy). The
+        # change is inert when the new MCP env vars aren't present, so S-2's
+        # mid-flight stub-worker swap path is unaffected.
+        ":!services/orchestrator-adapter/src/orchestrator_adapter/adapters/mcp_clients.py",
     ]
 
     rev_parse = subprocess.run(

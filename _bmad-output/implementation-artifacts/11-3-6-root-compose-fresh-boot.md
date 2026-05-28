@@ -1,6 +1,6 @@
 # Story 11.3.6 — ROOT compose fresh-boot: downstream services unhealthy (S4 Phase 1)
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -100,7 +100,7 @@ mandatory at pass-1**.
 - [SPLIT 11.3.7] **Task 5 — Regression guard for the FULL S-4 boot** (needs the 11.3.7 fixes to be a meaningful guard)
 - [x] **Task 6a — Validation gates green:** ruff ✓ · ruff format ✓ · mypy --strict on changed adapters ✓ · check_imports ✓ · check_event_registry ✓ · check_single_writer ✓ · `pytest -m "not slow"` **3139 passed, 3 skipped, 0 failed** (no regression)
 - [SPLIT 11.3.7] **Task 6b — Nightly all-4-green** (S-4 can't be green until 11.3.7's tail closes)
-- [ ] **Task 7 — AI-1 3-lane adversarial review at pass-1** on this slice (Blind = `code-reviewer`; Edge + Acceptance = `general-purpose`); diff-audit the MCP env change for the a0ca050 leak pattern — pending
+- [x] **Task 7 — AI-1 7-angle review** completed 2026-05-28. `/code-review high` ran 7 finder angles (line-by-line + removed-behavior + cross-file + reuse + simplification + efficiency + altitude). 10 ranked findings; all applied as fixes (see "Code review findings" below). Validation re-run: 3140 tests pass, ruff/format/mypy/discipline ✓, both composes config-validate ✓. P0 diff-audit clean — no `os.environ.copy` / `dict(os.environ)` under `services/*/adapters/mcp_clients.py`.
 
 ## Dev Notes
 
@@ -467,17 +467,68 @@ orthogonal to this story's MCP-env/registry-api objective, which is COMPLETE + V
   OMC-in-image + telegram-gateway offline-mode + clawhip-daemon `/tmp/ready` code + dummy token
   + final S-4 green + nightly). Validation gates green: ruff/format/mypy/discipline ✓ +
   `pytest -m "not slow"` **3139 passed / 0 failed**. Status → `review`.
+- 2026-05-28 — `/code-review high` ran 7-angle adversarial review; 10 findings applied as fixes
+  (s4 telegram-gateway socket healthcheck mirror; contract test spawner ⊇ canon + extended
+  required set + module-top imports; per-call defensive `env=dict(self.env)` in both adapters;
+  `x-mcp-spawner-env` + `x-healthcheck-http` YAML anchors collapsing 4 duplicated env blocks +
+  2 duplicated healthchecks; socket healthcheck wrapped in `try/except OSError` for clean stderr;
+  3 separability-sentinel tests updated to allowlist the orchestrator-adapter mcp_clients.py
+  touch with a Story 11.3.6 justification; deferred-work.md entry for H7f nested-stdio deadlock).
+  Validation re-run: **3140 tests pass / 0 failed** (one pre-existing timing flake passed on
+  retry). Status → `done`.
+
+### Code review findings (7-angle, 2026-05-28) — all 10 applied as fixes
+
+Ranked most-severe first. Each was applied + verified by re-running the full gates.
+
+1. **`tests/separability/docker-compose.s4.yml:100`** — telegram-gateway S4 healthcheck still
+   `test -f /tmp/ready` (H7d socket-probe fix wasn't mirrored to the s4 overlay). FIX: socket
+   probe (try/except OSError) mirroring the ROOT compose.
+2. **`tests/contract/test_clawhip_client_env_allowlist_mirror.py`** — contract test missing
+   spawner ⊇ canon assertion. FIX: new `test_spawner_allowlists_are_superset_of_canon` imports
+   the canon `_TASK_ALLOWLIST` and asserts both spawner allowlists contain it.
+3. **`tests/contract/test_clawhip_client_env_allowlist_mirror.py:103`** — `_SPAWNER_REQUIRED_ENV_VARS`
+   omitted `CLAWHIP_BRIDGE_LOG_DIR` / `REGISTRY_EVENTS_DIR` / `REGISTRY_DB_PATH`. FIX: added all
+   three with a comment explaining why each is load-bearing.
+4. **`services/{orch-adapter,worker-wrapper}/.../mcp_clients.py`** — `env` was shared across the
+   3 `_connect` calls; sibling mutation hazard. FIX: per-call defensive `env=dict(self.env)`.
+5. **`docker-compose.yml`** — 11-line MCP-spawner env block duplicated 4× (root×2 + s4×2). FIX:
+   `x-mcp-spawner-env: &mcp_spawner_env` anchor in both files; service env collapses to
+   `<<: [*common-env, *mcp_spawner_env]` + per-service ACTOR_KIND/ACTOR_ID only.
+6. **`docker-compose.yml:60,130`** — two inline 12-line socket-probe healthchecks for
+   registry-api + telegram-gateway with no shared anchor. FIX: `x-healthcheck-http: &healthcheck_http`
+   anchor; service `healthcheck: *healthcheck_http`.
+7. **`docker-compose.yml`** — socket healthcheck `python -c` raised unhandled
+   `ConnectionRefusedError` during startup retries (traceback noise in container logs). FIX:
+   wrapped in `try/except OSError: sys.exit(1)` (applied in both root + s4 + the new HTTP anchor).
+8. **`tests/contract/test_clawhip_client_env_allowlist_mirror.py:109`** — lazy imports inside
+   `_spawner_allowlists()` (inconsistent with rest of file; ImportError yields pytest ERROR
+   not FAIL). FIX: imports moved to module top; helper function deleted.
+9. **`_bmad-output/implementation-artifacts/deferred-work.md`** — H7f nested-stdio deadlock
+   workaround had no entry. FIX: added "Deferred from: code review of story 11-3-6" entry with
+   the workaround rationale + the proper-fix options (restructure clawhip_client to detect
+   nesting, or lift audit emission to the spawner) + back-ref to Story 11.3.7.
+10. **Separability sentinels** (`tests/integration/test_journey_1_overnight.py`,
+   `tests/separability/test_s1_cold_worker_swap.py`, `tests/separability/test_s2_midflight_swap.py`)
+   — 3 sentinel tests legitimately flagged the orchestrator-adapter `mcp_clients.py` touch as a
+   spine-source modification. FIX: added the path to each test's `_ALLOWED` / `SPINE_PATHS`
+   exclusion with a Story 11.3.6 justification comment (the change is inert without the new
+   compose env vars; stub-worker boot paths are unaffected).
 
 ### File List
 
-- `services/orchestrator-adapter/src/orchestrator_adapter/adapters/mcp_clients.py` (modified — `_ENV_ALLOWLIST` frozenset + `_default_env_allowlist()` + `env=self.env` in `_connect`; H7b core)
-- `services/worker-wrapper/src/worker_wrapper/adapters/mcp_clients.py` (modified — byte-identical allowlist + `env=` propagation)
-- `tests/contract/test_clawhip_client_env_allowlist_mirror.py` (modified — 3 new tests: byte-identical spawner-allowlist mirror, required-vars present, secret-exclusion guard)
-- `docker-compose.yml` (modified — H7a registry-api `:ro`→RW + `REGISTRY_API_DB_URL`/`LOG_DIR` + `depends_on: registry-state healthy` + socket healthcheck; H7b orch/worker full MCP env block + RW volume + `depends_on` + audit-OFF; H7d telegram-gateway socket healthcheck; H7h `WORKER_READY_FILE_PATH=/tmp/ready`)
-- `tests/separability/docker-compose.s4.yml` (modified — H7b orch/worker MCP env + RW + `depends_on` + audit-OFF; H7h worker ready-file env)
-- `_bmad-output/implementation-artifacts/11-3-6-root-compose-fresh-boot.md` (this story — updated through "review")
-- `_bmad-output/implementation-artifacts/11-3-7-root-compose-full-bringup.md` (new — split-tail story stub)
-- `_bmad-output/implementation-artifacts/sprint-status.yaml` (modified — 11-3-6 `backlog`→`ready-for-dev`→`in-progress`→`review`; 11-3-7 added as `backlog`)
+- `services/orchestrator-adapter/src/orchestrator_adapter/adapters/mcp_clients.py` — `_ENV_ALLOWLIST` + `_default_env_allowlist()` + per-call defensive `env=dict(self.env)` in `_connect`; H7b core
+- `services/worker-wrapper/src/worker_wrapper/adapters/mcp_clients.py` — byte-identical allowlist + per-call defensive `env=dict(self.env)`
+- `tests/contract/test_clawhip_client_env_allowlist_mirror.py` — 4 new tests (byte-identical mirror, spawner ⊇ canon, extended required-vars, secret-exclusion); imports moved to module top
+- `docker-compose.yml` — H7a registry-api RW + DB/log-dir + depends_on; H7b orch/worker MCP env via `*mcp_spawner_env` anchor + RW volume + depends_on + audit-OFF; H7d socket healthcheck via `*healthcheck_http` anchor (try/except wrapped); H7h `WORKER_READY_FILE_PATH=/tmp/ready`; new YAML anchors at top of file
+- `tests/separability/docker-compose.s4.yml` — H7b orch/worker MCP env via parallel `*mcp_spawner_env` anchor + RW + depends_on + audit-OFF; H7d s4 telegram-gateway socket healthcheck (review fix); H7h worker ready-file env
+- `tests/integration/test_journey_1_overnight.py` — `_ALLOWED` set extended (review fix #10)
+- `tests/separability/test_s1_cold_worker_swap.py` — `SPINE_PATHS` exclusion added (review fix #10)
+- `tests/separability/test_s2_midflight_swap.py` — `SPINE_PATHS` exclusion added (review fix #10)
+- `_bmad-output/implementation-artifacts/deferred-work.md` — H7f entry added (review fix #9)
+- `_bmad-output/implementation-artifacts/11-3-6-root-compose-fresh-boot.md` — this story (Status `done`)
+- `_bmad-output/implementation-artifacts/11-3-7-root-compose-full-bringup.md` — new split-tail story stub
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` — 11-3-6 `backlog`→`ready-for-dev`→`in-progress`→`review`→`done`; 11-3-7 added as `backlog`
 
 ### File List
 - `services/orchestrator-adapter/src/orchestrator_adapter/adapters/mcp_clients.py` (modified — `_ENV_ALLOWLIST` + `env=` propagation)

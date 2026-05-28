@@ -365,6 +365,13 @@ def test_worker_facing_source_code_unchanged() -> None:
         # backwards-compat-preserving by design; behavior unchanged.
         ":!services/registry-state/src/registry_state/adapters/event_log.py",
         ":!services/registry-state/src/registry_state/app/main.py",
+        # Story 11.3.6 H7b: orchestrator-adapter's mcp_clients.py adds an explicit
+        # env-allowlist forwarded to its spawned MCP subprocesses (P0-adjacent
+        # security fix on the a0ca050 code path — NEVER os.environ.copy). The
+        # change is inert when the new MCP env vars aren't present (the allowlist
+        # only forwards what exists), so behavior is unchanged unless the compose
+        # declares the new vars — S-1's stub-worker boot path is unaffected.
+        ":!services/orchestrator-adapter/src/orchestrator_adapter/adapters/mcp_clients.py",
     ]
 
     rev_parse = subprocess.run(

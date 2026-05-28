@@ -30,6 +30,37 @@ x-healthcheck: &healthcheck
   retries: 12
   start_period: 10s
 
+# Story 11.3.6 (H7d) — HTTP-server healthcheck anchor. Use for any service that
+# is a uvicorn/FastAPI server bound to :8080 instead of the `/tmp/ready` file
+# convention (which only the tail-loop services follow). Wrapped in try/except
+# so retries during startup don't dump a Python traceback per attempt.
+x-healthcheck-http: &healthcheck_http
+  test:
+    - CMD
+    - python
+    - -c
+    - "import socket,sys\ntry:\n  s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1', 8080)); s.close()\nexcept OSError:\n  sys.exit(1)"
+  interval: 5s
+  timeout: 3s
+  retries: 12
+  start_period: 10s
+
+# Story 11.3.6 (H7b) — env vars forwarded to spawned MCP subprocesses via the
+# allowlist in services/{orch-adapter,worker-wrapper}/.../mcp_clients.py. Shared
+# between orchestrator-adapter + worker-wrapper; per-service env overrides only
+# the ACTOR_KIND/ACTOR_ID identity vars. NEVER list secrets here.
+x-mcp-spawner-env: &mcp_spawner_env
+  TASK_REGISTRY_DB_PATH: ${REGISTRY_DB_PATH:-/var/lib/oh-my-bmad/registry/state.sqlite3}
+  SESSION_REGISTRY_DB_PATH: ${REGISTRY_DB_PATH:-/var/lib/oh-my-bmad/registry/state.sqlite3}
+  CLAWHIP_BRIDGE_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+  REGISTRY_EVENTS_DIR: /var/lib/oh-my-bmad/registry/events
+  REGISTRY_DB_PATH: ${REGISTRY_DB_PATH:-/var/lib/oh-my-bmad/registry/state.sqlite3}
+  # H7f: disable nested audit-emission on the registry MCP children (3-level
+  # stdio deadlock when task-registry/session-registry spawn a clawhip-bridge
+  # stdio CLIENT from inside their own stdio SERVER). The deep-debug to make
+  # audit-ON work in this nesting is deferred — see deferred-work.md.
+  OMB_MCP_AUDIT_EMISSION_ENABLED: "0"
+
 services:
   registry-api:
     container_name: omb-registry-api
@@ -67,16 +98,7 @@ services:
     # creates /tmp/ready (the shared *healthcheck file convention is for the
     # tail-loop services). Probe the TCP port instead, mirroring the proven
     # journey/s4 overlays (tests/separability/docker-compose.s4.yml:51-60).
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import socket,sys; s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1', 8080)); s.close()"
-      interval: 5s
-      timeout: 3s
-      retries: 12
-      start_period: 10s
+    healthcheck: *healthcheck_http
 
   registry-state:
     container_name: omb-registry-state
@@ -121,17 +143,7 @@ services:
     networks: [oh-my-bmad-net]
     # Story 11.3.6 (H7d): telegram-gateway is a uvicorn HTTP server (binds
     # 0.0.0.0:8080) and never creates /tmp/ready — probe the TCP port instead
-    # of the file convention (mirrors registry-api above + the journey overlays).
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import socket,sys; s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1', 8080)); s.close()"
-      interval: 5s
-      timeout: 3s
-      retries: 12
-      start_period: 10s
+    healthcheck: *healthcheck_http
 
   orchestrator-adapter:
     container_name: omb-orchestrator-adapter
@@ -152,35 +164,19 @@ services:
       - path: .env
         required: false
     environment:
-      <<: *common-env
+      # Story 11.3.6 (H7b): MCP-subprocess env via shared anchor (see top of
+      # file). Identity = orchestrator (ActorKind, packages/events/.../envelope.py:183).
+      # Forwarded to the spawned servers by the allowlist in adapters/mcp_clients.py
+      # (NEVER os.environ.copy — the a0ca050 P0 leak). Per-service override:
+      # ACTOR_KIND/ACTOR_ID only; everything else comes from *mcp_spawner_env.
+      <<: [*common-env, *mcp_spawner_env]
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      # Story 11.3.6 (H7b): orchestrator-adapter spawns task-registry,
-      # session-registry and clawhip-bridge as MCP stdio subprocesses. Each
-      # server's __main__.py exits 2 unless its REQUIRED identity + DB/log vars
-      # are present → verify_connectivity() fails → /tmp/ready is never touched →
-      # the service is reported "unhealthy" on a fresh boot. These vars are
-      # forwarded to the subprocesses by the explicit allowlist in
-      # adapters/mcp_clients.py (NEVER os.environ.copy — the a0ca050 P0 leak).
-      # Identity = orchestrator (ActorKind, packages/events/.../envelope.py:183).
-      TASK_REGISTRY_DB_PATH: ${REGISTRY_DB_PATH:-/var/lib/oh-my-bmad/registry/state.sqlite3}
       TASK_REGISTRY_ACTOR_KIND: orchestrator
       TASK_REGISTRY_ACTOR_ID: orchestrator-adapter
-      SESSION_REGISTRY_DB_PATH: ${REGISTRY_DB_PATH:-/var/lib/oh-my-bmad/registry/state.sqlite3}
       SESSION_REGISTRY_ACTOR_KIND: orchestrator
       SESSION_REGISTRY_ACTOR_ID: orchestrator-adapter
       CLAWHIP_BRIDGE_ACTOR_KIND: orchestrator
       CLAWHIP_BRIDGE_ACTOR_ID: orchestrator-adapter
-      CLAWHIP_BRIDGE_LOG_DIR: /var/lib/oh-my-bmad/registry/events
-      REGISTRY_EVENTS_DIR: /var/lib/oh-my-bmad/registry/events
-      REGISTRY_DB_PATH: ${REGISTRY_DB_PATH:-/var/lib/oh-my-bmad/registry/state.sqlite3}
-      # Story 11.3.6 (H7f): disable nested audit-emission on the registry MCP
-      # children. When task-registry/session-registry are themselves spawned as
-      # stdio subprocesses of this service, their default-ON audit emission tries
-      # to spawn a clawhip-bridge MCP *client from inside their own stdio server*
-      # (3-level nesting) which deadlocks → the registries never finish MCP init →
-      # this service never reaches /tmp/ready. Forwarded to the children via the
-      # mcp_clients.py allowlist. registry-api's HTTP-path audit is unaffected.
-      OMB_MCP_AUDIT_EMISSION_ENABLED: "0"
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]
@@ -207,32 +203,21 @@ services:
       - path: .env
         required: false
     environment:
-      <<: *common-env
+      # Story 11.3.6 (H7b): MCP-subprocess env via shared anchor; identity = worker.
+      # ANTHROPIC_API_KEY / GITHUB_TOKEN are the worker's OWN secrets and are
+      # deliberately NOT in the mcp_clients.py allowlist — they never reach the
+      # MCP subprocesses. (H7h): WORKER_READY_FILE_PATH pins the worker's
+      # ready-file to /tmp/ready so the shared *healthcheck (test -f /tmp/ready)
+      # matches; the worker default is per-pid (/tmp/worker-wrapper-ready-<pid>).
+      <<: [*common-env, *mcp_spawner_env]
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
-      REGISTRY_DB_PATH: ${REGISTRY_DB_PATH:-/var/lib/oh-my-bmad/registry/state.sqlite3}
-      # Story 11.3.6 (H7b): worker-wrapper spawns the same three MCP servers as
-      # orchestrator-adapter; identity = worker. Forwarded to the subprocesses by
-      # the explicit allowlist in adapters/mcp_clients.py (NEVER os.environ.copy).
-      # ANTHROPIC_API_KEY / GITHUB_TOKEN above are the worker's OWN secrets and are
-      # deliberately NOT in that allowlist — they never reach the MCP subprocesses.
-      TASK_REGISTRY_DB_PATH: ${REGISTRY_DB_PATH:-/var/lib/oh-my-bmad/registry/state.sqlite3}
       TASK_REGISTRY_ACTOR_KIND: worker
       TASK_REGISTRY_ACTOR_ID: worker-wrapper
-      SESSION_REGISTRY_DB_PATH: ${REGISTRY_DB_PATH:-/var/lib/oh-my-bmad/registry/state.sqlite3}
       SESSION_REGISTRY_ACTOR_KIND: worker
       SESSION_REGISTRY_ACTOR_ID: worker-wrapper
       CLAWHIP_BRIDGE_ACTOR_KIND: worker
       CLAWHIP_BRIDGE_ACTOR_ID: worker-wrapper
-      CLAWHIP_BRIDGE_LOG_DIR: /var/lib/oh-my-bmad/registry/events
-      REGISTRY_EVENTS_DIR: /var/lib/oh-my-bmad/registry/events
-      # Story 11.3.6 (H7f): disable nested audit-emission on the registry MCP
-      # children (same nested-stdio deadlock as orchestrator-adapter above).
-      OMB_MCP_AUDIT_EMISSION_ENABLED: "0"
-      # Story 11.3.6 (H7h): worker-wrapper's ready_file_path defaults to "" →
-      # /tmp/worker-wrapper-ready-<pid>, but the shared *healthcheck checks
-      # /tmp/ready (mismatch). Pin to /tmp/ready so the existing healthcheck
-      # passes. orchestrator-adapter doesn't need this (its default IS /tmp/ready).
       WORKER_READY_FILE_PATH: /tmp/ready
     init: true
     restart: unless-stopped

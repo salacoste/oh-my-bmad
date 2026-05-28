@@ -147,7 +147,10 @@ class MCPClientGroup:
         log = structlog.get_logger(__name__)
         # Story 11.3.6: forward the allowlisted env so each MCP server gets its
         # REQUIRED vars. The SDK merges this over get_default_environment().
-        params = StdioServerParameters(command=command, args=args, env=self.env)
+        # `dict(self.env)` is a defensive per-call copy so a mutation in one
+        # spawned server's startup path cannot affect a sibling's env (the 3
+        # _connect calls share the same `self.env` reference otherwise).
+        params = StdioServerParameters(command=command, args=args, env=dict(self.env))
         read, write = await self._stack.enter_async_context(stdio_client(params))
         session = await self._stack.enter_async_context(ClientSession(read, write))
         await asyncio.wait_for(session.initialize(), timeout=_INIT_TIMEOUT)
