@@ -321,8 +321,16 @@ def build_app(
     # eventually expands this to registry status / worker status / queue
     # depth / platform version — for now we return a stable liveness shape
     # so external probes (S-4 harness, future ping commands) see 200 OK.
-    # Declared inline (no router) because it's middleware-free + needs no
-    # DB access — just confirms the FastAPI app is serving.
+    # Declared inline (no router) because the handler needs no DB access and
+    # no per-route dependencies — just confirms the FastAPI app is serving.
+    # NOTE: this is a LIVENESS probe only — the four middleware registered
+    # above (TraceId/RequestId/IdempotencyKey/ActorId) DO apply to this route
+    # since they're mounted via ``app.add_middleware``; they only set
+    # ``request.state`` + response headers so they do not gate the 200. The
+    # endpoint does NOT exercise registry-state SQLite, EventLogWriter, or
+    # any downstream dependency, so a green response only proves "the HTTP
+    # server is up", not "the spine is healthy". FR17 may add a separate
+    # ``/v1/ready`` readiness probe later for kubernetes-style coupling.
     @app.get("/v1/health", tags=["meta"])
     async def health() -> dict[str, str]:
         """Liveness probe — returns 200 when registry-api is serving."""

@@ -229,8 +229,14 @@ services:
       # harness does NOT exercise the real Telegram outbound path, so a
       # syntactically-valid dummy is sufficient + production-safe (regex
       # matches; no real Telegram traffic is generated under the harness).
-      # NOT applied to telegram-gateway (line 107 stays empty so the AC2
-      # hermetic skip-mode is the gating mechanism there, not the token).
+      # ALSO applied to telegram-gateway above (line 119) — see Story 11.3.7
+      # Dev Agent Record / Spec deviation #1: the spec said "do NOT change
+      # telegram-gateway's empty token", but audited_secret_field rejects
+      # empty strings with ValueError, and _PRODUCER_SERVICES requires
+      # telegram-gateway healthy in BOTH phases (AC5). So the dummy token
+      # gates settings construction on BOTH services; the AC2 hermetic
+      # skip-mode (TELEGRAM_SKIP_WEBHOOK_SET=1 on telegram-gateway) gates
+      # set_webhook independently of the token.
       TELEGRAM_BOT_TOKEN: "0:dummytesttoken"
     init: true
     restart: "no"

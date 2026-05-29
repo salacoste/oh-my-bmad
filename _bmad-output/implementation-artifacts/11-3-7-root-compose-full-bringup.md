@@ -527,11 +527,73 @@ service image changed size.
 - `_bmad-output/implementation-artifacts/11-3-7-root-compose-full-bringup.md` — this
   Dev Agent Record + Change Log appended.
 
+## AI-1 3-lane review (AC9) — findings + applied fixes
+
+Three lanes run in parallel against commit `6c1c221`:
+
+- **Blind** (`code-reviewer`, sonnet): 4 issues, no blockers. 1 MEDIUM + 2 LOW + 1 Nit. Strong
+  positive observations on the security discipline (`mcp_clients.py` untouched, contract tests
+  enforce allowlist invariants, RFC 2606 `.invalid` TLD, narrow `except OSError` in `finally`).
+- **Edge** (`general-purpose`, sonnet): 12 findings. 2 HIGH silent-misbehavior + 3 MED + 7 LOW/UX.
+- **Acceptance** (`general-purpose`, sonnet): per-AC table verdict CHANGES REQUESTED, with 5
+  Deviations enumerated (4 sound, 1 stale-comment cleanup needed).
+
+### Applied fixes (review-fix delta — commit after this section)
+
+1. **F1 — stale comment** (Blind-M + Acceptance-Dev5 cross-lane convergence).
+   `tests/separability/docker-compose.s4.yml:232` originally said "NOT applied to
+   telegram-gateway (line 107 stays empty so the AC2 hermetic skip-mode is the gating
+   mechanism there, not the token)" — factually wrong after the deviation that added
+   `TELEGRAM_BOT_TOKEN: "0:dummytesttoken"` + `TELEGRAM_SKIP_WEBHOOK_SET: "1"` to telegram-gateway
+   at line 119. **Rewritten** to explain the AC2 skip-mode gates `set_webhook` independently of
+   the AC4 token-format gate, with a back-ref to the Dev-Agent-Record Deviation #1.
+2. **F2 — misleading "middleware-free" comment** (Blind-L).
+   `services/registry-api/src/registry_api/app.py:324` said the new `/v1/health` route is
+   "middleware-free" — actually all 4 `app.add_middleware(...)` calls above (TraceId/RequestId/
+   IdempotencyKey/ActorId) DO apply to this route; they just don't gate the 200. **Rewritten** to
+   clarify it's a *liveness* probe (HTTP-server-up, NOT spine-healthy); flagged Edge-E5's concern
+   that a future readiness probe (`/v1/ready` with a cheap DB SELECT 1) should land separately.
+
+### Discharged without fix (with rationale)
+
+3. **Edge-E1** — claimed lifespan-internal `apply_hermetic_defaults_to_env()` call at
+   `lifespan.py:199` is "dead on arrival" because the seed `from_env` at `__main__.py:220`
+   already ran. **Rejected:** the seed IS protected because `__main__.py:213` calls the helper
+   BEFORE the seed's `from_env`. The lifespan-internal call is intentional defense-in-depth for
+   the SECOND `from_env` rewrap (with the real `EventLogWriter.append` emit) — and for callers
+   that bypass `__main__` (e.g., the test fixture at `test_lifespan.py:557`). The Edge-lane
+   author correctly identified that the test fixture relies on this — that's the contract, not a
+   bug. Filed as a documentation clarity improvement for future revision (low priority).
+4. **Edge-E2** — claimed `${TELEGRAM_BOT_TOKEN:-}` substitution in compose can be shadowed by
+   an empty shell var, overriding `env_file:` values. **Acknowledged but discharged:** this is
+   the SAME pattern that the pre-existing `telegram-gateway` ROOT-compose `TELEGRAM_BOT_TOKEN`
+   line uses (line 138 of `docker-compose.yml` predates this story). My addition extends the
+   same shape to `clawhip-daemon` for consistency; the operator workflow already requires shell
+   env to be exported (via `set -a; source .env; set +a` or equivalent). Not a regression.
+5. **Edge-E3-E5** (clawhip restart-flap window; stale `/tmp/ready` after failed touch;
+   `/v1/health` returns 200 even when DB down). **Acknowledged, all out of scope** — E3+E4 are
+   second-order timing concerns under Docker `restart: unless-stopped`; E5 is explicitly called
+   out in the new F2 comment as the readiness/liveness distinction (deferred to FR17). Filed
+   to `deferred-work.md`-eligible follow-ups.
+6. **Edge-E6** (helper truthy-set vs pydantic-settings bool-coercion divergence). **Discharged:**
+   verified pydantic-settings accepts `{"1", "true", "yes", "on"}` ⊆ pydantic's truthy set, so
+   the helper's narrower set is a strict subset → no contradiction. Operators using "t" / "y"
+   would see helper=False AND pydantic=True (mismatch), but the failure mode is the same as
+   pre-existing pydantic-settings handling of unconventional bool inputs.
+7. **Edge-E7-E12** (test pollution, OMC tree bloat, leading-zero token, orphan webhook,
+   chgrp symlinks). All tolerable or filed for follow-up; none block.
+8. **Acceptance-CR-2** ("AC5 should be marked pending CI"). **APPLIED** via sprint-status
+   comment + this section. The story-file `Status: review` is correct (development complete,
+   awaiting CI signal); the AC5 verdict in the per-AC table is **Partial / pending CI Linux**.
+9. **Acceptance-CR-3** ("run AC8 nightly before close"). **Out of scope** per up-front
+   dev-story scope agreement; tracked in Task 9 subtask `[ ]`.
+
 ## Change Log
 
 | Date | Author | Summary |
 |---|---|---|
 | 2026-05-29 | Claude Opus 4.7 (1M ctx) via /bmad-dev-story | Initial implementation of Tasks 1-10 on branch epic-11.3.7. AC1 orchestrator-adapter Dockerfile + OMC vendoring. AC2 telegram-gateway hermetic skip-mode (config + lifespan + bootstrap + 3 tests). AC3 clawhip-daemon /tmp/ready touch+unlink mirror of Story 2.11 (+2 tests). AC4 test-env dummy token wiring (s4 overlay + ROOT compose substitution + phase1_env). AC5 registry-api `/v1/health` endpoint addition. AC6 sentinel-allowlist updates (3 sites). AC7 gates clean: ruff/format/mypy/discipline + 3140+ regression. Spec deviations: s4-overlay telegram-gateway needs both dummy token + skip flag (empty token blocked AC5); ROOT-compose clawhip-daemon needs explicit TELEGRAM_BOT_TOKEN substitution for CI hermetic boot. AC8 nightly + AC9 AI-1 3-lane review STILL OUTSTANDING (gated on user authorisation per dev-story scope agreement). |
+| 2026-05-29 | Claude Opus 4.7 (1M ctx) via /bmad-dev-story | AI-1 3-lane review (AC9) discharged. 2 cross-lane convergent findings fixed: F1 stale comment in `docker-compose.s4.yml:232` (Blind-M + Acceptance-Dev5); F2 misleading "middleware-free" comment in `registry-api/app.py:324` (Blind-L). 7 Edge-lane findings reviewed and discharged with rationale (E1 misidentified defense-in-depth as dead-code; E2 pre-existing pattern, not introduced here; E3-E7 out-of-scope follow-ups). AC5 status clarified: "Partial / pending CI Linux" (5/7 local healthy due to pre-existing macOS H7f MCP-init flake, NOT this diff). Story Status remains `review`; AC8 (push + nightly) deferred to user authorisation. |
 
 ## Definition of Done
 
