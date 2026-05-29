@@ -636,3 +636,162 @@ async def test_lifespan_cancels_stuck_supervisor_after_join_timeout(
         f"PP30 regression: supervisor cancel join took {elapsed:.3f}s, "
         "exceeds 2s hard ceiling — likely stuck in to_thread"
     )
+
+
+# ---------------------------------------------------------------------------
+# Story 12.1.1 — PP4b regression test for maximally-pathological subprocess
+# + OUTER ``task_overall_timeout_s`` ceiling firing as the trigger
+# ---------------------------------------------------------------------------
+#
+# Maximally-pathological subprocess body (Story 12.1.1 AC2 + PP43 platform
+# caveat): module-level constant so the test asserts on a deterministic
+# shape. Pure POSIX (no ``os.setsid`` / ``os.setpgrp`` — PP43 deferral cited
+# these as the kernel-version-dependent macOS CI risk).
+#
+# 1. ``signal.signal(signal.SIGTERM, signal.SIG_IGN)`` — SIGTERM is
+#    ignored, forcing the terminate_with_grace escalation to SIGKILL.
+# 2. ``os.close(0)`` — stdin pipe closed (defensive: confirms stdin-close
+#    doesn't trigger an unintended exit path).
+# 3. ``signal.pause()`` — event-driven block. Returns only when an
+#    uncaught signal arrives. SIGKILL is uncatchable, so this is the
+#    cleanest "wait forever until forcibly killed" shape; no race against
+#    a fixed-duration ``time.sleep``.
+_PP4B_SUBPROCESS_BODY = (
+    "import os, signal; "
+    "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+    "os.close(0); "
+    "print('READY', flush=True); "
+    "signal.pause()"
+)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_pp4b_outer_timeout_ceiling_reaps_maximally_pathological_subprocess(
+    tmp_path: Path,
+) -> None:
+    """PP4b (Story 12.1.1) — OUTER ``task_overall_timeout_s`` ceiling fires + reaps subprocess.
+
+    Distinguishing feature vs the sibling PP24 test
+    (``test_overall_timeout_kills_subprocess_before_reraise``, line 520):
+    that test calls ``terminate_with_grace`` DIRECTLY. THIS test drives
+    the FULL production control flow from
+    ``services/worker-wrapper/src/worker_wrapper/app/main.py:546-559``:
+
+        try:
+            result = await asyncio.wait_for(
+                runner.run(prompt, worktree_path),
+                timeout=settings.task_overall_timeout_s,
+            )
+        except TimeoutError:
+            log.error("runner_overall_timeout_exceeded", ...)
+            with contextlib.suppress(Exception):
+                await runner.terminate_with_grace(grace_period_s=5.0)
+            raise
+
+    We simulate ``runner.run()`` hanging-because-subprocess-hangs by
+    awaiting ``proc.wait()`` on a SIGTERM-ignoring subprocess attached to
+    the runner's ``_process`` slot. The OUTER ``wait_for`` MUST fire,
+    triggering the terminate_with_grace escalation that SIGKILLs +
+    reaps the orphan. TimeoutError MUST then propagate to the caller so
+    the lifespan teardown observes the failure correctly.
+
+    PP43 platform-portability note: the subprocess body uses only
+    ``signal.SIG_IGN`` + ``os.close(0)`` + ``signal.pause()`` — all
+    POSIX-portable primitives. NO ``setsid`` / ``setpgrp`` (per PP43
+    macOS CI flake concern).
+
+    Wall-clock budget (Story 12.1.1 AC5 empirical check): the test body
+    measures ``<3s`` for the outer-ceiling-trigger + reap path (1.0s
+    timeout + 0.5s grace + escalation), but pytest + subprocess-spawn
+    overhead pushes the WALL-CLOCK to ~10s per `uv run pytest`
+    invocation. Marked ``@pytest.mark.slow`` so it lands in the nightly
+    bucket — matches the sibling
+    ``test_budget_enforced_subprocess_exits_within_5s_e2e`` convention.
+    """
+    runner = ClaudeCodeRunner(_settings())
+    proc: asyncio.subprocess.Process | None = None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-u",
+            "-c",
+            _PP4B_SUBPROCESS_BODY,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        assert proc.stdout is not None
+        sentinel = await asyncio.wait_for(proc.stdout.readline(), timeout=2.0)
+        assert sentinel.strip() == b"READY", (
+            f"PP4b child setup failed (SIG_IGN + stdin close + signal.pause); "
+            f"got sentinel={sentinel!r}"
+        )
+        runner._process = proc
+
+        # Replicate the FULL production control flow from app/main.py:546-559.
+        # ``proc.wait()`` substitutes for ``runner.run(prompt, worktree_path)``
+        # — both block as long as the subprocess is alive; the pathological
+        # subprocess never exits naturally, so the OUTER wait_for ceiling
+        # is the only thing that can break the hang.
+        t0 = time.monotonic()
+        term_result: _TerminationResult | None = None
+        with pytest.raises(TimeoutError):
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=1.0)
+            except TimeoutError:
+                # The terminate_with_grace call MUST run before the re-raise
+                # (PP24 fix shape). Capture its result so the post-block
+                # asserts can verify the SIGKILL escalation landed.
+                term_result = await runner.terminate_with_grace(grace_period_s=0.5)
+                raise
+        elapsed = time.monotonic() - t0
+
+        # Wall-clock sanity — outer ceiling (1.0s) + grace (0.5s) +
+        # SIGKILL escalation + reap should comfortably fit under 3s.
+        assert elapsed < 3.0, (
+            f"PP4b regression: outer-ceiling-trigger + reap took {elapsed:.3f}s, "
+            "exceeds 3s ceiling for this test config (1.0s + 0.5s grace)"
+        )
+
+        # PP24 shape contract: terminate_with_grace was called between
+        # TimeoutError fire and re-raise.
+        assert term_result is not None, (
+            "PP4b regression: terminate_with_grace was NOT called between "
+            "TimeoutError fire and re-raise — PP24's inner-handler shape broke"
+        )
+
+        # SIGKILL escalation expected (subprocess installed SIG_IGN for SIGTERM).
+        assert term_result.method == "sigkill", (
+            f"PP4b expected SIGKILL escalation (SIG_IGN ignored SIGTERM); "
+            f"got method={term_result.method!r}"
+        )
+        # PP34 — actual SIGKILL was delivered (the grace window MUST have
+        # elapsed and the kill landed since the subprocess is uncatchable).
+        assert term_result.escalation_landed is True, (
+            "PP4b regression: SIGKILL escalation NOT confirmed landed; "
+            "subprocess may have exited via some other unintended path"
+        )
+
+        # Subprocess MUST be reaped — no orphan leak.
+        assert proc.returncode is not None, (
+            "PP4b regression: subprocess still alive after terminate_with_grace; "
+            "outer-timeout cleanup did NOT reap the orphan"
+        )
+        # Returncode MUST reflect SIGKILL specifically (the SIG_IGN'd SIGTERM
+        # would NOT exit the process; only SIGKILL can).
+        import signal as _signal
+
+        assert proc.returncode == -_signal.SIGKILL, (
+            f"PP4b expected returncode=-SIGKILL ({-_signal.SIGKILL}); "
+            f"got {proc.returncode} — subprocess may have exited via "
+            "an unintended signal path"
+        )
+    finally:
+        # Zombie reap: even on test-setup failure, ensure no leaked
+        # subprocess persists across the integration suite (Epic 11 retro
+        # AI-6 BaseException-discipline applied at the test boundary).
+        if proc is not None and proc.returncode is None:
+            proc.kill()
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(proc.wait(), timeout=3.0)
