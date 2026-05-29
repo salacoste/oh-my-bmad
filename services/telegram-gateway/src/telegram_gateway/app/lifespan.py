@@ -98,10 +98,7 @@ from registry_state.adapters.event_log import (  # noqa: IMP001 — services→s
 )
 from secret_hygiene import flush_pending_emissions
 
-from telegram_gateway.app.config import (
-    TelegramSettings,
-    apply_hermetic_defaults_to_env,
-)
+from telegram_gateway.app.config import TelegramSettings
 from telegram_gateway.app.middleware import AllowlistMiddleware
 from telegram_gateway.app.rate_limit import PerActorRateLimitMiddleware
 from telegram_gateway.handlers import (
@@ -191,13 +188,15 @@ def make_lifespan(
             # writer.close pushed FIRST so it pops LAST.
             stack.push_async_callback(writer.close)
 
-            # Story 11.3.7 / AC2: when TELEGRAM_SKIP_WEBHOOK_SET=1 is set
-            # (hermetic test mode), default-fill dummy values for
-            # TELEGRAM_WEBHOOK_URL + TELEGRAM_WEBHOOK_SECRET_TOKEN so
-            # settings construction succeeds in CI envs without those vars.
-            # No-op in production (skip flag falsy → required env-vars
-            # still fail-closed if missing).
-            apply_hermetic_defaults_to_env()
+            # Story 11.3.7 / AC2 — TELEGRAM_SKIP_WEBHOOK_SET hermetic defaults
+            # are populated by :func:`telegram_gateway.app.config.apply_hermetic_defaults_to_env`
+            # BEFORE this lifespan runs. The two production callers are
+            # ``__main__.main()`` (bootstrap from_env at __main__.py:212) and
+            # the colocated test fixtures that invoke the helper explicitly
+            # before ``_seed_settings``. Calling the helper here would be
+            # dead-on-arrival — settings_seed has already been constructed
+            # at this point. See Story 11.3.7 Dev Agent Record (Edge-E1
+            # discharge) for the full rationale.
 
             # First service-side use of AuditedBaseSettings.from_env
             # (Story 2.16). The placeholder wrappers on *settings_seed*
@@ -411,7 +410,19 @@ def make_lifespan(
             # token portion or the secret_token value (Story 2.17 log-leakage
             # contract). The path is platform-internal — operator already
             # knows it.
-            _log.info("Webhook set · ready", extra={"path": audited.webhook_path})
+            #
+            # Story 11.3.7 / AC2 — emit the "ready" log only when set_webhook
+            # actually ran. Operators / monitoring that parse for the
+            # verbatim string MUST be able to distinguish "real ready" from
+            # "skipped". The skip-mode INFO at line 313 is the dual signal
+            # for hermetic boots.
+            if not audited.telegram_skip_webhook_set:
+                _log.info("Webhook set · ready", extra={"path": audited.webhook_path})
+            else:
+                _log.info(
+                    "Webhook SKIPPED · lifespan ready (hermetic test mode)",
+                    extra={"path": audited.webhook_path},
+                )
 
             yield
 

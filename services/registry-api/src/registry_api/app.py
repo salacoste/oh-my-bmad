@@ -81,6 +81,9 @@ from registry_api.routes.digest import (
 from registry_api.routes.events import (
     router as events_router,
 )
+from registry_api.routes.health import (
+    router as health_router,
+)
 from registry_api.routes.tasks import (
     ResponseSlot,
     ResponseSlotCache,
@@ -314,30 +317,14 @@ def build_app(
     app.add_exception_handler(RequestValidationError, handle_validation_error)
     app.add_exception_handler(Exception, handle_internal_error)
 
-    # Story 11.3.7 (AC5 / FR17 minimal) — /v1/health liveness probe.
-    # The S-4 separability test (and the telegram-gateway registry_client's
-    # TODO(story-TBD)) reference this endpoint; previously absent on the
-    # server side (only telegram-gateway exposed its own /v1/health). FR17
-    # eventually expands this to registry status / worker status / queue
-    # depth / platform version — for now we return a stable liveness shape
-    # so external probes (S-4 harness, future ping commands) see 200 OK.
-    # Declared inline (no router) because the handler needs no DB access and
-    # no per-route dependencies — just confirms the FastAPI app is serving.
-    # NOTE: this is a LIVENESS probe only — the four middleware registered
-    # above (TraceId/RequestId/IdempotencyKey/ActorId) DO apply to this route
-    # since they're mounted via ``app.add_middleware``; they only set
-    # ``request.state`` + response headers so they do not gate the 200. The
-    # endpoint does NOT exercise registry-state SQLite, EventLogWriter, or
-    # any downstream dependency, so a green response only proves "the HTTP
-    # server is up", not "the spine is healthy". FR17 may add a separate
-    # ``/v1/ready`` readiness probe later for kubernetes-style coupling.
-    @app.get("/v1/health", tags=["meta"])
-    async def health() -> dict[str, str]:
-        """Liveness probe — returns 200 when registry-api is serving."""
-        return {"status": "ok", "service": "registry-api"}
-
     # Routes — /v1 prefix applied here; handlers declare /tasks and /tasks/{id}.
     app.include_router(tasks_router, prefix="/v1")
+    # Story 11.3.7 (AC5) — /v1/health liveness probe; wire shape matches
+    # ``HealthResponseLocal`` in telegram-gateway's registry_client.py
+    # so the /ping command can parse without ValidationError. FR17 expansion
+    # to real registry/worker/queue signals is tracked there. Follows the
+    # routes/*.py + include_router convention used by every other /v1 route.
+    app.include_router(health_router, prefix="/v1")
     # Story 7.3 — LLM digest endpoint for task events (FR5).
     app.include_router(digest_router, prefix="/v1")
     # Story 7.5 — raw event tail for debugging (FR6).

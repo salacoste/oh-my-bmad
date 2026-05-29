@@ -149,43 +149,70 @@ _REJECTED_HOSTNAMES: frozenset[str] = frozenset({"localhost", "127.0.0.1", "::1"
 # Production behaviour (skip flag unset → falsy) is unchanged: missing
 # ``TELEGRAM_WEBHOOK_URL`` / ``TELEGRAM_WEBHOOK_SECRET_TOKEN`` still raise
 # ``ValidationError`` fail-closed at boot.
-HERMETIC_WEBHOOK_URL: str = "https://hermetic.test.invalid/v1/telegram/webhook"
+#
+# Default webhook path is the same value as :class:`TelegramSettings`'s
+# ``webhook_path`` field default — kept in sync intentionally; if the
+# default ever changes there, update this constant too (the f-string
+# composition in :func:`apply_hermetic_defaults_to_env` then picks up
+# whatever ``TELEGRAM_WEBHOOK_PATH`` the operator overrides at runtime).
+_HERMETIC_WEBHOOK_URL_HOST: str = "https://hermetic.test.invalid"
+_DEFAULT_WEBHOOK_PATH: str = "/v1/telegram/webhook"
 HERMETIC_WEBHOOK_SECRET_TOKEN: str = "hermetic-test-secret-skip-mode-no-traffic"
 _HERMETIC_SKIP_ENV_VAR: str = "TELEGRAM_SKIP_WEBHOOK_SET"
-_HERMETIC_SKIP_TRUTHY: frozenset[str] = frozenset({"1", "true", "yes", "on"})
-
-
-def is_hermetic_skip_enabled_in_env() -> bool:
-    """Return True when ``TELEGRAM_SKIP_WEBHOOK_SET`` env-var is truthy.
-
-    Centralises the truthy-string parsing so :func:`apply_hermetic_defaults_to_env`
-    and the lifespan-side gate agree on what counts as "skip enabled". The
-    field ``TelegramSettings.telegram_skip_webhook_set`` reflects the same
-    decision post-construction via pydantic-settings' bool coercion.
-    """
-    raw = os.environ.get(_HERMETIC_SKIP_ENV_VAR, "").strip().lower()
-    return raw in _HERMETIC_SKIP_TRUTHY
+# Truthy set aligned with pydantic-settings' bool coercion accept-set so
+# the helper and the ``telegram_skip_webhook_set: bool`` field never
+# disagree on edge inputs like ``"yes"`` / ``"y"`` / ``"t"`` / uppercase.
+_HERMETIC_SKIP_TRUTHY: frozenset[str] = frozenset({"1", "true", "yes", "y", "on", "t"})
 
 
 def apply_hermetic_defaults_to_env() -> None:
-    """When skip-flag is on, ``setdefault`` dummy webhook env-vars.
+    """When skip-flag is truthy, fill dummy webhook env-vars (idempotent).
 
     Call BEFORE :py:meth:`TelegramSettings.from_env` so pydantic-settings
     sees the dummy values for ``TELEGRAM_WEBHOOK_URL`` /
-    ``TELEGRAM_WEBHOOK_SECRET_TOKEN`` if (and only if) hermetic skip mode
-    is enabled AND the operator hasn't already supplied real values.
+    ``TELEGRAM_WEBHOOK_SECRET_TOKEN`` if hermetic skip mode is enabled AND
+    the operator hasn't already supplied real values.
 
-    Uses ``setdefault`` so an operator who DOES set both the skip flag and
-    real webhook values keeps the real values (useful for debugging the
-    skip-mode plumbing without losing connection metadata).
+    **Empty-string handling** — ``os.environ.setdefault`` only treats
+    ABSENCE as "fillable"; an explicitly-empty env-var (e.g. from a future
+    docker-compose ``${TELEGRAM_WEBHOOK_URL:-}`` substitution that resolves
+    to ``""`` when the shell is unset) would defeat the dummy-fill. We
+    treat any empty / whitespace-only value as fillable so the skip-mode
+    contract holds for both "var unset" and "var set to empty".
+
+    **Webhook-path coupling** — the hermetic URL's path is composed from
+    the runtime ``TELEGRAM_WEBHOOK_PATH`` env-var (default
+    ``/v1/telegram/webhook``) so an operator who overrides the path AND
+    enables skip-mode without supplying ``TELEGRAM_WEBHOOK_URL`` still
+    passes :class:`TelegramSettings`'s ``_validate_url_path_matches_route``
+    invariant (which compares ``webhook_url.path`` ≡ ``webhook_path``).
 
     No-op when ``TELEGRAM_SKIP_WEBHOOK_SET`` is unset / falsy — preserves
     the fail-closed default for production deploys.
     """
-    if not is_hermetic_skip_enabled_in_env():
+    raw_skip = os.environ.get(_HERMETIC_SKIP_ENV_VAR, "").strip().lower()
+    if raw_skip not in _HERMETIC_SKIP_TRUTHY:
         return
-    os.environ.setdefault("TELEGRAM_WEBHOOK_URL", HERMETIC_WEBHOOK_URL)
-    os.environ.setdefault("TELEGRAM_WEBHOOK_SECRET_TOKEN", HERMETIC_WEBHOOK_SECRET_TOKEN)
+    # Mirror the field-level default so the operator override picks through.
+    webhook_path = (
+        os.environ.get("TELEGRAM_WEBHOOK_PATH", _DEFAULT_WEBHOOK_PATH).strip()
+        or _DEFAULT_WEBHOOK_PATH
+    )
+    hermetic_url = f"{_HERMETIC_WEBHOOK_URL_HOST}{webhook_path}"
+    # Use direct assignment when current value is unset OR empty/whitespace
+    # (setdefault alone would no-op on explicitly-empty env-vars).
+    if not os.environ.get("TELEGRAM_WEBHOOK_URL", "").strip():
+        os.environ["TELEGRAM_WEBHOOK_URL"] = hermetic_url
+    if not os.environ.get("TELEGRAM_WEBHOOK_SECRET_TOKEN", "").strip():
+        os.environ["TELEGRAM_WEBHOOK_SECRET_TOKEN"] = HERMETIC_WEBHOOK_SECRET_TOKEN
+
+
+# Back-compat exports: callers that imported HERMETIC_WEBHOOK_URL directly
+# now get a path-composed value via a small accessor. Most call-sites just
+# observed it as documentation; the test fixture didn't depend on a
+# specific path. Kept as a constant for the default-path case (which is
+# what tests actually want) so the test_lifespan asserts stay readable.
+HERMETIC_WEBHOOK_URL: str = f"{_HERMETIC_WEBHOOK_URL_HOST}{_DEFAULT_WEBHOOK_PATH}"
 
 
 # ASCII-printable charset accepted for ``webhook_secret_token`` (review-fix

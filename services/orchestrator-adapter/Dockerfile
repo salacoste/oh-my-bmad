@@ -12,13 +12,17 @@
 # Decision D1-A (per-service Dockerfile, not base): only orchestrator-adapter
 # needs OMC, so we keep the ~48MB blast radius in this image alone rather
 # than multiplying it across all 7 service images via Dockerfile.base.
-# Ownership: omb group + setgid 2775 inherited from /app, plus an explicit
-# ``chgrp -R omb`` so the orchestrator-adapter uid (10004) inside the omb
-# group can read every file regardless of upstream's host-side ownership.
+#
+# Ownership: ``--chown=:omb`` + ``--chmod=755`` on the COPY directive so
+# the orchestrator-adapter uid (10004) inside the omb group can read
+# every file regardless of upstream's host-side ownership. Single COPY
+# layer — no separate ``chgrp -R`` / ``chmod -R`` RUN step (which would
+# recursively walk 5289 files and create a duplicate ~48MB metadata-only
+# layer via overlayfs copy-up). 755 grants read+execute on dirs and read
+# on regular files for all triads — the OMC tree is read-only at runtime
+# so the broader-than-g+rX permission is harmless.
 FROM oh-my-bmad-base:local
-COPY upstream/omc /app/upstream/omc
-RUN chgrp -R omb /app/upstream/omc \
- && chmod -R g+rX /app/upstream/omc
+COPY --chown=:omb --chmod=755 upstream/omc /app/upstream/omc
 RUN useradd --system --uid 10004 --gid omb --home /app --shell /usr/sbin/nologin orchestrator-adapter
 USER orchestrator-adapter
 ENTRYPOINT ["python", "-m", "orchestrator_adapter"]

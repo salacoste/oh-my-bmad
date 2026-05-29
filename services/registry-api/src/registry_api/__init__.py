@@ -16,13 +16,12 @@ a legacy Story 1.1 scaffold and is intentionally not advertised (still
 importable; the bootstrap-verify check still references it).
 """
 
+from registry_api._version import __version__
 from registry_api.app import build_app
-
-__version__ = "0.3.0"
 
 
 def hello() -> str:
     return "registry-api hello"
 
 
-__all__ = ["build_app"]
+__all__ = ["__version__", "build_app"]

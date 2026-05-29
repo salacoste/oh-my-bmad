@@ -37,6 +37,15 @@ x-mcp-spawner-env: &mcp_spawner_env
   REGISTRY_DB_PATH: /var/lib/oh-my-bmad/registry/state.sqlite3
   OMB_MCP_AUDIT_EMISSION_ENABLED: "0"  # H7f — nested-stdio deadlock; see deferred-work.md.
 
+# Story 11.3.7 (AC4 / H7e) — dummy Telegram bot token, syntactically valid
+# per ``services/clawhip-daemon/.../main.py:231-242`` regex
+# (``<digits>:<alphanumeric>``) so audited_secret_field doesn't reject it
+# with ValueError at boot. The S-4 harness never authorises real Telegram
+# outbound traffic (clawhip-daemon: no telegram-API call; telegram-gateway:
+# TELEGRAM_SKIP_WEBHOOK_SET=1 gates bot.set_webhook). YAML anchor avoids
+# the cross-service literal duplication that the AI-1 review-fix R3 flagged.
+x-dummy-telegram-token: &dummy_telegram_token "0:dummytesttoken"
+
 services:
   registry-api:
     container_name: omb-s4-registry-api
@@ -116,7 +125,7 @@ services:
       # _PRODUCER_SERVICES) to reach healthy in Phase 2. Spec-deviation
       # noted in Story 11.3.7 Dev Agent Record (the literal "keep its
       # empty token" instruction conflicts with audited-secret validation).
-      TELEGRAM_BOT_TOKEN: "0:dummytesttoken"
+      TELEGRAM_BOT_TOKEN: *dummy_telegram_token
       TELEGRAM_SKIP_WEBHOOK_SET: "1"
       TG_ALLOWLIST_USER_IDS: "[]"
     init: true
@@ -229,15 +238,17 @@ services:
       # harness does NOT exercise the real Telegram outbound path, so a
       # syntactically-valid dummy is sufficient + production-safe (regex
       # matches; no real Telegram traffic is generated under the harness).
-      # ALSO applied to telegram-gateway above (line 119) — see Story 11.3.7
+      # ALSO applied to telegram-gateway above — see Story 11.3.7
       # Dev Agent Record / Spec deviation #1: the spec said "do NOT change
       # telegram-gateway's empty token", but audited_secret_field rejects
       # empty strings with ValueError, and _PRODUCER_SERVICES requires
       # telegram-gateway healthy in BOTH phases (AC5). So the dummy token
       # gates settings construction on BOTH services; the AC2 hermetic
       # skip-mode (TELEGRAM_SKIP_WEBHOOK_SET=1 on telegram-gateway) gates
-      # set_webhook independently of the token.
-      TELEGRAM_BOT_TOKEN: "0:dummytesttoken"
+      # set_webhook independently of the token. AI-1 review-fix R3:
+      # canonical value lives in the ``x-dummy-telegram-token`` anchor
+      # at the top of this file — single source of truth.
+      TELEGRAM_BOT_TOKEN: *dummy_telegram_token
     init: true
     restart: "no"
     networks: [oh-my-bmad-net]
