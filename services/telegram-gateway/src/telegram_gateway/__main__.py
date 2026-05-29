@@ -68,7 +68,7 @@ from events.clock import SystemClock
 from events.envelope import Actor, EventEnvelope
 from secret_hygiene.sanitizer import redact_secrets
 
-from telegram_gateway.app.config import TelegramSettings
+from telegram_gateway.app.config import TelegramSettings, apply_hermetic_defaults_to_env
 from telegram_gateway.app.main import build_app
 
 _SERVICE = "telegram-gateway"
@@ -204,6 +204,14 @@ def main() -> None:
         )
 
     clock = SystemClock()
+
+    # Story 11.3.7 / AC2: hermetic test-mode pre-population — when
+    # TELEGRAM_SKIP_WEBHOOK_SET=1, fill dummy TELEGRAM_WEBHOOK_URL +
+    # TELEGRAM_WEBHOOK_SECRET_TOKEN so this bootstrap from_env (and the
+    # lifespan's subsequent from_env) construct successfully without
+    # those env-vars. No-op in production (flag unset → required env-vars
+    # remain fail-closed).
+    apply_hermetic_defaults_to_env()
 
     # emit sentinel: the lifespan rebuilds the settings with the real
     # EventLogWriter.append once the writer exists. We need a populated

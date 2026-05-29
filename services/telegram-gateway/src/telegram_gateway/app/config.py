@@ -40,6 +40,7 @@ from __future__ import annotations
 import contextlib
 import ipaddress
 import logging
+import os
 import string
 from pathlib import Path
 from typing import Any, ClassVar
@@ -133,6 +134,60 @@ def _coerce_allowlist_env(value: Any) -> Any:
 # rather than a silent no-deliver downstream (review-fix M13).
 _REJECTED_HOSTNAMES: frozenset[str] = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 
+# Story 11.3.7 / AC2 / D2-A — hermetic test-mode constants.
+#
+# When ``TELEGRAM_SKIP_WEBHOOK_SET=1`` is set, the lifespan skips the live
+# ``bot.set_webhook(...)`` call AND the operator is not required to supply
+# ``TELEGRAM_WEBHOOK_URL`` / ``TELEGRAM_WEBHOOK_SECRET_TOKEN``. These
+# constants provide placeholder values that satisfy field validators
+# (https + non-rejected host + path-matches-webhook-path + ASCII-printable
+# non-empty secret) so settings construction succeeds in hermetic CI envs.
+# The ``.invalid`` TLD (RFC 2606) is guaranteed-unresolvable, so even if
+# code paths leaked these defaults to actual HTTP traffic the request
+# would fail-closed at DNS rather than reach a third-party host.
+#
+# Production behaviour (skip flag unset → falsy) is unchanged: missing
+# ``TELEGRAM_WEBHOOK_URL`` / ``TELEGRAM_WEBHOOK_SECRET_TOKEN`` still raise
+# ``ValidationError`` fail-closed at boot.
+HERMETIC_WEBHOOK_URL: str = "https://hermetic.test.invalid/v1/telegram/webhook"
+HERMETIC_WEBHOOK_SECRET_TOKEN: str = "hermetic-test-secret-skip-mode-no-traffic"
+_HERMETIC_SKIP_ENV_VAR: str = "TELEGRAM_SKIP_WEBHOOK_SET"
+_HERMETIC_SKIP_TRUTHY: frozenset[str] = frozenset({"1", "true", "yes", "on"})
+
+
+def is_hermetic_skip_enabled_in_env() -> bool:
+    """Return True when ``TELEGRAM_SKIP_WEBHOOK_SET`` env-var is truthy.
+
+    Centralises the truthy-string parsing so :func:`apply_hermetic_defaults_to_env`
+    and the lifespan-side gate agree on what counts as "skip enabled". The
+    field ``TelegramSettings.telegram_skip_webhook_set`` reflects the same
+    decision post-construction via pydantic-settings' bool coercion.
+    """
+    raw = os.environ.get(_HERMETIC_SKIP_ENV_VAR, "").strip().lower()
+    return raw in _HERMETIC_SKIP_TRUTHY
+
+
+def apply_hermetic_defaults_to_env() -> None:
+    """When skip-flag is on, ``setdefault`` dummy webhook env-vars.
+
+    Call BEFORE :py:meth:`TelegramSettings.from_env` so pydantic-settings
+    sees the dummy values for ``TELEGRAM_WEBHOOK_URL`` /
+    ``TELEGRAM_WEBHOOK_SECRET_TOKEN`` if (and only if) hermetic skip mode
+    is enabled AND the operator hasn't already supplied real values.
+
+    Uses ``setdefault`` so an operator who DOES set both the skip flag and
+    real webhook values keeps the real values (useful for debugging the
+    skip-mode plumbing without losing connection metadata).
+
+    No-op when ``TELEGRAM_SKIP_WEBHOOK_SET`` is unset / falsy — preserves
+    the fail-closed default for production deploys.
+    """
+    if not is_hermetic_skip_enabled_in_env():
+        return
+    os.environ.setdefault("TELEGRAM_WEBHOOK_URL", HERMETIC_WEBHOOK_URL)
+    os.environ.setdefault("TELEGRAM_WEBHOOK_SECRET_TOKEN", HERMETIC_WEBHOOK_SECRET_TOKEN)
+
+
 # ASCII-printable charset accepted for ``webhook_secret_token`` (review-fix
 # L8). Telegram's docs state the secret token may contain only ASCII
 # characters; we narrow further to printable (no control chars, no
@@ -165,6 +220,26 @@ class TelegramSettings(AuditedBaseSettings):
         "telegram_webhook_secret_token", env_var="TELEGRAM_WEBHOOK_SECRET_TOKEN"
     )
     webhook_url: HttpUrl = Field(validation_alias="TELEGRAM_WEBHOOK_URL")
+    # Story 11.3.7 / AC2 / D2-A — hermetic test-mode opt-in.
+    #
+    # When true, the lifespan SKIPS the live ``bot.set_webhook(...)`` call
+    # and the operator is not required to supply real
+    # ``TELEGRAM_WEBHOOK_URL`` / ``TELEGRAM_WEBHOOK_SECRET_TOKEN`` values
+    # (see :func:`apply_hermetic_defaults_to_env`). Defaults to False so
+    # production deploys are unaffected (set_webhook still runs, missing
+    # webhook env-vars still fail-closed at boot).
+    #
+    # Intended only for hermetic CI / S-4 separability tests that don't
+    # exercise the real Telegram webhook path. DO NOT enable in production.
+    telegram_skip_webhook_set: bool = Field(
+        default=False,
+        validation_alias="TELEGRAM_SKIP_WEBHOOK_SET",
+        description=(
+            "Hermetic test-mode opt-in. When true, the lifespan skips "
+            "bot.set_webhook(...) and treats TELEGRAM_WEBHOOK_URL + "
+            "TELEGRAM_WEBHOOK_SECRET_TOKEN as optional. Production unset."
+        ),
+    )
     # Review-fix M18: ``webhook_path`` is overridable via env. Review-fix
     # H1/L13: leading slash required, trailing slash rejected (unless the
     # value is exactly ``/``). Combined with ``main.build_app`` mounting

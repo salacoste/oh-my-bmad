@@ -15,6 +15,13 @@ __pycache__/
 _bmad/
 _bmad-output/
 upstream/
+# Story 11.3.7 / AC1 / H7g: orchestrator-adapter's Dockerfile vendors the OMC
+# source tree into its image so OMCRunner.__init__ (omc_runner.py:62) finds
+# /app/upstream/omc at boot. Exception override (matches the
+# !tests/fixtures/* idiom below). Other vendored trees under upstream/
+# (e.g. upstream/clawhip) remain excluded — only orchestrator-adapter needs
+# OMC, and we keep the ~48MB blast radius scoped accordingly.
+!upstream/omc/
 .agent/
 .agents/
 .claude/

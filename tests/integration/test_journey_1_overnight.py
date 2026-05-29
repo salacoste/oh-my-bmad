@@ -404,6 +404,20 @@ def test_worker_facing_source_code_unchanged() -> None:
         # change is inert when the new MCP env vars aren't present, so journey-1's
         # stub-worker boot path is unaffected.
         "services/orchestrator-adapter/src/orchestrator_adapter/adapters/mcp_clients.py",
+        # Story 11.3.7 audit: AC1 modifies services/orchestrator-adapter/Dockerfile
+        # (COPY upstream/omc) + AC2 touches services/telegram-gateway/src/.../{config,
+        # lifespan,__main__}.py + AC3 touches services/clawhip-daemon/src/.../app/main.py.
+        # Of these, only the orchestrator-adapter Dockerfile change is even adjacent
+        # to _WORKER_FACING_PATHS (line 40 covers src/ only — Dockerfile is at the
+        # service root, so does NOT match). telegram-gateway + clawhip-daemon are
+        # entirely outside _WORKER_FACING_PATHS.
+        #
+        # AC5 (registry-api /v1/health liveness probe) DOES touch
+        # services/registry-api/src/registry_api/app.py — additive route (no
+        # behavior change for existing endpoints; previously absent /v1/health
+        # was a documented TODO in telegram-gateway's registry_client). Allowed
+        # below; journey-1's stub-driven flow doesn't exercise /v1/health.
+        "services/registry-api/src/registry_api/app.py",
     }
 
     rev_parse = subprocess.run(

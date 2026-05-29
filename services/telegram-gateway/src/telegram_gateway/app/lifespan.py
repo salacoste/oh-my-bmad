@@ -98,7 +98,10 @@ from registry_state.adapters.event_log import (  # noqa: IMP001 — services→s
 )
 from secret_hygiene import flush_pending_emissions
 
-from telegram_gateway.app.config import TelegramSettings
+from telegram_gateway.app.config import (
+    TelegramSettings,
+    apply_hermetic_defaults_to_env,
+)
 from telegram_gateway.app.middleware import AllowlistMiddleware
 from telegram_gateway.app.rate_limit import PerActorRateLimitMiddleware
 from telegram_gateway.handlers import (
@@ -187,6 +190,14 @@ def make_lifespan(
             # Push order is documented in the module docstring. Summary:
             # writer.close pushed FIRST so it pops LAST.
             stack.push_async_callback(writer.close)
+
+            # Story 11.3.7 / AC2: when TELEGRAM_SKIP_WEBHOOK_SET=1 is set
+            # (hermetic test mode), default-fill dummy values for
+            # TELEGRAM_WEBHOOK_URL + TELEGRAM_WEBHOOK_SECRET_TOKEN so
+            # settings construction succeeds in CI envs without those vars.
+            # No-op in production (skip flag falsy → required env-vars
+            # still fail-closed if missing).
+            apply_hermetic_defaults_to_env()
 
             # First service-side use of AuditedBaseSettings.from_env
             # (Story 2.16). The placeholder wrappers on *settings_seed*
@@ -284,11 +295,27 @@ def make_lifespan(
 
             # set_webhook uses the cached secret bytes (decoded back to
             # str for the aiogram API). No additional ``.value`` read.
-            await bot.set_webhook(
-                url=str(audited.webhook_url),
-                secret_token=expected_webhook_secret_bytes.decode("utf-8"),
-                drop_pending_updates=True,
-            )
+            #
+            # Story 11.3.7 / AC2: hermetic-test gate. When
+            # ``TELEGRAM_SKIP_WEBHOOK_SET=1`` is set, skip the live
+            # api.telegram.org call so the S-4 separability test (and
+            # any CI env without outbound Telegram reachability) can
+            # boot telegram-gateway to healthy. Production-default
+            # (flag unset → False) preserves the normal set_webhook
+            # path; no behavior change for operators with real .env.
+            if not audited.telegram_skip_webhook_set:
+                await bot.set_webhook(
+                    url=str(audited.webhook_url),
+                    secret_token=expected_webhook_secret_bytes.decode("utf-8"),
+                    drop_pending_updates=True,
+                )
+            else:
+                _log.info(
+                    "set_webhook SKIPPED — TELEGRAM_SKIP_WEBHOOK_SET=1 "
+                    "(hermetic test mode); webhook URL %r and secret will "
+                    "NOT be registered with Telegram",
+                    str(audited.webhook_url),
+                )
 
             # Story 3.3 AC-4: construct the long-lived httpx.AsyncClient ONCE
             # (Story 3.1 H4 cache-once pattern — never construct per-request).

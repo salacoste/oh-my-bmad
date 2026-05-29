@@ -470,3 +470,103 @@ async def test_lifespan_wires_trace_router_with_explicit_trace_allowlist(
 
     assert len(captured_kwargs) == 1
     assert captured_kwargs[0]["allowed_chat_ids"] == frozenset({789, -100123456789})
+
+
+# ---------------------------------------------------------------------------
+# Story 11.3.7 / AC2 — hermetic skip-webhook mode (TELEGRAM_SKIP_WEBHOOK_SET)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_skip_webhook_flag_unset_calls_set_webhook(
+    env_setup: dict[str, Any], patched_aiogram: dict[str, Any], tmp_path: Path
+) -> None:
+    """AC2 (a): flag unset → ``bot.set_webhook`` IS called (production default).
+
+    Pins the no-regression contract: the hermetic skip-mode plumbing has
+    zero effect when ``TELEGRAM_SKIP_WEBHOOK_SET`` is not set in the env.
+    """
+    settings = _seed_settings(tmp_path)
+    clock = FrozenClock(mono_ns=0, now=FROZEN_EPOCH)
+    app = build_app(settings=settings, clock=clock)
+
+    async with LifespanManager(app):
+        pass
+
+    assert len(patched_aiogram["set_webhook_calls"]) == 1, (
+        "set_webhook MUST be called when TELEGRAM_SKIP_WEBHOOK_SET is unset "
+        "(production default — no behavior change from the skip-mode patch)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_skip_webhook_flag_set_does_not_call_set_webhook(
+    env_setup: dict[str, Any],
+    patched_aiogram: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """AC2 (b): flag set → ``bot.set_webhook`` is NOT called.
+
+    This is the hermetic-test boot path — telegram-gateway reaches
+    healthy on the socket probe without any outbound api.telegram.org
+    traffic.
+    """
+    monkeypatch.setenv("TELEGRAM_SKIP_WEBHOOK_SET", "1")
+
+    settings = _seed_settings(tmp_path)
+    clock = FrozenClock(mono_ns=0, now=FROZEN_EPOCH)
+    app = build_app(settings=settings, clock=clock)
+
+    async with LifespanManager(app):
+        pass
+
+    assert patched_aiogram["set_webhook_calls"] == [], (
+        "set_webhook MUST NOT be called when TELEGRAM_SKIP_WEBHOOK_SET=1; "
+        f"got {patched_aiogram['set_webhook_calls']!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_skip_webhook_flag_set_tolerates_missing_webhook_env_vars(
+    monkeypatch: pytest.MonkeyPatch,
+    patched_aiogram: dict[str, Any],
+    tmp_path: Path,
+) -> None:
+    """AC2 (c) / D3: flag set + webhook URL/secret UNSET → lifespan completes.
+
+    The hermetic-test path must work in CI envs that don't supply
+    ``TELEGRAM_WEBHOOK_URL`` / ``TELEGRAM_WEBHOOK_SECRET_TOKEN``. The
+    ``apply_hermetic_defaults_to_env`` helper fills dummies so settings
+    construction succeeds, and the skip gate suppresses set_webhook.
+
+    Bot token is still required (the bot itself is constructed and
+    authenticates against Telegram on first use); only the webhook URL +
+    secret are optional under skip-mode.
+    """
+    # Provide only the bot token + event log dir. NO webhook URL / secret.
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", _BOT_TOKEN)
+    monkeypatch.setenv("EVENT_LOG_DIR", str(tmp_path / "events"))
+    monkeypatch.setenv("TELEGRAM_SKIP_WEBHOOK_SET", "1")
+    monkeypatch.delenv("TELEGRAM_WEBHOOK_URL", raising=False)
+    monkeypatch.delenv("TELEGRAM_WEBHOOK_SECRET_TOKEN", raising=False)
+
+    # _seed_settings calls TelegramSettings.from_env which internally
+    # depends on the apply_hermetic_defaults_to_env helper (called from
+    # __main__.py / lifespan.py before from_env). Invoke it directly here
+    # to mirror the production wiring.
+    from telegram_gateway.app.config import apply_hermetic_defaults_to_env
+
+    apply_hermetic_defaults_to_env()
+
+    settings = _seed_settings(tmp_path)
+    clock = FrozenClock(mono_ns=0, now=FROZEN_EPOCH)
+    app = build_app(settings=settings, clock=clock)
+
+    async with LifespanManager(app):
+        pass
+
+    # set_webhook MUST NOT have been called (skip flag was set).
+    assert patched_aiogram["set_webhook_calls"] == [], (
+        "set_webhook unexpectedly called with the skip flag set"
+    )

@@ -314,6 +314,20 @@ def build_app(
     app.add_exception_handler(RequestValidationError, handle_validation_error)
     app.add_exception_handler(Exception, handle_internal_error)
 
+    # Story 11.3.7 (AC5 / FR17 minimal) — /v1/health liveness probe.
+    # The S-4 separability test (and the telegram-gateway registry_client's
+    # TODO(story-TBD)) reference this endpoint; previously absent on the
+    # server side (only telegram-gateway exposed its own /v1/health). FR17
+    # eventually expands this to registry status / worker status / queue
+    # depth / platform version — for now we return a stable liveness shape
+    # so external probes (S-4 harness, future ping commands) see 200 OK.
+    # Declared inline (no router) because it's middleware-free + needs no
+    # DB access — just confirms the FastAPI app is serving.
+    @app.get("/v1/health", tags=["meta"])
+    async def health() -> dict[str, str]:
+        """Liveness probe — returns 200 when registry-api is serving."""
+        return {"status": "ok", "service": "registry-api"}
+
     # Routes — /v1 prefix applied here; handlers declare /tasks and /tasks/{id}.
     app.include_router(tasks_router, prefix="/v1")
     # Story 7.3 — LLM digest endpoint for task events (FR5).

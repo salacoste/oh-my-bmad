@@ -138,6 +138,15 @@ services:
       <<: *common-env
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TG_ALLOWLIST_USER_IDS: ${TG_ALLOWLIST_USER_IDS:-}
+      # Story 11.3.7 (AC2 / D2-A) — propagate the hermetic skip flag from
+      # shell substitution so test harnesses can flip the gateway into
+      # offline boot (lifespan skips bot.set_webhook(...) + treats webhook
+      # URL/secret as optional via apply_hermetic_defaults_to_env).
+      # Default "0" (not empty) because pydantic-settings rejects empty
+      # string → bool coercion; "0" parses as False unambiguously.
+      # Production operators leave the shell var unset for normal
+      # set_webhook behavior (default "0" → False).
+      TELEGRAM_SKIP_WEBHOOK_SET: ${TELEGRAM_SKIP_WEBHOOK_SET:-0}
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]
@@ -246,6 +255,16 @@ services:
     environment:
       <<: *common-env
       REGISTRY_DB_PATH: ${REGISTRY_DB_PATH:-/var/lib/oh-my-bmad/registry/state.sqlite3}
+      # Story 11.3.7 (AC4 / H7e) — propagate TELEGRAM_BOT_TOKEN via shell
+      # substitution so CI envs without an .env file can still boot
+      # clawhip-daemon (which sys.exit(2)s on missing/empty token).
+      # Mirrors telegram-gateway's existing TELEGRAM_BOT_TOKEN line for
+      # consistency. The s3-separability harness exports a dummy token
+      # for Phase 1; production operators continue to set the real value
+      # via .env (when shell is unset, .env value flows through env_file;
+      # when shell is set explicitly, it takes precedence — matches the
+      # existing telegram-gateway contract above).
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]

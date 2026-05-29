@@ -104,7 +104,20 @@ services:
     image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-telegram-gateway:${OMB_VERSION:-dev}
     environment:
       ENV: test
-      TELEGRAM_BOT_TOKEN: ""
+      # Story 11.3.7 (AC2/AC4) — telegram-gateway requires a syntactically
+      # valid TELEGRAM_BOT_TOKEN at boot (audited_secret_field rejects ""
+      # with ValueError). The dummy <digits>:<alphanumeric> shape satisfies
+      # the validator without authorizing real Telegram traffic; combined
+      # with TELEGRAM_SKIP_WEBHOOK_SET=1 (AC2 hermetic mode), the lifespan
+      # skips bot.set_webhook(...) and the apply_hermetic_defaults_to_env
+      # helper fills dummy TELEGRAM_WEBHOOK_URL / TELEGRAM_WEBHOOK_SECRET_TOKEN
+      # so settings construction succeeds without those env-vars. Required
+      # for the s4 overlay's telegram-gateway (one of the 6 producers in
+      # _PRODUCER_SERVICES) to reach healthy in Phase 2. Spec-deviation
+      # noted in Story 11.3.7 Dev Agent Record (the literal "keep its
+      # empty token" instruction conflicts with audited-secret validation).
+      TELEGRAM_BOT_TOKEN: "0:dummytesttoken"
+      TELEGRAM_SKIP_WEBHOOK_SET: "1"
       TG_ALLOWLIST_USER_IDS: "[]"
     init: true
     restart: "no"
@@ -210,6 +223,15 @@ services:
     environment:
       ENV: test
       REGISTRY_DB_PATH: /var/lib/oh-my-bmad/registry/state.sqlite3
+      # Story 11.3.7 (AC4 / H7e) — clawhip-daemon validates TELEGRAM_BOT_TOKEN
+      # format at boot (services/clawhip-daemon/.../main.py:231-242) and
+      # sys.exit(2) without a valid <digits>:<alphanumeric> shape. The S-4
+      # harness does NOT exercise the real Telegram outbound path, so a
+      # syntactically-valid dummy is sufficient + production-safe (regex
+      # matches; no real Telegram traffic is generated under the harness).
+      # NOT applied to telegram-gateway (line 107 stays empty so the AC2
+      # hermetic skip-mode is the gating mechanism there, not the token).
+      TELEGRAM_BOT_TOKEN: "0:dummytesttoken"
     init: true
     restart: "no"
     networks: [oh-my-bmad-net]
