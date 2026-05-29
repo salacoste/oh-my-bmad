@@ -665,6 +665,12 @@ _PP4B_SUBPROCESS_BODY = (
     "signal.pause()"
 )
 
+# /code-review-pass2-fix L1: compile at import time so a future edit to
+# ``_PP4B_SUBPROCESS_BODY`` that introduces a syntax error fails at test
+# COLLECTION (visible immediately) rather than mid-test as an opaque READY
+# sentinel timeout — saves debug time when the body grows.
+compile(_PP4B_SUBPROCESS_BODY, "<_PP4B_SUBPROCESS_BODY>", "exec")
+
 
 @pytest.mark.integration
 @pytest.mark.slow
@@ -740,6 +746,21 @@ async def test_pp4b_outer_timeout_ceiling_reaps_maximally_pathological_subproces
                 f"PP4b child never printed READY within 2.0s — child likely "
                 f"crashed before signal.pause(). Child stderr: {stderr_bytes!r}"
             ) from None
+        # /code-review-pass2-fix E1: explicit empty-readline guard. If the
+        # child exits cleanly without printing READY (e.g., future body
+        # change that exits early), ``readline()`` returns ``b""``; the
+        # ``strip() == b"READY"`` compare below would fire with a misleading
+        # "got sentinel=b''" message that doesn't say "child pre-exited".
+        # Distinguish the EOF-before-READY case explicitly + surface stderr.
+        if sentinel == b"":
+            stderr_bytes = b""
+            if proc.stderr is not None:
+                with contextlib.suppress(Exception):
+                    stderr_bytes = await asyncio.wait_for(proc.stderr.read(), timeout=1.0)
+            raise AssertionError(
+                f"PP4b child exited before printing READY (EOF on stdout); "
+                f"child stderr: {stderr_bytes!r}"
+            )
         assert sentinel.strip() == b"READY", (
             f"PP4b child setup failed (SIG_IGN + stdin close + signal.pause); "
             f"got sentinel={sentinel!r}"
@@ -751,18 +772,44 @@ async def test_pp4b_outer_timeout_ceiling_reaps_maximally_pathological_subproces
         # — both block as long as the subprocess is alive; the pathological
         # subprocess never exits naturally, so the OUTER wait_for ceiling
         # is the only thing that can break the hang.
-        t0 = time.monotonic()
         term_result: _TerminationResult | None = None
+        # /code-review-pass2-fix M1+E2: capture any exception raised by
+        # ``terminate_with_grace`` itself so the post-block diagnostic can
+        # distinguish "terminate_with_grace raised" from "the inner handler
+        # didn't run". Without this, a future regression in
+        # ``terminate_with_grace`` would re-raise out of the inner except,
+        # the outer ``pytest.raises(TimeoutError)`` would absorb the WRONG
+        # exception type (or pass-through TimeoutError if the regression
+        # raises TimeoutError), and ``term_result is None`` would fire with
+        # the misdirecting "PP24's inner-handler shape broke" message.
+        terminate_exc: BaseException | None = None
+        # /code-review-pass2-fix N1: capture ``t0`` immediately before the
+        # measured operation (the ``wait_for`` call), not before pytest.raises
+        # setup — small but pins the diagnostic to the actual budget window.
         with pytest.raises(TimeoutError):
+            t0 = time.monotonic()
             try:
                 await asyncio.wait_for(proc.wait(), timeout=1.0)
             except TimeoutError:
                 # The terminate_with_grace call MUST run before the re-raise
                 # (PP24 fix shape). Capture its result so the post-block
                 # asserts can verify the SIGKILL escalation landed.
-                term_result = await runner.terminate_with_grace(grace_period_s=0.5)
+                try:
+                    term_result = await runner.terminate_with_grace(grace_period_s=0.5)
+                except BaseException as exc:  # noqa: BLE001 — surface to diagnostic
+                    terminate_exc = exc
                 raise
         elapsed = time.monotonic() - t0
+
+        # /code-review-pass2-fix M1+E2: if ``terminate_with_grace`` raised,
+        # surface the actual exception type/message rather than the generic
+        # "PP24 inner-handler shape broke" assertion below.
+        assert terminate_exc is None, (
+            f"PP4b regression: terminate_with_grace itself raised "
+            f"{type(terminate_exc).__name__}: {terminate_exc!r}; "
+            "this means the SIGKILL escalation path is broken, NOT the "
+            "inner-handler control-flow shape"
+        )
 
         # Wall-clock sanity — outer ceiling (1.0s) + grace (0.5s) +
         # SIGKILL escalation + reap should comfortably fit under 3s.
@@ -808,7 +855,33 @@ async def test_pp4b_outer_timeout_ceiling_reaps_maximally_pathological_subproces
         # Zombie reap: even on test-setup failure, ensure no leaked
         # subprocess persists across the integration suite (Epic 11 retro
         # AI-6 BaseException-discipline applied at the test boundary).
+        #
+        # /code-review-pass2-fix H1+E3: harden the cleanup so a real zombie
+        # leak fails LOUDLY rather than silently being swallowed by
+        # ``contextlib.suppress``. Two independent risks closed:
+        #
+        # 1. ``proc.kill()`` raises ``ProcessLookupError`` if the child
+        #    died between the ``returncode is None`` check and the
+        #    ``.kill()`` call (TOCTOU). Bare ``proc.kill()`` would replace
+        #    the original test-body assertion with an unrelated cleanup
+        #    error; wrap in ``suppress(ProcessLookupError)`` to absorb only
+        #    the expected race.
+        # 2. ``asyncio.wait_for(proc.wait(), timeout=3.0)`` was previously
+        #    wrapped in ``suppress(Exception)`` — if the kernel hung the
+        #    reap, the TimeoutError was silently swallowed and the test
+        #    marked "completed" while the zombie remained. That defeats
+        #    the entire orphan-leak detection purpose of this test. Now
+        #    raise ``pytest.fail(...)`` to make the leak visible.
         if proc is not None and proc.returncode is None:
-            proc.kill()
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            try:
                 await asyncio.wait_for(proc.wait(), timeout=3.0)
+            except TimeoutError:
+                pytest.fail(
+                    "PP4b cleanup: zombie subprocess survived final SIGKILL "
+                    "+ 3s wait — orphan-leak detection escaped this test"
+                )
+            except ProcessLookupError:
+                # Already reaped between the kill and the wait — fine.
+                pass
