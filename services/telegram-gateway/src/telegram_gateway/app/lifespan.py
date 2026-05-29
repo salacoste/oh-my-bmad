@@ -105,6 +105,7 @@ from telegram_gateway.handlers import (
     make_agent_router,
     make_approvals_router,
     make_approve_router,
+    make_key_status_router,
     make_logs_router,
     make_ping_router,
     make_reject_router,
@@ -363,6 +364,9 @@ def make_lifespan(
             # Story 11.3 / FR63 — /approvals operator pinned-thread handler.
             dp.include_router(make_approvals_router())
             dp.include_router(make_ping_router())
+            # Story 11.5.1 / FR65a — /key-status surfaces the singleton
+            # KeyFingerprint row via registry-api GET /v1/key-status.
+            dp.include_router(make_key_status_router())
             dp.include_router(make_status_router())
             dp.include_router(make_logs_router())
             dp.include_router(make_stop_router())

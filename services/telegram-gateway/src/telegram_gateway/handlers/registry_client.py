@@ -112,6 +112,26 @@ class HealthResponseLocal(BaseModel):
     version: str = Field(min_length=1, max_length=200)  # e.g., "v1.2.3"
 
 
+class KeyStatusResponseLocal(BaseModel):
+    """Local mirror of registry-api's GET /v1/key-status response (Story 11.5.1 / AC2).
+
+    Wire contract MUST match :class:`registry_api.routes.key_status.KeyStatusResponse`
+    field-for-field; pinned by ``tests/contract/test_key_status_client_server_shape_parity.py``
+    (Story 11.5.1 AC7; mirror-identity canon L9 from Epic 11 retro addendum).
+
+    The 16-hex ``fingerprint`` is a one-way SHA-256[:8] truncation per Story
+    11.5 AC1 + ADR-0006 §Key-fingerprint — operator-readable; does NOT reveal
+    the underlying ``OPERATOR_HMAC_KEY``.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    fingerprint: str = Field(min_length=16, max_length=16, pattern=r"^[0-9a-f]{16}$")
+    rotated_at: datetime
+    # Story 11.2 P1-H1 codebase-wide actor_id length invariant.
+    rotated_by_actor_id: str = Field(min_length=1, max_length=128)
+
+
 class ActorLocal(BaseModel):
     """Local mirror of registry-api's ActorOut (Story 3.14 AC-2).
 
@@ -541,6 +561,54 @@ class RegistryAPIClient:
             return HealthResponseLocal.model_validate(data)
         except (_json.JSONDecodeError, KeyError, ValidationError, ValueError) as exc:
             # ValueError included for edge-cases (e.g. unexpected json type).
+            raise RegistryResponseError(f"registry-api returned malformed body: {exc}") from exc
+
+    async def get_key_status(
+        self,
+        *,
+        request_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> KeyStatusResponseLocal:
+        """GET /v1/key-status and return the typed local response model (Story 11.5.1).
+
+        No request body. No Idempotency-Key header — GET is idempotent by HTTP
+        semantics (same as :meth:`get_platform_health`). Telegram retries
+        safely re-fetch the key fingerprint without duplication concerns.
+
+        Args:
+            request_id: UUIDv7 request correlation id. Forwarded as X-Request-ID.
+            trace_id:   UUIDv7 trace id (Story 9.3 / FR58). Forwarded as
+                        X-Trace-Id when non-empty.
+
+        Returns:
+            KeyStatusResponseLocal on HTTP 2xx.
+
+        Raises:
+            RegistryResponseError: On 2xx with malformed/unexpected body.
+            httpx.HTTPStatusError: On non-2xx responses (404 = cold-start;
+                                   the handler renders an operator-readable
+                                   "key not yet materialized" reply).
+            httpx.HTTPError:       On network / timeout errors.
+        """
+        headers: dict[str, str] = {}
+        if request_id is not None:
+            headers["X-Request-ID"] = request_id
+        # Story 9.3 (FR58): forward derived trace_id through to registry-api.
+        if trace_id is not None and trace_id != "":
+            headers["X-Trace-Id"] = trace_id
+        elif trace_id == "":
+            _log.warning(
+                "empty trace_id supplied to registry_client; "
+                "correlation will break (X-Trace-Id header omitted)"
+            )
+
+        response = await self._http_client.get("/v1/key-status", headers=headers)
+        response.raise_for_status()
+
+        try:
+            data = response.json()
+            return KeyStatusResponseLocal.model_validate(data)
+        except (_json.JSONDecodeError, KeyError, ValidationError, ValueError) as exc:
             raise RegistryResponseError(f"registry-api returned malformed body: {exc}") from exc
 
     async def get_task(

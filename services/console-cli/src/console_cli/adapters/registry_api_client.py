@@ -136,6 +136,28 @@ class HealthResponseLocal(BaseModel):
     version: str = Field(min_length=1, max_length=200)
 
 
+class KeyStatusResponseLocal(BaseModel):
+    """Local mirror of registry-api's GET /v1/key-status response (Story 11.5.1 / AC2).
+
+    Wire contract MUST match :class:`registry_api.routes.key_status.KeyStatusResponse`
+    AND the parallel mirror in telegram-gateway's registry_client.py
+    field-for-field; pinned by
+    ``tests/contract/test_key_status_client_server_shape_parity.py`` (Story
+    11.5.1 AC7; mirror-identity canon L9 from Epic 11 retro addendum).
+
+    The 16-hex ``fingerprint`` is a one-way SHA-256[:8] truncation per Story
+    11.5 AC1 + ADR-0006 §Key-fingerprint — operator-readable; does NOT reveal
+    the underlying ``OPERATOR_HMAC_KEY``.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    fingerprint: str = Field(min_length=16, max_length=16, pattern=r"^[0-9a-f]{16}$")
+    rotated_at: datetime
+    # Story 11.2 P1-H1 codebase-wide actor_id length invariant.
+    rotated_by_actor_id: str = Field(min_length=1, max_length=128)
+
+
 class TaskEventsResponseLocal(BaseModel):
     """Local mirror of registry-api's eventual GET /v1/tasks/{id}/events response.
 
@@ -394,6 +416,46 @@ class RegistryAPIClient:
 
         try:
             return HealthResponseLocal.model_validate(data)
+        except (
+            _json.JSONDecodeError,
+            ValidationError,
+            ValueError,
+        ) as exc:
+            raise RegistryResponseError(f"registry-api returned malformed body: {exc}") from exc
+
+    async def get_key_status(
+        self,
+        *,
+        request_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> KeyStatusResponseLocal:
+        """GET /v1/key-status — operator-facing HMAC key fingerprint surface (Story 11.5.1).
+
+        No Idempotency-Key header — GET is idempotent by HTTP semantics.
+
+        Returns:
+            KeyStatusResponseLocal on HTTP 2xx.
+
+        Raises:
+            RegistryResponseError: On 2xx with malformed/unexpected body.
+            httpx.HTTPStatusError: On non-2xx responses (404 = cold-start;
+                                   the CLI command renders it as a
+                                   "key not yet materialized" message).
+            httpx.HTTPError:       On network / timeout errors.
+        """
+        headers: dict[str, str] = {}
+        if request_id is not None:
+            headers[REQUEST_ID_HEADER] = request_id
+        if isinstance(trace_id, str) and is_valid_trace_id(trace_id):
+            headers[TRACE_ID_HEADER] = trace_id
+
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=_DEFAULT_TIMEOUT) as client:
+            response = await client.get("/v1/key-status", headers=headers)
+            response.raise_for_status()
+            data = response.json()
+
+        try:
+            return KeyStatusResponseLocal.model_validate(data)
         except (
             _json.JSONDecodeError,
             ValidationError,

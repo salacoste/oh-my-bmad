@@ -10,6 +10,7 @@ Future handlers:
 from telegram_gateway.handlers.agent_command import make_agent_router
 from telegram_gateway.handlers.approvals_command import make_approvals_router
 from telegram_gateway.handlers.approve_command import make_approve_router
+from telegram_gateway.handlers.key_status_command import make_key_status_router
 from telegram_gateway.handlers.logs_command import make_logs_router
 from telegram_gateway.handlers.ping_command import make_ping_router
 from telegram_gateway.handlers.reject_command import make_reject_router
@@ -24,6 +25,7 @@ __all__ = [
     "make_agent_router",
     "make_approvals_router",
     "make_approve_router",
+    "make_key_status_router",
     "make_logs_router",
     "make_ping_router",
     "make_reject_router",
