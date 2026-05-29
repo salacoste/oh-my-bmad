@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-05-29T05:30:00Z
+last_updated: 2026-05-29T06:30:00Z
 current_phase: 2  # Phase 2 opened by ADR-0003 (docs/adr/0003-phase-2-gate.md), 2026-05-15
 
 development_status:
@@ -308,9 +308,9 @@ development_status:
   # phase: 2 · composes with Epic 10
   # FR66–FR68a · NFR-R8
   # =========================================================================
-  epic-12: backlog
+  epic-12: in-progress  # 2026-05-29 (hygiene fix) — Story 12.1 shipped 2026-05-22 (e98d50f→e4183dd→12e08f4) but epic row was not flipped; per BMad convention "first done story → epic in-progress" this row is brought to truth. Remaining: 12.1.1 (PP43 deferral), 12.2 (FR67 event), 12.3 (FR68 override), 12.4 (FR68a policy storage).
   12-1-budget-supervisor-worker-wrapper: done  # phase: 2 · FR66 + NFR-R8 + FR26 · 6 ACs · pass-2 review CI green @ 12e08f4 (run 26260564190) 2026-05-22 · 22 fixes batch-applied (4 P1-H: PP23 enforcement_failed + lifespan retry, PP24 outer-timeout orphan-kill, PP25 CancelledError split, PP26 cancel.set() suppress; 8 P1-M: PP27 Protocol contract, PP28 infinite-rescan break, PP29 fixture rebuild, PP30 hard-cap join, PP31-PP33 spec doc-drift, PP34 escalation_landed; 10 P1-L: PP35 AST class-context, PP36 public unregister API, PP37-PP40 tracing/safety, PP41 gap doc, PP42-PP44 spec/traceback); test count 3083→3087 (+4); mypy 42 unchanged; check_single_writer.py exit 0; Epic 11 retro L1 validated 3rd time on cross-cutting stories — pass-2 catches residuals from pass-1's larger refactors
-  12-1-1-pp4b-overall-timeout-regression-test: backlog  # phase: 2 · Story 12.1 PP43 deferral 2026-05-22 — regression test for PP4 task_overall_timeout_s ceiling killing subprocess before re-raise; deferred from pass-1 batch as platform-specific (macOS CI subprocess pipe-survival mechanics); PP24's integration test partially covers the fix shape
+  12-1-1-pp4b-overall-timeout-regression-test: ready-for-dev  # phase: 2 · story file enriched to dev-ready 2026-05-29 (create-story) on branch epic-12.1.1 — single regression test (test-only, NO production code) exercising the FULL outer-ceiling path (asyncio.wait_for → TimeoutError → terminate_with_grace → SIGKILL → reap) with a maximally-pathological subprocess (SIG_IGN on SIGTERM + stdin close + signal.pause); POSIX-portable (no setsid/setpgrp per PP43 caveat); ~1-2 hour dev cycle · Story 12.1 PP43 deferral 2026-05-22 — regression test for PP4 task_overall_timeout_s ceiling killing subprocess before re-raise; deferred from pass-1 batch as platform-specific (macOS CI subprocess pipe-survival mechanics); PP24's integration test partially covers the fix shape
   12-2-budget-enforcement-triggered-event: backlog  # phase: 2 · FR67 · new event type
   12-3-approve-override-budget-event: backlog  # phase: 2 · FR68 · new event type
   12-4-per-task-budget-policy-storage: backlog  # phase: 2 · FR68a
