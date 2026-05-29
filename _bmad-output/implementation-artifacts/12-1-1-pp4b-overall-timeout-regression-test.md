@@ -1,6 +1,6 @@
 # Story 12.1.1 — PP4b regression test: pathological-hang subprocess reaped by outer `task_overall_timeout_s` ceiling
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -404,6 +404,7 @@ outer-ceiling code path.
 
 | Date | Author | Summary |
 |---|---|---|
+| 2026-05-29 | Claude Opus 4.7 (1M ctx) via /code-review default | Code review (3-angle consolidated: correctness + spec-AC + cleanup) — verdict APPROVE. 5 findings (all Nit/Low). 2 batch-applied: (#1) `import signal` promoted to module-level + inline `_signal` alias removed (single inline Python `signal` import in the file → consistent with `asyncio`/`contextlib`/`sys`); (#2) subprocess `stderr=DEVNULL → PIPE` + child-stderr captured in the READY-sentinel timeout path's AssertionError so a future child-crash surfaces actionable diagnostics instead of opaque `asyncio.wait_for` TimeoutError. 3 dismissed per reviewer's own advice: (#3) single-vs-loop `signal.pause()` deviation already justified in Dev Agent Record; (#4) helper-extraction is rule-of-three (only 2 consumers today); (#5) verbose comment density is intentional "regression test = forensic artifact" style. All 8 ACs verified satisfied by the reviewer. Gates re-verified post-fix: ruff/format clean, 7/7 tests pass (26.18s wall-clock incl. the new stderr-pipe overhead — still under the @pytest.mark.slow ceiling). Sprint-status: review → **done**. |
 | 2026-05-29 | Claude Opus 4.7 (1M ctx) via /bmad-dev-story | Initial implementation of Tasks 1-3 on branch epic-12.1.1. AC1-AC4+AC6 single test `test_pp4b_outer_timeout_ceiling_reaps_maximally_pathological_subprocess` appended to `tests/integration/test_budget_enforcement_latency.py` (after PP30 sibling). Module-level `_PP4B_SUBPROCESS_BODY` constant for the SIG_IGN + os.close(0) + signal.pause() pathological body (POSIX-portable, no setsid per PP43). Test replicates production control flow from `app/main.py:546-559` inline: `asyncio.wait_for(proc.wait(), timeout=1.0)` → `TimeoutError` → `terminate_with_grace(0.5s)` → `pytest.raises(TimeoutError)` for re-raise. 4 invariants asserted (term_result populated + method=="sigkill" + escalation_landed + proc.returncode==-SIGKILL) + wall-clock budget elapsed<3.0s + finally-block zombie reap. AC5 `@pytest.mark.slow` ADDED — 3-run empirical wall-clock 9.25-10.61s (consistently >5s; test body itself ~1.5s, pytest+subprocess overhead is the bulk). AC7 gates green: ruff/format clean, mypy 240=baseline 0-new, discipline 0, 7/7 tests pass in test_budget_enforcement_latency.py (6 existing + 1 new) in 17.76s wall-clock. AC8 code-review runs next as Task 4. No production code changes. No spec deviations besides single-vs-loop `signal.pause()` (documented in Completion Notes — single call is more accurate for SIG_IGN-only-SIGTERM setup). Sprint-status: ready-for-dev → in-progress → review. |
 
 ## Definition of Done

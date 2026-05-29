@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import signal
 import sys
 import time
 from collections.abc import Generator
@@ -713,16 +714,32 @@ async def test_pp4b_outer_timeout_ceiling_reaps_maximally_pathological_subproces
     runner = ClaudeCodeRunner(_settings())
     proc: asyncio.subprocess.Process | None = None
     try:
+        # /code-review-fix #2: route stderr to PIPE (was DEVNULL) so a child-
+        # crash before the READY sentinel surfaces actionable diagnostics
+        # rather than an opaque ``asyncio.wait_for`` TimeoutError pointing at
+        # readline. The child only writes to stderr if Python itself errors
+        # (ImportError / SyntaxError); production-path stderr is empty.
         proc = await asyncio.create_subprocess_exec(
             sys.executable,
             "-u",
             "-c",
             _PP4B_SUBPROCESS_BODY,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
         )
         assert proc.stdout is not None
-        sentinel = await asyncio.wait_for(proc.stdout.readline(), timeout=2.0)
+        try:
+            sentinel = await asyncio.wait_for(proc.stdout.readline(), timeout=2.0)
+        except TimeoutError:
+            # Capture child stderr to surface the real failure cause.
+            stderr_bytes = b""
+            if proc.stderr is not None:
+                with contextlib.suppress(Exception):
+                    stderr_bytes = await asyncio.wait_for(proc.stderr.read(), timeout=1.0)
+            raise AssertionError(
+                f"PP4b child never printed READY within 2.0s — child likely "
+                f"crashed before signal.pause(). Child stderr: {stderr_bytes!r}"
+            ) from None
         assert sentinel.strip() == b"READY", (
             f"PP4b child setup failed (SIG_IGN + stdin close + signal.pause); "
             f"got sentinel={sentinel!r}"
@@ -780,10 +797,10 @@ async def test_pp4b_outer_timeout_ceiling_reaps_maximally_pathological_subproces
         )
         # Returncode MUST reflect SIGKILL specifically (the SIG_IGN'd SIGTERM
         # would NOT exit the process; only SIGKILL can).
-        import signal as _signal
-
-        assert proc.returncode == -_signal.SIGKILL, (
-            f"PP4b expected returncode=-SIGKILL ({-_signal.SIGKILL}); "
+        # /code-review-fix #1: module-level ``signal`` import (above) — no
+        # per-test inline import.
+        assert proc.returncode == -signal.SIGKILL, (
+            f"PP4b expected returncode=-SIGKILL ({-signal.SIGKILL}); "
             f"got {proc.returncode} — subprocess may have exited via "
             "an unintended signal path"
         )
