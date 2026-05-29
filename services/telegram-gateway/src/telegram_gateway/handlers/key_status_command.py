@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import html
 import logging
+from datetime import UTC, datetime
 
 import httpx
 from aiogram import Router
@@ -156,12 +157,18 @@ def _iso_z(dt: object) -> str:
     :class:`KeyStatusResponseLocal.rotated_at` IS ``datetime``, so the str
     fallback is dead in the happy path — kept as defensive cast for
     serialization edge cases).
-    """
-    from datetime import datetime
 
+    Story 11.5.1 /code-review-fix M1: a NAIVE datetime (``tzinfo=None``) from
+    a JSON payload without explicit offset would round-trip via
+    ``isoformat()`` without ``+00:00`` — the ``replace("+00:00", "Z")`` would
+    no-op and the operator would see ``"2026-05-21T14:30:00"`` (no Z), wrongly
+    implying local-time semantics. Normalize naive timestamps to UTC explicitly
+    before formatting so the trailing ``Z`` is always present.
+    """
     if isinstance(dt, datetime):
+        normalized = dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
         # strip subsecond + ensure trailing Z for operator readability
-        return dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        return normalized.replace(microsecond=0).isoformat().replace("+00:00", "Z")
     return str(dt)
 
 

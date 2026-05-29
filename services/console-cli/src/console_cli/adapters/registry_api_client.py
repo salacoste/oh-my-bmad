@@ -458,9 +458,15 @@ class RegistryAPIClient:
             return KeyStatusResponseLocal.model_validate(data)
         except (
             _json.JSONDecodeError,
+            KeyError,
             ValidationError,
             ValueError,
         ) as exc:
+            # Story 11.5.1 /code-review-fix H3: include KeyError in the funnel for
+            # parity with the telegram-gateway sibling at registry_client.py
+            # (`KeyStatusResponseLocal.model_validate` would currently swallow
+            # KeyError via ValidationError, but a future refactor that does
+            # ``data["fingerprint"]`` before validate would raise uncaught KeyError).
             raise RegistryResponseError(f"registry-api returned malformed body: {exc}") from exc
 
     async def get_task_events(

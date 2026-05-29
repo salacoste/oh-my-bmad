@@ -48,7 +48,13 @@ class KeyStatusResponse(BaseModel):
     Pinned by the cross-service parity contract test (Story 11.5.1 AC7).
     """
 
-    model_config = ConfigDict(frozen=True)
+    # Story 11.5.1 /code-review-fix Acceptance-Dev1: spec AC6 prescribed
+    # ``frozen=True, extra="ignore"`` symmetric with the client mirrors. The
+    # extra="ignore" on the producer side is a no-op for output (pydantic
+    # serializes only declared fields by default) but kept for spec-verbatim
+    # parity so the 3 schemas share an identical ConfigDict — defense against
+    # a future refactor that extracts a shared base config.
+    model_config = ConfigDict(frozen=True, extra="ignore")
 
     # Story 11.5 AC1 + ADR-0006 §Key-fingerprint: SHA-256(key_bytes)[:8] = 16
     # lowercase hex chars (64 bits). Operator-readable; collision-safe for
@@ -95,6 +101,16 @@ async def get_key_status(request: Request) -> KeyStatusResponse:
         row = result.scalar_one_or_none()
 
         if row is None:
+            # Story 11.5.1 /code-review-fix L2: log cold-start hits at INFO
+            # so operators have observable evidence of the empty-table window
+            # (the materializer ought to UPSERT one row at lifespan startup;
+            # repeated 404s here = either lifespan didn't run or registry-state
+            # subscriber is lagging).
+            _log.info(
+                "/v1/key-status cold-start 404 — KeyFingerprint singleton row "
+                "absent; registry-state has not yet materialized any "
+                "key.rotated event"
+            )
             raise HTTPException(
                 status_code=404,
                 detail=(
@@ -104,8 +120,13 @@ async def get_key_status(request: Request) -> KeyStatusResponse:
                 ),
             )
 
-    return KeyStatusResponse(
-        fingerprint=row.fingerprint,
-        rotated_at=row.rotated_at,
-        rotated_by_actor_id=row.rotated_by_actor_id,
-    )
+        # Story 11.5.1 /code-review-fix L3: construct the response INSIDE the
+        # session block so attribute access doesn't risk DetachedInstanceError
+        # if KeyFingerprint ever gains a deferred column / relationship.
+        # All 3 fields are eager scalar columns today, so this is defensive
+        # against future schema evolution rather than a current bug.
+        return KeyStatusResponse(
+            fingerprint=row.fingerprint,
+            rotated_at=row.rotated_at,
+            rotated_by_actor_id=row.rotated_by_actor_id,
+        )

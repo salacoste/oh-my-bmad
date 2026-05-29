@@ -168,6 +168,14 @@ async def test_get_key_status_returns_404_when_row_missing(
         f"expected 404, got {response.status_code}; body={response.text!r}"
     )
 
+    # Story 11.5.1 /code-review-fix M3: pin the RFC 7807 Content-Type so a
+    # future regression that swaps the registry-api ``handle_http_exception``
+    # adapter for FastAPI's default ``{detail: ...}`` envelope is caught here.
+    content_type = response.headers.get("content-type", "")
+    assert "application/problem+json" in content_type, (
+        f"expected RFC 7807 problem+json content-type; got {content_type!r}"
+    )
+
     body = response.json()
     # RFC 7807 problem+json shape per the handle_http_exception adapter.
     # detail field should mention the cold-start guidance string from the route.

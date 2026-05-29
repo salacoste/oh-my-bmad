@@ -78,7 +78,19 @@ def key_status() -> None:
     # Render the 4-line operator-readable block. NOT one-line like /ping —
     # multi-line is intentional so operators can copy-paste the fingerprint
     # into runbooks.
-    rotated_at_iso = result.rotated_at.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    #
+    # Story 11.5.1 /code-review-fix M1: explicitly normalize naive datetimes to
+    # UTC before formatting so the trailing ``Z`` is always present (server
+    # response WILL be tz-aware, but a future deserializer change to a naive
+    # datetime would silently drop the ``Z`` suffix).
+    from datetime import UTC
+
+    rotated_at = (
+        result.rotated_at
+        if result.rotated_at.tzinfo is not None
+        else result.rotated_at.replace(tzinfo=UTC)
+    )
+    rotated_at_iso = rotated_at.replace(microsecond=0).isoformat().replace("+00:00", "Z")
     print("Operator HMAC signing key:")
     print(f"  Fingerprint:    {result.fingerprint}")
     print(f"  Last rotated:   {rotated_at_iso}")
