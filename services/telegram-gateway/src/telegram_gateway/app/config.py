@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 from urllib.parse import urlparse
 
+from events import ensure_shared_dir
 from pydantic import Field, HttpUrl, field_validator, model_validator
 from pydantic_settings import SettingsConfigDict
 from secret_hygiene import (
@@ -560,7 +561,11 @@ class TelegramSettings(AuditedBaseSettings):
         """
         target = Path(self.event_log_dir)
         try:
-            target.mkdir(parents=True, exist_ok=True)
+            # Story 11.3.8 / FR62a: use ``ensure_shared_dir`` so this probe
+            # leaves the dir at mode 0o2775 if it's the first creator —
+            # avoids the cross-uid permission lockout other ``omb``-group
+            # services hit when telegram-gateway wins the boot race.
+            ensure_shared_dir(target)
         except OSError as exc:
             raise ValueError(f"event_log_dir {target!s} cannot be created: {exc}") from exc
         probe = target / ".write-probe"

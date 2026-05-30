@@ -1,6 +1,6 @@
 # Story 11.3.8 — `EventLogWriter.__init__` chmods event-dir to 2775 so cross-uid services in `omb` group can write
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -350,11 +350,88 @@ unblocks:
 
 ### Agent Model Used
 
+claude-opus-4-7 (1M context) — direct execution under "Full autonomous,
+stop before push" agreement (continuing established workflow scope from
+Stories 11.3.7 / 11.5.1 / 12.1.1).
+
 ### Debug Log References
+
+- Pre-existing timing-flake set in `services/registry-state/src/registry_state/app/test_main.py`
+  (test_full_replay_vs_snapshot_replay_byte_identical, test_synthetic_1k_replay_under_500ms,
+  test_run_subscriber_live_tail_materializes_within_200ms,
+  test_run_subscriber_captures_snapshots_during_replay,
+  test_run_subscriber_is_idempotent_across_3x_replay) — all confirmed
+  failing on `git stash`-isolated baseline too. NOT regressions from this
+  story. Filed as known-flakes for future hardening (out of scope here).
+- AC8 Docker repro deferred per operator decision mid-dev (terminated the
+  compose health-wait at 6/7 healthy in favor of completing validation
+  gates + code-review). The 5 helper-unit-tests + integration test
+  collection-smoke cover the regression at the unit + structural layer;
+  the integration test will run end-to-end against ROOT compose on the
+  next nightly cycle.
 
 ### Completion Notes List
 
+- **AC1 ✓** `EventLogWriter.__init__` (`event_log.py:300`) chmod 2775 via
+  shared helper.
+- **AC2 ✓** All shared `/var/lib/oh-my-bmad/` mkdir sites audited and
+  migrated:
+  - `metrics-subscriber/__main__.py:230` event_log_dir (race-trigger site)
+  - `metrics-subscriber/__main__.py:239` cursor_path.parent (added in code-
+    review pass — reviewer L4: `cursor_path` defaults to
+    `/var/lib/oh-my-bmad/metrics-subscriber/cursor.json` per
+    `app/config.py:44`, so its parent IS under the shared root despite
+    a stale source-comment claim to the contrary).
+  - `telegram-gateway/app/config.py:563` event-log readiness probe site.
+  - `registry-state/app/main.py:168` `_ensure_db_parent_dir` (delegates
+    to helper; reviewer M1 removed the `if parent.exists(): return`
+    short-circuit so the helper's idempotent self-heal applies to
+    pre-existing wrong-mode parents on every boot).
+- **AC3 ✓** `packages/events/src/events/_filesystem.py` extracted +
+  re-exported via `packages/events/src/events/__init__.py`. Walks new
+  ancestors and chmods each one (reviewer L2 fix — `Path.mkdir(parents=True)`
+  applies the explicit mode only to the leaf; intermediates would lose
+  group-write under umask 022).
+- **AC4 ✓** 5 unit tests in `packages/events/src/events/test_filesystem.py`
+  (initial 3 + 2 from code-review pass for L2/M1 coverage), all pass
+  including: 2775-mode pin, idempotency, chmod-fail best-effort,
+  intermediate-dir chmod (L2-regression gate), pre-existing-leaf
+  self-heal (M1-regression gate).
+- **AC5 ✓** `tests/integration/test_event_log_dir_perm.py` (NEW, slow +
+  integration) collects clean; full end-to-end on next nightly.
+- **AC6 ✓** Validation gates green:
+  - `ruff check` — all checks passed (401 files)
+  - `ruff format --check` — clean
+  - `mypy --strict packages/ services/ scripts/ mcp-servers/` — 240
+    errors in 57 files = baseline (0 new errors from this story; verified
+    pre + post code-review fixes)
+  - `check_imports.py`, `check_event_registry.py`, `check_single_writer.py`
+    — all clean
+  - `pytest packages/events/src/events/test_filesystem.py` — 5/5 pass
+  - Regression sweep across `packages/events`, `services/registry-state`,
+    `services/metrics-subscriber`, `services/telegram-gateway` with
+    `-m "not slow"` minus 5 known timing-flakes — clean (1305 passed)
+- **AC7 ✓** `/code-review` default-effort discharged via code-reviewer
+  agent (opus). 0 CRITICAL/HIGH, 1 MEDIUM (M1 — short-circuit defeats
+  self-heal in `_ensure_db_parent_dir`), 3 LOW (L2 — intermediates lose
+  mode, L3 — self-referential docstring, L4 — `cursor_path.parent` left
+  bare). ALL 4 fixed in pass-2 + 2 new regression-gate tests added.
+- **AC8 ⚠ deferred** to nightly cycle — see Debug Log References above.
+
 ### File List
+
+NEW:
+- `packages/events/src/events/_filesystem.py` (helper + docstring)
+- `packages/events/src/events/test_filesystem.py` (5 unit tests)
+- `tests/integration/test_event_log_dir_perm.py` (slow + integration regression gate)
+
+MODIFIED:
+- `packages/events/src/events/__init__.py` (re-export `ensure_shared_dir`)
+- `services/registry-state/src/registry_state/adapters/event_log.py` (line ~300: bare `mkdir` → `ensure_shared_dir`)
+- `services/registry-state/src/registry_state/app/main.py` (`_ensure_db_parent_dir`: delegates to helper + drops `if exists: return` short-circuit per reviewer M1)
+- `services/metrics-subscriber/src/metrics_subscriber/__main__.py` (lines ~230 + ~239: 2 sites → helper)
+- `services/telegram-gateway/src/telegram_gateway/app/config.py` (line ~563: probe site → helper)
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` (row flip: in-progress → done)
 
 ## Definition of Done
 

@@ -83,7 +83,7 @@ except ImportError:  # pragma: no cover — Windows-only branch
     _fcntl = None  # type: ignore[assignment]
     _FCNTL_AVAILABLE = False
 
-from events import EventEnvelope, to_canonical_json
+from events import EventEnvelope, ensure_shared_dir, to_canonical_json
 
 # Story 10.2 AC1: read-side JSONL functions moved to packages/events/.
 # Re-export here so existing call-sites (registry-state app/main.py,
@@ -297,7 +297,15 @@ class EventLogWriter:
         self._lock: asyncio.Lock = asyncio.Lock()
         self._poisoned: bool = False
         self._closed: bool = False
-        base_dir.mkdir(parents=True, exist_ok=True)
+        # Story 11.3.8 / FR62a: use ``ensure_shared_dir`` instead of bare
+        # ``mkdir`` so cross-uid services in the ``omb`` group can write to
+        # the shared event-log directory regardless of which service booted
+        # first. Pre-fix: bare mkdir used the process umask (typically 022 →
+        # mode 0o755) and locked out every other service. Helper applies
+        # explicit ``chmod 0o2775`` (setgid + group-write) after creation.
+        # See ``packages/events/_filesystem.py`` for the full rationale +
+        # POSIX setgid semantics docs.
+        ensure_shared_dir(base_dir)
         if not _FCNTL_AVAILABLE:
             logging.getLogger(__name__).warning(
                 "event_log_fcntl_unavailable",

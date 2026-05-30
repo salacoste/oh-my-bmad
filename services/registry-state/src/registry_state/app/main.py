@@ -41,7 +41,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from events import EventEnvelope
+from events import EventEnvelope, ensure_shared_dir
 from events.clock import Clock, SystemClock
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -153,8 +153,7 @@ def _ensure_db_parent_dir(db_url: str) -> None:
     The created dir is made setgid + group-writable (``2775``) — matching the
     ``Dockerfile.base`` data-root pattern — so the sibling ``omb``-group writers
     that share the tree (e.g. the migrator writing ``registry/events``) can write
-    under it regardless of their per-service uid. No-op for in-memory URLs and
-    when the parent already exists (e.g. the migrator/alembic created it first).
+    under it regardless of their per-service uid. No-op for in-memory URLs.
     """
     try:
         database = make_url(db_url).database
@@ -163,14 +162,17 @@ def _ensure_db_parent_dir(db_url: str) -> None:
     if not database or database == ":memory:":
         return
     parent = Path(database).parent
-    if parent.exists():
-        return
-    parent.mkdir(parents=True, exist_ok=True)
-    # umask (typically 022) strips the group-write bit from mkdir, so set the
-    # mode explicitly. Best-effort: a pre-existing dir we don't own would raise,
-    # but we only reach here when WE just created it.
-    with contextlib.suppress(OSError):
-        parent.chmod(0o2775)
+    # Story 11.3.8 / FR62a: delegate to the shared ``ensure_shared_dir``
+    # helper. Note we deliberately DO NOT short-circuit on ``parent.exists()``
+    # before this call: the helper is idempotent + best-effort, and an
+    # already-existing parent with the wrong mode (e.g. a sibling service
+    # in the ``omb`` group created it under umask 022 → 0o755 and lost the
+    # group-write triad) gets self-healed to 0o2775 on every boot. This is
+    # the same self-heal contract that closes the original Story 11.3.7-
+    # Task-7 regression one directory level down — Epic 11 retro L9
+    # mirror-identity canon: the helper's invariant is identical for
+    # registry/, registry/events/, and every future shared-volume path.
+    ensure_shared_dir(parent)
 
 
 async def run_subscriber(
