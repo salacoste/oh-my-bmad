@@ -98,6 +98,7 @@ async def signing_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None]:
         base_dir=events_dir,
         db_url=db_url,
         clock=clock,
+        create_idempotency_schema_on_start=True,
         signing_settings=signing_settings,
     )
 
@@ -127,6 +128,7 @@ async def unsigned_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None]:
         base_dir=events_dir,
         db_url=db_url,
         clock=clock,
+        create_idempotency_schema_on_start=True,
         signing_settings=signing_settings,
     )
 
@@ -466,6 +468,7 @@ class TestApprovalSignedAppendFailureNonFatal:
             base_dir=events_dir,
             db_url=db_url,
             clock=clock,
+            create_idempotency_schema_on_start=True,
             signing_settings=signing_settings,
         )
 

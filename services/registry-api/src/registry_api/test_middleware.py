@@ -81,7 +81,12 @@ async def app_client(
     await _seed_tables(db_url)
     events_dir = tmp_path / "events"
     clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
-    app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+    app = build_app(
+        base_dir=events_dir,
+        db_url=db_url,
+        clock=clock,
+        create_idempotency_schema_on_start=True,
+    )
 
     # Probe endpoint that echoes request.state fields for middleware assertions.
     #
@@ -215,7 +220,12 @@ class TestRequestIdMiddlewareStructlog:
         await _seed_tables(db_url)
         events_dir = tmp_path / "events"
         clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
-        app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+        app = build_app(
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=clock,
+            create_idempotency_schema_on_start=True,
+        )
 
         @app.get("/debug/boom")
         async def _boom(request: Request) -> JSONResponse:
@@ -411,6 +421,7 @@ async def constrained_client(
         base_dir=events_dir,
         db_url=db_url_str,
         clock=clock,
+        create_idempotency_schema_on_start=True,
         actor_kind="worker",
     )
 
@@ -501,6 +512,7 @@ class TestTierEnforcementMiddleware:
                 base_dir=events_dir,
                 db_url=db_url_str,
                 clock=clock,
+                create_idempotency_schema_on_start=True,
                 actor_kind="worker",
             )
             async with (
@@ -566,6 +578,7 @@ async def _denied_app_ctx(
             base_dir=events_dir,
             db_url=db_url_str,
             clock=clock,
+            create_idempotency_schema_on_start=True,
             actor_kind="worker",
         )
         async with (
@@ -874,7 +887,12 @@ class TestTraceIdMiddleware:
         await _seed_tables(db_url)
         events_dir = tmp_path / "events"
         clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
-        app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+        app = build_app(
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=clock,
+            create_idempotency_schema_on_start=True,
+        )
 
         @app.get("/debug/boom-trace")
         async def _boom(request: Request) -> JSONResponse:
@@ -963,7 +981,12 @@ class TestTraceIdMiddleware:
         await _seed_tables(db_url)
         events_dir = tmp_path / "events"
         clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
-        app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+        app = build_app(
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=clock,
+            create_idempotency_schema_on_start=True,
+        )
 
         sent = new_uuid7(clock=clock)
 
@@ -1190,7 +1213,12 @@ class TestTraceIdMiddleware:
         await _seed_tables(db_url)
         events_dir = tmp_path / "events"
         clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
-        app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+        app = build_app(
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=clock,
+            create_idempotency_schema_on_start=True,
+        )
 
         @app.get("/debug/vary-star")
         async def _vary_star(request: Request) -> JSONResponse:
@@ -1225,7 +1253,12 @@ class TestTraceIdMiddleware:
         await _seed_tables(db_url)
         events_dir = tmp_path / "events"
         clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
-        app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+        app = build_app(
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=clock,
+            create_idempotency_schema_on_start=True,
+        )
 
         @app.get("/debug/vary-lower")
         async def _vary_lower(request: Request) -> JSONResponse:
@@ -1326,7 +1359,12 @@ class TestTraceIdMiddlewareBypass:
         # middleware in reverse-registration order; the OUTERMOST (last
         # registered) is at index 0. ``TraceIdMiddleware`` is registered
         # last in ``build_app`` so we remove the entry whose ``cls`` is it.
-        app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+        app = build_app(
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=clock,
+            create_idempotency_schema_on_start=True,
+        )
         # mypy: ``mw.cls`` has type ``_MiddlewareFactory[P]`` (a Protocol),
         # which is not a subtype of ``type[TraceIdMiddleware]``, so identity
         # comparison via ``is`` raises a mypy comparison-overlap error.

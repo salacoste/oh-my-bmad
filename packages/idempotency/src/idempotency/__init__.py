@@ -7,7 +7,11 @@ integration.
 
 from __future__ import annotations
 
-from idempotency.cache import CacheHit, IdempotencyCacheStore
+from idempotency.cache import (
+    CacheHit,
+    IdempotencyCacheStore,
+    create_idempotency_schema,
+)
 from idempotency.errors import IdempotencyConflict
 
 __version__ = "0.2.0"
@@ -17,4 +21,5 @@ __all__ = [
     "IdempotencyCacheStore",
     "IdempotencyConflict",
     "__version__",
+    "create_idempotency_schema",
 ]

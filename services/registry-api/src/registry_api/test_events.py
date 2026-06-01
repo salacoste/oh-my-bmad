@@ -526,7 +526,12 @@ class TestPostTasksTraceIdJsonl:
         await engine.dispose()
         events_dir = tmp_path / "events"
         clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
-        app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+        app = build_app(
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=clock,
+            create_idempotency_schema_on_start=True,
+        )
 
         sent_trace = _new_uuid7(clock=clock)
 
@@ -576,7 +581,12 @@ class TestPostTasksTraceIdJsonl:
         await engine.dispose()
         events_dir = tmp_path / "events"
         clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
-        app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+        app = build_app(
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=clock,
+            create_idempotency_schema_on_start=True,
+        )
 
         sent_trace = "tg:42"
 

@@ -132,6 +132,17 @@ services:
       # log (fcntl-serialized, Story 11.2.3) + its own idempotency_cache table.
       REGISTRY_API_LOG_DIR: ${REGISTRY_API_LOG_DIR:-/var/lib/oh-my-bmad/registry/events}
       REGISTRY_API_DB_URL: ${REGISTRY_API_DB_URL:-sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3}
+      # Story 11.3.12 — the writable idempotency cache lives in its OWN SQLite
+      # file so registry-api (uid 10001) is its sole writer and registry-state
+      # (uid 10002) is the sole writer of state.sqlite3. This closes the
+      # cross-uid WAL crash-loop: previously registry-api's writable cache
+      # engine created state.sqlite3-wal/-shm owned by 10001 at 0o644, locking
+      # registry-state out of its own DB (OperationalError: readonly database).
+      REGISTRY_API_IDEMPOTENCY_DB_URL: ${REGISTRY_API_IDEMPOTENCY_DB_URL:-sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/idempotency.sqlite3}
+      # Self-contained ROOT compose has no migrator step for the idempotency
+      # file, so registry-api create_all's its own idempotency_cache table on
+      # start (mirrors REGISTRY_STATE_AUTO_CREATE_SCHEMA; default OFF in prod).
+      REGISTRY_API_AUTO_CREATE_IDEMPOTENCY_SCHEMA: ${REGISTRY_API_AUTO_CREATE_IDEMPOTENCY_SCHEMA:-1}
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]

@@ -87,7 +87,12 @@ async def app_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None]:
     await _seed_tables_with_tasks(db_url)
     events_dir = tmp_path / "events"
     clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
-    app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+    app = build_app(
+        base_dir=events_dir,
+        db_url=db_url,
+        clock=clock,
+        create_idempotency_schema_on_start=True,
+    )
 
     async with (
         LifespanManager(app) as manager,
@@ -353,7 +358,12 @@ async def flagged_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, None]:
 
     events_dir = tmp_path / "events"
     clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
-    app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+    app = build_app(
+        base_dir=events_dir,
+        db_url=db_url,
+        clock=clock,
+        create_idempotency_schema_on_start=True,
+    )
 
     async with (
         LifespanManager(app) as manager,
@@ -515,7 +525,12 @@ async def budget_blocked_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, N
 
     events_dir = tmp_path / "events"
     clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
-    app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+    app = build_app(
+        base_dir=events_dir,
+        db_url=db_url,
+        clock=clock,
+        create_idempotency_schema_on_start=True,
+    )
 
     async with (
         LifespanManager(app) as manager,
@@ -687,7 +702,12 @@ async def dual_blocked_client(tmp_path: Path) -> AsyncGenerator[AsyncClient, Non
 
     events_dir = tmp_path / "events"
     clock = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
-    app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+    app = build_app(
+        base_dir=events_dir,
+        db_url=db_url,
+        clock=clock,
+        create_idempotency_schema_on_start=True,
+    )
 
     async with (
         LifespanManager(app) as manager,
