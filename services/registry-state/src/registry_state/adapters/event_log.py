@@ -53,9 +53,15 @@ working on the previous day's file.
 single writer process, an asyncio.Lock guards against the edge case where
 multiple coroutines in the same process race (e.g., during a hot-reload).
 
-**File mode 0o640** — audit logs contain task contents + approval trails.
-Files are created group-readable (not world-readable) to limit accidental
-exposure on shared systems.
+**File mode 0o660** (Story 11.3.11) — audit logs contain task contents +
+approval trails, so files are created group-read/WRITE but NEVER
+world-readable.  Group-write (the upgrade from the original 0o640) lets
+any service in the shared ``omb`` group append to / recover the day's file
+regardless of which uid created it first — the file-level sibling of Story
+11.3.8's 0o2775 DIRECTORY fix.  Because ``os.open``'s mode is masked by the
+process umask (022 strips group-write back to 0o640), the writer follows
+its ``os.open`` with an explicit ``os.fchmod(fd, 0o660)``.  The others-triad
+stays ``0`` — the non-world-readable audit invariant is preserved.
 """
 
 from __future__ import annotations
@@ -162,6 +168,34 @@ async def recover_all_logs(base_dir: Path) -> int:
         except FileNotFoundError:
             # TOCTOU: file disappeared between glob and open.  Skip.
             continue
+        except PermissionError:
+            # Story 11.3.11 (AC3) — a day-file owned by a DIFFERENT omb-uid
+            # and still 0o640 (pre-11.3.11 / external tool) cannot be opened
+            # r+b for recovery, and the AC2 self-heal chmod also failed
+            # (we don't own it).  This used to crash-loop the whole subscriber
+            # (PermissionError → lifespan dies → restart → repeat, 15→20+
+            # restarts observed in Story 11.3.10 AC5).  Convert it into a
+            # single clear, actionable log line and SKIP this file so the
+            # rest of recovery (and the subscriber) proceeds.  The file's
+            # producer will continue appending to it via its own writer; only
+            # this recoverer's trailing-partial-line trim is skipped, which is
+            # best-effort cleanup anyway (see this function's docstring).
+            with contextlib.suppress(OSError):
+                st = path.stat()
+                _log.error(
+                    "event_log_recovery_permission_denied",
+                    extra={
+                        "path": str(path),
+                        "file_uid": st.st_uid,
+                        "file_gid": st.st_gid,
+                        "file_mode": oct(st.st_mode & 0o7777),
+                        "remediation": (
+                            "chmod 0o660 the file (or ensure its creator runs "
+                            "post-Story-11.3.11 so it is created group-writable)"
+                        ),
+                    },
+                )
+            continue
     return total
 
 
@@ -185,6 +219,17 @@ def _recover_file(path: Path) -> int:
     size = path.stat().st_size
     if size == 0:
         return 0
+
+    # Story 11.3.11 (AC2) — self-heal a stale-mode file before the r+b open.
+    # A file created by a pre-11.3.11 writer (or any other tool) may still be
+    # 0o640 (no group-write), which makes the read-WRITE ``r+b`` open below
+    # fail with PermissionError for a cross-uid recoverer.  Best-effort chmod
+    # to 0o660 fixes it IF we own the file; if it is owned by a different uid
+    # the chmod fails (suppressed) and the open below raises PermissionError,
+    # which ``recover_all_logs`` turns into a clear non-fatal diagnostic (AC3)
+    # rather than a crash-loop.  others-triad stays 0 (non-world-readable).
+    with contextlib.suppress(OSError):
+        os.chmod(path, 0o660)
 
     trimmed = 0
     truncated = False
@@ -509,9 +554,23 @@ class EventLogWriter:
             return
         path = current_day_path(self._base_dir, now)
         # Open the new fd FIRST.  If this raises, the old fd stays valid and
-        # the writer keeps working on the previous day's file.  File mode is
-        # 0o640 (group-readable) — audit logs should not be world-readable.
-        new_fd = os.open(str(path), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o640)
+        # the writer keeps working on the previous day's file.
+        #
+        # Story 11.3.11 (FR62a) — file mode 0o660 (rw-rw----): owner+group
+        # read/write, NEVER world-readable (audit logs contain task contents +
+        # approval trails).  Group-WRITE is required so a DIFFERENT omb-group
+        # service uid (e.g. worker-wrapper 10005) that created the day's file
+        # first does not lock out a later cross-uid append/recover by
+        # registry-state (10002) — the file-level sibling of Story 11.3.8's
+        # 0o2775 DIRECTORY fix.  os.open's mode is masked by the process umask
+        # (typically 022 → strips group-write back to 0o640), so an explicit
+        # fchmod on the just-opened fd is required to defeat umask — the
+        # fd-native analog of ensure_shared_dir's chmod.  Best-effort: a
+        # pre-existing file we don't own must not crash the writer (the
+        # O_APPEND open already gave us a usable fd).
+        new_fd = os.open(str(path), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o660)
+        with contextlib.suppress(OSError):
+            os.fchmod(new_fd, 0o660)
         old_fd = self._fd
         self._fd = new_fd
         self._current_date = today
