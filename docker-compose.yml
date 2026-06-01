@@ -30,6 +30,35 @@ x-healthcheck: &healthcheck
   retries: 12
   start_period: 10s
 
+# Story 11.3.10 (H7f deep-fix) — healthcheck anchor for the two MCP-spawner
+# services (orchestrator-adapter + worker-wrapper). Same `/tmp/ready` file
+# convention as `*healthcheck`, but a MUCH larger `start_period`.
+#
+# Why: both spawners init 3 MCP subprocesses SEQUENTIALLY at startup, each
+# capped by `_INIT_TIMEOUT = 30.0` in their respective `adapters/mcp_clients.py`
+# (orchestrator-adapter line 19 / worker-wrapper line 16). The legitimate
+# worst-case init ceiling is therefore 3 × 30s = 90s BEFORE the service can
+# touch `/tmp/ready`. The shared `*healthcheck` window above is only
+# start_period(10s) + retries(12) × interval(5s) ≈ 70s — SHORTER than the
+# code's own worst-case init time. On a slow host (macOS Docker Desktop's
+# subprocess spawn) the 70s window expires mid-init → Docker marks the
+# container `unhealthy` while it is still legitimately starting; with
+# `restart: unless-stopped` it then oscillates starting→unhealthy→restart
+# and never latches `healthy` (the Story 11.3.7 Task-7 "5/7 healthy →
+# TimeoutError after 180s" flake).
+#
+# `start_period` is the correct Docker primitive here: failing probes during
+# it do NOT count toward `retries`, so a single slow-but-successful init gets
+# the full 100s to finish and write `/tmp/ready`. 100s = 90s ceiling + 10s
+# headroom. Scoped to ONLY these two services so the other five (which init
+# fast) keep the tighter shared `*healthcheck`.
+x-healthcheck-mcp: &healthcheck_mcp
+  test: ["CMD", "test", "-f", "/tmp/ready"]
+  interval: 5s
+  timeout: 3s
+  retries: 12
+  start_period: 100s
+
 # Story 11.3.6 (H7d) — HTTP-server healthcheck anchor. Use for any service that
 # is a uvicorn/FastAPI server bound to :8080 instead of the `/tmp/ready` file
 # convention (which only the tail-loop services follow). Wrapped in try/except
@@ -200,7 +229,11 @@ services:
         condition: service_healthy
     volumes:
       - oh-my-bmad-data:/var/lib/oh-my-bmad
-    healthcheck: *healthcheck
+    # Story 11.3.10 (H7f deep-fix): *healthcheck_mcp (start_period 100s) not
+    # the shared *healthcheck (~70s). 3 sequential MCP inits at
+    # _INIT_TIMEOUT=30s = 90s worst-case ceiling > the 70s shared window →
+    # the Story 11.3.7 Task-7 "5/7 healthy → TimeoutError" restart-oscillation.
+    healthcheck: *healthcheck_mcp
 
   worker-wrapper:
     container_name: omb-worker-wrapper
@@ -241,7 +274,11 @@ services:
         condition: service_healthy
     volumes:
       - oh-my-bmad-data:/var/lib/oh-my-bmad
-    healthcheck: *healthcheck
+    # Story 11.3.10 (H7f deep-fix): *healthcheck_mcp (start_period 100s) not
+    # the shared *healthcheck (~70s). worker-wrapper mirrors the orchestrator's
+    # 3-sequential-MCP-init = 90s worst-case ceiling > 70s shared window →
+    # the same restart-oscillation Story 11.3.7 Task-7 observed.
+    healthcheck: *healthcheck_mcp
 
   clawhip-daemon:
     container_name: omb-clawhip-daemon
