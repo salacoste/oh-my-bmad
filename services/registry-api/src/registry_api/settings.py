@@ -142,4 +142,65 @@ class ApprovalSigningSettings(BaseSettings):
         return cls()
 
 
-__all__ = ["ApprovalSigningSettings"]
+class HealthProbeSettings(BaseSettings):
+    """Settings for the GET /v1/health probes (Story 11.3.9 / FR17 / NFR-R8).
+
+    Story 11.3.9 committed (AC2/AC3 + Dev Notes) to making the worker
+    look-back window and the queue-depth look-back operator-tunable via
+    env vars, wired through the same pydantic-settings pattern as
+    :class:`ApprovalSigningSettings` rather than direct ``os.environ``
+    reads (the codebase's NO-`os.environ.copy()` discipline).
+
+    Both windows are bounded:
+
+    * ``worker_window_s`` ∈ [5, 3600] — narrower than 5s flips between
+      "ok"/"idle" on heartbeat jitter; wider than 1h makes "ok"
+      meaningless. Default 60 (matches
+      ``health_probes.WORKER_WINDOW_S_DEFAULT``).
+    * ``queue_lookback_s`` ∈ [5, 86400] — covers worker-pickup latency;
+      pending tasks older than this are "stuck" (a different alert).
+      Default 300 (matches ``health_probes.QUEUE_LOOKBACK_S_DEFAULT``).
+
+    Out-of-range env values raise at construction time (fail-fast at
+    startup, not silently clamped — an operator who typo'd 36000 for
+    3600 should hear about it, not get a silently-different window).
+    """
+
+    model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
+        extra="ignore",
+        populate_by_name=True,
+    )
+
+    worker_window_s: int = Field(
+        default=60,
+        ge=5,
+        le=3600,
+        validation_alias="OMB_HEALTH_WORKER_WINDOW_S",
+        description=(
+            "Look-back window (seconds) for the worker-activity health probe "
+            "(AC2). A worker event within this window → worker_status='ok'; "
+            "none → 'idle'. Default 60."
+        ),
+    )
+    queue_lookback_s: int = Field(
+        default=300,
+        ge=5,
+        le=86_400,
+        validation_alias="OMB_HEALTH_QUEUE_LOOKBACK_S",
+        description=(
+            "Look-back window (seconds) for the queue-depth health probe "
+            "(AC3). Pending tasks created within this window are counted; "
+            "older ones are treated as stuck (out of scope). Default 300."
+        ),
+    )
+
+    @classmethod
+    def from_env(cls) -> HealthProbeSettings:
+        """Construct from the process environment.
+
+        Single greppable entry point — matches :meth:`ApprovalSigningSettings.from_env`.
+        """
+        return cls()
+
+
+__all__ = ["ApprovalSigningSettings", "HealthProbeSettings"]

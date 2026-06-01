@@ -97,7 +97,7 @@ from registry_api.routes.tasks import (
 from registry_api.routes.trace import (
     router as trace_router,
 )
-from registry_api.settings import ApprovalSigningSettings
+from registry_api.settings import ApprovalSigningSettings, HealthProbeSettings
 
 # Idempotency-cache TTL — 7 days per FR28 (Architecture line 205). The cache is
 # created by the registry-state schema (``IdempotencyCache`` ORM model) and
@@ -125,6 +125,7 @@ def build_app(
     clock: Clock,
     actor_kind: ActorKind = "operator",
     signing_settings: ApprovalSigningSettings | None = None,
+    health_probe_settings: HealthProbeSettings | None = None,
 ) -> FastAPI:
     """Build and return the wired-up FastAPI application.
 
@@ -148,6 +149,12 @@ def build_app(
                   to avoid env-var coupling. Hot-reload is NOT supported —
                   the key is read once here and survives until process
                   restart (Story 11.5 will add rotation).
+        health_probe_settings: Optional :class:`HealthProbeSettings` carrying
+                  the /v1/health probe windows (Story 11.3.9 / FR17). When
+                  ``None``, the factory constructs one via ``.from_env()``
+                  (reads ``OMB_HEALTH_WORKER_WINDOW_S`` /
+                  ``OMB_HEALTH_QUEUE_LOOKBACK_S``). Tests inject explicit
+                  instances to avoid env-var coupling.
 
     Returns:
         Fully configured ``FastAPI`` instance ready for ``uvicorn.run``.
@@ -249,6 +256,18 @@ def build_app(
                 else ApprovalSigningSettings.from_env()
             )
             app.state.signing_settings = resolved_signing
+
+            # Story 11.3.9 (FR17 / NFR-R8): load /v1/health probe-window
+            # settings (OMB_HEALTH_WORKER_WINDOW_S / OMB_HEALTH_QUEUE_LOOKBACK_S).
+            # Same inject-or-from-env pattern as signing settings above;
+            # routes/health.py reads app.state.health_probe_settings (falls
+            # back to module defaults if absent, e.g. standalone test mounts).
+            resolved_health_probes = (
+                health_probe_settings
+                if health_probe_settings is not None
+                else HealthProbeSettings.from_env()
+            )
+            app.state.health_probe_settings = resolved_health_probes
 
             # Writer last — F13 note: EventLogWriter.__init__ calls
             # base_dir.mkdir(parents=True, exist_ok=True) so a non-existent
