@@ -228,6 +228,15 @@ deferred to this story).
         sit inside the headroom, not just the 90s `_connect` ceiling.
 - [ ] **Task 8 — Nightly green** (AC8): ⏸ DEFERRED to user authorisation.
 
+### Review Findings (3-lane: Blind + Edge + Acceptance, 2026-06-01)
+
+- [x] [Review][Patch] Shared 100s budget yokes 2 services whose init profiles could diverge [docker-compose.yml:~55] — APPLIED: added a SHARED-BUDGET CAVEAT comment to the `x-healthcheck-mcp` anchor (re-evaluate / split if either spawner's `_INIT_TIMEOUT`, server count, or liveness-probe latency changes).
+- [x] [Review][Defer] Unbounded `verify_connectivity()` `list_tools()` probes + un-timed `stdio_client` subprocess spawn mean `start_period` mitigates but does not CLOSE the hung-init class [mcp_clients.py:~162 orch / ~167 worker; main.py ready-touch path] — deferred: closure requires an `asyncio.wait_for` around the liveness probes in the **a0ca050 P0 file** `mcp_clients.py`, which is AC3-gated (needs AC1 Linux nightly evidence + AI-1 3-lane review). The compose comment + the new caveat both disclose this honestly; the start_period bump is a real, proven mitigation for the slow-but-successful path, not a claim of full closure.
+- [x] [Review][Defer] Stale `/tmp/ready` could shortcut a restarted spawner to healthy-at-t=0 if `/tmp` is not wiped on restart [docker-compose.yml — no tmpfs for /tmp] — deferred, pre-existing: applies to ALL `/tmp/ready` services (registry-state, clawhip-daemon, worker-wrapper), not introduced by this diff. Track as a separate hardening item if it ever reproduces.
+- [x] [Review][Dismiss] "start_period needs Docker ≥25" (Blind #4) — FALSE: `start_period` has suppressed failure-counting since Docker 17.05 (2017); the v25 change was only the `start_interval` probe cadence, irrelevant here.
+- [x] [Review][Dismiss] YAML merge-key override correctness (Blind #5) — CONFIRMED CORRECT by all 3 lanes; `<<: *healthcheck` + scalar `start_period` override resolves cleanly (verified via `yaml.safe_load` + `docker compose config`).
+- [ ] [Review][Acceptance-BLOCKER] Story CANNOT be marked `done` — AC1 (nightly evidence, "gathered FIRST, gates the fix choice") + AC8 (nightly green, the tail's headline acceptance) are unrun, AND AC5 did NOT reach 7/7 (it surfaced the registry-state 0o640 crash-loop). The DoD's "ROOT compose comes up fully green" is not demonstrated. Status stays `in-progress`; close-out blocked on (a) user push-auth for the nightly and (b) the 0o640 fix (proposed Story 11.3.11). Honestly represented across Status header + checkboxes + sprint-status — NOT swallowed.
+
 ## Dev Notes
 
 ### Source map (file:line guardrails)

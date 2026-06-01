@@ -61,6 +61,19 @@ x-healthcheck: &healthcheck
 # retries in lock-step with the shared anchor — if those are ever tuned on
 # `*healthcheck`, this inherits the change automatically (only `start_period`
 # is intentionally divergent). [code-review L1]
+#
+# SHARED-BUDGET CAVEAT [3-lane review]: both spawners currently share the
+# SAME init profile (`_INIT_TIMEOUT = 30.0` × 3 sequential MCP servers = 90s),
+# so one 100s budget fits both. If EITHER service later changes its
+# `_INIT_TIMEOUT`, adds/removes an MCP server, or its post-init
+# `verify_connectivity()` `list_tools()` probes (currently NOT
+# `wait_for`-bounded) start taking non-trivial time, this shared budget must
+# be re-evaluated — or split into per-service anchors. `start_period` only
+# suppresses failure-COUNTING during the window; it does NOT cap how long
+# init may take, so a genuinely-hung subprocess would sit in `starting`
+# indefinitely regardless of this value. The real closure for that class is a
+# `wait_for` around the liveness probes in `mcp_clients.py` — deferred to the
+# AC3-gated P0 path (needs AC1 Linux nightly evidence + AI-1 3-lane review).
 x-healthcheck-mcp: &healthcheck_mcp
   <<: *healthcheck
   start_period: 100s
