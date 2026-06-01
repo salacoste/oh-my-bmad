@@ -397,10 +397,55 @@ claude-opus-4-8 (1M context) — direct execution under the established
   - **AC1 (nightly s3-separability evidence)** — needs push +
     `gh workflow run nightly.yml`. NOT executed; awaiting user push auth
     (mirrors Story 11.3.7 AC8 deferral pattern).
-  - **AC5 (macOS Docker repro, 7/7 healthy)** — `docker info` returns
-    NO_DOCKER / daemon 500. Cannot boot the ROOT compose to prove the
-    before/after. Re-run once Docker Desktop is back up.
   - **AC8 (nightly green close-out)** — same gate as AC1.
+
+- **AC5 (macOS Docker repro) — RAN once Docker came back up. AC2 FIX PROVEN:**
+  Boot of the ROOT compose (fresh volume, hermetic env) showed BOTH MCP
+  spawners reach `ready` + `healthy` under the new 100s start_period:
+  - `orchestrator-adapter` — all 3 MCP servers connected (`connectivity_check:
+    {task-registry: true, session-registry: true, clawhip-bridge: true}`),
+    `orchestrator_adapter_ready` at `2026-06-01T01:46:00.594Z`,
+    `adapter_loop_started` — then `healthy`.
+  - `worker-wrapper` — `event: "ready"` at `2026-06-01T01:46:01.796Z` — then
+    `healthy`.
+  - Init took ~95s wall (3 servers × ~10s connect + handshake). The OLD 70s
+    shared-`*healthcheck` window would have marked them unhealthy mid-init;
+    the new 100s `*healthcheck_mcp` budget let them latch. **This is the
+    direct before/after proof the H7f budget fix works.** (Note: an earlier
+    `TimeoutError` appears in the orch log from a PRIOR restart attempt
+    during image-pull contention; the subsequent attempt succeeded cleanly
+    — exactly the slow-but-successful path the fix is designed to tolerate.)
+
+- **NEW BUG DISCOVERED during AC5 (out of scope for 11.3.10 — needs its own
+  story, the file-level analog of Story 11.3.8):** with the spawners now
+  reaching ready, the stack got far enough to exercise multi-uid event-log
+  WRITES, and `registry-state` entered a persistent crash-loop (observed
+  15→20 restarts, climbing) on:
+  `PermissionError: [Errno 13] Permission denied: '/var/lib/oh-my-bmad/registry/events/2026-06-01.jsonl'`
+  at `event_log.py:191` (`recover_all_logs` → `_recover_file` opens the
+  JSONL `r+b`). Filesystem evidence captured live:
+  - `events/` DIR = `drwxrwsr-x` (2775) owned `10008:omb` — Story 11.3.8's
+    dir fix IS in effect (group-write + setgid present).
+  - The JSONL FILE = `-rw-r-----` (**0o640**) owned **10005 (worker-wrapper)**.
+    registry-state (uid 10002, same `omb` group) can READ but NOT WRITE it,
+    so the `r+b` recovery open fails.
+  - Root cause: `event_log.py:513-514` creates files
+    `os.open(..., O_WRONLY|O_APPEND|O_CREAT, 0o640)` — deliberately
+    not-world-readable (audit logs) but ALSO lacking GROUP-WRITE. Whichever
+    `omb`-uid creates the day's file first owns it 0o640; a different
+    `omb`-uid that later needs to append/recover is locked out. This is the
+    **file-level** sibling of Story 11.3.8 (which fixed the DIRECTORY to
+    2775 but left file mode at 0o640). It was LATENT behind 11.3.8's dir bug
+    and behind this story's MCP-init flake — only now that the stack reaches
+    multi-uid event-log writes does it surface.
+  - **NOT caused by this story's diff** (docker-compose healthcheck timing
+    only; file mode is set by `os.open` in `event_log.py`, untouched here).
+  - **Recommended:** file a Story 11.3.11 "event-log FILE mode 0o660 (group-
+    write) for cross-uid omb append/recovery" — mode `0o660` (rw-rw----)
+    keeps audit logs non-world-readable while allowing same-group append.
+    Security-adjacent (audit-log perms) → default-review at minimum; do NOT
+    widen to world-readable. This is exactly the kind of P0-adjacent perms
+    change that warrants the diff-audit discipline.
 
 ### Completion Notes List
 
