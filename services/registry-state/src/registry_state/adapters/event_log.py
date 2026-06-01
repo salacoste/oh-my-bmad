@@ -569,7 +569,12 @@ class EventLogWriter:
         # pre-existing file we don't own must not crash the writer (the
         # O_APPEND open already gave us a usable fd).
         new_fd = os.open(str(path), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o660)
-        with contextlib.suppress(OSError):
+        # AttributeError guard (code-review L1): os.fchmod is absent on Windows
+        # (raises AttributeError, which suppress(OSError) would NOT catch).
+        # Windows is an unsupported runtime (see module docstring) but the
+        # writer must still degrade cleanly rather than poison itself on the
+        # first rollover.  POSIX hosts (the deploy target) are unaffected.
+        with contextlib.suppress(OSError, AttributeError):
             os.fchmod(new_fd, 0o660)
         old_fd = self._fd
         self._fd = new_fd

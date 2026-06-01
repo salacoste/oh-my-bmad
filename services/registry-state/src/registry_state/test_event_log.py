@@ -1003,3 +1003,45 @@ class TestFileMode:
         assert path.stat().st_mode & 0o777 == 0o660, (
             f"recovery should self-heal mode to 0o660; got {oct(path.stat().st_mode & 0o777)}"
         )
+
+    @pytest.mark.asyncio
+    async def test_recovery_skips_and_continues_on_cross_uid_permission_denied(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC3 (code-review L2): a PermissionError from _recover_file does NOT
+        crash-loop the subscriber — recover_all_logs logs + skips + continues.
+
+        Simulates the genuinely-cross-uid unrecoverable case (file owned by a
+        DIFFERENT omb-uid, still 0o640, AC2 chmod suppressed → r+b open
+        raises PermissionError) WITHOUT needing a second uid: monkeypatch
+        ``_recover_file`` to raise PermissionError for one of two day-files.
+        The OTHER file must still be recovered, and the call must RETURN
+        (not propagate) — proving the skip-and-continue that prevents the
+        Story 11.3.10-AC5 crash-loop.
+        """
+        from registry_state.adapters import event_log as _evt
+
+        # Two day-files; one will "fail" recovery, the other succeeds.
+        good = tmp_path / "2026-06-01.jsonl"
+        bad = tmp_path / "2026-06-02.jsonl"
+        good.write_bytes(b'{"ok": true}\n{"partial": ')  # partial tail → trimmable
+        bad.write_bytes(b'{"x": 1}\n')
+
+        real_recover = _evt._recover_file
+
+        def _fake_recover(path: Path) -> int:
+            if path.name == bad.name:
+                raise PermissionError(13, "Permission denied", str(path))
+            return real_recover(path)
+
+        monkeypatch.setattr(_evt, "_recover_file", _fake_recover)
+
+        # MUST NOT raise — the PermissionError on `bad` is logged + skipped.
+        total = await _evt.recover_all_logs(tmp_path)
+
+        # `good` was still recovered (its partial tail trimmed → >0 bytes),
+        # proving iteration continued past the failed file.
+        assert total > 0, (
+            "recover_all_logs must skip the PermissionError file and STILL "
+            "recover the good one (skip-and-continue, not crash) — AC3"
+        )

@@ -395,7 +395,18 @@ advancing the Epic-11.3 tail.
   for omb services, and/or (B) split registry-api's writable
   idempotency-cache engine onto its own sqlite file (the already-
   documented app.py:179-191 "M8 follow-up"). Do NOT point-fix a 4th file.
-- **AC9 (code review)** — pending.
+- **AC9 ✓** code review (default effort, opus code-reviewer): APPROVE,
+  0 CRITICAL/HIGH, 2 LOW — both applied. The world-readable security
+  invariant was confirmed INTACT (all 3 sites 0o660, others-triad 0;
+  the AC3 skip does NOT mask corruption — the consumer log_reader.py
+  opens read-only and tolerates partial tails). L1: added `AttributeError`
+  to the fchmod `suppress` (os.fchmod is absent on Windows → would raise
+  AttributeError that suppress(OSError) misses). L2: added a hermetic unit
+  test `test_recovery_skips_and_continues_on_cross_uid_permission_denied`
+  (monkeypatches `_recover_file` to raise PermissionError on one of two
+  files; asserts recover_all_logs skips it + still recovers the other +
+  returns rather than crash-looping) — the AC3 path was previously only
+  covered by the Docker-gated integration test.
 
 ### File List
 
