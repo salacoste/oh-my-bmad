@@ -40,7 +40,7 @@ from sqlalchemy.pool import StaticPool
 import registry_state.domain.event_types  # noqa: F401 — side-effect: register() calls
 from registry_state.adapters.event_log import EventLogWriter
 from registry_state.adapters.sqlite_store import get_session
-from registry_state.app.main import run_subscriber
+from registry_state.app.main import _ensure_db_file_group_writable, run_subscriber
 from registry_state.schema import Base
 
 # ---------------------------------------------------------------------------
@@ -944,3 +944,43 @@ async def test_synthetic_1k_replay_under_500ms(tmp_path: Path) -> None:
     assert elapsed_ms < 500, f"NFR-P3 (1K) breach: {elapsed_ms:.1f}ms (budget 500ms)"
 
     # EventEnvelope.create() validates the dict and converts it to the registered
+
+
+# ---------------------------------------------------------------------------
+# Story 11.3.12 — state.sqlite3 0o660 so WAL/SHM sidecars inherit group-write
+# ---------------------------------------------------------------------------
+
+
+class TestEnsureDbFileGroupWritable:
+    """The DB file is chmod'd 0o660 so its WAL/SHM sidecars are group-writable.
+
+    Closes the cross-uid WAL crash-loop: a read-only consumer (registry-api,
+    uid 10001) opening registry-state's WAL-mode state.sqlite3 creates the
+    -wal/-shm sidecars; SQLite gives them the MAIN db file's mode. By making
+    the main file 0o660 the sidecars inherit group-write (omb group) while
+    staying non-world-readable (others-triad 0 — audit invariant preserved).
+    WAL-preserving: no journal-mode change.
+    """
+
+    @pytest.mark.skipif(
+        __import__("sys").platform == "win32",
+        reason="POSIX mode bits ignored on Windows",
+    )
+    def test_chmods_existing_db_file_to_0o660(self, tmp_path: Path) -> None:
+        import os
+
+        db = tmp_path / "state.sqlite3"
+        db.write_bytes(b"")  # the engine/create_all would have made this
+        os.chmod(db, 0o640)  # simulate the umask-022 default (the bug)
+        assert db.stat().st_mode & 0o777 == 0o640
+
+        _ensure_db_file_group_writable(f"sqlite+aiosqlite:///{db}")
+
+        mode = db.stat().st_mode & 0o777
+        assert mode == 0o660, f"expected 0o660 (group-rw, non-world); got {oct(mode)}"
+        assert mode & 0o007 == 0, "others-triad must stay 0 (non-world-readable)"
+
+    def test_noop_for_memory_url(self) -> None:
+        # Must not raise on in-memory / malformed URLs.
+        _ensure_db_file_group_writable("sqlite+aiosqlite:///:memory:")
+        _ensure_db_file_group_writable("not a url at all")
