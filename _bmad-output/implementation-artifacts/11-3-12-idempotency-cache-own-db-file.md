@@ -1,6 +1,6 @@
 # Story 11.3.12 — split registry-api's writable idempotency-cache onto its own SQLite file (M8 follow-up) so registry-state is the sole `state.sqlite3` writer
 
-Status: in-progress (AC1-5/7 done & green — idempotency split correct + committed; AC6/8/9 BLOCKED on a WAL-reader architecture decision: any reader of a WAL-mode SQLite DB creates cross-uid -wal/-shm sidecars — see Dev Agent Record + memory)
+Status: in-progress (AC1-8 done & PROVEN 7/7 GREEN on live stack; AC9 code-review pending) — the WAL-reader fork was resolved with a WAL-preserving main-db-file chmod 0o660 so sidecars inherit group-write
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -356,10 +356,24 @@ claude-opus-4-8 (1M context) — /loop autonomous execution per BMad workflow.
   (idempotency pkg owns the Core `_meta`); migrator unchanged →
   `idempotency_cache` is an orphaned-empty table in `state.sqlite3`
   (lower-risk than a destructive migration).
-- **AC6 (integration test), AC8 (7/7 repro), AC9 (review)** — BLOCKED on
-  the WAL-reader architecture decision above. The 7/7-green DoD cannot be
-  met by this story alone; it removed the WRITE contention but the
-  READ-path WAL-sidecar creation is a separate, deeper layer.
+- **WAL-reader fork RESOLVED (WAL-preserving):** rather than the rejected
+  options (umask 002 = world-readable; skip-WAL-pragma = insufficient,
+  proven by test; journal_mode=DELETE = crash-recovery risk), the fix is a
+  main-db-file chmod. Empirically verified: SQLite creates -wal/-shm
+  inheriting the MAIN db file's mode. So registry-state chmods its own
+  state.sqlite3 to 0o660 after engine+create_all
+  (`_ensure_db_file_group_writable`, app/main.py); sidecars then inherit
+  group-write (others 0 — audit invariant kept) regardless of which
+  omb-uid creates them. No journal-mode change → crash-injection nightly
+  unaffected. (commit 1727c89)
+- **AC8 ✓ PROVEN 7/7 GREEN** (live Docker repro): all 7 healthy,
+  registry-state restart count 0 (was 13); state.sqlite3 + -wal/-shm all
+  -rw-rw---- (group-write, others 0) even when a sidecar is created by a
+  different omb uid (10004); POST /v1/tasks → 201; idempotency.sqlite3 is
+  its own file owned by registry-api (10001). The Epic-11.3 fresh-deploy-
+  green tail is functionally COMPLETE.
+- **AC6 (integration test)** — added `test_state_sqlite_wal_cross_uid.py`
+  (asserts 7/7 + sidecar modes). **AC9 (review)** — pending.
 
 ### File List
 
