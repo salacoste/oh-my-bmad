@@ -1,6 +1,6 @@
 # Story 11.3.12 — split registry-api's writable idempotency-cache onto its own SQLite file (M8 follow-up) so registry-state is the sole `state.sqlite3` writer
 
-Status: ready-for-dev
+Status: in-progress (AC1-5/7 done & green — idempotency split correct + committed; AC6/8/9 BLOCKED on a WAL-reader architecture decision: any reader of a WAL-mode SQLite DB creates cross-uid -wal/-shm sidecars — see Dev Agent Record + memory)
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -315,11 +315,62 @@ unblocks:
 
 ### Agent Model Used
 
+claude-opus-4-8 (1M context) — /loop autonomous execution per BMad workflow.
+
 ### Debug Log References
+
+- **AC1-AC5 + AC7 (code + unit tests) DONE & green** (committed 7749a16):
+  ruff/format clean, mypy 242=baseline (0 new), discipline 0,
+  registry-api + idempotency **284 passed / 0 failed**. The idempotency
+  split is correct: `TestIdempotencyCacheSeparateFile` proves cache rows
+  land in `idempotency.sqlite3` and `state.sqlite3` has ZERO cache rows;
+  the schema-drift parity test still passes; all 27 build_app test sites
+  pass `create_idempotency_schema_on_start=True`.
+- **AC8 (Docker repro) — the split is NECESSARY but NOT SUFFICIENT.**
+  Rebuilt base (verified the split is in the image) → boot → registry-state
+  STILL crash-loops (13 restarts, 6/7) on the SAME
+  `sqlite3.OperationalError: attempt to write a readonly database`
+  (materializer.py:298). Live FS: `state.sqlite3-wal` is STILL owned by
+  registry-api (uid 10001), even though its WRITABLE engine now targets
+  the separate file.
+- **Deeper root cause found (architecture fork — NOT auto-decided):**
+  `sqlite_store.create_engine` runs `PRAGMA journal_mode=WAL` on EVERY
+  connection incl. read-only (sqlite_store.py:87). More fundamentally, a
+  test I wrote (`test_read_only_engine_does_not_create_wal_sidecars`)
+  PROVED that **any reader of a WAL-mode SQLite DB intrinsically creates
+  the -wal/-shm sidecars** — skipping the pragma is insufficient. So
+  registry-api's READ-ONLY engine on `state.sqlite3` creates the sidecars
+  owned by uid 10001, locking out the writer registry-state (uid 10002).
+  The insufficient pragma-skip attempt was REVERTED to keep the tree green.
+  Surfaced to the user + saved to memory
+  `cross-uid-group-write-systemic-umask-gap` (UPDATE 2026-06-01) with the
+  candidate fixes (state.sqlite3 off-WAL / registry-api reads via HTTP /
+  init-pre-create sidecars / same-uid) for a decision.
 
 ### Completion Notes List
 
+- **AC1-AC5, AC7 ✓** — the idempotency cache now uses its own
+  `idempotency.sqlite3` (registry-api sole writer); state engine stays
+  read-only; FR26 strengthened; M8 WAL-WRITE-contention resolved.
+- **AC3 decision:** registry-api `create_all`s the table on its own file
+  (idempotency pkg owns the Core `_meta`); migrator unchanged →
+  `idempotency_cache` is an orphaned-empty table in `state.sqlite3`
+  (lower-risk than a destructive migration).
+- **AC6 (integration test), AC8 (7/7 repro), AC9 (review)** — BLOCKED on
+  the WAL-reader architecture decision above. The 7/7-green DoD cannot be
+  met by this story alone; it removed the WRITE contention but the
+  READ-path WAL-sidecar creation is a separate, deeper layer.
+
 ### File List
+
+MODIFIED:
+- `packages/idempotency/src/idempotency/cache.py` (create_idempotency_schema + Core index)
+- `packages/idempotency/src/idempotency/__init__.py` (export)
+- `services/registry-api/src/registry_api/app.py` (separate cache engine + _derive_idempotency_url)
+- `services/registry-api/src/registry_api/__main__.py` (env wiring)
+- `services/registry-api/src/registry_api/test_app.py` (+ TestIdempotencyCacheSeparateFile; 13 call sites)
+- `services/registry-api/src/registry_api/test_{decisions,decisions_signing,middleware,approvals,events}.py` (build_app flag)
+- `docker-compose.yml` (REGISTRY_API_IDEMPOTENCY_DB_URL + auto-create env)
 
 ## Definition of Done
 
