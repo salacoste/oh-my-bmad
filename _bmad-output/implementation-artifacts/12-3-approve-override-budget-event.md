@@ -1,6 +1,6 @@
 # Story 12.3 — `/approve --override budget` reaches the Epic-12 enforcement loop + `budget.override` event (FR68)
 
-Status: review
+Status: done
 
 <!-- DECISION RESOLVED 2026-06-01 (operator): D1=(A) keep tier3.budget_override + add budget.override @1.1.0 alias; D2=(II) DEFER grace-window interception to Story 12.3a. Scope = the achievable delta below (console-cli parity + event-naming + /retry sharp-edge docs). The ACs as written already reflect this fork. -->
 
@@ -230,6 +230,22 @@ claude-opus-4-8[1m] (dev-story, 2026-06-01).
   pre-existing on clean epic-12.2 baseline via stash — NOT this story).
 - Cardinality bounds bumped 62→63 in BOTH AC10 tests (steady-state +
   burst-cleanup) for the new pre-populated `event_family="budget"` child.
+
+### Code Review (AC7) — 2026-06-01, two-lane (separate context)
+
+- **code-reviewer:** APPROVE-WITH-NITS (0 CRITICAL/HIGH). 1 MEDIUM (stale
+  docstring sum in metrics.py — I touched that block but left `= 49`/`≤ 50`
+  stale; FIXED → 53 children + points to the AC10 test as authoritative bound).
+  1 LOW (no `--override license` CLI test — FIXED by parametrizing over both
+  values). 1 NIT (console-cli `.strip()` vs Telegram — an improvement, no-op).
+- **security-reviewer:** SAFE TO MERGE (0 CRITICAL/HIGH). Confirmed: same
+  `X-Actor-Id` propagation as Telegram (no weaker auth path); `mcp_clients.py`
+  untouched; no `os.environ` copy / secret exposure; override constrained to
+  `Literal[license,budget]` client- AND server-side (`extra="forbid"`); audit
+  emission unchanged. The 1 MEDIUM (console-cli static `actor_id="console"`) is
+  PRE-EXISTING (Phase-1, scoped to Story 6.1+), NOT introduced by this story.
+- Both actionable findings fixed; re-ran ruff/format + console-cli (27 pass) +
+  AC10 cardinality (2 pass). Story marked done.
 
 ### Completion Notes List
 

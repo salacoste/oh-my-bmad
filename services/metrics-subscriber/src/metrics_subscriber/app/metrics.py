@@ -705,14 +705,16 @@ def build_collectors(registry: CollectorRegistry) -> MetricsState:
     enum label child is materialised via ``.inc(0)`` at registration
     time.  This eliminates the lazy-registration race between
     ``Counter.labels(...).inc()`` from the worker thread and a
-    concurrent ``generate_latest()`` scrape.  Counters: 15 task +
+    concurrent ``generate_latest()`` scrape.  Counters: 16 task (incl.
+    ``task.budget_enforcement_triggered`` per Story 12.2 FR67) +
     5 session + 5 actor_kind + 15 event_family (14 registered families
     incl. ``"budget"`` per Story 12.3 FR68 + 1 ``"unknown"`` fallback
     bucket per Story 10.4 P1-H1) + 2 idempotency +
-    6 capability + 4 parse_skip = 49 pre-populated children.  Plus
-    the 3 label-free gauges + 2 labelled gauges (cursor_offset,
-    task_tokens) — total steady-state cardinality ≤ 50 timeseries
-    (Story 10.4 AC10 bound).
+    6 capability + 4 parse_skip = 53 pre-populated children.  Plus
+    the label-free + labelled gauges and the lock-wait Histogram — the
+    authoritative steady-state bound is the AC10 cardinality tests
+    (``test_metrics_state.py``), currently ≤ 63 timeseries (Story 12.3;
+    was ≤ 50 at Story 10.4 AC10, widened by later stories' label adds).
 
     Args:
         registry: A fresh :class:`CollectorRegistry` instance owned by

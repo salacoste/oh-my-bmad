@@ -245,9 +245,12 @@ def test_approve_command_success() -> None:
     assert f"Approved {_VALID_TASK_ID}" in result.output
 
 
-def test_approve_command_override_budget_reaches_post() -> None:
-    """Story 12.3 AC1 — `approve <task> --override budget` carries override
-    through to the decisions POST body via the typer command surface."""
+@pytest.mark.parametrize("override_value", ["budget", "license"])
+def test_approve_command_override_reaches_post(override_value: str) -> None:
+    """Story 12.3 AC1 — `approve <task> --override <budget|license>` carries the
+    override through to the decisions POST body via the typer command surface.
+    Both supported values are mechanically identical; parametrized for parity
+    with the Telegram surface (which already tests both)."""
     from typer.testing import CliRunner
 
     from console_cli.app.main import app
@@ -259,9 +262,9 @@ def test_approve_command_override_budget_reaches_post() -> None:
         new_callable=AsyncMock,
         return_value=_mock_200(body),
     ) as mock_post:
-        result = runner.invoke(app, ["approve", _VALID_TASK_ID, "--override", "budget"])
+        result = runner.invoke(app, ["approve", _VALID_TASK_ID, "--override", override_value])
     assert result.exit_code == 0
-    assert mock_post.call_args[1]["json"]["override"] == "budget"
+    assert mock_post.call_args[1]["json"]["override"] == override_value
 
 
 def test_approve_command_invalid_override_rejected() -> None:
