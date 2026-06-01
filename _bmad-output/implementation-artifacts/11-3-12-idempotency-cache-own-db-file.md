@@ -1,6 +1,6 @@
 # Story 11.3.12 — split registry-api's writable idempotency-cache onto its own SQLite file (M8 follow-up) so registry-state is the sole `state.sqlite3` writer
 
-Status: in-progress (AC1-8 done & PROVEN 7/7 GREEN on live stack; AC9 code-review pending) — the WAL-reader fork was resolved with a WAL-preserving main-db-file chmod 0o660 so sidecars inherit group-write
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -175,23 +175,23 @@ Separating the writable idempotency cache onto its OWN file means:
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Separate cache engine URL** (AC1, AC2): add
+- [x] **Task 1 — Separate cache engine URL** (AC1, AC2): add
       `idempotency_db_url` param to `build_app`; resolve from
       `REGISTRY_API_IDEMPOTENCY_DB_URL` in `__main__.py` (default = state
       dir + `/idempotency.sqlite3`); set it in `docker-compose.yml`.
-- [ ] **Task 2 — Bootstrap the table in the new file** (AC3): registry-api
+- [x] **Task 2 — Bootstrap the table in the new file** (AC3): registry-api
       `create_all`s `_IDEMPOTENCY_TABLE` on the cache engine (flag-gated);
       stop the migrator creating it in state.sqlite3 (or document the
       orphaned-empty-table backward-compat choice).
-- [ ] **Task 3 — FR26 discipline check** (AC4): grep-verify no writable
+- [x] **Task 3 — FR26 discipline check** (AC4): grep-verify no writable
       engine against the STATE db_url remains.
-- [ ] **Task 4 — Unit/contract tests** (AC5): cache round-trip on its own
+- [x] **Task 4 — Unit/contract tests** (AC5): cache round-trip on its own
       file; column-consistency; distinct-engine-URL assertion.
-- [ ] **Task 5 — Integration regression** (AC6): 7/7 healthy + WAL owned
+- [x] **Task 5 — Integration regression** (AC6): 7/7 healthy + WAL owned
       by registry-state.
-- [ ] **Task 6 — Docker repro** (AC8): 7/7 stable + idempotency replay.
-- [ ] **Task 7 — Validation gates** (AC7).
-- [ ] **Task 8 — Code review** (AC9); apply findings.
+- [x] **Task 6 — Docker repro** (AC8): 7/7 stable + idempotency replay.
+- [x] **Task 7 — Validation gates** (AC7).
+- [x] **Task 8 — Code review** (AC9); apply findings.
 
 ## Dev Notes
 
@@ -374,6 +374,23 @@ claude-opus-4-8 (1M context) — /loop autonomous execution per BMad workflow.
   green tail is functionally COMPLETE.
 - **AC6 (integration test)** — added `test_state_sqlite_wal_cross_uid.py`
   (asserts 7/7 + sidecar modes). **AC9 (review)** — pending.
+
+### Final verification (AC8 + AC9, post-review-fixes)
+
+Re-ran the Docker repro after the AC9 review fixes (H1 idempotency chmod +
+H2 fail-loud derivation). PROVEN 7/7 GREEN + both DBs secured:
+- all 7 services healthy, registry-state restart count 0
+- POST /v1/tasks → 201
+- state.sqlite3 -rw-rw---- owned by registry-state (10002)
+- idempotency.sqlite3 -rw-rw---- owned by registry-api (10001) — the H1
+  fix confirmed: no longer world-readable
+- both files group-write, neither world-readable (others-triad 0)
+
+The Epic-11.3 fresh-deploy-green tail is COMPLETE: ROOT compose comes up
+7/7 stable on first boot. Chain: 11.3.8 (events dir 2775) → 11.3.9
+(/v1/health) → 11.3.10 (mcp-init start_period) → 11.3.11 (events file
+0o660) → 11.3.12 (idempotency split + state.sqlite3 0o660 so WAL sidecars
+inherit group-write).
 
 ### File List
 
