@@ -150,6 +150,7 @@ def ensure_registered() -> None:
     register("task.created", "1.0.0", TaskCreatedPayload)
     register("task.created", "1.0.1", TaskCreatedPayload)
     register("task.created", "1.1.0", TaskCreatedPayload)
+    register("task.created", "1.2.0", TaskCreatedPayload)  # Story 12.4 — per-task budget policy
     register("task.planning.started", "1.0.0", TaskPlanningStartedPayload)
     register("task.planning.started", "1.0.1", TaskPlanningStartedPayload)
     register("task.planning.started", "1.1.0", TaskPlanningStartedPayload)

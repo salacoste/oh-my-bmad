@@ -70,7 +70,30 @@ class OrchestratorSettings(BaseSettings):
     github_base_branch: str = "main"
 
     # Story 5.15 — Per-task budget enforcement (FR44). 0 disables enforcement.
+    # Story 12.4: this is now the LEGACY/lowest-precedence token-ceiling default
+    # (ORCHESTRATOR_TASK_TOKEN_BUDGET). The new operator-facing default below
+    # (OMB_DEFAULT_TASK_BUDGET_TOKENS) takes precedence over it; a per-task
+    # Task-row ``budget_token_limit`` takes precedence over both.
     task_token_budget: int = Field(default=50_000, ge=0)
+
+    # Story 12.4 (FR68a / D3) — operator-facing per-task budget default. Sits
+    # ABOVE the legacy ``task_token_budget`` and BELOW a per-task row value in
+    # the precedence chain: per-task row > OMB_DEFAULT_TASK_BUDGET_TOKENS >
+    # ORCHESTRATOR_TASK_TOKEN_BUDGET. Read via an explicit ``validation_alias``
+    # so it escapes the ``ORCHESTRATOR_`` env prefix and matches the .env name.
+    # ``None`` (unset) means "fall through to the legacy default".
+    default_task_budget_tokens: int | None = Field(
+        default=None,
+        gt=0,
+        validation_alias=AliasChoices(
+            "default_task_budget_tokens", "OMB_DEFAULT_TASK_BUDGET_TOKENS"
+        ),
+        description=(
+            "Operator-facing default per-task token ceiling (OMB_DEFAULT_TASK_BUDGET_TOKENS, "
+            "Story 12.4 / FR68a). Precedence: per-task Task-row budget_token_limit > "
+            "OMB_DEFAULT_TASK_BUDGET_TOKENS > ORCHESTRATOR_TASK_TOKEN_BUDGET (legacy)."
+        ),
+    )
 
     # Story 9.6 review pass-2 PH0 + pass-3 TH1 — orchestrator-adapter is the
     # REAL spawner of worker-wrapper (via OMC).  ``OMCRunner`` propagates

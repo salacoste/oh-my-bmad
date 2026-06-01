@@ -242,6 +242,22 @@ Both reach the same registry-api override branch (extends the limit, emits the
 > not yet implemented. Until then, treat `--override budget` as "raise the
 > ceiling, then `/retry`" for any task that has already been terminated.
 
+### Per-task budget policy defaults (Story 12.4 / FR68a)
+
+Each task can carry its own budget policy. Submitters may set `budget_token_limit`
+and `budget_action` on `POST /v1/tasks`; when omitted, the `.env` defaults
+(`OMB_DEFAULT_TASK_BUDGET_TOKENS`, `OMB_DEFAULT_TASK_BUDGET_ACTION`) are inherited.
+The **token ceiling** is consumed end-to-end now: orchestrator-adapter sources it
+per-task with precedence `per-task budget_token_limit > OMB_DEFAULT_TASK_BUDGET_TOKENS
+> ORCHESTRATOR_TASK_TOKEN_BUDGET (legacy)`.
+
+> **STORED-BUT-NOT-YET-CONSUMED (Story 12.3a).** The per-task `budget_action` is
+> stored on the Task row and surfaced via the API, but worker-wrapper still
+> enforces the **global** `OMB_DEFAULT_BUDGET_ACTION` (Story 12.2) — it does not
+> yet read the per-task value. Per-task `budget_action` delivery + the
+> `awaiting_approval` FSM path land together in **Story 12.3a**. Until then every
+> task's effective action is necessarily `failed`.
+
 ## Forward-referenced scenarios
 
 These failure modes are spec'd but the enforcement logic does not exist yet.

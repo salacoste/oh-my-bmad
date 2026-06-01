@@ -1,6 +1,6 @@
 # Story 12.4 — Per-task budget policy storage + default policy in `.env` (FR68a)
 
-Status: ready-for-dev
+Status: review
 
 <!-- DECISION RESOLVED 2026-06-01 (operator): D1=(A) ship token-ceiling
 consumption now + store budget_action but DEFER its worker-wrapper consumption
@@ -205,11 +205,51 @@ unblocks:
 
 ### Agent Model Used
 
+claude-opus-4-8[1m] (dev-story via delegated executor + diff-audit, 2026-06-01).
+
 ### Debug Log References
+
+- Implemented by a delegated executor (opus); DIFF-AUDITED line-by-line by the
+  orchestrator per standing discipline (event-schema + single-writer change).
+  Audit confirmed: additive 1.2.0 (both fields default None, old events still
+  validate); single-writer preserved (materializer writes; orchestrator-adapter
+  + task-registry read-only); precedence guarded (bool-guard + non-positive
+  guard + legacy disable preserved); mcp_clients.py + worker-wrapper enforcement
+  untouched.
+- Gates RE-RUN independently (evidence over trust): ruff check + format clean on
+  all 9 py files; discipline gates (imports/event_registry/single_writer) pass;
+  mypy --strict 44=baseline, ZERO new in any touched production file; new
+  integration test 3/3 (all three precedence tiers); 351 affected unit tests
+  pass (payloads/event_types/handlers/task-registry/orchestrator + registry-api
+  app 45).
 
 ### Completion Notes List
 
+- D1=(A) + D2 defer-dollar + D3 env-naming per operator decision (2026-06-01).
+- TaskCreatedPayload bumped 1.1.0→1.2.0 (additive); registered 1.2.0 alongside
+  1.0.0/1.0.1/1.1.0 (same-model contract, mirrors task.completed 1.2.0 precedent).
+- Per-task token ceiling wired end-to-end: payload → materializer → Task row →
+  task-registry _task_to_dict → orchestrator-adapter _resolve_budget_limit with
+  precedence per-task > OMB_DEFAULT_TASK_BUDGET_TOKENS > ORCHESTRATOR_TASK_TOKEN_BUDGET.
+- budget_action STORED + surfaced (Task row, payload, API) but worker-wrapper
+  consumption DEFERRED to Story 12.3a (main.py:744 unchanged) — documented in
+  operator-runbook.
+- dollar-ceiling deferred (D2, YAGNI); env precedence keeps 12.2/5.15 vars as
+  legacy fallbacks.
+
 ### File List
+
+- packages/events/src/events/payloads.py (M — TaskCreatedPayload budget fields)
+- services/registry-state/src/registry_state/domain/event_types.py (M — task.created 1.2.0)
+- services/registry-state/src/registry_state/schema.py (M — Task budget columns)
+- services/registry-state/src/registry_state/domain/handlers.py (M — materializer writes budget)
+- services/registry-api/src/registry_api/routes/tasks.py (M — CreateTaskRequest/TaskResponse/emit 1.2.0)
+- mcp-servers/task-registry/src/task_registry_mcp/handlers/resources.py (M — _task_to_dict serialization)
+- services/orchestrator-adapter/src/orchestrator_adapter/app/config.py (M — OMB_DEFAULT_TASK_BUDGET_TOKENS)
+- services/orchestrator-adapter/src/orchestrator_adapter/app/main.py (M — _resolve_budget_limit precedence)
+- .env.example (M — budget-policy section)
+- docs/operator-runbook.md (M — per-task budget defaults note)
+- tests/integration/test_budget_policy_inheritance.py (NEW — 3-tier precedence E2E)
 
 ## Definition of Done
 

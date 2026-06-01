@@ -139,6 +139,12 @@ class CreateTaskRequest(BaseModel):
     chat_id: int | None = Field(default=None, ge=-(2**63), le=(2**63) - 1)
     # M13: reply_to_message_id must be strictly positive (Telegram message IDs ≥ 1).
     reply_to_message_id: int | None = Field(default=None, gt=0)
+    # Story 12.4: per-task budget policy (FR68a). Both optional — omitting them
+    # means "inherit the .env default" (OMB_DEFAULT_TASK_BUDGET_*). budget_action
+    # is stored + surfaced but its worker-wrapper consumption is deferred to
+    # Story 12.3a (per-task delivery + awaiting_approval FSM).
+    budget_token_limit: int | None = Field(default=None, gt=0)
+    budget_action: Literal["failed", "awaiting_approval"] | None = None
 
     @field_validator("chat_id")
     @classmethod
@@ -216,6 +222,10 @@ class TaskResponse(BaseModel):
     chat_id: int | None = Field(default=None, ge=-(2**63), le=(2**63) - 1)
     reply_to_message_id: int | None = Field(default=None, gt=0)
     hint: str | None = None
+    # Story 12.4: per-task budget policy (FR68a). Surfaces the effective stored
+    # values; NULL = "inherit the .env default".
+    budget_token_limit: int | None = Field(default=None, gt=0)
+    budget_action: Literal["failed", "awaiting_approval"] | None = None
 
     @field_validator("chat_id")
     @classmethod
@@ -399,19 +409,22 @@ async def post_tasks(
             hint=body.hint,
             chat_id=body.chat_id,
             reply_to_message_id=body.reply_to_message_id,
+            budget_token_limit=body.budget_token_limit,
+            budget_action=body.budget_action,
         )
 
         # Phase 1: actor_id flows from middleware. TODO(Story 6.1+): real auth.
         actor = Actor(kind="operator", id=request.state.actor_id)
 
-        # Story 3.9 AC-11: schema_version bumped to 1.1.0 — emit the
-        # additive-minor version that recognises chat_id /
-        # reply_to_message_id. v1.0.0 stays registered (back-compat) but
-        # new emissions always use 1.1.0.
+        # Story 12.4 AC2/AC3: schema_version bumped to 1.2.0 — emit the
+        # additive-minor version that recognises budget_token_limit /
+        # budget_action (on top of 3.9's chat_id / reply_to_message_id).
+        # Earlier versions stay registered (back-compat) but new emissions
+        # always use 1.2.0.
         envelope = EventEnvelope.create(
             event_id=event_id,
             type="task.created",
-            schema_version="1.1.0",
+            schema_version="1.2.0",
             emitted_at=clock.now(),
             emitted_at_monotonic_ns=clock.monotonic_ns(),
             actor=actor,
@@ -611,6 +624,8 @@ async def get_task_by_id(
         chat_id=task.chat_id,
         reply_to_message_id=task.reply_to_message_id,
         hint=task.hint,
+        budget_token_limit=task.budget_token_limit,
+        budget_action=task.budget_action,
     )
 
 

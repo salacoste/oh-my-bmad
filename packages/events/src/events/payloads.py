@@ -56,6 +56,14 @@ class TaskCreatedPayload(BaseModel):
     registered under both ``1.0.0`` and ``1.1.0`` per the same-model
     contract — pre-3.9 events deserialize cleanly with the new fields
     defaulting to ``None`` (additive-only NFR-M3).
+
+    Story 12.4 AC2 — additive minor bump (1.1.0 → 1.2.0): ``budget_token_limit``
+    and ``budget_action`` carry the per-task budget policy (FR68a). Both default
+    to ``None`` ("inherit the .env default"); ``budget_token_limit`` is
+    ``gt=0`` and ``budget_action`` is ``Literal["failed","awaiting_approval"]``.
+    The single payload class is registered under ``1.0.0``..``1.2.0`` per the
+    same-model contract — pre-12.4 events (neither budget field) deserialize
+    cleanly with both defaulting to ``None`` (additive-only NFR-M3).
     """
 
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
@@ -69,6 +77,11 @@ class TaskCreatedPayload(BaseModel):
     chat_id: int | None = Field(default=None, ge=-(2**63), le=(2**63) - 1)
     # M13: reply_to_message_id must be strictly positive (Telegram msg IDs ≥ 1).
     reply_to_message_id: int | None = Field(default=None, gt=0)
+    # Story 12.4: per-task budget policy (FR68a). Both nullable = "inherit
+    # default". budget_action consumption is deferred to Story 12.3a (stored +
+    # surfaced now; worker-wrapper still reads the global OMB_DEFAULT_BUDGET_ACTION).
+    budget_token_limit: int | None = Field(default=None, gt=0)
+    budget_action: Literal["failed", "awaiting_approval"] | None = None
 
     @field_validator("chat_id")
     @classmethod
