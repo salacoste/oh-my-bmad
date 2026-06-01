@@ -210,3 +210,31 @@ async def test_budget_policy_explicit_overrides_default(
     # Precedence: per-task value wins over the default (77_000).
     resolved = _resolve_budget_limit(task_dict, settings)
     assert resolved == 250_000
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_budget_enforcement_disabled_via_legacy_zero(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Story 12.4 review (LOW): the legacy enforcement-disable path survives.
+
+    With NO per-task value, NO new default (``OMB_DEFAULT_TASK_BUDGET_TOKENS``
+    unset), and ``ORCHESTRATOR_TASK_TOKEN_BUDGET=0``, ``_resolve_budget_limit``
+    returns 0 — which the dispatch path reads as "no BudgetTracker" (enforcement
+    disabled), the pre-12.4 behaviour. Guards the precedence chain's tail.
+    """
+    monkeypatch.delenv("OMB_DEFAULT_TASK_BUDGET_TOKENS", raising=False)
+    monkeypatch.setenv("ORCHESTRATOR_TASK_TOKEN_BUDGET", "0")
+    settings = OrchestratorSettings(_env_file=None)
+    assert settings.default_task_budget_tokens is None
+    assert settings.task_token_budget == 0
+
+    envelope = _make_created_envelope(seed=4)
+    task_dict = await _materialize_and_serialize(db_session, envelope)
+    assert task_dict["budget_token_limit"] is None
+
+    # No per-task value, no new default → legacy 0 → enforcement disabled.
+    resolved = _resolve_budget_limit(task_dict, settings)
+    assert resolved == 0

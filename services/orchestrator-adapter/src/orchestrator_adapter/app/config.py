@@ -85,9 +85,12 @@ class OrchestratorSettings(BaseSettings):
     default_task_budget_tokens: int | None = Field(
         default=None,
         gt=0,
-        validation_alias=AliasChoices(
-            "default_task_budget_tokens", "OMB_DEFAULT_TASK_BUDGET_TOKENS"
-        ),
+        # Story 12.4 review (MEDIUM): use ONLY the intended OMB_ env name. A
+        # redundant field-name alias ("default_task_budget_tokens") would make
+        # pydantic-settings ALSO match an unprefixed DEFAULT_TASK_BUDGET_TOKENS
+        # env var — an unintended/ghost surface. populate_by_name=True still lets
+        # the field be set by its python name in code/tests.
+        validation_alias=AliasChoices("OMB_DEFAULT_TASK_BUDGET_TOKENS"),
         description=(
             "Operator-facing default per-task token ceiling (OMB_DEFAULT_TASK_BUDGET_TOKENS, "
             "Story 12.4 / FR68a). Precedence: per-task Task-row budget_token_limit > "

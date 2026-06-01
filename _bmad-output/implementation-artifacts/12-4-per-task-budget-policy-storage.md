@@ -1,6 +1,6 @@
 # Story 12.4 — Per-task budget policy storage + default policy in `.env` (FR68a)
 
-Status: review
+Status: done
 
 <!-- DECISION RESOLVED 2026-06-01 (operator): D1=(A) ship token-ceiling
 consumption now + store budget_action but DEFER its worker-wrapper consumption
@@ -222,6 +222,24 @@ claude-opus-4-8[1m] (dev-story via delegated executor + diff-audit, 2026-06-01).
   integration test 3/3 (all three precedence tiers); 351 affected unit tests
   pass (payloads/event_types/handlers/task-registry/orchestrator + registry-api
   app 45).
+
+### Code Review (AC10) — 2026-06-01, code-reviewer (separate context)
+
+- **code-reviewer:** APPROVE-WITH-NITS (0 CRITICAL/HIGH). All 3 findings fixed:
+  - **MEDIUM** — `AliasChoices("default_task_budget_tokens", "OMB_...")` first
+    alias created an unintended unprefixed `DEFAULT_TASK_BUDGET_TOKENS` ghost env
+    var. FIXED → `AliasChoices("OMB_DEFAULT_TASK_BUDGET_TOKENS")` only
+    (populate_by_name still allows python-name construction; verified by the
+    integration test that reads the OMB_ env).
+  - **LOW** — added `test_budget_enforcement_disabled_via_legacy_zero` (4th tier:
+    no per-task + no new default + `ORCHESTRATOR_TASK_TOKEN_BUDGET=0` → resolve 0
+    → enforcement disabled; guards the legacy disable path).
+  - **NIT** — `.env.example` now notes the new default must be UNSET to use the
+    legacy disable-via-zero.
+- Reviewer confirmed: additive 1.2.0 (old events validate), precedence + bool/
+  non-positive guards sound, single-writer preserved, no field/type drift across
+  CreateTaskRequest→payload→ORM→_task_to_dict→resolver→TaskResponse.
+- Re-ran: ruff/format clean; integration 4/4; orchestrator config 17 pass.
 
 ### Completion Notes List
 
