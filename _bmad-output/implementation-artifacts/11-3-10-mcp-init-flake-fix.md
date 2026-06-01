@@ -188,38 +188,45 @@ deferred to this story).
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Gather nightly evidence** (AC1)
+- [ ] **Task 1 — Gather nightly evidence** (AC1) — ⏸ BLOCKED on push auth
   - [ ] (If push pre-authorised) push `epic-11.3.10`, `gh workflow run nightly.yml --ref epic-11.3.10`.
   - [ ] Capture `s3-separability` result + logs; classify: Linux-clean vs Linux-flakes.
   - [ ] Record verdict in Dev Agent Record (drives whether AC3 is in scope).
-- [ ] **Task 2 — Add `x-healthcheck-mcp` anchor + apply to the 2 spawners** (AC2)
-  - [ ] In `docker-compose.yml`, add a sibling anchor near lines 26-46:
-        `x-healthcheck-mcp: &healthcheck_mcp` = copy of `*healthcheck`
-        with `start_period: 100s` (≥ 90s ceiling + headroom) and a
-        rationale comment citing 3 × `_INIT_TIMEOUT`.
-  - [ ] Point `orchestrator-adapter.healthcheck` (line 203) and
-        `worker-wrapper.healthcheck` (line 244) at `*healthcheck_mcp`.
-  - [ ] Leave the shared `*healthcheck` untouched for the file-ready
-        services that init fast (registry-state, clawhip-daemon).
-- [ ] **Task 3 — Document restart-loop interaction** (AC4)
-  - [ ] Confirm `restart: unless-stopped` on both blocks (already present);
-        document that the start_period bump — not a restart-policy change —
-        is the fix lever, and why (a looping container still can't latch
-        healthy if no single attempt fits the window).
-- [ ] **Task 4 — macOS Docker repro** (AC5)
-  - [ ] Run the AC5 fixture; assert 7/7 healthy post-fix; paste
-        `docker compose ps` before/after into Dev Agent Record.
-  - [ ] If still flaking → capture per-server init timing as AC3 evidence.
-- [ ] **Task 5 — (CONDITIONAL, only if AC1+AC5 prove Linux/per-server >30s) `mcp_clients.py` fix** (AC3)
-  - [ ] Change BOTH mirror files identically (timeout bump and/or
-        sequential→`asyncio.gather` parallel init). NO env-handling change.
-  - [ ] P0 diff-audit: confirm no `os.environ.copy()` / `dict(os.environ)`;
-        `_ENV_ALLOWLIST` intact; mirror byte-identical.
-  - [ ] Run the env-allowlist mirror contract test → green.
-- [ ] **Task 6 — Validation gates** (AC6).
-- [ ] **Task 7 — Code review** (AC7): default effort if compose-only;
-      AI-1 3-lane MANDATORY if Task 5 ran.
-- [ ] **Task 8 — Nightly green** (AC8): may defer to user authorisation.
+- [x] **Task 2 — Add `x-healthcheck-mcp` anchor + apply to the 2 spawners** (AC2)
+  - [x] In `docker-compose.yml`, added `x-healthcheck-mcp: &healthcheck_mcp`
+        with `start_period: 100s` + rationale comment citing 3 × `_INIT_TIMEOUT`.
+  - [x] Repointed `orchestrator-adapter.healthcheck` + `worker-wrapper.healthcheck`
+        at `*healthcheck_mcp` (verified via yaml.safe_load: both now 100s).
+  - [x] Shared `*healthcheck` untouched (other 5 services still 10s).
+- [x] **Task 3 — Document restart-loop interaction** (AC4)
+  - [x] Confirmed `restart: unless-stopped` on both blocks (orch 219 /
+        worker 261); documented start_period as the fix lever (not a
+        restart-policy change) in Dev Agent Record.
+- [x] **Task 4 — macOS Docker repro** (AC5)
+  - [x] Ran the AC5 fixture once Docker came back up; BOTH spawners reached
+        ready+healthy under the 100s budget (~95s init) — H7f budget fix
+        PROVEN. Surfaced a NEW out-of-scope 0o640 event-log-FILE perm bug
+        (registry-state crash-loop) — captured + memory'd + recommended
+        Story 11.3.11. (Details in Dev Agent Record.)
+- [ ] **Task 5 — (CONDITIONAL) `mcp_clients.py` fix** (AC3) — NOT triggered
+  - [N/A] AC3 gate not met: AC5 showed init COMPLETES (~95s, all 3 servers
+        connect) — it's slow-aggregate, NOT per-server >30s. The compose
+        budget fix (AC2) is the complete fix; the P0 file stays untouched.
+        (Final AC3 confirmation still wants the AC1 Linux nightly, but the
+        macOS evidence already points to "slow-aggregate not per-server".)
+- [x] **Task 6 — Validation gates** (AC6) — non-Docker gates green
+        (ruff/format clean, discipline 0, `docker compose config` valid;
+        regression failures all environmental/pre-existing per Dev Agent
+        Record). mypy unaffected (YAML-only change).
+- [x] **Task 7 — Code review** (AC7): default effort (opus code-reviewer;
+        compose-only, Task 5 did NOT run so no AI-1 3-lane needed). APPROVE,
+        0 CRITICAL/HIGH, 2 LOW — both applied: L1 switched the anchor to
+        merge-key form (`<<: *healthcheck` + start_period override) so
+        test/interval/timeout/retries stay in lock-step with the shared
+        anchor; L2 tightened the rationale comment to note the post-init
+        `verify_connectivity()` liveness probes (3× unbounded `list_tools()`)
+        sit inside the headroom, not just the 90s `_connect` ceiling.
+- [ ] **Task 8 — Nightly green** (AC8): ⏸ DEFERRED to user authorisation.
 
 ## Dev Notes
 

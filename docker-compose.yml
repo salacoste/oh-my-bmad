@@ -49,14 +49,20 @@ x-healthcheck: &healthcheck
 #
 # `start_period` is the correct Docker primitive here: failing probes during
 # it do NOT count toward `retries`, so a single slow-but-successful init gets
-# the full 100s to finish and write `/tmp/ready`. 100s = 90s ceiling + 10s
-# headroom. Scoped to ONLY these two services so the other five (which init
-# fast) keep the tighter shared `*healthcheck`.
+# the full 100s to finish and write `/tmp/ready`. 100s ≈ the 90s sequential
+# `_connect()` ceiling + headroom for the post-init `verify_connectivity()`
+# liveness probes (3× `list_tools()`, sub-second on the happy path but NOT
+# individually `wait_for`-bounded — see mcp_clients.py `_check_one`) + Python
+# interpreter start. Observed live: ~95s to `ready`. Scoped to ONLY these two
+# services so the other five (which init fast) keep the tighter shared
+# `*healthcheck`.
+#
+# Merge-key form (`<<: *healthcheck` + override) keeps test/interval/timeout/
+# retries in lock-step with the shared anchor — if those are ever tuned on
+# `*healthcheck`, this inherits the change automatically (only `start_period`
+# is intentionally divergent). [code-review L1]
 x-healthcheck-mcp: &healthcheck_mcp
-  test: ["CMD", "test", "-f", "/tmp/ready"]
-  interval: 5s
-  timeout: 3s
-  retries: 12
+  <<: *healthcheck
   start_period: 100s
 
 # Story 11.3.6 (H7d) — HTTP-server healthcheck anchor. Use for any service that
