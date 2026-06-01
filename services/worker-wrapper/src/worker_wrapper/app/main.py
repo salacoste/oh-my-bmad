@@ -702,43 +702,58 @@ async def run_task(
         # an audit-emit failure must NOT block the FSM transition or leak the
         # subprocess (enforcement already happened). NFR-R8 unaffected: this
         # is AFTER termination.
-        # ``token_limit``/``tokens_used``/``step`` are typed ``int | None`` on
-        # the result (None only when ``triggered=False``); here ``triggered``
-        # is True so they are populated from the matching task.budget_exceeded
-        # payload. mypy can't narrow that, so we assert-with-fallback: if any
-        # were somehow unset we skip the emit (a malformed result shouldn't
-        # crash the FSM transition, which is the load-bearing action).
-        if (
-            budget_result.token_limit is not None
-            and budget_result.tokens_used is not None
-            and budget_result.step is not None
-        ):
-            enforcement_payload = TaskBudgetEnforcementTriggeredPayload(
-                task_id=task_id,
-                budget_threshold=budget_result.token_limit,
-                actual_spend=budget_result.tokens_used,
-                action_taken="subprocess_terminated",
-                post_trigger_transition=settings.default_budget_action,
-                step=budget_result.step,
-            )
-            await _call_tool_best_effort(
-                clients.clawhip_bridge,
-                "emit_event",
-                {
-                    "type": "task.budget_enforcement_triggered",
-                    "payload": enforcement_payload.model_dump(),
-                    "caller_trace_id": settings.resolve_trace_id(),
-                },
-                label="emit_budget_enforcement_triggered",
-            )
-        else:
+        # CODE-REVIEW M3 — FR67 requires the audit event after EVERY
+        # enforcement, so we MUST emit even if an optional field is missing.
+        # ``token_limit``/``tokens_used`` are isinstance-int-validated by the
+        # supervisor (budget_supervisor.py) so they are guaranteed set when
+        # ``triggered=True``; ``step`` is parsed best-effort from the raw
+        # task.budget_exceeded payload and CAN be None on a malformed/older
+        # producer. Rather than DROP the whole audit record over a missing
+        # ``step``, default it to the schema floor (1, ``Field(ge=1)``) and
+        # log that the source step was absent. ``budget_threshold`` /
+        # ``actual_spend`` fall back to the supervisor values; if THOSE were
+        # somehow None (should be impossible per the supervisor contract) the
+        # payload's ``gt=0`` validation would reject 0 — so we coerce a None to
+        # the smallest valid sentinel and log loudly, still preserving a record.
+        step_value = budget_result.step if budget_result.step is not None else 1
+        if budget_result.step is None:
             log.warning(
-                "budget_enforcement_event_skipped_incomplete_result",
+                "budget_enforcement_event_step_missing_defaulted",
+                task_id=task_id,
+                event_id=budget_result.event_id,
+            )
+        threshold_value = budget_result.token_limit if budget_result.token_limit is not None else 1
+        spend_value = budget_result.tokens_used if budget_result.tokens_used is not None else 1
+        if budget_result.token_limit is None or budget_result.tokens_used is None:
+            log.error(
+                "budget_enforcement_event_spend_fields_missing",
                 task_id=task_id,
                 token_limit=budget_result.token_limit,
                 tokens_used=budget_result.tokens_used,
-                step=budget_result.step,
             )
+        enforcement_payload = TaskBudgetEnforcementTriggeredPayload(
+            task_id=task_id,
+            budget_threshold=threshold_value,
+            actual_spend=spend_value,
+            action_taken="subprocess_terminated",
+            # H1/H2: pin to "failed" — the only transition the FSM actually
+            # drives below. settings.default_budget_action is validated to
+            # reject "awaiting_approval" until Story 12.3, so this equals
+            # "failed" today; reading it (not hard-coding) keeps the wiring
+            # ready for 12.3/12.4 to flip the value once the FSM can honor it.
+            post_trigger_transition=settings.default_budget_action,
+            step=step_value,
+        )
+        await _call_tool_best_effort(
+            clients.clawhip_bridge,
+            "emit_event",
+            {
+                "type": "task.budget_enforcement_triggered",
+                "payload": enforcement_payload.model_dump(),
+                "caller_trace_id": settings.resolve_trace_id(),
+            },
+            label="emit_budget_enforcement_triggered",
+        )
 
         await mgr.handle_event(LifecycleEvent.TASK_FAILED)
         log.info(

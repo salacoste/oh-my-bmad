@@ -368,3 +368,36 @@ class TestResolverNarrowRaise:
         s._resolved_worker_id = None
         with pytest.raises(RuntimeError, match=r"_resolved_worker_id.*WorkerSettings"):
             s.resolve_worker_id()
+
+
+class TestDefaultBudgetAction:
+    """Story 12.2 (FR67) + code-review H1/H2 — OMB_DEFAULT_BUDGET_ACTION."""
+
+    def test_default_is_failed(self) -> None:
+        s = WorkerSettings()
+        assert s.default_budget_action == "failed"
+
+    def test_failed_is_accepted(self) -> None:
+        with patch.dict(os.environ, {"OMB_DEFAULT_BUDGET_ACTION": "failed"}):
+            s = WorkerSettings()
+            assert s.default_budget_action == "failed"
+
+    def test_awaiting_approval_is_rejected_until_story_12_3(self) -> None:
+        # H1/H2: the worker can only drive TASK_FAILED today, so accepting
+        # 'awaiting_approval' would make the FR67 audit event lie. Reject loud.
+        from pydantic import ValidationError
+
+        with (
+            patch.dict(os.environ, {"OMB_DEFAULT_BUDGET_ACTION": "awaiting_approval"}),
+            pytest.raises(ValidationError, match="awaiting_approval"),
+        ):
+            WorkerSettings()
+
+    def test_unknown_value_is_rejected(self) -> None:
+        from pydantic import ValidationError
+
+        with (
+            patch.dict(os.environ, {"OMB_DEFAULT_BUDGET_ACTION": "cancelled"}),
+            pytest.raises(ValidationError),
+        ):
+            WorkerSettings()
