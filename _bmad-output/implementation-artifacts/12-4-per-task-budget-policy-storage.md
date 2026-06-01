@@ -1,11 +1,12 @@
 # Story 12.4 — Per-task budget policy storage + default policy in `.env` (FR68a)
 
-Status: needs-scoping-decision
+Status: ready-for-dev
 
-<!-- Note: scope hinges on a DECISION (see "⚠️ Scoping decision required").
-Recommended scope is fully specified below; the fork is whether to also build
-the worker-wrapper per-task budget_action DELIVERY now or defer it to couple
-with Story 12.3a (which is what makes a non-`failed` action meaningful). -->
+<!-- DECISION RESOLVED 2026-06-01 (operator): D1=(A) ship token-ceiling
+consumption now + store budget_action but DEFER its worker-wrapper consumption
+to Story 12.3a; D2 defer dollar-ceiling (YAGNI); D3 add OMB_DEFAULT_TASK_BUDGET_*
+defaults + keep ORCHESTRATOR_TASK_TOKEN_BUDGET / OMB_DEFAULT_BUDGET_ACTION as
+legacy fallbacks. The ACs as written already reflect this fork. -->
 
 ## ⚠️ Scoping decision required (read FIRST)
 
