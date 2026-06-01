@@ -428,6 +428,44 @@ services:
     volumes:
       - oh-my-bmad-data:/var/lib/oh-my-bmad
 
+  # Story 13.1 / FR69 / ADR-0007 — litestream WAL replication sidecar.
+  # DISASTER RECOVERY, NOT HA (replication ≠ HA — see ADR-0007): ships the
+  # registry-state SQLite WAL stream off-host to an operator-configured
+  # S3-compatible target. No failover, no second live writer — recovery is the
+  # manual stack-down procedure in Story 13.3 (just restore-from-litestream).
+  #
+  # OFF by default, two independent levers (both required to actually run it):
+  #   1. ``profiles: ["litestream"]`` keeps it out of a plain ``docker compose
+  #      up`` (mirrors the migrator). Activate with:
+  #        docker compose --profile litestream up -d litestream
+  #   2. The operator points OMB_LITESTREAM_CONFIG_PATH at a filled-in
+  #      ``litestream.yml`` (Story 13.2 ships the template + credential docs).
+  #      Unset → the bind mount falls back to ./litestream.yml; if that is
+  #      absent the operator simply never enables the profile.
+  #
+  # Mounts the data volume READ-ONLY (:ro) — defence-in-depth for FR26
+  # single-writer: the sidecar can only READ state.sqlite3 + its -wal/-shm
+  # sidecars (registry-state fixes them to 0o660 at startup, Story 11.3.12),
+  # never write. Runs the upstream public image (config-not-code); no
+  # oh-my-bmad-base derivative needed. Replication-lag health observability
+  # lands in Story 13.4 (litestream-lag-check + replication.lagging) — this
+  # story intentionally ships the sidecar without a compose healthcheck (like
+  # the migrator), so it is orthogonal to the core "N/N healthy" count.
+  litestream:
+    container_name: omb-litestream
+    image: litestream/litestream:${LITESTREAM_VERSION:-0.3.13}
+    profiles: ["litestream"]
+    env_file:
+      - path: .env
+        required: false
+    command: ["replicate", "-config", "/etc/litestream/litestream.yml"]
+    init: true
+    restart: unless-stopped
+    networks: [oh-my-bmad-net]
+    volumes:
+      - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
+      - ${OMB_LITESTREAM_CONFIG_PATH:-./litestream.yml}:/etc/litestream/litestream.yml:ro
+
 networks:
   oh-my-bmad-net:
     driver: bridge
