@@ -1282,14 +1282,48 @@ class TestIdempotencyCacheSeparateFile:
     """
 
     def test_derive_idempotency_url_swaps_filename(self) -> None:
-        from registry_api.app import _derive_idempotency_url
+        from registry_api.app import (
+            IdempotencyUrlDerivationError,
+            _derive_idempotency_url,
+        )
 
         state = "sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3"
         got = _derive_idempotency_url(state)
         assert got == "sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/idempotency.sqlite3"
-        # Non-matching URL passes through unchanged (caller supplies explicit).
-        other = "sqlite+aiosqlite:////tmp/custom.db"
-        assert _derive_idempotency_url(other) == other
+        # Code-review H2: a non-canonical state URL must FAIL LOUD, not silently
+        # return the same URL (which would re-collide the writable cache engine
+        # on the state DB and re-introduce the cross-uid WAL crash-loop).
+        for bad in (
+            "sqlite+aiosqlite:////tmp/custom.db",  # custom filename
+            "sqlite+aiosqlite:///:memory:",  # in-memory
+            "sqlite+aiosqlite:////var/lib/registry/state.sqlite3?foo=bar",  # query param
+        ):
+            with pytest.raises(IdempotencyUrlDerivationError):
+                _derive_idempotency_url(bad)
+
+    def test_chmod_sqlite_file_makes_idempotency_non_world_readable(self, tmp_path: Path) -> None:
+        """Code-review H1: the idempotency DB file is chmod'd 0o660 (not world-readable)."""
+        import os
+        import sys
+
+        if sys.platform == "win32":
+            pytest.skip("POSIX mode bits ignored on Windows")
+
+        from registry_api.app import _chmod_sqlite_file
+
+        f = tmp_path / "idempotency.sqlite3"
+        f.write_bytes(b"")
+        os.chmod(f, 0o644)  # simulate SQLite's umask-022 default (world-readable)
+        assert f.stat().st_mode & 0o777 == 0o644
+
+        _chmod_sqlite_file(f"sqlite+aiosqlite:///{f}")
+
+        mode = f.stat().st_mode & 0o777
+        assert mode == 0o660, f"expected 0o660 (group-rw, non-world); got {oct(mode)}"
+        assert mode & 0o007 == 0, "others-triad must be 0 (non-world-readable)"
+        # No-op on in-memory / non-sqlite URLs (must not raise).
+        _chmod_sqlite_file("sqlite+aiosqlite:///:memory:")
+        _chmod_sqlite_file("postgresql://x/y")
 
     @pytest.mark.asyncio
     async def test_cache_writes_go_to_idempotency_file_not_state_db(

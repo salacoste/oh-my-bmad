@@ -209,10 +209,25 @@ def _ensure_db_file_group_writable(db_url: str) -> None:
     if not database or database == ":memory:":
         return
     db_path = Path(database)
-    # The file exists by now (create_engine + the optional create_all ran).
     # 0o660 = rw-rw---- : owner+group read/write, others none. The sidecars
     # SQLite creates inherit this mode, closing the cross-uid gap while
     # keeping audit data non-world-readable.
+    #
+    # Code-review L1: the file SHOULD exist by now (create_engine opened it +
+    # the optional create_all ran). If it's absent — e.g. AUTO_CREATE off AND
+    # no migrator ran yet, or a reordered deploy — chmod would silently no-op
+    # under the suppress, and the cross-uid WAL gap would return with no
+    # signal. Log a WARNING so the gap is visible rather than silent. (In the
+    # production compose, depends_on ordering guarantees the file exists.)
+    if not db_path.exists():
+        log.warning(
+            "state DB file %s absent at chmod time — WAL/SHM sidecars may be "
+            "created non-group-writable; cross-uid readers could be locked out. "
+            "Ensure the migrator (or REGISTRY_STATE_AUTO_CREATE_SCHEMA) creates "
+            "the DB before this service's lifespan reaches ready.",
+            db_path,
+        )
+        return
     with contextlib.suppress(OSError):
         db_path.chmod(0o660)
 

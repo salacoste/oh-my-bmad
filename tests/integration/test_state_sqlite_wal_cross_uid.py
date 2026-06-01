@@ -289,6 +289,20 @@ def test_fresh_volume_state_sqlite_wal_is_group_writable(
                 f"(group-write + non-world), got triad={triad!r} on line {ln!r}; "
                 f"full ls={proc_ls.stdout!r}"
             )
+
+        # Code-review H1: idempotency.sqlite3* must also be non-world-readable.
+        idem_lines = [
+            ln
+            for ln in proc_ls.stdout.splitlines()
+            if ln.strip().split()[-1:] and ln.strip().split()[-1].startswith("idempotency.sqlite3")
+        ]
+        for ln in idem_lines:
+            triad = ln.split()[0] if ln.split() else ""
+            # others-triad (chars 7-9) must be `---` — not world-readable.
+            assert triad[7:10] == "---", (
+                f"idempotency.sqlite3* must not be world-readable (others-triad 0); "
+                f"got triad={triad!r} on line {ln!r}; full ls={proc_ls.stdout!r}"
+            )
     finally:
         subprocess.run(
             _compose_cmd(project, _ROOT_COMPOSE_FILE, "down", "-v", "--remove-orphans"),
