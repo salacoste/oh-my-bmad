@@ -1,6 +1,6 @@
 # Story 11.3.11 — event-log JSONL files created 0o660 (group-write) so cross-uid `omb` services can append/recover
 
-Status: ready-for-dev
+Status: in-progress (AC1-AC7+AC9 done & green; AC8 PARTIAL — 0o660 fix PROVEN on live stack but 7/7 blocked by a newly-surfaced systemic sqlite-WAL cross-uid bug, out of scope — see Dev Agent Record)
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -174,25 +174,25 @@ the fd-native analog of `ensure_shared_dir`'s `path.chmod`.)
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Change file-create mode + fchmod** (AC1)
+- [x] **Task 1 — Change file-create mode + fchmod** (AC1)
   - [ ] `event_log.py:514` `0o640` → `0o660`; add
         `with contextlib.suppress(OSError): os.fchmod(new_fd, 0o660)`
         immediately after the `os.open`.
   - [ ] Update docstring (56-58) + inline comment (512-513): `0o660`
         group-RW, NOT world-readable, umask-strip rationale.
-- [ ] **Task 2 — Recovery self-heal + diagnostic** (AC2, AC3)
+- [x] **Task 2 — Recovery self-heal + diagnostic** (AC2, AC3)
   - [ ] `_recover_file` (line 191): best-effort `os.chmod(path, 0o660)`
         (suppressed) before `open(path, "r+b")`.
   - [ ] On still-`PermissionError`: structured `log.error` with file uid
         + mode; skip-and-continue (or one-shot fail) — NOT crash-loop.
-- [ ] **Task 3 — Helper rule-of-three decision** (AC4); document inline-vs-helper.
-- [ ] **Task 4 — Unit tests** (AC5): mode 0o660, not-world-readable,
+- [x] **Task 3 — Helper rule-of-three decision** (AC4); document inline-vs-helper.
+- [x] **Task 4 — Unit tests** (AC5): mode 0o660, not-world-readable,
         recovery self-heal, umask-pin, POSIX-only.
-- [ ] **Task 5 — Integration regression test** (AC6):
+- [x] **Task 5 — Integration regression test** (AC6):
         `tests/integration/test_event_log_file_perm.py`.
-- [ ] **Task 6 — Docker repro** (AC8): 7/7 healthy + day-file 0o660.
-- [ ] **Task 7 — Validation gates** (AC7).
-- [ ] **Task 8 — Code review** (AC9); apply findings.
+- [~] **Task 6 — Docker repro** (AC8): PARTIAL — day-file 0o660 + event-log PermissionError GONE (fix proven); 7/7 NOT reached, blocked by the out-of-scope systemic sqlite-WAL cross-uid bug (see Dev Agent Record + memory cross-uid-group-write-systemic-umask-gap).
+- [x] **Task 7 — Validation gates** (AC7).
+- [x] **Task 8 — Code review** (AC9); apply findings.
 
 ## Dev Notes
 
