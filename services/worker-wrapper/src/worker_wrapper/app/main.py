@@ -35,6 +35,7 @@ from events.payloads import (
     SessionHeartbeatPayload,
     SessionStartedPayload,
     TaskApprovalRequestedPayload,
+    TaskBudgetEnforcementTriggeredPayload,
     TaskLicenseFlaggedPayload,
     Tier3ActionPerformedPayload,
 )
@@ -689,6 +690,56 @@ async def run_task(
                 exc_type=type(runner_raised).__name__,
                 exc_str=str(runner_raised),
             )
+
+        # Story 12.2 (FR67) — emit the task.budget_enforcement_triggered AUDIT
+        # event: the durable ACTION-RECORD that the platform terminated the
+        # subprocess in response to the budget overage. Populated from the
+        # supervisor result (token_limit → budget_threshold, tokens_used →
+        # actual_spend, step). ``post_trigger_transition`` comes from the
+        # operator-configured default (Story 12.4 will source it per-task);
+        # it MUST match the FSM transition actually driven below
+        # (TASK_FAILED → "failed"). Best-effort via _call_tool_best_effort —
+        # an audit-emit failure must NOT block the FSM transition or leak the
+        # subprocess (enforcement already happened). NFR-R8 unaffected: this
+        # is AFTER termination.
+        # ``token_limit``/``tokens_used``/``step`` are typed ``int | None`` on
+        # the result (None only when ``triggered=False``); here ``triggered``
+        # is True so they are populated from the matching task.budget_exceeded
+        # payload. mypy can't narrow that, so we assert-with-fallback: if any
+        # were somehow unset we skip the emit (a malformed result shouldn't
+        # crash the FSM transition, which is the load-bearing action).
+        if (
+            budget_result.token_limit is not None
+            and budget_result.tokens_used is not None
+            and budget_result.step is not None
+        ):
+            enforcement_payload = TaskBudgetEnforcementTriggeredPayload(
+                task_id=task_id,
+                budget_threshold=budget_result.token_limit,
+                actual_spend=budget_result.tokens_used,
+                action_taken="subprocess_terminated",
+                post_trigger_transition=settings.default_budget_action,
+                step=budget_result.step,
+            )
+            await _call_tool_best_effort(
+                clients.clawhip_bridge,
+                "emit_event",
+                {
+                    "type": "task.budget_enforcement_triggered",
+                    "payload": enforcement_payload.model_dump(),
+                    "caller_trace_id": settings.resolve_trace_id(),
+                },
+                label="emit_budget_enforcement_triggered",
+            )
+        else:
+            log.warning(
+                "budget_enforcement_event_skipped_incomplete_result",
+                task_id=task_id,
+                token_limit=budget_result.token_limit,
+                tokens_used=budget_result.tokens_used,
+                step=budget_result.step,
+            )
+
         await mgr.handle_event(LifecycleEvent.TASK_FAILED)
         log.info(
             "budget_enforced_task_terminated",

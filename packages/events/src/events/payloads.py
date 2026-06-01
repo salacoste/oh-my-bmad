@@ -776,6 +776,45 @@ class TaskBudgetExceededPayload(BaseModel):
     step: int = Field(ge=1)
 
 
+class TaskBudgetEnforcementTriggeredPayload(BaseModel):
+    """Payload for the ``task.budget_enforcement_triggered`` event (FR67 / Story 12.2).
+
+    The ACTION-RECORD event: emitted by worker-wrapper AFTER it SIGTERMs the
+    Claude Code subprocess in response to a ``task.budget_exceeded`` signal
+    (Story 5.15 / FR44). Distinct from ``task.budget_exceeded`` — that event
+    SIGNALS the ceiling was crossed; this one RECORDS that the platform
+    terminated the subprocess and how the task subsequently transitioned.
+
+    Story 12.1's ``budget_supervisor`` owns the SIGTERM (enforcement leg) and
+    deliberately deferred this audit event to Story 12.2; the trigger data
+    (``token_limit`` → ``budget_threshold``, ``tokens_used`` → ``actual_spend``,
+    ``step``) is carried through ``BudgetSupervisorResult``.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    task_id: str = Field(min_length=1, max_length=64, pattern=_TASK_ID_PATTERN)
+    # The token (or dollar) ceiling that was crossed. ``int`` mirrors the
+    # token-budget shape of TaskBudgetExceededPayload; dollar ceilings (when
+    # added) are integer cents.
+    budget_threshold: int = Field(gt=0)
+    # Cumulative spend at the moment enforcement triggered.
+    actual_spend: int = Field(gt=0)
+    # The only action this story takes (FR67 names it explicitly). A Literal
+    # rather than a free str so a future action variant is a deliberate
+    # schema change, not an accidental typo.
+    action_taken: Literal["subprocess_terminated"] = "subprocess_terminated"
+    # How the task transitioned post-enforcement, per the per-task policy
+    # declared at submission. Until Story 12.4 stores per-task policy, the
+    # emitter sources this from the operator-configured default
+    # (OMB_DEFAULT_BUDGET_ACTION). The event SHAPE is forward-compatible —
+    # Story 12.4 changes only the value SOURCE, not this field.
+    post_trigger_transition: Literal["failed", "awaiting_approval"]
+    # Step counter from the matching task.budget_exceeded payload (PP16),
+    # carried through BudgetSupervisorResult.step.
+    step: int = Field(ge=1)
+
+
 class Tier3ActionAttemptedPayload(BaseModel):
     """Payload for the ``tier3.action_attempted`` event (FR38 / Story 6.2).
 
@@ -1140,6 +1179,7 @@ __all__ = [
     "TaskApprovalRequestedPayload",
     "TaskApprovalSignedPayload",
     "TaskBlockerRaisedPayload",
+    "TaskBudgetEnforcementTriggeredPayload",
     "TaskBudgetExceededPayload",
     "TaskCompletedPayload",
     "TaskLicenseFlaggedPayload",

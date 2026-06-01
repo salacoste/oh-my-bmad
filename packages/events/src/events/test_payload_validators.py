@@ -15,6 +15,7 @@ from events.payloads import (
     PlanStep,
     TaskApprovalRequestedPayload,
     TaskBlockerRaisedPayload,
+    TaskBudgetEnforcementTriggeredPayload,
     TaskBudgetExceededPayload,
     TaskCompletedPayload,
     TaskCreatedPayload,
@@ -87,6 +88,63 @@ class TestTaskIdPatternValid:
 
     def test_budget_exceeded(self, task_id: str) -> None:
         TaskBudgetExceededPayload(task_id=task_id, token_limit=1000, tokens_used=1500, step=5)
+
+    def test_budget_enforcement_triggered(self, task_id: str) -> None:
+        # Story 12.2 / FR67 — happy path: all FR67 fields validate.
+        p = TaskBudgetEnforcementTriggeredPayload(
+            task_id=task_id,
+            budget_threshold=100_000,
+            actual_spend=105_000,
+            action_taken="subprocess_terminated",
+            post_trigger_transition="failed",
+            step=3,
+        )
+        assert p.action_taken == "subprocess_terminated"
+        assert p.post_trigger_transition == "failed"
+
+    def test_budget_enforcement_triggered_rejects_bad_input(self, task_id: str) -> None:
+        # Story 12.2 / FR67 — frozen+strict+extra=forbid; constrained literals.
+        import pytest
+        from pydantic import ValidationError
+
+        # extra field forbidden
+        with pytest.raises(ValidationError):
+            TaskBudgetEnforcementTriggeredPayload(
+                task_id=task_id,
+                budget_threshold=1,
+                actual_spend=2,
+                post_trigger_transition="failed",
+                step=1,
+                bogus="x",  # type: ignore[call-arg]
+            )
+        # action_taken constrained to the single literal
+        with pytest.raises(ValidationError):
+            TaskBudgetEnforcementTriggeredPayload(
+                task_id=task_id,
+                budget_threshold=1,
+                actual_spend=2,
+                action_taken="something_else",  # type: ignore[arg-type]
+                post_trigger_transition="failed",
+                step=1,
+            )
+        # post_trigger_transition constrained to failed|awaiting_approval
+        with pytest.raises(ValidationError):
+            TaskBudgetEnforcementTriggeredPayload(
+                task_id=task_id,
+                budget_threshold=1,
+                actual_spend=2,
+                post_trigger_transition="cancelled",  # type: ignore[arg-type]
+                step=1,
+            )
+        # spend/threshold must be > 0
+        with pytest.raises(ValidationError):
+            TaskBudgetEnforcementTriggeredPayload(
+                task_id=task_id,
+                budget_threshold=0,
+                actual_spend=2,
+                post_trigger_transition="failed",
+                step=1,
+            )
 
     def test_approval_requested(self, task_id: str) -> None:
         TaskApprovalRequestedPayload(task_id=task_id, action="approve", justification="looks good")

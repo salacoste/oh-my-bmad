@@ -45,6 +45,7 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     TaskApprovalRequestedPayload,
     TaskApprovalSignedPayload,
     TaskBlockerRaisedPayload,
+    TaskBudgetEnforcementTriggeredPayload,
     TaskBudgetExceededPayload,
     TaskCompletedPayload,
     TaskCreatedPayload,
@@ -113,6 +114,7 @@ __all__ = [
     "TaskApprovalRequestedPayload",
     "TaskApprovalSignedPayload",
     "TaskBlockerRaisedPayload",
+    "TaskBudgetEnforcementTriggeredPayload",
     "TaskBudgetExceededPayload",
     "TaskCompletedPayload",
     "TaskCreatedPayload",
@@ -236,6 +238,17 @@ def ensure_registered() -> None:
     # Story 5.15 — task.budget_exceeded event payload (FR44 / NFR-P5).
     register("task.budget_exceeded", "1.0.0", TaskBudgetExceededPayload)
     register("task.budget_exceeded", "1.1.0", TaskBudgetExceededPayload)
+
+    # Story 12.2 — task.budget_enforcement_triggered audit event (FR67).
+    # The ACTION-RECORD emitted by worker-wrapper AFTER it SIGTERMs the
+    # subprocess for a budget overage (distinct from the task.budget_exceeded
+    # SIGNAL above). Brand-new type → registered only at 1.1.0 per the epics
+    # scope note (no 1.0.0 legacy to carry).
+    register(
+        "task.budget_enforcement_triggered",
+        "1.1.0",
+        TaskBudgetEnforcementTriggeredPayload,
+    )
 
     # Story 6.2 — tier3.action_attempted audit event (FR38).
     # Emitter added in Story 6.5.

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 import structlog
 from events.envelope import is_valid_trace_id
@@ -90,6 +90,31 @@ class WorkerSettings(BaseSettings):
     # cleanly. Well above ``claude_timeout_s`` so it only trips on pathological
     # subprocess hangs (process killed but pipe-reader stuck in syscall).
     task_overall_timeout_s: float = Field(default=900.0, gt=0)
+
+    # Story 12.2 (FR67) — default post-enforcement task transition, used to
+    # populate ``task.budget_enforcement_triggered.post_trigger_transition``
+    # so the audit event records what ACTUALLY happened to the task.
+    #
+    # Default is ``"failed"`` — and that is the ONLY fully-wired transition
+    # today: the post-enforcement path drives ``LifecycleEvent.TASK_FAILED``.
+    # The ``"awaiting_approval"`` transition requires the operator
+    # budget-override APPROVAL-WAIT path that Story 12.3 (FR68,
+    # ``/approve --override budget``) builds — until that ships, routing a
+    # terminated task to AWAITING_APPROVAL would leave the worker hanging with
+    # no way to be approved. So 12.2 honestly defaults to ``"failed"``; the
+    # field + literal are present so Stories 12.3 (approval path) + 12.4
+    # (per-task policy storage, FR68a) flip the default / source per-task
+    # WITHOUT changing the event shape. Constrained to the 2 FR67 literals.
+    default_budget_action: Literal["failed", "awaiting_approval"] = Field(
+        default="failed",
+        validation_alias="OMB_DEFAULT_BUDGET_ACTION",
+        description=(
+            "Default task transition recorded in task.budget_enforcement_triggered "
+            "(Story 12.2 / FR67). 'failed' is the only wired transition today; "
+            "'awaiting_approval' needs Story 12.3's override-approval path. "
+            "Story 12.4 will source this per-task."
+        ),
+    )
 
     # GitHub API settings (Story 5.7).
     github_token: SecretStr = SecretStr("")
