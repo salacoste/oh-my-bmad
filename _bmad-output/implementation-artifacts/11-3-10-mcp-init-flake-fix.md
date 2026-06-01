@@ -1,6 +1,6 @@
 # Story 11.3.10 — orchestrator-adapter + worker-wrapper MCP-init flake fix (healthcheck budget ≥ legitimate init ceiling)
 
-Status: ready-for-dev
+Status: in-progress (AC2/AC4/AC5/AC6/AC7 done; AC1/AC8 nightly blocked on push auth; see Dev Agent Record)
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
