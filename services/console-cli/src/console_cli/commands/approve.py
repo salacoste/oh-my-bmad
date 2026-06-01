@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from typing import Literal
 
 import httpx
 import typer
@@ -20,11 +21,34 @@ from console_cli.app.runner import run_async
 
 def approve(
     task_id: str = typer.Argument(..., help="Task ID (t-<uuidv7>)"),
+    override: str | None = typer.Option(
+        None,
+        "--override",
+        help=(
+            "Override a gate when approving: 'license' or 'budget'. "
+            "'budget' extends the task's budget and unblocks it AT THE REGISTRY "
+            "GATE only — it works while the task is still 'blocked'. Once Epic-12's "
+            "supervisor has already terminated the subprocess (task 'failed'), "
+            "--override cannot resurrect it; use 'console retry <task-id>' instead. "
+            "(Story 12.3; mirrors the Telegram /approve --override surface.)"
+        ),
+    ),
 ) -> None:
-    """Approve a pending decision."""
+    """Approve a pending decision (optionally with a gate --override)."""
     if not TASK_ID_PATTERN.match(task_id):
         print(f"Error: Invalid task ID format: {task_id!r}", file=sys.stderr)
         raise SystemExit(1) from None
+
+    override_value: Literal["license", "budget"] | None = None
+    if override is not None:
+        normalized = override.strip().lower()
+        if normalized not in ("license", "budget"):
+            print(
+                f"Error: Unknown override: {override!r}. Supported: license, budget.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1) from None
+        override_value = normalized  # type: ignore[assignment]
 
     settings = ConsoleSettings()
     client = RegistryAPIClient(base_url=settings.registry_api_base_url)
@@ -38,6 +62,7 @@ def approve(
                 idempotency_key=metadata.idempotency_key,
                 request_id=metadata.request_id,
                 trace_id=metadata.trace_id,
+                override=override_value,
             )
         )
     except httpx.ConnectError:

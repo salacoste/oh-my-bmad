@@ -544,6 +544,28 @@ def test_task_completed_schema_versions_register_distinct_entries() -> None:
     assert REGISTRY[("task.completed", "1.1.0")] is TaskCompletedPayload
 
 
+def test_budget_override_alias_registers_same_payload_as_tier3() -> None:
+    """Story 12.3 AC2 (FR68, D1=(A)) — budget.override @1.1.0 is registered as
+    an Epic-12-namespace alias on the SAME BudgetOverridePayload as the legacy
+    tier3.budget_override (architecture.md:1423). Both names resolve to one
+    payload class; tier3.budget_override stays registered for FR44 back-compat.
+    """
+    from events.schema_registry import REGISTRY, register
+
+    from registry_state.domain.event_types import BudgetOverridePayload
+
+    # Re-register (idempotent same-class no-op) to be order-independent vs the
+    # packages/events unregister_all() autouse fixture — see L4 test above.
+    register("tier3.budget_override", "1.1.0", BudgetOverridePayload)
+    register("budget.override", "1.1.0", BudgetOverridePayload)
+
+    assert ("budget.override", "1.1.0") in REGISTRY
+    assert ("tier3.budget_override", "1.1.0") in REGISTRY
+    # The alias and the legacy name resolve to the identical payload class.
+    assert REGISTRY[("budget.override", "1.1.0")] is BudgetOverridePayload
+    assert REGISTRY[("budget.override", "1.1.0")] is REGISTRY[("tier3.budget_override", "1.1.0")]
+
+
 # ---------------------------------------------------------------------------
 # Story 3.13 — TaskSelfRecoveredPayload (FR16, 5 tests)
 # ---------------------------------------------------------------------------

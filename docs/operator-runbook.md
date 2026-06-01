@@ -217,6 +217,31 @@ For Cloudflare Tunnel: check `cloudflared` service logs with
 
 ---
 
+## Budget override — `/approve --override budget` and its sharp edge
+
+When a task is **blocked at the registry gate** for crossing its budget, an
+operator can extend the budget and unblock it from either surface:
+
+- **Telegram:** `/approve <task-id> --override budget`
+- **console-cli:** `console approve <task-id> --override budget`
+
+Both reach the same registry-api override branch (extends the limit, emits the
+`tier3.budget_override` audit event — also registered as `budget.override`
+@1.1.0 per Story 12.3 / FR68).
+
+> **SHARP EDGE (Story 12.3, D2=(II)).** `--override budget` only works while the
+> task is still `blocked`. Epic-12's `budget_supervisor` enforces the budget by
+> **autonomously `SIGTERM`-ing the live subprocess** within ~5s of
+> `task.budget_exceeded` — it has no awareness of override events. So if you
+> override *after* the subprocess has already been terminated (task `failed`),
+> the override **cannot resurrect the task**. Use `/retry` (Telegram) or
+> `console retry <task-id>` to start a fresh run with the extended budget.
+>
+> Preventing enforcement *within* the 5-second grace window (coupling the
+> supervisor to inbound override events) is **deferred to Story 12.3a** — it is
+> not yet implemented. Until then, treat `--override budget` as "raise the
+> ceiling, then `/retry`" for any task that has already been terminated.
+
 ## Forward-referenced scenarios
 
 These failure modes are spec'd but the enforcement logic does not exist yet.

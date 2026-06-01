@@ -306,6 +306,12 @@ def ensure_registered() -> None:
     # Story 6.11 — tier3.budget_override audit event (FR44).
     register("tier3.budget_override", "1.0.0", BudgetOverridePayload)
     register("tier3.budget_override", "1.1.0", BudgetOverridePayload)
+    # Story 12.3 (FR68, D1=(A)) — budget.override @ 1.1.0 is the Epic-12-namespace
+    # alias for the SAME BudgetOverridePayload (architecture.md:1423). The decisions
+    # route still EMITS tier3.budget_override (kept above for FR44 back-compat); this
+    # registration lets the budget.override name validate/round-trip so a later pass
+    # can switch the emit once consumers migrate. No new payload, no new 1.0.0.
+    register("budget.override", "1.1.0", BudgetOverridePayload)
 
     # Story 9.7 / AC10: all event types registered under 1.1.0 above for
     # replay safety. Both 1.0.0 and 1.1.0 entries kept per AC10 option (a).

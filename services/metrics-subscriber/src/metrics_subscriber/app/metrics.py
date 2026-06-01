@@ -214,6 +214,9 @@ _EVENT_FAMILIES: Final[tuple[str, ...]] = (
     "deployment",
     "key",  # Story 11.2 — key.rotated (FR65a)
     "capability",  # Story 11.2 — capability.denied (DD5 from Epic 10 retro)
+    "budget",  # Story 12.3 — budget.override @1.1.0 registered (FR68, D1=(A));
+    #            counter stays at 0 until the decisions route switches its emit
+    #            from tier3.budget_override to budget.override (consumer migration).
     "unknown",
 )
 
@@ -703,8 +706,9 @@ def build_collectors(registry: CollectorRegistry) -> MetricsState:
     time.  This eliminates the lazy-registration race between
     ``Counter.labels(...).inc()`` from the worker thread and a
     concurrent ``generate_latest()`` scrape.  Counters: 15 task +
-    5 session + 5 actor_kind + 12 event_family (11 registered + 1
-    ``"unknown"`` fallback bucket per Story 10.4 P1-H1) + 2 idempotency +
+    5 session + 5 actor_kind + 15 event_family (14 registered families
+    incl. ``"budget"`` per Story 12.3 FR68 + 1 ``"unknown"`` fallback
+    bucket per Story 10.4 P1-H1) + 2 idempotency +
     6 capability + 4 parse_skip = 49 pre-populated children.  Plus
     the 3 label-free gauges + 2 labelled gauges (cursor_offset,
     task_tokens) — total steady-state cardinality ≤ 50 timeseries

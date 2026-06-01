@@ -1,8 +1,8 @@
 # Story 12.3 — `/approve --override budget` reaches the Epic-12 enforcement loop + `budget.override` event (FR68)
 
-Status: needs-scoping-decision
+Status: review
 
-<!-- Note: this story's scope hinges on a DECISION (see "⚠️ Scoping decision required"). Do NOT dev-story until resolved. -->
+<!-- DECISION RESOLVED 2026-06-01 (operator): D1=(A) keep tier3.budget_override + add budget.override @1.1.0 alias; D2=(II) DEFER grace-window interception to Story 12.3a. Scope = the achievable delta below (console-cli parity + event-naming + /retry sharp-edge docs). The ACs as written already reflect this fork. -->
 
 ## ⚠️ Scoping decision required (read FIRST)
 
@@ -215,11 +215,49 @@ unblocks:
 
 ### Agent Model Used
 
+claude-opus-4-8[1m] (dev-story, 2026-06-01).
+
 ### Debug Log References
+
+- ruff check + format: clean (1 auto-format applied to test_event_types.py).
+- discipline gates (check_imports / check_event_registry / check_single_writer): pass.
+- mypy --strict (packages + registry-api + registry-state + worker-wrapper):
+  44 errors = baseline (verified unchanged via git-stash A/B); ZERO in any file
+  this story touched (event_types.py clean).
+- Tests: console-cli test_decision_commands 26 pass; registry-state
+  test_event_types 56 pass; metrics-subscriber 98 pass + 1 PRE-EXISTING flake
+  (`test_restart_recovery_subprocess::...sigterm_persists_cursor...`, proven
+  pre-existing on clean epic-12.2 baseline via stash — NOT this story).
+- Cardinality bounds bumped 62→63 in BOTH AC10 tests (steady-state +
+  burst-cleanup) for the new pre-populated `event_family="budget"` child.
 
 ### Completion Notes List
 
+- D1=(A) + D2=(II) per operator decision (2026-06-01).
+- AC1: console-cli `approve --override license|budget` mirrors the Telegram
+  surface; the override reaches the decisions POST body and the already-built
+  registry-api override branch. Did NOT fork the registry logic.
+- AC2: `budget.override` @1.1.0 registered as an alias on `BudgetOverridePayload`;
+  `tier3.budget_override` kept (still the emitted name) for FR44 back-compat.
+- AC3: `/retry`-after-termination sharp edge documented in console-cli help,
+  the Telegram override-parse block, AND a new operator-runbook section.
+- AC4: `budget` added to metrics `_EVENT_FAMILIES` (bounded enum); counter stays
+  at 0 until the emit migrates. No lazy-cardinality label.
+- Grace-window interception + `awaiting_approval` FSM DEFERRED to Story 12.3a
+  (filed `backlog`, NOT silently dropped).
+
 ### File List
+
+- services/console-cli/src/console_cli/commands/approve.py (M — `--override` option)
+- services/console-cli/src/console_cli/adapters/registry_api_client.py (M — `override` kwarg)
+- services/console-cli/src/console_cli/test_decision_commands.py (M — 4 override tests)
+- services/registry-state/src/registry_state/domain/event_types.py (M — `budget.override` @1.1.0)
+- services/registry-state/src/registry_state/domain/test_event_types.py (M — alias round-trip test)
+- services/metrics-subscriber/src/metrics_subscriber/app/metrics.py (M — `budget` family)
+- services/metrics-subscriber/src/metrics_subscriber/test_metrics_state.py (M — 62→63 bounds ×2)
+- services/telegram-gateway/src/telegram_gateway/handlers/approve_command.py (M — sharp-edge doc)
+- docs/operator-runbook.md (M — budget-override section)
+- _bmad-output/implementation-artifacts/12-3a-budget-override-grace-window-interception.md (NEW — deferred story)
 
 ## Definition of Done
 
