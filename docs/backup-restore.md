@@ -135,6 +135,61 @@ event log, artifacts).
 
 ---
 
+## Restore from a litestream replica (continuous DR)
+
+This is the **continuous** counterpart to the snapshot `just backup`/restore
+above. If you enabled the litestream sidecar (Story 13.1/13.2 — see
+[ADR-0007](./adr/0007-litestream-wal-replication.md) and the operator-runbook
+litestream section), the registry-state SQLite WAL is streamed off-host with a
+seconds-scale RPO. `just restore-from-litestream` rebuilds the
+`oh-my-bmad-data` volume from that replica.
+
+> **Replication ≠ HA.** This is an operator-initiated, **stack-down** recovery —
+> there is no failover. Bring the lost/old host down before recovering; never run
+> two Platforms against one replicated database.
+
+### `just restore-from-litestream`
+
+```bash
+# Prereqs: litestream.yml filled in + LITESTREAM_ACCESS_KEY_ID/SECRET in env/.env
+# (the SAME config the sidecar replicates with — the bucket/key live there).
+just restore-from-litestream                 # uses ./litestream.yml
+just restore-from-litestream config=path/to/litestream.yml
+```
+
+What the recipe does (DESTRUCTIVE — it replaces the live volume):
+
+1. **Stops** the stack (`docker compose down`).
+2. **Empties** the detected `*_oh-my-bmad-data` volume and recreates the
+   `registry/` dir at `2775` owned by the `omb` group (gid 10000) so
+   registry-state (uid 10002) can write.
+3. **Restores** `state.sqlite3` from the litestream replica's latest generation
+   (`litestream restore -config litestream.yml …` in a throwaway container — the
+   config-based form, latest generation by default).
+4. **Restarts** the stack; registry-state fixes `state.sqlite3` to `0o660` on
+   startup (Story 11.3.12).
+5. **Verifies** the workspace resolves (`just bootstrap-verify`). After it
+   returns, confirm the stack reaches healthy: `docker compose ps`.
+
+### Hermetic drill — `just litestream-restore-drill`
+
+A no-cloud-credentials proof of the restore mechanism, runnable locally and in
+`nightly.yml`:
+
+```bash
+just litestream-restore-drill
+```
+
+It seeds a WAL SQLite db, replicates to a local **file** replica, simulates host
+loss (wipes the db + meta), runs `litestream restore`, and asserts
+`PRAGMA integrity_check = ok` plus the exact recovered row count. This exercises
+the same litestream restore code path as `restore-from-litestream`, minus the S3
+transport (the transport is your own bucket — validate it live once per
+ADR-0007's first-enable checklist). The drill runs nightly
+(`.github/workflows/nightly.yml`).
+
+---
+
 ## Backup cadence
 
 - **Weekly:** run `just backup` and copy the archive off-host. Aligns with

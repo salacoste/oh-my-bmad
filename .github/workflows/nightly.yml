@@ -169,6 +169,28 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+  litestream-restore-drill:
+    name: litestream restore drill (FR71 / Story 13.3)
+    # Story 13.3 — hermetic disaster-recovery proof: seed a WAL SQLite db,
+    # replicate to a local FILE replica (no cloud creds), simulate host loss,
+    # `litestream restore`, assert PRAGMA integrity_check + exact row count.
+    # Exercises the same litestream restore code path as
+    # `just restore-from-litestream` minus the S3 transport (the transport is the
+    # operator's own bucket, validated live per ADR-0007). Docker + python3 are
+    # preinstalled on ubuntu-latest; no workspace sync needed.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install just
+        uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6  # v2
+
+      - name: Run litestream restore drill
+        run: just litestream-restore-drill
+
   migrator-integration:
     name: Migrator integration (FR22 / NFR-M3)
     # Story 2.14 — verifies the v1.0.0 → v1.0.1 schema migrator over a
