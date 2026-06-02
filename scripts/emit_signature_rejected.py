@@ -33,7 +33,6 @@ OS-level lock is defense-in-depth for the post-upgrade re-verify case.
 from __future__ import annotations
 
 import argparse
-import fcntl
 import os
 import sys
 from datetime import datetime, timedelta
@@ -44,6 +43,7 @@ from events import (
     DeploymentSignatureRejectedPayload,
     EventEnvelope,
     SystemClock,
+    append_event_line,
     new_event_id,
     new_request_id,
 )
@@ -109,42 +109,22 @@ def _build_envelope(
 
 
 def _append_with_lock(path: Path, line: bytes) -> None:
-    """Append *line* to *path* under ``LOCK_EX | LOCK_NB``, then fsync.
+    """Append *line* to *path* via the shared :func:`events.append_event_line`.
 
-    Raises ``BlockingIOError`` if the lock is held (FR26 single-writer
-    contention). Atomic durable append: ``fsync`` runs while the lock is
-    still held so the bytes are on stable storage before any other writer
-    can race for the lock.
+    Thin wrapper retained for the existing call site. Delegates to the canonical
+    FR26-respecting external-emitter append (Epic-13 retro AI-13.2).
 
-    **Code-review fix F3**: file is created with mode ``0o640`` (rw-r-----)
-    via ``os.open(..., O_CREAT, 0o640)``, matching the explicit permission
-    discipline of ``registry_state.adapters.event_log:486``. Default ``open()``
-    would inherit the process umask (typically ``0o022``) producing
-    world-readable ``0o644`` files — the audit trail must not be world-readable.
+    **Story 13.4a / retro AI-13.2 FIX:** this previously created the file at
+    ``0o640`` (the original Story-8.6 mode). An external emitter creating the
+    day's JSONL group-non-writable crash-loops registry-state's cross-uid
+    recovery (Stories 11.3.11/11.3.12) — the SAME systemic bug 13.4's lag-check
+    independently hit. ``append_event_line`` creates at ``0o660`` + ``os.fchmod``
+    (defeats umask 022), others-triad 0 (never world-readable). All external
+    emitters now share that ONE implementation so the 0o640 mistake can't recur.
 
-    **TOCTOU window (F9 in Edge-Case lane, accepted as defense-in-depth)**:
-    between ``os.open()`` and ``fcntl.flock()`` there is a sub-microsecond
-    window where another writer (registry-state) could also open the file.
-    The workflow design already guarantees mutual exclusion (operator runs
-    this helper while Platform is down); ``LOCK_NB`` non-blocking acquisition
-    closes the window with a deterministic exit-3 contention path.
+    Raises ``BlockingIOError`` if the lock is held (FR26 contention → exit 3).
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # F3: explicit 0o640 file mode — never world-readable. POSIX append-mode
-    # guarantees write position is at EOF for each ``write()`` call.
-    fd = os.open(
-        str(path),
-        os.O_WRONLY | os.O_APPEND | os.O_CREAT,
-        0o640,
-    )
-    with os.fdopen(fd, "ab", closefd=True) as f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        try:
-            f.write(line)
-            f.flush()
-            os.fsync(f.fileno())
-        finally:
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    append_event_line(path, line)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
