@@ -483,6 +483,16 @@ async def handle_tier3_budget_override(session: AsyncSession, envelope: EventEnv
     ``blocker_reason="budget_exceeded"``. Other states are left unchanged,
     making this handler replay-safe.
 
+    Story 12.3c AC4 (FR68 cross-restart durability): the override's
+    ``new_limit`` is ALSO persisted to ``Task.budget_token_limit`` on BOTH the
+    primary blocked→executing transition AND the replay-safe touch fallback.
+    registry-state is the SOLE ``state.sqlite3`` writer (FR26), so this is the
+    single durable persistence point for the raised ceiling. On an
+    orchestrator-adapter restart mid-task, ``_resolve_budget_limit`` reloads
+    this raised value (highest precedence) instead of the original limit. The
+    same handler is registered for the ``budget.override`` @1.1.0 alias so the
+    persistence applies regardless of which event name carries the override.
+
     Raises ``MaterializerError`` if the task row does not exist.
     """
     payload = _hydrate(envelope.payload, BudgetOverridePayload)
@@ -497,6 +507,7 @@ async def handle_tier3_budget_override(session: AsyncSession, envelope: EventEnv
         .values(
             status="executing",
             blocker_reason=None,
+            budget_token_limit=payload.new_limit,
             last_event_id=envelope.event_id,
             updated_at=envelope.emitted_at,
         )
@@ -504,8 +515,15 @@ async def handle_tier3_budget_override(session: AsyncSession, envelope: EventEnv
     result = cast(CursorResult[tuple[()]], await session.execute(stmt))
     if result.rowcount == 0:
         # Task is not in budget-blocked state — fall back to touch-only
-        # (replay safety: re-running the same override is a no-op).
-        await _touch_task(session, payload.task_id, envelope)
+        # (replay safety: re-running the same override is a no-op). Still
+        # persist the raised ceiling (Story 12.3c AC4) so a restart picks it
+        # up even when the FSM transition already happened.
+        await _touch_task(
+            session,
+            payload.task_id,
+            envelope,
+            {"budget_token_limit": payload.new_limit},
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -753,6 +771,12 @@ def register_default_handlers(materializer: MaterializerProtocol) -> None:
     # Story 6.11 — budget-exceeded enforcement (FR44).
     materializer.register_handler("task.budget_exceeded", handle_task_budget_exceeded)
     materializer.register_handler("tier3.budget_override", handle_tier3_budget_override)
+    # Story 12.3c (FR68) — the Epic-12 namespace alias ``budget.override``
+    # (event_types.py:315) carries the SAME BudgetOverridePayload. Register it
+    # to the same handler so the AC4 new_limit persistence applies regardless of
+    # which event name a future emitter uses (the live decisions.py route still
+    # emits tier3.budget_override for FR44 back-compat).
+    materializer.register_handler("budget.override", handle_tier3_budget_override)
     # Story 7.1 — reconstituted-state handlers (step progress, agent actions).
     materializer.register_handler("task.step.completed", handle_task_step_completed)
     materializer.register_handler("file.edited", handle_file_edited)

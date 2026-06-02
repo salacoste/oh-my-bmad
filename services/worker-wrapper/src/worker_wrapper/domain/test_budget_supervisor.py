@@ -882,6 +882,52 @@ async def test_grace_window_override_after_expiry_ignored(tmp_path: Path) -> Non
     assert result.override_received is False  # unchanged — abort is impossible now
 
 
+@pytest.mark.asyncio
+async def test_grace_window_override_during_terminate_callback_still_terminates(
+    tmp_path: Path,
+) -> None:
+    """Story 12.3c AC6 (true late-arrival) — the override lands DURING the
+    terminate callback (after the grace deadline already expired), not after the
+    function returns. Fail-closed is irreversible once the window deadline is
+    crossed: the supervisor still terminates and never reports override_received.
+
+    This is the realistic race the 12.3a critic flagged the prior test missed —
+    the override write is interleaved with the in-flight termination leg rather
+    than sequenced strictly after the supervisor returns.
+    """
+    budget_env = _make_budget_envelope(task_id=_TASK_ID_PRIMARY)
+    _write_envelopes(tmp_path, [budget_env])
+
+    calls: list[int] = []
+
+    async def _callback_writes_late_override() -> None:
+        # The override arrives WHILE we are terminating — too late to abort.
+        calls.append(1)
+        late_override = _make_override_envelope(task_id=_TASK_ID_PRIMARY)
+        _write_envelopes(tmp_path, [budget_env, late_override])
+
+    cancel = asyncio.Event()
+    clock = TickingClock(tick_ns=2_000_000_000)
+
+    result = await watch_for_budget_exceeded(
+        task_id=_TASK_ID_PRIMARY,
+        event_log_dir=tmp_path,
+        terminate_callback=_callback_writes_late_override,
+        clock=clock,
+        cancel_event=cancel,
+        poll_interval_s=0.01,
+        budget_action="awaiting_approval",
+        grace_window_s=3.0,
+    )
+
+    # The callback ran (termination happened) and the override that landed
+    # mid-callback did NOT retroactively abort it — fail-closed is final.
+    assert calls == [1]
+    assert result.triggered is True
+    assert result.override_received is False
+    assert result.termination_latency_s is not None
+
+
 # ---------------------------------------------------------------------------
 # 12.3a — (d) wrong-task-id: override for another task does not match
 # ---------------------------------------------------------------------------
