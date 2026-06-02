@@ -282,7 +282,10 @@ class TestHealthRouteHappyPath:
                     )
                 await s.commit()
 
-        asyncio.get_event_loop().run_until_complete(_seed())
+        # asyncio.run (not get_event_loop().run_until_complete) — a fresh loop
+        # per call is immune to a prior async test having closed the shared
+        # loop ("RuntimeError: Event loop is closed" under full-suite ordering).
+        asyncio.run(_seed())
         return engine, async_sessionmaker(engine, expire_on_commit=False)
 
     def test_returns_real_signals_when_all_probes_succeed(self, make_app: _AppFactory) -> None:
@@ -313,4 +316,4 @@ class TestHealthRouteHappyPath:
             )
             assert body.version  # non-empty
         finally:
-            asyncio.get_event_loop().run_until_complete(engine.dispose())
+            asyncio.run(engine.dispose())
