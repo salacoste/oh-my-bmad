@@ -780,6 +780,32 @@ async def test_grace_window_override_aborts_termination(tmp_path: Path) -> None:
     assert result.termination_method is None
 
 
+@pytest.mark.asyncio
+async def test_grace_window_override_matches_budget_dot_override_name(tmp_path: Path) -> None:
+    """12.3a 3-lane review (code LOW) — the Epic-12 `budget.override` name (not
+    just the legacy `tier3.budget_override`) is matched by _scan_for_override.
+    Guards against a typo in _BUDGET_OVERRIDE_TYPES dropping a real override."""
+    budget_env = _make_budget_envelope(
+        task_id=_TASK_ID_PRIMARY, tokens_used=2000, token_limit=1000, step=5
+    )
+    override_env = _make_override_envelope(task_id=_TASK_ID_PRIMARY, event_type="budget.override")
+    _write_envelopes(tmp_path, [budget_env, override_env])
+
+    calls, callback = _recording_callback()
+    result = await watch_for_budget_exceeded(
+        task_id=_TASK_ID_PRIMARY,
+        event_log_dir=tmp_path,
+        terminate_callback=callback,
+        clock=TickingClock(),
+        cancel_event=asyncio.Event(),
+        poll_interval_s=0.05,
+        budget_action="awaiting_approval",
+        grace_window_s=5.0,
+    )
+    assert result.override_received is True
+    assert calls == []  # terminate aborted by the budget.override-named event
+
+
 # ---------------------------------------------------------------------------
 # 12.3a — (b) window-expires: no override → fail-closed terminate
 # ---------------------------------------------------------------------------

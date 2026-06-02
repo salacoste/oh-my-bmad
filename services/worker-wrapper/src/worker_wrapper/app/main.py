@@ -647,12 +647,22 @@ async def run_task(
         # A budget breach WAS observed but an operator budget override arrived
         # inside the grace window (only reachable when
         # ``default_budget_action == "awaiting_approval"``), so the supervisor
-        # ABORTED termination — the subprocess is STILL ALIVE and finishing its
-        # work under the extended budget. We do NOT drive the FSM to FAILED and
-        # we do NOT ``return``; instead we record the prevented-enforcement
-        # audit event and FALL THROUGH to the normal-completion path below
-        # (re-raise of a real runner error, or TASK_COMPLETED / approval gate)
-        # so the runner's natural ``result`` is processed.
+        # ABORTED this termination — the subprocess is STILL ALIVE and runs to
+        # natural completion. We do NOT drive the FSM to FAILED and we do NOT
+        # ``return``; we record the prevented-enforcement audit event and FALL
+        # THROUGH to the normal-completion path below (re-raise of a real runner
+        # error, or TASK_COMPLETED / approval gate) so the runner's natural
+        # ``result`` is processed.
+        #
+        # SCOPE (3-lane review, critic MAJOR-1 — honest framing): this is a
+        # ONE-SHOT REPRIEVE, not a re-enforced higher ceiling. 12.3a does NOT
+        # re-spawn the supervisor with the override's ``new_limit`` and does NOT
+        # re-couple the orchestrator-adapter BudgetTracker — so after this abort
+        # the task runs WITHOUT further budget enforcement, bounded only by
+        # ``task_overall_timeout_s`` (default 900s). Enforcing the new ceiling
+        # going forward is deferred to Story 12.3c (tracked). The operator
+        # explicitly chose ``--override budget`` (= "let this task exceed its
+        # budget"), so finishing the run is the intended semantic for now.
         #
         # post_trigger_transition="awaiting_approval" is audit-truthful here:
         # the task was NOT failed — it parks for / continues under operator

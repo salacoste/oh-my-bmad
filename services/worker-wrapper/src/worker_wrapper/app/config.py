@@ -133,14 +133,23 @@ class WorkerSettings(BaseSettings):
     #
     # Single ``OMB_BUDGET_GRACE_WINDOW_S`` alias only — NO redundant field-name
     # alias (Story 12.4 fixed exactly that ghost-unprefixed-env-var bug).
+    # Story 12.3a 3-lane review (security MEDIUM) — bounded above by ``le=300``
+    # so a misconfiguration (e.g. OMB_BUDGET_GRACE_WINDOW_S=999999) cannot stretch
+    # the token-burn window to days; 5 min is a generous ceiling (overrides that
+    # matter arrive in seconds). Enforcement is never DISABLED — the monotonic
+    # deadline always fires — but the burn window stays sane.
     budget_grace_window_s: float = Field(
         default=5.0,
         gt=0,
+        le=300.0,
         validation_alias=AliasChoices("OMB_BUDGET_GRACE_WINDOW_S"),
         description=(
-            "Bounded grace window (seconds) the budget supervisor waits for an "
-            "operator budget override before enforcing (SIGTERM). Only active "
-            "when default_budget_action='awaiting_approval' (Story 12.3a / FR68)."
+            "Bounded grace window (seconds, 0<x<=300) the budget supervisor waits "
+            "for an operator budget override before enforcing (SIGTERM). Only "
+            "active when default_budget_action='awaiting_approval'. NOTE: ~5s is "
+            "only reachable by a PRE-STAGED / automated override; an ad-hoc human "
+            "operator should raise this (e.g. 30-60s) to have a chance to react "
+            "(Story 12.3a / FR68; review finding)."
         ),
     )
 

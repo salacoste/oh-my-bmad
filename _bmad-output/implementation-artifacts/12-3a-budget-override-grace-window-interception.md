@@ -1,6 +1,6 @@
 # Story 12.3a — Budget-override grace-window interception (supervisor↔override coupling, FR68 enforcement-prevention)
 
-Status: review (all 3 phases implemented)
+Status: done
 
 <!-- DESIGN RESOLVED 2026-06-02 (architect): inbound channel = extend the existing
 JSONL tail (Option a); G1 grace-window-only-on-awaiting_approval; G2 defer per-task
@@ -19,7 +19,7 @@ supervisor and deserves its own review. -->
 **As** the platform operator,
 **I want** `/approve --override budget <task-id>` issued DURING the budget grace
 window to abort the pending subprocess termination and let the task continue
-under the extended budget,
+(a one-shot reprieve; new-ceiling enforcement = Story 12.3c),
 **so that** I can rescue an over-budget task *without losing its in-flight work*
 to a `/retry` from scratch — the FR68 headline behavior.
 
@@ -183,3 +183,36 @@ unblocks:
 - [Source: Story 12.3 architect gap analysis 2026-06-01 — the two-disjoint-budget-models root cause + D2 fork.]
 - [Source: prd.md:1029 (FR68).]
 - [Source: Story 12.2 config.py:120-137 — the validator this story removes once the FSM path lands.]
+
+
+## 3-Lane Review — 2026-06-02 (DONE)
+
+- **code-reviewer:** APPROVE-WITH-NITS (0 crit/high). Control flow + audit
+  truthfulness + fail-closed state machine confirmed correct; backward-compat
+  preserved. MEDIUM (DRY duplication) + LOW (budget.override name test) → LOW
+  applied (test added); MEDIUM (DRY helper) tracked in 12.3c.
+- **security-reviewer:** SAFE TO MERGE (0 crit/high). Only an authenticated
+  registry-api-written override event (matching task_id) can abort enforcement —
+  same JSONL trust boundary already used for task.budget_exceeded/approval.granted;
+  no new attack surface. Fail-closed mechanically guaranteed (monotonic deadline).
+  MEDIUM (no upper bound on grace window) → APPLIED le=300. mcp_clients untouched;
+  no env-copy; OPERATOR_HMAC_KEY not exposed; FR26 preserved.
+- **critic:** ACCEPT-WITH-RESERVATIONS. Two MAJOR design/honesty findings (not
+  code bugs): (1) one-shot reprieve — nothing enforces the override new_limit
+  going forward (task runs unbounded until task_overall_timeout_s) → corrected
+  the misleading "extended budget" wording in code+doc + filed **Story 12.3c**;
+  (2) 5s window impractical for ad-hoc human reaction → documented in the config
+  (only pre-staged/automated overrides hit ~5s; humans should raise it).
+
+**Fixes applied from review:** config `le=300` bound; honest "one-shot reprieve"
+wording (main.py + this doc); budget.override-name supervisor test; 5s-window
+config NOTE. **Deferred to Story 12.3c:** new-ceiling enforcement (the MAJOR-1
+gap), the DRY helper refactor, the offset-0 scan-efficiency + true-late-arrival
+test nits.
+
+**Gates:** ruff/format clean; mypy --strict worker-wrapper 42=baseline 0-new in
+production files; check_event_registry + discipline green; 20 supervisor + 2
+run_task + config + payload tests pass (config teardown "errors" are the
+pre-existing py3.12 event-loop DeprecationWarning artifact, not body failures).
+Live cross-service E2E (operator override aborts a real grace window) deferred to
+operator/nightly.
