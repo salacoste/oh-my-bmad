@@ -443,10 +443,16 @@ services:
   #      Unset → the bind mount falls back to ./litestream.yml; if that is
   #      absent the operator simply never enables the profile.
   #
-  # Mounts the data volume READ-ONLY (:ro) — defence-in-depth for FR26
-  # single-writer: the sidecar can only READ state.sqlite3 + its -wal/-shm
-  # sidecars (registry-state fixes them to 0o660 at startup, Story 11.3.12),
-  # never write. Runs the upstream public image (config-not-code); no
+  # Mounts the data volume READ-WRITE (required — see ADR-0007 §3). litestream
+  # is NOT a passive reader: it (a) creates a ``.state.sqlite3-litestream/``
+  # metadata dir alongside the DB and (b) TAKES OVER checkpointing
+  # (``PRAGMA wal_autocheckpoint=0`` then issues its own ``wal_checkpoint``),
+  # which writes the .db + -wal/-shm files. A ``:ro`` mount would break
+  # replication outright. FR26 single-writer is preserved NOT by the mount mode
+  # but by design: registry-state remains the sole AUTHOR of rows; litestream
+  # only relocates already-committed WAL frames (checkpoint) + writes its own
+  # meta dir + the remote replica — it never originates application data
+  # (ADR-0007 §1/§3). Runs the upstream public image (config-not-code); no
   # oh-my-bmad-base derivative needed. Replication-lag health observability
   # lands in Story 13.4 (litestream-lag-check + replication.lagging) — this
   # story intentionally ships the sidecar without a compose healthcheck (like
@@ -463,7 +469,7 @@ services:
     restart: unless-stopped
     networks: [oh-my-bmad-net]
     volumes:
-      - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
+      - oh-my-bmad-data:/var/lib/oh-my-bmad
       - ${OMB_LITESTREAM_CONFIG_PATH:-./litestream.yml}:/etc/litestream/litestream.yml:ro
 
 networks:

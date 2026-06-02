@@ -3,7 +3,7 @@
 Status: review
 
 <!-- Epic 13 opener. Conventional engineering choices (compose profile, upstream
-image, read-only mount) — no product fork, so implemented directly with the
+image, read-WRITE mount per litestream's requirement) — no product fork, so implemented directly with the
 defaults documented below rather than a needs-scoping-decision pause. ADR-0007
 (the Epic-13 prerequisite) authored alongside. -->
 
@@ -20,7 +20,7 @@ recovery) — WITHOUT changing the default stack footprint when I don't.
 The Epic-13 acceptance gate requires `ADR-0007` authored + `accepted` with the
 explicit **"replication ≠ HA"** framing. Authored in this story:
 `docs/adr/0007-litestream-wal-replication.md` (status: accepted) — DR-not-HA,
-single-writer preserved, optional/off-by-default, read-only mount, config-not-code.
+single-writer preserved at the app layer, optional/off-by-default, READ-WRITE mount (litestream requirement — corrected from an initial :ro draft), config-not-code.
 
 ## Gap analysis (BUILT vs NET-NEW — 2026-06-01)
 
@@ -44,9 +44,14 @@ single-writer preserved, optional/off-by-default, read-only mount, config-not-co
 - **Image:** upstream `litestream/litestream:${LITESTREAM_VERSION:-0.3.13}` —
   config-not-code, no `oh-my-bmad-base` derivative (the sidecar has no Platform
   Python / uid logic).
-- **Mount:** `oh-my-bmad-data:/var/lib/oh-my-bmad:ro` (READ-ONLY) — FR26
-  defence-in-depth; the sidecar can never write the DB. Config bind-mounted
-  read-only at `/etc/litestream/litestream.yml`.
+- **Mount:** `oh-my-bmad-data:/var/lib/oh-my-bmad` (READ-WRITE — required).
+  CORRECTED after authoritative litestream-docs/source verification: litestream
+  needs write access to the DB directory — it writes a `.state.sqlite3-litestream/`
+  meta dir AND takes over checkpointing (writes the `.db`/`-wal`/`-shm`). A
+  `:ro` mount (the original draft) would break replication. FR26 is preserved at
+  the application layer (registry-state is the sole row-author; litestream only
+  relocates committed frames), NOT by the mount mode — see ADR-0007 §1/§3. The
+  *config* file is still bind-mounted read-only (`:ro`).
 - **Healthcheck:** intentionally OMITTED for 13.1 (like the migrator). The
   sidecar is orthogonal to the core "N/N healthy" count; replication-health
   observability (lag) is Story 13.4's `litestream-lag-check` +
@@ -61,9 +66,14 @@ single-writer preserved, optional/off-by-default, read-only mount, config-not-co
    litestream; `docker compose --profile litestream config --services` → 8
    (litestream present).
 
-2. **AC2 — read-only data mount (FR26 defence-in-depth).** The sidecar mounts
-   `oh-my-bmad-data` read-only. **VERIFIED:** rendered config shows the volume
-   `read_only: True` for litestream.
+2. **AC2 — read-WRITE data mount (litestream requires it); FR26 upheld by
+   design.** The sidecar mounts `oh-my-bmad-data` read-write — litestream writes
+   its `.state.sqlite3-litestream/` meta dir + checkpoints the DB (verified vs
+   litestream source). A `:ro` mount would break replication. FR26 single-writer
+   is preserved at the application layer (registry-state sole row-author;
+   litestream only relocates committed WAL frames), per ADR-0007 §1/§3.
+   **VERIFIED:** rendered config shows the data volume mounted read-write (no
+   `read_only`) and the *config* bind read-only.
 
 3. **AC3 — upstream image, config-driven.** `image: litestream/litestream`
    (pinned via `LITESTREAM_VERSION`); `command: ["replicate", "-config",
@@ -92,7 +102,9 @@ single-writer preserved, optional/off-by-default, read-only mount, config-not-co
 ## Constraints
 
 - **NO `mcp_clients.py` / no Python service code touched** — compose + env + ADR only.
-- **FR26 single-writer preserved** — read-only mount makes a sidecar write impossible.
+- **FR26 single-writer preserved** at the application layer — registry-state is
+  the sole row-author; litestream needs RW (meta dir + checkpoints) but only
+  relocates committed frames, never authors data (ADR-0007 §1/§3).
 - **Replication ≠ HA** — see ADR-0007; no failover, no second live writer.
 - **Sharp edge (documented):** enabling the profile without first creating the
   `litestream.yml` the bind mount points at will fail/auto-create a dir — the
@@ -106,11 +118,11 @@ claude-opus-4-8[1m] (create-story + dev-story, 2026-06-01).
 
 ### Completion Notes List
 - ADR-0007 authored (accepted) — the Epic-13 prerequisite.
-- litestream service added to docker-compose.yml (profile-gated, :ro mount,
+- litestream service added to docker-compose.yml (profile-gated, READ-WRITE data mount,
   pinned upstream image, replicate command).
 - `.env.example` Epic-13 section (OMB_LITESTREAM_CONFIG_PATH + LITESTREAM_VERSION).
 - Verified via `docker compose config`: 7 services default / 8 with profile;
-  data volume read_only:True; image + command + config bind correct.
+  data volume read-write (config bind :ro); image + command correct. CORRECTED the initial :ro data mount → rw after verifying litestream needs DB-dir write (meta dir + checkpoint) via docs/source.
 - Deferred to later Epic-13 stories: litestream.yml.example + credential runbook
   (13.2), restore recipe (13.3), lag-check + replication.lagging (13.4).
 
@@ -120,7 +132,7 @@ claude-opus-4-8[1m] (create-story + dev-story, 2026-06-01).
 - .env.example (M — Epic-13 env section)
 
 ## Definition of Done
-- litestream sidecar in compose, profile-gated OFF by default, read-only data mount.
+- litestream sidecar in compose, profile-gated OFF by default, read-WRITE data mount (litestream requirement).
 - ADR-0007 authored + accepted with "replication ≠ HA" framing.
 - `OMB_LITESTREAM_CONFIG_PATH` + `LITESTREAM_VERSION` in `.env.example`.
 - `docker compose config` validates default (no sidecar) and `--profile litestream` (sidecar present).
@@ -139,7 +151,7 @@ nfr_refs: [NFR-R7]
 arch_refs:
   - "ADR-0007 (authored here) — litestream WAL replication, replication ≠ HA"
   - "epics.md Epic 13 — orthogonal DR sidecar; Story 13.1 scope + AC"
-  - "Story 11.3.12 — state.sqlite3 0o660 / WAL-sidecar inheritance the read-only mount relies on"
+  - "Story 11.3.12 — state.sqlite3 0o660 / WAL-sidecar mode the litestream sidecar (shared omb group) reads+writes"
   - "docker-compose migrator profiles:[migrate] — the optional-service pattern mirrored"
 estimated_complexity: SMALL (compose + env + ADR; no service code)
 priority: MEDIUM (FR69; Epic-13 opener, orthogonal)

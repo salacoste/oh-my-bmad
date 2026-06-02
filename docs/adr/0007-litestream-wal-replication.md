@@ -53,12 +53,21 @@ gate requires.
   Platform. Recovery is an **operator-initiated, manual** procedure
   (`just restore-from-litestream`, Story 13.3) that stops the stack, recreates
   the volume, restores, and restarts.
-- **FR26 single-writer is PRESERVED and is WHY this is safe.** litestream
-  requires exactly one writer to the SQLite file; oh-my-bmad already guarantees
-  that (registry-state is the sole writer). Running two Platforms against one
-  replicated database would corrupt it — so the recovery procedure explicitly
-  brings the old host DOWN before the new one comes UP. We will never run
-  primary + replica live simultaneously.
+- **FR26 single-writer is PRESERVED — with a precise caveat.** FR26 means
+  registry-state is the sole **author of application rows**. litestream does NOT
+  author rows, but it is *not* a pure reader either: it disables SQLite
+  autocheckpoint (`PRAGMA wal_autocheckpoint=0`) and **takes over checkpointing**,
+  issuing its own `wal_checkpoint` which physically writes the `.db` + `-wal`/
+  `-shm` files (it relocates already-committed WAL frames into the main file —
+  it never originates data). This is the standard, intended litestream model and
+  is safe under SQLite WAL (checkpoints are lock-coordinated; one writer of new
+  data at a time). So FR26 holds at the application layer (registry-state is the
+  only INSERT/UPDATE source) while litestream co-manages the WAL/checkpoint
+  lifecycle. The consequence for deployment is that litestream needs **write**
+  access to the database directory (see §3). Running two *Platforms* (two
+  row-authors) against one replicated database would corrupt it — so recovery
+  brings the old host DOWN before the new one comes UP; we never run primary +
+  replica live simultaneously.
 
 Operators MUST NOT treat litestream as a way to run a warm second site. Any
 future true-HA design (multi-writer, failover) is out of scope for Phase 2 and
@@ -73,14 +82,31 @@ the operator setting `OMB_LITESTREAM_CONFIG_PATH` to a filled-in `litestream.yml
 zero default footprint, matching the "doesn't depend on any other Phase-2 epic;
 orthogonal" placement of Epic 13.
 
-### 3. The sidecar mounts the data volume READ-ONLY.
+### 3. The sidecar mounts the data volume READ-WRITE (it must).
 
-litestream only needs to READ the SQLite file + its `-wal`/`-shm` sidecars to
-ship frames; it writes only to the remote object store. Mounting
-`oh-my-bmad-data` read-only (`:ro`) is defence-in-depth: the replication sidecar
-can never mutate registry-state's database, so it cannot violate FR26 even by
-bug. (registry-state's startup already fixes the DB file to mode 0o660 — Story
-11.3.12 — so the same-group read the sidecar performs is permitted.)
+litestream **requires write access to the database directory** — a `:ro` mount
+would break replication. Two concrete reasons (verified against litestream
+0.3.x/0.5.x source, `db.go`):
+
+1. It creates and continuously writes a metadata directory **alongside** the DB:
+   `/var/lib/oh-my-bmad/registry/.state.sqlite3-litestream/` (shadow WAL in
+   0.3.x; LTX log in 0.5.x). The path is fixed next to the DB
+   (`meta-path` can relocate it, but the `-wal`/`-shm` + checkpoint writes below
+   still need the DB dir writable, so relocation buys nothing here).
+2. It takes over checkpointing (§1), writing the `.db`/`-wal`/`-shm` files.
+
+An **earlier draft of this ADR (and Story 13.1) wrongly specified a `:ro` mount
+as "FR26 defence-in-depth."** That was incorrect — corrected here after
+verifying litestream's actual behaviour. The data volume is mounted **read-write**
+for the sidecar. FR26 is upheld by the application-layer single-author invariant
+(§1), not by the mount mode. The same-group access works because registry-state
+fixes the DB file to mode 0o660 at startup (Story 11.3.12) and the sidecar runs
+in the shared `omb` group; the litestream container's uid must be a member of
+that group (deployment detail to confirm when the sidecar is first enabled —
+tracked for Story 13.2's setup runbook).
+
+The `litestream.yml` config file is bind-mounted **read-only** (`:ro`) — only the
+*data* volume needs write; the config is never mutated.
 
 ### 4. Replication is driven by an upstream image, config-not-code.
 
@@ -95,7 +121,9 @@ layout out of the repo and out of the image.
 **Positive.**
 - Cross-host disaster recovery with a seconds-scale RPO, opt-in, zero default
   cost.
-- FR26 single-writer is reinforced (read-only mount; no second live writer).
+- FR26 single-writer holds at the application layer (registry-state is the sole
+  row-author; litestream only co-manages checkpoints — §1/§3); no second
+  *Platform* runs against the replica.
 - Clear operator mental model: "this is a backup that streams, not a failover."
 
 **Negative / accepted trade-offs.**
@@ -108,6 +136,18 @@ layout out of the repo and out of the image.
 - Replication health must itself be observed (a silently-dead replica is
   dangerous) — addressed by the `litestream-lag-check` recipe +
   `replication.lagging` event (Story 13.4).
+- **Checkpoint coordination:** litestream takes over checkpointing (disables
+  autocheckpoint on its connection + issues its own `wal_checkpoint`). This is
+  the standard litestream model and is lock-safe under SQLite WAL, but it means
+  litestream becomes a second process that physically writes the DB/WAL files
+  (relocating committed frames, never authoring data — see §1). To verify once
+  the sidecar is first run live: that registry-state and litestream do not fight
+  over checkpoints (litestream is designed to coexist with an app that also
+  checkpoints; worst case is a redundant checkpoint, not corruption). Tracked as
+  a verification item for Story 13.2's first live enablement.
+- **Container group membership:** the litestream uid must join the shared `omb`
+  group to read/write the 0o660 DB files — a deployment detail to confirm at
+  first enablement (Story 13.2 runbook).
 
 ## References
 
