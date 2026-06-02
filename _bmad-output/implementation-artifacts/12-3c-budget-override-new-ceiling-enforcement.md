@@ -66,9 +66,12 @@ Reaction leg (worker-wrapper) — UNCHANGED by this story:
 - `services/worker-wrapper/src/worker_wrapper/domain/budget_supervisor.py` —
   has no token counter / ceiling; only matches `task_id` on the override event.
   `_scan_for_override` (~:673-757) is a clean JSONL override-scan reference the
-  orchestrator MAY reuse. After Option A re-arms and a future breach re-emits
-  `task.budget_exceeded` against new_limit, the worker grace-window naturally
-  re-engages — no worker code change.
+  orchestrator MAY reuse. NOTE (critic MINOR-2 correction): the worker
+  supervisor has already RETURNED after the first override, so a second
+  `task.budget_exceeded` is NOT re-monitored by the worker. This is functionally
+  fine — the orchestrator owns the ceiling and re-enforces the second breach
+  itself (steps are awaited synchronously); the worker reaction leg is
+  unchanged. Do not rely on the worker re-engaging.
 
 Override source + persistence:
 - `packages/events/src/events/payloads.py:948-967` — `BudgetOverridePayload`
@@ -102,7 +105,8 @@ Override source + persistence:
    loop `break`s and terminates exactly as the pre-12.3c behavior (no regression).
 3. **AC3 — re-breach enforced.** A re-breach of the NEW ceiling fires enforcement
    again (test: limit 1k→override 5k→spend to 6k → second `task.budget_exceeded`
-   emitted; with the worker supervisor present, its grace-window re-engages).
+   emitted by the orchestrator itself — it owns the ceiling; the worker leg is
+   not relied upon for the second breach).
 4. **AC4 — cross-restart durability.** The raised `new_limit` is persisted to
    `Task.budget_token_limit` via registry-state's materializer on the override
    event; after an orchestrator restart mid-task, `_resolve_budget_limit` reloads

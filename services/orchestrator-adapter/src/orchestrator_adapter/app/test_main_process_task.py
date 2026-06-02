@@ -436,3 +436,8 @@ async def test_read_task_budget_limit_null_and_notfound_and_transient_return_non
     # Transient MCP read failure → swallowed, returns None (not an exception).
     c_err = _fake_task_registry(raises=True)
     assert await _read_task_budget_limit(c_err, _T7) is None
+    # task-registry not connected (None client) → None, fail-closed (critic note).
+    import types
+
+    c_none = types.SimpleNamespace(task_registry=None)
+    assert await _read_task_budget_limit(c_none, _T7) is None

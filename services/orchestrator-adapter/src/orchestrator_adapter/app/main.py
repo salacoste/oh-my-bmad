@@ -124,7 +124,14 @@ async def _read_task_budget_limit(
     if clients.task_registry is None:
         return None
     try:
-        result = await clients.task_registry.read_resource(f"task://detail/{task_id}")
+        # Per-read timeout (critic MINOR-1): a hung MCP channel must NOT extend
+        # the override window unbounded. With this bound the worst-case window is
+        # override_wait_s + at most _MCP_CALL_TIMEOUT; a timeout raises and is
+        # swallowed below → None → keep polling → still fails closed at deadline.
+        result = await asyncio.wait_for(
+            clients.task_registry.read_resource(f"task://detail/{task_id}"),
+            timeout=_MCP_CALL_TIMEOUT,
+        )
         if result is None or not hasattr(result, "contents"):
             return None
         text = ""
