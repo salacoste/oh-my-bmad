@@ -428,6 +428,57 @@ services:
     volumes:
       - oh-my-bmad-data:/var/lib/oh-my-bmad
 
+  # Story 13.1 / FR69 / ADR-0007 — litestream WAL replication sidecar.
+  # DISASTER RECOVERY, NOT HA (replication ≠ HA — see ADR-0007): ships the
+  # registry-state SQLite WAL stream off-host to an operator-configured
+  # S3-compatible target. No failover, no second live writer — recovery is the
+  # manual stack-down procedure in Story 13.3 (just restore-from-litestream).
+  #
+  # OFF by default, two independent levers (both required to actually run it):
+  #   1. ``profiles: ["litestream"]`` keeps it out of a plain ``docker compose
+  #      up`` (mirrors the migrator). Activate with:
+  #        docker compose --profile litestream up -d litestream
+  #   2. The operator points OMB_LITESTREAM_CONFIG_PATH at a filled-in
+  #      ``litestream.yml`` (Story 13.2 ships the template + credential docs).
+  #      Unset → the bind mount falls back to ./litestream.yml; if that is
+  #      absent the operator simply never enables the profile.
+  #
+  # Mounts the data volume READ-WRITE (required — see ADR-0007 §3). litestream
+  # is NOT a passive reader: it (a) creates a ``.state.sqlite3-litestream/``
+  # metadata dir alongside the DB and (b) TAKES OVER checkpointing
+  # (``PRAGMA wal_autocheckpoint=0`` then issues its own ``wal_checkpoint``),
+  # which writes the .db + -wal/-shm files. A ``:ro`` mount would break
+  # replication outright. FR26 single-writer is preserved NOT by the mount mode
+  # but by design: registry-state remains the sole AUTHOR of rows; litestream
+  # only relocates already-committed WAL frames (checkpoint) + writes its own
+  # meta dir + the remote replica — it never originates application data
+  # (ADR-0007 §1/§3). Runs the upstream public image (config-not-code); no
+  # oh-my-bmad-base derivative needed. Replication-lag health observability
+  # lands in Story 13.4 (litestream-lag-check + replication.lagging) — this
+  # story intentionally ships the sidecar without a compose healthcheck (like
+  # the migrator), so it is orthogonal to the core "N/N healthy" count.
+  litestream:
+    container_name: omb-litestream
+    image: litestream/litestream:${LITESTREAM_VERSION:-0.3.13}
+    profiles: ["litestream"]
+    env_file:
+      - path: .env
+        required: false
+    command: ["replicate", "-config", "/etc/litestream/litestream.yml"]
+    init: true
+    restart: unless-stopped
+    networks: [oh-my-bmad-net]
+    # Story 13.1 review (MEDIUM): join the shared ``omb`` group (gid 10000) so the
+    # sidecar can read+write the 0o660 DB files (Story 11.3.12) even if it runs
+    # non-root. No-op while the upstream image runs as root; pure upside if a
+    # future image drops root or an operator adds a ``user:`` override. The
+    # explicit non-root ``user:`` + ``depends_on: registry-state`` are deferred to
+    # Story 13.2 (need live validation that the upstream image tolerates them).
+    group_add: ["10000"]
+    volumes:
+      - oh-my-bmad-data:/var/lib/oh-my-bmad
+      - ${OMB_LITESTREAM_CONFIG_PATH:-./litestream.yml}:/etc/litestream/litestream.yml:ro
+
 networks:
   oh-my-bmad-net:
     driver: bridge
