@@ -76,8 +76,38 @@ on. Authored after Epics 8–13 reached story-complete (all on branches; the
 4. Resolve the two ⚠️ naming discrepancies (tests/arch, tests/replay) — rename checklist→discipline-gates OR add thin wrappers.
 5. Spot-confirm the documentation items on merged main; file small doc stories for any genuine gaps.
 
+## Integration verification — the #9–#15 train composes clean + green (2026-06-02)
+
+Built a local `integration-phase2-verify` branch off `main` (which already has
+#1–#8) and merged every remaining root — Epic-13 chain (#9–#13), `epic-12.3a`
+(#14), `epic-phase2-shipgate` (#15):
+
+- **Zero merge conflicts** across all three separate roots (despite overlapping
+  `payloads.py`, `config.py`, `main.py`, `justfile`, `ci.yml`, `sprint-status.yaml`).
+- **`just check-gates` exit 0** on the combined tree — all 5 discipline gates,
+  incl. `check_event_registry` validating EVERY new event type together (12.2
+  enforcement, 12.3 budget.override, 13.4 replication.lagging) + `check_mcp_transport`.
+- **mypy --strict 44 = full-set baseline** — 0 net-new across the entire train.
+- **139 cross-cutting unit tests pass** — the metrics-cardinality bumps
+  (12.2→62, 12.3→63, 13.4→64) and the 12.3a `override_intercepted` payload enum
+  all reconcile in one tree.
+- **Full PR-gate suite (`pytest -m "not slow"`): 3239 passed, 31 failed, 3 skipped.**
+  Every one of the 31 failures was **REPRODUCED on clean `main`** (which has none
+  of this work) → **the train introduces ZERO new failures.** The 31 are
+  pre-existing: docker-gated integration tests (test_license_scan, test_tier3_negative,
+  test_command_injection_fuzz, idempotency 100×, test_health — need a live compose
+  stack; they pass in nightly/compose CI, the 🌙 items, not a bare `pytest`) + the
+  documented TMPDIR-setgid `test_filesystem` flakes + the registry-state 500ms
+  timing test.
+
+**Verdict: the #9–#15 PR train is verified clean-to-merge** — composes onto `main`
+with no conflicts, no new failures, gates green, mypy at baseline. The remaining
+ship gates (nightly drills, tagged-release supply-chain) run AFTER merge, by design.
+
 ## This assessment's deliverable
 - **Closed:** ADR-0004 (the one true missing artifact).
+- **Verified:** the full #9–#15 train composes clean + green on a combined tree
+  (0 conflicts, 0 new test failures vs main, gates green, mypy baseline).
 - **Surfaced:** the merge→nightly→release critical path; the tests/arch + tests/replay
   naming discrepancies; doc items to confirm on main.
 - Phase 2 is **story-complete + design-complete**; remaining is integration
