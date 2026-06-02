@@ -69,6 +69,45 @@ def _clamp_timeout(interval_s: float) -> float:
     return max(_CLAMP_FLOOR, min(_MCP_CALL_TIMEOUT, interval_s * 0.5))
 
 
+def _coerce_enforcement_fields(
+    budget_result: _BudgetSupervisorResult,
+    task_id: str,
+    log: structlog.stdlib.BoundLogger,
+) -> tuple[int, int, int]:
+    """Null-coalesce + audit-log the step / threshold / spend enforcement fields.
+
+    Story 12.3c AC6 (carried-over code-reviewer MEDIUM/DRY): both the
+    override-intercepted branch and the terminated branch of ``run_task`` need
+    the SAME defensive coalescing for ``TaskBudgetEnforcementTriggeredPayload``
+    construction — ``step`` defaults to the schema floor (1, ``Field(ge=1)``)
+    when the producer omitted it, and ``token_limit`` / ``tokens_used`` default
+    to 1 (the smallest value passing the payload's ``gt=0`` validation) so a
+    missing optional field never DROPS the whole FR67 audit record. Each
+    coalesced default emits the original warning/error log so operators still
+    see the missing-field signal. Returns ``(step, threshold, spend)``.
+
+    No behavior change to the reaction leg — this only de-duplicates the two
+    identical ~16-line blocks that previously diverged by copy-paste risk.
+    """
+    step_value = budget_result.step if budget_result.step is not None else 1
+    if budget_result.step is None:
+        log.warning(
+            "budget_enforcement_event_step_missing_defaulted",
+            task_id=task_id,
+            event_id=budget_result.event_id,
+        )
+    threshold_value = budget_result.token_limit if budget_result.token_limit is not None else 1
+    spend_value = budget_result.tokens_used if budget_result.tokens_used is not None else 1
+    if budget_result.token_limit is None or budget_result.tokens_used is None:
+        log.error(
+            "budget_enforcement_event_spend_fields_missing",
+            task_id=task_id,
+            token_limit=budget_result.token_limit,
+            tokens_used=budget_result.tokens_used,
+        )
+    return step_value, threshold_value, spend_value
+
+
 async def _call_tool_best_effort(
     session: ClientSession | None,
     tool_name: str,
@@ -668,22 +707,10 @@ async def run_task(
         # the task was NOT failed — it parks for / continues under operator
         # approval (the 12.2 H1/H2 audit-integrity principle: the field MUST
         # match the actual FSM outcome).
-        step_value = budget_result.step if budget_result.step is not None else 1
-        if budget_result.step is None:
-            log.warning(
-                "budget_enforcement_event_step_missing_defaulted",
-                task_id=task_id,
-                event_id=budget_result.event_id,
-            )
-        threshold_value = budget_result.token_limit if budget_result.token_limit is not None else 1
-        spend_value = budget_result.tokens_used if budget_result.tokens_used is not None else 1
-        if budget_result.token_limit is None or budget_result.tokens_used is None:
-            log.error(
-                "budget_enforcement_event_spend_fields_missing",
-                task_id=task_id,
-                token_limit=budget_result.token_limit,
-                tokens_used=budget_result.tokens_used,
-            )
+        # Story 12.3c AC6 (DRY) — shared coalescing + missing-field audit logs.
+        step_value, threshold_value, spend_value = _coerce_enforcement_fields(
+            budget_result, task_id, log
+        )
         override_payload = TaskBudgetEnforcementTriggeredPayload(
             task_id=task_id,
             budget_threshold=threshold_value,
@@ -794,22 +821,11 @@ async def run_task(
         # somehow None (should be impossible per the supervisor contract) the
         # payload's ``gt=0`` validation would reject 0 — so we coerce a None to
         # the smallest valid sentinel and log loudly, still preserving a record.
-        step_value = budget_result.step if budget_result.step is not None else 1
-        if budget_result.step is None:
-            log.warning(
-                "budget_enforcement_event_step_missing_defaulted",
-                task_id=task_id,
-                event_id=budget_result.event_id,
-            )
-        threshold_value = budget_result.token_limit if budget_result.token_limit is not None else 1
-        spend_value = budget_result.tokens_used if budget_result.tokens_used is not None else 1
-        if budget_result.token_limit is None or budget_result.tokens_used is None:
-            log.error(
-                "budget_enforcement_event_spend_fields_missing",
-                task_id=task_id,
-                token_limit=budget_result.token_limit,
-                tokens_used=budget_result.tokens_used,
-            )
+        # Story 12.3c AC6 (DRY) — shared coalescing + missing-field audit logs
+        # (identical to the override-intercepted branch above).
+        step_value, threshold_value, spend_value = _coerce_enforcement_fields(
+            budget_result, task_id, log
+        )
         enforcement_payload = TaskBudgetEnforcementTriggeredPayload(
             task_id=task_id,
             budget_threshold=threshold_value,

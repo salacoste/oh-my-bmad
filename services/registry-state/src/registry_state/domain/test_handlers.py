@@ -1730,6 +1730,50 @@ async def test_budget_override_resumes_to_executing(
     assert task.status == "executing"
     assert task.blocker_reason is None
     assert task.last_event_id == env_ov.event_id
+    # Story 12.3c AC4 — the raised ceiling is persisted on the transition.
+    assert task.budget_token_limit == 100_000
+
+
+@pytest.mark.asyncio
+async def test_budget_override_persists_new_limit_on_touch_fallback(
+    db_session: AsyncSession,
+) -> None:
+    """Story 12.3c AC4 — even when the task is NOT in budget-blocked state, the
+    replay-safe touch fallback still persists ``new_limit`` to
+    ``budget_token_limit`` so an orchestrator restart reloads the raised ceiling.
+    """
+    env_created = _make_created_envelope(mono_ns=1_000_000, seed=307)
+    await handle_task_created(db_session, env_created)
+    assert isinstance(env_created.payload, TaskCreatedPayload)
+    task_id = env_created.payload.task_id
+
+    # Task is in its post-creation state (NOT blocked/budget_exceeded), so the
+    # primary UPDATE matches 0 rows and the handler falls back to touch-only.
+    rng_ov = Random(607)
+    clk_ov = FrozenClock(mono_ns=20_000_000, now=FROZEN_EPOCH)
+    env_ov = EventEnvelope.create(
+        event_id=new_event_id(clock=clk_ov, rng=rng_ov),
+        schema_version="1.0.0",
+        type="tier3.budget_override",
+        emitted_at=clk_ov.now(),
+        emitted_at_monotonic_ns=clk_ov.monotonic_ns(),
+        actor=_ACTOR,
+        payload=BudgetOverridePayload(
+            task_id=task_id,
+            decision_id="d-budget-override-0000000000",
+            actor_id="operator-1",
+            old_limit=50_000,
+            new_limit=250_000,
+        ),
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
+        request_id=new_uuid7(clock=clk_ov, rng=rng_ov),
+    )
+    await handle_tier3_budget_override(db_session, env_ov)
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    # Fallback path: status is left unchanged but the ceiling IS persisted.
+    assert task.budget_token_limit == 250_000
+    assert task.last_event_id == env_ov.event_id
 
 
 @pytest.mark.asyncio
@@ -2667,3 +2711,34 @@ async def test_key_rotated_event_row_has_null_task_id() -> None:
 
     assert row.task_id is None, "events.task_id MUST be NULL for key.rotated events"
     assert row.session_id is None, "events.session_id MUST be NULL for key.rotated events"
+
+
+def test_budget_override_alias_routes_to_same_handler() -> None:
+    """Story 12.3c — the ``budget.override`` @1.1.0 alias and the legacy
+    ``tier3.budget_override`` name MUST both route to
+    ``handle_tier3_budget_override`` so the AC4 new_limit persistence applies
+    regardless of which event name an emitter uses. Guards against accidental
+    deletion of the alias registration line."""
+    from typing import cast
+
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from registry_state.domain.handlers import (
+        handle_tier3_budget_override as _handler,
+    )
+    from registry_state.domain.handlers import (
+        register_default_handlers,
+    )
+    from registry_state.domain.materializer import Materializer
+
+    # register_default_handlers enforces a runtime isinstance(Materializer)
+    # check (Story 11.3 P28), so a real Materializer is required. session_maker
+    # is only used at dispatch time, not registration — a typed dummy suffices
+    # to inspect the handler table.
+    materializer = Materializer(session_maker=cast(async_sessionmaker[AsyncSession], object()))
+    register_default_handlers(materializer)
+
+    handlers = materializer._handlers  # noqa: SLF001 — assert registration wiring
+    assert handlers.get("tier3.budget_override") is _handler
+    assert handlers.get("budget.override") is _handler
+    assert handlers["budget.override"] is handlers["tier3.budget_override"]

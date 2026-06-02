@@ -98,6 +98,45 @@ class OrchestratorSettings(BaseSettings):
         ),
     )
 
+    # Story 12.3c (FR68) — bounded wait, in seconds, for an operator budget
+    # override to raise the per-task ceiling after the in-memory BudgetTracker
+    # breaches. On breach, process_task emits ``task.budget_exceeded`` then
+    # polls task-registry for a raised ``budget_token_limit`` until this
+    # MONOTONIC deadline elapses; if the ceiling is raised it re-arms the
+    # tracker and RESUMES the step loop, otherwise it fails-closed (terminates)
+    # exactly as the pre-12.3c behavior. Default matched to the worker-side
+    # grace window (worker ``budget_grace_window_s`` default 5.0) but slightly
+    # larger so the orchestrator does not give up before a pre-staged override
+    # lands. Read via an explicit ``validation_alias`` so it escapes the
+    # ``ORCHESTRATOR_`` env prefix and matches the operator-facing OMB_ name.
+    override_wait_s: float = Field(
+        default=30.0,
+        gt=0,
+        le=300,
+        validation_alias=AliasChoices("OMB_ORCH_OVERRIDE_WAIT_S"),
+        description=(
+            "Bounded monotonic wait (seconds) for an operator budget override to "
+            "raise the per-task ceiling after a BudgetTracker breach before the "
+            "orchestrator fails-closed (OMB_ORCH_OVERRIDE_WAIT_S, Story 12.3c / "
+            "FR68). On a raised budget_token_limit the tracker re-arms and the "
+            "step loop resumes; on timeout the loop breaks (terminate)."
+        ),
+    )
+
+    # Story 12.3c (FR68) — poll cadence (seconds) for the override-wait loop;
+    # uses ``await asyncio.sleep`` so it never blocks the event loop.
+    override_poll_interval_s: float = Field(
+        default=1.0,
+        gt=0,
+        le=60,
+        validation_alias=AliasChoices("OMB_ORCH_OVERRIDE_POLL_INTERVAL_S"),
+        description=(
+            "Poll cadence (seconds) for the Story 12.3c override-wait loop "
+            "(OMB_ORCH_OVERRIDE_POLL_INTERVAL_S). Re-reads the task's "
+            "budget_token_limit via task-registry MCP each interval."
+        ),
+    )
+
     # Story 9.6 review pass-2 PH0 + pass-3 TH1 — orchestrator-adapter is the
     # REAL spawner of worker-wrapper (via OMC).  ``OMCRunner`` propagates
     # this trace_id to the child subprocess as ``OMB_TRACE_ID`` so downstream

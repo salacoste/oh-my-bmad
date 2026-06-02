@@ -329,6 +329,15 @@ async def watch_for_budget_exceeded(
                     poll_interval_s=poll_interval_s,
                     grace_window_s=grace_window_s,
                     log=log,
+                    # Story 12.3c AC6 (efficiency) — seed the override scan
+                    # cursor at the budget-exceeded match position. The override
+                    # MUST appear AFTER its triggering budget_exceeded event in
+                    # the same daily JSONL, so re-scanning lines [0, scan_offset)
+                    # every window is wasted work on large daily logs. ``scan_offset``
+                    # here is the cumulative index INCLUDING the matched line
+                    # (see _scan_for_match), so the first override poll starts
+                    # exactly past it. Reset to 0 internally on a day-rollover.
+                    start_offset=scan_offset,
                 )
                 if override_found is _GraceOutcome.CANCELLED:
                     # cancel_event fired inside the window — clean exit,
@@ -484,6 +493,7 @@ async def _await_override_or_deadline(
     poll_interval_s: float,
     grace_window_s: float,
     log: structlog.stdlib.BoundLogger,
+    start_offset: int = 0,
 ) -> _GraceOutcome:
     """Poll the SAME day JSONL for a budget override until a hard deadline.
 
@@ -505,6 +515,14 @@ async def _await_override_or_deadline(
     Uses a SEPARATE override scan cursor (independent of the budget-exceeded
     cursor) and the same OSError/ValueError error-isolation discipline as
     :func:`_scan_for_match` (via :func:`_scan_for_override`).
+
+    Story 12.3c AC6 (efficiency) — ``start_offset`` seeds the override scan
+    cursor at the budget-exceeded match position (its cumulative line index in
+    today's JSONL). Because an override can only land AFTER its triggering
+    budget_exceeded event, this skips re-scanning the prefix every poll on
+    large daily logs. ``last_path`` is primed to today's path so the first
+    iteration does NOT clobber the seed via the day-rollover reset; a genuine
+    midnight rollover still correctly resets the cursor to 0 for the new file.
     """
     deadline_ns = clock.monotonic_ns() + int(grace_window_s * _NS_PER_S)
     log.info(
@@ -512,8 +530,8 @@ async def _await_override_or_deadline(
         task_id=task_id,
         grace_window_s=grace_window_s,
     )
-    override_scan_offset = 0
-    last_path: Path | None = None
+    last_path: Path | None = current_day_path(event_log_dir, clock.now())
+    override_scan_offset = start_offset
     override_scan_state: dict[str, int] = {"consecutive_errors": 0}
 
     while True:

@@ -205,6 +205,118 @@ async def test_pr_created_when_all_guards_pass() -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Story 12.3c (FR68) — orchestrator override re-arm tests.
+# ---------------------------------------------------------------------------
+
+_T5 = "t-22222222-3333-7444-8555-666666666666"
+_T6 = "t-33333333-4444-7555-8666-777777777777"
+
+
+@pytest.mark.asyncio
+async def test_budget_exceeded_fail_closed_when_no_override() -> None:
+    """AC2 — no override within the bounded wait → loop breaks (terminate),
+    exactly the pre-12.3c behavior: a single ``task.budget_exceeded`` and NO
+    further steps / no resume. Drives the override-wait to expiry by stubbing
+    the persisted-limit read to always return the ORIGINAL limit (no raise)."""
+    emitted: list[str] = []
+
+    async def _capture_emit(clients, event_type, payload, *, label, caller_trace_id):
+        emitted.append(event_type)
+
+    runner = _make_sequential_runner(
+        plan_stdout="1. Step one\n2. Step two",
+        step_results=[
+            {"stdout": "5 passed in 1s\n1100 tokens used", "error": None},
+            {"stdout": "5 passed in 1s\n1100 tokens used", "error": None},
+        ],
+    )
+    # Tiny wait window + tiny poll so the monotonic deadline elapses fast.
+    settings = _make_settings(
+        task_token_budget=1000,
+        override_wait_s=0.05,
+        override_poll_interval_s=0.01,
+    )
+    task = {"id": _T5, "title": "Fail closed"}
+
+    with (
+        patch("orchestrator_adapter.app.main._emit_event", side_effect=_capture_emit),
+        # Persisted limit never rises → re-arm returns None → fail-closed break.
+        patch(
+            "orchestrator_adapter.app.main._read_task_budget_limit",
+            return_value=1000,
+        ),
+    ):
+        await process_task(AsyncMock(), runner, settings, task)
+
+    # Exactly one budget_exceeded and NO second step.completed after it.
+    assert emitted.count("task.budget_exceeded") == 1
+    # Only the first step completed before the breach broke the loop.
+    assert emitted.count("task.step.completed") == 1
+
+
+@pytest.mark.asyncio
+async def test_budget_override_rearm_resumes_and_rebreaches() -> None:
+    """AC1/AC3 — limit 1k → step1 spends 1100 (breach) → override raises ceiling
+    to 5k → tracker re-arms, loop RESUMES → step2 spends 5000 → cumulative 6100
+    exceeds the NEW 5k ceiling → a SECOND ``task.budget_exceeded`` is emitted."""
+    emitted: list[str] = []
+
+    async def _capture_emit(clients, event_type, payload, *, label, caller_trace_id):
+        emitted.append(event_type)
+
+    runner = _make_sequential_runner(
+        plan_stdout="1. Step one\n2. Step two",
+        step_results=[
+            {"stdout": "5 passed in 1s\n1100 tokens used", "error": None},
+            {"stdout": "5 passed in 1s\n5000 tokens used", "error": None},
+        ],
+    )
+    # Tiny wait window: the SECOND breach's override-wait is not under test
+    # (the patched read returns 5000 == the re-armed ceiling, so it never
+    # re-arms again) — keep it short so it fails closed fast instead of
+    # blocking the suite for the full window.
+    settings = _make_settings(
+        task_token_budget=1000,
+        override_wait_s=0.05,
+        override_poll_interval_s=0.01,
+    )
+    task = {"id": _T6, "title": "Re-arm then re-breach"}
+
+    with (
+        patch("orchestrator_adapter.app.main._emit_event", side_effect=_capture_emit),
+        # Operator override has raised the persisted ceiling to 5000.
+        patch(
+            "orchestrator_adapter.app.main._read_task_budget_limit",
+            return_value=5000,
+        ),
+    ):
+        await process_task(AsyncMock(), runner, settings, task)
+
+    # Two breaches: the original 1k ceiling, then the re-armed 5k ceiling.
+    assert emitted.count("task.budget_exceeded") == 2
+    # Both steps completed (the loop resumed after the first breach).
+    assert emitted.count("task.step.completed") == 2
+
+
+def test_resolve_budget_limit_reloads_persisted_raised_ceiling() -> None:
+    """AC4 — after a restart, ``_resolve_budget_limit`` picks up the persisted
+    raised ``budget_token_limit`` (highest precedence) rather than the default.
+
+    Plain sync test — ``_resolve_budget_limit`` is not a coroutine.
+    """
+    from orchestrator_adapter.app.main import _resolve_budget_limit
+
+    settings = _make_settings(task_token_budget=1000)
+    # Simulate the task row reloaded post-restart with the raised ceiling.
+    task = {"id": _T6, "budget_token_limit": 5000}
+    assert _resolve_budget_limit(task, settings) == 5000
+    # Defense-in-depth: an out-of-contract over-bound value is IGNORED (falls
+    # back to the default) so a corrupted row cannot disable enforcement.
+    over = {"id": _T6, "budget_token_limit": 1_000_000_001}
+    assert _resolve_budget_limit(over, settings) == 1000
+
+
 @pytest.mark.asyncio
 async def test_emit_event_threads_caller_trace_id_to_clawhip_call() -> None:
     """TH0 regression: ``_emit_event`` includes ``caller_trace_id`` in the
@@ -254,3 +366,78 @@ def test_emit_event_caller_trace_id_passes_validate_caller_trace_id() -> None:
     tid = settings.resolve_trace_id()
     # Must not raise.
     validate_caller_trace_id(tid)
+
+
+# ---------------------------------------------------------------------------
+# Story 12.3c — _read_task_budget_limit UNPATCHED read path (security review:
+# the re-arm tests patch this fn, so exercise the REAL task://detail parse +
+# the defense-in-depth bounds here so the wiring can't silently rot).
+# ---------------------------------------------------------------------------
+
+_T7 = "t-44444444-5555-7666-8777-888888888888"
+
+
+def _fake_task_registry(*, text: str | None = None, raises: bool = False) -> object:
+    """Build a fake MCPClientGroup whose task_registry.read_resource returns a
+    task://detail result with *text* as a single text-content block (or raises).
+    """
+    import types
+    from unittest.mock import AsyncMock
+
+    registry = AsyncMock()
+    if raises:
+        registry.read_resource = AsyncMock(side_effect=RuntimeError("transient MCP read failure"))
+    else:
+        content = types.SimpleNamespace(text=text)
+        result = types.SimpleNamespace(contents=[content] if text is not None else [])
+        registry.read_resource = AsyncMock(return_value=result)
+    return types.SimpleNamespace(task_registry=registry)
+
+
+@pytest.mark.asyncio
+async def test_read_task_budget_limit_parses_detail_resource() -> None:
+    """Happy path: a task://detail JSON body with a positive budget_token_limit
+    within bound is parsed and returned (proves the real serialize→read wiring,
+    not a patched stub)."""
+    import json
+
+    from orchestrator_adapter.app.main import _read_task_budget_limit
+
+    clients = _fake_task_registry(text=json.dumps({"id": _T7, "budget_token_limit": 5000}))
+    assert await _read_task_budget_limit(clients, _T7) == 5000
+
+
+@pytest.mark.asyncio
+async def test_read_task_budget_limit_rejects_over_bound_value() -> None:
+    """Defense-in-depth (security MEDIUM): an over-bound value (> 1e9) is
+    rejected (None) so a corrupted row cannot re-arm to a runaway ceiling."""
+    import json
+
+    from orchestrator_adapter.app.main import _read_task_budget_limit
+
+    clients = _fake_task_registry(text=json.dumps({"id": _T7, "budget_token_limit": 1_000_000_001}))
+    assert await _read_task_budget_limit(clients, _T7) is None
+
+
+@pytest.mark.asyncio
+async def test_read_task_budget_limit_null_and_notfound_and_transient_return_none() -> None:
+    """NULL/absent column, task-not-found (empty body), and a transient read
+    error all return None → caller keeps polling → fails closed at deadline."""
+    import json
+
+    from orchestrator_adapter.app.main import _read_task_budget_limit
+
+    # NULL column.
+    c_null = _fake_task_registry(text=json.dumps({"id": _T7, "budget_token_limit": None}))
+    assert await _read_task_budget_limit(c_null, _T7) is None
+    # Task not found → task-registry returns "" (empty body).
+    c_missing = _fake_task_registry(text="")
+    assert await _read_task_budget_limit(c_missing, _T7) is None
+    # Transient MCP read failure → swallowed, returns None (not an exception).
+    c_err = _fake_task_registry(raises=True)
+    assert await _read_task_budget_limit(c_err, _T7) is None
+    # task-registry not connected (None client) → None, fail-closed (critic note).
+    import types
+
+    c_none = types.SimpleNamespace(task_registry=None)
+    assert await _read_task_budget_limit(c_none, _T7) is None

@@ -95,6 +95,129 @@ async def _read_task_list(clients: MCPClientGroup) -> list[dict[str, object]]:
         return []
 
 
+# Story 12.3c (FR68) defense-in-depth: mirror the ``BudgetOverridePayload.new_limit``
+# event-layer bound (``le=1_000_000_000``) on the CONSUMER side too. A corrupted
+# or out-of-contract row value must not silently disable enforcement by re-arming
+# the tracker to an astronomically large ceiling.
+_MAX_BUDGET_TOKEN_LIMIT = 1_000_000_000
+
+
+async def _read_task_budget_limit(
+    clients: MCPClientGroup,
+    task_id: str,
+) -> int | None:
+    """Re-read a single task's persisted ``budget_token_limit`` via task-registry.
+
+    Story 12.3c (FR68): the override-wait loop polls this to detect an
+    operator-raised ceiling. Reads the SINGLE-task ``task://detail/{task_id}``
+    resource (not the full ``task://list``) so a 30s poll window costs one
+    one-row read per iteration instead of a full-table scan. This is the SOLE
+    READ path — orchestrator-adapter never writes ``state.sqlite3`` (FR26).
+    Returns the int limit when it is a positive int within
+    ``_MAX_BUDGET_TOKEN_LIMIT``, else ``None`` (task not found → ``""``, column
+    NULL/absent, out-of-contract value, or any transient read error). Defense-
+    in-depth: a non-positive OR over-bound value must NOT silently re-arm the
+    tracker; a transient read failure returns ``None`` so the caller keeps
+    polling and ultimately fails closed at the deadline.
+    """
+    log = structlog.get_logger(__name__)
+    if clients.task_registry is None:
+        return None
+    try:
+        # Per-read timeout (critic MINOR-1): a hung MCP channel must NOT extend
+        # the override window unbounded. With this bound the worst-case window is
+        # override_wait_s + at most _MCP_CALL_TIMEOUT; a timeout raises and is
+        # swallowed below → None → keep polling → still fails closed at deadline.
+        result = await asyncio.wait_for(
+            clients.task_registry.read_resource(f"task://detail/{task_id}"),
+            timeout=_MCP_CALL_TIMEOUT,
+        )
+        if result is None or not hasattr(result, "contents"):
+            return None
+        text = ""
+        for content in result.contents:
+            if hasattr(content, "text"):
+                text += content.text
+        if not text:  # task-registry returns "" when the task row is absent
+            return None
+        task = json.loads(text)
+        if not isinstance(task, dict):
+            return None
+        raw = task.get("budget_token_limit")
+        if (
+            isinstance(raw, int)
+            and not isinstance(raw, bool)
+            and 0 < raw <= _MAX_BUDGET_TOKEN_LIMIT
+        ):
+            return raw
+        return None
+    except Exception:
+        log.warning("task_budget_limit_read_failed", task_id=task_id, exc_info=True)
+        return None
+
+
+async def _wait_for_override_rearm(
+    clients: MCPClientGroup,
+    settings: OrchestratorSettings,
+    task_id: str,
+    tracker: BudgetTracker,
+) -> BudgetTracker | None:
+    """Bounded MONOTONIC wait for an operator override that raises the ceiling.
+
+    Story 12.3c AC1/AC2 (FR68). Called on ``tracker.is_exceeded`` after the
+    ``task.budget_exceeded`` event is emitted. Polls the persisted per-task
+    ``budget_token_limit`` (written by registry-state's materializer on the
+    override event — the FR26 single-writer path) every
+    ``override_poll_interval_s`` until ``override_wait_s`` of MONOTONIC time
+    elapses.
+
+    On a raised ceiling (``new_limit > tracker.limit``) returns a re-armed
+    ``BudgetTracker(limit=new_limit, used=tracker.used)`` so the caller can
+    RESUME the step loop (AC1). The re-arm is idempotent: it always adopts the
+    latest observed limit and NEVER lowers the ceiling (AC: idempotent /
+    multiple overrides). FAIL-CLOSED: returns ``None`` when the deadline
+    elapses with no increase, so the caller breaks/terminates exactly as the
+    pre-12.3c behavior (AC2).
+
+    Uses ``await asyncio.sleep`` for the poll cadence so the event loop is
+    never blocked, and a monotonic deadline snapshotted ONCE at entry. The
+    deadline is checked AFTER each read, so the worst-case wall-clock wait is
+    ``override_wait_s`` plus at most one MCP read latency — this read-then-check
+    order deliberately honors an override that materializes right at the
+    deadline rather than racing it. A hung/slow read channel therefore cannot
+    UNBOUNDEDLY extend the window (bounded by one read latency), and fail-closed
+    still holds: no raised ceiling observed → return ``None`` → caller breaks.
+    """
+    log = structlog.get_logger(__name__)
+    deadline = asyncio.get_running_loop().time() + settings.override_wait_s
+    log.info(
+        "budget_override_wait_opened",
+        task_id=task_id,
+        token_limit=tracker.limit,
+        wait_s=settings.override_wait_s,
+    )
+    while True:
+        new_limit = await _read_task_budget_limit(clients, task_id)
+        if new_limit is not None and new_limit > tracker.limit:
+            log.info(
+                "budget_override_rearm",
+                task_id=task_id,
+                old_limit=tracker.limit,
+                new_limit=new_limit,
+                tokens_used=tracker.used,
+            )
+            return BudgetTracker(limit=new_limit, used=tracker.used)
+        if asyncio.get_running_loop().time() >= deadline:
+            log.warning(
+                "budget_override_wait_expired",
+                task_id=task_id,
+                token_limit=tracker.limit,
+                wait_s=settings.override_wait_s,
+            )
+            return None
+        await asyncio.sleep(settings.override_poll_interval_s)
+
+
 def _tasks_needing_planning(tasks: list[dict[str, object]]) -> list[dict[str, object]]:
     """Filter tasks that need planning (status is ``pending`` or ``new``)."""
     planning_statuses = {"pending", "new", "ready"}
@@ -192,7 +315,7 @@ def _resolve_budget_limit(
     the legacy ``task_token_budget=0`` setting, matching prior behaviour).
     """
     raw = task.get("budget_token_limit")
-    if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0:
+    if isinstance(raw, int) and not isinstance(raw, bool) and 0 < raw <= _MAX_BUDGET_TOKEN_LIMIT:
         return raw
     if settings.default_task_budget_tokens is not None:
         return settings.default_task_budget_tokens
@@ -398,6 +521,20 @@ async def process_task(
                         label=f"budget_exceeded_{task_id}",
                         caller_trace_id=task_trace_id,
                     )
+                    # Story 12.3c AC1/AC2 (FR68) — make "continue under the
+                    # EXTENDED budget" real. Instead of unconditionally
+                    # abandoning the task, wait (bounded, MONOTONIC) for an
+                    # operator override that raises the persisted per-task
+                    # ceiling. On a raised ceiling re-arm the in-memory
+                    # BudgetTracker (preserving ``used``) and RESUME the step
+                    # loop; otherwise FAIL-CLOSED and break exactly as the
+                    # pre-12.3c behavior. The override's new_limit is persisted
+                    # by registry-state's materializer (FR26 single-writer);
+                    # orchestrator-adapter only READS it back here.
+                    rearmed = await _wait_for_override_rearm(clients, settings, task_id, tracker)
+                    if rearmed is not None:
+                        tracker = rearmed
+                        continue
                     break
             else:
                 log.debug(
