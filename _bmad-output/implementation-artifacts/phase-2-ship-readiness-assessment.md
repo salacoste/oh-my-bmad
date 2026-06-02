@@ -28,7 +28,7 @@ on. Authored after Epics 8–13 reached story-complete (all on branches; the
 | FR26 single-writer (Phase-2 additions read-only) | ✅ | `scripts/check_single_writer.py` discipline gate green every story; metrics-subscriber, budget_supervisor, lag-check, litestream all read-only |
 | schema 1.0.0→1.1.0 additive; 1.0.0 parseable ~1mo | ✅ (ADR-0004) | backfill.py accepts 1.0.0/1.0.1/1.1.0; cutover window documented in ADR-0004 |
 | No instrumentation in `services/*` (metrics-subscriber only) | ✅ | Epic 10 derived-projection model (ADR-0005) |
-| MCP transport stdio-only (no sse/streamable_http) | ✅ | verify on merged main via `check_imports` / arch grep |
+| MCP transport stdio-only (no sse/streamable_http) | ✅ **now GUARDED** | was UNGUARDED — added `scripts/check_mcp_transport.py` (MCP001 AST gate, wired into `just check-gates` + ci.yml + self-test). Real tree exit 0 (stdio-only today); self-test detects planted sse/streamable violations. |
 | No new public-network ingress | ✅ | metrics `/metrics` internal-only (P2-I5); litestream egress-only to operator bucket |
 | cosign + SLSA L2 + CycloneDX SBOM on every release | 🏷️ | Epic 8 built `just verify-images`; verifiable only against a tagged release |
 
@@ -49,7 +49,7 @@ on. Authored after Epics 8–13 reached story-complete (all on branches; the
 | tests/crash-injection | ✅ present; 🌙 nightly |
 | tests/idempotency (100× incl. trace_id) | ✅ present; in nightly |
 | tests/contract (incl. 6 new-event fwd-compat fixtures) | ✅ present |
-| tests/arch (single-writer/transport/no-anthropic) | ⚠️ **naming discrepancy** — no `tests/arch/` dir; the arch invariants are enforced by `scripts/check_single_writer.py` / `check_imports.py` / `check_no_subprocess.py` discipline gates instead. Either rename the checklist item to point at the discipline gates, or add a thin `tests/arch/` wrapper. NON-blocking (the invariants ARE enforced). |
+| tests/arch (single-writer/transport/no-anthropic) | ⚠️ **resolved + corrected** — the arch invariants are enforced by the `scripts/check_*.py` discipline GATES (CI-wired), not a `tests/arch/` dir: single-writer=`check_single_writer.py`, import-graph=`check_imports.py`, no-shell=`check_no_subprocess.py`, registry-isolation=`check_registry_isolation.py`, event-registry=`check_event_registry.py`, **transport=`check_mcp_transport.py` (added this pass)**. **"no-anthropic-outside-worker" is STALE**: the actual Anthropic-SDK consumer is `registry-api` (Story 7.3 LLM digest); worker-wrapper does NOT import the SDK (it spawns the `claude` CLI subprocess). The real current rule is "Anthropic SDK confined to registry-api's LLM digest" — the checklist item should be reworded. NON-blocking. |
 | tests/replay (byte-for-byte post trace_id) | ⚠️ **naming discrepancy** — covered by `tests/idempotency/test_100x_replay.py` + the migrator round-trip equivalence tests; no standalone `tests/replay/` dir. Same disposition. |
 
 ## New ADRs accepted
