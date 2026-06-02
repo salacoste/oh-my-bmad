@@ -47,6 +47,14 @@ services:
       REGISTRY_API_PORT: "8080"
       REGISTRY_API_LOG_DIR: /var/lib/oh-my-bmad/registry/events
       REGISTRY_API_DB_URL: sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3
+      # Story 11.3.12: the writable idempotency cache lives in its OWN SQLite
+      # file beside state.sqlite3 so registry-state stays the sole writer of
+      # state.sqlite3. This harness runs no Alembic migrator, so registry-api
+      # create_all's its idempotency_cache table on start — without it the
+      # server-generated idempotency-key path 500s on POST /v1/tasks because
+      # the idempotency_cache table does not exist.
+      REGISTRY_API_IDEMPOTENCY_DB_URL: sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/idempotency.sqlite3
+      REGISTRY_API_AUTO_CREATE_IDEMPOTENCY_SCHEMA: "1"
     user: "${OMB_S3_UID:-10002}:${OMB_S3_GID:-10000}"
     init: true
     restart: "no"

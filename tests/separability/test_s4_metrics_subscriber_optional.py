@@ -554,11 +554,21 @@ def test_metrics_subscriber_is_optional_not_a_hidden_dependency(
             f"Phase 1: /metrics output does not look like Prometheus exposition "
             f"format; first 200 bytes={proc_metrics.stdout!r}"
         )
-        # P1-L3 review patch — sanity-check baseline cardinality <= 52.
+        # P1-L3 review patch — sanity-check baseline cardinality <= 65.
         # Story 10.5 owns the cardinality regression gate; this is a smoke
         # check only. The `proc_metrics` `python -c` printed only the
         # first 200 bytes via slicing — re-fetch the full body for the
         # cardinality count.
+        #
+        # Story 13.4 reconciliation: the backstop literal was a STALE 52
+        # (pre-Phase-2). The authoritative gate
+        # (tests/integration/test_metrics_cardinality.py) pins the steady-state
+        # baseline at EXACTLY 64 timeseries — Story 12.2 added
+        # ``task.budget_enforcement_triggered`` (task family 15→16), Story 12.3
+        # added the ``budget`` event family, and Story 13.4 added the
+        # ``replication`` event-family child. Its drift ceiling is <= 65 (64
+        # baseline + 1 persist cycle). This backstop mirrors that ceiling so it
+        # stays a true sanity net, not a stale false-fail.
         proc_metrics_full = subprocess.run(
             _compose_cmd(
                 phase1_project,
@@ -578,11 +588,11 @@ def test_metrics_subscriber_is_optional_not_a_hidden_dependency(
         )
         if proc_metrics_full.returncode == 0 and proc_metrics_full.stdout:
             ts_count = _count_canonical_timeseries(proc_metrics_full.stdout)
-            assert ts_count <= 52, (
+            assert ts_count <= 65, (
                 f"Phase 1: cardinality smoke check failed — "
-                f"{ts_count} canonical timeseries > 52 budget. Story 10.5 "
-                f"owns the authoritative regression gate; this is a smoke "
-                f"backstop."
+                f"{ts_count} canonical timeseries > 65 budget. Story 10.5 "
+                f"owns the authoritative regression gate (baseline 64, drift "
+                f"ceiling 65); this is a smoke backstop."
             )
 
         # Also confirm registry-api still serves its own /v1/health
