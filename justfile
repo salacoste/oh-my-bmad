@@ -246,6 +246,90 @@ backup name="":
         tar -czf "/dest/${archive}" -C /source .
     echo "✓ backup written to ${PWD}/${archive}"
 
+# Story 13.3 / FR71 — DISASTER RECOVERY: rebuild the oh-my-bmad-data volume from
+# the litestream replica configured in `litestream.yml` (Story 13.2 + ADR-0007).
+# Replication ≠ HA: this is an operator-initiated, stack-DOWN procedure.
+# Flow: stop stack → empty the volume → litestream restore state.sqlite3 → bring
+# the registry dir back to the omb-group perms → start stack → bootstrap-verify.
+# Config-based: the bucket/key + creds live in litestream.yml / LITESTREAM_* env
+# (the SAME config the sidecar uses) — no positional bucket/key arg.
+# DESTRUCTIVE: replaces the live volume. Run only when recovering a lost/corrupt
+# host. `config=` overrides the config path (default litestream.yml). Set
+# OMB_RESTORE_CONFIRM=yes-restore to skip the interactive prompt (automation).
+restore-from-litestream config="litestream.yml":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cfg='{{config}}'
+    if [ ! -f "${cfg}" ]; then
+        echo "ERROR: litestream config '${cfg}' not found (cp litestream.yml.example litestream.yml, then fill it)." >&2
+        exit 1
+    fi
+    volume=$(docker volume ls --format '{{{{.Name}}' | grep -E '_oh-my-bmad-data$' | head -1 || true)
+    if [ -z "${volume}" ]; then
+        echo "ERROR: no *_oh-my-bmad-data docker volume found. Run 'just dev' once to create it." >&2
+        exit 1
+    fi
+    # Review HIGH: DESTRUCTIVE op — require an explicit typed confirmation (or the
+    # OMB_RESTORE_CONFIRM env bypass for scripted DR). Empties the live volume.
+    if [ "${OMB_RESTORE_CONFIRM:-}" != "yes-restore" ]; then
+        echo "WARNING: this DESTROYS all data in volume '${volume}' and replaces it from the litestream replica."
+        printf "Type 'yes-restore' to proceed: "
+        read -r confirm
+        if [ "${confirm}" != "yes-restore" ]; then echo "Aborted." >&2; exit 1; fi
+    fi
+    compose_files=(-f docker-compose.yml)
+    if [ "$(uname -s)" = "Darwin" ]; then compose_files+=(-f docker-compose.macos.yml); fi
+    # Review HIGH: recovery trap — if anything fails after the wipe, the volume is
+    # empty + stack down. Print clear guidance instead of leaving the operator
+    # stranded. Cleared on success before the final messages.
+    fail_guidance() {
+        echo "" >&2
+        echo "FATAL: restore-from-litestream did not complete — volume '${volume}' may be EMPTY and the stack is DOWN." >&2
+        echo "  → Fix the cause (config path / LITESTREAM_* creds / replica reachability), then re-run." >&2
+        echo "  → Or restore a tarball snapshot instead (see docs/backup-restore.md)." >&2
+    }
+    trap fail_guidance EXIT
+    echo "→ stopping stack"
+    docker compose "${compose_files[@]}" down
+    echo "→ emptying volume ${volume} (DESTRUCTIVE) + recreating registry/ + registry/events/ (2775, omb gid 10000)"
+    docker run --rm -v "${volume}:/v" alpine:3 sh -c '
+        set -e
+        rm -rf /v/* /v/.[!.]* /v/..?* 2>/dev/null || true
+        [ -z "$(ls -A /v)" ] || { echo "ERROR: volume not empty after wipe" >&2; exit 1; }
+        mkdir -p /v/registry/events
+        chown -R 10002:10000 /v/registry
+        chmod 2775 /v /v/registry /v/registry/events'
+    echo "→ restoring state.sqlite3 from litestream replica (latest generation)"
+    docker run --rm \
+        -v "${volume}:/var/lib/oh-my-bmad" \
+        -v "${PWD}/${cfg}:/etc/litestream/litestream.yml:ro" \
+        -e LITESTREAM_ACCESS_KEY_ID="${LITESTREAM_ACCESS_KEY_ID:-}" \
+        -e LITESTREAM_SECRET_ACCESS_KEY="${LITESTREAM_SECRET_ACCESS_KEY:-}" \
+        litestream/litestream:${LITESTREAM_VERSION:-0.3.13} \
+        restore -config /etc/litestream/litestream.yml /var/lib/oh-my-bmad/registry/state.sqlite3
+    # Review CRITICAL: litestream runs as root, so the restored state.sqlite3 is
+    # root-owned and registry-state (uid 10002) cannot write it → readonly-DB
+    # crash loop (the Epic-11.3 bug). Re-own + 0o660 the restored file (+ -wal/-shm
+    # if present) so the omb group can write before the stack comes up.
+    echo "→ fixing restored DB ownership/mode (uid 10002:omb, 0o660)"
+    docker run --rm -v "${volume}:/v" alpine:3 sh -c '
+        for f in /v/registry/state.sqlite3 /v/registry/state.sqlite3-wal /v/registry/state.sqlite3-shm; do
+            [ -e "$f" ] && chown 10002:10000 "$f" && chmod 0660 "$f" || true
+        done'
+    echo "→ restarting stack"
+    docker compose "${compose_files[@]}" up -d
+    echo "→ verifying workspace resolves"
+    just bootstrap-verify
+    trap - EXIT
+    echo "✓ restore-from-litestream complete — now confirm the stack reaches healthy:"
+    echo "    docker compose ${compose_files[*]} ps"
+
+# Story 13.3 / FR71 — hermetic litestream replicate→restore drill (no cloud).
+# Proves the restore MECHANISM: seed WAL db → file-replica → wipe → restore →
+# assert integrity_check + row count. Locally runnable + run in nightly.yml.
+litestream-restore-drill:
+    ./scripts/litestream-restore-drill.sh
+
 # Build the shared base image `oh-my-bmad-base:local`. Every per-service
 # Dockerfile extends this. Run before `just build` / `just deploy-*` on a
 # fresh checkout or whenever `Dockerfile.base` / `uv.lock` changes.
