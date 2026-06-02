@@ -20,6 +20,15 @@ ROWS="${DRILL_ROWS:-500}"
 # and the litestream container can't see the db. /tmp (→/private/tmp) is shared.
 work="$(mktemp -d /tmp/omb-ls-drill.XXXXXX)"
 cname="omb-ls-drill-$$"
+# Run the litestream containers as the INVOKING uid:gid (not the image default
+# root). On Linux CI a root-run container writes the restored /data/state.sqlite3
+# root-owned, so the host-side python3 verify step (the unprivileged `runner`
+# user) gets "sqlite3.OperationalError: unable to open database file". macOS
+# Docker Desktop hid this — it maps bind-mount ownership to the host user
+# regardless of container uid. Passing --user makes the round-trip files
+# runner-owned on BOTH platforms; litestream only needs to read/write the
+# bind-mounted /data + /replica dirs, which mktemp created owned by this uid.
+ls_user="$(id -u):$(id -g)"
 
 cleanup() {
     docker rm -f "${cname}" >/dev/null 2>&1 || true
@@ -52,6 +61,7 @@ CFGEOF
 
 echo "→ [2/5] replicate to a local file replica (no cloud)"
 docker run --rm -d --name "${cname}" \
+    --user "${ls_user}" \
     -v "${work}/data:/data" \
     -v "${work}/replica:/replica" \
     -v "${work}/litestream.yml:/etc/litestream.yml:ro" \
@@ -86,6 +96,7 @@ fi
 
 echo "→ [4/5] litestream restore from the replica (config-based, latest generation)"
 docker run --rm \
+    --user "${ls_user}" \
     -v "${work}/data:/data" \
     -v "${work}/replica:/replica" \
     -v "${work}/litestream.yml:/etc/litestream.yml:ro" \
