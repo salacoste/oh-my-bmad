@@ -126,7 +126,13 @@ async def app_client(
     await _seed_tables(db_url)
 
     events_dir = tmp_path / "events"
-    app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+    app = build_app(
+        base_dir=events_dir,
+        db_url=db_url,
+        clock=fixed_clock,
+        idempotency_db_url=_db_url(tmp_path / "idempotency.sqlite3"),
+        create_idempotency_schema_on_start=True,
+    )
 
     async with (
         LifespanManager(app) as manager,
@@ -282,7 +288,13 @@ async def test_idempotency_100x_replay_runs_10_times_no_flakiness(
     await _seed_tables(db_url)
 
     events_dir = tmp_path / f"events-{replay_iteration}"
-    app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+    app = build_app(
+        base_dir=events_dir,
+        db_url=db_url,
+        clock=fixed_clock,
+        idempotency_db_url=_db_url(tmp_path / f"idempotency-{replay_iteration}.sqlite3"),
+        create_idempotency_schema_on_start=True,
+    )
 
     # Per-iteration unique idempotency key: vary the RNG via the iteration
     # number so two iterations cannot collide in-process. (Each test instance
@@ -376,7 +388,13 @@ async def test_idempotency_error_during_first_attempt_does_not_cache(
     await _seed_tables(db_url)
 
     events_dir = tmp_path / "events"
-    app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+    app = build_app(
+        base_dir=events_dir,
+        db_url=db_url,
+        clock=fixed_clock,
+        idempotency_db_url=_db_url(tmp_path / "idempotency.sqlite3"),
+        create_idempotency_schema_on_start=True,
+    )
 
     call_count: dict[str, int] = {"n": 0}
     real_append: Callable[[EventEnvelope], Awaitable[None]] | None = None
@@ -471,7 +489,13 @@ async def test_idempotency_100x_with_ticking_clock_proves_cache_serves_body(
         tick_ns=1_000_000,
         start_now=FROZEN_EPOCH,
     )
-    app = build_app(base_dir=events_dir, db_url=db_url, clock=ticking)
+    app = build_app(
+        base_dir=events_dir,
+        db_url=db_url,
+        clock=ticking,
+        idempotency_db_url=_db_url(tmp_path / "idempotency-ticking.sqlite3"),
+        create_idempotency_schema_on_start=True,
+    )
 
     # Generate the key with a SEPARATE FrozenClock so the key value is
     # deterministic — we don't want the test's idempotency-key to depend

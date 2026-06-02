@@ -111,7 +111,8 @@ async def probe_registry_reachable(session: AsyncSession) -> bool:
     """
     try:
         result = await session.execute(text("SELECT 1"))
-        return result.scalar_one() == 1
+        # bool() coerces the Any from scalar_one() — mypy --strict no-any-return.
+        return bool(result.scalar_one() == 1)
     except Exception:  # noqa: BLE001 — degraded-on-anything by design (AC1)
         return False
 

@@ -198,6 +198,8 @@ async def canary_client(
         db_url=db_url,
         clock=clock,
         signing_settings=signing_settings,
+        idempotency_db_url=_db_url(tmp_path / "idempotency.sqlite3"),
+        create_idempotency_schema_on_start=True,
     )
 
     async with (
@@ -304,6 +306,8 @@ async def test_operator_hmac_key_never_appears_in_snapshot(
         db_url=db_url,
         clock=clock,
         signing_settings=signing_settings,
+        idempotency_db_url=_db_url(tmp_path / "idempotency.sqlite3"),
+        create_idempotency_schema_on_start=True,
     )
 
     async with (
@@ -442,6 +446,8 @@ async def test_operator_hmac_key_never_appears_in_structlog_output(
         db_url=db_url,
         clock=clock,
         signing_settings=signing_settings,
+        idempotency_db_url=_db_url(tmp_path / "idempotency.sqlite3"),
+        create_idempotency_schema_on_start=True,
     )
 
     with structlog.testing.capture_logs() as cap, caplog.at_level(logging.DEBUG):

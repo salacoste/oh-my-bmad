@@ -20,10 +20,14 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncEngine
 
 from registry_api.routes.health import HealthResponse
 from registry_api.routes.health import router as health_router
@@ -223,7 +227,7 @@ class TestHealthRouteHappyPath:
 
     def _seeded_session_maker(
         self,
-    ) -> tuple[object, object]:
+    ) -> tuple[AsyncEngine, object]:
         """Build (engine, session_maker) against a seeded in-memory DB.
 
         Returns the engine too so the caller can dispose it. The DB has:
@@ -278,7 +282,10 @@ class TestHealthRouteHappyPath:
                     )
                 await s.commit()
 
-        asyncio.get_event_loop().run_until_complete(_seed())
+        # asyncio.run (not get_event_loop().run_until_complete) — a fresh loop
+        # per call is immune to a prior async test having closed the shared
+        # loop ("RuntimeError: Event loop is closed" under full-suite ordering).
+        asyncio.run(_seed())
         return engine, async_sessionmaker(engine, expire_on_commit=False)
 
     def test_returns_real_signals_when_all_probes_succeed(self, make_app: _AppFactory) -> None:
@@ -309,4 +316,4 @@ class TestHealthRouteHappyPath:
             )
             assert body.version  # non-empty
         finally:
-            asyncio.get_event_loop().run_until_complete(engine.dispose())
+            asyncio.run(engine.dispose())

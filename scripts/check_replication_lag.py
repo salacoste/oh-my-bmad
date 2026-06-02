@@ -217,7 +217,9 @@ def main(argv: list[str] | None = None) -> int:
     db = os.environ.get("OMB_LITESTREAM_DB", _DEFAULT_DB)
     # .resolve() normalizes any `..` in operator-supplied paths (review MEDIUM;
     # matches emit_signature_rejected.py's path handling).
-    state_path = Path(os.environ.get("OMB_LITESTREAM_LAG_STATE_PATH", str(_DEFAULT_STATE_PATH))).resolve()
+    state_path = Path(
+        os.environ.get("OMB_LITESTREAM_LAG_STATE_PATH", str(_DEFAULT_STATE_PATH))
+    ).resolve()
     event_log_dir = Path(os.environ.get("EVENT_LOG_DIR", str(_DEFAULT_EVENT_LOG_DIR))).resolve()
 
     try:
