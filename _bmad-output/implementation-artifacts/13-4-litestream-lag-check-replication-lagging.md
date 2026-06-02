@@ -1,6 +1,6 @@
 # Story 13.4 — `just litestream-lag-check` + `replication.lagging` event (NFR-R7)
 
-Status: review
+Status: done
 
 <!-- Epic 13 capstone. Validation-first + subagent-orchestrated: two doc/explore
 subagents verified the litestream metrics + the FR26 emit path BEFORE build; an
@@ -40,7 +40,7 @@ stall and emits a `replication.lagging` audit event (once per episode),
    `scripts/replication_lag_detector.py`: pure state machine —
    lagging = sync_count not advancing + sync_error rising; emit EXACTLY ONCE when
    sustained >5min; reset on recovery (so a new episode re-emits). No I/O.
-   **VERIFIED:** 12 unit tests (no-lag / onset<5min / sustained→emit-once /
+   **VERIFIED:** 11 unit tests (no-lag / onset<5min / sustained→emit-once /
    no-re-emit / recovery→re-emit / stall-without-errors / boundary / json).
 
 3. **AC3 — emit script.** `scripts/check_replication_lag.py`: stdlib-only
@@ -95,6 +95,23 @@ claude-opus-4-8[1m] — 2 verification subagents (litestream docs + emit-path ex
   it) and ran the suite green at 64.
 - No `os.environ.copy`; mcp_clients untouched; flock pattern reused; mypy
   44=baseline.
+
+### Code Review (AC7) — 2026-06-02, code-reviewer (separate lane)
+
+- **code-reviewer:** APPROVE-WITH-NITS (0 CRITICAL/HIGH). Independently verified
+  (post-fix): FR26 flock emit path correct; 0o660+fchmod fix correct; daily-JSONL
+  path matches registry-state's; detector emit-once + recovery-reset walked
+  transition-by-transition = correct; cardinality arithmetic internally
+  consistent at 64. Findings:
+  - MEDIUM (signal blind spot — AND too strict, misses a TOTALLY-hung litestream
+    with flat errors): a documented spec design trade-off, not a bug. Added an
+    explicit blind-spot comment + filed follow-up **Story 13.4a** (OR-branch for a
+    pure-stall "silent_stall" signal). Operators also watch container liveness.
+  - MEDIUM (path traversal): added `.resolve()` to env-supplied paths (matches
+    emit_signature_rejected.py precedent).
+  - LOW (bool-in-state): added explicit `isinstance(onset, bool)` reject.
+  - NIT: doc test-count 12→11.
+- Re-validated: ruff clean; 37 detector+payload tests pass.
 
 ### File List
 - packages/events/src/events/types/replication.py (NEW — payload + register 1.0.0/1.1.0)

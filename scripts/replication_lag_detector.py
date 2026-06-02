@@ -179,6 +179,17 @@ def evaluate(
         )
 
     # sync_count did NOT advance. Lagging requires the stall AND rising errors.
+    #
+    # KNOWN BLIND SPOT (Story 13.4 code-review, follow-up 13.4a): this AND is the
+    # CONSERVATIVE signal — it detects the common failure (S3/network errors:
+    # sync attempts fail, error counter climbs) without false-positives during
+    # app-idle. It does NOT catch a TOTALLY-HUNG litestream (process frozen /
+    # deadlocked) where no sync is attempted, so sync_error_count stays flat. A
+    # follow-up may add an OR-branch (pure stall sustained > 2× threshold with
+    # flat errors → a distinct "silent_stall" signal) once we confirm 0.3.x's
+    # sync_count does not advance on empty poll cycles (which would otherwise
+    # false-positive during idle). Until then, operators also watch
+    # `docker logs omb-litestream` / container liveness (runbook).
     is_lagging = errors_rose
     if not is_lagging:
         # Stalled but no new errors — not (yet) classified as a lag episode.
@@ -237,7 +248,9 @@ def state_from_json(raw: dict[str, Any]) -> DetectorState:
     suppressing emissions forever.
     """
     onset = raw.get("lag_onset_epoch")
-    if onset is not None and not isinstance(onset, (int, float)):
+    # bool is a subclass of int — reject it explicitly so a stray `true` in the
+    # state file can't become epoch 1.0 (review LOW).
+    if onset is not None and (isinstance(onset, bool) or not isinstance(onset, (int, float))):
         raise ValueError(f"lag_onset_epoch must be a number or null, got {type(onset).__name__}")
     return DetectorState(
         lag_onset_epoch=float(onset) if onset is not None else None,
