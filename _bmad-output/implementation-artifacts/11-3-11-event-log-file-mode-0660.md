@@ -1,6 +1,6 @@
 # Story 11.3.11 — event-log JSONL files created 0o660 (group-write) so cross-uid `omb` services can append/recover
 
-Status: ready-for-dev
+Status: in-progress (AC1-AC7+AC9 done & green; AC8 PARTIAL — 0o660 fix PROVEN on live stack but 7/7 blocked by a newly-surfaced systemic sqlite-WAL cross-uid bug, out of scope — see Dev Agent Record)
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -174,25 +174,25 @@ the fd-native analog of `ensure_shared_dir`'s `path.chmod`.)
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Change file-create mode + fchmod** (AC1)
+- [x] **Task 1 — Change file-create mode + fchmod** (AC1)
   - [ ] `event_log.py:514` `0o640` → `0o660`; add
         `with contextlib.suppress(OSError): os.fchmod(new_fd, 0o660)`
         immediately after the `os.open`.
   - [ ] Update docstring (56-58) + inline comment (512-513): `0o660`
         group-RW, NOT world-readable, umask-strip rationale.
-- [ ] **Task 2 — Recovery self-heal + diagnostic** (AC2, AC3)
+- [x] **Task 2 — Recovery self-heal + diagnostic** (AC2, AC3)
   - [ ] `_recover_file` (line 191): best-effort `os.chmod(path, 0o660)`
         (suppressed) before `open(path, "r+b")`.
   - [ ] On still-`PermissionError`: structured `log.error` with file uid
         + mode; skip-and-continue (or one-shot fail) — NOT crash-loop.
-- [ ] **Task 3 — Helper rule-of-three decision** (AC4); document inline-vs-helper.
-- [ ] **Task 4 — Unit tests** (AC5): mode 0o660, not-world-readable,
+- [x] **Task 3 — Helper rule-of-three decision** (AC4); document inline-vs-helper.
+- [x] **Task 4 — Unit tests** (AC5): mode 0o660, not-world-readable,
         recovery self-heal, umask-pin, POSIX-only.
-- [ ] **Task 5 — Integration regression test** (AC6):
+- [x] **Task 5 — Integration regression test** (AC6):
         `tests/integration/test_event_log_file_perm.py`.
-- [ ] **Task 6 — Docker repro** (AC8): 7/7 healthy + day-file 0o660.
-- [ ] **Task 7 — Validation gates** (AC7).
-- [ ] **Task 8 — Code review** (AC9); apply findings.
+- [~] **Task 6 — Docker repro** (AC8): PARTIAL — day-file 0o660 + event-log PermissionError GONE (fix proven); 7/7 NOT reached, blocked by the out-of-scope systemic sqlite-WAL cross-uid bug (see Dev Agent Record + memory cross-uid-group-write-systemic-umask-gap).
+- [x] **Task 7 — Validation gates** (AC7).
+- [x] **Task 8 — Code review** (AC9); apply findings.
 
 ## Dev Notes
 
@@ -242,6 +242,23 @@ the fd-native analog of `ensure_shared_dir`'s `path.chmod`.)
   1 new integration test. No file moves, no deletions.
 - If AC4 decides a helper IS warranted, it lives next to
   `ensure_shared_dir` in `packages/events/src/events/_filesystem.py`.
+
+### ⚠️ AC8 build gotcha (learned during dev — applies to ANY services/ src change)
+
+`services/registry-state/Dockerfile` is a THIN OVERRIDE
+(`FROM oh-my-bmad-base:local` + `USER` + `ENTRYPOINT`) — it does NOT
+COPY/install the registry-state source. The source is baked into the venv
+by `Dockerfile.base:35-41` (`COPY services/ ./services/` + `uv sync
+--no-editable`). So `docker compose build registry-state` ALONE picks up
+NOTHING — it just re-stamps the thin layer over a STALE base. The AC8
+repro (and Story 11.3.10's AC5 before it) initially booted with the OLD
+0o640 code for exactly this reason: verified the installed package via
+`docker compose exec registry-api grep -c 0o660
+/opt/venv/.../registry_state/adapters/event_log.py` → returned 0.
+**Correct AC8 sequence: `just build-base` FIRST (re-bakes the venv), then
+`docker compose build`, then `up -d`.** Any future story touching
+`services/*/src` or `packages/*/src` must rebuild the base, not just the
+service.
 
 ### References
 
@@ -316,11 +333,89 @@ unblocks:
 
 ### Agent Model Used
 
+claude-opus-4-8 (1M context) — direct execution under the established
+"full autonomous, stop before push" scope + the /loop directive to keep
+advancing the Epic-11.3 tail.
+
 ### Debug Log References
+
+- **AC1-AC5 (code + unit tests) — DONE, all gates green:** ruff/format
+  clean, mypy 242 = baseline (0 new — the "240" in the story templates was
+  stale; the real baseline drifted to 242), discipline 0, registry-state
+  312 passed, TestFileMode 3/3 (incl. the umask-022 fchmod-defeat proof),
+  integration test collects.
+- **AC8 (Docker repro) — MY FIX PROVEN, but surfaced the NEXT systemic
+  layer:** Booting the ROOT compose on the rebuilt base (see the build
+  gotcha note above — `just build-base` is REQUIRED, the thin service
+  Dockerfile alone re-stamps a stale base; verified the base now has 8×
+  `0o660` + 3× `fchmod` + the AC3 log marker via
+  `docker run --entrypoint sh oh-my-bmad-base:local -c "grep -c ..."`):
+  - The event-log `PermissionError` on `*.jsonl` is **GONE** — my 0o660 +
+    AC3 skip-and-continue worked. registry-state no longer dies on the
+    event-log recovery path.
+  - BUT registry-state STILL crash-loops (12 restarts), now on a DEEPER,
+    DIFFERENT error: `sqlite3.OperationalError: attempt to write a
+    readonly database` (`materializer.py:298` via `run_subscriber:332`).
+  - Root cause (live FS evidence): `state.sqlite3-wal` + `state.sqlite3-shm`
+    are created by **registry-api uid 10001** (its Story 2.13 writable
+    idempotency-cache engine, `read_only=False`, app.py:214) at mode
+    **`0o644`** (no group-write). registry-state (uid 10002, same omb
+    group) opens the DB in WAL mode and MUST write the -wal/-shm sidecars
+    → readonly-database error → crash-loop.
+  - This is the **THIRD instance** of the identical cross-uid group-write
+    gap (11.3.8 dir → 11.3.11 events-file → now sqlite-WAL). The true root
+    cause is **systemic**: containers run umask 022, so every multi-uid
+    shared file defaults group-non-writable. Captured in project memory
+    `cross-uid-group-write-systemic-umask-gap`.
 
 ### Completion Notes List
 
+- **AC1 ✓** event_log.py `_ensure_current_day` creates 0o660 + explicit
+  `os.fchmod(fd, 0o660)` to defeat umask; others-triad stays 0.
+- **AC2 ✓** `_recover_file` best-effort `os.chmod(path, 0o660)` before the
+  `r+b` open (self-heals same-uid stale-mode files).
+- **AC3 ✓** `recover_all_logs` catches genuine cross-uid `PermissionError`
+  → structured `log.error` with uid/gid/mode/remediation → skip-and-
+  continue, NOT crash-loop. `EventLogWriter.recover()` delegates here so
+  both writer + subscriber recovery are protected. **PROVEN by AC8:** the
+  event-log permission crash is gone.
+- **AC4 ✓** rule-of-three not met (fd-fchmod + path-chmod = 2 different
+  forms) → inline, no helper. Documented.
+- **AC5 ✓** TestFileMode rewritten (superseded the old 0o640 assertion):
+  3 POSIX-only tests — exact-0o660-under-umask-022, never-world-accessible,
+  recovery-self-heal.
+- **AC6 ✓** `tests/integration/test_event_log_file_perm.py` (slow) created,
+  mirrors the 11.3.8 dir-perm test; collects clean.
+- **AC7 ✓** validation gates green (see Debug Log).
+- **AC8 ⚠ PARTIAL — my fix proven, but 7/7 NOT reached** due to the
+  newly-surfaced sqlite-WAL cross-uid bug (uid 10001 creates -wal/-shm
+  0o644, locks out registry-state uid 10002). This is OUT OF SCOPE for
+  11.3.11 (event-log files) — it's the DB-file layer of the same systemic
+  umask gap. Recommend (per memory): fix the root cause — (A) umask 002
+  for omb services, and/or (B) split registry-api's writable
+  idempotency-cache engine onto its own sqlite file (the already-
+  documented app.py:179-191 "M8 follow-up"). Do NOT point-fix a 4th file.
+- **AC9 ✓** code review (default effort, opus code-reviewer): APPROVE,
+  0 CRITICAL/HIGH, 2 LOW — both applied. The world-readable security
+  invariant was confirmed INTACT (all 3 sites 0o660, others-triad 0;
+  the AC3 skip does NOT mask corruption — the consumer log_reader.py
+  opens read-only and tolerates partial tails). L1: added `AttributeError`
+  to the fchmod `suppress` (os.fchmod is absent on Windows → would raise
+  AttributeError that suppress(OSError) misses). L2: added a hermetic unit
+  test `test_recovery_skips_and_continues_on_cross_uid_permission_denied`
+  (monkeypatches `_recover_file` to raise PermissionError on one of two
+  files; asserts recover_all_logs skips it + still recovers the other +
+  returns rather than crash-looping) — the AC3 path was previously only
+  covered by the Docker-gated integration test.
+
 ### File List
+
+MODIFIED:
+- `services/registry-state/src/registry_state/adapters/event_log.py` (0o660 + fchmod + recovery self-heal + AC3 skip-and-continue)
+- `services/registry-state/src/registry_state/test_event_log.py` (TestFileMode rewrite + recover_all_logs/sys imports)
+
+NEW:
+- `tests/integration/test_event_log_file_perm.py` (slow+integration regression gate)
 
 ## Definition of Done
 

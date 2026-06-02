@@ -28,6 +28,7 @@ original BaseModel instance.  Using ``{"value": "..."}`` dicts avoids this.
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Callable, Generator
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
@@ -51,6 +52,7 @@ from registry_state.adapters.event_log import (
     EventLogWriter,
     current_day_path,
     read_log_lines,
+    recover_all_logs,
 )
 from registry_state.domain.event_types import ensure_registered
 
@@ -912,20 +914,51 @@ class TestRolloverAtomicity:
 
 
 class TestFileMode:
+    """Story 11.3.11 — event-log files are 0o660 (group-RW, never world-readable).
+
+    Supersedes the F14 ``0o640`` assertion: the writer now creates day-files
+    group-WRITABLE so cross-uid ``omb`` services can append/recover (the
+    file-level sibling of Story 11.3.8's 0o2775 dir fix), while keeping the
+    others-triad ``0`` (the non-world-readable audit invariant).
+    """
+
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="POSIX mode bits ignored on Windows — fchmod is a no-op there",
+    )
     @pytest.mark.asyncio
-    async def test_created_file_has_mode_0o640(
+    async def test_created_file_is_0o660_regardless_of_umask(
         self, tmp_path: Path, fixed_clock: FrozenClock
     ) -> None:
-        """Newly-created event-log files are mode 0o640 (not 0o644).
+        """Fresh file is exactly 0o660 even under umask 022 (fchmod defeats umask).
 
-        The actual file mode is ``0o640 & ~umask``.  We read the current
-        process umask (temporarily, then restore) and assert the resulting
-        mode matches the umask-masked intent.
+        Pins umask to 022 — under which a bare ``os.open(..., 0o660)`` would be
+        masked down to 0o640 (stripping group-write, the original bug).  The
+        writer's explicit ``os.fchmod(fd, 0o660)`` (event_log.py
+        ``_ensure_current_day``) must restore the group-write bit.
         """
-        # Capture umask (os.umask must be called to read it; restore immediately).
-        current_umask = os.umask(0o022)
-        os.umask(current_umask)
+        prev_umask = os.umask(0o022)
+        try:
+            env = _make_envelope(clock=fixed_clock)
+            writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+            await writer.append(env)
+            await writer.close()
+        finally:
+            os.umask(prev_umask)
 
+        path = current_day_path(tmp_path, fixed_clock.now())
+        mode_bits = path.stat().st_mode & 0o777
+        assert mode_bits == 0o660, (
+            f"file mode {oct(mode_bits)} != 0o660 — the explicit fchmod must "
+            f"defeat umask 022 (a bare os.open would yield 0o640)"
+        )
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX mode bits")
+    @pytest.mark.asyncio
+    async def test_created_file_is_never_world_accessible(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """The audit-log security invariant: others-triad is 0 (no world r/w/x)."""
         env = _make_envelope(clock=fixed_clock)
         writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
         await writer.append(env)
@@ -933,11 +966,82 @@ class TestFileMode:
 
         path = current_day_path(tmp_path, fixed_clock.now())
         mode_bits = path.stat().st_mode & 0o777
-        expected = 0o640 & ~current_umask
-        assert mode_bits == expected, (
-            f"file mode {oct(mode_bits)} != expected {oct(expected)} "
-            f"(0o640 & ~umask={oct(current_umask)})"
+        assert mode_bits & 0o007 == 0, (
+            f"others-triad must be 0 (non-world-readable audit log); got {oct(mode_bits)}"
         )
-        # Explicit guard: under any reasonable umask, the world-read bit must
-        # be clear.  0o644 would leave 0o004 set; 0o640 never does.
-        assert mode_bits & 0o004 == 0, "world-readable bit must be clear"
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX mode bits")
+    @pytest.mark.asyncio
+    async def test_recovery_self_heals_pre_existing_0o640_file(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """AC2: a stale 0o640 file owned by us is chmod'd to 0o660 before r+b open.
+
+        Simulates a file created by a pre-11.3.11 writer: mode 0o640 with a
+        trailing partial line.  ``recover_all_logs`` must self-heal the mode
+        (so the r+b open succeeds) AND trim the partial tail — proving the
+        recovery path no longer fails on a wrong-mode same-uid file.
+        """
+        # Write one clean envelope, then close, then downgrade to 0o640 and
+        # append a partial (un-terminated) line to force a recovery trim.
+        env = _make_envelope(clock=fixed_clock)
+        writer = EventLogWriter(base_dir=tmp_path, clock=fixed_clock)
+        await writer.append(env)
+        await writer.close()
+        path = current_day_path(tmp_path, fixed_clock.now())
+
+        os.chmod(path, 0o640)  # simulate pre-11.3.11 creation
+        with open(path, "ab") as f:
+            f.write(b'{"partial": true')  # no trailing newline → partial tail
+
+        assert path.stat().st_mode & 0o777 == 0o640, "test setup: file is 0o640"
+
+        trimmed = await recover_all_logs(tmp_path)
+
+        assert trimmed > 0, "recovery should have trimmed the partial tail"
+        # Self-healed to 0o660 (we own the file, so the AC2 chmod succeeds).
+        assert path.stat().st_mode & 0o777 == 0o660, (
+            f"recovery should self-heal mode to 0o660; got {oct(path.stat().st_mode & 0o777)}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_recovery_skips_and_continues_on_cross_uid_permission_denied(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC3 (code-review L2): a PermissionError from _recover_file does NOT
+        crash-loop the subscriber — recover_all_logs logs + skips + continues.
+
+        Simulates the genuinely-cross-uid unrecoverable case (file owned by a
+        DIFFERENT omb-uid, still 0o640, AC2 chmod suppressed → r+b open
+        raises PermissionError) WITHOUT needing a second uid: monkeypatch
+        ``_recover_file`` to raise PermissionError for one of two day-files.
+        The OTHER file must still be recovered, and the call must RETURN
+        (not propagate) — proving the skip-and-continue that prevents the
+        Story 11.3.10-AC5 crash-loop.
+        """
+        from registry_state.adapters import event_log as _evt
+
+        # Two day-files; one will "fail" recovery, the other succeeds.
+        good = tmp_path / "2026-06-01.jsonl"
+        bad = tmp_path / "2026-06-02.jsonl"
+        good.write_bytes(b'{"ok": true}\n{"partial": ')  # partial tail → trimmable
+        bad.write_bytes(b'{"x": 1}\n')
+
+        real_recover = _evt._recover_file
+
+        def _fake_recover(path: Path) -> int:
+            if path.name == bad.name:
+                raise PermissionError(13, "Permission denied", str(path))
+            return real_recover(path)
+
+        monkeypatch.setattr(_evt, "_recover_file", _fake_recover)
+
+        # MUST NOT raise — the PermissionError on `bad` is logged + skipped.
+        total = await _evt.recover_all_logs(tmp_path)
+
+        # `good` was still recovered (its partial tail trimmed → >0 bytes),
+        # proving iteration continued past the failed file.
+        assert total > 0, (
+            "recover_all_logs must skip the PermissionError file and STILL "
+            "recover the good one (skip-and-continue, not crash) — AC3"
+        )
