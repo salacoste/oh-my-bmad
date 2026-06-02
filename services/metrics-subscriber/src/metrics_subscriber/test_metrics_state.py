@@ -400,6 +400,50 @@ def test_task_completed_logs_final_token_usage_before_gauge_clear() -> None:
     assert _metric_value(body, "omb_task_tokens_spent", labels={"task_id": task_id}) is None
 
 
+def test_budget_enforcement_triggered_counts_and_clears_gauge() -> None:
+    """Story 12.2 / FR67 — the enforcement event is a terminal task event:
+    it increments ``omb_task_lifecycle_events_total{event_type=
+    task.budget_enforcement_triggered}`` AND clears the live token gauge.
+    """
+    registry = CollectorRegistry()
+    state = build_collectors(registry)
+    task_id = "task-budget-enforced"
+    # Live spend on the gauge (a prior task.budget_exceeded set it).
+    update_for(
+        state,
+        _make_envelope(
+            "task.budget_exceeded",
+            payload={"task_id": task_id, "tokens_used": 9999},
+        ),
+    )
+    update_for(
+        state,
+        _make_envelope(
+            "task.budget_enforcement_triggered",
+            payload={
+                "task_id": task_id,
+                "budget_threshold": 8000,
+                "actual_spend": 9999,
+                "action_taken": "subprocess_terminated",
+                "post_trigger_transition": "failed",
+                "step": 2,
+            },
+        ),
+    )
+    body = generate_latest(registry)
+    # Counter incremented for the new event type.
+    assert (
+        _metric_value(
+            body,
+            "omb_task_lifecycle_events_total",
+            labels={"event_type": "task.budget_enforcement_triggered"},
+        )
+        == 1.0
+    )
+    # Terminal → token gauge cleared.
+    assert _metric_value(body, "omb_task_tokens_spent", labels={"task_id": task_id}) is None
+
+
 def test_task_completed_without_token_usage_skips_final_log() -> None:
     """Story 10.4 P1-H4 — missing/None ``token_usage`` is a silent no-op.
 
@@ -478,12 +522,13 @@ def test_task_gauge_cleanup_then_resurrect_is_idempotent() -> None:
 
 
 def test_dispatch_table_size_meets_minimum() -> None:
-    """AC6 — exactly 22 entries.
+    """AC6 — exactly 23 entries.
 
-    Breakdown: 10 lifecycle-only + 3 token-bearing + 2 terminal +
-    5 session + 1 secret + 1 capability (Story 11.2 P1-H3) = 22.
+    Breakdown: 10 lifecycle-only + 3 token-bearing + 3 terminal (task.completed,
+    task.stop_requested, + task.budget_enforcement_triggered per Story 12.2) +
+    5 session + 1 secret + 1 capability (Story 11.2 P1-H3) = 23.
     """
-    assert len(_DISPATCH) == 22, f"dispatch table has {len(_DISPATCH)} entries, expected == 22"
+    assert len(_DISPATCH) == 23, f"dispatch table has {len(_DISPATCH)} entries, expected == 23"
 
 
 def test_dispatch_table_covers_all_task_lifecycle_event_types() -> None:
@@ -731,8 +776,11 @@ def test_cardinality_at_steady_state_is_bounded() -> None:
     # exactly 8 canonical samples after ``_created`` filtering (verified
     # via prometheus_client 0.x — see test reproduction in Story 11.2.3
     # pass-1 review notes).
-    assert canonical_timeseries <= 61, (
-        f"cardinality {canonical_timeseries} exceeds AC10 steady-state bound of 61; "
+    # Story 12.2: bound 61 → 62 for the new pre-populated
+    # ``omb_task_lifecycle_events_total{event_type="task.budget_enforcement_triggered"}``
+    # label (FR67). One additional canonical sample; cardinality stays bounded.
+    assert canonical_timeseries <= 62, (
+        f"cardinality {canonical_timeseries} exceeds AC10 steady-state bound of 62; "
         f"families: {[(f.name, len(f.samples)) for f in timeseries]}"
     )
 
@@ -777,9 +825,10 @@ def test_cardinality_under_burst_cleanup() -> None:
         for sample in family.samples
         if not sample.name.endswith("_created")
     )
-    # Story 11.2.3: see steady-state bound rationale above (exactly 61).
-    assert canonical_timeseries <= 61, (
-        f"cardinality {canonical_timeseries} exceeds AC10 burst-cleanup bound of 61"
+    # Story 11.2.3: see steady-state bound rationale above. Story 12.2 bumped
+    # 61 → 62 for the new task.budget_enforcement_triggered lifecycle label.
+    assert canonical_timeseries <= 62, (
+        f"cardinality {canonical_timeseries} exceeds AC10 burst-cleanup bound of 62"
     )
 
 

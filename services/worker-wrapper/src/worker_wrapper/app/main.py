@@ -35,6 +35,7 @@ from events.payloads import (
     SessionHeartbeatPayload,
     SessionStartedPayload,
     TaskApprovalRequestedPayload,
+    TaskBudgetEnforcementTriggeredPayload,
     TaskLicenseFlaggedPayload,
     Tier3ActionPerformedPayload,
 )
@@ -689,6 +690,71 @@ async def run_task(
                 exc_type=type(runner_raised).__name__,
                 exc_str=str(runner_raised),
             )
+
+        # Story 12.2 (FR67) — emit the task.budget_enforcement_triggered AUDIT
+        # event: the durable ACTION-RECORD that the platform terminated the
+        # subprocess in response to the budget overage. Populated from the
+        # supervisor result (token_limit → budget_threshold, tokens_used →
+        # actual_spend, step). ``post_trigger_transition`` comes from the
+        # operator-configured default (Story 12.4 will source it per-task);
+        # it MUST match the FSM transition actually driven below
+        # (TASK_FAILED → "failed"). Best-effort via _call_tool_best_effort —
+        # an audit-emit failure must NOT block the FSM transition or leak the
+        # subprocess (enforcement already happened). NFR-R8 unaffected: this
+        # is AFTER termination.
+        # CODE-REVIEW M3 — FR67 requires the audit event after EVERY
+        # enforcement, so we MUST emit even if an optional field is missing.
+        # ``token_limit``/``tokens_used`` are isinstance-int-validated by the
+        # supervisor (budget_supervisor.py) so they are guaranteed set when
+        # ``triggered=True``; ``step`` is parsed best-effort from the raw
+        # task.budget_exceeded payload and CAN be None on a malformed/older
+        # producer. Rather than DROP the whole audit record over a missing
+        # ``step``, default it to the schema floor (1, ``Field(ge=1)``) and
+        # log that the source step was absent. ``budget_threshold`` /
+        # ``actual_spend`` fall back to the supervisor values; if THOSE were
+        # somehow None (should be impossible per the supervisor contract) the
+        # payload's ``gt=0`` validation would reject 0 — so we coerce a None to
+        # the smallest valid sentinel and log loudly, still preserving a record.
+        step_value = budget_result.step if budget_result.step is not None else 1
+        if budget_result.step is None:
+            log.warning(
+                "budget_enforcement_event_step_missing_defaulted",
+                task_id=task_id,
+                event_id=budget_result.event_id,
+            )
+        threshold_value = budget_result.token_limit if budget_result.token_limit is not None else 1
+        spend_value = budget_result.tokens_used if budget_result.tokens_used is not None else 1
+        if budget_result.token_limit is None or budget_result.tokens_used is None:
+            log.error(
+                "budget_enforcement_event_spend_fields_missing",
+                task_id=task_id,
+                token_limit=budget_result.token_limit,
+                tokens_used=budget_result.tokens_used,
+            )
+        enforcement_payload = TaskBudgetEnforcementTriggeredPayload(
+            task_id=task_id,
+            budget_threshold=threshold_value,
+            actual_spend=spend_value,
+            action_taken="subprocess_terminated",
+            # H1/H2: pin to "failed" — the only transition the FSM actually
+            # drives below. settings.default_budget_action is validated to
+            # reject "awaiting_approval" until Story 12.3, so this equals
+            # "failed" today; reading it (not hard-coding) keeps the wiring
+            # ready for 12.3/12.4 to flip the value once the FSM can honor it.
+            post_trigger_transition=settings.default_budget_action,
+            step=step_value,
+        )
+        await _call_tool_best_effort(
+            clients.clawhip_bridge,
+            "emit_event",
+            {
+                "type": "task.budget_enforcement_triggered",
+                "payload": enforcement_payload.model_dump(),
+                "caller_trace_id": settings.resolve_trace_id(),
+            },
+            label="emit_budget_enforcement_triggered",
+        )
+
         await mgr.handle_event(LifecycleEvent.TASK_FAILED)
         log.info(
             "budget_enforced_task_terminated",

@@ -123,8 +123,18 @@ log = structlog.get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 #: Bounded enum of task-lifecycle envelope ``type`` values that increment
-#: ``omb_task_lifecycle_events_total``.  15 values per Story 10.4 AC1
-#: (cross-checked against ``event_types.py:140-258``).
+#: ``omb_task_lifecycle_events_total``.  16 values (15 per Story 10.4 AC1 +
+#: ``task.budget_enforcement_triggered`` per Story 12.2 / FR67) — cross-checked
+#: against ``event_types.py``.
+#:
+#: Story 12.2 (FR67): the Epic 12 acceptance gate calls for counting
+#: ``task.budget_enforcement_triggered``. This module's idiom is the bounded
+#: ``omb_task_lifecycle_events_total{event_type=...}`` counter (one
+#: pre-registered label per enum value, no lazy cardinality leak — Story 10.5
+#: regression test enforces). So the enforcement event is counted as
+#: ``omb_task_lifecycle_events_total{event_type="task.budget_enforcement_triggered"}``
+#: rather than a separate ``task_budget_enforcement_triggered_total`` counter,
+#: keeping the cardinality contract intact.
 _TASK_LIFECYCLE_EVENT_TYPES: Final[tuple[str, ...]] = (
     "task.created",
     "task.planning.started",
@@ -139,6 +149,7 @@ _TASK_LIFECYCLE_EVENT_TYPES: Final[tuple[str, ...]] = (
     "task.self_recovered",
     "task.execution.resumed",
     "task.budget_exceeded",
+    "task.budget_enforcement_triggered",
     "task.license_flagged",
     "task.summary_emitted",
 )
@@ -586,7 +597,8 @@ def _update_capability_denied(state: MetricsState, envelope: EventEnvelope) -> N
 
 #: Story 10.4 AC6 — immutable event_type → updater dispatch table.
 #:
-#: Keys: 15 task lifecycle + 5 session + 1 secret = 21 entries.
+#: Keys: 16 task lifecycle (15 + task.budget_enforcement_triggered, Story 12.2)
+#: + 5 session + 1 secret + 1 capability.denied = 23 entries.
 #:
 #: Lookup MUST use ``_DISPATCH.get(...)`` — direct subscript would
 #: raise ``KeyError`` for legitimate unknown envelope types (those still
@@ -614,6 +626,9 @@ _DISPATCH: Final[dict[str, EventMetricUpdater]] = {
     # Terminal task events — bump lifecycle counter AND clear the gauge.
     "task.completed": _update_task_lifecycle_and_clear_task_gauge,
     "task.stop_requested": _update_task_lifecycle_and_clear_task_gauge,
+    # Story 12.2 (FR67) — budget-enforcement is terminal (task → failed):
+    # count it AND clear the token gauge (the task is done, no live spend).
+    "task.budget_enforcement_triggered": _update_task_lifecycle_and_clear_task_gauge,
     # Session lifecycle.
     "session.started": _update_session_lifecycle,
     "session.heartbeat": _update_session_lifecycle,
