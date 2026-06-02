@@ -180,8 +180,10 @@ class TestSignalLiteral:
         with pytest.raises(ValidationError):
             ReplicationLaggingPayload(**kwargs)
 
-    def test_known_signal_accepted(self) -> None:
-        ReplicationLaggingPayload(**{**_VALID_KWARGS, "signal": "sync_stalled"})
+    @pytest.mark.parametrize("good_signal", ["sync_stalled", "silent_stall"])
+    def test_known_signal_accepted(self, good_signal: str) -> None:
+        # Story 13.4a added "silent_stall" — both Literal values must validate.
+        ReplicationLaggingPayload(**{**_VALID_KWARGS, "signal": good_signal})
 
 
 class TestThresholdSeconds:

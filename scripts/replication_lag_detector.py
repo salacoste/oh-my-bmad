@@ -8,16 +8,21 @@ persisted state plus an emit decision. ``scripts/check_replication_lag.py`` wrap
 it with the impure parts (HTTP GET of ``/metrics``, state-file load/save, event
 append).
 
-**Lag signal** (works for ANY litestream replica type — Story 13.4 authoritative
-findings): replication is "lagging" when ``litestream_sync_count`` did NOT
-advance between two successive samples (the sync loop has stalled; it normally
-ticks ~1/s) AND ``litestream_sync_error_count`` has risen (errors are being
-recorded). ``litestream_replica_operation_total{operation="PUT"}`` is NOT
-instrumented for ``file`` replicas, so it is deliberately not consulted.
+**Lag signal** (works for ANY litestream replica type — Story 13.4 + 13.4a
+authoritative findings): replication is "lagging" when ``litestream_sync_count``
+did NOT advance between two successive samples — the sync loop has stalled. It
+normally ticks ~1/s INDEPENDENT of DB write activity (empirically verified: an
+idle DB still advances it ~1/s), so a flat counter unambiguously means the loop
+stopped, with no idle false-positives. The CAUSE is classified at emit time
+(Story 13.4a): ``"sync_stalled"`` if ``litestream_sync_error_count`` also rose
+during the episode (S3/network failures), or ``"silent_stall"`` if errors stayed
+flat (the sync loop itself is hung — the dangerous silent failure).
+``litestream_replica_operation_total{operation="PUT"}`` is NOT instrumented for
+``file`` replicas, so it is deliberately not consulted.
 
 **Debounce / emit-once-per-episode contract**:
 
-  * Track the lag ONSET time (first sample where the stall+error condition holds).
+  * Track the lag ONSET time (first sample where the stall condition holds).
   * Emit ``replication.lagging`` EXACTLY ONCE per lag episode, when the lag has
     been sustained STRICTLY LONGER than ``sustained_threshold_seconds`` (300s =
     5 min) and the episode has not already emitted.
@@ -33,7 +38,7 @@ window that gates emission.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
 #: Default sustained-lag window (seconds): emit only after the stall has
 #: persisted STRICTLY LONGER than this. 300s = 5 min per NFR-R7 / the recipe.
@@ -99,7 +104,7 @@ class EmitFields:
     envelope.
     """
 
-    signal: str
+    signal: Literal["sync_stalled", "silent_stall"]
     threshold_seconds: int
     sustained_seconds: int
     sync_error_count: int

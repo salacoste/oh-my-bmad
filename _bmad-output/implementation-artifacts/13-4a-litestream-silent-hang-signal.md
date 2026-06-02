@@ -1,6 +1,6 @@
 # Story 13.4a — litestream silent-hang signal (`silent_stall`) (NFR-R7 follow-up)
 
-Status: review
+Status: done
 
 <!-- Follow-up filed from the Story 13.4 code-review: the 13.4 lag signal
 (sync_count stall AND sync_error rising) missed a TOTALLY-hung litestream (loop
@@ -91,6 +91,17 @@ claude-opus-4-8[1m] — validation-first (empirical litestream idle-heartbeat te
 - scripts/test_replication_lag_detector.py (M — silent_stall + back-compat tests)
 - packages/events/src/events/types/replication.py (M — signal Literal += silent_stall)
 - docs/operator-runbook.md (M — silent_stall mention)
+
+### Code Review — 2026-06-02, code-reviewer (separate lane)
+
+- **code-reviewer:** APPROVE-WITH-NITS (0 CRITICAL/HIGH). Traced ALL state
+  transitions = correct; no regression to the 13.4 sync_stalled path; onset
+  baseline captured correctly (previous sample's error count); back-compat
+  default safe; `>` boundary preserved; Literal extension additive (no consumer
+  pattern-matches signal). Fixes applied: MEDIUM (stale module docstring → now
+  describes episode-on-stall + silent_stall), LOW (payload test now parametrized
+  over both signals), NIT (EmitFields.signal tightened to the Literal). 41 tests
+  pass; ruff/mypy clean.
 
 ## Definition of Done
 - silent-hang detected as `replication.lagging` signal="silent_stall".
