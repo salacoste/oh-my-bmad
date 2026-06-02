@@ -198,7 +198,13 @@ def harness(tmp_path) -> _Harness:
         h.clock = clock
 
         async def _setup() -> tuple[LifespanManager, httpx.AsyncClient]:
-            app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+            app = build_app(
+                base_dir=events_dir,
+                db_url=db_url,
+                clock=clock,
+                idempotency_db_url=_db_url(tmp_path / "idempotency.sqlite3"),
+                create_idempotency_schema_on_start=True,
+            )
             mgr = LifespanManager(app, startup_timeout=30, shutdown_timeout=30)
             await mgr.__aenter__()
             transport = httpx.ASGITransport(app=mgr.app)

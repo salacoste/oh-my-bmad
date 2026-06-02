@@ -191,6 +191,8 @@ def _build_harness(tmp_path: Path, actor_kind: str) -> _Harness:
             db_url=db_url,
             clock=clock,
             actor_kind=actor_kind,
+            idempotency_db_url=_db_url(tmp_path / "idempotency.sqlite3"),
+            create_idempotency_schema_on_start=True,
         )
         mgr = LifespanManager(app, startup_timeout=30, shutdown_timeout=30)
         await mgr.__aenter__()

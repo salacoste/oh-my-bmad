@@ -600,7 +600,13 @@ def harness(tmp_path: Path) -> Iterator[_Harness]:
         # 30 keeps the harness flake-free without inflating wall-clock for
         # warm runs.
         async def _setup() -> tuple[LifespanManager, httpx.AsyncClient, _RequestRecorder]:
-            app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+            app = build_app(
+                base_dir=events_dir,
+                db_url=db_url,
+                clock=clock,
+                idempotency_db_url=_db_url(tmp_path / "idempotency.sqlite3"),
+                create_idempotency_schema_on_start=True,
+            )
             mgr = LifespanManager(app, startup_timeout=30, shutdown_timeout=30)
             await mgr.__aenter__()
             delegate = httpx.ASGITransport(app=mgr.app)

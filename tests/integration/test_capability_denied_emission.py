@@ -67,6 +67,8 @@ async def denied_app_client(
             db_url=db_url,
             clock=clock,
             actor_kind="worker",
+            idempotency_db_url=integration_db_url(tmp_path / "idempotency.sqlite3"),
+            create_idempotency_schema_on_start=True,
         )
         async with (
             LifespanManager(app),
