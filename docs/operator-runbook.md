@@ -330,12 +330,20 @@ just litestream-lag-check
 ```
 
 It polls `http://<host>:9090/metrics` (`OMB_LITESTREAM_METRICS_URL` to override),
-and if `litestream_sync_count` stalls while `litestream_sync_error_count` rises
-for **>5 minutes**, it emits a single `replication.lagging` audit event (via the
-FR26-respecting flock-guarded append) and stops re-emitting until replication
-recovers. litestream 0.3.x exposes no direct lag-seconds gauge, so the stall of
-the per-second sync counter is the signal. metrics-subscriber counts the event
-under `omb_events_appended_total{event_family="replication"}`.
+and if `litestream_sync_count` **stalls for >5 minutes** it emits a single
+`replication.lagging` audit event (via the FR26-respecting flock-guarded append)
+and stops re-emitting until replication recovers. `sync_count` is a ~1/s
+heartbeat (it advances even when the DB is idle — empirically verified), so a
+flat counter unambiguously means the sync loop stopped. The event's `signal`
+distinguishes the cause (Story 13.4a):
+- **`sync_stalled`** — `sync_error_count` rose during the stall → S3/network
+  failures (the sidecar is trying and failing).
+- **`silent_stall`** — errors stayed flat → the sync loop is **hung/frozen**
+  (the dangerous silent failure; the sidecar looks alive but isn't replicating).
+
+litestream 0.3.x exposes no direct lag-seconds gauge, so the sync-counter stall
+is the signal. metrics-subscriber counts the event under
+`omb_events_appended_total{event_family="replication"}`.
 
 > The script exits 3 if registry-state holds the event-log lock (it is the live
 > writer) — that is normal; the next cron tick retries.
