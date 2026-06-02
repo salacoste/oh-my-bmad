@@ -1,6 +1,6 @@
 # Story 13.2 — litestream config template + S3-compatible target docs (FR70)
 
-Status: review
+Status: done
 
 <!-- Epic 13, story 2. Authoring-heavy (config template + credential docs +
 operator runbook) + the small deferred compose items from Story 13.1's review.
@@ -84,6 +84,16 @@ claude-opus-4-8[1m] (create-story + dev-story, 2026-06-02).
   `git check-ignore litestream.yml` ignored, template valid YAML.
 - Deferred: live "replicate within 1 min" (needs real bucket) → operator/nightly;
   restore drill = 13.3; lag-check + replication.lagging = 13.4.
+
+### Code Review — 2026-06-02, security-reviewer (separate context)
+
+- **security-reviewer:** SAFE TO MERGE (0 CRITICAL/HIGH/MEDIUM). Confirmed: no
+  secrets in repo (template + .env.example are placeholders/empty); litestream.yml
+  gitignored while .example is committable; env-var credential flow is the correct
+  litestream pattern; no mcp_clients/os.environ/permission regressions; group_add
+  is the pre-existing omb group (no new privilege).
+- LOW (advisory) APPLIED: .env.example now recommends a bucket-SCOPED key (least
+  privilege) for all four targets, not just AWS.
 
 ### File List
 - litestream.yml.example (NEW — config template, 4 targets)
