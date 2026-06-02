@@ -518,6 +518,15 @@ async def run_task(
                 terminate_callback=_terminate_for_budget,
                 clock=SystemClock(),
                 cancel_event=budget_cancel,
+                # Story 12.3a Phase 2 — wire the grace-window state machine.
+                # ``budget_action`` selects "failed" (immediate SIGTERM, today's
+                # behavior, the default) vs "awaiting_approval" (open a bounded
+                # override grace window). ``grace_window_s`` is the OVERRIDE
+                # window the supervisor waits for an inbound budget override —
+                # DISTINCT from ``budget_grace_period_s`` above, which is the
+                # SIGTERM→SIGKILL escalation grace inside ``terminate_with_grace``.
+                budget_action=settings.default_budget_action,
+                grace_window_s=settings.budget_grace_window_s,
             ),
             name=f"budget-supervisor-{task_id}",
         )
@@ -633,7 +642,76 @@ async def run_task(
             with contextlib.suppress(Exception, asyncio.CancelledError):
                 budget_result = budget_supervisor_task.result()
 
-    if budget_result is not None and budget_result.triggered:
+    if budget_result is not None and budget_result.triggered and budget_result.override_received:
+        # Story 12.3a Phase 2 — OVERRIDE-INTERCEPTED path (FR68 headline).
+        # A budget breach WAS observed but an operator budget override arrived
+        # inside the grace window (only reachable when
+        # ``default_budget_action == "awaiting_approval"``), so the supervisor
+        # ABORTED this termination — the subprocess is STILL ALIVE and runs to
+        # natural completion. We do NOT drive the FSM to FAILED and we do NOT
+        # ``return``; we record the prevented-enforcement audit event and FALL
+        # THROUGH to the normal-completion path below (re-raise of a real runner
+        # error, or TASK_COMPLETED / approval gate) so the runner's natural
+        # ``result`` is processed.
+        #
+        # SCOPE (3-lane review, critic MAJOR-1 — honest framing): this is a
+        # ONE-SHOT REPRIEVE, not a re-enforced higher ceiling. 12.3a does NOT
+        # re-spawn the supervisor with the override's ``new_limit`` and does NOT
+        # re-couple the orchestrator-adapter BudgetTracker — so after this abort
+        # the task runs WITHOUT further budget enforcement, bounded only by
+        # ``task_overall_timeout_s`` (default 900s). Enforcing the new ceiling
+        # going forward is deferred to Story 12.3c (tracked). The operator
+        # explicitly chose ``--override budget`` (= "let this task exceed its
+        # budget"), so finishing the run is the intended semantic for now.
+        #
+        # post_trigger_transition="awaiting_approval" is audit-truthful here:
+        # the task was NOT failed — it parks for / continues under operator
+        # approval (the 12.2 H1/H2 audit-integrity principle: the field MUST
+        # match the actual FSM outcome).
+        step_value = budget_result.step if budget_result.step is not None else 1
+        if budget_result.step is None:
+            log.warning(
+                "budget_enforcement_event_step_missing_defaulted",
+                task_id=task_id,
+                event_id=budget_result.event_id,
+            )
+        threshold_value = budget_result.token_limit if budget_result.token_limit is not None else 1
+        spend_value = budget_result.tokens_used if budget_result.tokens_used is not None else 1
+        if budget_result.token_limit is None or budget_result.tokens_used is None:
+            log.error(
+                "budget_enforcement_event_spend_fields_missing",
+                task_id=task_id,
+                token_limit=budget_result.token_limit,
+                tokens_used=budget_result.tokens_used,
+            )
+        override_payload = TaskBudgetEnforcementTriggeredPayload(
+            task_id=task_id,
+            budget_threshold=threshold_value,
+            actual_spend=spend_value,
+            action_taken="override_intercepted",
+            post_trigger_transition="awaiting_approval",
+            step=step_value,
+        )
+        await _call_tool_best_effort(
+            clients.clawhip_bridge,
+            "emit_event",
+            {
+                "type": "task.budget_enforcement_triggered",
+                "payload": override_payload.model_dump(),
+                "caller_trace_id": settings.resolve_trace_id(),
+            },
+            label="emit_budget_override_intercepted",
+        )
+        log.info(
+            "budget_override_intercepted",
+            task_id=task_id,
+            event_id=budget_result.event_id,
+            detection_latency_s=budget_result.detection_latency_s,
+        )
+        # FALL THROUGH — no FSM transition, no return; the subprocess survived
+        # so the normal-completion path (~below) processes the runner result.
+
+    elif budget_result is not None and budget_result.triggered:
         # Story 12.1 — task was terminated by budget enforcement.
         # ``task.completed`` is NOT emitted; Story 12.2 will emit
         # ``task.budget_enforcement_triggered`` here (FR67) with the
@@ -695,10 +773,11 @@ async def run_task(
         # event: the durable ACTION-RECORD that the platform terminated the
         # subprocess in response to the budget overage. Populated from the
         # supervisor result (token_limit → budget_threshold, tokens_used →
-        # actual_spend, step). ``post_trigger_transition`` comes from the
-        # operator-configured default (Story 12.4 will source it per-task);
-        # it MUST match the FSM transition actually driven below
-        # (TASK_FAILED → "failed"). Best-effort via _call_tool_best_effort —
+        # actual_spend, step). ``post_trigger_transition`` is hard-pinned to
+        # "failed" below — this branch ALWAYS drives ``TASK_FAILED``, so the
+        # audit field MUST say "failed" to stay truthful (Story 12.3a Phase 2;
+        # the override-intercepted branch above owns "awaiting_approval").
+        # Best-effort via _call_tool_best_effort —
         # an audit-emit failure must NOT block the FSM transition or leak the
         # subprocess (enforcement already happened). NFR-R8 unaffected: this
         # is AFTER termination.
@@ -736,12 +815,21 @@ async def run_task(
             budget_threshold=threshold_value,
             actual_spend=spend_value,
             action_taken="subprocess_terminated",
-            # H1/H2: pin to "failed" — the only transition the FSM actually
-            # drives below. settings.default_budget_action is validated to
-            # reject "awaiting_approval" until Story 12.3, so this equals
-            # "failed" today; reading it (not hard-coding) keeps the wiring
-            # ready for 12.3/12.4 to flip the value once the FSM can honor it.
-            post_trigger_transition=settings.default_budget_action,
+            # Story 12.2 H1/H2 audit-integrity: ``post_trigger_transition`` MUST
+            # match the FSM transition this branch actually drives. The
+            # terminated branch ALWAYS drives ``TASK_FAILED`` below, so the audit
+            # field is hard-pinned to "failed" — even when the operator policy
+            # was ``default_budget_action="awaiting_approval"`` but NO override
+            # arrived in the grace window (fail-closed → the subprocess WAS
+            # terminated → the task failed). The audit must record what truly
+            # happened to the task, not the configured intent. The override-
+            # intercepted branch above is the only path that emits
+            # ``post_trigger_transition="awaiting_approval"``, and only there
+            # does the task continue rather than fail. (Story 12.3a Phase 2
+            # removed the now-obsolete ``_reject_unwired_budget_action``
+            # validator that pinned ``settings.default_budget_action`` to
+            # "failed".)
+            post_trigger_transition="failed",
             step=step_value,
         )
         await _call_tool_best_effort(

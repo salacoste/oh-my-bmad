@@ -813,10 +813,19 @@ class TaskBudgetEnforcementTriggeredPayload(BaseModel):
     budget_threshold: int = Field(gt=0)
     # Cumulative spend at the moment enforcement triggered.
     actual_spend: int = Field(gt=0)
-    # The only action this story takes (FR67 names it explicitly). A Literal
+    # The action the platform took in response to the budget breach. A Literal
     # rather than a free str so a future action variant is a deliberate
     # schema change, not an accidental typo.
-    action_taken: Literal["subprocess_terminated"] = "subprocess_terminated"
+    #
+    # Story 12.3a Phase 2 — additive enum value ``"override_intercepted"``: the
+    # supervisor opened a grace window (``budget_action="awaiting_approval"``)
+    # and an operator budget override arrived WITHIN the window, so the
+    # subprocess was NOT terminated and the task continues under the extended
+    # limit. ``"subprocess_terminated"`` remains the value for the enforcement
+    # path (window expired / immediate-SIGTERM "failed" policy). Additive enum
+    # value — no schema-version bump (NFR-M3); the field default stays
+    # ``"subprocess_terminated"``.
+    action_taken: Literal["subprocess_terminated", "override_intercepted"] = "subprocess_terminated"
     # How the task transitioned post-enforcement, per the per-task policy
     # declared at submission. Until Story 12.4 stores per-task policy, the
     # emitter sources this from the operator-configured default
