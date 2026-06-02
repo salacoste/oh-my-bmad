@@ -1,6 +1,6 @@
 # Story 13.3 — `just restore-from-litestream` recipe + restore drill (FR71)
 
-Status: review
+Status: done
 
 <!-- Epic 13, story 3. Validation-first: the litestream replicate→restore
 MECHANISM was PROVEN locally (hermetic file-replica round-trip, exit 0) before
@@ -88,6 +88,29 @@ claude-opus-4-8[1m] (create-story + dev-story, validation-first, 2026-06-02).
 - docs/backup-restore.md: litestream-restore section.
 - Deferred (live): full fresh-host restore from real S3 + stack-healthy +
   cross-uid perm reconstruction → operator/nightly (ADR-0007 first-enable item).
+
+### Code Review (AC7) — 2026-06-02, code-reviewer (separate context)
+
+- **code-reviewer:** CHANGES-REQUIRED → all addressed. This caught real defects
+  in the operator recipe (which could NOT be live-validated — exactly why it was
+  reviewed):
+  - **CRITICAL FIXED:** litestream restore runs as root → restored state.sqlite3
+    was root-owned → registry-state (uid 10002) couldn't write → readonly-DB
+    crash loop (the Epic-11.3 bug). Added a post-restore chown 10002:10000 +
+    chmod 0660 on state.sqlite3 (+ -wal/-shm).
+  - **HIGH FIXED:** no confirmation on the DESTRUCTIVE op → added a typed
+    `yes-restore` prompt with `OMB_RESTORE_CONFIRM` env bypass for automation.
+  - **HIGH FIXED:** no failure trap → added `trap fail_guidance EXIT` (cleared on
+    success) so a failed restore prints recovery guidance instead of stranding.
+  - **MEDIUM FIXED:** echo quoting bug (`${compose_files[@]}`→`[*]`); only
+    registry/ recreated → now also registry/events/ (2775/omb); drill
+    snapshot-wait 15s→30s for CI margin.
+  - **LOW FIXED:** post-wipe emptiness check (no silent masking).
+  - Reviewer confirmed `{{{{.Name}}` escaping correct, pinned action SHAs, drill
+    cleanup trap sound.
+- Re-validated: `just --list` parses, shellcheck clean, drill re-run green (exit 0).
+- Operator recipe full live run (real S3 + 7-service stack + perms) still = AC6
+  deferred operator/nightly; the crash-loop logic bug is now fixed.
 
 ### File List
 - scripts/litestream-restore-drill.sh (NEW — hermetic drill, run green)

@@ -60,7 +60,7 @@ docker run --rm -d --name "${cname}" \
 # Wait for the first snapshot to land (litestream snapshots on the first sync
 # cycle, ≤1s; poll up to 15s to be CI-robust).
 snapshot_ok=""
-for _ in $(seq 1 30); do
+for _ in $(seq 1 60); do   # poll up to 30s — margin for slow CI runners (review MEDIUM)
     if ls "${work}"/replica/state/generations/*/snapshots/* >/dev/null 2>&1; then
         snapshot_ok=1
         break
@@ -68,7 +68,7 @@ for _ in $(seq 1 30); do
     sleep 0.5
 done
 if [ -z "${snapshot_ok}" ]; then
-    echo "✗ FAIL: no snapshot appeared in the replica within 15s" >&2
+    echo "✗ FAIL: no snapshot appeared in the replica within 30s" >&2
     echo "--- litestream container logs ---" >&2
     docker logs "${cname}" 2>&1 | tail -15 >&2 || true   # grab logs BEFORE --rm stop removes it
     docker stop "${cname}" >/dev/null 2>&1 || true
