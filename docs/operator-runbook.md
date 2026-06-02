@@ -258,6 +258,76 @@ per-task with precedence `per-task budget_token_limit > OMB_DEFAULT_TASK_BUDGET_
 > `awaiting_approval` FSM path land together in **Story 12.3a**. Until then every
 > task's effective action is necessarily `failed`.
 
+## litestream WAL replication (optional disaster recovery)
+
+litestream streams registry-state's SQLite WAL off-host to an S3-compatible
+target so a destroyed host can be rebuilt from object storage. It is **disaster
+recovery, NOT high availability** — no failover, no second live writer; recovery
+is a manual stack-down procedure (Story 13.3). See
+[ADR-0007](./adr/0007-litestream-wal-replication.md) for the full rationale.
+
+**It is OFF by default.** Nothing below runs unless you opt in.
+
+### Enable it
+
+1. **Create a bucket** on your target (AWS S3 / Backblaze B2 / Cloudflare R2 /
+   self-hosted MinIO) and an access key scoped to it
+   (`PutObject`/`GetObject`/`ListBucket`).
+2. **Write the config:**
+   ```bash
+   cp litestream.yml.example litestream.yml      # litestream.yml is .gitignored
+   ```
+   Uncomment ONE replica block, fill `bucket` / `region` / `endpoint`. Leave the
+   access keys OUT of the file.
+3. **Set credentials + path in `.env`** (gitignored — never commit creds):
+   ```
+   OMB_LITESTREAM_CONFIG_PATH=./litestream.yml
+   LITESTREAM_ACCESS_KEY_ID=...
+   LITESTREAM_SECRET_ACCESS_KEY=...
+   ```
+   litestream reads the two `LITESTREAM_*` vars automatically; the sidecar gets
+   them via `env_file: .env`.
+4. **Start the sidecar:**
+   ```bash
+   docker compose --profile litestream up -d litestream
+   ```
+   Within ~1 minute it uploads an initial snapshot, then ships WAL frames on the
+   `sync-interval` (default 1s). Confirm with `docker logs omb-litestream` (look
+   for `replicating to` + periodic snapshot/sync lines) and by checking objects
+   appear under your bucket's `oh-my-bmad/registry-state` prefix.
+
+### Operational notes / sharp edges
+
+- **Credentials never touch the repo.** `litestream.yml` is gitignored and the
+  keys live in `.env` (also gitignored). The committed file is only
+  `litestream.yml.example`.
+- **The data volume is mounted read-WRITE** for the sidecar — litestream needs
+  it (it writes a `.state.sqlite3-litestream/` meta dir next to the DB and takes
+  over checkpointing). This does NOT violate FR26: registry-state remains the
+  sole *author* of rows; litestream only relocates already-committed WAL frames.
+- **Container group / permissions.** The sidecar joins the `omb` group
+  (`group_add: ["10000"]`) so it can access the 0o660 DB files. The upstream
+  image runs as root by default (works); if you pin a non-root `user:`, ensure
+  it is in gid 10000. *(First-live-enable verification item from ADR-0007.)*
+- **Missing config sharp edge.** If `OMB_LITESTREAM_CONFIG_PATH` points at a file
+  that does not exist when you enable the profile, Docker creates a *directory*
+  at that path and litestream fails to parse it. Always `cp` the template first.
+- **Checkpoint coexistence.** litestream disables autocheckpoint on its own
+  connection and checkpoints itself; registry-state keeps its normal
+  autocheckpoint. SQLite WAL locking serialises the two — worst case is a
+  redundant checkpoint, never corruption. *(First-live-enable verification item.)*
+- **Replication ≠ backup-of-record (yet).** Lag observability
+  (`replication.lagging`) + the restore drill land in Stories 13.3/13.4; until
+  then, monitor `docker logs omb-litestream` manually.
+
+### Disable it
+
+```bash
+docker compose stop litestream && docker compose rm -f litestream
+```
+Unset `OMB_LITESTREAM_CONFIG_PATH` (or just stop using `--profile litestream`).
+The core stack is unaffected.
+
 ## Forward-referenced scenarios
 
 These failure modes are spec'd but the enforcement logic does not exist yet.
