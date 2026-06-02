@@ -715,17 +715,18 @@ def test_cardinality_at_steady_state_is_bounded() -> None:
                            this test) + parse_skip_total (4) = 6
       Story 10.4 counters: task_lifecycle (15) + session (5) +
                            secret_accessed (5) + events_appended
-                           (15 — 11 base families + ``"unknown"`` fallback
+                           (16 — 11 base families + ``"unknown"`` fallback
                            bucket per P1-H1 + ``"key"`` + ``"capability"``
                            per Story 11.2 P1-H2 + ``"budget"`` per Story 12.3
-                           FR68) + idempotency (2) +
-                           capability (6) = 48
+                           FR68 + ``"replication"`` per Story 13.4 NFR-R7) +
+                           idempotency (2) +
+                           capability (6) = 49
       task_tokens_spent  : 0 after cleanup (terminal events ran).
 
-      Total = 53 — bound widened by +2 vs Story 10.4 P1-H1 cardinality
-      (was 51) to accommodate the two new Story 11.2 P1-H2 event-family
-      pre-populated samples (``"key"`` + ``"capability"``); "timeseries"
-      = canonical samples post-``_created`` filter per P1-L4 wording.
+      Total = 54 — bound widened by +1 vs Story 12.3 (was 53) to accommodate
+      the new Story 13.4 ``"replication"`` event-family pre-populated sample;
+      "timeseries" = canonical samples post-``_created`` filter per P1-L4
+      wording.
     """
     registry = CollectorRegistry()
     state = build_collectors(registry)
@@ -784,8 +785,12 @@ def test_cardinality_at_steady_state_is_bounded() -> None:
     # ``omb_events_appended_total{event_family="budget"}`` child (FR68, D1=(A)).
     # The budget.override event is registered (event_types.py) but not yet
     # emitted, so this sample stays at 0; cardinality stays bounded.
-    assert canonical_timeseries <= 63, (
-        f"cardinality {canonical_timeseries} exceeds AC10 steady-state bound of 63; "
+    # Story 13.4: bound 63 → 64 for the new pre-populated
+    # ``omb_events_appended_total{event_family="replication"}`` child (NFR-R7).
+    # replication.lagging is emitted by scripts/check_replication_lag.py (just
+    # litestream-lag-check); the family child is pre-populated at 0.
+    assert canonical_timeseries <= 64, (
+        f"cardinality {canonical_timeseries} exceeds AC10 steady-state bound of 64; "
         f"families: {[(f.name, len(f.samples)) for f in timeseries]}"
     )
 
@@ -834,8 +839,10 @@ def test_cardinality_under_burst_cleanup() -> None:
     # 61 → 62 for the new task.budget_enforcement_triggered lifecycle label.
     # Story 12.3 bumped 62 → 63 for the new pre-populated
     # ``omb_events_appended_total{event_family="budget"}`` child (FR68, D1=(A)).
-    assert canonical_timeseries <= 63, (
-        f"cardinality {canonical_timeseries} exceeds AC10 burst-cleanup bound of 63"
+    # Story 13.4 bumped 63 → 64 for the new pre-populated
+    # ``omb_events_appended_total{event_family="replication"}`` child (NFR-R7).
+    assert canonical_timeseries <= 64, (
+        f"cardinality {canonical_timeseries} exceeds AC10 burst-cleanup bound of 64"
     )
 
 

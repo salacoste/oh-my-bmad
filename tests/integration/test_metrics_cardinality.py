@@ -3,9 +3,13 @@
 CI-enforced regression tests that fingerprint the cardinality invariants
 shipped in Story 10.4:
 
-  * AC2 — baseline cardinality at steady state == 53 timeseries (exact;
-    Story 11.2 pass-1 P1-H2 added ``key`` + ``capability`` to ``_EVENT_FAMILIES``,
-    bumping the baseline 51 → 53).
+  * AC2 — baseline cardinality at steady state == 64 timeseries (exact;
+    Story 11.2 pass-1 P1-H2 added ``key`` + ``capability`` to ``_EVENT_FAMILIES``
+    bumping 51 → 53; Story 11.2.3 added the lock-wait Histogram (+8 → 61);
+    Story 12.2 added the ``task.budget_enforcement_triggered`` lifecycle label
+    and Story 12.3 added the ``budget`` family (→ 63); Story 13.4 added the
+    ``replication`` family (→ 64) — the running exact baseline is asserted at
+    each call site below).
   * AC3 — 10K varying task_ids → cardinality returns to baseline after
     synchronous tail-loop cleanup (slow marker).
   * AC4 — N=100 concurrent active tasks → cardinality bounded by baseline
@@ -249,14 +253,15 @@ async def test_baseline_cardinality_at_steady_state(
     event families newly registered in this story):
 
       Story 10.3 baseline (lag, bytes_behind, parse_skip × 4)   =  6
-      Task lifecycle (15 event types)                           = 15
+      Task lifecycle (16 event types incl. budget_enforcement)  = 16
       Session lifecycle (5 phases)                              =  5
       Secret accessed (5 ActorKind values)                      =  5
-      Event family (13 registered + 1 ``unknown`` fallback)     = 14
+      Event family (15 registered + 1 ``unknown`` fallback)     = 16
       Idempotency cache (2 outcomes — DEFERRED preview)         =  2
       Capability denied (3 tiers × 2 boundaries — DEFERRED)     =  6
+      Event-log lock-wait Histogram (5 buckets + Inf+count+sum) =  8
       ─────────────────────────────────────────────────────────
-                                                                = 53
+                                                                = 64
 
     Story 11.2 P1-H2 added ``key`` (Story 11.5 ``key.rotated`` emission)
     and ``capability`` (Story 11.2.1 ``capability.denied`` emission) to
@@ -280,11 +285,19 @@ async def test_baseline_cardinality_at_steady_state(
     # ``omb_event_log_lock_wait_ms`` Histogram. Bucket count was set in
     # ``metrics.py``: 5 explicit buckets [0.1, 1, 10, 100, 1000] + ``+Inf``
     # + ``_count`` + ``_sum`` = 8 series.
-    assert count == 61, (
-        f"baseline cardinality drift: got {count} canonical timeseries, expected 61. "
+    # Story 13.4: exact count is 64. NOTE: the pre-13.4 literal in this assert
+    # was a STALE 61 — the real runtime baseline had already drifted to 63 once
+    # Story 12.2 added the ``task.budget_enforcement_triggered`` lifecycle label
+    # (task family 15 → 16) and Story 12.3 added the ``budget`` event family;
+    # those bumps were applied to the UNIT test (test_metrics_state.py) but not
+    # to this integration assert. Story 13.4 reconciles the literal to the
+    # empirically-verified value AND adds +1 for the new
+    # ``omb_events_appended_total{event_family="replication"}`` child (NFR-R7).
+    assert count == 64, (
+        f"baseline cardinality drift: got {count} canonical timeseries, expected 64. "
         f"Breakdown: {breakdown}. "
-        f"Expected: 6 baseline + 15 task + 5 session + 5 secret + 14 family "
-        f"+ 2 idempotency + 6 capability + 8 event_log_lock_wait = 61."
+        f"Expected: 6 baseline + 16 task + 5 session + 5 secret + 16 family "
+        f"+ 2 idempotency + 6 capability + 8 event_log_lock_wait = 64."
     )
 
 
@@ -409,9 +422,11 @@ async def test_cardinality_under_10k_varying_task_ids(
     # (``task_tokens_spent._metrics`` empty) is asserted separately below.
     # Story 11.2.3 PP1 (pass-1 review, Edge P0 live-reproduced): baseline
     # bumped 53 → 61 (omb_event_log_lock_wait_ms Histogram +8 series).
-    assert count <= 62, (
-        f"10K cardinality drift: got {count} canonical timeseries, expected <= 62 "
-        f"(61 baseline + 1 cursor-offset path child). Breakdown: {breakdown}"
+    # Story 13.4: empirically-verified baseline is 64 (stale-61 reconciliation +
+    # replication family — see AC2 note); bound is 64 + 1 cursor child = 65.
+    assert count <= 65, (
+        f"10K cardinality drift: got {count} canonical timeseries, expected <= 65 "
+        f"(64 baseline + 1 cursor-offset path child). Breakdown: {breakdown}"
     )
 
     # Critical: the per-task gauge has zero labelled children after
@@ -523,9 +538,11 @@ async def test_cardinality_with_n_concurrent_active_tasks(
     # >= N``).
     # Story 11.2.3: baseline bumped 53 → 61 (8 new series for the
     # omb_event_log_lock_wait_ms Histogram).
-    assert 161 <= count_mid <= 162, (
-        f"mid-flight cardinality drift: got {count_mid}, expected 161..162 "
-        f"(61 baseline + {n_tasks} per-task gauges +/- 1 cursor-offset path child). "
+    # Story 13.4: empirically-verified baseline 64 (see AC2 note) + N gauges
+    # +/- 1 cursor child → 164..165.
+    assert 164 <= count_mid <= 165, (
+        f"mid-flight cardinality drift: got {count_mid}, expected 164..165 "
+        f"(64 baseline + {n_tasks} per-task gauges +/- 1 cursor-offset path child). "
         f"Breakdown: {_family_breakdown(body)}"
     )
 
@@ -552,9 +569,10 @@ async def test_cardinality_with_n_concurrent_active_tasks(
         body = r.text
         count_after = _count_canonical_timeseries(body)
     # Story 11.2.3: baseline bumped 53 → 61 (event_log_lock_wait Histogram).
-    assert count_after <= 62, (
-        f"post-drain cardinality drift: got {count_after}, expected <= 62 "
-        f"(61 baseline + 1 cursor-offset path child). "
+    # Story 13.4: empirically-verified baseline 64 (see AC2 note); bound 64+1=65.
+    assert count_after <= 65, (
+        f"post-drain cardinality drift: got {count_after}, expected <= 65 "
+        f"(64 baseline + 1 cursor-offset path child). "
         f"Breakdown: {_family_breakdown(body)}"
     )
 
@@ -604,10 +622,11 @@ async def test_deliberate_unbounded_label_violation_fails(
         r = await client.get("/metrics")
         body = r.text
     count = _count_canonical_timeseries(body)
-    # Story 11.2.3: baseline bumped 53 → 61. 61 + 200 novel labelled children = 261.
-    assert count >= 61 + leak_count, (
+    # Story 13.4: empirically-verified baseline 64 (see AC2 note).
+    # 64 + 200 novel labelled children = 264.
+    assert count >= 64 + leak_count, (
         f"deliberate violation did NOT materialise the cardinality leak: "
-        f"got {count} canonical timeseries, expected >= {61 + leak_count}. "
+        f"got {count} canonical timeseries, expected >= {64 + leak_count}. "
         f"This means the gate would NOT detect a real cardinality regression."
     )
 
@@ -722,11 +741,11 @@ async def test_envelope_with_unknown_family_falls_to_unknown_bucket(
     # materialises.  If a future fixture change ever pre-warms the log
     # with a real envelope (or wires this test through
     # ``LifespanManager + log writes``), relax to ``<= 54``.
-    # Story 11.2.3: bumped 53 → 61 to include new omb_event_log_lock_wait_ms
-    # Histogram series. See test at line 283 for the breakdown.
+    # Story 13.4: empirically-verified baseline is 64 (stale-61 reconciliation +
+    # replication event-family child — see the AC2 test for the full breakdown).
     count = _count_canonical_timeseries(body)
-    assert count == 61, (
-        f"AC7 cardinality drift: got {count}, expected 61 (no novel families "
+    assert count == 64, (
+        f"AC7 cardinality drift: got {count}, expected 64 (no novel families "
         f"created). Breakdown: {_family_breakdown(body)}"
     )
 

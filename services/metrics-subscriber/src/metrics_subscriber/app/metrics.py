@@ -198,8 +198,10 @@ _ACTOR_KINDS_SET: Final[frozenset[str]] = frozenset(_ACTOR_KINDS)
 #: session, sink, task, telegram, tier3.  ``deployment`` is included for
 #: forward-compatibility per the AC4 enum table (no registered events yet
 #: — counter sample stays at 0 until a future story adds the event
-#: family).  ``unknown`` is the fallback bucket for any envelope whose
-#: prefix is not in the enum.
+#: family).  ``key`` / ``capability`` (Story 11.2), ``budget`` (Story 12.3),
+#: and ``replication`` (Story 13.4 — replication.lagging, NFR-R7) follow the
+#: same forward-compat-or-emitting pattern.  ``unknown`` is the fallback
+#: bucket for any envelope whose prefix is not in the enum.
 _EVENT_FAMILIES: Final[tuple[str, ...]] = (
     "task",
     "session",
@@ -217,6 +219,10 @@ _EVENT_FAMILIES: Final[tuple[str, ...]] = (
     "budget",  # Story 12.3 — budget.override @1.1.0 registered (FR68, D1=(A));
     #            counter stays at 0 until the decisions route switches its emit
     #            from tier3.budget_override to budget.override (consumer migration).
+    "replication",  # Story 13.4 — replication.lagging (NFR-R7). Emitted by
+    #            scripts/check_replication_lag.py (just litestream-lag-check); the
+    #            counter increments under event_family="replication" when a
+    #            sustained litestream replication stall is recorded.
     "unknown",
 )
 
@@ -707,13 +713,14 @@ def build_collectors(registry: CollectorRegistry) -> MetricsState:
     ``Counter.labels(...).inc()`` from the worker thread and a
     concurrent ``generate_latest()`` scrape.  Counters: 16 task (incl.
     ``task.budget_enforcement_triggered`` per Story 12.2 FR67) +
-    5 session + 5 actor_kind + 15 event_family (14 registered families
-    incl. ``"budget"`` per Story 12.3 FR68 + 1 ``"unknown"`` fallback
-    bucket per Story 10.4 P1-H1) + 2 idempotency +
-    6 capability + 4 parse_skip = 53 pre-populated children.  Plus
+    5 session + 5 actor_kind + 16 event_family (15 registered families
+    incl. ``"budget"`` per Story 12.3 FR68 + ``"replication"`` per Story
+    13.4 NFR-R7 + 1 ``"unknown"`` fallback bucket per Story 10.4 P1-H1) +
+    2 idempotency +
+    6 capability + 4 parse_skip = 54 pre-populated children.  Plus
     the label-free + labelled gauges and the lock-wait Histogram — the
     authoritative steady-state bound is the AC10 cardinality tests
-    (``test_metrics_state.py``), currently ≤ 63 timeseries (Story 12.3;
+    (``test_metrics_state.py``), currently ≤ 64 timeseries (Story 13.4;
     was ≤ 50 at Story 10.4 AC10, widened by later stories' label adds).
 
     Args:
@@ -805,7 +812,7 @@ def build_collectors(registry: CollectorRegistry) -> MetricsState:
         (
             "Total envelopes processed by the tail loop, labelled by "
             "event_family (envelope.type prefix before first dot — bounded "
-            "11-value enum).  Use PromQL rate(...) for FR62 1m/5m/1h windows."
+            "16-value enum).  Use PromQL rate(...) for FR62 1m/5m/1h windows."
         ),
         labelnames=("event_family",),
         registry=registry,

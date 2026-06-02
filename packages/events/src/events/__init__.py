@@ -63,7 +63,9 @@ from events.schema_registry import REGISTRY, register
 # ``events.types``. Tracker: review during Epic 11 when more
 # ``events/types/<X>.py`` files arrive.
 from events.types import deployment as _types_deployment  # noqa: F401
+from events.types import replication as _types_replication  # noqa: F401
 from events.types.deployment import DeploymentSignatureRejectedPayload
+from events.types.replication import ReplicationLaggingPayload
 
 __version__ = "0.4.0"
 
@@ -109,6 +111,10 @@ __all__ = [
     # exception class imported from ``events.errors`` — NOT the new
     # ``CapabilityDeniedPayload`` (P1-L2 disambiguation).
     "DeploymentSignatureRejectedPayload",
+    # Story 13.4 / NFR-R7 — replication.lagging payload re-export (mirrors
+    # DeploymentSignatureRejectedPayload). Registered via the side-effect import
+    # of events.types.replication above.
+    "ReplicationLaggingPayload",
     "EventEnvelope",
     "EventLogReader",
     "EventSchemaUnknown",

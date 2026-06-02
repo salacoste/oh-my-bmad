@@ -330,6 +330,17 @@ restore-from-litestream config="litestream.yml":
 litestream-restore-drill:
     ./scripts/litestream-restore-drill.sh
 
+# Story 13.4 / NFR-R7 — poll litestream /metrics, debounce, emit replication.lagging.
+# Run on a ~30s cron/timer. Detects a sustained (>5 min) replication stall
+# (litestream_sync_count stalls + litestream_sync_error_count rises) and emits a
+# single replication.lagging event per episode via the FR26 flock-guarded append.
+# Config is env-driven: OMB_LITESTREAM_METRICS_URL (default
+# http://localhost:9090/metrics — requires `addr: ":9090"` in litestream.yml),
+# OMB_LITESTREAM_DB, OMB_LITESTREAM_LAG_STATE_PATH, EVENT_LOG_DIR.
+# Exit 3 on flock contention (Platform stack is the live writer).
+litestream-lag-check:
+    uv run python scripts/check_replication_lag.py
+
 # Build the shared base image `oh-my-bmad-base:local`. Every per-service
 # Dockerfile extends this. Run before `just build` / `just deploy-*` on a
 # fresh checkout or whenever `Dockerfile.base` / `uv.lock` changes.
