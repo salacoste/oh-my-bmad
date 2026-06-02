@@ -56,9 +56,12 @@ class ReplicationLaggingPayload(BaseModel):
     * ``db`` — the database PATH that is lagging (e.g.
       ``/var/lib/oh-my-bmad/registry/state.sqlite3``). ``min_length=1``;
       bounded to 4096 chars (filesystem path cap).
-    * ``signal`` — the detection signal. ``Literal["sync_stalled"]`` so the
-      value set is bounded and any future signal variant (e.g.
-      ``"error_spike"``) is a deliberate schema change, not a free-form typo.
+    * ``signal`` — the detection signal (bounded ``Literal`` so any new variant
+      is a deliberate schema change, not a free-form typo):
+      ``"sync_stalled"`` (sync_count stalled WHILE sync_error_count rose —
+      S3/network failures) or ``"silent_stall"`` (sync_count stalled with errors
+      FLAT — the sync loop itself is hung; Story 13.4a, additive on the same
+      1.1.0 schema since it is a new enum *value*, not a field/shape change).
     * ``threshold_seconds`` — the lag threshold (the ~30s sampling/lag
       granularity). ``gt=0``.
     * ``sustained_seconds`` — how long the lag has been sustained when the
@@ -70,7 +73,7 @@ class ReplicationLaggingPayload(BaseModel):
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
     db: str = Field(min_length=1, max_length=4096)
-    signal: Literal["sync_stalled"]
+    signal: Literal["sync_stalled", "silent_stall"]
     threshold_seconds: int = Field(gt=0)
     sustained_seconds: int = Field(ge=0)
     sync_error_count: int = Field(ge=0)

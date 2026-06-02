@@ -58,12 +58,20 @@ class DetectorState(TypedDict):
       last_sync_count: the ``litestream_sync_count`` from the previous sample.
       last_sync_error_count: the ``litestream_sync_error_count`` from the
         previous sample.
+      onset_sync_error_count: the ``litestream_sync_error_count`` captured at the
+        START of the current stall episode (Story 13.4a). At emit time, comparing
+        the current error count against this baseline classifies the signal:
+        errors accumulated during the stall → ``"sync_stalled"`` (S3/network
+        failures); errors flat throughout → ``"silent_stall"`` (the sync loop
+        itself is hung). Unused (carries the last value) when no episode is
+        active.
     """
 
     lag_onset_epoch: float | None
     emitted: bool
     last_sync_count: int
     last_sync_error_count: int
+    onset_sync_error_count: int
 
 
 @dataclass(frozen=True)
@@ -128,6 +136,7 @@ def initial_state(sample: Sample) -> DetectorState:
         emitted=False,
         last_sync_count=sample.sync_count,
         last_sync_error_count=sample.sync_error_count,
+        onset_sync_error_count=sample.sync_error_count,
     )
 
 
@@ -162,7 +171,6 @@ def evaluate(
         )
 
     sync_advanced = sample.sync_count > state["last_sync_count"]
-    errors_rose = sample.sync_error_count > state["last_sync_error_count"]
 
     if sync_advanced:
         # Recovery (or normal progress): the sync loop is making progress again.
@@ -173,44 +181,32 @@ def evaluate(
                 emitted=False,
                 last_sync_count=sample.sync_count,
                 last_sync_error_count=sample.sync_error_count,
+                onset_sync_error_count=sample.sync_error_count,
             ),
             should_emit=False,
             emit_fields=None,
         )
 
-    # sync_count did NOT advance. Lagging requires the stall AND rising errors.
+    # sync_count did NOT advance → a STALL episode is active (Story 13.4a).
     #
-    # KNOWN BLIND SPOT (Story 13.4 code-review, follow-up 13.4a): this AND is the
-    # CONSERVATIVE signal — it detects the common failure (S3/network errors:
-    # sync attempts fail, error counter climbs) without false-positives during
-    # app-idle. It does NOT catch a TOTALLY-HUNG litestream (process frozen /
-    # deadlocked) where no sync is attempted, so sync_error_count stays flat. A
-    # follow-up may add an OR-branch (pure stall sustained > 2× threshold with
-    # flat errors → a distinct "silent_stall" signal) once we confirm 0.3.x's
-    # sync_count does not advance on empty poll cycles (which would otherwise
-    # false-positive during idle). Until then, operators also watch
-    # `docker logs omb-litestream` / container liveness (runbook).
-    is_lagging = errors_rose
-    if not is_lagging:
-        # Stalled but no new errors — not (yet) classified as a lag episode.
-        # Preserve any in-flight onset/emitted flags so a transient
-        # error-free tick inside an ongoing stall does not reset the clock,
-        # but refresh the last-seen counters.
-        return DetectorResult(
-            new_state=DetectorState(
-                lag_onset_epoch=state["lag_onset_epoch"],
-                emitted=state["emitted"],
-                last_sync_count=sample.sync_count,
-                last_sync_error_count=sample.sync_error_count,
-            ),
-            should_emit=False,
-            emit_fields=None,
-        )
-
-    # Lag condition holds: stall + rising errors.
+    # litestream's sync loop runs every ~1s and bumps ``sync_count`` on EVERY
+    # cycle, independent of DB write activity — empirically verified (an idle DB
+    # still advances sync_count ~1/s). So a flat sync_count means the sync loop
+    # itself stopped; this is a real stall whether or not errors are rising, with
+    # NO idle false-positives. The episode therefore starts on ANY stall; the
+    # SIGNAL is derived at emit time from whether errors accumulated since onset:
+    #   * errors rose during the stall  → "sync_stalled" (S3/network failures)
+    #   * errors flat throughout        → "silent_stall" (the loop is hung —
+    #     the dangerous silent failure Story 13.4's AND-only signal missed).
     onset = state["lag_onset_epoch"]
+    onset_error_count = state["onset_sync_error_count"]
     if onset is None:
+        # Episode begins now. Baseline the error count at the value from JUST
+        # BEFORE the stall (the previous sample) so any errors that rise during
+        # the episode — including this first stalled tick — count toward
+        # "sync_stalled".
         onset = sample.observed_at_epoch
+        onset_error_count = state["last_sync_error_count"]
 
     sustained = sample.observed_at_epoch - onset
     already_emitted = state["emitted"]
@@ -219,8 +215,9 @@ def evaluate(
     should_emit = cross_threshold and not already_emitted
     emit_fields: EmitFields | None = None
     if should_emit:
+        signal = "sync_stalled" if sample.sync_error_count > onset_error_count else "silent_stall"
         emit_fields = EmitFields(
-            signal="sync_stalled",
+            signal=signal,
             threshold_seconds=lag_threshold_seconds,
             # Report the integer sustained-seconds at emit time (>= the window).
             sustained_seconds=int(sustained),
@@ -233,6 +230,7 @@ def evaluate(
             emitted=already_emitted or should_emit,
             last_sync_count=sample.sync_count,
             last_sync_error_count=sample.sync_error_count,
+            onset_sync_error_count=onset_error_count,
         ),
         should_emit=should_emit,
         emit_fields=emit_fields,
@@ -252,9 +250,14 @@ def state_from_json(raw: dict[str, Any]) -> DetectorState:
     # state file can't become epoch 1.0 (review LOW).
     if onset is not None and (isinstance(onset, bool) or not isinstance(onset, (int, float))):
         raise ValueError(f"lag_onset_epoch must be a number or null, got {type(onset).__name__}")
+    last_err = int(raw.get("last_sync_error_count", 0))
     return DetectorState(
         lag_onset_epoch=float(onset) if onset is not None else None,
         emitted=bool(raw.get("emitted", False)),
         last_sync_count=int(raw.get("last_sync_count", 0)),
-        last_sync_error_count=int(raw.get("last_sync_error_count", 0)),
+        last_sync_error_count=last_err,
+        # Story 13.4a — default to last_sync_error_count for state files written
+        # before this field existed (an in-flight episode from an older version
+        # then classifies as sync_stalled only if errors keep rising — safe).
+        onset_sync_error_count=int(raw.get("onset_sync_error_count", last_err)),
     )

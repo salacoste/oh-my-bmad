@@ -140,15 +140,48 @@ def test_recovery_resets_then_new_episode_emits_again() -> None:
     assert n2.emit_fields.sustained_seconds == 301
 
 
-def test_stall_without_rising_errors_is_not_lag() -> None:
+def test_stall_without_errors_starts_episode_but_no_immediate_emit() -> None:
+    # Story 13.4a: a stall (sync_count flat) starts an episode even with errors
+    # flat — but the first stalled tick has sustained=0, so no emit yet.
     state = initial_state(Sample(sync_count=100, sync_error_count=5, observed_at_epoch=1000.0))
-    # sync stalled but errors unchanged → not a lag episode, no onset recorded.
-    r = evaluate(state, Sample(sync_count=100, sync_error_count=5, observed_at_epoch=2000.0))
+    r = evaluate(state, Sample(sync_count=100, sync_error_count=5, observed_at_epoch=1001.0))
     assert r.should_emit is False
-    assert r.new_state["lag_onset_epoch"] is None
+    assert r.new_state["lag_onset_epoch"] == 1001.0  # episode now recorded
+    assert r.new_state["onset_sync_error_count"] == 5
     assert r.new_state["emitted"] is False
-    assert r.new_state["last_sync_count"] == 100
-    assert r.new_state["last_sync_error_count"] == 5
+
+
+def test_silent_stall_sustained_emits_silent_signal() -> None:
+    # Story 13.4a: sync_count flat AND errors flat throughout, sustained >5min →
+    # emit ONCE with signal="silent_stall" (the hung-loop case 13.4 missed).
+    state = initial_state(Sample(sync_count=100, sync_error_count=2, observed_at_epoch=1000.0))
+    s1 = evaluate(state, Sample(sync_count=100, sync_error_count=2, observed_at_epoch=1001.0))
+    assert s1.should_emit is False
+    s2 = evaluate(
+        s1.new_state, Sample(sync_count=100, sync_error_count=2, observed_at_epoch=1400.0)
+    )
+    assert s2.should_emit is True
+    assert s2.emit_fields is not None
+    assert s2.emit_fields.signal == "silent_stall"
+    assert s2.emit_fields.sync_error_count == 2
+    # No re-emit on the next still-silent tick.
+    s3 = evaluate(
+        s2.new_state, Sample(sync_count=100, sync_error_count=2, observed_at_epoch=1500.0)
+    )
+    assert s3.should_emit is False
+
+
+def test_errors_rising_during_stall_classifies_as_sync_stalled() -> None:
+    # Story 13.4a: same stall, but errors accumulate since onset → "sync_stalled".
+    state = initial_state(Sample(sync_count=100, sync_error_count=2, observed_at_epoch=1000.0))
+    s1 = evaluate(state, Sample(sync_count=100, sync_error_count=2, observed_at_epoch=1001.0))
+    # errors rise later in the same episode
+    s2 = evaluate(
+        s1.new_state, Sample(sync_count=100, sync_error_count=9, observed_at_epoch=1400.0)
+    )
+    assert s2.should_emit is True
+    assert s2.emit_fields is not None
+    assert s2.emit_fields.signal == "sync_stalled"
 
 
 def test_exact_threshold_boundary_is_strict_greater_than() -> None:
@@ -194,12 +227,14 @@ def test_state_from_json_round_trip() -> None:
         "emitted": True,
         "last_sync_count": 100,
         "last_sync_error_count": 3,
+        "onset_sync_error_count": 1,
     }
     state = state_from_json(raw)
     assert state["lag_onset_epoch"] == 1030.5
     assert state["emitted"] is True
     assert state["last_sync_count"] == 100
     assert state["last_sync_error_count"] == 3
+    assert state["onset_sync_error_count"] == 1
 
 
 def test_state_from_json_missing_keys_defaults() -> None:
@@ -208,3 +243,13 @@ def test_state_from_json_missing_keys_defaults() -> None:
     assert state["emitted"] is False
     assert state["last_sync_count"] == 0
     assert state["last_sync_error_count"] == 0
+    assert state["onset_sync_error_count"] == 0
+
+
+def test_state_from_json_onset_error_defaults_to_last_error() -> None:
+    # Story 13.4a back-compat: a pre-13.4a state file (no onset_sync_error_count)
+    # defaults that field to last_sync_error_count, not 0.
+    state = state_from_json(
+        {"lag_onset_epoch": 5.0, "emitted": False, "last_sync_count": 9, "last_sync_error_count": 7}
+    )
+    assert state["onset_sync_error_count"] == 7
