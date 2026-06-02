@@ -40,6 +40,10 @@ def _task_to_dict(task: Task) -> dict[str, object]:
         "total_steps": task.total_steps,
         "last_agent_action": task.last_agent_action,
         "hint": task.hint,
+        # Story 12.4: per-task budget policy (FR68a). NULL → orchestrator-adapter
+        # falls back to OMB_DEFAULT_TASK_BUDGET_TOKENS / legacy default.
+        "budget_token_limit": task.budget_token_limit,
+        "budget_action": task.budget_action,
     }
 
 

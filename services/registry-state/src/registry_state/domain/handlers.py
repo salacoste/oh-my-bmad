@@ -159,6 +159,11 @@ async def handle_task_created(session: AsyncSession, envelope: EventEnvelope) ->
     so the SQL INSERT writes NULL, which is the correct back-compat
     behaviour. The ON CONFLICT branch refreshes the binding only when the
     new payload carries it (re-running the same envelope is a no-op).
+
+    Story 12.4 AC4: persist ``budget_token_limit`` + ``budget_action`` from
+    the additive 1.2.0 payload (per-task budget policy, FR68a). Pre-12.4
+    payloads omit both → they default to ``None`` (NULL = "inherit the .env
+    default"), the correct back-compat behaviour.
     """
     payload = _hydrate(envelope.payload, TaskCreatedPayload)
     assert isinstance(payload, TaskCreatedPayload)
@@ -176,6 +181,8 @@ async def handle_task_created(session: AsyncSession, envelope: EventEnvelope) ->
             chat_id=payload.chat_id,
             reply_to_message_id=payload.reply_to_message_id,
             hint=payload.hint,
+            budget_token_limit=payload.budget_token_limit,
+            budget_action=payload.budget_action,
         )
         .on_conflict_do_update(
             index_elements=["id"],

@@ -172,6 +172,33 @@ async def _create_pr_draft(
         return None
 
 
+def _resolve_budget_limit(
+    task: dict[str, object],
+    settings: OrchestratorSettings,
+) -> int:
+    """Resolve the per-task token ceiling with documented precedence (Story 12.4 AC5).
+
+    Precedence (FR68a): per-task Task-row ``budget_token_limit`` >
+    ``OMB_DEFAULT_TASK_BUDGET_TOKENS`` (``settings.default_task_budget_tokens``)
+    > ``ORCHESTRATOR_TASK_TOKEN_BUDGET`` (``settings.task_token_budget``, legacy).
+
+    The per-task value arrives in the task dict via task-registry's
+    ``_task_to_dict`` (AC4); it is ``None``/absent when the operator omitted it
+    (NULL on the row = "inherit default"). A non-positive per-task value is
+    ignored so it cannot silently disable enforcement; ``TaskCreatedPayload``
+    already enforces ``gt=0`` at submission, so this is defense-in-depth.
+
+    Returns the resolved ceiling; ``0`` disables enforcement (only reachable via
+    the legacy ``task_token_budget=0`` setting, matching prior behaviour).
+    """
+    raw = task.get("budget_token_limit")
+    if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0:
+        return raw
+    if settings.default_task_budget_tokens is not None:
+        return settings.default_task_budget_tokens
+    return settings.task_token_budget
+
+
 async def process_task(
     clients: MCPClientGroup,
     runner: OMCRunner,
@@ -298,7 +325,12 @@ async def process_task(
     # Drive each step via OMC.
     step_outputs: dict[int, str] = {}
     blockers_count = 0
-    budget_limit = settings.task_token_budget
+    # Story 12.4 AC5 (FR68a): source the per-task token ceiling with explicit
+    # precedence — per-task Task-row value > OMB_DEFAULT_TASK_BUDGET_TOKENS >
+    # ORCHESTRATOR_TASK_TOKEN_BUDGET (legacy). The Task row's budget_token_limit
+    # arrives in the task dict via task-registry's _task_to_dict (AC4); NULL/
+    # absent means "inherit the default".
+    budget_limit = _resolve_budget_limit(task, settings)
     tracker = BudgetTracker(limit=budget_limit) if budget_limit > 0 else None
     for step in plan_result.steps:
         step_prompt = build_omc_prompt(task_id, hint=f"Step {step.step}: {step.description}")

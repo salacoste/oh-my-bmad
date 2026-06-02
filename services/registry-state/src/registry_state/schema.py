@@ -126,6 +126,14 @@ class Task(Base):
     last_agent_action: Mapped[str | None] = mapped_column(String(2000), nullable=True, default=None)
     # Story 7.6: retry hint injection (FR7). Populated by materializer on task.retry_requested.
     hint: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    # Story 12.4: per-task budget policy (FR68a). Additive nullable columns —
+    # NULL means "inherit the .env default" (OMB_DEFAULT_TASK_BUDGET_*). Populated
+    # by the materializer from the additive task.created 1.2.0 payload. The
+    # ``budget_action`` enum (failed|awaiting_approval) is validated at the
+    # Pydantic/model boundary (TaskCreatedPayload / CreateTaskRequest), NOT a DB
+    # CHECK constraint — consistent with how the codebase constrains enums.
+    budget_token_limit: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    budget_action: Mapped[str | None] = mapped_column(String(32), nullable=True, default=None)
 
 
 class Session(Base):
