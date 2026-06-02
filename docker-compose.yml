@@ -468,6 +468,13 @@ services:
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]
+    # Story 13.1 review (MEDIUM): join the shared ``omb`` group (gid 10000) so the
+    # sidecar can read+write the 0o660 DB files (Story 11.3.12) even if it runs
+    # non-root. No-op while the upstream image runs as root; pure upside if a
+    # future image drops root or an operator adds a ``user:`` override. The
+    # explicit non-root ``user:`` + ``depends_on: registry-state`` are deferred to
+    # Story 13.2 (need live validation that the upstream image tolerates them).
+    group_add: ["10000"]
     volumes:
       - oh-my-bmad-data:/var/lib/oh-my-bmad
       - ${OMB_LITESTREAM_CONFIG_PATH:-./litestream.yml}:/etc/litestream/litestream.yml:ro

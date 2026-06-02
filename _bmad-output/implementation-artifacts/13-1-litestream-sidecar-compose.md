@@ -1,6 +1,6 @@
 # Story 13.1 — litestream sidecar in docker-compose (FR69)
 
-Status: review
+Status: done
 
 <!-- Epic 13 opener. Conventional engineering choices (compose profile, upstream
 image, read-WRITE mount per litestream's requirement) — no product fork, so implemented directly with the
@@ -125,6 +125,19 @@ claude-opus-4-8[1m] (create-story + dev-story, 2026-06-01).
   data volume read-write (config bind :ro); image + command correct. CORRECTED the initial :ro data mount → rw after verifying litestream needs DB-dir write (meta dir + checkpoint) via docs/source.
 - Deferred to later Epic-13 stories: litestream.yml.example + credential runbook
   (13.2), restore recipe (13.3), lag-check + replication.lagging (13.4).
+
+### Code Review — 2026-06-02, architect (separate context)
+
+- **architect:** APPROVE-WITH-NITS (0 CRITICAL/HIGH). Confirmed the :ro→rw fix is
+  complete (no stale :ro-data/defence-in-depth claims anywhere), ADR-0007's
+  app-layer FR26 reasoning sound, "replication ≠ HA" framing intact, and the
+  checkpoint-coordination deferral safe (SQLite WAL lock-coordination prevents
+  corruption; sidecar off-by-default, never run live in 13.1).
+- MEDIUM (group_add for omb gid 10000): APPLIED now — `group_add: ["10000"]` on
+  the litestream service (no-op as root, required if non-root; pure upside).
+- Deferred to Story 13.2 (need live validation): explicit non-root `user:`,
+  `depends_on: registry-state`, bind-mount-missing-file pre-flight. NITs
+  (env_file/networks unnecessary) left as harmless consistency.
 
 ### File List
 - docs/adr/0007-litestream-wal-replication.md (NEW — ADR, accepted)
