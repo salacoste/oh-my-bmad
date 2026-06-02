@@ -33,6 +33,7 @@ Design notes:
 
 from __future__ import annotations
 
+import contextlib
 import os
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -45,7 +46,7 @@ from events.envelope import ActorKind  # noqa: IMP001 — services→packages al
 from events.errors import CapabilityDenied
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
-from idempotency import IdempotencyCacheStore
+from idempotency import IdempotencyCacheStore, create_idempotency_schema
 from registry_state.adapters.event_log import (  # noqa: IMP001 — services→services allowed per AC-16
     EventLogWriter,
 )
@@ -118,6 +119,77 @@ _IDEMPOTENCY_TTL_SECONDS = 604800
 _RESPONSE_CACHE_MAX = 100_000
 
 
+class IdempotencyUrlDerivationError(ValueError):
+    """Raised when the idempotency DB URL cannot be safely derived.
+
+    Story 11.3.12 (code-review H2): a SILENT fallback to the state DB URL
+    would re-collide the writable cache engine on ``state.sqlite3`` and
+    re-introduce the very cross-uid WAL crash-loop this story closes — and
+    do so invisibly. So derivation FAILS LOUD instead; the caller must pass
+    an explicit ``idempotency_db_url`` for any non-canonical state URL.
+    """
+
+
+def _derive_idempotency_url(state_db_url: str) -> str:
+    """Derive the idempotency-cache DB URL from the state DB URL.
+
+    Story 11.3.12: the writable idempotency cache lives in its OWN SQLite
+    file beside the state DB (``state.sqlite3`` → ``idempotency.sqlite3``),
+    so registry-api is its sole writer and registry-state is the sole
+    writer of ``state.sqlite3`` (closes the cross-uid WAL crash-loop).
+
+    Swaps the trailing ``state.sqlite3`` filename for ``idempotency.sqlite3``
+    while preserving the ``sqlite+aiosqlite://`` scheme + directory.
+
+    Raises:
+        IdempotencyUrlDerivationError: if ``state_db_url`` does NOT end in the
+            canonical ``state.sqlite3`` (custom filename, trailing slash,
+            query params, in-memory URL, …). Returning the original URL here
+            would point the WRITABLE cache engine at the SAME file as the
+            state engine — silently re-creating the cross-uid WAL bug
+            (code-review H2). Callers with a non-canonical state URL MUST
+            pass an explicit ``idempotency_db_url`` to ``build_app`` /
+            ``REGISTRY_API_IDEMPOTENCY_DB_URL`` instead.
+    """
+    if state_db_url.endswith("state.sqlite3"):
+        return state_db_url[: -len("state.sqlite3")] + "idempotency.sqlite3"
+    raise IdempotencyUrlDerivationError(
+        f"cannot derive an idempotency DB URL from {state_db_url!r} (does not end "
+        "in 'state.sqlite3'); pass an explicit idempotency_db_url / "
+        "REGISTRY_API_IDEMPOTENCY_DB_URL so the writable cache engine does NOT "
+        "collide on the state DB and re-introduce the cross-uid WAL crash-loop"
+    )
+
+
+def _chmod_sqlite_file(db_url: str, mode: int = 0o660) -> None:
+    """chmod a ``sqlite+aiosqlite://`` file DB to ``mode`` (best-effort).
+
+    Story 11.3.12 (code-review H1) — the idempotency DB file is created by
+    SQLite at the umask-022 default (0o644 = world-readable). 0o660
+    (rw-rw----) keeps it group-accessible but NOT world-readable, mirroring
+    the audit-data invariant. SQLite's WAL/SHM sidecars inherit the main
+    file's mode, so chmod'ing the main file covers them too.
+
+    Parses the file path out of the ``sqlite+aiosqlite:///<path>`` URL
+    (handling the optional ``file:`` URI prefix + query string). No-op for
+    in-memory / non-sqlite / malformed URLs. Suppresses OSError +
+    AttributeError (Windows ``Path.chmod`` is a no-op for POSIX bits;
+    a not-owned file must not crash startup).
+    """
+    prefix = "sqlite+aiosqlite:///"
+    if not db_url.startswith(prefix):
+        return
+    path_part = db_url[len(prefix) :]
+    # Strip the read-only URI form (``file:<path>?uri=true&mode=ro``) if present.
+    if path_part.startswith("file:"):
+        path_part = path_part[len("file:") :]
+    path_part, _, _ = path_part.partition("?")
+    if not path_part or path_part == ":memory:" or path_part.startswith(":memory:"):
+        return
+    with contextlib.suppress(OSError, AttributeError):
+        Path(path_part).chmod(mode)
+
+
 def build_app(
     *,
     base_dir: Path,
@@ -126,6 +198,8 @@ def build_app(
     actor_kind: ActorKind = "operator",
     signing_settings: ApprovalSigningSettings | None = None,
     health_probe_settings: HealthProbeSettings | None = None,
+    idempotency_db_url: str | None = None,
+    create_idempotency_schema_on_start: bool = False,
 ) -> FastAPI:
     """Build and return the wired-up FastAPI application.
 
@@ -206,13 +280,49 @@ def build_app(
             app.state.session_maker = session_maker
             app.state.clock = clock
 
-            # Story 2.13: writable engine for the idempotency cache. The cache
-            # writes to its own ``idempotency_cache`` table; tasks/events/
-            # sessions are still materialized solely by registry-state (FR26).
-            # ``check_single_writer`` already excludes ``packages/idempotency/``
+            # Story 2.13 + Story 11.3.12: writable engine for the idempotency
+            # cache. The cache writes its own ``idempotency_cache`` table;
+            # tasks/events/sessions are materialized solely by registry-state
+            # (FR26). ``check_single_writer`` excludes ``packages/idempotency/``
             # from its scan, so this writable surface does not violate FR26.
-            cache_engine = create_engine(db_url, read_only=False)
+            #
+            # Story 11.3.12 (M8 follow-up — closes the cross-uid WAL crash-loop):
+            # this writable engine now targets a SEPARATE SQLite file
+            # (``idempotency_db_url``, default ``idempotency.sqlite3`` beside the
+            # state DB) instead of ``state.sqlite3``. Previously both this
+            # writer (registry-api uid 10001) and registry-state's writer
+            # (uid 10002) wrote the same file; in WAL mode the first writer
+            # created the ``-wal``/``-shm`` sidecars owned by ITS uid at 0o644
+            # (no group-write), locking the OTHER uid out → ``OperationalError:
+            # attempt to write a readonly database`` crash-loop on fresh boot.
+            # Splitting the cache onto its own file makes registry-api the SOLE
+            # writer of ``idempotency.sqlite3`` (single-uid → no cross-uid
+            # sidecar gap) and registry-state the SOLE writer of
+            # ``state.sqlite3`` (FR26 strengthened; M8 WAL-contention resolved).
+            resolved_idempotency_url = (
+                idempotency_db_url
+                if idempotency_db_url is not None
+                else _derive_idempotency_url(db_url)
+            )
+            cache_engine = create_engine(resolved_idempotency_url, read_only=False)
             stack.push_async_callback(cache_engine.dispose)
+            # The separate file needs the ``idempotency_cache`` table created.
+            # Gated like registry-state's REGISTRY_STATE_AUTO_CREATE_SCHEMA: the
+            # idempotency package owns the canonical Core ``Table`` definition,
+            # so bootstrapping it here (rather than the registry-state migrator)
+            # keeps ownership local + avoids a cross-file migrator dependency.
+            if create_idempotency_schema_on_start:
+                await create_idempotency_schema(cache_engine)
+            # Story 11.3.12 (code-review H1): chmod the idempotency DB file to
+            # 0o660 so it (and its WAL/SHM sidecars, which inherit the main
+            # file's mode) is NOT world-readable. SQLite creates the file at
+            # the umask-022 default 0o644 (rw-r--r-- = world-readable); the
+            # file holds idempotency keys + result_event_ids, which — like the
+            # audit log — must not be readable by non-omb processes. 0o660 =
+            # rw-rw---- : owner+group read/write, others NONE. Mirrors
+            # registry-state's _ensure_db_file_group_writable for state.sqlite3.
+            # Best-effort (suppress OSError) for non-file / not-owned URLs.
+            _chmod_sqlite_file(resolved_idempotency_url)
             cache_session_maker = get_session(cache_engine)
             idempotency_cache = IdempotencyCacheStore(
                 session_maker=cache_session_maker,

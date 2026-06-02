@@ -69,7 +69,12 @@ async def app_client(
 
     events_dir = tmp_path / "events"
     clock = FrozenClock(mono_ns=1_000_000, now=FROZEN_EPOCH)
-    app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+    app = build_app(
+        base_dir=events_dir,
+        db_url=db_url,
+        clock=clock,
+        create_idempotency_schema_on_start=True,
+    )
 
     async with (
         LifespanManager(app) as manager,
@@ -278,7 +283,12 @@ async def app_client_with_state(
 
     events_dir = tmp_path / "events"
     clock = FrozenClock(mono_ns=1_000_000, now=FROZEN_EPOCH)
-    app = build_app(base_dir=events_dir, db_url=db_url, clock=clock)
+    app = build_app(
+        base_dir=events_dir,
+        db_url=db_url,
+        clock=clock,
+        create_idempotency_schema_on_start=True,
+    )
 
     async with (
         LifespanManager(app) as manager,
@@ -357,6 +367,7 @@ async def test_post_open_inbox_requires_tier_2(tmp_path: Path) -> None:
             base_dir=events_dir,
             db_url=db_url,
             clock=clock,
+            create_idempotency_schema_on_start=True,
             actor_kind="worker",
         )
         async with (

@@ -177,7 +177,12 @@ async def post_client(
     await _seed_tables(db_url)
 
     events_dir = tmp_path / "events"
-    app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+    app = build_app(
+        base_dir=events_dir,
+        db_url=db_url,
+        clock=fixed_clock,
+        create_idempotency_schema_on_start=True,
+    )
 
     async with (
         LifespanManager(app) as manager,
@@ -202,7 +207,12 @@ async def get_client(tmp_path: Path, fixed_clock: FrozenClock) -> AsyncGenerator
     await _seed_task_row(db_url)
 
     events_dir = tmp_path / "events"
-    app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+    app = build_app(
+        base_dir=events_dir,
+        db_url=db_url,
+        clock=fixed_clock,
+        create_idempotency_schema_on_start=True,
+    )
 
     async with (
         LifespanManager(app) as manager,
@@ -241,7 +251,12 @@ class TestPostTasks:
         await _seed_tables(db_url)
 
         events_dir = tmp_path / "events"
-        app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+        app = build_app(
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=fixed_clock,
+            create_idempotency_schema_on_start=True,
+        )
 
         async with (
             LifespanManager(app) as manager,
@@ -269,7 +284,12 @@ class TestPostTasks:
         await _seed_tables(db_url)
 
         events_dir = tmp_path / "events"
-        app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+        app = build_app(
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=fixed_clock,
+            create_idempotency_schema_on_start=True,
+        )
 
         async with (
             LifespanManager(app) as manager,
@@ -315,7 +335,12 @@ class TestPostTasks:
         await _seed_tables(db_url)
 
         events_dir = tmp_path / "events"
-        app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+        app = build_app(
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=fixed_clock,
+            create_idempotency_schema_on_start=True,
+        )
 
         sent_trace = _new_uuid7(clock=fixed_clock)
 
@@ -441,7 +466,12 @@ class TestPostTasks:
         events_dir = tmp_path / "does" / "not" / "exist" / "events"
         assert not events_dir.exists()
 
-        app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+        app = build_app(
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=fixed_clock,
+            create_idempotency_schema_on_start=True,
+        )
         async with (
             LifespanManager(app) as manager,
             AsyncClient(
@@ -583,7 +613,12 @@ class TestMiddleware:
         await _seed_tables(db_url)
 
         events_dir = tmp_path / "events"
-        app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+        app = build_app(
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=fixed_clock,
+            create_idempotency_schema_on_start=True,
+        )
 
         # Add a diagnostic endpoint that echoes request.state.idempotency_key
         @app.get("/debug/idem")
@@ -611,7 +646,12 @@ class TestMiddleware:
         await _seed_tables(db_url)
 
         events_dir = tmp_path / "events"
-        app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+        app = build_app(
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=fixed_clock,
+            create_idempotency_schema_on_start=True,
+        )
 
         @app.get("/debug/actor")
         async def _actor_echo(request: Request) -> JSONResponse:
@@ -644,7 +684,12 @@ class TestMiddleware:
         await _seed_tables(db_url)
 
         events_dir = tmp_path / "events"
-        app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+        app = build_app(
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=fixed_clock,
+            create_idempotency_schema_on_start=True,
+        )
 
         @app.get("/debug/actor-header")
         async def _actor_header_echo(request: Request) -> JSONResponse:
@@ -735,7 +780,12 @@ class TestMiddleware:
         await _seed_tables(db_url)
 
         events_dir = tmp_path / "events"
-        app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+        app = build_app(
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=fixed_clock,
+            create_idempotency_schema_on_start=True,
+        )
 
         async with LifespanManager(app):
             assert hasattr(app.state, "idempotency_cache")
@@ -792,7 +842,12 @@ class TestMiddleware:
         await _seed_tables(db_url)
 
         events_dir = tmp_path / "events"
-        app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+        app = build_app(
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=fixed_clock,
+            create_idempotency_schema_on_start=True,
+        )
 
         observed: dict[str, list[str]] = {"keys": []}
 
@@ -905,7 +960,12 @@ class TestErrorHandlers:
         await _seed_tables(db_url)
 
         events_dir = tmp_path / "events"
-        app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+        app = build_app(
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=fixed_clock,
+            create_idempotency_schema_on_start=True,
+        )
 
         async def _boom(*_args: object, **_kwargs: object) -> None:
             raise RuntimeError("synthetic failure for test")
@@ -1178,7 +1238,12 @@ class TestTaskThreadBinding:
         await engine.dispose()
 
         events_dir = tmp_path / "events"
-        app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+        app = build_app(
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=fixed_clock,
+            create_idempotency_schema_on_start=True,
+        )
         async with (
             LifespanManager(app) as manager,
             AsyncClient(
@@ -1199,3 +1264,136 @@ class TestTaskThreadBinding:
             json={"title": "bad binding", "chat_id": "not-an-int"},
         )
         assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Story 11.3.12 — idempotency cache uses its OWN SQLite file (M8 follow-up)
+# ---------------------------------------------------------------------------
+
+
+class TestIdempotencyCacheSeparateFile:
+    """The writable idempotency cache engine targets a SEPARATE DB file.
+
+    Story 11.3.12 closes the cross-uid WAL crash-loop by making registry-api
+    the sole writer of ``idempotency.sqlite3`` and registry-state the sole
+    writer of ``state.sqlite3``. These tests pin the wiring at the unit
+    level so a regression (cache engine pointed back at the state DB) is
+    caught without needing the slow Docker repro.
+    """
+
+    def test_derive_idempotency_url_swaps_filename(self) -> None:
+        from registry_api.app import (
+            IdempotencyUrlDerivationError,
+            _derive_idempotency_url,
+        )
+
+        state = "sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3"
+        got = _derive_idempotency_url(state)
+        assert got == "sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/idempotency.sqlite3"
+        # Code-review H2: a non-canonical state URL must FAIL LOUD, not silently
+        # return the same URL (which would re-collide the writable cache engine
+        # on the state DB and re-introduce the cross-uid WAL crash-loop).
+        for bad in (
+            "sqlite+aiosqlite:////tmp/custom.db",  # custom filename
+            "sqlite+aiosqlite:///:memory:",  # in-memory
+            "sqlite+aiosqlite:////var/lib/registry/state.sqlite3?foo=bar",  # query param
+        ):
+            with pytest.raises(IdempotencyUrlDerivationError):
+                _derive_idempotency_url(bad)
+
+    def test_chmod_sqlite_file_makes_idempotency_non_world_readable(self, tmp_path: Path) -> None:
+        """Code-review H1: the idempotency DB file is chmod'd 0o660 (not world-readable)."""
+        import os
+        import sys
+
+        if sys.platform == "win32":
+            pytest.skip("POSIX mode bits ignored on Windows")
+
+        from registry_api.app import _chmod_sqlite_file
+
+        f = tmp_path / "idempotency.sqlite3"
+        f.write_bytes(b"")
+        os.chmod(f, 0o644)  # simulate SQLite's umask-022 default (world-readable)
+        assert f.stat().st_mode & 0o777 == 0o644
+
+        _chmod_sqlite_file(f"sqlite+aiosqlite:///{f}")
+
+        mode = f.stat().st_mode & 0o777
+        assert mode == 0o660, f"expected 0o660 (group-rw, non-world); got {oct(mode)}"
+        assert mode & 0o007 == 0, "others-triad must be 0 (non-world-readable)"
+        # No-op on in-memory / non-sqlite URLs (must not raise).
+        _chmod_sqlite_file("sqlite+aiosqlite:///:memory:")
+        _chmod_sqlite_file("postgresql://x/y")
+
+    @pytest.mark.asyncio
+    async def test_cache_writes_go_to_idempotency_file_not_state_db(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        """A POST that populates the cache creates idempotency.sqlite3, and the
+        state DB is NOT written by registry-api (no -wal owned by this process
+        appears on it from the cache path).
+
+        Proves the split: after exercising the idempotency write path, the
+        separate ``idempotency.sqlite3`` file exists and contains the
+        ``idempotency_cache`` table, while the state DB file is untouched by
+        the cache engine.
+        """
+        import sqlite3
+
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+
+        events_dir = tmp_path / "events"
+        idem_path = tmp_path / "idempotency.sqlite3"
+        app = build_app(
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=fixed_clock,
+            idempotency_db_url=_db_url(idem_path),
+            create_idempotency_schema_on_start=True,
+        )
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://testserver"
+            ) as client,
+        ):
+            r = await client.post(
+                "/v1/tasks",
+                json={"title": "11-3-12 split"},
+                headers={"Idempotency-Key": "11111111-1111-1111-1111-111111111111"},
+            )
+            assert r.status_code == 201
+
+        # The separate idempotency file was created + has the cache table.
+        assert idem_path.exists(), "idempotency.sqlite3 must be created on its own file"
+        conn = sqlite3.connect(str(idem_path))
+        try:
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+        finally:
+            conn.close()
+        assert "idempotency_cache" in tables, (
+            f"idempotency_cache table must live in the separate file; got {tables}"
+        )
+
+        # The state DB does NOT contain the idempotency_cache table written by
+        # registry-api (it was only seeded with the materialized ORM tables;
+        # registry-api's writable engine never touched it).
+        conn2 = sqlite3.connect(str(db_path))
+        try:
+            cache_rows = conn2.execute("SELECT count(*) FROM idempotency_cache").fetchone()[0]
+        finally:
+            conn2.close()
+        # _seed_tables creates the table (ORM Base) but registry-api must NOT
+        # have written cache rows into the STATE db — they went to the
+        # separate file. Zero rows in state.sqlite3 proves the split.
+        assert cache_rows == 0, (
+            "registry-api wrote idempotency rows into state.sqlite3 — the "
+            "cache engine is still pointed at the state DB (Story 11.3.12 regression)"
+        )

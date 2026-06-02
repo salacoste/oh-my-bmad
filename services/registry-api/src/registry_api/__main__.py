@@ -171,8 +171,26 @@ def main() -> None:
         port,
     )
 
+    # Story 11.3.12: the writable idempotency cache uses its OWN SQLite file
+    # (default ``idempotency.sqlite3`` beside the state DB) so registry-state
+    # is the sole writer of ``state.sqlite3`` — closes the cross-uid WAL
+    # crash-loop. The separate file is created on start via the same
+    # auto-create gate registry-state uses (off by default in production
+    # where a migrator/operator owns schema; on for the self-contained
+    # ROOT/separability composes).
+    idempotency_db_url = os.environ.get("REGISTRY_API_IDEMPOTENCY_DB_URL")
+    create_idempotency_schema_on_start = (
+        os.environ.get("REGISTRY_API_AUTO_CREATE_IDEMPOTENCY_SCHEMA") == "1"
+    )
+
     clock = SystemClock()
-    app = build_app(base_dir=log_dir, db_url=db_url, clock=clock)
+    app = build_app(
+        base_dir=log_dir,
+        db_url=db_url,
+        clock=clock,
+        idempotency_db_url=idempotency_db_url,
+        create_idempotency_schema_on_start=create_idempotency_schema_on_start,
+    )
 
     uvicorn.run(app, host=host, port=port)
 

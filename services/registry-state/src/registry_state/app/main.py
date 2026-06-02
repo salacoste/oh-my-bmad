@@ -175,6 +175,63 @@ def _ensure_db_parent_dir(db_url: str) -> None:
     ensure_shared_dir(parent)
 
 
+def _ensure_db_file_group_writable(db_url: str) -> None:
+    """chmod the SQLite DB file to 0o660 so its WAL/SHM sidecars inherit group-write.
+
+    Story 11.3.12 — the genuine close-out of the cross-uid WAL crash-loop.
+
+    ``state.sqlite3`` runs in WAL mode (``PRAGMA journal_mode=WAL``). Any
+    process that opens the DB — including registry-api's READ-ONLY consumer
+    engine — participates in the WAL protocol and creates the ``-wal``/``-shm``
+    sidecar files. Empirically (verified): SQLite creates those sidecars
+    inheriting the MAIN db file's mode. The main db is created at 0o644 base
+    → under umask 022 it's 0o640 (group-read, NO group-write), so the
+    sidecars are 0o640 too → whichever uid creates them first locks the
+    OTHER omb-group uid out of its own DB → ``OperationalError: attempt to
+    write a readonly database`` crash-loop (Story 11.3.10/11.3.11 AC8).
+
+    Fix: registry-state (the DB owner + sole writer, FR26) chmods its own
+    ``state.sqlite3`` to 0o660 right after the engine opens it. SQLite then
+    propagates 0o660 to every ``-wal``/``-shm`` it (or any same-group reader)
+    creates — group read/write, others NONE (the audit-data non-world-
+    readable invariant from Stories 11.3.8/11.3.11 is preserved: 0o660 has a
+    zero others-triad). This is WAL-PRESERVING — no journal-mode change, so
+    crash-recovery semantics (and the nightly crash-injection job) are
+    unaffected.
+
+    Best-effort + idempotent (mirrors ``ensure_shared_dir``): a pre-existing
+    file we don't own must not crash startup. No-op for in-memory URLs.
+    """
+    try:
+        database = make_url(db_url).database
+    except Exception:  # noqa: BLE001 — malformed URL: let create_engine surface it
+        return
+    if not database or database == ":memory:":
+        return
+    db_path = Path(database)
+    # 0o660 = rw-rw---- : owner+group read/write, others none. The sidecars
+    # SQLite creates inherit this mode, closing the cross-uid gap while
+    # keeping audit data non-world-readable.
+    #
+    # Code-review L1: the file SHOULD exist by now (create_engine opened it +
+    # the optional create_all ran). If it's absent — e.g. AUTO_CREATE off AND
+    # no migrator ran yet, or a reordered deploy — chmod would silently no-op
+    # under the suppress, and the cross-uid WAL gap would return with no
+    # signal. Log a WARNING so the gap is visible rather than silent. (In the
+    # production compose, depends_on ordering guarantees the file exists.)
+    if not db_path.exists():
+        log.warning(
+            "state DB file %s absent at chmod time — WAL/SHM sidecars may be "
+            "created non-group-writable; cross-uid readers could be locked out. "
+            "Ensure the migrator (or REGISTRY_STATE_AUTO_CREATE_SCHEMA) creates "
+            "the DB before this service's lifespan reaches ready.",
+            db_path,
+        )
+        return
+    with contextlib.suppress(OSError):
+        db_path.chmod(0o660)
+
+
 async def run_subscriber(
     *,
     base_dir: Path,
@@ -253,6 +310,14 @@ async def run_subscriber(
             log.info(
                 "lifespan phase: schema_create complete in %.3fs", time.monotonic() - _phase_t0
             )
+
+        # Story 11.3.12: chmod state.sqlite3 to 0o660 so the WAL/SHM sidecars
+        # (created by any omb-group process that opens this WAL-mode DB —
+        # including registry-api's read-only consumer) inherit group-write and
+        # the cross-uid "readonly database" crash-loop is closed. Runs after
+        # the engine + optional create_all so the file exists. WAL-preserving;
+        # see _ensure_db_file_group_writable docstring.
+        _ensure_db_file_group_writable(db_url)
 
         # Startup contract: trim trailing partial lines across all *.jsonl.
         # Use the free function so we don't construct a full writer just to

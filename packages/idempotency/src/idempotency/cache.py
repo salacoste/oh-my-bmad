@@ -80,10 +80,10 @@ from datetime import UTC, datetime, timedelta
 
 import cachetools
 from events.clock import Clock
-from sqlalchemy import Column, DateTime, MetaData, String, Table, delete, select
+from sqlalchemy import Column, DateTime, Index, MetaData, String, Table, delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Row
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from idempotency.errors import IdempotencyConflict
 
@@ -106,7 +106,33 @@ _IDEMPOTENCY_TABLE = Table(
     Column("expires_at", DateTime(timezone=True), nullable=False),
     Column("result_event_id", String(38), nullable=False),
     Column("request_id_on_first_hit", String(36), nullable=False),
+    # Mirrors the ORM ``ix_idempotency_cache_expires_at`` index
+    # (registry-state/schema.py:335) — backs the ``sweep_expired`` range
+    # delete on ``expires_at``. Included here (Story 11.3.12) so a DB
+    # bootstrapped from this Core MetaData via :func:`create_idempotency_schema`
+    # gets the same index the migrator-created table had.
+    Index("ix_idempotency_cache_expires_at", "expires_at"),
 )
+
+
+async def create_idempotency_schema(engine: AsyncEngine) -> None:
+    """Create the ``idempotency_cache`` table (+ index) on ``engine``'s DB.
+
+    Story 11.3.12 — registry-api now runs its writable idempotency-cache
+    engine against its OWN ``idempotency.sqlite3`` file (split out of
+    ``state.sqlite3`` so registry-state is the sole writer of the audit
+    store, closing the cross-uid WAL crash-loop). That separate file needs
+    the table created; the idempotency package owns the canonical Core
+    ``Table`` definition, so bootstrapping it lives here rather than in the
+    registry-state migrator.
+
+    Idempotent: ``create_all`` issues ``CREATE TABLE IF NOT EXISTS`` so a
+    re-run against an existing file is a no-op. Caller decides when to run
+    it (registry-api gates on an auto-create flag, mirroring
+    ``REGISTRY_STATE_AUTO_CREATE_SCHEMA``).
+    """
+    async with engine.begin() as conn:
+        await conn.run_sync(_meta.create_all)
 
 
 # ---------------------------------------------------------------------------

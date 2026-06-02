@@ -1,6 +1,6 @@
 # Story 11.3.12 — split registry-api's writable idempotency-cache onto its own SQLite file (M8 follow-up) so registry-state is the sole `state.sqlite3` writer
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -175,23 +175,23 @@ Separating the writable idempotency cache onto its OWN file means:
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Separate cache engine URL** (AC1, AC2): add
+- [x] **Task 1 — Separate cache engine URL** (AC1, AC2): add
       `idempotency_db_url` param to `build_app`; resolve from
       `REGISTRY_API_IDEMPOTENCY_DB_URL` in `__main__.py` (default = state
       dir + `/idempotency.sqlite3`); set it in `docker-compose.yml`.
-- [ ] **Task 2 — Bootstrap the table in the new file** (AC3): registry-api
+- [x] **Task 2 — Bootstrap the table in the new file** (AC3): registry-api
       `create_all`s `_IDEMPOTENCY_TABLE` on the cache engine (flag-gated);
       stop the migrator creating it in state.sqlite3 (or document the
       orphaned-empty-table backward-compat choice).
-- [ ] **Task 3 — FR26 discipline check** (AC4): grep-verify no writable
+- [x] **Task 3 — FR26 discipline check** (AC4): grep-verify no writable
       engine against the STATE db_url remains.
-- [ ] **Task 4 — Unit/contract tests** (AC5): cache round-trip on its own
+- [x] **Task 4 — Unit/contract tests** (AC5): cache round-trip on its own
       file; column-consistency; distinct-engine-URL assertion.
-- [ ] **Task 5 — Integration regression** (AC6): 7/7 healthy + WAL owned
+- [x] **Task 5 — Integration regression** (AC6): 7/7 healthy + WAL owned
       by registry-state.
-- [ ] **Task 6 — Docker repro** (AC8): 7/7 stable + idempotency replay.
-- [ ] **Task 7 — Validation gates** (AC7).
-- [ ] **Task 8 — Code review** (AC9); apply findings.
+- [x] **Task 6 — Docker repro** (AC8): 7/7 stable + idempotency replay.
+- [x] **Task 7 — Validation gates** (AC7).
+- [x] **Task 8 — Code review** (AC9); apply findings.
 
 ## Dev Notes
 
@@ -315,11 +315,93 @@ unblocks:
 
 ### Agent Model Used
 
+claude-opus-4-8 (1M context) — /loop autonomous execution per BMad workflow.
+
 ### Debug Log References
+
+- **AC1-AC5 + AC7 (code + unit tests) DONE & green** (committed 7749a16):
+  ruff/format clean, mypy 242=baseline (0 new), discipline 0,
+  registry-api + idempotency **284 passed / 0 failed**. The idempotency
+  split is correct: `TestIdempotencyCacheSeparateFile` proves cache rows
+  land in `idempotency.sqlite3` and `state.sqlite3` has ZERO cache rows;
+  the schema-drift parity test still passes; all 27 build_app test sites
+  pass `create_idempotency_schema_on_start=True`.
+- **AC8 (Docker repro) — the split is NECESSARY but NOT SUFFICIENT.**
+  Rebuilt base (verified the split is in the image) → boot → registry-state
+  STILL crash-loops (13 restarts, 6/7) on the SAME
+  `sqlite3.OperationalError: attempt to write a readonly database`
+  (materializer.py:298). Live FS: `state.sqlite3-wal` is STILL owned by
+  registry-api (uid 10001), even though its WRITABLE engine now targets
+  the separate file.
+- **Deeper root cause found (architecture fork — NOT auto-decided):**
+  `sqlite_store.create_engine` runs `PRAGMA journal_mode=WAL` on EVERY
+  connection incl. read-only (sqlite_store.py:87). More fundamentally, a
+  test I wrote (`test_read_only_engine_does_not_create_wal_sidecars`)
+  PROVED that **any reader of a WAL-mode SQLite DB intrinsically creates
+  the -wal/-shm sidecars** — skipping the pragma is insufficient. So
+  registry-api's READ-ONLY engine on `state.sqlite3` creates the sidecars
+  owned by uid 10001, locking out the writer registry-state (uid 10002).
+  The insufficient pragma-skip attempt was REVERTED to keep the tree green.
+  Surfaced to the user + saved to memory
+  `cross-uid-group-write-systemic-umask-gap` (UPDATE 2026-06-01) with the
+  candidate fixes (state.sqlite3 off-WAL / registry-api reads via HTTP /
+  init-pre-create sidecars / same-uid) for a decision.
 
 ### Completion Notes List
 
+- **AC1-AC5, AC7 ✓** — the idempotency cache now uses its own
+  `idempotency.sqlite3` (registry-api sole writer); state engine stays
+  read-only; FR26 strengthened; M8 WAL-WRITE-contention resolved.
+- **AC3 decision:** registry-api `create_all`s the table on its own file
+  (idempotency pkg owns the Core `_meta`); migrator unchanged →
+  `idempotency_cache` is an orphaned-empty table in `state.sqlite3`
+  (lower-risk than a destructive migration).
+- **WAL-reader fork RESOLVED (WAL-preserving):** rather than the rejected
+  options (umask 002 = world-readable; skip-WAL-pragma = insufficient,
+  proven by test; journal_mode=DELETE = crash-recovery risk), the fix is a
+  main-db-file chmod. Empirically verified: SQLite creates -wal/-shm
+  inheriting the MAIN db file's mode. So registry-state chmods its own
+  state.sqlite3 to 0o660 after engine+create_all
+  (`_ensure_db_file_group_writable`, app/main.py); sidecars then inherit
+  group-write (others 0 — audit invariant kept) regardless of which
+  omb-uid creates them. No journal-mode change → crash-injection nightly
+  unaffected. (commit 1727c89)
+- **AC8 ✓ PROVEN 7/7 GREEN** (live Docker repro): all 7 healthy,
+  registry-state restart count 0 (was 13); state.sqlite3 + -wal/-shm all
+  -rw-rw---- (group-write, others 0) even when a sidecar is created by a
+  different omb uid (10004); POST /v1/tasks → 201; idempotency.sqlite3 is
+  its own file owned by registry-api (10001). The Epic-11.3 fresh-deploy-
+  green tail is functionally COMPLETE.
+- **AC6 (integration test)** — added `test_state_sqlite_wal_cross_uid.py`
+  (asserts 7/7 + sidecar modes). **AC9 (review)** — pending.
+
+### Final verification (AC8 + AC9, post-review-fixes)
+
+Re-ran the Docker repro after the AC9 review fixes (H1 idempotency chmod +
+H2 fail-loud derivation). PROVEN 7/7 GREEN + both DBs secured:
+- all 7 services healthy, registry-state restart count 0
+- POST /v1/tasks → 201
+- state.sqlite3 -rw-rw---- owned by registry-state (10002)
+- idempotency.sqlite3 -rw-rw---- owned by registry-api (10001) — the H1
+  fix confirmed: no longer world-readable
+- both files group-write, neither world-readable (others-triad 0)
+
+The Epic-11.3 fresh-deploy-green tail is COMPLETE: ROOT compose comes up
+7/7 stable on first boot. Chain: 11.3.8 (events dir 2775) → 11.3.9
+(/v1/health) → 11.3.10 (mcp-init start_period) → 11.3.11 (events file
+0o660) → 11.3.12 (idempotency split + state.sqlite3 0o660 so WAL sidecars
+inherit group-write).
+
 ### File List
+
+MODIFIED:
+- `packages/idempotency/src/idempotency/cache.py` (create_idempotency_schema + Core index)
+- `packages/idempotency/src/idempotency/__init__.py` (export)
+- `services/registry-api/src/registry_api/app.py` (separate cache engine + _derive_idempotency_url)
+- `services/registry-api/src/registry_api/__main__.py` (env wiring)
+- `services/registry-api/src/registry_api/test_app.py` (+ TestIdempotencyCacheSeparateFile; 13 call sites)
+- `services/registry-api/src/registry_api/test_{decisions,decisions_signing,middleware,approvals,events}.py` (build_app flag)
+- `docker-compose.yml` (REGISTRY_API_IDEMPOTENCY_DB_URL + auto-create env)
 
 ## Definition of Done
 
