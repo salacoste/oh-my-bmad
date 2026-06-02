@@ -332,11 +332,21 @@ class RegistryAPIClient:
         request_id: str | None = None,
         trace_id: str | None = None,
         hint: str | None = None,
+        override: Literal["license", "budget"] | None = None,
     ) -> DecisionResponseLocal:
         """POST /v1/tasks/{task_id}/decisions — submit an operator decision.
 
         Note: Server-side endpoint not yet implemented (Story 6.4).
         Live calls return 404. Tests mock the transport layer.
+
+        Args:
+            override: Optional override flag (Story 12.3, mirrors the Telegram
+                surface at handlers/registry_client.py:408,474). Valid values:
+                ``"license"``, ``"budget"``. Omitted from the POST body when
+                None. ``"budget"`` reaches the already-built registry-api
+                override branch (decisions.py:251) which bypasses the budget
+                gate for a still-``blocked`` task — an authorization-bypass
+                surface gated by the operator decision itself.
 
         Returns DecisionResponseLocal on HTTP 2xx.
         Raises ValueError if task_id doesn't match TASK_ID_PATTERN.
@@ -356,6 +366,8 @@ class RegistryAPIClient:
         body: dict[str, str] = {"action": action}
         if hint is not None:
             body["hint"] = hint
+        if override is not None:
+            body["override"] = override
 
         async with httpx.AsyncClient(base_url=self._base_url, timeout=_DEFAULT_TIMEOUT) as client:
             response = await client.post(

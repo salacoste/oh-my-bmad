@@ -115,6 +115,49 @@ async def test_submit_decision_hint_omitted_when_none() -> None:
 
 
 @pytest.mark.asyncio
+async def test_submit_decision_approve_with_override_budget() -> None:
+    """Story 12.3 AC1/AC5 — --override budget reaches the POST body.
+
+    Mirrors the Telegram surface (handlers/registry_client.py:473-474): the
+    ``override`` kwarg, when set, is included in the decisions POST body so it
+    reaches the already-built registry-api override branch (decisions.py:251).
+    """
+    client = _make_client()
+    with patch(
+        "httpx.AsyncClient.post",
+        new_callable=AsyncMock,
+        return_value=_mock_200(_DECISION_RESPONSE_BODY),
+    ) as mock_post:
+        await client.submit_decision(
+            task_id=_VALID_TASK_ID,
+            action="approve",
+            idempotency_key="ik-123",
+            override="budget",
+        )
+    call_kwargs = mock_post.call_args
+    assert call_kwargs[1]["json"]["override"] == "budget"
+
+
+@pytest.mark.asyncio
+async def test_submit_decision_override_omitted_when_none() -> None:
+    """Story 12.3 AC5 — no override kwarg → key absent from the POST body
+    (back-compat: a plain /approve must not start carrying an override)."""
+    client = _make_client()
+    with patch(
+        "httpx.AsyncClient.post",
+        new_callable=AsyncMock,
+        return_value=_mock_200(_DECISION_RESPONSE_BODY),
+    ) as mock_post:
+        await client.submit_decision(
+            task_id=_VALID_TASK_ID,
+            action="approve",
+            idempotency_key="ik-123",
+        )
+    call_kwargs = mock_post.call_args
+    assert "override" not in call_kwargs[1]["json"]
+
+
+@pytest.mark.asyncio
 async def test_submit_decision_invalid_task_id() -> None:
     client = _make_client()
     with pytest.raises(ValueError, match="Invalid task_id"):
@@ -200,6 +243,43 @@ def test_approve_command_success() -> None:
         result = runner.invoke(app, ["approve", _VALID_TASK_ID])
     assert result.exit_code == 0
     assert f"Approved {_VALID_TASK_ID}" in result.output
+
+
+@pytest.mark.parametrize("override_value", ["budget", "license"])
+def test_approve_command_override_reaches_post(override_value: str) -> None:
+    """Story 12.3 AC1 — `approve <task> --override <budget|license>` carries the
+    override through to the decisions POST body via the typer command surface.
+    Both supported values are mechanically identical; parametrized for parity
+    with the Telegram surface (which already tests both)."""
+    from typer.testing import CliRunner
+
+    from console_cli.app.main import app
+
+    runner = CliRunner()
+    body = {**_DECISION_RESPONSE_BODY, "action": "approve"}
+    with patch(
+        "httpx.AsyncClient.post",
+        new_callable=AsyncMock,
+        return_value=_mock_200(body),
+    ) as mock_post:
+        result = runner.invoke(app, ["approve", _VALID_TASK_ID, "--override", override_value])
+    assert result.exit_code == 0
+    assert mock_post.call_args[1]["json"]["override"] == override_value
+
+
+def test_approve_command_invalid_override_rejected() -> None:
+    """Story 12.3 AC1 — an unknown --override value exits non-zero BEFORE any
+    HTTP call (mirrors the Telegram handler's license|budget guard)."""
+    from typer.testing import CliRunner
+
+    from console_cli.app.main import app
+
+    runner = CliRunner()
+    with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+        result = runner.invoke(app, ["approve", _VALID_TASK_ID, "--override", "nonsense"])
+    assert result.exit_code != 0
+    assert "Unknown override" in (result.output + (result.stderr or ""))
+    mock_post.assert_not_called()
 
 
 def test_approve_command_invalid_task_id() -> None:

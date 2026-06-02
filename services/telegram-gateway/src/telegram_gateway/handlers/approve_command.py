@@ -130,6 +130,13 @@ async def handle_approve(
     # Story 6.10/6.11: parse --override license|budget from trailing text.
     # Regex ensures --override is a standalone flag (not --overridelicense)
     # and supports both "--override license" and "--override=license".
+    #
+    # Story 12.3 (FR68, D2=(II)) — SHARP EDGE: `--override budget` extends the
+    # budget and unblocks the task AT THE REGISTRY GATE only. It works while the
+    # task is still `blocked`. Once Epic-12's budget_supervisor has already
+    # SIGTERMed the live subprocess (task `failed`), --override cannot resurrect
+    # it — the operator must `/retry`. Preventing enforcement WITHIN the 5s grace
+    # window (supervisor↔override coupling) is DEFERRED to Story 12.3a.
     override: Literal["license", "budget"] | None = None
     if trailing:
         m = re.search(r"(?:^|\s)--override(?:=|\s+)(\S+)", trailing, re.IGNORECASE)

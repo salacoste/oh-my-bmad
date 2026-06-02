@@ -715,10 +715,11 @@ def test_cardinality_at_steady_state_is_bounded() -> None:
                            this test) + parse_skip_total (4) = 6
       Story 10.4 counters: task_lifecycle (15) + session (5) +
                            secret_accessed (5) + events_appended
-                           (14 — 11 base families + ``"unknown"`` fallback
+                           (15 — 11 base families + ``"unknown"`` fallback
                            bucket per P1-H1 + ``"key"`` + ``"capability"``
-                           per Story 11.2 P1-H2) + idempotency (2) +
-                           capability (6) = 47
+                           per Story 11.2 P1-H2 + ``"budget"`` per Story 12.3
+                           FR68) + idempotency (2) +
+                           capability (6) = 48
       task_tokens_spent  : 0 after cleanup (terminal events ran).
 
       Total = 53 — bound widened by +2 vs Story 10.4 P1-H1 cardinality
@@ -779,8 +780,12 @@ def test_cardinality_at_steady_state_is_bounded() -> None:
     # Story 12.2: bound 61 → 62 for the new pre-populated
     # ``omb_task_lifecycle_events_total{event_type="task.budget_enforcement_triggered"}``
     # label (FR67). One additional canonical sample; cardinality stays bounded.
-    assert canonical_timeseries <= 62, (
-        f"cardinality {canonical_timeseries} exceeds AC10 steady-state bound of 62; "
+    # Story 12.3: bound 62 → 63 for the new pre-populated
+    # ``omb_events_appended_total{event_family="budget"}`` child (FR68, D1=(A)).
+    # The budget.override event is registered (event_types.py) but not yet
+    # emitted, so this sample stays at 0; cardinality stays bounded.
+    assert canonical_timeseries <= 63, (
+        f"cardinality {canonical_timeseries} exceeds AC10 steady-state bound of 63; "
         f"families: {[(f.name, len(f.samples)) for f in timeseries]}"
     )
 
@@ -827,8 +832,10 @@ def test_cardinality_under_burst_cleanup() -> None:
     )
     # Story 11.2.3: see steady-state bound rationale above. Story 12.2 bumped
     # 61 → 62 for the new task.budget_enforcement_triggered lifecycle label.
-    assert canonical_timeseries <= 62, (
-        f"cardinality {canonical_timeseries} exceeds AC10 burst-cleanup bound of 62"
+    # Story 12.3 bumped 62 → 63 for the new pre-populated
+    # ``omb_events_appended_total{event_family="budget"}`` child (FR68, D1=(A)).
+    assert canonical_timeseries <= 63, (
+        f"cardinality {canonical_timeseries} exceeds AC10 burst-cleanup bound of 63"
     )
 
 
