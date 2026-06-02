@@ -18,7 +18,7 @@ production wire format — Epic 11 retro L6).
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Generator
+from collections.abc import Awaitable, Callable, Generator
 from datetime import UTC, datetime
 from pathlib import Path
 from random import Random
@@ -35,7 +35,7 @@ from events import (
     new_uuid7,
     to_canonical_json,
 )
-from events.payloads import TaskBudgetExceededPayload
+from events.payloads import BudgetOverridePayload, TaskBudgetExceededPayload
 from events.schema_registry import REGISTRY, register, unregister
 
 from worker_wrapper.domain.budget_supervisor import (
@@ -75,6 +75,12 @@ def _isolated_registry() -> Generator[None, None, None]:
     snapshot = dict(REGISTRY)
     register("task.budget_exceeded", "1.0.0", TaskBudgetExceededPayload)
     register("task.budget_exceeded", "1.1.0", TaskBudgetExceededPayload)
+    # Story 12.3a Phase 1 — the inbound override channel. Register both the
+    # FR44 back-compat name (tier3.budget_override) and the Epic-12 namespace
+    # name (budget.override) so override envelopes round-trip through the
+    # canonical reader in the grace-window tests.
+    register("tier3.budget_override", "1.1.0", BudgetOverridePayload)
+    register("budget.override", "1.1.0", BudgetOverridePayload)
     try:
         yield
     finally:
@@ -114,6 +120,42 @@ def _make_budget_envelope(
             tokens_used=tokens_used,
             token_limit=token_limit,
             step=step,
+        ),
+        trace_id=_DEFAULT_TRACE_ID,
+        request_id=str(new_uuid7(clock=clk, rng=rng)),
+    )
+
+
+def _make_override_envelope(
+    *,
+    task_id: str = _TASK_ID_PRIMARY,
+    event_type: str = "tier3.budget_override",
+    old_limit: int = 1000,
+    new_limit: int = 5000,
+    mono_seed: int = 7,
+) -> EventEnvelope:
+    """Build a real budget-override envelope (production wire shape, Story 12.3a).
+
+    ``event_type`` defaults to ``tier3.budget_override`` (the name registry-api
+    actually emits today); pass ``budget.override`` to exercise the Epic-12
+    namespace name. Carries a real :class:`events.payloads.BudgetOverridePayload`
+    whose ``task_id`` is the supervisor's match key.
+    """
+    rng = Random(mono_seed)
+    clk = FrozenClock(mono_ns=mono_seed, now=FROZEN_EPOCH)
+    return EventEnvelope.create(
+        event_id=new_event_id(clock=clk, rng=rng),
+        schema_version="1.1.0",
+        type=event_type,
+        emitted_at=clk.now(),
+        emitted_at_monotonic_ns=clk.monotonic_ns(),
+        actor=_ACTOR,
+        payload=BudgetOverridePayload(
+            task_id=task_id,
+            decision_id="d-12-3a-grace",
+            actor_id="operator-test",
+            old_limit=old_limit,
+            new_limit=new_limit,
         ),
         trace_id=_DEFAULT_TRACE_ID,
         request_id=str(new_uuid7(clock=clk, rng=rng)),
@@ -671,3 +713,276 @@ async def test_watch_records_termination_latency_from_callback(tmp_path: Path) -
     # termination_latency_s = (4e9 - 1.5e9) / 1e9 = 2.5
     assert result.detection_latency_s == pytest.approx(1.0, abs=1e-6)
     assert result.termination_latency_s == pytest.approx(2.5, abs=1e-6)
+
+
+# ===========================================================================
+# Story 12.3a Phase 1 — grace-window interception (FR68). 6 cases.
+#
+# The grace window is bounded by a HARD MONOTONIC deadline snapshotted once at
+# window open: deadline_ns = clock.monotonic_ns() + grace_window_s * 1e9. These
+# tests drive that deadline deterministically via TickingClock's per-call
+# monotonic advance (tick_ns) so window expiry needs NO wall-clock wait — a
+# hung/empty override channel cannot extend the window past the deadline.
+# ===========================================================================
+
+
+def _recording_callback() -> tuple[list[int], Callable[[], Awaitable[None]]]:
+    """Return ``(calls, callback)`` where ``callback`` appends to ``calls``."""
+    calls: list[int] = []
+
+    async def _callback() -> None:
+        calls.append(1)
+
+    return calls, _callback
+
+
+# ---------------------------------------------------------------------------
+# 12.3a — (a) override-wins: override within window aborts termination
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_grace_window_override_aborts_termination(tmp_path: Path) -> None:
+    """budget_exceeded + override for same task in window → override_received, no terminate."""
+    budget_env = _make_budget_envelope(
+        task_id=_TASK_ID_PRIMARY, tokens_used=2000, token_limit=1000, step=5
+    )
+    override_env = _make_override_envelope(task_id=_TASK_ID_PRIMARY)
+    _write_envelopes(tmp_path, [budget_env, override_env])
+
+    calls, callback = _recording_callback()
+    cancel = asyncio.Event()
+
+    result = await watch_for_budget_exceeded(
+        task_id=_TASK_ID_PRIMARY,
+        event_log_dir=tmp_path,
+        terminate_callback=callback,
+        clock=TickingClock(),
+        cancel_event=cancel,
+        poll_interval_s=0.05,
+        budget_action="awaiting_approval",
+        grace_window_s=5.0,
+    )
+
+    # Override intercepted: a budget breach WAS observed (triggered=True) but
+    # termination was ABORTED, so terminate_callback never ran.
+    assert result.triggered is True
+    assert result.override_received is True
+    assert calls == []  # terminate_callback NOT called
+    # Budget-exceeded provenance carried through on the abort path.
+    assert result.event_id == budget_env.event_id
+    assert result.tokens_used == 2000
+    assert result.token_limit == 1000
+    assert result.step == 5
+    assert result.detection_latency_s is not None
+    # No termination occurred → these stay None.
+    assert result.termination_latency_s is None
+    assert result.termination_method is None
+
+
+# ---------------------------------------------------------------------------
+# 12.3a — (b) window-expires: no override → fail-closed terminate
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_grace_window_expiry_terminates_fail_closed(tmp_path: Path) -> None:
+    """budget_exceeded, no override → after the monotonic deadline, terminate fires."""
+    budget_env = _make_budget_envelope(task_id=_TASK_ID_PRIMARY)
+    _write_envelopes(tmp_path, [budget_env])
+
+    calls, callback = _recording_callback()
+    cancel = asyncio.Event()
+
+    # tick_ns=2s per monotonic call, grace_window_s=3s → deadline crossed
+    # within ~2 monotonic reads inside the window loop. No wall-clock wait
+    # needed; the deadline is monotonic-driven (fail-closed by elapsed time,
+    # not poll count).
+    clock = TickingClock(tick_ns=2_000_000_000)
+
+    result = await watch_for_budget_exceeded(
+        task_id=_TASK_ID_PRIMARY,
+        event_log_dir=tmp_path,
+        terminate_callback=callback,
+        clock=clock,
+        cancel_event=cancel,
+        poll_interval_s=0.01,
+        budget_action="awaiting_approval",
+        grace_window_s=3.0,
+    )
+
+    # Fail-closed: window expired with no override → unchanged terminate path.
+    assert result.triggered is True
+    assert result.override_received is False
+    assert calls == [1]  # terminate_callback DID run
+    assert result.termination_latency_s is not None
+
+
+# ---------------------------------------------------------------------------
+# 12.3a — (c) override-after-expiry: late override is ignored (fail-closed)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_grace_window_override_after_expiry_ignored(tmp_path: Path) -> None:
+    """Window expires → terminate fires → THEN override written → still terminated."""
+    budget_env = _make_budget_envelope(task_id=_TASK_ID_PRIMARY)
+    _write_envelopes(tmp_path, [budget_env])
+
+    calls, callback = _recording_callback()
+    cancel = asyncio.Event()
+    clock = TickingClock(tick_ns=2_000_000_000)
+
+    result = await watch_for_budget_exceeded(
+        task_id=_TASK_ID_PRIMARY,
+        event_log_dir=tmp_path,
+        terminate_callback=callback,
+        clock=clock,
+        cancel_event=cancel,
+        poll_interval_s=0.01,
+        budget_action="awaiting_approval",
+        grace_window_s=3.0,
+    )
+
+    # Window already expired and termination already fired.
+    assert result.triggered is True
+    assert result.override_received is False
+    assert calls == [1]
+
+    # A late override arriving AFTER the deadline cannot un-terminate the task:
+    # the supervisor has already returned the terminated result (fail-closed).
+    late_override = _make_override_envelope(task_id=_TASK_ID_PRIMARY)
+    _write_envelopes(tmp_path, [budget_env, late_override])
+    assert result.override_received is False  # unchanged — abort is impossible now
+
+
+# ---------------------------------------------------------------------------
+# 12.3a — (d) wrong-task-id: override for another task does not match
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_grace_window_override_wrong_task_id_terminates(tmp_path: Path) -> None:
+    """budget_exceeded for A, override for B in window → not matched → terminate A."""
+    budget_env = _make_budget_envelope(task_id=_TASK_ID_PRIMARY)
+    # Override targets a DIFFERENT task — must not abort task A's termination.
+    other_override = _make_override_envelope(task_id=_TASK_ID_OTHER)
+    _write_envelopes(tmp_path, [budget_env, other_override])
+
+    calls, callback = _recording_callback()
+    cancel = asyncio.Event()
+    clock = TickingClock(tick_ns=2_000_000_000)
+
+    result = await watch_for_budget_exceeded(
+        task_id=_TASK_ID_PRIMARY,
+        event_log_dir=tmp_path,
+        terminate_callback=callback,
+        clock=clock,
+        cancel_event=cancel,
+        poll_interval_s=0.01,
+        budget_action="awaiting_approval",
+        grace_window_s=3.0,
+    )
+
+    assert result.triggered is True
+    assert result.override_received is False  # B's override ignored for A
+    assert calls == [1]  # A still terminated (fail-closed)
+
+
+# ---------------------------------------------------------------------------
+# 12.3a — (e) failed-skips-window: default action terminates immediately
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_failed_action_skips_grace_window(tmp_path: Path) -> None:
+    """budget_action='failed' (default) → immediate terminate, NO grace-window loop.
+
+    Drives a TickingClock that records every ``monotonic_ns`` call. With the
+    grace window SKIPPED, only the main loop's detection + termination reads
+    occur (a small, fixed count). If a window loop had run, the monotonic call
+    count would be far higher (deadline-check per iteration).
+    """
+    budget_env = _make_budget_envelope(task_id=_TASK_ID_PRIMARY)
+    # An override is present, but 'failed' must ignore it entirely (no window).
+    override_env = _make_override_envelope(task_id=_TASK_ID_PRIMARY)
+    _write_envelopes(tmp_path, [budget_env, override_env])
+
+    mono_calls: list[int] = []
+
+    class _CountingClock:
+        def __init__(self) -> None:
+            self._mono = 0
+
+        def now(self) -> datetime:
+            return datetime(2026, 1, 1, tzinfo=UTC)
+
+        def monotonic_ns(self) -> int:
+            mono_calls.append(self._mono)
+            current = self._mono
+            self._mono += 1_000_000
+            return current
+
+    calls, callback = _recording_callback()
+    cancel = asyncio.Event()
+
+    result = await watch_for_budget_exceeded(
+        task_id=_TASK_ID_PRIMARY,
+        event_log_dir=tmp_path,
+        terminate_callback=callback,
+        clock=_CountingClock(),
+        cancel_event=cancel,
+        poll_interval_s=0.05,
+        budget_action="failed",  # the default — immediate terminate, no window
+    )
+
+    assert result.triggered is True
+    assert result.override_received is False
+    assert calls == [1]  # terminate fired on first match
+    assert result.termination_latency_s is not None
+    # Exactly the main loop's monotonic reads: start_ns, detection_ns,
+    # term_start_ns, term_end_ns = 4. The grace-window loop (which would add a
+    # deadline-check read per iteration) never executed.
+    assert len(mono_calls) == 4
+
+
+# ---------------------------------------------------------------------------
+# 12.3a — (f) cancel-during-window: clean exit, no termination
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_grace_window_cancel_returns_clean(tmp_path: Path) -> None:
+    """cancel_event set during the grace window → triggered=False, terminate NOT called."""
+    budget_env = _make_budget_envelope(task_id=_TASK_ID_PRIMARY)
+    _write_envelopes(tmp_path, [budget_env])
+
+    calls, callback = _recording_callback()
+    cancel = asyncio.Event()
+
+    # Default tick (1ms) + grace_window_s=5s → the monotonic deadline is far
+    # away; the cancel below fires first, exercising the in-window cancel path.
+    async def _cancel_after_delay() -> None:
+        await asyncio.sleep(0.1)
+        cancel.set()
+
+    cancel_task = asyncio.create_task(_cancel_after_delay())
+    try:
+        result = await watch_for_budget_exceeded(
+            task_id=_TASK_ID_PRIMARY,
+            event_log_dir=tmp_path,
+            terminate_callback=callback,
+            clock=TickingClock(),
+            cancel_event=cancel,
+            poll_interval_s=0.02,
+            budget_action="awaiting_approval",
+            grace_window_s=5.0,
+        )
+    finally:
+        await cancel_task
+
+    # Clean cancel inside the window — no termination, consistent with the
+    # other cancel paths.
+    assert result.triggered is False
+    assert result.override_received is False
+    assert calls == []

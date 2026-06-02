@@ -1,6 +1,10 @@
 # Story 12.3a — Budget-override grace-window interception (supervisor↔override coupling, FR68 enforcement-prevention)
 
-Status: backlog
+Status: in-progress (Phase 1 — grace-window state machine)
+
+<!-- DESIGN RESOLVED 2026-06-02 (architect): inbound channel = extend the existing
+JSONL tail (Option a); G1 grace-window-only-on-awaiting_approval; G2 defer per-task
+delivery. 3 phases; see "Resolved design" below. Phase 1 in flight. -->>
 
 <!-- Split out of Story 12.3 (D2=(II) decision, 2026-06-01). Story 12.3 shipped
 the achievable FR68 delta (console-cli --override parity + budget.override
@@ -18,6 +22,61 @@ window to abort the pending subprocess termination and let the task continue
 under the extended budget,
 **so that** I can rescue an over-budget task *without losing its in-flight work*
 to a `/retry` from scratch — the FR68 headline behavior.
+
+## Resolved design (architect pass, 2026-06-02)
+
+**THE CRUX — inbound override channel = extend the existing JSONL tail (Option a).**
+The `budget_supervisor` ALREADY tails the shared event-log JSONL
+(`budget_supervisor.py:153-342`, 500ms poll via `read_log_lines`) for
+`task.budget_exceeded` — and registry-api writes `tier3.budget_override` /
+`budget.override` to the SAME physical file (shared `oh-my-bmad-data` volume).
+So the supervisor just watches for the override event for this `task_id` during a
+bounded grace window. **Zero new coupling**, mirrors the proven `ApprovalWaiter`
+(`approval_waiter.py:37-135`), FR26-preserved (supervisor stays read-only),
+~500ms detection latency (well within 5s), excellent unit-testability. Options
+(b) MCP-poll / (c) signal-file / (d) registry-push all add real coupling and were
+rejected (see architect trade-off table).
+
+**Recommended decisions (sensible defaults, not product forks):**
+- **G1 — grace window only when `budget_action == "awaiting_approval"`.** When
+  `"failed"` (the default), SIGTERM is immediate as today → the feature is INERT
+  by default, exact current behavior preserved; operators opt in via
+  `OMB_DEFAULT_BUDGET_ACTION=awaiting_approval`. Fail-closed: no valid override
+  in the window → SIGTERM proceeds (hard monotonic deadline; a hung channel
+  cannot delay enforcement past `grace_window_s`).
+- **G2 — defer per-task `budget_action` delivery to a follow-up (12.3b).** The
+  supervisor takes `budget_action` as a PARAMETER, so swapping the source from
+  the global default to Story-12.4's per-task Task-row value later is a one-line
+  call-site change. 12.3a stays on the global default.
+
+**Phase breakdown (implement + review per phase):**
+- **Phase 1 (THIS unit — the unit-testable core):** grace-window state machine in
+  `budget_supervisor.py`. Add `grace_window_s: float` + `budget_action` params and
+  an `override_received: bool` field on `BudgetSupervisorResult`. On
+  `task.budget_exceeded`, if `budget_action=="awaiting_approval"`, poll the SAME
+  JSONL for `tier3.budget_override`/`budget.override` (matching task_id) until the
+  override arrives (→ abort terminate, `override_received=True`) or the monotonic
+  grace deadline expires (→ existing `terminate_callback` path, fail-closed). When
+  `"failed"`, behave EXACTLY as today (no window). New params DEFAULT to the
+  current behavior so this phase is a safe no-op until Phase 2 wires it. 6 unit
+  tests (override-wins / window-expires / override-after-expiry / wrong-task-id /
+  failed-skips-window / cancel-during-window).
+- **Phase 2:** `run_task` (`main.py:490-523,636-771`) passes `budget_action` +
+  `grace_window_s`; adds the `override_received` branch (subprocess CONTINUES, no
+  FSM→FAILED; emit `task.budget_enforcement_triggered` with truthful
+  `post_trigger_transition="awaiting_approval"` + a `budget.override_intercepted`
+  audit record). Post-termination (no override) stays `TASK_FAILED` → `/retry`
+  (the FR68 documented sharp edge).
+- **Phase 3:** remove `_reject_unwired_budget_action` validator
+  (`config.py:120-137`); add `OMB_BUDGET_GRACE_WINDOW_S` (default 5.0, gt=0);
+  flip `test_config.py` from reject→accept.
+
+**Validation strategy (focus):** Phase 1's grace-window state machine is the pure,
+unit-testable core (TickingClock + tmp-JSONL, mirrors `test_budget_supervisor.py`)
+— 6 cases incl. fail-closed timeout. Phase 3 config round-trip. The cross-service
+E2E (operator `/approve --override budget` aborts a live grace window) is deferred
+to operator/nightly. 3-lane code-review minimum (authorization + autonomous
+enforcement).
 
 ## Why this is separate from 12.3
 

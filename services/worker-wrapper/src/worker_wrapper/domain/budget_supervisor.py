@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import enum
 from collections.abc import Awaitable, Callable, Generator
 from dataclasses import dataclass
 from pathlib import Path
@@ -115,6 +116,19 @@ class BudgetSupervisorResult:
       directly (typically by calling :meth:`ClaudeCodeRunner.terminate_with_grace`
       again) before transitioning. Default ``False`` (cancel-clean path and
       successful-callback path both leave it ``False``).
+    - ``override_received`` (Story 12.3a Phase 1): ``True`` IFF a
+      ``tier3.budget_override`` / ``budget.override`` event for THIS
+      ``task_id`` arrived inside the bounded grace window AND termination
+      was consequently ABORTED (``terminate_callback`` was NOT invoked).
+      Only reachable when ``budget_action == "awaiting_approval"`` — the
+      ``"failed"`` default terminates immediately with no window, so it
+      always leaves ``override_received=False``. On this override-abort path
+      ``triggered=True`` (a budget breach WAS observed), ``event_id`` /
+      ``tokens_used`` / ``token_limit`` / ``step`` / ``detection_latency_s``
+      come from the matching ``task.budget_exceeded`` envelope, and
+      ``termination_latency_s`` / ``termination_method`` are ``None`` (no
+      termination occurred). Default ``False`` (every other path — including
+      window-expiry fail-closed and cancel-clean — leaves it ``False``).
 
     All latency fields use the injected ``Clock`` so tests can drive them
     deterministically via :class:`events.clock.TickingClock` rather than
@@ -136,6 +150,7 @@ class BudgetSupervisorResult:
     termination_latency_s: float | None = None
     termination_method: Literal["noop", "sigterm", "sigkill"] | None = None
     enforcement_failed: bool = False
+    override_received: bool = False
 
 
 # PP18 — backwards-compat alias; callers (lifespan, integration test) keep
@@ -147,6 +162,14 @@ _BudgetSupervisorResult = BudgetSupervisorResult
 
 
 _BUDGET_EXCEEDED_TYPE: str = "task.budget_exceeded"
+# Story 12.3a Phase 1 — the inbound override channel. registry-api EMITS
+# ``tier3.budget_override`` (decisions.py:438, FR44 back-compat name) and the
+# Epic-12 namespace registers ``budget.override`` @1.1.0 (event_types.py:315)
+# for the same :class:`events.payloads.BudgetOverridePayload`. The supervisor
+# accepts EITHER name so it interoperates with both the current emitter and a
+# future rename. Match key is the payload ``task_id`` field
+# (``payloads.py:948``).
+_BUDGET_OVERRIDE_TYPES: frozenset[str] = frozenset({"tier3.budget_override", "budget.override"})
 _NS_PER_S: float = 1e9
 
 
@@ -158,6 +181,8 @@ async def watch_for_budget_exceeded(
     clock: Clock,
     cancel_event: asyncio.Event,
     poll_interval_s: float = 0.5,
+    budget_action: Literal["failed", "awaiting_approval"] = "failed",
+    grace_window_s: float = 5.0,
 ) -> BudgetSupervisorResult:
     """Tail the JSONL event log for ``task.budget_exceeded`` events matching ``task_id``.
 
@@ -196,6 +221,27 @@ async def watch_for_budget_exceeded(
         poll_interval_s: Seconds between JSONL polls. Default 0.5s — 10
             retries inside the 5s NFR-R8 budget leaves ≥4.5s for the
             termination leg (Decision D1).
+        budget_action: Story 12.3a Phase 1 grace-window switch.
+            ``"failed"`` (default) preserves TODAY'S behavior EXACTLY —
+            on the first ``task.budget_exceeded`` match the supervisor
+            terminates immediately, no grace window, no override scan. So
+            this parameter is a safe no-op until Phase 2 passes a
+            non-default value. ``"awaiting_approval"`` opens a bounded grace
+            window (see ``grace_window_s``) after the budget match during
+            which an operator ``tier3.budget_override`` / ``budget.override``
+            for this ``task_id`` ABORTS the pending termination (the task
+            continues under the extended limit). FAIL-CLOSED: if no valid
+            override arrives before the window's monotonic deadline,
+            termination proceeds via the unchanged ``terminate_callback``
+            path. (G2 — the source of this value, global default vs. a
+            per-task Task-row value, is a Phase-2 call-site concern.)
+        grace_window_s: Bounded grace-window length in seconds. Only
+            consulted when ``budget_action == "awaiting_approval"``. The
+            deadline is computed ONCE as a hard monotonic instant
+            (``clock.monotonic_ns() + grace_window_s * 1e9``) at window
+            open, so a hung or empty override channel can NEVER delay
+            enforcement past it — the window is bounded by elapsed monotonic
+            time, not by a poll count. Default 5.0s per FR68.
 
     Returns:
         :class:`BudgetSupervisorResult` describing the outcome.
@@ -268,6 +314,64 @@ async def watch_for_budget_exceeded(
                 step=match.step,
                 detection_latency_s=detection_latency_s,
             )
+
+            # Story 12.3a Phase 1 — grace-window interception (FR68).
+            # ``budget_action == "failed"`` (default) keeps TODAY'S behavior:
+            # fall straight through to the termination path below. Only
+            # ``"awaiting_approval"`` opens a bounded grace window during
+            # which an operator override for THIS task aborts termination.
+            if budget_action == "awaiting_approval":
+                override_found = await _await_override_or_deadline(
+                    task_id=task_id,
+                    event_log_dir=event_log_dir,
+                    clock=clock,
+                    cancel_event=cancel_event,
+                    poll_interval_s=poll_interval_s,
+                    grace_window_s=grace_window_s,
+                    log=log,
+                )
+                if override_found is _GraceOutcome.CANCELLED:
+                    # cancel_event fired inside the window — clean exit,
+                    # consistent with the other cancel paths. Termination is
+                    # NOT performed.
+                    log.info(
+                        "budget_supervisor_cancelled_during_grace_window",
+                        task_id=task_id,
+                        event_id=match.event_id,
+                    )
+                    return BudgetSupervisorResult(triggered=False)
+                if override_found is _GraceOutcome.OVERRIDE:
+                    # Operator override arrived in time — ABORT termination.
+                    # The budget breach WAS observed (triggered=True) but no
+                    # terminate_callback runs, so the termination_* fields
+                    # stay None and override_received=True records the abort.
+                    log.info(
+                        "budget_supervisor_override_intercepted",
+                        task_id=task_id,
+                        event_id=match.event_id,
+                        detection_latency_s=detection_latency_s,
+                    )
+                    return BudgetSupervisorResult(
+                        triggered=True,
+                        override_received=True,
+                        event_id=match.event_id,
+                        tokens_used=match.tokens_used,
+                        token_limit=match.token_limit,
+                        step=match.step,
+                        detection_latency_s=detection_latency_s,
+                        termination_latency_s=None,
+                        termination_method=None,
+                    )
+                # _GraceOutcome.DEADLINE — fail-closed: no valid override
+                # within the bounded monotonic deadline. Fall through to the
+                # UNCHANGED termination path below (override_received stays
+                # False on the returned result).
+                log.info(
+                    "budget_supervisor_grace_window_expired",
+                    task_id=task_id,
+                    event_id=match.event_id,
+                )
+
             term_start_ns = clock.monotonic_ns()
             termination_method: Literal["noop", "sigterm", "sigkill"] | None = None
             enforcement_failed = False
@@ -353,6 +457,99 @@ class _Match:
 
 
 _SCAN_ERROR_BREAK_THRESHOLD: int = 5
+
+
+class _GraceOutcome(enum.Enum):
+    """Result of the Story 12.3a grace-window wait (internal).
+
+    - ``OVERRIDE``: an operator override for this task arrived BEFORE the
+      monotonic deadline → caller ABORTS termination.
+    - ``DEADLINE``: the bounded monotonic deadline expired with no valid
+      override → caller proceeds to terminate (fail-closed).
+    - ``CANCELLED``: ``cancel_event`` fired during the window → caller exits
+      cleanly with ``triggered=False`` (matches the other cancel paths).
+    """
+
+    OVERRIDE = "override"
+    DEADLINE = "deadline"
+    CANCELLED = "cancelled"
+
+
+async def _await_override_or_deadline(
+    *,
+    task_id: str,
+    event_log_dir: Path,
+    clock: Clock,
+    cancel_event: asyncio.Event,
+    poll_interval_s: float,
+    grace_window_s: float,
+    log: structlog.stdlib.BoundLogger,
+) -> _GraceOutcome:
+    """Poll the SAME day JSONL for a budget override until a hard deadline.
+
+    Story 12.3a Phase 1. Invoked only when
+    ``budget_action == "awaiting_approval"`` after a ``task.budget_exceeded``
+    match. Mirrors the main :func:`watch_for_budget_exceeded` loop discipline:
+    same ``poll_interval_s`` cadence, the same off-thread
+    :func:`asyncio.to_thread` scan, and the same cancel-responsive sleep that
+    races :meth:`asyncio.Event.wait` so a cancel is honored mid-window.
+
+    FAIL-CLOSED — the deadline is a HARD monotonic instant snapshotted ONCE at
+    window open (``clock.monotonic_ns() + grace_window_s * _NS_PER_S``). Every
+    iteration re-reads ``clock.monotonic_ns()`` and stops the moment that value
+    reaches the deadline, so a hung or empty override channel can NOT delay
+    enforcement past ``grace_window_s`` of monotonic time — we never count
+    polls. A non-positive ``grace_window_s`` yields an immediate
+    :attr:`_GraceOutcome.DEADLINE` (degenerates to today's terminate-now).
+
+    Uses a SEPARATE override scan cursor (independent of the budget-exceeded
+    cursor) and the same OSError/ValueError error-isolation discipline as
+    :func:`_scan_for_match` (via :func:`_scan_for_override`).
+    """
+    deadline_ns = clock.monotonic_ns() + int(grace_window_s * _NS_PER_S)
+    log.info(
+        "budget_supervisor_grace_window_opened",
+        task_id=task_id,
+        grace_window_s=grace_window_s,
+    )
+    override_scan_offset = 0
+    last_path: Path | None = None
+    override_scan_state: dict[str, int] = {"consecutive_errors": 0}
+
+    while True:
+        if cancel_event.is_set():
+            return _GraceOutcome.CANCELLED
+
+        # Hard monotonic deadline — checked BEFORE each scan so a hung channel
+        # cannot extend the window. Fail-closed: deadline reached → terminate.
+        if clock.monotonic_ns() >= deadline_ns:
+            return _GraceOutcome.DEADLINE
+
+        path = current_day_path(event_log_dir, clock.now())
+        if path != last_path:
+            override_scan_offset = 0
+            last_path = path
+
+        override_found, envelopes_scanned = await asyncio.to_thread(
+            _scan_for_override,
+            path=path,
+            task_id=task_id,
+            scan_offset=override_scan_offset,
+            log=log,
+            scan_state=override_scan_state,
+        )
+        override_scan_offset = envelopes_scanned
+        if override_found:
+            return _GraceOutcome.OVERRIDE
+
+        # Cancel-responsive sleep (mirrors the main loop's PP11 discipline):
+        # race the sleep against cancel so we exit promptly on cancel rather
+        # than burning a full poll_interval_s.
+        try:
+            await asyncio.wait_for(cancel_event.wait(), timeout=poll_interval_s)
+        except TimeoutError:
+            continue
+        return _GraceOutcome.CANCELLED
 
 
 def _scan_for_match(
@@ -471,6 +668,93 @@ def _scan_for_match(
     if scan_state is not None and scan_state.get("consecutive_errors", 0) != 0:
         scan_state["consecutive_errors"] = 0
     return None, idx
+
+
+def _scan_for_override(
+    *,
+    path: Path,
+    task_id: str,
+    scan_offset: int,
+    log: structlog.stdlib.BoundLogger,
+    scan_state: dict[str, int] | None = None,
+) -> tuple[bool, int]:
+    """Scan JSONL past ``scan_offset`` for a budget-override matching ``task_id``.
+
+    Story 12.3a Phase 1 — the override counterpart of :func:`_scan_for_match`.
+    Returns ``(override_found, envelopes_scanned)`` so the caller advances its
+    SEPARATE override cursor regardless of outcome (same single-pass PP3
+    discipline). A match is an envelope whose ``type`` is one of
+    :data:`_BUDGET_OVERRIDE_TYPES` (``tier3.budget_override`` /
+    ``budget.override``) AND whose payload ``task_id`` equals ``task_id``
+    (:class:`events.payloads.BudgetOverridePayload.task_id`,
+    ``payloads.py:948``). When a match is found, ``envelopes_scanned`` is the
+    cumulative index INCLUDING the matched line so later polls skip past it.
+
+    Same fail-loud isolation as :func:`_scan_for_match`:
+    :class:`FileNotFoundError` returns ``(False, scan_offset)`` so the cursor
+    doesn't regress; :class:`OSError` / :class:`ValueError` (incl. Pydantic
+    ``ValidationError``) are logged + retried, advancing past the region after
+    :data:`_SCAN_ERROR_BREAK_THRESHOLD` consecutive errors. FR26-preserving:
+    READ-ONLY — never writes.
+    """
+    try:
+        envelopes_iter = read_log_lines(path)
+    except FileNotFoundError:
+        return False, scan_offset
+
+    closeable_iter = cast(
+        "Generator[EventEnvelope, None, None]",
+        envelopes_iter,
+    )
+    idx = 0
+    try:
+        with contextlib.closing(closeable_iter):
+            for envelope in closeable_iter:
+                idx += 1
+                if idx <= scan_offset:
+                    continue
+                if getattr(envelope, "type", "") not in _BUDGET_OVERRIDE_TYPES:
+                    continue
+                payload = _safe_payload(envelope)
+                if payload is None:
+                    continue
+                if payload.get("task_id") != task_id:
+                    continue
+                return True, idx
+    except (OSError, ValueError) as exc:
+        # Mirror :func:`_scan_for_match` — Decision D5 / Epic 11 retro L1
+        # fail-loud isolation. On error, conservatively return the PRIOR
+        # ``scan_offset`` so the next poll re-scans the same region; advance
+        # past it after ``_SCAN_ERROR_BREAK_THRESHOLD`` consecutive errors so
+        # a persistently-corrupt region cannot disk-thrash the grace window.
+        if scan_state is not None:
+            consecutive = scan_state.get("consecutive_errors", 0) + 1
+            scan_state["consecutive_errors"] = consecutive
+            if consecutive >= _SCAN_ERROR_BREAK_THRESHOLD:
+                log.error(
+                    "budget_supervisor_override_scan_persistent_errors_advancing",
+                    task_id=task_id,
+                    path=str(path),
+                    consecutive_errors=consecutive,
+                    advancing_from=scan_offset,
+                    advancing_to=idx,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                scan_state["consecutive_errors"] = 0
+                return False, idx
+        log.warning(
+            "budget_supervisor_override_scan_error",
+            task_id=task_id,
+            path=str(path),
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        return False, scan_offset
+    # Clean pass — reset the persistent-error counter (mirrors PP28).
+    if scan_state is not None and scan_state.get("consecutive_errors", 0) != 0:
+        scan_state["consecutive_errors"] = 0
+    return False, idx
 
 
 def _safe_payload(envelope: Any) -> dict[str, Any] | None:
