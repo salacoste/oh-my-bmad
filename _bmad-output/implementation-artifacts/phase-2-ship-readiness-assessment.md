@@ -66,8 +66,8 @@ on. Authored after Epics 8–13 reached story-complete (all on branches; the
 | Item | Status |
 |---|---|
 | operator-runbook: metrics + litestream restore + budget tuning + HMAC verify | ✅ (litestream enable/restore/lag + budget-override sections added this session; metrics + HMAC added in Epics 10/11) — spot-confirm completeness on merged main |
-| docs/explanations: 1–2 new deep-dives | ⚠️ verify on merged main (trace-id / supply-chain / HMAC candidates); file a doc story if absent |
-| project-context.md: Phase-2 Cat 3 + Cat 7 additions | ⚠️ verify on merged main; likely a small doc follow-up |
+| docs/explanations: 1–2 new deep-dives | ✅ **closed** — was a genuine gap (4 existing dives all Phase-1). Added `docs/explanations/trace-id-propagation.md` (pairs with ADR-0004). |
+| project-context.md: Phase-2 Cat 3 + Cat 7 additions | ✅ **closed** — was stale (still said "trace_id reserved / no metrics in Phase 1"). Added a "Phase 2 additions (Epics 8–13)" section (Cat-3: metrics-subscriber-only + litestream RW + stdio-only + trace_id + anthropic-in-registry-api; Cat-7: 0o660 file-mode, build-base, env-alias bounds, disjoint-budget-model) + corrected the stale Phase-1 ban note. |
 
 ## The gating critical path (what actually unblocks "Phase 2 shipped")
 1. **Merge the PR train to `main`** (#9 → #13 Epic-13 chain; #14 12.3a; plus any earlier unmerged 11.x). Most 🔀/🌙 items can't evaluate until the work is on main.

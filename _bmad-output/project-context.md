@@ -688,9 +688,16 @@ Cross-refs: secret hygiene → Cat 2 + Cat 5 (3-layer model, no f-string of secr
 
 ---
 
-**Phase 2 gap — explicit ban, not acknowledgment**
+**Phase 2 gap — explicit ban, not acknowledgment** *(superseded by the Phase-2 additions below — see "## Phase 2 additions")*
 
 Do NOT add OpenTelemetry, Prometheus exporters, or distributed-tracing instrumentation in Phase 1. Placeholder spans and stub metrics are also banned — they create false coverage signals. Features that require tracing to be correct are *blocked*, not shipped with amateur instrumentation. The `trace_id` field is reserved on the envelope for the Phase 2 wiring story.
+
+> **PHASE-2 UPDATE (Epics 9 + 10, shipped):** `trace_id` is now WIRED (required on
+> the envelope @ 1.1.0 — see ADR-0004) and metrics ARE exposed — but ONLY via the
+> `metrics-subscriber` derived-projection service (ADR-0005), NOT by instrumenting
+> `services/*`. The Phase-1 ban on in-service instrumentation still holds; the
+> derived-projection model is the *only* sanctioned metrics surface. See
+> "## Phase 2 additions" for the framework rules.
 
 ---
 
@@ -702,6 +709,66 @@ Do NOT add OpenTelemetry, Prometheus exporters, or distributed-tracing instrumen
 4. Search ADRs (`docs/adr/`) for the *why* behind any rule. If the ADR is `superseded`/`deprecated`, find the successor before acting.
 5. Search `docs/development.md` for tooling gotchas.
 6. **Hard stop.** If the correct behavior remains ambiguous after the steps above, emit a structured `BLOCKED` event with the specific ambiguity, halt the task, and surface to a human. Ambiguity is not a license to proceed with reduced confidence. Never ask an LLM to interpret a rule that LLM is currently executing under — that's circular and produces hallucinated policy.
+
+---
+
+## Phase 2 additions (Epics 8–13)
+
+Digest of the Phase-2 framework rules + high-frequency gotchas. Earlier
+categories still govern; these EXTEND Cat 3 (framework) and Cat 7 (don't-miss).
+
+### Cat-3 framework rules (Phase-2 services)
+
+- **metrics-subscriber is the ONLY metrics surface (ADR-0005).** It tails the
+  JSONL event spine and exposes `/metrics` (internal-only, port 9090). NEVER add
+  Prometheus/OTel instrumentation inside `services/*` — `scripts/check_imports.py`
+  + the derived-projection model enforce this. Metric labels are BOUNDED enums
+  (`_EVENT_FAMILIES`, `_TASK_LIFECYCLE_EVENT_TYPES`); adding an event type that
+  introduces a new family/label REQUIRES extending the bounded enum AND bumping
+  the AC10 cardinality-test assertions (`test_metrics_state.py` ×2 +
+  `tests/integration/test_metrics_cardinality.py`) in lockstep — a missed bump is
+  the #1 Phase-2 cardinality-test break.
+- **litestream sidecar = disaster recovery, NOT HA (ADR-0007).** Optional, OFF by
+  default (`profiles: ["litestream"]` + `OMB_LITESTREAM_CONFIG_PATH`). It mounts
+  `oh-my-bmad-data` **read-write** (it writes a `.state.sqlite3-litestream/` meta
+  dir + checkpoints the DB — a `:ro` mount BREAKS replication). FR26 is preserved
+  at the application layer (registry-state is the sole row-author), NOT by the
+  mount mode. Credentials via `LITESTREAM_ACCESS_KEY_ID/SECRET` env; the filled
+  `litestream.yml` is gitignored.
+- **MCP transport is stdio-only (P2-I4).** No `mcp.server.sse` / `streamable_http`
+  imports anywhere — enforced by `scripts/check_mcp_transport.py` (rule MCP001).
+- **trace_id propagation (ADR-0004 / Cat-2 observability).** Mint-once-at-the-edge,
+  forward-everywhere; required on the envelope @ 1.1.0; `caller_trace_id` is an
+  explicit MCP-tool argument, never ambient. See `docs/explanations/trace-id-propagation.md`.
+- **Anthropic SDK is confined to registry-api's LLM digest (Story 7.3).** The
+  worker does NOT import the SDK — it spawns the `claude` CLI subprocess.
+  (Supersedes the stale Phase-1 "no-anthropic-outside-worker" wording.)
+
+### Cat-7 don't-miss (Phase-2 gotchas from retros)
+
+1. **Cross-uid event-log file mode = `0o660` + `os.fchmod` (Stories 11.3.11 / 13.4).**
+   Any writer that creates the per-day JSONL (incl. external emit scripts like
+   `check_replication_lag.py` / `emit_signature_rejected.py`) MUST create it
+   `0o660` and `os.fchmod` it (umask 022 strips group-write back to `0o640`,
+   which crash-loops registry-state's cross-uid recovery). Others-triad stays 0
+   (audit logs are never world-readable).
+2. **`just build-base` before any src change takes effect in compose.**
+   `services/*/Dockerfile` are thin `FROM oh-my-bmad-base:local` overrides; source
+   is baked into the base image (`Dockerfile.base` COPY + `uv sync --no-editable`).
+   A code change won't appear in a container until `build-base` re-runs.
+2b. **Same-class re-registration is a no-op, but a NEW event family must extend
+    the metrics `_EVENT_FAMILIES` enum** (see Cat-3 above) — `check_event_registry`
+    gates registration; the cardinality tests gate the metrics side.
+3. **Additive-only env-var aliases.** Use a single explicit
+   `validation_alias=AliasChoices("OMB_…")` — a redundant field-name alias creates
+   a ghost UNPREFIXED env var (Story 12.4 bug). Bound numeric env fields
+   (`gt=0, le=…`) so a misconfig can't create an unbounded window/budget.
+4. **Disjoint budget models (Epic 12).** The registry-level override
+   (`tier3.budget_override`, FR44) and the worker-level autonomous SIGTERM
+   (budget_supervisor, FR66) are SEPARATE. The grace-window interception (12.3a)
+   couples them via the shared JSONL tail (override = one-shot reprieve, NOT a
+   re-enforced ceiling — that's deferred to 12.3c). `post_trigger_transition` in
+   the audit event MUST match the actual FSM outcome (failed↔TASK_FAILED).
 
 ---
 
@@ -721,4 +788,4 @@ Do NOT add OpenTelemetry, Prometheus exporters, or distributed-tracing instrumen
 
 ---
 
-_Last updated: 2026-05-15. Status: complete (Phase 1 baseline)._
+_Last updated: 2026-06-02. Status: complete (Phase 1 baseline + Phase 2 additions — Epics 8–13)._
