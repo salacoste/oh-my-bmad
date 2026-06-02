@@ -71,3 +71,7 @@ marketing/
 
 # Playwright MCP page-snapshot artifacts — transient CI-debug dumps.
 .playwright-mcp/
+
+# Story 13.2 — operator's filled-in litestream config MAY hold credentials.
+# The committed template is litestream.yml.example; the real file is local-only.
+litestream.yml

@@ -468,12 +468,18 @@ services:
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]
+    # Story 13.2: wait for registry-state to be healthy so the state.sqlite3 DB
+    # exists before litestream tries to tail it (avoids a restart-loop on cold
+    # start). Profile-gated, so this only applies when the operator opts in.
+    depends_on:
+      registry-state:
+        condition: service_healthy
     # Story 13.1 review (MEDIUM): join the shared ``omb`` group (gid 10000) so the
     # sidecar can read+write the 0o660 DB files (Story 11.3.12) even if it runs
     # non-root. No-op while the upstream image runs as root; pure upside if a
-    # future image drops root or an operator adds a ``user:`` override. The
-    # explicit non-root ``user:`` + ``depends_on: registry-state`` are deferred to
-    # Story 13.2 (need live validation that the upstream image tolerates them).
+    # future image drops root or an operator adds a ``user:`` override. An
+    # explicit non-root ``user:`` stays deferred until first-live-enable confirms
+    # the upstream image tolerates it (ADR-0007 verification item).
     group_add: ["10000"]
     volumes:
       - oh-my-bmad-data:/var/lib/oh-my-bmad

@@ -1,0 +1,68 @@
+# litestream.yml.example — Story 13.2 / FR70 — TEMPLATE, copy before use.
+#
+#   cp litestream.yml.example litestream.yml      # litestream.yml is .gitignored
+#   # fill in ONE replica block + set the credential env vars (see below)
+#   docker compose --profile litestream up -d litestream
+#
+# Disaster recovery, NOT HA — see docs/adr/0007-litestream-wal-replication.md.
+#
+# ── Credentials: keep them OUT of this file ──────────────────────────────────
+# litestream reads these standard env vars automatically for every s3-type
+# replica, so you do NOT put access keys in this YAML:
+#     LITESTREAM_ACCESS_KEY_ID
+#     LITESTREAM_SECRET_ACCESS_KEY
+# Pass them to the sidecar via your .env (the litestream service has
+# `env_file: .env`). That keeps secrets out of the repo AND out of the image.
+# (If you must inline them, this file is .gitignored once copied to
+# litestream.yml — but env is strongly preferred.)
+#
+# ── The database ─────────────────────────────────────────────────────────────
+# Path is INSIDE the container (the sidecar mounts oh-my-bmad-data at
+# /var/lib/oh-my-bmad). This is registry-state's single-writer SQLite DB.
+# Do NOT add the idempotency DB (registry-api/idempotency.sqlite3) — it is a
+# rebuildable cache, not durable state.
+
+dbs:
+  - path: /var/lib/oh-my-bmad/registry/state.sqlite3
+    replicas:
+      # ─────────────────────────────────────────────────────────────────────
+      # Pick ONE target below, uncomment it, fill bucket/endpoint/region.
+      # ─────────────────────────────────────────────────────────────────────
+
+      # ── AWS S3 ────────────────────────────────────────────────────────────
+      - type: s3
+        bucket: CHANGE-ME-your-bucket
+        path: oh-my-bmad/registry-state          # key prefix within the bucket
+        region: us-east-1
+        # access-key-id / secret-access-key come from LITESTREAM_* env (above).
+
+      # ── Backblaze B2 (S3-compatible) ──────────────────────────────────────
+      # - type: s3
+      #   bucket: CHANGE-ME-your-b2-bucket
+      #   path: oh-my-bmad/registry-state
+      #   region: us-west-002                      # match your B2 bucket region
+      #   endpoint: https://s3.us-west-002.backblazeb2.com
+
+      # ── Cloudflare R2 (S3-compatible) ─────────────────────────────────────
+      # - type: s3
+      #   bucket: CHANGE-ME-your-r2-bucket
+      #   path: oh-my-bmad/registry-state
+      #   region: auto
+      #   endpoint: https://CHANGE-ME-accountid.r2.cloudflarestorage.com
+
+      # ── MinIO (self-hosted, S3-compatible) ────────────────────────────────
+      # - type: s3
+      #   bucket: CHANGE-ME-your-minio-bucket
+      #   path: oh-my-bmad/registry-state
+      #   region: us-east-1                        # arbitrary for MinIO
+      #   endpoint: http://minio:9000              # add minio to the compose net
+      #   force-path-style: true                   # REQUIRED for MinIO
+
+# ── Optional tuning (defaults are sane; uncomment to override) ────────────────
+#   - path: /var/lib/oh-my-bmad/registry/state.sqlite3
+#     replicas:
+#       - type: s3
+#         ...
+#         sync-interval: 1s            # how often frames ship (default 1s)
+#         snapshot-interval: 24h       # full-snapshot cadence
+#         retention: 72h               # how long to keep WAL segments
