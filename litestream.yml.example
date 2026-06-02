@@ -22,6 +22,26 @@
 # Do NOT add the idempotency DB (registry-api/idempotency.sqlite3) — it is a
 # rebuildable cache, not durable state.
 
+# ── Metrics endpoint (Story 13.4 / NFR-R7) ───────────────────────────────────
+# Uncomment to expose litestream's Prometheus metrics on :9090. This enables the
+# GET http://<host>:9090/metrics endpoint that `just litestream-lag-check`
+# (scripts/check_replication_lag.py) polls to detect a sustained replication
+# stall (litestream_sync_count stalls + litestream_sync_error_count rises) and
+# emit a replication.lagging event. litestream 0.3.x has NO direct lag-seconds
+# gauge — the lag is inferred from those two counters.
+#
+# Port exposure choice: the litestream compose service does NOT publish 9090 to
+# the host (it joins the oh-my-bmad-net bridge). Two supported ways to run the
+# lag-check against it:
+#   (a) run the recipe INSIDE the network and point
+#       OMB_LITESTREAM_METRICS_URL=http://litestream:9090/metrics, or
+#   (b) the operator adds a `ports: ["127.0.0.1:9090:9090"]` mapping to the
+#       litestream service and uses the default http://localhost:9090/metrics.
+# Keeping the port unpublished by default avoids widening the host attack surface
+# for a profile-gated sidecar (mirrors the Story 13.1 "no compose healthcheck"
+# minimalism).
+# addr: ":9090"
+
 dbs:
   - path: /var/lib/oh-my-bmad/registry/state.sqlite3
     replicas:

@@ -35,4 +35,7 @@ from __future__ import annotations
 # Side-effect import — registers ``deployment.signature_rejected`` (Story 8.6).
 from events.types import deployment as _deployment  # noqa: F401
 
+# Side-effect import — registers ``replication.lagging`` (Story 13.4 / NFR-R7).
+from events.types import replication as _replication  # noqa: F401
+
 __all__: list[str] = []

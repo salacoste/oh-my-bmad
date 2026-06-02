@@ -316,9 +316,29 @@ is a manual stack-down procedure (Story 13.3). See
   connection and checkpoints itself; registry-state keeps its normal
   autocheckpoint. SQLite WAL locking serialises the two — worst case is a
   redundant checkpoint, never corruption. *(First-live-enable verification item.)*
-- **Replication ≠ backup-of-record (yet).** Lag observability
-  (`replication.lagging`) + the restore drill land in Stories 13.3/13.4; until
-  then, monitor `docker logs omb-litestream` manually.
+- **Replication ≠ backup-of-record.** Recovery is `just restore-from-litestream`
+  (Story 13.3); the hermetic restore drill runs nightly.
+
+### Lag monitoring (`just litestream-lag-check`)
+
+Story 13.4 (NFR-R7) adds replication-stall detection. Enable litestream's metrics
+endpoint by uncommenting `addr: ":9090"` in `litestream.yml`, then run (e.g. from
+cron, every ~30s):
+
+```bash
+just litestream-lag-check
+```
+
+It polls `http://<host>:9090/metrics` (`OMB_LITESTREAM_METRICS_URL` to override),
+and if `litestream_sync_count` stalls while `litestream_sync_error_count` rises
+for **>5 minutes**, it emits a single `replication.lagging` audit event (via the
+FR26-respecting flock-guarded append) and stops re-emitting until replication
+recovers. litestream 0.3.x exposes no direct lag-seconds gauge, so the stall of
+the per-second sync counter is the signal. metrics-subscriber counts the event
+under `omb_events_appended_total{event_family="replication"}`.
+
+> The script exits 3 if registry-state holds the event-log lock (it is the live
+> writer) — that is normal; the next cron tick retries.
 
 ### Disable it
 
