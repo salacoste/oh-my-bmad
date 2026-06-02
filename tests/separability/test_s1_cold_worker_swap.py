@@ -365,6 +365,26 @@ def test_worker_facing_source_code_unchanged() -> None:
         # backwards-compat-preserving by design; behavior unchanged.
         ":!services/registry-state/src/registry_state/adapters/event_log.py",
         ":!services/registry-state/src/registry_state/app/main.py",
+        # Story 11.3.6 H7b: orchestrator-adapter's mcp_clients.py adds an explicit
+        # env-allowlist forwarded to its spawned MCP subprocesses (P0-adjacent
+        # security fix on the a0ca050 code path — NEVER os.environ.copy). The
+        # change is inert when the new MCP env vars aren't present (the allowlist
+        # only forwards what exists), so behavior is unchanged unless the compose
+        # declares the new vars — S-1's stub-worker boot path is unaffected.
+        ":!services/orchestrator-adapter/src/orchestrator_adapter/adapters/mcp_clients.py",
+        # Story 11.3.7 audit: AC1 modifies services/orchestrator-adapter/Dockerfile
+        # (COPY upstream/omc, outside src/), AC2 touches
+        # services/telegram-gateway/src/, AC3 touches services/clawhip-daemon/src/.
+        # None of those fall under _WORKER_FACING_PATHS (line 41 covers only
+        # registry-state, registry-api, clawhip-bridge MCP, orchestrator-adapter
+        # src/) — no exclusions needed for them.
+        #
+        # Story 11.3.7 AC5: registry-api's app.py adds a /v1/health liveness
+        # route (additive — needed by the S-4 separability probe + previously
+        # documented TODO in telegram-gateway's registry_client). The route is
+        # middleware-free, DB-free, and pure liveness — S-1's stub-worker cold
+        # swap path doesn't touch it, so the addition is inert here.
+        ":!services/registry-api/src/registry_api/app.py",
     ]
 
     rev_parse = subprocess.run(

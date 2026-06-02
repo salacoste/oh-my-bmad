@@ -56,7 +56,7 @@ from pathlib import Path
 
 import structlog
 import uvicorn
-from events import EventEnvelope
+from events import EventEnvelope, ensure_shared_dir
 from events.errors import CursorSchemaVersionError, ParseSkipThresholdExceeded
 from events.log_reader import EventLogReader
 
@@ -227,8 +227,22 @@ async def run_subscriber(
     """
     stop = stop_event if stop_event is not None else asyncio.Event()
 
-    settings.event_log_dir.mkdir(parents=True, exist_ok=True)
-    settings.cursor_path.parent.mkdir(parents=True, exist_ok=True)
+    # Story 11.3.8 / FR62a: metrics-subscriber's event_log_dir.mkdir was the
+    # FIRST-service-wins race trigger in Story 11.3.7's Task 7 repro — its
+    # bare ``mkdir`` (umask 022 → mode 0o755) locked out registry-api and
+    # other ``omb``-group services. Use ``ensure_shared_dir`` so the dir
+    # gets explicit ``chmod 0o2775`` (setgid + group-write) after creation,
+    # regardless of who reached the path first.
+    #
+    # cursor_path's parent (default ``/var/lib/oh-my-bmad/metrics-subscriber/``
+    # per app/config.py:44) is ALSO under the shared ``/var/lib/oh-my-bmad/``
+    # data root — defense-in-depth, also via the helper, so any future
+    # cross-uid consumer (e.g. operator cleanup tooling, sibling tail-and-
+    # replay services) in the ``omb`` group can write under it without
+    # hitting the same uid-mismatch pattern. Convention-only "subscriber-
+    # local" isolation isn't enforceable — the named volume is shared.
+    ensure_shared_dir(settings.event_log_dir)
+    ensure_shared_dir(settings.cursor_path.parent)
 
     log.info(
         "metrics_subscriber_starting",

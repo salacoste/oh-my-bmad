@@ -81,6 +81,12 @@ from registry_api.routes.digest import (
 from registry_api.routes.events import (
     router as events_router,
 )
+from registry_api.routes.health import (
+    router as health_router,
+)
+from registry_api.routes.key_status import (
+    router as key_status_router,
+)
 from registry_api.routes.tasks import (
     ResponseSlot,
     ResponseSlotCache,
@@ -316,6 +322,18 @@ def build_app(
 
     # Routes — /v1 prefix applied here; handlers declare /tasks and /tasks/{id}.
     app.include_router(tasks_router, prefix="/v1")
+    # Story 11.3.7 (AC5) — /v1/health liveness probe; wire shape matches
+    # ``HealthResponseLocal`` in telegram-gateway's registry_client.py
+    # so the /ping command can parse without ValidationError. FR17 expansion
+    # to real registry/worker/queue signals is tracked there. Follows the
+    # routes/*.py + include_router convention used by every other /v1 route.
+    app.include_router(health_router, prefix="/v1")
+    # Story 11.5.1 (FR65a / AC6 of Story 11.5) — /v1/key-status surface for
+    # operator-facing HMAC key-fingerprint reads. Wire shape matches
+    # ``KeyStatusResponseLocal`` mirrored in telegram-gateway's
+    # registry_client.py AND console-cli's registry_api_client.py; the
+    # tri-party parity is pinned by tests/contract/test_key_status_client_server_shape_parity.py.
+    app.include_router(key_status_router, prefix="/v1")
     # Story 7.3 — LLM digest endpoint for task events (FR5).
     app.include_router(digest_router, prefix="/v1")
     # Story 7.5 — raw event tail for debugging (FR6).

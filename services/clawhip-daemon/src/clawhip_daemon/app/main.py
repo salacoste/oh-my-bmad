@@ -185,15 +185,52 @@ async def run(
         stop_event:       Optional ``asyncio.Event``; set it to stop the loop.
                           If ``None``, a local event is created (useful in tests).
     """
+    log = logging.getLogger(_SERVICE)
     stop = stop_event if stop_event is not None else asyncio.Event()
     sink, telegram_client, registry_client = build_app(
         base_dir=base_dir,
         registry_api_url=registry_api_url,
         bot_token=bot_token,
     )
+    # Story 11.3.7 / AC3 / H7d — mirror registry-state Story 2.11's
+    # /tmp/ready touch+unlink convention so the docker-compose
+    # shared `*healthcheck` (test -f /tmp/ready) flips clawhip-daemon to
+    # "healthy" once build_app has wired the dependency graph. Without
+    # this signal the no-port daemon never reaches healthy and the
+    # ROOT-compose fresh-boot stalls at S-4 Phase 1.
+    #
+    # Best-effort: if /tmp is read-only or otherwise unwritable, we log
+    # and continue — the daemon's correctness does not depend on this
+    # file, only the healthcheck signal does. Pattern + rationale lifted
+    # verbatim from services/registry-state/.../main.py:277-291.
+    try:
+        Path("/tmp/ready").touch()  # noqa: S108 — healthcheck signal, not data store
+    except OSError as exc:
+        log.warning("failed to touch /tmp/ready healthcheck signal: %s", exc)
     try:
         await sink.run(stop_event=stop)
     finally:
+        # Story 11.3.7 / AC3 — delete the /tmp/ready healthcheck signal
+        # on graceful shutdown. Same rationale as registry-state
+        # (main.py:373-394): ``docker compose stop`` + ``compose start``
+        # REUSES the same container, so /tmp persists across stop/start
+        # cycles; a stale /tmp/ready from before a SIGKILL would make
+        # the healthcheck report "healthy" before this daemon has
+        # re-established its wiring. Deleting on graceful shutdown
+        # ensures the next start boots into health=starting until run()
+        # re-touches the file. ``unlink(missing_ok=True)`` covers the
+        # case where the touch above failed (we logged a warning but
+        # continued; no /tmp/ready to delete is fine here).
+        #
+        # Epic 11 retro AI-6 (BaseException-leak audit): a narrow
+        # ``except OSError`` is intentional — KeyboardInterrupt /
+        # SystemExit / CancelledError from a SIGTERM during shutdown
+        # must propagate so the asyncio loop unwinds cleanly. Both
+        # branches of the try (unlink + aclose) follow this discipline.
+        try:
+            Path("/tmp/ready").unlink(missing_ok=True)  # noqa: S108 — healthcheck signal, not data store
+        except OSError as exc:
+            log.warning("failed to delete /tmp/ready on shutdown: %s", exc)
         await telegram_client.aclose()
         await registry_client.aclose()
 

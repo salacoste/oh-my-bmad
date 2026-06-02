@@ -24,6 +24,28 @@
 # OMB_S1_DATA_DIR convention; eliminates inter-test data contamination
 # without needing `docker volume rm` between phases).
 
+# Story 11.3.6 (H7b) — env vars forwarded to spawned MCP subprocesses via the
+# allowlist in services/{orch-adapter,worker-wrapper}/.../mcp_clients.py. Shared
+# anchor between orchestrator-adapter + worker-wrapper (s4 overlay copy of the
+# same shape in the ROOT compose; literal paths instead of ${REGISTRY_DB_PATH}
+# indirection since the s4 test fixes the paths). NEVER list secrets here.
+x-mcp-spawner-env: &mcp_spawner_env
+  TASK_REGISTRY_DB_PATH: /var/lib/oh-my-bmad/registry/state.sqlite3
+  SESSION_REGISTRY_DB_PATH: /var/lib/oh-my-bmad/registry/state.sqlite3
+  CLAWHIP_BRIDGE_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+  REGISTRY_EVENTS_DIR: /var/lib/oh-my-bmad/registry/events
+  REGISTRY_DB_PATH: /var/lib/oh-my-bmad/registry/state.sqlite3
+  OMB_MCP_AUDIT_EMISSION_ENABLED: "0"  # H7f — nested-stdio deadlock; see deferred-work.md.
+
+# Story 11.3.7 (AC4 / H7e) — dummy Telegram bot token, syntactically valid
+# per ``services/clawhip-daemon/.../main.py:231-242`` regex
+# (``<digits>:<alphanumeric>``) so audited_secret_field doesn't reject it
+# with ValueError at boot. The S-4 harness never authorises real Telegram
+# outbound traffic (clawhip-daemon: no telegram-API call; telegram-gateway:
+# TELEGRAM_SKIP_WEBHOOK_SET=1 gates bot.set_webhook). YAML anchor avoids
+# the cross-service literal duplication that the AI-1 review-fix R3 flagged.
+x-dummy-telegram-token: &dummy_telegram_token "0:dummytesttoken"
+
 services:
   registry-api:
     container_name: omb-s4-registry-api
@@ -91,13 +113,33 @@ services:
     image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-telegram-gateway:${OMB_VERSION:-dev}
     environment:
       ENV: test
-      TELEGRAM_BOT_TOKEN: ""
+      # Story 11.3.7 (AC2/AC4) — telegram-gateway requires a syntactically
+      # valid TELEGRAM_BOT_TOKEN at boot (audited_secret_field rejects ""
+      # with ValueError). The dummy <digits>:<alphanumeric> shape satisfies
+      # the validator without authorizing real Telegram traffic; combined
+      # with TELEGRAM_SKIP_WEBHOOK_SET=1 (AC2 hermetic mode), the lifespan
+      # skips bot.set_webhook(...) and the apply_hermetic_defaults_to_env
+      # helper fills dummy TELEGRAM_WEBHOOK_URL / TELEGRAM_WEBHOOK_SECRET_TOKEN
+      # so settings construction succeeds without those env-vars. Required
+      # for the s4 overlay's telegram-gateway (one of the 6 producers in
+      # _PRODUCER_SERVICES) to reach healthy in Phase 2. Spec-deviation
+      # noted in Story 11.3.7 Dev Agent Record (the literal "keep its
+      # empty token" instruction conflicts with audited-secret validation).
+      TELEGRAM_BOT_TOKEN: *dummy_telegram_token
+      TELEGRAM_SKIP_WEBHOOK_SET: "1"
       TG_ALLOWLIST_USER_IDS: "[]"
     init: true
     restart: "no"
     networks: [oh-my-bmad-net]
+    # Story 11.3.6 (H7d) — telegram-gateway is a uvicorn HTTP server that never
+    # creates /tmp/ready; probe the TCP port instead (mirrors the ROOT compose
+    # fix). Without this the S-4 Phase-2 healthcheck would never pass.
     healthcheck:
-      test: ["CMD", "test", "-f", "/tmp/ready"]
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket,sys\ntry:\n  s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1', 8080)); s.close()\nexcept OSError:\n  sys.exit(1)"
       interval: 1s
       timeout: 3s
       retries: 60
@@ -110,11 +152,30 @@ services:
       dockerfile: services/orchestrator-adapter/Dockerfile
     image: ${ORCHESTRATOR_IMAGE:-${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-orchestrator-adapter:${OMB_VERSION:-dev}}
     environment:
+      # Story 11.3.6 (H7b): MCP-subprocess env via *mcp_spawner_env anchor;
+      # identity = orchestrator. Forwarded via the mcp_clients.py allowlist
+      # (never os.environ.copy — a0ca050 P0).
+      <<: *mcp_spawner_env
       ENV: test
       ANTHROPIC_API_KEY: ""
+      TASK_REGISTRY_ACTOR_KIND: orchestrator
+      TASK_REGISTRY_ACTOR_ID: orchestrator-adapter
+      SESSION_REGISTRY_ACTOR_KIND: orchestrator
+      SESSION_REGISTRY_ACTOR_ID: orchestrator-adapter
+      CLAWHIP_BRIDGE_ACTOR_KIND: orchestrator
+      CLAWHIP_BRIDGE_ACTOR_ID: orchestrator-adapter
     init: true
     restart: "no"
     networks: [oh-my-bmad-net]
+    # Story 11.3.6 (H7b): RW data volume so the spawned clawhip-bridge can append
+    # the event log; task-registry reads the DB. Wait for registry-state + api.
+    depends_on:
+      registry-state:
+        condition: service_healthy
+      registry-api:
+        condition: service_healthy
+    volumes:
+      - ${OMB_S4_DATA_DIR:?OMB_S4_DATA_DIR must be exported by the harness}:/var/lib/oh-my-bmad
     healthcheck:
       test: ["CMD", "test", "-f", "/tmp/ready"]
       interval: 1s
@@ -129,15 +190,32 @@ services:
       dockerfile: services/worker-wrapper/Dockerfile
     image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-worker-wrapper:${OMB_VERSION:-dev}
     environment:
+      # Story 11.3.6 (H7b): MCP-subprocess env via *mcp_spawner_env anchor;
+      # identity = worker. (H7h) WORKER_READY_FILE_PATH pins ready-file to
+      # /tmp/ready (worker default is per-pid).
+      <<: *mcp_spawner_env
       ENV: test
       ANTHROPIC_API_KEY: ""
       GITHUB_TOKEN: ""
-      REGISTRY_DB_PATH: /var/lib/oh-my-bmad/registry/state.sqlite3
+      TASK_REGISTRY_ACTOR_KIND: worker
+      TASK_REGISTRY_ACTOR_ID: worker-wrapper
+      SESSION_REGISTRY_ACTOR_KIND: worker
+      SESSION_REGISTRY_ACTOR_ID: worker-wrapper
+      CLAWHIP_BRIDGE_ACTOR_KIND: worker
+      CLAWHIP_BRIDGE_ACTOR_ID: worker-wrapper
+      WORKER_READY_FILE_PATH: /tmp/ready
     init: true
     restart: "no"
     networks: [oh-my-bmad-net]
+    # Story 11.3.6 (H7b): RW (was :ro) so the spawned clawhip-bridge can append
+    # the event log. Wait for registry-state (DB/schema) + registry-api.
+    depends_on:
+      registry-state:
+        condition: service_healthy
+      registry-api:
+        condition: service_healthy
     volumes:
-      - ${OMB_S4_DATA_DIR:?OMB_S4_DATA_DIR must be exported by the harness}:/var/lib/oh-my-bmad:ro
+      - ${OMB_S4_DATA_DIR:?OMB_S4_DATA_DIR must be exported by the harness}:/var/lib/oh-my-bmad
     healthcheck:
       test: ["CMD", "test", "-f", "/tmp/ready"]
       interval: 1s
@@ -154,6 +232,23 @@ services:
     environment:
       ENV: test
       REGISTRY_DB_PATH: /var/lib/oh-my-bmad/registry/state.sqlite3
+      # Story 11.3.7 (AC4 / H7e) — clawhip-daemon validates TELEGRAM_BOT_TOKEN
+      # format at boot (services/clawhip-daemon/.../main.py:231-242) and
+      # sys.exit(2) without a valid <digits>:<alphanumeric> shape. The S-4
+      # harness does NOT exercise the real Telegram outbound path, so a
+      # syntactically-valid dummy is sufficient + production-safe (regex
+      # matches; no real Telegram traffic is generated under the harness).
+      # ALSO applied to telegram-gateway above — see Story 11.3.7
+      # Dev Agent Record / Spec deviation #1: the spec said "do NOT change
+      # telegram-gateway's empty token", but audited_secret_field rejects
+      # empty strings with ValueError, and _PRODUCER_SERVICES requires
+      # telegram-gateway healthy in BOTH phases (AC5). So the dummy token
+      # gates settings construction on BOTH services; the AC2 hermetic
+      # skip-mode (TELEGRAM_SKIP_WEBHOOK_SET=1 on telegram-gateway) gates
+      # set_webhook independently of the token. AI-1 review-fix R3:
+      # canonical value lives in the ``x-dummy-telegram-token`` anchor
+      # at the top of this file — single source of truth.
+      TELEGRAM_BOT_TOKEN: *dummy_telegram_token
     init: true
     restart: "no"
     networks: [oh-my-bmad-net]

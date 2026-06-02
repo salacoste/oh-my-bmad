@@ -8,6 +8,7 @@ from console_cli.commands import (
     agent,
     approve,
     events,
+    key_status,
     logs,
     ping,
     reject,
@@ -35,6 +36,9 @@ app.command()(ping.ping)
 app.command()(agent.agent)
 app.command(name="events")(events.events)
 app.command(name="trace")(trace.trace)
+# Story 11.5.1 / FR65a — explicit name="key-status" so typer surfaces the
+# hyphenated command form expected by operators (matches Telegram's /key-status).
+app.command(name="key-status")(key_status.key_status)
 
 
 __all__ = ["app"]

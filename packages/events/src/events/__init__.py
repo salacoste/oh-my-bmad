@@ -9,6 +9,7 @@ this module's contracts.
 from __future__ import annotations
 
 from events import schema_registry as _schema_registry
+from events._filesystem import ensure_shared_dir
 from events.approval_signing import compute_approval_hmac, compute_key_fingerprint
 from events.backfill import backfill_trace_id_from_request_id
 from events.canonical import from_canonical_json, to_canonical_json
@@ -123,6 +124,12 @@ __all__ = [
     # instead of the deeper ``from events.backfill import ...`` form.
     "backfill_trace_id_from_request_id",
     "current_day_path",
+    # Story 11.3.8 — shared-volume directory helper for mkdir + chmod 2775
+    # at every EventLogWriter / event_log_dir creation site. Mirrors the
+    # registry-state ``_ensure_db_parent_dir`` pattern; closes the
+    # production fresh-deploy permission regression discovered during
+    # Story 11.3.7 Task 7.
+    "ensure_shared_dir",
     "from_canonical_json",
     "iter_new_envelopes_since",
     "new_decision_id",

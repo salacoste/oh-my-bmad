@@ -17,11 +17,17 @@ graphs (matches the existing
 
 from __future__ import annotations
 
+from orchestrator_adapter.adapters.mcp_clients import (  # noqa: IMP001 — tests/* can cross
+    _ENV_ALLOWLIST as _ORCH_ALLOWLIST,
+)
 from session_registry_mcp.adapters.clawhip_client import (  # noqa: IMP001 — tests/* can cross
     _ENV_ALLOWLIST as _SESSION_ALLOWLIST,
 )
 from task_registry_mcp.adapters.clawhip_client import (  # noqa: IMP001 — tests/* can cross
     _ENV_ALLOWLIST as _TASK_ALLOWLIST,
+)
+from worker_wrapper.adapters.mcp_clients import (  # noqa: IMP001 — tests/* can cross
+    _ENV_ALLOWLIST as _WORKER_ALLOWLIST,
 )
 
 
@@ -86,3 +92,104 @@ def test_scripted_worker_stub_allowlist_contains_required_clawhip_vars() -> None
         f"env vars: {sorted(missing)}. Without these the stub-spawned clawhip-bridge "
         "exits 2 → S-1/S-2 separability stalls at task.created."
     )
+
+
+# ---------------------------------------------------------------------------
+# Story 11.3.6 — orchestrator-adapter + worker-wrapper MCPClientGroup allowlists.
+#
+# Unlike the registry adapters (which spawn ONLY clawhip-bridge), these two
+# services spawn ALL THREE MCP servers (task-registry, session-registry,
+# clawhip-bridge), so their allowlist is a superset carrying every server's
+# REQUIRED vars. These were env-less before 11.3.6 (the a0ca050 revert), which
+# stripped the required vars → services never reached /tmp/ready on a fresh
+# ROOT-compose boot. The fix forwards an ALLOWLIST (never os.environ.copy).
+# ---------------------------------------------------------------------------
+
+# Required by the three MCP servers' __main__.py (exit 2 if absent) PLUS the
+# log/events/db-path vars the spawned subprocesses (and their own nested clients)
+# need to find the shared event log + SQLite DB. CLAWHIP_BRIDGE_LOG_DIR has a
+# default in clawhip-bridge/__main__.py but the default path requires the data
+# volume to be mounted — silently broken without it. REGISTRY_EVENTS_DIR /
+# REGISTRY_DB_PATH mirror the canon clawhip_client allowlist and are part of the
+# established spine convention. Removing any of these from the allowlist breaks
+# the fresh-boot path Story 11.3.6 closed.
+_SPAWNER_REQUIRED_ENV_VARS = {
+    "TASK_REGISTRY_DB_PATH",
+    "TASK_REGISTRY_ACTOR_KIND",
+    "TASK_REGISTRY_ACTOR_ID",
+    "SESSION_REGISTRY_DB_PATH",
+    "SESSION_REGISTRY_ACTOR_KIND",
+    "SESSION_REGISTRY_ACTOR_ID",
+    "CLAWHIP_BRIDGE_ACTOR_KIND",
+    "CLAWHIP_BRIDGE_ACTOR_ID",
+    "CLAWHIP_BRIDGE_LOG_DIR",
+    "REGISTRY_EVENTS_DIR",
+    "REGISTRY_DB_PATH",
+}
+
+# Secrets that MUST NEVER be forwarded to an MCP subprocess (the a0ca050 P0).
+_FORBIDDEN_SECRET_ENV_VARS = {
+    "ANTHROPIC_API_KEY",
+    "GITHUB_TOKEN",
+    "OPERATOR_HMAC_KEY",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "OPENAI_API_KEY",
+}
+
+
+def test_spawner_allowlists_byte_identical_across_services() -> None:
+    """orchestrator-adapter and worker-wrapper spawn the same 3 servers → same allowlist."""
+    assert _ORCH_ALLOWLIST == _WORKER_ALLOWLIST, (
+        "MCPClientGroup._ENV_ALLOWLIST drifted between orchestrator-adapter and worker-wrapper:\n"
+        f"  in orchestrator not in worker: {sorted(_ORCH_ALLOWLIST - _WORKER_ALLOWLIST)}\n"
+        f"  in worker not in orchestrator: {sorted(_WORKER_ALLOWLIST - _ORCH_ALLOWLIST)}\n"
+        "Update both adapters together — mirror discipline (Story 11.3.6)."
+    )
+
+
+def test_spawner_allowlists_are_superset_of_canon() -> None:
+    """Story 11.3.6 — the spawner allowlists carry the canon allowlist's contents.
+
+    The two new spawner allowlists are by-definition a SUPERSET of the canon
+    (which spawns only clawhip-bridge); they add `TASK_REGISTRY_*` and
+    `SESSION_REGISTRY_*` because the spawners also start task-registry and
+    session-registry as MCP children. Drift hazard: when canon gains a new
+    CLAWHIP_BRIDGE_* var, both spawner copies must be expanded too. Without
+    this assertion the byte-identical-between-spawners test stays green while
+    each spawner silently strips the new var → the subprocess exits 2 on a
+    fresh boot.
+    """
+    missing_from_orch = _TASK_ALLOWLIST - _ORCH_ALLOWLIST
+    assert not missing_from_orch, (
+        "orchestrator-adapter _ENV_ALLOWLIST is missing canon vars from "
+        f"task-registry clawhip_client._ENV_ALLOWLIST: {sorted(missing_from_orch)}. "
+        "Add them to BOTH spawners (mirror discipline)."
+    )
+    missing_from_worker = _TASK_ALLOWLIST - _WORKER_ALLOWLIST
+    assert not missing_from_worker, (
+        "worker-wrapper _ENV_ALLOWLIST is missing canon vars: "
+        f"{sorted(missing_from_worker)}. Add to BOTH spawners (mirror discipline)."
+    )
+
+
+def test_spawner_allowlists_contain_all_required_server_vars() -> None:
+    """Every REQUIRED var for the 3 spawned MCP servers must be forwarded."""
+    missing = _SPAWNER_REQUIRED_ENV_VARS - _ORCH_ALLOWLIST
+    assert not missing, (
+        f"MCPClientGroup._ENV_ALLOWLIST omits MCP-server required vars: {sorted(missing)}. "
+        "Without these the spawned subprocess exits 2 and the service never reaches /tmp/ready."
+    )
+
+
+def test_spawner_allowlists_exclude_secrets() -> None:
+    """a0ca050 P0 guard: no API key / token / HMAC key may be in the forwarded allowlist."""
+    for name, allowlist in (
+        ("orchestrator-adapter", _ORCH_ALLOWLIST),
+        ("worker-wrapper", _WORKER_ALLOWLIST),
+    ):
+        leaked = _FORBIDDEN_SECRET_ENV_VARS & allowlist
+        assert not leaked, (
+            f"{name} _ENV_ALLOWLIST leaks secret env vars to MCP subprocesses: "
+            f"{sorted(leaked)}. This is the a0ca050 P0 — NEVER forward secrets."
+        )

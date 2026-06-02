@@ -105,6 +105,7 @@ from telegram_gateway.handlers import (
     make_agent_router,
     make_approvals_router,
     make_approve_router,
+    make_key_status_router,
     make_logs_router,
     make_ping_router,
     make_reject_router,
@@ -187,6 +188,16 @@ def make_lifespan(
             # Push order is documented in the module docstring. Summary:
             # writer.close pushed FIRST so it pops LAST.
             stack.push_async_callback(writer.close)
+
+            # Story 11.3.7 / AC2 — TELEGRAM_SKIP_WEBHOOK_SET hermetic defaults
+            # are populated by :func:`telegram_gateway.app.config.apply_hermetic_defaults_to_env`
+            # BEFORE this lifespan runs. The two production callers are
+            # ``__main__.main()`` (bootstrap from_env at __main__.py:212) and
+            # the colocated test fixtures that invoke the helper explicitly
+            # before ``_seed_settings``. Calling the helper here would be
+            # dead-on-arrival — settings_seed has already been constructed
+            # at this point. See Story 11.3.7 Dev Agent Record (Edge-E1
+            # discharge) for the full rationale.
 
             # First service-side use of AuditedBaseSettings.from_env
             # (Story 2.16). The placeholder wrappers on *settings_seed*
@@ -284,11 +295,27 @@ def make_lifespan(
 
             # set_webhook uses the cached secret bytes (decoded back to
             # str for the aiogram API). No additional ``.value`` read.
-            await bot.set_webhook(
-                url=str(audited.webhook_url),
-                secret_token=expected_webhook_secret_bytes.decode("utf-8"),
-                drop_pending_updates=True,
-            )
+            #
+            # Story 11.3.7 / AC2: hermetic-test gate. When
+            # ``TELEGRAM_SKIP_WEBHOOK_SET=1`` is set, skip the live
+            # api.telegram.org call so the S-4 separability test (and
+            # any CI env without outbound Telegram reachability) can
+            # boot telegram-gateway to healthy. Production-default
+            # (flag unset → False) preserves the normal set_webhook
+            # path; no behavior change for operators with real .env.
+            if not audited.telegram_skip_webhook_set:
+                await bot.set_webhook(
+                    url=str(audited.webhook_url),
+                    secret_token=expected_webhook_secret_bytes.decode("utf-8"),
+                    drop_pending_updates=True,
+                )
+            else:
+                _log.info(
+                    "set_webhook SKIPPED — TELEGRAM_SKIP_WEBHOOK_SET=1 "
+                    "(hermetic test mode); webhook URL %r and secret will "
+                    "NOT be registered with Telegram",
+                    str(audited.webhook_url),
+                )
 
             # Story 3.3 AC-4: construct the long-lived httpx.AsyncClient ONCE
             # (Story 3.1 H4 cache-once pattern — never construct per-request).
@@ -337,6 +364,9 @@ def make_lifespan(
             # Story 11.3 / FR63 — /approvals operator pinned-thread handler.
             dp.include_router(make_approvals_router())
             dp.include_router(make_ping_router())
+            # Story 11.5.1 / FR65a — /key-status surfaces the singleton
+            # KeyFingerprint row via registry-api GET /v1/key-status.
+            dp.include_router(make_key_status_router())
             dp.include_router(make_status_router())
             dp.include_router(make_logs_router())
             dp.include_router(make_stop_router())
@@ -384,7 +414,19 @@ def make_lifespan(
             # token portion or the secret_token value (Story 2.17 log-leakage
             # contract). The path is platform-internal — operator already
             # knows it.
-            _log.info("Webhook set · ready", extra={"path": audited.webhook_path})
+            #
+            # Story 11.3.7 / AC2 — emit the "ready" log only when set_webhook
+            # actually ran. Operators / monitoring that parse for the
+            # verbatim string MUST be able to distinguish "real ready" from
+            # "skipped". The skip-mode INFO at line 313 is the dual signal
+            # for hermetic boots.
+            if not audited.telegram_skip_webhook_set:
+                _log.info("Webhook set · ready", extra={"path": audited.webhook_path})
+            else:
+                _log.info(
+                    "Webhook SKIPPED · lifespan ready (hermetic test mode)",
+                    extra={"path": audited.webhook_path},
+                )
 
             yield
 

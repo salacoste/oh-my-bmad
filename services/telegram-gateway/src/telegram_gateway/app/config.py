@@ -40,11 +40,13 @@ from __future__ import annotations
 import contextlib
 import ipaddress
 import logging
+import os
 import string
 from pathlib import Path
 from typing import Any, ClassVar
 from urllib.parse import urlparse
 
+from events import ensure_shared_dir
 from pydantic import Field, HttpUrl, field_validator, model_validator
 from pydantic_settings import SettingsConfigDict
 from secret_hygiene import (
@@ -133,6 +135,87 @@ def _coerce_allowlist_env(value: Any) -> Any:
 # rather than a silent no-deliver downstream (review-fix M13).
 _REJECTED_HOSTNAMES: frozenset[str] = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 
+# Story 11.3.7 / AC2 / D2-A — hermetic test-mode constants.
+#
+# When ``TELEGRAM_SKIP_WEBHOOK_SET=1`` is set, the lifespan skips the live
+# ``bot.set_webhook(...)`` call AND the operator is not required to supply
+# ``TELEGRAM_WEBHOOK_URL`` / ``TELEGRAM_WEBHOOK_SECRET_TOKEN``. These
+# constants provide placeholder values that satisfy field validators
+# (https + non-rejected host + path-matches-webhook-path + ASCII-printable
+# non-empty secret) so settings construction succeeds in hermetic CI envs.
+# The ``.invalid`` TLD (RFC 2606) is guaranteed-unresolvable, so even if
+# code paths leaked these defaults to actual HTTP traffic the request
+# would fail-closed at DNS rather than reach a third-party host.
+#
+# Production behaviour (skip flag unset → falsy) is unchanged: missing
+# ``TELEGRAM_WEBHOOK_URL`` / ``TELEGRAM_WEBHOOK_SECRET_TOKEN`` still raise
+# ``ValidationError`` fail-closed at boot.
+#
+# Default webhook path is the same value as :class:`TelegramSettings`'s
+# ``webhook_path`` field default — kept in sync intentionally; if the
+# default ever changes there, update this constant too (the f-string
+# composition in :func:`apply_hermetic_defaults_to_env` then picks up
+# whatever ``TELEGRAM_WEBHOOK_PATH`` the operator overrides at runtime).
+_HERMETIC_WEBHOOK_URL_HOST: str = "https://hermetic.test.invalid"
+_DEFAULT_WEBHOOK_PATH: str = "/v1/telegram/webhook"
+HERMETIC_WEBHOOK_SECRET_TOKEN: str = "hermetic-test-secret-skip-mode-no-traffic"
+_HERMETIC_SKIP_ENV_VAR: str = "TELEGRAM_SKIP_WEBHOOK_SET"
+# Truthy set aligned with pydantic-settings' bool coercion accept-set so
+# the helper and the ``telegram_skip_webhook_set: bool`` field never
+# disagree on edge inputs like ``"yes"`` / ``"y"`` / ``"t"`` / uppercase.
+_HERMETIC_SKIP_TRUTHY: frozenset[str] = frozenset({"1", "true", "yes", "y", "on", "t"})
+
+
+def apply_hermetic_defaults_to_env() -> None:
+    """When skip-flag is truthy, fill dummy webhook env-vars (idempotent).
+
+    Call BEFORE :py:meth:`TelegramSettings.from_env` so pydantic-settings
+    sees the dummy values for ``TELEGRAM_WEBHOOK_URL`` /
+    ``TELEGRAM_WEBHOOK_SECRET_TOKEN`` if hermetic skip mode is enabled AND
+    the operator hasn't already supplied real values.
+
+    **Empty-string handling** — ``os.environ.setdefault`` only treats
+    ABSENCE as "fillable"; an explicitly-empty env-var (e.g. from a future
+    docker-compose ``${TELEGRAM_WEBHOOK_URL:-}`` substitution that resolves
+    to ``""`` when the shell is unset) would defeat the dummy-fill. We
+    treat any empty / whitespace-only value as fillable so the skip-mode
+    contract holds for both "var unset" and "var set to empty".
+
+    **Webhook-path coupling** — the hermetic URL's path is composed from
+    the runtime ``TELEGRAM_WEBHOOK_PATH`` env-var (default
+    ``/v1/telegram/webhook``) so an operator who overrides the path AND
+    enables skip-mode without supplying ``TELEGRAM_WEBHOOK_URL`` still
+    passes :class:`TelegramSettings`'s ``_validate_url_path_matches_route``
+    invariant (which compares ``webhook_url.path`` ≡ ``webhook_path``).
+
+    No-op when ``TELEGRAM_SKIP_WEBHOOK_SET`` is unset / falsy — preserves
+    the fail-closed default for production deploys.
+    """
+    raw_skip = os.environ.get(_HERMETIC_SKIP_ENV_VAR, "").strip().lower()
+    if raw_skip not in _HERMETIC_SKIP_TRUTHY:
+        return
+    # Mirror the field-level default so the operator override picks through.
+    webhook_path = (
+        os.environ.get("TELEGRAM_WEBHOOK_PATH", _DEFAULT_WEBHOOK_PATH).strip()
+        or _DEFAULT_WEBHOOK_PATH
+    )
+    hermetic_url = f"{_HERMETIC_WEBHOOK_URL_HOST}{webhook_path}"
+    # Use direct assignment when current value is unset OR empty/whitespace
+    # (setdefault alone would no-op on explicitly-empty env-vars).
+    if not os.environ.get("TELEGRAM_WEBHOOK_URL", "").strip():
+        os.environ["TELEGRAM_WEBHOOK_URL"] = hermetic_url
+    if not os.environ.get("TELEGRAM_WEBHOOK_SECRET_TOKEN", "").strip():
+        os.environ["TELEGRAM_WEBHOOK_SECRET_TOKEN"] = HERMETIC_WEBHOOK_SECRET_TOKEN
+
+
+# Back-compat exports: callers that imported HERMETIC_WEBHOOK_URL directly
+# now get a path-composed value via a small accessor. Most call-sites just
+# observed it as documentation; the test fixture didn't depend on a
+# specific path. Kept as a constant for the default-path case (which is
+# what tests actually want) so the test_lifespan asserts stay readable.
+HERMETIC_WEBHOOK_URL: str = f"{_HERMETIC_WEBHOOK_URL_HOST}{_DEFAULT_WEBHOOK_PATH}"
+
+
 # ASCII-printable charset accepted for ``webhook_secret_token`` (review-fix
 # L8). Telegram's docs state the secret token may contain only ASCII
 # characters; we narrow further to printable (no control chars, no
@@ -165,6 +248,26 @@ class TelegramSettings(AuditedBaseSettings):
         "telegram_webhook_secret_token", env_var="TELEGRAM_WEBHOOK_SECRET_TOKEN"
     )
     webhook_url: HttpUrl = Field(validation_alias="TELEGRAM_WEBHOOK_URL")
+    # Story 11.3.7 / AC2 / D2-A — hermetic test-mode opt-in.
+    #
+    # When true, the lifespan SKIPS the live ``bot.set_webhook(...)`` call
+    # and the operator is not required to supply real
+    # ``TELEGRAM_WEBHOOK_URL`` / ``TELEGRAM_WEBHOOK_SECRET_TOKEN`` values
+    # (see :func:`apply_hermetic_defaults_to_env`). Defaults to False so
+    # production deploys are unaffected (set_webhook still runs, missing
+    # webhook env-vars still fail-closed at boot).
+    #
+    # Intended only for hermetic CI / S-4 separability tests that don't
+    # exercise the real Telegram webhook path. DO NOT enable in production.
+    telegram_skip_webhook_set: bool = Field(
+        default=False,
+        validation_alias="TELEGRAM_SKIP_WEBHOOK_SET",
+        description=(
+            "Hermetic test-mode opt-in. When true, the lifespan skips "
+            "bot.set_webhook(...) and treats TELEGRAM_WEBHOOK_URL + "
+            "TELEGRAM_WEBHOOK_SECRET_TOKEN as optional. Production unset."
+        ),
+    )
     # Review-fix M18: ``webhook_path`` is overridable via env. Review-fix
     # H1/L13: leading slash required, trailing slash rejected (unless the
     # value is exactly ``/``). Combined with ``main.build_app`` mounting
@@ -458,7 +561,11 @@ class TelegramSettings(AuditedBaseSettings):
         """
         target = Path(self.event_log_dir)
         try:
-            target.mkdir(parents=True, exist_ok=True)
+            # Story 11.3.8 / FR62a: use ``ensure_shared_dir`` so this probe
+            # leaves the dir at mode 0o2775 if it's the first creator —
+            # avoids the cross-uid permission lockout other ``omb``-group
+            # services hit when telegram-gateway wins the boot race.
+            ensure_shared_dir(target)
         except OSError as exc:
             raise ValueError(f"event_log_dir {target!s} cannot be created: {exc}") from exc
         probe = target / ".write-probe"

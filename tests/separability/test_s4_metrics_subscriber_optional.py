@@ -400,6 +400,15 @@ def test_metrics_subscriber_is_optional_not_a_hidden_dependency(
     # The ROOT compose reads this via `${REGISTRY_STATE_AUTO_CREATE_SCHEMA:-}`
     # (default OFF in production); setting it here is test-scoped only.
     phase1_env["REGISTRY_STATE_AUTO_CREATE_SCHEMA"] = "1"
+    # Story 11.3.7 (AC4 / AC2) — make Phase 1 hermetic on CI envs that lack
+    # a real .env. The ROOT compose substitutes `${TELEGRAM_BOT_TOKEN:-}`
+    # for both telegram-gateway and clawhip-daemon; we export a dummy
+    # syntactically-valid token AND enable AC2's hermetic skip-mode so
+    # telegram-gateway boots without outbound Telegram traffic. Production
+    # `.env` (if present in the host env) is overridden here since this
+    # test path never authorises real Telegram delivery.
+    phase1_env["TELEGRAM_BOT_TOKEN"] = "0:dummytesttoken"
+    phase1_env["TELEGRAM_SKIP_WEBHOOK_SET"] = "1"
     # The root compose binds the `oh-my-bmad-data` *named volume*
     # (driver: local) — per-project naming gives each test invocation
     # its own volume so `down -v` cleanly tears it down without

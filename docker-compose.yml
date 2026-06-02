@@ -30,6 +30,37 @@ x-healthcheck: &healthcheck
   retries: 12
   start_period: 10s
 
+# Story 11.3.6 (H7d) — HTTP-server healthcheck anchor. Use for any service that
+# is a uvicorn/FastAPI server bound to :8080 instead of the `/tmp/ready` file
+# convention (which only the tail-loop services follow). Wrapped in try/except
+# so retries during startup don't dump a Python traceback per attempt.
+x-healthcheck-http: &healthcheck_http
+  test:
+    - CMD
+    - python
+    - -c
+    - "import socket,sys\ntry:\n  s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1', 8080)); s.close()\nexcept OSError:\n  sys.exit(1)"
+  interval: 5s
+  timeout: 3s
+  retries: 12
+  start_period: 10s
+
+# Story 11.3.6 (H7b) — env vars forwarded to spawned MCP subprocesses via the
+# allowlist in services/{orch-adapter,worker-wrapper}/.../mcp_clients.py. Shared
+# between orchestrator-adapter + worker-wrapper; per-service env overrides only
+# the ACTOR_KIND/ACTOR_ID identity vars. NEVER list secrets here.
+x-mcp-spawner-env: &mcp_spawner_env
+  TASK_REGISTRY_DB_PATH: ${REGISTRY_DB_PATH:-/var/lib/oh-my-bmad/registry/state.sqlite3}
+  SESSION_REGISTRY_DB_PATH: ${REGISTRY_DB_PATH:-/var/lib/oh-my-bmad/registry/state.sqlite3}
+  CLAWHIP_BRIDGE_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+  REGISTRY_EVENTS_DIR: /var/lib/oh-my-bmad/registry/events
+  REGISTRY_DB_PATH: ${REGISTRY_DB_PATH:-/var/lib/oh-my-bmad/registry/state.sqlite3}
+  # H7f: disable nested audit-emission on the registry MCP children (3-level
+  # stdio deadlock when task-registry/session-registry spawn a clawhip-bridge
+  # stdio CLIENT from inside their own stdio SERVER). The deep-debug to make
+  # audit-ON work in this nesting is deferred — see deferred-work.md.
+  OMB_MCP_AUDIT_EMISSION_ENABLED: "0"
+
 services:
   registry-api:
     container_name: omb-registry-api
@@ -43,12 +74,31 @@ services:
     environment:
       <<: *common-env
       REGISTRY_DB_PATH: ${REGISTRY_DB_PATH:-/var/lib/oh-my-bmad/registry/state.sqlite3}
+      # Story 11.3.6 (H7a): registry-api is the event-log WRITER (EventLogWriter)
+      # AND opens a writable idempotency-cache engine, so it needs READ-WRITE on
+      # the data volume (was :ro → "unable to open database file" crash-loop on a
+      # fresh boot) plus an explicit log-dir / db-url (the bare defaults pointed
+      # into the old :ro mount). Mirrors tests/separability/docker-compose.s4.yml.
+      # FR26 single-writer is preserved: registry-state remains the sole writer of
+      # the materialized STATE tables; registry-api only appends the JSONL event
+      # log (fcntl-serialized, Story 11.2.3) + its own idempotency_cache table.
+      REGISTRY_API_LOG_DIR: ${REGISTRY_API_LOG_DIR:-/var/lib/oh-my-bmad/registry/events}
+      REGISTRY_API_DB_URL: ${REGISTRY_API_DB_URL:-sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3}
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]
+    # Story 11.3.6 (H7a): registry-state creates the DB + schema; wait for it so
+    # registry-api doesn't open a not-yet-existent SQLite file on a fresh volume.
+    depends_on:
+      registry-state:
+        condition: service_healthy
     volumes:
-      - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
-    healthcheck: *healthcheck
+      - oh-my-bmad-data:/var/lib/oh-my-bmad
+    # Story 11.3.6 (H7d): registry-api is a uvicorn HTTP server — it never
+    # creates /tmp/ready (the shared *healthcheck file convention is for the
+    # tail-loop services). Probe the TCP port instead, mirroring the proven
+    # journey/s4 overlays (tests/separability/docker-compose.s4.yml:51-60).
+    healthcheck: *healthcheck_http
 
   registry-state:
     container_name: omb-registry-state
@@ -88,10 +138,21 @@ services:
       <<: *common-env
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TG_ALLOWLIST_USER_IDS: ${TG_ALLOWLIST_USER_IDS:-}
+      # Story 11.3.7 (AC2 / D2-A) — propagate the hermetic skip flag from
+      # shell substitution so test harnesses can flip the gateway into
+      # offline boot (lifespan skips bot.set_webhook(...) + treats webhook
+      # URL/secret as optional via apply_hermetic_defaults_to_env).
+      # Default "0" (not empty) because pydantic-settings rejects empty
+      # string → bool coercion; "0" parses as False unambiguously.
+      # Production operators leave the shell var unset for normal
+      # set_webhook behavior (default "0" → False).
+      TELEGRAM_SKIP_WEBHOOK_SET: ${TELEGRAM_SKIP_WEBHOOK_SET:-0}
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]
-    healthcheck: *healthcheck
+    # Story 11.3.6 (H7d): telegram-gateway is a uvicorn HTTP server (binds
+    # 0.0.0.0:8080) and never creates /tmp/ready — probe the TCP port instead
+    healthcheck: *healthcheck_http
 
   orchestrator-adapter:
     container_name: omb-orchestrator-adapter
@@ -112,11 +173,33 @@ services:
       - path: .env
         required: false
     environment:
-      <<: *common-env
+      # Story 11.3.6 (H7b): MCP-subprocess env via shared anchor (see top of
+      # file). Identity = orchestrator (ActorKind, packages/events/.../envelope.py:183).
+      # Forwarded to the spawned servers by the allowlist in adapters/mcp_clients.py
+      # (NEVER os.environ.copy — the a0ca050 P0 leak). Per-service override:
+      # ACTOR_KIND/ACTOR_ID only; everything else comes from *mcp_spawner_env.
+      <<: [*common-env, *mcp_spawner_env]
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      TASK_REGISTRY_ACTOR_KIND: orchestrator
+      TASK_REGISTRY_ACTOR_ID: orchestrator-adapter
+      SESSION_REGISTRY_ACTOR_KIND: orchestrator
+      SESSION_REGISTRY_ACTOR_ID: orchestrator-adapter
+      CLAWHIP_BRIDGE_ACTOR_KIND: orchestrator
+      CLAWHIP_BRIDGE_ACTOR_ID: orchestrator-adapter
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]
+    # Story 11.3.6 (H7b): task-registry reads the DB (needs registry-state's
+    # schema) and the spawned clawhip-bridge appends the shared event log, so
+    # mount the volume RW (FR26 fcntl serialization, Story 11.2.3). Wait for the
+    # DB (registry-state) and the spine writer (registry-api) to be healthy.
+    depends_on:
+      registry-state:
+        condition: service_healthy
+      registry-api:
+        condition: service_healthy
+    volumes:
+      - oh-my-bmad-data:/var/lib/oh-my-bmad
     healthcheck: *healthcheck
 
   worker-wrapper:
@@ -129,15 +212,35 @@ services:
       - path: .env
         required: false
     environment:
-      <<: *common-env
+      # Story 11.3.6 (H7b): MCP-subprocess env via shared anchor; identity = worker.
+      # ANTHROPIC_API_KEY / GITHUB_TOKEN are the worker's OWN secrets and are
+      # deliberately NOT in the mcp_clients.py allowlist — they never reach the
+      # MCP subprocesses. (H7h): WORKER_READY_FILE_PATH pins the worker's
+      # ready-file to /tmp/ready so the shared *healthcheck (test -f /tmp/ready)
+      # matches; the worker default is per-pid (/tmp/worker-wrapper-ready-<pid>).
+      <<: [*common-env, *mcp_spawner_env]
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
-      REGISTRY_DB_PATH: ${REGISTRY_DB_PATH:-/var/lib/oh-my-bmad/registry/state.sqlite3}
+      TASK_REGISTRY_ACTOR_KIND: worker
+      TASK_REGISTRY_ACTOR_ID: worker-wrapper
+      SESSION_REGISTRY_ACTOR_KIND: worker
+      SESSION_REGISTRY_ACTOR_ID: worker-wrapper
+      CLAWHIP_BRIDGE_ACTOR_KIND: worker
+      CLAWHIP_BRIDGE_ACTOR_ID: worker-wrapper
+      WORKER_READY_FILE_PATH: /tmp/ready
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]
+    # Story 11.3.6 (H7b): RW (was :ro) so the spawned clawhip-bridge can append
+    # the shared event log; task-registry reads the DB. Wait for registry-state
+    # (DB/schema) + registry-api (spine writer) to be healthy.
+    depends_on:
+      registry-state:
+        condition: service_healthy
+      registry-api:
+        condition: service_healthy
     volumes:
-      - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
+      - oh-my-bmad-data:/var/lib/oh-my-bmad
     healthcheck: *healthcheck
 
   clawhip-daemon:
@@ -152,6 +255,16 @@ services:
     environment:
       <<: *common-env
       REGISTRY_DB_PATH: ${REGISTRY_DB_PATH:-/var/lib/oh-my-bmad/registry/state.sqlite3}
+      # Story 11.3.7 (AC4 / H7e) — propagate TELEGRAM_BOT_TOKEN via shell
+      # substitution so CI envs without an .env file can still boot
+      # clawhip-daemon (which sys.exit(2)s on missing/empty token).
+      # Mirrors telegram-gateway's existing TELEGRAM_BOT_TOKEN line for
+      # consistency. The s3-separability harness exports a dummy token
+      # for Phase 1; production operators continue to set the real value
+      # via .env (when shell is unset, .env value flows through env_file;
+      # when shell is set explicitly, it takes precedence — matches the
+      # existing telegram-gateway contract above).
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]
