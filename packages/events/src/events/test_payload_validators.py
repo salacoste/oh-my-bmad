@@ -102,6 +102,23 @@ class TestTaskIdPatternValid:
         assert p.action_taken == "subprocess_terminated"
         assert p.post_trigger_transition == "failed"
 
+    def test_budget_enforcement_triggered_override_intercepted(self, task_id: str) -> None:
+        # Story 12.3a Phase 2 — additive enum value: the override landed in the
+        # grace window, the subprocess was NOT terminated, and the task
+        # continues under the extended budget (audit-truthful pairing of
+        # action_taken="override_intercepted" with
+        # post_trigger_transition="awaiting_approval").
+        p = TaskBudgetEnforcementTriggeredPayload(
+            task_id=task_id,
+            budget_threshold=1_000,
+            actual_spend=1_500,
+            action_taken="override_intercepted",
+            post_trigger_transition="awaiting_approval",
+            step=2,
+        )
+        assert p.action_taken == "override_intercepted"
+        assert p.post_trigger_transition == "awaiting_approval"
+
     def test_budget_enforcement_triggered_rejects_bad_input(self, task_id: str) -> None:
         # Story 12.2 / FR67 — frozen+strict+extra=forbid; constrained literals.
         import pytest

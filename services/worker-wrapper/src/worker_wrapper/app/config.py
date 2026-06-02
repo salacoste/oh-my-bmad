@@ -91,50 +91,58 @@ class WorkerSettings(BaseSettings):
     # subprocess hangs (process killed but pipe-reader stuck in syscall).
     task_overall_timeout_s: float = Field(default=900.0, gt=0)
 
-    # Story 12.2 (FR67) — default post-enforcement task transition, used to
-    # populate ``task.budget_enforcement_triggered.post_trigger_transition``
-    # so the audit event records what ACTUALLY happened to the task.
+    # Story 12.2 (FR67) — default post-enforcement task transition, the
+    # operator-selected budget-enforcement policy.
     #
-    # CODE-REVIEW H1/H2: ``"failed"`` is the ONLY transition the worker can
-    # currently HONOR — the post-enforcement path unconditionally drives
-    # ``LifecycleEvent.TASK_FAILED``. The ``"awaiting_approval"`` transition
-    # requires the operator budget-override APPROVAL-WAIT path that Story 12.3
-    # (FR68, ``/approve --override budget``) builds; until that ships, emitting
-    # ``post_trigger_transition="awaiting_approval"`` while the FSM goes to
-    # FAILED would make the audit event LIE (and routing the task there would
-    # hang the worker). So the field is REJECTED at ``"awaiting_approval"``
-    # by ``_reject_unwired_budget_action`` below — Story 12.3 will remove the
-    # validator (and 12.4 will source the value per-task) WITHOUT changing the
-    # event shape. The Literal keeps both values in the type for forward-compat.
+    # Story 12.3a wired BOTH transitions, so the Story-12.2
+    # ``_reject_unwired_budget_action`` validator (which rejected
+    # ``"awaiting_approval"`` until the FSM path existed) is REMOVED:
+    #   * ``"failed"`` (default) → supervisor SIGTERMs immediately on budget
+    #     breach; the worker drives ``TASK_FAILED`` and the audit event records
+    #     ``post_trigger_transition="failed"``. Current behavior, INERT default.
+    #   * ``"awaiting_approval"`` → supervisor opens a bounded override grace
+    #     window (``budget_grace_window_s``); if an operator budget override
+    #     arrives in the window the subprocess survives and the task continues
+    #     (audit ``post_trigger_transition="awaiting_approval"``,
+    #     ``action_taken="override_intercepted"``); fail-closed otherwise
+    #     (window expires → SIGTERM → ``TASK_FAILED`` →
+    #     ``post_trigger_transition="failed"``). Audit integrity is preserved by
+    #     IMPLEMENTING the action (the worker now drives the matching FSM
+    #     transition), not by rejecting the config value.
+    # Story 12.4 will source this value per-task; the event SHAPE is unchanged.
     default_budget_action: Literal["failed", "awaiting_approval"] = Field(
         default="failed",
         validation_alias="OMB_DEFAULT_BUDGET_ACTION",
         description=(
             "Default task transition recorded in task.budget_enforcement_triggered "
-            "(Story 12.2 / FR67). MUST be 'failed' until Story 12.3 wires the "
-            "override-approval path; 'awaiting_approval' is rejected at startup. "
+            "(Story 12.2 / FR67). 'failed' (default) terminates the subprocess "
+            "immediately on budget breach; 'awaiting_approval' opens a bounded "
+            "override grace window (OMB_BUDGET_GRACE_WINDOW_S) during which an "
+            "operator budget override aborts termination (Story 12.3a / FR68). "
             "Story 12.4 will source this per-task."
         ),
     )
 
-    @field_validator("default_budget_action", mode="after")
-    @classmethod
-    def _reject_unwired_budget_action(cls, value: str) -> str:
-        """CODE-REVIEW H1/H2 — reject the not-yet-honorable transition.
-
-        The worker can only drive ``TASK_FAILED`` post-enforcement today, so
-        ``awaiting_approval`` would make the FR67 audit event lie. Fail loud at
-        startup rather than silently misreport. Story 12.3 removes this.
-        """
-        if value == "awaiting_approval":
-            raise ValueError(
-                "OMB_DEFAULT_BUDGET_ACTION='awaiting_approval' is not supported "
-                "until Story 12.3 wires the budget-override approval-wait path; "
-                "the worker currently transitions budget-enforced tasks to "
-                "'failed'. Use 'failed' (the default) to keep the "
-                "task.budget_enforcement_triggered audit event truthful."
-            )
-        return value
+    # Story 12.3a Phase 3 (FR68) — the bounded grace window the budget
+    # supervisor waits for an inbound operator override before SIGTERMing the
+    # subprocess. ONLY active when ``default_budget_action == "awaiting_approval"``
+    # (with the "failed" default the supervisor terminates immediately and this
+    # value is never consulted). Fail-closed: a hung override channel cannot
+    # delay enforcement past this monotonic deadline. DISTINCT from the
+    # SIGTERM→SIGKILL escalation grace inside ``terminate_with_grace``.
+    #
+    # Single ``OMB_BUDGET_GRACE_WINDOW_S`` alias only — NO redundant field-name
+    # alias (Story 12.4 fixed exactly that ghost-unprefixed-env-var bug).
+    budget_grace_window_s: float = Field(
+        default=5.0,
+        gt=0,
+        validation_alias=AliasChoices("OMB_BUDGET_GRACE_WINDOW_S"),
+        description=(
+            "Bounded grace window (seconds) the budget supervisor waits for an "
+            "operator budget override before enforcing (SIGTERM). Only active "
+            "when default_budget_action='awaiting_approval' (Story 12.3a / FR68)."
+        ),
+    )
 
     # GitHub API settings (Story 5.7).
     github_token: SecretStr = SecretStr("")

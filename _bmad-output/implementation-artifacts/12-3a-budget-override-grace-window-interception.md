@@ -1,6 +1,6 @@
 # Story 12.3a — Budget-override grace-window interception (supervisor↔override coupling, FR68 enforcement-prevention)
 
-Status: in-progress (Phase 1 — grace-window state machine)
+Status: review (all 3 phases implemented)
 
 <!-- DESIGN RESOLVED 2026-06-02 (architect): inbound channel = extend the existing
 JSONL tail (Option a); G1 grace-window-only-on-awaiting_approval; G2 defer per-task

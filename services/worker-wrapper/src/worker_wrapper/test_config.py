@@ -382,16 +382,15 @@ class TestDefaultBudgetAction:
             s = WorkerSettings()
             assert s.default_budget_action == "failed"
 
-    def test_awaiting_approval_is_rejected_until_story_12_3(self) -> None:
-        # H1/H2: the worker can only drive TASK_FAILED today, so accepting
-        # 'awaiting_approval' would make the FR67 audit event lie. Reject loud.
-        from pydantic import ValidationError
-
-        with (
-            patch.dict(os.environ, {"OMB_DEFAULT_BUDGET_ACTION": "awaiting_approval"}),
-            pytest.raises(ValidationError, match="awaiting_approval"),
-        ):
-            WorkerSettings()
+    def test_awaiting_approval_is_accepted_after_story_12_3a(self) -> None:
+        # Story 12.3a Phase 2+3 wired the awaiting_approval FSM path (grace
+        # window + override-intercepted branch), so the Story-12.2
+        # ``_reject_unwired_budget_action`` validator was REMOVED. The value is
+        # now ACCEPTED — audit integrity is preserved by IMPLEMENTING the
+        # action, not by rejecting the config.
+        with patch.dict(os.environ, {"OMB_DEFAULT_BUDGET_ACTION": "awaiting_approval"}):
+            s = WorkerSettings()
+            assert s.default_budget_action == "awaiting_approval"
 
     def test_unknown_value_is_rejected(self) -> None:
         from pydantic import ValidationError
@@ -401,3 +400,45 @@ class TestDefaultBudgetAction:
             pytest.raises(ValidationError),
         ):
             WorkerSettings()
+
+
+class TestBudgetGraceWindow:
+    """Story 12.3a Phase 3 (FR68) — OMB_BUDGET_GRACE_WINDOW_S."""
+
+    def test_default_is_5_seconds(self) -> None:
+        s = WorkerSettings()
+        assert s.budget_grace_window_s == 5.0
+
+    def test_parses_from_env(self) -> None:
+        with patch.dict(os.environ, {"OMB_BUDGET_GRACE_WINDOW_S": "12.5"}):
+            s = WorkerSettings()
+            assert s.budget_grace_window_s == 12.5
+
+    def test_rejects_zero(self) -> None:
+        from pydantic import ValidationError
+
+        with (
+            patch.dict(os.environ, {"OMB_BUDGET_GRACE_WINDOW_S": "0"}),
+            pytest.raises(ValidationError),
+        ):
+            WorkerSettings()
+
+    def test_rejects_negative(self) -> None:
+        from pydantic import ValidationError
+
+        with (
+            patch.dict(os.environ, {"OMB_BUDGET_GRACE_WINDOW_S": "-1"}),
+            pytest.raises(ValidationError),
+        ):
+            WorkerSettings()
+
+    def test_no_unprefixed_field_name_env_alias(self) -> None:
+        # Story 12.4 lesson — the field declares ONLY the OMB_-prefixed alias in
+        # AliasChoices (no redundant field-name entry). A bare, unprefixed
+        # ``BUDGET_GRACE_WINDOW_S`` env var must NOT be a ghost source — that is
+        # the exact unprefixed-env-var bug Story 12.4 fixed. (The WORKER_-prefix
+        # field-name source is the class-wide env_prefix behavior shared by
+        # every field and is out of scope for this guard.)
+        with patch.dict(os.environ, {"BUDGET_GRACE_WINDOW_S": "99"}):
+            s = WorkerSettings()
+            assert s.budget_grace_window_s == 5.0

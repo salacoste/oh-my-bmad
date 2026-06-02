@@ -665,3 +665,146 @@ class TestTraceIdFlagGating:
         args = runner._build_args("hi")
         assert "--trace-id" in args
         assert args[args.index("--trace-id") + 1] == tid
+
+
+# ---------------------------------------------------------------------------
+# Story 12.3a Phase 2 — budget supervisor override-intercepted vs terminated
+# ---------------------------------------------------------------------------
+
+
+def _find_enforcement_emit(clients: _FakeClients) -> dict[str, Any]:
+    """Return the payload dict of the single ``task.budget_enforcement_triggered``
+    emit_event call recorded on the fake clawhip_bridge."""
+    matches: list[dict[str, Any]] = []
+    for call in clients.clawhip_bridge.call_tool.await_args_list:
+        # _call_tool_best_effort calls session.call_tool(tool_name, arguments=...)
+        if call.args and call.args[0] == "emit_event":
+            arguments = call.kwargs["arguments"]
+            if arguments.get("type") == "task.budget_enforcement_triggered":
+                matches.append(arguments["payload"])
+    assert len(matches) == 1, f"expected exactly one enforcement emit, got {len(matches)}"
+    return matches[0]
+
+
+class TestRunTaskBudgetOverrideIntercepted:
+    """Story 12.3a Phase 2 — override arrives in the grace window: the
+    subprocess SURVIVES, NO TASK_FAILED, audit records the prevented
+    enforcement with ``action_taken="override_intercepted"`` +
+    ``post_trigger_transition="awaiting_approval"``."""
+
+    @pytest.mark.asyncio
+    async def test_override_intercepted_falls_through_to_completion(self, tmp_path: Path) -> None:
+        from worker_wrapper.domain.budget_supervisor import BudgetSupervisorResult
+
+        settings = _make_settings(tmp_path, event_log_dir=str(tmp_path / "logs"))
+        clients = _FakeClients()
+
+        # Runner completes normally (no Tier-3) — the subprocess survived the
+        # budget breach because the override landed in the grace window.
+        result = ClaudeCodeResult(
+            exit_code=0,
+            session_id="s-budget-override",
+            events=[
+                ExtractedEvent(event_type="file.edited", tool_name="Write", tool_input={}),
+            ],
+        )
+
+        override_result = BudgetSupervisorResult(
+            triggered=True,
+            override_received=True,
+            event_id="evt-budget-1",
+            tokens_used=1500,
+            token_limit=1000,
+            step=3,
+            detection_latency_s=0.4,
+        )
+
+        async def _fake_supervisor(*_args: Any, **_kwargs: Any) -> BudgetSupervisorResult:
+            return override_result
+
+        with (
+            patch("worker_wrapper.app.main.ClaudeCodeRunner") as mock_runner,
+            patch(
+                "worker_wrapper.app.main.watch_for_budget_exceeded",
+                side_effect=_fake_supervisor,
+            ),
+        ):
+            mock_runner.return_value.run = AsyncMock(return_value=result)
+            await run_task(clients, settings, "do stuff under budget override", tmp_path)  # type: ignore[arg-type]  # _FakeClients test harness
+
+        # FALL-THROUGH: task COMPLETED (not failed) — the subprocess survived.
+        state_file = tmp_path / ".lifecycle-state.json"
+        data = json.loads(state_file.read_text())
+        assert data["state"] == "completed"
+
+        # Audit event truthfully records the prevented enforcement.
+        payload = _find_enforcement_emit(clients)
+        assert payload["action_taken"] == "override_intercepted"
+        assert payload["post_trigger_transition"] == "awaiting_approval"
+        assert payload["budget_threshold"] == 1000
+        assert payload["actual_spend"] == 1500
+        assert payload["step"] == 3
+
+
+class TestRunTaskBudgetTerminated:
+    """Story 12.3a Phase 2 — no override in the window: the subprocess is
+    terminated, the FSM is driven to FAILED, and the audit records
+    ``action_taken="subprocess_terminated"`` +
+    ``post_trigger_transition="failed"`` (even under an awaiting_approval
+    policy — audit must match the actual FSM outcome)."""
+
+    @pytest.mark.asyncio
+    async def test_terminated_drives_failed_with_post_transition_failed(
+        self, tmp_path: Path
+    ) -> None:
+        from worker_wrapper.domain.budget_supervisor import BudgetSupervisorResult
+
+        # Policy is awaiting_approval, but NO override arrived — fail-closed.
+        settings = WorkerSettings(
+            task_id="t-00000000-0000-7000-8000-000000000001",
+            worktree_path=str(tmp_path),
+            event_log_dir=str(tmp_path / "logs"),
+            default_budget_action="awaiting_approval",
+        )
+        clients = _FakeClients()
+
+        # Runner raises (the SIGTERM cascade) — typical budget-enforcement case.
+        terminated_result = BudgetSupervisorResult(
+            triggered=True,
+            override_received=False,
+            event_id="evt-budget-2",
+            tokens_used=2000,
+            token_limit=1000,
+            step=5,
+            detection_latency_s=0.3,
+            termination_latency_s=0.2,
+            termination_method="sigterm",
+        )
+
+        async def _fake_supervisor(*_args: Any, **_kwargs: Any) -> BudgetSupervisorResult:
+            return terminated_result
+
+        with (
+            patch("worker_wrapper.app.main.ClaudeCodeRunner") as mock_runner,
+            patch(
+                "worker_wrapper.app.main.watch_for_budget_exceeded",
+                side_effect=_fake_supervisor,
+            ),
+        ):
+            mock_runner.return_value.run = AsyncMock(
+                side_effect=BrokenPipeError("subprocess SIGTERMed mid-stream")
+            )
+            await run_task(clients, settings, "do stuff over budget", tmp_path)  # type: ignore[arg-type]  # _FakeClients test harness
+
+        # Terminated path drives TASK_FAILED.
+        state_file = tmp_path / ".lifecycle-state.json"
+        data = json.loads(state_file.read_text())
+        assert data["state"] == "failed"
+
+        # Audit event matches the actual FSM outcome.
+        payload = _find_enforcement_emit(clients)
+        assert payload["action_taken"] == "subprocess_terminated"
+        assert payload["post_trigger_transition"] == "failed"
+        assert payload["budget_threshold"] == 1000
+        assert payload["actual_spend"] == 2000
+        assert payload["step"] == 5
