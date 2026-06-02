@@ -167,11 +167,67 @@ def _wait_for_all_healthy(
         ):
             return services
         time.sleep(1.0)
+    # Observability fix (Story 11.3.10) — on a Linux-only crash-loop we were
+    # flying blind: the bare TimeoutError only reported `docker compose ps`
+    # state (e.g. `Restarting (1)`), never the failing service's stdout/stderr
+    # traceback. Dump `docker compose logs` for every expected service that did
+    # NOT reach `healthy` BEFORE raising, so the next nightly run captures the
+    # actual exit-1 traceback in the job log + junit artifact. Best-effort: each
+    # call is bounded + swallows its own errors so a logs failure never masks
+    # the underlying TimeoutError.
+    _dump_unhealthy_service_logs(project, compose_file, env, last_state, expected_set)
     raise TimeoutError(
         f"compose project {project!r} ({compose_file.name}): not all expected "
         f"services {expected_set!r} became healthy within {timeout_s}s; "
         f"last state={last_state!r}"
     )
+
+
+def _dump_unhealthy_service_logs(
+    project: str,
+    compose_file: Path,
+    env: dict[str, str],
+    last_state: list[dict[str, Any]],
+    expected_set: set[str],
+) -> None:
+    """Emit `docker compose logs` for any expected service not yet `healthy`.
+
+    Called from ``_wait_for_all_healthy`` just before it raises ``TimeoutError``
+    so Linux-only startup crashes (e.g. ``Restarting (1)`` = main process
+    exited 1) surface their actual traceback in the test/CI log instead of only
+    the opaque `ps`-state. Best-effort and self-contained: bounded subprocess +
+    broad except so a logging failure can never shadow the real timeout cause.
+    """
+    health_by_name = {
+        s.get("Service"): s.get("Health") for s in last_state if isinstance(s.get("Service"), str)
+    }
+    # Services that are expected but either absent from `ps` or not `healthy`.
+    not_healthy = sorted(name for name in expected_set if health_by_name.get(name) != "healthy")
+    if not not_healthy:
+        return
+    _log.error(
+        "S-4 healthcheck timeout — dumping logs for not-healthy services: %r (observed health: %r)",
+        not_healthy,
+        {n: health_by_name.get(n, "<absent>") for n in not_healthy},
+    )
+    for svc in not_healthy:
+        try:
+            proc = subprocess.run(
+                _compose_cmd(project, compose_file, "logs", "--no-color", "--tail", "100", svc),
+                check=False,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            _log.error(
+                "==== docker compose logs %s (tail 100) ====\n%s\n%s",
+                svc,
+                proc.stdout,
+                proc.stderr,
+            )
+        except Exception:  # noqa: BLE001 — diagnostics must never mask the timeout
+            _log.exception("failed to capture logs for service %r", svc)
 
 
 def _resolve_mapped_port(
