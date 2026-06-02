@@ -20,10 +20,14 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncEngine
 
 from registry_api.routes.health import HealthResponse
 from registry_api.routes.health import router as health_router
@@ -223,7 +227,7 @@ class TestHealthRouteHappyPath:
 
     def _seeded_session_maker(
         self,
-    ) -> tuple[object, object]:
+    ) -> tuple[AsyncEngine, object]:
         """Build (engine, session_maker) against a seeded in-memory DB.
 
         Returns the engine too so the caller can dispose it. The DB has:
