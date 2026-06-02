@@ -24,6 +24,7 @@ from events.errors import (
     EventValidationError,
     WorktreeLockHeld,
 )
+from events.external_append import EVENT_LOG_FILE_MODE, append_event_line
 from events.ids import (
     new_decision_id,
     new_event_id,
@@ -86,10 +87,12 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [
+    "EVENT_LOG_FILE_MODE",
     "EVENT_TYPES",  # noqa: F405 — resolved lazily via __getattr__
     "FROZEN_EPOCH",
     "REGISTRY",
     "Actor",
+    "append_event_line",
     "CanonicalSerializationError",
     "CapabilityDenied",
     "Clock",
