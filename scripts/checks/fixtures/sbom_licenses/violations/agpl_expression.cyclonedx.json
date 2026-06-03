@@ -1,0 +1,15 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "components": [
+    {
+      "type": "library",
+      "name": "eta-agpl",
+      "version": "1.0.0",
+      "licenses": [
+        { "expression": "AGPL-3.0-only" }
+      ]
+    }
+  ]
+}

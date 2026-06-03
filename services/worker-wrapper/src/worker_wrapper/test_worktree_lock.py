@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -187,7 +188,7 @@ class TestReleaseLockTOCTOU:
 
         lock_file = tmp_path / ".oh-my-bmad.lock"
 
-        def _unlink_only_lock(self_path, *args, **kwargs):
+        def _unlink_only_lock(self_path: Path, *args: Any, **kwargs: Any) -> None:
             if self_path == lock_file:
                 raise FileNotFoundError("simulated TOCTOU race")
             return original_unlink(self_path, *args, **kwargs)
@@ -206,7 +207,9 @@ class TestReleaseLockTOCTOU:
 
         assert is_lock_held(tmp_path) is False
 
-    def test_release_no_error_log_on_vanished_file(self, tmp_path: Path, caplog) -> None:
+    def test_release_no_error_log_on_vanished_file(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """FNFE on unlink produces no ERROR-level logs."""
         import logging
 
@@ -215,7 +218,7 @@ class TestReleaseLockTOCTOU:
 
         lock_file = tmp_path / ".oh-my-bmad.lock"
 
-        def _unlink_only_lock(self_path, *args, **kwargs):
+        def _unlink_only_lock(self_path: Path, *args: Any, **kwargs: Any) -> None:
             if self_path == lock_file:
                 raise FileNotFoundError("simulated TOCTOU race")
             return original_unlink(self_path, *args, **kwargs)

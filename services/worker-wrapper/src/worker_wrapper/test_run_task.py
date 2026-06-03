@@ -29,7 +29,7 @@ from worker_wrapper.adapters.claude_code_runner import (
     ExtractedEvent,
 )
 from worker_wrapper.app.config import WorkerSettings
-from worker_wrapper.app.main import run_task
+from worker_wrapper.app.main import _MCPClients, run_task
 
 # Story 9.6 review pass-2 PH5 — env-cleaning fixture moved to
 # ``worker_wrapper/conftest.py`` (single shared autouse fixture).
@@ -50,7 +50,14 @@ def _make_settings(
 
 
 class _FakeClients:
-    """Minimal MCPClientGroup stub with async call_tool."""
+    """Minimal MCPClientGroup stub with async call_tool.
+
+    The three session attributes are ``AsyncMock`` doubles so individual
+    tests can reassign ``call_tool`` and introspect ``call_args`` /
+    ``await_args_list``. The fake is passed to ``run_task`` /
+    ``_emit_tier3_performed`` via ``_as_clients`` which casts it to the
+    ``_MCPClients`` protocol at the call seam.
+    """
 
     def __init__(self) -> None:
         self.clawhip_bridge = AsyncMock()
@@ -58,11 +65,21 @@ class _FakeClients:
         self.session_registry = AsyncMock()
         self.task_registry = AsyncMock()
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> _FakeClients:
         return self
 
     async def __aexit__(self, *args: Any) -> None:
         pass
+
+
+def _as_clients(fake: _FakeClients) -> _MCPClients:
+    """Cast a ``_FakeClients`` double to the protocol ``run_task`` expects.
+
+    Test-seam cast only: the fake provides the three session attributes the
+    protocol declares; mypy cannot see the structural match through the
+    ``AsyncMock`` attribute types, so the boundary is bridged here.
+    """
+    return cast("_MCPClients", fake)
 
 
 class TestRunTaskNoApprovalNeeded:
@@ -87,7 +104,7 @@ class TestRunTaskNoApprovalNeeded:
 
         with patch("worker_wrapper.app.main.ClaudeCodeRunner") as mock_runner:
             mock_runner.return_value.run = AsyncMock(return_value=result)
-            await run_task(clients, settings, "do stuff", tmp_path)
+            await run_task(_as_clients(clients), settings, "do stuff", tmp_path)
 
         # State file should exist with COMPLETED.
         state_file = tmp_path / ".lifecycle-state.json"
@@ -136,7 +153,7 @@ class TestRunTaskApprovalGranted:
             mock_waiter.return_value.wait_for_approval = AsyncMock(
                 return_value=fake_approval,
             )
-            await run_task(clients, settings, "implement X", tmp_path)
+            await run_task(_as_clients(clients), settings, "implement X", tmp_path)
 
         # tier3.action_performed emitted with accepted=True.
         mock_tier3.assert_awaited_once()
@@ -188,7 +205,7 @@ class TestRunTaskApprovalRejected:
             mock_waiter.return_value.wait_for_approval = AsyncMock(
                 return_value=fake_rejection,
             )
-            await run_task(clients, settings, "implement Y", tmp_path)
+            await run_task(_as_clients(clients), settings, "implement Y", tmp_path)
 
         mock_tier3.assert_awaited_once()
         assert mock_tier3.call_args.kwargs["accepted"] is False
@@ -232,7 +249,7 @@ class TestRunTaskApprovalTimeout:
             mock_waiter.return_value.wait_for_approval = AsyncMock(
                 side_effect=TimeoutError("timed out"),
             )
-            await run_task(clients, settings, "implement Z", tmp_path)
+            await run_task(_as_clients(clients), settings, "implement Z", tmp_path)
 
         assert mock_tier3.call_args.kwargs["accepted"] is False
 
@@ -280,7 +297,7 @@ class TestRunTaskRestartRecovery:
             mock_waiter.return_value.wait_for_approval = AsyncMock(
                 return_value=fake_approval,
             )
-            await run_task(clients, settings, "implement W", tmp_path)
+            await run_task(_as_clients(clients), settings, "implement W", tmp_path)
 
         # ClaudeCodeRunner.run should NOT have been called (restored state).
         mock_runner.return_value.run.assert_not_called()
@@ -298,7 +315,7 @@ class TestRunTaskNoTaskId:
         clients = _FakeClients()
 
         with pytest.raises(ValueError, match="task_id is required"):
-            await run_task(clients, settings, "do stuff", tmp_path)
+            await run_task(_as_clients(clients), settings, "do stuff", tmp_path)
 
 
 class TestRunTaskEventLogDirNotConfigured:
@@ -331,7 +348,7 @@ class TestRunTaskEventLogDirNotConfigured:
             ) as mock_tier3,
         ):
             mock_runner.return_value.run = AsyncMock(return_value=result)
-            await run_task(clients, settings, "implement Z", tmp_path)
+            await run_task(_as_clients(clients), settings, "implement Z", tmp_path)
 
         # Early return at event_log_dir check — tier3 never reached.
         assert mock_tier3.call_args is None
@@ -396,7 +413,7 @@ class TestRunTaskTraceIdPropagation:
 
         with patch("worker_wrapper.app.main.ClaudeCodeRunner") as mock_runner:
             mock_runner.return_value.run = AsyncMock(return_value=result)
-            await run_task(clients, settings, "do stuff", tmp_path)
+            await run_task(_as_clients(clients), settings, "do stuff", tmp_path)
 
         # Every lifecycle FSM transition emitted by LifecycleManager goes
         # through _emit_event → caller_trace_id must be present + identical.
@@ -433,7 +450,7 @@ class TestRunTaskTraceIdPropagation:
 
         with patch("worker_wrapper.app.main.ClaudeCodeRunner") as mock_runner:
             mock_runner.return_value.run = AsyncMock(return_value=result)
-            await run_task(clients, settings, "do stuff", tmp_path)
+            await run_task(_as_clients(clients), settings, "do stuff", tmp_path)
 
         assert len(captured) >= 1
         # All emissions share a single minted trace_id (per-invocation singleton).
@@ -492,7 +509,7 @@ class TestRunTaskTraceIdPropagation:
             mock_waiter.return_value.wait_for_approval = AsyncMock(
                 side_effect=TimeoutError("timed out"),
             )
-            await run_task(clients, settings, "implement timeout path", tmp_path)
+            await run_task(_as_clients(clients), settings, "implement timeout path", tmp_path)
 
         tier3_calls = [call for call in captured if call["type"] == "tier3.action_performed"]
         assert len(tier3_calls) == 1
@@ -518,7 +535,7 @@ class TestRunTaskTraceIdPropagation:
         settings = _make_settings(tmp_path, trace_id=tid)
 
         await _emit_tier3_performed(
-            clients,
+            _as_clients(clients),
             settings,
             task_id="t-00000000-0000-7000-8000-000000000001",
             accepted=True,
@@ -545,7 +562,7 @@ class TestRunTaskTraceIdPropagation:
         expected = settings.resolve_trace_id()
 
         await _emit_tier3_performed(
-            clients,
+            _as_clients(clients),
             settings,
             task_id="t-00000000-0000-7000-8000-000000000001",
             accepted=False,
@@ -616,7 +633,7 @@ class TestTriEqualByteIdentity:
 
         clients.clawhip_bridge.call_tool = AsyncMock(side_effect=capture)
         await _emit_tier3_performed(
-            clients,
+            _as_clients(clients),
             settings,
             task_id="t-00000000-0000-7000-8000-000000000001",
             accepted=True,
@@ -730,7 +747,12 @@ class TestRunTaskBudgetOverrideIntercepted:
             ),
         ):
             mock_runner.return_value.run = AsyncMock(return_value=result)
-            await run_task(clients, settings, "do stuff under budget override", tmp_path)  # type: ignore[arg-type]  # _FakeClients test harness
+            await run_task(
+                _as_clients(clients),
+                settings,
+                "do stuff under budget override",
+                tmp_path,
+            )
 
         # FALL-THROUGH: task COMPLETED (not failed) — the subprocess survived.
         state_file = tmp_path / ".lifecycle-state.json"
@@ -794,7 +816,12 @@ class TestRunTaskBudgetTerminated:
             mock_runner.return_value.run = AsyncMock(
                 side_effect=BrokenPipeError("subprocess SIGTERMed mid-stream")
             )
-            await run_task(clients, settings, "do stuff over budget", tmp_path)  # type: ignore[arg-type]  # _FakeClients test harness
+            await run_task(
+                _as_clients(clients),
+                settings,
+                "do stuff over budget",
+                tmp_path,
+            )
 
         # Terminated path drives TASK_FAILED.
         state_file = tmp_path / ".lifecycle-state.json"

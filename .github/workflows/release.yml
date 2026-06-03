@@ -214,6 +214,28 @@ jobs:
           artifact-name: sbom-base
 
       # ---------------------------------------------------------------------
+      # NFR-S11 / G1: publish-time license-incompatibility gate. FR40's
+      # commit-time copyleft/proprietary block (secret-hygiene pre-push scan)
+      # is extended to publish-time here: the CycloneDX SBOM generated above is
+      # scanned and the job FAILS if any component declares a license
+      # incompatible with the repo's MIT license — so the image is never signed
+      # (no continue-on-error) and never becomes a valid release. The gate
+      # reuses secret_hygiene.license_scan verbatim (single source of truth, no
+      # forked policy), invoked via uv (no forked policy in YAML).
+      # ---------------------------------------------------------------------
+      - name: Install uv + Python 3.12 (license gate)
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Sync workspace (license gate)
+        run: uv sync --frozen
+
+      - name: License-incompatibility gate (NFR-S11 / FR40 publish-time)
+        run: uv run python scripts/check_sbom_licenses.py --sbom sbom-base.cyclonedx.json
+
+      # ---------------------------------------------------------------------
       # Story 8.3 (Phase 2 Epic 8): cosign keyless signing — third + outermost
       # gate of the supply-chain triumvirate. The signature wraps an image
       # whose SLSA L2 attestation (Story 8.2) + CycloneDX SBOM (Story 8.1)
@@ -429,6 +451,26 @@ jobs:
           format: cyclonedx-json
           output-file: sbom-${{ matrix.service }}.cyclonedx.json
           artifact-name: sbom-${{ matrix.service }}
+
+      # ---------------------------------------------------------------------
+      # NFR-S11 / G1: publish-time license-incompatibility gate (per service).
+      # Same contract + rationale as the base-job gate above: the CycloneDX
+      # SBOM just generated is scanned against the MIT repo license; an
+      # incompatible component FAILS this matrix entry (no continue-on-error)
+      # so its image is never signed and never published. Policy is reused
+      # verbatim from secret_hygiene.license_scan via uv (no forked policy).
+      # ---------------------------------------------------------------------
+      - name: Install uv + Python 3.12 (license gate)
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Sync workspace (license gate)
+        run: uv sync --frozen
+
+      - name: License-incompatibility gate (NFR-S11 / FR40 publish-time)
+        run: uv run python scripts/check_sbom_licenses.py --sbom sbom-${{ matrix.service }}.cyclonedx.json
 
       # ---------------------------------------------------------------------
       # Story 8.3 (Phase 2 Epic 8): cosign keyless signing per service image.

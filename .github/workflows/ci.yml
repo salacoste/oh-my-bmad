@@ -67,6 +67,7 @@ jobs:
           uv run python scripts/check_single_writer.py --self-test
           uv run python scripts/check_registry_isolation.py --self-test
           uv run python scripts/check_mcp_transport.py --self-test
+          uv run python scripts/check_sbom_licenses.py --self-test
 
       - name: Check secrets (full tree)
         run: git ls-files -z | xargs -0 uv run secret-hygiene-precommit

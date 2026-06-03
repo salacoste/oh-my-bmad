@@ -8,6 +8,7 @@ layer (DIP compliance).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
 
@@ -18,7 +19,7 @@ class HasEventType(Protocol):
     event_type: str
 
 
-def needs_approval(events: list[HasEventType]) -> HasEventType | None:
+def needs_approval[EventT: HasEventType](events: Sequence[EventT]) -> EventT | None:
     """Return the first ``git.push`` event requiring approval, or ``None``.
 
     Phase-1 policy: only ``git push`` triggers the approval gate.
