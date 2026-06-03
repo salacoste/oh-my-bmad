@@ -17,8 +17,18 @@ top of that single source of truth.
 
 What it does:
   * Parses one or more CycloneDX-JSON SBOMs (``--sbom`` repeatable).
-  * For each ``components[]`` entry, collects every license candidate from its
-    ``licenses[]`` array:
+  * Scopes the gate to APPLICATION dependencies: a whole-image SBOM enumerates
+    the base OS distro's packages too (``pkg:deb/``, ``pkg:apk/``,
+    ``pkg:alpine/``, ``pkg:rpm/``), which are governed by the base image, not
+    this project. By default those OS-distro components are SKIPPED (matched on
+    the component ``purl`` ecosystem prefix, case-insensitively). Everything
+    else (``pkg:pypi/`` and any other / non-OS bundled deps) is evaluated, and
+    a component with NO ``purl`` is ALSO evaluated (fail-safe — never skipped).
+    Pass ``--include-os-packages`` to restore the old whole-image behavior and
+    evaluate OS-distro components too. The count of skipped OS-distro
+    components is reported on stderr (no silent skips).
+  * For each evaluated ``components[]`` entry, collects every license candidate
+    from its ``licenses[]`` array:
       - entry ``{"expression": "..."}``  → the SPDX expression as-is.
       - entry ``{"license": {"id": ...}}`` → the SPDX id.
       - entry ``{"license": {"name": ...}}`` → the name (id-absent fallback).
@@ -30,7 +40,10 @@ What it does:
 FAIL-CLOSED (never pass on an unparseable supply-chain artifact): a missing
 file, invalid JSON, or top-level non-object SBOM exits 1 with a clear error —
 even under the default ``--unknown-license warn``. An SBOM we cannot read is a
-gate we cannot enforce.
+gate we cannot enforce. The empty-components guard checks the ORIGINAL
+components array (before OS-distro filtering): an SBOM with zero components at
+all fails closed, but an all-OS-distro image (zero app deps after filtering)
+legitimately passes.
 
 Exit status: 0 when every component's declared licenses are compatible (and
 every SBOM parsed); 1 on ANY incompatible license OR ANY missing/unparseable
@@ -89,6 +102,30 @@ class SbomLicenseFinding:
 # ---------------------------------------------------------------------------
 # CycloneDX parsing
 # ---------------------------------------------------------------------------
+
+# OS-distro purl ecosystem prefixes. A whole-image SBOM lists the base OS's
+# packages under these schemes; they are governed by the base image, not this
+# project, so the gate skips them by default (use --include-os-packages to
+# include). Matched case-insensitively against the component's ``purl``.
+_OS_DISTRO_PURL_PREFIXES: tuple[str, ...] = (
+    "pkg:deb/",
+    "pkg:apk/",
+    "pkg:alpine/",
+    "pkg:rpm/",
+)
+
+
+def _is_os_distro_component(component: dict[str, Any]) -> bool:
+    """Return ``True`` if *component*'s ``purl`` is an OS-distro package.
+
+    A component with no ``purl`` (or a non-string one) is NOT treated as
+    OS-distro — it is evaluated (fail-safe: never skip an unidentified dep).
+    """
+    purl = component.get("purl")
+    if not isinstance(purl, str):
+        return False
+    purl_lower = purl.lower()
+    return any(purl_lower.startswith(prefix) for prefix in _OS_DISTRO_PURL_PREFIXES)
 
 
 def _component_label(component: dict[str, Any]) -> tuple[str, str]:
@@ -153,6 +190,7 @@ def scan_sbom(
     *,
     repo_license: str,
     unknown_license: str,
+    include_os_packages: bool = False,
 ) -> list[SbomLicenseFinding]:
     """Scan a single SBOM, returning every incompatible-license finding.
 
@@ -160,6 +198,11 @@ def scan_sbom(
     A component with no declared license is governed by *unknown_license*:
     ``warn`` emits a stderr note and records nothing; ``fail`` records a
     finding with an ``unknown-incompatible`` reason code.
+
+    When *include_os_packages* is False (default) OS-distro components (purl
+    ``pkg:deb/`` / ``pkg:apk/`` / ``pkg:alpine/`` / ``pkg:rpm/``) are skipped
+    and the skipped count is reported on stderr. When True every component is
+    evaluated (old whole-image behavior).
     """
     data = _load_sbom(path)
     sbom_label = str(path)
@@ -169,6 +212,8 @@ def scan_sbom(
     # always enumerates components. A missing/non-list/empty ``components``
     # array means the gate cannot inspect any dependency — refuse to pass it
     # rather than silently green-light an image whose deps were never listed.
+    # NOTE: this guard checks the ORIGINAL array (before OS-distro filtering),
+    # so an all-OS image (zero app deps after filtering) does NOT trip it.
     components = data.get("components")
     if not isinstance(components, list) or len(components) == 0:
         raise ValueError(
@@ -176,8 +221,12 @@ def scan_sbom(
             "license gate that cannot inspect any dependencies (fail-closed)"
         )
 
+    os_skipped = 0
     for component in components:
         if not isinstance(component, dict):
+            continue
+        if not include_os_packages and _is_os_distro_component(component):
+            os_skipped += 1
             continue
         name, version = _component_label(component)
         candidates = _license_candidates(component)
@@ -214,6 +263,13 @@ def scan_sbom(
                         reason_code=_reason_code(candidate),
                     )
                 )
+
+    if os_skipped:
+        print(
+            f"note: {sbom_label}: skipped {os_skipped} OS-distro component(s) "
+            "(pkg:deb/apk/rpm); pass --include-os-packages to include",
+            file=sys.stderr,
+        )
 
     return findings
 
@@ -319,6 +375,15 @@ def main(argv: list[str] | None = None) -> int:
         default="warn",
         help="How to treat components with no declared license (default: warn).",
     )
+    parser.add_argument(
+        "--include-os-packages",
+        action="store_true",
+        help=(
+            "Also evaluate OS-distro components (pkg:deb/apk/alpine/rpm). By "
+            "default these are skipped as base-image deps (whole-image SBOM "
+            "scoping); set this for the old whole-image behavior."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.self_test:
@@ -336,6 +401,7 @@ def main(argv: list[str] | None = None) -> int:
                     Path(sbom_path),
                     repo_license=args.repo_license,
                     unknown_license=args.unknown_license,
+                    include_os_packages=args.include_os_packages,
                 )
             )
         except ValueError as exc:

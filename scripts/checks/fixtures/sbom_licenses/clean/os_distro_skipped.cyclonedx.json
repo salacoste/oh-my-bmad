@@ -1,0 +1,16 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "components": [
+    {
+      "type": "library",
+      "name": "bash",
+      "version": "5.2",
+      "purl": "pkg:deb/debian/bash@5.2",
+      "licenses": [
+        { "license": { "id": "GPL-2.0-only" } }
+      ]
+    }
+  ]
+}
