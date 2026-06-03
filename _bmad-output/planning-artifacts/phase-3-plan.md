@@ -19,7 +19,7 @@
 - **Event-only telemetry** (NFR-O1/O10) — servers emit typed events on the spine; metrics remain derived in metrics-subscriber; NO per-server instrumentation.
 - **trace_id propagation** (NFR-O7) — every new server stamps/propagates trace_id.
 - **Tier-enforced authz** (Epic 6) — destructive tools (git push, github writes, artifact deletes) are Tier-3 gated through the approval flow.
-- **Supply-chain** (Epic 8 + G-SEC-1/2) — each new server image ships cosign/SLSA/SBOM-signed, passes the (now fail-closed) license gate, and uses the child-env allowlist.
+- **Supply-chain** (Epic 8 + G-SEC-1/2) — each new server ships as a **wheel in the signed base image** (no per-server image); it inherits cosign/SLSA/SBOM signing transitively, passes the (now fail-closed) license gate, and uses the child-env allowlist.
 
 ## 2. Proposed FRs / NFRs (PRD-extension sketch — finalize in create-prd)
 
@@ -33,14 +33,14 @@ Numbering continues from FR71a → **FR72+**. Each is crisp + testable, mirrorin
 - **FR77 — digest-deprecation execution (was FR56's Phase-3 commitment).** Remove the tag-based image-reference fallback; digest-pinned references (`OMB_IMAGE_DIGEST_*`) become the sole supported deploy path; update compose/docs/`just verify-images` accordingly; tag refs emit a deprecation warning then are dropped.
 - **NFR-(O-series) — mutation-testing nightly gate.** A nightly mutation-testing run (e.g. `mutmut`/`cosmic-ray`) over the platform-owned packages, with a published mutation score; gate threshold TBD. Evidence-gated per `architecture.md:1493` (metrics-subscriber data now available to justify runtime).
 - **NFR-(M-series) — fleet separability.** Each new server is an optional, swappable stdio member: adding/removing it requires no source change to other services; verified by new `tests/separability/` entries (S-5…S-9).
-- **NFR-(S-series) — fleet supply-chain + authz.** Every new server image is cosign/SLSA/SBOM-signed, passes the fail-closed license gate + child-env allowlist; every destructive tool is Tier-3-gated (negative tests prove denial without approval).
+- **NFR-(S-series) — fleet supply-chain + authz.** Every new server ships as a **wheel in the signed base image** and is cosign/SLSA/SBOM-covered transitively (no per-server image, no release-matrix row), passes the fail-closed license gate + child-env allowlist; every destructive tool is Tier-3-gated (negative tests prove denial without approval).
 
 ## 3. Epic Breakdown (next epic # = 14, dependency order per D4)
 
 | Epic | Goal | Covers | Key stories (skeleton) | Acceptance gate |
 |---|---|---|---|---|
 | **14 — Tests-first hardening warm-up** | Land pure verification/CI work before any feature surface (Epic-8-before-features pattern). | FR77 (digest-deprecation), mutation-gate NFR | 14.1 digest-deprecation (drop tag fallback + compose/docs/verify-images) · 14.2 mutation-testing nightly gate scaffold + baseline score · 14.3 mutation-gate threshold decision + CI wiring · 14.4 G-FN triage (decide pull-in/defer G-FN-1/2/3) | digest-only deploy verified green; mutation nightly runs + publishes score; G-FN dispositions recorded |
-| **15 — `git` MCP server** (recipe-establishing) | First fleet server; establishes the reusable "new stdio MCP server" recipe (authz + telemetry + separability + supply-chain). ATDD/test-design-first per operator priority. | FR72 | 15.1 test-design/ATDD red-phase per git tool contract · 15.2 server scaffold (stdio, workspace member) · 15.3 read tools (status/diff/log) Tier-1 · 15.4 mutating tools (commit/push) Tier-3-gated + events · 15.5 separability S-5 · 15.6 supply-chain (image + sign + license gate) | git tools work in worktree; push Tier-3-denied without approval (negative test); S-5 green; image verify-images-green |
+| **15 — `git` MCP server** (recipe-establishing) | First fleet server; establishes the reusable "new stdio MCP server" recipe (authz + telemetry + separability + supply-chain). ATDD/test-design-first per operator priority. | FR72 | 15.1 test-design/ATDD red-phase per git tool contract · 15.2 server scaffold (stdio, workspace member) · 15.3 read tools (status/diff/log) Tier-1 · 15.4 mutating tools (commit/push) Tier-3-gated + events · 15.5 separability S-5 · 15.6 supply-chain (transitive base-image inclusion + license gate) | git tools work in worktree; push Tier-3-denied without approval (negative test); S-5 green; base image carrying the server verify-images-green |
 | **16 — `github` MCP server** | GitHub issues/PRs/reviews surface; scoped-token auth (G-SEC-2 follow-up). | FR73 | 16.1 ATDD · 16.2 scaffold · 16.3 read tools · 16.4 write tools Tier-3-gated · 16.5 scoped-credential design (close G-SEC-2 GITHUB_TOKEN follow-up) · 16.6 separability S-6 + supply-chain | writes Tier-3-gated; scoped creds (no broad PAT in agent env); S-6 green |
 | **17 — `build`/`verification` MCP server** | Structured build+test execution surface. | FR74 | 17.1 ATDD · 17.2 scaffold · 17.3 run-build/run-tests tools (sandboxed) · 17.4 structured-result + `verification.*` events · 17.5 separability S-7 + supply-chain | build/test run + structured results; events emitted; S-7 green |
 | **18 — `memory`/`wiki` MCP server** | Cross-task persistent knowledge (FS + SQLite FTS5). | FR75 | 18.1 ATDD · 18.2 store schema (FTS5, own file — single-writer-safe) · 18.3 read/search tools · 18.4 write tool Tier-2 · 18.5 separability S-8 + supply-chain | search returns relevant results; store isolated from registry DB; S-8 green |
@@ -51,7 +51,7 @@ Numbering continues from FR71a → **FR72+**. Each is crisp + testable, mirrorin
 
 ## 4. Sequencing Rationale & Dependencies
 
-- **Epic 14 first (D4):** pure verification/CI, zero feature surface, satisfies the tests-first priority and de-risks the deploy path (digest-only) before publishing 5 new server images.
+- **Epic 14 first (D4):** pure verification/CI, zero feature surface, satisfies the tests-first priority and de-risks the deploy path (digest-only) before the base image carrying five new servers is published.
 - **Epic 15 (git) second:** establishes the MCP-server recipe at the lowest-risk, best-understood domain (git ops already partly solved); every later server reuses its scaffold/authz/separability/supply-chain pattern.
 - **Epics 16–19 then largely parallelizable** once the recipe exists — github/build/memory/artifact are independent server workspaces. Recommended order github → build → memory → artifact (operator-visibility + reuse of the github scoped-cred work).
 - **Each epic is independently shippable** (a new optional stdio server), so Phase 3 can release incrementally (v0.4.0 after Epic 15, etc.) rather than one big-bang.
@@ -79,9 +79,9 @@ Numbering continues from FR71a → **FR72+**. Each is crisp + testable, mirrorin
 - [ ] No instrumentation outside metrics-subscriber (servers emit events only).
 - [ ] Every new event carries trace_id.
 - [ ] No new public-network ingress (servers are stdio, internal).
-- [ ] Cosign + SLSA + CycloneDX SBOM + fail-closed license gate + child-env allowlist on every new server image.
+- [ ] Cosign + SLSA + CycloneDX SBOM + fail-closed license gate covering the base image that carries all new servers (no per-server image); child-env allowlist on every new server.
 
-**Per-epic gates:** each server — tools function in-worktree · destructive tools Tier-3-denied without approval (negative test) · separability S-entry green · image `just verify-images`-green. Epic 14 — digest-only deploy green · mutation nightly publishes score.
+**Per-epic gates:** each server — tools function in-worktree · destructive tools Tier-3-denied without approval (negative test) · separability S-entry green · base image carrying the server `just verify-images`-green. Epic 14 — digest-only deploy green · mutation nightly publishes score.
 
 **Phase-1+2 invariants regression-free:** separability S-1…S-9 green · crash-injection green · idempotency green · contract green (incl. new event types) · arch gates green · replay equivalence holds.
 

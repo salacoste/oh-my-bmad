@@ -40,7 +40,7 @@ Phase 3's documented theme is **"MCP tooling fleet / MCP-tooling baseline"** (`p
 
 **Unblocked NOW by shipped Phase-2 work:**
 - Second CLI agent / head-to-head (#13) ← trace_id kernel (Epic 9) + metrics-subscriber (Epic 10) — the explicit enablers (`architecture.md:1491`).
-- Any new server's release/hardening ← supply-chain pipeline (Epic 8) + the just-shipped NFR-S11 license gate — new servers inherit cosign/SLSA/SBOM + license gating for free.
+- Any new server's release/hardening ← supply-chain pipeline (Epic 8) + the just-shipped NFR-S11 license gate — new servers ship as **wheels in the signed base image** (no per-server image) and so inherit cosign/SLSA/SBOM + license gating transitively, for free.
 - Mutation-testing gate (#14) ← metrics plane + existing nightly harness.
 - FR56 digest-deprecation (#15) ← `OMB_IMAGE_DIGEST_*` + `just verify-images` already primary; cheapest item.
 
