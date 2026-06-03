@@ -5,6 +5,18 @@ findings.  Designed to run as a pre-push step on agent-generated commits
 (FR40, NFR-S8).  ``scancode-toolkit`` is an **optional** dependency — when
 unavailable the module degrades gracefully (returns no findings, logs a warning).
 
+Policy model (G-SEC-1, fail-closed):
+  The compatibility policy is **allowlist-based and fail-closed**. A license is
+  compatible ONLY if (after normalization via :data:`_LICENSE_ALIASES`) it is in
+  :data:`PERMISSIVE_LICENSES`, matches the repo's own license, or is explicitly
+  accepted by the caller via the ``extra_allowed`` operator-override set.
+  Everything else — copyleft, proprietary, AND genuinely-unknown licenses — is
+  treated as INCOMPATIBLE (previously unknown licenses defaulted OPEN, silently
+  passing the release gate). Free-text license strings (e.g. "Apache 2.0",
+  "MIT License") are normalized to canonical SPDX ids first so legitimate deps
+  are not falsely blocked. This module is PURE — it never reads the environment;
+  callers (e.g. scripts/check_sbom_licenses.py) supply ``extra_allowed``.
+
 Usage (programmatic)::
 
     from secret_hygiene.license_scan import scan_file_licenses, scan_files_for_licenses
@@ -71,25 +83,68 @@ COPYLEFT_INDICATORS: frozenset[str] = frozenset(
 
 REPO_LICENSE: str = "mit"
 
+# Free-text license-string aliases → canonical SPDX id already in
+# PERMISSIVE_LICENSES. Keys are lowercased+stripped. Kept deliberately
+# CONSERVATIVE: only unambiguous permissive variants — adding a non-permissive
+# mapping here would silently re-open the fail-closed gate. (G-SEC-1)
+_LICENSE_ALIASES: dict[str, str] = {
+    "apache 2.0": "apache-2.0",
+    "apache license 2.0": "apache-2.0",
+    "apache license, version 2.0": "apache-2.0",
+    "apache software license": "apache-2.0",
+    "apache software license 2.0": "apache-2.0",
+    "mit license": "mit",
+    "isc license": "isc",
+    "isc license (iscl)": "isc",
+    "the unlicense": "unlicense",
+    "python software foundation license": "psf-2.0",
+    "psf": "psf-2.0",
+    "bsd license": "bsd-3-clause",
+    "bsd": "bsd-3-clause",
+}
+
 
 def _normalize(license_expr: str) -> str:
     """Normalize a license expression to lowercase for comparison."""
     return license_expr.lower().strip()
 
 
-def is_compatible(detected: str, repo_license: str = REPO_LICENSE) -> bool:
+def _canonicalize(token: str) -> str:
+    """Canonicalize a single license token / expression.
+
+    Lowercases and strips, then maps known free-text aliases (e.g.
+    "Apache 2.0", "MIT License") to their canonical SPDX id. Returns the
+    normalized token unchanged when no alias applies.
+    """
+    norm = _normalize(token)
+    return _LICENSE_ALIASES.get(norm, norm)
+
+
+def is_compatible(
+    detected: str,
+    repo_license: str = REPO_LICENSE,
+    extra_allowed: frozenset[str] = frozenset(),
+) -> bool:
     """Return ``True`` if *detected* license is compatible with *repo_license*.
 
-    A license is compatible when it is in :data:`PERMISSIVE_LICENSES` or matches
-    the project's own license.  Copyleft indicators (gpl, agpl, …) are
-    considered incompatible.
+    Fail-closed allowlist policy (G-SEC-1): a license is compatible only when it
+    is in :data:`PERMISSIVE_LICENSES`, matches *repo_license*, or appears in
+    *extra_allowed* (operator override) — after :func:`_canonicalize`
+    normalization. Copyleft, proprietary, AND genuinely-unknown licenses are all
+    incompatible.
+
+    *extra_allowed* entries are canonicalized here, so callers may pass raw
+    operator-supplied strings.
     """
-    norm = _normalize(detected)
+    extra_allowed = frozenset(_canonicalize(e) for e in extra_allowed)
+    norm = _canonicalize(detected)
     if not norm:
         return True
-    if norm == _normalize(repo_license):
+    if norm == _canonicalize(repo_license):
         return True
     if norm in PERMISSIVE_LICENSES:
+        return True
+    if norm in extra_allowed:
         return True
     # Composite expressions — split on AND and OR separately.
     # AND: every component must be compatible.
@@ -100,22 +155,34 @@ def is_compatible(detected: str, repo_license: str = REPO_LICENSE) -> bool:
         or_tokens = re.split(r"\s+or\s+", group)
         if len(or_tokens) > 1:
             # OR group: compatible if ANY branch is ok
-            if not any(_token_ok(t.strip("() "), repo_license) for t in or_tokens):
+            if not any(_token_ok(t.strip("() "), repo_license, extra_allowed) for t in or_tokens):
                 return False
         else:
-            if not _token_ok(group, repo_license):
+            if not _token_ok(group, repo_license, extra_allowed):
                 return False
     return True
 
 
-def _token_ok(token: str, repo_license: str) -> bool:
-    """Return True if a single license token is compatible."""
-    token = token.strip("() ")
+def _token_ok(
+    token: str,
+    repo_license: str,
+    extra_allowed: frozenset[str] = frozenset(),
+) -> bool:
+    """Return True if a single license token is compatible (fail-closed).
+
+    *extra_allowed* is assumed already canonicalized by the caller
+    (:func:`is_compatible`); each entry is re-canonicalized defensively so the
+    helper is safe to call standalone with raw operator strings.
+    """
+    extra_allowed = frozenset(_canonicalize(e) for e in extra_allowed)
+    token = _canonicalize(token.strip("() "))
     if token in PERMISSIVE_LICENSES:
         return True
-    if token == _normalize(repo_license):
+    if token == _canonicalize(repo_license):
         return True
-    return all(indicator not in token for indicator in COPYLEFT_INDICATORS)
+    # FAIL-CLOSED: only an explicit operator override can accept anything else
+    # (copyleft / proprietary / genuinely-unknown all fall through to False).
+    return token in extra_allowed
 
 
 def _reason_code(detected: str) -> str:

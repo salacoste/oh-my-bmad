@@ -185,3 +185,67 @@ def test_pypi_mpl2_passes() -> None:
         ["--sbom", str(FIXTURES / "clean" / "pypi_mpl2.cyclonedx.json")]
     )
     assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# G-SEC-1: fail-closed unknown licenses + operator override
+# ---------------------------------------------------------------------------
+
+
+def _write_unknown_sbom(tmp_path: Path) -> Path:
+    """Write an SBOM with one pypi component carrying an unknown license."""
+    sbom = tmp_path / "unknown.cyclonedx.json"
+    sbom.write_text(
+        '{"components":[{"name":"frob","version":"1","'
+        'purl":"pkg:pypi/frob@1",'
+        '"licenses":[{"license":{"name":"Frobnicate-1.0"}}]}]}'
+    )
+    return sbom
+
+
+def test_unknown_license_fails_closed_by_default(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """G-SEC-1: an unknown-license pypi component now FAILS by default
+    (previously default-OPEN silently passed)."""
+    mod = _load_module()
+    sbom = _write_unknown_sbom(tmp_path)
+    rc = mod.main(["--sbom", str(sbom)])  # type: ignore[attr-defined]
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "unknown-incompatible" in err
+    # Operator guidance is surfaced for the actionable case.
+    assert "OMB_LICENSE_EXTRA_ALLOWED" in err
+    assert "--allow-license" in err
+
+
+def test_unknown_license_passes_with_allow_license_flag(tmp_path: Path) -> None:
+    mod = _load_module()
+    sbom = _write_unknown_sbom(tmp_path)
+    rc = mod.main(  # type: ignore[attr-defined]
+        ["--sbom", str(sbom), "--allow-license", "Frobnicate-1.0"]
+    )
+    assert rc == 0
+
+
+def test_unknown_license_passes_with_env_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    sbom = _write_unknown_sbom(tmp_path)
+    monkeypatch.setenv("OMB_LICENSE_EXTRA_ALLOWED", "other-thing, Frobnicate-1.0")
+    rc = mod.main(["--sbom", str(sbom)])  # type: ignore[attr-defined]
+    assert rc == 0
+
+
+def test_freetext_apache_alias_passes(tmp_path: Path) -> None:
+    """A pypi component with free-text 'Apache 2.0' passes via alias
+    normalization (legit deps not broken by fail-closed)."""
+    mod = _load_module()
+    sbom = tmp_path / "apache_freetext.cyclonedx.json"
+    sbom.write_text(
+        '{"components":[{"name":"a","version":"1",'
+        '"purl":"pkg:pypi/a@1",'
+        '"licenses":[{"license":{"name":"Apache 2.0"}}]}]}'
+    )
+    assert mod.main(["--sbom", str(sbom)]) == 0  # type: ignore[attr-defined]
