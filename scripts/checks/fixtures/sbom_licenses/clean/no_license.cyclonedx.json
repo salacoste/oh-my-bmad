@@ -1,0 +1,13 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "components": [
+    {
+      "type": "library",
+      "name": "epsilon-unlicensed",
+      "version": "1.2.3",
+      "licenses": []
+    }
+  ]
+}

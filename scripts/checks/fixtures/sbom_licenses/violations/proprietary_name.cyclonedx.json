@@ -1,0 +1,15 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "components": [
+    {
+      "type": "library",
+      "name": "theta-proprietary",
+      "version": "7.7.7",
+      "licenses": [
+        { "license": { "name": "Proprietary" } }
+      ]
+    }
+  ]
+}

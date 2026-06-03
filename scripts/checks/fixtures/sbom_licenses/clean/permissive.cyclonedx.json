@@ -1,0 +1,39 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "components": [
+    {
+      "type": "library",
+      "name": "alpha-mit",
+      "version": "1.0.0",
+      "licenses": [
+        { "license": { "id": "MIT" } }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "beta-apache",
+      "version": "2.3.4",
+      "licenses": [
+        { "license": { "id": "Apache-2.0" } }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "gamma-dual",
+      "version": "0.9.1",
+      "licenses": [
+        { "expression": "(MIT OR Apache-2.0)" }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "delta-bsd",
+      "version": "3.1.0",
+      "licenses": [
+        { "license": { "id": "BSD-3-Clause" } }
+      ]
+    }
+  ]
+}

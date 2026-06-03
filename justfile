@@ -197,6 +197,7 @@ check-gates-self-test:
     uv run python scripts/check_event_registry.py --self-test
     uv run python scripts/check_single_writer.py --self-test
     uv run python scripts/check_mcp_transport.py --self-test
+    uv run python scripts/check_sbom_licenses.py --self-test
 
 # Scenario harness (journey-level smoke tests) lands across Stories 2.11 /
 # 2.12 / 5.18. Story 1.5 only wires the harness; real scenarios land later.
@@ -474,6 +475,15 @@ verify-images:
     # operator a clearer error message naming the .env variable to fix.
     digest_re='^sha256:[a-f0-9]{64}$'
     failures=()
+    # G2 (FR56a / NFR-S9): parallel structured track for the 3 cosign-verify
+    # failure types, so the final block can best-effort emit one
+    # ``deployment.signature_rejected`` event per failed check. We deliberately
+    # do NOT record the "digest not set / invalid format" failures here — there
+    # is no resolvable image to attest in those cases.
+    emit_image=()
+    emit_digest=()
+    emit_type=()
+    emit_errtail=()
     for svc in "${SERVICES[@]}"; do
         digest_var="OMB_IMAGE_DIGEST_${svc//-/_}"
         digest="${!digest_var:-}"
@@ -486,6 +496,10 @@ verify-images:
             continue
         fi
         image="${REGISTRY}/${OMB_GHCR_OWNER}/oh-my-bmad-${svc}@${digest}"
+        # Digest-less repo ref for the emit helper's --image arg: its payload
+        # model (_IMAGE_PATTERN) accepts the canonical repo ref WITHOUT the
+        # ``@sha256:...`` suffix (the digest is carried separately in --digest).
+        image_ref="${REGISTRY}/${OMB_GHCR_OWNER}/oh-my-bmad-${svc}"
         echo "→ verifying $svc @ $digest"
         # 1. cosign signature (Story 8.3)
         errfile=$(mktemp)
@@ -496,6 +510,7 @@ verify-images:
             "$image" >/dev/null 2>"$errfile"; then
             errtail=$(tail -5 "$errfile" 2>/dev/null || true)
             failures+=("$svc: cosign verify (signature) FAILED — owned by Story 8.3"$'\n'"    $errtail")
+            emit_image+=("$image_ref"); emit_digest+=("$digest"); emit_type+=("signature"); emit_errtail+=("$errtail")
         fi
         rm -f "$errfile"
         # 2. SLSA L2 provenance attestation (Story 8.2)
@@ -512,6 +527,7 @@ verify-images:
             "$image" >/dev/null 2>"$errfile"; then
             errtail=$(tail -5 "$errfile" 2>/dev/null || true)
             failures+=("$svc: cosign verify-attestation slsaprovenance FAILED — owned by Story 8.2"$'\n'"    $errtail")
+            emit_image+=("$image_ref"); emit_digest+=("$digest"); emit_type+=("slsaprovenance"); emit_errtail+=("$errtail")
         fi
         rm -f "$errfile"
         # 3. CycloneDX SBOM attestation (Story 8.4)
@@ -527,6 +543,7 @@ verify-images:
             "$image" >/dev/null 2>"$errfile"; then
             errtail=$(tail -5 "$errfile" 2>/dev/null || true)
             failures+=("$svc: cosign verify-attestation cyclonedx FAILED — owned by Story 8.4"$'\n'"    $errtail")
+            emit_image+=("$image_ref"); emit_digest+=("$digest"); emit_type+=("cyclonedx"); emit_errtail+=("$errtail")
         fi
         rm -f "$errfile"
     done
@@ -537,6 +554,57 @@ verify-images:
         echo
         echo "Triage: see docs/deployment-guide.md §Verifying releases for fix-forward procedures."
         echo "Do NOT run docker compose pull until all verifications pass."
+        # G2 traceability close (FR56a / NFR-S9): best-effort record one
+        # ``deployment.signature_rejected`` event per FAILED cosign-verify check,
+        # routed THROUGH scripts/emit_signature_rejected.py (FR26: that helper
+        # is the single flock-defended writer — no second writer path here).
+        #
+        # Hard conservatism rules:
+        #   * Emission is BEST-EFFORT. It NEVER changes the outcome: this recipe
+        #     always still `exit 1` below regardless of emit success/failure.
+        #   * Guarded so a non-zero emit exit does not trip `set -e`.
+        #   * Helper exit 3 (flock contention = stack appears up) → ::warning::
+        #     and continue. Any other non-zero → ::warning:: and continue.
+        #   * `uv` missing → ::warning:: and skip.
+        #   * Opt-out: OMB_SKIP_REJECTION_EVENT=1 skips emission with a notice.
+        if [ "${OMB_SKIP_REJECTION_EVENT:-0}" = "1" ]; then
+            echo "::notice::OMB_SKIP_REJECTION_EVENT=1 — skipping deployment.signature_rejected emission (G2 opt-out)."
+        elif [ ${#emit_type[@]} -eq 0 ]; then
+            : # no emittable cosign-verify failures (only digest not-set/format) — nothing to record.
+        elif ! command -v uv >/dev/null 2>&1; then
+            echo "::warning::uv not on PATH — skipping deployment.signature_rejected emission (FR56a/NFR-S9 gap not recorded for this run)."
+        else
+            for i in "${!emit_type[@]}"; do
+                emit_args=(
+                    run python scripts/emit_signature_rejected.py
+                    --image "${emit_image[$i]}"
+                    --digest "${emit_digest[$i]}"
+                    --attestation-type "${emit_type[$i]}"
+                    --error-message "${emit_errtail[$i]}"
+                    --omb-version "${OMB_VERSION:-unknown}"
+                    --ghcr-owner "$OMB_GHCR_OWNER"
+                    # operator-id must match the payload model's
+                    # ``^op-[a-zA-Z0-9-]+$`` contract; ``op-verify-images``
+                    # identifies the gate as emitter AND passes validation so
+                    # the rejection event is actually recorded (gap closed).
+                    --operator-id "${OMB_OPERATOR_ID:-op-verify-images}"
+                )
+                # Only redirect the event log when the operator/test sets the
+                # override; otherwise the helper uses its own default dir.
+                if [ -n "${OMB_EVENT_LOG_DIR:-}" ]; then
+                    emit_args+=(--event-log-dir "$OMB_EVENT_LOG_DIR")
+                fi
+                # Guard the call so a non-zero exit does NOT abort via set -e,
+                # while still capturing the code for the exit-3 distinction.
+                emit_rc=0
+                uv "${emit_args[@]}" || emit_rc=$?
+                if [ "$emit_rc" -eq 3 ]; then
+                    echo "::warning::rejection event not recorded — registry-state holds the log lock; stack appears up (${emit_type[$i]} / ${emit_image[$i]})."
+                elif [ "$emit_rc" -ne 0 ]; then
+                    echo "::warning::emit_signature_rejected exited ${emit_rc} — rejection event not recorded (${emit_type[$i]} / ${emit_image[$i]})."
+                fi
+            done
+        fi
         exit 1
     fi
     echo
