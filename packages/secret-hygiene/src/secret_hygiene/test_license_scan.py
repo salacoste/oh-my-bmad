@@ -106,6 +106,46 @@ class TestIsCompatible:
     def test_or_expression_all_copyleft(self) -> None:
         assert not is_compatible("gpl-2.0 OR agpl-3.0")
 
+    # --- G-SEC-1: free-text alias normalization -----------------------------
+
+    def test_apache_freetext_aliases_compatible(self) -> None:
+        assert is_compatible("Apache 2.0")
+        assert is_compatible("Apache License 2.0")
+        assert is_compatible("Apache License, Version 2.0")
+        assert is_compatible("Apache Software License")
+
+    def test_mit_license_freetext_compatible(self) -> None:
+        assert is_compatible("MIT License")
+
+    def test_isc_license_freetext_compatible(self) -> None:
+        assert is_compatible("ISC License")
+        assert is_compatible("ISC License (ISCL)")
+
+    def test_psf_aliases_compatible(self) -> None:
+        assert is_compatible("Python Software Foundation License")
+        assert is_compatible("PSF")
+
+    def test_bsd_freetext_compatible(self) -> None:
+        assert is_compatible("BSD License")
+        assert is_compatible("BSD")
+
+    # --- G-SEC-1: fail-closed on genuinely-unknown licenses -----------------
+
+    def test_unknown_license_fail_closed(self) -> None:
+        # Previously defaulted OPEN; now an unknown license is INCOMPATIBLE.
+        assert not is_compatible("Frobnicate-1.0")
+        assert not is_compatible("WTFPL")
+
+    def test_unknown_license_with_operator_override(self) -> None:
+        assert is_compatible("Frobnicate-1.0", extra_allowed=frozenset({"frobnicate-1.0"}))
+        # Override entries are canonicalized → raw mixed-case also works.
+        assert is_compatible("Frobnicate-1.0", extra_allowed=frozenset({"Frobnicate-1.0"}))
+
+    def test_override_in_and_expression(self) -> None:
+        # An unknown token inside an AND expression passes only with override.
+        assert not is_compatible("mit AND frobnicate-1.0")
+        assert is_compatible("mit AND frobnicate-1.0", extra_allowed=frozenset({"frobnicate-1.0"}))
+
 
 class TestReasonCode:
     """_reason_code returns correct categorization."""

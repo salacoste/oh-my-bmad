@@ -37,6 +37,14 @@ What it does:
     ``--unknown-license`` (default ``warn`` → stderr note, no failure;
     ``fail`` → recorded as a finding).
 
+Fail-closed policy + operator override (G-SEC-1): the underlying policy is now
+allowlist-based — an UNKNOWN license (not permissive, not copyleft, not the repo
+license) no longer silently passes; it fails with reason ``unknown-incompatible``.
+A reviewed-and-accepted license may be allowlisted at the call site via the
+repeatable ``--allow-license <spdx-or-string>`` flag and/or the
+``OMB_LICENSE_EXTRA_ALLOWED`` env var (comma-separated); the two are unioned and
+passed as ``extra_allowed`` to the policy (which canonicalizes them).
+
 FAIL-CLOSED (never pass on an unparseable supply-chain artifact): a missing
 file, invalid JSON, or top-level non-object SBOM exits 1 with a clear error —
 even under the default ``--unknown-license warn``. An SBOM we cannot read is a
@@ -60,6 +68,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -191,6 +200,7 @@ def scan_sbom(
     repo_license: str,
     unknown_license: str,
     include_os_packages: bool = False,
+    extra_allowed: frozenset[str] = frozenset(),
 ) -> list[SbomLicenseFinding]:
     """Scan a single SBOM, returning every incompatible-license finding.
 
@@ -252,7 +262,7 @@ def scan_sbom(
             continue
 
         for candidate in candidates:
-            if not is_compatible(candidate, repo_license):
+            if not is_compatible(candidate, repo_license, extra_allowed=extra_allowed):
                 findings.append(
                     SbomLicenseFinding(
                         sbom=sbom_label,
@@ -384,6 +394,17 @@ def main(argv: list[str] | None = None) -> int:
             "scoping); set this for the old whole-image behavior."
         ),
     )
+    parser.add_argument(
+        "--allow-license",
+        action="append",
+        metavar="SPDX",
+        default=[],
+        help=(
+            "Operator override: allowlist a reviewed-and-accepted license "
+            "(repeatable). Unioned with the OMB_LICENSE_EXTRA_ALLOWED env var "
+            "(comma-separated). Canonicalized by the policy module."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.self_test:
@@ -391,6 +412,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.sbom:
         parser.error("at least one --sbom is required (or use --self-test)")
+
+    # Operator override: union of --allow-license flags and the
+    # OMB_LICENSE_EXTRA_ALLOWED env var (comma-separated). Canonicalization
+    # happens inside the policy module.
+    extra_allowed_values: set[str] = {a.strip() for a in args.allow_license if a.strip()}
+    env_extra = os.environ.get("OMB_LICENSE_EXTRA_ALLOWED", "")
+    extra_allowed_values.update(p.strip() for p in env_extra.split(",") if p.strip())
+    extra_allowed = frozenset(extra_allowed_values)
 
     findings: list[SbomLicenseFinding] = []
     parse_failed = False
@@ -402,6 +431,7 @@ def main(argv: list[str] | None = None) -> int:
                     repo_license=args.repo_license,
                     unknown_license=args.unknown_license,
                     include_os_packages=args.include_os_packages,
+                    extra_allowed=extra_allowed,
                 )
             )
         except ValueError as exc:
@@ -416,13 +446,18 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         for f in findings:
-            print(
+            msg = (
                 f"SBOM license incompatibility: {f.sbom} :: "
                 f"{f.component}@{f.version} — detected {f.license_detected} "
                 f"(incompatible with {f.incompatible_with_repo_license}, "
-                f"reason: {f.reason_code})",
-                file=sys.stderr,
+                f"reason: {f.reason_code})"
             )
+            if f.reason_code == "unknown-incompatible" and f.license_detected != "<none>":
+                msg += (
+                    " — if reviewed-and-accepted, add to OMB_LICENSE_EXTRA_ALLOWED "
+                    "or pass --allow-license"
+                )
+            print(msg, file=sys.stderr)
 
     if findings or parse_failed:
         return 1
