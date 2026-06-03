@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-06-02T16:30:00Z
+last_updated: 2026-06-03T00:00:00Z
 current_phase: 2  # Phase 2 opened by ADR-0003 (docs/adr/0003-phase-2-gate.md), 2026-05-15
 
 development_status:
@@ -249,6 +249,7 @@ development_status:
   8-7-5-test-isolation-conftest: done  # phase: 2 · pass-1 review CI green @ a6b8f1f (run 26309899991) 2026-05-22 · 10 fixes batch-applied (PP1 P0 test_event_log.py teardown restore — Edge live-reproduced 16 failures pre-fix; PP2 P1-H secret-hygiene H7 invariant explicit unregister/register; PP3 P1-M new scripts/check_registry_isolation.py CI gate prevents future recurrence; PP4-PP5 docs/testing-guide.md snapshot/restore + test-only + xdist stance; PP6-PP10 P1-L cleanup); validates Epic 11 retro L1 mandate AGAIN — Edge Case Hunter alone caught P0 (codebase context required); Blind+Edge converged on P1-H; Acceptance gave clean spec-conformance verdict that masked P0 because spec AC2 audit list was incomplete
   8-7-6-aiosqlite-teardown: done  # phase: 2 · pass-1 review CI green @ e8d3dd4 (run 26339093404) 2026-05-23 · 17 fixes batch-applied (3 P1-H structural: PP1 drain relocated to repo-root conftest.py for cross-testpath coverage; PP2 transitive loop_scope="function" audit across 8 additional registry-api LifespanManager fixtures; PP3 defensive `_is_aiosqlite_worker` matcher resilient to upstream thread-name changes; PP4 loud-warn on drain timeout + `OMB_AIOSQLITE_DRAIN_TIMEOUT_S` env; PP5 per-iteration gc.collect; PP6 pytest_sessionfinish hook; PP7 leaked-task autouse assertion; PP10 docs/testing-guide.md Module-scoped asyncio loops section; PP11 tests/integration/test_aiosqlite_drain.py subprocess regression test; PP12-PP15+PP17 doc cleanup); validates Epic 11 retro L1 mandate for the 5th consecutive cross-cutting story — pass-1 dev shipping green masked 3 P1-H coverage/robustness residuals
   epic-8-7-retrospective: done  # phase: 2 · 2026-05-16 retro captures hidden-gate cascade pattern (L1) + module-cache trap (L2) + bash -e gotcha (L3)
+  8-7-7-worker-wrapper-mypy-strict-sweep: done  # phase: 2 · DONE 2026-06-03 — tech-debt follow-up surfaced by the Phase-2 ship-blocker verification (mirror 8-7-2-mypy-strict-fix). Closed the just-lint/CI mypy divergence: `just lint`'s two mypy --strict invocations (worker-wrapper 42 errors + test-dirs null_orchestrator 1 error) → 0/0. Type-safety-ONLY: PEP-695 generic needs_approval[EventT: HasEventType](Sequence[EventT]) fixes list-invariance + the app/main.py HasEventType.tool_input attr-defined at the callsite; new private structural _MCPClients Protocol widens run_task/_handle_pending_approval/_emit_tier3_performed clients param (MCPClientGroup satisfies nominally, lets test doubles substitute); _emit_event dict→dict[str,Any]; _sync_scan list→list[LicenseFinding]; FakeClock.monotonic_ns added; test-helper annotations + a cast-at-the-seam _as_clients helper. ZERO type:ignore added (2 stale ones removed). 7 files (2 prod: app/main.py + domain/approval_gate.py; 5 test/fixture). NO mcp_clients.py, NO os.environ.copy, NO _ENV_ALLOWLIST, NO config files (mypy.ini/ci.yml/justfile) touched. executor-built → orchestrator diff-audited → independently re-verified: mypy 0/0, ruff check+format clean, `just lint` EXIT 0, worker-wrapper 442 tests pass + null_orchestrator 1 pass. NOTE: app/main.py is worker-facing → separability worker-facing ratchet will fire on the commit containing it (commit-hygiene canary, expected).
 
   # =========================================================================
   # Epic 9: α trace_id propagation kernel (7 stories, ~1 week)
@@ -451,3 +452,123 @@ audit_trail:
       epic-12 in-progress→done, epic-13 backlog→done (+13-4 done, +13-4a added),
       11-3-10 in-progress→done, 11-3-11 review→done (Epic-11.3 fresh-deploy-green
       tail validated transitively by S-4 ROOT-compose 7/7-healthy).
+  - date: "2026-06-03"
+    event: phase-2-ship-blocker-checklist-verified
+    commit: 7799af0
+    reason: >
+      Full-local-re-run ship-blocker verification campaign (orchestrated:
+      3 parallel subagents + backgrounded Docker chain build-base→test-
+      separability→test-crash). ALL items in epics.md "Phase 2 Ship-Blocker
+      Checklist" flipped to [x] with cited evidence (see the 2026-06-03
+      verification stamp appended to that section). GREEN: P2-I1..P2-I6 arch
+      invariants; per-epic gates 8-13; Phase-1 invariants (idempotency 15,
+      contract 63, migrator 8, /trace 58, metrics 10 incl p95<0.1ms, HMAC 50,
+      budget 6, replay/migrator 23, separability S1-S4 functional swap tests);
+      ADR-0003..0008 accepted; docs (operator-runbook gained Metrics-scraping +
+      Approval-offline-verification sections this session, closing the only
+      genuine doc ship-blocker gap). KNOWN non-blocking divergences documented:
+      (1) just lint red / CI green — worker-wrapper 42 + test-dirs 1 mypy
+      --strict errors are NOT in the CI gate (ci.yml:46 omits worker-wrapper) —
+      tech-debt sweep candidate (mirror 8-7-2); (2) macOS-only flakes
+      (test_filesystem setgid + crash restart-recovery healthcheck) green on
+      Linux; (3) separability source-unchanged ratchets fire at HEAD because
+      12.3c legitimately touched registry-state spine (commit-hygiene canary,
+      self-clears next non-spine commit). RESIDUAL before release tag: re-run
+      just verify-images against the tagged Phase-2 release (P2-I6/Epic-8 are
+      release-time gates) + optionally a fresh same-commit nightly on 7799af0.
+  - date: "2026-06-03"
+    event: just-lint-ci-mypy-divergence-resolved
+    story: 8-7-7-worker-wrapper-mypy-strict-sweep
+    reason: >
+      Closed the documented just-lint/CI mypy divergence (the only non-blocking
+      tech-debt surfaced by the 2026-06-03 ship-blocker verification). Both
+      `just lint` mypy --strict invocations driven 42->0 (worker-wrapper) and
+      1->0 (test-dirs null_orchestrator); `just lint` now EXIT 0 locally,
+      mirroring a clean gate. Type-safety-only (PEP-695 generic needs_approval,
+      structural _MCPClients Protocol, FakeClock.monotonic_ns, test-helper
+      annotations); 0 type:ignore added (2 stale removed). executor-built,
+      orchestrator diff-audited (no mcp_clients / os.environ.copy / config
+      touched, behaviour-preserving), independently re-verified (mypy 0/0,
+      ruff clean, worker-wrapper 442 tests + null_orchestrator 1 pass).
+  - date: "2026-06-03"
+    event: phase-2-extra-verification-coverage
+    reason: >
+      Loop-driven post-ship verification increments (no required backlog left;
+      feature-complete + ship-verified). (1) NFR-S5 command-injection fuzz
+      suite re-run on HEAD: 7 passed, ~13K Hypothesis examples, 2m23s (GREEN).
+      (2) Added docs/explanations/hmac-approval-signing.md (296 lines) — 2nd
+      Phase-2 deep-dive, raising the docs/explanations ship-blocker item above
+      its 1-2 floor; source-verified (canonical form, SHA-256[:16] fingerprint,
+      bootstrap sentinel 0000000000000000, verify_approval exit-code map 0-5 all
+      confirmed against approval_signing.py + verify_approval.py). RESIDUAL
+      unchanged: commit + release-tag (verify-images) + fresh nightly need
+      operator action.
+  - date: "2026-06-03"
+    event: phase-2-requirements-traceability-matrix
+    artifact: _bmad-output/test-artifacts/phase-2-traceability-matrix-2026-06-03.md
+    reason: >
+      BMad testarch-trace requirements→test traceability over Phase-2 (FR53-FR71a
+      + NFRs), 6-agent fan-out (one per epic 8-13). 25 requirements traced:
+      FULL 18, PARTIAL 4, RELEASE-TIME 3, LIVE-ONLY 2, NONE 0. QUALITY GATE =
+      CONCERNS. 4 addressable gaps surfaced (not caught by the coarse "tests
+      green" ship check): G1 NFR-S11 license-incompatibility publish-gate
+      UNIMPLEMENTED (HIGH — implement or WAIVE via ADR); G2 FR56a/NFR-S9
+      verify-images failure does not auto-emit deployment.signature_rejected
+      (MEDIUM, wiring+test); G3 NFR-O7 no cross-service trace_id E2E chain test
+      (MEDIUM, test-only); G4 FR69/FR70 litestream compose profile-gating +
+      env-default-disable only manually checked (LOW, test-only). G3+G4 are
+      pure-test additions, immediately closeable; G2 small fix; G1 needs
+      operator scope decision. None blocks the FUNCTIONAL Phase-2 claim.
+  - date: "2026-06-03"
+    event: traceability-gaps-G3-G4-closed
+    reason: >
+      Closed the two pure-test traceability gaps (executor-built, orchestrator
+      diff-audited + independently re-run green, no production code touched).
+      G3 (NFR-O7 cross-service trace chain) → tests/integration/
+      test_trace_cross_service.py (2 tests; real EventLogWriter→materializer→
+      registry-api GET /v1/trace; 3 distinct service actors on one trace_id,
+      mono_ns-ordered + negative-control isolation; NFR-O7 now FULL). G4
+      (FR69/FR70 litestream compose gating) → tests/test_litestream_compose_
+      profile_gating.py (5 tests; profiles:[litestream] off-by-default, RW data
+      mount, env-default config path, default-stack-unchanged invariant).
+      7 tests pass. REMAINING: G2 (verify-images→signature_rejected wiring,
+      small fix) + G1 (NFR-S11 license publish-gate — implement or WAIVE via ADR,
+      operator decision). Revised gate: CONCERNS → PASS pending G1.
+  - date: "2026-06-03"
+    event: traceability-gap-G2-closed
+    reason: >
+      Closed G2 (FR56a/NFR-S9): `just verify-images` now best-effort emits one
+      deployment.signature_rejected per failed cosign check, routed THROUGH the
+      existing flock-defended scripts/emit_signature_rejected.py (FR26 — no
+      second writer). Conservative: never masks the verification exit 1; opt-out
+      OMB_SKIP_REJECTION_EVENT=1; helper exit-3 (stack up) / uv-missing -> warning.
+      Test tests/integration/test_verify_images_emits_rejection.py (stubbed
+      failing cosign -> 24 events + exit 1; opt-out -> 0 events + exit 1).
+      executor-built -> orchestrator diff-audited (no os.environ.copy/mcp_clients,
+      real .env untouched, FR26-safe) -> independently re-verified (2 pass,
+      shellcheck clean, just --dry-run parse OK). Deviation: operator_id default
+      op-verify-images (payload ^op- regex); residual: event records only when
+      OMB_VERSION is valid v<semver> (normal release workflow sets it). ALL
+      pure-test/wiring gaps now closed — ONLY G1 (NFR-S11 license publish gate,
+      operator implement-or-waive decision) remains. Gate: PASS pending G1.
+  - date: "2026-06-03"
+    event: traceability-gap-G1-closed-nfr-s11-implemented
+    reason: >
+      Operator chose IMPLEMENT (over waive). Closed G1 (NFR-S11 license-
+      incompatibility publish gate): new scripts/check_sbom_licenses.py parses
+      the CycloneDX SBOM and fails the release BEFORE cosign-sign on any license
+      incompatible with the REUSED secret_hygiene.license_scan policy (imports
+      is_compatible/_reason_code/REPO_LICENSE — no fork; "extends FR40 to
+      publish-time"). Wired into both release.yml jobs (setup-uv SHA-matched to
+      ci.yml + uv sync + gate, after SBOM gen / before sign; no continue-on-error
+      so failure blocks signing => not a valid release) + ci.yml & justfile
+      self-test. 11 unit tests + 8 self-test fixtures; fail-closed on parse error
+      AND empty/missing components. PIPELINE: architect-designed → executor-built
+      → security-review SAFE-TO-MERGE + code-review APPROVE-WITH-NITS (both 0
+      crit/high) → orchestrator diff-audited (policy imported not forked,
+      license_scan.py untouched, no os.environ.copy/mcp_clients) → 2 review
+      MEDIUMs fixed (fail-closed empty components + multi-license-per-component
+      test) → independently re-verified (self-test 8 OK, 11 tests pass, ruff
+      clean, release.yml/ci.yml YAML parse OK). ALL FOUR traceability gaps
+      (G1-G4) now CLOSED. FINAL Phase-2 quality gate: PASS. NFR-S11 + NFR-O7
+      now FULL. Residual: RELEASE-TIME items exercise on the next tagged release.

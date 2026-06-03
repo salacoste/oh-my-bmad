@@ -356,6 +356,198 @@ docker compose stop litestream && docker compose rm -f litestream
 Unset `OMB_LITESTREAM_CONFIG_PATH` (or just stop using `--profile litestream`).
 The core stack is unaffected.
 
+## Metrics scraping
+
+The `metrics-subscriber` service (Story 10.3) exposes a Prometheus-format `/metrics`
+endpoint on port 9090. This is **internal-only per P2-I5** — there is no host port
+published to the operator's network. Scrape the metrics via:
+
+1. **From inside the docker network** (co-located Prometheus, sidecar scraper):
+   ```bash
+   curl http://omb-metrics-subscriber:9090/metrics
+   ```
+   This works from any container on the `oh-my-bmad-net` network (defined in
+   `docker-compose.yml`). Replace `omb-metrics-subscriber` with the container IP
+   if running Prometheus outside compose.
+
+2. **Via SSH tunnel to the host**:
+   ```bash
+   ssh -L 9090:omb-metrics-subscriber:9090 <operator@host>
+   # Then, on your local machine:
+   curl http://127.0.0.1:9090/metrics
+   ```
+
+3. **Via container exec** (one-off inspection):
+   ```bash
+   docker compose exec metrics-subscriber curl http://127.0.0.1:9090/metrics
+   ```
+
+**Metrics exposed:**
+
+The endpoint returns Prometheus text format with gauges and counters from the JSONL
+event log. Key counters for operational monitoring:
+
+- `omb_events_appended_total{event_family="..."}` — cumulative count of events by
+  family (`approval`, `task`, `deployment`, `replication`, `metadata`, etc.). Useful
+  for verifying approval and budget-override events are being recorded.
+- `omb_events_appended_total{event_family="replication"}` — specifically counts
+  `replication.lagging` events emitted when litestream WAL sync stalls (Story 13.4).
+
+**Healthcheck endpoint** (monitoring only, not Prometheus format):
+
+```bash
+curl http://omb-metrics-subscriber:9090/healthz
+# Returns JSON: {"status": "ok", "version": "..."}
+```
+
+The `/healthz` endpoint is used by `docker compose` for the metrics-subscriber
+healthcheck (Story 10.3). It is independent of `/metrics` to avoid noisy probes on
+the hot-path counter endpoint.
+
+---
+
+## Approval signing — offline verification
+
+Task approval decisions are cryptographically signed at decision time via HMAC-SHA256
+(Story 11.1 / FR64). An operator can verify any approval offline without booting the
+Platform stack, using the `just verify-approval` recipe (Story 11.4 / FR65).
+
+### Setup: OPERATOR_HMAC_KEY
+
+The key is a UTF-8-encoded secret string, minimum 32 bytes, held in the `OPERATOR_HMAC_KEY`
+environment variable. Generate it once during initial setup:
+
+```bash
+openssl rand -base64 32 > /secure/path/operator_hmac_key.txt
+export OPERATOR_HMAC_KEY="$(cat /secure/path/operator_hmac_key.txt)"
+```
+
+Store the key file offline in a secure location (not in the repo, not in `.env`).
+When the key rotates (see [Rotation](#key-rotation) below), the previous key must be
+retained for audit-window duration so pre-rotation approvals remain verifiable.
+
+### Verify an approval — basic usage
+
+```bash
+just verify-approval <EVENT_ID>
+```
+
+- **EVENT_ID**: The UUID of the `task.approval_signed` event (Story 11.1). This is
+  the event that records the operator's decision; it is distinct from the sibling
+  `approval.granted` event (both are emitted in sequence).
+- **Default log directory**: `/var/lib/oh-my-bmad/registry/events` (the live JSONL log).
+- **Requires**: `OPERATOR_HMAC_KEY` set in the current shell environment.
+
+**Example output (match)**:
+```
+✓ Signature match
+  Event ID: 01abc...xyz789
+  Event type: task.approval_signed
+  Task ID: task-123
+  Action: approve
+  Actor: alice
+  Decided at: 2026-06-03T15:30:45.123Z
+  Stored HMAC: a1b2c3d4e5f6...
+  Recomputed: a1b2c3d4e5f6...
+```
+
+**Exit code 0** = match; exit code 1 = mismatch; other codes indicate errors (see
+[Investigation](#investigation) below).
+
+### Verify from an archive (offline)
+
+To verify an approval from a frozen backup (e.g., after a restore):
+
+```bash
+just verify-approval <EVENT_ID> /path/to/archive/events
+```
+
+- **Log directory**: Points to the archived JSONL files (not the live directory).
+  Useful for audit / forensic scenarios.
+
+### Verify with a prior key (pre-rotation approvals)
+
+If the approval was signed before a key rotation, you must supply the prior key file:
+
+```bash
+just verify-approval <EVENT_ID> /var/lib/oh-my-bmad/registry/events --key-file /secure/path/prior_key.txt
+```
+
+The prior key file content is treated as UTF-8 and trailing whitespace is stripped
+(so `echo $KEY > key.txt` works). The key must be at least 32 bytes.
+
+**Finding the prior key**: When you rotated the key, a `key.rotated` event was
+emitted. Inspect it to find the `previous_key_fingerprint` (16 hex chars):
+
+```bash
+grep '"type":"key.rotated"' /var/lib/oh-my-bmad/registry/events/*.jsonl
+# Output includes: "previous_key_fingerprint": "a1b2c3d4e5f6ghij"
+```
+
+The fingerprint is a one-way SHA-256 hash of the prior key; it cannot be reversed to
+the original key. You must have retained the prior key file separately.
+
+### Machine-readable output (JSON)
+
+For scripting, use the `--json` flag:
+
+```bash
+just verify-approval <EVENT_ID> /var/lib/oh-my-bmad/registry/events --json
+```
+
+Returns structured JSON with fields: `status`, `reason`, `event_id`, `task_id`,
+`action`, `decided_at`, `actor_id`, `stored_hmac`, `recomputed_hmac`,
+`investigation_steps`.
+
+### Investigation: mismatch or error
+
+The verifier emits investigation steps when verification fails. Common scenarios:
+
+| Reason | Cause | Next step |
+|--------|-------|-----------|
+| `signature_mismatch` | Approval payload was tampered with, or wrong key | Verify `OPERATOR_HMAC_KEY` matches the key in effect when the event was signed. Find the corresponding `key.rotated` event to identify which key was current. |
+| `event_not_found` | Event ID does not exist in the log | Confirm the event ID is correct (UUIDv7, not a sibling event). Check the date range of the archive. |
+| `key_missing` | `OPERATOR_HMAC_KEY` not set and `--key-file` not passed | Set env var or pass `--key-file PATH` to offline key file. |
+| `key_too_short` | Key is <32 bytes | Regenerate per FR64. |
+
+### Key rotation
+
+When you rotate the `OPERATOR_HMAC_KEY`, the Platform automatically emits a `key.rotated`
+event on next registry-api boot (Story 11.5 / FR65a). The rotation detector:
+
+1. Computes the fingerprint of the supplied current key.
+2. Reads the most-recent `key.rotated` event from the JSONL log.
+3. Compares fingerprints. If different, emits `key.rotated` before accepting requests.
+
+**Operator procedure**:
+
+1. Retain the prior key file (e.g., rename to `operator_hmac_key_2026-06-03.txt`).
+2. Generate a new key:
+   ```bash
+   openssl rand -base64 32 > /secure/path/operator_hmac_key_new.txt
+   export OPERATOR_HMAC_KEY="$(cat /secure/path/operator_hmac_key_new.txt)"
+   ```
+3. Restart registry-api:
+   ```bash
+   docker compose restart registry-api
+   ```
+   The rotation detector runs synchronously in the lifespan startup; registry-api
+   will not serve requests until the `key.rotated` event is persisted.
+4. Verify the rotation:
+   ```bash
+   docker compose logs registry-api 2>&1 | grep "key.rotated"
+   ```
+
+**Consequences**:
+
+- Pre-rotation approvals remain verifiable via the archived prior key (FR65a).
+- The `key.rotated` event is audit-logged (immutable, signed along with future approvals
+  via the new key).
+- The previous key's fingerprint is recorded in `key.rotated.previous_key_fingerprint`
+  so operators can track which approval was signed with which key.
+
+---
+
 ## Forward-referenced scenarios
 
 These failure modes are spec'd but the enforcement logic does not exist yet.
