@@ -45,6 +45,71 @@ _GIT_PUSH_PATTERN: re.Pattern[str] = re.compile(r"^\s*git\s+push\b")
 # Maximum prompt length included in spawn log (prevents sensitive data leaks).
 _LOG_PROMPT_PREVIEW_LEN: int = 80
 
+# G-SEC-2 (D1) — explicit child-env allowlist for the spawned ``claude``
+# subprocess. This MUST stay an explicit allowlist: NEVER forward the whole
+# parent environment here — copying every parent var leaked operator /
+# platform secrets (OPERATOR_HMAC_KEY, LITESTREAM_*, TELEGRAM_*, AWS_*,
+# OPENAI_API_KEY, registry DB creds) into the agent subprocess (reverted
+# twice; see ``mcp_clients._ENV_ALLOWLIST`` for the sibling discipline).
+#
+# Contents are FUNCTIONAL-only:
+#   - PATH / HOME / USER — process basics the ``claude`` binary needs.
+#   - LANG / LC_ALL / LC_CTYPE — locale (avoids Unicode/encoding surprises).
+#   - TMPDIR / TMP / TEMP — temp-dir resolution for the agent's file ops.
+#   - SSL_CERT_FILE / SSL_CERT_DIR / REQUESTS_CA_BUNDLE / CURL_CA_BUNDLE —
+#     TLS / CA bundles for custom-CA deployments.
+#   - GITHUB_TOKEN — retained because the ``claude`` subprocess performs
+#     ``git push`` (see ``worker_wrapper/main.py:476``).
+#     TODO(G-SEC-2 follow-up): migrate to a scoped git credential helper so
+#     the raw PAT need not enter the agent env at all.
+#
+# ANTHROPIC_API_KEY is INTENTIONALLY NOT in this allowlist — it is re-injected
+# from settings in ``_spawn`` (see the ``anthropic_api_key`` overlay), not
+# passed through from the parent env.
+_CHILD_ENV_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        # Process basics
+        "PATH",
+        "HOME",
+        "USER",
+        # Locale
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        # Temp directories
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        # TLS / CA bundles (custom-CA deployments)
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        # git push (main.py:476) — TODO(G-SEC-2 follow-up): scoped cred helper.
+        "GITHUB_TOKEN",
+    }
+)
+
+# G-SEC-2 (D1) — prefix allowlist: task/trace vars (``OMB_*``) + Claude CLI
+# config (``CLAUDE_*``). NEVER name a secret with these prefixes — anything
+# matching is forwarded to the agent subprocess verbatim.
+_CHILD_ENV_PREFIXES: tuple[str, ...] = ("OMB_", "CLAUDE_")
+
+
+def _build_child_env() -> dict[str, str]:
+    """Return the explicit child-env for the spawned ``claude`` subprocess.
+
+    G-SEC-2 (D1): only parent-env vars matching ``_CHILD_ENV_ALLOWLIST`` or
+    starting with one of ``_CHILD_ENV_PREFIXES`` are forwarded; everything
+    else (operator / platform secrets) is dropped. The ANTHROPIC_API_KEY and
+    OMB_TRACE_ID overlays are applied by the caller (``_spawn``).
+    """
+    return {
+        k: v
+        for k, v in os.environ.items()
+        if k in _CHILD_ENV_ALLOWLIST or k.startswith(_CHILD_ENV_PREFIXES)
+    }
+
 
 @dataclass
 class ExtractedEvent:
@@ -182,7 +247,8 @@ class ClaudeCodeRunner:
     ) -> asyncio.subprocess.Process:
         """Spawn the ``claude`` subprocess with correct args and env."""
         args = self._build_args(prompt)
-        env = dict(os.environ)
+        # G-SEC-2 (D1): explicit child-env allowlist (NOT a full parent-env copy).
+        env = _build_child_env()
         if self._settings.anthropic_api_key:
             env["ANTHROPIC_API_KEY"] = self._settings.anthropic_api_key
         # Story 9.6 / FR59 review pass-1 L2 — OMB_TRACE_ID env var is the
