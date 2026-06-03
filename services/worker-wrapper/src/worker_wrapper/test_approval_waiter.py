@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,13 +31,20 @@ class FakeEnvelope:
 
 
 class FakeClock:
-    """Minimal clock returning a fixed UTC datetime."""
+    """Minimal clock returning a fixed UTC datetime.
+
+    Implements the full ``events.clock.Clock`` protocol (``now`` +
+    ``monotonic_ns``) so it can stand in for ``Clock`` without a cast.
+    """
 
     def __init__(self, now: datetime | None = None) -> None:
         self._now = now or datetime(2026, 5, 10, 12, 0, 0, tzinfo=UTC)
 
     def now(self) -> datetime:
         return self._now
+
+    def monotonic_ns(self) -> int:
+        return 0
 
 
 # ---------------------------------------------------------------------------
@@ -70,18 +78,22 @@ def _unrelated_event() -> FakeEnvelope:
     )
 
 
-def _patch_day_path(return_value: Path = _DAY_PATH):
+def _patch_day_path(return_value: Path = _DAY_PATH) -> AbstractContextManager[Any]:
     return patch(
         "worker_wrapper.adapters.approval_waiter.current_day_path",
         return_value=return_value,
     )
 
 
-def _patch_read_log_lines(**kwargs):
-    return patch(
-        "worker_wrapper.adapters.approval_waiter.read_log_lines",
-        **kwargs,
-    )
+def _patch_read_log_lines(
+    *,
+    return_value: Any = ...,
+    side_effect: Any = ...,
+) -> AbstractContextManager[Any]:
+    target = "worker_wrapper.adapters.approval_waiter.read_log_lines"
+    if side_effect is not ...:
+        return patch(target, side_effect=side_effect)
+    return patch(target, return_value=return_value)
 
 
 # ---------------------------------------------------------------------------

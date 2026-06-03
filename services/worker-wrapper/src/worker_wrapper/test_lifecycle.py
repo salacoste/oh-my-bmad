@@ -30,6 +30,17 @@ _ALL_STATES = list(St)
 _ALL_EVENTS = list(Evt)
 
 
+def _state(fsm: LifecycleFSM) -> St:
+    """Read ``current_state`` as the declared ``WorkerState`` type.
+
+    Reading through this helper erases mypy's literal-narrowing carried over
+    from a prior ``assert``, so a later equality check against a different
+    state is not flagged ``comparison-overlap``. Behaviour is identical to
+    reading ``fsm.current_state`` directly.
+    """
+    return fsm.current_state
+
+
 # ---------------------------------------------------------------------------
 # Parametrized: every valid transition in the table
 # ---------------------------------------------------------------------------
@@ -153,11 +164,11 @@ class TestCanonicalApprovalFlow:
     def test_running_approval_grant_complete(self) -> None:
         fsm = LifecycleFSM()
         fsm.transition(Evt.TASK_AWAITING_APPROVAL)
-        assert fsm.current_state == St.AWAITING_APPROVAL
+        assert _state(fsm) == St.AWAITING_APPROVAL
         fsm.transition(Evt.APPROVAL_GRANTED)
-        assert fsm.current_state == St.RESUMED
+        assert _state(fsm) == St.RESUMED
         fsm.transition(Evt.TASK_COMPLETED)
-        assert fsm.current_state == St.COMPLETED
+        assert _state(fsm) == St.COMPLETED
 
     def test_running_approval_reject(self) -> None:
         fsm = LifecycleFSM()
@@ -176,11 +187,11 @@ class TestPauseResumeFlow:
     def test_running_pause_resume_complete(self) -> None:
         fsm = LifecycleFSM()
         fsm.transition(Evt.TASK_PAUSED)
-        assert fsm.current_state == St.PAUSED
+        assert _state(fsm) == St.PAUSED
         fsm.transition(Evt.TASK_RESUMED)
-        assert fsm.current_state == St.RESUMED
+        assert _state(fsm) == St.RESUMED
         fsm.transition(Evt.TASK_COMPLETED)
-        assert fsm.current_state == St.COMPLETED
+        assert _state(fsm) == St.COMPLETED
 
     def test_paused_then_fail(self) -> None:
         fsm = LifecycleFSM()
@@ -194,9 +205,9 @@ class TestResumeCycle:
         fsm = LifecycleFSM()
         fsm.transition(Evt.TASK_AWAITING_APPROVAL)
         fsm.transition(Evt.APPROVAL_GRANTED)
-        assert fsm.current_state == St.RESUMED
+        assert _state(fsm) == St.RESUMED
         fsm.transition(Evt.TASK_AWAITING_APPROVAL)
-        assert fsm.current_state == St.AWAITING_APPROVAL
+        assert _state(fsm) == St.AWAITING_APPROVAL
 
     def test_resumed_can_pause(self) -> None:
         fsm = LifecycleFSM()

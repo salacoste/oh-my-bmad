@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from pathlib import Path
+from typing import Any, Protocol
 
 import structlog
 from events.clock import SystemClock
@@ -42,7 +43,7 @@ from events.payloads import (
 from mcp import ClientSession
 
 # secret_hygiene is a workspace package; imported here for license scan.
-from secret_hygiene.license_scan import scan_files_for_licenses
+from secret_hygiene.license_scan import LicenseFinding, scan_files_for_licenses
 
 from worker_wrapper.adapters.approval_waiter import ApprovalWaiter
 from worker_wrapper.adapters.claude_code_runner import ClaudeCodeResult, ClaudeCodeRunner
@@ -62,6 +63,19 @@ _CLAMP_FLOOR: float = 1.0
 
 # Story 9.6 review pass-1 H8 — bounded preview for log injection avoidance.
 _TRACE_ID_PREVIEW_LEN: int = 80
+
+
+class _MCPClients(Protocol):
+    """Structural view of the MCP client trio used by the task driver.
+
+    ``MCPClientGroup`` satisfies this protocol nominally; declaring the
+    dependency structurally lets test doubles substitute without inheriting
+    from the concrete adapter. Type-only — no runtime behaviour change.
+    """
+
+    task_registry: ClientSession | None
+    session_registry: ClientSession | None
+    clawhip_bridge: ClientSession | None
 
 
 def _clamp_timeout(interval_s: float) -> float:
@@ -415,7 +429,7 @@ async def finish_session(
 
 
 async def run_task(
-    clients: MCPClientGroup,
+    clients: _MCPClients,
     settings: WorkerSettings,
     prompt: str,
     worktree_path: Path,
@@ -438,7 +452,7 @@ async def run_task(
 
     state_path = worktree_path / ".lifecycle-state.json"
 
-    async def _emit_event(event_type: str, payload: dict) -> str:
+    async def _emit_event(event_type: str, payload: dict[str, Any]) -> str:
         # Review pass-2 PH4 — delegate to ``_call_tool_best_effort`` so the
         # H7 ValueError special-case (Story 9.1 trace_id contract violation)
         # applies uniformly across run_task's emission sites instead of the
@@ -915,7 +929,7 @@ async def run_task(
             str(p) for p in worktree_path.rglob("*") if p.is_file() and not p.name.startswith(".")
         ]
 
-        def _sync_scan() -> list:
+        def _sync_scan() -> list[LicenseFinding]:
             return scan_files_for_licenses(all_files)
 
         license_findings = await asyncio.to_thread(_sync_scan)
@@ -970,7 +984,7 @@ async def run_task(
 
 async def _handle_pending_approval(
     mgr: LifecycleManager,
-    clients: MCPClientGroup,
+    clients: _MCPClients,
     settings: WorkerSettings,
     task_id: str,
 ) -> None:
@@ -1062,7 +1076,7 @@ async def _handle_pending_approval(
 
 
 async def _emit_tier3_performed(
-    clients: MCPClientGroup,
+    clients: _MCPClients,
     settings: WorkerSettings,
     task_id: str,
     *,

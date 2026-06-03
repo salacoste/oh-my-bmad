@@ -10,6 +10,8 @@ events. These tests fail against the pre-fix code (TypeError) — AI-7 realism c
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from events import (
     Actor,
@@ -51,7 +53,7 @@ def _make_task_created(clock: SystemClock) -> EventEnvelope:
 
 
 @pytest.mark.asyncio
-async def test_emit_lifecycle_propagates_trace_id(tmp_path) -> None:
+async def test_emit_lifecycle_propagates_trace_id(tmp_path: Path) -> None:
     """All 4 lifecycle events are emitted and chain trace_id + parent from task.created."""
     clock = SystemClock()
     created = _make_task_created(clock)
