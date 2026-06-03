@@ -1098,3 +1098,72 @@ Phase 2 success means **at minimum:**
 - **Phase boundary discipline:** every Phase 2 epic and story carries `phase: 2` in `sprint-status.yaml`. No `phase: 2` work merges to `main` until a Phase-2 gate ADR (`docs/adr/0003-phase-2-gate.md`, to be authored) is accepted.
 
 — *Amendment by R2d2, 2026-05-15, via the BMad `bmad-edit-prd` workflow.*
+
+---
+
+## Phase 3 Scope Extension
+
+> **Status:** Phase-3 PRD extension. Formalizes the operator-brainstorming convergence of 2026-06-03 (decisions D1–D4, captured in [`phase-3-plan.md`](./phase-3-plan.md), grounded in [`phase-3-scoping-brief.md`](./phase-3-scoping-brief.md)). Authored after Phase 2 shipped (v0.3.0, all Epics 1–13 `done`) and the Phase-3 readiness hardening landed (G-SEC-1 license-gate fail-closed, G-SEC-2 child-env allowlist — both merged, main green). FR/NFR numbering continues the canonical series (FR71a → FR72; NFR-O10 → O11; NFR-M7 → M8; NFR-S11 → S12).
+
+**Theme:** the **MCP tooling fleet** — give the worker/orchestrator a set of first-class, stdio-only, tier-authz'd MCP tool servers, built on the Phase-2 spine (event-only telemetry, `trace_id`, supply-chain pipeline). Phase 3 lands **exactly five** new servers — `git`, `github`, `build`/`verification`, `memory`/`wiki`, `artifact` (D1) — plus a tests-first hardening warm-up that executes the FR56 digest-deprecation commitment and adds a mutation-testing gate.
+
+**Resolved scope (operator brainstorming, D1–D4):**
+
+- **D1 (IN).** Five servers only — `git`, `github`, `build`/`verification`, `memory`/`wiki`, `artifact`. The narrower five-server reading (roadmap) is the canonical Phase-3 boundary; the broader 11-server "Phase 3+" list stays a later-phase backlog.
+- **D2 (OUT, deferred).** Remote-MCP transport (HTTP/SSE/streamable). MCP stays **stdio-only** this phase; no auth/rate-limit sub-project. The remote-MCP ADR remains a non-decision.
+- **D3 (OUT, deferred to Phase 5).** Second CLI agent (Codex/Gemini/GLM). A single Claude Code runtime this phase.
+- **D4 (entry point).** A **tests-first hardening warm-up epic FIRST** (FR77 digest-deprecation + the mutation-testing nightly gate), then the recipe-establishing `git` server, then the remaining four.
+
+**Preserved invariants (carry from Phases 1–2 — non-negotiable):**
+
+- **Single-writer (FR26) unchanged.** Every new server is a *read-only consumer* of the event log OR routes any mutation through the existing `registry-state` write path; none becomes a second DB writer. The `memory`/`wiki` and `artifact` stores are isolated backing stores (their own files), never the registry DB.
+- **MCP transport remains stdio-only.** Every new server is a stdio MCP server; no `mcp.server.sse` / `streamable_http` is introduced. Remote-MCP stays deferred (D2).
+- **Event-only telemetry (NFR-O1/O10) unchanged.** New servers emit typed events on the event spine; metrics remain *derived* in `metrics-subscriber`. No per-server instrumentation.
+- **`trace_id` propagation (NFR-O7) unchanged.** Every new server stamps/propagates `trace_id` on every event it emits.
+- **Tier-enforced authz (Epic 6) unchanged.** Every destructive tool (git `push`/history-rewrite, GitHub writes, `artifact` deletes) is **Tier-3 gated** through the existing approval flow.
+- **Supply-chain (Epic 8 + G-SEC-1/2) unchanged.** Each new server image ships cosign/SLSA-L2/CycloneDX-SBOM-signed, passes the (now fail-closed) license gate, and runs with the child-env allowlist.
+
+### Phase 3 Functional Requirements
+
+#### σ — `git` MCP server (Epic 15)
+
+- **FR72.** Platform ships a stdio MCP server `services/git-mcp/` exposing structured git tools (`status`, `diff`, `log`, `branch`, `add`, `commit`, `push`). Read tools (`status`, `diff`, `log`, `branch`) are **Tier-1**; mutating tools (`add`, `commit`) are **Tier-2**; `push` and any history-rewrite are **Tier-3 gated** through the approval flow (negative test proves denial without approval). The server operates only within the active task worktree (no access outside it), emits typed `git.*` events for every mutating op, carries `trace_id`, and is a new separability entry (S-5). The server adds no instrumentation to any other service.
+
+#### τ — `github` MCP server (Epic 16)
+
+- **FR73.** Platform ships a stdio MCP server `services/github-mcp/` for GitHub operations (create/list issues; create/update/list PRs; request reviews; comment). Read tools are **Tier-1**; all write tools are **Tier-3 gated** through the approval flow. Authentication uses a **scoped credential** (fine-grained PAT or GitHub App installation token, narrowed to the target repo) supplied via the child-env allowlist — never the broad inherited PAT (closes the G-SEC-2 `GITHUB_TOKEN` follow-up). The server generalizes the existing PR-draft adapter (Story 5.14) into a full GitHub surface, emits `github.*` events with `trace_id`, and is a new separability entry (S-6).
+
+#### υ — `build`/`verification` MCP server (Epic 17)
+
+- **FR74.** Platform ships a stdio MCP server `services/verification-mcp/` that runs the project's build + test/verification recipes and returns structured results (pass/fail, captured logs, coverage summary). Execution is sandboxed to the active worktree. Tools are **Tier-2** (they run project code but perform no external mutation). The server emits `verification.*` events carrying the recipe invoked, exit status, and `trace_id`, and is a new separability entry (S-7). It adds no instrumentation to any other service.
+
+#### φ — `memory`/`wiki` MCP server (Epic 18)
+
+- **FR75.** Platform ships a stdio MCP server `services/memory-mcp/` providing a persistent cross-task knowledge store backed by the filesystem + SQLite FTS5, exposing `read`/`search`/`write` tools. The store is single-writer-safe — it owns its own store file and **never** writes the registry DB (FR26 preserved). Read/search tools are **Tier-1**; the `write` tool is **Tier-2**. The server emits `memory.*` events with `trace_id` and is a new separability entry (S-8).
+
+#### χ — `artifact` MCP server + store (Epic 19)
+
+- **FR76.** Platform ships a stdio MCP server `services/artifact-mcp/` plus a persisted build/run-output store (the "Artifact store — Phase 3" surface), exposing `put`/`get`/`list` tools over a **content-addressed**, local-FS backing store (no new external dependency, per the project's simplicity principle). `put` is **Tier-2** (`delete`, if exposed, is **Tier-3 gated**); `get`/`list` are **Tier-1**. Retention policy is operator-configurable. The server emits `artifact.*` events with `trace_id` and is a new separability entry (S-9).
+
+#### ψ — Digest-deprecation execution (Epic 14)
+
+- **FR77.** Platform executes the Phase-3 clause of **FR56**: the tag-based image-reference fallback (`:latest`, `:v0.X.Y`) is removed, and digest-pinned references (`OMB_IMAGE_DIGEST_<service>`, `<image>@sha256:...`) become the **sole** supported deploy path. `docker-compose.yml`, the operator deployment docs, and `just verify-images` are updated to digest-only resolution; any remaining tag-based reference emits a deprecation warning during the cutover window and is then dropped. Verified by a digest-only deploy passing `just verify-images` + `just bootstrap-verify` green.
+
+### Phase 3 Non-Functional Requirements
+
+- **NFR-O11.** Mutation-testing nightly gate: a nightly mutation-testing run (e.g. `mutmut` / `cosmic-ray`) executes over the platform-owned packages and publishes a mutation score. The runtime is evidence-justified by the now-available `metrics-subscriber` data. The gate threshold is set per the Epic-14 threshold decision; once set, a mutation score below threshold fails the nightly gate. Verified by the nightly CI run publishing a score artifact and enforcing the threshold.
+- **NFR-M8.** Fleet separability: each of the five new MCP servers (FR72–FR76) is an **optional, swappable stdio member** — adding or removing it requires a single configuration change and **no source-code modification** to any other service. Verified by new separability tests **S-5 (`git`), S-6 (`github`), S-7 (`build`/`verification`), S-8 (`memory`/`wiki`), S-9 (`artifact`)** in `tests/separability/`, continuing the S-1…S-4 series.
+- **NFR-S12.** Fleet supply-chain + tier-authz: every new server image (FR72–FR76) carries a cosign keyless signature, a SLSA-L2 provenance attestation, and a CycloneDX SBOM, and passes the **fail-closed** license gate (G-SEC-1) and the **child-env allowlist** (G-SEC-2) — inheriting the Epic-8 release recipe with no exceptions. Every destructive tool across the fleet (git `push`/history-rewrite, GitHub writes, `artifact` `delete`) is **Tier-3 gated**; for each, a **negative test proves the tool is denied without an approval grant**. Verified by `just verify-images` green on every new image + per-server Tier-3-denial integration tests.
+
+### Phase 3 Out-of-Scope (deferred)
+
+Per the operator-brainstorming convergence (D2–D4):
+
+- **Remote-MCP transport** (HTTP/SSE/streamable) and its attendant auth + rate-limiting layer — deferred (D2); the remote-MCP ADR stays deferred.
+- **Browser-automation plane** (4th worker tool or 4th operator surface) — deferred (roadmap: Phase 4); the browser-automation surface ADR stays deferred.
+- **Second CLI agent** (Codex / Gemini / GLM via the orchestrator-adapter shim) — deferred to **Phase 5** (D3).
+- Also out for Phase 3: the `workspace`, `docker-pool`, `db-schema`, `docs-research`, and `telegram-control-direct` servers, and historical replay mode (value-gated).
+
+- **Phase boundary discipline:** every Phase 3 epic and story carries `phase: 3` in `sprint-status.yaml`. No `phase: 3` work merges to `main` until a Phase-3 gate ADR (`docs/adr/0009-phase-3-gate.md`) is accepted.
+
+— *Amendment by R2d2, 2026-06-03, via the BMad `bmad-create-prd` workflow (Phase-3 extension; brainstorming convergence D1–D4).*
