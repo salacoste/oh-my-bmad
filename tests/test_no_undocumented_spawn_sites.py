@@ -131,15 +131,20 @@ _ALLOWLIST: dict[str, dict[int, str]] = {
     _rel("services/worker-wrapper/src/worker_wrapper/adapters/claude_code_runner.py"): {
         # Line shifted from 151 → 175 (Story 12.1) → 187 (pass-1 review:
         # PP18 alias + PP5 defense) → 203 (pass-2 review: PP34 escalation_landed
-        # field added to TerminationResult dataclass shifts all downstream lines).
+        # field added to TerminationResult dataclass shifts all downstream lines)
+        # → 269 (G-SEC-2 D1: _CHILD_ENV_ALLOWLIST/_CHILD_ENV_PREFIXES/
+        # _build_child_env added above _spawn shift all downstream lines).
         # PP13 — function-keyed entry in _FUNC_ALLOWLIST below is preferred;
         # this line entry is retained as defence-in-depth.
-        203: "asyncio.create_subprocess_exec",
+        269: "asyncio.create_subprocess_exec",
     },
     # orchestrator-adapter: spawns OMC node subprocess.
     # Story 9.6 — propagates OMB_TRACE_ID through env (FR59 / TH3).
     _rel("services/orchestrator-adapter/src/orchestrator_adapter/adapters/omc_runner.py"): {
-        93: "asyncio.create_subprocess_exec",
+        # Line shifted 93 → 164 (G-SEC-2 D4: _CHILD_ENV_ALLOWLIST/
+        # _CHILD_ENV_PREFIXES/_build_child_env added above _spawn shift all
+        # downstream lines). PP13 — function-keyed entry preferred.
+        164: "asyncio.create_subprocess_exec",
     },
     # sync_upstream.py: dev-only maintenance script — clones upstream repos
     # into scripts/upstream/ for vendored-source tracking. Not invoked at

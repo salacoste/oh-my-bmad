@@ -224,3 +224,86 @@ class TestOMCRunnerTraceIdEnv:
         assert captured[0].get("OMB_TRACE_ID") == tid_a
         assert captured[1].get("OMB_TRACE_ID") == tid_b
         assert captured[0]["OMB_TRACE_ID"] != captured[1]["OMB_TRACE_ID"]
+
+
+# ---------------------------------------------------------------------------
+# G-SEC-2 (D4) — explicit child-env allowlist.
+# ---------------------------------------------------------------------------
+
+
+class TestOMCRunnerChildEnvAllowlist:
+    """G-SEC-2 (D4): ``_spawn`` builds the child env from an explicit
+    allowlist (``_build_child_env``) — functional vars (incl. NODE_PATH and a
+    pass-through ANTHROPIC_API_KEY) + ``OMB_*``/``CLAUDE_*`` prefixes pass
+    through, operator/platform secrets are dropped."""
+
+    @pytest.mark.asyncio
+    async def test_spawn_env_contains_needed_vars(
+        self, omc_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Functional allowlist + prefix vars + pass-through ANTHROPIC/GITHUB.
+
+        Unlike the worker, OrchestratorSettings has no anthropic_api_key field,
+        so ANTHROPIC_API_KEY must pass THROUGH from the parent env.
+        """
+        from typing import Any
+
+        monkeypatch.setenv("PATH", "/usr/bin:/bin")
+        monkeypatch.setenv("HOME", "/home/agent")
+        monkeypatch.setenv("NODE_PATH", "/opt/node_modules")
+        monkeypatch.setenv("OMB_FOO", "x")  # prefix passthrough
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-passthrough")
+        monkeypatch.setenv("GITHUB_TOKEN", "ghp-needed")
+
+        captured_env: dict[str, str] = {}
+
+        async def _fake_exec(*a: Any, **kw: Any) -> Any:
+            captured_env.update(kw.get("env", {}))
+            return _mock_process()
+
+        with patch(_SPAWN_PATH, side_effect=_fake_exec):
+            runner = OMCRunner(omc_path=omc_dir)
+            await runner._spawn("hello", trace_id="01917e5c-a7d1-7000-8abc-0123456789ab")
+
+        assert captured_env["PATH"] == "/usr/bin:/bin"
+        assert captured_env["HOME"] == "/home/agent"
+        assert captured_env["NODE_PATH"] == "/opt/node_modules"
+        assert captured_env["OMB_TRACE_ID"] == "01917e5c-a7d1-7000-8abc-0123456789ab"
+        assert captured_env["OMB_FOO"] == "x"
+        # ANTHROPIC passes THROUGH (no settings field to re-inject).
+        assert captured_env["ANTHROPIC_API_KEY"] == "sk-passthrough"
+        # GITHUB_TOKEN retained (git push).
+        assert captured_env["GITHUB_TOKEN"] == "ghp-needed"
+
+    @pytest.mark.asyncio
+    async def test_spawn_env_excludes_operator_secrets(
+        self, omc_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Operator/platform secret canaries MUST NOT reach the child env."""
+        from typing import Any
+
+        canaries = {
+            "OPERATOR_HMAC_KEY": "canary",
+            "LITESTREAM_SECRET_ACCESS_KEY": "canary",
+            "LITESTREAM_ACCESS_KEY_ID": "canary",
+            "TELEGRAM_BOT_TOKEN": "canary",
+            "TELEGRAM_WEBHOOK_SECRET_TOKEN": "canary",
+            "TG_ALLOWLIST_USER_IDS": "canary",
+            "AWS_SECRET_ACCESS_KEY": "canary",
+            "OPENAI_API_KEY": "canary",
+        }
+        for name, value in canaries.items():
+            monkeypatch.setenv(name, value)
+
+        captured_env: dict[str, str] = {}
+
+        async def _fake_exec(*a: Any, **kw: Any) -> Any:
+            captured_env.update(kw.get("env", {}))
+            return _mock_process()
+
+        with patch(_SPAWN_PATH, side_effect=_fake_exec):
+            runner = OMCRunner(omc_path=omc_dir)
+            await runner._spawn("hello", trace_id=None)
+
+        for name in canaries:
+            assert name not in captured_env, f"{name} leaked into child env"

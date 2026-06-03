@@ -27,6 +27,79 @@ import structlog
 _GRACE_PERIOD_S: float = 5.0
 _LOG_PROMPT_PREVIEW_LEN: int = 80
 
+# G-SEC-2 (D4) — explicit child-env allowlist for the spawned OMC (Node)
+# subprocess. This MUST stay an explicit allowlist: NEVER forward the whole
+# parent environment here — copying every parent var leaked operator /
+# platform secrets (OPERATOR_HMAC_KEY, LITESTREAM_*, TELEGRAM_*, AWS_*,
+# OPENAI_API_KEY, registry DB creds) into the agent subprocess (reverted
+# twice; see ``mcp_clients._ENV_ALLOWLIST`` for the sibling discipline).
+#
+# Contents are FUNCTIONAL-only:
+#   - PATH / HOME / USER — process basics the ``node`` binary needs.
+#   - LANG / LC_ALL / LC_CTYPE — locale.
+#   - TMPDIR / TMP / TEMP — temp-dir resolution.
+#   - SSL_CERT_FILE / SSL_CERT_DIR / REQUESTS_CA_BUNDLE / CURL_CA_BUNDLE —
+#     TLS / CA bundles for custom-CA deployments.
+#   - NODE_PATH — OMC is a Node app and needs Node module resolution.
+#     NODE_OPTIONS is deliberately NOT forwarded: it accepts ``--require`` /
+#     ``--inspect`` which would let a compromised parent env inject arbitrary
+#     JS into the OMC child (security review G-SEC-2 MEDIUM). If a specific Node
+#     flag is ever needed, set it explicitly in the launch argv, not via env.
+#   - ANTHROPIC_API_KEY — passes THROUGH from the parent env here: unlike the
+#     worker, ``OrchestratorSettings`` has NO ``anthropic_api_key`` field to
+#     re-inject, so the allowlist is the only path for the agent's key.
+#   - GITHUB_TOKEN — retained because the spawned agent performs ``git push``.
+#     TODO(G-SEC-2 follow-up): migrate to a scoped git credential helper so
+#     the raw PAT need not enter the agent env at all.
+_CHILD_ENV_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        # Process basics
+        "PATH",
+        "HOME",
+        "USER",
+        # Locale
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        # Temp directories
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        # TLS / CA bundles (custom-CA deployments)
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        # Node runtime (OMC is a Node app). NODE_OPTIONS intentionally omitted
+        # (--require/--inspect injection vector — see comment above).
+        "NODE_PATH",
+        # ANTHROPIC passes through (no settings field to re-inject).
+        "ANTHROPIC_API_KEY",
+        # git push — TODO(G-SEC-2 follow-up): scoped cred helper.
+        "GITHUB_TOKEN",
+    }
+)
+
+# G-SEC-2 (D4) — prefix allowlist: task/trace vars (``OMB_*``) + Claude CLI
+# config (``CLAUDE_*``). NEVER name a secret with these prefixes — anything
+# matching is forwarded to the agent subprocess verbatim.
+_CHILD_ENV_PREFIXES: tuple[str, ...] = ("OMB_", "CLAUDE_")
+
+
+def _build_child_env() -> dict[str, str]:
+    """Return the explicit child-env for the spawned OMC (Node) subprocess.
+
+    G-SEC-2 (D4): only parent-env vars matching ``_CHILD_ENV_ALLOWLIST`` or
+    starting with one of ``_CHILD_ENV_PREFIXES`` are forwarded; everything
+    else (operator / platform secrets) is dropped. The OMB_TRACE_ID overlay
+    is applied by the caller (``_spawn``).
+    """
+    return {
+        k: v
+        for k, v in os.environ.items()
+        if k in _CHILD_ENV_ALLOWLIST or k.startswith(_CHILD_ENV_PREFIXES)
+    }
+
 
 @dataclass
 class OMCResult:
@@ -84,10 +157,11 @@ class OMCRunner:
         if len(prompt) > _LOG_PROMPT_PREVIEW_LEN:
             preview += "..."
         log.info("omc_spawning", prompt_preview=preview, cwd=str(self._omc_path))
-        # Build env: start from parent env so PATH / NODE_PATH / etc. still
-        # work, then layer the trace_id when present.  Story 9.6 review
-        # pass-2 PH0 / pass-3 TH2.
-        env = dict(os.environ)
+        # Build env: G-SEC-2 (D4) explicit child-env allowlist (PATH /
+        # NODE_PATH / ANTHROPIC_API_KEY etc.) — NOT a full parent-env copy —
+        # then layer the trace_id when present.  Story 9.6 review pass-2 PH0 /
+        # pass-3 TH2.
+        env = _build_child_env()
         if trace_id is not None:
             env["OMB_TRACE_ID"] = trace_id
         return await asyncio.create_subprocess_exec(

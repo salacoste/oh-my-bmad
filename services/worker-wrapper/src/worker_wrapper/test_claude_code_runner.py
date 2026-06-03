@@ -251,6 +251,87 @@ class TestSpawnEnvTraceId:
         assert is_valid_trace_id(captured["env"]["OMB_TRACE_ID"]) is True
 
 
+class TestSpawnChildEnvAllowlist:
+    """G-SEC-2 (D1): ``_spawn`` builds the child env from an explicit
+    allowlist (``_build_child_env``) — functional vars + ``OMB_*``/``CLAUDE_*``
+    prefixes pass through, operator/platform secrets are dropped, and
+    ANTHROPIC_API_KEY is re-injected from settings."""
+
+    @pytest.mark.asyncio
+    async def test_spawn_env_contains_needed_vars(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Functional allowlist + prefix vars + settings ANTHROPIC + GITHUB."""
+        monkeypatch.setenv("PATH", "/usr/bin:/bin")
+        monkeypatch.setenv("HOME", "/home/agent")
+        monkeypatch.setenv("OMB_FOO", "x")  # prefix passthrough
+        monkeypatch.setenv("GITHUB_TOKEN", "ghp-needed")
+
+        runner = ClaudeCodeRunner(_settings())
+
+        captured: dict[str, Any] = {}
+
+        async def _fake_exec(*args: Any, **kwargs: Any) -> Any:
+            captured["env"] = kwargs.get("env", {})
+            return AsyncMock(spec=asyncio.subprocess.Process)
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=_fake_exec,
+        ):
+            await runner._spawn("do something", tmp_path)
+
+        env = captured["env"]
+        assert env["PATH"] == "/usr/bin:/bin"
+        assert env["HOME"] == "/home/agent"
+        assert "OMB_TRACE_ID" in env  # always-on overlay
+        assert env["OMB_FOO"] == "x"  # prefix passthrough
+        # ANTHROPIC re-injected from settings (NOT the allowlist).
+        assert env["ANTHROPIC_API_KEY"] == "sk-test-key-123"
+        # GITHUB_TOKEN retained (git push, main.py:476).
+        assert env["GITHUB_TOKEN"] == "ghp-needed"
+
+    @pytest.mark.asyncio
+    async def test_spawn_env_excludes_operator_secrets(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Operator/platform secret canaries MUST NOT reach the child env."""
+        canaries = {
+            "OPERATOR_HMAC_KEY": "canary",
+            "LITESTREAM_SECRET_ACCESS_KEY": "canary",
+            "LITESTREAM_ACCESS_KEY_ID": "canary",
+            "TELEGRAM_BOT_TOKEN": "canary",
+            "TELEGRAM_WEBHOOK_SECRET_TOKEN": "canary",
+            "TG_ALLOWLIST_USER_IDS": "canary",
+            "AWS_SECRET_ACCESS_KEY": "canary",
+            "OPENAI_API_KEY": "canary",
+        }
+        for name, value in canaries.items():
+            monkeypatch.setenv(name, value)
+
+        runner = ClaudeCodeRunner(_settings())
+
+        captured: dict[str, Any] = {}
+
+        async def _fake_exec(*args: Any, **kwargs: Any) -> Any:
+            captured["env"] = kwargs.get("env", {})
+            return AsyncMock(spec=asyncio.subprocess.Process)
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=_fake_exec,
+        ):
+            await runner._spawn("do something", tmp_path)
+
+        env = captured["env"]
+        for name in canaries:
+            assert name not in env, f"{name} leaked into child env"
+
+
 # ---------------------------------------------------------------------------
 # Tests: _classify_tool_use (event extraction)
 # ---------------------------------------------------------------------------
