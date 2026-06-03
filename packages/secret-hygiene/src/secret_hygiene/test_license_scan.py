@@ -62,8 +62,16 @@ class TestIsCompatible:
     def test_lgpl_incompatible(self) -> None:
         assert not is_compatible("lgpl-3.0")
 
-    def test_mpl_incompatible(self) -> None:
-        assert not is_compatible("mpl-2.0")
+    def test_mpl_2_0_compatible(self) -> None:
+        # MPL-2.0 is weak/file-level copyleft, accepted by operator decision
+        # (2026-06-03); permissive short-circuit beats the "mpl" fallback.
+        assert is_compatible("MPL-2.0")
+        assert is_compatible("mpl-2.0")
+
+    def test_generic_mpl_still_incompatible(self) -> None:
+        # Generic "mpl" / MPL-1.1 are NOT permissive → still flagged.
+        assert not is_compatible("mpl")
+        assert not is_compatible("mpl-1.1")
 
     def test_empty_string_compatible(self) -> None:
         assert is_compatible("")

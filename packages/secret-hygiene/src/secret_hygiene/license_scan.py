@@ -46,6 +46,11 @@ PERMISSIVE_LICENSES: frozenset[str] = frozenset(
         "zlib",
         "mit-0",
         "boost-1.0",
+        # MPL-2.0 is weak / file-level copyleft, distribution-compatible with
+        # MIT (operator decision 2026-06-03). Listing it here short-circuits
+        # _token_ok True BEFORE the "mpl" copyleft-substring fallback, so
+        # MPL-2.0 is accepted while generic "mpl" / "mpl-1.1" stay flagged.
+        "mpl-2.0",
     }
 )
 

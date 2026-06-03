@@ -136,3 +136,52 @@ def test_empty_components_fails_closed() -> None:
         ["--sbom", str(FIXTURES / "violations" / "empty_components.cyclonedx.json")]
     )
     assert rc == 1
+
+
+def test_os_distro_component_skipped_by_default(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A pkg:deb OS-distro component with a GPL license passes by default —
+    base-image OS packages are out of scope for the app-deps gate. The skip
+    is reported on stderr (no silent skip)."""
+    mod = _load_module()
+    rc = mod.main(  # type: ignore[attr-defined]
+        ["--sbom", str(FIXTURES / "clean" / "os_distro_skipped.cyclonedx.json")]
+    )
+    assert rc == 0
+    assert "skipped 1 OS-distro component" in capsys.readouterr().err
+
+
+def test_include_os_packages_evaluates_os_distro() -> None:
+    """--include-os-packages restores whole-image behavior: the same pkg:deb
+    GPL component now FAILS."""
+    mod = _load_module()
+    rc = mod.main(  # type: ignore[attr-defined]
+        [
+            "--sbom",
+            str(FIXTURES / "clean" / "os_distro_skipped.cyclonedx.json"),
+            "--include-os-packages",
+        ]
+    )
+    assert rc == 1
+
+
+def test_pypi_gpl_still_fails_by_default(capsys: pytest.CaptureFixture[str]) -> None:
+    """A pkg:pypi (application dep) GPL component must STILL fail by default —
+    OS-distro scoping does not weaken the app-deps gate."""
+    mod = _load_module()
+    rc = mod.main(  # type: ignore[attr-defined]
+        ["--sbom", str(FIXTURES / "violations" / "pypi_gpl.cyclonedx.json")]
+    )
+    assert rc == 1
+    assert "copyleft-incompatible" in capsys.readouterr().err
+
+
+def test_pypi_mpl2_passes() -> None:
+    """A pkg:pypi component declaring MPL-2.0 now PASSES (FIX 1: MPL-2.0 added
+    to PERMISSIVE_LICENSES) while pypi components remain evaluated (FIX 2)."""
+    mod = _load_module()
+    rc = mod.main(  # type: ignore[attr-defined]
+        ["--sbom", str(FIXTURES / "clean" / "pypi_mpl2.cyclonedx.json")]
+    )
+    assert rc == 0
