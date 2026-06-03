@@ -1505,3 +1505,108 @@ These remain Phase-3 territory and Phase 2 explicitly does not pre-decide them:
 - [ ] `deferred-work.md` reviewed; any items now superseded by Phase 2 marked `killed: superseded_by_phase_2_epic_<n>`.
 
 — *Amendment by R2d2, 2026-05-15, via the BMad `bmad-create-architecture` workflow (extension mode).*
+
+## Phase 3 Architecture Extension — MCP Tooling Fleet
+
+> **Amendment added:** 2026-06-03.
+>
+> **Companion documents:**
+> - PRD amendment: see [`prd.md`](./prd.md) §"Phase 3 Scope Extension" (FR72–FR77 + NFR-O11/M8/S12).
+> - Selection rationale: see [`phase-3-plan.md`](./phase-3-plan.md) — resolved scope D1–D4, Epics 14–19, ship-blocker checklist; grounded in [`phase-3-scoping-brief.md`](./phase-3-scoping-brief.md).
+> - Gate: see [`docs/adr/0009-phase-3-gate.md`](../../docs/adr/0009-phase-3-gate.md) (proposed) — this section is the architecture amendment its [acceptance criteria](../../docs/adr/0009-phase-3-gate.md#acceptance-criteria) require.
+
+**Theme.** The MCP tooling fleet — give the worker/orchestrator runtime a set of first-class, stdio-only, tier-authz'd MCP tool servers (`git`, `github`, `verification`, `memory`, `artifact`), built entirely on the Phase-2 spine: event-only telemetry, `trace_id` propagation, tier-enforced authz, and the cosign/SLSA/SBOM supply-chain. Phase 3 adds **tools**, not new trust boundaries. Every new server is a sibling of the three existing stdio MCP servers (`clawhip-bridge`, `task-registry`, `session-registry` — `mcp-servers/*`), not a new long-running compose service.
+
+### Preserved invariants (Phase 1 + Phase 2 carry forward, restated for new servers)
+
+All Phase 1 invariants and all Phase 2 invariants (P2-I1 through P2-I6, `architecture.md:1086-1091`) stand unchanged. As they apply to the five new servers:
+
+- **FR26 single-writer (P2-I1).** No new server is a second writer of persisted state. Read-only tools query the materialized SQLite state opened `read_only=True` (the `task-registry` pattern — `mcp-servers/task-registry/src/task_registry_mcp/app/main.py:84`) or read the JSONL log via `read_log_lines`. Mutating *spine* events route through the single FR26 writer (`clawhip-bridge`'s `EventLogWriter.append` — `mcp-servers/clawhip-bridge/src/clawhip_bridge_mcp/server.py:265`), reached either in-process (clawhip-bridge is itself the writer) or via a spawned clawhip-bridge stdio client + `EmitterHolder` (the `task-registry` lifespan pattern — `app/main.py:90-152`). The `memory` and `artifact` servers persist to **their own backing-store files**, never the registry DB (FR75/FR76; ADR-0011, ADR-0012).
+- **MCP transport stdio-only (P2-I4).** Every new server is `FastMCP(...).run()` on stdio (`server.py:196`, `:697`). No `mcp.server.sse` / `streamable_http`. Remote-MCP stays deferred (D2).
+- **Event-only telemetry (P2-I3 / NFR-O1/O10).** New servers emit typed events on the spine; they add **zero** instrumentation paths to any other service. Metrics for `git.*`/`github.*`/`verification.*`/`memory.*`/`artifact.*` are derived by `metrics-subscriber` tailing the log (`architecture.md:1197-1214`), under the same bounded-cardinality discipline (event families, not raw IDs, become metric labels).
+- **`trace_id` propagation (NFR-O7).** Every tool takes `caller_trace_id` as an **explicit, shape-validated input** (never ambient), via the byte-identical `validate_caller_trace_id` helper (`server.py:123-154`) threaded into `EventEnvelope.create(trace_id=...)` (`server.py:262`). The contract test `tests/contract/test_mcp_tool_schemas.py::test_validate_caller_trace_id_byte_identical_across_servers` is extended to cover all eight servers.
+- **Tier-enforced authz (Epic 6).** Every tool declares a tier in a module-level `TIER_MAP` (`server.py:64-74`, `handlers/tools.py:39-43`) and calls `check_tier` / `check_tier_with_approval` (`packages/capabilities/src/capabilities/tiers.py:64,106`). Tier-3 tools are denied without a matching `approval.granted` event (`tiers.py:96-102`).
+- **Supply-chain (Epic 8 + G-SEC-1/2).** New server code ships **inside the base image** (`Dockerfile.base:38` `COPY mcp-servers/`, `:41` `uv sync --all-packages --no-editable` builds every workspace member as a wheel) — so it inherits the base image's cosign/SLSA/CycloneDX attestation and fail-closed license gate (`release.yml:186-236`) **without a new matrix entry**. The child-env allowlist (`_ENV_ALLOWLIST`, `services/worker-wrapper/.../adapters/mcp_clients.py:34-74`) is expanded — never replaced by `os.environ.copy()` — for each new server's REQUIRED vars and for any scoped credential it consumes.
+
+### New invariants (delta from P2-I1..I6)
+
+Phase 3 introduces **three** new discipline rules on top of the preserved set. They generalize properties the three existing servers already exhibit implicitly; Phase 3 makes them explicit because the fleet quintuples the server count.
+
+| # | Invariant | Why |
+|---|---|---|
+| **P3-I1** | **Every MCP tool declares its capability tier.** Each tool name maps to a `Tier` in the server's module-level `TIER_MAP`, and every handler calls `check_tier`/`check_tier_with_approval` before any side effect. A tool with no `TIER_MAP` entry is a build-time failure (arch-gate AST check). Destructive tools (`git push`/history-rewrite, all `github` writes, `artifact delete`) are `Tier.THREE`; each carries a negative test proving denial without `approval.granted`. | The fleet adds ~25 new tools across 5 servers. An untiered tool is an unbounded-authority hole. Making "declare a tier" a structural invariant (not a convention) means the authz surface is enumerable and CI-checkable — mirrors how `clawhip-bridge`'s `TIER_MAP` (`server.py:64`) and `task-registry`'s (`handlers/tools.py:39`) already enumerate every tool's tier. |
+| **P3-I2** | **A server with a backing store owns an isolated file; it is never a second writer of the registry DB or the JSONL log.** `memory` (SQLite FTS5) and `artifact` (content-addressed FS) each own a dedicated path under a per-server subtree of the named volume, opened single-writer by exactly that server process. Spine *events* about store operations still route through the FR26 writer (clawhip-bridge); the store *content* is the server's private concern. | This is the FR26-safe extension of stateful tools. The Phase-2 precedent is `metrics-subscriber`'s cursor file (`architecture.md:1212`) — a service owning its own small state file outside the registry DB. P3-I2 makes that the rule for any Phase-3 server that must persist. ADR-0011/ADR-0012 are the per-store decisions. |
+| **P3-I3** | **MCP servers ship as wheels in the base image and run as stdio subprocesses — never as standalone long-running compose services.** A new fleet member is added to the `[tool.uv.workspace] members` glob (`pyproject.toml:35`), built into the base via the existing `COPY mcp-servers/` + `uv sync --all-packages` (`Dockerfile.base:38,41`), and spawned on demand by the worker/orchestrator via `StdioServerParameters` with the allowlisted env (`mcp_clients.py:153`). It does **not** get a `services/*` Dockerfile, a `docker-compose.yml` entry, or a `release.yml` matrix row. | This is the existing packaging reality for `clawhip-bridge`/`task-registry`/`session-registry` (none has a Dockerfile; none is in the release matrix `release.yml:347-354`; all three are spawned by `MCPClientGroup`). P3-I3 names it so Epic 15 doesn't accidentally invent a per-server compose service + image — which would add public surface (violating P2-I5), a new writer lifecycle, and a redundant supply-chain matrix entry. **Consequence for separability (NFR-M8):** S-5…S-9 test *tool-set composition* (spawn-with/spawn-without the server's stdio command), not compose-service presence/absence like S-4 did. |
+
+### The MCP-server-authoring pattern (the Epic-15 recipe; reused by Epics 16–19)
+
+This is the canonical recipe every new fleet server follows. It is the concrete extraction of the three existing servers; ADR-0010 is its decision record. Epic 15 (`git`) implements it end-to-end; Epics 16–19 reuse it verbatim.
+
+**1. Workspace member + package layout.** Add `mcp-servers/<name>/` with the standard tree (mirror `task-registry`):
+
+```
+mcp-servers/git-mcp/
+  pyproject.toml                         # name = "git-mcp"; workspace member
+  src/git_mcp/
+    __init__.py
+    __main__.py                          # env validation + build_server + mcp.run()  (mirror clawhip-bridge/__main__.py)
+    server.py  (or app/main.py)          # build_server(*, ...) -> FastMCP factory
+    handlers/tools.py                    # @mcp.tool() registrations + TIER_MAP
+    handlers/resources.py                # @mcp.resource() read-only surfaces (optional)
+    adapters/clawhip_client.py           # EmitterHolder + ClawhipBridgeClient (copy from task-registry — see import-graph note)
+    test_server.py
+```
+
+Register the member: add `"git-mcp"` to `[project]` deps + `[tool.uv.sources]` and rely on the `members = ["services/*", "packages/*", "mcp-servers/*"]` glob (`pyproject.toml:35,39-50`). No Dockerfile, no compose entry (P3-I3).
+
+**2. The `build_server` factory.** A synchronous factory returning a configured `FastMCP`, with all I/O deferred to a lifespan async-context (so the factory is safe from sync + async callers — `server.py:162-196`). Inject config (paths, clock, `actor_kind`, `actor_id`) at the boundary; never read `os.environ` inside the factory. The lifespan runs startup recovery / spawns the clawhip-bridge emitter client and **fails loud** on startup error (`task-registry app/main.py:94-152`, OQ-4 fail-loud-on-startup vs PD-1 fail-soft-mid-request).
+
+**3. Tool registration + tier-authz wrapping.** Each tool:
+   - Is a module-level `@mcp.tool()` with `caller_trace_id` as a **keyword-only required** arg (the `*,` separator — `server.py:551-555`).
+   - Calls `validate_caller_trace_id(caller_trace_id)` **first** (`server.py:370`, `handlers/tools.py:194`).
+   - Calls `check_tier(action, CallerContext(actor_kind, actor_id, task_id), TIER_MAP[action])` for Tier-0..2, or `check_tier_with_approval(..., approval_lookup=...)` for Tier-3 (`tiers.py:106-134`).
+   - For destructive tools, is additionally wrapped by `emit_capability_denied_on_deny(boundary="mcp", emitter=emitter_holder.emit_event, attempted_action=tool_name, get_actor_id=...)` (`handlers/tools.py:154-168`) so a denial emits a `capability.denied` audit envelope through the FR26 writer before re-raising.
+
+   The Tier-3 approval lookup reuses the existing pattern: scan the materialized `Event` table (`handlers/tools.py:80-106`) or today's JSONL (`server.py:77-110`) for an `approval.granted` event matching `task_id`. **G-FN-2 note (nested-stdio audit deadlock):** because every new destructive tool may spawn a clawhip-bridge stdio child to emit its denial audit, the nested-stdio audit path is now five-fold more common. Epic 15's recipe MUST adopt the G-FN-2 disposition (per `phase-3-plan.md:71`) before the first Tier-3 tool ships — fold it into ADR-0010.
+
+**4. Event emission with `trace_id`.** Mutating ops emit typed events (`git.committed`, `github.pr_opened`, `verification.completed`, `memory.written`, `artifact.put`) via the spine writer. The emit helper mirrors `clawhip-bridge._emit` (`server.py:219-269`): `EventEnvelope.create(...)` with `trace_id=caller_trace_id`, then `writer.append(envelope)` (in-process for a server that is its own writer, else `emitter_holder.emit_event(...)` over the spawned clawhip-bridge client). New event *types* must be registered in `registry-state`'s `domain/event_types.py` (additive) so the schema registry validates them and `metrics-subscriber` derives their metrics.
+
+**5. The child-env allowlist additions.** For each new server, add its REQUIRED env vars to the `_ENV_ALLOWLIST` frozensets in **both** `services/worker-wrapper/.../mcp_clients.py:34` **and** `services/orchestrator-adapter/.../mcp_clients.py:37` (kept byte-identical — guarded by `tests/contract/test_clawhip_client_env_allowlist_mirror.py`). Example for `git`: `GIT_MCP_ACTOR_KIND`, `GIT_MCP_ACTOR_ID`, `GIT_MCP_WORKTREE_ROOT`. **Never** add a broad secret (the `_ENV_ALLOWLIST` comment at `mcp_clients.py:26-28,72` is load-bearing: `ANTHROPIC_API_KEY`/`GITHUB_TOKEN`/`OPERATOR_HMAC_KEY` have leaked into MCP subprocesses twice and been reverted — see the diff-audit memory). The `github` server's scoped credential (FR73) is the sole exception and is added deliberately under a *new* var name (`GITHUB_MCP_SCOPED_TOKEN`), not the broad `GITHUB_TOKEN` (ADR-0010 / Epic 16; closes G-SEC-2).
+
+**6. The `__main__.py` entrypoint.** `python -m <name>_mcp`: read env, validate REQUIRED vars (exit 2 on missing/invalid, with a typed-dispatch `actor_kind` narrowing for mypy --strict — `clawhip-bridge/__main__.py:37-93`), `build_server(...)`, `mcp.run()`. Wire the spawn command into `WorkerSettings` (the `*_command`/`*_args` fields consumed by `MCPClientGroup._connect` — `mcp_clients.py:108-122,153`).
+
+**7. Supply-chain.** Because the server ships in the base image (P3-I3), it inherits cosign/SLSA/SBOM + the fail-closed license gate automatically (`release.yml` base job `:186-236`). The only supply-chain action per server is: ensure its third-party deps appear in the base SBOM (they will, via `uv.lock`) and pass the license gate (`scripts/check_sbom_licenses.py`). **No new `release.yml` matrix row.** NFR-S12's "every new server image is signed" is satisfied transitively: the worker-wrapper/orchestrator-adapter images that *carry and spawn* the servers are the signed artifacts.
+
+**8. Separability test (new S-entry).** Add `tests/separability/test_s<N>_<name>_optional.py` mirroring S-1/S-2's tool-composition style (`@pytest.mark.separability + @pytest.mark.slow`, `skip_if_no_docker`, `try/finally` teardown — `test_s4_metrics_subscriber_optional.py:411-419`). **Unlike S-4** (which toggled a compose service), the fleet S-entries toggle the server's **spawn command** in the worker/orchestrator MCP-client config and assert: (a) with the server spawned, its tools are listed + callable; (b) with it absent from the spawn set, every other MCP server still initializes and the worker still completes a scripted task — proving the member is optional (NFR-M8). Use `_build_scripted_worker.py` / `_build_null_orchestrator.py` fixtures (`tests/separability/`).
+
+### Per-epic wiring decisions (Epics 14–19)
+
+**Epic 14 — tests-first hardening warm-up (FR77 + NFR-O11).** No new server. Two pieces:
+   - **FR77 digest-deprecation cutover.** Remove tag-based image resolution from `docker-compose.yml`, operator docs, and `just verify-images` (`justfile:424-498` already resolves `OMB_IMAGE_DIGEST_<service>` + validates `^sha256:[a-f0-9]{64}$`); make digest-pinned the **sole** path. Cutover mechanics: (1) emit a deprecation warning when any tag-form reference is resolved during a one-release window; (2) then drop the tag-resolution branch entirely; (3) the gate is a digest-only deploy passing `just verify-images` + `just bootstrap-verify` green. The `:latest`-advance logic in `release.yml` (`:392-398`) stays for human convenience but is no longer a deploy input.
+   - **NFR-O11 mutation gate + harness.** A nightly `mutmut`/`cosmic-ray` run over platform-owned `packages/*` (the tier/event kernels are the highest-value targets — a surviving mutant in `tiers.py:86-102` is an authz hole). Scaffold + baseline score first (14.2), threshold decision + CI wiring second (14.3). This is the **mutation-gate harness** that protects the authz invariants the whole fleet depends on. Also resolve the G-FN-1/2/3 dispositions here (14.4); G-FN-2 is a direct Epic-15 input (nested-stdio deadlock, see recipe step 3).
+
+**Epic 15 — `git` MCP server (FR72; recipe-establishing).** `mcp-servers/git-mcp/`. Tools: `status`/`diff`/`log`/`branch` (Tier-1), `add`/`commit` (Tier-2), `push`/history-rewrite (Tier-3-gated). **Key decision — operates in-worktree only:** the server is launched with `GIT_MCP_WORKTREE_ROOT` set to the active task worktree and every tool resolves paths against it + refuses any path that escapes it (realpath containment check); there is no "repo selection" arg, closing the path-traversal surface. Emits `git.*` events with `trace_id`. ATDD/test-design-first per operator priority (15.1). This epic produces the ADR-0010 recipe; 16–19 reuse it.
+
+**Epic 16 — `github` MCP server (FR73; closes G-SEC-2).** `mcp-servers/github-mcp/`. Generalizes the existing `GitHubClient` (`services/worker-wrapper/.../adapters/github_client.py` — aiohttp + tenacity 3x backoff, structured `PRDraftResult`/`BranchResult`, no-token→structured-error at `:201`) into a full surface: issues/PRs/reviews/comments. Reads Tier-1; **all writes Tier-3-gated. Key decision — scoped-credential design:** authenticate with a **fine-grained PAT or GitHub App installation token narrowed to the target repo**, supplied via a *new* allowlist entry `GITHUB_MCP_SCOPED_TOKEN` — never the broad inherited `GITHUB_TOKEN` (which remains banned from MCP subprocess env, `mcp_clients.py:72`). The existing `GitHubClient._headers` `Bearer` flow (`github_client.py:93-101`) carries over unchanged; only the token's *scope* and *injection path* change. This is the G-SEC-2 follow-up closure (`phase-3-plan.md:70`).
+
+**Epic 17 — `verification` MCP server (FR74).** `mcp-servers/verification-mcp/`. Runs build + test recipes, returns structured `{pass/fail, logs, coverage}`. **Key decision — sandboxed to worktree:** like `git`, launched with a worktree root; the subprocess it spawns to run tests inherits the **child-env allowlist only** (no secrets), `cwd` pinned to the worktree, and a wall-clock timeout. Tier-2 (runs project code, no external mutation). Emits `verification.*` events carrying recipe-invoked + exit-status + `trace_id`.
+
+**Epic 18 — `memory`/`wiki` MCP server (FR75; ADR-0012).** `mcp-servers/memory-mcp/`. **Key decision — FTS5 own-file isolation (P3-I2):** a dedicated SQLite DB file with an FTS5 virtual table, under its own volume subtree (e.g. `oh-my-bmad-data/memory-mcp/store.db`), opened single-writer by exactly this server process — **never** the registry DB. `read`/`search` Tier-1, `write` Tier-2. WAL mode for crash-safety, single-writer-safe by construction (only one memory-mcp instance spawned). Emits `memory.*` events with `trace_id`. ADR-0012 is the decision record.
+
+**Epic 19 — `artifact` MCP server + store (FR76; ADR-0011).** `mcp-servers/artifact-mcp/`. **Key decision — content-addressed local-FS store (P3-I2):** `put` hashes content (sha256) and stores at `oh-my-bmad-data/artifact-mcp/objects/<hash[:2]>/<hash>`; `get`/`list` read it; a sidecar index (small SQLite or JSON manifest in the same subtree) maps logical names → hashes + records retention metadata. `put` Tier-2; `delete` (if exposed) Tier-3-gated. **Retention:** operator-configurable TTL/size-cap, enforced by a sweep at startup + on `put`. No new external dependency (local FS only, per the simplicity principle `prd.md:557`). Emits `artifact.*` events with `trace_id`. ADR-0011 is the decision record. The plan flags this may warrant an infra sub-epic if it needs a new volume (`phase-3-plan.md:50`); the P3-I2 own-subtree design keeps it on the existing `oh-my-bmad-data` named volume, so no new infra is required.
+
+### Forward-referenced ADRs (proposed; each gates its epic)
+
+Each lands `status: proposed` first and must be `accepted` before its owning epic's first story merges (mirrors the ADR-0004..0008 discipline, `architecture.md:1504`).
+
+- **ADR-0010** — MCP-server-authoring pattern (stdio + tier-authz + event-telemetry + separability + supply-chain + child-env allowlist). **Gates Epic 15; reused by 16–19.** `docs/adr/0010-mcp-server-authoring.md`.
+- **ADR-0011** — artifact-store design (content-addressed local-FS; retention; FR26-safe own-store). **Gates Epic 19.** `docs/adr/0011-artifact-store.md`.
+- **ADR-0012** — memory/wiki store (SQLite FTS5; own DB file; registry-DB isolation; single-writer-safe). **Gates Epic 18.** `docs/adr/0012-memory-wiki-store.md`.
+
+Deferred ADRs stay deferred (per ADR-0009 §3): remote-MCP transport (D2) and the browser-automation surface remain explicit non-decisions for Phase 3.
+
+### Phase 3 CI-gate additions
+
+The PR-required-checks list expands per epic (mirrors `architecture.md:1500-1504`):
+- **Epic 14:** digest-only deploy green (`just verify-images` + `just bootstrap-verify`); mutation-nightly publishes a score artifact + enforces the threshold.
+- **Epics 15–19 (each):** new separability entry S-5…S-9 green; per-server Tier-3-denial negative test (destructive tool denied without `approval.granted`); the byte-identical `validate_caller_trace_id` + `_ENV_ALLOWLIST`-mirror contract tests extended to the new server; new event types registered + cardinality-regression green in `metrics-subscriber`.
