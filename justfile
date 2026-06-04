@@ -249,6 +249,7 @@ check-gates:
     uv run python scripts/check_single_writer.py
     uv run python scripts/check_mcp_transport.py
     uv run python scripts/check_trace_id_required.py
+    uv run python scripts/check_tier_declarations.py
 
 # Run the architectural-gate self-tests — exercises the bundled fixture
 # trees under scripts/checks/fixtures/ to verify each check script's own
@@ -259,6 +260,7 @@ check-gates-self-test:
     uv run python scripts/check_single_writer.py --self-test
     uv run python scripts/check_mcp_transport.py --self-test
     uv run python scripts/check_trace_id_required.py --self-test
+    uv run python scripts/check_tier_declarations.py --self-test
     uv run python scripts/check_sbom_licenses.py --self-test
 
 # Scenario harness (journey-level smoke tests) lands across Stories 2.11 /
