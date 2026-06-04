@@ -7,6 +7,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "artifact-mcp",
     "capabilities",
     "clawhip-bridge-mcp",
     "clawhip-daemon",
@@ -39,6 +40,7 @@ required-version = ">=0.5"
 members = ["services/*", "packages/*", "mcp-servers/*"]
 
 [tool.uv.sources]
+artifact-mcp = { workspace = true }
 capabilities = { workspace = true }
 clawhip-bridge-mcp = { workspace = true }
 clawhip-daemon = { workspace = true }

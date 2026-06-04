@@ -114,6 +114,19 @@ class WorkerSettings(BaseSettings):
     memory_command: str = ""
     memory_args: list[str] = ["-m", "memory_mcp"]
 
+    # Epic 19 / Stories 19.1-19.2 — artifact MCP server spawn command (latent scaffold).
+    # The spawn + the ``_ENV_ALLOWLIST`` (ARTIFACT_MCP_STORE_PATH / ACTOR_KIND /
+    # ACTOR_ID + the optional retention vars) both activate in Story 19.5 — NEITHER
+    # is wired yet. The default is "" (OFF) so a fresh boot without the
+    # ARTIFACT_MCP_* env does NOT brick the worker: artifact-mcp's __main__.py exits
+    # 2 without those required vars, so artifact stays absent unless a deployment
+    # opts in by setting WORKER_ARTIFACT_COMMAND (e.g. "python") AND forwarding the
+    # ARTIFACT_MCP_* env. Mirrors the git/github/verification/memory blank-command
+    # toggle (the P3-I3 separability seam): artifact-mcp is a stdio member spawned
+    # by worker-wrapper, NOT a container.
+    artifact_command: str = ""
+    artifact_args: list[str] = ["-m", "artifact_mcp"]
+
     # TODO(Story 5.8/5.9): consumed when task/session registry MCP servers
     # need a shared SQLite path.
     registry_db_path: str = ""
