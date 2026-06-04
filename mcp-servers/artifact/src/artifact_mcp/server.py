@@ -114,11 +114,6 @@ def build_server(
     if _swept:
         log.info("artifact_mcp_startup_sweep_evicted", extra={"count": len(_swept)})
 
-    # ``clock`` is threaded for the Tier-3 approval lookup + event emission landing
-    # in 19.3 / 19.4; referenced here so the scaffold is import-clean. Same for
-    # ``registry_events_dir`` (the 19.3 approval source / 19.4 event source).
-    _ = (clock, registry_events_dir)
-
     emitter_holder: EmitterHolder | None
     lifespan_fn = None
     if clawhip_bridge_command is not None and clawhip_bridge_args is not None:
@@ -172,11 +167,19 @@ def build_server(
 
     mcp = FastMCP("artifact", lifespan=lifespan_fn) if lifespan_fn else FastMCP("artifact")
 
-    # Stories 19.1-19.2 scaffold: no tools registered yet (``TIER_MAP`` empty).
-    # The store + emitter_holder are threaded so the artifact tools (19.3 / 19.4)
-    # close over a live store + the FR26 single-writer audit surface. The Tier-3
-    # ``approval_lookup`` is wired in 19.3 (when ``artifact.delete`` lands).
-    from artifact_mcp.handlers.tools import register_tools
+    # Story 19.3: register the read (Tier-1) + mutating (Tier-2/3) artifact tools.
+    # ``clock`` is threaded so the Tier-3 ``approval_lookup`` scans TODAY's JSONL
+    # event log (``current_day_path(events_dir, clock.now())``). ``emitter_holder``
+    # is forwarded so the audit ``capability.denied`` decorator wraps each handler.
+    # ``registry_events_dir`` is the approval-source base dir; when None, every
+    # Tier-3 ``artifact.delete`` call is denied (no approval source).
+    from artifact_mcp.handlers.tools import make_approval_lookup, register_tools
+
+    approval_lookup = (
+        make_approval_lookup(registry_events_dir, clock)
+        if registry_events_dir is not None
+        else None
+    )
 
     register_tools(
         mcp,
@@ -184,7 +187,7 @@ def build_server(
         actor_kind=actor_kind,
         actor_id=actor_id,
         emitter_holder=emitter_holder,
-        approval_lookup=None,
+        approval_lookup=approval_lookup,
     )
 
     return mcp

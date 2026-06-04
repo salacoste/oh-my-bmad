@@ -40,6 +40,7 @@ the red-phase suite on known-green primitives the 19.3 / 19.4 tools delegate to.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import stat
 import sys
@@ -140,21 +141,18 @@ def _assert_caller_trace_id_required(tool: object, *, name: str) -> None:
 # ===========================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.parametrize("tool", _TIER1_TOOLS)
 def test_read_tools_are_tier_one(tool: str) -> None:
     """artifact.get / artifact.list are Tier-1 (bounded read) — Story 19.3 (GREEN)."""
     assert TIER_MAP[tool] == Tier.ONE
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.parametrize("tool", _TIER2_TOOLS)
 def test_put_tool_is_tier_two(tool: str) -> None:
     """artifact.put is Tier-2 (store mutation) — Story 19.3 (GREEN)."""
     assert TIER_MAP[tool] == Tier.TWO
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.parametrize("tool", _TIER3_TOOLS)
 def test_delete_tool_is_tier_three(tool: str) -> None:
     """artifact.delete is Tier-3 (approval-gated deletion) — Story 19.3 (GREEN)."""
@@ -167,7 +165,6 @@ def test_delete_tool_is_tier_three(tool: str) -> None:
 # ===========================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool", _TIER1_TOOLS + _TIER2_TOOLS + _TIER3_TOOLS)
 async def test_tool_registered_with_required_caller_trace_id(tool: str, tmp_path: Path) -> None:
@@ -186,21 +183,120 @@ async def test_tool_registered_with_required_caller_trace_id(tool: str, tmp_path
 # ===========================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.parametrize("tool", _TIER3_TOOLS)
 def test_tier3_denial_semantics_via_check_tier(tool: str) -> None:
     """Tier-3 artifact.delete with no approval is denied by the shared capability gate.
 
     Independent of tool registration, this pins the *semantics* 19.3 inherits:
     a worker requesting the tool's tier (TIER_MAP[tool], expected Tier.THREE)
-    with ``has_approval=False`` must raise CapabilityDenied. Today TIER_MAP[tool]
-    raises KeyError → runtime failure → clean xfail; when the tier is wired this
-    becomes a real green guard over the denial path.
+    with ``has_approval=False`` must raise CapabilityDenied. Now that the tier is
+    wired this is a real green guard over the denial path.
     """
-    required = TIER_MAP[tool]  # KeyError today → clean xfail
+    required = TIER_MAP[tool]
     caller = CallerContext(actor_kind="worker", actor_id="w-1", task_id="t-1")
     with pytest.raises(CapabilityDenied):
         check_tier(tool, caller, required, has_approval=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", _TIER3_TOOLS)
+async def test_tier3_delete_denied_without_approval(tool: str, tmp_path: Path) -> None:
+    """artifact.delete raises CapabilityDenied when no approval.granted matches (GREEN).
+
+    The 19.3 handler calls ``check_tier_with_approval`` with an ``approval_lookup``
+    that returns False when no matching ``approval.granted`` exists for the task;
+    the absence of approval MUST deny the Tier-3 deletion. We build a server with
+    an EMPTY events dir (a real approval source with zero ``approval.granted``
+    entries → lookup returns False) and assert the denial via the live tool call.
+    ``actor_kind="operator"`` so the coarse actor-kind gate ADMITS Tier-3 and the
+    denial is driven specifically by the MISSING approval.granted.
+    """
+    events_dir = tmp_path / "events"
+    events_dir.mkdir()
+    mcp = build_server(
+        store_root=tmp_path / "store",
+        clock=FrozenClock(mono_ns=1_000_000, now=FROZEN_EPOCH),
+        actor_kind="operator",
+        actor_id="test-operator",
+        registry_events_dir=events_dir,
+    )
+    await mcp.list_tools()
+    fn = mcp._tool_manager._tools[tool].fn
+
+    with pytest.raises(CapabilityDenied):
+        await fn(caller_trace_id=_VALID_TRACE_ID, hash="0" * 64, task_id="t-1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", _TIER3_TOOLS)
+async def test_tier3_delete_permitted_with_approval(tool: str, tmp_path: Path) -> None:
+    """artifact.delete is PERMITTED when a matching approval.granted exists (GREEN).
+
+    Mirrors git-mcp's Tier-3 positive test: seed an ``approval.granted`` for the
+    caller's task into today's JSONL event log, ``put`` a real object so there is
+    something to delete, then assert the live ``artifact.delete`` call succeeds and
+    reports ``deleted=True``. ``actor_kind="operator"`` admits Tier-3; the gate is
+    satisfied purely by the seeded approval.
+    """
+    events_dir = tmp_path / "events"
+    events_dir.mkdir()
+    task_id = "t-0190000a-0000-7000-8000-000000000001"  # valid t-<uuidv7> pattern
+
+    mcp = build_server(
+        store_root=tmp_path / "store",
+        clock=FrozenClock(mono_ns=1_000_000, now=FROZEN_EPOCH),
+        actor_kind="operator",
+        actor_id="test-operator",
+        registry_events_dir=events_dir,
+    )
+    await mcp.list_tools()
+    put_fn = mcp._tool_manager._tools["artifact.put"].fn
+    delete_fn = mcp._tool_manager._tools[tool].fn
+
+    put_result = await put_fn(
+        caller_trace_id=_VALID_TRACE_ID,
+        content=base64.b64encode(b"to-be-deleted").decode("ascii"),
+        name="k",
+    )
+    content_hash = put_result["hash"]
+
+    _seed_approval(events_dir, task_id)
+    result = await delete_fn(caller_trace_id=_VALID_TRACE_ID, hash=content_hash, task_id=task_id)
+
+    assert isinstance(result, dict) and result.get("ok") is True, (
+        f"{tool}: approved delete did not succeed: {result!r}"
+    )
+    assert result.get("deleted") is True, (
+        f"{tool}: approved delete must report deleted=True; got {result!r}"
+    )
+
+
+def _seed_approval(events_dir: Path, task_id: str) -> None:
+    """Write an ``approval.granted`` JSONL line for *task_id* into today's log.
+
+    Mirrors git-mcp's ``_seed_approval`` (the Tier-3 positive-path seeder).
+    """
+    from events.canonical import to_canonical_json
+    from events.envelope import Actor, EventEnvelope
+    from events.ids import new_event_id, new_request_id
+
+    clock = FrozenClock(mono_ns=1_000_000, now=FROZEN_EPOCH)
+    envelope = EventEnvelope.create(
+        event_id=new_event_id(clock=clock),
+        schema_version="1.1.0",
+        type="approval.granted",
+        emitted_at=clock.now(),
+        emitted_at_monotonic_ns=clock.monotonic_ns(),
+        actor=Actor(kind="operator", id="op-1"),
+        payload={"task_id": task_id, "decision_id": "d-1", "actor_id": "op-1"},
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
+        request_id=new_request_id(clock=clock),
+    )
+    from events import current_day_path
+
+    day_path = current_day_path(events_dir, clock.now())
+    day_path.parent.mkdir(parents=True, exist_ok=True)
+    day_path.write_bytes(to_canonical_json(envelope) + b"\n")
 
 
 # ===========================================================================
@@ -386,7 +482,6 @@ def test_object_and_index_file_modes_are_0o660(tmp_path: Path) -> None:
 # ===========================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool", _TIER1_TOOLS + _TIER2_TOOLS + _TIER3_TOOLS)
 async def test_tool_rejects_invalid_caller_trace_id(tool: str, tmp_path: Path) -> None:
@@ -448,7 +543,11 @@ async def test_put_emits_artifact_event_with_trace_id(
     """
     mcp = _build(tmp_path / "store")
     fn = await _tool_fn(mcp, tool)
-    result = await fn(caller_trace_id=_VALID_TRACE_ID, content="artifact bytes", name="k")
+    result = await fn(
+        caller_trace_id=_VALID_TRACE_ID,
+        content=base64.b64encode(b"artifact bytes").decode("ascii"),
+        name="k",
+    )
 
     assert isinstance(result, dict) and result.get("ok") is True, (
         f"{tool}: put did not succeed: {result!r}"
