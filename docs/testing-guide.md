@@ -338,6 +338,62 @@ before `fixed_clock` lands.
 
 ---
 
+## Mutation testing (NFR-O11, Story 14.2)
+
+Mutation testing measures **test-suite strength**: it deliberately introduces
+small faults ("mutants") into the source and checks whether the suite catches
+them. A surviving mutant is a fault no test detected — a weak or missing
+assertion. The score is `killed / checked` (a higher percentage is better).
+
+We use **cosmic-ray**, not mutmut. mutmut copies sources into a `mutants/`
+tree, but this repo's `uv` workspace uses *editable* installs that resolve
+imports back to the pristine real source — so no mutant was ever exercised and
+every run reported a false `0%`. cosmic-ray mutates the **real source file in
+place** under VCS during `exec`, then restores it from the original contents
+after testing each mutant; editable installs therefore pick up each mutation.
+cosmic-ray leaves the working tree clean on completion (the session db is a
+gitignored `*.sqlite`).
+
+### Scope
+
+The harness is deliberately tight — three high-value, purely logical kernel
+modules where a surviving mutant most directly signals a weak assertion:
+
+| Module | Why |
+|--------|-----|
+| `packages/capabilities/src/capabilities/tiers.py` | Tier authorization logic |
+| `packages/events/src/events/schema_registry.py` | Event-schema registration/validation |
+| `packages/events/src/events/canonical.py` | Canonical-JSON serialization |
+
+Config lives in `cosmic-ray.toml` (3 kernels, full run) and
+`cosmic-ray.smoke.toml` (tiers.py only, the fast proof).
+
+### Recipes
+
+```sh
+just mutation-smoke   # tiers.py only, <~3 min — the harness sanity proof
+just mutation-test    # full 3-kernel run — SLOW (minutes); nightly/operator
+just mutation-score   # recompute the score from an existing session db
+```
+
+Each prints one canonical line, e.g. `mutation-score: 68/90 = 75.6%`.
+`scripts/mutation_score.py` parses `cosmic-ray dump` and applies the NFR-O11
+denominator convention: `no-test` / `skipped` mutants (coverage gaps) are
+excluded; `survived`, `exception`, `abnormal`, and `incompetent` count as
+checked-but-not-killed.
+
+### Baseline + enforcement
+
+In Story 14.2 the score is a **non-gating baseline** only. The nightly
+`mutation-baseline` job (`.github/workflows/nightly.yml`) runs
+`just mutation-test || true`, writes the score to a 30-day artifact + the run
+summary, and never fails the build. The `--threshold N` flag exists on
+`scripts/mutation_score.py` but is **not** wired into any gate yet — **Story
+14.3** wires enforcement once the nightly baseline establishes a defensible
+floor.
+
+---
+
 ## See also
 
 - [Exceptions](./exceptions.md) — suppression-tag reference + noqa conventions.

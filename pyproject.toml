@@ -64,6 +64,11 @@ dev = [
     # at the workspace root materialises them for `pytest -m "not slow"`.
     "asgi-lifespan>=2.1",
     "httpx>=0.27",
+    # Story 14.2 (NFR-O11) — mutation-testing harness. cosmic-ray mutates
+    # source IN PLACE under VCS (mutmut copies to mutants/ that this uv
+    # workspace's editable installs never resolve to → false 0%). Nightly
+    # `mutation-baseline` job only; not on the PR-gate path.
+    "cosmic-ray>=8.4.6",
 ]
 
 [tool.pytest.ini_options]

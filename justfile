@@ -149,6 +149,42 @@ test-fuzz *ARGS="":
 test-separability *ARGS="": build-base
     uv run pytest -m separability -v tests/separability/ {{ARGS}}
 
+# Story 14.2 — mutation-testing harness (NFR-O11), powered by cosmic-ray.
+#
+# WHY cosmic-ray, not mutmut: mutmut copies sources to mutants/ but this uv
+# workspace's *editable* installs resolve imports back to the pristine real
+# source, so no mutant is ever exercised (false 0%). cosmic-ray mutates the
+# real source IN PLACE under VCS during `exec`, then RESTORES it after each
+# mutant — so editable installs pick up the mutation. The session db is a
+# gitignored *.sqlite; cosmic-ray leaves the working tree clean on completion.
+#
+# `mutation-test` — FULL lifecycle over the 3 kernel modules (tiers.py,
+# schema_registry.py, canonical.py). SLOW (minutes); nightly / operator-only.
+# Non-gating in 14.2 — the score is a baseline signal; Story 14.3 wires the
+# `--threshold` enforcement once a defensible floor is established.
+# Trailing `*ARGS` lets nightly forward extra flags if needed.
+mutation-test *ARGS="":
+    rm -f mutation.sqlite
+    uv run cosmic-ray init cosmic-ray.toml mutation.sqlite
+    uv run cosmic-ray exec cosmic-ray.toml mutation.sqlite
+    uv run python scripts/mutation_score.py --session mutation.sqlite {{ARGS}}
+
+# `mutation-score` — recompute + print the score from an existing session db
+# WITHOUT re-running the (slow) mutation exec. Reads mutation.sqlite by default.
+mutation-score *ARGS="":
+    uv run python scripts/mutation_score.py --session mutation.sqlite {{ARGS}}
+
+# `mutation-smoke` — hard-bounded harness proof: mutates ONLY tiers.py against
+# its co-located unit suite (<~3 min). This is the in-place-mutation sanity
+# check that proves cosmic-ray reaches the editable-installed source where
+# mutmut produced a false 0%. cosmic-ray restores the tree on completion; the
+# session db is gitignored. Emits a real `mutation-score: killed/checked` line.
+mutation-smoke:
+    rm -f mutation-smoke.sqlite
+    uv run cosmic-ray init cosmic-ray.smoke.toml mutation-smoke.sqlite
+    uv run cosmic-ray exec cosmic-ray.smoke.toml mutation-smoke.sqlite
+    uv run python scripts/mutation_score.py --session mutation-smoke.sqlite
+
 # Strict lint + format + type-check + architectural-discipline gates.
 # ruff rules cover style (E/F/I/UP/B/SIM/N); ruff format --check enforces
 # canonical formatting; mypy --strict gates the platform-owned packages +

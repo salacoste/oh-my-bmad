@@ -1,0 +1,39 @@
+# cosmic-ray.toml — mutation-testing harness config (Story 14.2, NFR-O11).
+#
+# cosmic-ray (NOT mutmut) is used deliberately: cosmic-ray mutates source
+# files IN PLACE under VCS during `exec`, then restores each file from the
+# original contents after testing each mutant. Because the mutation lands on
+# the real source file, this workspace's *editable* (uv workspace) installs
+# resolve imports back to the mutated file — so mutations are actually
+# exercised. mutmut copies sources into `mutants/` and was architecturally
+# unworkable here: editable installs resolved imports back to the pristine
+# real source, yielding a false 0% (every mutant "survived").
+#
+# SCOPE (Story 14.2): three kernel modules only — the highest-value, purely
+# logical units where surviving mutants most directly signal a weak assertion.
+# `module-path` accepts a LIST of file paths in cosmic-ray 8.4.x (cli.py maps
+# each entry through find_modules; a `.py` file is yielded as-is), so we target
+# exactly these three files — no package-wide blast radius.
+#
+# The full run is SLOW (nightly / operator-only). `just mutation-smoke` runs a
+# hard-bounded subset (tiers.py) as the <~3min harness proof.
+[cosmic-ray]
+module-path = [
+    "packages/capabilities/src/capabilities/tiers.py",
+    "packages/events/src/events/schema_registry.py",
+    "packages/events/src/events/canonical.py",
+]
+# Per-mutant test timeout (seconds). A mutant that makes the suite hang (e.g.
+# an inverted loop bound) is recorded as a timeout (counted as not-killed) once
+# it exceeds the slowest legitimate run by a safe margin.
+timeout = 60.0
+excluded-modules = []
+# Run from the REPO ROOT so the root conftest.py registration + workspace
+# editable installs are on the import path. `-p no:cacheprovider` keeps the run
+# hermetic; `-x` stops at the first failing test (a kill) to minimise per-mutant
+# wall time. The payload-validators suite is included because it exercises the
+# canonical/schema_registry kernels.
+test-command = "uv run pytest packages/capabilities/src/capabilities/test_tiers.py packages/events/src/events/test_schema_registry.py packages/events/src/events/test_canonical.py packages/events/src/events/test_payload_validators.py -p no:cacheprovider -q -x"
+
+[cosmic-ray.distributor]
+name = "local"

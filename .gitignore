@@ -75,3 +75,12 @@ marketing/
 # Story 13.2 — operator's filled-in litestream config MAY hold credentials.
 # The committed template is litestream.yml.example; the real file is local-only.
 litestream.yml
+
+# Story 14.2 — cosmic-ray mutation-testing session databases + artifacts.
+# `cosmic-ray init` writes a SQLite session db (the "work order" + results);
+# the smoke/full recipes name them mutation-*.sqlite. These are generated,
+# can be large, and must never be committed. (cosmic-ray restores mutated
+# source from VCS after each mutant, so no source diff should ever leak.)
+*.sqlite
+*.sqlite-journal
+.cosmic-ray/
