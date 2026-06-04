@@ -367,14 +367,14 @@ development_status:
   # phase: 3 · produces the ADR-0010 recipe reused by Epics 16–19
   # FR72 · NFR-M8/S12 · P3-I1/I3 · ADR-0010
   # =========================================================================
-  epic-15: backlog  # phase: 3 · first fleet server; establishes MCP-server-authoring recipe
-  15-1-atdd-red-phase-contracts: backlog  # phase: 3 · FR72 (test-design) · per-tool tier + denial + worktree-containment red-phase contracts
-  15-2-server-scaffold: backlog  # phase: 3 · FR72 · P3-I3 · mcp-servers/git/ (git-mcp) scaffold + build_server factory (recipe steps 1,2,6)
-  15-2a-tier-declarations-ast-gate: backlog  # phase: 3 · FR72 · P3-I1 · build scripts/check_tier_declarations.py (fleet-wide untiered-tool gate)
-  15-3-read-tools-status-diff-log-branch: backlog  # phase: 3 · FR72 · Tier-1 read tools (recipe steps 3,4)
-  15-4-mutating-tools-add-commit-push-events: backlog  # phase: 3 · FR72 · add/commit Tier-2 + push/history-rewrite Tier-3 + git.* events (recipe steps 3,4)
-  15-5-child-env-allowlist-separability-s5: backlog  # phase: 3 · FR72 · NFR-M8 (S-5) · P3-I3 · _ENV_ALLOWLIST + S-5 (recipe steps 5,8)
-  15-6-supply-chain-adr-0010-finalization: backlog  # phase: 3 · FR72 · NFR-S12 · P3-I3 · transitive supply-chain + ADR-0010 finalization (recipe step 7)
+  epic-15: done  # phase: 3 · CLOSED 2026-06-04 — σ git MCP server complete; MCP-server-authoring recipe (ADR-0010) established + reused by Epics 16–19. 6 stories merged (PR #38–#41), 4 P0 security vulns (1 read-path RCE, 3 write/push RCE/SSRF) caught by independent security-review + fixed with prove-live→assert-shielded regression tests.
+  15-1-atdd-red-phase-contracts: done  # phase: 3 · FR72 (test-design) · per-tool tier + denial + worktree-containment red-phase contracts · merged PR #38
+  15-2-server-scaffold: done  # phase: 3 · FR72 · P3-I3 · mcp-servers/git/ (git-mcp) scaffold + build_server factory (recipe steps 1,2,6) · merged PR #38
+  15-2a-tier-declarations-ast-gate: done  # phase: 3 · FR72 · P3-I1 · scripts/check_tier_declarations.py (fleet-wide untiered-tool AST gate, --self-test, CI PR-required) · 2 P1 dead-code/nested-helper TIER_MAP-bypass false-negatives hardened · merged PR #38
+  15-3-read-tools-status-diff-log-branch: done  # phase: 3 · FR72 · Tier-1 read tools status/diff/log/branch (recipe steps 3,4) · P0 repo-local .git/config RCE (core.fsmonitor/hooksPath) fixed via _GIT_HARDENING -c shields + regression tests · merged PR #39
+  15-4-mutating-tools-add-commit-push-events: done  # phase: 3 · FR72 · add/commit Tier-2 + push/history-rewrite Tier-3 + git.* events (recipe steps 3,4) · 3 P0s (filter/merge driver RCE via .gitattributes, url.insteadOf SSRF) fixed via assert_safe_repo_config config-scrub + protocol.allow=never · merged PR #40
+  15-5-child-env-allowlist-separability-s5: done  # phase: 3 · FR72 · NFR-M8 (S-5) · P3-I3 · _ENV_ALLOWLIST GIT_MCP_* (byte-identical orch↔worker, NEVER os.environ.copy) + conditional spawn (git_command off-by-default "") + S-5 separability + contract mirror (recipe steps 5,8) · merged PR #41 (commit 26678af, CI conclusion=success)
+  15-6-supply-chain-adr-0010-finalization: done  # phase: 3 · FR72 · NFR-S12 · P3-I3 · 2026-06-04 — confirmation-only (no source change): git-mcp adds ZERO new third-party deps (only `mcp`, already in base SBOM for the 3 existing servers); zero new release.yml matrix row (matrix is services-only); license gate self-test 11/11 green; built into base via Dockerfile.base:38 COPY + :41 uv sync --all-packages; ADR-0010 accepted w/ G-FN-2 precondition (Decision #9). See 15-6-supply-chain-transitive-inclusion.md (recipe step 7)
 
   # =========================================================================
   # Epic 16: τ github MCP server (6 stories, ~1 week)
