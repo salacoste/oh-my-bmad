@@ -68,6 +68,21 @@ _ENV_ALLOWLIST: frozenset[str] = frozenset(
         "GIT_MCP_ACTOR_KIND",
         "GIT_MCP_ACTOR_ID",
         "GIT_MCP_WORKTREE_ROOT",
+        # github-mcp REQUIRED (mcp-servers/github/.../__main__.py exits 2 without
+        # these) — Story 16.5 / G-SEC-2. GITHUB_MCP_SCOPED_TOKEN is a NARROWLY-
+        # SCOPED GitHub credential (fine-grained PAT / App installation token
+        # scoped to the target repo), NOT the broad operator GITHUB_TOKEN — which
+        # stays BANNED (below). This closes the MCP-SUBPROCESS half of G-SEC-2: an
+        # MCP subprocess never sees the broad operator PAT, only a repo-scoped
+        # token (leak blast-radius = one repo). NOTE: the claude-agent spawn path
+        # (claude_code_runner _CHILD_ENV_ALLOWLIST) still forwards the broad PAT
+        # for `git push` — that half remains open, tracked by its in-code TODO +
+        # deferred-work. It IS a credential but a deliberately narrow one
+        # (ADR-0010 §6 "scoped credentials use new, narrowly-named vars"); the
+        # broad-secret denylist below remains excluded.
+        "GITHUB_MCP_ACTOR_KIND",
+        "GITHUB_MCP_ACTOR_ID",
+        "GITHUB_MCP_SCOPED_TOKEN",
         # Shared event-log + SQLite paths (spine convention)
         "REGISTRY_EVENTS_DIR",
         "REGISTRY_DB_PATH",
