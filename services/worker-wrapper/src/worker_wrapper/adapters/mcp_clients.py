@@ -64,6 +64,10 @@ _ENV_ALLOWLIST: frozenset[str] = frozenset(
         "CLAWHIP_BRIDGE_ACTOR_KIND",
         "CLAWHIP_BRIDGE_ACTOR_ID",
         "CLAWHIP_BRIDGE_LOG_DIR",
+        # git-mcp REQUIRED (mcp-servers/git/.../__main__.py) — Story 15.5
+        "GIT_MCP_ACTOR_KIND",
+        "GIT_MCP_ACTOR_ID",
+        "GIT_MCP_WORKTREE_ROOT",
         # Shared event-log + SQLite paths (spine convention)
         "REGISTRY_EVENTS_DIR",
         "REGISTRY_DB_PATH",
@@ -100,6 +104,12 @@ class MCPClientGroup:
     task_registry: ClientSession | None = None
     session_registry: ClientSession | None = None
     clawhip_bridge: ClientSession | None = None
+    # Story 15.5 / P3-I3 — OPTIONAL 4th stdio member. Stays ``None`` unless the
+    # deployment opts in by setting a non-blank ``settings.git_command`` (the
+    # default is "" so a fresh boot without the GIT_MCP_* env does NOT brick the
+    # worker — git-mcp's __main__.py exits 2 without its required vars). The
+    # blank-command toggle is the NFR-M8 / S-5 separability seam.
+    git: ClientSession | None = None
 
     async def __aenter__(self) -> MCPClientGroup:
         self._stack = AsyncExitStack()
@@ -120,6 +130,16 @@ class MCPClientGroup:
                 self.settings.clawhip_bridge_command,
                 self.settings.clawhip_bridge_args,
             )
+            # Story 15.5 — conditional git-mcp spawn. ONLY when the operator has
+            # opted in via a non-blank ``git_command``; otherwise git stays
+            # absent (separability S-5 "absent" state). The GIT_MCP_* required
+            # vars are forwarded via ``_ENV_ALLOWLIST``.
+            if self.settings.git_command:
+                self.git = await self._connect(
+                    "git",
+                    self.settings.git_command,
+                    self.settings.git_args,
+                )
         except BaseException:
             await self.__aexit__(None, None, None)
             raise
@@ -137,6 +157,7 @@ class MCPClientGroup:
         self.task_registry = None
         self.session_registry = None
         self.clawhip_bridge = None
+        self.git = None  # Story 15.5 — null the optional 4th member.
 
     async def _connect(
         self,

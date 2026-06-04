@@ -17,6 +17,9 @@ graphs (matches the existing
 
 from __future__ import annotations
 
+from git_mcp.adapters.clawhip_client import (  # noqa: IMP001 — tests/* can cross
+    _ENV_ALLOWLIST as _GIT_ALLOWLIST,
+)
 from orchestrator_adapter.adapters.mcp_clients import (  # noqa: IMP001 — tests/* can cross
     _ENV_ALLOWLIST as _ORCH_ALLOWLIST,
 )
@@ -52,6 +55,18 @@ def test_clawhip_client_env_allowlist_byte_identical_across_servers() -> None:
         f"  in task-registry not in session: {sorted(_TASK_ALLOWLIST - _SESSION_ALLOWLIST)}\n"
         f"  in session not in task-registry: {sorted(_SESSION_ALLOWLIST - _TASK_ALLOWLIST)}\n"
         "Update both adapters together — mirror discipline."
+    )
+    # Story 15.5 (Epic-15 gate): git-mcp's clawhip_client._ENV_ALLOWLIST is the
+    # SAME canon copy (it spawns clawhip-bridge for audit emission, never task/
+    # session-registry), so it MUST stay byte-identical to the task/session
+    # siblings. NOTE: this is the clawhip-bridge *spawn* allowlist and does NOT
+    # carry GIT_MCP_* — those live in the worker-wrapper/orchestrator-adapter
+    # MCPClientGroup allowlists (which spawn git-mcp itself), asserted below.
+    assert _GIT_ALLOWLIST == _TASK_ALLOWLIST, (
+        f"clawhip_client._ENV_ALLOWLIST drifted between git-mcp and task-registry:\n"
+        f"  in git-mcp not in task-registry: {sorted(_GIT_ALLOWLIST - _TASK_ALLOWLIST)}\n"
+        f"  in task-registry not in git-mcp: {sorted(_TASK_ALLOWLIST - _GIT_ALLOWLIST)}\n"
+        "Update all clawhip_client adapters together — mirror discipline (Story 15.5)."
     )
 
 
@@ -123,6 +138,14 @@ _SPAWNER_REQUIRED_ENV_VARS = {
     "CLAWHIP_BRIDGE_ACTOR_KIND",
     "CLAWHIP_BRIDGE_ACTOR_ID",
     "CLAWHIP_BRIDGE_LOG_DIR",
+    # git-mcp REQUIRED (mcp-servers/git/.../__main__.py exits 2 without these) —
+    # Story 15.5. Forwarded by BOTH spawner allowlists to keep them byte-identical
+    # (the mirror test enforces identity); only worker-wrapper actually spawns
+    # git-mcp (conditional on a non-blank WORKER_GIT_COMMAND), so the orchestrator
+    # carries them as harmless extra vars.
+    "GIT_MCP_ACTOR_KIND",
+    "GIT_MCP_ACTOR_ID",
+    "GIT_MCP_WORKTREE_ROOT",
     "REGISTRY_EVENTS_DIR",
     "REGISTRY_DB_PATH",
 }
