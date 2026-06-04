@@ -205,7 +205,6 @@ def _assert_caller_trace_id_required(tool, *, name: str) -> None:  # type: ignor
 # ===========================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.parametrize("tool", _TIER1_TOOLS)
 def test_read_tools_are_tier_one(tool: str) -> None:
     """github read tools (issues/prs/reviews list+get) are Tier-1 — Story 16.3 (GREEN)."""
@@ -225,7 +224,6 @@ def test_write_tools_are_tier_three(tool: str) -> None:
 # ===========================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool", _TIER1_TOOLS)
 async def test_tier1_tool_registered_with_required_caller_trace_id(tool: str) -> None:
@@ -313,7 +311,6 @@ def test_tier3_denial_semantics_via_check_tier(tool: str) -> None:
 # ===========================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
 async def test_read_tool_authenticates_with_scoped_token_not_broad_token(
     monkeypatch,  # type: ignore[no-untyped-def]
@@ -324,11 +321,24 @@ async def test_read_tool_authenticates_with_scoped_token_not_broad_token(
     built with a distinct ``scoped_token`` and a DIFFERENT broad ``GITHUB_TOKEN``
     in the environment, then the read tool's outbound REST request must carry the
     SCOPED token's bearer value — proving the broad operator token is never the
-    auth source. Today the read tool is absent → _tool_fn fails → clean xfail; once
-    16.3/16.4 land with a recordable adapter, this asserts the Authorization
-    header carries the scoped token.
+    auth source. We record the OUTBOUND ``Authorization`` header the adapter would
+    attach (intercepting ``GitHubReadClient._read``) rather than asserting a token
+    echoed in the tool result — disclosing the credential through the tool boundary
+    would itself be the leak this contract guards against.
     """
     monkeypatch.setenv("GITHUB_TOKEN", "ghp_broad_operator_token_MUST_NOT_be_used")
+
+    import github_mcp.adapters.github_rest as _rest
+
+    captured: dict[str, object] = {}
+
+    async def _recording_read(self: _rest.GitHubReadClient, path: str) -> _rest.ReadResult:
+        captured["token"] = self._token
+        captured["authorization"] = self._headers().get("Authorization")
+        return _rest.ReadResult(ok=True, status=200, data=[])
+
+    monkeypatch.setattr(_rest.GitHubReadClient, "_read", _recording_read)
+
     mcp = build_server(
         actor_kind="worker",
         actor_id="test-worker",
@@ -336,15 +346,18 @@ async def test_read_tool_authenticates_with_scoped_token_not_broad_token(
         clock=FrozenClock(mono_ns=1_000_000, now=FROZEN_EPOCH),
     )
     fn = await _tool_fn(mcp, "github.issues.list")
-    result = await fn(caller_trace_id=_VALID_TRACE_ID)
-    # The 16.3 read tool surfaces the auth token it used (test/recording adapter);
-    # it MUST be the scoped token and MUST NOT be the broad GITHUB_TOKEN.
+    result = await fn(caller_trace_id=_VALID_TRACE_ID, owner="acme", repo="widgets")
+
+    # The tool result MUST NOT carry the credential.
     assert isinstance(result, dict)
-    auth_used = result.get("_auth_token")
-    assert auth_used == _SCOPED_TOKEN, (
-        f"github read tool must authenticate with the scoped token, got {auth_used!r}"
+    assert "_auth_token" not in result, "tool result must NEVER disclose the scoped token"
+    assert result.get("ok") is True
+    # The outbound bearer MUST be the scoped token, NEVER the broad GITHUB_TOKEN.
+    assert captured["token"] == _SCOPED_TOKEN, (
+        f"github read tool must authenticate with the scoped token, got {captured.get('token')!r}"
     )
-    assert auth_used != os.environ.get("GITHUB_TOKEN"), (
+    assert captured["authorization"] == f"Bearer {_SCOPED_TOKEN}"
+    assert captured["token"] != os.environ.get("GITHUB_TOKEN"), (
         "github read tool must NEVER authenticate with the broad GITHUB_TOKEN"
     )
 
@@ -357,7 +370,6 @@ async def test_read_tool_authenticates_with_scoped_token_not_broad_token(
 # ===========================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool", _TIER1_TOOLS)
 async def test_tier1_tool_rejects_invalid_caller_trace_id(tool: str) -> None:
