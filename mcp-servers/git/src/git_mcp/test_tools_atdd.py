@@ -115,6 +115,22 @@ async def _tool_by_name(mcp: FastMCP, name: str) -> object:
     return by_name[name]
 
 
+async def _tool_fn(mcp: FastMCP, name: str):  # type: ignore[no-untyped-def]
+    """Return the callable for the registered tool *name*, or fail the assertion.
+
+    ``mcp.list_tools()`` returns ``mcp.types.Tool`` schema objects (no ``.fn``);
+    the invocable handler lives on the FastMCP tool-manager. We assert presence
+    against ``list_tools()`` (empty today for absent tools → clean xfail) and
+    return the manager's ``.fn``.
+    """
+    tools = await mcp.list_tools()
+    by_name = {t.name for t in tools}
+    assert name in by_name, (
+        f"tool {name!r} not registered (have: {sorted(by_name)}) — lands in Story 15.3/15.4"
+    )
+    return mcp._tool_manager._tools[name].fn
+
+
 def _assert_caller_trace_id_required(tool: object, *, name: str) -> None:
     """Assert ``caller_trace_id`` is a required string field on the tool schema.
 
@@ -139,10 +155,9 @@ def _assert_caller_trace_id_required(tool: object, *, name: str) -> None:
 # ===========================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.parametrize("tool", _TIER1_TOOLS)
 def test_read_tools_are_tier_one(tool: str) -> None:
-    """git.status/diff/log/branch are Tier-1 (bounded read) — Story 15.3."""
+    """git.status/diff/log/branch are Tier-1 (bounded read) — Story 15.3 (GREEN)."""
     assert TIER_MAP[tool] == Tier.ONE
 
 
@@ -166,11 +181,22 @@ def test_high_risk_tools_are_tier_three(tool: str) -> None:
 # ===========================================================================
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", _TIER1_TOOLS)
+async def test_tier1_tool_registered_with_required_caller_trace_id(
+    tool: str, tmp_path: Path
+) -> None:
+    """Each Tier-1 read tool is registered and requires a ``caller_trace_id`` (GREEN)."""
+    mcp = _build(tmp_path)
+    registered = await _tool_by_name(mcp, tool)
+    _assert_caller_trace_id_required(registered, name=tool)
+
+
 @pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tool", _TIER1_TOOLS + _TIER2_TOOLS + _TIER3_TOOLS)
+@pytest.mark.parametrize("tool", _TIER2_TOOLS + _TIER3_TOOLS)
 async def test_tool_registered_with_required_caller_trace_id(tool: str, tmp_path: Path) -> None:
-    """Every git tool is registered and requires a ``caller_trace_id`` string."""
+    """Each Tier-2/3 git tool is registered and requires ``caller_trace_id`` — Story 15.4."""
     mcp = _build(tmp_path)
     registered = await _tool_by_name(mcp, tool)
     _assert_caller_trace_id_required(registered, name=tool)
@@ -197,12 +223,11 @@ async def test_tier3_denied_without_approval(tool: str, tmp_path: Path) -> None:
     We assert the denial via the live tool call (today: tool absent → xfail).
     """
     mcp = _build(tmp_path)
-    registered = await _tool_by_name(mcp, tool)  # absent today → clean xfail
+    fn = await _tool_fn(mcp, tool)  # absent today → clean xfail
 
     # Contract the wired handler must satisfy: a worker calling a Tier-3 git op
     # without a matching approval.granted is denied. We invoke the tool and
     # expect CapabilityDenied (surfaced through the MCP error path).
-    fn = registered.fn  # type: ignore[attr-defined]
     with pytest.raises(CapabilityDenied):
         await fn(caller_trace_id=_VALID_TRACE_ID)
 
@@ -233,7 +258,6 @@ def test_tier3_denial_semantics_via_check_tier(tool: str) -> None:
 # ===========================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
 async def test_path_escaping_worktree_root_is_refused(tmp_path: Path) -> None:
     """A read tool given a path outside GIT_MCP_WORKTREE_ROOT refuses it.
@@ -246,10 +270,9 @@ async def test_path_escaping_worktree_root_is_refused(tmp_path: Path) -> None:
     root = tmp_path / "worktree"
     root.mkdir()
     mcp = _build(root)
-    status = await _tool_by_name(mcp, "git.status")  # absent today → clean xfail
+    fn = await _tool_fn(mcp, "git.status")
 
     escaping = str(root / ".." / "evil")
-    fn = status.fn  # type: ignore[attr-defined]
     with pytest.raises((ValueError, PermissionError)):
         await fn(caller_trace_id=_VALID_TRACE_ID, path=escaping)
 
@@ -276,14 +299,23 @@ def test_worktree_executor_refuses_escape(tmp_path: Path) -> None:
 # ===========================================================================
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", _TIER1_TOOLS)
+async def test_tier1_tool_rejects_invalid_caller_trace_id(tool: str, tmp_path: Path) -> None:
+    """Each Tier-1 read tool rejects an invalid ``caller_trace_id`` first (GREEN)."""
+    mcp = _build(tmp_path)
+    fn = await _tool_fn(mcp, tool)
+    with pytest.raises(ValueError, match="Story 9.1 contract"):
+        await fn(caller_trace_id=_INVALID_TRACE_ID)
+
+
 @pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tool", _TIER1_TOOLS + _TIER2_TOOLS + _TIER3_TOOLS)
+@pytest.mark.parametrize("tool", _TIER2_TOOLS + _TIER3_TOOLS)
 async def test_tool_rejects_invalid_caller_trace_id(tool: str, tmp_path: Path) -> None:
-    """Each git tool rejects an invalid ``caller_trace_id`` before doing work."""
+    """Each mutating git tool rejects an invalid ``caller_trace_id`` first — Story 15.4."""
     mcp = _build(tmp_path)
-    registered = await _tool_by_name(mcp, tool)  # absent today → clean xfail
-    fn = registered.fn  # type: ignore[attr-defined]
+    fn = await _tool_fn(mcp, tool)  # absent today → clean xfail
     with pytest.raises(ValueError, match="Story 9.1 contract"):
         await fn(caller_trace_id=_INVALID_TRACE_ID)
 
@@ -324,9 +356,8 @@ async def test_mutating_op_emits_git_event_with_trace_id(
     15.4 wires; today the tool is absent → _tool_by_name fails → clean xfail.
     """
     mcp = _build(tmp_path)
-    registered = await _tool_by_name(mcp, tool)  # absent today → clean xfail
+    fn = await _tool_fn(mcp, tool)  # absent today → clean xfail
 
-    fn = registered.fn  # type: ignore[attr-defined]
     result = await fn(caller_trace_id=_VALID_TRACE_ID)
 
     # The 15.4 handler must surface the emitted event so this contract can read

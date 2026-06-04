@@ -174,6 +174,17 @@ _FUNC_ALLOWLIST: dict[str, dict[str, str]] = {
     _rel("services/orchestrator-adapter/src/orchestrator_adapter/adapters/omc_runner.py"): {
         "OMCRunner._spawn": "asyncio.create_subprocess_exec",
     },
+    _rel("mcp-servers/git/src/git_mcp/server.py"): {
+        # Epic 15 / Story 15.3 — the SINGLE sandboxed ``git`` spawn-site behind
+        # the Tier-1 read tools. ``create_subprocess_exec`` (never ``_shell``);
+        # argv is a discrete list with ``--`` before any path filter; location
+        # pinned by ``-C <root>`` + ``cwd``; env is the hermetic allowlist
+        # (``_build_git_env`` — no secrets, no ``HOME``, ``GIT_CONFIG_*=/dev/null``).
+        # Reads do not propagate trace_id into the git env by design (no
+        # credentials enter the read path); the caller_trace_id is validated and
+        # logged at the handler boundary, not threaded to git.
+        "GitExecutor.run_git": "asyncio.create_subprocess_exec",
+    },
     _rel("scripts/sync_upstream.py"): {
         # Both ``subprocess.run`` calls live in ``main()`` — the maintenance
         # script's single entry-point. Top-level function (no class), so no

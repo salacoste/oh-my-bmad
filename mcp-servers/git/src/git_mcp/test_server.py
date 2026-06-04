@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from capabilities import Tier
 from events import FROZEN_EPOCH, FrozenClock
 from mcp.server.fastmcp import FastMCP
 
@@ -49,12 +50,18 @@ class TestServerConstruction:
         assert isinstance(mcp, FastMCP)
 
     @pytest.mark.asyncio
-    async def test_build_server_registers_no_tools_yet(self, tmp_path: Path) -> None:
-        """Scaffold: TIER_MAP empty → no git tools registered (land in 15.3/15.4)."""
+    async def test_build_server_registers_read_tools(self, tmp_path: Path) -> None:
+        """Story 15.3: the four Tier-1 read tools are registered (mutating land in 15.4)."""
         mcp = _build(tmp_path)
         tools = await mcp.list_tools()
-        assert tools == []
-        assert TIER_MAP == {}
+        names = {t.name for t in tools}
+        assert names == {"git.status", "git.diff", "git.log", "git.branch"}
+        assert TIER_MAP == {
+            "git.status": Tier.ONE,
+            "git.diff": Tier.ONE,
+            "git.log": Tier.ONE,
+            "git.branch": Tier.ONE,
+        }
 
     def test_build_server_with_clawhip_disabled_returns_cleanly(self, tmp_path: Path) -> None:
         """With clawhip args None, no lifespan/spawn is wired (audit-off path)."""
