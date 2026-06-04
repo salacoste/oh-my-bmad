@@ -1,6 +1,6 @@
 ---
 id: ADR-0012
-status: proposed
+status: accepted
 date: 2026-06-03
 supersedes: null
 ---
@@ -9,7 +9,7 @@ supersedes: null
 
 ## Status
 
-**Proposed** — 2026-06-03. Transitions to **accepted** before **Epic 18**'s first story merges (per [ADR-0009](./0009-phase-3-gate.md) §3). Gates Epic 18 (`memory`/`wiki` MCP server, FR75).
+**Accepted** — 2026-06-04. Accepted alongside the Phase-3 gate ([ADR-0009](./0009-phase-3-gate.md)); must be `accepted` before **Epic 18**'s first story merges (per ADR-0009 §3). Gates Epic 18 (`memory`/`wiki` MCP server, FR75).
 
 ## Context
 
@@ -55,4 +55,4 @@ The existing platform already runs SQLite as the registry-state store (opened `r
 - [ADR-0007](./0007-litestream-wal-replication.md) — the litestream target boundary this store sits outside of.
 - Precedent: `mcp-servers/task-registry/.../app/main.py:84` (separate read-only SQLite engine).
 
-— *R2d2, 2026-06-03 (proposed; via the BMad Phase-3 planning chain).*
+— *R2d2, 2026-06-03 (proposed; via the BMad Phase-3 planning chain). Accepted 2026-06-04 (alongside the Phase-3 gate).*

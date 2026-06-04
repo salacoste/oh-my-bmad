@@ -1,6 +1,6 @@
 ---
 id: ADR-0011
-status: proposed
+status: accepted
 date: 2026-06-03
 supersedes: null
 ---
@@ -9,7 +9,7 @@ supersedes: null
 
 ## Status
 
-**Proposed** — 2026-06-03. Transitions to **accepted** before **Epic 19**'s first story merges (per [ADR-0009](./0009-phase-3-gate.md) §3). Gates Epic 19 (`artifact` MCP server + store, FR76).
+**Accepted** — 2026-06-04. Accepted alongside the Phase-3 gate ([ADR-0009](./0009-phase-3-gate.md)); must be `accepted` before **Epic 19**'s first story merges (per ADR-0009 §3). Gates Epic 19 (`artifact` MCP server + store, FR76).
 
 ## Context
 
@@ -56,4 +56,4 @@ The plan flags that the backing store "may warrant its own infra sub-epic if it 
 - [ADR-0010](./0010-mcp-server-authoring.md) — the authoring recipe Epic 19 follows.
 - Precedent: `architecture.md:1212` (metrics-subscriber own cursor file).
 
-— *R2d2, 2026-06-03 (proposed; via the BMad Phase-3 planning chain).*
+— *R2d2, 2026-06-03 (proposed; via the BMad Phase-3 planning chain). Accepted 2026-06-04 (alongside the Phase-3 gate).*
