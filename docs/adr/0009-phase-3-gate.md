@@ -1,6 +1,6 @@
 ---
 id: ADR-0009
-status: proposed
+status: accepted
 date: 2026-06-03
 supersedes: null
 ---
@@ -9,7 +9,7 @@ supersedes: null
 
 ## Status
 
-**Proposed** — 2026-06-03. Transitions to **accepted** once the Phase-3 architecture amendment, epics/stories decomposition, and implementation-readiness report are aligned (see [Acceptance criteria](#acceptance-criteria)). Mirrors the ADR-0003 (Phase-2 gate) lifecycle, which was accepted only after all four planning amendments aligned.
+**Accepted** — 2026-06-04. All four planning amendments are aligned (Phase-3 architecture amendment, epics/stories decomposition, and implementation-readiness report — see [Acceptance criteria](#acceptance-criteria), now all checked). Mirrors the ADR-0003 (Phase-2 gate) lifecycle, which was accepted only after all four planning amendments aligned.
 
 ## Context
 
@@ -54,13 +54,13 @@ The project-context Cat-6 workflow rule requires every epic/story carry `phase: 
 
 ## Acceptance criteria
 
-This ADR transitions `proposed → accepted` only when:
+This ADR transitions `proposed → accepted` only when (all criteria met; **accepted 2026-06-04**):
 
 - [x] Phase-3 brainstorming convergence recorded (`phase-3-plan.md`).
 - [x] PRD extension authored (`prd.md` §"Phase 3 Scope Extension", FR72–FR77 + NFR-O11/M8/S12).
-- [ ] Phase-3 **architecture amendment** authored (`architecture.md` §"Phase 3 Architecture Extension" — the MCP-server-authoring pattern + per-epic wiring + ADR-0010/0011/0012 placeholders).
-- [ ] Phase-3 **epics/stories** decomposed (`epics.md` §"Phase 3 Epics" — Epics 14–19 + stories + per-epic acceptance gates + the Phase-3 ship-blocker checklist).
-- [ ] Phase-3 **implementation-readiness report** confirms the PRD + architecture + epics are aligned, the deferred-work backlog is reviewed, and G-FN-1/2/3 dispositions are set.
+- [x] Phase-3 **architecture amendment** authored (`architecture.md` §"Phase 3 Architecture Extension" — the MCP-server-authoring pattern + per-epic wiring + ADR-0010/0011/0012 placeholders).
+- [x] Phase-3 **epics/stories** decomposed (`epics.md` §"Phase 3 Epics" — Epics 14–19 + stories + per-epic acceptance gates + the Phase-3 ship-blocker checklist).
+- [x] Phase-3 **implementation-readiness report** confirms the PRD + architecture + epics are aligned, the deferred-work backlog is reviewed, and G-FN-1/2/3 dispositions are set (`implementation-readiness-report-phase-3-2026-06-03.md`, verdict **READY**).
 
 ### Deferred-work dispositions (12-3c, 11.3.3)
 
@@ -69,7 +69,7 @@ The Phase-3 readiness review (`phase-3-scoping-brief.md` §"Epic-11/12 follow-up
 - **12-3c (budget-override new-ceiling enforcement, FR68).** **Already merged / done** — landed in `main` at HEAD commit `c07694e` (`fix(epic-12.3c): critic-lane review fixes + mark 12-3c done`), preceded by `ece88a2` (`feat(epic-12.3c): budget-override new-ceiling enforcement (FR68) — Option A + persist`). **Disposition: no Phase-3 action needed** — it is closed Phase-2 work, not Phase-3 backlog.
 - **11.3.3 (deferred nightly-red root-cause, carried over from Story 11.3.2).** **Disposition: folded into Epic 14.** The Epic-14 mutation-gate/nightly work (Stories 14.2/14.3) requires a green nightly to be meaningful — a red nightly would mask mutation-score regressions. **Epic 14 must confirm the nightly is green before its gate passes** (added to the Epic-14 acceptance criteria); resolving the 11.3.3 nightly-red root cause is therefore a precondition of the Epic-14 gate, not a standing-deferred item.
 
-Until accepted, NO `phase: 3` story merges to `main` and `current_phase` stays `2`.
+Now accepted (2026-06-04): `phase: 3` stories may merge to `main` and `current_phase` increments to `3` (per the Decision §1–2).
 
 ## Consequences
 
@@ -94,4 +94,4 @@ Until accepted, NO `phase: 3` story merges to `main` and `current_phase` stays `
 - [`prd.md`](../../_bmad-output/planning-artifacts/prd.md) §"Phase 3 Scope Extension" — FR72–FR77 + NFR-O11/M8/S12.
 - ADR-0010 / ADR-0011 / ADR-0012 — to be authored in the architecture amendment.
 
-— *R2d2, 2026-06-03 (proposed; via the BMad Phase-3 planning chain).*
+— *R2d2, 2026-06-03 (proposed; via the BMad Phase-3 planning chain). Accepted 2026-06-04 (all four planning amendments aligned; readiness verdict READY).*

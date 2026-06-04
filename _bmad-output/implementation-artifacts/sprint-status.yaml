@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-06-03T00:00:00Z
-current_phase: 2  # Phase 2 opened by ADR-0003 (docs/adr/0003-phase-2-gate.md), 2026-05-15
+last_updated: 2026-06-04T00:00:00Z
+current_phase: 3  # Phase 3 opened by ADR-0009 (docs/adr/0009-phase-3-gate.md), 2026-06-04 (Phase 2 opened by ADR-0003, 2026-05-15)
 
 development_status:
   # =========================================================================
@@ -337,6 +337,91 @@ development_status:
   13-4a-litestream-silent-stall-signal: done  # phase: 2 · NFR-R7 follow-on · DONE 2026-06-02 (commit b7bf008) — closes the 13.4 blind spot: detects litestream SILENT hang (process alive but no replication progress) and emits a silent_stall signal. Distinct from replication.lagging (which fires on measurable lag); silent_stall covers the no-metrics-movement failure mode.
   epic-13-retrospective: done  # retro filed 2026-06-02 (epic-13-retro-2026-06-02.md); lessons → project-context Phase-2 additions
 
+  # =========================================================================
+  # PHASE 3 — MCP Tooling Fleet (opened by ADR-0009, 2026-06-04)
+  # Scope: FR72–FR77 + NFR-O11/M8/S12 from prd.md §"Phase 3 Scope Extension"
+  # Selected via: phase-3-plan.md (operator brainstorming convergence D1–D4 —
+  # exactly five stdio MCP servers + a tests-first hardening warm-up)
+  # Estimated effort: 5–7 weeks of solo-operator work (~31 stories)
+  # All stories below carry phase: 3; cannot merge to main without
+  # ADR-0009 accepted (which it is, as of 2026-06-04). Each forward-referenced
+  # ADR (0010/0011/0012) must be accepted before its owning epic's first story
+  # merges (all three accepted 2026-06-04 alongside the gate).
+  # Entry point: Epic 14.1 (FR77 digest-deprecation), the next story to implement.
+  # =========================================================================
+
+  # =========================================================================
+  # Epic 14: ψ Tests-first hardening warm-up (5 stories, ~3–4 days)
+  # phase: 3 · lands first (Epic-8-before-features pattern) · ADR-0009
+  # FR77 (digest-deprecation) · NFR-O11 (mutation gate) · NFR-O7 (trace_id AST gate)
+  # =========================================================================
+  epic-14: in-progress  # phase: 3 · entry epic — pure CI/verification before any server surface
+  14-1-digest-deprecation-cutover: ready-for-dev  # phase: 3 · FR77 · next story to implement — digest-pinned references become the sole deploy path
+  14-2-mutation-testing-harness-scaffold-baseline: backlog  # phase: 3 · NFR-O11 (harness) · mutmut/cosmic-ray over packages/* + baseline score artifact
+  14-3-mutation-gate-threshold-ci-enforcement: backlog  # phase: 3 · NFR-O11 (gate) · threshold decision + nightly enforcement
+  14-4-g-fn-disposition-triage: backlog  # phase: 3 · G-FN-1/2/3 dispositions; G-FN-2 nested-stdio folded into ADR-0010 recipe precondition
+  14-5-trace-id-required-ast-gate: backlog  # phase: 3 · NFR-O7 · build scripts/checks/check_trace_id_required.py (closes Phase-2 Story-9.7 deferral)
+
+  # =========================================================================
+  # Epic 15: σ git MCP server — recipe-establishing (7 stories, ~1 week)
+  # phase: 3 · produces the ADR-0010 recipe reused by Epics 16–19
+  # FR72 · NFR-M8/S12 · P3-I1/I3 · ADR-0010
+  # =========================================================================
+  epic-15: backlog  # phase: 3 · first fleet server; establishes MCP-server-authoring recipe
+  15-1-atdd-red-phase-contracts: backlog  # phase: 3 · FR72 (test-design) · per-tool tier + denial + worktree-containment red-phase contracts
+  15-2-server-scaffold: backlog  # phase: 3 · FR72 · P3-I3 · mcp-servers/git/ (git-mcp) scaffold + build_server factory (recipe steps 1,2,6)
+  15-2a-tier-declarations-ast-gate: backlog  # phase: 3 · FR72 · P3-I1 · build scripts/check_tier_declarations.py (fleet-wide untiered-tool gate)
+  15-3-read-tools-status-diff-log-branch: backlog  # phase: 3 · FR72 · Tier-1 read tools (recipe steps 3,4)
+  15-4-mutating-tools-add-commit-push-events: backlog  # phase: 3 · FR72 · add/commit Tier-2 + push/history-rewrite Tier-3 + git.* events (recipe steps 3,4)
+  15-5-child-env-allowlist-separability-s5: backlog  # phase: 3 · FR72 · NFR-M8 (S-5) · P3-I3 · _ENV_ALLOWLIST + S-5 (recipe steps 5,8)
+  15-6-supply-chain-adr-0010-finalization: backlog  # phase: 3 · FR72 · NFR-S12 · P3-I3 · transitive supply-chain + ADR-0010 finalization (recipe step 7)
+
+  # =========================================================================
+  # Epic 16: τ github MCP server (6 stories, ~1 week)
+  # phase: 3 · closes G-SEC-2 scoped-credential follow-up · ADR-0010 (reused)
+  # FR73 · NFR-M8/S12
+  # =========================================================================
+  epic-16: backlog  # phase: 3 · most operator-visible server; scoped GITHUB_MCP_SCOPED_TOKEN
+  16-1-atdd-red-phase-contracts: backlog  # phase: 3 · FR73 (test-design) · per-tool tier + denial + scoped-credential contracts
+  16-2-server-scaffold: backlog  # phase: 3 · FR73 · P3-I3 · mcp-servers/github/ (github-mcp) scaffold (recipe steps 1,2,6)
+  16-3-read-tools-issues-prs-reviews: backlog  # phase: 3 · FR73 · Tier-1 list/get tools (recipe step 3)
+  16-4-write-tools-tier3-gated-events: backlog  # phase: 3 · FR73 · all write tools Tier-3 + github.* events (recipe steps 3,4)
+  16-5-scoped-credential-github-mcp-scoped-token: backlog  # phase: 3 · FR73 · NFR-S12 · GITHUB_MCP_SCOPED_TOKEN (closes G-SEC-2; broad GITHUB_TOKEN stays banned)
+  16-6-separability-s6-supply-chain: backlog  # phase: 3 · FR73 · NFR-M8 (S-6) · NFR-S12 · S-6 + supply-chain (recipe steps 7,8)
+
+  # =========================================================================
+  # Epic 17: υ verification MCP server (5 stories, ~1 week)
+  # phase: 3 · ADR-0010 (reused) · FR74 · NFR-M8/S12
+  # =========================================================================
+  epic-17: backlog  # phase: 3 · sandboxed build/test runner returning {pass/fail, logs, coverage}
+  17-1-atdd-red-phase-contracts: backlog  # phase: 3 · FR74 (test-design) · tier + structured-result + sandbox contracts
+  17-2-server-scaffold: backlog  # phase: 3 · FR74 · P3-I3 · mcp-servers/verification/ (verification-mcp) scaffold (recipe)
+  17-3-run-build-run-tests-sandboxed: backlog  # phase: 3 · FR74 · Tier-2 sandboxed build/test tools (recipe step 3)
+  17-4-structured-result-verification-events: backlog  # phase: 3 · FR74 · structured result + verification.* events (recipe step 4)
+  17-5-separability-s7-supply-chain: backlog  # phase: 3 · FR74 · NFR-M8 (S-7) · NFR-S12 · S-7 + supply-chain (recipe steps 7,8)
+
+  # =========================================================================
+  # Epic 18: φ memory/wiki MCP server (5 stories, ~1 week)
+  # phase: 3 · SQLite FTS5 own DB file · ADR-0012 · FR75 · NFR-M8/S12 · P3-I1/I2
+  # =========================================================================
+  epic-18: backlog  # phase: 3 · persistent cross-task knowledge store; gated by ADR-0012
+  18-1-atdd-red-phase-contracts: backlog  # phase: 3 · FR75 (test-design) · tier + search-relevance + store-isolation contracts
+  18-2-store-schema-sqlite-fts5-own-db-file: backlog  # phase: 3 · FR75 · P3-I2 · ADR-0012 · dedicated SQLite FTS5 DB, single-writer-safe
+  18-3-read-search-tools: backlog  # phase: 3 · FR75 · Tier-1 read/search tools (recipe step 3)
+  18-4-write-tool-memory-events: backlog  # phase: 3 · FR75 · Tier-2 write + memory.* events (recipe steps 3,4)
+  18-5-separability-s8-supply-chain: backlog  # phase: 3 · FR75 · NFR-M8 (S-8) · NFR-S12 · S-8 + supply-chain + ADR-0012 finalization (recipe steps 7,8)
+
+  # =========================================================================
+  # Epic 19: χ artifact MCP server + store (5 stories, ~1 week)
+  # phase: 3 · content-addressed local-FS store · ADR-0011 · FR76 · NFR-M8/S12 · P3-I1/I2
+  # =========================================================================
+  epic-19: backlog  # phase: 3 · content-addressed build/run-output store; gated by ADR-0011
+  19-1-atdd-red-phase-contracts: backlog  # phase: 3 · FR76 (test-design) · tier + content-addressing + delete-denial + retention contracts
+  19-2-content-addressed-store-retention: backlog  # phase: 3 · FR76 · P3-I2 · ADR-0011 · sha256 content store + retention sweep
+  19-3-put-get-list-delete-tools: backlog  # phase: 3 · FR76 · P3-I1 · get/list Tier-1, put Tier-2, delete Tier-3-gated (recipe step 3)
+  19-4-artifact-events-retention-policy-events: backlog  # phase: 3 · FR76 · P3-I1 · artifact.* events incl. retention artifact.deleted (recipe step 4)
+  19-5-separability-s9-supply-chain: backlog  # phase: 3 · FR76 · NFR-M8 (S-9) · NFR-S12 · S-9 + supply-chain + ADR-0011 finalization (recipe steps 7,8)
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
@@ -572,3 +657,26 @@ audit_trail:
       clean, release.yml/ci.yml YAML parse OK). ALL FOUR traceability gaps
       (G1-G4) now CLOSED. FINAL Phase-2 quality gate: PASS. NFR-S11 + NFR-O7
       now FULL. Residual: RELEASE-TIME items exercise on the next tagged release.
+  - date: "2026-06-04"
+    event: phase-3-opened
+    from: 2
+    to: 3
+    reason: >
+      Phase 3 formally OPENED (operator-authorized). ADR-0009 (Phase-3 gate) +
+      ADR-0010 (MCP-server-authoring pattern) + ADR-0011 (artifact-store design)
+      + ADR-0012 (memory/wiki store) all transitioned proposed → accepted
+      2026-06-04 (the three forward-referenced ADRs accepted alongside the gate;
+      each must be accepted before its owning epic's first story merges). ADR-0009
+      acceptance criteria all met: phase-3-plan.md convergence + prd.md FR72–FR77
+      extension + architecture.md Phase-3 amendment + epics.md Phase-3 Epics
+      decomposition + implementation-readiness-report-phase-3-2026-06-03.md
+      (verdict READY; critic-reviewed, 3 MAJOR fixed). sprint-status
+      current_phase incremented 2 → 3. Phase 3 = the MCP tooling fleet
+      (Epics 14–19: ψ tests-first hardening warm-up, σ git, τ github,
+      υ verification, φ memory/wiki, χ artifact — FR72–FR77 + NFR-O11/M8/S12).
+      Phase-3 development_status block appended (6 epics + ~31 stories, all
+      phase: 3, all backlog except Epic 14 in-progress and Story 14.1
+      ready-for-dev). Entry point = Epic 14.1 (FR77 digest-deprecation —
+      digest-pinned references become the sole deploy path), the next story to
+      implement (Epic-8-before-features pattern: pure CI/verification before any
+      server surface ships in the base image). DOCS/STATUS-ONLY change — no code.

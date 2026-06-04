@@ -1,6 +1,6 @@
 ---
 id: ADR-0010
-status: proposed
+status: accepted
 date: 2026-06-03
 supersedes: null
 ---
@@ -9,7 +9,7 @@ supersedes: null
 
 ## Status
 
-**Proposed** — 2026-06-03. Transitions to **accepted** before Epic 15's first story merges to `main` (per [ADR-0009](./0009-phase-3-gate.md) §3). Mirrors the ADR-0004..0008 lifecycle: proposed in the architecture amendment, accepted as its owning epic begins. Gates **Epic 15**; reused verbatim by **Epics 16–19**.
+**Accepted** — 2026-06-04. Accepted alongside the Phase-3 gate ([ADR-0009](./0009-phase-3-gate.md)); must be `accepted` before Epic 15's first story merges to `main` (per ADR-0009 §3). Mirrors the ADR-0004..0008 lifecycle. Gates **Epic 15**; reused verbatim by **Epics 16–19**.
 
 ## Context
 
@@ -68,4 +68,4 @@ Every Phase-3 fleet server is authored to the eight-step pattern documented in [
 - [`phase-3-plan.md`](../../_bmad-output/planning-artifacts/phase-3-plan.md) — Epics 14–19 + G-FN dispositions.
 - Reference code: `mcp-servers/clawhip-bridge/.../server.py`, `mcp-servers/task-registry/.../app/main.py` + `handlers/tools.py`, `packages/capabilities/.../tiers.py`, `services/worker-wrapper/.../adapters/mcp_clients.py`, `Dockerfile.base`, `.github/workflows/release.yml`.
 
-— *R2d2, 2026-06-03 (proposed; via the BMad Phase-3 planning chain).*
+— *R2d2, 2026-06-03 (proposed; via the BMad Phase-3 planning chain). Accepted 2026-06-04 (alongside the Phase-3 gate).*
