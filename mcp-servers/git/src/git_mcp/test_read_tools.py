@@ -1,0 +1,235 @@
+"""Green unit tests for the Tier-1 git read tools + run_git sandbox (Story 15.3).
+
+These exercise the actual ``git`` subprocess (via ``GitExecutor.run_git``) over a
+real temp repo, plus the structured parsers and the security invariants
+(path-escape refusal, env allowlist, timeout kill+reap). ``check_no_subprocess``
+exempts co-located ``test_*.py`` files, so the test setup may shell out to ``git``
+to build a fixture repo.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+from collections.abc import Awaitable, Callable
+from pathlib import Path
+from typing import cast
+
+import pytest
+
+from git_mcp.server import GitExecutor, GitTimeout, _build_git_env
+
+_VALID_TRACE_ID = "01917e5c-a7d1-7000-8abc-0123456789ab"
+
+# Hermetic author/committer identity so commits don't depend on operator config.
+_GIT_FIXTURE_ENV = {
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_CONFIG_SYSTEM": "/dev/null",
+    "GIT_AUTHOR_NAME": "Test Author",
+    "GIT_AUTHOR_EMAIL": "author@example.test",
+    "GIT_COMMITTER_NAME": "Test Author",
+    "GIT_COMMITTER_EMAIL": "author@example.test",
+}
+
+
+def _git(repo: Path, *args: str) -> None:
+    """Run a ``git`` command in *repo* with hermetic identity (fixture setup only)."""
+    env = {**os.environ, **_GIT_FIXTURE_ENV}
+    subprocess.run(  # noqa: S603 — test fixture builder, not the request path
+        ["git", "-C", str(repo), *args],
+        check=True,
+        env=env,
+        capture_output=True,
+    )
+
+
+@pytest.fixture
+def repo(tmp_path: Path) -> Path:
+    """A real git repo with one committed file and one dirty + one untracked file."""
+    root = tmp_path / "wt"
+    root.mkdir()
+    _git(root, "init", "-q", "-b", "main")
+    (root / "tracked.txt").write_text("line1\nline2\n")
+    _git(root, "add", "tracked.txt")
+    _git(root, "commit", "-q", "-m", "initial commit")
+    # Dirty the worktree: modify the tracked file + add an untracked file.
+    (root / "tracked.txt").write_text("line1\nline2\nline3\n")
+    (root / "untracked.txt").write_text("new\n")
+    return root
+
+
+async def _tool(repo: Path, name: str) -> Callable[..., Awaitable[dict[str, object]]]:
+    """Build the audit-off server over *repo* and return the named tool's fn."""
+    from events import FROZEN_EPOCH, FrozenClock
+
+    from git_mcp.server import build_server
+
+    mcp = build_server(
+        worktree_root=repo,
+        clock=FrozenClock(mono_ns=1_000_000, now=FROZEN_EPOCH),
+        actor_kind="worker",
+        actor_id="test-worker",
+    )
+    # ``list_tools()`` returns schema objects (no ``.fn``); the callable lives on
+    # the FastMCP tool-manager keyed by the dotted name.
+    await mcp.list_tools()
+    return mcp._tool_manager._tools[name].fn
+
+
+# ---------------------------------------------------------------------------
+# Structured tool results over a real repo
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_status_reports_dirty_worktree(repo: Path) -> None:
+    fn = await _tool(repo, "git.status")
+    result = await fn(caller_trace_id=_VALID_TRACE_ID)
+    assert result["ok"] is True
+    assert result["branch"] == "main"
+    assert result["clean"] is False
+    entries = cast("list[dict[str, str]]", result["entries"])
+    paths = {e["path"] for e in entries}
+    assert "tracked.txt" in paths
+    assert "untracked.txt" in paths
+
+
+@pytest.mark.asyncio
+async def test_log_returns_commits_in_order(repo: Path) -> None:
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "second commit")
+    fn = await _tool(repo, "git.log")
+    result = await fn(caller_trace_id=_VALID_TRACE_ID)
+    assert result["ok"] is True
+    commits = cast("list[dict[str, str]]", result["commits"])
+    subjects = [c["subject"] for c in commits]
+    assert subjects == ["second commit", "initial commit"]
+    assert commits[0]["author"] == "Test Author"
+
+
+@pytest.mark.asyncio
+async def test_branch_reports_current(repo: Path) -> None:
+    fn = await _tool(repo, "git.branch")
+    result = await fn(caller_trace_id=_VALID_TRACE_ID)
+    assert result["ok"] is True
+    assert result["current"] == "main"
+    branches = cast("list[str]", result["branches"])
+    assert "main" in branches
+
+
+@pytest.mark.asyncio
+async def test_diff_numstat_counts(repo: Path) -> None:
+    fn = await _tool(repo, "git.diff")
+    result = await fn(caller_trace_id=_VALID_TRACE_ID)
+    assert result["ok"] is True
+    files = cast("list[dict[str, object]]", result["files"])
+    by_path = {cast("str", f["path"]): f for f in files}
+    # tracked.txt gained one line vs HEAD (untracked.txt is not in `git diff`).
+    assert by_path["tracked.txt"]["added"] == 1
+    assert by_path["tracked.txt"]["deleted"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Sandbox / security invariants
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_diff_path_escape_raises(repo: Path) -> None:
+    fn = await _tool(repo, "git.diff")
+    escaping = str(repo / ".." / "evil")
+    with pytest.raises(ValueError, match="escapes worktree root"):
+        await fn(caller_trace_id=_VALID_TRACE_ID, path=escaping)
+
+
+@pytest.mark.asyncio
+async def test_run_git_timeout_kills_and_reaps(repo: Path) -> None:
+    """A wedged git invocation raises GitTimeout and leaves the sandbox usable.
+
+    A near-zero ``timeout`` forces ``asyncio.wait_for`` to trip before
+    ``communicate()`` returns, driving ``run_git``'s kill+reap path. A
+    subsequent call must still succeed (no leaked/zombie process wedges later
+    invocations).
+    """
+    ex = GitExecutor(repo)
+    with pytest.raises(GitTimeout):
+        await ex.run_git(["log", "--format=%H", "-n", "1"], timeout=1e-9)
+    ok = await ex.run_git(["rev-parse", "--is-inside-work-tree"])
+    assert ok.returncode == 0
+
+
+def test_build_git_env_drops_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_secret")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret")
+    monkeypatch.setenv("PATH", "/usr/bin")
+    env = _build_git_env()
+    assert "GITHUB_TOKEN" not in env
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "HOME" not in env
+    assert env["PATH"] == "/usr/bin"
+    assert env["GIT_CONFIG_GLOBAL"] == "/dev/null"
+    assert env["GIT_CONFIG_SYSTEM"] == "/dev/null"
+
+
+@pytest.mark.asyncio
+async def test_nonzero_returncode_surfaced_as_structured_error(tmp_path: Path) -> None:
+    """A git failure (not a repo) returns ok=False, not an exception."""
+    root = tmp_path / "norepo"
+    root.mkdir()
+    ex = GitExecutor(root)
+    result = await ex.run_git(["status", "--porcelain"])
+    assert result.returncode != 0
+    assert "not a git repository" in result.stderr.lower()
+
+
+@pytest.mark.asyncio
+async def test_run_git_blocks_repo_local_config_fsmonitor_rce(repo: Path, tmp_path: Path) -> None:
+    """P0 regression (Story 15.3 security review): repo-local ``.git/config``
+    ``core.fsmonitor`` must NOT execute on a read.
+
+    ``GIT_CONFIG_GLOBAL/SYSTEM=/dev/null`` only disables global/system config; the
+    repo-local ``.git/config`` is still read by ``git status`` and is attacker-
+    writable (the worktree is the worker's sandbox). Without the ``_GIT_HARDENING``
+    ``-c core.fsmonitor=`` override, ``git status`` runs the configured program →
+    arbitrary command execution as the server. This locks the shield.
+    """
+    sentinel = tmp_path / "fsmonitor_pwned"
+    evil = repo / "evil.sh"
+    evil.write_text(f"#!/bin/sh\ntouch '{sentinel}'\n")
+    evil.chmod(0o755)
+    with (repo / ".git" / "config").open("a", encoding="utf-8") as fh:
+        fh.write(f"\n[core]\n\tfsmonitor = {evil}\n")
+
+    result = await GitExecutor(repo).run_git(["status", "--porcelain=v1", "-z", "--branch"])
+
+    assert not sentinel.exists(), (
+        "run_git executed repo-local core.fsmonitor → P0 repo-local-config RCE not blocked"
+    )
+    # The shield disables fsmonitor but the read itself still succeeds.
+    assert result.returncode == 0
+
+
+@pytest.mark.asyncio
+async def test_run_git_blocks_repo_local_config_hookspath_rce(repo: Path, tmp_path: Path) -> None:
+    """P0 regression: a repo-local ``core.hooksPath`` post-index-change hook must NOT
+    execute on ``git status`` (closed by ``_GIT_HARDENING`` ``core.hooksPath=/dev/null``)."""
+    sentinel = tmp_path / "hook_pwned"
+    hooks = repo / "evilhooks"
+    hooks.mkdir()
+    hook = hooks / "post-index-change"
+    hook.write_text(f"#!/bin/sh\ntouch '{sentinel}'\n")
+    hook.chmod(0o755)
+    with (repo / ".git" / "config").open("a", encoding="utf-8") as fh:
+        fh.write(f"\n[core]\n\thooksPath = {hooks}\n")
+
+    await GitExecutor(repo).run_git(["status", "--porcelain=v1", "-z", "--branch"])
+
+    assert not sentinel.exists(), (
+        "run_git ran a repo-local-configured hook → P0 repo-local-config RCE not blocked"
+    )
+
+
+def test_build_git_env_sets_nosystem(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Defense-in-depth: GIT_CONFIG_NOSYSTEM=1 alongside GIT_CONFIG_SYSTEM=/dev/null."""
+    env = _build_git_env()
+    assert env["GIT_CONFIG_NOSYSTEM"] == "1"
