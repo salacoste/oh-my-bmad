@@ -298,19 +298,22 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-  mutation-baseline:
-    name: Mutation-testing baseline (NFR-O11)
-    # Story 14.2 — NON-GATING mutation-score baseline over the 3 kernel modules
+  mutation-gate:
+    name: Mutation-testing gate (NFR-O11, gating)
+    # Story 14.3 — GATING mutation-score gate over the 3 kernel modules
     # (capabilities/tiers.py, events/schema_registry.py, events/canonical.py)
     # via cosmic-ray. cosmic-ray mutates the real source IN PLACE under VCS and
     # restores it after each mutant, so this workspace's editable installs
     # actually exercise the mutation (mutmut produced a false 0% because it
     # copies sources to mutants/ that editable imports never resolve to).
     #
-    # NON-GATING in 14.2: `just mutation-test || true` — the score is recorded
-    # as a baseline signal only. Story 14.3 wires the `--threshold` enforcement
-    # once this nightly establishes a defensible floor. No Docker required
-    # (pure pytest + in-memory fixtures).
+    # GATING in 14.3: `just mutation-gate` (NO `|| true`) — the gate FAILS the
+    # nightly when the score drops below the version-controlled threshold (82 =
+    # floor of the 82.4% / 145-176 first-nightly baseline; ratchet UP as mutants
+    # are killed, see docs/testing-guide.md — never lower it silently). The score
+    # is still published to the step summary + a 30-day artifact even on failure
+    # (the publish + upload steps run `if: always()`), so a gate failure stays
+    # diagnosable. No Docker required (pure pytest + in-memory fixtures).
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -330,18 +333,35 @@ jobs:
       - name: Sync workspace (incl. dev deps)
         run: uv sync --frozen --dev
 
-      - name: Run mutation baseline (non-gating)
-        # `|| true` keeps this job NON-GATING for Story 14.2: a low/zero score,
-        # a cosmic-ray hiccup, or a timeout must NOT fail the nightly. The score
-        # line is captured to a per-run artifact + the step summary regardless.
+      - name: Run mutation gate (NFR-O11, gating)
+        # NO `|| true`: Story 14.3 flips this job to GATING. `just mutation-gate`
+        # invokes mutation_score.py with `--threshold 82`, which exits non-zero
+        # when the score < 82 — failing this step (and the job). The score line
+        # is still tee'd to a per-run file so the publish + upload steps below
+        # (both `if: always()`) surface the score on the run summary + artifact
+        # even when the gate fails. `set -o pipefail` makes the `tee` pipeline
+        # inherit `just`'s non-zero exit (otherwise `tee`'s 0 would mask it).
         run: |
+          set -o pipefail
           mkdir -p _bmad-output/test-artifacts
           score_file="_bmad-output/test-artifacts/mutation-score-${{ github.run_id }}.txt"
-          just mutation-test 2>&1 | tee "$score_file" || true
-          echo "## Mutation-testing baseline (NFR-O11, non-gating)" >> "$GITHUB_STEP_SUMMARY"
+          just mutation-gate 2>&1 | tee "$score_file"
+
+      - name: Publish mutation score to step summary
+        # `if: always()` — surface the score on the run summary even when the
+        # gate step above failed (score < threshold), so the failure is
+        # diagnosable without downloading the artifact.
+        if: always()
+        run: |
+          score_file="_bmad-output/test-artifacts/mutation-score-${{ github.run_id }}.txt"
+          echo "## Mutation-testing gate (NFR-O11, gating · threshold 82)" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          grep -E "^mutation-score:" "$score_file" >> "$GITHUB_STEP_SUMMARY" \
-            || echo "no mutation-score line produced (see artifact)" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f "$score_file" ]; then
+            grep -E "^(mutation-score:|OK:|FAIL:)" "$score_file" >> "$GITHUB_STEP_SUMMARY" \
+              || echo "no mutation-score line produced (see artifact)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "no score file produced (see artifact)" >> "$GITHUB_STEP_SUMMARY"
+          fi
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload mutation-score artifact

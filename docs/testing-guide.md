@@ -373,6 +373,7 @@ Config lives in `cosmic-ray.toml` (3 kernels, full run) and
 ```sh
 just mutation-smoke   # tiers.py only, <~3 min — the harness sanity proof
 just mutation-test    # full 3-kernel run — SLOW (minutes); nightly/operator
+just mutation-gate    # full 3-kernel run + `--threshold 82` gate (NFR-O11, gating)
 just mutation-score   # recompute the score from an existing session db
 ```
 
@@ -384,13 +385,25 @@ checked-but-not-killed.
 
 ### Baseline + enforcement
 
-In Story 14.2 the score is a **non-gating baseline** only. The nightly
-`mutation-baseline` job (`.github/workflows/nightly.yml`) runs
-`just mutation-test || true`, writes the score to a 30-day artifact + the run
-summary, and never fails the build. The `--threshold N` flag exists on
-`scripts/mutation_score.py` but is **not** wired into any gate yet — **Story
-14.3** wires enforcement once the nightly baseline establishes a defensible
-floor.
+The mutation score is **gating** as of Story 14.3 (NFR-O11). The first nightly
+baseline (Story 14.2's non-gating job) measured **145/176 = 82.4%** over the
+three kernels. The enforced **threshold is `82`** — `floor()` of that 82.4%
+baseline, set at-or-below the current score so the gate is defensible on day one.
+
+The nightly `mutation-gate` job (`.github/workflows/nightly.yml`) runs
+`just mutation-gate` (which invokes `scripts/mutation_score.py --threshold 82`)
+with **no `|| true`**: a score below 82 now **fails the nightly**. The score is
+still written to the run summary + a 30-day artifact even on failure (the
+publish + upload steps run `if: always()`), so a gate failure stays diagnosable.
+
+The threshold is version-controlled (the `mutation-gate THRESHOLD="82"` default
+in the `justfile`, mirrored in the nightly job comment).
+
+**Ratchet-up policy:** as surviving mutants are killed and the score rises,
+**raise** the threshold to lock in the gain (update the `justfile` default + the
+nightly comment in one commit). **Never lower the threshold silently** — a drop
+must be an explicit, reviewed decision with a recorded rationale (a regression
+in test strength is exactly what this gate exists to catch).
 
 ---
 

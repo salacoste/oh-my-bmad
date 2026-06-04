@@ -182,8 +182,9 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         metavar="N",
         help=(
-            "If set, exit non-zero when score < N (percent). BUILT for Story 14.3; "
-            "NOT wired into any gate in 14.2 — the nightly baseline runs without it."
+            "If set, exit non-zero when score < N (percent). Gating as of Story "
+            "14.3 — `just mutation-gate` passes `--threshold 82` (the NFR-O11 floor) "
+            "and the nightly fails below it."
         ),
     )
     args = parser.parse_args(argv)

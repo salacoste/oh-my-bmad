@@ -179,6 +179,22 @@ mutation-score *ARGS="":
     uv run cosmic-ray dump mutation.sqlite > _bmad-output/test-artifacts/mutation-dump.txt
     uv run python scripts/mutation_score.py --dump-path _bmad-output/test-artifacts/mutation-dump.txt {{ARGS}}
 
+# `mutation-gate` — GATING variant of `mutation-test` (Story 14.3, NFR-O11).
+# Runs the SAME slow cosmic-ray init/exec/dump lifecycle over the 3 kernels,
+# then feeds the dump to mutation_score.py WITH `--threshold {{THRESHOLD}}` so a
+# score below the floor exits NON-ZERO (failing this recipe — and the nightly
+# job that calls it). THRESHOLD is version-controlled here: 82 = floor() of the
+# 82.4% (145/176) first-nightly baseline. Ratchet UP as surviving mutants are
+# killed; never lower it silently (see docs/testing-guide.md). SLOW (minutes);
+# nightly / operator-only — do NOT run in the PR-gate lane.
+mutation-gate THRESHOLD="82":
+    rm -f mutation.sqlite
+    mkdir -p _bmad-output/test-artifacts
+    uv run cosmic-ray init cosmic-ray.toml mutation.sqlite
+    uv run cosmic-ray exec cosmic-ray.toml mutation.sqlite
+    uv run cosmic-ray dump mutation.sqlite > _bmad-output/test-artifacts/mutation-dump.txt
+    uv run python scripts/mutation_score.py --dump-path _bmad-output/test-artifacts/mutation-dump.txt --threshold {{THRESHOLD}}
+
 # `mutation-smoke` — hard-bounded harness proof: mutates ONLY tiers.py against
 # its co-located unit suite (<~3 min). This is the in-place-mutation sanity
 # check that proves cosmic-ray reaches the editable-installed source where

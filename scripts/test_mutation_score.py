@@ -224,6 +224,38 @@ def test_main_above_threshold_exits_zero(
     assert rc == 0
 
 
+def test_main_score_at_or_above_82_threshold_exits_zero(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Story 14.3: the production gate threshold is 82 (= floor of the 82.4%
+    # baseline). A fixture scoring >= 82% must pass the gate (exit 0).
+    # 41/50 = 82.0% — exactly the boundary; >= is inclusive so it passes.
+    mod = _load_module()
+    pairs = [[_item(i), _result(test_outcome="killed")] for i in range(41)]
+    pairs += [[_item(i), _result(test_outcome="survived")] for i in range(9)]  # 41/50 = 82.0%
+    dump = _write_dump(tmp_path, pairs)
+    rc = mod.main(["--dump-path", str(dump), "--threshold", "82"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "OK" in out
+
+
+def test_main_score_below_82_threshold_exits_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Story 14.3: a fixture scoring < 82% must FAIL the gate (exit 1) — this is
+    # the regression the nightly mutation-gate job is wired to catch.
+    # 40/50 = 80.0% — below the 82 floor.
+    mod = _load_module()
+    pairs = [[_item(i), _result(test_outcome="killed")] for i in range(40)]
+    pairs += [[_item(i), _result(test_outcome="survived")] for i in range(10)]  # 40/50 = 80.0%
+    dump = _write_dump(tmp_path, pairs)
+    rc = mod.main(["--dump-path", str(dump), "--threshold", "82"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "FAIL" in err
+
+
 def test_main_missing_dump_file_exits_one(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
