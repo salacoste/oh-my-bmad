@@ -27,13 +27,91 @@ just lint
 # 3. Does the Python workspace resolve cleanly?
 just bootstrap-verify
 
-# Expected: 13 workspace-member import lines then:
-# ✓ bootstrap OK (13 workspace-member imports verified)
+# Expected: 19 workspace-member import lines then:
+# ✓ bootstrap OK (19 workspace-member imports verified)
 ```
 
 If all three pass, the stack is structurally healthy. A persistent failure in
 `just lint` or `just bootstrap-verify` after a code change points to a broken
 dependency or import regression, not a runtime failure.
+
+---
+
+## Phase 3 fleet MCP servers (optional stdio members)
+
+Phase 3 (Epics 15–19) added **five fleet MCP tool servers** — `git`, `github`,
+`verification`, `memory`, `artifact`. They are **not** containers and **not** public
+services: each is a stdio subprocess **spawned by `worker-wrapper`** (and carried in
+the same base image), so there is no new compose row, port, or Dockerfile (P3-I3).
+Every one is **OFF by default** — the worker only spawns a fleet server when its
+`WORKER_<SERVER>_COMMAND` is non-blank. A fresh boot with none of them set behaves
+exactly as Phase 2.
+
+### Enabling a fleet server
+
+Set its spawn command (any non-blank value; `python` is the convention) **and**
+forward its REQUIRED env. The required vars are forwarded to the subprocess via the
+explicit `_ENV_ALLOWLIST` (NEVER `os.environ.copy` — no broad secret is forwarded);
+they are validated at the server's `__main__`, which **exits 2** if any is missing,
+so a half-configured server fails loud rather than silently misbehaving.
+
+| Server | Enable (worker env) | REQUIRED subprocess env | Tiers |
+|---|---|---|---|
+| `git` | `WORKER_GIT_COMMAND=python` | `GIT_MCP_WORKTREE_ROOT`, `GIT_MCP_ACTOR_KIND`, `GIT_MCP_ACTOR_ID` | read 1 / add+commit 2 / push+rebase 3 |
+| `github` | `WORKER_GITHUB_COMMAND=python` | `GITHUB_MCP_ACTOR_KIND`, `GITHUB_MCP_ACTOR_ID`, **`GITHUB_MCP_SCOPED_TOKEN`** | list/get 1 / writes 3 |
+| `verification` | `WORKER_VERIFICATION_COMMAND=python` | `VERIFICATION_MCP_WORKTREE_ROOT`, `VERIFICATION_MCP_ACTOR_KIND`, `VERIFICATION_MCP_ACTOR_ID` | run_build/run_tests 2 |
+| `memory` | `WORKER_MEMORY_COMMAND=python` | `MEMORY_MCP_STORE_PATH`, `MEMORY_MCP_ACTOR_KIND`, `MEMORY_MCP_ACTOR_ID` | read/search 1 / write 2 |
+| `artifact` | `WORKER_ARTIFACT_COMMAND=python` | `ARTIFACT_MCP_STORE_PATH`, `ARTIFACT_MCP_ACTOR_KIND`, `ARTIFACT_MCP_ACTOR_ID` | get/list 1 / put 2 / delete 3 |
+
+`ACTOR_KIND` is one of `operator|orchestrator|worker|system|clawhip`; `ACTOR_ID` is a
+non-empty instance identifier. Tier-3 tools (`git push`/`rebase`, all `github` writes,
+`artifact delete`) are **denied without a matching `approval.granted` event** — the
+operator approves via the normal approval flow.
+
+### `github` — scoped-credential setup (G-SEC-2)
+
+`github-mcp` authenticates with **`GITHUB_MCP_SCOPED_TOKEN`**, a *narrowly-scoped*
+credential — a fine-grained PAT or GitHub App installation token **scoped to the
+target repo only**. The broad operator `GITHUB_TOKEN` is **forbidden** from every MCP
+subprocess env (it is in `_FORBIDDEN_SECRET_ENV_VARS`; a contract test enforces its
+absence). Set up:
+
+1. Create a fine-grained PAT (GitHub → Settings → Developer settings → Fine-grained
+   tokens) scoped to *only* the target repository, with the minimum permissions the
+   tools need (Issues / Pull requests: read+write).
+2. Provide it as `GITHUB_MCP_SCOPED_TOKEN` in the worker's env.
+3. **Do NOT** reuse the operator's broad `GITHUB_TOKEN` — if it leaked from a
+   subprocess, the blast radius would be the operator's entire account; the scoped
+   token's leak radius is one repo.
+
+> **Note (G-SEC-2 is half-closed):** this closes the *MCP-subprocess* half. The
+> spawned `claude` agent (`claude_code_runner.py`) still receives the broad
+> `GITHUB_TOKEN` for its own `git push`; migrating that to a scoped git-credential
+> helper is tracked in `deferred-work.md`.
+
+### `memory` / `artifact` — store paths + retention
+
+Each store-backed server owns an **isolated subtree of the existing `oh-my-bmad-data`
+volume** — never the registry DB (P3-I2). No new volume is required.
+
+- **`memory`**: `MEMORY_MCP_STORE_PATH` → its own SQLite FTS5 DB file (e.g.
+  `oh-my-bmad-data/memory-mcp/store.db`). WAL mode; created group-writable (0o660)
+  for cross-uid recovery.
+- **`artifact`**: `ARTIFACT_MCP_STORE_PATH` → its own content-store **root dir** (e.g.
+  `oh-my-bmad-data/artifact-mcp/`); objects land at `objects/<hash[:2]>/<hash>`,
+  content-addressed by sha256. **Retention** (optional operator policy, swept at
+  startup + after each `put`): `ARTIFACT_MCP_RETENTION_MAX_BYTES` (total-size cap) and
+  `ARTIFACT_MCP_RETENTION_TTL_SECONDS` (age cap) — unset ⇒ unbounded. Each retention
+  eviction emits an `artifact.deleted` spine event (the only deletion path that runs
+  without a Tier-3 approval — system-initiated, policy-bounded). The store is
+  **regenerable build output**, deliberately NOT litestream-replicated.
+
+### Separability check
+
+Each fleet server is provable-optional: `tests/separability/test_s{5,6,7,8,9}_*.py`
+boot a real subprocess in the SPAWNED state and confirm the worker still completes a
+scripted task in the ABSENT state. To confirm a server is live in a running stack,
+the worker logs `mcp_client_connected server=<name>` at startup for each spawned member.
 
 ---
 
