@@ -146,6 +146,15 @@ _SPAWNER_REQUIRED_ENV_VARS = {
     "GIT_MCP_ACTOR_KIND",
     "GIT_MCP_ACTOR_ID",
     "GIT_MCP_WORKTREE_ROOT",
+    # github-mcp REQUIRED (mcp-servers/github/.../__main__.py exits 2 without
+    # these) — Story 16.5 / G-SEC-2. GITHUB_MCP_SCOPED_TOKEN is the narrowly-
+    # scoped credential (NOT the broad GITHUB_TOKEN, which stays in the forbidden
+    # set below). Forwarded by BOTH spawner allowlists (byte-identical mirror);
+    # only worker-wrapper actually spawns github-mcp (Story 16.6, conditional on
+    # a non-blank WORKER_GITHUB_COMMAND).
+    "GITHUB_MCP_ACTOR_KIND",
+    "GITHUB_MCP_ACTOR_ID",
+    "GITHUB_MCP_SCOPED_TOKEN",
     "REGISTRY_EVENTS_DIR",
     "REGISTRY_DB_PATH",
 }
@@ -215,4 +224,34 @@ def test_spawner_allowlists_exclude_secrets() -> None:
         assert not leaked, (
             f"{name} _ENV_ALLOWLIST leaks secret env vars to MCP subprocesses: "
             f"{sorted(leaked)}. This is the a0ca050 P0 — NEVER forward secrets."
+        )
+
+
+def test_github_scoped_token_present_broad_token_absent() -> None:
+    """Story 16.5 / G-SEC-2: github-mcp authenticates with a SCOPED token, never the broad PAT.
+
+    The G-SEC-2 follow-up (the broad ``GITHUB_TOKEN`` reaching an agent-spawned
+    subprocess) is CLOSED by forwarding ONLY a narrowly-scoped credential
+    (``GITHUB_MCP_SCOPED_TOKEN`` — a fine-grained PAT / App installation token
+    scoped to the target repo, ADR-0010 §6 "scoped credentials use new,
+    narrowly-named vars"). This pins both halves of that contract in both spawner
+    allowlists:
+
+      * the scoped var IS forwarded (github-mcp's ``__main__.py`` exits 2 without
+        it), AND
+      * the broad ``GITHUB_TOKEN`` is NEVER forwarded (it is in
+        ``_FORBIDDEN_SECRET_ENV_VARS`` — this test makes the github-specific intent
+        explicit alongside the generic exclude-secrets guard).
+    """
+    for name, allowlist in (
+        ("orchestrator-adapter", _ORCH_ALLOWLIST),
+        ("worker-wrapper", _WORKER_ALLOWLIST),
+    ):
+        assert "GITHUB_MCP_SCOPED_TOKEN" in allowlist, (
+            f"{name} _ENV_ALLOWLIST omits GITHUB_MCP_SCOPED_TOKEN — github-mcp's "
+            "__main__.py exits 2 without the scoped credential (Story 16.5)."
+        )
+        assert "GITHUB_TOKEN" not in allowlist, (
+            f"{name} _ENV_ALLOWLIST forwards the BROAD GITHUB_TOKEN — G-SEC-2 "
+            "regression. Only the repo-scoped GITHUB_MCP_SCOPED_TOKEN may be forwarded."
         )

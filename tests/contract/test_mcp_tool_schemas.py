@@ -402,6 +402,12 @@ def test_validate_caller_trace_id_byte_identical_across_servers() -> None:
     from git_mcp.handlers.tools import (
         validate_caller_trace_id as _v_git,
     )
+
+    # Epic 16 / Story 16.5 — github-mcp's helper is a byte-identical copy too
+    # (FR58 / AC2 sync invariant extended to github-mcp).
+    from github_mcp.handlers.tools import (
+        validate_caller_trace_id as _v_github,
+    )
     from session_registry_mcp.handlers.tools import (
         validate_caller_trace_id as _v_sess,
     )
@@ -413,6 +419,7 @@ def test_validate_caller_trace_id_byte_identical_across_servers() -> None:
     sess_body = _extract_fn_body_ast(_v_sess)
     task_body = _extract_fn_body_ast(_v_task)
     git_body = _extract_fn_body_ast(_v_git)
+    github_body = _extract_fn_body_ast(_v_github)
 
     assert bridge_body == sess_body, (
         "validate_caller_trace_id body differs between clawhip-bridge and session-registry"
@@ -429,6 +436,11 @@ def test_validate_caller_trace_id_byte_identical_across_servers() -> None:
         f"\n--- bridge ---\n{bridge_body}"
         f"\n--- git ---\n{git_body}"
     )
+    assert bridge_body == github_body, (
+        "validate_caller_trace_id body differs between clawhip-bridge and github-mcp (Story 16.5)"
+        f"\n--- bridge ---\n{bridge_body}"
+        f"\n--- github ---\n{github_body}"
+    )
 
 
 @pytest.mark.contract
@@ -444,6 +456,9 @@ def test_validate_caller_trace_id_runtime_messages_identical() -> None:
     from git_mcp.handlers.tools import (  # Story 15.5
         validate_caller_trace_id as _v_git,
     )
+    from github_mcp.handlers.tools import (  # Story 16.5
+        validate_caller_trace_id as _v_github,
+    )
     from session_registry_mcp.handlers.tools import (
         validate_caller_trace_id as _v_sess,
     )
@@ -453,12 +468,12 @@ def test_validate_caller_trace_id_runtime_messages_identical() -> None:
 
     bad = "not-a-uuid"
     messages: list[str] = []
-    for fn in (_v_bridge, _v_sess, _v_task, _v_git):
+    for fn in (_v_bridge, _v_sess, _v_task, _v_git, _v_github):
         try:
             fn(bad)
         except ValueError as exc:
             messages.append(str(exc))
-    assert len(messages) == 4, f"expected 4 ValueError messages, got {messages!r}"
+    assert len(messages) == 5, f"expected 5 ValueError messages, got {messages!r}"
     assert len(set(messages)) == 1, f"helper messages drift: {messages!r}"
 
 
