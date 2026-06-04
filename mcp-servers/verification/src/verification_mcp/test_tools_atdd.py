@@ -163,7 +163,6 @@ def _assert_caller_trace_id_required(tool: object, *, name: str) -> None:
 # ===========================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.parametrize("tool", _TIER2_TOOLS)
 def test_verification_tools_are_tier_two(tool: str) -> None:
     """verification.run_build/run_tests are Tier-2 (run project code, no external mutation)."""
@@ -176,7 +175,6 @@ def test_verification_tools_are_tier_two(tool: str) -> None:
 # ===========================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool", _TIER2_TOOLS)
 async def test_tool_registered_with_required_caller_trace_id(tool: str, tmp_path: Path) -> None:
@@ -192,7 +190,6 @@ async def test_tool_registered_with_required_caller_trace_id(tool: str, tmp_path
 # ===========================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool", _TIER2_TOOLS)
 async def test_tool_returns_structured_result(tool: str, tmp_path: Path) -> None:
@@ -229,7 +226,6 @@ async def test_tool_returns_structured_result(tool: str, tmp_path: Path) -> None
 # ===========================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool", _TIER2_TOOLS)
 async def test_tool_refuses_path_escaping_worktree_root(tool: str, tmp_path: Path) -> None:
@@ -311,7 +307,6 @@ async def test_executor_timeout_kills_hung_recipe(tmp_path: Path) -> None:
 # ===========================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool", _TIER2_TOOLS)
 async def test_tool_rejects_invalid_caller_trace_id(tool: str, tmp_path: Path) -> None:

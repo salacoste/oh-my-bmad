@@ -1,27 +1,48 @@
-"""verification-mcp MCP tool handlers (Epic 17 / Story 17.2 — scaffold).
+"""verification-mcp MCP tool handlers (Epic 17 / Story 17.3 — Tier-2 sandboxed tools).
 
-Story 17.2 ships the SCAFFOLD only: an empty ``TIER_MAP`` and the shared
-``validate_caller_trace_id`` helper. ``register_tools`` registers NO tools yet —
-the two Tier-2 verification tools (``verification.run_build`` /
-``verification.run_tests``) land in Stories 17.3 / 17.4, each registered with an
-EXPLICIT dotted MCP name (``@mcp.tool(name="verification.run_build")``) so
-``list_tools()`` surfaces the canonical ``verification.<op>`` id the 17.1 ATDD
-contracts assert (FastMCP would otherwise default the id to the Python function
-name). Both tools are ``Tier.TWO`` (they run project code but perform no external
-mutation) and gate via ``check_tier``.
+Story 17.3 lands the two sandboxed verification tools — ``verification.run_build``
+and ``verification.run_tests`` — both at ``Tier.TWO`` (they run project code but
+perform no external mutation). Each is registered with an EXPLICIT dotted MCP name
+(``@mcp.tool(name="verification.run_build")``) so ``list_tools()`` surfaces the
+canonical ``verification.<op>`` id the 17.1 ATDD contracts assert (FastMCP would
+otherwise default the id to the Python function name). Every handler:
+
+  1. validates ``caller_trace_id`` FIRST (FR58 / Story 9.1 shape contract);
+  2. gates on its tier via ``check_tier("verification.<op>", CallerContext(...),
+     TIER_MAP["verification.<op>"])`` — the ``TIER_MAP[...]`` subscript is passed
+     as a DIRECT argument to ``check_tier`` so
+     ``scripts/check_tier_declarations.py`` recognises the tool as tiered;
+  3. containment-checks any optional ``cwd`` arg against the worktree root (an
+     escaping ``cwd`` raises ``ValueError`` BEFORE any recipe spawn — there is NO
+     "repo selection" arg; the recipe always runs inside the sandbox); and
+  4. routes the actual recipe invocation through ``VerificationExecutor.run_recipe``
+     (the single sandboxed spawn-site — ``cwd`` pinned to the worktree, child-env
+     allowlist only, wall-clock timeout) and returns a deterministic, structured
+     ``{ok/pass, exit_code, logs, coverage}`` result.
+
+A non-zero recipe exit is NOT an exception — it is surfaced as
+``{"ok": False, "pass": False, ...}``. A spawn failure (the recipe binary is
+absent) is caught and surfaced structurally so a misconfigured recipe never
+crashes the request path. The ``verification.*`` event emission lands in Story
+17.4 (no ``clock``/event surface is consumed by this story's handlers).
 
 The ``validate_caller_trace_id`` helper is duplicated byte-identically across
 clawhip-bridge, task-registry, session-registry, and git-mcp (mcp-servers cannot
 share code per Story 5.8's import-graph constraint); the same drift guard extends
-to verification-mcp now that it ships the scaffold.
+to verification-mcp now that it registers tools.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import re
+from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from capabilities import CallerContext, Tier, check_tier
+from capabilities.emit import emit_capability_denied_on_deny
 from events.envelope import ActorKind, is_valid_trace_id  # noqa: IMP001 — packages/
 
 from verification_mcp.adapters.clawhip_client import EmitterHolder
@@ -33,11 +54,26 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# Story 17.2 scaffold — EMPTY until the verification tools land in 17.3 / 17.4.
-# Keys will be the canonical dotted ``verification.<op>`` MCP tool ids
-# (``verification.run_build`` / ``verification.run_tests``), both ``Tier.TWO``
-# (run project code, no external mutation). check_tier is imported ready.
-TIER_MAP: dict[str, Tier] = {}
+# Story 17.3: the two Tier-2 sandboxed verification tools. Both run project code
+# (a build/test recipe) but perform no external mutation, so both are ``Tier.TWO``
+# (gated by ``check_tier`` — NO approval gate). Keys are the canonical dotted
+# ``verification.<op>`` MCP tool ids (matched to the ``@mcp.tool(name=…)``
+# registration below).
+TIER_MAP: dict[str, Tier] = {
+    "verification.run_build": Tier.TWO,
+    "verification.run_tests": Tier.TWO,
+}
+
+# Default recipes (the project's build/test invocation). A caller may override
+# ``command`` / ``args`` per invocation, but there is NO "repo selection" arg —
+# the recipe always runs with ``cwd`` pinned inside the sandbox worktree.
+_DEFAULT_BUILD: tuple[str, list[str]] = ("just", ["build"])
+_DEFAULT_TESTS: tuple[str, list[str]] = ("just", ["test"])
+
+# Coverage-summary extraction: pytest-cov / coverage.py print a ``TOTAL`` line
+# ending in an integer percentage (``TOTAL   1234   56   95%``). We surface that
+# integer as the ``coverage`` summary; absent any such line, ``coverage`` is None.
+_COVERAGE_TOTAL_RE = re.compile(r"^TOTAL\b.*?(\d+)%\s*$", re.MULTILINE)
 
 
 def validate_caller_trace_id(caller_trace_id: str) -> None:
@@ -74,6 +110,53 @@ def validate_caller_trace_id(caller_trace_id: str) -> None:
         )
 
 
+def _make_actor_id_extractor(actor_id: str) -> Callable[..., str]:
+    """Return a ``get_actor_id`` callable for ``emit_capability_denied_on_deny``.
+
+    The configured ``actor_id`` is the calling actor's identity for the
+    duration of this server process (set at startup). Tool kwargs do not carry
+    actor identity — it comes from the server's launch config — so the
+    extractor returns the closed-over value irrespective of args/kwargs.
+    """
+
+    def _get_actor_id(*_args: object, **_kwargs: object) -> str:
+        return actor_id
+
+    return _get_actor_id
+
+
+def _assert_contained_cwd(executor: VerificationExecutor, cwd: str) -> None:
+    """Refuse a ``cwd`` that escapes the worktree root (P0/security).
+
+    There is NO "repo selection" arg: the recipe always runs with ``cwd`` pinned
+    to the worktree root inside ``run_recipe``. The optional ``cwd`` tool arg only
+    narrows the run to a SUBDIRECTORY of the worktree; an absolute path is taken
+    as-is, a relative path is joined to the root, and the candidate is validated
+    with the shipped ``VerificationExecutor._contains`` (realpath containment —
+    collapses ``..`` and symlinks). An escaping path raises ``ValueError`` BEFORE
+    any recipe spawn — mirrors git-mcp's ``_contained_relpath`` refusal.
+    """
+    root = executor.worktree_root
+    candidate = Path(cwd) if os.path.isabs(cwd) else root / cwd
+    if not executor._contains(candidate):
+        raise ValueError(f"cwd {cwd!r} escapes worktree root")
+
+
+def _extract_coverage(stdout: str, stderr: str) -> int | None:
+    """Return the integer coverage percentage from recipe output, else None.
+
+    Scans the combined recipe output for a coverage.py / pytest-cov ``TOTAL``
+    summary line (``TOTAL ... NN%``) and returns ``NN`` as an int. When the
+    recipe emits no recognisable coverage summary, returns None (the structured
+    result still carries the ``coverage`` key — FR74 — with a null value).
+    """
+    for text in (stdout, stderr):
+        match = _COVERAGE_TOTAL_RE.search(text)
+        if match is not None:
+            return int(match.group(1))
+    return None
+
+
 def register_tools(
     mcp: FastMCP,
     executor: VerificationExecutor,
@@ -82,25 +165,144 @@ def register_tools(
     actor_id: str,
     emitter_holder: EmitterHolder | None = None,
 ) -> None:
-    """Register the verification tools on *mcp* (Story 17.2 — NO tools yet).
+    """Register the two Tier-2 verification tools on *mcp* (Story 17.3).
 
-    Story 17.2 is the SCAFFOLD: ``TIER_MAP`` is empty and this function
-    registers ZERO tools. Stories 17.3 / 17.4 add the two Tier-2 tools —
-    ``verification.run_build`` / ``verification.run_tests`` — each gated via
-    ``check_tier`` and (17.4) emitting a typed ``verification.*`` event.
+    Story 17.3 ships ``verification.run_build`` / ``verification.run_tests`` —
+    both ``Tier.TWO``, each gated via ``check_tier`` (NO approval gate). The
+    ``verification.*`` event emission lands in Story 17.4.
 
     Mirrors git-mcp's / task-registry's ``register_tools``: when *emitter_holder*
     is wired, each tier-gated handler is wrapped with
     ``emit_capability_denied_on_deny`` so a ``CapabilityDenied`` from
     ``check_tier`` emits a ``capability.denied`` audit envelope via clawhip-bridge
-    before re-raising. The parameters are accepted now so the 17.3 handlers can
-    close over them without changing the factory wiring.
+    before re-raising.
     """
-    # Story 17.2 scaffold — no tools registered yet. The parameters are bound to
-    # ``_`` so linters / mypy --strict do not flag them as unused while the
-    # handler bodies (17.3) are still pending. ``CallerContext`` / ``check_tier``
-    # are imported ready for the 17.3 handlers' tier gate.
-    _ = (executor, actor_kind, actor_id, emitter_holder, CallerContext, check_tier)
+    get_actor_id = _make_actor_id_extractor(actor_id)
+
+    def _maybe_wrap(
+        tool_name: str,
+    ) -> Callable[
+        [Callable[..., Awaitable[dict[str, object]]]],
+        Callable[..., Awaitable[dict[str, object]]],
+    ]:
+        """Apply the audit-emission decorator iff an emitter holder is wired."""
+        if emitter_holder is None:
+            return lambda fn: fn
+        return emit_capability_denied_on_deny(
+            boundary="mcp",
+            emitter=emitter_holder.emit_event,
+            attempted_action=tool_name,
+            get_actor_id=get_actor_id,
+        )
+
+    def _caller(task_id: str | None = None) -> CallerContext:
+        return CallerContext(actor_kind=actor_kind, actor_id=actor_id, task_id=task_id)
+
+    async def _run_recipe_structured(
+        command: str | None,
+        args: list[str] | None,
+        *,
+        default: tuple[str, list[str]],
+        cwd: str | None,
+    ) -> dict[str, object]:
+        """Run the resolved recipe in the sandbox; return ``{ok/pass, exit_code, logs, coverage}``.
+
+        ``command`` / ``args`` override the recipe; when both are None the
+        per-tool *default* recipe is used. The optional *cwd* is containment-
+        checked (escapes refused) BEFORE any spawn — the recipe itself still runs
+        with ``cwd`` pinned to the worktree root by ``run_recipe`` (no "repo
+        selection"). A non-zero exit is surfaced structurally (``pass=False``); a
+        spawn failure (recipe binary absent) is caught and surfaced the same way
+        so a misconfigured recipe never crashes the request path.
+        """
+        from verification_mcp.server import VerificationResult
+
+        if cwd is not None:
+            _assert_contained_cwd(executor, cwd)
+        bin_, default_args = default
+        resolved_cmd = command if command is not None else bin_
+        resolved_args = args if args is not None else default_args
+        argv = [resolved_cmd, *resolved_args]
+        try:
+            result: VerificationResult = await executor.run_recipe(argv)
+        except OSError as exc:
+            # Spawn failure (recipe binary absent / not executable) — surface as a
+            # structured failure, never crash the request path.
+            return {
+                "ok": False,
+                "pass": False,
+                "exit_code": None,
+                "logs": {"stdout": "", "stderr": str(exc)},
+                "coverage": None,
+            }
+        passed = result.returncode == 0
+        return {
+            "ok": passed,
+            "pass": passed,
+            "exit_code": result.returncode,
+            "logs": {"stdout": result.stdout, "stderr": result.stderr},
+            "coverage": _extract_coverage(result.stdout, result.stderr),
+        }
+
+    # ------------------------------------------------------------------
+    # Tool: verification.run_build (Tier-2 sandboxed recipe)
+    # ------------------------------------------------------------------
+
+    @mcp.tool(name="verification.run_build")
+    @_maybe_wrap("verification.run_build")
+    async def run_build(
+        *,
+        caller_trace_id: str,
+        command: str | None = None,
+        args: list[str] | None = None,
+        cwd: str | None = None,
+    ) -> dict[str, object]:
+        """Run the project's build recipe in the sandbox (Tier-2).
+
+        Args:
+            caller_trace_id: FR58 correlation ID (UUIDv7 OR ``tg:<update_id>``).
+            command: Optional override for the build recipe binary (default
+                ``just``). There is NO "repo selection" arg — the recipe always
+                runs inside the sandbox worktree.
+            args: Optional override for the recipe args (default ``["build"]``).
+            cwd: Optional subdirectory of the worktree to run from; refused if it
+                escapes the worktree root.
+        """
+        validate_caller_trace_id(caller_trace_id)
+        check_tier("verification.run_build", _caller(), TIER_MAP["verification.run_build"])
+        return await _run_recipe_structured(command, args, default=_DEFAULT_BUILD, cwd=cwd)
+
+    # ------------------------------------------------------------------
+    # Tool: verification.run_tests (Tier-2 sandboxed recipe)
+    # ------------------------------------------------------------------
+
+    @mcp.tool(name="verification.run_tests")
+    @_maybe_wrap("verification.run_tests")
+    async def run_tests(
+        *,
+        caller_trace_id: str,
+        command: str | None = None,
+        args: list[str] | None = None,
+        cwd: str | None = None,
+    ) -> dict[str, object]:
+        """Run the project's test recipe in the sandbox (Tier-2).
+
+        Args:
+            caller_trace_id: FR58 correlation ID (UUIDv7 OR ``tg:<update_id>``).
+            command: Optional override for the test recipe binary (default
+                ``just``). There is NO "repo selection" arg — the recipe always
+                runs inside the sandbox worktree.
+            args: Optional override for the recipe args (default ``["test"]``).
+            cwd: Optional subdirectory of the worktree to run from; refused if it
+                escapes the worktree root.
+        """
+        validate_caller_trace_id(caller_trace_id)
+        check_tier("verification.run_tests", _caller(), TIER_MAP["verification.run_tests"])
+        return await _run_recipe_structured(command, args, default=_DEFAULT_TESTS, cwd=cwd)
+
+    # Reference the handlers so linters see them as used (FastMCP holds the real
+    # references via the decorator registration side-effect).
+    _ = (run_build, run_tests)
 
 
 __all__ = ["TIER_MAP", "register_tools", "validate_caller_trace_id"]
