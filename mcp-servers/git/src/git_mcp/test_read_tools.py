@@ -17,7 +17,7 @@ from typing import cast
 
 import pytest
 
-from git_mcp.handlers.tools import _parse_numstat
+from git_mcp.handlers.tools import _parse_branch, _parse_numstat
 from git_mcp.server import GitExecutor, GitOutputTooLarge, GitTimeout, _build_git_env
 
 _VALID_TRACE_ID = "01917e5c-a7d1-7000-8abc-0123456789ab"
@@ -171,6 +171,38 @@ def test_parse_numstat_mixed_modify_and_rename() -> None:
     assert set(by_path) == {"kept.txt", "src/new.py"}
     assert by_path["src/new.py"] == {"added": 3, "deleted": 2, "path": "src/new.py"}
     assert "" not in by_path
+
+
+# ---------------------------------------------------------------------------
+# _parse_branch detached-HEAD handling (deferred-work nit — git.branch)
+# ---------------------------------------------------------------------------
+#
+# On a detached HEAD ``git branch --format=...`` emits a pseudo-ref
+# ``(HEAD detached at <sha>)`` with the ``*`` marker.  The parser must
+# filter it out of ``branches`` and report ``current=None``.
+
+
+def test_parse_branch_normal() -> None:
+    """Baseline: a regular branch listing is unaffected."""
+    out = "main\x00*\ndevelop\x00\nfeature/x\x00\n"
+    result = _parse_branch(out)
+    assert result == {"ok": True, "branches": ["main", "develop", "feature/x"], "current": "main"}
+
+
+def test_parse_branch_detached_head_filters_pseudo_ref() -> None:
+    """Detached HEAD pseudo-ref is excluded from branches; current is None."""
+    out = "(HEAD detached at 846494f)\x00*\nmain\x00\n"
+    result = _parse_branch(out)
+    assert result["current"] is None
+    assert result["branches"] == ["main"]
+
+
+def test_parse_branch_detached_head_no_branches() -> None:
+    """Detached HEAD with no other branches → empty branches list, current=None."""
+    out = "(HEAD detached at abc1234)\x00*\n"
+    result = _parse_branch(out)
+    assert result["current"] is None
+    assert result["branches"] == []
 
 
 # ---------------------------------------------------------------------------
