@@ -910,6 +910,43 @@ class GithubCommentCreatedPayload(BaseModel):
     number: int = Field(gt=0, le=10**9)
 
 
+class VerificationCompletedPayload(BaseModel):
+    """Payload for the ``verification.completed`` event (Epic 17 / Story 17.4 / FR74).
+
+    Emitted by verification-mcp after a Tier-2 ``verification.run_build`` /
+    ``verification.run_tests`` recipe finishes — for BOTH a pass and a fail (a
+    non-zero recipe exit is surfaced structurally, not raised). Records which
+    tool ran, the recipe command that was invoked, the pass/fail outcome, and the
+    recipe's exit status. Born at 1.1.0 (NEW Phase-3 event type — no v1.0.0
+    predecessor, same convention as the ``git.*`` / ``github.*`` events above).
+
+    P0/security: the payload carries ONLY the recipe command string + the
+    exit-status discriminators — NEVER the captured recipe ``logs`` (which may
+    contain secret-bearing output) and NEVER any environment value.
+
+    Field rules:
+
+    * ``tool``: the canonical dotted MCP tool id that ran
+      (``verification.run_build`` or ``verification.run_tests``).
+    * ``recipe``: the recipe command line that was invoked (e.g. ``just test``),
+      space-joined argv. Bounded to 2000 chars; ``min_length=1``.
+    * ``passed``: True iff the recipe exited 0.
+    * ``exit_code``: the recipe's process exit code; ``None`` when the recipe
+      binary could not be spawned (a misconfigured recipe surfaces structurally,
+      not as a crash).
+    * ``coverage``: the integer coverage percentage parsed from the recipe output
+      when present (FR74), else ``None``.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    tool: str = Field(min_length=1, max_length=255)
+    recipe: str = Field(min_length=1, max_length=2000)
+    passed: bool
+    exit_code: int | None = Field(default=None, ge=-1, le=255)
+    coverage: int | None = Field(default=None, ge=0, le=100)
+
+
 class TaskBudgetExceededPayload(BaseModel):
     """Payload for the ``task.budget_exceeded`` event (FR44 / NFR-P5).
 
@@ -1363,4 +1400,5 @@ __all__ = [
     "TelegramRejectedPayload",
     "Tier3ActionAttemptedPayload",
     "Tier3ActionPerformedPayload",
+    "VerificationCompletedPayload",
 ]

@@ -70,6 +70,7 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     TelegramRejectedPayload,
     Tier3ActionAttemptedPayload,
     Tier3ActionPerformedPayload,
+    VerificationCompletedPayload,
 )
 from events.schema_registry import register as _register
 
@@ -147,6 +148,7 @@ __all__ = [
     "TelegramRejectedPayload",
     "Tier3ActionAttemptedPayload",
     "Tier3ActionPerformedPayload",
+    "VerificationCompletedPayload",
 ]
 
 # ---------------------------------------------------------------------------
@@ -348,6 +350,13 @@ def ensure_registered() -> None:
     register("github.pr.updated", "1.1.0", GithubPrUpdatedPayload)
     register("github.review.requested", "1.1.0", GithubReviewRequestedPayload)
     register("github.comment.created", "1.1.0", GithubCommentCreatedPayload)
+
+    # Story 17.4 — verification.* event type (Epic 17 / FR74). Emitted by
+    # verification-mcp after a Tier-2 verification.run_build / verification.run_tests
+    # recipe finishes (for BOTH a pass and a fail — a non-zero exit is structural,
+    # not raised). Born at 1.1.0 (NEW Phase-3 event type — no v1.0.0 predecessor,
+    # same convention as the git.* / github.* events above).
+    register("verification.completed", "1.1.0", VerificationCompletedPayload)
 
     # Story 9.7 / AC10: all event types registered under 1.1.0 above for
     # replay safety. Both 1.0.0 and 1.1.0 entries kept per AC10 option (a).

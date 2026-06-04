@@ -59,8 +59,9 @@ Sandbox contract:    a path/cwd escaping the worktree root is refused
                      the allowlist; a hung run is killed by the wall-clock timeout.
 caller_trace_id:     a missing/invalid caller_trace_id is rejected
                      (ValueError, "Story 9.1 contract").
-verification.* events: a successful run emits a ``verification.*`` event carrying
-                     the inbound trace_id (xfail until 17.4).
+verification.* events: a run emits a ``verification.completed`` event carrying
+                     the inbound trace_id, surfaced as ``result["event"]`` (GREEN
+                     since Story 17.4).
 """
 
 from __future__ import annotations
@@ -96,8 +97,6 @@ _EVENT_BY_TOOL = {
     "verification.run_build": "verification.completed",
     "verification.run_tests": "verification.completed",
 }
-
-_XFAIL_REASON = "verification tools land in Story 17.3/17.4 — red-phase ATDD contract"
 
 
 def _build(worktree_root: Path) -> FastMCP:
@@ -343,7 +342,6 @@ def test_validator_rejects_invalid_caller_trace_id() -> None:
 # ===========================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("tool", "event_type"), list(_EVENT_BY_TOOL.items()))
 async def test_run_emits_verification_event_with_trace_id(
