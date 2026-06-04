@@ -1,0 +1,14 @@
+# cosmic-ray.smoke.toml — hard-bounded harness proof (Story 14.2, NFR-O11).
+#
+# Mutates ONLY tiers.py against ONLY its co-located unit suite. This is the
+# <~3min sanity proof that cosmic-ray's IN-PLACE mutation actually reaches the
+# editable-installed source (where mutmut produced a false 0%). It is NOT the
+# baseline — `cosmic-ray.toml` (3 kernels) drives the nightly baseline.
+[cosmic-ray]
+module-path = "packages/capabilities/src/capabilities/tiers.py"
+timeout = 30.0
+excluded-modules = []
+test-command = "uv run pytest packages/capabilities/src/capabilities/test_tiers.py -p no:cacheprovider -q -x"
+
+[cosmic-ray.distributor]
+name = "local"

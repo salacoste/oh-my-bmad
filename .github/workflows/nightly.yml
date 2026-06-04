@@ -26,6 +26,9 @@ on:
       - "services/registry-api/**"
       - "packages/events/**"
       - "packages/idempotency/**"
+      - "packages/capabilities/**"
+      - "cosmic-ray.toml"
+      - "scripts/mutation_score.py"
       - "docker-compose.yml"
       - ".github/workflows/nightly.yml"
   workflow_dispatch:
@@ -292,5 +295,60 @@ jobs:
         with:
           name: s3-separability-${{ github.run_id }}
           path: _bmad-output/test-artifacts/s3-separability-*.xml
+          if-no-files-found: warn
+          retention-days: 30
+
+  mutation-baseline:
+    name: Mutation-testing baseline (NFR-O11)
+    # Story 14.2 — NON-GATING mutation-score baseline over the 3 kernel modules
+    # (capabilities/tiers.py, events/schema_registry.py, events/canonical.py)
+    # via cosmic-ray. cosmic-ray mutates the real source IN PLACE under VCS and
+    # restores it after each mutant, so this workspace's editable installs
+    # actually exercise the mutation (mutmut produced a false 0% because it
+    # copies sources to mutants/ that editable imports never resolve to).
+    #
+    # NON-GATING in 14.2: `just mutation-test || true` — the score is recorded
+    # as a baseline signal only. Story 14.3 wires the `--threshold` enforcement
+    # once this nightly establishes a defensible floor. No Docker required
+    # (pure pytest + in-memory fixtures).
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install just
+        uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6  # v2
+
+      - name: Install uv + Python 3.12
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Sync workspace (incl. dev deps)
+        run: uv sync --frozen --dev
+
+      - name: Run mutation baseline (non-gating)
+        # `|| true` keeps this job NON-GATING for Story 14.2: a low/zero score,
+        # a cosmic-ray hiccup, or a timeout must NOT fail the nightly. The score
+        # line is captured to a per-run artifact + the step summary regardless.
+        run: |
+          mkdir -p _bmad-output/test-artifacts
+          score_file="_bmad-output/test-artifacts/mutation-score-${{ github.run_id }}.txt"
+          just mutation-test 2>&1 | tee "$score_file" || true
+          echo "## Mutation-testing baseline (NFR-O11, non-gating)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -E "^mutation-score:" "$score_file" >> "$GITHUB_STEP_SUMMARY" \
+            || echo "no mutation-score line produced (see artifact)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload mutation-score artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: mutation-score-${{ github.run_id }}
+          path: _bmad-output/test-artifacts/mutation-score-*.txt
           if-no-files-found: warn
           retention-days: 30
