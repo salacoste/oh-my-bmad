@@ -60,6 +60,15 @@ class WorkerSettings(BaseSettings):
     clawhip_bridge_command: str = "python"
     clawhip_bridge_args: list[str] = ["-m", "clawhip_bridge_mcp"]
 
+    # Epic 15 / Story 15.2 — git MCP server spawn command (recipe step 6).
+    # LATENT in 15.2: the field surface exists, but git-mcp is NOT yet added to
+    # the MCPClientGroup spawn list (mcp_clients.py). Story 15.5 activates the
+    # spawn together with the GIT_MCP_* env-allowlist entries — activating it
+    # here first would brick the worker (git-mcp's __main__.py exits 2 without
+    # GIT_MCP_WORKTREE_ROOT/ACTOR_KIND/ACTOR_ID, which 15.5 forwards).
+    git_command: str = "python"
+    git_args: list[str] = ["-m", "git_mcp"]
+
     # TODO(Story 5.8/5.9): consumed when task/session registry MCP servers
     # need a shared SQLite path.
     registry_db_path: str = ""

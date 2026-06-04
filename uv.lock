@@ -13,6 +13,7 @@ members = [
     "clawhip-daemon",
     "console-cli",
     "events",
+    "git-mcp",
     "idempotency",
     "metrics-subscriber",
     "oh-my-bmad",
@@ -1081,6 +1082,23 @@ wheels = [
 ]
 
 [[package]]
+name = "git-mcp"
+version = "0.1.0"
+source = { editable = "mcp-servers/git" }
+dependencies = [
+    { name = "capabilities" },
+    { name = "events" },
+    { name = "mcp" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "capabilities", editable = "packages/capabilities" },
+    { name = "events", editable = "packages/events" },
+    { name = "mcp", specifier = ">=1.0" },
+]
+
+[[package]]
 name = "gitdb"
 version = "4.0.12"
 source = { registry = "https://pypi.org/simple" }
@@ -2009,6 +2027,7 @@ dependencies = [
     { name = "clawhip-daemon" },
     { name = "console-cli" },
     { name = "events" },
+    { name = "git-mcp" },
     { name = "idempotency" },
     { name = "metrics-subscriber" },
     { name = "orchestrator-adapter" },
@@ -2042,6 +2061,7 @@ requires-dist = [
     { name = "clawhip-daemon", editable = "services/clawhip-daemon" },
     { name = "console-cli", editable = "services/console-cli" },
     { name = "events", editable = "packages/events" },
+    { name = "git-mcp", editable = "mcp-servers/git" },
     { name = "idempotency", editable = "packages/idempotency" },
     { name = "metrics-subscriber", editable = "services/metrics-subscriber" },
     { name = "orchestrator-adapter", editable = "services/orchestrator-adapter" },

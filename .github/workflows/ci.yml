@@ -63,6 +63,9 @@ jobs:
       - name: Check trace_id required (NFR-O7)
         run: uv run python scripts/check_trace_id_required.py
 
+      - name: Check tier declarations (P3-I1)
+        run: uv run python scripts/check_tier_declarations.py
+
       - name: Check-scripts self-tests
         run: |
           uv run python scripts/check_imports.py --self-test
@@ -71,6 +74,7 @@ jobs:
           uv run python scripts/check_registry_isolation.py --self-test
           uv run python scripts/check_mcp_transport.py --self-test
           uv run python scripts/check_trace_id_required.py --self-test
+          uv run python scripts/check_tier_declarations.py --self-test
           uv run python scripts/check_sbom_licenses.py --self-test
 
       - name: Check secrets (full tree)
