@@ -1,0 +1,19 @@
+[project]
+name = "github-mcp"
+version = "0.1.0"
+description = "MCP server exposing bounded GitHub REST operations (Epic 16 / FR73). Story 16.2 ships the scaffold + clawhip-bridge audit wiring; github tools land in 16.3/16.4."
+authors = [
+    { name = "R2d2", email = "bad.vano23ru@gmail.com" },
+]
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=1.0",
+    "events>=0.3.0",
+    "capabilities",
+    "aiohttp",
+    "tenacity",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.0,<1.0"]
+build-backend = "uv_build"

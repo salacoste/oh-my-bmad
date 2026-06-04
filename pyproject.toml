@@ -13,6 +13,7 @@ dependencies = [
     "console-cli",
     "events",
     "git-mcp",
+    "github-mcp",
     "idempotency",
     "metrics-subscriber",
     "orchestrator-adapter",
@@ -42,6 +43,7 @@ clawhip-daemon = { workspace = true }
 console-cli = { workspace = true }
 events = { workspace = true }
 git-mcp = { workspace = true }
+github-mcp = { workspace = true }
 idempotency = { workspace = true }
 metrics-subscriber = { workspace = true }
 orchestrator-adapter = { workspace = true }

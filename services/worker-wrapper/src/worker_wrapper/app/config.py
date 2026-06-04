@@ -72,6 +72,20 @@ class WorkerSettings(BaseSettings):
     git_command: str = ""
     git_args: list[str] = ["-m", "git_mcp"]
 
+    # Epic 16 / Story 16.2 — github MCP server spawn command (latent scaffold).
+    # The spawn is LATENT here: Story 16.6 activates it in MCPClientGroup, gated
+    # on this command being NON-BLANK, and Story 16.5 lands the scoped-token
+    # allowlist (GITHUB_MCP_SCOPED_TOKEN) — NEITHER is wired yet. The default is
+    # "" (OFF) so a fresh boot without the GITHUB_MCP_* env (ACTOR_KIND/ACTOR_ID/
+    # SCOPED_TOKEN) does NOT brick the worker: github-mcp's __main__.py exits 2
+    # without those required vars, so github stays absent unless a deployment opts
+    # in by setting WORKER_GITHUB_COMMAND (e.g. "python") AND forwarding the
+    # GITHUB_MCP_* env. Mirrors the git-mcp blank-command toggle (the P3-I3
+    # separability seam): github-mcp is a stdio member spawned by worker-wrapper,
+    # NOT a container.
+    github_command: str = ""
+    github_args: list[str] = ["-m", "github_mcp"]
+
     # TODO(Story 5.8/5.9): consumed when task/session registry MCP servers
     # need a shared SQLite path.
     registry_db_path: str = ""
