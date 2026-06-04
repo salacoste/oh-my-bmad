@@ -23,8 +23,17 @@ otherwise default the id to the Python function name). Every handler:
 A non-zero recipe exit is NOT an exception — it is surfaced as
 ``{"ok": False, "pass": False, ...}``. A spawn failure (the recipe binary is
 absent) is caught and surfaced structurally so a misconfigured recipe never
-crashes the request path. The ``verification.*`` event emission lands in Story
-17.4 (no ``clock``/event surface is consumed by this story's handlers).
+crashes the request path.
+
+Story 17.4 adds the ``verification.*`` event emission: after the recipe runs
+(for BOTH a pass and a fail), each handler emits a typed ``verification.completed``
+event through the FR26 single-writer surface (``emitter_holder.emit_event`` →
+clawhip-bridge MCP RPC, NEVER a direct event-log write) carrying the inbound
+``caller_trace_id``. The emit is BEST-EFFORT (guarded on ``emitter_holder``, PP1
+re-raise of cancellation) and the typed descriptor is surfaced UNCONDITIONALLY as
+``result["event"]`` (mirrors github-mcp's ``_emit_github_event``). The event
+payload carries ONLY the recipe command + exit-status discriminators — NEVER the
+captured ``logs`` (secret-bearing) or any environment value.
 
 The ``validate_caller_trace_id`` helper is duplicated byte-identically across
 clawhip-bridge, task-registry, session-registry, and git-mcp (mcp-servers cannot
@@ -34,6 +43,7 @@ to verification-mcp now that it registers tools.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -244,6 +254,75 @@ def register_tools(
             "coverage": _extract_coverage(result.stdout, result.stderr),
         }
 
+    async def _emit_verification_event(
+        event_type: str,
+        payload: dict[str, object],
+        *,
+        caller_trace_id: str,
+    ) -> dict[str, object]:
+        """Best-effort emit a ``verification.*`` event; return the surfaced descriptor.
+
+        FR26 single-writer: the actual emission routes through *emitter_holder*
+        (clawhip-bridge MCP RPC), NEVER a direct event-log write. The emit is
+        BEST-EFFORT — guarded on *emitter_holder* and wrapped so an emission
+        failure (audit-off, closed pipe) is logged and swallowed, never failing the
+        already-completed verification run.
+
+        The returned ``{"type": ..., "trace_id": caller_trace_id}`` descriptor is
+        built UNCONDITIONALLY (independent of whether the emit fired) and surfaced
+        by the caller as ``result["event"]`` so the ATDD contract can read the
+        verification.* event type + inbound trace_id even when audit emission is
+        disabled. Mirrors github-mcp's ``_emit_github_event``.
+        """
+        descriptor: dict[str, object] = {"type": event_type, "trace_id": caller_trace_id}
+        if emitter_holder is not None:
+            try:
+                await emitter_holder.emit_event(
+                    event_type, payload, caller_trace_id=caller_trace_id
+                )
+            except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):  # noqa: TRY302 — cancellation MUST propagate (PP1 contract); re-raise control-flow
+                raise
+            except BaseException:  # noqa: BLE001 — best-effort audit; never fail the verification op
+                log.exception(
+                    "verification_event_emission_failed",
+                    extra={"event_type": event_type},
+                )
+        return descriptor
+
+    async def _run_and_emit(
+        tool_name: str,
+        command: str | None,
+        args: list[str] | None,
+        *,
+        default: tuple[str, list[str]],
+        cwd: str | None,
+        caller_trace_id: str,
+    ) -> dict[str, object]:
+        """Run the recipe, emit ``verification.completed``, surface the descriptor.
+
+        The event fires for BOTH a pass and a fail (a non-zero recipe exit is
+        surfaced structurally, not raised). The emitted payload carries ONLY the
+        recipe command + exit-status discriminators — NEVER the captured ``logs``
+        (which may contain secret-bearing output) or any environment value.
+        """
+        structured = await _run_recipe_structured(command, args, default=default, cwd=cwd)
+        bin_, default_args = default
+        resolved_cmd = command if command is not None else bin_
+        resolved_args = args if args is not None else default_args
+        exit_code = structured["exit_code"]
+        coverage = structured["coverage"]
+        payload: dict[str, object] = {
+            "tool": tool_name,
+            "recipe": " ".join([resolved_cmd, *resolved_args]),
+            "passed": bool(structured["pass"]),
+            "exit_code": exit_code if isinstance(exit_code, int) else None,
+            "coverage": coverage if isinstance(coverage, int) else None,
+        }
+        event = await _emit_verification_event(
+            "verification.completed", payload, caller_trace_id=caller_trace_id
+        )
+        return {**structured, "event": event}
+
     # ------------------------------------------------------------------
     # Tool: verification.run_build (Tier-2 sandboxed recipe)
     # ------------------------------------------------------------------
@@ -270,7 +349,14 @@ def register_tools(
         """
         validate_caller_trace_id(caller_trace_id)
         check_tier("verification.run_build", _caller(), TIER_MAP["verification.run_build"])
-        return await _run_recipe_structured(command, args, default=_DEFAULT_BUILD, cwd=cwd)
+        return await _run_and_emit(
+            "verification.run_build",
+            command,
+            args,
+            default=_DEFAULT_BUILD,
+            cwd=cwd,
+            caller_trace_id=caller_trace_id,
+        )
 
     # ------------------------------------------------------------------
     # Tool: verification.run_tests (Tier-2 sandboxed recipe)
@@ -298,7 +384,14 @@ def register_tools(
         """
         validate_caller_trace_id(caller_trace_id)
         check_tier("verification.run_tests", _caller(), TIER_MAP["verification.run_tests"])
-        return await _run_recipe_structured(command, args, default=_DEFAULT_TESTS, cwd=cwd)
+        return await _run_and_emit(
+            "verification.run_tests",
+            command,
+            args,
+            default=_DEFAULT_TESTS,
+            cwd=cwd,
+            caller_trace_id=caller_trace_id,
+        )
 
     # Reference the handlers so linters see them as used (FastMCP holds the real
     # references via the decorator registration side-effect).
