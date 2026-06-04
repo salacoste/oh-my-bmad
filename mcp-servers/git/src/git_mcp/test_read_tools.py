@@ -17,6 +17,7 @@ from typing import cast
 
 import pytest
 
+from git_mcp.handlers.tools import _parse_numstat
 from git_mcp.server import GitExecutor, GitTimeout, _build_git_env
 
 _VALID_TRACE_ID = "01917e5c-a7d1-7000-8abc-0123456789ab"
@@ -127,6 +128,49 @@ async def test_diff_numstat_counts(repo: Path) -> None:
     # tracked.txt gained one line vs HEAD (untracked.txt is not in `git diff`).
     assert by_path["tracked.txt"]["added"] == 1
     assert by_path["tracked.txt"]["deleted"] == 0
+
+
+# ---------------------------------------------------------------------------
+# _parse_numstat rename handling (deferred-work P1 — `git.diff` rename detection)
+# ---------------------------------------------------------------------------
+#
+# Under ``git diff --numstat -z`` a rename/copy emits the numstat record with an
+# EMPTY path field, followed by the origin and destination names as two separate
+# NUL records. The parser must consume the origin and surface the destination —
+# otherwise the renamed file is recorded with ``path=""`` and its real name lost.
+
+
+def test_parse_numstat_modify_only() -> None:
+    """Baseline: a plain modify record is unaffected by rename handling."""
+    out = "1\t0\ttracked.txt\x00"
+    result = cast("list[dict[str, object]]", _parse_numstat(out)["files"])
+    assert result == [{"added": 1, "deleted": 0, "path": "tracked.txt"}]
+
+
+def test_parse_numstat_text_rename_surfaces_destination() -> None:
+    """A text rename surfaces the destination path, not ``path=''``."""
+    # added=2, deleted=1, empty path, then origin + destination NUL records.
+    out = "2\t1\t\x00old/name.py\x00new/name.py\x00"
+    files = cast("list[dict[str, object]]", _parse_numstat(out)["files"])
+    assert files == [{"added": 2, "deleted": 1, "path": "new/name.py"}]
+    assert all(f["path"] != "" for f in files)
+
+
+def test_parse_numstat_binary_rename_surfaces_destination() -> None:
+    """A binary rename surfaces the destination with ``None`` counts."""
+    out = "-\t-\t\x00bin/old.png\x00bin/new.png\x00"
+    files = cast("list[dict[str, object]]", _parse_numstat(out)["files"])
+    assert files == [{"added": None, "deleted": None, "path": "bin/new.png"}]
+
+
+def test_parse_numstat_mixed_modify_and_rename() -> None:
+    """A modify and a rename in the same diff both keep their real paths."""
+    out = "1\t0\tkept.txt\x00" "3\t2\t\x00src/old.py\x00src/new.py\x00"
+    files = cast("list[dict[str, object]]", _parse_numstat(out)["files"])
+    by_path = {cast("str", f["path"]): f for f in files}
+    assert set(by_path) == {"kept.txt", "src/new.py"}
+    assert by_path["src/new.py"] == {"added": 3, "deleted": 2, "path": "src/new.py"}
+    assert "" not in by_path
 
 
 # ---------------------------------------------------------------------------
