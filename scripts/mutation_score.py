@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """mutation_score.py — compute the cosmic-ray mutation score (Story 14.2, NFR-O11).
 
-Reads a cosmic-ray session database via ``cosmic-ray dump`` (the stable
-machine contract: one JSON ``[WorkItem, WorkResult]`` pair per line), computes
-``killed / checked`` and prints a single score line, e.g.::
+Reads pre-captured ``cosmic-ray dump`` output (the stable machine contract: one
+JSON ``[WorkItem, WorkResult]`` pair per line), computes ``killed / checked``
+and prints a single score line, e.g.::
 
     mutation-score: 68/90 = 75.6%
+
+This script is PURE parse + score: it never spawns a subprocess. The caller (a
+``just`` recipe / CI) is responsible for running ``cosmic-ray dump <session>``
+and feeding the text in via ``--dump-path PATH`` or stdin (``--dump-path -``).
 
 WHY cosmic-ray (not mutmut)? mutmut copies sources into ``mutants/`` but this
 workspace's *editable* (uv-workspace) installs resolve imports back to the
@@ -20,13 +24,13 @@ any CI gate yet — Story 14.3 wires enforcement once the first nightly baseline
 establishes a defensible floor. Until then the nightly ``mutation-baseline``
 job runs this WITHOUT ``--threshold`` (informational only / non-gating).
 
-INPUT FORMATS (two ways to feed the same seam):
-  - ``--session PATH``  : a cosmic-ray ``*.sqlite`` session; this script shells
-                          out to ``cosmic-ray dump`` to read it.
+INPUT FORMATS (one seam, two ways to feed it — neither spawns a process):
   - ``--dump-path PATH``: a pre-captured ``cosmic-ray dump`` text file (one
                           ``[WorkItem, WorkResult]`` JSON list per line). Lets
                           CI capture the dump once and lets tests feed fixtures
                           without a real session.
+  - ``--dump-path -``   : read the same dump text from stdin (e.g.
+                          ``cosmic-ray dump <session> | python mutation_score.py --dump-path -``).
 
 Mutation-score denominator (NFR-O11 convention): a mutant counts toward the
 denominator only if it was actually *checked* by the suite. cosmic-ray records
@@ -55,12 +59,9 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from pathlib import Path
 from typing import NamedTuple
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Worker outcomes that mean the worker never produced a usable verdict because
 # no test covered the mutated line / the job was skipped — coverage gaps,
@@ -156,40 +157,24 @@ def parse_dump_text(text: str) -> list[tuple[dict[str, object], dict[str, object
     return pairs
 
 
-def dump_session(session_path: Path) -> str:
-    """Shell out to ``cosmic-ray dump`` to read a session db's results."""
-    proc = subprocess.run(
-        ["cosmic-ray", "dump", str(session_path)],
-        cwd=REPO_ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return proc.stdout
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Compute the cosmic-ray mutation score. Reads a session db (via "
-            "`cosmic-ray dump`) or a pre-captured dump file, and prints a "
-            "'mutation-score: killed/checked = pct%' line. Story 14.2 (NFR-O11)."
+            "Compute the cosmic-ray mutation score from a pre-captured "
+            "`cosmic-ray dump` file (or stdin), and print a "
+            "'mutation-score: killed/checked = pct%' line. Never spawns a "
+            "process. Story 14.2 (NFR-O11)."
         ),
     )
-    source = parser.add_mutually_exclusive_group()
-    source.add_argument(
-        "--session",
-        type=Path,
-        default=None,
-        metavar="SQLITE",
-        help="Path to a cosmic-ray session db; read via `cosmic-ray dump`.",
-    )
-    source.add_argument(
+    parser.add_argument(
         "--dump-path",
-        type=Path,
-        default=None,
+        type=str,
+        required=True,
         metavar="TXT",
-        help="Path to a pre-captured `cosmic-ray dump` text file (one JSON pair per line).",
+        help=(
+            "Path to a pre-captured `cosmic-ray dump` text file (one JSON pair "
+            "per line), or '-' to read the dump from stdin."
+        ),
     )
     parser.add_argument(
         "--threshold",
@@ -203,10 +188,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    # Resolve the input source. Default (neither flag) = the conventional
-    # session path the just recipes write.
-    if args.dump_path is not None:
-        dump_path: Path = args.dump_path
+    # Resolve the input source: stdin ('-') or a pre-captured dump file. This
+    # script never spawns `cosmic-ray dump` itself — the caller pipes the dump
+    # text in (see the `just mutation-*` recipes).
+    if args.dump_path == "-":
+        text = sys.stdin.read()
+    else:
+        dump_path = Path(args.dump_path)
         if not dump_path.exists():
             print(f"error: {dump_path} not found.", file=sys.stderr)
             return 1
@@ -214,22 +202,6 @@ def main(argv: list[str] | None = None) -> int:
             text = dump_path.read_text(encoding="utf-8")
         except OSError as exc:
             print(f"error: failed to read {dump_path}: {exc}", file=sys.stderr)
-            return 1
-    else:
-        session_path: Path = (
-            args.session if args.session is not None else REPO_ROOT / "mutation.sqlite"
-        )
-        if not session_path.exists():
-            print(
-                f"error: {session_path} not found. Run `just mutation-test` "
-                "(or `cosmic-ray init` + `cosmic-ray exec`) first.",
-                file=sys.stderr,
-            )
-            return 1
-        try:
-            text = dump_session(session_path)
-        except (OSError, subprocess.CalledProcessError) as exc:
-            print(f"error: `cosmic-ray dump {session_path}` failed: {exc}", file=sys.stderr)
             return 1
 
     try:

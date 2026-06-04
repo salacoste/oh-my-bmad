@@ -12,6 +12,7 @@ smoke (worker_outcome / test_outcome axes). Cases:
   - exception / incompetent count as checked-but-not-killed (conservative)
   - null WorkResult (pending) skipped
   - missing dump file                       -> exit 1 (fail-closed)
+  - stdin ('--dump-path -') reads the dump from stdin (no subprocess)
 
 Mirrors the module-load convention in scripts/test_check_sbom_licenses.py.
 
@@ -21,6 +22,7 @@ NO ``slow`` marker — must run in the PR-gate ``pytest -m "not slow"`` lane.
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import sys
 from pathlib import Path
@@ -233,17 +235,6 @@ def test_main_missing_dump_file_exits_one(
     assert "not found" in err
 
 
-def test_main_missing_session_file_exits_one(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    mod = _load_module()
-    missing = tmp_path / "does-not-exist.sqlite"
-    rc = mod.main(["--session", str(missing)])
-    assert rc == 1
-    err = capsys.readouterr().err
-    assert "not found" in err
-
-
 def test_main_threshold_with_zero_checked_exits_one(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -253,6 +244,18 @@ def test_main_threshold_with_zero_checked_exits_one(
     assert rc == 1
     err = capsys.readouterr().err
     assert "no mutants" in err
+
+
+def test_main_reads_dump_from_stdin(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    text = _dump_lines([[_item(i), _result(test_outcome="killed")] for i in range(5)])
+    monkeypatch.setattr("sys.stdin", io.StringIO(text))
+    rc = mod.main(["--dump-path", "-"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "mutation-score: 5/5 = 100.0%" in out
 
 
 def test_main_malformed_json_exits_one(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

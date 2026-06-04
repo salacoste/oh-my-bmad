@@ -84,3 +84,6 @@ litestream.yml
 *.sqlite
 *.sqlite-journal
 .cosmic-ray/
+# The recipes pipe `cosmic-ray dump <session>` into a text file, then feed it to
+# the pure (non-spawning) scorer. Generated artifact, never committed.
+_bmad-output/test-artifacts/mutation-*dump*.txt

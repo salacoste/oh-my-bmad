@@ -165,14 +165,19 @@ test-separability *ARGS="": build-base
 # Trailing `*ARGS` lets nightly forward extra flags if needed.
 mutation-test *ARGS="":
     rm -f mutation.sqlite
+    mkdir -p _bmad-output/test-artifacts
     uv run cosmic-ray init cosmic-ray.toml mutation.sqlite
     uv run cosmic-ray exec cosmic-ray.toml mutation.sqlite
-    uv run python scripts/mutation_score.py --session mutation.sqlite {{ARGS}}
+    uv run cosmic-ray dump mutation.sqlite > _bmad-output/test-artifacts/mutation-dump.txt
+    uv run python scripts/mutation_score.py --dump-path _bmad-output/test-artifacts/mutation-dump.txt {{ARGS}}
 
-# `mutation-score` — recompute + print the score from an existing session db
-# WITHOUT re-running the (slow) mutation exec. Reads mutation.sqlite by default.
+# `mutation-score` — recompute + print the score from the existing session db
+# WITHOUT re-running the (slow) mutation exec. Re-dumps mutation.sqlite (cheap)
+# and feeds the dump to the pure scorer (which never spawns a process itself).
 mutation-score *ARGS="":
-    uv run python scripts/mutation_score.py --session mutation.sqlite {{ARGS}}
+    mkdir -p _bmad-output/test-artifacts
+    uv run cosmic-ray dump mutation.sqlite > _bmad-output/test-artifacts/mutation-dump.txt
+    uv run python scripts/mutation_score.py --dump-path _bmad-output/test-artifacts/mutation-dump.txt {{ARGS}}
 
 # `mutation-smoke` — hard-bounded harness proof: mutates ONLY tiers.py against
 # its co-located unit suite (<~3 min). This is the in-place-mutation sanity
@@ -181,9 +186,11 @@ mutation-score *ARGS="":
 # session db is gitignored. Emits a real `mutation-score: killed/checked` line.
 mutation-smoke:
     rm -f mutation-smoke.sqlite
+    mkdir -p _bmad-output/test-artifacts
     uv run cosmic-ray init cosmic-ray.smoke.toml mutation-smoke.sqlite
     uv run cosmic-ray exec cosmic-ray.smoke.toml mutation-smoke.sqlite
-    uv run python scripts/mutation_score.py --session mutation-smoke.sqlite
+    uv run cosmic-ray dump mutation-smoke.sqlite > _bmad-output/test-artifacts/mutation-smoke-dump.txt
+    uv run python scripts/mutation_score.py --dump-path _bmad-output/test-artifacts/mutation-smoke-dump.txt
 
 # Strict lint + format + type-check + architectural-discipline gates.
 # ruff rules cover style (E/F/I/UP/B/SIM/N); ruff format --check enforces
