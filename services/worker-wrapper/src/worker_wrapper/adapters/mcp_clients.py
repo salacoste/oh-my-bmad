@@ -103,6 +103,18 @@ _ENV_ALLOWLIST: frozenset[str] = frozenset(
         "MEMORY_MCP_STORE_PATH",
         "MEMORY_MCP_ACTOR_KIND",
         "MEMORY_MCP_ACTOR_ID",
+        # artifact-mcp REQUIRED (mcp-servers/artifact/.../__main__.py exits 2 without
+        # the first three) — Story 19.5. All NON-secret: ARTIFACT_MCP_STORE_PATH is
+        # the artifact-mcp's OWN content-store root (NEVER the registry DB — P3-I2)
+        # + the actor identity; the two RETENTION vars are optional operator policy
+        # (size cap / TTL). No external credential, so NO scoped token. Forwarded by
+        # BOTH spawner allowlists (byte-identical mirror); only worker-wrapper spawns
+        # artifact-mcp (conditional on a non-blank WORKER_ARTIFACT_COMMAND).
+        "ARTIFACT_MCP_STORE_PATH",
+        "ARTIFACT_MCP_ACTOR_KIND",
+        "ARTIFACT_MCP_ACTOR_ID",
+        "ARTIFACT_MCP_RETENTION_MAX_BYTES",
+        "ARTIFACT_MCP_RETENTION_TTL_SECONDS",
         # Shared event-log + SQLite paths (spine convention)
         "REGISTRY_EVENTS_DIR",
         "REGISTRY_DB_PATH",
@@ -164,6 +176,12 @@ class MCPClientGroup:
     # 2 without MEMORY_MCP_STORE_PATH/ACTOR_KIND/ACTOR_ID, so a fresh boot without
     # the MEMORY_MCP_* env does NOT brick the worker. NFR-M8 / S-8 seam.
     memory: ClientSession | None = None
+    # Story 19.5 / P3-I3 — OPTIONAL 8th stdio member (artifact-mcp). Same seam:
+    # stays ``None`` unless the deployment opts in via a non-blank
+    # ``settings.artifact_command`` (default "" → OFF). artifact-mcp's __main__.py
+    # exits 2 without ARTIFACT_MCP_STORE_PATH/ACTOR_KIND/ACTOR_ID, so a fresh boot
+    # without the ARTIFACT_MCP_* env does NOT brick the worker. NFR-M8 / S-9 seam.
+    artifact: ClientSession | None = None
 
     async def __aenter__(self) -> MCPClientGroup:
         self._stack = AsyncExitStack()
@@ -224,6 +242,17 @@ class MCPClientGroup:
                     self.settings.memory_command,
                     self.settings.memory_args,
                 )
+            # Story 19.5 — conditional artifact-mcp spawn. ONLY when the operator
+            # opted in via a non-blank ``artifact_command``; otherwise artifact stays
+            # absent (separability S-9 "absent" state). The ARTIFACT_MCP_* required
+            # vars (incl. the store path + retention policy) are forwarded via
+            # ``_ENV_ALLOWLIST``.
+            if self.settings.artifact_command:
+                self.artifact = await self._connect(
+                    "artifact",
+                    self.settings.artifact_command,
+                    self.settings.artifact_args,
+                )
         except BaseException:
             await self.__aexit__(None, None, None)
             raise
@@ -245,6 +274,7 @@ class MCPClientGroup:
         self.github = None  # Story 16.6 — null the optional 5th member.
         self.verification = None  # Story 17.5 — null the optional 6th member.
         self.memory = None  # Story 18.5 — null the optional 7th member.
+        self.artifact = None  # Story 19.5 — null the optional 8th member.
 
     async def _connect(
         self,

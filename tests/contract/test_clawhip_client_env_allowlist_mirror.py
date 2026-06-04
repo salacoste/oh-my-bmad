@@ -171,6 +171,16 @@ _SPAWNER_REQUIRED_ENV_VARS = {
     "MEMORY_MCP_STORE_PATH",
     "MEMORY_MCP_ACTOR_KIND",
     "MEMORY_MCP_ACTOR_ID",
+    # artifact-mcp REQUIRED (mcp-servers/artifact/.../__main__.py exits 2 without
+    # these) — Story 19.5. All NON-secret: ARTIFACT_MCP_STORE_PATH is the artifact
+    # content-store root (never the registry DB — P3-I2) + actor identity; no
+    # credential. (The two ARTIFACT_MCP_RETENTION_* vars are OPTIONAL operator
+    # policy — allowlisted but not required, so not listed here.) Forwarded by BOTH
+    # spawner allowlists; only worker-wrapper spawns artifact-mcp (conditional on a
+    # non-blank WORKER_ARTIFACT_COMMAND).
+    "ARTIFACT_MCP_STORE_PATH",
+    "ARTIFACT_MCP_ACTOR_KIND",
+    "ARTIFACT_MCP_ACTOR_ID",
     "REGISTRY_EVENTS_DIR",
     "REGISTRY_DB_PATH",
 }
