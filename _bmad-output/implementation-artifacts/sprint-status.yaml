@@ -356,7 +356,7 @@ development_status:
   # FR77 (digest-deprecation) · NFR-O11 (mutation gate) · NFR-O7 (trace_id AST gate)
   # =========================================================================
   epic-14: in-progress  # phase: 3 · entry epic — pure CI/verification before any server surface
-  14-1-digest-deprecation-cutover: ready-for-dev  # phase: 3 · FR77 · next story to implement — digest-pinned references become the sole deploy path
+  14-1-digest-deprecation-cutover: done  # phase: 3 · FR77 · next story to implement — digest-pinned references become the sole deploy path
   14-2-mutation-testing-harness-scaffold-baseline: backlog  # phase: 3 · NFR-O11 (harness) · mutmut/cosmic-ray over packages/* + baseline score artifact
   14-3-mutation-gate-threshold-ci-enforcement: backlog  # phase: 3 · NFR-O11 (gate) · threshold decision + nightly enforcement
   14-4-g-fn-disposition-triage: backlog  # phase: 3 · G-FN-1/2/3 dispositions; G-FN-2 nested-stdio folded into ADR-0010 recipe precondition

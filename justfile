@@ -388,18 +388,48 @@ image-sizes:
 # Linux VPS deploy primitive: build-base → pull-if-available → build → up.
 # Story 1.9's GHCR images will make pull the primary path; until then build
 # is the source of truth. Docs in Story 1.10a.
+#
+# Epic 14 / Story 14.1 / FR77: this TAG-BASED path is DEPRECATED for
+# production — tags are mutable. Use ``just deploy-vps-digest`` (digest-pinned,
+# the supported production path). This recipe is retained for local/dev builds.
 deploy-vps: build-base
+    @echo "::warning::[FR77] tag-based deploy-vps is DEPRECATED for production (mutable tags). Use 'just deploy-vps-digest' (digest-pinned, the supported production path)."
     docker compose -f docker-compose.yml pull || true
     docker compose -f docker-compose.yml build
     docker compose -f docker-compose.yml up -d
 
 # macOS deploy primitive — same flow plus the macOS overlay and a mkdir
 # prerequisite so the bind-mount source exists.
+#
+# Epic 14 / Story 14.1 / FR77: DEPRECATED for production — see deploy-vps above.
+# Use ``just deploy-macos-digest`` (digest-pinned, the supported production path).
 deploy-macos: build-base
+    @echo "::warning::[FR77] tag-based deploy-macos is DEPRECATED for production (mutable tags). Use 'just deploy-macos-digest' (digest-pinned, the supported production path)."
     mkdir -p "${HOME}/.oh-my-bmad"
     docker compose -f docker-compose.yml -f docker-compose.macos.yml pull || true
     docker compose -f docker-compose.yml -f docker-compose.macos.yml build
     docker compose -f docker-compose.yml -f docker-compose.macos.yml up -d
+
+# Epic 14 / Story 14.1 / FR77 — DIGEST-PINNED VPS deploy (supported production
+# path). Verifies the supply-chain triumvirate (cosign sig + SLSA + SBOM) for
+# every published image, then pulls + runs each CORE service BY CONTENT-DIGEST
+# via the docker-compose.digest.yml overlay (immutable, not the mutable tag).
+#
+# The overlay's ``${OMB_IMAGE_DIGEST_<svc>:?...}`` refs FAIL LOUD if any digest
+# is unset, so the ``pull`` deliberately has NO ``|| true`` — a missing/wrong
+# digest MUST abort the deploy, never silently fall back to a tag.
+# Populate OMB_IMAGE_DIGEST_* in .env from the release notes first (see
+# docs/deployment-guide.md §Upgrading).
+deploy-vps-digest: verify-images
+    docker compose -f docker-compose.yml -f docker-compose.digest.yml pull
+    docker compose -f docker-compose.yml -f docker-compose.digest.yml up -d
+
+# Epic 14 / Story 14.1 / FR77 — DIGEST-PINNED macOS deploy. Same flow as
+# deploy-vps-digest plus the macOS bind-mount overlay + mkdir prerequisite.
+deploy-macos-digest: verify-images
+    mkdir -p "${HOME}/.oh-my-bmad"
+    docker compose -f docker-compose.yml -f docker-compose.digest.yml -f docker-compose.macos.yml pull
+    docker compose -f docker-compose.yml -f docker-compose.digest.yml -f docker-compose.macos.yml up -d
 
 # Story 8.5 (Phase 2 Epic 8): Verify cosign signature + SLSA L2 + CycloneDX SBOM
 # attestations for every Platform-published image before deploy. Operator runs
