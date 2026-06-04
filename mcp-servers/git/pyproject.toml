@@ -1,0 +1,17 @@
+[project]
+name = "git-mcp"
+version = "0.1.0"
+description = "MCP server exposing bounded git operations over a sandboxed worktree (Epic 15 / FR72). Story 15.2 ships the scaffold + clawhip-bridge audit wiring; git tools land in 15.3/15.4."
+authors = [
+    { name = "R2d2", email = "bad.vano23ru@gmail.com" },
+]
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=1.0",
+    "events>=0.3.0",
+    "capabilities",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.0,<1.0"]
+build-backend = "uv_build"
