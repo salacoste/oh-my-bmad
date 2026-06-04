@@ -3633,7 +3633,22 @@ class TestCollapseNewlinesUnicode:
     def test_strips_consecutive_unicode_separators(self) -> None:
         from clawhip_daemon.adapters.sinks.telegram_sink import _collapse_newlines
 
-        assert _collapse_newlines("a  b") == "a  b"
+        assert _collapse_newlines("a  b") == "a b"
+
+    def test_strips_vt_ff_nel(self) -> None:
+        """D1: VT (\\v), FF (\\f), NEL (\\x85) are now collapsed."""
+        from clawhip_daemon.adapters.sinks.telegram_sink import _collapse_newlines
+
+        assert _collapse_newlines("a\v b") == "a  b"
+        assert _collapse_newlines("a\f b") == "a  b"
+        assert _collapse_newlines("a\x85b") == "a b"
+
+    def test_mixed_adjacent_separators_single_space(self) -> None:
+        """D2: mixed adjacent separators produce one space, not multiple."""
+        from clawhip_daemon.adapters.sinks.telegram_sink import _collapse_newlines
+
+        assert _collapse_newlines("a\n\rb") == "a b"
+        assert _collapse_newlines("a\r\n\rb") == "a b"
 
     def test_preserves_plain_text(self) -> None:
         from clawhip_daemon.adapters.sinks.telegram_sink import _collapse_newlines

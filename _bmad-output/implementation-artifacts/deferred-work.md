@@ -120,10 +120,10 @@ A running log of issues that surfaced during code review but were not fixed at t
 
 ## Deferred from: code review of 7-5-8-renderer-validator-consistency (2026-05-14)
 
-- **D1 — `_collapse_newlines` doesn't handle NEL (U+0085), VT (U+000B), FF (U+000C)** (Blind Hunter + Edge Case Hunter, telegram_sink.py): Spec (AC-3) specifically names U+2028/U+2029. These additional Unicode line breaks recognized by Python's `str.splitlines()` were not in scope. Consider using `re.sub(r"[\r\n  \x0b\x0c]+", " ", text)` for comprehensive coverage in a future pass.
-- **D2 — Sequential `.replace()` produces multi-space for consecutive mixed separators** (Blind Hunter, telegram_sink.py): `_collapse_newlines` replaces each separator independently, so `\n ` produces two spaces. Consistent with pre-existing ASCII newline behavior. Consider normalizing all to one separator first, then collapsing, in a future pass.
-- **D3 — `TaskExecutionResumedPayload` not covered in validator tests** (Acceptance Auditor, test_payload_validators.py): This model already had `pattern=_TASK_ID_PATTERN` before this story. The test file covers the 14 explicitly-named models in scope. Add coverage if model-specific validation behavior diverges.
-- **D4 — `hint` min_length=1 allows whitespace-only strings** (Blind Hunter + Edge Case Hunter, payloads.py:60): Standard Pydantic pattern. No evidence of real issues. Consider a whitespace-stripping validator if semantic emptiness becomes a concern.
+- **D1 — ✅ CLOSED 2026-06-05.** `_collapse_newlines` now uses a single regex `(?:\r\n|[\r\n\v\f\x85  ])+` covering every Unicode line-break in Python's `str.splitlines()`. 164 telegram_sink tests pass. *Original:* NEL/VT/FF not handled.
+- **D2 — ✅ CLOSED 2026-06-05.** Single regex pass means all adjacent line-break sequences produce exactly one space. *Original:* sequential `.replace()` produced multi-space for mixed adjacent separators.
+- **D3 — ✅ WONTDO.** Model already has the same pattern; no divergent validation behavior. Will add coverage if behavior diverges.
+- **D4 — ✅ WONTDO.** Standard Pydantic pattern; no evidence of real issues. Whitespace-stripping validator can be added if semantic emptiness surfaces.
 
 ## Deferred from: code review of story-9.6 (2026-05-17)
 
