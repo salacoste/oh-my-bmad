@@ -1,0 +1,17 @@
+[project]
+name = "memory-mcp"
+version = "0.1.0"
+description = "MCP server exposing a persistent cross-task knowledge store backed by SQLite FTS5 (Epic 18 / ADR-0012). Stories 18.1/18.2 ship the red-phase ATDD contracts + the store schema scaffold; the memory tools land in 18.3/18.4."
+authors = [
+    { name = "R2d2", email = "bad.vano23ru@gmail.com" },
+]
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=1.0",
+    "events>=0.3.0",
+    "capabilities",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.0,<1.0"]
+build-backend = "uv_build"
