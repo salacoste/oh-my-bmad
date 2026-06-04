@@ -18,7 +18,7 @@ from typing import cast
 import pytest
 
 from git_mcp.handlers.tools import _parse_numstat
-from git_mcp.server import GitExecutor, GitTimeout, _build_git_env
+from git_mcp.server import GitExecutor, GitOutputTooLarge, GitTimeout, _build_git_env
 
 _VALID_TRACE_ID = "01917e5c-a7d1-7000-8abc-0123456789ab"
 
@@ -200,6 +200,42 @@ async def test_run_git_timeout_kills_and_reaps(repo: Path) -> None:
         await ex.run_git(["log", "--format=%H", "-n", "1"], timeout=1e-9)
     ok = await ex.run_git(["rev-parse", "--is-inside-work-tree"])
     assert ok.returncode == 0
+
+
+@pytest.mark.asyncio
+async def test_run_git_output_cap_kills_and_reaps(repo: Path) -> None:
+    """Output past the cap raises GitOutputTooLarge and leaves the sandbox usable.
+
+    A tiny ``output_cap`` forces the incremental reader to trip before the
+    subprocess finishes, driving ``run_git``'s kill+reap path (the
+    memory-pressure sibling of the timeout path). A subsequent call must still
+    succeed (no leaked/zombie process wedges later invocations).
+    """
+    ex = GitExecutor(repo)
+    with pytest.raises(GitOutputTooLarge):
+        # `git log` emits a commit hash + metadata — far more than 4 bytes.
+        await ex.run_git(["log", "--format=%H"], output_cap=4)
+    ok = await ex.run_git(["rev-parse", "--is-inside-work-tree"])
+    assert ok.returncode == 0
+
+
+@pytest.mark.asyncio
+async def test_run_git_output_under_cap_succeeds(repo: Path) -> None:
+    """Output within the cap returns normally (boundary: cap not tripped)."""
+    ex = GitExecutor(repo)
+    result = await ex.run_git(["rev-parse", "--is-inside-work-tree"], output_cap=4096)
+    assert result.returncode == 0
+    assert result.stdout.strip() == "true"
+
+
+@pytest.mark.asyncio
+async def test_run_git_output_cap_boundary_is_exclusive(repo: Path) -> None:
+    """Output of exactly ``output_cap`` bytes succeeds (cap check is ``>``, not ``>=``)."""
+    ex = GitExecutor(repo)
+    # `rev-parse --is-inside-work-tree` emits exactly "true\n" = 5 bytes.
+    result = await ex.run_git(["rev-parse", "--is-inside-work-tree"], output_cap=5)
+    assert result.returncode == 0
+    assert result.stdout.strip() == "true"
 
 
 def test_build_git_env_drops_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
