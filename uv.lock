@@ -14,6 +14,7 @@ members = [
     "console-cli",
     "events",
     "git-mcp",
+    "github-mcp",
     "idempotency",
     "metrics-subscriber",
     "oh-my-bmad",
@@ -1111,6 +1112,27 @@ wheels = [
 ]
 
 [[package]]
+name = "github-mcp"
+version = "0.1.0"
+source = { editable = "mcp-servers/github" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "capabilities" },
+    { name = "events" },
+    { name = "mcp" },
+    { name = "tenacity" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp" },
+    { name = "capabilities", editable = "packages/capabilities" },
+    { name = "events", editable = "packages/events" },
+    { name = "mcp", specifier = ">=1.0" },
+    { name = "tenacity" },
+]
+
+[[package]]
 name = "gitpython"
 version = "3.1.50"
 source = { registry = "https://pypi.org/simple" }
@@ -2028,6 +2050,7 @@ dependencies = [
     { name = "console-cli" },
     { name = "events" },
     { name = "git-mcp" },
+    { name = "github-mcp" },
     { name = "idempotency" },
     { name = "metrics-subscriber" },
     { name = "orchestrator-adapter" },
@@ -2062,6 +2085,7 @@ requires-dist = [
     { name = "console-cli", editable = "services/console-cli" },
     { name = "events", editable = "packages/events" },
     { name = "git-mcp", editable = "mcp-servers/git" },
+    { name = "github-mcp", editable = "mcp-servers/github" },
     { name = "idempotency", editable = "packages/idempotency" },
     { name = "metrics-subscriber", editable = "services/metrics-subscriber" },
     { name = "orchestrator-adapter", editable = "services/orchestrator-adapter" },
