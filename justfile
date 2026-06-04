@@ -181,15 +181,16 @@ scan-secrets:
     git ls-files -z | xargs -0 uv run secret-hygiene-precommit
 
 # Architectural-discipline gates: import-graph, event-registry, single-writer,
-# mcp-transport (P2-I4 stdio-only).
+# mcp-transport (P2-I4 stdio-only), trace-id-required (NFR-O7).
 # Replicates the CI `Check*` steps locally; run before opening a PR.
 check-gates:
     uv run python scripts/check_imports.py
     uv run python scripts/check_event_registry.py
     uv run python scripts/check_single_writer.py
     uv run python scripts/check_mcp_transport.py
+    uv run python scripts/check_trace_id_required.py
 
-# Run the three architectural-gate self-tests — exercises the bundled fixture
+# Run the architectural-gate self-tests — exercises the bundled fixture
 # trees under scripts/checks/fixtures/ to verify each check script's own
 # detection logic still works.
 check-gates-self-test:
@@ -197,6 +198,7 @@ check-gates-self-test:
     uv run python scripts/check_event_registry.py --self-test
     uv run python scripts/check_single_writer.py --self-test
     uv run python scripts/check_mcp_transport.py --self-test
+    uv run python scripts/check_trace_id_required.py --self-test
     uv run python scripts/check_sbom_licenses.py --self-test
 
 # Scenario harness (journey-level smoke tests) lands across Stories 2.11 /
