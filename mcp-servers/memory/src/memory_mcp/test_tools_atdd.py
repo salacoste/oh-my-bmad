@@ -97,6 +97,22 @@ async def _tool_by_name(mcp: FastMCP, name: str) -> object:
     return by_name[name]
 
 
+async def _tool_fn(mcp: FastMCP, name: str):  # type: ignore[no-untyped-def]
+    """Return the invocable callable for the registered tool *name*.
+
+    ``mcp.list_tools()`` returns ``mcp.types.Tool`` schema objects (no ``.fn``);
+    the invocable handler lives on the FastMCP tool-manager. We assert presence
+    against ``list_tools()`` (empty today for absent tools → clean xfail) and
+    return the manager's ``.fn``. Mirrors git-mcp's ``_tool_fn``.
+    """
+    tools = await mcp.list_tools()
+    by_name = {t.name for t in tools}
+    assert name in by_name, (
+        f"tool {name!r} not registered (have: {sorted(by_name)}) — lands in Story 18.3/18.4"
+    )
+    return mcp._tool_manager._tools[name].fn
+
+
 def _assert_caller_trace_id_required(tool: object, *, name: str) -> None:
     """Assert ``caller_trace_id`` is a required string field on the tool schema.
 
@@ -121,10 +137,9 @@ def _assert_caller_trace_id_required(tool: object, *, name: str) -> None:
 # ===========================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.parametrize("tool", _TIER1_TOOLS)
 def test_read_tools_are_tier_one(tool: str) -> None:
-    """memory.read / memory.search are Tier-1 (bounded read) — Story 18.3."""
+    """memory.read / memory.search are Tier-1 (bounded read) — Story 18.3 (GREEN)."""
     assert TIER_MAP[tool] == Tier.ONE
 
 
@@ -141,11 +156,24 @@ def test_write_tool_is_tier_two(tool: str) -> None:
 # ===========================================================================
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", _TIER1_TOOLS)
+async def test_read_tool_registered_with_required_caller_trace_id(
+    tool: str, tmp_path: Path
+) -> None:
+    """Each Tier-1 read tool is registered and requires a ``caller_trace_id`` string (GREEN)."""
+    mcp = _build(tmp_path / "mem.db")
+    registered = await _tool_by_name(mcp, tool)
+    _assert_caller_trace_id_required(registered, name=tool)
+
+
 @pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tool", _TIER1_TOOLS + _TIER2_TOOLS)
-async def test_tool_registered_with_required_caller_trace_id(tool: str, tmp_path: Path) -> None:
-    """Every memory tool is registered and requires a ``caller_trace_id`` string."""
+@pytest.mark.parametrize("tool", _TIER2_TOOLS)
+async def test_write_tool_registered_with_required_caller_trace_id(
+    tool: str, tmp_path: Path
+) -> None:
+    """The Tier-2 write tool is registered and requires a ``caller_trace_id`` — Story 18.4."""
     mcp = _build(tmp_path / "mem.db")
     registered = await _tool_by_name(mcp, tool)
     _assert_caller_trace_id_required(registered, name=tool)
@@ -276,14 +304,29 @@ def test_db_file_mode_is_0o660_and_wal(tmp_path: Path) -> None:
 # ===========================================================================
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", _TIER1_TOOLS)
+async def test_read_tool_rejects_invalid_caller_trace_id(tool: str, tmp_path: Path) -> None:
+    """Each Tier-1 read tool rejects an invalid ``caller_trace_id`` first — Story 18.3 (GREEN).
+
+    ``validate_caller_trace_id`` runs FIRST in every handler body, BEFORE the tier
+    gate / store read. The read tools' ``key`` / ``query`` kwargs carry a default
+    (``""``) so Python does not raise a missing-arg ``TypeError`` before the body
+    runs; the invalid trace_id is then rejected with the Story 9.1 contract message.
+    """
+    mcp = _build(tmp_path / "mem.db")
+    fn = await _tool_fn(mcp, tool)
+    with pytest.raises(ValueError, match="Story 9.1 contract"):
+        await fn(caller_trace_id=_INVALID_TRACE_ID)
+
+
 @pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tool", _TIER1_TOOLS + _TIER2_TOOLS)
-async def test_tool_rejects_invalid_caller_trace_id(tool: str, tmp_path: Path) -> None:
-    """Each memory tool rejects an invalid ``caller_trace_id`` before doing work."""
+@pytest.mark.parametrize("tool", _TIER2_TOOLS)
+async def test_write_tool_rejects_invalid_caller_trace_id(tool: str, tmp_path: Path) -> None:
+    """The Tier-2 write tool rejects an invalid ``caller_trace_id`` first — Story 18.4."""
     mcp = _build(tmp_path / "mem.db")
-    registered = await _tool_by_name(mcp, tool)  # absent today → clean xfail
-    fn = registered.fn  # type: ignore[attr-defined]
+    fn = await _tool_fn(mcp, tool)  # absent today → clean xfail
     with pytest.raises(ValueError, match="Story 9.1 contract"):
         await fn(caller_trace_id=_INVALID_TRACE_ID)
 
@@ -299,6 +342,63 @@ def test_validator_rejects_invalid_caller_trace_id() -> None:
         validate_caller_trace_id(_INVALID_TRACE_ID)
     # Sanity: a valid id passes (no raise).
     validate_caller_trace_id(_VALID_TRACE_ID)
+
+
+def _seed_store(store_path: Path) -> None:
+    """Upsert a couple of docs into the store DB the built server will reopen."""
+    store = MemoryStore(store_path)
+    try:
+        store.upsert("doc-postgres", "Tuning PostgreSQL vacuum thresholds.", title="db")
+        store.upsert("doc-redis", "Redis is an in-memory key-value cache.", title="cache")
+    finally:
+        store.close()
+
+
+# ===========================================================================
+# 8. Tier-1 read tools — happy-path round-trip through the REGISTERED tool
+#    (GREEN now; Story 18.3). The tool closes over the live store the factory
+#    constructs at ``store_path``; we seed that DB first, then call the tool fn.
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_memory_read_tool_round_trips_seeded_doc(tmp_path: Path) -> None:
+    """memory.read returns ``{ok, found, document}`` for a seeded key — Story 18.3 (GREEN)."""
+    store_path = tmp_path / "mem.db"
+    _seed_store(store_path)
+    mcp = _build(store_path)
+    fn = await _tool_fn(mcp, "memory.read")
+
+    hit = await fn(caller_trace_id=_VALID_TRACE_ID, key="doc-postgres")
+    assert hit["ok"] is True
+    assert hit["found"] is True
+    document = hit["document"]
+    assert isinstance(document, dict)
+    assert document["key"] == "doc-postgres"
+    assert document["title"] == "db"
+
+    miss = await fn(caller_trace_id=_VALID_TRACE_ID, key="absent")
+    assert miss == {"ok": True, "found": False, "document": None}
+
+
+@pytest.mark.asyncio
+async def test_memory_search_tool_returns_ranked_results(tmp_path: Path) -> None:
+    """memory.search returns ``{ok, results}`` ranked best-first — Story 18.3 (GREEN)."""
+    store_path = tmp_path / "mem.db"
+    _seed_store(store_path)
+    mcp = _build(store_path)
+    fn = await _tool_fn(mcp, "memory.search")
+
+    found = await fn(caller_trace_id=_VALID_TRACE_ID, query="vacuum")
+    assert found["ok"] is True
+    results = found["results"]
+    assert isinstance(results, list)
+    keys = [r["key"] for r in results]
+    assert keys == ["doc-postgres"], f"expected only the matching doc, got {keys!r}"
+
+    # An empty query short-circuits to an empty result set (no store call).
+    empty = await fn(caller_trace_id=_VALID_TRACE_ID, query="")
+    assert empty == {"ok": True, "results": []}
 
 
 # ===========================================================================
@@ -323,9 +423,7 @@ async def test_write_emits_memory_event_with_trace_id(
     caller_trace_id. Today the tool is absent → _tool_by_name fails → clean xfail.
     """
     mcp = _build(tmp_path / "mem.db")
-    registered = await _tool_by_name(mcp, tool)  # absent today → clean xfail
-
-    fn = registered.fn  # type: ignore[attr-defined]
+    fn = await _tool_fn(mcp, tool)  # absent today → clean xfail
     result = await fn(caller_trace_id=_VALID_TRACE_ID, key="k", body="b")
 
     emitted = result.get("event") if isinstance(result, dict) else None
