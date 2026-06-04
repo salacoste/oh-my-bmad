@@ -106,6 +106,18 @@ _ENV_ALLOWLIST: frozenset[str] = frozenset(
         "MEMORY_MCP_STORE_PATH",
         "MEMORY_MCP_ACTOR_KIND",
         "MEMORY_MCP_ACTOR_ID",
+        # artifact-mcp REQUIRED (mcp-servers/artifact/.../__main__.py exits 2 without
+        # the first three) — Story 19.5. All NON-secret: ARTIFACT_MCP_STORE_PATH is
+        # the artifact-mcp's OWN content-store root (NEVER the registry DB — P3-I2)
+        # + the actor identity; the two RETENTION vars are optional operator policy
+        # (size cap / TTL). No external credential, so NO scoped token. Forwarded by
+        # BOTH spawner allowlists (byte-identical mirror); only worker-wrapper spawns
+        # artifact-mcp (conditional on a non-blank WORKER_ARTIFACT_COMMAND).
+        "ARTIFACT_MCP_STORE_PATH",
+        "ARTIFACT_MCP_ACTOR_KIND",
+        "ARTIFACT_MCP_ACTOR_ID",
+        "ARTIFACT_MCP_RETENTION_MAX_BYTES",
+        "ARTIFACT_MCP_RETENTION_TTL_SECONDS",
         # Shared event-log + SQLite paths (spine convention)
         "REGISTRY_EVENTS_DIR",
         "REGISTRY_DB_PATH",

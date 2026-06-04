@@ -394,6 +394,11 @@ def test_validate_caller_trace_id_byte_identical_across_servers() -> None:
     logic drift — e.g. one server using a different error message or a different
     validation function — that wouldn't be caught by per-server unit tests alone.
     """
+    # Epic 19 / Story 19.5 — artifact-mcp's helper is a byte-identical copy too
+    # (the full Phase-3 stdio fleet now carries the identical helper).
+    from artifact_mcp.handlers.tools import (
+        validate_caller_trace_id as _v_artifact,
+    )
     from clawhip_bridge_mcp.server import validate_caller_trace_id as _v_bridge
 
     # Epic 15 / Story 15.5 — git-mcp's helper lives at ``git_mcp.handlers.tools``
@@ -432,6 +437,7 @@ def test_validate_caller_trace_id_byte_identical_across_servers() -> None:
     github_body = _extract_fn_body_ast(_v_github)
     verification_body = _extract_fn_body_ast(_v_verification)
     memory_body = _extract_fn_body_ast(_v_memory)
+    artifact_body = _extract_fn_body_ast(_v_artifact)
 
     assert bridge_body == sess_body, (
         "validate_caller_trace_id body differs between clawhip-bridge and session-registry"
@@ -458,6 +464,11 @@ def test_validate_caller_trace_id_byte_identical_across_servers() -> None:
         "(Story 17.5)"
         f"\n--- bridge ---\n{bridge_body}"
         f"\n--- verification ---\n{verification_body}"
+    )
+    assert bridge_body == artifact_body, (
+        "validate_caller_trace_id body differs between clawhip-bridge and artifact-mcp (Story 19.5)"
+        f"\n--- bridge ---\n{bridge_body}"
+        f"\n--- artifact ---\n{artifact_body}"
     )
     assert bridge_body == memory_body, (
         "validate_caller_trace_id body differs between clawhip-bridge and memory-mcp (Story 18.5)"
@@ -497,12 +508,25 @@ def test_validate_caller_trace_id_runtime_messages_identical() -> None:
 
     bad = "not-a-uuid"
     messages: list[str] = []
-    for fn in (_v_bridge, _v_sess, _v_task, _v_git, _v_github, _v_verification, _v_memory):
+    from artifact_mcp.handlers.tools import (  # Story 19.5
+        validate_caller_trace_id as _v_artifact,
+    )
+
+    for fn in (
+        _v_bridge,
+        _v_sess,
+        _v_task,
+        _v_git,
+        _v_github,
+        _v_verification,
+        _v_memory,
+        _v_artifact,
+    ):
         try:
             fn(bad)
         except ValueError as exc:
             messages.append(str(exc))
-    assert len(messages) == 7, f"expected 7 ValueError messages, got {messages!r}"
+    assert len(messages) == 8, f"expected 8 ValueError messages, got {messages!r}"
     assert len(set(messages)) == 1, f"helper messages drift: {messages!r}"
 
 
