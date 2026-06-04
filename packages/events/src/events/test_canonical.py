@@ -333,3 +333,31 @@ class TestCanonicalPayloadJson:
         data = {"x": float("nan")}
         with pytest.raises(CanonicalSerializationError):
             to_canonical_payload_json(data)
+
+
+# ---------------------------------------------------------------------------
+# Deferred-work D3 (Story 3-5-4 review): BaseModel payload round-trip
+# ---------------------------------------------------------------------------
+
+
+class TestBaseModelPayload:
+    def test_basemodel_payload_round_trips_via_canonical(self) -> None:
+        """A ``BaseModel`` payload (not dict) serialises identically to its dict form.
+
+        The 15 existing tests construct envelopes with ``payload={"value": "hello"}``
+        (dict).  This test uses ``payload=_SimplePayload(value="hello")`` to verify
+        the BaseModel branch receives the same canonical bytes.
+        """
+        env_dict = _make_envelope(payload={"value": "hello"})
+        env_model = EventEnvelope(
+            event_id=_VALID_EVENT_ID,
+            schema_version="1.0.0",
+            type="task.created",
+            emitted_at=_VALID_EMITTED_AT,
+            emitted_at_monotonic_ns=999,
+            actor=Actor(kind="system", id="sys"),
+            payload=_SimplePayload(value="hello"),
+            trace_id=_VALID_TRACE_ID,
+            request_id=_VALID_REQUEST_ID,
+        )
+        assert to_canonical_json(env_model) == to_canonical_json(env_dict)
