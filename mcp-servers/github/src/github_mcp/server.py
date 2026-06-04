@@ -71,8 +71,8 @@ def build_server(
         actor_id: Non-empty string identifying the calling actor.
         scoped_token: The Story-16.5 narrowly-scoped GitHub credential the REST
             adapter (16.3 / 16.4) authenticates with. NEVER the broad
-            ``GITHUB_TOKEN``. Threaded into ``register_tools`` so the github tools
-            close over it; unused by the empty scaffold registration.
+            ``GITHUB_TOKEN``. Closed over by the per-call ``GitHubReadClient``
+            factory as its bearer — never returned in a tool result.
         clock: Injected clock for deterministic testing (reserved for the github
             tools' event emission and the Tier-3 approval lookup in 16.3 / 16.4).
         clawhip_bridge_command: Command (e.g. ``python``) to spawn the
@@ -89,9 +89,14 @@ def build_server(
     Returns:
         A ``FastMCP`` instance ready to ``mcp.run()`` on stdio.
     """
-    # ``scoped_token`` is reserved for the 16.3 REST adapter; bind it so a future
-    # empty token surfaces at build time rather than on the first tool call.
-    _scoped_token = scoped_token
+    # ``scoped_token`` authenticates the 16.3 read adapter. A fresh
+    # ``GitHubReadClient`` is opened per tool call (an ``async with`` session) —
+    # the simplest-correct lifecycle for the read scaffold (no long-lived session
+    # state to share). The broad ``GITHUB_TOKEN`` is NEVER read.
+    from github_mcp.adapters.github_rest import GitHubReadClient
+
+    def _read_client_factory() -> GitHubReadClient:
+        return GitHubReadClient(scoped_token=scoped_token)
 
     emitter_holder: EmitterHolder | None
     lifespan_fn = None
@@ -164,6 +169,7 @@ def build_server(
 
     register_tools(
         mcp,
+        _read_client_factory,
         actor_kind=actor_kind,
         actor_id=actor_id,
         emitter_holder=emitter_holder,

@@ -36,6 +36,7 @@ from events import current_day_path, read_log_lines  # noqa: IMP001 — packages
 from events.envelope import ActorKind, is_valid_trace_id  # noqa: IMP001 — packages/
 
 from github_mcp.adapters.clawhip_client import EmitterHolder
+from github_mcp.adapters.github_rest import GitHubReadClient, ReadResult
 
 if TYPE_CHECKING:
     from pathlib import Path as _Path
@@ -50,7 +51,18 @@ log = logging.getLogger(__name__)
 # Tier.ONE in 16.3; write tools == Tier.THREE in 16.4). Re-exported from
 # ``server.py`` so the canonical TIER_MAP lives in one place (mirrors the git-mcp
 # handlers/tools.py shape). Tools register against it later.
-TIER_MAP: dict[str, Tier] = {}
+#
+# Story 16.3: the six Tier-1 read tools. Write tools (all Tier-3 — every GitHub
+# state change is a remote, externally-visible mutation; GitHub has NO Tier-2
+# local-only analogue) land in Story 16.4.
+TIER_MAP: dict[str, Tier] = {
+    "github.issues.list": Tier.ONE,
+    "github.issues.get": Tier.ONE,
+    "github.prs.list": Tier.ONE,
+    "github.prs.get": Tier.ONE,
+    "github.reviews.list": Tier.ONE,
+    "github.reviews.get": Tier.ONE,
+}
 
 
 def validate_caller_trace_id(caller_trace_id: str) -> None:
@@ -148,8 +160,23 @@ def _make_actor_id_extractor(actor_id: str) -> Callable[..., str]:
     return _get_actor_id
 
 
+def _owner_repo_error(owner: str, repo: str) -> str | None:
+    """Reject an owner/repo segment that is empty or contains a path separator.
+
+    A ``/`` in an owner/repo would split the REST path into an unintended route
+    (option/path injection on the GitHub API). Mirrors the worker adapter's
+    ``_validate_owner_repo``; returns a human-readable reason or None.
+    """
+    if not owner or "/" in owner:
+        return f"Invalid owner: {owner!r}"
+    if not repo or "/" in repo:
+        return f"Invalid repo: {repo!r}"
+    return None
+
+
 def register_tools(
     mcp: FastMCP,
+    read_client_factory: Callable[[], GitHubReadClient],
     *,
     actor_kind: ActorKind,
     actor_id: str,
@@ -158,16 +185,21 @@ def register_tools(
 ) -> None:
     """Register the github read (Tier-1) + write (Tier-3) tools on *mcp*.
 
-    Story 16.2 SCAFFOLD: registers NO tools yet (``TIER_MAP`` is empty). Story
-    16.3 ships the six Tier-1 read tools; Story 16.4 adds the six Tier-3 write
-    tools (approval-gated) plus their ``github.*`` event emission.
+    Story 16.3 ships the six Tier-1 read tools (``github.issues.list`` /
+    ``github.issues.get`` / ``github.prs.list`` / ``github.prs.get`` /
+    ``github.reviews.list`` / ``github.reviews.get``); Story 16.4 adds the six
+    Tier-3 write tools (approval-gated) plus their ``github.*`` event emission.
+
+    *read_client_factory* returns a fresh ``GitHubReadClient`` (used as a per-call
+    ``async with`` session) authenticated with the SCOPED token (closed over by the
+    factory in ``build_server``); the broad ``GITHUB_TOKEN`` is NEVER used. The
+    scoped token is the client's bearer only — it is never returned in a tool result
+    (that would disclose the credential through the tool boundary).
 
     Mirrors git-mcp's ``register_tools``: when *emitter_holder* is wired, each
-    tier-gated handler will be wrapped with ``emit_capability_denied_on_deny`` so
-    a ``CapabilityDenied`` from ``check_tier`` / ``check_tier_with_approval`` emits
-    a ``capability.denied`` audit envelope via clawhip-bridge before re-raising.
-    The closures below (``_maybe_wrap`` / ``_caller``) are wired now so 16.3 / 16.4
-    add tools by registration only — no plumbing churn.
+    tier-gated handler is wrapped with ``emit_capability_denied_on_deny`` so a
+    ``CapabilityDenied`` from ``check_tier`` / ``check_tier_with_approval`` emits a
+    ``capability.denied`` audit envelope via clawhip-bridge before re-raising.
 
     *approval_lookup* is the async ``(task_id, action) -> bool`` callable threaded
     into ``check_tier_with_approval`` for the Tier-3 tools; when None the Tier-3
@@ -194,9 +226,209 @@ def register_tools(
     def _caller(task_id: str | None = None) -> CallerContext:
         return CallerContext(actor_kind=actor_kind, actor_id=actor_id, task_id=task_id)
 
-    # Story 16.3 / 16.4 register the github tools here, each gating on its tier via
-    # ``check_tier("github.<op>", _caller(), TIER_MAP["github.<op>"])`` (read) or
-    # ``check_tier_with_approval(..., approval_lookup=approval_lookup)`` (write).
-    # Reference the scaffolded helpers + gates so linters see them as used until
-    # the tools land (FastMCP holds the real references via decorator side-effects).
-    _ = (_maybe_wrap, _caller, check_tier, check_tier_with_approval)
+    def _result(read: ReadResult) -> dict[str, object]:
+        """Map a ``ReadResult`` into the structured tool payload."""
+        if read.ok:
+            return {"ok": True, "status": read.status, "data": read.data}
+        return {"ok": False, "status": read.status, "error": read.error}
+
+    # ------------------------------------------------------------------
+    # Tool: github.issues.list
+    # ------------------------------------------------------------------
+
+    @mcp.tool(name="github.issues.list")
+    @_maybe_wrap("github.issues.list")
+    async def github_issues_list(
+        *,
+        caller_trace_id: str,
+        owner: str | None = None,
+        repo: str | None = None,
+        state: str = "open",
+    ) -> dict[str, object]:
+        """List issues in a repo (Tier-1 bounded read).
+
+        Args:
+            caller_trace_id: FR58 correlation ID (UUIDv7 OR ``tg:<update_id>``).
+            owner: Repository owner. Omitted → auth-probe result (no REST call).
+            repo: Repository name. Omitted → auth-probe result (no REST call).
+            state: Issue state filter (``open``/``closed``/``all``).
+        """
+        validate_caller_trace_id(caller_trace_id)
+        check_tier("github.issues.list", _caller(), TIER_MAP["github.issues.list"])
+        if owner is None or repo is None:
+            return {"ok": False, "status": 0, "error": "owner and repo are required"}
+        err = _owner_repo_error(owner, repo)
+        if err is not None:
+            return {"ok": False, "status": 0, "error": err}
+        async with read_client_factory() as gh:
+            return _result(await gh.list_issues(owner, repo, state=state))
+
+    # ------------------------------------------------------------------
+    # Tool: github.issues.get
+    # ------------------------------------------------------------------
+
+    @mcp.tool(name="github.issues.get")
+    @_maybe_wrap("github.issues.get")
+    async def github_issues_get(
+        *,
+        caller_trace_id: str,
+        owner: str | None = None,
+        repo: str | None = None,
+        number: int | None = None,
+    ) -> dict[str, object]:
+        """Get a single issue (Tier-1 bounded read).
+
+        Args:
+            caller_trace_id: FR58 correlation ID (UUIDv7 OR ``tg:<update_id>``).
+            owner: Repository owner. Omitted → auth-probe result (no REST call).
+            repo: Repository name. Omitted → auth-probe result (no REST call).
+            number: Issue number.
+        """
+        validate_caller_trace_id(caller_trace_id)
+        check_tier("github.issues.get", _caller(), TIER_MAP["github.issues.get"])
+        if owner is None or repo is None or number is None:
+            return {"ok": False, "status": 0, "error": "owner and repo are required"}
+        err = _owner_repo_error(owner, repo)
+        if err is not None:
+            return {"ok": False, "status": 0, "error": err}
+        async with read_client_factory() as gh:
+            return _result(await gh.get_issue(owner, repo, number))
+
+    # ------------------------------------------------------------------
+    # Tool: github.prs.list
+    # ------------------------------------------------------------------
+
+    @mcp.tool(name="github.prs.list")
+    @_maybe_wrap("github.prs.list")
+    async def github_prs_list(
+        *,
+        caller_trace_id: str,
+        owner: str | None = None,
+        repo: str | None = None,
+        state: str = "open",
+    ) -> dict[str, object]:
+        """List pull requests in a repo (Tier-1 bounded read).
+
+        Args:
+            caller_trace_id: FR58 correlation ID (UUIDv7 OR ``tg:<update_id>``).
+            owner: Repository owner. Omitted → auth-probe result (no REST call).
+            repo: Repository name. Omitted → auth-probe result (no REST call).
+            state: PR state filter (``open``/``closed``/``all``).
+        """
+        validate_caller_trace_id(caller_trace_id)
+        check_tier("github.prs.list", _caller(), TIER_MAP["github.prs.list"])
+        if owner is None or repo is None:
+            return {"ok": False, "status": 0, "error": "owner and repo are required"}
+        err = _owner_repo_error(owner, repo)
+        if err is not None:
+            return {"ok": False, "status": 0, "error": err}
+        async with read_client_factory() as gh:
+            return _result(await gh.list_pull_requests(owner, repo, state=state))
+
+    # ------------------------------------------------------------------
+    # Tool: github.prs.get
+    # ------------------------------------------------------------------
+
+    @mcp.tool(name="github.prs.get")
+    @_maybe_wrap("github.prs.get")
+    async def github_prs_get(
+        *,
+        caller_trace_id: str,
+        owner: str | None = None,
+        repo: str | None = None,
+        number: int | None = None,
+    ) -> dict[str, object]:
+        """Get a single pull request (Tier-1 bounded read).
+
+        Args:
+            caller_trace_id: FR58 correlation ID (UUIDv7 OR ``tg:<update_id>``).
+            owner: Repository owner. Omitted → auth-probe result (no REST call).
+            repo: Repository name. Omitted → auth-probe result (no REST call).
+            number: PR number.
+        """
+        validate_caller_trace_id(caller_trace_id)
+        check_tier("github.prs.get", _caller(), TIER_MAP["github.prs.get"])
+        if owner is None or repo is None or number is None:
+            return {"ok": False, "status": 0, "error": "owner and repo are required"}
+        err = _owner_repo_error(owner, repo)
+        if err is not None:
+            return {"ok": False, "status": 0, "error": err}
+        async with read_client_factory() as gh:
+            return _result(await gh.get_pull_request(owner, repo, number))
+
+    # ------------------------------------------------------------------
+    # Tool: github.reviews.list
+    # ------------------------------------------------------------------
+
+    @mcp.tool(name="github.reviews.list")
+    @_maybe_wrap("github.reviews.list")
+    async def github_reviews_list(
+        *,
+        caller_trace_id: str,
+        owner: str | None = None,
+        repo: str | None = None,
+        pull_number: int | None = None,
+    ) -> dict[str, object]:
+        """List reviews on a pull request (Tier-1 bounded read).
+
+        Args:
+            caller_trace_id: FR58 correlation ID (UUIDv7 OR ``tg:<update_id>``).
+            owner: Repository owner. Omitted → auth-probe result (no REST call).
+            repo: Repository name. Omitted → auth-probe result (no REST call).
+            pull_number: PR number whose reviews are listed.
+        """
+        validate_caller_trace_id(caller_trace_id)
+        check_tier("github.reviews.list", _caller(), TIER_MAP["github.reviews.list"])
+        if owner is None or repo is None or pull_number is None:
+            return {"ok": False, "status": 0, "error": "owner and repo are required"}
+        err = _owner_repo_error(owner, repo)
+        if err is not None:
+            return {"ok": False, "status": 0, "error": err}
+        async with read_client_factory() as gh:
+            return _result(await gh.list_reviews(owner, repo, pull_number))
+
+    # ------------------------------------------------------------------
+    # Tool: github.reviews.get
+    # ------------------------------------------------------------------
+
+    @mcp.tool(name="github.reviews.get")
+    @_maybe_wrap("github.reviews.get")
+    async def github_reviews_get(
+        *,
+        caller_trace_id: str,
+        owner: str | None = None,
+        repo: str | None = None,
+        pull_number: int | None = None,
+        review_id: int | None = None,
+    ) -> dict[str, object]:
+        """Get a single review on a pull request (Tier-1 bounded read).
+
+        Args:
+            caller_trace_id: FR58 correlation ID (UUIDv7 OR ``tg:<update_id>``).
+            owner: Repository owner. Omitted → auth-probe result (no REST call).
+            repo: Repository name. Omitted → auth-probe result (no REST call).
+            pull_number: PR number the review belongs to.
+            review_id: Review id to fetch.
+        """
+        validate_caller_trace_id(caller_trace_id)
+        check_tier("github.reviews.get", _caller(), TIER_MAP["github.reviews.get"])
+        if owner is None or repo is None or pull_number is None or review_id is None:
+            return {"ok": False, "status": 0, "error": "owner and repo are required"}
+        err = _owner_repo_error(owner, repo)
+        if err is not None:
+            return {"ok": False, "status": 0, "error": err}
+        async with read_client_factory() as gh:
+            return _result(await gh.get_review(owner, repo, pull_number, review_id))
+
+    # Reference the handlers so linters see them as used (FastMCP holds the real
+    # references via the decorator registration side-effect). ``check_tier_with_approval``
+    # is referenced too — it is wired for the Story 16.4 Tier-3 write tools.
+    _ = (
+        github_issues_list,
+        github_issues_get,
+        github_prs_list,
+        github_prs_get,
+        github_reviews_list,
+        github_reviews_get,
+        check_tier_with_approval,
+    )
