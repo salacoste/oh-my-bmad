@@ -1,0 +1,74 @@
+# Digest-pinned DEPLOY overlay (Epic 14 / Story 14.1 / FR77).
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# The base ``docker-compose.yml`` references every image by TAG
+# (``:${OMB_VERSION:-dev}``) because its ``image:`` field is DUAL-PURPOSE: it is
+# both the local-build tag (``docker compose build`` in ``just dev``/``build``/
+# ``deploy-*``) AND the GHCR pull ref. Rewriting the base ``image:`` to a digest
+# would break local build. So FR77's "deploy by content-digest, not mutable tag"
+# is delivered as this DEPLOY-ONLY overlay, merged on top of the base file ONLY
+# on the supported production path:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.digest.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.digest.yml up -d
+#
+# (see ``just deploy-vps-digest`` / ``just deploy-macos-digest``). This overlay
+# is never used by ``just dev`` or the ``build`` recipes — those keep building
+# the local tag from the base file unchanged.
+#
+# MECHANICS
+# ---------
+# For each of the 6 CORE published services this overlay:
+#   * overrides ``image:`` to ``<repo>@${OMB_IMAGE_DIGEST_<svc>:?<msg>}`` — the
+#     ``:?`` (error-if-unset) form makes an unpopulated digest FAIL LOUD at
+#     ``docker compose`` parse time instead of silently degrading to a mutable
+#     tag. There is deliberately NO ``:-`` default fallback on the digest
+#     segment: a missing digest must abort the deploy, never fall back to a tag.
+#   * resets ``build:`` via ``!reset null`` (compose override-reset, requires
+#     compose >= v2.24.4 — verified against v2.34 here) so the digest path can
+#     never accidentally build a local image and re-tag over the pinned ref.
+#
+# The digest var names use the ``svc//-/_`` underscore convention shared with
+# ``just verify-images`` (justfile:488) and ``.env`` (``OMB_IMAGE_DIGEST_*``):
+# registry_api, registry_state, telegram_gateway, orchestrator_adapter,
+# worker_wrapper, clawhip_daemon.
+#
+# DELIBERATELY EXCLUDED (Option A — stay on tag in the base compose)
+# ------------------------------------------------------------------
+#   * metrics-subscriber, migrator — NOT pinned here because release.yml does
+#     not publish/sign them and ``just verify-images`` does not cover them, so
+#     there is no release-listed digest to pin to. They remain on the base
+#     ``:${OMB_VERSION}`` tag intentionally. Pinning them is a tracked
+#     follow-up: it would require release.yml to publish + digest them first.
+#   * litestream — third-party upstream image (config-not-code, ADR-0007); not
+#     an oh-my-bmad-published artifact, so no oh-my-bmad digest applies.
+#   * base, console-cli — not compose services (base is a build layer;
+#     console-cli is a ``docker run`` one-shot), so nothing to override here.
+services:
+  registry-api:
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-registry-api@${OMB_IMAGE_DIGEST_registry_api:?set OMB_IMAGE_DIGEST_registry_api in .env — see docs/deployment-guide.md (digest deploy)}
+    build: !reset null
+
+  registry-state:
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-registry-state@${OMB_IMAGE_DIGEST_registry_state:?set OMB_IMAGE_DIGEST_registry_state in .env — see docs/deployment-guide.md (digest deploy)}
+    build: !reset null
+
+  telegram-gateway:
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-telegram-gateway@${OMB_IMAGE_DIGEST_telegram_gateway:?set OMB_IMAGE_DIGEST_telegram_gateway in .env — see docs/deployment-guide.md (digest deploy)}
+    build: !reset null
+
+  orchestrator-adapter:
+    # PRESERVE the ORCHESTRATOR_IMAGE swap indirection (Story 2.15 / FR35 /
+    # NFR-M5 / S-3 separability): an operator who sets ORCHESTRATOR_IMAGE still
+    # swaps the whole ref; only the DEFAULT (unset) path is digest-pinned.
+    image: ${ORCHESTRATOR_IMAGE:-${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-orchestrator-adapter@${OMB_IMAGE_DIGEST_orchestrator_adapter:?set OMB_IMAGE_DIGEST_orchestrator_adapter in .env — see docs/deployment-guide.md (digest deploy)}}
+    build: !reset null
+
+  worker-wrapper:
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-worker-wrapper@${OMB_IMAGE_DIGEST_worker_wrapper:?set OMB_IMAGE_DIGEST_worker_wrapper in .env — see docs/deployment-guide.md (digest deploy)}
+    build: !reset null
+
+  clawhip-daemon:
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-clawhip-daemon@${OMB_IMAGE_DIGEST_clawhip_daemon:?set OMB_IMAGE_DIGEST_clawhip_daemon in .env — see docs/deployment-guide.md (digest deploy)}
+    build: !reset null

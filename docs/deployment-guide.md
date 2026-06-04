@@ -162,14 +162,42 @@ See [`docs/adr/0008-cosign-slsa-sbom.md`](./adr/0008-cosign-slsa-sbom.md) §"Ope
 
 ## Upgrading
 
-```sh
-# Edit .env
-OMB_IMAGE_REGISTRY=ghcr.io/<owner>
-OMB_VERSION=0.X.Y
+**Production is digest-pinned (Epic 14 / Story 14.1 / FR77).** Deploy by
+immutable content-digest, not the mutable `OMB_VERSION` tag. The tag-based
+`docker compose pull` flow is **DEPRECATED** for production (kept only for
+local/dev builds).
 
-docker compose pull
-docker compose up -d
+```sh
+# 1. Look up the per-image digests for the target release. Either copy them
+#    from the GitHub release notes, or query GHCR directly per service:
+docker buildx imagetools inspect ghcr.io/<owner>/oh-my-bmad-registry-api:0.X.Y
+#    (repeat for registry-state, telegram-gateway, orchestrator-adapter,
+#     worker-wrapper, clawhip-daemon — the 6 core published images).
+
+# 2. Populate .env with the digests (format sha256:<64-hex>):
+OMB_IMAGE_REGISTRY=ghcr.io/<owner>
+OMB_IMAGE_DIGEST_registry_api=sha256:...
+OMB_IMAGE_DIGEST_registry_state=sha256:...
+OMB_IMAGE_DIGEST_telegram_gateway=sha256:...
+OMB_IMAGE_DIGEST_orchestrator_adapter=sha256:...
+OMB_IMAGE_DIGEST_worker_wrapper=sha256:...
+OMB_IMAGE_DIGEST_clawhip_daemon=sha256:...
+
+# 3. Deploy by digest (verify-images runs first; pull fails loud on any unset
+#    digest, never falling back to a tag):
+just deploy-vps-digest      # Linux VPS
+just deploy-macos-digest    # macOS (adds the bind-mount overlay)
 ```
+
+Under the hood these recipes run `just verify-images` (cosign sig + SLSA + SBOM)
+then `docker compose -f docker-compose.yml -f docker-compose.digest.yml pull &&
+up -d`. The `docker-compose.digest.yml` overlay overrides the 6 core services'
+`image:` to `<repo>@${OMB_IMAGE_DIGEST_<svc>:?}` (fail-loud) and resets `build:`.
+
+> `metrics-subscriber` and `migrator` are NOT digest-pinned (Option A) — they
+> have no release-published/signed digest and stay on the `OMB_VERSION` tag in
+> the base compose. Pinning them is a tracked follow-up (needs release.yml to
+> publish them first). `litestream` is a third-party upstream image.
 
 Volumes survive; persistent data (DB, event log, artifacts) is preserved. For schema migrations within a major, see [schema-evolution.md](./schema-evolution.md). For breaking changes, the one-shot migrator container:
 
@@ -181,9 +209,13 @@ docker compose run --rm migrator <from-version>-to-<to-version>
 
 **Decision criteria:** initiate rollback if the post-deploy smoke fails OR error rate in the first 10 min exceeds baseline by >2×.
 
-**Path:**
-1. Revert `OMB_VERSION` in `.env` to the prior tag.
-2. `docker compose pull && docker compose up -d`.
+**Path (digest-pinned, FR77):**
+1. Swap the `OMB_IMAGE_DIGEST_<svc>` vars in `.env` back to the prior release's
+   digests (look them up via the prior release notes or
+   `docker buildx imagetools inspect ghcr.io/<owner>/oh-my-bmad-<svc>:<prev>`).
+2. `just deploy-vps-digest` (or `deploy-macos-digest`) — re-runs verify-images
+   then `docker compose -f docker-compose.yml -f docker-compose.digest.yml pull
+   && up -d` against the reverted digests.
 3. Volumes survive — schema rollback follows [schema-evolution.md](./schema-evolution.md).
 
 The two most recent release tags are pre-pulled on runner startup so rollback isn't cold-cache-bound.
