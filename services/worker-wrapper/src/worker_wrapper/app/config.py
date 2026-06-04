@@ -101,6 +101,19 @@ class WorkerSettings(BaseSettings):
     verification_command: str = ""
     verification_args: list[str] = ["-m", "verification_mcp"]
 
+    # Epic 18 / Stories 18.1-18.2 — memory MCP server spawn command (latent scaffold).
+    # The spawn + the ``_ENV_ALLOWLIST`` (MEMORY_MCP_STORE_PATH / ACTOR_KIND /
+    # ACTOR_ID) both activate in Story 18.5 — NEITHER is wired yet. The default is
+    # "" (OFF) so a fresh boot without the MEMORY_MCP_* env does NOT brick the
+    # worker: memory-mcp's __main__.py exits 2 without those required vars, so
+    # memory stays absent unless a deployment opts in by setting
+    # WORKER_MEMORY_COMMAND (e.g. "python") AND forwarding the MEMORY_MCP_* env.
+    # Mirrors the git/github/verification blank-command toggle (the P3-I3
+    # separability seam): memory-mcp is a stdio member spawned by worker-wrapper,
+    # NOT a container.
+    memory_command: str = ""
+    memory_args: list[str] = ["-m", "memory_mcp"]
+
     # TODO(Story 5.8/5.9): consumed when task/session registry MCP servers
     # need a shared SQLite path.
     registry_db_path: str = ""

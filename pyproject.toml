@@ -15,6 +15,7 @@ dependencies = [
     "git-mcp",
     "github-mcp",
     "idempotency",
+    "memory-mcp",
     "metrics-subscriber",
     "orchestrator-adapter",
     "registry-api",
@@ -46,6 +47,7 @@ events = { workspace = true }
 git-mcp = { workspace = true }
 github-mcp = { workspace = true }
 idempotency = { workspace = true }
+memory-mcp = { workspace = true }
 metrics-subscriber = { workspace = true }
 orchestrator-adapter = { workspace = true }
 registry-api = { workspace = true }

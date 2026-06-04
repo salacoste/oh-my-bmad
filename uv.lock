@@ -16,6 +16,7 @@ members = [
     "git-mcp",
     "github-mcp",
     "idempotency",
+    "memory-mcp",
     "metrics-subscriber",
     "oh-my-bmad",
     "orchestrator-adapter",
@@ -1804,6 +1805,23 @@ wheels = [
 ]
 
 [[package]]
+name = "memory-mcp"
+version = "0.1.0"
+source = { editable = "mcp-servers/memory" }
+dependencies = [
+    { name = "capabilities" },
+    { name = "events" },
+    { name = "mcp" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "capabilities", editable = "packages/capabilities" },
+    { name = "events", editable = "packages/events" },
+    { name = "mcp", specifier = ">=1.0" },
+]
+
+[[package]]
 name = "metrics-subscriber"
 version = "0.1.0"
 source = { editable = "services/metrics-subscriber" }
@@ -2053,6 +2071,7 @@ dependencies = [
     { name = "git-mcp" },
     { name = "github-mcp" },
     { name = "idempotency" },
+    { name = "memory-mcp" },
     { name = "metrics-subscriber" },
     { name = "orchestrator-adapter" },
     { name = "registry-api" },
@@ -2089,6 +2108,7 @@ requires-dist = [
     { name = "git-mcp", editable = "mcp-servers/git" },
     { name = "github-mcp", editable = "mcp-servers/github" },
     { name = "idempotency", editable = "packages/idempotency" },
+    { name = "memory-mcp", editable = "mcp-servers/memory" },
     { name = "metrics-subscriber", editable = "services/metrics-subscriber" },
     { name = "orchestrator-adapter", editable = "services/orchestrator-adapter" },
     { name = "registry-api", editable = "services/registry-api" },
