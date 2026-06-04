@@ -64,7 +64,16 @@ from events import (
     schema_registry,
     to_canonical_json,
 )
+from events.schema_registry import REGISTRY as _REGISTRY
 from pydantic import BaseModel
+
+# D2 guard: assert the side-effect import populated the registry.
+# If registrations ever move behind a function call this will fail loudly
+# instead of silently producing empty-schema errors in EventEnvelope.create().
+assert len(_REGISTRY) > 0, (
+    "event_types import did not populate the registry — "
+    " registrations may have moved behind a function call"
+)
 
 if TYPE_CHECKING:
     # ``tests/crash-injection`` has a hyphen in its directory name so it is
