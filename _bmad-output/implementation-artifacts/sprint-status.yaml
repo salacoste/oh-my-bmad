@@ -355,10 +355,10 @@ development_status:
   # phase: 3 · lands first (Epic-8-before-features pattern) · ADR-0009
   # FR77 (digest-deprecation) · NFR-O11 (mutation gate) · NFR-O7 (trace_id AST gate)
   # =========================================================================
-  epic-14: in-progress  # phase: 3 · entry epic — pure CI/verification before any server surface
+  epic-14: done  # phase: 3 · entry epic — pure CI/verification before any server surface · all 5 stories done (14-1..14-5); mutation gate enforcing at 82 (baseline 145/176 = 82.4%)
   14-1-digest-deprecation-cutover: done  # phase: 3 · FR77 · next story to implement — digest-pinned references become the sole deploy path
   14-2-mutation-testing-harness-scaffold-baseline: done  # phase: 3 · NFR-O11 (harness) · cosmic-ray (NOT mutmut — mutmut copies sources to mutants/ but this uv-workspace's editable installs resolve imports back to pristine source → false 0%; OPERATOR-APPROVED cosmic-ray pivot mutates IN PLACE under VCS so editable installs pick up the mutation). cosmic-ray 8.4.6. Scope = 3 kernels (capabilities/tiers.py, events/schema_registry.py, events/canonical.py) via cosmic-ray.toml; cosmic-ray.smoke.toml = tiers.py-only proof. scripts/mutation_score.py adapted to parse `cosmic-ray dump` (was mutmut cicd-stats json); prints `mutation-score: killed/checked = pct%`, `--threshold N` BUILT-not-gated (→14.3). 17 unit tests pass. justfile: mutation-test/mutation-score/mutation-smoke. nightly.yml mutation-baseline job NON-GATING (`just mutation-test || true` → 30-day artifact + step summary), timeout 20m, +packages/capabilities/** on push.paths. SMOKE PROOF: tiers.py 68/90 = 75.6% killed (real non-zero — confirms in-place mutation reaches editable install where mutmut produced 0%); working tree CLEAN post-run (cosmic-ray VCS-restores each file). Session db *.sqlite gitignored.
-  14-3-mutation-gate-threshold-ci-enforcement: backlog  # phase: 3 · NFR-O11 (gate) · threshold decision + nightly enforcement · `--threshold` flag already BUILT in scripts/mutation_score.py (14.2); 14.3 wires it into a gate once nightly baseline establishes a defensible floor
+  14-3-mutation-gate-threshold-ci-enforcement: done  # phase: 3 · NFR-O11 (gate) · FINAL Epic-14 story — flips the mutation gate from non-gating (14.2) to GATING. Threshold = 82 = floor() of the first-nightly baseline 145/176 = 82.4% (set at-or-below current; ratchet UP as mutants are killed, never lower silently). justfile: new `mutation-gate THRESHOLD="82"` recipe (same cosmic-ray init/exec/dump lifecycle as mutation-test, then mutation_score.py --threshold 82 → exits non-zero below floor). nightly.yml: mutation-baseline job renamed mutation-gate, `just mutation-test || true` → `just mutation-gate` (NO `|| true`); score still tee'd to file + published to step summary + 30-day artifact via `if: always()` steps (diagnosable on failure), timeout 20m unchanged. docs/testing-guide.md: threshold-82 + ratchet-up policy. scripts/mutation_score.py `--threshold` was already BUILT in 14.2; 14.3 adds 2 explicit 82-boundary unit tests (41/50=82.0% → exit 0; 40/50=80.0% → exit 1). spawn-site gate still PASS (mutation_score.py pure-parse, no new spawn site).
   14-4-g-fn-disposition-triage: done  # phase: 3 · G-FN-1/2/3 dispositions; G-FN-2 nested-stdio folded into ADR-0010 recipe precondition
   14-5-trace-id-required-ast-gate: done  # phase: 3 · NFR-O7 · build scripts/checks/check_trace_id_required.py (closes Phase-2 Story-9.7 deferral)
 
@@ -680,3 +680,27 @@ audit_trail:
       digest-pinned references become the sole deploy path), the next story to
       implement (Epic-8-before-features pattern: pure CI/verification before any
       server surface ships in the base image). DOCS/STATUS-ONLY change — no code.
+  - date: "2026-06-04"
+    event: epic-14-complete
+    from: in-progress
+    to: done
+    story: 14-3-mutation-gate-threshold-ci-enforcement
+    reason: >
+      Epic 14 COMPLETE — all 5 stories done (14-1 digest-deprecation cutover,
+      14-2 mutation-harness scaffold+baseline, 14-3 mutation-gate threshold+CI
+      enforcement, 14-4 G-FN disposition triage, 14-5 trace-id-required AST
+      gate). FINAL story 14-3 flips the mutation gate from non-gating (14.2) to
+      GATING: the first nightly baseline measured 145/176 = 82.4% over the 3
+      kernels (capabilities/tiers.py, events/schema_registry.py,
+      events/canonical.py), so the enforced threshold = floor(82.4%) = 82 (set
+      at-or-below current; ratchet UP as surviving mutants are killed, never
+      lower silently). justfile gained `mutation-gate THRESHOLD="82"` (same
+      cosmic-ray init/exec/dump lifecycle as mutation-test + mutation_score.py
+      --threshold 82 → non-zero exit below floor); nightly.yml mutation-baseline
+      job renamed mutation-gate and `just mutation-test || true` →
+      `just mutation-gate` (NO `|| true` — score < 82 now FAILS the nightly),
+      score still published to step summary + 30-day artifact via `if: always()`
+      steps so failures stay diagnosable, timeout 20m unchanged. The mutation
+      gate is now ENFORCING at 82. DOCS/CI/STATUS — the only production change is
+      the gating wiring + 2 added 82-boundary unit tests; mutation_score.py
+      stays pure-parse (no new spawn site — spawn-site ratchet still PASS).
