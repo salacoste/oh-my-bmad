@@ -2558,6 +2558,9 @@ def test_build_pr_line_returns_none_when_all_pr_fields_absent() -> None:
         (5, None, 89, "5 files changed, 89- lines."),
         # fc only.
         (5, None, None, "5 files changed."),
+        # Singular form: 1 file (deferred-work D2 — "1 files changed" UX bug).
+        (1, None, None, "1 file changed."),
+        (1, 10, 3, "1 file changed, 10+ / 3- lines."),
         # la+lr.
         (None, 234, 89, "234+ / 89- lines."),
         # la only.

@@ -1311,15 +1311,16 @@ def _build_diff_stats_line(payload: TaskCompletedPayload) -> str | None:
     lr_v = lr if lr is not None and lr > 0 else None
     if fc_v is None and la_v is None and lr_v is None:
         return None
+    fc_word = "file" if fc_v == 1 else "files"
     if fc_v is not None and la_v is not None and lr_v is not None:
-        return f"{fc_v} files changed, {la_v}+ / {lr_v}- lines."
+        return f"{fc_v} {fc_word} changed, {la_v}+ / {lr_v}- lines."
     # H2: explicit (fc+la) and (fc+lr) branches before the fc-only fall-through.
     if fc_v is not None and la_v is not None:
-        return f"{fc_v} files changed, {la_v}+ lines."
+        return f"{fc_v} {fc_word} changed, {la_v}+ lines."
     if fc_v is not None and lr_v is not None:
-        return f"{fc_v} files changed, {lr_v}- lines."
+        return f"{fc_v} {fc_word} changed, {lr_v}- lines."
     if fc_v is not None:
-        return f"{fc_v} files changed."
+        return f"{fc_v} {fc_word} changed."
     if la_v is not None and lr_v is not None:
         return f"{la_v}+ / {lr_v}- lines."
     if la_v is not None:

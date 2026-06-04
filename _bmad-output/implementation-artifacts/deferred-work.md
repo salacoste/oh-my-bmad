@@ -41,7 +41,7 @@ A running log of issues that surfaced during code review but were not fixed at t
 ## Deferred from: code review of 3-13-self-recovered-summary-template (2026-05-03)
 
 - D1 — `import structlog.testing` inside test body inconsistent with project convention — pre-existing pattern in 7 test functions across multiple stories; module-level import in `test_middleware.py` but inline in `test_telegram_sink.py`. Consider promoting or documenting the intentional choice.
-- D2 — `_build_diff_stats_line` renders "1 files changed" (no singular form) — pre-existing UX polish gap in completion renderer (`telegram_sink.py:1148`). Low impact.
+- D2 — ✅ CLOSED 2026-06-05. `_build_diff_stats_line` now uses singular "1 file changed" / plural "N files changed" (2 new parametrized test cases for fc=1). 162 telegram_sink tests pass, ruff clean. *Original:* rendered "1 files changed" (no singular form).
 - D3 — `assert` in `_build_pr_line` stripped under `python -O` — pre-existing defensive pattern in completion renderer (`telegram_sink.py:1151`). Project likely never runs under `-O`.
 - D4 — `_build_step_boundary_payload` linear scan could be binary search — pre-existing test utility (`test_telegram_sink.py:2088`). Acceptable at cap=1900.
 - D5 — Missing test for `pr_url` containing only newlines — pre-existing test coverage gap in completion renderer. Symmetrical to the `pr_branch` newline test already present.
