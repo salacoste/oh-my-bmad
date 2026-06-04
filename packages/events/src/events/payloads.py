@@ -947,6 +947,38 @@ class VerificationCompletedPayload(BaseModel):
     coverage: int | None = Field(default=None, ge=0, le=100)
 
 
+class MemoryWrittenPayload(BaseModel):
+    """Payload for the ``memory.written`` event (Epic 18 / Story 18.4 / ADR-0012).
+
+    Emitted by memory-mcp after a Tier-2 ``memory.write`` upserts a document into
+    its DEDICATED FTS5 store. Born at 1.1.0 (NEW Phase-3 event type — no v1.0.0
+    predecessor, same convention as the ``git.*`` / ``github.*`` /
+    ``verification.completed`` events above).
+
+    P0/security (ADR-0012 §5): the payload carries METADATA ONLY — the document
+    ``key``, a short ``title``, and the BYTE LENGTH of the written body. It NEVER
+    carries the document body/content itself: the body lives ONLY in the
+    memory-mcp's own DB. The body could be large or hold sensitive cross-task
+    content, and spine events are append-only + queryable — so the unbounded body
+    is deliberately excluded from the event.
+
+    Field rules:
+
+    * ``key``: the stable string id the document was upserted under. Bounded to
+      512 chars; ``min_length=1``.
+    * ``title``: the document's short title (also stored). Bounded to 512 chars;
+      may be empty (the store defaults ``title`` to ``''``).
+    * ``body_bytes``: the byte length of the written body (NOT the body). ``>= 0``,
+      capped at ``10**9`` (defense-in-depth against an overflow value).
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    key: str = Field(min_length=1, max_length=512)
+    title: str = Field(default="", max_length=512)
+    body_bytes: int = Field(ge=0, le=10**9)
+
+
 class TaskBudgetExceededPayload(BaseModel):
     """Payload for the ``task.budget_exceeded`` event (FR44 / NFR-P5).
 
@@ -1369,6 +1401,7 @@ __all__ = [
     "GithubReviewRequestedPayload",
     "KeyRotatedPayload",
     "LicenseOverridePayload",
+    "MemoryWrittenPayload",
     "PlanStep",
     "PreCheckOutcome",
     "PreCheckResults",
