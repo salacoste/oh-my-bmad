@@ -1,0 +1,17 @@
+[project]
+name = "artifact-mcp"
+version = "0.1.0"
+description = "MCP server exposing a persisted, content-addressed build/run-output store (Epic 19 / ADR-0011). Stories 19.1/19.2 ship the red-phase ATDD contracts + the content-addressed store (objects + sqlite index + retention) scaffold; the artifact tools land in 19.3/19.4."
+authors = [
+    { name = "R2d2", email = "bad.vano23ru@gmail.com" },
+]
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=1.0",
+    "events>=0.3.0",
+    "capabilities",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.0,<1.0"]
+build-backend = "uv_build"
