@@ -241,7 +241,7 @@ class TestOMCRunnerChildEnvAllowlist:
     async def test_spawn_env_contains_needed_vars(
         self, omc_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Functional allowlist + prefix vars + pass-through ANTHROPIC/GITHUB.
+        """Functional allowlist + prefix vars + pass-through ANTHROPIC.
 
         Unlike the worker, OrchestratorSettings has no anthropic_api_key field,
         so ANTHROPIC_API_KEY must pass THROUGH from the parent env.
@@ -253,7 +253,6 @@ class TestOMCRunnerChildEnvAllowlist:
         monkeypatch.setenv("NODE_PATH", "/opt/node_modules")
         monkeypatch.setenv("OMB_FOO", "x")  # prefix passthrough
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-passthrough")
-        monkeypatch.setenv("GITHUB_TOKEN", "ghp-needed")
 
         captured_env: dict[str, str] = {}
 
@@ -272,8 +271,6 @@ class TestOMCRunnerChildEnvAllowlist:
         assert captured_env["OMB_FOO"] == "x"
         # ANTHROPIC passes THROUGH (no settings field to re-inject).
         assert captured_env["ANTHROPIC_API_KEY"] == "sk-passthrough"
-        # GITHUB_TOKEN retained (git push).
-        assert captured_env["GITHUB_TOKEN"] == "ghp-needed"
 
     @pytest.mark.asyncio
     async def test_spawn_env_excludes_operator_secrets(
@@ -291,6 +288,9 @@ class TestOMCRunnerChildEnvAllowlist:
             "TG_ALLOWLIST_USER_IDS": "canary",
             "AWS_SECRET_ACCESS_KEY": "canary",
             "OPENAI_API_KEY": "canary",
+            # G-SEC-2 remaining half (closed 2026-06-05): broad operator PAT
+            # must NOT reach the agent subprocess (sibling of claude_code_runner).
+            "GITHUB_TOKEN": "canary",
         }
         for name, value in canaries.items():
             monkeypatch.setenv(name, value)

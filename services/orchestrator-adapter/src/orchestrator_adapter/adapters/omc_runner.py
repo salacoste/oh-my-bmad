@@ -48,9 +48,16 @@ _LOG_PROMPT_PREVIEW_LEN: int = 80
 #   - ANTHROPIC_API_KEY — passes THROUGH from the parent env here: unlike the
 #     worker, ``OrchestratorSettings`` has NO ``anthropic_api_key`` field to
 #     re-inject, so the allowlist is the only path for the agent's key.
-#   - GITHUB_TOKEN — retained because the spawned agent performs ``git push``.
-#     TODO(G-SEC-2 follow-up): migrate to a scoped git credential helper so
-#     the raw PAT need not enter the agent env at all.
+#
+# GITHUB_TOKEN is INTENTIONALLY NOT in this allowlist — G-SEC-2 remaining half
+# CLOSED 2026-06-05 (sibling of the worker's ``claude_code_runner``). The broad
+# operator PAT must never enter the agent subprocess. The spawned agent's
+# ``git push`` does not need it today: the push target is a local bare remote
+# (no network, no credentials wired), and nothing turns this env var into a git
+# credential (no ``credential.helper`` / ``GIT_ASKPASS`` / token-in-URL). When a
+# real remote push is wired, authenticate it with a SCOPED git-credential helper
+# or a narrow ``GITHUB_MCP_SCOPED_TOKEN``-style token — NEVER re-add the broad
+# ``GITHUB_TOKEN`` here.
 _CHILD_ENV_ALLOWLIST: frozenset[str] = frozenset(
     {
         # Process basics
@@ -75,8 +82,6 @@ _CHILD_ENV_ALLOWLIST: frozenset[str] = frozenset(
         "NODE_PATH",
         # ANTHROPIC passes through (no settings field to re-inject).
         "ANTHROPIC_API_KEY",
-        # git push — TODO(G-SEC-2 follow-up): scoped cred helper.
-        "GITHUB_TOKEN",
     }
 )
 

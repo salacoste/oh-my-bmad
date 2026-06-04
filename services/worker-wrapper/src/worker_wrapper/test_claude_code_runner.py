@@ -19,11 +19,13 @@ from events.envelope import is_valid_trace_id
 from events.ids import new_uuid7
 
 from worker_wrapper.adapters.claude_code_runner import (
+    _CHILD_ENV_ALLOWLIST,
     _COMMIT_PATTERN,
     _GIT_PUSH_PATTERN,
     _TEST_PATTERN,
     ClaudeCodeRunner,
     ExtractedEvent,
+    _build_child_env,
     _TerminationResult,
 )
 from worker_wrapper.app.config import WorkerSettings
@@ -263,11 +265,10 @@ class TestSpawnChildEnvAllowlist:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Functional allowlist + prefix vars + settings ANTHROPIC + GITHUB."""
+        """Functional allowlist + prefix vars + settings ANTHROPIC re-inject."""
         monkeypatch.setenv("PATH", "/usr/bin:/bin")
         monkeypatch.setenv("HOME", "/home/agent")
         monkeypatch.setenv("OMB_FOO", "x")  # prefix passthrough
-        monkeypatch.setenv("GITHUB_TOKEN", "ghp-needed")
 
         runner = ClaudeCodeRunner(_settings())
 
@@ -290,8 +291,6 @@ class TestSpawnChildEnvAllowlist:
         assert env["OMB_FOO"] == "x"  # prefix passthrough
         # ANTHROPIC re-injected from settings (NOT the allowlist).
         assert env["ANTHROPIC_API_KEY"] == "sk-test-key-123"
-        # GITHUB_TOKEN retained (git push, main.py:476).
-        assert env["GITHUB_TOKEN"] == "ghp-needed"
 
     @pytest.mark.asyncio
     async def test_spawn_env_excludes_operator_secrets(
@@ -309,6 +308,11 @@ class TestSpawnChildEnvAllowlist:
             "TG_ALLOWLIST_USER_IDS": "canary",
             "AWS_SECRET_ACCESS_KEY": "canary",
             "OPENAI_API_KEY": "canary",
+            # G-SEC-2 remaining half (closed 2026-06-05): the broad operator
+            # PAT must NOT reach the agent subprocess — its ``git push`` targets
+            # a local bare remote (no creds wired). Scoped push auth, when added,
+            # uses a credential helper, never this var.
+            "GITHUB_TOKEN": "canary",
         }
         for name, value in canaries.items():
             monkeypatch.setenv(name, value)
@@ -330,6 +334,34 @@ class TestSpawnChildEnvAllowlist:
         env = captured["env"]
         for name in canaries:
             assert name not in env, f"{name} leaked into child env"
+
+
+class TestChildEnvGithubTokenExcluded:
+    """G-SEC-2 remaining half (closed 2026-06-05): the broad operator
+    ``GITHUB_TOKEN`` must never enter the spawned ``claude`` agent env.
+
+    The agent's ``git push`` targets a local bare remote (no credentials
+    wired); the worker only DETECTS the push to drive the Tier-3 approval
+    gate. Real remote push, when wired, must use a scoped git-credential
+    helper — never the broad PAT re-added to ``_CHILD_ENV_ALLOWLIST``.
+    """
+
+    def test_github_token_not_in_allowlist(self) -> None:
+        """The frozenset itself must not name the broad PAT."""
+        assert "GITHUB_TOKEN" not in _CHILD_ENV_ALLOWLIST
+
+    def test_build_child_env_drops_github_token(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Even present in the parent env, GITHUB_TOKEN is dropped."""
+        monkeypatch.setenv("GITHUB_TOKEN", "ghp-broad-operator-pat")
+        monkeypatch.setenv("PATH", "/usr/bin:/bin")  # control: allowlisted
+
+        env = _build_child_env()
+
+        assert "GITHUB_TOKEN" not in env
+        assert env["PATH"] == "/usr/bin:/bin"
 
 
 # ---------------------------------------------------------------------------
