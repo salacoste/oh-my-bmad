@@ -393,12 +393,12 @@ development_status:
   # Epic 17: υ verification MCP server (5 stories, ~1 week)
   # phase: 3 · ADR-0010 (reused) · FR74 · NFR-M8/S12
   # =========================================================================
-  epic-17: backlog  # phase: 3 · sandboxed build/test runner returning {pass/fail, logs, coverage}
-  17-1-atdd-red-phase-contracts: backlog  # phase: 3 · FR74 (test-design) · tier + structured-result + sandbox contracts
-  17-2-server-scaffold: backlog  # phase: 3 · FR74 · P3-I3 · mcp-servers/verification/ (verification-mcp) scaffold (recipe)
-  17-3-run-build-run-tests-sandboxed: backlog  # phase: 3 · FR74 · Tier-2 sandboxed build/test tools (recipe step 3)
-  17-4-structured-result-verification-events: backlog  # phase: 3 · FR74 · structured result + verification.* events (recipe step 4)
-  17-5-separability-s7-supply-chain: backlog  # phase: 3 · FR74 · NFR-M8 (S-7) · NFR-S12 · S-7 + supply-chain (recipe steps 7,8)
+  epic-17: done  # phase: 3 · CLOSED 2026-06-04 — υ verification MCP server complete via the ADR-0010 recipe (3rd fleet server; closest sibling to git-mcp — both run sandboxed subprocesses in the worktree). 5 stories merged (PR #48–#51). Sandboxed build/test runner: cwd-pinned + secret-free env-allowlist + wall-clock timeout + worktree containment; structured {pass/fail, logs, coverage}; verification.completed events.
+  17-1-atdd-red-phase-contracts: done  # phase: 3 · FR74 (test-design) · 12 xfail(strict) red-phase contracts + 4 green reference tests on executor primitives · merged PR #48 (with 17.2)
+  17-2-server-scaffold: done  # phase: 3 · FR74 · P3-I3 · mcp-servers/verification/ (verification-mcp) scaffold + VerificationExecutor (mirror of GitExecutor: create_subprocess_exec not _shell, cwd-pinned, _ENV_ALLOWLIST secret-free, asyncio.wait_for timeout+kill → VerificationTimeout, _contains containment) · merged PR #48 · NOTE: broke a recurring uv hook-deadlock via the Monitor tool ([tool.uv.sources] entry must land atomically with [project.dependencies])
+  17-3-run-build-run-tests-sandboxed: done  # phase: 3 · FR74 · verification.run_build/run_tests Tier-2; cwd-pinned worktree sandbox, secret-free env, timeout; path-escape refused before spawn; structured {ok,pass,exit_code,logs,coverage} (recipe step 3) · merged PR #49
+  17-4-structured-result-verification-events: done  # phase: 3 · FR74 · verification.completed event (two-location, born 1.1.0; payload = tool/recipe/passed/exit_code/coverage — NO logs/secrets in the queryable payload) for both pass and fail (recipe step 4) · merged PR #50
+  17-5-separability-s7-supply-chain: done  # phase: 3 · FR74 · NFR-M8 (S-7) · NFR-S12 · 2026-06-04 — VERIFICATION_MCP_WORKTREE_ROOT/ACTOR_KIND/ACTOR_ID added byte-identical to both _ENV_ALLOWLIST (all NON-secret, no scoped token); conditional spawn (6th stdio member, WORKER_VERIFICATION_COMMAND); test_s7_verification_optional.py (SPAWNED boots real verification-mcp + run_build callable end-to-end; ABSENT optional); validate_caller_trace_id mirror extended to verification (6 servers). Supply-chain: ZERO new third-party deps (only mcp, shared); license gate 11/11; no new release.yml matrix row. Authored allowlist in main context (a0ca050 P0 area) — non-secret vars, git-style risk profile. See 17-5-supply-chain-and-separability.md (recipe steps 7,8)
 
   # =========================================================================
   # Epic 18: φ memory/wiki MCP server (5 stories, ~1 week)

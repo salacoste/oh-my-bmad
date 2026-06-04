@@ -415,11 +415,17 @@ def test_validate_caller_trace_id_byte_identical_across_servers() -> None:
         validate_caller_trace_id as _v_task,
     )
 
+    # Epic 17 / Story 17.5 — verification-mcp's helper is a byte-identical copy too.
+    from verification_mcp.handlers.tools import (
+        validate_caller_trace_id as _v_verification,
+    )
+
     bridge_body = _extract_fn_body_ast(_v_bridge)
     sess_body = _extract_fn_body_ast(_v_sess)
     task_body = _extract_fn_body_ast(_v_task)
     git_body = _extract_fn_body_ast(_v_git)
     github_body = _extract_fn_body_ast(_v_github)
+    verification_body = _extract_fn_body_ast(_v_verification)
 
     assert bridge_body == sess_body, (
         "validate_caller_trace_id body differs between clawhip-bridge and session-registry"
@@ -440,6 +446,12 @@ def test_validate_caller_trace_id_byte_identical_across_servers() -> None:
         "validate_caller_trace_id body differs between clawhip-bridge and github-mcp (Story 16.5)"
         f"\n--- bridge ---\n{bridge_body}"
         f"\n--- github ---\n{github_body}"
+    )
+    assert bridge_body == verification_body, (
+        "validate_caller_trace_id body differs between clawhip-bridge and verification-mcp "
+        "(Story 17.5)"
+        f"\n--- bridge ---\n{bridge_body}"
+        f"\n--- verification ---\n{verification_body}"
     )
 
 
@@ -465,15 +477,18 @@ def test_validate_caller_trace_id_runtime_messages_identical() -> None:
     from task_registry_mcp.handlers.tools import (
         validate_caller_trace_id as _v_task,
     )
+    from verification_mcp.handlers.tools import (  # Story 17.5
+        validate_caller_trace_id as _v_verification,
+    )
 
     bad = "not-a-uuid"
     messages: list[str] = []
-    for fn in (_v_bridge, _v_sess, _v_task, _v_git, _v_github):
+    for fn in (_v_bridge, _v_sess, _v_task, _v_git, _v_github, _v_verification):
         try:
             fn(bad)
         except ValueError as exc:
             messages.append(str(exc))
-    assert len(messages) == 5, f"expected 5 ValueError messages, got {messages!r}"
+    assert len(messages) == 6, f"expected 6 ValueError messages, got {messages!r}"
     assert len(set(messages)) == 1, f"helper messages drift: {messages!r}"
 
 

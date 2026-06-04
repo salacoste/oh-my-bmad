@@ -155,6 +155,14 @@ _SPAWNER_REQUIRED_ENV_VARS = {
     "GITHUB_MCP_ACTOR_KIND",
     "GITHUB_MCP_ACTOR_ID",
     "GITHUB_MCP_SCOPED_TOKEN",
+    # verification-mcp REQUIRED (mcp-servers/verification/.../__main__.py exits 2
+    # without these) — Story 17.5. All NON-secret (worktree path + actor identity;
+    # verification needs no external credential). Forwarded by BOTH spawner
+    # allowlists (byte-identical mirror); only worker-wrapper spawns verification-mcp
+    # (Story 17.5, conditional on a non-blank WORKER_VERIFICATION_COMMAND).
+    "VERIFICATION_MCP_WORKTREE_ROOT",
+    "VERIFICATION_MCP_ACTOR_KIND",
+    "VERIFICATION_MCP_ACTOR_ID",
     "REGISTRY_EVENTS_DIR",
     "REGISTRY_DB_PATH",
 }
