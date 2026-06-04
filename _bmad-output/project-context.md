@@ -772,6 +772,86 @@ categories still govern; these EXTEND Cat 3 (framework) and Cat 7 (don't-miss).
 
 ---
 
+## Phase 3 additions (Epics 15–19)
+
+Digest of the Phase-3 framework rules (the MCP-server-authoring recipe + P3-I1/I2/I3)
++ high-frequency gotchas. Earlier categories still govern; these EXTEND Cat 3 and
+Cat 7. Full walkthrough: `docs/explanations/mcp-server-authoring-recipe.md`;
+decision: ADR-0010.
+
+### Cat-3 framework rules (Phase-3 fleet MCP servers)
+
+- **Author every fleet server to the eight-step recipe (ADR-0010).** stdio-only
+  (1) · synchronous `build_server` factory, I/O in the lifespan, no `os.environ`
+  inside it (2) · every tool in `TIER_MAP` + `check_tier`/`check_tier_with_approval`
+  before any side effect (3) · keyword-only required `caller_trace_id`, validated by
+  the byte-identical `validate_caller_trace_id` (4) · events through the FR26 writer,
+  registered two-location (`payloads.py` + `event_types.py`) at `1.1.0` (5) · child-env
+  allowlist (6) · base image, no compose/matrix row (7) · separability entry (8).
+- **P3-I1 — every MCP tool declares a tier.** Untiered tool = build failure
+  (`scripts/check_tier_declarations.py`). Tier-3 (destructive/external) uses
+  `check_tier_with_approval` + a negative denial test + `emit_capability_denied_on_deny`.
+- **P3-I2 — a store-owning server owns an ISOLATED file/subtree, never the registry
+  DB.** `memory`/`artifact` live under their own `oh-my-bmad-data/<x>-mcp/` subtree.
+  Use **stdlib `sqlite3` + raw SQL (NOT SQLAlchemy)** for any server-local store —
+  SQLAlchemy mutation patterns outside `registry-state` trip `check_single_writer.py`;
+  raw `conn.execute("INSERT …")` does not, and it adds zero deps (FTS5 + content-
+  addressing are stdlib). Create store dirs `0o2775` (setgid) + DB/`-wal`/`-shm`/blobs
+  `0o660` **in store-init** (the cross-uid umask fix is a precondition, ADR-0012 §7 —
+  never a later point-fix). Event payloads are METADATA ONLY — never the stored
+  bytes/body/content.
+- **P3-I3 — servers ship as wheels in the base image, spawned as stdio subprocesses.**
+  Workspace glob member; NO `services/*` Dockerfile, compose entry, or `release.yml`
+  matrix row. Supply-chain inherited transitively from the one signed base image; the
+  five fleet servers added zero matrix rows and zero new third-party deps.
+- **Child-env allowlist, NEVER `os.environ.copy()` (the a0ca050 P0).** REQUIRED vars
+  go in the BYTE-IDENTICAL `_ENV_ALLOWLIST` frozensets in `worker-wrapper` +
+  `orchestrator-adapter` (mirror enforced by `test_clawhip_client_env_allowlist_mirror.py`).
+  The ONE credential in the whole fleet allowlist is `github`'s `GITHUB_MCP_SCOPED_TOKEN`
+  (repo-scoped, narrowly-named — ADR-0010 §6); the broad `GITHUB_TOKEN`/`ANTHROPIC_API_KEY`/
+  `OPERATOR_HMAC_KEY` stay forbidden. This file is the P0 area: author allowlist changes
+  in the main implementation context (do NOT delegate); credential additions get an
+  independent security-review pass.
+
+### Cat-7 don't-miss (Phase-3 gotchas from retros)
+
+1. **Repo-local `.git/config` is an RCE surface; env-hermeticity is insufficient
+   (Epic 15).** Over an attacker-writable worktree, `core.fsmonitor`/`hooksPath`
+   execute on a mere `git status`, and `filter.<name>.clean`/`merge.<name>.driver`
+   on `add`/`rebase` (attacker-NAMED — `-c` can't target them). TWO defenses:
+   per-invocation `-c` shields for fixed keys + a pre-op `git config --local --list`
+   scrub for named drivers. Lock every fix with a prove-live→assert-shielded
+   regression test. Any subprocess-executing server (`git`, `verification`) is
+   sandboxed: cwd-pinned to the worktree + secret-free env-allowlist + wall-clock
+   timeout + realpath containment + `create_subprocess_exec` (never `_shell`).
+2. **`GITHUB_TOKEN` (broad) is forbidden; `GITHUB_MCP_SCOPED_TOKEN` (repo-scoped) is
+   the only allowed github credential (Epic 16 / G-SEC-2).** A tool result must NEVER
+   echo a credential — pin "scoped token used" by recording the OUTBOUND
+   `Authorization` header, never by returning the token. G-SEC-2 is HALF-closed: the
+   MCP-subprocess half is done; the spawned `claude` agent
+   (`claude_code_runner.py:89`) still gets the broad PAT for `git push` — don't claim
+   it fully closed (deferred-work).
+3. **The uv workspace hook-deadlock (recurs on every new workspace member).** Adding a member to root
+   `[project.dependencies]` without the matching `[tool.uv.sources]` entry breaks `uv`
+   → every `uv run` PreToolUse hook fails → all Bash/Write/Edit block (catch-22). Add
+   `[tool.uv.sources]` BEFORE/atomically-with `[project.dependencies]`; if deadlocked,
+   the Monitor tool (not hook-gated) can patch the sources line. (Also: this repo lives
+   under `~/Documents` — macOS TCC can EPERM `getcwd`; prefix bash with `cd /tmp && …`.)
+4. **Nested-stdio audit-emission deadlock (G-FN-2, ADR-0010 §9).** A server that emits
+   `capability.denied` may spawn a clawhip-bridge stdio child from inside its own stdio
+   server — 3-level nesting that deadlocks. Worked around via
+   `OMB_MCP_AUDIT_EMISSION_ENABLED=0` on the spawners; the real fix (nested-context
+   detection or lifting emission to the spawner) is the recipe precondition before any
+   Tier-3 tool ships.
+5. **Diff-audit delegated work: gate-green ≠ correct/secure.** Three real Phase-3
+   defects shipped gate-green by delegated passes and were caught only by an
+   independent diff-audit/review: the github scoped-token leak (16.3), the artifact
+   binary-safety asymmetry (a content store whose `put` took UTF-8 text — 19.3), and
+   the 16.5 G-SEC-2 scoping over-claim. Audit the PURPOSE + the security axis, not just
+   the gates + style.
+
+---
+
 ## Usage Guidelines
 
 **For AI agents**
@@ -788,4 +868,4 @@ categories still govern; these EXTEND Cat 3 (framework) and Cat 7 (don't-miss).
 
 ---
 
-_Last updated: 2026-06-02. Status: complete (Phase 1 baseline + Phase 2 additions — Epics 8–13)._
+_Last updated: 2026-06-04. Status: complete (Phase 1 baseline + Phase 2 additions — Epics 8–13 + Phase 3 additions — Epics 15–19, the MCP-server fleet)._
