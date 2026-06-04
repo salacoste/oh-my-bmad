@@ -75,8 +75,6 @@ _EVENT_BY_TOOL = {
     "artifact.put": "artifact.stored",
 }
 
-_XFAIL_REASON = "artifact tools land in Story 19.3/19.4 — red-phase ATDD contract"
-
 
 def _build(store_root: Path) -> FastMCP:
     """Build the scaffold server exactly as a test would (audit-off path)."""
@@ -526,7 +524,6 @@ def test_validator_rejects_invalid_caller_trace_id() -> None:
 # ===========================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("tool", "event_type"), list(_EVENT_BY_TOOL.items()))
 async def test_put_emits_artifact_event_with_trace_id(
@@ -560,3 +557,100 @@ async def test_put_emits_artifact_event_with_trace_id(
     assert emitted.get("trace_id") == _VALID_TRACE_ID, (
         f"{tool}: emitted {event_type} must carry inbound trace_id"
     )
+    # P0/security (ADR-0011 §5): the event descriptor carries NO artifact bytes.
+    assert "content" not in emitted and "body" not in emitted, (
+        f"{tool}: artifact bytes must NEVER enter the spine event: {emitted!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_emits_artifact_deleted_with_trace_id(tmp_path: Path) -> None:
+    """A successful Tier-3 artifact.delete emits artifact.deleted (reason="requested").
+
+    Seed an ``approval.granted`` for the caller's task, put a real object, then the
+    approved delete must surface an ``artifact.deleted`` event descriptor carrying
+    the inbound trace_id, ``reason="requested"``, and NO artifact bytes (ADR-0011 §5).
+    """
+    events_dir = tmp_path / "events"
+    events_dir.mkdir()
+    task_id = "t-0190000a-0000-7000-8000-000000000001"
+
+    mcp = build_server(
+        store_root=tmp_path / "store",
+        clock=FrozenClock(mono_ns=1_000_000, now=FROZEN_EPOCH),
+        actor_kind="operator",
+        actor_id="test-operator",
+        registry_events_dir=events_dir,
+    )
+    await mcp.list_tools()
+    put_fn = mcp._tool_manager._tools["artifact.put"].fn
+    delete_fn = mcp._tool_manager._tools["artifact.delete"].fn
+
+    put_result = await put_fn(
+        caller_trace_id=_VALID_TRACE_ID,
+        content=base64.b64encode(b"to-be-deleted").decode("ascii"),
+        name="k",
+    )
+    content_hash = put_result["hash"]
+
+    _seed_approval(events_dir, task_id)
+    result = await delete_fn(caller_trace_id=_VALID_TRACE_ID, hash=content_hash, task_id=task_id)
+
+    assert result.get("deleted") is True, f"approved delete must succeed: {result!r}"
+    emitted = result.get("event")
+    assert emitted is not None, f"no artifact.deleted event surfaced: {result!r}"
+    assert emitted.get("type") == "artifact.deleted", (
+        f"expected artifact.deleted, got {emitted.get('type')!r}"
+    )
+    assert emitted.get("trace_id") == _VALID_TRACE_ID, (
+        "emitted artifact.deleted must carry inbound trace_id"
+    )
+    assert "content" not in emitted and "body" not in emitted, (
+        f"artifact bytes must NEVER enter the spine event: {emitted!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_put_retention_sweep_emits_artifact_deleted(tmp_path: Path) -> None:
+    """A put past the size cap triggers a retention sweep emitting artifact.deleted.
+
+    Build a server with a small ``max_bytes`` cap. Putting distinct objects past the
+    cap runs the post-put retention sweep, which evicts the oldest object(s) and
+    surfaces an ``artifact.deleted`` event (``reason="retention"``) per eviction,
+    carrying the put's inbound trace_id — system-initiated deletion (ADR-0011 §5),
+    NO artifact bytes in the event.
+    """
+    # Cap = 250 bytes; three 100-byte distinct objects → the third put forces a sweep.
+    mcp = build_server(
+        store_root=tmp_path / "store",
+        max_bytes=250,
+        clock=FrozenClock(mono_ns=1_000_000, now=FROZEN_EPOCH),
+        actor_kind="worker",
+        actor_id="test-worker",
+    )
+    await mcp.list_tools()
+    put_fn = mcp._tool_manager._tools["artifact.put"].fn
+
+    payloads = [b"a" * 100, b"b" * 100, b"c" * 100]
+    last_result: dict[str, object] = {}
+    for i, payload in enumerate(payloads):
+        last_result = await put_fn(
+            caller_trace_id=_VALID_TRACE_ID,
+            content=base64.b64encode(payload).decode("ascii"),
+            name=f"obj-{i}",
+        )
+
+    retention = last_result.get("retention_deleted")
+    assert isinstance(retention, list) and retention, (
+        f"put past the size cap must surface retention artifact.deleted events: {last_result!r}"
+    )
+    for ev in retention:
+        assert ev.get("type") == "artifact.deleted", (
+            f"retention event must be artifact.deleted: {ev!r}"
+        )
+        assert ev.get("trace_id") == _VALID_TRACE_ID, (
+            "retention artifact.deleted must carry the put's inbound trace_id"
+        )
+        assert "content" not in ev and "body" not in ev, (
+            f"artifact bytes must NEVER enter the spine event: {ev!r}"
+        )

@@ -979,6 +979,74 @@ class MemoryWrittenPayload(BaseModel):
     body_bytes: int = Field(ge=0, le=10**9)
 
 
+class ArtifactStoredPayload(BaseModel):
+    """Payload for the ``artifact.stored`` event (Epic 19 / Story 19.4 / ADR-0011).
+
+    Emitted by artifact-mcp after a Tier-2 ``artifact.put`` persists opaque content
+    into its DEDICATED content-addressed store. Born at 1.1.0 (NEW Phase-3 event
+    type — no v1.0.0 predecessor, same convention as the ``git.*`` / ``github.*`` /
+    ``verification.completed`` / ``memory.written`` events above).
+
+    P0/security (ADR-0011 §3/§5): the payload carries METADATA ONLY — the content
+    ``hash``, the resolved logical ``name``, the byte ``size``, and the dedup flag.
+    It NEVER carries the artifact content/bytes: the bytes live ONLY in the
+    artifact-mcp's own content-addressed store. The content may be large build/run
+    output or hold sensitive cross-task data, and spine events are append-only +
+    queryable — so the unbounded content is deliberately excluded from the event.
+
+    Field rules:
+
+    * ``hash``: the lowercase hex SHA-256 the content was stored under. Bounded to
+      128 chars; ``min_length=1``.
+    * ``name``: the resolved index key (logical name, or the hash itself for an
+      anonymous put). Bounded to 512 chars; may be empty.
+    * ``size_bytes``: the byte length of the stored content (NOT the content).
+      ``>= 0``, capped at ``10**12`` (defense-in-depth against an overflow value).
+    * ``deduped``: True iff the content blob already existed (a dedup hit — the
+      object was not rewritten).
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    hash: str = Field(min_length=1, max_length=128)
+    name: str = Field(default="", max_length=512)
+    size_bytes: int = Field(ge=0, le=10**12)
+    deduped: bool
+
+
+class ArtifactDeletedPayload(BaseModel):
+    """Payload for the ``artifact.deleted`` event (Epic 19 / Story 19.4 / ADR-0011).
+
+    Emitted by artifact-mcp when an object is removed — covering BOTH the Tier-3
+    ``artifact.delete`` tool (operator-approved, ``reason="requested"``) AND a
+    retention sweep eviction (system-initiated, ``reason="retention"``; ADR-0011
+    §5). Born at 1.1.0 (NEW Phase-3 event type — no v1.0.0 predecessor, same
+    convention as the ``git.*`` / ``github.*`` / ``verification.completed`` /
+    ``memory.written`` events above).
+
+    P0/security (ADR-0011 §3/§5): the payload carries METADATA ONLY — the content
+    ``hash``, the ``reason``, and the byte ``size_bytes`` of the deleted object. It
+    NEVER carries the artifact content/bytes (which are gone by the time the event
+    fires regardless).
+
+    Field rules:
+
+    * ``hash``: the lowercase hex SHA-256 of the deleted object. Bounded to 128
+      chars; ``min_length=1``.
+    * ``reason``: why the object was deleted — ``"requested"`` (the Tier-3 delete
+      tool) or ``"retention"`` (a TTL / size-cap sweep eviction). Bounded to 64
+      chars; ``min_length=1``.
+    * ``size_bytes``: the byte length of the deleted object when known, else 0
+      (a retention sweep surfaces only the hash). ``>= 0``, capped at ``10**12``.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    hash: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=64)
+    size_bytes: int = Field(default=0, ge=0, le=10**12)
+
+
 class TaskBudgetExceededPayload(BaseModel):
     """Payload for the ``task.budget_exceeded`` event (FR44 / NFR-P5).
 
@@ -1386,6 +1454,8 @@ __all__ = [
     "AgentReasoningBreadcrumbPayload",
     "ApprovalGrantedPayload",
     "ApprovalInboxOpenedPayload",
+    "ArtifactDeletedPayload",
+    "ArtifactStoredPayload",
     "BudgetOverridePayload",
     "ApprovalRejectedPayload",
     "CapabilityDeniedPayload",

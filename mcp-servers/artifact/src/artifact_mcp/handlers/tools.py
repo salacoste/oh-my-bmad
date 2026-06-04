@@ -12,9 +12,21 @@ Story 19.3 lands the four artifact tools over the content-addressed
     + the *approval_lookup* threaded into ``register_tools`` here) — operator-
     approved single-object deletion.
 
-Story 19.4 adds the ``artifact.*`` event emission (``artifact.put`` →
-``artifact.stored``; the retention sweep → ``artifact.deleted`` per evicted
-object) — NOT yet wired here (those contracts stay xfail until 19.4).
+Story 19.4 adds the ``artifact.*`` event emission, wired here via
+``_emit_artifact_event`` (mirror of memory-mcp's ``_emit_memory_event``):
+
+  * ``artifact.put`` → ``artifact.stored`` (hash / name / size_bytes / deduped),
+    THEN the post-put retention sweep → ``artifact.deleted`` (``reason="retention"``)
+    per evicted object — all carrying the put's inbound ``caller_trace_id``;
+  * ``artifact.delete`` (Tier-3) → ``artifact.deleted`` (``reason="requested"``) on
+    a successful deletion, carrying the delete's inbound ``caller_trace_id``.
+
+Each payload is METADATA ONLY — the artifact content/bytes NEVER enter the spine
+event (ADR-0011 §3/§5; spine events are append-only + queryable). The startup
+sweep in ``build_server`` is deliberately event-LESS: it runs at boot with NO
+caller context (no ``caller_trace_id``), so emitting there would violate the
+trace_id-required invariant; the retention deletions that matter for observability
+are the post-put ones, which DO carry the caller's trace_id.
 
 Each tool is registered with an EXPLICIT dotted MCP name
 (``@mcp.tool(name="artifact.get")``) so ``list_tools()`` surfaces the canonical
@@ -45,6 +57,7 @@ drift guard extends to artifact-mcp now that it ships the helper.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 from typing import TYPE_CHECKING
@@ -235,6 +248,46 @@ def register_tools(
     def _caller(task_id: str | None = None) -> CallerContext:
         return CallerContext(actor_kind=actor_kind, actor_id=actor_id, task_id=task_id)
 
+    async def _emit_artifact_event(
+        event_type: str,
+        payload: dict[str, object],
+        *,
+        caller_trace_id: str,
+    ) -> dict[str, object]:
+        """Best-effort emit an ``artifact.*`` event; return the surfaced descriptor.
+
+        FR26 single-writer: the actual emission routes through *emitter_holder*
+        (clawhip-bridge MCP RPC), NEVER a direct event-log write. The emit is
+        BEST-EFFORT — guarded on *emitter_holder* and wrapped so an emission failure
+        (audit-off, closed pipe) is logged and swallowed, never failing the
+        already-completed store op.
+
+        The returned ``{"type": ..., "trace_id": caller_trace_id}`` descriptor is
+        built UNCONDITIONALLY (independent of whether the emit fired) and surfaced by
+        the caller as ``result["event"]`` so the ATDD contract can read the
+        artifact.* event type + inbound trace_id even when audit emission is disabled.
+        Mirrors memory-mcp's ``_emit_memory_event`` / verification-mcp's
+        ``_emit_verification_event``.
+
+        P0/security (ADR-0011 §3/§5): *payload* is METADATA ONLY — the artifact
+        content/bytes NEVER reach this surface (the bytes go to the store, full
+        stop). Spine events are append-only + queryable.
+        """
+        descriptor: dict[str, object] = {"type": event_type, "trace_id": caller_trace_id}
+        if emitter_holder is not None:
+            try:
+                await emitter_holder.emit_event(
+                    event_type, payload, caller_trace_id=caller_trace_id
+                )
+            except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):  # noqa: TRY302 — cancellation MUST propagate (PP1 contract); re-raise control-flow
+                raise
+            except BaseException:  # noqa: BLE001 — best-effort audit; never fail the artifact op
+                log.exception(
+                    "artifact_event_emission_failed",
+                    extra={"event_type": event_type},
+                )
+        return descriptor
+
     # ------------------------------------------------------------------
     # Tool: artifact.get (Tier-1 bounded read)
     # ------------------------------------------------------------------
@@ -312,8 +365,16 @@ def register_tools(
         content-addressed store persists. base64 (not raw text) so an artifact
         store can hold arbitrary BINARY build/run output, not only UTF-8 text.
         Invalid base64 returns a structured ``ok=False`` (never raises to the
-        boundary). Identical content deduplicates (``deduped=True``). The
-        ``artifact.stored`` event emission lands in Story 19.4.
+        boundary). Identical content deduplicates (``deduped=True``).
+
+        On success this surfaces an ``artifact.stored`` event descriptor in
+        ``result["event"]`` carrying the inbound *caller_trace_id* (Story 19.4). It
+        THEN runs the post-put retention sweep (``store.sweep()`` — retention is NOT
+        enforced inside ``store.put``): each hash the sweep evicts surfaces an
+        ``artifact.deleted`` event (``reason="retention"``, system-initiated
+        deletion per ADR-0011 §5) carrying the SAME *caller_trace_id*, returned in
+        ``result["retention_deleted"]``. Every payload is METADATA ONLY — the
+        artifact bytes NEVER enter the spine event (ADR-0011 §3/§5).
 
         Args:
             caller_trace_id: FR58 correlation ID (UUIDv7 OR ``tg:<update_id>``).
@@ -329,12 +390,39 @@ def register_tools(
         except ValueError:
             return {"ok": False, "error": "content must be valid base64"}
         record = store.put(raw, name=name, task_id=task_id)
+        # METADATA ONLY — the artifact bytes NEVER reach the event (ADR-0011 §5).
+        stored_payload: dict[str, object] = {
+            "hash": record["hash"],
+            "name": record["name"],
+            "size_bytes": record["size"],
+            "deduped": record["deduped"],
+        }
+        event = await _emit_artifact_event(
+            "artifact.stored", stored_payload, caller_trace_id=caller_trace_id
+        )
+        # Post-put retention sweep (ADR-0011 §5): retention is system-initiated and
+        # runs WITHOUT a Tier-3 approval. Each evicted hash surfaces an
+        # artifact.deleted event (reason="retention") with the SAME caller_trace_id.
+        retention_events: list[dict[str, object]] = []
+        for deleted_hash in store.sweep():
+            deleted_payload: dict[str, object] = {
+                "hash": deleted_hash,
+                "reason": "retention",
+                "size_bytes": 0,
+            }
+            retention_events.append(
+                await _emit_artifact_event(
+                    "artifact.deleted", deleted_payload, caller_trace_id=caller_trace_id
+                )
+            )
         return {
             "ok": True,
             "hash": record["hash"],
             "size": record["size"],
             "name": record["name"],
             "deduped": record["deduped"],
+            "event": event,
+            "retention_deleted": retention_events,
         }
 
     # ------------------------------------------------------------------
@@ -357,6 +445,12 @@ def register_tools(
         Retention sweeps (system-initiated deletion) run WITHOUT this gate — only
         the explicit ``artifact.delete`` tool is approval-gated (ADR-0011 §5).
 
+        On a successful deletion (``deleted=True``) this surfaces an
+        ``artifact.deleted`` event descriptor in ``result["event"]`` carrying the
+        inbound *caller_trace_id* and ``reason="requested"`` (METADATA ONLY — the
+        artifact bytes NEVER enter the spine event, ADR-0011 §3/§5). A no-op delete
+        (nothing matched, ``deleted=False``) emits NO event.
+
         Args:
             caller_trace_id: FR58 correlation ID (UUIDv7 OR ``tg:<update_id>``).
             hash: The lowercase hex SHA-256 of the object to delete.
@@ -370,7 +464,18 @@ def register_tools(
             approval_lookup=approval_lookup,
         )
         deleted = store.delete(hash)
-        return {"ok": True, "deleted": deleted, "hash": hash}
+        result: dict[str, object] = {"ok": True, "deleted": deleted, "hash": hash}
+        if deleted:
+            # METADATA ONLY — the artifact bytes NEVER reach the event (ADR-0011 §5).
+            deleted_payload: dict[str, object] = {
+                "hash": hash,
+                "reason": "requested",
+                "size_bytes": 0,
+            }
+            result["event"] = await _emit_artifact_event(
+                "artifact.deleted", deleted_payload, caller_trace_id=caller_trace_id
+            )
+        return result
 
     # Reference the handlers so linters see them as used (FastMCP holds the real
     # references via the decorator registration side-effect).

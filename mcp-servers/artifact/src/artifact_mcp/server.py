@@ -107,9 +107,13 @@ def build_server(
     store = ArtifactStore(store_root, max_bytes=max_bytes, ttl_seconds=ttl_seconds)
 
     # Startup retention sweep (ADR-0011 §5): clear orphan temp files left by a
-    # crashed put and enforce the configured TTL / size cap. The returned deleted
-    # hashes are surfaced to the 19.4 ``artifact.deleted`` emitter; in the scaffold
-    # the sweep just runs for its crash-recovery + retention side-effects.
+    # crashed put and enforce the configured TTL / size cap. This boot-time sweep is
+    # deliberately event-LESS (Story 19.4 decision (a)): it runs before any tool call
+    # with NO caller context — there is no ``caller_trace_id`` to carry, and the
+    # spine's ``check_trace_id_required`` invariant forbids a trace_id-less emit. The
+    # retention deletions that matter for observability are the POST-PUT ones (the
+    # ``artifact.put`` handler sweeps after each put and emits ``artifact.deleted``
+    # with the caller's trace_id). At boot we only log the evicted count.
     _swept = store.sweep()
     if _swept:
         log.info("artifact_mcp_startup_sweep_evicted", extra={"count": len(_swept)})

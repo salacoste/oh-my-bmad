@@ -26,6 +26,8 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     ApprovalGrantedPayload,
     ApprovalInboxOpenedPayload,
     ApprovalRejectedPayload,
+    ArtifactDeletedPayload,
+    ArtifactStoredPayload,
     BudgetOverridePayload,
     CapabilityDeniedPayload,
     DiffSummary,
@@ -105,6 +107,8 @@ __all__ = [
     "ApprovalGrantedPayload",
     "ApprovalInboxOpenedPayload",
     "ApprovalRejectedPayload",
+    "ArtifactDeletedPayload",
+    "ArtifactStoredPayload",
     "BudgetOverridePayload",
     "CapabilityDeniedPayload",
     "DiffSummary",
@@ -366,6 +370,17 @@ def ensure_registered() -> None:
     # ADR-0012 §5). Born at 1.1.0 (NEW Phase-3 event type — no v1.0.0 predecessor,
     # same convention as the git.* / github.* / verification.completed events above).
     register("memory.written", "1.1.0", MemoryWrittenPayload)
+
+    # Story 19.4 — artifact.* event types (Epic 19 / ADR-0011 §3/§5). Emitted by
+    # artifact-mcp: artifact.stored after a Tier-2 artifact.put persists content into
+    # its DEDICATED content-addressed store; artifact.deleted on BOTH the Tier-3
+    # artifact.delete tool (reason="requested") AND a retention-sweep eviction
+    # (reason="retention", system-initiated). METADATA-ONLY payloads (hash / name /
+    # size_bytes / deduped / reason — NEVER the artifact bytes; ADR-0011 §5). Born at
+    # 1.1.0 (NEW Phase-3 event types — no v1.0.0 predecessor, same convention as the
+    # git.* / github.* / verification.completed / memory.written events above).
+    register("artifact.stored", "1.1.0", ArtifactStoredPayload)
+    register("artifact.deleted", "1.1.0", ArtifactDeletedPayload)
 
     # Story 9.7 / AC10: all event types registered under 1.1.0 above for
     # replay safety. Both 1.0.0 and 1.1.0 entries kept per AC10 option (a).
