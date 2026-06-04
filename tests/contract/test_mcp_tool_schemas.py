@@ -395,6 +395,13 @@ def test_validate_caller_trace_id_byte_identical_across_servers() -> None:
     validation function — that wouldn't be caught by per-server unit tests alone.
     """
     from clawhip_bridge_mcp.server import validate_caller_trace_id as _v_bridge
+
+    # Epic 15 / Story 15.5 — git-mcp's helper lives at ``git_mcp.handlers.tools``
+    # (NOT ``.server`` like clawhip-bridge), but it must stay byte-identical to the
+    # other three (FR58 / AC2 sync invariant extended to git-mcp).
+    from git_mcp.handlers.tools import (
+        validate_caller_trace_id as _v_git,
+    )
     from session_registry_mcp.handlers.tools import (
         validate_caller_trace_id as _v_sess,
     )
@@ -405,6 +412,7 @@ def test_validate_caller_trace_id_byte_identical_across_servers() -> None:
     bridge_body = _extract_fn_body_ast(_v_bridge)
     sess_body = _extract_fn_body_ast(_v_sess)
     task_body = _extract_fn_body_ast(_v_task)
+    git_body = _extract_fn_body_ast(_v_git)
 
     assert bridge_body == sess_body, (
         "validate_caller_trace_id body differs between clawhip-bridge and session-registry"
@@ -415,6 +423,11 @@ def test_validate_caller_trace_id_byte_identical_across_servers() -> None:
         "validate_caller_trace_id body differs between clawhip-bridge and task-registry"
         f"\n--- bridge ---\n{bridge_body}"
         f"\n--- task ---\n{task_body}"
+    )
+    assert bridge_body == git_body, (
+        "validate_caller_trace_id body differs between clawhip-bridge and git-mcp (Story 15.5)"
+        f"\n--- bridge ---\n{bridge_body}"
+        f"\n--- git ---\n{git_body}"
     )
 
 
@@ -428,6 +441,9 @@ def test_validate_caller_trace_id_runtime_messages_identical() -> None:
     unparser collapses the diff, this runtime check still catches it.
     """
     from clawhip_bridge_mcp.server import validate_caller_trace_id as _v_bridge
+    from git_mcp.handlers.tools import (  # Story 15.5
+        validate_caller_trace_id as _v_git,
+    )
     from session_registry_mcp.handlers.tools import (
         validate_caller_trace_id as _v_sess,
     )
@@ -437,12 +453,12 @@ def test_validate_caller_trace_id_runtime_messages_identical() -> None:
 
     bad = "not-a-uuid"
     messages: list[str] = []
-    for fn in (_v_bridge, _v_sess, _v_task):
+    for fn in (_v_bridge, _v_sess, _v_task, _v_git):
         try:
             fn(bad)
         except ValueError as exc:
             messages.append(str(exc))
-    assert len(messages) == 3, f"expected 3 ValueError messages, got {messages!r}"
+    assert len(messages) == 4, f"expected 4 ValueError messages, got {messages!r}"
     assert len(set(messages)) == 1, f"helper messages drift: {messages!r}"
 
 

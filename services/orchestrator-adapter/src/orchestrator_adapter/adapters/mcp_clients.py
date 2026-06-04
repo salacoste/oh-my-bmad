@@ -67,6 +67,10 @@ _ENV_ALLOWLIST: frozenset[str] = frozenset(
         "CLAWHIP_BRIDGE_ACTOR_KIND",
         "CLAWHIP_BRIDGE_ACTOR_ID",
         "CLAWHIP_BRIDGE_LOG_DIR",
+        # git-mcp REQUIRED (mcp-servers/git/.../__main__.py) — Story 15.5
+        "GIT_MCP_ACTOR_KIND",
+        "GIT_MCP_ACTOR_ID",
+        "GIT_MCP_WORKTREE_ROOT",
         # Shared event-log + SQLite paths (spine convention)
         "REGISTRY_EVENTS_DIR",
         "REGISTRY_DB_PATH",
