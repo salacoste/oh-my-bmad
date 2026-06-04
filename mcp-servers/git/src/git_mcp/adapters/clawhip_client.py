@@ -267,7 +267,13 @@ class EmitterHolder:
     def __init__(self) -> None:
         self.client: ClawhipBridgeClient | None = None
 
-    async def emit_event(self, event_type: str, payload: dict[str, object]) -> None:
+    async def emit_event(
+        self,
+        event_type: str,
+        payload: dict[str, object],
+        *,
+        caller_trace_id: str | None = None,
+    ) -> None:
         """Forward to ``self.client``; route ``capability.denied`` to the dedicated tool.
 
         Story 11.2.3 AC5: ``capability.denied`` envelopes go through the
@@ -275,6 +281,17 @@ class EmitterHolder:
         validates caller identity and forces ``payload.actor_id`` to the
         validated caller). All other event types continue to use the
         generic ``emit_event`` tool.
+
+        Story 15.4: ``caller_trace_id`` is forwarded to ``client.emit_event``
+        for NON-denial events (e.g. ``git.committed`` / ``git.pushed``) so the
+        emitted envelope carries the inbound operator trace_id instead of an
+        auto-minted one (the AC requires the git.* event to carry the inbound
+        trace_id). ``capability.denied`` keeps its own auto-mint discipline via
+        ``forward_capability_denied_audit`` — the denial audit is
+        system-emitted and does not thread the caller trace_id here. The
+        keyword stays the same async ``(str, dict) -> None`` shape (trailing
+        kw-only optional) so the ``CapabilityDeniedEmitter`` contract used by
+        ``emit_capability_denied_on_deny`` is unaffected.
         """
         if self.client is None:
             raise RuntimeError(
@@ -284,7 +301,7 @@ class EmitterHolder:
         if event_type == "capability.denied":
             await self.client.forward_capability_denied(payload)
         else:
-            await self.client.emit_event(event_type, payload)
+            await self.client.emit_event(event_type, payload, caller_trace_id=caller_trace_id)
 
 
 __all__ = ["ClawhipBridgeClient", "EmitterHolder"]

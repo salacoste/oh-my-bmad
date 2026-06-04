@@ -51,16 +51,29 @@ class TestServerConstruction:
 
     @pytest.mark.asyncio
     async def test_build_server_registers_read_tools(self, tmp_path: Path) -> None:
-        """Story 15.3: the four Tier-1 read tools are registered (mutating land in 15.4)."""
+        """Story 15.3/15.4: the four read tools + four mutating tools are registered."""
         mcp = _build(tmp_path)
         tools = await mcp.list_tools()
         names = {t.name for t in tools}
-        assert names == {"git.status", "git.diff", "git.log", "git.branch"}
+        assert names == {
+            "git.status",
+            "git.diff",
+            "git.log",
+            "git.branch",
+            "git.add",
+            "git.commit",
+            "git.push",
+            "git.rebase",
+        }
         assert TIER_MAP == {
             "git.status": Tier.ONE,
             "git.diff": Tier.ONE,
             "git.log": Tier.ONE,
             "git.branch": Tier.ONE,
+            "git.add": Tier.TWO,
+            "git.commit": Tier.TWO,
+            "git.push": Tier.THREE,
+            "git.rebase": Tier.THREE,
         }
 
     def test_build_server_with_clawhip_disabled_returns_cleanly(self, tmp_path: Path) -> None:

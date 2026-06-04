@@ -773,6 +773,61 @@ class FileEditedPayload(BaseModel):
     secrets_detected: bool = False
 
 
+class GitCommittedPayload(BaseModel):
+    """Payload for the ``git.committed`` event (Epic 15 / Story 15.4 / FR72).
+
+    Emitted by git-mcp after a successful ``git.commit`` (Tier-2 repo mutation).
+    Records the new HEAD sha, the branch, a bounded commit-message summary, and
+    the number of files changed by the commit. Born at 1.1.0 (NEW Phase-3 event
+    type — no v1.0.0 predecessor, same convention as capability.denied /
+    key.rotated).
+
+    Field rules:
+
+    * ``sha``: the 40-char lowercase-hex new HEAD commit sha (full sha-1; the
+      abbreviated form is not used so downstream consumers have the canonical id).
+    * ``branch``: the branch the commit landed on. Bounded to the git ref-name
+      length limit (255) and the shared ``_PR_BRANCH_PATTERN`` char-class.
+    * ``message_summary``: the first line of the commit message, bounded to 2000
+      chars (matches the ``task.summary_emitted`` / blocker ``reason`` cap).
+    * ``files_changed``: count of files touched by the commit (``>= 0``, capped at
+      1M matching the file-level counter caps on ``TaskCompletedPayload``).
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    sha: str = Field(min_length=40, max_length=40, pattern=r"^[0-9a-f]{40}$")
+    branch: str = Field(min_length=1, max_length=255, pattern=_PR_BRANCH_PATTERN)
+    message_summary: str = Field(min_length=1, max_length=2000)
+    files_changed: int = Field(ge=0, le=10**6)
+
+
+class GitPushedPayload(BaseModel):
+    """Payload for the ``git.pushed`` event (Epic 15 / Story 15.4 / FR72).
+
+    Emitted by git-mcp after a successful Tier-3 ``git.push`` (gated by a
+    matching ``approval.granted``). DECISION-1(A): the push target is a LOCAL
+    bare remote (no network / no credentials in Phase-1); ``remote`` records the
+    configured remote name and ``refspec`` the pushed refspec. Born at 1.1.0
+    (NEW Phase-3 event type — no v1.0.0 predecessor).
+
+    Field rules:
+
+    * ``remote``: the remote name pushed to (e.g. ``origin``). Bounded to 255
+      chars (git remote-name length limit); ``min_length=1``.
+    * ``refspec``: the pushed refspec (e.g. ``main`` or ``main:main``). Bounded
+      to 512 chars; ``min_length=1``.
+    * ``sha``: the 40-char lowercase-hex sha that was pushed (the local HEAD at
+      push time).
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    remote: str = Field(min_length=1, max_length=255)
+    refspec: str = Field(min_length=1, max_length=512)
+    sha: str = Field(min_length=40, max_length=40, pattern=r"^[0-9a-f]{40}$")
+
+
 class TaskBudgetExceededPayload(BaseModel):
     """Payload for the ``task.budget_exceeded`` event (FR44 / NFR-P5).
 
@@ -1185,6 +1240,8 @@ __all__ = [
     "CapabilityDeniedPayload",
     "DiffSummary",
     "FileEditedPayload",
+    "GitCommittedPayload",
+    "GitPushedPayload",
     "KeyRotatedPayload",
     "LicenseOverridePayload",
     "PlanStep",

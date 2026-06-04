@@ -29,19 +29,24 @@ git-mcp now that it registers tools.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from capabilities import CallerContext, Tier, check_tier
+from capabilities import CallerContext, Tier, check_tier, check_tier_with_approval
 from capabilities.emit import emit_capability_denied_on_deny
+from events import current_day_path, read_log_lines  # noqa: IMP001 — packages/
 from events.envelope import ActorKind, is_valid_trace_id  # noqa: IMP001 — packages/
 
 from git_mcp.adapters.clawhip_client import EmitterHolder
 
 if TYPE_CHECKING:
+    from pathlib import Path as _Path
+
+    from events.clock import Clock  # noqa: IMP001 — packages/
     from mcp.server.fastmcp import FastMCP
 
     from git_mcp.server import GitExecutor
@@ -57,6 +62,13 @@ TIER_MAP: dict[str, Tier] = {
     "git.diff": Tier.ONE,
     "git.log": Tier.ONE,
     "git.branch": Tier.ONE,
+    # Story 15.4 — mutating tools. add/commit are Tier-2 (repo mutation); push
+    # and history-rewrite (rebase) are Tier-3 (approval-gated via
+    # check_tier_with_approval + approval_lookup).
+    "git.add": Tier.TWO,
+    "git.commit": Tier.TWO,
+    "git.push": Tier.THREE,
+    "git.rebase": Tier.THREE,
 }
 
 # D5: default + hard cap on ``git.log`` history depth so an unbounded request
@@ -97,6 +109,52 @@ def validate_caller_trace_id(caller_trace_id: str) -> None:
             f"caller_trace_id must match Story 9.1 contract "
             f"(UUIDv7 or tg:<update_id>); got {caller_trace_id!r}"
         )
+
+
+def make_approval_lookup(
+    base_dir: _Path,
+    clock: Clock,
+) -> Callable[[str, str], Awaitable[bool]]:
+    """Return an async ``(task_id, action) -> bool`` approval lookup for Tier-3 gating.
+
+    Story 15.4: the Tier-3 git tools (``git.push`` / ``git.rebase``) are gated by
+    ``check_tier_with_approval(..., approval_lookup=...)`` — the lookup returns
+    True only when a matching ``approval.granted`` event exists for the caller's
+    *task_id*. Scans TODAY's JSONL event log for ``approval.granted`` events whose
+    payload ``task_id`` matches; approvals are currently task-scoped only (the
+    *action* parameter is accepted but unused — reserved for future wildcard
+    matching).
+
+    COPIED (not imported) from clawhip-bridge's ``_make_approval_lookup`` — the
+    Story 5.8 import-graph constraint forbids cross-importing between mcp-servers,
+    so the lookup body is duplicated here (the same discipline that duplicates
+    ``validate_caller_trace_id``). The worker / clawhip-bridge precedents carry
+    the same Phase-1 limitation:
+
+    Phase-1 limitation: only scans today's JSONL log file. Cross-day approvals
+    (granted yesterday, used today) are not covered. Acceptable for the current
+    scale; addressed when the materialized Event table becomes the primary
+    approval source.
+    """
+
+    async def _lookup(task_id: str, action: str) -> bool:  # noqa: ARG001 — action reserved for future wildcard matching
+        # NOTE: O(n) linear scan of today's JSONL per check — acceptable for
+        # current scale, but cache or index if event volume grows.
+        path = current_day_path(base_dir, clock.now())
+        try:
+            for envelope in read_log_lines(path):
+                payload = envelope.payload
+                if (
+                    envelope.type == "approval.granted"
+                    and isinstance(payload, dict)
+                    and payload.get("task_id") == task_id
+                ):
+                    return True
+        except FileNotFoundError:
+            pass
+        return False
+
+    return _lookup
 
 
 def _make_actor_id_extractor(actor_id: str) -> Callable[..., str]:
@@ -244,6 +302,34 @@ def _git_error(result_stderr: str, returncode: int) -> dict[str, object]:
     return {"ok": False, "error": first_line, "returncode": returncode}
 
 
+async def _commit_metadata(executor: GitExecutor) -> tuple[str, str, int]:
+    """Return ``(head_sha, branch, files_changed)`` for the current HEAD.
+
+    ``head_sha`` is the full 40-char HEAD sha (``rev-parse HEAD``); ``branch`` is
+    the current branch short name (``rev-parse --abbrev-ref HEAD``); ``files_changed``
+    is the number of files touched by the HEAD commit (``diff-tree`` numstat, or
+    ``-z``-NUL-separated lines for the root commit). Each lookup is a bounded read
+    through the single sandboxed ``run_git`` spawn-site. A failed lookup yields a
+    safe default (empty string / 0) so a metadata hiccup never masks the already-
+    successful mutation; the typed payload models still reject a malformed sha at
+    emit time (caught by the best-effort emit guard).
+    """
+    sha_res = await executor.run_git(["rev-parse", "HEAD"])
+    sha = sha_res.stdout.strip() if sha_res.returncode == 0 else ""
+    branch_res = await executor.run_git(["rev-parse", "--abbrev-ref", "HEAD"])
+    branch = branch_res.stdout.strip() if branch_res.returncode == 0 else ""
+    # ``diff-tree --no-commit-id --numstat -r -z HEAD`` lists one NUL-terminated
+    # numstat record per changed file; for the root commit (no parent) it lists
+    # all files added. Count non-empty records.
+    files_res = await executor.run_git(
+        ["diff-tree", "--no-commit-id", "--numstat", "-r", "-z", "HEAD"]
+    )
+    files_changed = 0
+    if files_res.returncode == 0:
+        files_changed = len([r for r in files_res.stdout.split("\x00") if r != ""])
+    return sha, branch, files_changed
+
+
 def register_tools(
     mcp: FastMCP,
     executor: GitExecutor,
@@ -251,14 +337,26 @@ def register_tools(
     actor_kind: ActorKind,
     actor_id: str,
     emitter_holder: EmitterHolder | None = None,
+    approval_lookup: Callable[[str, str], Awaitable[bool]] | None = None,
 ) -> None:
-    """Register the four Tier-1 git read tools on *mcp* (Story 15.3).
+    """Register the git read (Tier-1) + mutating (Tier-2/3) tools on *mcp*.
+
+    Story 15.3 ships the four Tier-1 read tools; Story 15.4 adds the mutating
+    tools — ``git.add`` / ``git.commit`` (Tier-2) and ``git.push`` /
+    ``git.rebase`` (Tier-3, approval-gated).
 
     Mirrors task-registry's ``register_tools``: when *emitter_holder* is wired,
     each tier-gated handler is wrapped with ``emit_capability_denied_on_deny``
-    so a ``CapabilityDenied`` from ``check_tier`` emits a ``capability.denied``
-    audit envelope via clawhip-bridge before re-raising (D3 — kept for recipe
-    uniformity even though reads are unlikely to be denied for a worker).
+    so a ``CapabilityDenied`` from ``check_tier`` / ``check_tier_with_approval``
+    emits a ``capability.denied`` audit envelope via clawhip-bridge before
+    re-raising (the Tier-3 negative-test path). On success the mutating handlers
+    also emit a typed ``git.committed`` / ``git.pushed`` event through the same
+    single-writer surface (best-effort, guarded on *emitter_holder*).
+
+    *approval_lookup* is the async ``(task_id, action) -> bool`` callable
+    threaded into ``check_tier_with_approval`` for the Tier-3 tools; when None
+    the Tier-3 tools deny every call (no approval source — test/no-approval
+    default).
     """
     get_actor_id = _make_actor_id_extractor(actor_id)
 
@@ -278,8 +376,42 @@ def register_tools(
             get_actor_id=get_actor_id,
         )
 
-    def _caller() -> CallerContext:
-        return CallerContext(actor_kind=actor_kind, actor_id=actor_id, task_id=None)
+    def _caller(task_id: str | None = None) -> CallerContext:
+        return CallerContext(actor_kind=actor_kind, actor_id=actor_id, task_id=task_id)
+
+    async def _emit_git_event(
+        event_type: str,
+        payload: dict[str, object],
+        *,
+        caller_trace_id: str,
+    ) -> dict[str, object]:
+        """Best-effort emit a ``git.*`` event; return the result-surfaced descriptor.
+
+        FR26 single-writer: the actual emission routes through *emitter_holder*
+        (clawhip-bridge MCP RPC), NEVER a direct event-log write. The emit is
+        BEST-EFFORT — guarded on *emitter_holder* and wrapped so an emission
+        failure (audit-off, closed pipe) is logged and swallowed, never failing
+        the already-successful git mutation.
+
+        The returned ``{"type": ..., "trace_id": caller_trace_id}`` descriptor is
+        built UNCONDITIONALLY (independent of whether the emit fired) and surfaced
+        by the caller as ``result["event"]`` so the ATDD contract can read the
+        git.* event type + inbound trace_id even when audit emission is disabled.
+        """
+        descriptor: dict[str, object] = {"type": event_type, "trace_id": caller_trace_id}
+        if emitter_holder is not None:
+            try:
+                await emitter_holder.emit_event(
+                    event_type, payload, caller_trace_id=caller_trace_id
+                )
+            except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):  # noqa: TRY302 — cancellation MUST propagate (PP1 contract); re-raise control-flow
+                raise
+            except BaseException:  # noqa: BLE001 — best-effort audit; never fail the git op
+                log.exception(
+                    "git_event_emission_failed",
+                    extra={"event_type": event_type},
+                )
+        return descriptor
 
     # ------------------------------------------------------------------
     # Tool: git.status
@@ -391,6 +523,183 @@ def register_tools(
             return _git_error(result.stderr, result.returncode)
         return _parse_branch(result.stdout)
 
+    # ------------------------------------------------------------------
+    # Tool: git.add (Tier-2 repo mutation)
+    # ------------------------------------------------------------------
+
+    @mcp.tool(name="git.add")
+    @_maybe_wrap("git.add")
+    async def git_add(
+        *,
+        caller_trace_id: str,
+        path: str,
+    ) -> dict[str, object]:
+        """Stage *path* for the next commit (Tier-2 repo mutation).
+
+        Args:
+            caller_trace_id: FR58 correlation ID (UUIDv7 OR ``tg:<update_id>``).
+            path: Path to stage; refused if it escapes the worktree root. Placed
+                after a ``--`` separator (option-injection defense).
+        """
+        validate_caller_trace_id(caller_trace_id)
+        check_tier("git.add", _caller(), TIER_MAP["git.add"])
+        await executor.assert_safe_repo_config()  # P0: refuse filter.*.clean RCE on add
+        relpath = _contained_relpath(executor, path)
+        result = await executor.run_git(["add", "--", relpath])
+        if result.returncode != 0:
+            return _git_error(result.stderr, result.returncode)
+        return {"ok": True, "staged": relpath}
+
+    # ------------------------------------------------------------------
+    # Tool: git.commit (Tier-2 repo mutation; emits git.committed)
+    # ------------------------------------------------------------------
+
+    @mcp.tool(name="git.commit")
+    @_maybe_wrap("git.commit")
+    async def git_commit(
+        *,
+        caller_trace_id: str,
+        message: str,
+    ) -> dict[str, object]:
+        """Commit the staged index (Tier-2 repo mutation; emits ``git.committed``).
+
+        DECISION-2: the committer/author identity is injected per-invocation via
+        ``-c user.name`` / ``-c user.email`` (no env, no ``~/.gitconfig``) so the
+        bot identity is hermetic and deterministic. The identity ``-c`` flags MUST
+        precede the ``commit`` subcommand. ``--no-verify`` is belt-and-suspenders
+        on top of the base ``core.hooksPath=/dev/null`` shield.
+
+        Args:
+            caller_trace_id: FR58 correlation ID (UUIDv7 OR ``tg:<update_id>``).
+            message: The commit message (``-m`` body).
+        """
+        validate_caller_trace_id(caller_trace_id)
+        check_tier("git.commit", _caller(), TIER_MAP["git.commit"])
+        await executor.assert_safe_repo_config()  # P0: refuse exec-driver config before mutation
+        bot_name = "git-mcp"
+        bot_email = f"git-mcp+{actor_id}@oh-my-bmad.local"
+        # Identity ``-c`` flags precede the ``commit`` subcommand (git requires
+        # config overrides before the subcommand). ``--no-verify`` skips hooks.
+        result = await executor.run_git(
+            [
+                "-c",
+                f"user.name={bot_name}",
+                "-c",
+                f"user.email={bot_email}",
+                "commit",
+                "--no-verify",
+                "-m",
+                message,
+            ]
+        )
+        if result.returncode != 0:
+            return _git_error(result.stderr, result.returncode)
+        sha, branch, files_changed = await _commit_metadata(executor)
+        payload: dict[str, object] = {
+            "sha": sha,
+            "branch": branch,
+            "message_summary": message.splitlines()[0] if message else message,
+            "files_changed": files_changed,
+        }
+        event = await _emit_git_event("git.committed", payload, caller_trace_id=caller_trace_id)
+        return {"ok": True, "sha": sha, "branch": branch, "event": event}
+
+    # ------------------------------------------------------------------
+    # Tool: git.push (Tier-3 — approval-gated; emits git.pushed)
+    # ------------------------------------------------------------------
+
+    @mcp.tool(name="git.push")
+    @_maybe_wrap("git.push")
+    async def git_push(
+        *,
+        caller_trace_id: str,
+        task_id: str,
+        remote: str = "origin",
+    ) -> dict[str, object]:
+        """Push the current branch to *remote* (Tier-3; approval-gated).
+
+        DECISION-1(A): the push target is a LOCAL bare remote (no network, no
+        credentials). The Tier-3 gate ``check_tier_with_approval`` denies the call
+        unless a matching ``approval.granted`` exists for *task_id*; on denial the
+        ``@_maybe_wrap`` decorator emits ``capability.denied`` before re-raising.
+        The push path carries ``_GIT_HARDENING_PUSH`` (``core.sshCommand=``) so a
+        repo-local ssh-command vector cannot execute.
+
+        Args:
+            caller_trace_id: FR58 correlation ID (UUIDv7 OR ``tg:<update_id>``).
+            task_id: Task whose ``approval.granted`` authorizes this Tier-3 push.
+            remote: Configured remote name (defaults to ``origin``).
+        """
+        from git_mcp.server import _GIT_HARDENING_PUSH
+
+        validate_caller_trace_id(caller_trace_id)
+        await check_tier_with_approval(
+            "git.push",
+            _caller(task_id=task_id),
+            TIER_MAP["git.push"],
+            approval_lookup=approval_lookup,
+        )
+        await executor.assert_safe_repo_config()  # P0: defense-in-depth before Tier-3 mutation
+        sha, branch, _ = await _commit_metadata(executor)
+        result = await executor.run_git(
+            ["push", "--no-verify", remote, branch],
+            extra_hardening=_GIT_HARDENING_PUSH,
+        )
+        if result.returncode != 0:
+            return _git_error(result.stderr, result.returncode)
+        payload: dict[str, object] = {"remote": remote, "refspec": branch, "sha": sha}
+        event = await _emit_git_event("git.pushed", payload, caller_trace_id=caller_trace_id)
+        return {"ok": True, "remote": remote, "refspec": branch, "sha": sha, "event": event}
+
+    # ------------------------------------------------------------------
+    # Tool: git.rebase (Tier-3 — history-rewrite; approval-gated)
+    # ------------------------------------------------------------------
+
+    @mcp.tool(name="git.rebase")
+    @_maybe_wrap("git.rebase")
+    async def git_rebase(
+        *,
+        caller_trace_id: str,
+        task_id: str,
+        upstream: str,
+    ) -> dict[str, object]:
+        """Rebase the current branch onto *upstream* (Tier-3 history-rewrite).
+
+        Approval-gated identically to ``git.push`` — a history-rewrite is a
+        high-risk Tier-3 action and is denied without a matching
+        ``approval.granted`` for *task_id*. ``--no-verify`` skips pre-rebase
+        hooks (belt-and-suspenders on the base ``core.hooksPath`` shield).
+
+        Args:
+            caller_trace_id: FR58 correlation ID (UUIDv7 OR ``tg:<update_id>``).
+            task_id: Task whose ``approval.granted`` authorizes this Tier-3 rebase.
+            upstream: The upstream ref to rebase onto (e.g. ``main``). Validated
+                as a contained ref name (no path-escape / option injection).
+        """
+        validate_caller_trace_id(caller_trace_id)
+        await check_tier_with_approval(
+            "git.rebase",
+            _caller(task_id=task_id),
+            TIER_MAP["git.rebase"],
+            approval_lookup=approval_lookup,
+        )
+        await executor.assert_safe_repo_config()  # P0: refuse merge.*.driver RCE on rebase
+        # ``--`` terminates option parsing so an ``upstream`` starting with ``-``
+        # cannot be reparsed as a flag (option-injection defense).
+        result = await executor.run_git(["rebase", "--no-verify", "--", upstream])
+        if result.returncode != 0:
+            return _git_error(result.stderr, result.returncode)
+        return {"ok": True, "upstream": upstream}
+
     # Reference the handlers so linters see them as used (FastMCP holds the real
     # references via the decorator registration side-effect).
-    _ = (git_status, git_diff, git_log, git_branch)
+    _ = (
+        git_status,
+        git_diff,
+        git_log,
+        git_branch,
+        git_add,
+        git_commit,
+        git_push,
+        git_rebase,
+    )

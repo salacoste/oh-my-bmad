@@ -212,6 +212,8 @@ _EVENT_FAMILIES: Final[tuple[str, ...]] = (
     "sink",
     "agent",
     "file",
+    "git",  # Story 15.4 — git.committed / git.pushed (Epic 15 / FR72). git-mcp
+    #            mutating-tool events; counter increments under event_family="git".
     "telegram",
     "deployment",
     "key",  # Story 11.2 — key.rotated (FR65a)

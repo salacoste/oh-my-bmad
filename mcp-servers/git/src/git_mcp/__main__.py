@@ -123,6 +123,15 @@ def main() -> None:
         # shlex.split handles quoted paths with spaces.
         clawhip_args = shlex.split(clawhip_args_raw)
 
+    # -- Optional: REGISTRY_EVENTS_DIR (Story 15.4 Tier-3 approval source) --
+    # The base dir of the JSONL event log, scanned by the git-mcp Tier-3
+    # ``approval_lookup`` for an ``approval.granted`` matching the caller's
+    # ``task_id``. Already in git-mcp's clawhip-bridge env allowlist. When unset,
+    # the Tier-3 git tools (``git.push`` / ``git.rebase``) have no approval source
+    # and every Tier-3 call is denied.
+    registry_events_dir_raw = os.environ.get("REGISTRY_EVENTS_DIR", "").strip()
+    registry_events_dir = Path(registry_events_dir_raw) if registry_events_dir_raw else None
+
     from git_mcp.server import build_server
 
     mcp = build_server(
@@ -132,6 +141,7 @@ def main() -> None:
         actor_id=actor_id,
         clawhip_bridge_command=clawhip_cmd,
         clawhip_bridge_args=clawhip_args,
+        registry_events_dir=registry_events_dir,
     )
     mcp.run()
 
