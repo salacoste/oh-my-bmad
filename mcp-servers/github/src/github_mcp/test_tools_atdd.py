@@ -211,7 +211,6 @@ def test_read_tools_are_tier_one(tool: str) -> None:
     assert TIER_MAP[tool] == Tier.ONE
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.parametrize("tool", _TIER3_TOOLS)
 def test_write_tools_are_tier_three(tool: str) -> None:
     """github write tools (remote mutations) are Tier-3 (approval-gated) — Story 16.4 (GREEN)."""
@@ -233,7 +232,6 @@ async def test_tier1_tool_registered_with_required_caller_trace_id(tool: str) ->
     _assert_caller_trace_id_required(registered, name=tool)
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool", _TIER3_TOOLS)
 async def test_tool_registered_with_required_caller_trace_id(tool: str) -> None:
@@ -251,7 +249,6 @@ async def test_tool_registered_with_required_caller_trace_id(tool: str) -> None:
 # ===========================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool", _TIER3_TOOLS)
 async def test_tier3_denied_without_approval(tool: str, tmp_path) -> None:  # type: ignore[no-untyped-def]
@@ -285,7 +282,6 @@ async def test_tier3_denied_without_approval(tool: str, tmp_path) -> None:  # ty
         await fn(caller_trace_id=_VALID_TRACE_ID, **kwargs)
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.parametrize("tool", _TIER3_TOOLS)
 def test_tier3_denial_semantics_via_check_tier(tool: str) -> None:
     """Tier-3 github ops with no approval are denied by the shared capability gate.
@@ -380,7 +376,6 @@ async def test_tier1_tool_rejects_invalid_caller_trace_id(tool: str) -> None:
         await fn(caller_trace_id=_INVALID_TRACE_ID)
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool", _TIER3_TOOLS)
 async def test_tool_rejects_invalid_caller_trace_id(tool: str) -> None:
@@ -406,7 +401,6 @@ async def test_tool_rejects_invalid_caller_trace_id(tool: str) -> None:
 # ===========================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("tool", "event_type"), list(_EVENT_BY_TOOL.items()))
 async def test_write_op_emits_github_event_with_trace_id(

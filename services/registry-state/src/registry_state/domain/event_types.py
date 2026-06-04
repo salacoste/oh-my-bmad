@@ -31,6 +31,12 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     DiffSummary,
     FileEditedPayload,
     GitCommittedPayload,
+    GithubCommentCreatedPayload,
+    GithubIssueCreatedPayload,
+    GithubIssueUpdatedPayload,
+    GithubPrCreatedPayload,
+    GithubPrUpdatedPayload,
+    GithubReviewRequestedPayload,
     GitPushedPayload,
     KeyRotatedPayload,
     LicenseOverridePayload,
@@ -103,6 +109,12 @@ __all__ = [
     "FileEditedPayload",
     "GitCommittedPayload",
     "GitPushedPayload",
+    "GithubCommentCreatedPayload",
+    "GithubIssueCreatedPayload",
+    "GithubIssueUpdatedPayload",
+    "GithubPrCreatedPayload",
+    "GithubPrUpdatedPayload",
+    "GithubReviewRequestedPayload",
     "KeyRotatedPayload",
     "LicenseOverridePayload",
     "PreCheckOutcome",
@@ -324,6 +336,18 @@ def ensure_registered() -> None:
     # predecessor, same convention as capability.denied / key.rotated above).
     register("git.committed", "1.1.0", GitCommittedPayload)
     register("git.pushed", "1.1.0", GitPushedPayload)
+
+    # Story 16.4 — github.* write-tool event types (Epic 16 / FR73). Emitted by
+    # github-mcp after a successful Tier-3 write (issues/PRs create+update, review
+    # request, comment create — each gated by an approval.granted). Born at 1.1.0
+    # (NEW Phase-3 event types — no v1.0.0 predecessor, same convention as the
+    # git.* events above).
+    register("github.issue.created", "1.1.0", GithubIssueCreatedPayload)
+    register("github.issue.updated", "1.1.0", GithubIssueUpdatedPayload)
+    register("github.pr.created", "1.1.0", GithubPrCreatedPayload)
+    register("github.pr.updated", "1.1.0", GithubPrUpdatedPayload)
+    register("github.review.requested", "1.1.0", GithubReviewRequestedPayload)
+    register("github.comment.created", "1.1.0", GithubCommentCreatedPayload)
 
     # Story 9.7 / AC10: all event types registered under 1.1.0 above for
     # replay safety. Both 1.0.0 and 1.1.0 entries kept per AC10 option (a).

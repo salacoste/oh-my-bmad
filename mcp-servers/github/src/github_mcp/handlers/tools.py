@@ -25,7 +25,7 @@ to github-mcp once it registers tools (Story 16.5 contract test).
 
 from __future__ import annotations
 
-import asyncio  # noqa: F401 — reserved for the Story 16.4 write-tool event-emission path
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
@@ -36,7 +36,12 @@ from events import current_day_path, read_log_lines  # noqa: IMP001 — packages
 from events.envelope import ActorKind, is_valid_trace_id  # noqa: IMP001 — packages/
 
 from github_mcp.adapters.clawhip_client import EmitterHolder
-from github_mcp.adapters.github_rest import GitHubReadClient, ReadResult
+from github_mcp.adapters.github_rest import (
+    GitHubReadClient,
+    GitHubWriteClient,
+    ReadResult,
+    WriteResult,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path as _Path
@@ -62,6 +67,16 @@ TIER_MAP: dict[str, Tier] = {
     "github.prs.get": Tier.ONE,
     "github.reviews.list": Tier.ONE,
     "github.reviews.get": Tier.ONE,
+    # Story 16.4 — write tools. Every GitHub state change is a remote,
+    # externally-visible mutation (an issue, a PR, a review request, a comment),
+    # so ALL writes are Tier-3 approval-gated (GitHub has NO Tier-2 local-only
+    # analogue). Gated via ``check_tier_with_approval`` + ``approval_lookup``.
+    "github.issues.create": Tier.THREE,
+    "github.issues.update": Tier.THREE,
+    "github.prs.create": Tier.THREE,
+    "github.prs.update": Tier.THREE,
+    "github.reviews.request": Tier.THREE,
+    "github.comment.create": Tier.THREE,
 }
 
 
@@ -177,6 +192,7 @@ def _owner_repo_error(owner: str, repo: str) -> str | None:
 def register_tools(
     mcp: FastMCP,
     read_client_factory: Callable[[], GitHubReadClient],
+    write_client_factory: Callable[[], GitHubWriteClient],
     *,
     actor_kind: ActorKind,
     actor_id: str,
@@ -190,7 +206,8 @@ def register_tools(
     ``github.reviews.list`` / ``github.reviews.get``); Story 16.4 adds the six
     Tier-3 write tools (approval-gated) plus their ``github.*`` event emission.
 
-    *read_client_factory* returns a fresh ``GitHubReadClient`` (used as a per-call
+    *read_client_factory* / *write_client_factory* return a fresh
+    ``GitHubReadClient`` / ``GitHubWriteClient`` (each used as a per-call
     ``async with`` session) authenticated with the SCOPED token (closed over by the
     factory in ``build_server``); the broad ``GITHUB_TOKEN`` is NEVER used. The
     scoped token is the client's bearer only — it is never returned in a tool result
@@ -199,7 +216,9 @@ def register_tools(
     Mirrors git-mcp's ``register_tools``: when *emitter_holder* is wired, each
     tier-gated handler is wrapped with ``emit_capability_denied_on_deny`` so a
     ``CapabilityDenied`` from ``check_tier`` / ``check_tier_with_approval`` emits a
-    ``capability.denied`` audit envelope via clawhip-bridge before re-raising.
+    ``capability.denied`` audit envelope via clawhip-bridge before re-raising. On
+    success the Tier-3 write handlers also emit a typed ``github.*`` event through
+    the same single-writer surface (best-effort, guarded on *emitter_holder*).
 
     *approval_lookup* is the async ``(task_id, action) -> bool`` callable threaded
     into ``check_tier_with_approval`` for the Tier-3 tools; when None the Tier-3
@@ -231,6 +250,48 @@ def register_tools(
         if read.ok:
             return {"ok": True, "status": read.status, "data": read.data}
         return {"ok": False, "status": read.status, "error": read.error}
+
+    def _write_error(write: WriteResult) -> dict[str, object]:
+        """Map a failed ``WriteResult`` into the structured tool payload.
+
+        The scoped credential is NEVER surfaced (the ``WriteResult`` never carries
+        it; this only echoes status + reason).
+        """
+        return {"ok": False, "status": write.status, "error": write.error}
+
+    async def _emit_github_event(
+        event_type: str,
+        payload: dict[str, object],
+        *,
+        caller_trace_id: str,
+    ) -> dict[str, object]:
+        """Best-effort emit a ``github.*`` event; return the result-surfaced descriptor.
+
+        FR26 single-writer: the actual emission routes through *emitter_holder*
+        (clawhip-bridge MCP RPC), NEVER a direct event-log write. The emit is
+        BEST-EFFORT — guarded on *emitter_holder* and wrapped so an emission
+        failure (audit-off, closed pipe) is logged and swallowed, never failing the
+        already-successful github write.
+
+        The returned ``{"type": ..., "trace_id": caller_trace_id}`` descriptor is
+        built UNCONDITIONALLY (independent of whether the emit fired) and surfaced
+        by the caller as ``result["event"]`` so the ATDD contract can read the
+        github.* event type + inbound trace_id even when audit emission is disabled.
+        """
+        descriptor: dict[str, object] = {"type": event_type, "trace_id": caller_trace_id}
+        if emitter_holder is not None:
+            try:
+                await emitter_holder.emit_event(
+                    event_type, payload, caller_trace_id=caller_trace_id
+                )
+            except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):  # noqa: TRY302 — cancellation MUST propagate (PP1 contract); re-raise control-flow
+                raise
+            except BaseException:  # noqa: BLE001 — best-effort audit; never fail the github op
+                log.exception(
+                    "github_event_emission_failed",
+                    extra={"event_type": event_type},
+                )
+        return descriptor
 
     # ------------------------------------------------------------------
     # Tool: github.issues.list
@@ -420,9 +481,315 @@ def register_tools(
         async with read_client_factory() as gh:
             return _result(await gh.get_review(owner, repo, pull_number, review_id))
 
+    # ------------------------------------------------------------------
+    # Write tools (Tier-3 — approval-gated; each emits a github.* event).
+    #
+    # Every handler: validate caller_trace_id FIRST, then gate on Tier-3 via
+    # ``check_tier_with_approval(..., TIER_MAP["<tool>"], approval_lookup=...)``
+    # (denied without a matching approval.granted for *task_id*; on denial the
+    # ``@_maybe_wrap`` decorator emits ``capability.denied`` before re-raising),
+    # then perform the write through the write client and, on success, emit the
+    # mapped ``github.*`` event carrying the inbound trace_id.
+    #
+    # ``owner``/``repo`` are optional: when supplied they are validated (no slash /
+    # non-empty — path-injection defense); when omitted the Phase-1 simulated write
+    # proceeds (the deployed scoped-target is supplied by config in Stories
+    # 16.5/16.6). The write client NEVER returns the scoped token.
+    # ------------------------------------------------------------------
+
+    def _owner_repo_guard(owner: str | None, repo: str | None) -> dict[str, object] | None:
+        """Validate owner/repo iff present; return a structured error dict or None."""
+        if owner is not None and repo is not None:
+            err = _owner_repo_error(owner, repo)
+            if err is not None:
+                return {"ok": False, "status": 0, "error": err}
+        return None
+
+    # ------------------------------------------------------------------
+    # Tool: github.issues.create (Tier-3; emits github.issue.created)
+    # ------------------------------------------------------------------
+
+    @mcp.tool(name="github.issues.create")
+    @_maybe_wrap("github.issues.create")
+    async def github_issues_create(
+        *,
+        caller_trace_id: str,
+        task_id: str,
+        title: str,
+        body: str = "",
+        owner: str | None = None,
+        repo: str | None = None,
+    ) -> dict[str, object]:
+        """Create an issue (Tier-3 remote mutation; emits ``github.issue.created``).
+
+        Args:
+            caller_trace_id: FR58 correlation ID (UUIDv7 OR ``tg:<update_id>``).
+            task_id: Task whose ``approval.granted`` authorizes this Tier-3 write.
+            title: Issue title.
+            body: Issue body (markdown).
+            owner: Repository owner (validated when present).
+            repo: Repository name (validated when present).
+        """
+        validate_caller_trace_id(caller_trace_id)
+        await check_tier_with_approval(
+            "github.issues.create",
+            _caller(task_id=task_id),
+            TIER_MAP["github.issues.create"],
+            approval_lookup=approval_lookup,
+        )
+        guard = _owner_repo_guard(owner, repo)
+        if guard is not None:
+            return guard
+        async with write_client_factory() as gh:
+            write = await gh.create_issue(owner or "", repo or "", title=title, body=body)
+        if not write.ok:
+            return _write_error(write)
+        payload: dict[str, object] = {"number": write.number, "title": title}
+        event = await _emit_github_event(
+            "github.issue.created", payload, caller_trace_id=caller_trace_id
+        )
+        return {"ok": True, "status": write.status, "number": write.number, "event": event}
+
+    # ------------------------------------------------------------------
+    # Tool: github.issues.update (Tier-3; emits github.issue.updated)
+    # ------------------------------------------------------------------
+
+    @mcp.tool(name="github.issues.update")
+    @_maybe_wrap("github.issues.update")
+    async def github_issues_update(
+        *,
+        caller_trace_id: str,
+        task_id: str,
+        number: int,
+        body: str = "",
+        owner: str | None = None,
+        repo: str | None = None,
+    ) -> dict[str, object]:
+        """Update an issue (Tier-3 remote mutation; emits ``github.issue.updated``).
+
+        Args:
+            caller_trace_id: FR58 correlation ID (UUIDv7 OR ``tg:<update_id>``).
+            task_id: Task whose ``approval.granted`` authorizes this Tier-3 write.
+            number: Issue number to update.
+            body: New issue body (markdown).
+            owner: Repository owner (validated when present).
+            repo: Repository name (validated when present).
+        """
+        validate_caller_trace_id(caller_trace_id)
+        await check_tier_with_approval(
+            "github.issues.update",
+            _caller(task_id=task_id),
+            TIER_MAP["github.issues.update"],
+            approval_lookup=approval_lookup,
+        )
+        guard = _owner_repo_guard(owner, repo)
+        if guard is not None:
+            return guard
+        async with write_client_factory() as gh:
+            write = await gh.update_issue(owner or "", repo or "", number, body=body)
+        if not write.ok:
+            return _write_error(write)
+        payload: dict[str, object] = {"number": number}
+        event = await _emit_github_event(
+            "github.issue.updated", payload, caller_trace_id=caller_trace_id
+        )
+        return {"ok": True, "status": write.status, "number": number, "event": event}
+
+    # ------------------------------------------------------------------
+    # Tool: github.prs.create (Tier-3; emits github.pr.created)
+    # ------------------------------------------------------------------
+
+    @mcp.tool(name="github.prs.create")
+    @_maybe_wrap("github.prs.create")
+    async def github_prs_create(
+        *,
+        caller_trace_id: str,
+        task_id: str,
+        title: str,
+        head: str,
+        base: str,
+        body: str = "",
+        owner: str | None = None,
+        repo: str | None = None,
+    ) -> dict[str, object]:
+        """Create a pull request (Tier-3 remote mutation; emits ``github.pr.created``).
+
+        Args:
+            caller_trace_id: FR58 correlation ID (UUIDv7 OR ``tg:<update_id>``).
+            task_id: Task whose ``approval.granted`` authorizes this Tier-3 write.
+            title: PR title.
+            head: Head branch (the branch with changes).
+            base: Base branch (the branch to merge into).
+            body: PR body (markdown).
+            owner: Repository owner (validated when present).
+            repo: Repository name (validated when present).
+        """
+        validate_caller_trace_id(caller_trace_id)
+        await check_tier_with_approval(
+            "github.prs.create",
+            _caller(task_id=task_id),
+            TIER_MAP["github.prs.create"],
+            approval_lookup=approval_lookup,
+        )
+        guard = _owner_repo_guard(owner, repo)
+        if guard is not None:
+            return guard
+        async with write_client_factory() as gh:
+            write = await gh.create_pull_request(
+                owner or "", repo or "", title=title, head=head, base=base, body=body
+            )
+        if not write.ok:
+            return _write_error(write)
+        payload: dict[str, object] = {
+            "number": write.number,
+            "title": title,
+            "head": head,
+            "base": base,
+        }
+        event = await _emit_github_event(
+            "github.pr.created", payload, caller_trace_id=caller_trace_id
+        )
+        return {"ok": True, "status": write.status, "number": write.number, "event": event}
+
+    # ------------------------------------------------------------------
+    # Tool: github.prs.update (Tier-3; emits github.pr.updated)
+    # ------------------------------------------------------------------
+
+    @mcp.tool(name="github.prs.update")
+    @_maybe_wrap("github.prs.update")
+    async def github_prs_update(
+        *,
+        caller_trace_id: str,
+        task_id: str,
+        number: int,
+        body: str = "",
+        owner: str | None = None,
+        repo: str | None = None,
+    ) -> dict[str, object]:
+        """Update a pull request (Tier-3 remote mutation; emits ``github.pr.updated``).
+
+        Args:
+            caller_trace_id: FR58 correlation ID (UUIDv7 OR ``tg:<update_id>``).
+            task_id: Task whose ``approval.granted`` authorizes this Tier-3 write.
+            number: PR number to update.
+            body: New PR body (markdown).
+            owner: Repository owner (validated when present).
+            repo: Repository name (validated when present).
+        """
+        validate_caller_trace_id(caller_trace_id)
+        await check_tier_with_approval(
+            "github.prs.update",
+            _caller(task_id=task_id),
+            TIER_MAP["github.prs.update"],
+            approval_lookup=approval_lookup,
+        )
+        guard = _owner_repo_guard(owner, repo)
+        if guard is not None:
+            return guard
+        async with write_client_factory() as gh:
+            write = await gh.update_pull_request(owner or "", repo or "", number, body=body)
+        if not write.ok:
+            return _write_error(write)
+        payload: dict[str, object] = {"number": number}
+        event = await _emit_github_event(
+            "github.pr.updated", payload, caller_trace_id=caller_trace_id
+        )
+        return {"ok": True, "status": write.status, "number": number, "event": event}
+
+    # ------------------------------------------------------------------
+    # Tool: github.reviews.request (Tier-3; emits github.review.requested)
+    # ------------------------------------------------------------------
+
+    @mcp.tool(name="github.reviews.request")
+    @_maybe_wrap("github.reviews.request")
+    async def github_reviews_request(
+        *,
+        caller_trace_id: str,
+        task_id: str,
+        number: int,
+        reviewers: list[str],
+        owner: str | None = None,
+        repo: str | None = None,
+    ) -> dict[str, object]:
+        """Request reviewers on a PR (Tier-3; emits ``github.review.requested``).
+
+        Args:
+            caller_trace_id: FR58 correlation ID (UUIDv7 OR ``tg:<update_id>``).
+            task_id: Task whose ``approval.granted`` authorizes this Tier-3 write.
+            number: PR number to request reviewers on.
+            reviewers: GitHub login names to request review from.
+            owner: Repository owner (validated when present).
+            repo: Repository name (validated when present).
+        """
+        validate_caller_trace_id(caller_trace_id)
+        await check_tier_with_approval(
+            "github.reviews.request",
+            _caller(task_id=task_id),
+            TIER_MAP["github.reviews.request"],
+            approval_lookup=approval_lookup,
+        )
+        guard = _owner_repo_guard(owner, repo)
+        if guard is not None:
+            return guard
+        async with write_client_factory() as gh:
+            write = await gh.request_reviewers(
+                owner or "", repo or "", number, reviewers=list(reviewers)
+            )
+        if not write.ok:
+            return _write_error(write)
+        payload: dict[str, object] = {"number": number, "reviewers": list(reviewers)}
+        event = await _emit_github_event(
+            "github.review.requested", payload, caller_trace_id=caller_trace_id
+        )
+        return {"ok": True, "status": write.status, "number": number, "event": event}
+
+    # ------------------------------------------------------------------
+    # Tool: github.comment.create (Tier-3; emits github.comment.created)
+    # ------------------------------------------------------------------
+
+    @mcp.tool(name="github.comment.create")
+    @_maybe_wrap("github.comment.create")
+    async def github_comment_create(
+        *,
+        caller_trace_id: str,
+        task_id: str,
+        number: int,
+        body: str,
+        owner: str | None = None,
+        repo: str | None = None,
+    ) -> dict[str, object]:
+        """Create an issue/PR comment (Tier-3; emits ``github.comment.created``).
+
+        Args:
+            caller_trace_id: FR58 correlation ID (UUIDv7 OR ``tg:<update_id>``).
+            task_id: Task whose ``approval.granted`` authorizes this Tier-3 write.
+            number: Issue/PR number to comment on.
+            body: Comment body (markdown).
+            owner: Repository owner (validated when present).
+            repo: Repository name (validated when present).
+        """
+        validate_caller_trace_id(caller_trace_id)
+        await check_tier_with_approval(
+            "github.comment.create",
+            _caller(task_id=task_id),
+            TIER_MAP["github.comment.create"],
+            approval_lookup=approval_lookup,
+        )
+        guard = _owner_repo_guard(owner, repo)
+        if guard is not None:
+            return guard
+        async with write_client_factory() as gh:
+            write = await gh.create_comment(owner or "", repo or "", number, body=body)
+        if not write.ok:
+            return _write_error(write)
+        payload: dict[str, object] = {"number": number}
+        event = await _emit_github_event(
+            "github.comment.created", payload, caller_trace_id=caller_trace_id
+        )
+        return {"ok": True, "status": write.status, "number": number, "event": event}
+
     # Reference the handlers so linters see them as used (FastMCP holds the real
-    # references via the decorator registration side-effect). ``check_tier_with_approval``
-    # is referenced too — it is wired for the Story 16.4 Tier-3 write tools.
+    # references via the decorator registration side-effect).
     _ = (
         github_issues_list,
         github_issues_get,
@@ -430,5 +797,10 @@ def register_tools(
         github_prs_get,
         github_reviews_list,
         github_reviews_get,
-        check_tier_with_approval,
+        github_issues_create,
+        github_issues_update,
+        github_prs_create,
+        github_prs_update,
+        github_reviews_request,
+        github_comment_create,
     )

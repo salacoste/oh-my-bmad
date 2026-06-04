@@ -93,10 +93,19 @@ def build_server(
     # ``GitHubReadClient`` is opened per tool call (an ``async with`` session) —
     # the simplest-correct lifecycle for the read scaffold (no long-lived session
     # state to share). The broad ``GITHUB_TOKEN`` is NEVER read.
-    from github_mcp.adapters.github_rest import GitHubReadClient
+    from github_mcp.adapters.github_rest import GitHubReadClient, GitHubWriteClient
 
     def _read_client_factory() -> GitHubReadClient:
         return GitHubReadClient(scoped_token=scoped_token)
+
+    # Story 16.4: a fresh ``GitHubWriteClient`` per Tier-3 write call. Phase-1
+    # writes are SIMULATED (``simulate=True`` default) — the request shape is built
+    # but no real GitHub HTTP is issued until the narrowly-scoped credential is
+    # wired into the deployed composes (Stories 16.5/16.6). The audit ``github.*``
+    # event still fires through the FR26 single-writer surface. The broad
+    # ``GITHUB_TOKEN`` is NEVER read.
+    def _write_client_factory() -> GitHubWriteClient:
+        return GitHubWriteClient(scoped_token=scoped_token)
 
     emitter_holder: EmitterHolder | None
     lifespan_fn = None
@@ -170,6 +179,7 @@ def build_server(
     register_tools(
         mcp,
         _read_client_factory,
+        _write_client_factory,
         actor_kind=actor_kind,
         actor_id=actor_id,
         emitter_holder=emitter_holder,

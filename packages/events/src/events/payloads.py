@@ -828,6 +828,88 @@ class GitPushedPayload(BaseModel):
     sha: str = Field(min_length=40, max_length=40, pattern=r"^[0-9a-f]{40}$")
 
 
+class GithubIssueCreatedPayload(BaseModel):
+    """Payload for the ``github.issue.created`` event (Epic 16 / Story 16.4 / FR73).
+
+    Emitted by github-mcp after a successful Tier-3 ``github.issues.create`` (gated
+    by a matching ``approval.granted``). Records the new issue's number (when GitHub
+    returns one — ``None`` for a Phase-1 simulated write until the scoped credential
+    is wired in 16.5/16.6) and a bounded title summary. Born at 1.1.0 (NEW Phase-3
+    event type — no v1.0.0 predecessor, same convention as ``git.committed``).
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    number: int | None = Field(default=None, gt=0, le=10**9)
+    title: str = Field(min_length=1, max_length=2000)
+
+
+class GithubIssueUpdatedPayload(BaseModel):
+    """Payload for the ``github.issue.updated`` event (Epic 16 / Story 16.4 / FR73).
+
+    Emitted by github-mcp after a successful Tier-3 ``github.issues.update``.
+    Records the updated issue's number. Born at 1.1.0.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    number: int = Field(gt=0, le=10**9)
+
+
+class GithubPrCreatedPayload(BaseModel):
+    """Payload for the ``github.pr.created`` event (Epic 16 / Story 16.4 / FR73).
+
+    Emitted by github-mcp after a successful Tier-3 ``github.prs.create``. Records
+    the new PR's number (``None`` for a Phase-1 simulated write), a bounded title
+    summary, and the head/base branches. Born at 1.1.0.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    number: int | None = Field(default=None, gt=0, le=10**9)
+    title: str = Field(min_length=1, max_length=2000)
+    head: str = Field(min_length=1, max_length=255, pattern=_PR_BRANCH_PATTERN)
+    base: str = Field(min_length=1, max_length=255, pattern=_PR_BRANCH_PATTERN)
+
+
+class GithubPrUpdatedPayload(BaseModel):
+    """Payload for the ``github.pr.updated`` event (Epic 16 / Story 16.4 / FR73).
+
+    Emitted by github-mcp after a successful Tier-3 ``github.prs.update``. Records
+    the updated PR's number. Born at 1.1.0.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    number: int = Field(gt=0, le=10**9)
+
+
+class GithubReviewRequestedPayload(BaseModel):
+    """Payload for the ``github.review.requested`` event (Epic 16 / Story 16.4 / FR73).
+
+    Emitted by github-mcp after a successful Tier-3 ``github.reviews.request``.
+    Records the PR number and the requested reviewer logins (bounded list). Born at
+    1.1.0.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    number: int = Field(gt=0, le=10**9)
+    reviewers: tuple[str, ...] = Field(min_length=1, max_length=100)
+
+
+class GithubCommentCreatedPayload(BaseModel):
+    """Payload for the ``github.comment.created`` event (Epic 16 / Story 16.4 / FR73).
+
+    Emitted by github-mcp after a successful Tier-3 ``github.comment.create``.
+    Records the issue/PR number the comment was attached to. Born at 1.1.0.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    number: int = Field(gt=0, le=10**9)
+
+
 class TaskBudgetExceededPayload(BaseModel):
     """Payload for the ``task.budget_exceeded`` event (FR44 / NFR-P5).
 
@@ -1242,6 +1324,12 @@ __all__ = [
     "FileEditedPayload",
     "GitCommittedPayload",
     "GitPushedPayload",
+    "GithubCommentCreatedPayload",
+    "GithubIssueCreatedPayload",
+    "GithubIssueUpdatedPayload",
+    "GithubPrCreatedPayload",
+    "GithubPrUpdatedPayload",
+    "GithubReviewRequestedPayload",
     "KeyRotatedPayload",
     "LicenseOverridePayload",
     "PlanStep",
