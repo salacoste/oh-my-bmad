@@ -23,6 +23,7 @@ dependencies = [
     "session-registry-mcp",
     "task-registry-mcp",
     "telegram-gateway",
+    "verification-mcp",
     "worker-wrapper",
 ]
 
@@ -53,6 +54,7 @@ secret-hygiene = { workspace = true }
 session-registry-mcp = { workspace = true }
 task-registry-mcp = { workspace = true }
 telegram-gateway = { workspace = true }
+verification-mcp = { workspace = true }
 worker-wrapper = { workspace = true }
 
 [dependency-groups]

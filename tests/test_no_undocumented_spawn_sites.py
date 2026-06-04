@@ -185,6 +185,15 @@ _FUNC_ALLOWLIST: dict[str, dict[str, str]] = {
         # logged at the handler boundary, not threaded to git.
         "GitExecutor.run_git": "asyncio.create_subprocess_exec",
     },
+    _rel("mcp-servers/verification/src/verification_mcp/server.py"): {
+        # Epic 17 / Story 17.3 — the SINGLE sandboxed recipe spawn-site behind
+        # the Tier-2 verification tools. ``create_subprocess_exec`` (never
+        # ``_shell``); command is a discrete argv list; ``cwd`` pinned to the
+        # worktree root; env is the explicit ``_ENV_ALLOWLIST``-filtered dict
+        # (no secrets, no ``os.environ.copy``). Wall-clock timeout kills+reaps a
+        # wedged recipe. caller_trace_id validated at the handler boundary.
+        "VerificationExecutor.run_recipe": "asyncio.create_subprocess_exec",
+    },
     _rel("scripts/sync_upstream.py"): {
         # Both ``subprocess.run`` calls live in ``main()`` — the maintenance
         # script's single entry-point. Top-level function (no class), so no
