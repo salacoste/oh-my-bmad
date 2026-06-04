@@ -93,6 +93,16 @@ _ENV_ALLOWLIST: frozenset[str] = frozenset(
         "VERIFICATION_MCP_WORKTREE_ROOT",
         "VERIFICATION_MCP_ACTOR_KIND",
         "VERIFICATION_MCP_ACTOR_ID",
+        # memory-mcp REQUIRED (mcp-servers/memory/.../__main__.py exits 2 without
+        # these) — Story 18.5. All NON-secret: MEMORY_MCP_STORE_PATH is the path to
+        # memory-mcp's OWN dedicated SQLite store (NEVER the registry DB — P3-I2
+        # isolation) + the actor identity. No external credential, so NO scoped
+        # token. Forwarded by BOTH spawner allowlists (byte-identical mirror); only
+        # worker-wrapper actually spawns memory-mcp (conditional on a non-blank
+        # WORKER_MEMORY_COMMAND).
+        "MEMORY_MCP_STORE_PATH",
+        "MEMORY_MCP_ACTOR_KIND",
+        "MEMORY_MCP_ACTOR_ID",
         # Shared event-log + SQLite paths (spine convention)
         "REGISTRY_EVENTS_DIR",
         "REGISTRY_DB_PATH",
@@ -148,6 +158,12 @@ class MCPClientGroup:
     # so a fresh boot without the VERIFICATION_MCP_* env does NOT brick the worker.
     # NFR-M8 / S-7 seam.
     verification: ClientSession | None = None
+    # Story 18.5 / P3-I3 — OPTIONAL 7th stdio member (memory-mcp). Same seam: stays
+    # ``None`` unless the deployment opts in via a non-blank
+    # ``settings.memory_command`` (default "" → OFF). memory-mcp's __main__.py exits
+    # 2 without MEMORY_MCP_STORE_PATH/ACTOR_KIND/ACTOR_ID, so a fresh boot without
+    # the MEMORY_MCP_* env does NOT brick the worker. NFR-M8 / S-8 seam.
+    memory: ClientSession | None = None
 
     async def __aenter__(self) -> MCPClientGroup:
         self._stack = AsyncExitStack()
@@ -198,6 +214,16 @@ class MCPClientGroup:
                     self.settings.verification_command,
                     self.settings.verification_args,
                 )
+            # Story 18.5 — conditional memory-mcp spawn. ONLY when the operator
+            # opted in via a non-blank ``memory_command``; otherwise memory stays
+            # absent (separability S-8 "absent" state). The MEMORY_MCP_* required
+            # vars (incl. the store path) are forwarded via ``_ENV_ALLOWLIST``.
+            if self.settings.memory_command:
+                self.memory = await self._connect(
+                    "memory",
+                    self.settings.memory_command,
+                    self.settings.memory_args,
+                )
         except BaseException:
             await self.__aexit__(None, None, None)
             raise
@@ -218,6 +244,7 @@ class MCPClientGroup:
         self.git = None  # Story 15.5 — null the optional 4th member.
         self.github = None  # Story 16.6 — null the optional 5th member.
         self.verification = None  # Story 17.5 — null the optional 6th member.
+        self.memory = None  # Story 18.5 — null the optional 7th member.
 
     async def _connect(
         self,

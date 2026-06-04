@@ -96,6 +96,16 @@ _ENV_ALLOWLIST: frozenset[str] = frozenset(
         "VERIFICATION_MCP_WORKTREE_ROOT",
         "VERIFICATION_MCP_ACTOR_KIND",
         "VERIFICATION_MCP_ACTOR_ID",
+        # memory-mcp REQUIRED (mcp-servers/memory/.../__main__.py exits 2 without
+        # these) — Story 18.5. All NON-secret: MEMORY_MCP_STORE_PATH is the path to
+        # memory-mcp's OWN dedicated SQLite store (NEVER the registry DB — P3-I2
+        # isolation) + the actor identity. No external credential, so NO scoped
+        # token. Forwarded by BOTH spawner allowlists (byte-identical mirror); only
+        # worker-wrapper actually spawns memory-mcp (conditional on a non-blank
+        # WORKER_MEMORY_COMMAND).
+        "MEMORY_MCP_STORE_PATH",
+        "MEMORY_MCP_ACTOR_KIND",
+        "MEMORY_MCP_ACTOR_ID",
         # Shared event-log + SQLite paths (spine convention)
         "REGISTRY_EVENTS_DIR",
         "REGISTRY_DB_PATH",

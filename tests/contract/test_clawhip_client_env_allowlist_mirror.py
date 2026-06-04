@@ -163,6 +163,14 @@ _SPAWNER_REQUIRED_ENV_VARS = {
     "VERIFICATION_MCP_WORKTREE_ROOT",
     "VERIFICATION_MCP_ACTOR_KIND",
     "VERIFICATION_MCP_ACTOR_ID",
+    # memory-mcp REQUIRED (mcp-servers/memory/.../__main__.py exits 2 without these)
+    # — Story 18.5. All NON-secret: MEMORY_MCP_STORE_PATH is memory-mcp's OWN SQLite
+    # store path (never the registry DB — P3-I2) + actor identity; no credential.
+    # Forwarded by BOTH spawner allowlists (byte-identical mirror); only
+    # worker-wrapper spawns memory-mcp (conditional on a non-blank WORKER_MEMORY_COMMAND).
+    "MEMORY_MCP_STORE_PATH",
+    "MEMORY_MCP_ACTOR_KIND",
+    "MEMORY_MCP_ACTOR_ID",
     "REGISTRY_EVENTS_DIR",
     "REGISTRY_DB_PATH",
 }

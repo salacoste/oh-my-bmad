@@ -404,12 +404,12 @@ development_status:
   # Epic 18: φ memory/wiki MCP server (5 stories, ~1 week)
   # phase: 3 · SQLite FTS5 own DB file · ADR-0012 · FR75 · NFR-M8/S12 · P3-I1/I2
   # =========================================================================
-  epic-18: backlog  # phase: 3 · persistent cross-task knowledge store; gated by ADR-0012
-  18-1-atdd-red-phase-contracts: backlog  # phase: 3 · FR75 (test-design) · tier + search-relevance + store-isolation contracts
-  18-2-store-schema-sqlite-fts5-own-db-file: backlog  # phase: 3 · FR75 · P3-I2 · ADR-0012 · dedicated SQLite FTS5 DB, single-writer-safe
-  18-3-read-search-tools: backlog  # phase: 3 · FR75 · Tier-1 read/search tools (recipe step 3)
-  18-4-write-tool-memory-events: backlog  # phase: 3 · FR75 · Tier-2 write + memory.* events (recipe steps 3,4)
-  18-5-separability-s8-supply-chain: backlog  # phase: 3 · FR75 · NFR-M8 (S-8) · NFR-S12 · S-8 + supply-chain + ADR-0012 finalization (recipe steps 7,8)
+  epic-18: done  # phase: 3 · CLOSED 2026-06-04 — φ memory/wiki MCP server complete via the ADR-0010 recipe + ADR-0012 store design (4th fleet server; NEW archetype: own SQLite FTS5 store, not subprocess-sandbox or REST-client). 5 stories merged (PR #52–#55). stdlib sqlite3 + raw SQL (no SQLAlchemy → single_writer gate clean, zero deps); dedicated DB at MEMORY_MCP_STORE_PATH (P3-I2 isolation — never the registry DB); 0o660/0o2775 file modes (umask discipline); read/search Tier-1, write Tier-2; memory.written events (metadata-only payload).
+  18-1-atdd-red-phase-contracts: done  # phase: 3 · FR75 (test-design) · 10 xfail(strict) tool contracts + 5 green store reference tests (FTS5 search-relevance, read round-trip, P3-I2 isolation, WAL+0o660 file mode) · merged PR #52 (with 18.2)
+  18-2-store-schema-sqlite-fts5-own-db-file: done  # phase: 3 · FR75 · P3-I2 · ADR-0012 · MemoryStore (stdlib sqlite3, documents table + external-content FTS5 virtual table, bm25 ranking, WAL, 0o2775 dir + 0o660 db/-wal/-shm). Single-writer-safe by construction (one instance). · merged PR #52
+  18-3-read-search-tools: done  # phase: 3 · FR75 · memory.read (by key) + memory.search (FTS5 MATCH + bm25, limit-capped) Tier-1 (recipe step 3) · also fixed a latent ATDD _tool_fn lookup bug · merged PR #53
+  18-4-write-tool-memory-events: done  # phase: 3 · FR75 · memory.write Tier-2 (upsert) + memory.written event (two-location, born 1.1.0; payload = key/title/body_bytes — NO body/content in the queryable spine event, ADR-0012 §5) (recipe steps 3,4) · merged PR #54
+  18-5-separability-s8-supply-chain: done  # phase: 3 · FR75 · NFR-M8 (S-8) · NFR-S12 · 2026-06-04 — MEMORY_MCP_STORE_PATH/ACTOR_KIND/ACTOR_ID added byte-identical to both _ENV_ALLOWLIST (all NON-secret, store-path + identity); conditional spawn (7th stdio member, WORKER_MEMORY_COMMAND); test_s8_memory_optional.py (SPAWNED boots real memory-mcp + write→read round-trip end-to-end + P3-I2 assert registry DB never created; ABSENT optional); validate_caller_trace_id mirror extended to memory (7 servers). Supply-chain: ZERO new third-party deps (only mcp; FTS5 built into stdlib sqlite3); license gate 11/11; no new release.yml matrix row. ADR-0012 accepted. Authored allowlist in main context (a0ca050 P0 area) — non-secret vars. See 18-5-supply-chain-and-separability.md (recipe steps 7,8)
 
   # =========================================================================
   # Epic 19: χ artifact MCP server + store (5 stories, ~1 week)
