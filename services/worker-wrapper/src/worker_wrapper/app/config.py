@@ -86,6 +86,21 @@ class WorkerSettings(BaseSettings):
     github_command: str = ""
     github_args: list[str] = ["-m", "github_mcp"]
 
+    # Epic 17 / Story 17.2 — verification MCP server spawn command (latent scaffold).
+    # The spawn is LATENT here: Story 17.5 activates it in MCPClientGroup, gated on
+    # this command being NON-BLANK, and Story 17.5 also lands the REQUIRED env vars
+    # (VERIFICATION_MCP_WORKTREE_ROOT / ACTOR_KIND / ACTOR_ID) in both
+    # ``_ENV_ALLOWLIST`` frozensets (byte-identical mirror) — NEITHER is wired yet.
+    # The default is "" (OFF) so a fresh boot without the VERIFICATION_MCP_* env
+    # does NOT brick the worker: verification-mcp's __main__.py exits 2 without those
+    # required vars, so verification stays absent unless a deployment opts in by
+    # setting WORKER_VERIFICATION_COMMAND (e.g. "python") AND forwarding the
+    # VERIFICATION_MCP_* env. Mirrors the git-mcp / github-mcp blank-command toggle
+    # (the P3-I3 separability seam): verification-mcp is a stdio member spawned by
+    # worker-wrapper, NOT a container.
+    verification_command: str = ""
+    verification_args: list[str] = ["-m", "verification_mcp"]
+
     # TODO(Story 5.8/5.9): consumed when task/session registry MCP servers
     # need a shared SQLite path.
     registry_db_path: str = ""
