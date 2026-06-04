@@ -381,13 +381,13 @@ development_status:
   # phase: 3 · closes G-SEC-2 scoped-credential follow-up · ADR-0010 (reused)
   # FR73 · NFR-M8/S12
   # =========================================================================
-  epic-16: backlog  # phase: 3 · most operator-visible server; scoped GITHUB_MCP_SCOPED_TOKEN
-  16-1-atdd-red-phase-contracts: backlog  # phase: 3 · FR73 (test-design) · per-tool tier + denial + scoped-credential contracts
-  16-2-server-scaffold: backlog  # phase: 3 · FR73 · P3-I3 · mcp-servers/github/ (github-mcp) scaffold (recipe steps 1,2,6)
-  16-3-read-tools-issues-prs-reviews: backlog  # phase: 3 · FR73 · Tier-1 list/get tools (recipe step 3)
-  16-4-write-tools-tier3-gated-events: backlog  # phase: 3 · FR73 · all write tools Tier-3 + github.* events (recipe steps 3,4)
-  16-5-scoped-credential-github-mcp-scoped-token: backlog  # phase: 3 · FR73 · NFR-S12 · GITHUB_MCP_SCOPED_TOKEN (closes G-SEC-2; broad GITHUB_TOKEN stays banned)
-  16-6-separability-s6-supply-chain: backlog  # phase: 3 · FR73 · NFR-M8 (S-6) · NFR-S12 · S-6 + supply-chain (recipe steps 7,8)
+  epic-16: done  # phase: 3 · CLOSED 2026-06-04 — γ github MCP server complete via the ADR-0010 recipe (2nd fleet server, reused git-mcp's recipe verbatim). 6 stories merged (PR #43–#47). Scoped-credential GITHUB_MCP_SCOPED_TOKEN closes the MCP-subprocess half of G-SEC-2 (broad GITHUB_TOKEN never reaches an MCP child); claude-agent half tracked in deferred-work. A P0 credential-leak (read tool echoing the scoped token in its result) was caught by diff-audit + fixed in 16.3. Independent security-review (16.5) APPROVE/LOW.
+  16-1-atdd-red-phase-contracts: done  # phase: 3 · FR73 (test-design) · 56 xfail(strict) red-phase contracts (tier + denial + scoped-credential) · merged PR #43 (with 16.2)
+  16-2-server-scaffold: done  # phase: 3 · FR73 · P3-I3 · mcp-servers/github/ (github-mcp) scaffold + build_server + __main__ fail-loud (reads GITHUB_MCP_SCOPED_TOKEN, never broad GITHUB_TOKEN) (recipe steps 1,2,6) · merged PR #43
+  16-3-read-tools-issues-prs-reviews: done  # phase: 3 · FR73 · Tier-1 issues/prs/reviews list+get via GitHubReadClient (aiohttp+tenacity, scoped-token Bearer) (recipe step 3) · P0 fix: removed scoped-token echo from tool result; scoped-cred test records outbound Authorization header instead · merged PR #44
+  16-4-write-tools-tier3-gated-events: done  # phase: 3 · FR73 · 6 write tools Tier-3 (check_tier_with_approval) + github.* events (two-location, born 1.1.0); Phase-1 writes simulated (deferred-work: flip simulate=False in real-write enablement) (recipe steps 3,4) · merged PR #45
+  16-5-scoped-credential-github-mcp-scoped-token: done  # phase: 3 · FR73 · NFR-S12 · GITHUB_MCP_SCOPED_TOKEN added byte-identical to both _ENV_ALLOWLIST (broad GITHUB_TOKEN stays in _FORBIDDEN_SECRET_ENV_VARS); contract test pins scoped-present+broad-absent; validate_caller_trace_id mirror extended to github (5 servers). Closes G-SEC-2 MCP-half; authored in main context (a0ca050 P0 area, NOT delegated) + independent security-review APPROVE/LOW · merged PR #46
+  16-6-separability-s6-supply-chain: done  # phase: 3 · FR73 · NFR-M8 (S-6) · NFR-S12 · 2026-06-04 — conditional github-mcp spawn (5th stdio member, gated on non-blank WORKER_GITHUB_COMMAND) + tests/separability/test_s6_github_optional.py (SPAWNED boots real github-mcp subprocess + github.issues.list callable end-to-end; ABSENT proves optional). Supply-chain: ZERO new third-party deps (aiohttp/tenacity already in worker-wrapper base SBOM, mcp shared); license gate 11/11; no new release.yml matrix row. See 16-6-supply-chain-and-separability.md (recipe steps 7,8)
 
   # =========================================================================
   # Epic 17: υ verification MCP server (5 stories, ~1 week)

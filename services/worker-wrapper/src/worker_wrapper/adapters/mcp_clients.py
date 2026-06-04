@@ -125,6 +125,12 @@ class MCPClientGroup:
     # worker — git-mcp's __main__.py exits 2 without its required vars). The
     # blank-command toggle is the NFR-M8 / S-5 separability seam.
     git: ClientSession | None = None
+    # Story 16.6 / P3-I3 — OPTIONAL 5th stdio member (github-mcp). Same seam as
+    # git: stays ``None`` unless the deployment opts in via a non-blank
+    # ``settings.github_command`` (default "" → OFF). github-mcp's __main__.py
+    # exits 2 without GITHUB_MCP_ACTOR_KIND/ACTOR_ID/SCOPED_TOKEN, so a fresh boot
+    # without the GITHUB_MCP_* env does NOT brick the worker. NFR-M8 / S-6 seam.
+    github: ClientSession | None = None
 
     async def __aenter__(self) -> MCPClientGroup:
         self._stack = AsyncExitStack()
@@ -155,6 +161,16 @@ class MCPClientGroup:
                     self.settings.git_command,
                     self.settings.git_args,
                 )
+            # Story 16.6 — conditional github-mcp spawn. ONLY when the operator
+            # opted in via a non-blank ``github_command``; otherwise github stays
+            # absent (separability S-6 "absent" state). The GITHUB_MCP_* required
+            # vars (incl. the scoped token) are forwarded via ``_ENV_ALLOWLIST``.
+            if self.settings.github_command:
+                self.github = await self._connect(
+                    "github",
+                    self.settings.github_command,
+                    self.settings.github_args,
+                )
         except BaseException:
             await self.__aexit__(None, None, None)
             raise
@@ -173,6 +189,7 @@ class MCPClientGroup:
         self.session_registry = None
         self.clawhip_bridge = None
         self.git = None  # Story 15.5 — null the optional 4th member.
+        self.github = None  # Story 16.6 — null the optional 5th member.
 
     async def _connect(
         self,
