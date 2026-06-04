@@ -30,6 +30,8 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     CapabilityDeniedPayload,
     DiffSummary,
     FileEditedPayload,
+    GitCommittedPayload,
+    GitPushedPayload,
     KeyRotatedPayload,
     LicenseOverridePayload,
     PreCheckOutcome,
@@ -99,6 +101,8 @@ __all__ = [
     "CapabilityDeniedPayload",
     "DiffSummary",
     "FileEditedPayload",
+    "GitCommittedPayload",
+    "GitPushedPayload",
     "KeyRotatedPayload",
     "LicenseOverridePayload",
     "PreCheckOutcome",
@@ -313,6 +317,13 @@ def ensure_registered() -> None:
     # registration lets the budget.override name validate/round-trip so a later pass
     # can switch the emit once consumers migrate. No new payload, no new 1.0.0.
     register("budget.override", "1.1.0", BudgetOverridePayload)
+
+    # Story 15.4 — git.* mutating-tool event types (Epic 15 / FR72). Emitted by
+    # git-mcp after a successful Tier-2 commit / Tier-3 push (gated by an
+    # approval.granted). Born at 1.1.0 (NEW Phase-3 event types — no v1.0.0
+    # predecessor, same convention as capability.denied / key.rotated above).
+    register("git.committed", "1.1.0", GitCommittedPayload)
+    register("git.pushed", "1.1.0", GitPushedPayload)
 
     # Story 9.7 / AC10: all event types registered under 1.1.0 above for
     # replay safety. Both 1.0.0 and 1.1.0 entries kept per AC10 option (a).

@@ -58,6 +58,8 @@ git.* events:       a successful commit/push emits git.committed / git.pushed
 
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -161,17 +163,15 @@ def test_read_tools_are_tier_one(tool: str) -> None:
     assert TIER_MAP[tool] == Tier.ONE
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.parametrize("tool", _TIER2_TOOLS)
 def test_write_tools_are_tier_two(tool: str) -> None:
-    """git.add/commit are Tier-2 (repo mutation) — Story 15.4."""
+    """git.add/commit are Tier-2 (repo mutation) — Story 15.4 (GREEN)."""
     assert TIER_MAP[tool] == Tier.TWO
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.parametrize("tool", _TIER3_TOOLS)
 def test_high_risk_tools_are_tier_three(tool: str) -> None:
-    """git.push and history-rewrite (rebase) are Tier-3 (approval-gated) — Story 15.4."""
+    """git.push and history-rewrite (rebase) are Tier-3 (approval-gated) — Story 15.4 (GREEN)."""
     assert TIER_MAP[tool] == Tier.THREE
 
 
@@ -192,11 +192,10 @@ async def test_tier1_tool_registered_with_required_caller_trace_id(
     _assert_caller_trace_id_required(registered, name=tool)
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool", _TIER2_TOOLS + _TIER3_TOOLS)
 async def test_tool_registered_with_required_caller_trace_id(tool: str, tmp_path: Path) -> None:
-    """Each Tier-2/3 git tool is registered and requires ``caller_trace_id`` — Story 15.4."""
+    """Each Tier-2/3 git tool registers and requires ``caller_trace_id`` — Story 15.4 (GREEN)."""
     mcp = _build(tmp_path)
     registered = await _tool_by_name(mcp, tool)
     _assert_caller_trace_id_required(registered, name=tool)
@@ -211,28 +210,39 @@ async def test_tool_registered_with_required_caller_trace_id(tool: str, tmp_path
 # ===========================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool", _TIER3_TOOLS)
 async def test_tier3_denied_without_approval(tool: str, tmp_path: Path) -> None:
     """git.push / history-rewrite raises CapabilityDenied when no approval.granted matches.
 
-    The 15.4 handler must call ``check_tier_with_approval`` with an
+    The 15.4 handler calls ``check_tier_with_approval`` with an
     ``approval_lookup`` that returns False when no matching ``approval.granted``
     exists for the task; the absence of approval MUST deny the Tier-3 action.
-    We assert the denial via the live tool call (today: tool absent → xfail).
+    We build a server with an EMPTY events dir (a real approval source with zero
+    ``approval.granted`` entries → lookup returns False) and assert the denial
+    via the live tool call. The Tier-3 tools require a ``task_id`` kwarg threaded
+    into the approval lookup. (GREEN — Story 15.4.)
     """
-    mcp = _build(tmp_path)
-    fn = await _tool_fn(mcp, tool)  # absent today → clean xfail
+    events_dir = tmp_path / "events"
+    events_dir.mkdir()
+    # actor_kind="operator" so the actor-kind gate ADMITS Tier-3 and the denial
+    # is driven specifically by the MISSING approval.granted (the AC's negative
+    # test), not by the coarse actor-kind cap (worker maxes at Tier.2).
+    mcp = build_server(
+        worktree_root=tmp_path,
+        clock=FrozenClock(mono_ns=1_000_000, now=FROZEN_EPOCH),
+        actor_kind="operator",
+        actor_id="test-operator",
+        registry_events_dir=events_dir,
+    )
+    await mcp.list_tools()
+    fn = mcp._tool_manager._tools[tool].fn
 
-    # Contract the wired handler must satisfy: a worker calling a Tier-3 git op
-    # without a matching approval.granted is denied. We invoke the tool and
-    # expect CapabilityDenied (surfaced through the MCP error path).
+    extra: dict[str, str] = {"upstream": "main"} if tool == "git.rebase" else {}
     with pytest.raises(CapabilityDenied):
-        await fn(caller_trace_id=_VALID_TRACE_ID)
+        await fn(caller_trace_id=_VALID_TRACE_ID, task_id="t-1", **extra)
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.parametrize("tool", _TIER3_TOOLS)
 def test_tier3_denial_semantics_via_check_tier(tool: str) -> None:
     """Tier-3 git ops with no approval are denied by the shared capability gate.
@@ -309,15 +319,27 @@ async def test_tier1_tool_rejects_invalid_caller_trace_id(tool: str, tmp_path: P
         await fn(caller_trace_id=_INVALID_TRACE_ID)
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool", _TIER2_TOOLS + _TIER3_TOOLS)
 async def test_tool_rejects_invalid_caller_trace_id(tool: str, tmp_path: Path) -> None:
-    """Each mutating git tool rejects an invalid ``caller_trace_id`` first — Story 15.4."""
+    """Each mutating git tool rejects an invalid ``caller_trace_id`` first — Story 15.4 (GREEN).
+
+    ``validate_caller_trace_id`` runs FIRST in every handler body, BEFORE the tier
+    gate / git spawn. The required tool-specific kwargs (``path`` / ``message`` /
+    ``task_id`` / ``upstream``) must be supplied so Python doesn't raise a
+    missing-arg ``TypeError`` before the body runs; the invalid trace_id is then
+    rejected with the Story 9.1 contract message.
+    """
     mcp = _build(tmp_path)
-    fn = await _tool_fn(mcp, tool)  # absent today → clean xfail
+    fn = await _tool_fn(mcp, tool)
+    extra: dict[str, str] = {
+        "git.add": {"path": "x"},
+        "git.commit": {"message": "m"},
+        "git.push": {"task_id": "t-1"},
+        "git.rebase": {"task_id": "t-1", "upstream": "main"},
+    }[tool]
     with pytest.raises(ValueError, match="Story 9.1 contract"):
-        await fn(caller_trace_id=_INVALID_TRACE_ID)
+        await fn(caller_trace_id=_INVALID_TRACE_ID, **extra)
 
 
 def test_validator_rejects_invalid_caller_trace_id() -> None:
@@ -341,30 +363,117 @@ def test_validator_rejects_invalid_caller_trace_id() -> None:
 # ===========================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
+def _init_repo_with_commit(root: Path) -> None:
+    """Init a real git repo at *root* with one committed file (fixture setup only).
+
+    ``test_*.py`` files are exempt from the SHELL001 / spawn-site gates, so the
+    fixture builder may shell out to ``git`` directly.
+    """
+    env = {
+        **os.environ,
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_AUTHOR_NAME": "Test Author",
+        "GIT_AUTHOR_EMAIL": "author@example.test",
+        "GIT_COMMITTER_NAME": "Test Author",
+        "GIT_COMMITTER_EMAIL": "author@example.test",
+    }
+
+    def _git(*args: str) -> None:
+        subprocess.run(  # noqa: S603 — test fixture builder, not the request path
+            ["git", "-C", str(root), *args], check=True, env=env, capture_output=True
+        )
+
+    _git("init", "-q", "-b", "main")
+    (root / "tracked.txt").write_text("line1\n")
+    _git("add", "tracked.txt")
+    _git("commit", "-q", "-m", "initial commit")
+
+
+def _seed_approval(events_dir: Path, task_id: str) -> None:
+    """Write an ``approval.granted`` JSONL line for *task_id* into today's log."""
+    from events.canonical import to_canonical_json
+    from events.envelope import Actor, EventEnvelope
+    from events.ids import new_event_id, new_request_id
+
+    clock = FrozenClock(mono_ns=1_000_000, now=FROZEN_EPOCH)
+    envelope = EventEnvelope.create(
+        event_id=new_event_id(clock=clock),
+        schema_version="1.1.0",
+        type="approval.granted",
+        emitted_at=clock.now(),
+        emitted_at_monotonic_ns=clock.monotonic_ns(),
+        actor=Actor(kind="operator", id="op-1"),
+        payload={"task_id": task_id, "decision_id": "d-1", "actor_id": "op-1"},
+        trace_id="01917e5c-a7d1-7000-8abc-000000000000",
+        request_id=new_request_id(clock=clock),
+    )
+    from events import current_day_path
+
+    day_path = current_day_path(events_dir, clock.now())
+    day_path.parent.mkdir(parents=True, exist_ok=True)
+    day_path.write_bytes(to_canonical_json(envelope) + b"\n")
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("tool", "event_type"), list(_EVENT_BY_TOOL.items()))
 async def test_mutating_op_emits_git_event_with_trace_id(
     tool: str, event_type: str, tmp_path: Path
 ) -> None:
-    """A successful commit/push emits git.committed / git.pushed carrying trace_id.
+    """A successful commit/push emits git.committed / git.pushed carrying trace_id (GREEN).
 
-    The 15.4 handlers emit a typed ``git.*`` event via the spine writer with
-    ``trace_id=caller_trace_id``. This contract drives that: invoking the tool
-    must produce an event of *event_type* whose ``trace_id`` is the inbound
-    caller_trace_id. The emitted-event surface (recorded emitter) is the seam
-    15.4 wires; today the tool is absent → _tool_by_name fails → clean xfail.
+    The 15.4 handlers surface a typed ``git.*`` event descriptor in the structured
+    result with ``trace_id=caller_trace_id``. This contract seeds a real repo
+    (+ a local bare remote for push, + a matching ``approval.granted`` for the
+    Tier-3 push) so the tool reaches the event-surface path, then asserts the
+    surfaced ``result["event"]`` names the git.* event and echoes the inbound
+    trace_id. Runs audit-OFF (no clawhip), so the descriptor is independent of
+    whether the best-effort emit actually fired.
     """
-    mcp = _build(tmp_path)
-    fn = await _tool_fn(mcp, tool)  # absent today → clean xfail
+    repo = tmp_path / "wt"
+    repo.mkdir()
+    _init_repo_with_commit(repo)
 
-    result = await fn(caller_trace_id=_VALID_TRACE_ID)
+    events_dir = tmp_path / "events"
+    events_dir.mkdir()
+    task_id = "t-0190000a-0000-7000-8000-000000000001"  # valid t-<uuidv7> pattern
 
-    # The 15.4 handler must surface the emitted event so this contract can read
-    # its type + trace_id. We assert the structured result names the git.* event
-    # and echoes the inbound trace_id (the exact result shape is defined by the
-    # 15.4 impl this contract drives).
-    emitted = result.get("event") if isinstance(result, dict) else None
+    # actor_kind="operator" so the Tier-3 push (parametrized branch) is admitted by
+    # the actor-kind gate and gated purely on the seeded approval.granted. Tier-2
+    # commit is allowed for any actor, so this kind also covers the commit branch.
+    mcp = build_server(
+        worktree_root=repo,
+        clock=FrozenClock(mono_ns=1_000_000, now=FROZEN_EPOCH),
+        actor_kind="operator",
+        actor_id="test-operator",
+        registry_events_dir=events_dir,
+    )
+    await mcp.list_tools()
+    fn = mcp._tool_manager._tools[tool].fn
+
+    if tool == "git.commit":
+        # Stage a change so the commit produces a new HEAD.
+        (repo / "tracked.txt").write_text("line1\nline2\n")
+        add_fn = mcp._tool_manager._tools["git.add"].fn
+        await add_fn(caller_trace_id=_VALID_TRACE_ID, path="tracked.txt")
+        result = await fn(caller_trace_id=_VALID_TRACE_ID, message="second commit")
+    else:  # git.push — set up a local bare remote + a matching approval.
+        bare = tmp_path / "bare.git"
+        subprocess.run(  # noqa: S603 — test fixture builder
+            ["git", "init", "--bare", "-q", str(bare)], check=True, capture_output=True
+        )
+        subprocess.run(  # noqa: S603 — test fixture builder
+            ["git", "-C", str(repo), "remote", "add", "origin", str(bare)],
+            check=True,
+            capture_output=True,
+        )
+        _seed_approval(events_dir, task_id)
+        result = await fn(caller_trace_id=_VALID_TRACE_ID, task_id=task_id)
+
+    assert isinstance(result, dict) and result.get("ok") is True, (
+        f"{tool}: mutating op did not succeed: {result!r}"
+    )
+    emitted = result.get("event")
     assert emitted is not None, f"{tool}: no git.* event surfaced in result {result!r}"
     assert emitted.get("type") == event_type, (
         f"{tool}: expected {event_type}, got {emitted.get('type')!r}"

@@ -25,6 +25,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from pathlib import Path
@@ -87,6 +88,15 @@ _GIT_ENV_ALLOWLIST: frozenset[str] = frozenset(
 # lock-file side effects on a read. Story 15.4 (content diff + push) MUST extend
 # this for the ``diff.external`` / ``*.textconv`` and ``core.sshCommand`` /
 # ``GIT_SSH`` vectors those tools open.
+#
+# Story 15.4 (content diff + push) extends this base with ``-c diff.external=``:
+# the mutating tools (``git.commit`` invokes diff machinery; an attacker-supplied
+# repo-local ``diff.external`` runs an arbitrary command when git computes a
+# content diff — empirically confirmed RCE, same class as ``core.fsmonitor``).
+# Neutralizing it here (in the BASE) closes the vector on every path, not just
+# commit. The push-only ``core.sshCommand`` vector is closed by the separate
+# ``_GIT_HARDENING_PUSH`` overlay (threaded via ``run_git(extra_hardening=...)``)
+# so non-push paths don't carry a push-specific override.
 _GIT_HARDENING: tuple[str, ...] = (
     "-c",
     "core.fsmonitor=",
@@ -94,7 +104,42 @@ _GIT_HARDENING: tuple[str, ...] = (
     "core.hooksPath=/dev/null",
     "-c",
     "core.pager=cat",
+    "-c",
+    "diff.external=",
     "--no-optional-locks",
+)
+
+# Story 15.4 P0 — push-path-only hardening overlay. ``git.push`` to a configured
+# remote can be hijacked by a repo-local ``core.sshCommand`` (runs an arbitrary
+# command instead of ``ssh`` for an ``ssh://`` / ``scp``-style remote). Even
+# though DECISION-1(A) restricts the push target to a LOCAL bare remote (no ssh
+# transport reached in practice), the override is injected belt-and-suspenders so
+# a repo-local ``core.sshCommand`` can never execute on the push path. Passed via
+# ``run_git(..., extra_hardening=_GIT_HARDENING_PUSH)`` so read/commit paths do
+# not carry it. (``GIT_SSH`` / ``GIT_SSH_COMMAND`` are env vectors — closed by
+# their exclusion from ``_GIT_ENV_ALLOWLIST``; asserted in the regression suite.)
+_GIT_HARDENING_PUSH: tuple[str, ...] = (
+    "-c",
+    "core.sshCommand=",
+    # Story 15.4 P0-3 (security review) — DECISION-1(A) restricts push to a LOCAL
+    # bare remote, but a repo-local ``url.<base>.insteadOf`` can rewrite that local
+    # target to a NETWORK URL (https/ssh/git/ftp), turning push into an SSRF /
+    # repo-exfiltration primitive (the ``core.sshCommand=`` shield covers ssh but
+    # NOT https). Deny every network transport so any rewrite to a remote URL fails
+    # closed BEFORE connecting; ``file``/local transport keeps its default (allowed)
+    # so the legitimate bare-remote push still works.
+    "-c",
+    "protocol.https.allow=never",
+    "-c",
+    "protocol.http.allow=never",
+    "-c",
+    "protocol.ssh.allow=never",
+    "-c",
+    "protocol.ftp.allow=never",
+    "-c",
+    "protocol.ftps.allow=never",
+    "-c",
+    "protocol.git.allow=never",
 )
 
 
@@ -120,6 +165,32 @@ class GitTimeout(RuntimeError):  # noqa: N818 — domain-named (no Error suffix)
     The wedged subprocess is killed and reaped before this propagates so no
     zombie/leaked process survives the request.
     """
+
+
+class RepoConfigUnsafe(RuntimeError):  # noqa: N818 — domain-named (no Error suffix); mirrors GitTimeout / events.errors precedent
+    """Raised when a mutating op finds an exec-capable driver in the repo-local config.
+
+    Story 15.4 P0 (security review): ``filter.<name>.clean/smudge/process`` and
+    ``merge.<name>.driver`` (and named ``diff.<name>.command/textconv``) run an
+    arbitrary command via a gitattributes-chosen driver NAME. Because the name is
+    attacker-controlled, no name-agnostic ``-c <key>=`` override can neutralize
+    them (unlike ``core.fsmonitor`` / ``diff.external`` which are fixed keys). A
+    mutating git op (add / commit / push / rebase) therefore REFUSES to run on a
+    worktree whose repo-local ``.git/config`` defines any such driver.
+    """
+
+
+# Repo-local config keys that execute an arbitrary command via an attacker-chosen
+# (gitattributes-driven) driver name. Reading config does NOT execute a driver, so
+# the pre-op scrub (``GitExecutor.assert_safe_repo_config``) can safely read these
+# and refuse. Fixed-key exec vectors (``core.fsmonitor`` / ``core.hooksPath`` /
+# ``diff.external`` / ``core.sshCommand``) are handled by the ``-c`` shields and are
+# NOT listed here.
+_DANGEROUS_CONFIG_RE: re.Pattern[str] = re.compile(
+    r"^(?:filter\..+\.(?:clean|smudge|process)"
+    r"|merge\..+\.driver"
+    r"|diff\..+\.(?:command|textconv))$"
+)
 
 
 @dataclass(frozen=True)
@@ -171,7 +242,13 @@ class GitExecutor:
         resolved = Path(os.path.realpath(path))
         return resolved == self.worktree_root or resolved.is_relative_to(self.worktree_root)
 
-    async def run_git(self, subcmd: list[str], *, timeout: float = _GIT_TIMEOUT) -> GitResult:
+    async def run_git(
+        self,
+        subcmd: list[str],
+        *,
+        timeout: float = _GIT_TIMEOUT,
+        extra_hardening: tuple[str, ...] = (),
+    ) -> GitResult:
         """Run ``git -C <root> <subcmd...>`` in the sandbox and return its result.
 
         The ONLY git spawn-site (Story 15.3). Security (every item load-bearing):
@@ -186,7 +263,11 @@ class GitExecutor:
           no ``HOME``, ``GIT_CONFIG_*=/dev/null``).
         - ``_GIT_HARDENING`` ``-c`` overrides are injected before *subcmd* to
           neutralize the repo-local ``.git/config`` RCE surface (``core.fsmonitor``
-          / ``core.hooksPath`` would otherwise run on a mere ``git status``).
+          / ``core.hooksPath`` / ``diff.external`` would otherwise run on a mere
+          ``git status`` / diff). *extra_hardening* (Story 15.4) appends
+          path-specific overrides AFTER the base — e.g. the push path passes
+          ``_GIT_HARDENING_PUSH`` (``core.sshCommand=``) so the ssh-transport
+          vector is closed without burdening read/commit invocations.
         - A wedged git is bounded by ``timeout``; on expiry it is killed+reaped
           and ``GitTimeout`` is raised (no leaked process).
 
@@ -199,6 +280,7 @@ class GitExecutor:
             "-C",
             str(self.worktree_root),
             *_GIT_HARDENING,
+            *extra_hardening,
             *subcmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -217,6 +299,35 @@ class GitExecutor:
             stderr=err.decode(errors="replace"),
         )
 
+    async def assert_safe_repo_config(self) -> None:
+        """Refuse a mutating op if the repo-local config defines an exec-capable driver.
+
+        Story 15.4 P0 (security review): ``filter.<name>.clean/smudge/process`` runs
+        on ``git add`` and ``merge.<name>.driver`` runs during ``git rebase``'s 3-way
+        merge — each executes an arbitrary command chosen by a gitattributes driver
+        NAME the attacker controls, so (unlike the fixed-key ``core.fsmonitor`` /
+        ``diff.external`` vectors) no ``-c`` override can name-agnostically disable
+        them. The mutating handlers call this BEFORE the mutating ``run_git`` and it
+        raises :class:`RepoConfigUnsafe` when any such driver is present.
+
+        Reading config (``git config --local --list``) does NOT execute any driver,
+        so this probe is itself safe under the base ``_GIT_HARDENING`` shield. A
+        repo with no local config (returncode != 0) is treated as clean — the real
+        git error surfaces from the subsequent op.
+        """
+        result = await self.run_git(["config", "--local", "--list", "-z"])
+        if result.returncode != 0:
+            return
+        for record in result.stdout.split("\x00"):
+            if not record:
+                continue
+            key = record.split("\n", 1)[0]
+            if _DANGEROUS_CONFIG_RE.match(key):
+                raise RepoConfigUnsafe(
+                    f"repo-local git config defines an exec-capable driver {key!r}; "
+                    "mutating git operations are refused on this worktree (Story 15.4 P0)"
+                )
+
 
 def build_server(
     *,
@@ -226,6 +337,7 @@ def build_server(
     actor_id: str,
     clawhip_bridge_command: str | None = None,
     clawhip_bridge_args: list[str] | None = None,
+    registry_events_dir: Path | None = None,
 ) -> FastMCP:
     """Build and return a configured ``FastMCP`` server instance.
 
@@ -246,6 +358,11 @@ def build_server(
             emission. When None, audit emission is disabled (test mode).
         clawhip_bridge_args: Args for the clawhip-bridge subprocess
             (e.g. ``["-m", "clawhip_bridge_mcp"]``).
+        registry_events_dir: Base dir of the JSONL event log, scanned by the
+            Tier-3 ``approval_lookup`` (Story 15.4) for an ``approval.granted``
+            matching the caller's ``task_id``. When None, the Tier-3 git tools
+            (``git.push`` / ``git.rebase``) have NO approval source and every
+            Tier-3 call is denied (test/no-approval default).
 
     Returns:
         A ``FastMCP`` instance ready to ``mcp.run()`` on stdio.
@@ -306,11 +423,20 @@ def build_server(
 
     mcp = FastMCP("git", lifespan=lifespan_fn) if lifespan_fn else FastMCP("git")
 
-    # Story 15.3: register the Tier-1 read tools (status/diff/log/branch). Reads
-    # do not emit events (no ``clock`` threaded here); 15.4 adds the mutating
-    # tools' event emission. ``emitter_holder`` is forwarded so the audit
-    # ``capability.denied`` decorator wraps each handler when wired.
-    from git_mcp.handlers.tools import register_tools
+    # Story 15.3/15.4: register the read (Tier-1) + mutating (Tier-2/3) tools.
+    # ``clock`` is threaded so the Tier-3 ``approval_lookup`` scans TODAY's JSONL
+    # event log (``current_day_path(events_dir, clock.now())``). ``emitter_holder``
+    # is forwarded so the audit ``capability.denied`` decorator wraps each handler
+    # AND so the mutating tools emit ``git.committed`` / ``git.pushed`` through the
+    # FR26 single-writer surface. ``registry_events_dir`` is the approval-source
+    # base dir; when None, every Tier-3 call is denied (no approval source).
+    from git_mcp.handlers.tools import make_approval_lookup, register_tools
+
+    approval_lookup = (
+        make_approval_lookup(registry_events_dir, clock)
+        if registry_events_dir is not None
+        else None
+    )
 
     register_tools(
         mcp,
@@ -318,6 +444,7 @@ def build_server(
         actor_kind=actor_kind,
         actor_id=actor_id,
         emitter_holder=emitter_holder,
+        approval_lookup=approval_lookup,
     )
 
     return mcp

@@ -789,8 +789,12 @@ def test_cardinality_at_steady_state_is_bounded() -> None:
     # ``omb_events_appended_total{event_family="replication"}`` child (NFR-R7).
     # replication.lagging is emitted by scripts/check_replication_lag.py (just
     # litestream-lag-check); the family child is pre-populated at 0.
-    assert canonical_timeseries <= 64, (
-        f"cardinality {canonical_timeseries} exceeds AC10 steady-state bound of 64; "
+    # Story 15.4: bound 64 → 65 for the new pre-populated
+    # ``omb_events_appended_total{event_family="git"}`` child (Epic 15 / FR72).
+    # git.committed / git.pushed are emitted by git-mcp; the family child is
+    # pre-populated at 0 here. One additional canonical sample; stays bounded.
+    assert canonical_timeseries <= 65, (
+        f"cardinality {canonical_timeseries} exceeds AC10 steady-state bound of 65; "
         f"families: {[(f.name, len(f.samples)) for f in timeseries]}"
     )
 
@@ -841,8 +845,10 @@ def test_cardinality_under_burst_cleanup() -> None:
     # ``omb_events_appended_total{event_family="budget"}`` child (FR68, D1=(A)).
     # Story 13.4 bumped 63 → 64 for the new pre-populated
     # ``omb_events_appended_total{event_family="replication"}`` child (NFR-R7).
-    assert canonical_timeseries <= 64, (
-        f"cardinality {canonical_timeseries} exceeds AC10 burst-cleanup bound of 64"
+    # Story 15.4 bumped 64 → 65 for the new pre-populated
+    # ``omb_events_appended_total{event_family="git"}`` child (Epic 15 / FR72).
+    assert canonical_timeseries <= 65, (
+        f"cardinality {canonical_timeseries} exceeds AC10 burst-cleanup bound of 65"
     )
 
 
