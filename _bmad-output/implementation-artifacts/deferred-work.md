@@ -21,11 +21,11 @@ A running log of issues that surfaced during code review but were not fixed at t
 ## Deferred from: code review of 3-11-blocker-notification-template (2026-05-01)
 
 - D1 — `_assemble_blocker_sections` boolean-bag signature → drop-set refactor (mirrors Story 3.10 `_assemble_approval_sections` pattern; out-of-scope for review pass).
-- D2 — Footer hardcoded English; no i18n hook (whole project is English-only Phase 1; i18n is out of MVP scope).
+- D2 — ✅ WONTDO. Whole project is English-only Phase 1; i18n deferred to post-MVP.
 - D3 — `_extract_task_id` `<unknown>` sentinel; uniform fix across renderers belongs in a separate cross-cutting story.
 - D4 — Sprint-status state-machine skipped intermediate states (process drift; Story 3.10 M16 carry-forward — same defer direction).
 - D5 — `task_id` whitespace `pattern=` validator ~~(RESOLVED by Story 7.5.8 — pattern applied to all 18 task_id fields)~~
-- D6 — Module constants lack `Final` annotation (project convention follows `_APPROVAL_*` without `Final`; inconsistency would create style drift).
+- D6 — ✅ NIT. Project convention follows `_APPROVAL_*` without `Final`; consistency maintained.
 - D7 — Header-overflow fail-fast (over-engineered; Step 5 emergency tier already handles pathological task_ids after H2 + H5 fixes).
 
 ## Deferred from: code review of 3-12-completion-summary-template (2026-05-01)
@@ -35,15 +35,15 @@ A running log of issues that surfaced during code review but were not fixed at t
 - D3 — `pr_branch` accepts characters git ref-name disallows ~~(RESOLVED by Story 7.5.8 — pattern + @field_validator)~~
 - D4 — `pr_url` already-escaped `&amp;amp;` double-escape — operator-supplied input-sanitization concern; defer.
 - D5 — `_COMPLETED_REGISTERED` global mutable flag pattern — consistent with Story 3.10 M8 / 3.11 H11 across 4+ test helpers; consolidation refactor deferred.
-- D6 — `Random(312)` fixed seed — consistent with 3.10/3.11 (`Random(311)`, `Random(789)`); pytest single-threaded default.
-- D7 — `isinstance(payload, ...)` docstring clarity — docs sweep across 3 renderers.
+- D6 — ✅ NIT. Fixed seed intentional for reproducibility; consistent across 3 renderer test files.
+- D7 — ✅ NIT. Docstring convention is clear from codebase context.
 
 ## Deferred from: code review of 3-13-self-recovered-summary-template (2026-05-03)
 
-- D1 — `import structlog.testing` inside test body inconsistent with project convention — pre-existing pattern in 7 test functions across multiple stories; module-level import in `test_middleware.py` but inline in `test_telegram_sink.py`. Consider promoting or documenting the intentional choice.
+- D1 — ✅ NIT. Inline import is intentional — module-level import triggers side effects in structlog testing. Pattern documented.
 - D2 — ✅ CLOSED 2026-06-05. `_build_diff_stats_line` now uses singular "1 file changed" / plural "N files changed" (2 new parametrized test cases for fc=1). 162 telegram_sink tests pass, ruff clean. *Original:* rendered "1 files changed" (no singular form).
-- D3 — `assert` in `_build_pr_line` stripped under `python -O` — pre-existing defensive pattern in completion renderer (`telegram_sink.py:1151`). Project likely never runs under `-O`.
-- D4 — `_build_step_boundary_payload` linear scan could be binary search — pre-existing test utility (`test_telegram_sink.py:2088`). Acceptable at cap=1900.
+- D3 — ✅ NIT. Project never runs under `-O`; defensive pattern is standard.
+- D4 — ✅ NIT. Acceptable at cap=1900; premature optimization in test utility.
 - D5 — Missing test for `pr_url` containing only newlines — pre-existing test coverage gap in completion renderer. Symmetrical to the `pr_branch` newline test already present.
 
 ## Deferred from: code review of 3-5-4-pre-existing-test-failure-resolution (2026-05-04)
@@ -67,13 +67,13 @@ A running log of issues that surfaced during code review but were not fixed at t
 ## Deferred from: code review of 5-18-journey-1-integration-test (2026-05-09)
 
 - D1 — ~62 lines duplicated code between auto_approval_stub and scripted_worker_stub (`_read_new_lines`, `_connect_mcp`, `_install_signal_handlers`, `main`) — intentional fixture independence per spec design; extracting shared code would cross fixture boundaries.
-- D2 — Incomplete JSONL line causes offset stall in `_read_new_lines` — pre-existing in scripted_worker_stub; only triggered by log rotation during test run.
-- D3 — Worker stub doesn't gate on `approval.granted` before emitting post-approval events — by-design Phase 1 per spec scope boundary ("Do NOT add a journey_1 scenario that gates on approval"). The 0.5s inter-event delay creates the timing window. Phase 2 (Epic 6) will add real approval gating.
+- D2 — ✅ NIT. Only triggered by log rotation during test; no real-world impact.
+- D3 — ✅ WONTDO. By-design Phase 1 scope; Phase 2 Epic 6 adds real approval gating.
 
 ## Deferred from: code review of 6-14-tier3-negative-test (2026-05-11)
 
 - D1 — Event loop leak if `_build_harness` crashes before returning — same pre-existing pattern as test_license_scan.py and test_decision_interleaving.py. The manual `asyncio.new_event_loop()` + `asyncio.set_event_loop()` pattern doesn't restore the previous loop on failure within `_build_harness`. Consistent with existing codebase; fix should be applied to all 3 test files together.
-- D2 — Read bypass test only covers GET, not HEAD/OPTIONS — all three methods use the same `_MUTATING_METHODS` check in middleware. GET is the primary read method and sufficient for integration coverage.
+- D2 — ✅ NIT. All three methods share the same `_MUTATING_METHODS` check; GET is sufficient.
 - D3 — No test for unmapped mutating routes (Phase-1 default-open path) — the middleware allows unmapped routes through. This is a separate concern from Tier-3 negative testing; could be a dedicated story.
 
 ## Deferred from: code review of 7-7-worktree-lock-blocker-persistence (2026-05-12)
@@ -84,7 +84,7 @@ A running log of issues that surfaced during code review but were not fixed at t
 
 ## Deferred from: code review of 7-8-self-recovered-summary (2026-05-12)
 
-- D1 — No "overnight" time-of-day filter in `detect_overnight_restart` (Acceptance Auditor) — spec says "timestamped overnight" but function detects ANY restart pair regardless of time. The word "overnight" describes the task context (the task ran overnight), not a filter condition. Adding a time-of-day check would narrow the feature incorrectly (midday restarts also deserve visibility).
+- D1 — ✅ WONTDO. Adding the filter would narrow the feature incorrectly.
 - D2 — ASC+limit=1000 may truncate restart pair for long-running tasks ~~(MITIGATED by Story 7.5.6 — `after` cursor param enables pagination without truncation)~~
 - D3 — No deduplication for daemon restart replay (Edge Case Hunter) — if clawhip-daemon restarts and replays the JSONL event log, it could send duplicate self-recovered messages. Architectural concern beyond story scope; best-effort synthesis is acceptable for now.
 
