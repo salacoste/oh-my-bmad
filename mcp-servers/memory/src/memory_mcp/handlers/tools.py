@@ -1,7 +1,9 @@
-"""memory-mcp MCP tool handlers (Epic 18 / Story 18.3 — Tier-1 read tools).
+"""memory-mcp MCP tool handlers (Epic 18 / Stories 18.3 + 18.4).
 
 Story 18.3 lands the two bounded read tools — ``memory.read`` and
-``memory.search`` — both at ``Tier.ONE``. Each is registered with an EXPLICIT
+``memory.search`` — both at ``Tier.ONE``. Story 18.4 adds the mutating
+``memory.write`` tool (``Tier.TWO`` — gated by ``check_tier``, NO approval gate)
+plus its ``memory.written`` event emission. Each is registered with an EXPLICIT
 dotted MCP name (``@mcp.tool(name="memory.read")``) so ``list_tools()`` surfaces
 the canonical ``memory.<op>`` id the 18.1 ATDD contracts assert (FastMCP would
 otherwise default the id to the Python function name ``memory_read`` — which is
@@ -16,8 +18,16 @@ otherwise default the id to the Python function name ``memory_read`` — which i
      :class:`~memory_mcp.store.MemoryStore` (``store.read`` / ``store.search``)
      and returns a deterministic structured result.
 
-Reads emit NO events (no ``clock`` is threaded into this story); the mutating
-``memory.write`` tool's ``memory.*`` event emission lands in Story 18.4.
+Reads emit NO events. The mutating ``memory.write`` tool emits a typed
+``memory.written`` event via the FR26 single-writer surface
+(``emitter_holder.emit_event`` → clawhip-bridge MCP RPC, NEVER a direct event-log
+write) carrying the inbound ``caller_trace_id``. The emit is BEST-EFFORT (guarded
+on ``emitter_holder``, PP1 re-raise of cancellation) and the typed descriptor is
+surfaced UNCONDITIONALLY as ``result["event"]`` (mirrors verification-mcp's
+``_emit_verification_event``). P0/security (ADR-0012 §5): the emitted payload
+carries METADATA ONLY (``key`` / ``title`` / ``body_bytes``) — NEVER the document
+body, which could be large or hold sensitive cross-task content; the body lives
+only in the memory-mcp's own DB.
 
 The :class:`~memory_mcp.store.MemoryStore` is threaded into ``register_tools``
 since 18.2 so the read tools close over the live store without re-plumbing the
@@ -31,6 +41,7 @@ to memory-mcp now that it registers tools.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -49,16 +60,16 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# Story 18.3: the two Tier-1 read tools. The mutating ``memory.write`` tool
-# (Tier-2 store mutation) lands in Story 18.4. Keys are the canonical dotted
-# ``memory.<op>`` MCP tool ids (matched to the ``@mcp.tool(name=…)``
-# registration below).
-#   memory.write == Tier.TWO  (store mutation; Story 18.4) — added when the
-#   write tool is registered, so its ``test_write_tool_is_tier_two`` ATDD
-#   contract stays red-phase xfail until then.
+# Story 18.3: the two Tier-1 read tools. Story 18.4 adds the mutating
+# ``memory.write`` tool (Tier-2 store mutation) plus its ``memory.written`` event
+# emission. Keys are the canonical dotted ``memory.<op>`` MCP tool ids (matched to
+# the ``@mcp.tool(name=…)`` registration below).
+#   memory.write == Tier.TWO  (store mutation; gated by ``check_tier`` — NO
+#   approval gate; Story 18.4).
 TIER_MAP: dict[str, Tier] = {
     "memory.read": Tier.ONE,
     "memory.search": Tier.ONE,
+    "memory.write": Tier.TWO,
 }
 
 # D5: default + hard cap on ``memory.search`` result count so an unbounded
@@ -167,6 +178,44 @@ def register_tools(
     def _caller() -> CallerContext:
         return CallerContext(actor_kind=actor_kind, actor_id=actor_id, task_id=None)
 
+    async def _emit_memory_event(
+        event_type: str,
+        payload: dict[str, object],
+        *,
+        caller_trace_id: str,
+    ) -> dict[str, object]:
+        """Best-effort emit a ``memory.*`` event; return the surfaced descriptor.
+
+        FR26 single-writer: the actual emission routes through *emitter_holder*
+        (clawhip-bridge MCP RPC), NEVER a direct event-log write. The emit is
+        BEST-EFFORT — guarded on *emitter_holder* and wrapped so an emission
+        failure (audit-off, closed pipe) is logged and swallowed, never failing the
+        already-completed store write.
+
+        The returned ``{"type": ..., "trace_id": caller_trace_id}`` descriptor is
+        built UNCONDITIONALLY (independent of whether the emit fired) and surfaced
+        by the caller as ``result["event"]`` so the ATDD contract can read the
+        memory.* event type + inbound trace_id even when audit emission is disabled.
+        Mirrors verification-mcp's ``_emit_verification_event``.
+
+        P0/security (ADR-0012 §5): *payload* is METADATA ONLY — the document body
+        NEVER reaches this surface (the body goes to the store, full stop).
+        """
+        descriptor: dict[str, object] = {"type": event_type, "trace_id": caller_trace_id}
+        if emitter_holder is not None:
+            try:
+                await emitter_holder.emit_event(
+                    event_type, payload, caller_trace_id=caller_trace_id
+                )
+            except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):  # noqa: TRY302 — cancellation MUST propagate (PP1 contract); re-raise control-flow
+                raise
+            except BaseException:  # noqa: BLE001 — best-effort audit; never fail the memory op
+                log.exception(
+                    "memory_event_emission_failed",
+                    extra={"event_type": event_type},
+                )
+        return descriptor
+
     # ------------------------------------------------------------------
     # Tool: memory.read (Tier-1 bounded read)
     # ------------------------------------------------------------------
@@ -218,9 +267,49 @@ def register_tools(
         results = store.search(query, capped)
         return {"ok": True, "results": results}
 
+    # ------------------------------------------------------------------
+    # Tool: memory.write (Tier-2 store mutation + memory.written event)
+    # ------------------------------------------------------------------
+
+    @mcp.tool(name="memory.write")
+    @_maybe_wrap("memory.write")
+    async def memory_write(
+        *,
+        caller_trace_id: str,
+        key: str = "",
+        body: str = "",
+        title: str = "",
+    ) -> dict[str, object]:
+        """Upsert the document keyed by *key* and emit ``memory.written`` (Tier-2).
+
+        The *body* carries the document content into the STORE only — it is
+        full-text indexed there and NEVER placed into the emitted event payload
+        (ADR-0012 §5: the body may be large or hold sensitive cross-task content,
+        and spine events are append-only + queryable). The ``memory.written`` event
+        carries METADATA ONLY (``key`` / ``title`` / ``body_bytes``).
+
+        Args:
+            caller_trace_id: FR58 correlation ID (UUIDv7 OR ``tg:<update_id>``).
+            key: Stable string id of the document to upsert (insert-or-update).
+            body: Full-text-indexed document body — goes to the store, NEVER the
+                event payload.
+            title: Optional short title (also stored + full-text indexed).
+        """
+        validate_caller_trace_id(caller_trace_id)
+        check_tier("memory.write", _caller(), TIER_MAP["memory.write"])
+        store.upsert(key, body, title=title)
+        # METADATA ONLY — the body NEVER reaches the event (ADR-0012 §5).
+        payload: dict[str, object] = {
+            "key": key,
+            "title": title,
+            "body_bytes": len(body.encode("utf-8")),
+        }
+        event = await _emit_memory_event("memory.written", payload, caller_trace_id=caller_trace_id)
+        return {"ok": True, "key": key, "event": event}
+
     # Reference the handlers so linters see them as used (FastMCP holds the real
     # references via the decorator registration side-effect).
-    _ = (memory_read, memory_search)
+    _ = (memory_read, memory_search, memory_write)
 
 
 __all__ = ["TIER_MAP", "register_tools", "validate_caller_trace_id"]

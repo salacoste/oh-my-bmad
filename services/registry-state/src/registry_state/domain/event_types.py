@@ -40,6 +40,7 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     GitPushedPayload,
     KeyRotatedPayload,
     LicenseOverridePayload,
+    MemoryWrittenPayload,
     PreCheckOutcome,
     PreCheckResults,
     SecretAccessedPayload,
@@ -118,6 +119,7 @@ __all__ = [
     "GithubReviewRequestedPayload",
     "KeyRotatedPayload",
     "LicenseOverridePayload",
+    "MemoryWrittenPayload",
     "PreCheckOutcome",
     "PreCheckResults",
     "SecretAccessedPayload",
@@ -357,6 +359,13 @@ def ensure_registered() -> None:
     # not raised). Born at 1.1.0 (NEW Phase-3 event type — no v1.0.0 predecessor,
     # same convention as the git.* / github.* events above).
     register("verification.completed", "1.1.0", VerificationCompletedPayload)
+
+    # Story 18.4 — memory.* event type (Epic 18 / ADR-0012). Emitted by
+    # memory-mcp after a Tier-2 memory.write upserts a document into its DEDICATED
+    # FTS5 store. METADATA-ONLY payload (key/title/body_bytes — NEVER the body;
+    # ADR-0012 §5). Born at 1.1.0 (NEW Phase-3 event type — no v1.0.0 predecessor,
+    # same convention as the git.* / github.* / verification.completed events above).
+    register("memory.written", "1.1.0", MemoryWrittenPayload)
 
     # Story 9.7 / AC10: all event types registered under 1.1.0 above for
     # replay safety. Both 1.0.0 and 1.1.0 entries kept per AC10 option (a).

@@ -71,8 +71,6 @@ _EVENT_BY_TOOL = {
     "memory.write": "memory.written",
 }
 
-_XFAIL_REASON = "memory tools land in Story 18.3/18.4 — red-phase ATDD contract"
-
 
 def _build(store_path: Path) -> FastMCP:
     """Build the scaffold server exactly as a test would (audit-off path)."""
@@ -143,10 +141,9 @@ def test_read_tools_are_tier_one(tool: str) -> None:
     assert TIER_MAP[tool] == Tier.ONE
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.parametrize("tool", _TIER2_TOOLS)
 def test_write_tool_is_tier_two(tool: str) -> None:
-    """memory.write is Tier-2 (store mutation) — Story 18.4."""
+    """memory.write is Tier-2 (store mutation) — Story 18.4 (GREEN)."""
     assert TIER_MAP[tool] == Tier.TWO
 
 
@@ -167,13 +164,12 @@ async def test_read_tool_registered_with_required_caller_trace_id(
     _assert_caller_trace_id_required(registered, name=tool)
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool", _TIER2_TOOLS)
 async def test_write_tool_registered_with_required_caller_trace_id(
     tool: str, tmp_path: Path
 ) -> None:
-    """The Tier-2 write tool is registered and requires a ``caller_trace_id`` — Story 18.4."""
+    """The Tier-2 write tool is registered + requires a ``caller_trace_id`` — Story 18.4 (GREEN)."""
     mcp = _build(tmp_path / "mem.db")
     registered = await _tool_by_name(mcp, tool)
     _assert_caller_trace_id_required(registered, name=tool)
@@ -320,13 +316,12 @@ async def test_read_tool_rejects_invalid_caller_trace_id(tool: str, tmp_path: Pa
         await fn(caller_trace_id=_INVALID_TRACE_ID)
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool", _TIER2_TOOLS)
 async def test_write_tool_rejects_invalid_caller_trace_id(tool: str, tmp_path: Path) -> None:
-    """The Tier-2 write tool rejects an invalid ``caller_trace_id`` first — Story 18.4."""
+    """The Tier-2 write tool rejects an invalid ``caller_trace_id`` first — Story 18.4 (GREEN)."""
     mcp = _build(tmp_path / "mem.db")
-    fn = await _tool_fn(mcp, tool)  # absent today → clean xfail
+    fn = await _tool_fn(mcp, tool)
     with pytest.raises(ValueError, match="Story 9.1 contract"):
         await fn(caller_trace_id=_INVALID_TRACE_ID)
 
@@ -409,7 +404,6 @@ async def test_memory_search_tool_returns_ranked_results(tmp_path: Path) -> None
 # ===========================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("tool", "event_type"), list(_EVENT_BY_TOOL.items()))
 async def test_write_emits_memory_event_with_trace_id(
@@ -420,11 +414,16 @@ async def test_write_emits_memory_event_with_trace_id(
     The 18.4 handler emits a typed ``memory.*`` event via the spine writer with
     ``trace_id=caller_trace_id``. This contract drives that: invoking the tool
     must produce an event of *event_type* whose ``trace_id`` is the inbound
-    caller_trace_id. Today the tool is absent → _tool_by_name fails → clean xfail.
+    caller_trace_id. The descriptor is surfaced UNCONDITIONALLY (audit-off path —
+    emitter_holder is None in the test build), mirroring verification-mcp.
+
+    P0/security (ADR-0012 §5): the surfaced event descriptor carries METADATA
+    ONLY — the document body is NEVER present (it goes to the store, full stop).
     """
     mcp = _build(tmp_path / "mem.db")
-    fn = await _tool_fn(mcp, tool)  # absent today → clean xfail
-    result = await fn(caller_trace_id=_VALID_TRACE_ID, key="k", body="b")
+    fn = await _tool_fn(mcp, tool)
+    body = "a-distinctive-secret-body-string"
+    result = await fn(caller_trace_id=_VALID_TRACE_ID, key="k", body=body)
 
     emitted = result.get("event") if isinstance(result, dict) else None
     assert emitted is not None, f"{tool}: no memory.* event surfaced in result {result!r}"
@@ -433,4 +432,11 @@ async def test_write_emits_memory_event_with_trace_id(
     )
     assert emitted.get("trace_id") == _VALID_TRACE_ID, (
         f"{tool}: emitted {event_type} must carry inbound trace_id"
+    )
+    # P0/security (ADR-0012 §5): the body MUST NOT leak into the event descriptor.
+    assert body not in repr(emitted), (
+        f"{tool}: document body leaked into the {event_type} event descriptor {emitted!r}"
+    )
+    assert "body" not in emitted, (
+        f"{tool}: event descriptor must not carry a 'body' field: {emitted!r}"
     )
