@@ -360,7 +360,7 @@ development_status:
   14-2-mutation-testing-harness-scaffold-baseline: backlog  # phase: 3 · NFR-O11 (harness) · mutmut/cosmic-ray over packages/* + baseline score artifact
   14-3-mutation-gate-threshold-ci-enforcement: backlog  # phase: 3 · NFR-O11 (gate) · threshold decision + nightly enforcement
   14-4-g-fn-disposition-triage: backlog  # phase: 3 · G-FN-1/2/3 dispositions; G-FN-2 nested-stdio folded into ADR-0010 recipe precondition
-  14-5-trace-id-required-ast-gate: backlog  # phase: 3 · NFR-O7 · build scripts/checks/check_trace_id_required.py (closes Phase-2 Story-9.7 deferral)
+  14-5-trace-id-required-ast-gate: done  # phase: 3 · NFR-O7 · build scripts/checks/check_trace_id_required.py (closes Phase-2 Story-9.7 deferral)
 
   # =========================================================================
   # Epic 15: σ git MCP server — recipe-establishing (7 stories, ~1 week)
