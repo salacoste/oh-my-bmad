@@ -83,6 +83,16 @@ _ENV_ALLOWLIST: frozenset[str] = frozenset(
         "GITHUB_MCP_ACTOR_KIND",
         "GITHUB_MCP_ACTOR_ID",
         "GITHUB_MCP_SCOPED_TOKEN",
+        # verification-mcp REQUIRED (mcp-servers/verification/.../__main__.py exits
+        # 2 without these) — Story 17.5. All NON-secret: a worktree-root path + the
+        # actor identity. verification runs build/test recipes in the worktree
+        # sandbox and needs NO external credential, so there is NO scoped-token
+        # entry here (unlike github-mcp). Forwarded by BOTH spawner allowlists
+        # (byte-identical mirror); only worker-wrapper actually spawns it
+        # (conditional on a non-blank WORKER_VERIFICATION_COMMAND).
+        "VERIFICATION_MCP_WORKTREE_ROOT",
+        "VERIFICATION_MCP_ACTOR_KIND",
+        "VERIFICATION_MCP_ACTOR_ID",
         # Shared event-log + SQLite paths (spine convention)
         "REGISTRY_EVENTS_DIR",
         "REGISTRY_DB_PATH",
@@ -131,6 +141,13 @@ class MCPClientGroup:
     # exits 2 without GITHUB_MCP_ACTOR_KIND/ACTOR_ID/SCOPED_TOKEN, so a fresh boot
     # without the GITHUB_MCP_* env does NOT brick the worker. NFR-M8 / S-6 seam.
     github: ClientSession | None = None
+    # Story 17.5 / P3-I3 — OPTIONAL 6th stdio member (verification-mcp). Same seam:
+    # stays ``None`` unless the deployment opts in via a non-blank
+    # ``settings.verification_command`` (default "" → OFF). verification-mcp's
+    # __main__.py exits 2 without VERIFICATION_MCP_WORKTREE_ROOT/ACTOR_KIND/ACTOR_ID,
+    # so a fresh boot without the VERIFICATION_MCP_* env does NOT brick the worker.
+    # NFR-M8 / S-7 seam.
+    verification: ClientSession | None = None
 
     async def __aenter__(self) -> MCPClientGroup:
         self._stack = AsyncExitStack()
@@ -171,6 +188,16 @@ class MCPClientGroup:
                     self.settings.github_command,
                     self.settings.github_args,
                 )
+            # Story 17.5 — conditional verification-mcp spawn. ONLY when the
+            # operator opted in via a non-blank ``verification_command``; otherwise
+            # verification stays absent (separability S-7 "absent" state). The
+            # VERIFICATION_MCP_* required vars are forwarded via ``_ENV_ALLOWLIST``.
+            if self.settings.verification_command:
+                self.verification = await self._connect(
+                    "verification",
+                    self.settings.verification_command,
+                    self.settings.verification_args,
+                )
         except BaseException:
             await self.__aexit__(None, None, None)
             raise
@@ -190,6 +217,7 @@ class MCPClientGroup:
         self.clawhip_bridge = None
         self.git = None  # Story 15.5 — null the optional 4th member.
         self.github = None  # Story 16.6 — null the optional 5th member.
+        self.verification = None  # Story 17.5 — null the optional 6th member.
 
     async def _connect(
         self,

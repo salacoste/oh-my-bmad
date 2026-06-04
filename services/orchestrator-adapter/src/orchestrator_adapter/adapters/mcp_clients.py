@@ -86,6 +86,16 @@ _ENV_ALLOWLIST: frozenset[str] = frozenset(
         "GITHUB_MCP_ACTOR_KIND",
         "GITHUB_MCP_ACTOR_ID",
         "GITHUB_MCP_SCOPED_TOKEN",
+        # verification-mcp REQUIRED (mcp-servers/verification/.../__main__.py exits
+        # 2 without these) — Story 17.5. All NON-secret: a worktree-root path + the
+        # actor identity. verification runs build/test recipes in the worktree
+        # sandbox and needs NO external credential, so there is NO scoped-token
+        # entry here (unlike github-mcp). Forwarded by BOTH spawner allowlists
+        # (byte-identical mirror); only worker-wrapper actually spawns it
+        # (conditional on a non-blank WORKER_VERIFICATION_COMMAND).
+        "VERIFICATION_MCP_WORKTREE_ROOT",
+        "VERIFICATION_MCP_ACTOR_KIND",
+        "VERIFICATION_MCP_ACTOR_ID",
         # Shared event-log + SQLite paths (spine convention)
         "REGISTRY_EVENTS_DIR",
         "REGISTRY_DB_PATH",
