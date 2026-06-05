@@ -14,6 +14,7 @@ from mcp.client.stdio import stdio_client
 from worker_wrapper.app.config import WorkerSettings
 
 _INIT_TIMEOUT: float = 30.0
+_PROBE_TIMEOUT: float = 10.0
 
 # Story 11.3.6 — env-var allowlist forwarded to the THREE spawned MCP
 # subprocesses (task-registry, session-registry, clawhip-bridge). Each
@@ -302,8 +303,11 @@ async def _check_one(name: str, session: ClientSession | None) -> tuple[str, boo
     if session is None:
         return (name, False)
     try:
-        await session.list_tools()
+        await asyncio.wait_for(session.list_tools(), timeout=_PROBE_TIMEOUT)
         return (name, True)
+    except TimeoutError:
+        log.warning("connectivity_check_timeout", server=name, timeout=_PROBE_TIMEOUT)
+        return (name, False)
     except Exception:
         log.exception("connectivity_check_failed", server=name)
         return (name, False)
