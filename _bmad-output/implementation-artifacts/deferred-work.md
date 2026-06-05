@@ -192,3 +192,11 @@ Story 16.5 closes the **MCP-subprocess half** of G-SEC-2 (the broad `GITHUB_TOKE
 
 — *Story 16.5 (scoped-credential, G-SEC-2 MCP-half), security-reviewer APPROVE/LOW, R2d2 + Claude, 2026-06-04.*
 — *G-SEC-2 agent-spawn halves CLOSED (claude_code_runner + omc_runner), R2d2 + Claude, 2026-06-05. The per-server env-scoping item above stays open as a defense-in-depth enhancement.*
+
+## Deferred from: Phase 3 retro carry-forward closures (2026-06-05)
+
+- **AI-17.1 — ✅ CLOSED 2026-06-05.** Port git-mcp's `_read_capped` bounded reader pattern to verification-mcp: added `_VERIFICATION_OUTPUT_CAP` (16 MiB), `_VERIFICATION_READ_CHUNK` (65536), `VerificationOutputTooLarge` exception; replaced `proc.communicate()` with concurrent `_read_capped` reader tasks; added `BaseException` cleanup handler (Epic-11 L7 discipline). 3 new tests (under-cap, over-cap kill, cancellation cleanup). Commit: `6dbaaab fix(verification-mcp): bounded output reader for run_recipe -- AI-17.1`. *Original:* Apply the output-cap to run_recipe's communicate() when the git-mcp P1 output-cap lands — same root pattern.
+
+- **G-FN-3 — ✅ CLOSED 2026-06-05.** Bound liveness probes with `asyncio.wait_for`: added `_PROBE_TIMEOUT: float = 10.0` constant in both `mcp_clients.py` files; wrapped `session.list_tools()` in `asyncio.wait_for(..., timeout=_PROBE_TIMEOUT)`; `TimeoutError` handler logs warning and returns unhealthy. 5 new tests (responsive, None session, hung, slow-but-ok, exception). Commit: `b1b0b95 fix(mcp-clients): bound liveness probe with asyncio.wait_for -- G-FN-3`. *Original:* Bound liveness probes with asyncio.wait_for.
+
+— *Phase 3 retro carry-forward closures, R2d2 + Claude, 2026-06-05.*
