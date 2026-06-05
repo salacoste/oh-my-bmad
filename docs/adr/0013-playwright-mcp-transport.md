@@ -1,6 +1,6 @@
 ---
 id: ADR-0013
-status: proposed
+status: accepted
 date: 2026-06-05
 supersedes: null
 ---
@@ -9,7 +9,7 @@ supersedes: null
 
 ## Status
 
-**Proposed** — 2026-06-05. Must be `accepted` before **Epic 20**'s first story merges to `main` (per the Phase-4 gate). Resolves the browser-automation surface decision deferred in [ADR-0009](./0009-phase-3-gate.md) §3.
+**Accepted** — 2026-06-05. Resolves the browser-automation surface decision deferred in [ADR-0009](./0009-phase-3-gate.md) §3. Gates Epic 20 (browser MCP server scaffold).
 
 ## Context
 

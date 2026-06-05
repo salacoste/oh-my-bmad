@@ -1,6 +1,6 @@
 ---
 id: ADR-0014
-status: proposed
+status: accepted
 date: 2026-06-05
 supersedes: null
 ---
@@ -9,7 +9,7 @@ supersedes: null
 
 ## Status
 
-**Proposed** — 2026-06-05. Awaiting acceptance criteria verification. Mirrors the ADR-0003 (Phase-2 gate) and ADR-0009 (Phase-3 gate) lifecycle: this ADR transitions to `accepted` only when all acceptance criteria below are checked.
+**Accepted** — 2026-06-05. All acceptance criteria verified: PRD amendment authored, architecture amendment authored, ADR-0013 accepted, epics decomposed (Epic 20-22, 17 stories), implementation readiness report verdict READY. Mirrors the ADR-0003 (Phase-2 gate) and ADR-0009 (Phase-3 gate) lifecycle.
 
 ## Context
 
