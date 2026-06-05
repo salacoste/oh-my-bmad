@@ -325,9 +325,7 @@ class GitExecutor:
                     return b"".join(chunks)
                 total += len(chunk)
                 if total > output_cap:
-                    raise GitOutputTooLarge(
-                        f"git {subcmd!r} exceeded {output_cap}-byte output cap"
-                    )
+                    raise GitOutputTooLarge(f"git {subcmd!r} exceeded {output_cap}-byte output cap")
                 chunks.append(chunk)
 
         # ``proc.stdout``/``proc.stderr`` are non-None because both were PIPE'd.
@@ -350,9 +348,7 @@ class GitExecutor:
             await asyncio.gather(out_task, err_task, return_exceptions=True)
 
         try:
-            out, err = await asyncio.wait_for(
-                asyncio.gather(out_task, err_task), timeout
-            )
+            out, err = await asyncio.wait_for(asyncio.gather(out_task, err_task), timeout)
         except (TimeoutError, GitOutputTooLarge) as exc:
             await _cleanup_child()
             if isinstance(exc, GitOutputTooLarge):

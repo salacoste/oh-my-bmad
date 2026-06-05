@@ -165,7 +165,7 @@ def test_parse_numstat_binary_rename_surfaces_destination() -> None:
 
 def test_parse_numstat_mixed_modify_and_rename() -> None:
     """A modify and a rename in the same diff both keep their real paths."""
-    out = "1\t0\tkept.txt\x00" "3\t2\t\x00src/old.py\x00src/new.py\x00"
+    out = "1\t0\tkept.txt\x003\t2\t\x00src/old.py\x00src/new.py\x00"
     files = cast("list[dict[str, object]]", _parse_numstat(out)["files"])
     by_path = {cast("str", f["path"]): f for f in files}
     assert set(by_path) == {"kept.txt", "src/new.py"}
