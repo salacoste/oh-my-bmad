@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from events.envelope import ActorKind
 
     from browser_mcp.adapters.clawhip_client import EmitterHolder
+    from browser_mcp.adapters.playwright_subprocess import PlaywrightSubprocessManager
 
 # Story 20.1 scaffold — empty until browser tools land in 21.1-21.5.
 # Re-exported from server.py so the canonical TIER_MAP lives in one place.
@@ -27,6 +28,7 @@ def register_tools(
     actor_kind: ActorKind,
     actor_id: str,
     emitter_holder: EmitterHolder | None,
+    pw_manager: PlaywrightSubprocessManager,
 ) -> None:
     """Register browser tools on the FastMCP instance.
 

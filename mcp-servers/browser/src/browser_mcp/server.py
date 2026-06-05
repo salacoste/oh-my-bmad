@@ -29,6 +29,7 @@ from events.envelope import ActorKind  # noqa: IMP001 — packages/
 from mcp.server.fastmcp import FastMCP
 
 from browser_mcp.adapters.clawhip_client import ClawhipBridgeClient, EmitterHolder
+from browser_mcp.adapters.playwright_subprocess import PlaywrightSubprocessManager
 
 if TYPE_CHECKING:
     from events.clock import Clock  # noqa: IMP001 — packages/
@@ -119,6 +120,15 @@ def build_server(
 
     emitter_holder: EmitterHolder | None
     lifespan_fn = None
+
+    # Story 20.2 — Playwright subprocess manager. Created eagerly so tool
+    # handlers can call ``manager.get_or_spawn(task_id)`` at request time.
+    pw_manager = PlaywrightSubprocessManager(
+        image=playwright_image,
+        extra_caps=extra_caps,
+        allowed_origins=allowed_origins,
+    )
+
     if clawhip_bridge_command is not None and clawhip_bridge_args is not None:
         emitter_holder = EmitterHolder()
 
@@ -158,10 +168,22 @@ def build_server(
                     await client.__aexit__(None, None, None)
                 finally:
                     emitter_holder.client = None
+                # NFR-R9: kill all orphaned Playwright subprocesses on shutdown.
+                await pw_manager.kill_all()
 
         lifespan_fn = _lifespan
     else:
         emitter_holder = None
+
+        @contextlib.asynccontextmanager
+        async def _lifespan_no_emit(_server: FastMCP) -> AsyncGenerator[None, None]:
+            """Minimal lifespan for test/no-audit mode — still kills Playwright on exit."""
+            try:
+                yield
+            finally:
+                await pw_manager.kill_all()
+
+        lifespan_fn = _lifespan_no_emit
 
     mcp = FastMCP("browser", lifespan=lifespan_fn) if lifespan_fn else FastMCP("browser")
 
@@ -174,6 +196,7 @@ def build_server(
         actor_kind=actor_kind,
         actor_id=actor_id,
         emitter_holder=emitter_holder,
+        pw_manager=pw_manager,
     )
 
     return mcp
