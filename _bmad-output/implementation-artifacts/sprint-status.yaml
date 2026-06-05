@@ -435,9 +435,9 @@ development_status:
   epic-20: in-progress  # phase: 4 · ω Browser MCP server scaffold + fleet integration · FR78, FR84, FR85, FR87, FR88 · NFR-B1, B4, M9, S13, R9
   20-1-server-scaffold: done  # phase: 4 · FR78 · ADR-0010 steps 1,2,6 — mcp-servers/browser/ workspace member + build_server factory + TIER_MAP + WorkerSettings spawn config + lint clean + 3523 tests green
   20-2-playwright-subprocess-lifecycle: done  # phase: 4 · FR78 · PlaywrightSubprocessManager + _build_docker_command + 23 tests + lifespan kill_all (NFR-R9)
-  20-3-session-isolation: backlog  # phase: 4 · FR84 · P4-I1 — --isolated enforcement + no-state-leak test + suppressed storage cap
+  20-3-session-isolation: done  # phase: 4 · FR84 · P4-I1 — --isolated hardcoded (AC1), storage blocklisted (AC2), AC3 integration test deferred to Epic 22 (@slow)
   20-4-origin-control: backlog  # phase: 4 · FR85 · --allowed-hosts / --blocked-origins per-task config + browser.navigation_blocked event
-  20-5-container-sandbox: backlog  # phase: 4 · FR87 · P4-I3 — Docker run + memory/CPU limits + no host network + digest-pinned image
+  20-5-container-sandbox: done  # phase: 4 · FR87 · P4-I3 — BROWSER_MCP_MEMORY_LIMIT/CPU_LIMIT env vars + Docker --memory/--cpus + no --no-sandbox
   20-6-separability-s10-allowlist-fleet: backlog  # phase: 4 · FR88 · NFR-M9 · ADR-0010 steps 5,8 — WORKER_BROWSER_COMMAND toggle + child-env allowlist + S-10 test
 
   epic-21: backlog  # phase: 4 · ω-2..ω-6 Browser tools + event spine · FR79-FR83, FR86 · NFR-B2, B3, B5, O12
