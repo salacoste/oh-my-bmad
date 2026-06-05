@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-06-05T00:00:00Z
+last_updated: 2026-06-06T00:00:00Z
 current_phase: 4  # Phase 4 opened by ADR-0014 (docs/adr/0014-phase-4-gate.md), 2026-06-05 (Phase 3 opened by ADR-0009, 2026-06-04)
 
 development_status:
@@ -432,8 +432,8 @@ development_status:
   # 4th archetype: Browser Worker — wraps @playwright/mcp as managed Docker subprocess
   # FR78-FR88 · NFR-B1-B5, O12, M9, S13, R9 · P4-I1/I2/I3 invariants
 
-  epic-20: backlog  # phase: 4 · ω Browser MCP server scaffold + fleet integration · FR78, FR84, FR85, FR87, FR88 · NFR-B1, B4, M9, S13, R9
-  20-1-server-scaffold: backlog  # phase: 4 · FR78 · ADR-0010 steps 1,2,6 — mcp-servers/browser/ workspace member + build_server factory + TIER_MAP
+  epic-20: in-progress  # phase: 4 · ω Browser MCP server scaffold + fleet integration · FR78, FR84, FR85, FR87, FR88 · NFR-B1, B4, M9, S13, R9
+  20-1-server-scaffold: in-progress  # phase: 4 · FR78 · ADR-0010 steps 1,2,6 — mcp-servers/browser/ workspace member + build_server factory + TIER_MAP
   20-2-playwright-subprocess-lifecycle: backlog  # phase: 4 · FR78 · playwright_subprocess.py — docker run + per-task {task_id: Popen} dict + spawn/kill lifecycle
   20-3-session-isolation: backlog  # phase: 4 · FR84 · P4-I1 — --isolated enforcement + no-state-leak test + suppressed storage cap
   20-4-origin-control: backlog  # phase: 4 · FR85 · --allowed-hosts / --blocked-origins per-task config + browser.navigation_blocked event

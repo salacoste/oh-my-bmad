@@ -1,0 +1,181 @@
+"""browser-mcp MCP server — browser automation via Playwright MCP subprocess (Epic 20 / FR78).
+
+Exports:
+    ``build_server(*, clock, actor_kind, actor_id, playwright_image, ...) -> FastMCP``
+        Synchronous factory that creates the FastMCP server. Story 20.1 ships
+        the SCAFFOLD: no browser tools are registered yet (``TIER_MAP`` is empty);
+        the browser tools land in Stories 21.1-21.5.
+
+Architecture notes:
+    - The factory wires the clawhip-bridge audit-emission lifespan exactly as
+      task-registry / git-mcp do: when ``clawhip_bridge_command`` is configured,
+      a stdio MCP client to clawhip-bridge is spawned inside the FastMCP lifespan
+      and held by an ``EmitterHolder`` (consumed by the tool decorators once tools
+      land in 21.1). Startup is bounded by ``asyncio.wait_for(initialize(),
+      _INIT_TIMEOUT)`` (G-FN-3 bounded init).
+    - The Playwright MCP subprocess lifecycle management lands in Story 20.2.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import logging
+import os
+from collections.abc import AsyncGenerator
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+from capabilities import Tier
+from events.envelope import ActorKind  # noqa: IMP001 — packages/
+from mcp.server.fastmcp import FastMCP
+
+from browser_mcp.adapters.clawhip_client import ClawhipBridgeClient, EmitterHolder
+
+if TYPE_CHECKING:
+    from events.clock import Clock  # noqa: IMP001 — packages/
+
+log = logging.getLogger(__name__)
+
+_INIT_TIMEOUT: float = 30.0
+
+# Story 20.1 scaffold — empty TIER_MAP. Browser tools register against it
+# in Stories 21.1-21.5. Re-exported from handlers.tools.
+TIER_MAP: dict[str, Tier] = {}
+
+# Child env allowlist for the browser server (Story 20.6 fills this out fully).
+# Only these parent-env vars are forwarded; everything else is dropped.
+# NEVER add GITHUB_TOKEN / ANTHROPIC_API_KEY / any *_TOKEN / *_KEY / *_SECRET.
+_BROWSER_ENV_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        "PATH",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        # Browser-specific vars (added in Story 20.6, but scaffolded here)
+        "BROWSER_MCP_ACTOR_KIND",
+        "BROWSER_MCP_ACTOR_ID",
+        "BROWSER_MCP_PLAYWRIGHT_IMAGE",
+        "BROWSER_MCP_ALLOWED_HOSTS",
+        "BROWSER_MCP_ALLOWED_ORIGINS",
+        "BROWSER_MCP_EXTRA_CAPS",
+    }
+)
+
+
+def build_server(
+    *,
+    clock: Clock,
+    actor_kind: ActorKind,
+    actor_id: str,
+    playwright_image: str,
+    allowed_hosts: list[str] | None = None,
+    allowed_origins: list[str] | None = None,
+    extra_caps: list[str] | None = None,
+    clawhip_bridge_command: str | None = None,
+    clawhip_bridge_args: list[str] | None = None,
+    registry_events_dir: Path | None = None,
+) -> FastMCP:
+    """Build and return a configured FastMCP server instance.
+
+    Story 20.1 SCAFFOLD: no browser tools are registered (TIER_MAP is empty).
+    The clawhip-bridge audit-emission lifespan is wired so the first browser tool
+    added in 21.1 inherits the FR26 single-writer audit path for free.
+
+    Args:
+        clock: Injected clock for deterministic testing (reserved for the
+            browser tools' event emission in 21.1-21.5).
+        actor_kind: One of ``operator|orchestrator|worker|system|clawhip``.
+        actor_id: Non-empty string identifying the calling actor.
+        playwright_image: Pinned Docker image digest for the Playwright MCP
+            subprocess (e.g. ``mcr.microsoft.com/playwright/mcp@sha256:...``).
+        allowed_hosts: Comma-separated host allowlist for browser navigation.
+        allowed_origins: Comma-separated origin allowlist for browser navigation.
+        extra_caps: Additional Playwright capabilities (blocklist enforced).
+        clawhip_bridge_command: Command (e.g. ``python``) to spawn the
+            clawhip-bridge MCP subprocess for ``capability.denied`` audit
+            emission. When None, audit emission is disabled (test mode).
+        clawhip_bridge_args: Args for the clawhip-bridge subprocess
+            (e.g. ``["-m", "clawhip_bridge_mcp"]``).
+        registry_events_dir: Base dir of the JSONL event log, scanned by the
+            Tier-3 ``approval_lookup`` for an ``approval.granted`` matching
+            the caller's ``task_id``. When None, Tier-3 calls are denied.
+
+    Returns:
+        A ``FastMCP`` instance ready to ``mcp.run()`` on stdio.
+    """
+    # Validate blocklisted caps (P4-I1/P4-I3)
+    _BLOCKLISTED_CAPS: frozenset[str] = frozenset({"storage", "network"})
+    if extra_caps:
+        blocked = _BLOCKLISTED_CAPS.intersection(extra_caps)
+        if blocked:
+            raise RuntimeError(
+                f"BROWSER_MCP_EXTRA_CAPS contains blocklisted caps: {sorted(blocked)}. "
+                f"storage and network are never allowed (P4-I1/P4-I3)."
+            )
+
+    emitter_holder: EmitterHolder | None
+    lifespan_fn = None
+    if clawhip_bridge_command is not None and clawhip_bridge_args is not None:
+        emitter_holder = EmitterHolder()
+
+        @contextlib.asynccontextmanager
+        async def _lifespan(_server: FastMCP) -> AsyncGenerator[None, None]:
+            """Spawn the clawhip-bridge stdio client; fail-loud on startup (OQ-4).
+
+            Mirror of task-registry's / git-mcp's lifespan. Startup failure
+            (clawhip-bridge subprocess refuses to launch) propagates here so
+            the operator sees a hard error instead of silently degrading to
+            no-emission mode. The bounded ``asyncio.wait_for(initialize(),
+            _INIT_TIMEOUT)`` lives inside ``ClawhipBridgeClient.__aenter__``
+            (G-FN-3).
+            """
+            if clawhip_bridge_command is None:
+                raise RuntimeError("clawhip_bridge_command must be set when lifespan_fn is wired")
+            if clawhip_bridge_args is None:
+                raise RuntimeError("clawhip_bridge_args must be set when lifespan_fn is wired")
+            if emitter_holder is None:
+                raise RuntimeError("emitter_holder must be initialized when lifespan_fn is wired")
+            client = ClawhipBridgeClient(
+                command=clawhip_bridge_command,
+                args=clawhip_bridge_args,
+                caller_actor_kind=actor_kind,
+                caller_actor_id=actor_id,
+            )
+            await client.__aenter__()
+            emitter_holder.client = client
+            log.info(
+                "browser_mcp_clawhip_client_ready",
+                extra={"command": clawhip_bridge_command},
+            )
+            try:
+                yield
+            finally:
+                try:
+                    await client.__aexit__(None, None, None)
+                finally:
+                    emitter_holder.client = None
+
+        lifespan_fn = _lifespan
+    else:
+        emitter_holder = None
+
+    mcp = FastMCP("browser", lifespan=lifespan_fn) if lifespan_fn else FastMCP("browser")
+
+    # Story 21.1-21.5: register browser tools.
+    # clock, emitter_holder, playwright_image, etc. are threaded through.
+    from browser_mcp.handlers.tools import register_tools
+
+    register_tools(
+        mcp,
+        actor_kind=actor_kind,
+        actor_id=actor_id,
+        emitter_holder=emitter_holder,
+    )
+
+    return mcp
+
+
+__all__ = ["build_server", "TIER_MAP", "_BROWSER_ENV_ALLOWLIST"]

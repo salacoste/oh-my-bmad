@@ -1,0 +1,17 @@
+[project]
+name = "browser-mcp"
+version = "0.1.0"
+description = "MCP server exposing browser automation via Playwright MCP subprocess (Epic 20 / FR78). Story 20.1 ships the scaffold + clawhip-bridge audit wiring; browser tools land in 21.1-21.5."
+authors = [
+    { name = "R2d2", email = "bad.vano23ru@gmail.com" },
+]
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=1.0",
+    "events>=0.3.0",
+    "capabilities",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.0,<1.0"]
+build-backend = "uv_build"
