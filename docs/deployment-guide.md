@@ -205,6 +205,82 @@ Volumes survive; persistent data (DB, event log, artifacts) is preserved. For sc
 docker compose run --rm migrator <from-version>-to-<to-version>
 ```
 
+## Phase 3 fleet MCP servers (deployment configuration)
+
+Phase 3 (Epics 15--19) added **five optional MCP tool servers** --- `git`, `github`, `verification`, `memory`, `artifact`. They are **not** containers and **not** public services: each is a stdio subprocess spawned by `worker-wrapper` (carried in the base image), so there is no new compose row, port, or Dockerfile.
+
+> For **operating** fleet servers (paging, recovery, scoped-credential rotation), see [operator-runbook.md](./operator-runbook.md). This section covers **deployment-configuration** only.
+
+### Enabling / disabling a fleet server
+
+Each fleet server is **OFF by default**. The worker spawns it only when the corresponding `WORKER_<SERVER>_COMMAND` env var is set to a non-blank value (convention: `"python"`). All five servers ship in the base image --- no additional build step or image pull is needed. A fresh boot with none of them set behaves exactly as Phase 2.
+
+| Server | Enable via `.env` | Required subprocess env |
+|---|---|---|
+| `git` | `WORKER_GIT_COMMAND=python` | `GIT_MCP_WORKTREE_ROOT`, `GIT_MCP_ACTOR_KIND`, `GIT_MCP_ACTOR_ID` |
+| `github` | `WORKER_GITHUB_COMMAND=python` | `GITHUB_MCP_SCOPED_TOKEN`, `GITHUB_MCP_ACTOR_KIND`, `GITHUB_MCP_ACTOR_ID` |
+| `verification` | `WORKER_VERIFICATION_COMMAND=python` | `VERIFICATION_MCP_WORKTREE_ROOT`, `VERIFICATION_MCP_ACTOR_KIND`, `VERIFICATION_MCP_ACTOR_ID` |
+| `memory` | `WORKER_MEMORY_COMMAND=python` | `MEMORY_MCP_STORE_PATH`, `MEMORY_MCP_ACTOR_KIND`, `MEMORY_MCP_ACTOR_ID` |
+| `artifact` | `WORKER_ARTIFACT_COMMAND=python` | `ARTIFACT_MCP_STORE_PATH`, `ARTIFACT_MCP_ACTOR_KIND`, `ARTIFACT_MCP_ACTOR_ID` |
+
+Required env vars are forwarded to the subprocess via the explicit `_ENV_ALLOWLIST` (never `os.environ.copy`). Each server's `__main__` validates its required vars at startup and **exits 2** if any is missing, so a half-configured server fails loud rather than silently misbehaving.
+
+`ACTOR_KIND` is one of `operator|orchestrator|worker|system|clawhip`; `ACTOR_ID` is a non-empty instance identifier. Tier-3 tools (`git push`/`rebase`, all `github` writes, `artifact delete`) are denied without a matching `approval.granted` event.
+
+### Per-server env var reference
+
+#### `git` --- worktree operations
+
+| Variable | Purpose |
+|---|---|
+| `GIT_MCP_WORKTREE_ROOT` | Root directory of the git worktree the server operates on |
+| `GIT_MCP_ACTOR_KIND` | Identity kind (`operator`, `worker`, etc.) |
+| `GIT_MCP_ACTOR_ID` | Instance identifier for audit trails |
+
+#### `github` --- GitHub API (scoped credential)
+
+| Variable | Purpose |
+|---|---|
+| `GITHUB_MCP_SCOPED_TOKEN` | **Narrowly-scoped** fine-grained PAT or GitHub App installation token, limited to the target repo only. **Never** use the broad operator `GITHUB_TOKEN` --- the broad token is explicitly forbidden from every MCP subprocess env |
+| `GITHUB_MCP_ACTOR_KIND` | Identity kind |
+| `GITHUB_MCP_ACTOR_ID` | Instance identifier |
+
+See [operator-runbook.md](./operator-runbook.md) for the full scoped-credential setup and rotation procedure (G-SEC-2).
+
+#### `verification` --- build / test execution
+
+| Variable | Purpose |
+|---|---|
+| `VERIFICATION_MCP_WORKTREE_ROOT` | Root directory for running builds and tests |
+| `VERIFICATION_MCP_ACTOR_KIND` | Identity kind |
+| `VERIFICATION_MCP_ACTOR_ID` | Instance identifier |
+
+#### `memory` --- persistent memory store
+
+| Variable | Purpose |
+|---|---|
+| `MEMORY_MCP_STORE_PATH` | Path to the SQLite FTS5 database file (e.g. `/var/lib/oh-my-bmad/memory-mcp/store.db`). Created at startup with group-write (0o660) for cross-uid recovery |
+| `MEMORY_MCP_ACTOR_KIND` | Identity kind |
+| `MEMORY_MCP_ACTOR_ID` | Instance identifier |
+
+#### `artifact` --- content-addressed artifact store
+
+| Variable | Purpose |
+|---|---|
+| `ARTIFACT_MCP_STORE_PATH` | Root directory of the content store (e.g. `/var/lib/oh-my-bmad/artifact-mcp/`). Objects land at `objects/<hash[:2]>/<hash>`, content-addressed by sha256 |
+| `ARTIFACT_MCP_ACTOR_KIND` | Identity kind |
+| `ARTIFACT_MCP_ACTOR_ID` | Instance identifier |
+| `ARTIFACT_MCP_RETENTION_MAX_BYTES` | Optional total-size cap. Unset = unbounded |
+| `ARTIFACT_MCP_RETENTION_TTL_SECONDS` | Optional age cap. Unset = unbounded |
+
+Retention is swept at startup and after each `put`. Each eviction emits an `artifact.deleted` spine event (system-initiated, policy-bounded --- the only deletion path that runs without Tier-3 approval).
+
+`memory` and `artifact` each own an **isolated subtree** of the existing `oh-my-bmad-data` volume --- never the registry DB. No new volume is required. The artifact store is regenerable build output, deliberately not litestream-replicated.
+
+### Digest-pinned deployment
+
+Fleet servers run inside the `worker-wrapper` container, so they inherit the same digest-pinned image as the worker itself (Epic 14 / Story 14.1 / FR77). No separate digest pinning is needed --- enabling a fleet server is purely an `.env` configuration change followed by `docker compose up -d`.
+
 ## Rollback
 
 **Decision criteria:** initiate rollback if the post-deploy smoke fails OR error rate in the first 10 min exceeds baseline by >2×.

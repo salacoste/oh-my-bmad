@@ -291,6 +291,8 @@ vendored upstream source changes (via `just sync-upstream`), re-running
 | `scripts/check_imports.py` | No cross-layer imports (e.g., a service importing another service's internals) | `IMP001` |
 | `scripts/check_event_registry.py` | Every `type=` literal at an emission site is present in `REGISTRY` | `EVT001` |
 | `scripts/check_single_writer.py` | Only the designated writer package appends to the event log | `SW001` |
+| `scripts/check_tier_declarations.py` | Every `@mcp.tool()` handler has a `TIER_MAP` entry (P3-I1) | `TIER001`, `TIER002` |
+| `scripts/check_trace_id_required.py` | Every `EventEnvelope.create(...)` call passes `trace_id=` (NFR-O7) | `TRACE001` |
 | `secret-hygiene-precommit` (via `git ls-files`) | No secret patterns in tracked files | — |
 
 ### Reading a violation report
@@ -318,7 +320,7 @@ The reason string after the tag is mandatory. See
 
 ```sh
 just check-gates-self-test
-# Expected: 3/3 gate self-tests pass (fixture-based detection logic verified)
+# Expected: all gate self-tests pass (fixture-based detection logic verified)
 ```
 
 ---
@@ -404,6 +406,157 @@ in the `justfile`, mirrored in the nightly job comment).
 nightly comment in one commit). **Never lower the threshold silently** — a drop
 must be an explicit, reviewed decision with a recorded rationale (a regression
 in test strength is exactly what this gate exists to catch).
+
+---
+
+## Fleet MCP server separability tests (S-5 through S-9, NFR-M8)
+
+Phase 3 added five optional stdio MCP servers to the worker's `MCPClientGroup`.
+Each one is gated by a non-blank `<member>_command` setting on `WorkerSettings`
+(default `""` — OFF). The blank-command toggle IS the separability seam, so
+S-5 through S-9 mirror the in-process MCP-client-composition style (real
+`MCPClientGroup` boot spawning real stdio subprocesses, NO Docker) rather than
+the compose-toggle style of S-1/S-4.
+
+| Test file | Server | Story | Member key |
+|-----------|--------|-------|------------|
+| `tests/separability/test_s5_git_optional.py` | git-mcp | 15.5 | `git_command` |
+| `tests/separability/test_s6_github_optional.py` | github-mcp | 16.5 | `github_command` |
+| `tests/separability/test_s7_verification_optional.py` | verification-mcp | 17.5 | `verification_command` |
+| `tests/separability/test_s8_memory_optional.py` | memory-mcp | 18.5 | `memory_command` |
+| `tests/separability/test_s9_artifact_optional.py` | artifact-mcp | 19.5 | `artifact_command` |
+
+All five tests follow the same two-test pattern, proving NFR-M8 (separability)
+for each fleet member:
+
+### SPAWNED test — "the member works when opted in"
+
+`test_<member>_spawned_when_command_set` proves the optional server fully
+participates when its command setting is non-blank and its member-specific env
+vars are present:
+
+1. `MCPClientGroup` boots with the command set.
+2. `clients.<member>` is not `None` — the subprocess connected.
+3. The member's tools appear in `list_tools()` (e.g. `git.status` for git-mcp,
+   `artifact.put` for artifact-mcp).
+4. A representative tool call succeeds end-to-end through the stdio boundary
+   (e.g. `git.status` on an initialized worktree, `artifact.put` + `artifact.get`
+   round-trip with binary content via base64).
+
+### ABSENT test — "the member is optional"
+
+`test_<member>_absent_when_command_blank` proves the member is truly optional —
+the worker and its always-on servers function without it:
+
+1. The member's command is blank, and its member-specific env vars are
+   deliberately **not** set.
+2. `clients.<member>` is `None` — no subprocess was spawned.
+3. The three core MCP members (task-registry, session-registry, clawhip-bridge)
+   all initialize and pass `verify_connectivity`.
+4. A scripted task-registry write-tool round-trip (e.g. `task_add_note`)
+   completes with `ok: True`, proving the worker can do real work without the
+   optional member.
+
+### Shared infrastructure
+
+Every S-5 through S-9 test file uses the same building blocks:
+
+- `_spawn_command()` — returns `sys.executable` so `python -m <module>` resolves
+  workspace members via editable installs.
+- `_base_env(tmp_path)` — builds the explicit allowlisted env dict for the three
+  core registry servers, with audit emission OFF (`OMB_MCP_AUDIT_EMISSION_ENABLED=0`)
+  to prevent nested clawhip-bridge subprocesses.
+- `_seed_task_row(db_path, task_id)` — creates the task-registry schema in WAL
+  mode and seeds one `Task` row so the absent-state scripted round-trip completes.
+- `_settings(*, <member>_command)` — builds `WorkerSettings` with the three core
+  commands pointing at the venv python and the member under test set or blank.
+
+Both tests in each file are marked `@pytest.mark.slow` (they boot real stdio
+subprocesses) and `@pytest.mark.separability`. They are excluded from the PR-gate
+`just test` and run on merge / nightly (same cadence as S-1's slow harness).
+No Docker is required — these tests do NOT request `skip_if_no_docker`.
+
+### Adding a new fleet member (S-10+)
+
+When adding a new optional stdio member to `MCPClientGroup`:
+
+1. Create `tests/separability/test_s<next>_optional.py`.
+2. Copy `_base_env`, `_seed_task_row`, `_spawn_command`, and `_settings` from an
+   existing S-5..S-9 file.
+3. Add the new member's command to `_settings` (all other optional commands blank).
+4. Write the SPAWNED test: set the command, provide the member-specific env,
+   assert `clients.<member>` is live, list tools, call one end-to-end.
+5. Write the ABSENT test: blank command, no member env, assert `clients.<member>`
+   is `None`, verify the three core members initialize, run a scripted round-trip.
+6. Mark both tests `@pytest.mark.separability` and `@pytest.mark.slow`.
+
+---
+
+## AST gate testing (P3-I1, NFR-O7)
+
+Two architectural-discipline gates use AST analysis (not grep) to enforce
+structural invariants across the fleet MCP servers. Both run in the CI PR gate
+(via `just lint` → `just check-gates`) and have self-test harnesses that
+exercise bundled fixture files.
+
+| Gate script | Invariant | Rule tags | Scope |
+|-------------|-----------|-----------|-------|
+| `scripts/check_tier_declarations.py` | Every `@mcp.tool()` handler has a `TIER_MAP` entry (P3-I1) | `TIER001`, `TIER002` | `mcp-servers/*/src/**/handlers/tools.py` |
+| `scripts/check_trace_id_required.py` | Every `EventEnvelope.create(...)` call passes `trace_id=` (NFR-O7) | `TRACE001` | `services/*/src/`, `mcp-servers/*/src/`, `packages/*/src/` |
+
+### check_tier_declarations.py
+
+Ensures every `@mcp.tool()`-registered handler declares a required capability
+tier — i.e. its own body passes `TIER_MAP["<key>"]` as an argument to
+`check_tier(...)` or `check_tier_with_approval(...)`. This is the structural
+invariant that Epics 16-19 inherit from Epic 15.
+
+Two violations are detected:
+
+- **TIER001 (untiered tool):** A registered handler whose own body contains no
+  `TIER_MAP["<key>"]` subscript that is a direct argument to a `check_tier*`
+  call. Bare subscripts (not wired into `check_tier*`) and subscripts inside
+  nested functions/lambdas do NOT count — the check must be reachable in the
+  handler's own body.
+- **TIER002 (orphan tier key):** A handler references `TIER_MAP["<key>"]` but
+  no such key exists in the module-level `TIER_MAP` dict literal (typo or
+  missing entry).
+
+Why AST, not grep: the tier key is a string subscript inside a `check_tier*`
+call argument, not the function name. A naive grep would false-positive on
+docstrings/comments and miss the key-dict cross-check.
+
+Suppression: `# noqa: TIER001 <reason>` on the decorator line,
+`# noqa: TIER002 <reason>` on the subscript line. Reason must be non-empty.
+
+### check_trace_id_required.py
+
+Ensures every `EventEnvelope.create(...)` call passes the required `trace_id=`
+keyword argument. Since Phase 2 (FR57, schema 1.1.0 / Story 9.7), `trace_id`
+is a required kwarg on the factory — no default, no fallback. This gate moves
+that failure left-of-runtime: a missing `trace_id=` is caught at CI time.
+
+- **TRACE001:** An `EventEnvelope.create(...)` attribute call whose `trace_id`
+  keyword is absent. A `**kwargs` splat is treated as possibly supplying
+  `trace_id` (fail-open to avoid false positives).
+
+What it does NOT flag: the `EventEnvelope.create` definition itself, calls on
+unrelated objects, calls inside test/fixture trees.
+
+Suppression: `# noqa: TRACE001 <reason>` on the offending line. Reason must be
+non-empty.
+
+### Running the AST gates
+
+```sh
+just check-gates                           # All architectural gates (CI mirror)
+uv run python scripts/check_tier_declarations.py       # Tier declarations only
+uv run python scripts/check_trace_id_required.py        # Trace-id required only
+just check-gates-self-test                 # Exercise bundled fixtures
+```
+
+The self-tests verify each gate's detection logic against clean/ and violations/
+fixture trees under `scripts/checks/fixtures/`.
 
 ---
 
