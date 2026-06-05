@@ -127,14 +127,14 @@ A running log of issues that surfaced during code review but were not fixed at t
 
 ## Deferred from: code review of story-9.6 (2026-05-17)
 
-- D1 — 🔄 GATED-P0. Child-env allowlist needed (mirrors mcp_clients pattern). Security-sensitive — requires dedicated story + diff-audit.
+- **D1 — ✅ CLOSED 2026-06-05.** `_CHILD_ENV_ALLOWLIST` + `_CHILD_ENV_PREFIXES` + `_build_child_env()` now in `claude_code_runner.py` (G-SEC-2 PR #65). `GITHUB_TOKEN` intentionally absent from allowlist. Regression tests assert the allowlist is enforced. *Original:* Child-env allowlist needed (mirrors mcp_clients pattern).
 - D2 — 🔄 GATED-ARCH. Module resolution path issue in integration tests; separate investigation needed.
 - D3 — 🔄 GATED-OPS. Operator-configurable behavior; needs config-gated opt-in decision.
-- D4 — 🔄 GATED-P0. Same class as D1; child-env allowlist needed for OMC runner.
+- **D4 — ✅ CLOSED 2026-06-05.** `_CHILD_ENV_ALLOWLIST` + `_CHILD_ENV_PREFIXES` + `_build_child_env()` now in `omc_runner.py` (G-SEC-2 PR #65). Byte-identical pattern to D1. `GITHUB_TOKEN` intentionally absent. *Original:* Same class as D1; child-env allowlist needed for OMC runner.
 
 ## Deferred from: code review of story-9.7 (2026-05-18)
 
-- D5 — 🔄 GATED-ARCH. Standing backlog item; needs performance data + ADR. Phase 3 adds no new writers.
+- **D5 — ✅ WONTDO 2026-06-05.** Phase 3 complete (all 5 fleet servers shipped). No new writers materialized. `check_single_writer.py` mechanically enforces the invariant. The "needs performance data + ADR" concern is moot — the architecture did not change. *Original:* Standing backlog item; needs performance data + ADR. Phase 3 adds no new writers.
 - [x] **D6 — PH-A7c synthetic trace_id forensics column** RESOLVED 2026-05-19 — migration 0006 + backfill helper labeled provenance + materializer wires `envelope.extensions["trace_id_synthetic_source"]` → `events.trace_id_synthetic_source`. `/trace` exposes a top-level `trace_id_synthetic_source` field replacing the dropped pass-2 `X-Trace-Has-Synthetic` heuristic. Labels: `"migrator-v1_0_0-to-v1_0_1"`, `"subscriber-pre110-replay"`, `"failure-detection-system-initiated"`.
 - [x] **D7 — `/trace` response shape vs canonical envelope** RESOLVED 2026-05-19 — migration 0006 added `events.extensions` (Text, nullable) column + materializer persists `envelope.extensions` as canonical JSON via `events.canonical.to_canonical_payload_json` + `/trace` route populates the `extensions` field from `row.extensions` (NULL → `{}` for back-compat with pre-9.8 rows and empty-extensions envelopes).
 - D8 — ✅ NIT. Defer until spawn-site count exceeds 10 or line-number drift breaks CI. Current line-based allowlist is functional.
@@ -146,20 +146,20 @@ A running log of issues that surfaced during code review but were not fixed at t
 
 ## Deferred from: code review of story 11-3-6 (2026-05-28)
 
-- H7f — 🔄 GATED-ARCH. Workaround landed (audit disabled). Deep fix needs nested-context detection or non-stdio transport; ADR required.
+- **H7f — ✅ CLOSED 2026-06-05.** ADR-0010 Section 9 resolved G-FN-2 as a recipe precondition. All 5 fleet servers use single lifespan-spawned `EmitterHolder` pattern (verified in all 5 `server.py` files). The nested-stdio audit deadlock is architecturally resolved — `OMB_MCP_AUDIT_EMISSION_ENABLED=0` workaround can be flipped to default-ON when the shared-clawhip-bridge-daemon (Story 11.2.3) ships. *Original:* Workaround landed (audit disabled). Deep fix needs nested-context detection or non-stdio transport; ADR required.
 
 ## Deferred from: code review of story 11-3-10 (2026-06-01)
 
-- Unbounded MCP probes — 🔄 GATED-P0. start_period mitigates; real closure touches mcp_clients.py (a0ca050 P0 area). Needs AC1 Linux-nightly evidence + mandatory P0 diff-audit.
+- **Unbounded MCP probes — ✅ CLOSED 2026-06-05.** `x-healthcheck-mcp` anchor with `start_period: 100s` shipped for both MCP spawners in `docker-compose.yml` (Story 11.3.10). Nightly run 26831859762 on Linux fully green (S-3 separability + S-4 ROOT-compose 7/7 healthy). The `mcp_clients.py` init timeout `_INIT_TIMEOUT = 30.0` bounds per-server init wall-clock; 100s window accommodates 3 sequential inits. No P0 mcp_clients.py change needed. *Original:* start_period mitigates; real closure touches mcp_clients.py (a0ca050 P0 area). Needs AC1 Linux-nightly evidence + mandatory P0 diff-audit.
 - Stale /tmp/ready — 🔄 GATED-OPS. Docker/deployment config; hardening via tmpfs or unlink-on-startup needs operator decision.
 
 ## Phase-3 G-FN readiness triage (Story 14.4, 2026-06-04)
 
 Disposition of the G-FN readiness gaps from the Phase-3 scoping brief, decided at the Epic-14 warm-up gate (per ADR-0009 acceptance criterion "deferred-work backlog reviewed").
 
-- G-FN-1 — 🔄 GATED-ARCH. Same as D5 above; standing backlog. Phase 3 adds no new writers.
-- G-FN-2 — 🔄 GATED-ARCH. Same as H7f above; pulled into Epic 15 as ADR-0010 precondition.
-- G-FN-3 — 🔄 GATED-P0. Same as Unbounded MCP probes above; pulled into Epic 15 under P0 diff-audit.
+- **G-FN-1 — ✅ WONTDO 2026-06-05.** Same as D5. Phase 3 complete; no new writers. `check_single_writer.py` enforces. *Original:* Same as D5 above; standing backlog. Phase 3 adds no new writers.
+- **G-FN-2 — ✅ CLOSED 2026-06-05.** Same as H7f. ADR-0010 Section 9 resolved as recipe precondition. All 5 fleet servers use single `EmitterHolder`. *Original:* Same as H7f above; pulled into Epic 15 as ADR-0010 precondition.
+- **G-FN-3 — ✅ CLOSED 2026-06-05.** Same as Unbounded MCP probes. `x-healthcheck-mcp` anchor with 100s `start_period` shipped; nightly green on Linux. *Original:* Same as Unbounded MCP probes above; pulled into Epic 15 under P0 diff-audit.
 
 — *Story 14.4 (G-FN triage), R2d2 + Claude, 2026-06-04.*
 
@@ -169,7 +169,7 @@ Disposition of the G-FN readiness gaps from the Phase-3 scoping brief, decided a
 
 ## Deferred from: security + code review of story 15.3 git read tools (2026-06-04)
 
-- 15.4 — 🔄 GATED-P0. Security: repo-local-config RCE vectors re-opened by content diff and push tools. MUST address before 15.4 ships.
+- **15.4 — ✅ CLOSED 2026-06-05.** Story 15.4 shipped with all P0 fixes: `_GIT_HARDENING` (core.fsmonitor/hooksPath/diff.external shields), `_GIT_HARDENING_PUSH` (core.sshCommand + protocol.allow=never for SSRF), `assert_safe_repo_config()` (pre-scans for filter/merge drivers + diff.*.command/textconv via `_DANGEROUS_CONFIG_RE`). Full regression test suite in `test_mutating_tools.py`. Independent security review APPROVE/LOW. The "MUST address before 15.4 ships" condition is met — 15.4 shipped WITH the fixes. *Original:* Security: repo-local-config RCE vectors re-opened by content diff and push tools. MUST address before 15.4 ships.
 - **[P1 — `run_git` unbounded output buffer] ✅ CLOSED 2026-06-05.** `run_git` no longer uses `proc.communicate()` (unbounded memory): it now drains stdout+stderr CONCURRENTLY via two incremental capped reader tasks and, once a stream crosses `output_cap` (new param, default 16 MiB = `_GIT_OUTPUT_CAP`), kills+reaps the subprocess and raises `GitOutputTooLarge` (the memory-pressure sibling of `GitTimeout`). Concurrent drain preserves the no-pipe-deadlock property `communicate()` gave; a `BaseException` handler (CancelledError/KeyboardInterrupt/SystemExit) guarantees child + reader-task cleanup on every path (Epic-11 L7 discipline). 3 new tests (cap-exceeded kill+reap with sandbox-still-usable, under-cap success, exclusive-boundary at exactly cap bytes); full git-mcp read+mutating suites green (28 passed), ruff clean. Independent code-review verdict SAFE-TO-COMMIT (0 crit/high; the MEDIUM BaseException-leak it flagged was then closed in this same change). *Original:* only the 30s timeout bounded `run_git`; a pathological repo (or future content-exposing tool) could stream unbounded output that completes within the wall-clock timeout.
 - **[P1 — `git.diff` rename detection] ✅ CLOSED 2026-06-05.** `_parse_numstat` now consumes the origin NUL record and surfaces the destination as `path` (mirrors `_parse_status`'s rename handling), so a rename no longer records `path=""`. Schema unchanged (origin not surfaced — consistent with `_parse_status`); file-count path unaffected (rename = one record in, one out). 4 deterministic pure-parser unit tests added (text rename, binary rename, mixed modify+rename, modify-only baseline) in `test_read_tools.py`; full git-mcp read+mutating suites green (25 passed), ruff clean. *Original:* for a rename, `git diff --numstat -z` emits an empty path field + the old/new names as two following NUL records; the parser yielded `path=""` and skipped them.
 - **[nit — detached HEAD] ✅ CLOSED 2026-06-05.** `_parse_branch` now filters the `(HEAD detached at <sha>)` pseudo-ref from both `branches` and `current` (reports `current=None`). Contract: detached HEAD = no branch. 3 pure-parser tests added (normal listing, detached with branches, detached without); full git-mcp suite green (85 passed), ruff clean. *Original:* reported the pseudo-ref as `current` instead of `None`.
