@@ -330,8 +330,7 @@ async def test_output_over_cap_kills_subprocess(tmp_path: Path) -> None:
             [
                 "python3",
                 "-c",
-                "import sys; sys.stdout.buffer.write(b'x' * 4096);"
-                " sys.stdout.flush()",
+                "import sys; sys.stdout.buffer.write(b'x' * 4096); sys.stdout.flush()",
             ],
             output_cap=1024,
             timeout=10.0,

@@ -20,7 +20,9 @@ class _FakeSession:
     """Lightweight stand-in for ``mcp.ClientSession`` with controllable ``list_tools``."""
 
     def __init__(self, *, list_tools_fn: Any = None) -> None:
-        self._list_tools: Any = list_tools_fn if list_tools_fn is not None else AsyncMock(return_value=None)
+        self._list_tools: Any = (
+            list_tools_fn if list_tools_fn is not None else AsyncMock(return_value=None)
+        )
 
     async def list_tools(self) -> None:
         await self._list_tools()
