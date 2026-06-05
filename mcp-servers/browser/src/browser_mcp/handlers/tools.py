@@ -13,6 +13,7 @@ from mcp.server.fastmcp import FastMCP
 
 if TYPE_CHECKING:
     from events.envelope import ActorKind
+
     from browser_mcp.adapters.clawhip_client import EmitterHolder
 
 # Story 20.1 scaffold — empty until browser tools land in 21.1-21.5.

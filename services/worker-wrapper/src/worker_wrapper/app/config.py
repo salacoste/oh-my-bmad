@@ -127,6 +127,18 @@ class WorkerSettings(BaseSettings):
     artifact_command: str = ""
     artifact_args: list[str] = ["-m", "artifact_mcp"]
 
+    # Browser MCP server spawn config (Story 20.1 / FR78).
+    # Blank-command toggle: WORKER_BROWSER_COMMAND="" means browser-mcp is NOT
+    # spawned (Phase-4 browser surface is opt-in). When set (e.g. "python"),
+    # worker-wrapper spawns browser-mcp as a stdio subprocess, which in turn
+    # manages a Playwright MCP subprocess for browser automation. The default is
+    # "" (OFF) so a fresh boot without BROWSER_MCP_* env does NOT brick the
+    # worker. Mirrors the git/github/verification/memory/artifact blank-command
+    # toggle (the P3-I3 separability seam): browser-mcp is a stdio member
+    # spawned by worker-wrapper, NOT a container.
+    browser_command: str = ""
+    browser_args: list[str] = ["-m", "browser_mcp"]
+
     # TODO(Story 5.8/5.9): consumed when task/session registry MCP servers
     # need a shared SQLite path.
     registry_db_path: str = ""

@@ -183,6 +183,14 @@ class MCPClientGroup:
     # exits 2 without ARTIFACT_MCP_STORE_PATH/ACTOR_KIND/ACTOR_ID, so a fresh boot
     # without the ARTIFACT_MCP_* env does NOT brick the worker. NFR-M8 / S-9 seam.
     artifact: ClientSession | None = None
+    # Story 20.1 / P3-I3 — OPTIONAL 9th stdio member (browser-mcp). Same seam:
+    # stays ``None`` unless the deployment opts in via a non-blank
+    # ``settings.browser_command`` (default "" → OFF). browser-mcp's __main__.py
+    # exits 2 without BROWSER_MCP_ACTOR_KIND/ACTOR_ID/PLAYWRIGHT_IMAGE, so a fresh
+    # boot without the BROWSER_MCP_* env does NOT brick the worker. NFR-M9 / S-10
+    # seam. Note: BROWSER_MCP_* env vars are NOT in _ENV_ALLOWLIST yet — that's
+    # Story 20.6 (separability).
+    browser: ClientSession | None = None
 
     async def __aenter__(self) -> MCPClientGroup:
         self._stack = AsyncExitStack()
@@ -254,6 +262,16 @@ class MCPClientGroup:
                     self.settings.artifact_command,
                     self.settings.artifact_args,
                 )
+            # Story 20.1 — conditional browser-mcp spawn. ONLY when the operator
+            # opted in via a non-blank ``browser_command``; otherwise browser stays
+            # absent (separability S-10 "absent" state). The BROWSER_MCP_* required
+            # vars are NOT in ``_ENV_ALLOWLIST`` yet (Story 20.6 fills those in).
+            if self.settings.browser_command:
+                self.browser = await self._connect(
+                    "browser",
+                    self.settings.browser_command,
+                    self.settings.browser_args,
+                )
         except BaseException:
             await self.__aexit__(None, None, None)
             raise
@@ -276,6 +294,7 @@ class MCPClientGroup:
         self.verification = None  # Story 17.5 — null the optional 6th member.
         self.memory = None  # Story 18.5 — null the optional 7th member.
         self.artifact = None  # Story 19.5 — null the optional 8th member.
+        self.browser = None  # Story 20.1 — null the optional 9th member.
 
     async def _connect(
         self,

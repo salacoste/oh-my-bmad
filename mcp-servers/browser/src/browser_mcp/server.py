@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import os
 from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -37,6 +36,9 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 _INIT_TIMEOUT: float = 30.0
+
+# P4-I1/P4-I3 — caps that are NEVER allowed in BROWSER_MCP_EXTRA_CAPS.
+_blocklisted_caps: frozenset[str] = frozenset({"storage", "network"})
 
 # Story 20.1 scaffold — empty TIER_MAP. Browser tools register against it
 # in Stories 21.1-21.5. Re-exported from handlers.tools.
@@ -107,9 +109,8 @@ def build_server(
         A ``FastMCP`` instance ready to ``mcp.run()`` on stdio.
     """
     # Validate blocklisted caps (P4-I1/P4-I3)
-    _BLOCKLISTED_CAPS: frozenset[str] = frozenset({"storage", "network"})
     if extra_caps:
-        blocked = _BLOCKLISTED_CAPS.intersection(extra_caps)
+        blocked = _blocklisted_caps.intersection(extra_caps)
         if blocked:
             raise RuntimeError(
                 f"BROWSER_MCP_EXTRA_CAPS contains blocklisted caps: {sorted(blocked)}. "
