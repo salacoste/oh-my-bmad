@@ -79,7 +79,7 @@ A typed event spine connects three operator surfaces (Telegram bot, console CLI,
                        └────────────────────────┘
 ```
 
-Outbound rendering (event log → operator surface text) goes through `clawhip-daemon` once Story 7.8 lands; in Phase 1 the gateways render directly.
+Outbound rendering (event log -> operator surface text) goes through `clawhip-daemon` once Story 7.8 lands; in Phase 1--2 the gateways render directly.
 
 ## Load-bearing invariants
 
@@ -89,7 +89,7 @@ These are non-bypassable. Most are enforced by CI gates (see [testing-guide.md](
 2. **Service-to-service imports banned.** `services.<A>` never imports `services.<B>.*`. Communication is via the event spine or registry HTTP API.
 3. **Event envelopes are immutable.** Once emitted, `event_id`, `schema_version`, `type`, `emitted_at`, `emitted_at_monotonic_ns`, `actor`, `payload`, `parent_event_id?` are never mutated.
 4. **Additive-only schema within a major.** `DROP COLUMN`, `DROP TABLE`, `ALTER COLUMN (type change)`, `RENAME`, `ADD COLUMN NOT NULL` w/o `DEFAULT` are rejected by the migrator linter.
-5. **MCP stdio-only in Phase 1.** Imports of `mcp.server.sse` / `mcp.server.streamable_http` are rejected.
+5. **MCP stdio-only in Phase 1--3.** Imports of `mcp.server.sse` / `mcp.server.streamable_http` are rejected. All eight MCP servers (3 always-on + 5 fleet) communicate over stdio.
 6. **Upstream-fork boundary.** Vendored code accessed only through `upstream/<fork>/adapter.py`.
 7. **No `anthropic` SDK in platform code.** Only `worker-wrapper` may import `anthropic`; everyone else routes via Claude Code worker through the event spine.
 8. **Capability-tier enforcement at every MCP tool boundary.** Deny-path / default-deny / escalation tests are mandatory per boundary.
@@ -99,7 +99,7 @@ These are non-bypassable. Most are enforced by CI gates (see [testing-guide.md](
 
 - **Event schema governance** — versioned, additive-only. New `(event_type, schema_version)` pairs register in `packages/events/src/events/`. Breaking changes ship via the one-shot Docker migrator (see [schema-evolution.md](./schema-evolution.md)).
 - **Secret hygiene** — three-layer enforcement: pre-commit scanner, structlog sanitizer in the processor chain *before* the renderer, and `secret.accessed` audit events on every secret read. The `secret-hygiene` package owns all three.
-- **Capability tiers** — applied identically at every MCP surface (`task-registry`, `session-registry`, `clawhip-bridge`). See `packages/capabilities` for the type contracts and [adr/0001-allowlist-middleware-auth.md](./adr/0001-allowlist-middleware-auth.md) for the authentication surface decision.
+- **Capability tiers** — applied identically at every MCP surface (`task-registry`, `session-registry`, `clawhip-bridge`, plus the five fleet servers). See `packages/capabilities` for the type contracts and [adr/0001-allowlist-middleware-auth.md](./adr/0001-allowlist-middleware-auth.md) for the authentication surface decision. The `check_tier_declarations.py` AST gate ensures every `@mcp.tool()` has a `TIER_MAP` entry at build time.
 - **Idempotency** — UUIDv7 client-generated keys flow from bot/console through the application API to `registry-state`. 7-day dedup cache (FR28). See `packages/idempotency`.
 - **Shutdown / recovery** — every long-running service handles SIGTERM cleanly: `registry-state` runs `PRAGMA wal_checkpoint(FULL)` + `await engine.dispose()`; workers release locks on SIGTERM; all services emit a terminal lifecycle event. Recovery replays the event log from the most recent snapshot.
 - **Structured logs vs typed events** — separate streams with different persistence semantics. **Typed events on the spine are the primary observability stream**; structured logs are secondary. See [`_bmad-output/project-context.md`](../_bmad-output/project-context.md) Cat 2/3 for binding rules.
@@ -141,7 +141,44 @@ Phase 2 shipped 2026-06-03 as **v0.3.0** (Epics 8--13 `done`; 6 ADRs accepted: A
 - **Litestream WAL replication** (Epic 13 / ADR-0007) -- read-only sidecar replicates the registry DB WAL to S3/B2/R2 for disaster recovery (not HA). Replication target is the registry DB only; fleet-server own-stores (artifact, memory) are deliberately outside litestream scope.
 - **Supply-chain triumvirate** (Epic 8 / ADR-0008) -- cosign keyless + SLSA L2 + CycloneDX SBOM; fail-closed license gate.
 
-## Phase-3+ forward references (not yet implemented)
+## Phase 3 -- MCP Tooling Fleet (in progress, gate ADR-0009)
+
+Phase 3 was formally opened 2026-06-04 (ADR-0009 accepted). Scope is five optional stdio MCP servers (Epics 14--19; FR72--FR77) plus a hardening warm-up epic. Each epic is independently shippable; Phase 3 releases incrementally rather than big-bang.
+
+### ADR-0010 authoring recipe
+
+Every fleet server follows an eight-step recipe ([ADR-0010](./adr/0010-mcp-server-authoring.md)), established by Epic 15 (`git`) and reused verbatim by Epics 16--19. The canonical story sequence per server:
+
+1. **ATDD contracts** -- red-phase `xfail` test stubs per tool: one per tier, one denial path per Tier-3 tool, one default-deny.
+2. **Server scaffold** -- `build_server` factory, `__main__.py`, `TIER_MAP` with placeholder entries.
+3. **Tools + event emission** -- read tools (Tier-1) first, then write tools (Tier-2/3). Each handler calls `check_tier` or `check_tier_with_approval` before side effects. Tier-3 handlers wrapped by `emit_capability_denied_on_deny`.
+4. **Event registration** -- two-location registration: spine JSONL (FR26 writer via clawhip-bridge) + service-local event type in `domain/event_types.py`. New events born at `schema_version 1.1.0`.
+5. **Separability + supply chain** -- S-5...S-9 entry proving the member is optional; license gate + SBOM inherited from the base image (NFR-S12).
+
+### Fleet server lifecycle
+
+Fleet servers are **conditional stdio subprocesses**, not compose services (P3-I3). The worker-wrapper and orchestrator-adapter each maintain a byte-identical `_ENV_ALLOWLIST` frozenset. A fleet server is spawned only when its `WORKER_<NAME>_COMMAND` env var is present and non-blank in the child env. With the var absent, the worker and all always-on servers function correctly (NFR-M8). Ships in the base image via the existing `COPY mcp-servers/` + `uv sync --all-packages` -- no per-server Dockerfile, no compose entry, no `release.yml` matrix row.
+
+### Tier enforcement
+
+Every fleet tool declares its tier in a module-level `TIER_MAP: dict[str, Tier]`. The build-time AST gate `scripts/check_tier_declarations.py` (Epic 15 / Story 15.2a) asserts every `@mcp.tool()` in `mcp-servers/**/handlers/tools.py` has a `TIER_MAP` entry. Destructive tools are `Tier.THREE` and must ship a negative test proving `CapabilityDenied` without a matching `approval.granted` event. `caller_trace_id` is a required keyword-only input on every tool, validated by the byte-identical `validate_caller_trace_id` helper guarded by contract tests.
+
+### Content-addressed stores (P3-I2)
+
+Two fleet servers own isolated backing stores on the existing `oh-my-bmad-data` named volume -- single-writer by exactly that server process, never the registry DB:
+
+- **artifact** (ADR-0011) -- content-addressed local-FS store under `<volume>/artifact-mcp/`. `put` writes to `objects/<hash[:2]>/<hash>` (sha256); `get`/`list` read from it. Metadata-only `artifact.stored`/`artifact.deleted` spine events route through the FR26 writer. Deliberately outside litestream scope (regenerable build output, not authoritative state).
+- **memory** (ADR-0012) -- SQLite FTS5 store at `<volume>/memory-mcp/store.db`. `write` upserts + indexes; `search` runs FTS5 `MATCH`; `read` fetches by key. Metadata-only `memory.written` spine events for observability. Also outside litestream scope.
+
+### Event emission pattern
+
+Mutating fleet-server events use the **two-location** pattern: the spine event routes through the FR26 writer (clawhip-bridge `EventLogWriter.append`) for observability, while the event type is also registered in `domain/event_types.py` (additive, never mutating an existing version). All fleet-server events are born at `schema_version 1.1.0` (the version that introduced `trace_id`). Payloads are metadata-only -- never logs, secrets, or artifact content/bytes.
+
+### Mutation testing gate (NFR-O11)
+
+Epic 14 established the cosmic-ray mutation gate (`scripts/mutation_score.py`). The `just mutation-gate` recipe passes `--threshold 82` (the NFR-O11 floor). The gate targets the capability-tier kernel (`packages/capabilities`) and the event-envelope core -- a surviving mutant in `tiers.py` `check_tier` is a fleet-wide authz hole. The nightly `mutation-baseline` job tracks the score over time.
+
+## Phase 4+ forward references (not yet implemented)
 
 - Browser-automation plane (Phase 4) -- would add a 4th operator surface; integrates through the same event spine.
 - Additional CLI agents (Codex, Gemini, GLM) (Phase 5) -- swappable behind the orchestrator-adapter shim contract.
