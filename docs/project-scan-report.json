@@ -2,8 +2,8 @@
   "workflow_version": "1.2.0",
   "timestamps": {
     "started": "2026-05-15T00:00:00Z",
-    "last_updated": "2026-05-15T00:00:00Z",
-    "completed": "2026-05-15T00:00:00Z"
+    "last_updated": "2026-06-05T00:00:00Z",
+    "completed": "2026-06-05T00:00:00Z"
   },
   "mode": "initial_scan",
   "scan_level": "deep",
@@ -19,7 +19,7 @@
     }
   ],
   "completed_steps": [
-    {"step": "step_1", "status": "completed", "timestamp": "2026-05-15T00:00:00Z", "summary": "Classified as monolith with 1 unified-backend part (14 uv-workspace members)"},
+    {"step": "step_1", "status": "completed", "timestamp": "2026-05-15T00:00:00Z", "summary": "Classified as monolith with 1 unified-backend part (19 uv-workspace members)"},
     {"step": "step_2", "status": "completed", "timestamp": "2026-05-15T00:00:00Z", "summary": "Inventoried existing docs (8 .md files + 2 ADRs + 2 deployment runbooks)"},
     {"step": "step_3", "status": "completed", "timestamp": "2026-05-15T00:00:00Z", "summary": "Tech stack: Python 3.12 + FastAPI + aiogram v3 + SQLAlchemy async + MCP stdio"},
     {"step": "step_4", "status": "completed", "timestamp": "2026-05-15T00:00:00Z", "summary": "Conditional analysis: 5 HTTP endpoints, 11 MCP tools, 5 DB tables, 32+ event types"},
@@ -33,20 +33,20 @@
   ],
   "current_step": "completed",
   "findings": {
-    "project_classification": "monorepo treated as single unified backend platform (14 uv-workspace members; user opted against per-group split)",
+    "project_classification": "monorepo treated as single unified backend platform (19 uv-workspace members; user opted against per-group split; Phase 3 complete)",
     "technology_stack": {
-      "platform": "Python 3.12 + uv workspace; FastAPI on registry-api; aiogram v3 on telegram-gateway; SQLAlchemy 2.0 async + Alembic on registry-state; MCP stdio (3 servers); structlog; hypothesis; ruff/mypy --strict"
+      "platform": "Python 3.12 + uv workspace; FastAPI on registry-api; aiogram v3 on telegram-gateway; SQLAlchemy 2.0 async + Alembic on registry-state; MCP stdio (8 servers: 3 always-on + 5 fleet); structlog; hypothesis; ruff/mypy --strict; cosmic-ray mutation testing"
     },
     "workspace_members": {
       "services": ["clawhip-daemon", "console-cli", "orchestrator-adapter", "registry-api", "registry-state", "telegram-gateway", "worker-wrapper"],
       "packages": ["capabilities", "events", "idempotency", "secret-hygiene"],
-      "mcp_servers": ["clawhip-bridge", "session-registry", "task-registry"]
+      "mcp_servers": ["clawhip-bridge", "session-registry", "task-registry", "artifact", "git", "github", "memory", "verification"]
     },
     "http_endpoint_count": 5,
-    "mcp_tool_count": 11,
-    "event_type_count": 32,
+    "mcp_tool_count": 43,
+    "event_type_count": 65,
     "db_table_count": 5,
-    "adr_count": 2,
+    "adr_count": 12,
     "existing_doc_count": 10
   },
   "outputs_generated": [
