@@ -119,6 +119,16 @@ _ENV_ALLOWLIST: frozenset[str] = frozenset(
         "ARTIFACT_MCP_ACTOR_ID",
         "ARTIFACT_MCP_RETENTION_MAX_BYTES",
         "ARTIFACT_MCP_RETENTION_TTL_SECONDS",
+        # browser-mcp REQUIRED — Story 20.6. All NON-secret. Byte-identical
+        # mirror of worker-wrapper's _ENV_ALLOWLIST.
+        "BROWSER_MCP_ACTOR_KIND",
+        "BROWSER_MCP_ACTOR_ID",
+        "BROWSER_MCP_PLAYWRIGHT_IMAGE",
+        "BROWSER_MCP_EXTRA_CAPS",
+        "BROWSER_MCP_ALLOWED_HOSTS",
+        "BROWSER_MCP_ALLOWED_ORIGINS",
+        "BROWSER_MCP_MEMORY_LIMIT",
+        "BROWSER_MCP_CPU_LIMIT",
         # Shared event-log + SQLite paths (spine convention)
         "REGISTRY_EVENTS_DIR",
         "REGISTRY_DB_PATH",

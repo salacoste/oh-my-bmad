@@ -116,6 +116,21 @@ _ENV_ALLOWLIST: frozenset[str] = frozenset(
         "ARTIFACT_MCP_ACTOR_ID",
         "ARTIFACT_MCP_RETENTION_MAX_BYTES",
         "ARTIFACT_MCP_RETENTION_TTL_SECONDS",
+        # browser-mcp REQUIRED (mcp-servers/browser/.../__main__.py exits 2 without
+        # the first three) — Story 20.6. All NON-secret: the actor identity + the
+        # pinned Docker image digest for Playwright. Optional vars: extra caps,
+        # allowed hosts/origins, resource limits. No external credential, so NO
+        # scoped token. Forwarded by BOTH spawner allowlists (byte-identical
+        # mirror); only worker-wrapper spawns browser-mcp (conditional on a
+        # non-blank WORKER_BROWSER_COMMAND).
+        "BROWSER_MCP_ACTOR_KIND",
+        "BROWSER_MCP_ACTOR_ID",
+        "BROWSER_MCP_PLAYWRIGHT_IMAGE",
+        "BROWSER_MCP_EXTRA_CAPS",
+        "BROWSER_MCP_ALLOWED_HOSTS",
+        "BROWSER_MCP_ALLOWED_ORIGINS",
+        "BROWSER_MCP_MEMORY_LIMIT",
+        "BROWSER_MCP_CPU_LIMIT",
         # Shared event-log + SQLite paths (spine convention)
         "REGISTRY_EVENTS_DIR",
         "REGISTRY_DB_PATH",
