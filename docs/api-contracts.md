@@ -88,10 +88,83 @@ uv run python -m console_cli --help
 
 The CLI is published as a GHCR image (`ghcr.io/<owner>/oh-my-bmad-console-cli`) but is NOT in `docker compose up` by design — it's invoked ad-hoc on the host. See [README](../README.md) §"Upgrading" and [exceptions.md](./exceptions.md).
 
+### Phase 3 fleet MCP servers
+
+Five additional stdio servers introduced in Phase 3 (ADR-0010 pattern). Each declares a module-level `TIER_MAP`; every handler calls `check_tier` (Tier-0..2) or `check_tier_with_approval` (Tier-3) before any side effect. `caller_trace_id` is a required keyword-only input on every tool, validated by the byte-identical `validate_caller_trace_id` helper. Mutating spine events route through the single FR26 writer (clawhip-bridge). Ships in the base image, not as a compose service (P3-I3).
+
+#### `git-mcp`
+
+All tools run through a sandboxed git subprocess.
+
+| Tool | Tier | Effect |
+|---|---|---|
+| `git_status` | 1 (read) | Working-tree status |
+| `git_diff` | 1 (read) | Diff of staged or unstaged changes |
+| `git_log` | 1 (read) | Commit log with configurable range |
+| `git_branch_list` | 1 (read) | List local and remote branches |
+| `git_branch_current` | 1 (read) | Return the name of the current branch |
+| `git_add` | 2 (write) | Stage paths for the next commit |
+| `git_commit` | 2 (write) | Create a commit from the staged tree |
+| `git_push` | 3 (approval-gated) | Push commits to a remote |
+| `git_reset` | 3 (approval-gated) | Reset HEAD to a specified ref |
+| `git_rebase` | 3 (approval-gated) | Rebase the current branch onto a target |
+| `git_merge` | 3 (approval-gated) | Merge a branch into the current branch |
+| `git_cherry_pick` | 3 (approval-gated) | Cherry-pick a commit onto the current branch |
+
+#### `github-mcp`
+
+API calls via `aiohttp` + `tenacity` retry, scoped Bearer token (`GITHUB_MCP_TOKEN`). Write operations are approval-gated; Phase 1 defaults `simulate=True` to validate without mutating GitHub state.
+
+| Tool | Tier | Effect |
+|---|---|---|
+| `github_issues_list` | 1 (read) | List issues for a repository |
+| `github_issues_get` | 1 (read) | Fetch a single issue by number |
+| `github_prs_list` | 1 (read) | List pull requests for a repository |
+| `github_prs_get` | 1 (read) | Fetch a single PR by number |
+| `github_reviews_list` | 1 (read) | List reviews on a pull request |
+| `github_issues_create` | 3 (approval-gated) | Create a new issue; `simulate=True` default |
+| `github_issues_comment` | 3 (approval-gated) | Add a comment to an issue; `simulate=True` default |
+| `github_prs_create` | 3 (approval-gated) | Create a pull request; `simulate=True` default |
+| `github_prs_merge` | 3 (approval-gated) | Merge a pull request; `simulate=True` default |
+| `github_prs_review` | 3 (approval-gated) | Submit a review on a PR; `simulate=True` default |
+| `github_prs_close` | 3 (approval-gated) | Close a pull request; `simulate=True` default |
+| `github_prs_reopen` | 3 (approval-gated) | Reopen a closed pull request; `simulate=True` default |
+
+#### `verification-mcp`
+
+Sandboxed subprocess, cwd-pinned, worktree-contained.
+
+| Tool | Tier | Effect |
+|---|---|---|
+| `verification_run_build` | 2 (write) | Execute the project build in a contained worktree |
+| `verification_run_tests` | 2 (write) | Execute the project test suite in a contained worktree |
+
+#### `memory-mcp`
+
+SQLite FTS5 store for persistent key-value memory and full-text search.
+
+| Tool | Tier | Effect |
+|---|---|---|
+| `memory_read` | 1 (read) | Retrieve a value by key |
+| `memory_search` | 1 (read) | Full-text search via FTS5 `MATCH` + `bm25` ranking |
+| `memory_write` | 2 (write) | Upsert a key-value entry |
+
+#### `artifact-mcp`
+
+Content-addressed filesystem store; objects keyed by `sha256` digest.
+
+| Tool | Tier | Effect |
+|---|---|---|
+| `artifact_get` | 1 (read) | Retrieve an artifact by its content hash |
+| `artifact_list` | 1 (read) | List stored artifacts |
+| `artifact_put` | 2 (write) | Store a base64-encoded payload (content-addressed) |
+| `artifact_delete` | 3 (approval-gated) | Delete an artifact by content hash |
+
 ## Cross-references
 
 - [data-models.md](./data-models.md) — event types catalog + registry-state DB schema.
 - [message-design.md](./message-design.md) — Telegram template catalog + character budgets.
 - [schema-evolution.md](./schema-evolution.md) — how to add an event type + ship a migrator.
 - [adr/0001-allowlist-middleware-auth.md](./adr/0001-allowlist-middleware-auth.md) — single-auth-gate decision.
+- [adr/0010-mcp-server-authoring.md](./adr/0010-mcp-server-authoring.md) — canonical recipe for Phase-3 fleet MCP servers.
 - [`_bmad-output/project-context.md`](../_bmad-output/project-context.md) Cat 3 — FastAPI / aiogram / MCP framework rules and trace-context binding.

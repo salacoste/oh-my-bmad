@@ -68,15 +68,30 @@ oh-my-bmad/
 │   └── secret-hygiene/                    # 3-layer secret enforcement (pre-commit + structlog sanitizer + audit events)  (~2.0K LOC)
 │       └── src/secret_hygiene/            # AuditedSecret, AuditedBaseSettings, audited_secret_field, sanitizer processor
 │
-├── mcp-servers/                           # 3 MCP stdio servers (tool/resource contracts to worker)
+├── mcp-servers/                           # 8 MCP stdio servers (tool/resource contracts to worker)
 │   ├── task-registry/                     # read-only task queries + bounded-write tools  (~470 LOC)
 │   │   └── src/task_registry_mcp/         # tools: task_add_note, task_attach_artifact, task_emit_event
 │   │
 │   ├── session-registry/                  # session lifecycle (register/heartbeat/close)  (~420 LOC)
 │   │   └── src/session_registry_mcp/      # tools: session_register, session_heartbeat, session_close
 │   │
-│   └── clawhip-bridge/                    # APPEND-ONLY event-emission surface; sole mutation path to event log  (~425 LOC)
-│       └── src/clawhip_bridge_mcp/        # tools: emit_event, emit_blocker, emit_summary, emit_approval_request, emit_completion
+│   ├── clawhip-bridge/                    # APPEND-ONLY event-emission surface; sole mutation path to event log  (~425 LOC)
+│   │   └── src/clawhip_bridge_mcp/        # tools: emit_event, emit_blocker, emit_summary, emit_approval_request, emit_completion
+│   │
+│   ├── artifact/                          # content-addressed FS store + Tier-1/2/3 tools
+│   │   └── src/artifact_mcp/              # tools: artifact_store, artifact_retrieve, artifact_list, artifact_delete
+│   │
+│   ├── git/                               # sandboxed git subprocess + Tier-1/2/3 tools
+│   │   └── src/git_mcp/                   # tools: git_status, git_diff, git_log, git_commit, git_branch
+│   │
+│   ├── github/                            # scoped-token GitHub API + Tier-1/3 tools
+│   │   └── src/github_mcp/                # tools: github_pr_create, github_pr_review, github_issue_list, github_release
+│   │
+│   ├── memory/                            # SQLite FTS5 store + Tier-1/2 tools
+│   │   └── src/memory_mcp/                # tools: memory_store, memory_query, memory_delete
+│   │
+│   └── verification/                      # sandboxed build/test runner + Tier-2 tools
+│       └── src/verification_mcp/          # tools: verify_build, verify_tests, verify_lint
 │
 ├── upstream/                              # vendored upstream forks (pinned SHAs in VENDORED.md)
 │   ├── omc/                               # Yeachan-Heo/oh-my-claudecode
@@ -158,5 +173,10 @@ These have invariants enforced by CI / static checks. **Don't drift them without
 | `task_registry_mcp` | stdio MCP server | invoked by orchestrator as subprocess |
 | `session_registry_mcp` | stdio MCP server | same |
 | `clawhip_bridge_mcp` | stdio MCP server | same; sole event-mutation surface |
+| `artifact_mcp` | stdio MCP server | content-addressed FS store; Tier-1/2/3 tools |
+| `git_mcp` | stdio MCP server | sandboxed git subprocess; Tier-1/2/3 tools |
+| `github_mcp` | stdio MCP server | scoped-token GitHub API; Tier-1/3 tools |
+| `memory_mcp` | stdio MCP server | SQLite FTS5 store; Tier-1/2 tools |
+| `verification_mcp` | stdio MCP server | sandboxed build/test runner; Tier-2 tools |
 
 Scaffold processes (`signal.pause()` + healthcheck touch) remain until their owning story replaces them — see `docs/exceptions.md` for the replacement-story map.

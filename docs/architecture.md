@@ -4,7 +4,7 @@ This is the runtime / operator view of oh-my-bmad. For the original solution-des
 
 ## One-paragraph summary
 
-A typed event spine connects three operator surfaces (Telegram bot, console CLI, future browser) to a Claude Code worker subprocess via an orchestrator adapter. All state lives in an append-only JSONL event log; `registry-state` is the **single writer** that materializes the log into SQLite for query, owns the UUIDv7 idempotency cache (FR28), and emits service-lifecycle events. Three MCP servers (`task-registry`, `session-registry`, `clawhip-bridge`) expose tool/resource contracts to the worker. Capability tiers gate every MCP tool call. Upstream forks (OMC, clawhip) integrate only via adapter shims under `upstream/`.
+A typed event spine connects three operator surfaces (Telegram bot, console CLI, future browser) to a Claude Code worker subprocess via an orchestrator adapter. All state lives in an append-only JSONL event log; `registry-state` is the **single writer** that materializes the log into SQLite for query, owns the UUIDv7 idempotency cache (FR28), and emits service-lifecycle events. Three always-on MCP servers (`task-registry`, `session-registry`, `clawhip-bridge`) expose tool/resource contracts to the worker. Five optional fleet MCP servers (`git`, `github`, `verification`, `memory`, `artifact`) are conditionally spawned based on `WORKER_*_COMMAND` env vars. Capability tiers gate every MCP tool call. `trace_id` correlation (schema_version 1.1.0) and a derived metrics-subscriber projection ship in Phase 2. Upstream forks (OMC, clawhip) integrate only via adapter shims under `upstream/`.
 
 ## Data-flow diagram (text)
 
@@ -54,6 +54,13 @@ A typed event spine connects three operator surfaces (Telegram bot, console CLI,
                 │  ─ session-registry     (session lifecycle)      │
                 │  ─ clawhip-bridge       (event emission, sole    │
                 │                          mutation path → log)    │
+                │  ─ git *                (bounded git ops)        │
+                │  ─ github *             (GitHub API ops)         │
+                │  ─ verification *       (validation tooling)     │
+                │  ─ memory *             (knowledge store/FTS5)   │
+                │  ─ artifact *           (content-addressed store)│
+                │     * = conditional; spawned only when           │
+                │       WORKER_*_COMMAND env var is set            │
                 └──────────────────────────────────────────────────┘
                               ▲
                               │
@@ -97,7 +104,7 @@ These are non-bypassable. Most are enforced by CI gates (see [testing-guide.md](
 - **Shutdown / recovery** — every long-running service handles SIGTERM cleanly: `registry-state` runs `PRAGMA wal_checkpoint(FULL)` + `await engine.dispose()`; workers release locks on SIGTERM; all services emit a terminal lifecycle event. Recovery replays the event log from the most recent snapshot.
 - **Structured logs vs typed events** — separate streams with different persistence semantics. **Typed events on the spine are the primary observability stream**; structured logs are secondary. See [`_bmad-output/project-context.md`](../_bmad-output/project-context.md) Cat 2/3 for binding rules.
 - **Upstream-fork pinning** — `VENDORED.md` carries the pinned commit SHA per fork. `just sync-upstream <name>` is the only sanctioned path. Contract tests under `tests/contract/fixtures/<adapter>/` gate semantic drift.
-- **Metrics + distributed tracing — Phase 2 gap (explicit ban in Phase 1).** Do NOT add OpenTelemetry, Prometheus exporters, or trace instrumentation now. Placeholder spans are also banned — they create false coverage signals. The `trace_id` field is reserved on the envelope for the Phase 2 wiring story.
+- **Metrics + distributed tracing — shipped in Phase 2.** `metrics-subscriber` (ADR-0005) derives Prometheus-style counters/gauges from the event log. `trace_id` propagation (ADR-0004) provides distributed correlation across services. Do NOT add OpenTelemetry spans or Prometheus exporters inside `services/*` -- instrumentation lives in `metrics-subscriber` only (P2-I2). The `trace_id` field on the envelope is mandatory since schema_version 1.1.0.
 
 ## What runs where
 
@@ -113,17 +120,32 @@ These are non-bypassable. Most are enforced by CI gates (see [testing-guide.md](
 | `task-registry` MCP | `mcp-servers/task-registry/` | Read tasks + bounded writes | None (RPC) | No |
 | `session-registry` MCP | `mcp-servers/session-registry/` | Session lifecycle | None (RPC) | No |
 | `clawhip-bridge` MCP | `mcp-servers/clawhip-bridge/` | Event emission — **sole mutation surface** | None (event RPC) | No |
+| `metrics-subscriber` | `services/metrics-subscriber/` | Derived metric projection from event log | RO event log (cursor file) | Own cursor file |
+| **Fleet MCP servers** (conditional stdio — spawned only when `WORKER_*_COMMAND` is set) | | | | |
+| `git` MCP | `mcp-servers/git/` | Bounded git operations on sandboxed worktree | RW worktree tree | No |
+| `github` MCP | `mcp-servers/github/` | GitHub API operations (scoped credential) | None (RPC) | No |
+| `verification` MCP | `mcp-servers/verification/` | Verification / validation tooling | None (RPC) | No |
+| `memory` MCP | `mcp-servers/memory/` | Cross-task knowledge store (SQLite FTS5) | RW own SQLite DB | Own DB file |
+| `artifact` MCP | `mcp-servers/artifact/` | Content-addressed build/run-output store | RW own FS subtree | Own FS store |
 
-The Docker Compose stack runs 6 containers (registry-api, registry-state, telegram-gateway, worker-wrapper, orchestrator-adapter, clawhip-daemon). MCP servers are subprocess-spawned by the orchestrator — they do NOT appear in `docker-compose.yml`. `console-cli` is published as an image but is intentionally not in Compose (see [README](../README.md) and [exceptions.md](./exceptions.md)).
+The Docker Compose stack runs 7 containers (registry-api, registry-state, telegram-gateway, worker-wrapper, orchestrator-adapter, clawhip-daemon, metrics-subscriber). The three always-on MCP servers (`task-registry`, `session-registry`, `clawhip-bridge`) are subprocess-spawned by the worker-wrapper or orchestrator-adapter — they do NOT appear in `docker-compose.yml`. The five fleet MCP servers are also stdio subprocesses but are **conditionally spawned**: the worker/orchestrator checks for `WORKER_GIT_COMMAND`, `WORKER_GITHUB_COMMAND`, etc. in the child env and only starts the server when the var is present. Fleet servers are optional — the worker and all always-on servers function correctly when any fleet server is absent (NFR-M8). `console-cli` is published as an image but is intentionally not in Compose (see [README](../README.md) and [exceptions.md](./exceptions.md)).
 
-## Phase-2 hooks (deferred, do not pre-implement)
+## Phase-2 features (shipped as v0.3.0)
 
-- Metrics collector (Prometheus-style gauges/counters) — clean insertion point exists in the structlog config + `/healthz` endpoints.
-- Distributed tracing (OpenTelemetry spans across services) — `trace_id?` field already reserved on the envelope.
-- Browser-automation plane — would add a 4th operator surface; integrates through the same event spine.
-- Additional CLI agents (Codex, Gemini, GLM) — swappable behind the orchestrator-adapter shim contract.
-- Remote-MCP transports (HTTP/SSE) — explicit Phase 2 decision, gated by ADR. Phase 1 transport is stdio-only.
-- Digest-pinning + signed-image verification (cosign + SLSA + SBOM) — replaces tag-based versioning currently in `release.yml`.
+Phase 2 shipped 2026-06-03 as **v0.3.0** (Epics 8--13 `done`; 6 ADRs accepted: ADR-0003 through ADR-0008). Key shipped capabilities:
+
+- **`trace_id` propagation** (Epic 9 / ADR-0004) -- explicit, shape-validated `caller_trace_id` input on every MCP tool; `trace_id` field on `EventEnvelope` (schema_version bumped 1.0.0 -> 1.1.0); AST gate `check_trace_id_required.py` enforces the contract at build time.
+- **`metrics-subscriber` derived projection** (Epic 10 / ADR-0005) -- service subscribes read-only to the event log, derives bounded-cardinality counters/gauges, owns a private cursor file on the named volume. Not a second JSONL writer.
+- **HMAC approval signing + key rotation** (Epic 11 / ADR-0006) -- operator HMAC non-repudiation for Tier-3 approval flows; offline-verify test gate.
+- **Per-task budget enforcement** (Epic 12) -- token budget ceilings with override cap (FR68); enforcement latency test gate.
+- **Litestream WAL replication** (Epic 13 / ADR-0007) -- read-only sidecar replicates the registry DB WAL to S3/B2/R2 for disaster recovery (not HA). Replication target is the registry DB only; fleet-server own-stores (artifact, memory) are deliberately outside litestream scope.
+- **Supply-chain triumvirate** (Epic 8 / ADR-0008) -- cosign keyless + SLSA L2 + CycloneDX SBOM; fail-closed license gate.
+
+## Phase-3+ forward references (not yet implemented)
+
+- Browser-automation plane (Phase 4) -- would add a 4th operator surface; integrates through the same event spine.
+- Additional CLI agents (Codex, Gemini, GLM) (Phase 5) -- swappable behind the orchestrator-adapter shim contract.
+- Remote-MCP transports (HTTP/SSE) -- deferred; MCP stays stdio-only. Requires its own ADR when a concrete remote-worker use case emerges.
 
 See `_bmad-output/planning-artifacts/architecture.md` for the full decision rationale per item.
 

@@ -9,14 +9,14 @@ Every event flows through this immutable envelope (Pydantic `frozen=True, strict
 | Field | Type | Notes |
 |---|---|---|
 | `event_id` | UUIDv7 string | from `events.new_uuid7()`; never `uuid.uuid4()`. |
-| `schema_version` | int | per `(event_type, schema_version)` pair registered in `events.REGISTRY`. |
+| `schema_version` | string (semver) | per `(event_type, schema_version)` pair registered in `events.REGISTRY`. |
 | `type` | string | the event-type identifier (e.g. `task.completed`). |
 | `emitted_at` | datetime (UTC, aware) | from `events.FrozenClock`; never `datetime.utcnow()`. |
 | `emitted_at_monotonic_ns` | int | from `time.monotonic_ns()` for ordering across clock skew. |
 | `actor` | `Actor` | typed actor (Telegram chat id, console user, worker, etc.). |
 | `payload` | `*Payload` | one of the typed payloads below. |
 | `parent_event_id` | UUIDv7 string \| None | trace-context propagation. Never fabricated when absent. |
-| `trace_id` | reserved | Phase 2 wiring; do not populate in Phase 1 (see [architecture.md](./architecture.md)). |
+| `trace_id` | string (UUIDv7 or `tg:<update_id>`) | Required since schema 1.1.0 (Story 9.7 / FR57-FR59a). Accepts bare UUIDv7 or Telegram-derived `tg:<update_id>`. |
 
 Once emitted, the envelope is **immutable** — not by the materializer, not by the bridge, not by sinks. Mutation invalidates the S-2 separability test (atomic visibility) and is rejected by static analysis + crash-injection fixtures.
 
@@ -44,6 +44,39 @@ Grouped by lifecycle area. Every entry is a `*Payload` Pydantic class with `froz
 
 ### Agent / worker
 `AgentReasoningBreadcrumbPayload`, `FileEditedPayload`
+
+### Security & signing (Phase 2 — Epic 10/11)
+`TaskApprovalSignedPayload`, `KeyRotatedPayload`, `CapabilityDeniedPayload`, `ApprovalInboxOpenedPayload`
+
+### Replication monitoring (Phase 2 — Epic 13)
+`ReplicationLaggingPayload` — emitted by `scripts/check_replication_lag.py` when the litestream sidecar stalls (`replication.lagging`, NFR-R7). Born at 1.0.0 + 1.1.0 (two-location registration in `packages/events/src/events/types/replication.py`).
+
+### Deployment security (Phase 2 — Epic 8)
+`DeploymentSignatureRejectedPayload` — emitted when `just verify-images` fails a cosign check (`deployment.signature_rejected`, FR56a, NFR-S9). Born at 1.0.0 + 1.1.0 (two-location registration in `packages/events/src/events/types/deployment.py`).
+
+### Budget enforcement (Phase 2 — Epic 12)
+`TaskBudgetEnforcementTriggeredPayload` — the ACTION-RECORD event emitted after SIGTERM of the Claude Code subprocess (`task.budget_enforcement_triggered`, FR67). `BudgetOverridePayload` — emitted alongside `approval.granted` when the operator overrides a budget block (`tier3.budget_override` / `budget.override` alias, FR68). Both registered at 1.0.0 + 1.1.0 (two-location).
+
+### Git mutations (Phase 3 — Epic 15)
+`GitCommittedPayload` (`git.committed`), `GitPushedPayload` (`git.pushed`) — emitted by git-mcp after Tier-2 commit / Tier-3 push. Born at 1.1.0 (no v1.0.0 predecessor; two-location registration).
+
+Planned Phase 3 read/query events (not yet registered; born 1.1.0, two-location):
+`git.status_queried`, `git.diff_queried`, `git.log_queried`, `git.branch_created`, `git.commit_created`, `git.push_completed`, `git.history_rewritten`.
+
+### GitHub writes (Phase 3 — Epic 16)
+`GithubIssueCreatedPayload` (`github.issue.created`), `GithubIssueUpdatedPayload` (`github.issue.updated`), `GithubPrCreatedPayload` (`github.pr.created`), `GithubPrUpdatedPayload` (`github.pr.updated`), `GithubReviewRequestedPayload` (`github.review.requested`), `GithubCommentCreatedPayload` (`github.comment.created`) — emitted by github-mcp after Tier-3 writes gated by `approval.granted`. Born at 1.1.0 (no v1.0.0 predecessor; two-location registration). Default `simulate=True` in Phase 1 (no scoped credential).
+
+Planned Phase 3 addition (not yet registered):
+`github.review.submitted` — emitted after a Tier-3 review submission.
+
+### Verification (Phase 3 — Epic 17)
+`VerificationCompletedPayload` (`verification.completed`, FR74) — emitted by verification-mcp after a Tier-2 `verification.run_build` / `verification.run_tests` recipe finishes. Payload carries `tool`, `recipe`, `passed`, `exit_code`, `coverage` — **never** logs or secrets. Born at 1.1.0 (no v1.0.0 predecessor; two-location registration).
+
+### Memory (Phase 3 — Epic 18)
+`MemoryWrittenPayload` (`memory.written`, ADR-0012) — emitted by memory-mcp after a Tier-2 `memory.write` upsert. Payload carries `key`, `title`, `body_bytes` — **never** the body content per ADR-0012 section 5. Born at 1.1.0 (no v1.0.0 predecessor; two-location registration).
+
+### Artifacts (Phase 3 — Epic 19)
+`ArtifactStoredPayload` (`artifact.stored`), `ArtifactDeletedPayload` (`artifact.deleted`, ADR-0011) — emitted by artifact-mcp. Metadata-only payloads: `hash`, `name`, `size_bytes`, `reason` — **never** the artifact content/bytes. Born at 1.1.0 (no v1.0.0 predecessor; two-location registration).
 
 ### Adding a new event type
 1. Add the `*Payload` class in `packages/events/src/events/` with `frozen=True, strict=True`.

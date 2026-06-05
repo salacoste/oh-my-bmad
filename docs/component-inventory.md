@@ -1,6 +1,6 @@
 # Component inventory
 
-The 14 uv-workspace members. Sizes are approximate LOC of non-test Python source. "Scaffold" means `signal.pause()` + healthcheck-touch placeholder until the owning story replaces it (see [exceptions.md](./exceptions.md)).
+The 19 uv-workspace members. Sizes are approximate LOC of non-test Python source. "Scaffold" means `signal.pause()` + healthcheck-touch placeholder until the owning story replaces it (see [exceptions.md](./exceptions.md)).
 
 ## Services (`services/*`)
 
@@ -36,6 +36,13 @@ Stdio-only MCP servers. Each is a workspace member with the canonical three-name
 | **clawhip-bridge** | ~425 | `emit_event`, `emit_blocker`, `emit_summary`, `emit_approval_request`, `emit_completion` | Append-only event-emission surface (Story 2.8). **Sole mutation path to the event log.** All other workspace code reads events; only this surface writes them. |
 | **session-registry** | ~420 | `session_register`, `session_heartbeat`, `session_close` | Session lifecycle — registration, heartbeat, close. Read-only session resource queries are exposed as MCP resources. |
 | **task-registry** | ~470 | `task_add_note`, `task_attach_artifact`, `task_emit_event` | Read-only task / approval-queue / blocker queries (via resources) plus bounded write tools for notes and artifacts. |
+| **git-mcp** | — | Tier-1 read + Tier-2 add/commit + Tier-3 push tools | Sandboxed git subprocess. Emits `git.*` events. |
+| **github-mcp** | — | Tier-1 issues/prs/reviews read + Tier-3 write tools | Scoped `GITHUB_MCP_SCOPED_TOKEN`. Emits `github.*` events. |
+| **verification-mcp** | — | Tier-2 `run_build` / `run_tests` | Sandboxed worktree subprocess. Emits `verification.completed` events. |
+| **memory-mcp** | — | Tier-1 read/search + Tier-2 write | SQLite FTS5 store. Emits `memory.written` events. |
+| **artifact-mcp** | — | Tier-1 get/list + Tier-2 put + Tier-3 delete | Content-addressed FS store. Emits `artifact.stored` / `artifact.deleted` events. |
+
+All fleet servers added in Phase 3 follow the [ADR-0010 MCP-server-authoring](../_bmad-output/adr/ADR-0010-mcp-server-authoring.md) pattern (three-name structure, capability-tier gates, event emission).
 
 ## Workspace topology (dependency direction)
 

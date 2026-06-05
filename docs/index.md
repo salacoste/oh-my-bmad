@@ -4,10 +4,10 @@
 
 ## Project Overview
 
-- **Type:** monorepo (uv workspace, 14 members) — single unified backend platform.
+- **Type:** monorepo (uv workspace, 19 members) — single unified backend platform.
 - **Primary Language:** Python 3.12 (locked).
 - **Architecture:** event-sourced, single-writer SQLite WAL + append-only JSONL; typed event spine connecting operator surfaces (Telegram + console) to a Claude Code worker via an orchestrator adapter.
-- **Status:** Phase 1 shipped — 10 epics, 88 stories done (as of 2026-05-15).
+- **Status:** Phase 3 shipped — 19 epics (incl. sub-epics 3.5, 7.5, 8.7), ~170+ stories done (as of 2026-06-05).
 
 ## Quick Reference
 
@@ -20,7 +20,7 @@
 - [Project Overview](./project-overview.md) — top-level summary, repository structure, where-to-start.
 - [Architecture](./architecture.md) — operator-oriented runtime view, invariants, data flow.
 - [Source Tree Analysis](./source-tree-analysis.md) — annotated directory map + entry-point table.
-- [Component Inventory](./component-inventory.md) — the 14 workspace members catalogued.
+- [Component Inventory](./component-inventory.md) — the 19 workspace members catalogued.
 - [API Contracts](./api-contracts.md) — HTTP endpoints + MCP tool catalog + Telegram surface.
 - [Data Models](./data-models.md) — event envelope, payload catalog, registry-state DB schema.
 - [Development Guide](./development-guide.md) — AI-context entry into the dev workflow.
@@ -46,6 +46,16 @@
 
 - [ADR-0001 — Allowlist Middleware Auth](./adr/0001-allowlist-middleware-auth.md) — accepted
 - [ADR-0002 — Integration Test Harness](./adr/0002-integration-test-harness.md) — accepted
+- [ADR-0003 — Phase-2 Gate](./adr/0003-phase-2-gate.md) — accepted
+- [ADR-0004 — trace_id Propagation Kernel](./adr/0004-trace-id-propagation-kernel.md) — accepted
+- [ADR-0005 — Metrics-Subscriber Service](./adr/0005-metrics-subscriber-service.md) — accepted
+- [ADR-0006 — HMAC Approval Signing](./adr/0006-hmac-approval-signing.md) — accepted
+- [ADR-0007 — Litestream WAL Replication](./adr/0007-litestream-wal-replication.md) — accepted
+- [ADR-0008 — Supply-Chain Hardening](./adr/0008-supply-chain-hardening.md) — accepted
+- [ADR-0009 — Phase-3 Gate](./adr/0009-phase-3-gate.md) — accepted
+- [ADR-0010 — MCP-Server-Authoring Pattern](./adr/0010-mcp-server-authoring-pattern.md) — accepted
+- [ADR-0011 — Artifact Store Design](./adr/0011-artifact-store-design.md) — accepted
+- [ADR-0012 — Memory/Wiki Store Design](./adr/0012-memory-wiki-store-design.md) — accepted
 
 ## Planning Artifacts (outside `docs/`)
 
@@ -80,9 +90,28 @@ The original solution-design lives under `_bmad-output/`. AI agents writing new 
 4. For specific work, follow the targeted sections in [development-guide.md](./development-guide.md) (adding a new event type, HTTP endpoint, MCP tool, workspace member).
 5. When in doubt, follow Cat 7 §"When in doubt" — emit a `BLOCKED` event, never guess.
 
+## Phase 3 Fleet MCP Servers
+
+Phase 3 added five fleet MCP servers (8 total, up from 3):
+
+| Server | Purpose |
+|--------|---------|
+| `git` | Git operations (status, log, diff, blame, branch management) |
+| `github` | GitHub API integration (PRs, issues, reviews, CI status) |
+| `verification` | Code-change verification and smoke-test harness |
+| `memory` | Persistent key-value memory store for agent sessions |
+| `artifact` | Artifact storage and retrieval (plan docs, reports, diagrams) |
+
+Key Phase 3 artifacts:
+- Trace-ID propagation kernel for end-to-end request correlation
+- HMAC approval signing for mutation gates
+- Litestream WAL replication for live backup
+- Supply-chain hardening (pinned deps, lockfile verification)
+- Metrics-subscriber service for observability
+
 ## Scope of this scan
 
 - **Mode:** initial scan, deep level (files read from critical directories).
-- **Date:** 2026-05-15.
+- **Date:** 2026-06-05.
 - **Project type:** backend (single-part monorepo, unified backend platform).
 - **State file:** [project-scan-report.json](./project-scan-report.json).

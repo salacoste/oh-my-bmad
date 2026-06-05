@@ -90,7 +90,7 @@ The MCP triple-naming rule (`<dir>` ↔ `<dir>-mcp` ↔ `<dir>_mcp`) is owned by
 
 ## Adding a new MCP tool
 
-1. Pick the right server: `task-registry`, `session-registry`, or `clawhip-bridge` (the last is mutation-only — most additions go elsewhere).
+1. Pick the right server. The original three — `task-registry`, `session-registry`, `clawhip-bridge` (the last is mutation-only — most additions go elsewhere) — are now joined by the Phase-3 fleet servers (`git`, `github`, `verification`, `memory`, `artifact`). Fleet servers follow the [ADR-0010 recipe](./adr/0010-mcp-server-authoring.md); see [Adding a fleet MCP server](#adding-a-fleet-mcp-server) for the full workflow.
 2. Pydantic-validated input model + pydantic-modelled output. One source of truth — never duplicate the schema in both the tool registration and a separate Pydantic model.
 3. Tool errors raise `ToolError(...)`. Never `raise ValueError`.
 4. The capability-tier middleware runs at the boundary; the handler body is logic-only.
@@ -98,6 +98,32 @@ The MCP triple-naming rule (`<dir>` ↔ `<dir>-mcp` ↔ `<dir>_mcp`) is owned by
 6. Side-effect tools must be idempotent by design (MCP clients retry on timeout).
 7. Add **three** mandatory tests at the boundary: deny-path, default-deny, escalation (see [`_bmad-output/project-context.md`](../_bmad-output/project-context.md) Cat 4).
 8. Record contract fixtures under `tests/contract/fixtures/<adapter>/`.
+
+## Adding a fleet MCP server
+
+Phase 3 adds five stdio MCP servers (`git`, `github`, `verification`, `memory`, `artifact`; FR72–FR76). Every fleet server follows the [ADR-0010 authoring recipe](./adr/0010-mcp-server-authoring.md). The recipe's reference implementations are `clawhip-bridge` and `task-registry`; copy their shape, don't improvise.
+
+### Story breakdown
+
+The recommended story sequence (mirrors Epic 15 for `git`; reuse verbatim for Epics 16–19):
+
+| Story | Scope | Key deliverables |
+|---|---|---|
+| **1 — ATDD contracts** | Red-phase only | `xfail` / `pytest.mark.xfail` test stubs per tool: one per tier (Tier-0..3), one denial path per Tier-3 tool, one default-deny. No production code yet. |
+| **2 — Server scaffold** | Minimal server | `build_server` factory, `__main__.py`, basic health (tools list returns without error). `TIER_MAP` with placeholder entries. |
+| **3 — Tools + event emission** | Full tool set | Read tools (Tier-1) first, then write tools (Tier-2/3). Each handler calls `check_tier` or `check_tier_with_approval` before side effects. Tier-3 handlers wrapped by `emit_capability_denied_on_deny`. |
+| **4 — Event registration** | Audit wiring | Two-location registration: spine JSONL (FR26 writer via clawhip-bridge `EventLogWriter`) + service-local event type in `domain/event_types.py`. Server born at version `1.1.0` (matching existing server versions). |
+| **5 — Separability + supply chain** | S-N test + gates | New separability entry (S-5…S-9) proving the member is optional: tools callable when spawned; all other servers + worker still function when absent (NFR-M8). License gate + SBOM check inherited from base image (NFR-S12). |
+
+### Key patterns (ADR-0010 §Decision)
+
+**Child-env allowlist — never `os.environ.copy()`.** Each server's required env vars are added to the byte-identical `_ENV_ALLOWLIST` frozensets in both `services/worker-wrapper/.../adapters/mcp_clients.py` and `services/orchestrator-adapter/.../adapters/mcp_clients.py`. Broad secrets (`ANTHROPIC_API_KEY`, `OPERATOR_HMAC_KEY`, etc.) are never forwarded. Scoped credentials use new, narrowly-named vars. The two frozensets must stay in sync — contract tests guard this.
+
+**Tier enforcement.** Every tool has a `TIER_MAP` entry. Handlers call `check_tier(action, caller, required_tier)` (Tier-0..2) or `check_tier_with_approval(action, caller, required_tier, approval_lookup)` (Tier-3). The build-time AST gate `scripts/check_tier_declarations.py` mechanically verifies no `@mcp.tool()` is missing a tier. Destructive tools are `Tier.THREE` and must ship a negative test proving `CapabilityDenied` without a matching `approval.granted` event.
+
+**Event emission — two locations, metadata-only payloads.** Mutating spine events route through the single FR26 writer (clawhip-bridge `EventLogWriter.append`). A spawned clawhip-bridge stdio client + `EmitterHolder` provides the writer. The event type is also registered in `domain/event_types.py` (additive, never mutating an existing version). `caller_trace_id` is an explicit, shape-validated keyword argument on every tool — never ambient, never env-backchannel.
+
+**Separability — conditional spawn.** The server is spawned as a stdio subprocess only when its `WORKER_<NAME>_COMMAND` env var is non-blank. No compose entry, no Dockerfile, no `release.yml` matrix row. The base image's supply-chain attestations (cosign/SLSA/CycloneDX + fail-closed license gate) cover the new member transitively. The S-N test toggles the env var off and proves all other servers + worker function correctly.
 
 ## Commit + PR discipline
 

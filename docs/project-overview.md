@@ -4,12 +4,12 @@
 
 **oh-my-bmad** is a self-hosted personal autonomous-development platform. Telegram and a local console drive a Claude Code worker through a typed event spine, backed by a single-writer SQLite WAL + append-only JSONL event log that survives restarts. The architecture is built to swap in additional CLI agents (Codex, Gemini, GLM) and a dedicated browser-automation plane later without changing the spine.
 
-This is the Phase 1 implementation. Phase 1 ships across **10 epics / 88 stories** (all `done` as of 2026-05-15). The MVP Ship-Blocker Checklist at the bottom of `_bmad-output/planning-artifacts/epics.md` is the definitive "Phase 1 shipped" criterion.
+Phase 1 shipped across **10 epics / 88 stories** (all `done` as of 2026-05-15). Phase 2 added trace\_id propagation, structured metrics, HMAC event signing, Litestream WAL backups, and token-budget enforcement. Phase 3 shipped the MCP Tooling Fleet — 5 new MCP servers, mutation testing, and AST-based quality gates. The project now covers **19 epics (incl. sub-epics) / ~170+ stories** (all `done` as of 2026-06-05).
 
 ## Status
 
-- **Phase:** 1 (shipped baseline).
-- **Repository type:** monorepo (uv workspace, 14 members).
+- **Phase:** 3 (MCP Tooling Fleet — shipped).
+- **Repository type:** monorepo (uv workspace, 19 members).
 - **Language:** Python 3.12 (locked).
 - **Deployment:** Docker Compose v2 + named volume (`oh-my-bmad-data`).
 
@@ -24,7 +24,7 @@ See `_bmad-output/implementation-artifacts/sprint-status.yaml` for current state
 | Telegram | aiogram v3 on `telegram-gateway` |
 | Storage | SQLite WAL + `aiosqlite` + Alembic on `registry-state` |
 | Event log | Append-only JSONL on the host volume |
-| MCP | stdio transport only (Phase 1) |
+| MCP | stdio transport; 8 servers (3 baseline + 5 fleet) |
 | Worker | Claude Code CLI subprocess, supervised by `worker-wrapper` |
 | Upstream forks | OMC + clawhip, vendored under `upstream/` behind adapter shims |
 | Logging | structlog (JSON) + secret-hygiene sanitizer in the processor chain |
@@ -38,7 +38,7 @@ Exact versions live in `uv.lock`. Don't duplicate them in docs.
 oh-my-bmad/
 ├── services/              # 7 backend services (deployable processes)
 ├── packages/              # 4 shared libraries imported by services + MCP servers
-├── mcp-servers/           # 3 MCP servers (stdio, tool-contract surfaces)
+├── mcp-servers/           # 8 MCP servers (3 baseline + 5 fleet: git, github, verification, memory, artifact)
 ├── upstream/              # vendored forks (omc, clawhip), via `just sync-upstream`
 ├── tests/                 # cross-service test trees (separability, crash-injection, etc.)
 ├── scripts/               # CI gates, migrator, sync-upstream tooling
@@ -54,11 +54,11 @@ oh-my-bmad/
 └── README.md              # human-facing quickstart
 ```
 
-The 14 uv-workspace members are documented in [component-inventory.md](./component-inventory.md). The annotated source tree lives in [source-tree-analysis.md](./source-tree-analysis.md).
+The 19 uv-workspace members are documented in [component-inventory.md](./component-inventory.md). The annotated source tree lives in [source-tree-analysis.md](./source-tree-analysis.md).
 
 ## Architecture in one paragraph
 
-A typed event spine connects three operator surfaces (Telegram, console, future browser) to a Claude Code worker subprocess via an orchestrator adapter. All state lives in the event log; `registry-state` is the single writer that materializes the log into SQLite for query, owns idempotency dedup (UUIDv7 keys, 7-day retention), and emits service-lifecycle events. MCP servers (`task-registry`, `session-registry`, `clawhip-bridge`) expose tool/resource contracts to the worker. Capability tiers gate every MCP tool call. Upstream forks (OMC, clawhip) integrate only via adapter shims so they can be swapped without changing the spine.
+A typed event spine connects three operator surfaces (Telegram, console, future browser) to a Claude Code worker subprocess via an orchestrator adapter. All state lives in the event log; `registry-state` is the single writer that materializes the log into SQLite for query, owns idempotency dedup (UUIDv7 keys, 7-day retention), and emits service-lifecycle events. Eight MCP servers expose tool/resource contracts to the worker: the 3 baseline servers (`task-registry`, `session-registry`, `clawhip-bridge`) plus 5 Phase 3 fleet servers (`git`, `github`, `verification`, `memory`, `artifact`). Capability tiers gate every MCP tool call. Upstream forks (OMC, clawhip) integrate only via adapter shims so they can be swapped without changing the spine.
 
 For the full design rationale, read `_bmad-output/planning-artifacts/architecture.md`. For the operator-oriented summary, read [architecture.md](./architecture.md).
 
