@@ -17,7 +17,8 @@ from typing import cast
 
 import pytest
 
-from git_mcp.server import GitExecutor, GitTimeout, _build_git_env
+from git_mcp.handlers.tools import _parse_branch, _parse_numstat
+from git_mcp.server import GitExecutor, GitOutputTooLarge, GitTimeout, _build_git_env
 
 _VALID_TRACE_ID = "01917e5c-a7d1-7000-8abc-0123456789ab"
 
@@ -130,6 +131,81 @@ async def test_diff_numstat_counts(repo: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# _parse_numstat rename handling (deferred-work P1 — `git.diff` rename detection)
+# ---------------------------------------------------------------------------
+#
+# Under ``git diff --numstat -z`` a rename/copy emits the numstat record with an
+# EMPTY path field, followed by the origin and destination names as two separate
+# NUL records. The parser must consume the origin and surface the destination —
+# otherwise the renamed file is recorded with ``path=""`` and its real name lost.
+
+
+def test_parse_numstat_modify_only() -> None:
+    """Baseline: a plain modify record is unaffected by rename handling."""
+    out = "1\t0\ttracked.txt\x00"
+    result = cast("list[dict[str, object]]", _parse_numstat(out)["files"])
+    assert result == [{"added": 1, "deleted": 0, "path": "tracked.txt"}]
+
+
+def test_parse_numstat_text_rename_surfaces_destination() -> None:
+    """A text rename surfaces the destination path, not ``path=''``."""
+    # added=2, deleted=1, empty path, then origin + destination NUL records.
+    out = "2\t1\t\x00old/name.py\x00new/name.py\x00"
+    files = cast("list[dict[str, object]]", _parse_numstat(out)["files"])
+    assert files == [{"added": 2, "deleted": 1, "path": "new/name.py"}]
+    assert all(f["path"] != "" for f in files)
+
+
+def test_parse_numstat_binary_rename_surfaces_destination() -> None:
+    """A binary rename surfaces the destination with ``None`` counts."""
+    out = "-\t-\t\x00bin/old.png\x00bin/new.png\x00"
+    files = cast("list[dict[str, object]]", _parse_numstat(out)["files"])
+    assert files == [{"added": None, "deleted": None, "path": "bin/new.png"}]
+
+
+def test_parse_numstat_mixed_modify_and_rename() -> None:
+    """A modify and a rename in the same diff both keep their real paths."""
+    out = "1\t0\tkept.txt\x003\t2\t\x00src/old.py\x00src/new.py\x00"
+    files = cast("list[dict[str, object]]", _parse_numstat(out)["files"])
+    by_path = {cast("str", f["path"]): f for f in files}
+    assert set(by_path) == {"kept.txt", "src/new.py"}
+    assert by_path["src/new.py"] == {"added": 3, "deleted": 2, "path": "src/new.py"}
+    assert "" not in by_path
+
+
+# ---------------------------------------------------------------------------
+# _parse_branch detached-HEAD handling (deferred-work nit — git.branch)
+# ---------------------------------------------------------------------------
+#
+# On a detached HEAD ``git branch --format=...`` emits a pseudo-ref
+# ``(HEAD detached at <sha>)`` with the ``*`` marker.  The parser must
+# filter it out of ``branches`` and report ``current=None``.
+
+
+def test_parse_branch_normal() -> None:
+    """Baseline: a regular branch listing is unaffected."""
+    out = "main\x00*\ndevelop\x00\nfeature/x\x00\n"
+    result = _parse_branch(out)
+    assert result == {"ok": True, "branches": ["main", "develop", "feature/x"], "current": "main"}
+
+
+def test_parse_branch_detached_head_filters_pseudo_ref() -> None:
+    """Detached HEAD pseudo-ref is excluded from branches; current is None."""
+    out = "(HEAD detached at 846494f)\x00*\nmain\x00\n"
+    result = _parse_branch(out)
+    assert result["current"] is None
+    assert result["branches"] == ["main"]
+
+
+def test_parse_branch_detached_head_no_branches() -> None:
+    """Detached HEAD with no other branches → empty branches list, current=None."""
+    out = "(HEAD detached at abc1234)\x00*\n"
+    result = _parse_branch(out)
+    assert result["current"] is None
+    assert result["branches"] == []
+
+
+# ---------------------------------------------------------------------------
 # Sandbox / security invariants
 # ---------------------------------------------------------------------------
 
@@ -156,6 +232,42 @@ async def test_run_git_timeout_kills_and_reaps(repo: Path) -> None:
         await ex.run_git(["log", "--format=%H", "-n", "1"], timeout=1e-9)
     ok = await ex.run_git(["rev-parse", "--is-inside-work-tree"])
     assert ok.returncode == 0
+
+
+@pytest.mark.asyncio
+async def test_run_git_output_cap_kills_and_reaps(repo: Path) -> None:
+    """Output past the cap raises GitOutputTooLarge and leaves the sandbox usable.
+
+    A tiny ``output_cap`` forces the incremental reader to trip before the
+    subprocess finishes, driving ``run_git``'s kill+reap path (the
+    memory-pressure sibling of the timeout path). A subsequent call must still
+    succeed (no leaked/zombie process wedges later invocations).
+    """
+    ex = GitExecutor(repo)
+    with pytest.raises(GitOutputTooLarge):
+        # `git log` emits a commit hash + metadata — far more than 4 bytes.
+        await ex.run_git(["log", "--format=%H"], output_cap=4)
+    ok = await ex.run_git(["rev-parse", "--is-inside-work-tree"])
+    assert ok.returncode == 0
+
+
+@pytest.mark.asyncio
+async def test_run_git_output_under_cap_succeeds(repo: Path) -> None:
+    """Output within the cap returns normally (boundary: cap not tripped)."""
+    ex = GitExecutor(repo)
+    result = await ex.run_git(["rev-parse", "--is-inside-work-tree"], output_cap=4096)
+    assert result.returncode == 0
+    assert result.stdout.strip() == "true"
+
+
+@pytest.mark.asyncio
+async def test_run_git_output_cap_boundary_is_exclusive(repo: Path) -> None:
+    """Output of exactly ``output_cap`` bytes succeeds (cap check is ``>``, not ``>=``)."""
+    ex = GitExecutor(repo)
+    # `rev-parse --is-inside-work-tree` emits exactly "true\n" = 5 bytes.
+    result = await ex.run_git(["rev-parse", "--is-inside-work-tree"], output_cap=5)
+    assert result.returncode == 0
+    assert result.stdout.strip() == "true"
 
 
 def test_build_git_env_drops_secrets(monkeypatch: pytest.MonkeyPatch) -> None:

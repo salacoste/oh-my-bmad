@@ -704,3 +704,35 @@ audit_trail:
       gate is now ENFORCING at 82. DOCS/CI/STATUS — the only production change is
       the gating wiring + 2 added 82-boundary unit tests; mutation_score.py
       stays pure-parse (no new spawn site — spawn-site ratchet still PASS).
+  - date: "2026-06-05"
+    event: g-sec-2-fully-closed
+    from: post-phase-3-deferred
+    to: closed
+    reason: >
+      G-SEC-2 (broad operator GITHUB_TOKEN must never reach an agent
+      subprocess) is now FULLY CLOSED. The MCP-subprocess half closed in Story
+      16.5 (GITHUB_MCP_SCOPED_TOKEN; broad token banned from every MCP child).
+      The agent-spawn half — tracked in deferred-work.md as the remaining open
+      half — closed here: GITHUB_TOKEN dropped from `_CHILD_ENV_ALLOWLIST` in
+      BOTH agent spawners (worker-wrapper claude_code_runner.py AND its sibling
+      orchestrator-adapter omc_runner.py; the deferred note named only the
+      worker, but the orchestrator spawner carried the identical retention and
+      was the same exposure — fixed together to avoid a point-fix). Investigation
+      (Explore + repo-wide search) established the broad PAT was INERT: the
+      agent's `git push` targets a local bare remote (no creds; git-mcp 15.4
+      DECISION-1(A) sibling), the worker only DETECTS the push to drive the
+      Tier-3 approval gate, and nothing wires the env var to git (no
+      credential.helper / GIT_ASKPASS / token-in-URL). Correct closure = DROP the
+      token, not build a credential helper for a remote that isn't wired yet;
+      when real remote push lands it MUST use a scoped credential helper, never
+      the broad PAT. Parent worker-wrapper REST PR-draft path unaffected (reads
+      settings.github_token, not the child env). Regression tests in both
+      services assert GITHUB_TOKEN absent from the allowlist + dropped by
+      _build_child_env() (added to the operator-secret leak-canary set); the
+      two stale "GITHUB_TOKEN retained" assertions flipped. Verified: worker
+      runner suite 81 passed, orchestrator omc_runner env tests 6 passed, ruff
+      clean on all four changed files. Docs updated (deferred-work.md closure
+      record + operator-runbook G-SEC-2 note half-closed → fully-closed). The
+      per-server MCP env-scoping item stays OPEN as a defense-in-depth
+      enhancement (not a blocker). SECURITY — agent subprocess no longer
+      receives the broad operator PAT.

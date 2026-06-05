@@ -58,10 +58,18 @@ _LOG_PROMPT_PREVIEW_LEN: int = 80
 #   - TMPDIR / TMP / TEMP — temp-dir resolution for the agent's file ops.
 #   - SSL_CERT_FILE / SSL_CERT_DIR / REQUESTS_CA_BUNDLE / CURL_CA_BUNDLE —
 #     TLS / CA bundles for custom-CA deployments.
-#   - GITHUB_TOKEN — retained because the ``claude`` subprocess performs
-#     ``git push`` (see ``worker_wrapper/main.py:476``).
-#     TODO(G-SEC-2 follow-up): migrate to a scoped git credential helper so
-#     the raw PAT need not enter the agent env at all.
+#
+# GITHUB_TOKEN is INTENTIONALLY NOT in this allowlist — G-SEC-2 remaining half
+# CLOSED 2026-06-05. The broad operator PAT must never enter the agent
+# subprocess. The ``claude`` agent's ``git push`` does not need it today: the
+# push target is a local bare remote (no network, no credentials — the
+# git-mcp Story-15.4 DECISION-1(A) sibling), the worker only DETECTS the push
+# to drive the Tier-3 approval gate (``main.py`` ``needs_approval``), and
+# nothing wires this env var to git (no ``credential.helper`` / ``GIT_ASKPASS``
+# / token-in-URL anywhere in the agent's push path). When a real remote push is
+# wired, authenticate it with a SCOPED git-credential helper or a narrow
+# ``GITHUB_MCP_SCOPED_TOKEN``-style token (mirror the github-mcp Story-16.5
+# pattern) — NEVER re-add the broad ``GITHUB_TOKEN`` here.
 #
 # ANTHROPIC_API_KEY is INTENTIONALLY NOT in this allowlist — it is re-injected
 # from settings in ``_spawn`` (see the ``anthropic_api_key`` overlay), not
@@ -85,8 +93,6 @@ _CHILD_ENV_ALLOWLIST: frozenset[str] = frozenset(
         "SSL_CERT_DIR",
         "REQUESTS_CA_BUNDLE",
         "CURL_CA_BUNDLE",
-        # git push (main.py:476) — TODO(G-SEC-2 follow-up): scoped cred helper.
-        "GITHUB_TOKEN",
     }
 )
 

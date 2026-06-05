@@ -52,6 +52,17 @@ _INIT_TIMEOUT: float = 30.0
 # not hang the request path — ``run_git`` kills+reaps on timeout and raises.
 _GIT_TIMEOUT: float = 30.0
 
+# Byte bound for a single ``git`` invocation's combined-per-stream output
+# (deferred-work P1). The timeout bounds WALL-CLOCK but not MEMORY: a
+# pathological repo (or a future content-exposing tool) could stream gigabytes
+# faster than the timeout trips. ``run_git`` reads each stream incrementally and,
+# once a stream crosses this cap, kills+reaps the subprocess and raises
+# ``GitOutputTooLarge`` — the memory-pressure sibling of ``GitTimeout``. 16 MiB
+# comfortably exceeds the cardinality-scaled metadata the read tools emit.
+_GIT_OUTPUT_CAP: int = 16 * 1024 * 1024
+# Per-read chunk size for the incremental bounded reader.
+_GIT_READ_CHUNK: int = 65536
+
 # Env allowlist for the spawned ``git`` subprocess (Story 15.3, P0/security).
 # Only these parent-env vars are forwarded to git; everything else (operator /
 # platform secrets) is dropped. ``HOME`` is INTENTIONALLY EXCLUDED so git cannot
@@ -167,6 +178,16 @@ class GitTimeout(RuntimeError):  # noqa: N818 — domain-named (no Error suffix)
     """
 
 
+class GitOutputTooLarge(RuntimeError):  # noqa: N818 — domain-named (no Error suffix); mirrors GitTimeout precedent
+    """Raised when a ``git`` invocation's output exceeds ``_GIT_OUTPUT_CAP``.
+
+    The memory-pressure sibling of ``GitTimeout`` (deferred-work P1): the
+    subprocess is killed and reaped before this propagates, so a pathological
+    repo cannot exhaust request-path memory by streaming unbounded output that
+    completes within the wall-clock timeout.
+    """
+
+
 class RepoConfigUnsafe(RuntimeError):  # noqa: N818 — domain-named (no Error suffix); mirrors GitTimeout / events.errors precedent
     """Raised when a mutating op finds an exec-capable driver in the repo-local config.
 
@@ -247,6 +268,7 @@ class GitExecutor:
         subcmd: list[str],
         *,
         timeout: float = _GIT_TIMEOUT,
+        output_cap: int = _GIT_OUTPUT_CAP,
         extra_hardening: tuple[str, ...] = (),
     ) -> GitResult:
         """Run ``git -C <root> <subcmd...>`` in the sandbox and return its result.
@@ -270,6 +292,12 @@ class GitExecutor:
           vector is closed without burdening read/commit invocations.
         - A wedged git is bounded by ``timeout``; on expiry it is killed+reaped
           and ``GitTimeout`` is raised (no leaked process).
+        - Output is bounded by ``output_cap``: each stream is read incrementally
+          and, once a stream crosses the cap, the subprocess is killed+reaped and
+          ``GitOutputTooLarge`` is raised (memory-pressure sibling of the
+          timeout). ``communicate()`` is NOT used — it would buffer unbounded
+          output in memory before returning. Both streams are drained
+          concurrently so a full stderr pipe cannot deadlock a stdout read.
 
         A non-zero exit is NOT raised — it is returned in ``GitResult.returncode``
         so handlers can surface a structured error. Output is decoded with
@@ -287,12 +315,52 @@ class GitExecutor:
             cwd=str(self.worktree_root),
             env=_build_git_env(),
         )
+
+        async def _read_capped(stream: asyncio.StreamReader) -> bytes:
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                chunk = await stream.read(_GIT_READ_CHUNK)
+                if not chunk:
+                    return b"".join(chunks)
+                total += len(chunk)
+                if total > output_cap:
+                    raise GitOutputTooLarge(f"git {subcmd!r} exceeded {output_cap}-byte output cap")
+                chunks.append(chunk)
+
+        # ``proc.stdout``/``proc.stderr`` are non-None because both were PIPE'd.
+        assert proc.stdout is not None and proc.stderr is not None
+        out_task = asyncio.ensure_future(_read_capped(proc.stdout))
+        err_task = asyncio.ensure_future(_read_capped(proc.stderr))
+
+        async def _cleanup_child() -> None:
+            # Cancel both readers, kill+reap the child (if still live), then
+            # await-suppress the tasks so none is left pending and no "exception
+            # never retrieved" / "task destroyed pending" warning fires.
+            # gather() does NOT cancel the sibling on first error, and wait_for
+            # cancels gather (and its children) on timeout — the explicit
+            # cancels are idempotent across both.
+            out_task.cancel()
+            err_task.cancel()
+            if proc.returncode is None:
+                proc.kill()
+                await proc.wait()
+            await asyncio.gather(out_task, err_task, return_exceptions=True)
+
         try:
-            out, err = await asyncio.wait_for(proc.communicate(), timeout)
-        except TimeoutError as exc:
-            proc.kill()
-            await proc.wait()
+            out, err = await asyncio.wait_for(asyncio.gather(out_task, err_task), timeout)
+        except (TimeoutError, GitOutputTooLarge) as exc:
+            await _cleanup_child()
+            if isinstance(exc, GitOutputTooLarge):
+                raise
             raise GitTimeout(f"git {subcmd!r} exceeded {timeout}s timeout") from exc
+        except BaseException:
+            # CancelledError / KeyboardInterrupt / SystemExit (or any unexpected
+            # error) must not leak the child or the reader tasks — mirror the
+            # claude_code_runner BaseException-cleanup discipline (Epic-11 L7).
+            await _cleanup_child()
+            raise
+        await proc.wait()
         return GitResult(
             returncode=proc.returncode if proc.returncode is not None else -1,
             stdout=out.decode(errors="replace"),

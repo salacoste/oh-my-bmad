@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -234,9 +235,16 @@ def _parse_numstat(stdout: str) -> dict[str, object]:
     Each record is ``<added>\\t<deleted>\\t<path>``. ``added``/``deleted`` are
     ``-`` for binary files (surfaced as ``None``). With ``-z`` the records are
     NUL-separated and the path is NOT tab-terminated.
+
+    Rename/copy entries are special-cased by ``git`` under ``-z``: the numstat
+    record's path field is EMPTY and the origin + destination names follow as
+    two separate NUL records. We consume the origin and surface the destination
+    as ``path`` (mirroring ``_parse_status``'s rename handling) — otherwise the
+    renamed file would be recorded with ``path=""`` and its real name dropped.
     """
     files: list[dict[str, object]] = []
-    for rec in stdout.split("\x00"):
+    it = iter(stdout.split("\x00"))
+    for rec in it:
         if rec == "":
             continue
         parts = rec.split("\t", 2)
@@ -245,6 +253,11 @@ def _parse_numstat(stdout: str) -> dict[str, object]:
         added_s, deleted_s, path = parts
         added = None if added_s == "-" else int(added_s)
         deleted = None if deleted_s == "-" else int(deleted_s)
+        if path == "":
+            # Rename/copy under -z: origin then destination follow as two NUL
+            # records. Consume the origin; the destination is the real path.
+            next(it, None)  # origin (not surfaced — mirror _parse_status)
+            path = next(it, "")
         files.append({"added": added, "deleted": deleted, "path": path})
     return {"ok": True, "files": files}
 
@@ -274,11 +287,18 @@ def _parse_log(stdout: str) -> dict[str, object]:
     return {"ok": True, "commits": commits}
 
 
+_DETACHED_RE = re.compile(r"^\(HEAD detached at .+\)$")
+
+
 def _parse_branch(stdout: str) -> dict[str, object]:
     """Parse ``git branch --format=%(refname:short)%00%(HEAD)`` into a payload.
 
     Each line is ``<name>\\x00<head-marker>`` where ``<head-marker>`` is ``*``
     for the current branch (else empty).
+
+    A detached HEAD emits ``(HEAD detached at <sha>)`` as a pseudo-ref with
+    the ``*`` marker.  The parser filters it out of ``branches`` and reports
+    ``current=None`` — there is no real branch checked out.
     """
     branches: list[str] = []
     current: str | None = None
@@ -286,6 +306,8 @@ def _parse_branch(stdout: str) -> dict[str, object]:
         if line == "":
             continue
         name, _, marker = line.partition("\x00")
+        if _DETACHED_RE.match(name):
+            continue  # not a real branch
         branches.append(name)
         if marker == "*":
             current = name

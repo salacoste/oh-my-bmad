@@ -84,10 +84,16 @@ absence). Set up:
    subprocess, the blast radius would be the operator's entire account; the scoped
    token's leak radius is one repo.
 
-> **Note (G-SEC-2 is half-closed):** this closes the *MCP-subprocess* half. The
-> spawned `claude` agent (`claude_code_runner.py`) still receives the broad
-> `GITHUB_TOKEN` for its own `git push`; migrating that to a scoped git-credential
-> helper is tracked in `deferred-work.md`.
+> **Note (G-SEC-2 is FULLY CLOSED, 2026-06-05):** this scoped-credential setup
+> closes the *MCP-subprocess* half. The *agent-spawn* half is now closed too —
+> the broad `GITHUB_TOKEN` was dropped from both agent spawners'
+> child-env allowlists (`claude_code_runner.py` and `omc_runner.py`). The agents'
+> `git push` does not need it (the push target is a local bare remote; no
+> credential is wired to that env var). **If you later wire a real remote push,
+> authenticate it with a scoped git-credential helper or a
+> `GITHUB_MCP_SCOPED_TOKEN`-style narrow token — never re-add the broad
+> `GITHUB_TOKEN` to an agent subprocess.** See `deferred-work.md` for the
+> closure record.
 
 ### `memory` / `artifact` — store paths + retention
 

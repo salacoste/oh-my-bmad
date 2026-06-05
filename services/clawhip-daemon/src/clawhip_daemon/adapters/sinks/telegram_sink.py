@@ -565,35 +565,25 @@ def _truncate(text: str, limit: int) -> str:
     return text[: limit - 1] + "…"
 
 
+_LINE_BREAK_RE = re.compile(r"(?:\r\n|[\r\n\v\f\x85  ])+")
+
+
 def _collapse_newlines(text: str) -> str:
     """Collapse all line-break sequences to single spaces.
 
-    Handles ``\\r\\n``, ``\\r``, ``\\n``, U+2028 (LINE SEPARATOR),
-    and U+2029 (PARAGRAPH SEPARATOR).
-
-    Story 3.11 review H6 / L17 / M12: extracted helper so renderers don't
-    diverge stylistically (``"\\n"`` vs ``chr(10)``). Order matters:
-    ``\\r\\n`` is collapsed first so the trailing ``\\n`` doesn't decay
-    a CRLF to ``" \\n"`` → ``"  "``. Bare ``\\r`` is collapsed next so
-    legacy Mac line endings don't leak into HTML-escaped output. Finally
-    bare ``\\n`` (the common case) is collapsed.
-
-    Story 7.5.8: U+2028 (LINE SEPARATOR) and U+2029 (PARAGRAPH SEPARATOR)
-    are also collapsed — Unicode line breaks that cause rendering artifacts
-    in some sinks.
+    Handles every Unicode line-break character recognised by Python's
+    ``str.splitlines()``: ``\\r\\n``, ``\\r``, ``\\n``, ``\\v`` (VT),
+    ``\\f`` (FF), ``\\x85`` (NEL), U+2028 (LINE SEPARATOR), and
+    U+2029 (PARAGRAPH SEPARATOR).  A single regex pass avoids the
+    multi-space output that sequential ``.replace()`` calls produced
+    for mixed adjacent separators (deferred-work D1+D2).
 
     The function is total — call sites do not pre-validate. Used on both
     operator-supplied free-form text (``reason``, ``last_action``) and
     registry-controlled strings (``last_event``, defense-in-depth) before
     HTML-escaping.
     """
-    return (
-        text.replace("\r\n", " ")
-        .replace("\r", " ")
-        .replace("\n", " ")
-        .replace(" ", " ")
-        .replace(" ", " ")
-    )
+    return _LINE_BREAK_RE.sub(" ", text)
 
 
 # Story 3.10 review M13: status → emoji map. Widened from binary
@@ -1311,15 +1301,16 @@ def _build_diff_stats_line(payload: TaskCompletedPayload) -> str | None:
     lr_v = lr if lr is not None and lr > 0 else None
     if fc_v is None and la_v is None and lr_v is None:
         return None
+    fc_word = "file" if fc_v == 1 else "files"
     if fc_v is not None and la_v is not None and lr_v is not None:
-        return f"{fc_v} files changed, {la_v}+ / {lr_v}- lines."
+        return f"{fc_v} {fc_word} changed, {la_v}+ / {lr_v}- lines."
     # H2: explicit (fc+la) and (fc+lr) branches before the fc-only fall-through.
     if fc_v is not None and la_v is not None:
-        return f"{fc_v} files changed, {la_v}+ lines."
+        return f"{fc_v} {fc_word} changed, {la_v}+ lines."
     if fc_v is not None and lr_v is not None:
-        return f"{fc_v} files changed, {lr_v}- lines."
+        return f"{fc_v} {fc_word} changed, {lr_v}- lines."
     if fc_v is not None:
-        return f"{fc_v} files changed."
+        return f"{fc_v} {fc_word} changed."
     if la_v is not None and lr_v is not None:
         return f"{la_v}+ / {lr_v}- lines."
     if la_v is not None:

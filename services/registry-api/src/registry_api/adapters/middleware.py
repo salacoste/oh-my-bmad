@@ -297,7 +297,14 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         self._clock = clock
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        incoming = request.headers.get("X-Request-ID")
+        # D9: warn on duplicate single-value headers (RFC 7230 §3.2.2).
+        header_values = request.headers.getlist("X-Request-ID")
+        if len(header_values) > 1:
+            _log.warning(
+                "duplicate X-Request-ID headers; using first",
+                extra={"received_count": len(header_values)},
+            )
+        incoming = header_values[0] if header_values else None
         if incoming and _UUIDV7_BARE_RE.match(incoming):
             request_id = incoming
         else:
@@ -308,6 +315,10 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
                     "invalid X-Request-ID header; generating fresh",
                     extra={"received": incoming[:80]},
                 )
+            else:
+                # Empty or absent — silent regen is by design (D7), but emit a
+                # debug log so operators can distinguish "absent" from "empty".
+                _log.debug("X-Request-ID absent or empty; generating fresh")
             request_id = new_request_id(clock=self._clock)
         request.state.request_id = request_id
         # Story 3.6 AC-1: bind into structlog contextvars so any downstream log
@@ -352,11 +363,18 @@ class IdempotencyKeyMiddleware(BaseHTTPMiddleware):
         self._clock = clock
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        # D9: warn on duplicate single-value headers (RFC 7230 §3.2.2).
+        header_values = request.headers.getlist("Idempotency-Key")
+        if len(header_values) > 1:
+            _log.warning(
+                "duplicate Idempotency-Key headers; using first",
+                extra={"received_count": len(header_values)},
+            )
         # Story 2.13 review M1: validate inbound Idempotency-Key against the
         # bare-UUIDv7 regex. A 10MB header would otherwise be a trivial DoS
         # vector + arbitrary client strings would land in SQLite cache PK
         # column. Mirrors RequestIdMiddleware's validation pattern.
-        incoming = request.headers.get("Idempotency-Key")
+        incoming = header_values[0] if header_values else None
         if incoming and _UUIDV7_BARE_RE.match(incoming):
             idempotency_key = incoming
             generated = False
@@ -368,6 +386,10 @@ class IdempotencyKeyMiddleware(BaseHTTPMiddleware):
                     "invalid Idempotency-Key header; generating fresh",
                     extra={"received": incoming[:80]},
                 )
+            else:
+                # Empty or absent — silent regen is by design (D7), but emit a
+                # debug log so operators can distinguish "absent" from "empty".
+                _log.debug("Idempotency-Key absent or empty; generating fresh")
             idempotency_key = new_idempotency_key(clock=self._clock)
             generated = True
         request.state.idempotency_key = idempotency_key

@@ -2558,6 +2558,9 @@ def test_build_pr_line_returns_none_when_all_pr_fields_absent() -> None:
         (5, None, 89, "5 files changed, 89- lines."),
         # fc only.
         (5, None, None, "5 files changed."),
+        # Singular form: 1 file (deferred-work D2 — "1 files changed" UX bug).
+        (1, None, None, "1 file changed."),
+        (1, 10, 3, "1 file changed, 10+ / 3- lines."),
         # la+lr.
         (None, 234, 89, "234+ / 89- lines."),
         # la only.
@@ -3630,7 +3633,22 @@ class TestCollapseNewlinesUnicode:
     def test_strips_consecutive_unicode_separators(self) -> None:
         from clawhip_daemon.adapters.sinks.telegram_sink import _collapse_newlines
 
-        assert _collapse_newlines("a  b") == "a  b"
+        assert _collapse_newlines("a  b") == "a b"
+
+    def test_strips_vt_ff_nel(self) -> None:
+        """D1: VT (\\v), FF (\\f), NEL (\\x85) are now collapsed."""
+        from clawhip_daemon.adapters.sinks.telegram_sink import _collapse_newlines
+
+        assert _collapse_newlines("a\v b") == "a  b"
+        assert _collapse_newlines("a\f b") == "a  b"
+        assert _collapse_newlines("a\x85b") == "a b"
+
+    def test_mixed_adjacent_separators_single_space(self) -> None:
+        """D2: mixed adjacent separators produce one space, not multiple."""
+        from clawhip_daemon.adapters.sinks.telegram_sink import _collapse_newlines
+
+        assert _collapse_newlines("a\n\rb") == "a b"
+        assert _collapse_newlines("a\r\n\rb") == "a b"
 
     def test_preserves_plain_text(self) -> None:
         from clawhip_daemon.adapters.sinks.telegram_sink import _collapse_newlines

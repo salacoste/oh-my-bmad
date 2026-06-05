@@ -74,10 +74,10 @@ _ENV_ALLOWLIST: frozenset[str] = frozenset(
         # scoped to the target repo), NOT the broad operator GITHUB_TOKEN — which
         # stays BANNED (below). This closes the MCP-SUBPROCESS half of G-SEC-2: an
         # MCP subprocess never sees the broad operator PAT, only a repo-scoped
-        # token (leak blast-radius = one repo). NOTE: the claude-agent spawn path
-        # (claude_code_runner _CHILD_ENV_ALLOWLIST) still forwards the broad PAT
-        # for `git push` — that half remains open, tracked by its in-code TODO +
-        # deferred-work. It IS a credential but a deliberately narrow one
+        # token (leak blast-radius = one repo). The claude-agent spawn paths
+        # (claude_code_runner + omc_runner _CHILD_ENV_ALLOWLIST) also EXCLUDE the
+        # broad PAT — G-SEC-2 agent-spawn half CLOSED 2026-06-05, so G-SEC-2 is
+        # now FULLY closed. It IS a credential but a deliberately narrow one
         # (ADR-0010 §6 "scoped credentials use new, narrowly-named vars"); the
         # broad-secret denylist below remains excluded.
         "GITHUB_MCP_ACTOR_KIND",
