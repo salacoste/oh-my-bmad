@@ -2,7 +2,8 @@
 
 How to run and add tests for the oh-my-bmad platform. This guide covers the
 test-tree layout, pytest marker taxonomy, unit and integration test patterns,
-contract-fixture recording workflow, and CI gate interpretation.
+contract-fixture recording workflow, CI gate interpretation, fleet MCP server
+separability tests, mutation testing, and AST gate testing.
 
 ---
 
@@ -283,8 +284,11 @@ vendored upstream source changes (via `just sync-upstream`), re-running
 
 ## CI gates
 
-`just lint` runs seven sub-commands: `ruff check`, `ruff format --check`,
-`mypy --strict`, then four architectural-discipline gates:
+`just lint` runs `ruff check`, `ruff format --check`, `mypy --strict`,
+then five architectural-discipline gates, followed by secret-hygiene.
+`just check-gates` additionally runs `check_tier_declarations` (P3-I1) and
+`check_trace_id_required` (NFR-O7) — both are CI PR-gate steps. The full
+set of architectural gates:
 
 | Gate script | What it checks | Violation tag |
 |-------------|---------------|--------------|
