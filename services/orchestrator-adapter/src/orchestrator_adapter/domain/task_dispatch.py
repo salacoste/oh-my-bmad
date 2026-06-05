@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 from annotated_types import Le as _Le
 from events.payloads import (
@@ -178,7 +178,7 @@ def build_budget_exceeded_payload(
     task_id: str,
     tracker: BudgetTracker,
     step: int,
-) -> dict[str, object]:
+) -> dict[str, Any]:
     """Build a ``task.budget_exceeded`` event payload dict."""
     return TaskBudgetExceededPayload(
         task_id=task_id,
@@ -280,17 +280,17 @@ def parse_omc_plan_output(raw_output: str) -> PlanParseResult:
 
     # Fallback: if no structured steps found, create one from summary.
     if not steps and summary:
-        steps = (PlanStep(step=1, description=summary[:_STEP_DESC_CAP]),)
+        steps = [PlanStep(step=1, description=summary[:_STEP_DESC_CAP])]
 
     return PlanParseResult(summary=summary, steps=tuple(steps))
 
 
-def build_planning_started_payload(task_id: str) -> dict[str, object]:
+def build_planning_started_payload(task_id: str) -> dict[str, Any]:
     """Build a ``task.planning.started`` event payload dict."""
     return TaskPlanningStartedPayload(task_id=task_id).model_dump()
 
 
-def build_plan_ready_payload(task_id: str, plan_result: PlanParseResult) -> dict[str, object]:
+def build_plan_ready_payload(task_id: str, plan_result: PlanParseResult) -> dict[str, Any]:
     """Build a ``task.plan.ready`` event payload dict with structured steps."""
     return TaskPlanReadyPayload(
         task_id=task_id,
@@ -300,7 +300,7 @@ def build_plan_ready_payload(task_id: str, plan_result: PlanParseResult) -> dict
     ).model_dump()
 
 
-def build_execution_started_payload(task_id: str, session_id: str) -> dict[str, object]:
+def build_execution_started_payload(task_id: str, session_id: str) -> dict[str, Any]:
     """Build a ``task.execution.started`` event payload dict."""
     return TaskExecutionStartedPayload(task_id=task_id, session_id=session_id).model_dump()
 
@@ -309,7 +309,7 @@ def build_step_completed_payload(
     task_id: str,
     step: PlanStep,
     output_summary: str,
-) -> dict[str, object]:
+) -> dict[str, Any]:
     """Build a ``task.step.completed`` event payload dict."""
     return TaskStepCompletedPayload(
         task_id=task_id,
@@ -332,7 +332,10 @@ def _extract_le(field_name: str) -> int:
     )
     if constraint is None:
         raise ValueError(f"No Le constraint on field {field_name!r}")
-    return int(constraint.le)
+    le_value = constraint.le
+    if not isinstance(le_value, int):
+        raise TypeError(f"Le constraint on {field_name!r} is not an int: {type(le_value)}")
+    return le_value
 
 
 _MAX_COUNT: int = _extract_le("files_changed")
@@ -355,7 +358,7 @@ def build_completion_payload(
     pr_number: int | None = None,
     pr_branch: str | None = None,
     token_usage: int | None = None,
-) -> dict[str, object]:
+) -> dict[str, Any]:
     """Build a ``task.completed`` event payload dict with synthesized summary.
 
     When *metrics* is provided, the FR9 structured fields are populated
@@ -368,32 +371,32 @@ def build_completion_payload(
         if out:
             parts.append(f"Step {s.step}: {out[:200]}")
     summary = "; ".join(parts) if parts else plan_result.summary or "Task completed."
-    payload_kwargs: dict[str, object] = {
-        "task_id": task_id,
-        "summary": summary[:2000],
-    }
+    payload = TaskCompletedPayload(
+        task_id=task_id,
+        summary=summary[:2000],
+        pr_url=pr_url,
+        pr_number=pr_number,
+        pr_branch=pr_branch,
+        token_usage=token_usage,
+    )
     if metrics is not None:
-        payload_kwargs["files_changed"] = _clamp(metrics.files_changed, _MAX_COUNT)
-        payload_kwargs["lines_added"] = _clamp(metrics.lines_added, _MAX_LINES)
-        payload_kwargs["lines_removed"] = _clamp(metrics.lines_removed, _MAX_LINES)
-        payload_kwargs["tests_added"] = _clamp(metrics.tests_added, _MAX_COUNT)
-        # ci_state="unknown" → None: cleaner Telegram rendering than showing "unknown".
-        payload_kwargs["ci_state"] = metrics.ci_state if metrics.ci_state != "unknown" else None
-        # blockers_count reflects blocker/budget-exceeded exits that break out of
-        # the step loop; forward-compatible for multi-blocker continuation (Story 5.17).
-        payload_kwargs["blockers_count"] = metrics.blockers_count or None
-    if pr_url is not None:
-        payload_kwargs["pr_url"] = pr_url
-    if pr_number is not None:
-        payload_kwargs["pr_number"] = pr_number
-    if pr_branch is not None:
-        payload_kwargs["pr_branch"] = pr_branch
-    if token_usage is not None:
-        payload_kwargs["token_usage"] = token_usage
-    return TaskCompletedPayload(**payload_kwargs).model_dump()
+        payload = payload.model_copy(
+            update={
+                "files_changed": _clamp(metrics.files_changed, _MAX_COUNT),
+                "lines_added": _clamp(metrics.lines_added, _MAX_LINES),
+                "lines_removed": _clamp(metrics.lines_removed, _MAX_LINES),
+                "tests_added": _clamp(metrics.tests_added, _MAX_COUNT),
+                # ci_state="unknown" → None: cleaner Telegram rendering than showing "unknown".
+                "ci_state": metrics.ci_state if metrics.ci_state != "unknown" else None,
+                # blockers_count reflects blocker/budget-exceeded exits that break out of
+                # the step loop; forward-compatible for multi-blocker continuation (Story 5.17).
+                "blockers_count": metrics.blockers_count or None,
+            }
+        )
+    return payload.model_dump()
 
 
-def build_blocker_raised_payload(task_id: str, reason: str) -> dict[str, object]:
+def build_blocker_raised_payload(task_id: str, reason: str) -> dict[str, Any]:
     """Build a ``task.blocker_raised`` event payload dict."""
     return TaskBlockerRaisedPayload(
         task_id=task_id,

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from orchestrator_adapter.adapters.github_adapter import PRDraftResult
+from orchestrator_adapter.adapters.mcp_clients import MCPClientGroup
 from orchestrator_adapter.app.config import OrchestratorSettings
 from orchestrator_adapter.app.main import _emit_event, process_task
 
@@ -17,7 +19,7 @@ _T3 = "t-11111111-2222-7333-8444-555555555555"
 _T4 = "t-ffffffff-0000-7000-a000-000000000000"
 
 
-def _make_settings(**overrides: object) -> OrchestratorSettings:
+def _make_settings(**overrides: Any) -> OrchestratorSettings:
     return OrchestratorSettings(**overrides)
 
 
@@ -72,12 +74,19 @@ async def test_empty_plan_emits_completed_without_execution_started() -> None:
     """Zero-step plan should emit task.completed but NOT task.execution.started."""
     emitted_events: list[str] = []
 
-    async def fake_emit(clients, event_type, payload, *, label, caller_trace_id):
+    async def fake_emit(
+        clients: Any,
+        event_type: str,
+        payload: Any,
+        *,
+        label: str,
+        caller_trace_id: str,
+    ) -> None:
         emitted_events.append(event_type)
 
     runner = _make_runner(stdout="")
     settings = _make_settings()
-    task = {"id": _T1, "title": "Do nothing"}
+    task: dict[str, object] = {"id": _T1, "title": "Do nothing"}
 
     with patch("orchestrator_adapter.app.main._emit_event", side_effect=fake_emit):
         await process_task(AsyncMock(), runner, settings, task)
@@ -122,7 +131,7 @@ async def test_pr_not_created_when_blockers_exist() -> None:
         ],
     )
     settings = _make_settings()
-    task = {
+    task: dict[str, object] = {
         "id": _T2,
         "title": "Blocked task",
         "repo": "owner/repo",
@@ -150,7 +159,7 @@ async def test_pr_not_created_when_budget_exceeded() -> None:
         ],
     )
     settings = _make_settings(task_token_budget=50)
-    task = {
+    task: dict[str, object] = {
         "id": _T3,
         "title": "Over budget",
         "repo": "owner/repo",
@@ -175,7 +184,7 @@ async def test_pr_created_when_all_guards_pass() -> None:
     )
     # task_token_budget=0 disables budget tracking -> tracker is None -> guard passes.
     settings = _make_settings(task_token_budget=0)
-    task = {
+    task: dict[str, object] = {
         "id": _T4,
         "title": "Green task",
         "repo": "owner/repo",
@@ -221,7 +230,14 @@ async def test_budget_exceeded_fail_closed_when_no_override() -> None:
     the persisted-limit read to always return the ORIGINAL limit (no raise)."""
     emitted: list[str] = []
 
-    async def _capture_emit(clients, event_type, payload, *, label, caller_trace_id):
+    async def _capture_emit(
+        clients: Any,
+        event_type: str,
+        payload: Any,
+        *,
+        label: str,
+        caller_trace_id: str,
+    ) -> None:
         emitted.append(event_type)
 
     runner = _make_sequential_runner(
@@ -237,7 +253,7 @@ async def test_budget_exceeded_fail_closed_when_no_override() -> None:
         override_wait_s=0.05,
         override_poll_interval_s=0.01,
     )
-    task = {"id": _T5, "title": "Fail closed"}
+    task: dict[str, object] = {"id": _T5, "title": "Fail closed"}
 
     with (
         patch("orchestrator_adapter.app.main._emit_event", side_effect=_capture_emit),
@@ -262,7 +278,14 @@ async def test_budget_override_rearm_resumes_and_rebreaches() -> None:
     exceeds the NEW 5k ceiling → a SECOND ``task.budget_exceeded`` is emitted."""
     emitted: list[str] = []
 
-    async def _capture_emit(clients, event_type, payload, *, label, caller_trace_id):
+    async def _capture_emit(
+        clients: Any,
+        event_type: str,
+        payload: Any,
+        *,
+        label: str,
+        caller_trace_id: str,
+    ) -> None:
         emitted.append(event_type)
 
     runner = _make_sequential_runner(
@@ -281,7 +304,7 @@ async def test_budget_override_rearm_resumes_and_rebreaches() -> None:
         override_wait_s=0.05,
         override_poll_interval_s=0.01,
     )
-    task = {"id": _T6, "title": "Re-arm then re-breach"}
+    task: dict[str, object] = {"id": _T6, "title": "Re-arm then re-breach"}
 
     with (
         patch("orchestrator_adapter.app.main._emit_event", side_effect=_capture_emit),
@@ -309,11 +332,11 @@ def test_resolve_budget_limit_reloads_persisted_raised_ceiling() -> None:
 
     settings = _make_settings(task_token_budget=1000)
     # Simulate the task row reloaded post-restart with the raised ceiling.
-    task = {"id": _T6, "budget_token_limit": 5000}
+    task: dict[str, object] = {"id": _T6, "budget_token_limit": 5000}
     assert _resolve_budget_limit(task, settings) == 5000
     # Defense-in-depth: an out-of-contract over-bound value is IGNORED (falls
     # back to the default) so a corrupted row cannot disable enforcement.
-    over = {"id": _T6, "budget_token_limit": 1_000_000_001}
+    over: dict[str, object] = {"id": _T6, "budget_token_limit": 1_000_000_001}
     assert _resolve_budget_limit(over, settings) == 1000
 
 
@@ -377,11 +400,12 @@ def test_emit_event_caller_trace_id_passes_validate_caller_trace_id() -> None:
 _T7 = "t-44444444-5555-7666-8777-888888888888"
 
 
-def _fake_task_registry(*, text: str | None = None, raises: bool = False) -> object:
+def _fake_task_registry(*, text: str | None = None, raises: bool = False) -> MCPClientGroup:
     """Build a fake MCPClientGroup whose task_registry.read_resource returns a
     task://detail result with *text* as a single text-content block (or raises).
     """
     import types
+    from typing import cast
     from unittest.mock import AsyncMock
 
     registry = AsyncMock()
@@ -391,7 +415,7 @@ def _fake_task_registry(*, text: str | None = None, raises: bool = False) -> obj
         content = types.SimpleNamespace(text=text)
         result = types.SimpleNamespace(contents=[content] if text is not None else [])
         registry.read_resource = AsyncMock(return_value=result)
-    return types.SimpleNamespace(task_registry=registry)
+    return cast(MCPClientGroup, types.SimpleNamespace(task_registry=registry))
 
 
 @pytest.mark.asyncio
@@ -438,6 +462,7 @@ async def test_read_task_budget_limit_null_and_notfound_and_transient_return_non
     assert await _read_task_budget_limit(c_err, _T7) is None
     # task-registry not connected (None client) → None, fail-closed (critic note).
     import types
+    from typing import cast
 
-    c_none = types.SimpleNamespace(task_registry=None)
+    c_none = cast(MCPClientGroup, types.SimpleNamespace(task_registry=None))
     assert await _read_task_budget_limit(c_none, _T7) is None

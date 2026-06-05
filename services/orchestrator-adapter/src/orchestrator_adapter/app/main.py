@@ -17,6 +17,7 @@ from pathlib import Path
 
 import structlog
 from events.envelope import is_valid_trace_id
+from pydantic import AnyUrl
 
 from orchestrator_adapter.adapters.github_adapter import GitHubAdapter, PRDraftResult
 from orchestrator_adapter.adapters.mcp_clients import MCPClientGroup
@@ -76,7 +77,7 @@ async def _read_task_list(clients: MCPClientGroup) -> list[dict[str, object]]:
         log.warning("task_registry_not_connected")
         return []
     try:
-        result = await clients.task_registry.read_resource("task://list")
+        result = await clients.task_registry.read_resource(AnyUrl("task://list"))
         if result is None or not hasattr(result, "contents"):
             return []
         # Resource results contain text content blocks.
@@ -129,7 +130,7 @@ async def _read_task_budget_limit(
         # override_wait_s + at most _MCP_CALL_TIMEOUT; a timeout raises and is
         # swallowed below → None → keep polling → still fails closed at deadline.
         result = await asyncio.wait_for(
-            clients.task_registry.read_resource(f"task://detail/{task_id}"),
+            clients.task_registry.read_resource(AnyUrl(f"task://detail/{task_id}")),
             timeout=_MCP_CALL_TIMEOUT,
         )
         if result is None or not hasattr(result, "contents"):
@@ -566,7 +567,7 @@ async def process_task(
             task_id,
             str(repo),
             plan_result.summary,
-            title,
+            str(title) if title else None,
         )
         if pr_result is not None and pr_result.success:
             pr_url = pr_result.url

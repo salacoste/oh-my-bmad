@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import SecretStr
 
+from orchestrator_adapter.app.config import OrchestratorSettings
 from orchestrator_adapter.app.main import _create_pr_draft
 
 
-def _make_settings(token: str = "ghp_test123") -> object:
-    from orchestrator_adapter.app.config import OrchestratorSettings
-
-    return OrchestratorSettings(github_token=token)
+def _make_settings(token: str = "ghp_test123") -> OrchestratorSettings:
+    return OrchestratorSettings(github_token=SecretStr(token))
 
 
 # --- repo parsing edge cases ---

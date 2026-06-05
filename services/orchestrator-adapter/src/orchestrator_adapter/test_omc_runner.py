@@ -112,6 +112,7 @@ class TestOMCRunnerRun:
             result = await runner.run("test prompt")
 
         assert result.exit_code == -1
+        assert result.error is not None
         assert "ENOENT" in result.error
 
     @pytest.mark.asyncio
@@ -124,6 +125,7 @@ class TestOMCRunnerRun:
             result = await runner.run("test prompt")
 
         assert result.exit_code == -1
+        assert result.error is not None
         assert "Timed out" in result.error
 
     @pytest.mark.asyncio
