@@ -153,6 +153,24 @@ def main() -> None:
     registry_events_dir_raw = os.environ.get("REGISTRY_EVENTS_DIR", "").strip()
     registry_events_dir = Path(registry_events_dir_raw) if registry_events_dir_raw else None
 
+    # -- Optional: BROWSER_MCP_MEMORY_LIMIT (Story 20.5 / FR87) --
+    # Docker container memory limit. Default: "512m".
+    memory_limit = os.environ.get("BROWSER_MCP_MEMORY_LIMIT", "").strip() or None
+
+    # -- Optional: BROWSER_MCP_CPU_LIMIT (Story 20.5 / FR87) --
+    # Docker container CPU limit. Default: 1.0.
+    cpu_limit_raw = os.environ.get("BROWSER_MCP_CPU_LIMIT", "").strip()
+    cpu_limit: float | None = None
+    if cpu_limit_raw:
+        try:
+            cpu_limit = float(cpu_limit_raw)
+        except ValueError:
+            print(
+                f"browser-mcp: BROWSER_MCP_CPU_LIMIT={cpu_limit_raw!r} is not a number.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
     from browser_mcp.server import build_server
 
     mcp = build_server(
@@ -163,6 +181,8 @@ def main() -> None:
         allowed_hosts=allowed_hosts,
         allowed_origins=allowed_origins,
         extra_caps=extra_caps,
+        memory_limit=memory_limit,
+        cpu_limit=cpu_limit,
         clawhip_bridge_command=clawhip_cmd,
         clawhip_bridge_args=clawhip_args,
         registry_events_dir=registry_events_dir,

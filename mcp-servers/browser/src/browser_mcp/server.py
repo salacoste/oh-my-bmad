@@ -77,6 +77,8 @@ def build_server(
     allowed_hosts: list[str] | None = None,
     allowed_origins: list[str] | None = None,
     extra_caps: list[str] | None = None,
+    memory_limit: str | None = None,
+    cpu_limit: float | None = None,
     clawhip_bridge_command: str | None = None,
     clawhip_bridge_args: list[str] | None = None,
     registry_events_dir: Path | None = None,
@@ -125,6 +127,8 @@ def build_server(
     # handlers can call ``manager.get_or_spawn(task_id)`` at request time.
     pw_manager = PlaywrightSubprocessManager(
         image=playwright_image,
+        memory_limit=memory_limit or "512m",
+        cpu_limit=cpu_limit or 1.0,
         extra_caps=extra_caps,
         allowed_origins=allowed_origins,
     )
