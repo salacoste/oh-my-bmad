@@ -65,6 +65,17 @@ _INIT_TIMEOUT: float = 30.0
 # a git read, so the default bound is generous; callers may override per-invocation.
 _VERIFICATION_TIMEOUT: float = 600.0
 
+# Byte bound for a single recipe invocation's combined-per-stream output (memory-
+# pressure sibling of ``_VERIFICATION_TIMEOUT``). The timeout bounds WALL-CLOCK but
+# not MEMORY: a pathological build/test (or a recipe emitting debug symbols) could
+# stream gigabytes faster than the timeout trips. ``run_recipe`` reads each stream
+# incrementally and, once a stream crosses this cap, kills+reaps the subprocess and
+# raises ``VerificationOutputTooLarge``. 16 MiB mirrors git-mcp's ``_GIT_OUTPUT_CAP``
+# and comfortably exceeds typical build/test recipe output.
+_VERIFICATION_OUTPUT_CAP: int = 16 * 1024 * 1024
+# Per-read chunk size for the incremental bounded reader.
+_VERIFICATION_READ_CHUNK: int = 65536
+
 # Env allowlist for the spawned recipe subprocess (Story 17.3, P0/security). Only
 # these parent-env vars are forwarded to the build/test recipe; everything else
 # (operator / platform secrets) is dropped — NO ``os.environ.copy``. Unlike a git
@@ -115,6 +126,15 @@ class VerificationTimeout(RuntimeError):  # noqa: N818 — domain-named (no Erro
     The wedged subprocess is killed and reaped before this propagates so no
     zombie/leaked process survives the request. Sibling of git-mcp's
     ``GitTimeout``.
+    """
+
+
+class VerificationOutputTooLarge(RuntimeError):  # noqa: N818 — domain-named (no Error suffix); mirrors git-mcp GitOutputTooLarge
+    """Raised when a recipe invocation's output exceeds ``_VERIFICATION_OUTPUT_CAP``.
+
+    The memory-pressure sibling of ``VerificationTimeout``: the subprocess is
+    killed and reaped before this propagates so no unbounded buffer survives the
+    request. Mirrors git-mcp's ``GitOutputTooLarge``.
     """
 
 
@@ -172,6 +192,7 @@ class VerificationExecutor:
         command: list[str],
         *,
         timeout: float = _VERIFICATION_TIMEOUT,
+        output_cap: int = _VERIFICATION_OUTPUT_CAP,
     ) -> VerificationResult:
         """Run *command* in the sandbox and return its result.
 
@@ -186,6 +207,12 @@ class VerificationExecutor:
           ``os.environ.copy``).
         - A wedged recipe is bounded by ``timeout``; on expiry it is killed+reaped
           and ``VerificationTimeout`` is raised (no leaked process).
+        - Output is bounded by ``output_cap``: each stream is read incrementally
+          and, once a stream crosses the cap, the subprocess is killed+reaped and
+          ``VerificationOutputTooLarge`` is raised (memory-pressure sibling of the
+          timeout). ``communicate()`` is NOT used — it would buffer unbounded
+          output in memory before returning. Both streams are drained concurrently
+          so a full stderr pipe cannot deadlock a stdout read.
 
         A non-zero exit is NOT raised — it is returned in
         ``VerificationResult.returncode`` so handlers can surface a structured
@@ -199,14 +226,56 @@ class VerificationExecutor:
             cwd=str(self.worktree_root),
             env=_build_env(),
         )
+
+        async def _read_capped(stream: asyncio.StreamReader) -> bytes:
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                chunk = await stream.read(_VERIFICATION_READ_CHUNK)
+                if not chunk:
+                    return b"".join(chunks)
+                total += len(chunk)
+                if total > output_cap:
+                    raise VerificationOutputTooLarge(
+                        f"verification recipe {command!r} exceeded {output_cap}-byte output cap"
+                    )
+                chunks.append(chunk)
+
+        # ``proc.stdout``/``proc.stderr`` are non-None because both were PIPE'd.
+        assert proc.stdout is not None and proc.stderr is not None
+        out_task = asyncio.ensure_future(_read_capped(proc.stdout))
+        err_task = asyncio.ensure_future(_read_capped(proc.stderr))
+
+        async def _cleanup_child() -> None:
+            # Cancel both readers, kill+reap the child (if still live), then
+            # await-suppress the tasks so none is left pending and no "exception
+            # never retrieved" / "task destroyed pending" warning fires.
+            # gather() does NOT cancel the sibling on first error, and wait_for
+            # cancels gather (and its children) on timeout — the explicit
+            # cancels are idempotent across both.
+            out_task.cancel()
+            err_task.cancel()
+            if proc.returncode is None:
+                proc.kill()
+                await proc.wait()
+            await asyncio.gather(out_task, err_task, return_exceptions=True)
+
         try:
-            out, err = await asyncio.wait_for(proc.communicate(), timeout)
-        except TimeoutError as exc:
-            proc.kill()
-            await proc.wait()
+            out, err = await asyncio.wait_for(asyncio.gather(out_task, err_task), timeout)
+        except (TimeoutError, VerificationOutputTooLarge) as exc:
+            await _cleanup_child()
+            if isinstance(exc, VerificationOutputTooLarge):
+                raise
             raise VerificationTimeout(
                 f"verification recipe {command!r} exceeded {timeout}s timeout"
             ) from exc
+        except BaseException:
+            # CancelledError / KeyboardInterrupt / SystemExit (or any unexpected
+            # error) must not leak the child or the reader tasks — mirror the
+            # claude_code_runner BaseException-cleanup discipline (Epic-11 L7).
+            await _cleanup_child()
+            raise
+        await proc.wait()
         return VerificationResult(
             returncode=proc.returncode if proc.returncode is not None else -1,
             stdout=out.decode(errors="replace"),

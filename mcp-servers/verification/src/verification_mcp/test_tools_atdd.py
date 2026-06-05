@@ -298,6 +298,67 @@ async def test_executor_timeout_kills_hung_recipe(tmp_path: Path) -> None:
         await ex.run_recipe(["sleep", "30"], timeout=0.2)
 
 
+@pytest.mark.asyncio
+async def test_output_under_cap_succeeds(tmp_path: Path) -> None:
+    """Reference (non-xfail): output within the cap completes normally.
+
+    A recipe that emits less than ``output_cap`` bytes should succeed without
+    raising ``VerificationOutputTooLarge``. Uses a tiny cap (1 KiB) and a
+    recipe that outputs less than that.
+    """
+    ex = VerificationExecutor(tmp_path)
+    # ``echo`` outputs a short string plus newline — well under 1024 bytes.
+    result = await ex.run_recipe(["echo", "hello"], output_cap=1024, timeout=10.0)
+    assert result.returncode == 0
+    assert "hello" in result.stdout
+
+
+@pytest.mark.asyncio
+async def test_output_over_cap_kills_subprocess(tmp_path: Path) -> None:
+    """Reference (non-xfail): output exceeding the cap kills the subprocess.
+
+    A recipe that emits more than ``output_cap`` bytes must raise
+    ``VerificationOutputTooLarge`` and kill+reap the subprocess. Uses a tiny cap
+    (1 KiB) and a Python one-liner that dumps more than that.
+    """
+    from verification_mcp.server import VerificationOutputTooLarge
+
+    ex = VerificationExecutor(tmp_path)
+    # Python one-liner that writes 4 KiB to stdout — exceeds the 1024-byte cap.
+    with pytest.raises(VerificationOutputTooLarge):
+        await ex.run_recipe(
+            [
+                "python3",
+                "-c",
+                "import sys; sys.stdout.buffer.write(b'x' * 4096);"
+                " sys.stdout.flush()",
+            ],
+            output_cap=1024,
+            timeout=10.0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_subprocess_cleaned_up_on_cancellation(tmp_path: Path) -> None:
+    """Reference (non-xfail): cancelling the caller cleans up the subprocess.
+
+    When the awaiting coroutine is cancelled (e.g. ``CancelledError``), the
+    subprocess and reader tasks must be cleaned up — no leaked process. We
+    spawn a long-running recipe and cancel the task mid-execution.
+    """
+    ex = VerificationExecutor(tmp_path)
+
+    async def _cancel_mid_run() -> None:
+        task = asyncio.ensure_future(ex.run_recipe(["sleep", "30"], timeout=60.0))
+        # Give the subprocess time to start, then cancel.
+        await asyncio.sleep(0.1)
+        task.cancel()
+        await task
+
+    with pytest.raises(asyncio.CancelledError):
+        await _cancel_mid_run()
+
+
 # ===========================================================================
 # 5. caller_trace_id required-and-validated — a missing/invalid value is
 #    rejected. The shared validator already rejects bad shapes (Story 17.2
