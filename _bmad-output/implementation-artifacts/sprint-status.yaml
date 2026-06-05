@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-06-04T00:00:00Z
-current_phase: 3  # Phase 3 opened by ADR-0009 (docs/adr/0009-phase-3-gate.md), 2026-06-04 (Phase 2 opened by ADR-0003, 2026-05-15)
+last_updated: 2026-06-05T00:00:00Z
+current_phase: 4  # Phase 4 opened by ADR-0014 (docs/adr/0014-phase-4-gate.md), 2026-06-05 (Phase 3 opened by ADR-0009, 2026-06-04)
 
 development_status:
   # =========================================================================
@@ -422,6 +422,43 @@ development_status:
   19-4-artifact-events-retention-policy-events: done  # phase: 3 · FR76 · P3-I1 · artifact.stored (put) + artifact.deleted (Tier-3 delete + retention sweep, system-initiated) events, two-location born 1.1.0; payload metadata-only (hash/name/size/reason — NO content/bytes); startup sweep event-less (no caller trace_id) (recipe step 4) · merged PR #58
   19-5-separability-s9-supply-chain: done  # phase: 3 · FR76 · NFR-M8 (S-9) · NFR-S12 · 2026-06-04 — ARTIFACT_MCP_STORE_PATH/ACTOR_KIND/ACTOR_ID + RETENTION_MAX_BYTES/TTL_SECONDS added byte-identical to both _ENV_ALLOWLIST (all NON-secret); conditional spawn (8th stdio member, WORKER_ARTIFACT_COMMAND); test_s9_artifact_optional.py (SPAWNED boots real artifact-mcp + binary put→get round-trip through stdio + P3-I2 assert; ABSENT optional); validate_caller_trace_id mirror extended to artifact (8 servers — FULL Phase-3 fleet). Supply-chain: ZERO new third-party deps (only mcp); license gate 11/11; no new release.yml matrix row. ADR-0011 accepted. Authored allowlist in main context (a0ca050 P0 area). See 19-5-supply-chain-and-separability.md (recipe steps 7,8). CLOSES EPIC 19 + PHASE 3.
 
+  # =========================================================================
+  # Phase 4: Browser Automation Plane (Epics 20-22)
+  # All stories below carry phase: 4; cannot merge to main without
+  # ADR-0014 accepted (docs/adr/0014-phase-4-gate.md)
+  # =========================================================================
+
+  # phase: 4 · ADR-0013 (transport) + ADR-0014 (gate) + ADR-0010 (recipe reused)
+  # 4th archetype: Browser Worker — wraps @playwright/mcp as managed Docker subprocess
+  # FR78-FR88 · NFR-B1-B5, O12, M9, S13, R9 · P4-I1/I2/I3 invariants
+
+  epic-20: backlog  # phase: 4 · ω Browser MCP server scaffold + fleet integration · FR78, FR84, FR85, FR87, FR88 · NFR-B1, B4, M9, S13, R9
+  20-1-server-scaffold: backlog  # phase: 4 · FR78 · ADR-0010 steps 1,2,6 — mcp-servers/browser/ workspace member + build_server factory + TIER_MAP
+  20-2-playwright-subprocess-lifecycle: backlog  # phase: 4 · FR78 · playwright_subprocess.py — docker run + per-task {task_id: Popen} dict + spawn/kill lifecycle
+  20-3-session-isolation: backlog  # phase: 4 · FR84 · P4-I1 — --isolated enforcement + no-state-leak test + suppressed storage cap
+  20-4-origin-control: backlog  # phase: 4 · FR85 · --allowed-hosts / --blocked-origins per-task config + browser.navigation_blocked event
+  20-5-container-sandbox: backlog  # phase: 4 · FR87 · P4-I3 — Docker run + memory/CPU limits + no host network + digest-pinned image
+  20-6-separability-s10-allowlist-fleet: backlog  # phase: 4 · FR88 · NFR-M9 · ADR-0010 steps 5,8 — WORKER_BROWSER_COMMAND toggle + child-env allowlist + S-10 test
+
+  epic-21: backlog  # phase: 4 · ω-2..ω-6 Browser tools + event spine · FR79-FR83, FR86 · NFR-B2, B3, B5, O12
+  21-1-navigation-tools: backlog  # phase: 4 · FR79 · Tier-1 — browser_navigate, browser_navigate_back, browser_snapshot + browser.navigated events
+  21-2-interaction-tools: backlog  # phase: 4 · FR80 · Tier-2 — browser_click, browser_type, browser_fill, browser_select_option, browser_press_key, browser_hover
+  21-3-screenshot-artifact-integration: backlog  # phase: 4 · FR81 · NFR-B3 — browser_take_screenshot + artifact-mcp content-addressed put + browser.screenshot_captured event
+  21-4-js-execution-tier3: backlog  # phase: 4 · FR82 · NFR-B5 · P4-I2 — browser_evaluate Tier-3 approval-gated + negative denial test + expression_hash
+  21-5-tab-management: backlog  # phase: 4 · FR83 · Tier-1/2 — browser_tabs list/create/close/select + TIER_MAP split
+  21-6-event-registration-cardinality: backlog  # phase: 4 · FR86 · NFR-O12 — 6 browser.* event types registered + cardinality ratchet + bounded-by-task_id
+
+  epic-22: backlog  # phase: 4 · Browser CI hardening + security gates · all FRs (CI enforcement) · all NFRs (verification)
+  22-1-p4-i1-ephemerality-ci-gate: backlog  # phase: 4 · P4-I1 — negative test: no cookie/localStorage survives across 2 sequential task-scoped sessions
+  22-2-p4-i2-tier3-denial-ci-gate: backlog  # phase: 4 · P4-I2 · NFR-B5 — negative test: browser_evaluate denied without approval.granted + capability.denied audit
+  22-3-p4-i3-container-spawn-ci-gate: backlog  # phase: 4 · P4-I3 — assertion test: spawn command contains docker run, not npx; no --no-sandbox
+  22-4-tier-declarations-event-cardinality-gates: backlog  # phase: 4 · check_tier_declarations.py green for browser-mcp + browser.* cardinality ratchet in metrics-subscriber
+  22-5-digest-pinning-supply-chain-s10-finalization: backlog  # phase: 4 · NFR-S13 · check_browser_image_digest.py + verify-images + S-10 separability final green
+
+  epic-20-retrospective: optional  # phase: 4
+  epic-21-retrospective: optional  # phase: 4
+  epic-22-retrospective: optional  # phase: 4
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
@@ -736,3 +773,23 @@ audit_trail:
       per-server MCP env-scoping item stays OPEN as a defense-in-depth
       enhancement (not a blocker). SECURITY — agent subprocess no longer
       receives the broad operator PAT.
+  - date: "2026-06-05"
+    event: phase-4-opened
+    from: 3
+    to: 4
+    reason: >
+      Phase 4 formally OPENED (operator-authorized). ADR-0013 (Playwright MCP
+      transport) + ADR-0014 (Phase 4 gate) authored as proposed. PRD amendment
+      (FR78-FR88, NFR-B1-B5/O12/M9/S13/R9, 14-item ship-blocker checklist)
+      + architecture amendment (P4-I1/I2/I3 invariants, Browser Worker 4th
+      archetype, tool surface tier mapping, ADR-0010 recipe steps 1-8) authored
+      and cross-reconciled after adversarial review (8 contradictions fixed:
+      --no-sandbox, event naming, Dockerfile model, _connect signature, ADR
+      numbering, tab tier, browser_file_upload, G-SEC-2 ship-blocker).
+      Implementation readiness report verdict: CONDITIONALLY-READY (single
+      condition: formal epic decomposition). Epics 20-22 decomposed (17 stories)
+      in phase-4-epics.md. sprint-status current_phase incremented 3 → 4.
+      Phase 4 = browser automation plane (Epics 20-22: scaffold + fleet
+      integration, browser tools + events, CI hardening). Entry point =
+      Epic 20 Story 1 (server scaffold — ADR-0010 recipe setup). DOCS/STATUS
+      change — no code.
