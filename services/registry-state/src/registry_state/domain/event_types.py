@@ -51,6 +51,7 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     MemoryWrittenPayload,
     PreCheckOutcome,
     PreCheckResults,
+    RuntimeHealthCheckedPayload,
     SecretAccessedPayload,
     ServiceCrashedPayload,
     SessionFinishedPayload,
@@ -72,6 +73,8 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     TaskPlanningStartedPayload,
     TaskPlanReadyPayload,
     TaskRetryRequestedPayload,
+    TaskRuntimeFallbackPayload,
+    TaskRuntimeHandoffPayload,
     TaskSelfRecoveredPayload,
     TaskStepCompletedPayload,
     TaskStopRequestedPayload,
@@ -161,6 +164,10 @@ __all__ = [
     "Tier3ActionAttemptedPayload",
     "Tier3ActionPerformedPayload",
     "VerificationCompletedPayload",
+    # Phase 5 — multi-runtime event payloads.
+    "RuntimeHealthCheckedPayload",
+    "TaskRuntimeFallbackPayload",
+    "TaskRuntimeHandoffPayload",
 ]
 
 # ---------------------------------------------------------------------------
@@ -408,6 +415,17 @@ def ensure_registered() -> None:
     )
     register("browser.tab_opened", "1.1.0", BrowserTabOpenedPayload)
     register("browser.tab_closed", "1.1.0", BrowserTabClosedPayload)
+
+    # Story 27.3 — Phase 5 multi-runtime event types (FR97 / Epic 27).
+    # Born at 1.1.0 (NEW Phase-5 event types — no v1.0.0 predecessor,
+    # same convention as the browser.* events above).
+    register("task.runtime_handoff", "1.1.0", TaskRuntimeHandoffPayload)
+    register("task.runtime_fallback", "1.1.0", TaskRuntimeFallbackPayload)
+    register("runtime.health_checked", "1.1.0", RuntimeHealthCheckedPayload)
+
+    # Story 27.3 — TaskExecutionStartedPayload gains optional `runtime`
+    # field (FR93). Registered at 1.2.0 (additive evolution per NFR-M3).
+    register("task.execution.started", "1.2.0", TaskExecutionStartedPayload)
 
     # Story 9.7 / AC10: all event types registered under 1.1.0 above for
     # replay safety. Both 1.0.0 and 1.1.0 entries kept per AC10 option (a).

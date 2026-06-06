@@ -152,6 +152,11 @@ class TaskExecutionStartedPayload(BaseModel):
 
     task_id: str = Field(pattern=_TASK_ID_PATTERN)
     session_id: str
+    # Phase 5 / FR93 — runtime identifier. Additive field (default None for
+    # backward compat with existing events). Populated by the task driver with
+    # the active adapter's runtime_name ("claude-code" | "codex"). Registered
+    # at schema version 1.2.0 per NFR-M3 additive evolution.
+    runtime: str | None = None
 
 
 class TaskStepCompletedPayload(BaseModel):
@@ -1498,6 +1503,61 @@ class BrowserTabClosedPayload(BaseModel):
     trace_id: str = Field(min_length=1)
 
 
+# ---------------------------------------------------------------------------
+# Phase 5 — Multi-runtime event payloads (FR97 / Epic 27 Story 27.3).
+# ---------------------------------------------------------------------------
+
+class TaskRuntimeHandoffPayload(BaseModel):
+    """Payload for the ``task.runtime_handoff`` event (FR92 / Epic 28).
+
+    Emitted when an in-progress task switches from one runtime to another
+    via the ``/handoff`` command.  Metadata-only — no prompt text, no API
+    response bodies, no secrets (FR97 invariant).
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    task_id: str = Field(min_length=1, max_length=64, pattern=_TASK_ID_PATTERN)
+    trace_id: str = Field(min_length=1)
+    source_runtime: str = Field(min_length=1, max_length=32)
+    target_runtime: str = Field(min_length=1, max_length=32)
+    source_session_id: str = Field(min_length=1)
+    target_session_id: str = Field(min_length=1)
+    context_summary: str = Field(default="", max_length=2000)
+
+
+class TaskRuntimeFallbackPayload(BaseModel):
+    """Payload for the ``task.runtime_fallback`` event (FR91 / Epic 27).
+
+    Emitted when a requested runtime is unavailable and the task falls back
+    to the default runtime.  Metadata-only (FR97 invariant).
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    task_id: str = Field(min_length=1, max_length=64, pattern=_TASK_ID_PATTERN)
+    requested_runtime: str = Field(min_length=1, max_length=32)
+    fallback_runtime: str = Field(min_length=1, max_length=32)
+    trace_id: str = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=200)
+
+
+class RuntimeHealthCheckedPayload(BaseModel):
+    """Payload for the ``runtime.health_checked`` event (FR95 / Epic 26).
+
+    Emitted when a runtime adapter completes a health probe.  Metadata-only
+    (FR97 invariant).
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    runtime: str = Field(min_length=1, max_length=32)
+    installed: bool
+    api_key_valid: bool = False
+    version: str = Field(default="", max_length=64)
+    trace_id: str = Field(min_length=1)
+
+
 __all__ = [
     "TELEGRAM_REJECTED_SCHEMA_VERSION",
     "AcceptedCommand",
@@ -1560,4 +1620,8 @@ __all__ = [
     "Tier3ActionAttemptedPayload",
     "Tier3ActionPerformedPayload",
     "VerificationCompletedPayload",
+    # Phase 5 — multi-runtime event payloads.
+    "RuntimeHealthCheckedPayload",
+    "TaskRuntimeFallbackPayload",
+    "TaskRuntimeHandoffPayload",
 ]

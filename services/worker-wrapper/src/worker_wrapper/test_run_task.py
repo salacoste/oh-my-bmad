@@ -102,7 +102,7 @@ class TestRunTaskNoApprovalNeeded:
             ],
         )
 
-        with patch("worker_wrapper.app.main.ClaudeCodeRunner") as mock_runner:
+        with patch("worker_wrapper.app.main.get_runtime_adapter") as mock_runner:
             mock_runner.return_value.run = AsyncMock(return_value=result)
             await run_task(_as_clients(clients), settings, "do stuff", tmp_path)
 
@@ -142,7 +142,7 @@ class TestRunTaskApprovalGranted:
         fake_approval.reason = ""
 
         with (
-            patch("worker_wrapper.app.main.ClaudeCodeRunner") as mock_runner,
+            patch("worker_wrapper.app.main.get_runtime_adapter") as mock_runner,
             patch("worker_wrapper.app.main.ApprovalWaiter") as mock_waiter,
             patch(
                 "worker_wrapper.app.main._emit_tier3_performed",
@@ -194,7 +194,7 @@ class TestRunTaskApprovalRejected:
         fake_rejection.reason = "operator denied"
 
         with (
-            patch("worker_wrapper.app.main.ClaudeCodeRunner") as mock_runner,
+            patch("worker_wrapper.app.main.get_runtime_adapter") as mock_runner,
             patch("worker_wrapper.app.main.ApprovalWaiter") as mock_waiter,
             patch(
                 "worker_wrapper.app.main._emit_tier3_performed",
@@ -238,7 +238,7 @@ class TestRunTaskApprovalTimeout:
         )
 
         with (
-            patch("worker_wrapper.app.main.ClaudeCodeRunner") as mock_runner,
+            patch("worker_wrapper.app.main.get_runtime_adapter") as mock_runner,
             patch("worker_wrapper.app.main.ApprovalWaiter") as mock_waiter,
             patch(
                 "worker_wrapper.app.main._emit_tier3_performed",
@@ -287,7 +287,7 @@ class TestRunTaskRestartRecovery:
         fake_approval.reason = ""
 
         with (
-            patch("worker_wrapper.app.main.ClaudeCodeRunner") as mock_runner,
+            patch("worker_wrapper.app.main.get_runtime_adapter") as mock_runner,
             patch("worker_wrapper.app.main.ApprovalWaiter") as mock_waiter,
             patch(
                 "worker_wrapper.app.main._emit_tier3_performed",
@@ -341,7 +341,7 @@ class TestRunTaskEventLogDirNotConfigured:
         )
 
         with (
-            patch("worker_wrapper.app.main.ClaudeCodeRunner") as mock_runner,
+            patch("worker_wrapper.app.main.get_runtime_adapter") as mock_runner,
             patch(
                 "worker_wrapper.app.main._emit_tier3_performed",
                 new_callable=AsyncMock,
@@ -411,7 +411,7 @@ class TestRunTaskTraceIdPropagation:
             ],
         )
 
-        with patch("worker_wrapper.app.main.ClaudeCodeRunner") as mock_runner:
+        with patch("worker_wrapper.app.main.get_runtime_adapter") as mock_runner:
             mock_runner.return_value.run = AsyncMock(return_value=result)
             await run_task(_as_clients(clients), settings, "do stuff", tmp_path)
 
@@ -448,7 +448,7 @@ class TestRunTaskTraceIdPropagation:
             events=[],
         )
 
-        with patch("worker_wrapper.app.main.ClaudeCodeRunner") as mock_runner:
+        with patch("worker_wrapper.app.main.get_runtime_adapter") as mock_runner:
             mock_runner.return_value.run = AsyncMock(return_value=result)
             await run_task(_as_clients(clients), settings, "do stuff", tmp_path)
 
@@ -502,7 +502,7 @@ class TestRunTaskTraceIdPropagation:
         )
 
         with (
-            patch("worker_wrapper.app.main.ClaudeCodeRunner") as mock_runner,
+            patch("worker_wrapper.app.main.get_runtime_adapter") as mock_runner,
             patch("worker_wrapper.app.main.ApprovalWaiter") as mock_waiter,
         ):
             mock_runner.return_value.run = AsyncMock(return_value=result)
@@ -740,7 +740,7 @@ class TestRunTaskBudgetOverrideIntercepted:
             return override_result
 
         with (
-            patch("worker_wrapper.app.main.ClaudeCodeRunner") as mock_runner,
+            patch("worker_wrapper.app.main.get_runtime_adapter") as mock_runner,
             patch(
                 "worker_wrapper.app.main.watch_for_budget_exceeded",
                 side_effect=_fake_supervisor,
@@ -807,7 +807,7 @@ class TestRunTaskBudgetTerminated:
             return terminated_result
 
         with (
-            patch("worker_wrapper.app.main.ClaudeCodeRunner") as mock_runner,
+            patch("worker_wrapper.app.main.get_runtime_adapter") as mock_runner,
             patch(
                 "worker_wrapper.app.main.watch_for_budget_exceeded",
                 side_effect=_fake_supervisor,

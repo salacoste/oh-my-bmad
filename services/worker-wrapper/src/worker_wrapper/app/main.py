@@ -49,6 +49,7 @@ from worker_wrapper.adapters.approval_waiter import ApprovalWaiter
 from worker_wrapper.adapters.claude_code_runner import ClaudeCodeResult, ClaudeCodeRunner
 from worker_wrapper.adapters.lifecycle_manager import LifecycleManager
 from worker_wrapper.adapters.mcp_clients import MCPClientGroup
+from worker_wrapper.adapters.runtime_factory import get_runtime_adapter
 from worker_wrapper.app.config import WorkerSettings
 from worker_wrapper.domain.approval_gate import needs_approval
 from worker_wrapper.domain.budget_supervisor import (
@@ -528,7 +529,10 @@ async def run_task(
         gated_action=_gated_action,
     )
 
-    runner = ClaudeCodeRunner(settings)
+    # Phase 5 / FR89 — select runtime adapter via factory. Per-task override
+    # is handled by passing the preferred_runtime through get_runtime_adapter.
+    # Default: "claude-code" (backward-compatible with Phase 4 behavior).
+    runner = get_runtime_adapter(settings)
 
     # Story 12.1 — spawn the budget supervisor as a shadow asyncio task that
     # subscribes to ``task.budget_exceeded`` events for this task_id and
