@@ -82,6 +82,8 @@ def build_server(
     clawhip_bridge_command: str | None = None,
     clawhip_bridge_args: list[str] | None = None,
     registry_events_dir: Path | None = None,
+    artifact_mcp_command: str | None = None,
+    artifact_mcp_args: list[str] | None = None,
 ) -> FastMCP:
     """Build and return a configured FastMCP server instance.
 
@@ -107,6 +109,10 @@ def build_server(
         registry_events_dir: Base dir of the JSONL event log, scanned by the
             Tier-3 ``approval_lookup`` for an ``approval.granted`` matching
             the caller's ``task_id``. When None, Tier-3 calls are denied.
+        artifact_mcp_command: Command to spawn the artifact-mcp subprocess
+            for screenshot storage (Story 21.3). When None, screenshot
+            storage is disabled (test mode).
+        artifact_mcp_args: Args for the artifact-mcp subprocess.
 
     Returns:
         A ``FastMCP`` instance ready to ``mcp.run()`` on stdio.
@@ -134,6 +140,15 @@ def build_server(
         allowed_hosts=allowed_hosts,
     )
 
+    # Story 21.3 — Artifact client holder for screenshot storage.
+    from browser_mcp.adapters.artifact_client import ArtifactClient, ArtifactClientHolder
+
+    artifact_holder: ArtifactClientHolder | None
+    if artifact_mcp_command is not None and artifact_mcp_args is not None:
+        artifact_holder = ArtifactClientHolder()
+    else:
+        artifact_holder = None
+
     if clawhip_bridge_command is not None and clawhip_bridge_args is not None:
         emitter_holder = EmitterHolder()
 
@@ -141,12 +156,7 @@ def build_server(
         async def _lifespan(_server: FastMCP) -> AsyncGenerator[None, None]:
             """Spawn the clawhip-bridge stdio client; fail-loud on startup (OQ-4).
 
-            Mirror of task-registry's / git-mcp's lifespan. Startup failure
-            (clawhip-bridge subprocess refuses to launch) propagates here so
-            the operator sees a hard error instead of silently degrading to
-            no-emission mode. The bounded ``asyncio.wait_for(initialize(),
-            _INIT_TIMEOUT)`` lives inside ``ClawhipBridgeClient.__aenter__``
-            (G-FN-3).
+            Also spawns the artifact-mcp client if configured (Story 21.3).
             """
             if clawhip_bridge_command is None:
                 raise RuntimeError("clawhip_bridge_command must be set when lifespan_fn is wired")
@@ -166,9 +176,29 @@ def build_server(
                 "browser_mcp_clawhip_client_ready",
                 extra={"command": clawhip_bridge_command},
             )
+
+            # Story 21.3 — spawn artifact-mcp client if configured.
+            art_client: ArtifactClient | None = None
+            if artifact_holder is not None:
+                art_client = ArtifactClient(
+                    command=artifact_mcp_command,
+                    args=artifact_mcp_args,
+                )
+                await art_client.__aenter__()
+                artifact_holder.client = art_client
+                log.info("browser_mcp_artifact_client_ready")
+
             try:
                 yield
             finally:
+                # Tear down artifact client first.
+                if art_client is not None:
+                    try:
+                        await art_client.__aexit__(None, None, None)
+                    finally:
+                        if artifact_holder is not None:
+                            artifact_holder.client = None
+                # Tear down clawhip-bridge client.
                 try:
                     await client.__aexit__(None, None, None)
                 finally:
@@ -182,10 +212,25 @@ def build_server(
 
         @contextlib.asynccontextmanager
         async def _lifespan_no_emit(_server: FastMCP) -> AsyncGenerator[None, None]:
-            """Minimal lifespan for test/no-audit mode — still kills Playwright on exit."""
+            """Minimal lifespan for test/no-audit mode — still spawns artifact client."""
+            art_client: ArtifactClient | None = None
+            if artifact_holder is not None and artifact_mcp_command is not None:
+                art_client = ArtifactClient(
+                    command=artifact_mcp_command,
+                    args=artifact_mcp_args or [],
+                )
+                await art_client.__aenter__()
+                artifact_holder.client = art_client
+                log.info("browser_mcp_artifact_client_ready_no_emit")
             try:
                 yield
             finally:
+                if art_client is not None:
+                    try:
+                        await art_client.__aexit__(None, None, None)
+                    finally:
+                        if artifact_holder is not None:
+                            artifact_holder.client = None
                 await pw_manager.kill_all()
 
         lifespan_fn = _lifespan_no_emit
@@ -210,6 +255,7 @@ def build_server(
         pw_manager=pw_manager,
         allowed_hosts=allowed_hosts,
         approval_lookup=approval_lookup,
+        artifact_holder=artifact_holder,
     )
 
     return mcp

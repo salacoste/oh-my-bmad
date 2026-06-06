@@ -84,8 +84,8 @@ class TestTierMap:
         assert tier3 == ["browser.evaluate"]
 
     def test_total_tool_count(self) -> None:
-        """14 tools total: 5 Tier-1 + 8 Tier-2 + 1 Tier-3."""
-        assert len(TIER_MAP) == 14
+        """15 tools total: 6 Tier-1 + 8 Tier-2 + 1 Tier-3."""
+        assert len(TIER_MAP) == 15
 
 
 # ---------------------------------------------------------------------------

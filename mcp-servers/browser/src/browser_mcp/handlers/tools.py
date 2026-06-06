@@ -76,6 +76,8 @@ TIER_MAP: dict[str, Tier] = {
     "browser.hover": Tier.TWO,
     # Story 21.4 — JS execution (Tier-3 / FR82).
     "browser.evaluate": Tier.THREE,
+    # Story 21.3 — Screenshot + artifact integration (Tier-1 / FR81).
+    "browser_take_screenshot": Tier.ONE,
     # Story 21.5 — Tab management (FR83).
     "browser.tab_list": Tier.ONE,
     "browser.tab_select": Tier.ONE,
@@ -269,6 +271,7 @@ def register_tools(
     pw_manager: PlaywrightSubprocessManager,
     allowed_hosts: list[str] | None = None,
     approval_lookup: Callable[[str, str], Awaitable[bool]] | None = None,
+    artifact_holder: Any = None,
 ) -> None:
     """Register browser tools on the FastMCP instance.
 
@@ -279,6 +282,10 @@ def register_tools(
     *approval_lookup* is the async ``(task_id, action) -> bool`` callable threaded
     into ``check_tier_with_approval`` for the Tier-3 tools; when None the Tier-3
     tools deny every call (no approval source — test/no-approval default).
+
+    *artifact_holder* is an ``ArtifactClientHolder`` for ``artifact.put`` calls
+    from ``browser_take_screenshot`` (Story 21.3); when None, screenshot storage
+    returns a structured error (no artifact store configured).
     """
     get_actor_id = _make_actor_id_extractor(actor_id)
 
@@ -765,6 +772,160 @@ def register_tools(
             {"tab_id": tab_id},
             caller_trace_id, task_id,
         )
+
+    # ===================================================================
+    # Story 21.3 — Screenshot capture + artifact integration (Tier-1 / FR81)
+    # ===================================================================
+    # browser_take_screenshot captures the current viewport via Playwright,
+    # stores the image bytes in the artifact-mcp content-addressed store,
+    # and returns a metadata-only response (artifact_ref, content_hash, etc.).
+    # Raw image bytes are NEVER in the tool result or events (NFR-B3).
+    # ===================================================================
+
+    @mcp.tool(name="browser_take_screenshot")
+    async def browser_take_screenshot(
+        *,
+        caller_trace_id: str,
+        format: str = "png",
+        task_id: str = "",
+    ) -> dict[str, object]:
+        """Capture a viewport screenshot and store in artifact-mcp. Tier-1 (FR81).
+
+        Args:
+            caller_trace_id: FR58 correlation ID (UUIDv7 OR ``tg:<update_id>``).
+            format: Image format — ``png`` (default) or ``jpeg``.
+            task_id: Optional task ID for artifact tagging.
+        """
+        validate_caller_trace_id(caller_trace_id)
+        check_tier(
+            "browser_take_screenshot",
+            _caller(actor_kind, actor_id),
+            TIER_MAP["browser_take_screenshot"],
+        )
+
+        # Validate format parameter.
+        if format not in ("png", "jpeg"):
+            return {
+                "error": True,
+                "reason": "invalid_format",
+                "detail": f"format must be 'png' or 'jpeg'; got {format!r}",
+            }
+
+        # Check artifact store availability.
+        if artifact_holder is None:
+            return {
+                "error": True,
+                "reason": "no_artifact_store",
+                "detail": "artifact-mcp client not configured",
+            }
+
+        # Capture screenshot via Playwright subprocess.
+        client = await pw_manager.ensure_client(task_id or "default")
+        try:
+            result = await client.call_tool(
+                "browser_screenshot",
+                {"format": format} if format != "png" else {},
+            )
+        except RuntimeError as exc:
+            log.error("browser_screenshot_subprocess_error", exc_info=True)
+            return {
+                "error": True, "reason": "subprocess_error",
+                "detail": str(exc), "task_id": task_id,
+            }
+        except TimeoutError:
+            log.error("browser_screenshot_timeout")
+            return {
+                "error": True, "reason": "subprocess_timeout",
+                "task_id": task_id,
+            }
+
+        if result.isError:
+            error_text = "; ".join(
+                c.text for c in result.content if hasattr(c, "text")
+            )
+            return {
+                "error": True,
+                "reason": "playwright_error",
+                "detail": error_text,
+                "task_id": task_id,
+            }
+
+        # Extract screenshot bytes from Playwright response.
+        # Playwright MCP returns image data as base64 in text content.
+        import base64 as _b64
+
+        screenshot_b64: str | None = None
+        for c in result.content:
+            if hasattr(c, "text") and c.text:
+                screenshot_b64 = c.text
+                break
+
+        if not screenshot_b64:
+            return {
+                "error": True,
+                "reason": "no_screenshot_data",
+                "detail": "Playwright returned empty screenshot",
+                "task_id": task_id,
+            }
+
+        try:
+            screenshot_bytes = _b64.b64decode(screenshot_b64)
+        except Exception as exc:
+            return {
+                "error": True,
+                "reason": "invalid_screenshot_data",
+                "detail": f"base64 decode failed: {exc}",
+                "task_id": task_id,
+            }
+
+        # Store in artifact-mcp via content-addressed put.
+        content_hash = hashlib.sha256(screenshot_bytes).hexdigest()
+        artifact_name = f"screenshot_{content_hash[:12]}.{format}"
+
+        t0 = time.monotonic()
+        try:
+            await artifact_holder.put(
+                caller_trace_id=caller_trace_id,
+                content=screenshot_bytes,
+                name=artifact_name,
+                task_id=task_id or None,
+            )
+        except Exception as exc:
+            log.error("browser_screenshot_artifact_put_failed", exc_info=True)
+            return {
+                "error": True,
+                "reason": "artifact_put_failed",
+                "detail": str(exc),
+                "task_id": task_id,
+            }
+        duration_ms = round((time.monotonic() - t0) * 1000)
+
+        response: dict[str, object] = {
+            "artifact_ref": artifact_name,
+            "content_hash": content_hash,
+            "format": format,
+            "size_bytes": len(screenshot_bytes),
+            "duration_ms": duration_ms,
+            "task_id": task_id,
+        }
+
+        # Emit browser.screenshot_captured event (best-effort, FR26).
+        if emitter_holder is not None:
+            try:
+                await emitter_holder.emit_event(
+                    "browser.screenshot_captured",
+                    {
+                        "task_id": task_id,
+                        "artifact_ref": artifact_name,
+                        "content_hash": content_hash,
+                        "trace_id": caller_trace_id,
+                    },
+                    caller_trace_id=caller_trace_id,
+                )
+            except Exception:
+                log.exception("browser_screenshot_emit_failed")
+
+        return response
 
     # ===================================================================
     # Story 21.4 — JS execution (Tier-3 / FR82)
