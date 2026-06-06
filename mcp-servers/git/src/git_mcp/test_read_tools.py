@@ -18,7 +18,7 @@ from typing import cast
 import pytest
 
 from git_mcp.handlers.tools import _parse_branch, _parse_numstat
-from git_mcp.server import GitExecutor, GitOutputTooLarge, GitTimeout, _build_git_env
+from git_mcp.server import GitExecutor, GitTimeout, _build_git_env
 
 _VALID_TRACE_ID = "01917e5c-a7d1-7000-8abc-0123456789ab"
 
@@ -235,18 +235,20 @@ async def test_run_git_timeout_kills_and_reaps(repo: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_git_output_cap_kills_and_reaps(repo: Path) -> None:
-    """Output past the cap raises GitOutputTooLarge and leaves the sandbox usable.
+async def test_run_git_output_cap_truncates_and_reaps(repo: Path) -> None:
+    """Output past the cap is truncated and subprocess is killed; sandbox remains usable.
 
-    A tiny ``output_cap`` forces the incremental reader to trip before the
+    A tiny ``output_cap`` forces the incremental reader to truncate before the
     subprocess finishes, driving ``run_git``'s kill+reap path (the
-    memory-pressure sibling of the timeout path). A subsequent call must still
+    memory-pressure sibling of the timeout path). The result carries
+    ``_truncated=True`` and partial output. A subsequent call must still
     succeed (no leaked/zombie process wedges later invocations).
     """
     ex = GitExecutor(repo)
-    with pytest.raises(GitOutputTooLarge):
-        # `git log` emits a commit hash + metadata — far more than 4 bytes.
-        await ex.run_git(["log", "--format=%H"], output_cap=4)
+    # `git log` emits a commit hash + metadata — far more than 4 bytes.
+    result = await ex.run_git(["log", "--format=%H"], output_cap=4)
+    assert result._truncated is True
+    assert len(result.stdout.encode()) <= 4
     ok = await ex.run_git(["rev-parse", "--is-inside-work-tree"])
     assert ok.returncode == 0
 

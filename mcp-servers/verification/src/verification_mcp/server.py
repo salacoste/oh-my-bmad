@@ -70,9 +70,9 @@ _VERIFICATION_TIMEOUT: float = 600.0
 # not MEMORY: a pathological build/test (or a recipe emitting debug symbols) could
 # stream gigabytes faster than the timeout trips. ``run_recipe`` reads each stream
 # incrementally and, once a stream crosses this cap, kills+reaps the subprocess and
-# raises ``VerificationOutputTooLarge``. 16 MiB mirrors git-mcp's ``_GIT_OUTPUT_CAP``
-# and comfortably exceeds typical build/test recipe output.
-_VERIFICATION_OUTPUT_CAP: int = 16 * 1024 * 1024
+# returns truncated output with ``_truncated=True`` on the result. 1 MiB mirrors
+# git-mcp's ``_GIT_OUTPUT_CAP`` and bounds request-path memory.
+_VERIFICATION_OUTPUT_CAP: int = 1 * 1024 * 1024
 # Per-read chunk size for the incremental bounded reader.
 _VERIFICATION_READ_CHUNK: int = 65536
 
@@ -130,11 +130,13 @@ class VerificationTimeout(RuntimeError):  # noqa: N818 — domain-named (no Erro
 
 
 class VerificationOutputTooLarge(RuntimeError):  # noqa: N818 — domain-named (no Error suffix); mirrors git-mcp GitOutputTooLarge
-    """Raised when a recipe invocation's output exceeds ``_VERIFICATION_OUTPUT_CAP``.
+    """Internal sentinel — raised by ``_read_capped`` to signal truncation.
 
     The memory-pressure sibling of ``VerificationTimeout``: the subprocess is
     killed and reaped before this propagates so no unbounded buffer survives the
-    request. Mirrors git-mcp's ``GitOutputTooLarge``.
+    request. ``run_recipe`` catches this internally and returns truncated output
+    with ``_truncated=True`` instead of propagating the exception to callers.
+    Mirrors git-mcp's ``GitOutputTooLarge``.
     """
 
 
@@ -145,11 +147,15 @@ class VerificationResult:
     A non-zero ``returncode`` is NOT an exception — handlers surface it as a
     structured ``{"pass": false, ...}`` payload. Only a timeout
     (``VerificationTimeout``) or a spawn failure propagates as an exception.
+    ``_truncated`` is True when one or both output streams exceeded
+    ``output_cap`` bytes — the subprocess was killed and the output is truncated
+    to the cap.
     """
 
     returncode: int
     stdout: str
     stderr: str
+    _truncated: bool = False
 
 
 # Story 17.2 scaffold — empty until the verification tools land in 17.3 / 17.4.
@@ -209,10 +215,11 @@ class VerificationExecutor:
           and ``VerificationTimeout`` is raised (no leaked process).
         - Output is bounded by ``output_cap``: each stream is read incrementally
           and, once a stream crosses the cap, the subprocess is killed+reaped and
-          ``VerificationOutputTooLarge`` is raised (memory-pressure sibling of the
-          timeout). ``communicate()`` is NOT used — it would buffer unbounded
-          output in memory before returning. Both streams are drained concurrently
-          so a full stderr pipe cannot deadlock a stdout read.
+          the result carries truncated output with ``_truncated=True`` (memory-
+          pressure sibling of the timeout). ``communicate()`` is NOT used — it
+          would buffer unbounded output in memory before returning. Both streams
+          are drained concurrently so a full stderr pipe cannot deadlock a stdout
+          read.
 
         A non-zero exit is NOT raised — it is returned in
         ``VerificationResult.returncode`` so handlers can surface a structured
@@ -227,24 +234,42 @@ class VerificationExecutor:
             env=_build_env(),
         )
 
-        async def _read_capped(stream: asyncio.StreamReader) -> bytes:
+        class _StreamTruncated(Exception):  # noqa: N818 — internal-only sentinel, not a public error class
+            """Internal-only sentinel — signals one stream hit the cap."""
+
+        # Partial output accumulators — accessible from the except block even
+        # after _StreamTruncated interrupts gather().
+        partial_out: list[bytes] = []
+        partial_err: list[bytes] = []
+
+        async def _read_capped(
+            stream: asyncio.StreamReader,
+            partial: list[bytes],
+        ) -> bytes:
             chunks: list[bytes] = []
             total = 0
-            while True:
-                chunk = await stream.read(_VERIFICATION_READ_CHUNK)
-                if not chunk:
-                    return b"".join(chunks)
-                total += len(chunk)
-                if total > output_cap:
-                    raise VerificationOutputTooLarge(
-                        f"verification recipe {command!r} exceeded {output_cap}-byte output cap"
-                    )
-                chunks.append(chunk)
+            try:
+                while True:
+                    chunk = await stream.read(_VERIFICATION_READ_CHUNK)
+                    if not chunk:
+                        return b"".join(chunks)
+                    total += len(chunk)
+                    if total > output_cap:
+                        # Truncate: keep only what fits within the cap.
+                        excess = total - output_cap
+                        keep = len(chunk) - excess
+                        if keep > 0:
+                            chunks.append(chunk[:keep])
+                        raise _StreamTruncated()
+                    chunks.append(chunk)
+            finally:
+                # Always publish partial data so the except block can read it.
+                partial.extend(chunks)
 
         # ``proc.stdout``/``proc.stderr`` are non-None because both were PIPE'd.
         assert proc.stdout is not None and proc.stderr is not None
-        out_task = asyncio.ensure_future(_read_capped(proc.stdout))
-        err_task = asyncio.ensure_future(_read_capped(proc.stderr))
+        out_task = asyncio.ensure_future(_read_capped(proc.stdout, partial_out))
+        err_task = asyncio.ensure_future(_read_capped(proc.stderr, partial_err))
 
         async def _cleanup_child() -> None:
             # Cancel both readers, kill+reap the child (if still live), then
@@ -260,15 +285,21 @@ class VerificationExecutor:
                 await proc.wait()
             await asyncio.gather(out_task, err_task, return_exceptions=True)
 
+        truncated = False
+        out = b""
+        err = b""
         try:
             out, err = await asyncio.wait_for(asyncio.gather(out_task, err_task), timeout)
-        except (TimeoutError, VerificationOutputTooLarge) as exc:
+        except (TimeoutError, _StreamTruncated) as exc:
             await _cleanup_child()
-            if isinstance(exc, VerificationOutputTooLarge):
-                raise
-            raise VerificationTimeout(
-                f"verification recipe {command!r} exceeded {timeout}s timeout"
-            ) from exc
+            if isinstance(exc, _StreamTruncated):
+                truncated = True
+                out = b"".join(partial_out)
+                err = b"".join(partial_err)
+            else:
+                raise VerificationTimeout(
+                    f"verification recipe {command!r} exceeded {timeout}s timeout"
+                ) from exc
         except BaseException:
             # CancelledError / KeyboardInterrupt / SystemExit (or any unexpected
             # error) must not leak the child or the reader tasks — mirror the
@@ -280,6 +311,7 @@ class VerificationExecutor:
             returncode=proc.returncode if proc.returncode is not None else -1,
             stdout=out.decode(errors="replace"),
             stderr=err.decode(errors="replace"),
+            _truncated=truncated,
         )
 
 

@@ -56,10 +56,11 @@ _GIT_TIMEOUT: float = 30.0
 # (deferred-work P1). The timeout bounds WALL-CLOCK but not MEMORY: a
 # pathological repo (or a future content-exposing tool) could stream gigabytes
 # faster than the timeout trips. ``run_git`` reads each stream incrementally and,
-# once a stream crosses this cap, kills+reaps the subprocess and raises
-# ``GitOutputTooLarge`` — the memory-pressure sibling of ``GitTimeout``. 16 MiB
-# comfortably exceeds the cardinality-scaled metadata the read tools emit.
-_GIT_OUTPUT_CAP: int = 16 * 1024 * 1024
+# once a stream crosses this cap, kills+reaps the subprocess and returns
+# truncated output with ``_truncated=True`` on the result — the memory-pressure
+# sibling of ``GitTimeout``. 1 MiB bounds request-path memory for metadata-scale
+# git output.
+_GIT_OUTPUT_CAP: int = 1 * 1024 * 1024
 # Per-read chunk size for the incremental bounded reader.
 _GIT_READ_CHUNK: int = 65536
 
@@ -179,12 +180,14 @@ class GitTimeout(RuntimeError):  # noqa: N818 — domain-named (no Error suffix)
 
 
 class GitOutputTooLarge(RuntimeError):  # noqa: N818 — domain-named (no Error suffix); mirrors GitTimeout precedent
-    """Raised when a ``git`` invocation's output exceeds ``_GIT_OUTPUT_CAP``.
+    """Internal sentinel — raised by ``_read_capped`` to signal truncation.
 
     The memory-pressure sibling of ``GitTimeout`` (deferred-work P1): the
     subprocess is killed and reaped before this propagates, so a pathological
     repo cannot exhaust request-path memory by streaming unbounded output that
-    completes within the wall-clock timeout.
+    completes within the wall-clock timeout. ``run_git`` catches this
+    internally and returns truncated output with ``_truncated=True`` instead
+    of propagating the exception to callers.
     """
 
 
@@ -220,12 +223,15 @@ class GitResult:
 
     A non-zero ``returncode`` is NOT an exception — handlers surface it as a
     structured ``{"ok": false, ...}`` payload. Only a timeout (``GitTimeout``)
-    or a spawn failure propagates as an exception.
+    or a spawn failure propagates as an exception. ``_truncated`` is True when
+    one or both output streams exceeded ``output_cap`` bytes — the subprocess
+    was killed and the output is truncated to the cap.
     """
 
     returncode: int
     stdout: str
     stderr: str
+    _truncated: bool = False
 
 
 # Story 15.2 scaffold — empty until the git tools land in 15.3 / 15.4. Re-exported
@@ -294,10 +300,11 @@ class GitExecutor:
           and ``GitTimeout`` is raised (no leaked process).
         - Output is bounded by ``output_cap``: each stream is read incrementally
           and, once a stream crosses the cap, the subprocess is killed+reaped and
-          ``GitOutputTooLarge`` is raised (memory-pressure sibling of the
-          timeout). ``communicate()`` is NOT used — it would buffer unbounded
-          output in memory before returning. Both streams are drained
-          concurrently so a full stderr pipe cannot deadlock a stdout read.
+          the result carries truncated output with ``_truncated=True`` (memory-
+          pressure sibling of the timeout). ``communicate()`` is NOT used — it
+          would buffer unbounded output in memory before returning. Both streams
+          are drained concurrently so a full stderr pipe cannot deadlock a stdout
+          read.
 
         A non-zero exit is NOT raised — it is returned in ``GitResult.returncode``
         so handlers can surface a structured error. Output is decoded with
@@ -316,22 +323,42 @@ class GitExecutor:
             env=_build_git_env(),
         )
 
-        async def _read_capped(stream: asyncio.StreamReader) -> bytes:
+        class _StreamTruncated(Exception):  # noqa: N818 — internal-only sentinel, not a public error class
+            """Internal-only sentinel — signals one stream hit the cap."""
+
+        # Partial output accumulators — accessible from the except block even
+        # after _StreamTruncated interrupts gather().
+        partial_out: list[bytes] = []
+        partial_err: list[bytes] = []
+
+        async def _read_capped(
+            stream: asyncio.StreamReader,
+            partial: list[bytes],
+        ) -> bytes:
             chunks: list[bytes] = []
             total = 0
-            while True:
-                chunk = await stream.read(_GIT_READ_CHUNK)
-                if not chunk:
-                    return b"".join(chunks)
-                total += len(chunk)
-                if total > output_cap:
-                    raise GitOutputTooLarge(f"git {subcmd!r} exceeded {output_cap}-byte output cap")
-                chunks.append(chunk)
+            try:
+                while True:
+                    chunk = await stream.read(_GIT_READ_CHUNK)
+                    if not chunk:
+                        return b"".join(chunks)
+                    total += len(chunk)
+                    if total > output_cap:
+                        # Truncate: keep only what fits within the cap.
+                        excess = total - output_cap
+                        keep = len(chunk) - excess
+                        if keep > 0:
+                            chunks.append(chunk[:keep])
+                        raise _StreamTruncated()
+                    chunks.append(chunk)
+            finally:
+                # Always publish partial data so the except block can read it.
+                partial.extend(chunks)
 
         # ``proc.stdout``/``proc.stderr`` are non-None because both were PIPE'd.
         assert proc.stdout is not None and proc.stderr is not None
-        out_task = asyncio.ensure_future(_read_capped(proc.stdout))
-        err_task = asyncio.ensure_future(_read_capped(proc.stderr))
+        out_task = asyncio.ensure_future(_read_capped(proc.stdout, partial_out))
+        err_task = asyncio.ensure_future(_read_capped(proc.stderr, partial_err))
 
         async def _cleanup_child() -> None:
             # Cancel both readers, kill+reap the child (if still live), then
@@ -347,13 +374,19 @@ class GitExecutor:
                 await proc.wait()
             await asyncio.gather(out_task, err_task, return_exceptions=True)
 
+        truncated = False
+        out = b""
+        err = b""
         try:
             out, err = await asyncio.wait_for(asyncio.gather(out_task, err_task), timeout)
-        except (TimeoutError, GitOutputTooLarge) as exc:
+        except (TimeoutError, _StreamTruncated) as exc:
             await _cleanup_child()
-            if isinstance(exc, GitOutputTooLarge):
-                raise
-            raise GitTimeout(f"git {subcmd!r} exceeded {timeout}s timeout") from exc
+            if isinstance(exc, _StreamTruncated):
+                truncated = True
+                out = b"".join(partial_out)
+                err = b"".join(partial_err)
+            else:
+                raise GitTimeout(f"git {subcmd!r} exceeded {timeout}s timeout") from exc
         except BaseException:
             # CancelledError / KeyboardInterrupt / SystemExit (or any unexpected
             # error) must not leak the child or the reader tasks — mirror the
@@ -365,6 +398,7 @@ class GitExecutor:
             returncode=proc.returncode if proc.returncode is not None else -1,
             stdout=out.decode(errors="replace"),
             stderr=err.decode(errors="replace"),
+            _truncated=truncated,
         )
 
     async def assert_safe_repo_config(self) -> None:

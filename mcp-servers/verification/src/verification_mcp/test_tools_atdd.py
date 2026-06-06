@@ -314,27 +314,26 @@ async def test_output_under_cap_succeeds(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_output_over_cap_kills_subprocess(tmp_path: Path) -> None:
-    """Reference (non-xfail): output exceeding the cap kills the subprocess.
+async def test_output_over_cap_truncates_and_kills_subprocess(tmp_path: Path) -> None:
+    """Reference (non-xfail): output exceeding the cap is truncated and subprocess killed.
 
-    A recipe that emits more than ``output_cap`` bytes must raise
-    ``VerificationOutputTooLarge`` and kill+reap the subprocess. Uses a tiny cap
-    (1 KiB) and a Python one-liner that dumps more than that.
+    A recipe that emits more than ``output_cap`` bytes must truncate output,
+    set ``_truncated=True`` on the result, and kill+reap the subprocess. Uses a
+    tiny cap (1 KiB) and a Python one-liner that dumps more than that.
     """
-    from verification_mcp.server import VerificationOutputTooLarge
-
     ex = VerificationExecutor(tmp_path)
     # Python one-liner that writes 4 KiB to stdout — exceeds the 1024-byte cap.
-    with pytest.raises(VerificationOutputTooLarge):
-        await ex.run_recipe(
-            [
-                "python3",
-                "-c",
-                "import sys; sys.stdout.buffer.write(b'x' * 4096); sys.stdout.flush()",
-            ],
-            output_cap=1024,
-            timeout=10.0,
-        )
+    result = await ex.run_recipe(
+        [
+            "python3",
+            "-c",
+            "import sys; sys.stdout.buffer.write(b'x' * 4096); sys.stdout.flush()",
+        ],
+        output_cap=1024,
+        timeout=10.0,
+    )
+    assert result._truncated is True
+    assert len(result.stdout.encode()) <= 1024
 
 
 @pytest.mark.asyncio
