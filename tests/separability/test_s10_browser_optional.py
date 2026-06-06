@@ -186,15 +186,15 @@ async def test_browser_absent_when_command_blank(
         assert clients.browser is None, (
             "browser-mcp should be absent when browser_command is blank"
         )
-        # A scripted add-note round-trip proves the 3 core members work.
+        # A scripted task_add_note round-trip proves the 3 core members work.
         result = await clients.task_registry.call_tool(
-            "add_note",
+            "task_add_note",
             {
                 "task_id": task_id,
-                "body": "s10 browser-absent check",
+                "note": "s10 browser-absent check",
                 "caller_trace_id": _TRACE_ID,
             },
         )
         assert result.isError is not True, (
-            f"add_note should succeed: {result}"
+            f"task_add_note should succeed: {result}"
         )
