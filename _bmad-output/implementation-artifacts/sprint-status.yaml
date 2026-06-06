@@ -432,11 +432,11 @@ development_status:
   # 4th archetype: Browser Worker — wraps @playwright/mcp as managed Docker subprocess
   # FR78-FR88 · NFR-B1-B5, O12, M9, S13, R9 · P4-I1/I2/I3 invariants
 
-  epic-20: in-progress  # phase: 4 · ω Browser MCP server scaffold + fleet integration · FR78, FR84, FR85, FR87, FR88 · NFR-B1, B4, M9, S13, R9
+  epic-20: done  # phase: 4 · ω Browser MCP server scaffold + fleet integration · FR78, FR84, FR85, FR87, FR88 · NFR-B1, B4, M9, S13, R9 · 6/6 stories complete
   20-1-server-scaffold: done  # phase: 4 · FR78 · ADR-0010 steps 1,2,6 — mcp-servers/browser/ workspace member + build_server factory + TIER_MAP + WorkerSettings spawn config + lint clean + 3523 tests green
   20-2-playwright-subprocess-lifecycle: done  # phase: 4 · FR78 · PlaywrightSubprocessManager + _build_docker_command + 23 tests + lifespan kill_all (NFR-R9)
   20-3-session-isolation: done  # phase: 4 · FR84 · P4-I1 — --isolated hardcoded (AC1), storage blocklisted (AC2), AC3 integration test deferred to Epic 22 (@slow)
-  20-4-origin-control: review  # phase: 4 · FR85 · --allowed-hosts / --blocked-origins per-task config + browser.navigation_blocked event
+  20-4-origin-control: done  # phase: 4 · FR85 · --allowed-hosts / --blocked-origins per-task config + browser.navigation_blocked event + 45 tests + trailing-dot/case normalisation
   20-5-container-sandbox: done  # phase: 4 · FR87 · P4-I3 — BROWSER_MCP_MEMORY_LIMIT/CPU_LIMIT env vars + Docker --memory/--cpus + no --no-sandbox
   20-6-separability-s10-allowlist-fleet: done  # phase: 4 · FR88 · NFR-M9 — BROWSER_MCP_* in both _ENV_ALLOWLIST (byte-identical) + S-10 test (spawned/absent)
 
