@@ -442,11 +442,11 @@ development_status:
 
   epic-21: in-progress  # phase: 4 · ω-2..ω-6 Browser tools + event spine · FR79-FR83, FR86 · NFR-B2, B3, B5, O12
   21-1-navigation-tools: done  # phase: 4 · FR79 · Tier-1 — PlaywrightMCPClient + real forwarding + 55 tests + P1 race/leak fixes
-  21-2-interaction-tools: backlog  # phase: 4 · FR80 · Tier-2 — browser_click, browser_type, browser_fill, browser_select_option, browser_press_key, browser_hover
+  21-2-interaction-tools: done  # phase: 4 · FR80 · Tier-2 — 6 interaction tools + _forward_action_tool helper + 71 tests
   21-3-screenshot-artifact-integration: backlog  # phase: 4 · FR81 · NFR-B3 — browser_take_screenshot + artifact-mcp content-addressed put + browser.screenshot_captured event
   21-4-js-execution-tier3: backlog  # phase: 4 · FR82 · NFR-B5 · P4-I2 — browser_evaluate Tier-3 approval-gated + negative denial test + expression_hash
   21-5-tab-management: backlog  # phase: 4 · FR83 · Tier-1/2 — browser_tabs list/create/close/select + TIER_MAP split
-  21-6-event-registration-cardinality: backlog  # phase: 4 · FR86 · NFR-O12 — 6 browser.* event types registered + cardinality ratchet + bounded-by-task_id
+  21-6-event-registration-cardinality: done  # phase: 4 · FR86 · NFR-O12 — 6 browser.* event payloads + ensure_registered + byte-identical contract test
 
   epic-22: backlog  # phase: 4 · Browser CI hardening + security gates · all FRs (CI enforcement) · all NFRs (verification)
   22-1-p4-i1-ephemerality-ci-gate: backlog  # phase: 4 · P4-I1 — negative test: no cookie/localStorage survives across 2 sequential task-scoped sessions
