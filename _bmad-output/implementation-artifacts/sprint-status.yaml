@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-06-06T00:00:00Z
+last_updated: 2026-06-06T02:00:00Z
 current_phase: 4  # Phase 4 opened by ADR-0014 (docs/adr/0014-phase-4-gate.md), 2026-06-05 (Phase 3 opened by ADR-0009, 2026-06-04)
 
 development_status:
@@ -436,7 +436,7 @@ development_status:
   20-1-server-scaffold: done  # phase: 4 · FR78 · ADR-0010 steps 1,2,6 — mcp-servers/browser/ workspace member + build_server factory + TIER_MAP + WorkerSettings spawn config + lint clean + 3523 tests green
   20-2-playwright-subprocess-lifecycle: done  # phase: 4 · FR78 · PlaywrightSubprocessManager + _build_docker_command + 23 tests + lifespan kill_all (NFR-R9)
   20-3-session-isolation: done  # phase: 4 · FR84 · P4-I1 — --isolated hardcoded (AC1), storage blocklisted (AC2), AC3 integration test deferred to Epic 22 (@slow)
-  20-4-origin-control: backlog  # phase: 4 · FR85 · --allowed-hosts / --blocked-origins per-task config + browser.navigation_blocked event
+  20-4-origin-control: review  # phase: 4 · FR85 · --allowed-hosts / --blocked-origins per-task config + browser.navigation_blocked event
   20-5-container-sandbox: done  # phase: 4 · FR87 · P4-I3 — BROWSER_MCP_MEMORY_LIMIT/CPU_LIMIT env vars + Docker --memory/--cpus + no --no-sandbox
   20-6-separability-s10-allowlist-fleet: done  # phase: 4 · FR88 · NFR-M9 — BROWSER_MCP_* in both _ENV_ALLOWLIST (byte-identical) + S-10 test (spawned/absent)
 

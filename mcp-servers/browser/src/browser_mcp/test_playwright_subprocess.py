@@ -101,6 +101,33 @@ class TestBuildDockerCommand:
         assert "--network" not in cmd
         assert "host" not in cmd
 
+    def test_allowed_hosts(self) -> None:
+        """Allowed hosts flag is added when provided (Story 20.4 / FR85)."""
+        cmd = _build_docker_command(
+            "pw@sha256:abc",
+            allowed_hosts=["localhost", "127.0.0.1"],
+        )
+        host_flags = [a for a in cmd if a.startswith("--allowed-hosts=")]
+        assert host_flags == ["--allowed-hosts=localhost,127.0.0.1"]
+
+    def test_no_allowed_hosts_when_none(self) -> None:
+        """No allowed-hosts flag when not provided (Story 20.4)."""
+        cmd = _build_docker_command("pw@sha256:abc")
+        host_flags = [a for a in cmd if a.startswith("--allowed-hosts")]
+        assert host_flags == []
+
+    def test_allowed_hosts_and_origins_together(self) -> None:
+        """Both flags can be present simultaneously (Story 20.4)."""
+        cmd = _build_docker_command(
+            "pw@sha256:abc",
+            allowed_origins=["https://example.com"],
+            allowed_hosts=["localhost"],
+        )
+        origin_flags = [a for a in cmd if a.startswith("--allowed-origins=")]
+        host_flags = [a for a in cmd if a.startswith("--allowed-hosts=")]
+        assert origin_flags == ["--allowed-origins=https://example.com"]
+        assert host_flags == ["--allowed-hosts=localhost"]
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -171,6 +198,24 @@ class TestSpawn:
         args = mock_exec.call_args[0]
         assert args[0] == "docker"
         assert args[1] == "run"
+
+    @pytest.mark.asyncio
+    async def test_spawn_passes_allowed_hosts_to_command(self) -> None:
+        """Spawn threads allowed_hosts through to _build_docker_command (Story 20.4)."""
+        mgr = PlaywrightSubprocessManager(
+            image="pw@sha256:test",
+            allowed_hosts=["localhost", "127.0.0.1"],
+        )
+        proc = _mock_proc()
+        with (
+            patch(_EXEC, AsyncMock(return_value=proc)) as mock_exec,
+            patch(_UUID, return_value="sid"),
+        ):
+            await mgr.spawn("task-1")
+
+        args = mock_exec.call_args[0]
+        host_flags = [a for a in args if isinstance(a, str) and a.startswith("--allowed-hosts=")]
+        assert host_flags == ["--allowed-hosts=localhost,127.0.0.1"]
 
 
 class TestGetOrSpawn:

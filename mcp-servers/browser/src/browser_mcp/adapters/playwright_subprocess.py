@@ -66,6 +66,7 @@ def _build_docker_command(
     cpu_limit: float = _DEFAULT_CPU_LIMIT,
     extra_caps: list[str] | None = None,
     allowed_origins: list[str] | None = None,
+    allowed_hosts: list[str] | None = None,
 ) -> list[str]:
     """Construct the ``docker run`` argv for a Playwright MCP subprocess.
 
@@ -97,6 +98,9 @@ def _build_docker_command(
 
     if allowed_origins:
         cmd.append(f"--allowed-origins={','.join(allowed_origins)}")
+
+    if allowed_hosts:
+        cmd.append(f"--allowed-hosts={','.join(allowed_hosts)}")
 
     return cmd
 
@@ -138,6 +142,7 @@ class PlaywrightSubprocessManager:
     extra_caps: list[str] | None = None
     # Origin control (Story 20.4)
     allowed_origins: list[str] | None = None
+    allowed_hosts: list[str] | None = None
     # Per-task sessions
     _sessions: dict[str, PlaywrightSession] = field(default_factory=dict)
 
@@ -169,6 +174,7 @@ class PlaywrightSubprocessManager:
             cpu_limit=self.cpu_limit,
             extra_caps=self.extra_caps,
             allowed_origins=self.allowed_origins,
+            allowed_hosts=self.allowed_hosts,
         )
 
         log.info(

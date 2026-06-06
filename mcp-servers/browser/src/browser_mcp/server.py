@@ -24,7 +24,7 @@ from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from capabilities import Tier
+from capabilities import Tier  # noqa: F401 — re-exported for check_tier_declarations
 from events.envelope import ActorKind  # noqa: IMP001 — packages/
 from mcp.server.fastmcp import FastMCP
 
@@ -41,9 +41,9 @@ _INIT_TIMEOUT: float = 30.0
 # P4-I1/P4-I3 — caps that are NEVER allowed in BROWSER_MCP_EXTRA_CAPS.
 _blocklisted_caps: frozenset[str] = frozenset({"storage", "network"})
 
-# Story 20.1 scaffold — empty TIER_MAP. Browser tools register against it
-# in Stories 21.1-21.5. Re-exported from handlers.tools.
-TIER_MAP: dict[str, Tier] = {}
+# TIER_MAP is defined in handlers/tools.py (the canonical location) and
+# re-exported at the bottom of this module for check_tier_declarations.py.
+# Do NOT redefine it here.
 
 # Child env allowlist for the browser server (Story 20.6 fills this out fully).
 # Only these parent-env vars are forwarded; everything else is dropped.
@@ -131,6 +131,7 @@ def build_server(
         cpu_limit=cpu_limit or 1.0,
         extra_caps=extra_caps,
         allowed_origins=allowed_origins,
+        allowed_hosts=allowed_hosts,
     )
 
     if clawhip_bridge_command is not None and clawhip_bridge_args is not None:
@@ -201,9 +202,26 @@ def build_server(
         actor_id=actor_id,
         emitter_holder=emitter_holder,
         pw_manager=pw_manager,
+        allowed_hosts=allowed_hosts,
     )
 
     return mcp
 
 
-__all__ = ["build_server", "TIER_MAP", "_BROWSER_ENV_ALLOWLIST"]
+__all__ = [
+    "build_server",
+    "TIER_MAP",
+    "_BROWSER_ENV_ALLOWLIST",
+]
+
+
+# Re-export TIER_MAP from the canonical location (handlers/tools.py) so
+# ``scripts/check_tier_declarations.py`` can import it from the server module.
+# This also ensures the TIER_MAP is populated at import time (register_tools
+# is called inside build_server, but TIER_MAP is a module-level constant).
+from browser_mcp.handlers.tools import (  # noqa: F401, E402
+    TIER_MAP as TIER_MAP,  # re-export
+)
+from browser_mcp.handlers.tools import (  # noqa: F401, E402
+    validate_caller_trace_id,
+)
