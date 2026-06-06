@@ -429,6 +429,78 @@ async def finish_session(
     log.info("session_finished", session_id=session_id, worker_id=worker_id)
 
 
+async def perform_runtime_handoff(
+    current_adapter: Any,
+    settings: WorkerSettings,
+    target_runtime: str,
+    trace_id: str,
+    task_id: str,
+    session_id: str,
+    clients: Any,
+    worktree_path: Path,
+) -> Any:
+    """Execute a runtime handoff — terminate current adapter, spawn target (FR92).
+
+    Phase 5 handoff flow (ADR-0015 / Epic 28):
+    1. Terminate current runtime adapter (SIGTERM -> grace -> SIGKILL).
+    2. Emit ``task.runtime_handoff`` event with from/to runtime and trace_id (P5-I2).
+    3. Spawn target runtime adapter via factory.
+    4. Return the new adapter (caller is responsible for running it).
+
+    The same trace_id spans both runtime segments (P5-I2).
+    The worktree lock is NOT released during handoff (task owns it for entire lifecycle).
+    """
+    log = structlog.get_logger(__name__)
+    source_runtime = current_adapter.runtime_name
+
+    # Step 1: terminate current adapter.
+    log.info(
+        "runtime_handoff_terminating_source",
+        source_runtime=source_runtime,
+        target_runtime=target_runtime,
+        task_id=task_id,
+    )
+    termination = await current_adapter.terminate_with_grace(grace_period_s=5.0)
+    log.info(
+        "runtime_handoff_source_terminated",
+        method=termination.method,
+        exit_code=termination.exit_code,
+    )
+
+    # Step 2: emit task.runtime_handoff event (P5-I2 — same trace_id).
+    new_session_id = settings.resolve_session_id()
+    try:
+        await _call_tool_best_effort(
+            clients.clawhip_bridge,
+            "emit_event",
+            {
+                "type": "task.runtime_handoff",
+                "payload": {
+                    "task_id": task_id,
+                    "trace_id": trace_id,
+                    "source_runtime": source_runtime,
+                    "target_runtime": target_runtime,
+                    "source_session_id": session_id,
+                    "target_session_id": new_session_id,
+                    "context_summary": "",
+                },
+                "caller_trace_id": trace_id,
+            },
+            label="emit_runtime_handoff",
+        )
+    except Exception:
+        log.warning("runtime_handoff_event_emit_failed", task_id=task_id)
+
+    # Step 3: spawn target runtime adapter.
+    log.info(
+        "runtime_handoff_spawning_target",
+        target_runtime=target_runtime,
+        task_id=task_id,
+    )
+    new_adapter = get_runtime_adapter(settings, runtime=target_runtime)
+    return new_adapter
+
+
 async def run_task(
     clients: _MCPClients,
     settings: WorkerSettings,
@@ -597,7 +669,7 @@ async def run_task(
     # audit event was emitted. The runner-raised case is now captured
     # explicitly; budget-enforced paths run BEFORE any re-raise.
     runner_raised: BaseException | None = None
-    result: ClaudeCodeResult | None = None
+    result: Any = None  # Adapter-specific result (ClaudeCodeResult, CodexResult, etc.)
     budget_result: _BudgetSupervisorResult | None = None
     try:
         # PP4 — defensive ceiling on ``runner.run()``. If the supervisor
