@@ -104,9 +104,10 @@ class TestTierMap:
     def test_interaction_tool_is_tier_two(self, name: str) -> None:
         assert TIER_MAP[name] is Tier.TWO
 
-    def test_six_interaction_tools_registered(self) -> None:
+    def test_interaction_tools_tier_two_count(self) -> None:
+        """6 interaction tools + 2 tab-mgmt Tier-2 tools = 8 Tier-2 total."""
         tier2_count = sum(1 for t in TIER_MAP.values() if t is Tier.TWO)
-        assert tier2_count == 6
+        assert tier2_count == 8
 
 
 # ---------------------------------------------------------------------------

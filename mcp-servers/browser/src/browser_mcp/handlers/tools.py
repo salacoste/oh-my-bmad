@@ -62,6 +62,11 @@ TIER_MAP: dict[str, Tier] = {
     "browser.select_option": Tier.TWO,
     "browser.press_key": Tier.TWO,
     "browser.hover": Tier.TWO,
+    # Story 21.5 — Tab management (FR83).
+    "browser.tab_list": Tier.ONE,
+    "browser.tab_select": Tier.ONE,
+    "browser.tab_create": Tier.TWO,
+    "browser.tab_close": Tier.TWO,
 }
 
 
@@ -586,5 +591,94 @@ def register_tools(
         check_tier("browser.hover", _caller(actor_kind, actor_id), TIER_MAP["browser.hover"])
         return await _forward_action_tool(
             "browser.hover", "browser_hover", {"element": element},
+            caller_trace_id, task_id,
+        )
+
+    # ===================================================================
+    # Story 21.5 — Tab management (FR83)
+    # ===================================================================
+    # list/select = Tier-1, create/close = Tier-2.
+    # Each forwards to the Playwright subprocess tab tools.
+    # ===================================================================
+
+    # -- browser.tab_list (Tier-1) -----------------------------------------
+
+    @mcp.tool(name="browser.tab_list")
+    async def browser_tab_list(
+        *,
+        caller_trace_id: str,
+        task_id: str = "",
+    ) -> dict[str, object]:
+        """List all open browser tabs. Tier-1 tool (FR83)."""
+        validate_caller_trace_id(caller_trace_id)
+        check_tier(
+            "browser.tab_list", _caller(actor_kind, actor_id),
+            TIER_MAP["browser.tab_list"],
+        )
+        return await _forward_action_tool(
+            "browser.tab_list", "browser_tab_list", {},
+            caller_trace_id, task_id,
+        )
+
+    # -- browser.tab_select (Tier-1) ---------------------------------------
+
+    @mcp.tool(name="browser.tab_select")
+    async def browser_tab_select(
+        *,
+        tab_id: str,
+        caller_trace_id: str,
+        task_id: str = "",
+    ) -> dict[str, object]:
+        """Switch to a specific browser tab. Tier-1 tool (FR83)."""
+        validate_caller_trace_id(caller_trace_id)
+        check_tier(
+            "browser.tab_select", _caller(actor_kind, actor_id),
+            TIER_MAP["browser.tab_select"],
+        )
+        return await _forward_action_tool(
+            "browser.tab_select", "browser_tab_select",
+            {"tab_id": tab_id},
+            caller_trace_id, task_id,
+        )
+
+    # -- browser.tab_create (Tier-2) --------------------------------------
+
+    @mcp.tool(name="browser.tab_create")
+    async def browser_tab_create(
+        *,
+        url: str,
+        caller_trace_id: str,
+        task_id: str = "",
+    ) -> dict[str, object]:
+        """Open a new browser tab at the given URL. Tier-2 tool (FR83)."""
+        validate_caller_trace_id(caller_trace_id)
+        check_tier(
+            "browser.tab_create", _caller(actor_kind, actor_id),
+            TIER_MAP["browser.tab_create"],
+        )
+        return await _forward_action_tool(
+            "browser.tab_create", "browser_tab_create",
+            {"url": url},
+            caller_trace_id, task_id,
+        )
+
+    # -- browser.tab_close (Tier-2) ---------------------------------------
+
+    @mcp.tool(name="browser.tab_close")
+    async def browser_tab_close(
+        *,
+        tab_id: str,
+        caller_trace_id: str,
+        task_id: str = "",
+    ) -> dict[str, object]:
+        """Close a specific browser tab. Tier-2 tool (FR83)."""
+        validate_caller_trace_id(caller_trace_id)
+        check_tier(
+            "browser.tab_close", _caller(actor_kind, actor_id),
+            TIER_MAP["browser.tab_close"],
+        )
+        return await _forward_action_tool(
+            "browser.tab_close", "browser_tab_close",
+            {"tab_id": tab_id},
             caller_trace_id, task_id,
         )
