@@ -1,0 +1,20 @@
+{
+  "event_id": "e-00000000-0000-7000-8000-000000000039",
+  "schema_version": "1.1.0",
+  "type": "browser.screenshot_captured",
+  "emitted_at": "1970-01-01T00:00:00.000+00:00",
+  "emitted_at_monotonic_ns": 0,
+  "actor": {
+    "kind": "worker",
+    "id": "fixture-browser-worker"
+  },
+  "payload": {
+    "task_id": "t-00000000-0000-7000-8000-000000000001",
+    "artifact_ref": "screenshot_abcd1234ef56.png",
+    "content_hash": "abcd1234ef567890abcd1234ef567890abcd1234ef567890abcd1234ef567890",
+    "trace_id": "00000000-0000-7000-8000-000000000040"
+  },
+  "trace_id": "00000000-0000-7000-8000-000000000040",
+  "request_id": "00000000-0000-7000-8000-000000000041",
+  "extensions": {}
+}

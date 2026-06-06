@@ -1,0 +1,19 @@
+{
+  "event_id": "e-00000000-0000-7000-8000-000000000042",
+  "schema_version": "1.1.0",
+  "type": "browser.tab_opened",
+  "emitted_at": "1970-01-01T00:00:00.000+00:00",
+  "emitted_at_monotonic_ns": 0,
+  "actor": {
+    "kind": "worker",
+    "id": "fixture-browser-worker"
+  },
+  "payload": {
+    "task_id": "t-00000000-0000-7000-8000-000000000001",
+    "tab_id": "tab-001",
+    "trace_id": "00000000-0000-7000-8000-000000000043"
+  },
+  "trace_id": "00000000-0000-7000-8000-000000000043",
+  "request_id": "00000000-0000-7000-8000-000000000044",
+  "extensions": {}
+}

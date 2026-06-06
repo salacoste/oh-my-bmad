@@ -1,0 +1,20 @@
+{
+  "event_id": "e-00000000-0000-7000-8000-000000000033",
+  "schema_version": "1.1.0",
+  "type": "browser.navigation_blocked",
+  "emitted_at": "1970-01-01T00:00:00.000+00:00",
+  "emitted_at_monotonic_ns": 0,
+  "actor": {
+    "kind": "worker",
+    "id": "fixture-browser-worker"
+  },
+  "payload": {
+    "task_id": "t-00000000-0000-7000-8000-000000000001",
+    "requested_url": "https://evil.example.com",
+    "reason": "origin_not_allowed",
+    "trace_id": "00000000-0000-7000-8000-000000000034"
+  },
+  "trace_id": "00000000-0000-7000-8000-000000000034",
+  "request_id": "00000000-0000-7000-8000-000000000035",
+  "extensions": {}
+}
