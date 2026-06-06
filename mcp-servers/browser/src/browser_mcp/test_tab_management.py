@@ -32,6 +32,7 @@ def _get_tools(**kwargs: object) -> dict[str, object]:
             def _deco(fn: object):
                 captured[name] = fn
                 return fn
+
             return _deco
 
     pw_manager = PlaywrightSubprocessManager(image="pw@sha256:test")
@@ -81,14 +82,19 @@ def _patch_ensure(mock_client: AsyncMock) -> Generator[None, None, None]:
 class TestTierMap:
     """Verify TIER_MAP entries for tab management tools."""
 
-    @pytest.mark.parametrize("name,expected_tier", [
-        ("browser.tab_list", Tier.ONE),
-        ("browser.tab_select", Tier.ONE),
-        ("browser.tab_create", Tier.TWO),
-        ("browser.tab_close", Tier.TWO),
-    ])
+    @pytest.mark.parametrize(
+        "name,expected_tier",
+        [
+            ("browser.tab_list", Tier.ONE),
+            ("browser.tab_select", Tier.ONE),
+            ("browser.tab_create", Tier.TWO),
+            ("browser.tab_close", Tier.TWO),
+        ],
+    )
     def test_tab_tier_mapping(
-        self, name: str, expected_tier: Tier,
+        self,
+        name: str,
+        expected_tier: Tier,
     ) -> None:
         assert TIER_MAP[name] is expected_tier
 
@@ -117,7 +123,8 @@ class TestTabToolsForward:
             )
 
         mock_client.call_tool.assert_awaited_once_with(
-            "browser_tab_list", {},
+            "browser_tab_list",
+            {},
         )
         assert result["success"] is True
 
@@ -134,7 +141,8 @@ class TestTabToolsForward:
             )
 
         mock_client.call_tool.assert_awaited_once_with(
-            "browser_tab_select", {"tab_id": "tab-2"},
+            "browser_tab_select",
+            {"tab_id": "tab-2"},
         )
         assert result["success"] is True
 
@@ -170,7 +178,8 @@ class TestTabToolsForward:
             )
 
         mock_client.call_tool.assert_awaited_once_with(
-            "browser_tab_close", {"tab_id": "tab-3"},
+            "browser_tab_close",
+            {"tab_id": "tab-3"},
         )
         assert result["success"] is True
         assert "duration_ms" in result

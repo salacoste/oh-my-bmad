@@ -192,9 +192,7 @@ def _parse_navigate_result(
     Fall back to sensible defaults when fields are missing.
     """
     if result.isError:
-        error_text = "; ".join(
-            c.text for c in result.content if hasattr(c, "text")
-        )
+        error_text = "; ".join(c.text for c in result.content if hasattr(c, "text"))
         return {
             "error": True,
             "reason": "playwright_error",
@@ -203,9 +201,7 @@ def _parse_navigate_result(
         }
 
     # Playwright MCP returns text content blocks. Extract structured fields.
-    text_parts: list[str] = [
-        c.text for c in result.content if hasattr(c, "text") and c.text
-    ]
+    text_parts: list[str] = [c.text for c in result.content if hasattr(c, "text") and c.text]
     combined = "\n".join(text_parts)
 
     return {
@@ -223,9 +219,7 @@ def _parse_snapshot_result(
 ) -> dict[str, object]:
     """Parse a Playwright ``browser_snapshot`` CallToolResult."""
     if result.isError:
-        error_text = "; ".join(
-            c.text for c in result.content if hasattr(c, "text")
-        )
+        error_text = "; ".join(c.text for c in result.content if hasattr(c, "text"))
         return {
             "error": True,
             "reason": "playwright_error",
@@ -233,9 +227,7 @@ def _parse_snapshot_result(
             "task_id": task_id,
         }
 
-    text_parts: list[str] = [
-        c.text for c in result.content if hasattr(c, "text") and c.text
-    ]
+    text_parts: list[str] = [c.text for c in result.content if hasattr(c, "text") and c.text]
     combined = "\n".join(text_parts)
 
     return {
@@ -305,6 +297,80 @@ def register_tools(
             get_actor_id=get_actor_id,
         )
 
+    # ===================================================================
+    # Navigation tool forwarder — shared by navigate, navigate_back,
+    # and snapshot (Story 21.1, Tier-1).
+    # ===================================================================
+
+    async def _forward_navigation_tool(
+        dotted_name: str,
+        pw_tool_name: str,
+        arguments: dict[str, Any],
+        caller_trace_id: str,
+        task_id: str,
+        event_type: str,
+        *,
+        parse_result_fn: Callable[..., dict[str, object]] | None = None,
+        pre_forward_hook: Callable[[], Awaitable[dict[str, object] | None]] | None = None,
+    ) -> dict[str, object]:
+        """Generic Tier-1 navigation forwarder with event emission.
+
+        1. Run optional ``pre_forward_hook`` (e.g. origin control check).
+           If the hook returns a dict, short-circuit and return it.
+        2. Ensure Playwright subprocess + MCP client.
+        3. Forward ``pw_tool_name`` with ``arguments``.
+        4. Parse result via ``parse_result_fn`` (or fall back to raw
+           error/success dict).
+        5. Emit ``event_type`` event (best-effort, FR26).
+        """
+        # Pre-forward hook (origin control for browser_navigate, etc.).
+        if pre_forward_hook is not None:
+            hook_result = await pre_forward_hook()
+            if hook_result is not None:
+                return hook_result
+
+        client = await pw_manager.ensure_client(task_id or "default")
+
+        log.info(
+            f"{dotted_name}_forwarding",
+            extra={"task_id": task_id},
+        )
+
+        try:
+            result = await client.call_tool(pw_tool_name, arguments)
+        except RuntimeError as exc:
+            log.error(f"{dotted_name}_subprocess_error", exc_info=True)
+            return {"error": True, "reason": "subprocess_error", "detail": str(exc)}
+        except TimeoutError:
+            log.error(f"{dotted_name}_timeout")
+            return {"error": True, "reason": "subprocess_timeout"}
+
+        # Parse Playwright response.
+        response = parse_result_fn(result) if parse_result_fn is not None else {"task_id": task_id}
+
+        # Emit event (best-effort, FR26).
+        if emitter_holder is not None:
+            try:
+                event_payload: dict[str, object] = {
+                    "task_id": task_id,
+                    "trace_id": caller_trace_id,
+                }
+                if event_type == "browser.navigated":
+                    event_payload["url"] = response.get("url", "back")
+                    event_payload["status_code"] = response.get("status_code")
+                elif event_type == "browser.action_completed":
+                    event_payload["tool_name"] = dotted_name
+                    event_payload["success"] = not result.isError
+                await emitter_holder.emit_event(
+                    event_type,
+                    event_payload,
+                    caller_trace_id=caller_trace_id,
+                )
+            except Exception:
+                log.exception(f"{dotted_name}_emit_failed")
+
+        return response
+
     # -- browser.navigate (Tier-1) -------------------------------------------
 
     @mcp.tool(name="browser.navigate")
@@ -326,73 +392,45 @@ def register_tools(
             TIER_MAP["browser.navigate"],
         )
 
-        # Story 20.4 — origin control (FR85). Check before spawning/forwarding.
-        if not _is_host_allowed(url, allowed_hosts):
-            log.warning(
-                "browser_navigation_blocked",
-                extra={"url": url, "task_id": task_id, "reason": "origin_not_allowed"},
-            )
-            # Emit browser.navigation_blocked event (best-effort, FR26).
-            if emitter_holder is not None:
-                try:
-                    await emitter_holder.emit_event(
-                        "browser.navigation_blocked",
-                        {
-                            "task_id": task_id,
-                            "requested_url": url,
-                            "reason": "origin_not_allowed",
-                            "trace_id": caller_trace_id,
-                        },
-                        caller_trace_id=caller_trace_id,
-                    )
-                except Exception:
-                    log.exception("browser_navigation_blocked_emit_failed")
-            return {
-                "blocked": True,
-                "reason": "origin_not_allowed",
-                "requested_url": url,
-            }
-
-        # Ensure Playwright subprocess + MCP client for this task.
-        client = await pw_manager.ensure_client(task_id or "default")
-
-        # Forward to Playwright subprocess via MCP stdio.
-        log.info(
-            "browser_navigate_forwarding",
-            extra={"url": url, "task_id": task_id},
-        )
-
-        status_code: int | None = None
-        try:
-            result = await client.call_tool("browser_navigate", {"url": url})
-        except RuntimeError as exc:
-            log.error("browser_navigate_subprocess_error", exc_info=True)
-            return {"error": True, "reason": "subprocess_error", "detail": str(exc)}
-        except TimeoutError:
-            log.error("browser_navigate_timeout", extra={"url": url})
-            return {"error": True, "reason": "subprocess_timeout", "url": url}
-
-        # Parse Playwright response into structured output.
-        response = _parse_navigate_result(result, url, task_id)
-        status_code = response.get("status_code")
-
-        # Emit browser.navigated event (if emitter is wired).
-        if emitter_holder is not None:
-            try:
-                await emitter_holder.emit_event(
-                    "browser.navigated",
-                    {
-                        "task_id": task_id,
-                        "url": url,
-                        "status_code": status_code,
-                        "trace_id": caller_trace_id,
-                    },
-                    caller_trace_id=caller_trace_id,
+        async def _origin_check() -> dict[str, object] | None:
+            """Story 20.4 — origin control (FR85). Check before forwarding."""
+            if not _is_host_allowed(url, allowed_hosts):
+                log.warning(
+                    "browser_navigation_blocked",
+                    extra={"url": url, "task_id": task_id, "reason": "origin_not_allowed"},
                 )
-            except Exception:
-                log.exception("browser_navigated_emit_failed")
+                # Emit browser.navigation_blocked event (best-effort, FR26).
+                if emitter_holder is not None:
+                    try:
+                        await emitter_holder.emit_event(
+                            "browser.navigation_blocked",
+                            {
+                                "task_id": task_id,
+                                "requested_url": url,
+                                "reason": "origin_not_allowed",
+                                "trace_id": caller_trace_id,
+                            },
+                            caller_trace_id=caller_trace_id,
+                        )
+                    except Exception:
+                        log.exception("browser_navigation_blocked_emit_failed")
+                return {
+                    "blocked": True,
+                    "reason": "origin_not_allowed",
+                    "requested_url": url,
+                }
+            return None
 
-        return response
+        return await _forward_navigation_tool(
+            "browser.navigate",
+            "browser_navigate",
+            {"url": url},
+            caller_trace_id,
+            task_id,
+            "browser.navigated",
+            parse_result_fn=lambda r: _parse_navigate_result(r, url, task_id),
+            pre_forward_hook=_origin_check,
+        )
 
     # -- browser.navigate_back (Tier-1) --------------------------------------
 
@@ -413,40 +451,15 @@ def register_tools(
             TIER_MAP["browser.navigate_back"],
         )
 
-        client = await pw_manager.ensure_client(task_id or "default")
-
-        log.info(
-            "browser_navigate_back_forwarding",
-            extra={"task_id": task_id},
+        return await _forward_navigation_tool(
+            "browser.navigate_back",
+            "browser_navigate_back",
+            {},
+            caller_trace_id,
+            task_id,
+            "browser.navigated",
+            parse_result_fn=lambda r: _parse_navigate_result(r, "", task_id),
         )
-
-        try:
-            result = await client.call_tool("browser_navigate_back", {})
-        except RuntimeError as exc:
-            log.error("browser_navigate_back_subprocess_error", exc_info=True)
-            return {"error": True, "reason": "subprocess_error", "detail": str(exc)}
-        except TimeoutError:
-            log.error("browser_navigate_back_timeout")
-            return {"error": True, "reason": "subprocess_timeout"}
-
-        response = _parse_navigate_result(result, "", task_id)
-
-        if emitter_holder is not None:
-            try:
-                await emitter_holder.emit_event(
-                    "browser.navigated",
-                    {
-                        "task_id": task_id,
-                        "url": response.get("url", "back"),
-                        "status_code": response.get("status_code"),
-                        "trace_id": caller_trace_id,
-                    },
-                    caller_trace_id=caller_trace_id,
-                )
-            except Exception:
-                log.exception("browser_navigate_back_emit_failed")
-
-        return response
 
     # -- browser.snapshot (Tier-1) -------------------------------------------
 
@@ -468,40 +481,15 @@ def register_tools(
             TIER_MAP["browser.snapshot"],
         )
 
-        client = await pw_manager.ensure_client(task_id or "default")
-
-        log.info(
-            "browser_snapshot_forwarding",
-            extra={"task_id": task_id},
+        return await _forward_navigation_tool(
+            "browser.snapshot",
+            "browser_snapshot",
+            {},
+            caller_trace_id,
+            task_id,
+            "browser.action_completed",
+            parse_result_fn=lambda r: _parse_snapshot_result(r, task_id),
         )
-
-        try:
-            result = await client.call_tool("browser_snapshot", {})
-        except RuntimeError as exc:
-            log.error("browser_snapshot_subprocess_error", exc_info=True)
-            return {"error": True, "reason": "subprocess_error", "detail": str(exc)}
-        except TimeoutError:
-            log.error("browser_snapshot_timeout")
-            return {"error": True, "reason": "subprocess_timeout"}
-
-        response = _parse_snapshot_result(result, task_id)
-
-        if emitter_holder is not None:
-            try:
-                await emitter_holder.emit_event(
-                    "browser.action_completed",
-                    {
-                        "task_id": task_id,
-                        "tool_name": "browser.snapshot",
-                        "success": not result.isError,
-                        "trace_id": caller_trace_id,
-                    },
-                    caller_trace_id=caller_trace_id,
-                )
-            except Exception:
-                log.exception("browser_snapshot_emit_failed")
-
-        return response
 
     # ===================================================================
     # Story 21.2 — Interaction tools (Tier-2 / FR80)
@@ -533,8 +521,10 @@ def register_tools(
         except RuntimeError as exc:
             log.error(f"{dotted_name}_subprocess_error", exc_info=True)
             return {
-                "error": True, "reason": "subprocess_error",
-                "detail": str(exc), "task_id": task_id,
+                "error": True,
+                "reason": "subprocess_error",
+                "detail": str(exc),
+                "task_id": task_id,
             }
         except TimeoutError:
             log.error(f"{dotted_name}_timeout")
@@ -543,7 +533,8 @@ def register_tools(
 
         success = not result.isError
         response: dict[str, object] = {
-            "task_id": task_id, "success": success,
+            "task_id": task_id,
+            "success": success,
             "duration_ms": duration_ms,
         }
 
@@ -585,8 +576,11 @@ def register_tools(
         validate_caller_trace_id(caller_trace_id)
         check_tier("browser.click", _caller(actor_kind, actor_id), TIER_MAP["browser.click"])
         return await _forward_action_tool(
-            "browser.click", "browser_click", {"element": element},
-            caller_trace_id, task_id,
+            "browser.click",
+            "browser_click",
+            {"element": element},
+            caller_trace_id,
+            task_id,
         )
 
     # -- browser.type (Tier-2) -----------------------------------------------
@@ -603,8 +597,11 @@ def register_tools(
         validate_caller_trace_id(caller_trace_id)
         check_tier("browser.type", _caller(actor_kind, actor_id), TIER_MAP["browser.type"])
         return await _forward_action_tool(
-            "browser.type", "browser_type", {"element": element, "text": text},
-            caller_trace_id, task_id,
+            "browser.type",
+            "browser_type",
+            {"element": element, "text": text},
+            caller_trace_id,
+            task_id,
         )
 
     # -- browser.fill (Tier-2) -----------------------------------------------
@@ -621,8 +618,11 @@ def register_tools(
         validate_caller_trace_id(caller_trace_id)
         check_tier("browser.fill", _caller(actor_kind, actor_id), TIER_MAP["browser.fill"])
         return await _forward_action_tool(
-            "browser.fill", "browser_fill", {"element": element, "text": text},
-            caller_trace_id, task_id,
+            "browser.fill",
+            "browser_fill",
+            {"element": element, "text": text},
+            caller_trace_id,
+            task_id,
         )
 
     # -- browser.select_option (Tier-2) --------------------------------------
@@ -638,13 +638,16 @@ def register_tools(
         """Select option(s) in a dropdown. Tier-2 tool (FR80)."""
         validate_caller_trace_id(caller_trace_id)
         check_tier(
-            "browser.select_option", _caller(actor_kind, actor_id),
+            "browser.select_option",
+            _caller(actor_kind, actor_id),
             TIER_MAP["browser.select_option"],
         )
         return await _forward_action_tool(
-            "browser.select_option", "browser_select_option",
+            "browser.select_option",
+            "browser_select_option",
             {"element": element, "values": values},
-            caller_trace_id, task_id,
+            caller_trace_id,
+            task_id,
         )
 
     # -- browser.press_key (Tier-2) ------------------------------------------
@@ -659,12 +662,16 @@ def register_tools(
         """Press a keyboard key. Tier-2 tool (FR80)."""
         validate_caller_trace_id(caller_trace_id)
         check_tier(
-            "browser.press_key", _caller(actor_kind, actor_id),
+            "browser.press_key",
+            _caller(actor_kind, actor_id),
             TIER_MAP["browser.press_key"],
         )
         return await _forward_action_tool(
-            "browser.press_key", "browser_press_key", {"key": key},
-            caller_trace_id, task_id,
+            "browser.press_key",
+            "browser_press_key",
+            {"key": key},
+            caller_trace_id,
+            task_id,
         )
 
     # -- browser.hover (Tier-2) ----------------------------------------------
@@ -680,8 +687,11 @@ def register_tools(
         validate_caller_trace_id(caller_trace_id)
         check_tier("browser.hover", _caller(actor_kind, actor_id), TIER_MAP["browser.hover"])
         return await _forward_action_tool(
-            "browser.hover", "browser_hover", {"element": element},
-            caller_trace_id, task_id,
+            "browser.hover",
+            "browser_hover",
+            {"element": element},
+            caller_trace_id,
+            task_id,
         )
 
     # ===================================================================
@@ -702,12 +712,16 @@ def register_tools(
         """List all open browser tabs. Tier-1 tool (FR83)."""
         validate_caller_trace_id(caller_trace_id)
         check_tier(
-            "browser.tab_list", _caller(actor_kind, actor_id),
+            "browser.tab_list",
+            _caller(actor_kind, actor_id),
             TIER_MAP["browser.tab_list"],
         )
         return await _forward_action_tool(
-            "browser.tab_list", "browser_tab_list", {},
-            caller_trace_id, task_id,
+            "browser.tab_list",
+            "browser_tab_list",
+            {},
+            caller_trace_id,
+            task_id,
         )
 
     # -- browser.tab_select (Tier-1) ---------------------------------------
@@ -722,13 +736,16 @@ def register_tools(
         """Switch to a specific browser tab. Tier-1 tool (FR83)."""
         validate_caller_trace_id(caller_trace_id)
         check_tier(
-            "browser.tab_select", _caller(actor_kind, actor_id),
+            "browser.tab_select",
+            _caller(actor_kind, actor_id),
             TIER_MAP["browser.tab_select"],
         )
         return await _forward_action_tool(
-            "browser.tab_select", "browser_tab_select",
+            "browser.tab_select",
+            "browser_tab_select",
             {"tab_id": tab_id},
-            caller_trace_id, task_id,
+            caller_trace_id,
+            task_id,
         )
 
     # -- browser.tab_create (Tier-2) --------------------------------------
@@ -743,13 +760,16 @@ def register_tools(
         """Open a new browser tab at the given URL. Tier-2 tool (FR83)."""
         validate_caller_trace_id(caller_trace_id)
         check_tier(
-            "browser.tab_create", _caller(actor_kind, actor_id),
+            "browser.tab_create",
+            _caller(actor_kind, actor_id),
             TIER_MAP["browser.tab_create"],
         )
         return await _forward_action_tool(
-            "browser.tab_create", "browser_tab_create",
+            "browser.tab_create",
+            "browser_tab_create",
             {"url": url},
-            caller_trace_id, task_id,
+            caller_trace_id,
+            task_id,
         )
 
     # -- browser.tab_close (Tier-2) ---------------------------------------
@@ -764,13 +784,16 @@ def register_tools(
         """Close a specific browser tab. Tier-2 tool (FR83)."""
         validate_caller_trace_id(caller_trace_id)
         check_tier(
-            "browser.tab_close", _caller(actor_kind, actor_id),
+            "browser.tab_close",
+            _caller(actor_kind, actor_id),
             TIER_MAP["browser.tab_close"],
         )
         return await _forward_action_tool(
-            "browser.tab_close", "browser_tab_close",
+            "browser.tab_close",
+            "browser_tab_close",
             {"tab_id": tab_id},
-            caller_trace_id, task_id,
+            caller_trace_id,
+            task_id,
         )
 
     # ===================================================================
@@ -829,20 +852,21 @@ def register_tools(
         except RuntimeError as exc:
             log.error("browser_screenshot_subprocess_error", exc_info=True)
             return {
-                "error": True, "reason": "subprocess_error",
-                "detail": str(exc), "task_id": task_id,
+                "error": True,
+                "reason": "subprocess_error",
+                "detail": str(exc),
+                "task_id": task_id,
             }
         except TimeoutError:
             log.error("browser_screenshot_timeout")
             return {
-                "error": True, "reason": "subprocess_timeout",
+                "error": True,
+                "reason": "subprocess_timeout",
                 "task_id": task_id,
             }
 
         if result.isError:
-            error_text = "; ".join(
-                c.text for c in result.content if hasattr(c, "text")
-            )
+            error_text = "; ".join(c.text for c in result.content if hasattr(c, "text"))
             return {
                 "error": True,
                 "reason": "playwright_error",
@@ -980,36 +1004,36 @@ def register_tools(
         except RuntimeError as exc:
             log.error("browser_evaluate_subprocess_error", exc_info=True)
             return {
-                "error": True, "reason": "subprocess_error",
-                "detail": str(exc), "task_id": task_id,
+                "error": True,
+                "reason": "subprocess_error",
+                "detail": str(exc),
+                "task_id": task_id,
             }
         except TimeoutError:
             log.error("browser_evaluate_timeout")
             return {
-                "error": True, "reason": "subprocess_timeout",
+                "error": True,
+                "reason": "subprocess_timeout",
                 "task_id": task_id,
             }
         duration_ms = round((time.monotonic() - t0) * 1000)
 
         success = not result.isError
         response: dict[str, object] = {
-            "task_id": task_id, "success": success,
+            "task_id": task_id,
+            "success": success,
             "duration_ms": duration_ms,
             "expression_hash": expression_hash,
         }
 
         if result.isError:
-            error_text = "; ".join(
-                c.text for c in result.content if hasattr(c, "text")
-            )
+            error_text = "; ".join(c.text for c in result.content if hasattr(c, "text"))
             response["error"] = True
             response["reason"] = "playwright_error"
             response["detail"] = error_text[:_result_preview_max]
         else:
             # Extract result text and truncate for preview (FR82).
-            result_text = "\n".join(
-                c.text for c in result.content if hasattr(c, "text") and c.text
-            )
+            result_text = "\n".join(c.text for c in result.content if hasattr(c, "text") and c.text)
             response["result_type"] = "string"
             response["result_preview"] = result_text[:_result_preview_max]
 

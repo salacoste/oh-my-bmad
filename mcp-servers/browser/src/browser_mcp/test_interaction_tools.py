@@ -15,10 +15,7 @@ from browser_mcp.handlers.tools import TIER_MAP
 
 _VALID_TRACE = "01945a0c-5d82-7d2e-8b3c-4a5b6c7d8e9f"
 
-_PSM = (
-    "browser_mcp.adapters.playwright_subprocess"
-    ".PlaywrightSubprocessManager"
-)
+_PSM = "browser_mcp.adapters.playwright_subprocess.PlaywrightSubprocessManager"
 
 
 # ---------------------------------------------------------------------------
@@ -37,6 +34,7 @@ def _get_tools(**kwargs: object) -> dict[str, object]:
             def _deco(fn: object):
                 captured[name] = fn
                 return fn
+
             return _deco
 
     pw_manager = PlaywrightSubprocessManager(image="pw@sha256:test")
@@ -93,14 +91,17 @@ def _patch_ensure(mock_client: AsyncMock) -> Generator[None, None, None]:
 class TestTierMap:
     """Verify TIER_MAP entries for interaction tools (AC #3)."""
 
-    @pytest.mark.parametrize("name", [
-        "browser.click",
-        "browser.type",
-        "browser.fill",
-        "browser.select_option",
-        "browser.press_key",
-        "browser.hover",
-    ])
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "browser.click",
+            "browser.type",
+            "browser.fill",
+            "browser.select_option",
+            "browser.press_key",
+            "browser.hover",
+        ],
+    )
     def test_interaction_tool_is_tier_two(self, name: str) -> None:
         assert TIER_MAP[name] is Tier.TWO
 
@@ -131,7 +132,8 @@ class TestInteractionToolsForward:
             )
 
         mock_client.call_tool.assert_awaited_once_with(
-            "browser_click", {"element": "#submit-btn"},
+            "browser_click",
+            {"element": "#submit-btn"},
         )
         assert result["success"] is True
         assert "duration_ms" in result
@@ -206,7 +208,8 @@ class TestInteractionToolsForward:
             )
 
         mock_client.call_tool.assert_awaited_once_with(
-            "browser_press_key", {"key": "Enter"},
+            "browser_press_key",
+            {"key": "Enter"},
         )
         assert result["success"] is True
 
@@ -223,7 +226,8 @@ class TestInteractionToolsForward:
             )
 
         mock_client.call_tool.assert_awaited_once_with(
-            "browser_hover", {"element": "#menu-item"},
+            "browser_hover",
+            {"element": "#menu-item"},
         )
         assert result["success"] is True
 

@@ -64,6 +64,7 @@ def _register_screenshot_tools(artifact_holder=None):
 # TIER_MAP
 # ---------------------------------------------------------------------------
 
+
 class TestTierMap:
     def test_browser_take_screenshot_is_tier_one(self) -> None:
         assert TIER_MAP["browser.take_screenshot"] is Tier.ONE
@@ -72,6 +73,7 @@ class TestTierMap:
 # ---------------------------------------------------------------------------
 # browser.take_screenshot handler
 # ---------------------------------------------------------------------------
+
 
 class TestBrowserTakeScreenshot:
     @pytest.mark.asyncio
@@ -83,9 +85,7 @@ class TestBrowserTakeScreenshot:
         artifact_holder.put = AsyncMock(return_value={"ok": True})
 
         with _register_screenshot_tools(artifact_holder=artifact_holder) as (mcp, mock_client):
-            mock_client.call_tool = AsyncMock(
-                return_value=_make_tool_result(_FAKE_PNG_B64)
-            )
+            mock_client.call_tool = AsyncMock(return_value=_make_tool_result(_FAKE_PNG_B64))
 
             tools = mcp._tool_manager._tools
             handler = tools["browser.take_screenshot"].fn
@@ -112,9 +112,7 @@ class TestBrowserTakeScreenshot:
         artifact_holder.put = AsyncMock(return_value={"ok": True})
 
         with _register_screenshot_tools(artifact_holder=artifact_holder) as (mcp, mock_client):
-            mock_client.call_tool = AsyncMock(
-                return_value=_make_tool_result(_FAKE_PNG_B64)
-            )
+            mock_client.call_tool = AsyncMock(return_value=_make_tool_result(_FAKE_PNG_B64))
 
             tools = mcp._tool_manager._tools
             handler = tools["browser.take_screenshot"].fn
@@ -224,9 +222,7 @@ class TestBrowserTakeScreenshot:
         artifact_holder.put = AsyncMock(return_value={"ok": True})
 
         with _register_screenshot_tools(artifact_holder=artifact_holder) as (mcp, mock_client):
-            mock_client.call_tool = AsyncMock(
-                return_value=_make_tool_result("")
-            )
+            mock_client.call_tool = AsyncMock(return_value=_make_tool_result(""))
 
             tools = mcp._tool_manager._tools
             handler = tools["browser.take_screenshot"].fn
@@ -245,9 +241,7 @@ class TestBrowserTakeScreenshot:
         artifact_holder.put = AsyncMock(side_effect=RuntimeError("artifact store down"))
 
         with _register_screenshot_tools(artifact_holder=artifact_holder) as (mcp, mock_client):
-            mock_client.call_tool = AsyncMock(
-                return_value=_make_tool_result(_FAKE_PNG_B64)
-            )
+            mock_client.call_tool = AsyncMock(return_value=_make_tool_result(_FAKE_PNG_B64))
 
             tools = mcp._tool_manager._tools
             handler = tools["browser.take_screenshot"].fn
@@ -279,9 +273,7 @@ class TestBrowserTakeScreenshot:
         artifact_holder.put = AsyncMock(return_value={"ok": True})
 
         with _register_screenshot_tools(artifact_holder=artifact_holder) as (mcp, mock_client):
-            mock_client.call_tool = AsyncMock(
-                return_value=_make_tool_result(_FAKE_PNG_B64)
-            )
+            mock_client.call_tool = AsyncMock(return_value=_make_tool_result(_FAKE_PNG_B64))
 
             tools = mcp._tool_manager._tools
             handler = tools["browser.take_screenshot"].fn

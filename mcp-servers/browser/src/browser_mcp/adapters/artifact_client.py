@@ -168,8 +168,7 @@ class ArtifactClientHolder:
         """Delegate to the live ``ArtifactClient``."""
         if self.client is None:
             raise RuntimeError(
-                "ArtifactClientHolder.put invoked before lifespan wired "
-                "the ArtifactClient"
+                "ArtifactClientHolder.put invoked before lifespan wired the ArtifactClient"
             )
         return await self.client.put(
             caller_trace_id=caller_trace_id,

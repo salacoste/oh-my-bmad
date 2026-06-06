@@ -243,9 +243,7 @@ class TestBrowserNavigateBlocked:
         # Patch ensure_client on the manager — it should NOT be called.
         from browser_mcp.adapters.playwright_subprocess import PlaywrightSubprocessManager
 
-        with patch.object(
-            PlaywrightSubprocessManager, "ensure_client", AsyncMock()
-        ) as mock_ensure:
+        with patch.object(PlaywrightSubprocessManager, "ensure_client", AsyncMock()) as mock_ensure:
             result = await navigate(
                 url="https://evil.example.com",
                 caller_trace_id="01945a0c-5d82-7d2e-8b3c-4a5b6c7d8e9f",
@@ -269,6 +267,7 @@ class TestBrowserNavigateBlocked:
                 def _deco(fn: object):
                     captured[name] = fn
                     return fn
+
                 return _deco
 
         from browser_mcp.handlers.tools import register_tools

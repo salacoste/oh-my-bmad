@@ -162,8 +162,7 @@ class PlaywrightMCPClient:
         """
         if self._session is None:
             raise RuntimeError(
-                "PlaywrightMCPClient session not initialized. "
-                "Use ``async with client:`` first."
+                "PlaywrightMCPClient session not initialized. Use ``async with client:`` first."
             )
         result = await asyncio.wait_for(
             self._session.call_tool(name, arguments or {}),
@@ -216,7 +215,8 @@ class PlaywrightMCPClient:
             async with reader:
                 async for session_message in reader:
                     json_str = session_message.message.model_dump_json(
-                        by_alias=True, exclude_none=True,
+                        by_alias=True,
+                        exclude_none=True,
                     )
                     self._proc.stdin.write((json_str + "\n").encode())
                     await self._proc.stdin.drain()
