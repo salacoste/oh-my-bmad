@@ -194,7 +194,13 @@ def build_server(
 
     # Story 21.1-21.5: register browser tools.
     # clock, emitter_holder, playwright_image, etc. are threaded through.
-    from browser_mcp.handlers.tools import register_tools
+    from browser_mcp.handlers.tools import make_approval_lookup, register_tools
+
+    approval_lookup = (
+        make_approval_lookup(registry_events_dir, clock)
+        if registry_events_dir is not None
+        else None
+    )
 
     register_tools(
         mcp,
@@ -203,6 +209,7 @@ def build_server(
         emitter_holder=emitter_holder,
         pw_manager=pw_manager,
         allowed_hosts=allowed_hosts,
+        approval_lookup=approval_lookup,
     )
 
     return mcp

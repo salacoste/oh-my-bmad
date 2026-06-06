@@ -24,18 +24,30 @@ per the import-graph constraint; drift is guarded by the contract test
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import time
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
-from capabilities import CallerContext, Tier, check_tier
+from capabilities import (
+    CallerContext,
+    Tier,
+    check_tier,
+    check_tier_with_approval,
+)
+from capabilities.emit import emit_capability_denied_on_deny
+from events import current_day_path, read_log_lines  # noqa: IMP001 — packages/
 from events.envelope import is_valid_trace_id  # noqa: IMP001 — packages/
 from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult
 
 if TYPE_CHECKING:
+    from pathlib import Path as _Path
+
+    from events.clock import Clock  # noqa: IMP001 — packages/
     from events.envelope import ActorKind
 
     from browser_mcp.adapters.clawhip_client import EmitterHolder
@@ -62,6 +74,8 @@ TIER_MAP: dict[str, Tier] = {
     "browser.select_option": Tier.TWO,
     "browser.press_key": Tier.TWO,
     "browser.hover": Tier.TWO,
+    # Story 21.4 — JS execution (Tier-3 / FR82).
+    "browser.evaluate": Tier.THREE,
     # Story 21.5 — Tab management (FR83).
     "browser.tab_list": Tier.ONE,
     "browser.tab_select": Tier.ONE,
@@ -87,9 +101,55 @@ def validate_caller_trace_id(caller_trace_id: str) -> None:
 def _caller(
     actor_kind: ActorKind,
     actor_id: str,
+    *,
+    task_id: str | None = None,
 ) -> CallerContext:
     """Build a CallerContext from the server's validated identity."""
-    return CallerContext(actor_kind=actor_kind, actor_id=actor_id)
+    return CallerContext(actor_kind=actor_kind, actor_id=actor_id, task_id=task_id)
+
+
+def make_approval_lookup(
+    base_dir: _Path,
+    clock: Clock,
+) -> Callable[[str, str], Awaitable[bool]]:
+    """Return an async ``(task_id, action) -> bool`` approval lookup for Tier-3 gating.
+
+    Story 21.4: the Tier-3 ``browser.evaluate`` tool is gated by
+    ``check_tier_with_approval(..., approval_lookup=...)`` — the lookup returns
+    True only when a matching ``approval.granted`` event exists for the caller's
+    *task_id*. Scans TODAY's JSONL event log for ``approval.granted`` events whose
+    payload ``task_id`` matches.
+
+    COPIED (not imported) from git-mcp's / github-mcp's approval lookup — the
+    Story 5.8 import-graph constraint forbids cross-importing between mcp-servers.
+    Phase-1 limitation: only scans today's JSONL log file.
+    """
+
+    async def _lookup(task_id: str, action: str) -> bool:  # noqa: ARG001 — action reserved
+        path = current_day_path(base_dir, clock.now())
+        try:
+            for envelope in read_log_lines(path):
+                payload = envelope.payload
+                if (
+                    envelope.type == "approval.granted"
+                    and isinstance(payload, dict)
+                    and payload.get("task_id") == task_id
+                ):
+                    return True
+        except FileNotFoundError:
+            pass
+        return False
+
+    return _lookup
+
+
+def _make_actor_id_extractor(actor_id: str) -> Callable[..., str]:
+    """Return a ``get_actor_id`` callable for ``emit_capability_denied_on_deny``."""
+
+    def _get_actor_id(*_args: object, **_kwargs: object) -> str:
+        return actor_id
+
+    return _get_actor_id
 
 
 def _is_host_allowed(url: str, allowed_hosts: list[str] | None) -> bool:
@@ -208,13 +268,36 @@ def register_tools(
     emitter_holder: EmitterHolder | None,
     pw_manager: PlaywrightSubprocessManager,
     allowed_hosts: list[str] | None = None,
+    approval_lookup: Callable[[str, str], Awaitable[bool]] | None = None,
 ) -> None:
     """Register browser tools on the FastMCP instance.
 
     Story 21.1: navigation tools (Tier-1).
     Stories 21.2-21.5: interaction, screenshot, evaluate, tab management.
     Story 20.4: origin checking via *allowed_hosts*.
+
+    *approval_lookup* is the async ``(task_id, action) -> bool`` callable threaded
+    into ``check_tier_with_approval`` for the Tier-3 tools; when None the Tier-3
+    tools deny every call (no approval source — test/no-approval default).
     """
+    get_actor_id = _make_actor_id_extractor(actor_id)
+
+    def _maybe_wrap(
+        tool_name: str,
+    ) -> Callable[
+        [Callable[..., Awaitable[dict[str, object]]]],
+        Callable[..., Awaitable[dict[str, object]]],
+    ]:
+        """Apply the audit-emission decorator iff an emitter holder is wired."""
+        if emitter_holder is None:
+            return lambda fn: fn
+        return emit_capability_denied_on_deny(
+            boundary="mcp",
+            emitter=emitter_holder.emit_event,
+            attempted_action=tool_name,
+            get_actor_id=get_actor_id,
+        )
+
     # -- browser.navigate (Tier-1) -------------------------------------------
 
     @mcp.tool(name="browser.navigate")
@@ -682,3 +765,109 @@ def register_tools(
             {"tab_id": tab_id},
             caller_trace_id, task_id,
         )
+
+    # ===================================================================
+    # Story 21.4 — JS execution (Tier-3 / FR82)
+    # ===================================================================
+    # browser.evaluate is the only Tier-3 browser tool. It executes
+    # arbitrary JavaScript in the page context — RCE-equivalent, so it
+    # requires an ``approval.granted`` event matching the caller's task_id.
+    #
+    # Pattern mirrors github-mcp's Tier-3 write tools:
+    #   validate caller_trace_id → check_tier_with_approval → forward
+    #   to Playwright → emit browser.action_completed with expression_hash.
+    #
+    # The ``@_maybe_wrap`` decorator emits ``capability.denied`` on denial.
+    # ===================================================================
+
+    _result_preview_max = 500
+
+    @mcp.tool(name="browser.evaluate")
+    @_maybe_wrap("browser.evaluate")
+    async def browser_evaluate(
+        *,
+        expression: str,
+        caller_trace_id: str,
+        task_id: str = "",
+    ) -> dict[str, object]:
+        """Execute JavaScript in the page context. Tier-3 tool (FR82).
+
+        RCE-equivalent — requires an ``approval.granted`` event for the
+        caller's *task_id* before execution proceeds.
+
+        Args:
+            expression: JavaScript expression to evaluate.
+            caller_trace_id: FR58 correlation ID (UUIDv7 OR ``tg:<update_id>``).
+            task_id: Task whose ``approval.granted`` authorizes this Tier-3 call.
+        """
+        validate_caller_trace_id(caller_trace_id)
+        await check_tier_with_approval(
+            "browser.evaluate",
+            _caller(actor_kind, actor_id, task_id=task_id),
+            TIER_MAP["browser.evaluate"],
+            approval_lookup=approval_lookup,
+        )
+
+        # SHA-256 hash of expression — never log/store raw expression (NFR-S13).
+        expression_hash = hashlib.sha256(expression.encode()).hexdigest()
+
+        client = await pw_manager.ensure_client(task_id or "default")
+
+        t0 = time.monotonic()
+        try:
+            result = await client.call_tool("browser_evaluate", {"expression": expression})
+        except RuntimeError as exc:
+            log.error("browser_evaluate_subprocess_error", exc_info=True)
+            return {
+                "error": True, "reason": "subprocess_error",
+                "detail": str(exc), "task_id": task_id,
+            }
+        except TimeoutError:
+            log.error("browser_evaluate_timeout")
+            return {
+                "error": True, "reason": "subprocess_timeout",
+                "task_id": task_id,
+            }
+        duration_ms = round((time.monotonic() - t0) * 1000)
+
+        success = not result.isError
+        response: dict[str, object] = {
+            "task_id": task_id, "success": success,
+            "duration_ms": duration_ms,
+            "expression_hash": expression_hash,
+        }
+
+        if result.isError:
+            error_text = "; ".join(
+                c.text for c in result.content if hasattr(c, "text")
+            )
+            response["error"] = True
+            response["reason"] = "playwright_error"
+            response["detail"] = error_text[:_result_preview_max]
+        else:
+            # Extract result text and truncate for preview (FR82).
+            result_text = "\n".join(
+                c.text for c in result.content if hasattr(c, "text") and c.text
+            )
+            response["result_type"] = "string"
+            response["result_preview"] = result_text[:_result_preview_max]
+
+        # Emit browser.action_completed with expression_hash (best-effort, FR26).
+        if emitter_holder is not None:
+            try:
+                await emitter_holder.emit_event(
+                    "browser.action_completed",
+                    {
+                        "task_id": task_id,
+                        "tool_name": "browser.evaluate",
+                        "success": success,
+                        "duration_ms": duration_ms,
+                        "trace_id": caller_trace_id,
+                        "expression_hash": expression_hash,
+                    },
+                    caller_trace_id=caller_trace_id,
+                )
+            except Exception:
+                log.exception("browser_evaluate_emit_failed")
+
+        return response
