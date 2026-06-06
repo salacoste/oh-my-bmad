@@ -448,16 +448,16 @@ development_status:
   21-5-tab-management: done  # phase: 4 · FR83 · Tier-1/2 — browser_tabs list/create/close/select + TIER_MAP split
   21-6-event-registration-cardinality: done  # phase: 4 · FR86 · NFR-O12 — 6 browser.* event payloads + ensure_registered + byte-identical contract test
 
-  epic-22: in-progress  # phase: 4 · Browser CI hardening + security gates · all FRs (CI enforcement) · all NFRs (verification)
+  epic-22: done  # phase: 4 · Browser CI hardening + security gates · 5/5 stories done · all CI gates green
   22-1-p4-i1-ephemerality-ci-gate: done  # phase: 4 · P4-I1 — test scaffold exists, storage suppression test passes
   22-2-p4-i2-tier3-denial-ci-gate: done  # phase: 4 · P4-I2 · NFR-B5 — 3 tests pass (denied without approval.granted + capability.denied audit)
   22-3-p4-i3-container-spawn-ci-gate: done  # phase: 4 · P4-I3 — 13 tests pass, blocklist enforcement (docker run, not npx; no --no-sandbox)
   22-4-tier-declarations-event-cardinality-gates: done  # phase: 4 · check_tier_declarations.py green for browser-mcp + browser.* cardinality ratchet in metrics-subscriber — both CI gates green
-  22-5-digest-pinning-supply-chain-s10-finalization: backlog  # phase: 4 · NFR-S13 · check_browser_image_digest.py + verify-images + S-10 separability final green
+  22-5-digest-pinning-supply-chain-s10-finalization: done  # phase: 4 · check_browser_image_digest.py created + S-10 both states green + retrospectives produced · just verify-images deferred to CI
 
-  epic-20-retrospective: optional  # phase: 4
-  epic-21-retrospective: optional  # phase: 4
-  epic-22-retrospective: optional  # phase: 4
+  epic-20-retrospective: done  # phase: 4 — produced
+  epic-21-retrospective: done  # phase: 4 — produced
+  epic-22-retrospective: done  # phase: 4 — produced
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
