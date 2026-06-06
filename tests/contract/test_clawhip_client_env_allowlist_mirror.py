@@ -181,6 +181,15 @@ _SPAWNER_REQUIRED_ENV_VARS = {
     "ARTIFACT_MCP_STORE_PATH",
     "ARTIFACT_MCP_ACTOR_KIND",
     "ARTIFACT_MCP_ACTOR_ID",
+    # browser-mcp REQUIRED (mcp-servers/browser/.../__main__.py exits 2 without
+    # these) — Story 20.6 / Phase 4. BROWSER_MCP_PLAYWRIGHT_IMAGE is the pinned
+    # Docker image digest (FR87). BROWSER_MCP_ACTOR_KIND / ACTOR_ID are identity.
+    # Forwarded by BOTH spawner allowlists (byte-identical mirror); only
+    # worker-wrapper spawns browser-mcp (conditional on a non-blank
+    # WORKER_BROWSER_COMMAND).
+    "BROWSER_MCP_PLAYWRIGHT_IMAGE",
+    "BROWSER_MCP_ACTOR_KIND",
+    "BROWSER_MCP_ACTOR_ID",
     "REGISTRY_EVENTS_DIR",
     "REGISTRY_DB_PATH",
 }

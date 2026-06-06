@@ -132,8 +132,8 @@ async def test_browser_spawned_when_command_set(
     """SPAWNED state: browser_command set + BROWSER_MCP_* env → live 9th member.
 
     Asserts the server boots and responds to list_tools() through the stdio
-    boundary. The TIER_MAP is empty in scaffold (tools land in Epic 21) but
-    the round-trip proves the subprocess lifecycle works end-to-end.
+    boundary. Epic 21 ships 15 browser tools; the round-trip proves both
+    the subprocess lifecycle and tool registration work end-to-end.
     """
     env = _base_env(tmp_path)
     env["BROWSER_MCP_ACTOR_KIND"] = "worker"
@@ -153,9 +153,11 @@ async def test_browser_spawned_when_command_set(
         tool_names = [
             t.name for t in tools_result.tools
         ]
-        # Story 20.6 scaffold: TIER_MAP is empty → no tools registered yet.
-        # The round-trip itself proves the subprocess lifecycle works.
+        # Epic 21 ships 15 browser tools; verify tool registration is live.
         assert isinstance(tool_names, list)
+        assert len(tool_names) > 0, (
+            f"Expected browser tools registered; got {tool_names}"
+        )
 
         # Audit emission is OFF → verify_connectivity should still work
         # for the 3 core members.
