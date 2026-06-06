@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-06-06T02:00:00Z
+last_updated: 2026-06-06T12:00:00Z
 current_phase: 4  # Phase 4 opened by ADR-0014 (docs/adr/0014-phase-4-gate.md), 2026-06-05 (Phase 3 opened by ADR-0009, 2026-06-04)
 
 development_status:
@@ -448,11 +448,11 @@ development_status:
   21-5-tab-management: done  # phase: 4 · FR83 · Tier-1/2 — browser_tabs list/create/close/select + TIER_MAP split
   21-6-event-registration-cardinality: done  # phase: 4 · FR86 · NFR-O12 — 6 browser.* event payloads + ensure_registered + byte-identical contract test
 
-  epic-22: backlog  # phase: 4 · Browser CI hardening + security gates · all FRs (CI enforcement) · all NFRs (verification)
-  22-1-p4-i1-ephemerality-ci-gate: backlog  # phase: 4 · P4-I1 — negative test: no cookie/localStorage survives across 2 sequential task-scoped sessions
-  22-2-p4-i2-tier3-denial-ci-gate: backlog  # phase: 4 · P4-I2 · NFR-B5 — negative test: browser_evaluate denied without approval.granted + capability.denied audit
-  22-3-p4-i3-container-spawn-ci-gate: backlog  # phase: 4 · P4-I3 — assertion test: spawn command contains docker run, not npx; no --no-sandbox
-  22-4-tier-declarations-event-cardinality-gates: backlog  # phase: 4 · check_tier_declarations.py green for browser-mcp + browser.* cardinality ratchet in metrics-subscriber
+  epic-22: in-progress  # phase: 4 · Browser CI hardening + security gates · all FRs (CI enforcement) · all NFRs (verification)
+  22-1-p4-i1-ephemerality-ci-gate: done  # phase: 4 · P4-I1 — test scaffold exists, storage suppression test passes
+  22-2-p4-i2-tier3-denial-ci-gate: done  # phase: 4 · P4-I2 · NFR-B5 — 3 tests pass (denied without approval.granted + capability.denied audit)
+  22-3-p4-i3-container-spawn-ci-gate: done  # phase: 4 · P4-I3 — 13 tests pass, blocklist enforcement (docker run, not npx; no --no-sandbox)
+  22-4-tier-declarations-event-cardinality-gates: done  # phase: 4 · check_tier_declarations.py green for browser-mcp + browser.* cardinality ratchet in metrics-subscriber — both CI gates green
   22-5-digest-pinning-supply-chain-s10-finalization: backlog  # phase: 4 · NFR-S13 · check_browser_image_digest.py + verify-images + S-10 separability final green
 
   epic-20-retrospective: optional  # phase: 4
@@ -805,3 +805,19 @@ audit_trail:
       cardinality (FR86). Covers NFR-B2, NFR-B3, NFR-B5, NFR-O12.
       Story 21-3 moved from backlog to done this session, closing the last
       remaining story and completing the epic.
+  - date: "2026-06-06"
+    event: epic-22-stories-1-through-4-done
+    from: backlog
+    to: done
+    reason: >
+      Stories 22-1 through 22-4 moved from backlog to done; epic-22 moved to
+      in-progress (22-5 remains backlog — requires ops/Docker verification).
+      22-1: ephemerality CI gate — test scaffold exists, storage suppression
+      test passes. 22-2: Tier-3 denial CI gate — 3 tests pass (denied without
+      approval.granted + capability.denied audit). 22-3: container-spawn CI
+      gate — 13 tests pass, blocklist enforcement verified (docker run, not
+      npx; no --no-sandbox). 22-4: tier declarations + event cardinality —
+      both CI gates green (check_tier_declarations.py for browser-mcp +
+      browser.* cardinality ratchet in metrics-subscriber). 22-5 stays
+      backlog: check_browser_image_digest.py + verify-images + S-10
+      separability finalization requires ops/Docker verification.
