@@ -28,6 +28,12 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     ApprovalRejectedPayload,
     ArtifactDeletedPayload,
     ArtifactStoredPayload,
+    BrowserActionCompletedPayload,
+    BrowserNavigatedPayload,
+    BrowserNavigationBlockedPayload,
+    BrowserScreenshotCapturedPayload,
+    BrowserTabClosedPayload,
+    BrowserTabOpenedPayload,
     BudgetOverridePayload,
     CapabilityDeniedPayload,
     DiffSummary,
@@ -381,6 +387,24 @@ def ensure_registered() -> None:
     # git.* / github.* / verification.completed / memory.written events above).
     register("artifact.stored", "1.1.0", ArtifactStoredPayload)
     register("artifact.deleted", "1.1.0", ArtifactDeletedPayload)
+
+    # Story 21.6 — browser.* event types (Epic 21 / FR86).
+    # Born at 1.1.0 (NEW Phase-4 event type — no v1.0.0 predecessor).
+    register("browser.navigated", "1.1.0", BrowserNavigatedPayload)
+    register(
+        "browser.navigation_blocked", "1.1.0",
+        BrowserNavigationBlockedPayload,
+    )
+    register(
+        "browser.action_completed", "1.1.0",
+        BrowserActionCompletedPayload,
+    )
+    register(
+        "browser.screenshot_captured", "1.1.0",
+        BrowserScreenshotCapturedPayload,
+    )
+    register("browser.tab_opened", "1.1.0", BrowserTabOpenedPayload)
+    register("browser.tab_closed", "1.1.0", BrowserTabClosedPayload)
 
     # Story 9.7 / AC10: all event types registered under 1.1.0 above for
     # replay safety. Both 1.0.0 and 1.1.0 entries kept per AC10 option (a).

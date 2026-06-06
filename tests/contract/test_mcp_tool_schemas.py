@@ -399,6 +399,12 @@ def test_validate_caller_trace_id_byte_identical_across_servers() -> None:
     from artifact_mcp.handlers.tools import (
         validate_caller_trace_id as _v_artifact,
     )
+
+    # Epic 21 / Story 21.6 — browser-mcp's helper is a byte-identical copy too
+    # (FR58 / AC2 sync invariant extended to browser-mcp).
+    from browser_mcp.handlers.tools import (
+        validate_caller_trace_id as _v_browser,
+    )
     from clawhip_bridge_mcp.server import validate_caller_trace_id as _v_bridge
 
     # Epic 15 / Story 15.5 — git-mcp's helper lives at ``git_mcp.handlers.tools``
@@ -438,6 +444,7 @@ def test_validate_caller_trace_id_byte_identical_across_servers() -> None:
     verification_body = _extract_fn_body_ast(_v_verification)
     memory_body = _extract_fn_body_ast(_v_memory)
     artifact_body = _extract_fn_body_ast(_v_artifact)
+    browser_body = _extract_fn_body_ast(_v_browser)
 
     assert bridge_body == sess_body, (
         "validate_caller_trace_id body differs between clawhip-bridge and session-registry"
@@ -474,6 +481,11 @@ def test_validate_caller_trace_id_byte_identical_across_servers() -> None:
         "validate_caller_trace_id body differs between clawhip-bridge and memory-mcp (Story 18.5)"
         f"\n--- bridge ---\n{bridge_body}"
         f"\n--- memory ---\n{memory_body}"
+    )
+    assert bridge_body == browser_body, (
+        "validate_caller_trace_id body differs between clawhip-bridge and browser-mcp (Story 21.6)"
+        f"\n--- bridge ---\n{bridge_body}"
+        f"\n--- browser ---\n{browser_body}"
     )
 
 
@@ -512,6 +524,11 @@ def test_validate_caller_trace_id_runtime_messages_identical() -> None:
         validate_caller_trace_id as _v_artifact,
     )
 
+    # Epic 21 / Story 21.6 — browser-mcp's helper is a byte-identical copy too.
+    from browser_mcp.handlers.tools import (
+        validate_caller_trace_id as _v_browser,
+    )
+
     for fn in (
         _v_bridge,
         _v_sess,
@@ -521,12 +538,13 @@ def test_validate_caller_trace_id_runtime_messages_identical() -> None:
         _v_verification,
         _v_memory,
         _v_artifact,
+        _v_browser,
     ):
         try:
             fn(bad)
         except ValueError as exc:
             messages.append(str(exc))
-    assert len(messages) == 8, f"expected 8 ValueError messages, got {messages!r}"
+    assert len(messages) == 9, f"expected 9 ValueError messages, got {messages!r}"
     assert len(set(messages)) == 1, f"helper messages drift: {messages!r}"
 
 

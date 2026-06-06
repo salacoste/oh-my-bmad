@@ -1448,6 +1448,56 @@ class CapabilityDeniedPayload(BaseModel):
     reason: str | None = Field(default=None, min_length=1, max_length=4096)
 
 
+# --- Browser events (Phase 4 / FR86) ---
+
+
+class BrowserNavigatedPayload(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+    task_id: str = Field(min_length=1)
+    url: str = Field(min_length=1)
+    status_code: int | None = Field(default=None)
+    trace_id: str = Field(min_length=1)
+
+
+class BrowserNavigationBlockedPayload(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+    task_id: str = Field(min_length=1)
+    requested_url: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    trace_id: str = Field(min_length=1)
+
+
+class BrowserActionCompletedPayload(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+    task_id: str = Field(min_length=1)
+    tool_name: str = Field(min_length=1)
+    success: bool = Field()
+    duration_ms: int | None = Field(default=None)
+    trace_id: str = Field(min_length=1)
+
+
+class BrowserScreenshotCapturedPayload(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+    task_id: str = Field(min_length=1)
+    artifact_ref: str = Field(min_length=1)
+    content_hash: str = Field(min_length=1)
+    trace_id: str = Field(min_length=1)
+
+
+class BrowserTabOpenedPayload(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+    task_id: str = Field(min_length=1)
+    tab_id: str = Field(min_length=1)
+    trace_id: str = Field(min_length=1)
+
+
+class BrowserTabClosedPayload(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+    task_id: str = Field(min_length=1)
+    tab_id: str = Field(min_length=1)
+    trace_id: str = Field(min_length=1)
+
+
 __all__ = [
     "TELEGRAM_REJECTED_SCHEMA_VERSION",
     "AcceptedCommand",
@@ -1456,6 +1506,12 @@ __all__ = [
     "ApprovalInboxOpenedPayload",
     "ArtifactDeletedPayload",
     "ArtifactStoredPayload",
+    "BrowserActionCompletedPayload",
+    "BrowserNavigatedPayload",
+    "BrowserNavigationBlockedPayload",
+    "BrowserScreenshotCapturedPayload",
+    "BrowserTabClosedPayload",
+    "BrowserTabOpenedPayload",
     "BudgetOverridePayload",
     "ApprovalRejectedPayload",
     "CapabilityDeniedPayload",
