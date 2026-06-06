@@ -440,12 +440,12 @@ development_status:
   20-5-container-sandbox: done  # phase: 4 · FR87 · P4-I3 — BROWSER_MCP_MEMORY_LIMIT/CPU_LIMIT env vars + Docker --memory/--cpus + no --no-sandbox
   20-6-separability-s10-allowlist-fleet: done  # phase: 4 · FR88 · NFR-M9 — BROWSER_MCP_* in both _ENV_ALLOWLIST (byte-identical) + S-10 test (spawned/absent)
 
-  epic-21: in-progress  # phase: 4 · ω-2..ω-6 Browser tools + event spine · FR79-FR83, FR86 · NFR-B2, B3, B5, O12
+  epic-21: done  # phase: 4 · ω-2..ω-6 Browser tools + event spine · FR79-FR83, FR86 · NFR-B2, B3, B5, O12 · ALL 6 STORIES DONE — Epic 21 complete as of 2026-06-06
   21-1-navigation-tools: done  # phase: 4 · FR79 · Tier-1 — PlaywrightMCPClient + real forwarding + 55 tests + P1 race/leak fixes
   21-2-interaction-tools: done  # phase: 4 · FR80 · Tier-2 — 6 interaction tools + _forward_action_tool helper + 71 tests
-  21-3-screenshot-artifact-integration: backlog  # phase: 4 · FR81 · NFR-B3 — browser_take_screenshot + artifact-mcp content-addressed put + browser.screenshot_captured event
-  21-4-js-execution-tier3: backlog  # phase: 4 · FR82 · NFR-B5 · P4-I2 — browser_evaluate Tier-3 approval-gated + negative denial test + expression_hash
-  21-5-tab-management: backlog  # phase: 4 · FR83 · Tier-1/2 — browser_tabs list/create/close/select + TIER_MAP split
+  21-3-screenshot-artifact-integration: done  # phase: 4 · FR81 · NFR-B3 — browser_take_screenshot + artifact-mcp content-addressed put + browser.screenshot_captured event
+  21-4-js-execution-tier3: done  # phase: 4 · FR82 · NFR-B5 · P4-I2 — browser_evaluate Tier-3 approval-gated + negative denial test + expression_hash
+  21-5-tab-management: done  # phase: 4 · FR83 · Tier-1/2 — browser_tabs list/create/close/select + TIER_MAP split
   21-6-event-registration-cardinality: done  # phase: 4 · FR86 · NFR-O12 — 6 browser.* event payloads + ensure_registered + byte-identical contract test
 
   epic-22: backlog  # phase: 4 · Browser CI hardening + security gates · all FRs (CI enforcement) · all NFRs (verification)
@@ -793,3 +793,15 @@ audit_trail:
       integration, browser tools + events, CI hardening). Entry point =
       Epic 20 Story 1 (server scaffold — ADR-0010 recipe setup). DOCS/STATUS
       change — no code.
+  - date: "2026-06-06"
+    event: epic-21-complete
+    from: in-progress
+    to: done
+    reason: >
+      Epic 21 (Browser tools + event spine) COMPLETE — all 6 stories done:
+      21-1 navigation tools (FR79), 21-2 interaction tools (FR80),
+      21-3 screenshot/artifact integration (FR81), 21-4 JS execution Tier-3
+      (FR82), 21-5 tab management (FR83), 21-6 event registration +
+      cardinality (FR86). Covers NFR-B2, NFR-B3, NFR-B5, NFR-O12.
+      Story 21-3 moved from backlog to done this session, closing the last
+      remaining story and completing the epic.
