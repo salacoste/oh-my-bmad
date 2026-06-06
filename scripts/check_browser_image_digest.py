@@ -23,9 +23,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
-import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -71,29 +69,28 @@ def _check_local(verbose: bool) -> list[str]:
 
     # 2. Check that the docstring/example references @sha256: format.
     if "@sha256:" not in content:
-        violations.append(
-            f"{main_file}: no @sha256: digest reference found in the file"
-        )
+        violations.append(f"{main_file}: no @sha256: digest reference found in the file")
 
     # 3. Check that BROWSER_MCP_PLAYWRIGHT_IMAGE is documented as required.
     if "BROWSER_MCP_PLAYWRIGHT_IMAGE" not in content:
-        violations.append(
-            f"{main_file}: BROWSER_MCP_PLAYWRIGHT_IMAGE env var not documented"
-        )
+        violations.append(f"{main_file}: BROWSER_MCP_PLAYWRIGHT_IMAGE env var not documented")
 
     # 4. Check server.py image format documentation.
     server_file = REPO_ROOT / "mcp-servers" / "browser" / "src" / "browser_mcp" / "server.py"
     if server_file.exists():
         server_content = server_file.read_text()
         if "@sha256:" not in server_content:
-            violations.append(
-                f"{server_file}: no @sha256: digest reference found"
-            )
+            violations.append(f"{server_file}: no @sha256: digest reference found")
 
     # 5. Verify _build_docker_command enforces digest pinning.
     subprocess_file = (
-        REPO_ROOT / "mcp-servers" / "browser" / "src" / "browser_mcp" /
-        "adapters" / "playwright_subprocess.py"
+        REPO_ROOT
+        / "mcp-servers"
+        / "browser"
+        / "src"
+        / "browser_mcp"
+        / "adapters"
+        / "playwright_subprocess.py"
     )
     if subprocess_file.exists():
         sp_content = subprocess_file.read_text()
@@ -103,20 +100,14 @@ def _check_local(verbose: bool) -> list[str]:
             )
         # Check that the documentation mentions digest pinning.
         if "digest" not in sp_content.lower():
-            violations.append(
-                f"{subprocess_file}: no digest-pinning documentation"
-            )
+            violations.append(f"{subprocess_file}: no digest-pinning documentation")
 
     # 6. Check the integration test uses a fake digest (not a real one).
-    test_file = (
-        REPO_ROOT / "tests" / "integration" / "test_browser_container_spawn.py"
-    )
+    test_file = REPO_ROOT / "tests" / "integration" / "test_browser_container_spawn.py"
     if test_file.exists():
         test_content = test_file.read_text()
         if "@sha256:" not in test_content:
-            violations.append(
-                f"{test_file}: no @sha256: digest assertion in container-spawn test"
-            )
+            violations.append(f"{test_file}: no @sha256: digest assertion in container-spawn test")
 
     if not violations and verbose:
         print(
@@ -140,7 +131,9 @@ def _check_remote(verbose: bool) -> list[str]:
     if not image_ref:
         # Not an error — the digest is runtime-configured.
         if verbose:
-            print("  remote check: BROWSER_MCP_PLAYWRIGHT_IMAGE not set, skipping remote verification")
+            print(
+                "  remote check: BROWSER_MCP_PLAYWRIGHT_IMAGE not set, skipping remote verification"
+            )
         return []
 
     m = _DIGEST_PATTERN.match(image_ref)
@@ -155,8 +148,7 @@ def _check_remote(verbose: bool) -> list[str]:
     full_image = f"{m.group('registry')}/{m.group('repo')}"
     if full_image != _CANONICAL_IMAGE:
         violations.append(
-            f"Image name {full_image!r} does not match canonical "
-            f"{_CANONICAL_IMAGE!r}"
+            f"Image name {full_image!r} does not match canonical {_CANONICAL_IMAGE!r}"
         )
 
     if verbose:
@@ -167,9 +159,6 @@ def _check_remote(verbose: bool) -> list[str]:
 
 def _self_test() -> int:
     """Run self-test with fixture files."""
-    fixtures_dir = (
-        REPO_ROOT / "scripts" / "checks" / "fixtures" / "browser_image_digest"
-    )
     failures = 0
 
     # Test: valid digest format detection.
@@ -184,10 +173,7 @@ def _self_test() -> int:
     short_digest = "mcr.microsoft.com/playwright/mcp@sha256:" + "a" * 32
     assert not _DIGEST_PATTERN.match(short_digest), "short digest should not match"
 
-    print(
-        "✓ check_browser_image_digest self-test OK "
-        f"(3 assertions, {failures} failures)"
-    )
+    print(f"✓ check_browser_image_digest self-test OK (3 assertions, {failures} failures)")
     return failures
 
 
@@ -197,15 +183,19 @@ def main(argv: list[str] | None = None) -> int:
         description="Verify Playwright MCP image digest pinning (FR88 / NFR-S13 / Story 22.5)",
     )
     parser.add_argument(
-        "--self-test", action="store_true",
+        "--self-test",
+        action="store_true",
         help="Run self-test fixtures instead of scanning the repo",
     )
     parser.add_argument(
-        "--verbose", "-v", action="store_true",
+        "--verbose",
+        "-v",
+        action="store_true",
         help="Show per-file details on success",
     )
     parser.add_argument(
-        "--verify-remote", action="store_true",
+        "--verify-remote",
+        action="store_true",
         help="Also check against the remote registry (requires BROWSER_MCP_PLAYWRIGHT_IMAGE env var)",
     )
     args = parser.parse_args(argv)
@@ -237,10 +227,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    print(
-        "✓ check_browser_image_digest OK "
-        "(local checks passed, digest format documented)"
-    )
+    print("✓ check_browser_image_digest OK (local checks passed, digest format documented)")
     return 0
 
 

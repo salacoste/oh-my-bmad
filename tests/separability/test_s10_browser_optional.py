@@ -138,9 +138,7 @@ async def test_browser_spawned_when_command_set(
     env = _base_env(tmp_path)
     env["BROWSER_MCP_ACTOR_KIND"] = "worker"
     env["BROWSER_MCP_ACTOR_ID"] = "s10-worker"
-    env["BROWSER_MCP_PLAYWRIGHT_IMAGE"] = (
-        "mcr.microsoft.com/playwright/mcp@sha256:deadbeef"
-    )
+    env["BROWSER_MCP_PLAYWRIGHT_IMAGE"] = "mcr.microsoft.com/playwright/mcp@sha256:deadbeef"
 
     settings = _settings(browser_command=_spawn_command())
     async with MCPClientGroup(settings, env=env) as clients:
@@ -150,14 +148,10 @@ async def test_browser_spawned_when_command_set(
         )
         # Verify the stdio boundary works — list_tools() round-trip.
         tools_result = await clients.browser.list_tools()
-        tool_names = [
-            t.name for t in tools_result.tools
-        ]
+        tool_names = [t.name for t in tools_result.tools]
         # Epic 21 ships 15 browser tools; verify tool registration is live.
         assert isinstance(tool_names, list)
-        assert len(tool_names) > 0, (
-            f"Expected browser tools registered; got {tool_names}"
-        )
+        assert len(tool_names) > 0, f"Expected browser tools registered; got {tool_names}"
 
         # Audit emission is OFF → verify_connectivity should still work
         # for the 3 core members.
@@ -183,9 +177,8 @@ async def test_browser_absent_when_command_blank(
     # browser_command is blank by default → browser should NOT spawn.
     settings = _settings(browser_command="")
     async with MCPClientGroup(settings, env=env) as clients:
-        assert clients.browser is None, (
-            "browser-mcp should be absent when browser_command is blank"
-        )
+        assert clients.browser is None, "browser-mcp should be absent when browser_command is blank"
+        assert clients.task_registry is not None, "task-registry must be present"
         # A scripted task_add_note round-trip proves the 3 core members work.
         result = await clients.task_registry.call_tool(
             "task_add_note",
@@ -195,6 +188,4 @@ async def test_browser_absent_when_command_blank(
                 "caller_trace_id": _TRACE_ID,
             },
         )
-        assert result.isError is not True, (
-            f"task_add_note should succeed: {result}"
-        )
+        assert result.isError is not True, f"task_add_note should succeed: {result}"

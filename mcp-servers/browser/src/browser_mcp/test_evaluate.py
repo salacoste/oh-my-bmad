@@ -21,6 +21,7 @@ _APPROVED_LOOKUP: Callable[[str, str], Awaitable[bool]] = staticmethod(
     lambda _tid, _act: _approved()
 )
 
+
 async def _approved() -> bool:
     return True
 
@@ -74,6 +75,7 @@ def _register_browser_evaluate(approval_lookup=None):
 # TIER_MAP
 # ---------------------------------------------------------------------------
 
+
 class TestTierMap:
     def test_browser_evaluate_is_tier_three(self) -> None:
         assert TIER_MAP["browser.evaluate"] is Tier.THREE
@@ -91,6 +93,7 @@ class TestTierMap:
 # ---------------------------------------------------------------------------
 # Approval lookup
 # ---------------------------------------------------------------------------
+
 
 class TestApprovalLookup:
     @pytest.mark.asyncio
@@ -116,7 +119,11 @@ class TestApprovalLookup:
             emitted_at=clock.now(),
             emitted_at_monotonic_ns=clock.monotonic_ns(),
             actor=Actor(kind="operator", id="test-op"),
-            payload={"task_id": "t-01945a0c-5d82-7d2e-8b3c-4a5b6c7d8e9f", "decision_id": "d-1", "actor_id": "test-op"},
+            payload={
+                "task_id": "t-01945a0c-5d82-7d2e-8b3c-4a5b6c7d8e9f",
+                "decision_id": "d-1",
+                "actor_id": "test-op",
+            },
             trace_id="01945a0c-5d82-7d2e-8b3c-4a5b6c7d8e9f",
             request_id=new_request_id(clock=clock),
         )
@@ -144,14 +151,13 @@ class TestApprovalLookup:
 # browser_evaluate handler
 # ---------------------------------------------------------------------------
 
+
 class TestBrowserEvaluate:
     @pytest.mark.asyncio
     async def test_evaluate_approved_success(self) -> None:
         """Approved call returns structured result with expression_hash."""
         with _register_browser_evaluate(approval_lookup=_APPROVED_LOOKUP) as (mcp, mock_client):
-            mock_client.call_tool = AsyncMock(
-                return_value=_make_tool_result("42")
-            )
+            mock_client.call_tool = AsyncMock(return_value=_make_tool_result("42"))
 
             tools = mcp._tool_manager._tools
             handler = tools["browser.evaluate"].fn
@@ -258,9 +264,7 @@ class TestBrowserEvaluate:
         """Long result is truncated to 500 chars."""
         long_text = "x" * 1000
         with _register_browser_evaluate(approval_lookup=_APPROVED_LOOKUP) as (mcp, mock_client):
-            mock_client.call_tool = AsyncMock(
-                return_value=_make_tool_result(long_text)
-            )
+            mock_client.call_tool = AsyncMock(return_value=_make_tool_result(long_text))
 
             tools = mcp._tool_manager._tools
             handler = tools["browser.evaluate"].fn
@@ -278,9 +282,7 @@ class TestBrowserEvaluate:
     async def test_evaluate_expression_hash_sha256(self) -> None:
         """expression_hash is SHA-256 of the expression, not the expression itself."""
         with _register_browser_evaluate(approval_lookup=_APPROVED_LOOKUP) as (mcp, mock_client):
-            mock_client.call_tool = AsyncMock(
-                return_value=_make_tool_result("ok")
-            )
+            mock_client.call_tool = AsyncMock(return_value=_make_tool_result("ok"))
 
             tools = mcp._tool_manager._tools
             handler = tools["browser.evaluate"].fn

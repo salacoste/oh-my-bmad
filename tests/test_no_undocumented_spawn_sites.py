@@ -192,6 +192,14 @@ _FUNC_ALLOWLIST: dict[str, dict[str, str]] = {
         # wedged recipe. caller_trace_id validated at the handler boundary.
         "VerificationExecutor.run_recipe": "asyncio.create_subprocess_exec",
     },
+    _rel("mcp-servers/browser/src/browser_mcp/adapters/playwright_subprocess.py"): {
+        # Epic 20 / Story 20-2 — the SINGLE sandboxed Docker spawn-site behind the
+        # browser MCP server. ``create_subprocess_exec`` (never ``_shell``); Docker
+        # argv with --memory/--cpus limits, --isolated (P4-I1), no --no-sandbox (P4-I3);
+        # env is the explicit _ENV_ALLOWLIST-filtered dict (no secrets, no os.environ.copy).
+        # caller_trace_id validated at the handler boundary.
+        "PlaywrightSubprocessManager.spawn": "asyncio.create_subprocess_exec",
+    },
     _rel("scripts/sync_upstream.py"): {
         # Both ``subprocess.run`` calls live in ``main()`` — the maintenance
         # script's single entry-point. Top-level function (no class), so no
