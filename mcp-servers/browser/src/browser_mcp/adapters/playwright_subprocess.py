@@ -46,6 +46,10 @@ import logging
 import signal
 import time
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from browser_mcp.adapters.playwright_client import PlaywrightMCPClient
 
 log = logging.getLogger(__name__)
 
@@ -114,12 +118,15 @@ class PlaywrightSession:
         proc: The ``asyncio.subprocess.Process`` for the Docker container.
         started_at: Monotonic timestamp of spawn time.
         session_id: UUIDv7-style session identifier (minted at spawn).
+        client: Lazy-initialized ``PlaywrightMCPClient`` for MCP tool forwarding.
+            Set by ``ensure_client()`` — not available immediately after spawn.
     """
 
     task_id: str
     proc: asyncio.subprocess.Process
     started_at: float
     session_id: str
+    client: PlaywrightMCPClient | None = None
 
 
 @dataclass
@@ -225,6 +232,25 @@ class PlaywrightSubprocessManager:
             del self._sessions[task_id]
         return await self.spawn(task_id)
 
+    async def ensure_client(self, task_id: str) -> PlaywrightMCPClient:
+        """Return a connected ``PlaywrightMCPClient`` for *task_id*.
+
+        Lazily creates and initializes the MCP client on first call for a
+        given task. The underlying subprocess is spawned if it doesn't exist.
+        """
+        from browser_mcp.adapters.playwright_client import PlaywrightMCPClient
+
+        session = await self.get_or_spawn(task_id)
+
+        if session.client is not None and session.client.is_alive:
+            return session.client
+
+        # Create and initialize a new MCP client over the session's pipes.
+        client = PlaywrightMCPClient(session.proc)
+        await client.__aenter__()
+        session.client = client
+        return client
+
     async def kill_session(
         self,
         task_id: str,
@@ -239,6 +265,18 @@ class PlaywrightSubprocessManager:
         session = self._sessions.pop(task_id, None)
         if session is None:
             return None
+
+        # Close MCP client session before killing the process.
+        if session.client is not None:
+            try:
+                await session.client.__aexit__(None, None, None)
+            except Exception:
+                log.warning(
+                    "playwright_client_close_failed",
+                    extra={"task_id": task_id},
+                    exc_info=True,
+                )
+            session.client = None
 
         duration_s = time.monotonic() - session.started_at
         await self._terminate_proc(session.proc, task_id)

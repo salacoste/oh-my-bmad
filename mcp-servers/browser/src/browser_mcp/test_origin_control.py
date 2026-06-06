@@ -126,11 +126,19 @@ def _build_mcp(allowed_hosts: list[str] | None = None):
     )
 
 
-def _get_navigate_fn(allowed_hosts: list[str] | None = None):
+def _get_navigate_fn(
+    allowed_hosts: list[str] | None = None,
+    *,
+    mock_call_tool_result: dict[str, object] | None = None,
+):
     """Extract the browser_navigate tool function from a built server.
 
     ``register_tools`` creates closures via ``@mcp.tool()``; we capture
     the decorated function by inspecting the FastMCP internal tool map.
+
+    When *mock_call_tool_result* is provided, the ``ensure_client`` method
+    is patched to return a mock client whose ``call_tool`` returns a
+    ``CallToolResult`` with the given content.
     """
     from browser_mcp.adapters.playwright_subprocess import PlaywrightSubprocessManager
 
@@ -148,15 +156,31 @@ def _get_navigate_fn(allowed_hosts: list[str] | None = None):
 
     from browser_mcp.handlers.tools import register_tools
 
+    pw_manager = PlaywrightSubprocessManager(image="pw@sha256:test")
     mock_mcp = _CaptureMCP()
     register_tools(
         mock_mcp,  # type: ignore[arg-type]
         actor_kind="worker",
         actor_id="w-1",
         emitter_holder=None,
-        pw_manager=PlaywrightSubprocessManager(image="pw@sha256:test"),
+        pw_manager=pw_manager,
         allowed_hosts=allowed_hosts,
     )
+
+    # If a mock result is provided, inject a mock client into the pw_manager.
+    if mock_call_tool_result is not None:
+        from mcp.types import CallToolResult, TextContent
+
+        mock_result = CallToolResult(
+            content=[TextContent(type="text", text=str(mock_call_tool_result))],
+            isError=False,
+        )
+        mock_client = AsyncMock()
+        mock_client.call_tool = AsyncMock(return_value=mock_result)
+        mock_client.is_alive = True
+        # Patch ensure_client to return our mock.
+        pw_manager.ensure_client = AsyncMock(return_value=mock_client)  # type: ignore[assignment]
+
     return captured["browser.navigate"]
 
 
@@ -168,15 +192,11 @@ class TestBrowserNavigateBlocked:
         """Blocked navigation returns {blocked: true, ...} (AC #2)."""
         navigate = _get_navigate_fn(allowed_hosts=["localhost"])
 
-        with (
-            patch(_EXEC, AsyncMock(return_value=_mock_proc())),
-            patch(_UUID, return_value="sid"),
-        ):
-            result = await navigate(
-                url="https://example.com",
-                caller_trace_id="01945a0c-5d82-7d2e-8b3c-4a5b6c7d8e9f",
-                task_id="task-1",
-            )
+        result = await navigate(
+            url="https://example.com",
+            caller_trace_id="01945a0c-5d82-7d2e-8b3c-4a5b6c7d8e9f",
+            task_id="task-1",
+        )
 
         assert result["blocked"] is True
         assert result["reason"] == "origin_not_allowed"
@@ -185,44 +205,47 @@ class TestBrowserNavigateBlocked:
     @pytest.mark.asyncio
     async def test_allowed_navigation_succeeds(self) -> None:
         """Navigation to allowed host succeeds (AC #1)."""
-        navigate = _get_navigate_fn(allowed_hosts=["localhost"])
+        navigate = _get_navigate_fn(
+            allowed_hosts=["localhost"],
+            mock_call_tool_result={"url": "http://localhost:8080/page"},
+        )
 
-        with (
-            patch(_EXEC, AsyncMock(return_value=_mock_proc())),
-            patch(_UUID, return_value="sid"),
-        ):
-            result = await navigate(
-                url="http://localhost:8080/page",
-                caller_trace_id="01945a0c-5d82-7d2e-8b3c-4a5b6c7d8e9f",
-                task_id="task-1",
-            )
+        result = await navigate(
+            url="http://localhost:8080/page",
+            caller_trace_id="01945a0c-5d82-7d2e-8b3c-4a5b6c7d8e9f",
+            task_id="task-1",
+        )
 
         assert result.get("blocked") is not True
-        assert result["url"] == "http://localhost:8080/page"
+        assert result.get("url") == "http://localhost:8080/page"
 
     @pytest.mark.asyncio
     async def test_no_allowlist_allows_all(self) -> None:
         """No allowed_hosts → all origins permitted (AC #3)."""
-        navigate = _get_navigate_fn(allowed_hosts=None)
+        navigate = _get_navigate_fn(
+            allowed_hosts=None,
+            mock_call_tool_result={"url": "https://any-site.example.com"},
+        )
 
-        with (
-            patch(_EXEC, AsyncMock(return_value=_mock_proc())),
-            patch(_UUID, return_value="sid"),
-        ):
-            result = await navigate(
-                url="https://any-site.example.com",
-                caller_trace_id="01945a0c-5d82-7d2e-8b3c-4a5b6c7d8e9f",
-                task_id="task-1",
-            )
+        result = await navigate(
+            url="https://any-site.example.com",
+            caller_trace_id="01945a0c-5d82-7d2e-8b3c-4a5b6c7d8e9f",
+            task_id="task-1",
+        )
 
         assert result.get("blocked") is not True
 
     @pytest.mark.asyncio
     async def test_blocked_does_not_spawn_subprocess(self) -> None:
-        """Blocked navigation must NOT spawn a Playwright subprocess."""
+        """Blocked navigation must NOT call ensure_client."""
         navigate = _get_navigate_fn(allowed_hosts=["localhost"])
 
-        with patch(_EXEC, AsyncMock(return_value=_mock_proc())) as mock_exec:
+        # Patch ensure_client on the manager — it should NOT be called.
+        from browser_mcp.adapters.playwright_subprocess import PlaywrightSubprocessManager
+
+        with patch.object(
+            PlaywrightSubprocessManager, "ensure_client", AsyncMock()
+        ) as mock_ensure:
             result = await navigate(
                 url="https://evil.example.com",
                 caller_trace_id="01945a0c-5d82-7d2e-8b3c-4a5b6c7d8e9f",
@@ -230,7 +253,7 @@ class TestBrowserNavigateBlocked:
             )
 
         assert result["blocked"] is True
-        mock_exec.assert_not_called()
+        mock_ensure.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_blocked_emits_navigation_blocked_event(self) -> None:

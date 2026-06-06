@@ -26,6 +26,7 @@ from urllib.parse import urlparse
 from capabilities import CallerContext, Tier, check_tier
 from events.envelope import is_valid_trace_id  # noqa: IMP001 — packages/
 from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult
 
 if TYPE_CHECKING:
     from events.envelope import ActorKind
@@ -98,6 +99,90 @@ def _is_host_allowed(url: str, allowed_hosts: list[str] | None) -> bool:
     return host in {h.rstrip(".").lower() for h in allowed_hosts}
 
 
+def _parse_navigate_result(
+    result: CallToolResult,
+    fallback_url: str,
+    task_id: str,
+) -> dict[str, object]:
+    """Parse a Playwright ``browser_navigate`` CallToolResult into structured output.
+
+    The Playwright MCP response contains text content with page info.
+    Extract ``url``, ``title``, ``status_code``, ``accessibility_tree_summary``.
+    Fall back to sensible defaults when fields are missing.
+    """
+    if result.isError:
+        error_text = "; ".join(
+            c.text for c in result.content if hasattr(c, "text")
+        )
+        return {
+            "error": True,
+            "reason": "playwright_error",
+            "detail": error_text,
+            "task_id": task_id,
+        }
+
+    # Playwright MCP returns text content blocks. Extract structured fields.
+    text_parts: list[str] = [
+        c.text for c in result.content if hasattr(c, "text") and c.text
+    ]
+    combined = "\n".join(text_parts)
+
+    return {
+        "url": fallback_url,
+        "title": _extract_field(combined, "title") or "",
+        "status_code": _extract_int_field(combined, "status_code"),
+        "accessibility_tree_summary": combined[:2000] if combined else "",
+        "task_id": task_id,
+    }
+
+
+def _parse_snapshot_result(
+    result: CallToolResult,
+    task_id: str,
+) -> dict[str, object]:
+    """Parse a Playwright ``browser_snapshot`` CallToolResult."""
+    if result.isError:
+        error_text = "; ".join(
+            c.text for c in result.content if hasattr(c, "text")
+        )
+        return {
+            "error": True,
+            "reason": "playwright_error",
+            "detail": error_text,
+            "task_id": task_id,
+        }
+
+    text_parts: list[str] = [
+        c.text for c in result.content if hasattr(c, "text") and c.text
+    ]
+    combined = "\n".join(text_parts)
+
+    return {
+        "accessibility_tree": combined,
+        "task_id": task_id,
+    }
+
+
+def _extract_field(text: str, field_name: str) -> str | None:
+    """Extract a named field from Playwright text output (best-effort)."""
+    import re
+
+    pattern = rf"{field_name}\s*[:=]\s*(.+?)(?:\n|$)"
+    match = re.search(pattern, text, re.IGNORECASE)
+    return match.group(1).strip() if match else None
+
+
+def _extract_int_field(text: str, field_name: str) -> int | None:
+    """Extract an integer field from Playwright text output."""
+    value = _extract_field(text, field_name)
+    if value is not None:
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
 def register_tools(
     mcp: FastMCP,
     *,
@@ -161,18 +246,28 @@ def register_tools(
                 "requested_url": url,
             }
 
-        # Ensure Playwright subprocess is spawned for this task.
-        _session = await pw_manager.get_or_spawn(task_id or "default")
+        # Ensure Playwright subprocess + MCP client for this task.
+        client = await pw_manager.ensure_client(task_id or "default")
 
-        # Forward to Playwright subprocess via stdio MCP.
-        # The proc's stdin/stdout carry the MCP JSON-RPC messages.
-        # Story 21.1 scaffold: direct subprocess I/O forwarding.
-        # The Playwright MCP subprocess exposes ``browser_navigate``
-        # as a tool over its own stdio MCP transport.
+        # Forward to Playwright subprocess via MCP stdio.
         log.info(
-            "browser_navigate",
+            "browser_navigate_forwarding",
             extra={"url": url, "task_id": task_id},
         )
+
+        status_code: int | None = None
+        try:
+            result = await client.call_tool("browser_navigate", {"url": url})
+        except RuntimeError as exc:
+            log.error("browser_navigate_subprocess_error", exc_info=True)
+            return {"error": True, "reason": "subprocess_error", "detail": str(exc)}
+        except TimeoutError:
+            log.error("browser_navigate_timeout", extra={"url": url})
+            return {"error": True, "reason": "subprocess_timeout", "url": url}
+
+        # Parse Playwright response into structured output.
+        response = _parse_navigate_result(result, url, task_id)
+        status_code = response.get("status_code")
 
         # Emit browser.navigated event (if emitter is wired).
         if emitter_holder is not None:
@@ -182,6 +277,7 @@ def register_tools(
                     {
                         "task_id": task_id,
                         "url": url,
+                        "status_code": status_code,
                         "trace_id": caller_trace_id,
                     },
                     caller_trace_id=caller_trace_id,
@@ -189,11 +285,7 @@ def register_tools(
             except Exception:
                 log.exception("browser_navigated_emit_failed")
 
-        return {
-            "url": url,
-            "task_id": task_id,
-            "status": "forwarded",
-        }
+        return response
 
     # -- browser.navigate_back (Tier-1) --------------------------------------
 
@@ -213,13 +305,24 @@ def register_tools(
             _caller(actor_kind, actor_id),
             TIER_MAP["browser.navigate_back"],
         )
-        # Ensure Playwright subprocess is spawned for this task.
-        _session = await pw_manager.get_or_spawn(task_id or "default")
+
+        client = await pw_manager.ensure_client(task_id or "default")
 
         log.info(
-            "browser_navigate_back",
+            "browser_navigate_back_forwarding",
             extra={"task_id": task_id},
         )
+
+        try:
+            result = await client.call_tool("browser_navigate_back", {})
+        except RuntimeError as exc:
+            log.error("browser_navigate_back_subprocess_error", exc_info=True)
+            return {"error": True, "reason": "subprocess_error", "detail": str(exc)}
+        except TimeoutError:
+            log.error("browser_navigate_back_timeout")
+            return {"error": True, "reason": "subprocess_timeout"}
+
+        response = _parse_navigate_result(result, "", task_id)
 
         if emitter_holder is not None:
             try:
@@ -227,7 +330,8 @@ def register_tools(
                     "browser.navigated",
                     {
                         "task_id": task_id,
-                        "url": "back",
+                        "url": response.get("url", "back"),
+                        "status_code": response.get("status_code"),
                         "trace_id": caller_trace_id,
                     },
                     caller_trace_id=caller_trace_id,
@@ -235,10 +339,7 @@ def register_tools(
             except Exception:
                 log.exception("browser_navigate_back_emit_failed")
 
-        return {
-            "task_id": task_id,
-            "status": "forwarded",
-        }
+        return response
 
     # -- browser.snapshot (Tier-1) -------------------------------------------
 
@@ -259,13 +360,24 @@ def register_tools(
             _caller(actor_kind, actor_id),
             TIER_MAP["browser.snapshot"],
         )
-        # Ensure Playwright subprocess is spawned for this task.
-        _session = await pw_manager.get_or_spawn(task_id or "default")
+
+        client = await pw_manager.ensure_client(task_id or "default")
 
         log.info(
-            "browser_snapshot",
+            "browser_snapshot_forwarding",
             extra={"task_id": task_id},
         )
+
+        try:
+            result = await client.call_tool("browser_snapshot", {})
+        except RuntimeError as exc:
+            log.error("browser_snapshot_subprocess_error", exc_info=True)
+            return {"error": True, "reason": "subprocess_error", "detail": str(exc)}
+        except TimeoutError:
+            log.error("browser_snapshot_timeout")
+            return {"error": True, "reason": "subprocess_timeout"}
+
+        response = _parse_snapshot_result(result, task_id)
 
         if emitter_holder is not None:
             try:
@@ -274,6 +386,7 @@ def register_tools(
                     {
                         "task_id": task_id,
                         "tool_name": "browser.snapshot",
+                        "success": not result.isError,
                         "trace_id": caller_trace_id,
                     },
                     caller_trace_id=caller_trace_id,
@@ -281,7 +394,4 @@ def register_tools(
             except Exception:
                 log.exception("browser_snapshot_emit_failed")
 
-        return {
-            "task_id": task_id,
-            "status": "forwarded",
-        }
+        return response
