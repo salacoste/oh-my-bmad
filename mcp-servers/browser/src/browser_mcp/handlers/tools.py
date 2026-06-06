@@ -1,7 +1,12 @@
-"""Browser tool registrations + TIER_MAP (Epic 21 / FR79).
+"""Browser tool registrations + TIER_MAP (Epic 21 / FR79-FR80).
 
 Story 21.1: Navigation tools — ``browser_navigate``, ``browser_navigate_back``,
-``browser_snapshot`` (Tier-1). Each tool follows the ADR-0010 pattern:
+``browser_snapshot`` (Tier-1).
+Story 21.2: Interaction tools — ``browser_click``, ``browser_type``,
+``browser_fill``, ``browser_select_option``, ``browser_press_key``,
+``browser_hover`` (Tier-2 / FR80).
+
+Each tool follows the ADR-0010 pattern:
 
 1. Decorated with ``@mcp.tool(name="browser.<op>")`` — EXPLICIT dotted name so
    ``scripts/check_tier_declarations.py`` can find them.
@@ -21,7 +26,8 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import TYPE_CHECKING
+import time
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from capabilities import CallerContext, Tier, check_tier
@@ -49,6 +55,13 @@ TIER_MAP: dict[str, Tier] = {
     "browser.navigate": Tier.ONE,
     "browser.navigate_back": Tier.ONE,
     "browser.snapshot": Tier.ONE,
+    # Story 21.2 — Interaction tools (Tier-2 / FR80).
+    "browser.click": Tier.TWO,
+    "browser.type": Tier.TWO,
+    "browser.fill": Tier.TWO,
+    "browser.select_option": Tier.TWO,
+    "browser.press_key": Tier.TWO,
+    "browser.hover": Tier.TWO,
 }
 
 
@@ -394,3 +407,184 @@ def register_tools(
                 log.exception("browser_snapshot_emit_failed")
 
         return response
+
+    # ===================================================================
+    # Story 21.2 — Interaction tools (Tier-2 / FR80)
+    # ===================================================================
+    # All six share a common pattern: validate → check_tier(Tier.TWO) →
+    # forward to Playwright → emit browser.action_completed with timing.
+    # The _forward_action_tool helper eliminates duplication.
+    # ===================================================================
+
+    async def _forward_action_tool(
+        dotted_name: str,
+        pw_tool_name: str,
+        arguments: dict[str, Any],
+        caller_trace_id: str,
+        task_id: str,
+    ) -> dict[str, object]:
+        """Generic Tier-2 action forwarder with timing + event emission.
+
+        1. Ensure Playwright subprocess + MCP client.
+        2. Forward ``pw_tool_name`` with ``arguments``.
+        3. Measure duration and emit ``browser.action_completed``.
+        4. Return structured result.
+        """
+        client = await pw_manager.ensure_client(task_id or "default")
+
+        t0 = time.monotonic()
+        try:
+            result = await client.call_tool(pw_tool_name, arguments)
+        except RuntimeError as exc:
+            log.error(f"{dotted_name}_subprocess_error", exc_info=True)
+            return {
+                "error": True, "reason": "subprocess_error",
+                "detail": str(exc), "task_id": task_id,
+            }
+        except TimeoutError:
+            log.error(f"{dotted_name}_timeout")
+            return {"error": True, "reason": "subprocess_timeout", "task_id": task_id}
+        duration_ms = round((time.monotonic() - t0) * 1000)
+
+        success = not result.isError
+        response: dict[str, object] = {
+            "task_id": task_id, "success": success,
+            "duration_ms": duration_ms,
+        }
+
+        if result.isError:
+            error_text = "; ".join(c.text for c in result.content if hasattr(c, "text"))
+            response["error"] = True
+            response["reason"] = "playwright_error"
+            response["detail"] = error_text
+
+        # Emit browser.action_completed (best-effort, FR26).
+        if emitter_holder is not None:
+            try:
+                await emitter_holder.emit_event(
+                    "browser.action_completed",
+                    {
+                        "task_id": task_id,
+                        "tool_name": dotted_name,
+                        "success": success,
+                        "duration_ms": duration_ms,
+                        "trace_id": caller_trace_id,
+                    },
+                    caller_trace_id=caller_trace_id,
+                )
+            except Exception:
+                log.exception(f"{dotted_name}_emit_failed")
+
+        return response
+
+    # -- browser.click (Tier-2) ---------------------------------------------
+
+    @mcp.tool(name="browser.click")
+    async def browser_click(
+        *,
+        element: str,
+        caller_trace_id: str,
+        task_id: str = "",
+    ) -> dict[str, object]:
+        """Click an element on the page. Tier-2 tool (FR80)."""
+        validate_caller_trace_id(caller_trace_id)
+        check_tier("browser.click", _caller(actor_kind, actor_id), TIER_MAP["browser.click"])
+        return await _forward_action_tool(
+            "browser.click", "browser_click", {"element": element},
+            caller_trace_id, task_id,
+        )
+
+    # -- browser.type (Tier-2) -----------------------------------------------
+
+    @mcp.tool(name="browser.type")
+    async def browser_type(
+        *,
+        element: str,
+        text: str,
+        caller_trace_id: str,
+        task_id: str = "",
+    ) -> dict[str, object]:
+        """Type text into an element. Tier-2 tool (FR80)."""
+        validate_caller_trace_id(caller_trace_id)
+        check_tier("browser.type", _caller(actor_kind, actor_id), TIER_MAP["browser.type"])
+        return await _forward_action_tool(
+            "browser.type", "browser_type", {"element": element, "text": text},
+            caller_trace_id, task_id,
+        )
+
+    # -- browser.fill (Tier-2) -----------------------------------------------
+
+    @mcp.tool(name="browser.fill")
+    async def browser_fill(
+        *,
+        element: str,
+        text: str,
+        caller_trace_id: str,
+        task_id: str = "",
+    ) -> dict[str, object]:
+        """Fill an element with text (clears first). Tier-2 tool (FR80)."""
+        validate_caller_trace_id(caller_trace_id)
+        check_tier("browser.fill", _caller(actor_kind, actor_id), TIER_MAP["browser.fill"])
+        return await _forward_action_tool(
+            "browser.fill", "browser_fill", {"element": element, "text": text},
+            caller_trace_id, task_id,
+        )
+
+    # -- browser.select_option (Tier-2) --------------------------------------
+
+    @mcp.tool(name="browser.select_option")
+    async def browser_select_option(
+        *,
+        element: str,
+        values: list[str],
+        caller_trace_id: str,
+        task_id: str = "",
+    ) -> dict[str, object]:
+        """Select option(s) in a dropdown. Tier-2 tool (FR80)."""
+        validate_caller_trace_id(caller_trace_id)
+        check_tier(
+            "browser.select_option", _caller(actor_kind, actor_id),
+            TIER_MAP["browser.select_option"],
+        )
+        return await _forward_action_tool(
+            "browser.select_option", "browser_select_option",
+            {"element": element, "values": values},
+            caller_trace_id, task_id,
+        )
+
+    # -- browser.press_key (Tier-2) ------------------------------------------
+
+    @mcp.tool(name="browser.press_key")
+    async def browser_press_key(
+        *,
+        key: str,
+        caller_trace_id: str,
+        task_id: str = "",
+    ) -> dict[str, object]:
+        """Press a keyboard key. Tier-2 tool (FR80)."""
+        validate_caller_trace_id(caller_trace_id)
+        check_tier(
+            "browser.press_key", _caller(actor_kind, actor_id),
+            TIER_MAP["browser.press_key"],
+        )
+        return await _forward_action_tool(
+            "browser.press_key", "browser_press_key", {"key": key},
+            caller_trace_id, task_id,
+        )
+
+    # -- browser.hover (Tier-2) ----------------------------------------------
+
+    @mcp.tool(name="browser.hover")
+    async def browser_hover(
+        *,
+        element: str,
+        caller_trace_id: str,
+        task_id: str = "",
+    ) -> dict[str, object]:
+        """Hover over an element. Tier-2 tool (FR80)."""
+        validate_caller_trace_id(caller_trace_id)
+        check_tier("browser.hover", _caller(actor_kind, actor_id), TIER_MAP["browser.hover"])
+        return await _forward_action_tool(
+            "browser.hover", "browser_hover", {"element": element},
+            caller_trace_id, task_id,
+        )
