@@ -852,6 +852,121 @@ decision: ADR-0010.
 
 ---
 
+## Phase 4 additions (Epics 20–22, 2026-06-05/06)
+
+Digest of the Phase-4 framework rules (browser worker archetype + P4-I1/I2/I3)
++ high-frequency gotchas. Earlier categories still govern; these EXTEND Cat 3 and
+Cat 7.
+
+### Browser Worker archetype (4th worker archetype)
+
+- Wraps a Playwright MCP subprocess via a Docker container
+  (`docker run -i --rm --init`). The worker-wrapper spawns `browser-mcp`, which
+  in turn spawns the Playwright container (Docker-in-Docker prerequisite).
+- Per-task browser sessions: a container is spawned on the first browser tool
+  call and killed when the task ends. Lifecycle:
+  `PlaywrightSubprocessManager` → spawn → stdio MCP transport → kill.
+- The browser worker is a workspace member under `mcp-servers/browser-mcp/`.
+  It follows the same eight-step MCP-server recipe (ADR-0010) as the Phase-3
+  fleet servers, plus the browser-specific rules below.
+
+### P4-I1 — Ephemeral sessions
+
+- `--isolated` flag is hardcoded — browser state (cookies, localStorage) never
+  persists across sessions.
+- `storage` and `network` capabilities are blocklisted (P4-I1 / P4-I3). Zero
+  state leakage across task-scoped sessions.
+
+### P4-I2 — Tier-3 approval gating
+
+- `browser_evaluate` (JS execution) is the only Tier-3 browser tool.
+- Requires an `approval.granted` event matching the caller's `task_id`.
+- `make_approval_lookup` scans the JSONL event log for approval events.
+- SHA-256 expression hash appears in audit events — never the raw expression
+  (NFR-S13).
+
+### P4-I3 — Container sandbox
+
+- Always `docker run`, never `npx` (bare-metal). The browser MCP server itself
+  runs inside the base image; it spawns a Playwright Docker container for
+  actual browser work.
+- Container flags: `--init` (PID-1 signal forwarding), `--rm` (auto-remove),
+  `--headless` (no display).
+- `--memory=` and `--cpus=` resource limits with safe defaults.
+- **Never** `--network host`. **Never** `--no-sandbox`.
+- Image pinned by `@sha256:` digest — no tag-only references.
+
+### NFR compliance
+
+- **NFR-B1:** Zero new third-party deps (only `mcp` from base SBOM; `events` /
+  `capabilities` are first-party).
+- **NFR-B3:** Screenshot output → artifact-mcp content-addressed store;
+  metadata-only in tool results and events.
+- **NFR-B5:** Tier-3 denial test verifies `CapabilityDenied` +
+  `capability.denied` audit emission.
+- **NFR-R9:** Container cleanup within 30 s of session end (graceful 10 s
+  SIGTERM → SIGKILL).
+- **NFR-S13:** Expression hash (SHA-256) in audit events, never raw
+  expression.
+
+### 15 browser tools
+
+- Tier-1 (6): `navigate`, `navigate_back`, `snapshot`, `take_screenshot`,
+  `tab_list`, `tab_select`.
+- Tier-2 (8): `click`, `type`, `fill`, `select_option`, `press_key`, `hover`,
+  `tab_create`, `tab_close`.
+- Tier-3 (1): `evaluate`.
+
+### 6 browser events
+
+- `browser.navigated`, `browser.navigation_blocked`,
+  `browser.action_completed`, `browser.screenshot_captured`,
+  `browser.tab_opened`, `browser.tab_closed`.
+
+### Cat-3 framework rules (Phase-4 browser-mcp)
+
+- **Browser MCP follows the eight-step recipe (ADR-0010)** with browser-specific
+  additions: Docker-in-Docker for Playwright container, per-task session
+  lifecycle, `--isolated` flag, Tier-3 approval gating for `evaluate`.
+- **Screenshot content lives in artifact-mcp, NEVER in tool results or events.**
+  Tool returns and event payloads carry metadata (content hash, dimensions,
+  mime type) only — the blob itself is stored via artifact-mcp's
+  content-addressed `put`. This is the same pattern as P3-I2 (store-owning
+  servers own an isolated subtree; event payloads are metadata-only).
+- **Container image pinning is `@sha256:` digest, never tag-only.** The
+  Playwright image reference in config/env must be a full
+  `repo@sha256:<hex>` string. A grep gate in CI rejects tag-only references
+  in browser-mcp code.
+
+### Cat-7 don't-miss (Phase-4 gotchas)
+
+1. **Never add `--no-sandbox` to the Playwright container invocation.** The
+   container is already sandboxed by Docker; `--no-sandbox` removes the
+   Chromium sandbox inside it — a defense-in-depth violation. If tests fail
+   inside the container without it, fix the container (user, permissions),
+   not the flag.
+2. **Always use Docker, never npx.** The browser-mcp server must invoke
+   Playwright via `docker run`, not via `npx @anthropic/mcp-server-playwright`
+   or any bare-metal path. Bare-metal execution escapes the resource limits,
+   network isolation, and cleanup guarantees that Docker provides.
+3. **Always use digest pinning for the Playwright image.** Tag-only references
+   (`mcr.microsoft.com/playwright:latest`) are mutable — a pushed tag can
+   change the image behind your back. Pin to
+   `mcr.microsoft.com/playwright@sha256:<digest>`.
+4. **The approval-gating scan reads the JSONL event log, not an in-memory
+   cache.** `make_approval_lookup` must tail the event log file for the
+   `approval.granted` event. An in-memory approval store would bypass the
+   audit trail and lose approvals on restart.
+5. **Container cleanup is a two-phase SIGTERM → SIGKILL with a 30 s total
+   budget (NFR-R9).** Send SIGTERM, wait 10 s, then SIGKILL. Never skip the
+   graceful phase — Playwright needs it to flush pending operations. Never
+   extend beyond 30 s — a stuck container must not leak resources.
+6. **The browser worker inherits the child-env allowlist (P3-I3).** No
+   additional env vars are passed to the Playwright container beyond what the
+   browser-mcp server itself receives from the worker-wrapper allowlist.
+
+---
+
 ## Usage Guidelines
 
 **For AI agents**
@@ -868,4 +983,4 @@ decision: ADR-0010.
 
 ---
 
-_Last updated: 2026-06-04. Status: complete (Phase 1 baseline + Phase 2 additions — Epics 8–13 + Phase 3 additions — Epics 15–19, the MCP-server fleet)._
+_Last updated: 2026-06-06. Status: complete (Phase 1 baseline + Phase 2 additions — Epics 8–13 + Phase 3 additions — Epics 15–19 + Phase 4 additions — Epics 20–22, browser worker)._

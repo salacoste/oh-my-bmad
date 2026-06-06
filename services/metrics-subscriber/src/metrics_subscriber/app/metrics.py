@@ -225,6 +225,10 @@ _EVENT_FAMILIES: Final[tuple[str, ...]] = (
     #            scripts/check_replication_lag.py (just litestream-lag-check); the
     #            counter increments under event_family="replication" when a
     #            sustained litestream replication stall is recorded.
+    "browser",  # Epic 21 — browser.navigated, browser.navigation_blocked,
+    #            browser.action_completed, browser.screenshot_captured,
+    #            browser.tab_opened, browser.tab_closed (FR83 / FR86).
+    #            Emitted by browser-mcp; family child pre-populated at 0.
     "unknown",
 )
 
@@ -715,14 +719,15 @@ def build_collectors(registry: CollectorRegistry) -> MetricsState:
     ``Counter.labels(...).inc()`` from the worker thread and a
     concurrent ``generate_latest()`` scrape.  Counters: 16 task (incl.
     ``task.budget_enforcement_triggered`` per Story 12.2 FR67) +
-    5 session + 5 actor_kind + 16 event_family (15 registered families
+    5 session + 5 actor_kind + 17 event_family (16 registered families
     incl. ``"budget"`` per Story 12.3 FR68 + ``"replication"`` per Story
-    13.4 NFR-R7 + 1 ``"unknown"`` fallback bucket per Story 10.4 P1-H1) +
+    13.4 NFR-R7 + ``"browser"`` per Epic 21 FR83/FR86 +
+    1 ``"unknown"`` fallback bucket per Story 10.4 P1-H1) +
     2 idempotency +
-    6 capability + 4 parse_skip = 54 pre-populated children.  Plus
+    6 capability + 4 parse_skip = 55 pre-populated children.  Plus
     the label-free + labelled gauges and the lock-wait Histogram — the
     authoritative steady-state bound is the AC10 cardinality tests
-    (``test_metrics_state.py``), currently ≤ 64 timeseries (Story 13.4;
+    (``test_metrics_state.py``), currently ≤ 66 timeseries (Epic 21;
     was ≤ 50 at Story 10.4 AC10, widened by later stories' label adds).
 
     Args:

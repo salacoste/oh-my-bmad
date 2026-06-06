@@ -121,6 +121,111 @@ the worker logs `mcp_client_connected server=<name>` at startup for each spawned
 
 ---
 
+## Phase 4 — Browser MCP server (optional stdio member)
+
+Phase 4 adds **`browser-mcp`**, a stdio subprocess spawned by `worker-wrapper` that
+exposes Playwright-based browser automation tools (navigate, screenshot, click, fill,
+evaluate, tab management). Like the Phase 3 fleet servers, it is **not** a container
+and **not** a public service — it runs inside the worker image as a spawned stdio child.
+It is **OFF by default** (S-10 separability); the worker only spawns it when
+`WORKER_BROWSER_COMMAND` is non-blank.
+
+### Enabling
+
+Set the spawn toggle **and** all three required env vars. The server validates them at
+`__main__` and **exits 2** if any is missing, so a half-configured server fails loud.
+
+| Env var | Purpose |
+|---|---|
+| `WORKER_BROWSER_COMMAND` | Spawn toggle. Blank = disabled (S-10). Convention: `python`. |
+| `BROWSER_MCP_ACTOR_KIND` | Actor kind (`operator\|orchestrator\|worker\|system\|clawhip`). **Required.** |
+| `BROWSER_MCP_ACTOR_ID` | Non-empty instance identifier. **Required.** |
+| `BROWSER_MCP_PLAYWRIGHT_IMAGE` | Docker image for the Playwright sidecar container. **Required.** Must use `@sha256:` digest pinning — see below. |
+
+### Playwright image digest pinning
+
+`BROWSER_MCP_PLAYWRIGHT_IMAGE` MUST use the `@sha256:<hex>` format. Tag-only references
+(e.g. `mcr.microsoft.com/playwright:v1.52`) are rejected at startup. Pinning ensures
+reproducible, auditable builds and prevents supply-chain drift.
+
+```sh
+# Correct
+BROWSER_MCP_PLAYWRIGHT_IMAGE=mcr.microsoft.com/playwright/python:v1.52.0-noble@sha256:abc123...
+
+# Wrong — will be rejected
+BROWSER_MCP_PLAYWRIGHT_IMAGE=mcr.microsoft.com/playwright/python:v1.52.0-noble
+```
+
+`scripts/check_browser_image_digest.py` verifies the pinned format in CI. If it fails,
+pull the image locally, extract the digest with `docker inspect --format='{{index .RepoDigests 0}}'`,
+and update the env var.
+
+### Origin control
+
+Two comma-separated allowlists gate which sites the browser may contact:
+
+| Env var | Scope | Default (unset) |
+|---|---|---|
+| `BROWSER_MCP_ALLOWED_HOSTS` | Hostname allowlist (e.g. `github.com,api.example.com`) | All hosts allowed (AC #3) |
+| `BROWSER_MCP_ALLOWED_ORIGINS` | Full-origin allowlist (e.g. `https://github.com,http://localhost:3000`) | All origins allowed (AC #3) |
+
+When either list is set, requests to hosts/origins not on the list are blocked at the
+Playwright level. When both are unset, the browser has unrestricted network access (the
+default for development; tighten for production).
+
+### Resource limits on the Playwright container
+
+The browser-mcp server launches a Docker container for each Playwright session. Resource
+limits are applied via Docker API constraints:
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `BROWSER_MCP_MEMORY_LIMIT` | `512m` | Memory cap on the Playwright container |
+| `BROWSER_MCP_CPU_LIMIT` | `1.0` | CPU quota (number of cores) |
+
+Override these in `.env` if the default is too tight for workloads (e.g. heavy SPAs).
+
+### Tier-3 approval — `browser_evaluate`
+
+The `browser_evaluate` tool (arbitrary JS execution in the page context) is **Tier-3**.
+It requires a matching `approval.granted` event for the current `task_id` before
+execution proceeds. The approval lookup reads from `REGISTRY_EVENTS_DIR` — that var
+must be set and point at the live event-log directory, or every `browser_evaluate` call
+is denied.
+
+### Artifact storage — screenshots
+
+Screenshots captured by the browser tools are stored via the **artifact-mcp** server.
+This requires `WORKER_ARTIFACT_COMMAND` and its associated env vars to be configured
+(see the Phase 3 table above). If artifact-mcp is not enabled, screenshot tools will
+return an error at invocation time.
+
+### Security invariants
+
+The following are **non-negotiable hardening rules**, enforced at startup and in CI:
+
+- **Never `--no-sandbox`.** Chromium sandbox is always enabled.
+- **Never `--network host`.** The Playwright container uses an isolated Docker network.
+- **Never `npx`.** Playwright runs exclusively inside its Docker image — no host-side `npx` invocations.
+- **`storage` and `network` Docker capabilities are blocklisted** on the Playwright container.
+- **`--isolated` flag is hardcoded.** Every session is ephemeral — no persistent profiles, cookies, or cache carryover between tasks.
+
+### Container cleanup (NFR-R9)
+
+On server shutdown, the browser-mcp process kills any remaining Playwright containers
+belonging to its sessions. Zombie containers are reclaimed within **30 seconds** of
+shutdown. If you see stale `playwright-*` containers after that window, check
+`docker compose logs worker-wrapper` for cleanup errors.
+
+### Separability check
+
+`tests/separability/test_s10_*.py` boots a real browser-mcp subprocess in the SPAWNED
+state and confirms the worker still completes a scripted task in the ABSENT state. To
+confirm the server is live in a running stack, the worker logs
+`mcp_client_connected server=browser` at startup.
+
+---
+
 ## Service-down playbooks
 
 All six services currently run a hello-world `signal.pause()` loop (Story 1.4
