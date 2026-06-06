@@ -18,6 +18,10 @@ from worker_wrapper.domain.lifecycle import (
     TransitionLogEntry,
     WorkerState,
 )
+from worker_wrapper.domain.runtime_adapter import (
+    HealthCheckResult,
+    RuntimeAdapter,
+)
 from worker_wrapper.domain.worktree_lock import (
     WorktreeLockHeld,
     acquire_lock,
@@ -27,10 +31,12 @@ from worker_wrapper.domain.worktree_lock import (
 )
 
 __all__ = [
+    "HealthCheckResult",
     "InvalidTransitionError",
     "needs_approval",
     "LifecycleEvent",
     "LifecycleFSM",
+    "RuntimeAdapter",
     "TransitionLogEntry",
     "WorktreeLockHeld",
     "WorkerState",

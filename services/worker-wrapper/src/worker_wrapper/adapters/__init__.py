@@ -17,6 +17,10 @@ from worker_wrapper.adapters.mcp_clients import (
     MCPClientGroup,
     verify_connectivity,
 )
+from worker_wrapper.adapters.runtime_factory import (
+    SUPPORTED_RUNTIMES,
+    get_runtime_adapter,
+)
 
 __all__ = [
     "ApprovalResult",
@@ -30,5 +34,7 @@ __all__ = [
     "MCPClientGroup",
     "PRDraftResult",
     "ReasoningBreadcrumb",
+    "SUPPORTED_RUNTIMES",
+    "get_runtime_adapter",
     "verify_connectivity",
 ]

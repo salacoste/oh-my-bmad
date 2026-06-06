@@ -15,7 +15,9 @@ import pytest
 from capabilities import CapabilityDenied
 from events.clock import FrozenClock
 
-FROZEN_EPOCH = __import__("datetime").datetime(2026, 1, 1, tzinfo=__import__("datetime").timezone.utc)
+FROZEN_EPOCH = __import__("datetime").datetime(
+    2026, 1, 1, tzinfo=__import__("datetime").timezone.utc
+)
 _VALID_TRACE = "01945a0c-5d82-7d2e-8b3c-4a5b6c7d8e9f"
 _VALID_TASK = "t-01945a0c-5d82-7d2e-8b3c-4a5b6c7d8e9f"
 

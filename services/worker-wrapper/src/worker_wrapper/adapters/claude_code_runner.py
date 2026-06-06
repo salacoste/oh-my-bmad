@@ -16,6 +16,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,6 +29,7 @@ from worker_wrapper.domain.reasoning import (
     ReasoningBreadcrumb,
     extract_reasoning_from_content,
 )
+from worker_wrapper.domain.runtime_adapter import HealthCheckResult
 
 # Graceful shutdown: wait this many seconds after SIGTERM before SIGKILL.
 _GRACE_PERIOD_S: float = 5.0
@@ -216,6 +218,37 @@ class ClaudeCodeRunner:
         self._session_id: str = ""
         self._result_msg: dict[str, Any] = {}
         self._process: asyncio.subprocess.Process | None = None
+
+    # -- RuntimeAdapter protocol (FR89 / ADR-0015) --
+
+    @property
+    def runtime_name(self) -> str:
+        """Runtime identifier: ``"claude-code"``."""
+        return "claude-code"
+
+    async def health_check(self) -> HealthCheckResult:
+        """Probe Claude Code binary availability (FR95).
+
+        Checks:
+        1. Binary installed via ``shutil.which``.
+        2. Version via ``claude --version`` (best-effort parse).
+        API key validity is NOT probed here (lazy, cached by caller).
+        """
+        installed = shutil.which(self._settings.claude_command) is not None
+        version = ""
+        if installed:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    self._settings.claude_command,
+                    "--version",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10.0)
+                version = stdout.decode("utf-8", errors="replace").strip()
+            except (OSError, TimeoutError):
+                pass
+        return HealthCheckResult(installed=installed, version=version)
 
     def _build_args(self, prompt: str) -> list[str]:
         """Build CLI arguments for the ``claude`` subprocess.

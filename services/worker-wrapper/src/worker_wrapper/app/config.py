@@ -151,6 +151,21 @@ class WorkerSettings(BaseSettings):
     worktree_path: str = ""
     heartbeat_interval_s: float = Field(default=30.0, gt=0)
 
+    # Phase 5 — runtime selection (FR89 / ADR-0015).
+    # Defaults to "claude-code" for backward compat: existing deployments without
+    # WORKER_RUNTIME set continue using Claude Code. Per-task override via
+    # TaskCreatedPayload.runtime.  The factory (runtime_factory.py) resolves
+    # this to a concrete RuntimeAdapter.
+    runtime: str = "claude-code"
+
+    # Codex-specific settings (latent scaffold — only consulted when
+    # runtime="codex").  codex_command mirrors claude_command; codex_timeout_s
+    # mirrors claude_timeout_s.  openai_api_key is the Codex-adapter sibling
+    # of anthropic_api_key (P5-I1 credential isolation).
+    codex_command: str = "codex"
+    codex_timeout_s: float = 600.0
+    openai_api_key: str = ""  # WORKER_OPENAI_API_KEY
+
     # Claude Code subprocess settings (Story 5.4).
     claude_command: str = "claude"
     claude_max_turns: int = 0  # 0 = unlimited

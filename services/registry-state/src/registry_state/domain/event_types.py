@@ -392,15 +392,18 @@ def ensure_registered() -> None:
     # Born at 1.1.0 (NEW Phase-4 event type — no v1.0.0 predecessor).
     register("browser.navigated", "1.1.0", BrowserNavigatedPayload)
     register(
-        "browser.navigation_blocked", "1.1.0",
+        "browser.navigation_blocked",
+        "1.1.0",
         BrowserNavigationBlockedPayload,
     )
     register(
-        "browser.action_completed", "1.1.0",
+        "browser.action_completed",
+        "1.1.0",
         BrowserActionCompletedPayload,
     )
     register(
-        "browser.screenshot_captured", "1.1.0",
+        "browser.screenshot_captured",
+        "1.1.0",
         BrowserScreenshotCapturedPayload,
     )
     register("browser.tab_opened", "1.1.0", BrowserTabOpenedPayload)
