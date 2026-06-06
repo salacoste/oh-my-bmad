@@ -1,6 +1,6 @@
 """Screenshot artifact round-trip integration test scaffold (FR81 / Ship-blocker #5).
 
-Verifies that a screenshot taken via browser_take_screenshot can be
+Verifies that a screenshot taken via browser.take_screenshot can be
 retrieved via artifact.get with the same content hash.
 
 Requires a running artifact-mcp server. Skipped when not available.
@@ -37,7 +37,7 @@ class TestScreenshotArtifactRoundTrip:
         """Screenshot bytes stored in artifact-mcp are retrievable via hash.
 
         Full round-trip:
-        1. browser_take_screenshot captures a screenshot
+        1. browser.take_screenshot captures a screenshot
         2. ArtifactClient.put stores bytes under SHA-256 hash
         3. artifact.get with the hash returns the original bytes
         """
@@ -75,7 +75,7 @@ class TestScreenshotArtifactRoundTrip:
             artifact_holder=artifact_holder,
         )
 
-        handler = mcp._tool_manager._tools["browser_take_screenshot"].fn
+        handler = mcp._tool_manager._tools["browser.take_screenshot"].fn
         result = await handler(
             caller_trace_id=_VALID_TRACE,
             task_id=_VALID_TASK,

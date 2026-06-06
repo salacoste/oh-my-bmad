@@ -77,7 +77,7 @@ TIER_MAP: dict[str, Tier] = {
     # Story 21.4 — JS execution (Tier-3 / FR82).
     "browser.evaluate": Tier.THREE,
     # Story 21.3 — Screenshot + artifact integration (Tier-1 / FR81).
-    "browser_take_screenshot": Tier.ONE,
+    "browser.take_screenshot": Tier.ONE,
     # Story 21.5 — Tab management (FR83).
     "browser.tab_list": Tier.ONE,
     "browser.tab_select": Tier.ONE,
@@ -284,7 +284,7 @@ def register_tools(
     tools deny every call (no approval source — test/no-approval default).
 
     *artifact_holder* is an ``ArtifactClientHolder`` for ``artifact.put`` calls
-    from ``browser_take_screenshot`` (Story 21.3); when None, screenshot storage
+    from ``browser.take_screenshot`` (Story 21.3); when None, screenshot storage
     returns a structured error (no artifact store configured).
     """
     get_actor_id = _make_actor_id_extractor(actor_id)
@@ -776,13 +776,13 @@ def register_tools(
     # ===================================================================
     # Story 21.3 — Screenshot capture + artifact integration (Tier-1 / FR81)
     # ===================================================================
-    # browser_take_screenshot captures the current viewport via Playwright,
+    # browser.take_screenshot captures the current viewport via Playwright,
     # stores the image bytes in the artifact-mcp content-addressed store,
     # and returns a metadata-only response (artifact_ref, content_hash, etc.).
     # Raw image bytes are NEVER in the tool result or events (NFR-B3).
     # ===================================================================
 
-    @mcp.tool(name="browser_take_screenshot")
+    @mcp.tool(name="browser.take_screenshot")
     async def browser_take_screenshot(
         *,
         caller_trace_id: str,
@@ -798,9 +798,9 @@ def register_tools(
         """
         validate_caller_trace_id(caller_trace_id)
         check_tier(
-            "browser_take_screenshot",
+            "browser.take_screenshot",
             _caller(actor_kind, actor_id),
-            TIER_MAP["browser_take_screenshot"],
+            TIER_MAP["browser.take_screenshot"],
         )
 
         # Validate format parameter.

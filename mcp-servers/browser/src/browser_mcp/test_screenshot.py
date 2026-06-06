@@ -1,4 +1,4 @@
-"""Tests for browser_take_screenshot — Tier-1 screenshot + artifact (Story 21.3 / FR81)."""
+"""Tests for browser.take_screenshot — Tier-1 screenshot + artifact (Story 21.3 / FR81)."""
 
 from __future__ import annotations
 
@@ -66,11 +66,11 @@ def _register_screenshot_tools(artifact_holder=None):
 
 class TestTierMap:
     def test_browser_take_screenshot_is_tier_one(self) -> None:
-        assert TIER_MAP["browser_take_screenshot"] is Tier.ONE
+        assert TIER_MAP["browser.take_screenshot"] is Tier.ONE
 
 
 # ---------------------------------------------------------------------------
-# browser_take_screenshot handler
+# browser.take_screenshot handler
 # ---------------------------------------------------------------------------
 
 class TestBrowserTakeScreenshot:
@@ -88,7 +88,7 @@ class TestBrowserTakeScreenshot:
             )
 
             tools = mcp._tool_manager._tools
-            handler = tools["browser_take_screenshot"].fn
+            handler = tools["browser.take_screenshot"].fn
             result = await handler(
                 caller_trace_id=_VALID_TRACE,
                 task_id=_VALID_TASK,
@@ -117,7 +117,7 @@ class TestBrowserTakeScreenshot:
             )
 
             tools = mcp._tool_manager._tools
-            handler = tools["browser_take_screenshot"].fn
+            handler = tools["browser.take_screenshot"].fn
             result = await handler(
                 caller_trace_id=_VALID_TRACE,
                 format="jpeg",
@@ -132,7 +132,7 @@ class TestBrowserTakeScreenshot:
         """Invalid format returns structured error."""
         with _register_screenshot_tools(artifact_holder=MagicMock()) as (mcp, mock_client):
             tools = mcp._tool_manager._tools
-            handler = tools["browser_take_screenshot"].fn
+            handler = tools["browser.take_screenshot"].fn
             result = await handler(
                 caller_trace_id=_VALID_TRACE,
                 format="gif",
@@ -147,7 +147,7 @@ class TestBrowserTakeScreenshot:
         """No artifact_holder → structured error."""
         with _register_screenshot_tools(artifact_holder=None) as (mcp, mock_client):
             tools = mcp._tool_manager._tools
-            handler = tools["browser_take_screenshot"].fn
+            handler = tools["browser.take_screenshot"].fn
             result = await handler(
                 caller_trace_id=_VALID_TRACE,
                 task_id=_VALID_TASK,
@@ -168,7 +168,7 @@ class TestBrowserTakeScreenshot:
             )
 
             tools = mcp._tool_manager._tools
-            handler = tools["browser_take_screenshot"].fn
+            handler = tools["browser.take_screenshot"].fn
             result = await handler(
                 caller_trace_id=_VALID_TRACE,
                 task_id=_VALID_TASK,
@@ -189,7 +189,7 @@ class TestBrowserTakeScreenshot:
             mock_client.call_tool = AsyncMock(side_effect=RuntimeError("spawn failed"))
 
             tools = mcp._tool_manager._tools
-            handler = tools["browser_take_screenshot"].fn
+            handler = tools["browser.take_screenshot"].fn
             result = await handler(
                 caller_trace_id=_VALID_TRACE,
                 task_id=_VALID_TASK,
@@ -208,7 +208,7 @@ class TestBrowserTakeScreenshot:
             mock_client.call_tool = AsyncMock(side_effect=TimeoutError())
 
             tools = mcp._tool_manager._tools
-            handler = tools["browser_take_screenshot"].fn
+            handler = tools["browser.take_screenshot"].fn
             result = await handler(
                 caller_trace_id=_VALID_TRACE,
                 task_id=_VALID_TASK,
@@ -229,7 +229,7 @@ class TestBrowserTakeScreenshot:
             )
 
             tools = mcp._tool_manager._tools
-            handler = tools["browser_take_screenshot"].fn
+            handler = tools["browser.take_screenshot"].fn
             result = await handler(
                 caller_trace_id=_VALID_TRACE,
                 task_id=_VALID_TASK,
@@ -250,7 +250,7 @@ class TestBrowserTakeScreenshot:
             )
 
             tools = mcp._tool_manager._tools
-            handler = tools["browser_take_screenshot"].fn
+            handler = tools["browser.take_screenshot"].fn
             result = await handler(
                 caller_trace_id=_VALID_TRACE,
                 task_id=_VALID_TASK,
@@ -264,7 +264,7 @@ class TestBrowserTakeScreenshot:
         """Invalid caller_trace_id → ValueError before tier check."""
         with _register_screenshot_tools(artifact_holder=MagicMock()) as (mcp, mock_client):
             tools = mcp._tool_manager._tools
-            handler = tools["browser_take_screenshot"].fn
+            handler = tools["browser.take_screenshot"].fn
 
             with pytest.raises(ValueError, match="caller_trace_id"):
                 await handler(
@@ -284,7 +284,7 @@ class TestBrowserTakeScreenshot:
             )
 
             tools = mcp._tool_manager._tools
-            handler = tools["browser_take_screenshot"].fn
+            handler = tools["browser.take_screenshot"].fn
             result = await handler(
                 caller_trace_id=_VALID_TRACE,
                 task_id=_VALID_TASK,
