@@ -152,6 +152,14 @@ class PlaywrightSubprocessManager:
     allowed_hosts: list[str] | None = None
     # Per-task sessions
     _sessions: dict[str, PlaywrightSession] = field(default_factory=dict)
+    # Lock to prevent concurrent ensure_client() races on the same task.
+    _client_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    def __post_init__(self) -> None:
+        # Ensure the lock is created even if the dataclass is instantiated
+        # without going through __init__ (e.g. direct field assignment).
+        if not hasattr(self, "_client_lock") or self._client_lock is None:
+            self._client_lock = asyncio.Lock()
 
     @property
     def sessions(self) -> dict[str, PlaywrightSession]:
@@ -237,19 +245,23 @@ class PlaywrightSubprocessManager:
 
         Lazily creates and initializes the MCP client on first call for a
         given task. The underlying subprocess is spawned if it doesn't exist.
+
+        Thread-safe: a lock prevents concurrent callers from creating
+        duplicate MCP clients over the same process pipes.
         """
         from browser_mcp.adapters.playwright_client import PlaywrightMCPClient
 
-        session = await self.get_or_spawn(task_id)
+        async with self._client_lock:
+            session = await self.get_or_spawn(task_id)
 
-        if session.client is not None and session.client.is_alive:
-            return session.client
+            if session.client is not None and session.client.is_alive:
+                return session.client
 
-        # Create and initialize a new MCP client over the session's pipes.
-        client = PlaywrightMCPClient(session.proc)
-        await client.__aenter__()
-        session.client = client
-        return client
+            # Create and initialize a new MCP client over the session's pipes.
+            client = PlaywrightMCPClient(session.proc)
+            await client.__aenter__()
+            session.client = client
+            return client
 
     async def kill_session(
         self,
@@ -296,7 +308,8 @@ class PlaywrightSubprocessManager:
         """Force-kill all active sessions (lifespan cleanup / NFR-R9).
 
         Used during server shutdown to ensure no orphaned Chromium processes
-        survive past server exit.
+        survive past server exit. Closes MCP client sessions before killing
+        processes to avoid resource leaks.
         """
         task_ids = list(self._sessions.keys())
         if not task_ids:
@@ -307,7 +320,21 @@ class PlaywrightSubprocessManager:
             extra={"count": len(task_ids), "task_ids": task_ids},
         )
 
-        # Kill all concurrently (don't wait for each sequentially).
+        # Close MCP client sessions first (releases anyio streams, bg tasks).
+        for tid in task_ids:
+            session = self._sessions.get(tid)
+            if session is not None and session.client is not None:
+                try:
+                    await session.client.__aexit__(None, None, None)
+                except Exception:
+                    log.warning(
+                        "playwright_client_close_failed",
+                        extra={"task_id": tid},
+                        exc_info=True,
+                    )
+                session.client = None
+
+        # Kill all processes concurrently.
         await asyncio.gather(
             *(self._terminate_proc(self._sessions[task_id].proc, task_id) for task_id in task_ids),
             return_exceptions=True,

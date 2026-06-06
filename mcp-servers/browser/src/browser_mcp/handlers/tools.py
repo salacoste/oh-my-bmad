@@ -20,6 +20,7 @@ per the import-graph constraint; drift is guarded by the contract test
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
@@ -165,9 +166,7 @@ def _parse_snapshot_result(
 
 def _extract_field(text: str, field_name: str) -> str | None:
     """Extract a named field from Playwright text output (best-effort)."""
-    import re
-
-    pattern = rf"{field_name}\s*[:=]\s*(.+?)(?:\n|$)"
+    pattern = rf"{re.escape(field_name)}\s*[:=]\s*(.+?)(?:\n|$)"
     match = re.search(pattern, text, re.IGNORECASE)
     return match.group(1).strip() if match else None
 
