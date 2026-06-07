@@ -63,8 +63,9 @@ _EXPECTED_INDEXES = frozenset(
 # → 0004 add task state columns (Story 8.x) → 0005 add event trace_id (Story 9.7)
 # → 0006 add event trace_id_synthetic_source + extensions (Story 9.8 D6+D7)
 # → 0007 add approval_inbox table (Story 11.3 AC2 / FR63)
-# → 0008 add key_fingerprint table (Story 11.5 AC2 / FR65a).
-_REVISION = "0008"
+# → 0008 add key_fingerprint table (Story 11.5 AC2 / FR65a)
+# → 0009 add tasks.worker_id column (Story 32.2 / P6-I4 / ADR-0019 D2).
+_REVISION = "0009"
 _INI_PATH = str(Path(__file__).parent.parent.parent / "alembic.ini")
 
 
@@ -102,6 +103,17 @@ def _inspect_db(path: str) -> tuple[frozenset[str], frozenset[str], list[str]]:
     finally:
         conn.close()
     return tables, indexes, versions
+
+
+def _get_columns(path: str, table: str) -> frozenset[str]:
+    """Return column names for *table* in the SQLite file at *path*."""
+    conn = sqlite3.connect(path)
+    try:
+        cur = conn.cursor()
+        cur.execute(f"PRAGMA table_info({table})")
+        return frozenset(row[1] for row in cur.fetchall())
+    finally:
+        conn.close()
 
 
 def _sqlite_master_snapshot(path: str) -> list[tuple[str, str, str]]:
@@ -374,13 +386,19 @@ def test_migration_0008_round_trip_downgrade_drops_table() -> None:
         # Confirm table exists post-upgrade.
         tables_pre, _, versions_pre = _inspect_db(db_path)
         assert "key_fingerprint" in tables_pre
-        assert versions_pre == ["0008"]
+        assert versions_pre == ["0009"]
 
-        # Downgrade one revision.
-        command.downgrade(_make_cfg(url), "-1")
+        # Downgrade one revision → 0008 (drops worker_id, not key_fingerprint).
+        # Downgrade again → 0007 (drops key_fingerprint).
+        command.downgrade(_make_cfg(url), "-1")  # 0009 → 0008
+        tables_mid, _, versions_mid = _inspect_db(db_path)
+        assert "key_fingerprint" in tables_mid, "key_fingerprint survives 0009→0008 downgrade"
+        assert "worker_id" not in _get_columns(db_path, "tasks"), "worker_id dropped on 0009→0008"
+        assert versions_mid == ["0008"]
 
+        command.downgrade(_make_cfg(url), "-1")  # 0008 → 0007
         tables_post, _, versions_post = _inspect_db(db_path)
-        assert "key_fingerprint" not in tables_post, "downgrade -1 must drop key_fingerprint table"
+        assert "key_fingerprint" not in tables_post, "downgrade 0008→0007 must drop key_fingerprint table"
         assert versions_post == ["0007"], (
             f"alembic_version must roll back to 0007; got {versions_post}"
         )

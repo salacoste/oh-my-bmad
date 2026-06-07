@@ -9,17 +9,19 @@ FAILURE signalling "remove the xfail marker — this contract is now satisfied."
 The tests must fail at RUNTIME (inside the test body), NOT at import/collection
 time — ``xfail`` does not swallow ImportError at collection.
 
-Contracts asserted (all xfail):
+Contracts satisfied (Story 32.2):
   1. Task ORM has nullable ``worker_id`` column
+  6. Worker identity generator produces ``hostname-pid`` format
+  7. ``claim_next_task`` atomic claiming function exists (stub)
+  10. ``handle_worker_crash`` crash detection function exists (stub)
+
+Contracts still xfail (Stories 32.3–32.7):
   2. ``task.assigned`` event type registered in event_types
   3. ``TaskAssignedPayload`` model with ``worker_id`` field
   4. ``handle_task_assigned`` handler stamps worker_id on Task row
   5. ``task.assigned`` maps to a valid FSM target state
-  6. Worker identity generator produces ``hostname-pid`` format
-  7. ``claim_next_task`` atomic claiming function exists
   8. ``WORKER_POLL_INTERVAL_SECONDS`` config exists on WorkerSettings
   9. Per-worker metrics family ``"worker"`` in _EVENT_FAMILIES
-  10. Worker crash: task transitions FAILED and is re-assignable
 
 Reference tests (NOT xfail):
   - Existing FSM states enumerated
@@ -36,7 +38,6 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="Story 32.2: Task.worker_id column not yet added")
 def test_task_orm_has_worker_id_column() -> None:
     """The Task ORM model must have a nullable ``worker_id`` column (String(64)).
 
@@ -182,9 +183,6 @@ def test_task_assigned_in_fsm_transition_map() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="Story 32.2: generate_worker_id not yet implemented"
-)
 def test_worker_identity_hostname_pid_format() -> None:
     """Worker identity must follow the ``hostname-pid`` format from ADR-0019 D2.
 
@@ -215,9 +213,6 @@ def test_worker_identity_hostname_pid_format() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="Story 32.3: claim_next_task not yet implemented"
-)
 @pytest.mark.asyncio
 async def test_claim_next_task_function_exists() -> None:
     """The ``claim_next_task`` function must exist and accept a session +
@@ -339,10 +334,6 @@ def test_worker_metrics_family_in_event_families() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Story 32.7: crash detection + task re-assignment not yet implemented",
-)
 def test_crashed_worker_task_detected_and_re_assigned() -> None:
     """When a worker crashes mid-task, the system must detect it and mark the
     task for re-assignment. This requires:

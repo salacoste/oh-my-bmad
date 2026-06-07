@@ -134,6 +134,12 @@ class Task(Base):
     # CHECK constraint — consistent with how the codebase constrains enums.
     budget_token_limit: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
     budget_action: Mapped[str | None] = mapped_column(String(32), nullable=True, default=None)
+    # Story 32.2: worker identity (P6-I4 / ADR-0019 D2). Nullable for backward
+    # compatibility — Phase 5 tasks were never "assigned" to a specific worker.
+    # Populated by the materializer on ``task.assigned`` events. When a worker
+    # claims a task, its unique worker_id (hostname-pid or WORKER_ID env var)
+    # is stamped here and carried in events + metrics labels.
+    worker_id: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
 
 
 class Session(Base):
