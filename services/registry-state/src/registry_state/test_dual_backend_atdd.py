@@ -226,31 +226,31 @@ async def test_both_backends_produce_identical_schema() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Story 30.4 — Alembic downgrade must work on SQLite",
-)
-@pytest.mark.asyncio
-async def test_alembic_downgrade_sqlite() -> None:
-    """Running `alembic downgrade -1` on SQLite must succeed without error."""
+def test_alembic_downgrade_sqlite() -> None:
+    """Running `alembic downgrade -1` on SQLite must succeed without error.
+
+    Follows the same pattern as test_migrations.py: use the real alembic.ini
+    with a programmatic URL override.
+    """
+    from pathlib import Path
+
     from alembic import command
-    from alembic.config import Config as AlembicConfig
+    from alembic.config import Config
+
+    ini_path = str(Path(__file__).parent.parent.parent / "alembic.ini")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "state.sqlite3")
         url = f"sqlite+aiosqlite:///{db_path}"
 
-        alembic_cfg = AlembicConfig()
-        alembic_cfg.set_main_option("script_location", "src/registry_state/migrations")
-        alembic_cfg.set_main_option("sqlalchemy.url", url)
+        cfg = Config(ini_path)
+        cfg.set_main_option("sqlalchemy.url", url)
 
         # First, upgrade to head
-        command.upgrade(alembic_cfg, "head")
+        command.upgrade(cfg, "head")
 
-        # Then, downgrade by one step
-        command.downgrade(alembic_cfg, "-1")
-
-        # Should not raise — that's the assertion
+        # Then, downgrade by one step — must not raise
+        command.downgrade(cfg, "-1")
 
 
 # ---------------------------------------------------------------------------
@@ -258,12 +258,6 @@ async def test_alembic_downgrade_sqlite() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Story 30.6 — S-12: full task lifecycle must pass on SQLite without REGISTRY_DATABASE_URL"
-    ),
-)
 @pytest.mark.asyncio
 async def test_s12_sqlite_lifecycle_without_postgres() -> None:
     """S-12 separability test: The full task lifecycle (create → materialize
@@ -275,24 +269,36 @@ async def test_s12_sqlite_lifecycle_without_postgres() -> None:
     3. Append an event
     4. Read back the task
     """
-    from registry_state.adapters.sqlite_store import create_engine, get_session
+    from datetime import UTC, datetime
+
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import StaticPool
+
+    from registry_state.adapters.sqlite_store import get_session
     from registry_state.schema import Base, Task
 
-    # No REGISTRY_DATABASE_URL set → SQLite (P6-I1)
+    # In-memory SQLite with StaticPool (NullPool discards tables between connections)
     url = "sqlite+aiosqlite:///:memory:"
-    engine = create_engine(url)
+    engine = create_async_engine(
+        url,
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
     session_factory = get_session(engine)
     async with session_factory() as session:
-        # Create a task
+        # Create a task (use timezone-aware datetimes for UTCDateTime column type)
+        from datetime import UTC, datetime
+
+        now = datetime(2026, 6, 7, 0, 0, 0, tzinfo=UTC)
         task = Task(
             id="t-test00000000-0000-7000-8000-000000000000",
             status="CREATED",
-            created_at="2026-06-07T00:00:00",
-            updated_at="2026-06-07T00:00:00",
+            created_at=now,
+            updated_at=now,
             actor_kind="human",
             actor_id="op",
         )
