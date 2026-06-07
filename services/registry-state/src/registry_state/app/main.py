@@ -61,7 +61,11 @@ from registry_state.domain.event_types import (  # noqa: F401 — side-effect: r
     TaskPlanReadyPayload,
     TaskStopRequestedPayload,
 )
-from registry_state.domain.handlers import register_default_handlers
+from registry_state.domain.failure_detection import HeartbeatMonitor
+from registry_state.domain.handlers import (
+    _set_audit_writer,
+    register_default_handlers,
+)
 from registry_state.domain.materializer import Materializer
 from registry_state.domain.recovery import (
     compute_events_max_cursor,
@@ -232,6 +236,29 @@ def _ensure_db_file_group_writable(db_url: str) -> None:
         db_path.chmod(0o660)
 
 
+def _feed_heartbeats(envelopes: list[EventEnvelope], monitor: HeartbeatMonitor) -> None:
+    """Story 36.3 / FR110: feed session/worker heartbeats into the monitor.
+
+    Scans applied envelopes for ``session.heartbeat`` and ``session.finished``
+    events and records/removes sessions accordingly. Also tracks
+    ``worker.heartbeat`` events for worker-level liveness.
+
+    Called after ``materializer.apply_many()`` in both startup replay and
+    the tail loop so the monitor always reflects the latest event state.
+    """
+    for env in envelopes:
+        if env.type == "session.heartbeat":
+            payload = env.payload
+            session_id = payload.get("session_id") if isinstance(payload, dict) else getattr(payload, "session_id", None)
+            if session_id:
+                monitor.record_heartbeat(session_id, at=env.emitted_at)
+        elif env.type == "session.finished":
+            payload = env.payload
+            session_id = payload.get("session_id") if isinstance(payload, dict) else getattr(payload, "session_id", None)
+            if session_id:
+                monitor.remove_session(session_id)
+
+
 async def run_subscriber(
     *,
     base_dir: Path,
@@ -243,6 +270,7 @@ async def run_subscriber(
     materializer_factory: Callable[
         [async_sessionmaker[AsyncSession]], Materializer
     ] = _default_materializer_factory,
+    heartbeat_interval_s: float = 15.0,
 ) -> None:
     """Long-lived subscriber loop: tail the JSONL event log → materialize SQLite state.
 
@@ -266,6 +294,10 @@ async def run_subscriber(
                             session-maker. Defaults to the :class:`Materializer`
                             class itself; tests inject subclasses (e.g. a counter
                             wrapper) without monkey-patching the module.
+        heartbeat_interval_s: (Story 36.3 / FR110) Interval in seconds for session
+                            heartbeat monitoring. Sessions exceeding
+                            ``2 * heartbeat_interval_s`` without a heartbeat are
+                            flagged as overdue. Default 15.0s → timeout at 30s.
     """
     stop = stop_event if stop_event is not None else asyncio.Event()
     # Story 11.3.3 AC2: opt-in lifespan phase tracer. When
@@ -337,6 +369,8 @@ async def run_subscriber(
         session_maker = get_session(engine)
         materializer = materializer_factory(session_maker)
         register_default_handlers(materializer)
+        # Story 36.3 / FR110: heartbeat monitor for dead-session detection.
+        monitor = HeartbeatMonitor(heartbeat_interval_s=heartbeat_interval_s, clock=clock)
         if _trace:
             log.info(
                 "lifespan phase: handlers_register complete in %.3fs", time.monotonic() - _phase_t0
@@ -397,6 +431,7 @@ async def run_subscriber(
                 applied = await materializer.apply_many(new_envelopes)
                 startup_applied += applied
                 if applied:
+                    _feed_heartbeats(new_envelopes, monitor)
                     last_env = new_envelopes[-1]
                     await snapshot_policy.maybe_capture(last_env, applied)
         # Story 2.6 AC-9: instrumentation for "verified via instrumentation
@@ -432,6 +467,7 @@ async def run_subscriber(
                 if to_apply:
                     applied = await materializer.apply_many(to_apply)
                     if applied:
+                        _feed_heartbeats(to_apply, monitor)
                         last_env = to_apply[-1]
                         await snapshot_policy.maybe_capture(last_env, applied)
             with contextlib.suppress(TimeoutError):

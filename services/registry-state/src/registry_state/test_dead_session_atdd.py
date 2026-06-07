@@ -79,7 +79,6 @@ def test_emit_session_heartbeat_timeout_exists() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True)
 @pytest.mark.asyncio
 async def test_subscriber_feeds_session_heartbeats_into_monitor() -> None:
     """The subscriber must record session heartbeats from session.heartbeat events
