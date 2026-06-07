@@ -270,7 +270,7 @@ _CAPABILITY_BOUNDARIES_SET: Final[frozenset[str]] = frozenset(_CAPABILITY_BOUNDA
 
 # Phase 5 / NFR-O13 — bounded runtime label for per-runtime attribution.
 # Cardinality is bounded by the runtime registry (currently 2 values).
-_RUNTIMES: Final[tuple[str, ...]] = ("claude-code", "codex", "unknown")
+_RUNTIMES: Final[tuple[str, ...]] = ("claude-code", "codex", "gemini", "unknown")
 _RUNTIMES_SET: Final[frozenset[str]] = frozenset(_RUNTIMES)
 
 

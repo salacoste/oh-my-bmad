@@ -7,6 +7,10 @@ from worker_wrapper.adapters.claude_code_runner import (
     ExtractedEvent,
     ReasoningBreadcrumb,
 )
+from worker_wrapper.adapters.gemini_runner import (
+    GeminiResult,
+    GeminiRunner,
+)
 from worker_wrapper.adapters.github_client import (
     BranchResult,
     GitHubClient,
@@ -29,6 +33,8 @@ __all__ = [
     "ClaudeCodeResult",
     "ClaudeCodeRunner",
     "ExtractedEvent",
+    "GeminiResult",
+    "GeminiRunner",
     "GitHubClient",
     "LifecycleManager",
     "MCPClientGroup",

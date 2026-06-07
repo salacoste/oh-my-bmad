@@ -171,6 +171,14 @@ class WorkerSettings(BaseSettings):
     codex_timeout_s: float = 600.0
     openai_api_key: str = ""  # WORKER_OPENAI_API_KEY
 
+    # Gemini-specific settings (latent scaffold — only consulted when
+    # runtime="gemini").  gemini_command mirrors claude_command/codex_command;
+    # gemini_timeout_s mirrors claude_timeout_s.  google_api_key is the
+    # Gemini-adapter sibling of anthropic_api_key (P6-I5 credential isolation).
+    gemini_command: str = "gemini"
+    gemini_timeout_s: float = 600.0
+    google_api_key: str = ""  # WORKER_GOOGLE_API_KEY
+
     # Claude Code subprocess settings (Story 5.4).
     claude_command: str = "claude"
     claude_max_turns: int = 0  # 0 = unlimited

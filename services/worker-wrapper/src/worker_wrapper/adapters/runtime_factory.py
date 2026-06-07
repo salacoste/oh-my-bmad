@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 #   2. Adding the name here
 #   3. Adding the factory branch below
 #   4. Updating ADR-0010 recipe step 9 (ADR-0015 D6)
-SUPPORTED_RUNTIMES: frozenset[str] = frozenset({"claude-code", "codex"})
+SUPPORTED_RUNTIMES: frozenset[str] = frozenset({"claude-code", "codex", "gemini"})
 
 
 def get_runtime_adapter(
@@ -66,6 +66,11 @@ def get_runtime_adapter(
         from worker_wrapper.adapters.codex_runner import CodexRunner
 
         return CodexRunner(settings)
+
+    if resolved == "gemini":
+        from worker_wrapper.adapters.gemini_runner import GeminiRunner
+
+        return GeminiRunner(settings)
 
     # Defensive: should be unreachable due to the frozenset check above.
     raise ValueError(f"Unhandled runtime: {resolved!r}")  # pragma: no cover

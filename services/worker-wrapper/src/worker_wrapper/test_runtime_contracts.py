@@ -20,6 +20,7 @@ from worker_wrapper.adapters.claude_code_runner import (
     TerminationResult,
 )
 from worker_wrapper.adapters.codex_runner import CodexRunner
+from worker_wrapper.adapters.gemini_runner import GeminiRunner
 from worker_wrapper.adapters.runtime_factory import (
     SUPPORTED_RUNTIMES,
     get_runtime_adapter,
@@ -40,6 +41,9 @@ class TestRuntimeAdapterFactory:
     def test_supported_runtimes_contains_codex(self) -> None:
         assert "codex" in SUPPORTED_RUNTIMES
 
+    def test_supported_runtimes_contains_gemini(self) -> None:
+        assert "gemini" in SUPPORTED_RUNTIMES
+
     def test_factory_claude_code_returns_claude_runner(self) -> None:
         s = WorkerSettings()
         adapter = get_runtime_adapter(s)
@@ -49,6 +53,11 @@ class TestRuntimeAdapterFactory:
         s = WorkerSettings(runtime="codex")
         adapter = get_runtime_adapter(s)
         assert isinstance(adapter, CodexRunner)
+
+    def test_factory_gemini_returns_gemini_runner(self) -> None:
+        s = WorkerSettings(runtime="gemini")
+        adapter = get_runtime_adapter(s)
+        assert isinstance(adapter, GeminiRunner)
 
     def test_factory_override_takes_priority(self) -> None:
         s = WorkerSettings(runtime="claude-code")
@@ -68,7 +77,7 @@ class TestRuntimeAdapterFactory:
     def test_factory_unknown_raises_value_error(self) -> None:
         s = WorkerSettings()
         with pytest.raises(ValueError, match="Unknown runtime"):
-            get_runtime_adapter(s, runtime="gemini")
+            get_runtime_adapter(s, runtime="nonexistent-runtime")
 
     def test_factory_empty_settings_defaults_to_claude(self) -> None:
         s = WorkerSettings()
@@ -91,8 +100,9 @@ class TestRuntimeAdapterProtocol:
         [
             lambda: ClaudeCodeRunner(WorkerSettings()),
             lambda: CodexRunner(WorkerSettings()),
+            lambda: GeminiRunner(WorkerSettings()),
         ],
-        ids=["claude-code", "codex"],
+        ids=["claude-code", "codex", "gemini"],
     )
     def test_isinstance_runtime_adapter(self, runner_factory: object) -> None:
         runner = runner_factory()  # type: ignore[operator]
@@ -103,8 +113,9 @@ class TestRuntimeAdapterProtocol:
         [
             (lambda: ClaudeCodeRunner(WorkerSettings()), "claude-code"),
             (lambda: CodexRunner(WorkerSettings()), "codex"),
+            (lambda: GeminiRunner(WorkerSettings()), "gemini"),
         ],
-        ids=["claude-code", "codex"],
+        ids=["claude-code", "codex", "gemini"],
     )
     def test_runtime_name_in_closed_set(
         self,
@@ -152,6 +163,29 @@ class TestRuntimeAdapterHealthCheck:
         assert isinstance(result, HealthCheckResult)
         assert result.installed is False
 
+    @pytest.mark.asyncio
+    async def test_gemini_health_check_returns_result(self) -> None:
+        s = WorkerSettings()
+        runner = GeminiRunner(s)
+        result = await runner.health_check()
+        assert isinstance(result, HealthCheckResult)
+
+    @pytest.mark.asyncio
+    async def test_gemini_health_check_missing_binary(self) -> None:
+        s = WorkerSettings(gemini_command="/nonexistent/gemini")
+        runner = GeminiRunner(s)
+        result = await runner.health_check()
+        assert isinstance(result, HealthCheckResult)
+        assert result.installed is False
+
+    @pytest.mark.asyncio
+    async def test_gemini_health_check_blank_command(self) -> None:
+        s = WorkerSettings(gemini_command="")
+        runner = GeminiRunner(s)
+        result = await runner.health_check()
+        assert isinstance(result, HealthCheckResult)
+        assert result.installed is False
+
 
 class TestRuntimeAdapterKill:
     """P5-I3: terminate_with_grace returns TerminationResult-compatible value."""
@@ -168,6 +202,14 @@ class TestRuntimeAdapterKill:
     async def test_codex_noop_terminate(self) -> None:
         """No live subprocess → noop termination."""
         runner = CodexRunner(WorkerSettings())
+        result = await runner.terminate_with_grace()
+        assert isinstance(result, TerminationResult)
+        assert result.method == "noop"
+
+    @pytest.mark.asyncio
+    async def test_gemini_noop_terminate(self) -> None:
+        """No live subprocess → noop termination."""
+        runner = GeminiRunner(WorkerSettings())
         result = await runner.terminate_with_grace()
         assert isinstance(result, TerminationResult)
         assert result.method == "noop"

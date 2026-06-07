@@ -1,15 +1,16 @@
-"""Credential isolation tests — P5-I1 / NFR-S14 / NFR-R10 (FR90 AC).
+"""Credential isolation tests — P5-I1 / P6-I5 / NFR-S14 / NFR-R10 (FR90/FR107 AC).
 
 Verifies that each runtime adapter's child environment contains ONLY its own
 API key and NEVER the other runtime's API key.  This is the runtime-level
 sibling of the existing G-SEC-2 worker-wrapper credential isolation tests.
 
 Contract:
-- ClaudeCodeRunner child env: contains ANTHROPIC_API_KEY, NOT OPENAI_API_KEY.
-- CodexRunner child env: contains OPENAI_API_KEY, NOT ANTHROPIC_API_KEY.
-- Neither child env contains GITHUB_TOKEN.
+- ClaudeCodeRunner child env: contains ANTHROPIC_API_KEY, NOT OPENAI_API_KEY, NOT GEMINI_API_KEY.
+- CodexRunner child env: contains OPENAI_API_KEY, NOT ANTHROPIC_API_KEY, NOT GEMINI_API_KEY.
+- GeminiRunner child env: contains GEMINI_API_KEY, NOT ANTHROPIC_API_KEY, NOT OPENAI_API_KEY.
+- No child env contains GITHUB_TOKEN.
 - The allowlists share functional vars but diverge on secrets.
-- Prefix allowlists are isolated: CLAUDE_ vs CODEX_.
+- Prefix allowlists are isolated: CLAUDE_ vs CODEX_ vs GEMINI_.
 """
 
 from __future__ import annotations
@@ -30,6 +31,13 @@ from worker_wrapper.adapters.codex_runner import (
 )
 from worker_wrapper.adapters.codex_runner import (
     _build_child_env as _codex_build_env,
+)
+from worker_wrapper.adapters.gemini_runner import (
+    _GEMINI_ENV_ALLOWLIST,
+    _GEMINI_ENV_PREFIXES,
+)
+from worker_wrapper.adapters.gemini_runner import (
+    _build_child_env as _gemini_build_env,
 )
 
 
@@ -54,8 +62,28 @@ class TestCredentialIsolation:
         """GITHUB_TOKEN must NOT be in Codex's allowlist."""
         assert "GITHUB_TOKEN" not in _CODEX_ENV_ALLOWLIST
 
+    def test_gemini_allowlist_excludes_anthropic_key(self) -> None:
+        """ANTHROPIC_API_KEY must NOT be in Gemini's allowlist."""
+        assert "ANTHROPIC_API_KEY" not in _GEMINI_ENV_ALLOWLIST
+
+    def test_gemini_allowlist_excludes_openai_key(self) -> None:
+        """OPENAI_API_KEY must NOT be in Gemini's allowlist."""
+        assert "OPENAI_API_KEY" not in _GEMINI_ENV_ALLOWLIST
+
+    def test_gemini_allowlist_excludes_github_token(self) -> None:
+        """GITHUB_TOKEN must NOT be in Gemini's allowlist."""
+        assert "GITHUB_TOKEN" not in _GEMINI_ENV_ALLOWLIST
+
+    def test_claude_allowlist_excludes_gemini_key(self) -> None:
+        """GEMINI_API_KEY must NOT be in Claude's allowlist."""
+        assert "GEMINI_API_KEY" not in _CHILD_ENV_ALLOWLIST
+
+    def test_codex_allowlist_excludes_gemini_key(self) -> None:
+        """GEMINI_API_KEY must NOT be in Codex's allowlist."""
+        assert "GEMINI_API_KEY" not in _CODEX_ENV_ALLOWLIST
+
     def test_shared_functional_vars(self) -> None:
-        """Functional vars (PATH, HOME, TLS) are in BOTH allowlists."""
+        """Functional vars (PATH, HOME, TLS) are in ALL allowlists."""
         shared = {
             "PATH",
             "HOME",
@@ -73,6 +101,7 @@ class TestCredentialIsolation:
         }
         assert shared.issubset(_CHILD_ENV_ALLOWLIST)
         assert shared.issubset(_CODEX_ENV_ALLOWLIST)
+        assert shared.issubset(_GEMINI_ENV_ALLOWLIST)
 
     # -- Prefix isolation --
 
@@ -84,10 +113,27 @@ class TestCredentialIsolation:
         """CLAUDE_ prefix must NOT be in Codex's prefix allowlist."""
         assert "CLAUDE_" not in _CODEX_ENV_PREFIXES
 
-    def test_both_include_omb_prefix(self) -> None:
-        """OMB_ prefix must be in BOTH prefix allowlists (trace/task vars)."""
+    def test_codex_prefix_excludes_gemini(self) -> None:
+        """GEMINI_ prefix must NOT be in Codex's prefix allowlist."""
+        assert "GEMINI_" not in _CODEX_ENV_PREFIXES
+
+    def test_gemini_prefix_excludes_claude(self) -> None:
+        """CLAUDE_ prefix must NOT be in Gemini's prefix allowlist."""
+        assert "CLAUDE_" not in _GEMINI_ENV_PREFIXES
+
+    def test_gemini_prefix_excludes_codex(self) -> None:
+        """CODEX_ prefix must NOT be in Gemini's prefix allowlist."""
+        assert "CODEX_" not in _GEMINI_ENV_PREFIXES
+
+    def test_claude_prefix_excludes_gemini(self) -> None:
+        """GEMINI_ prefix must NOT be in Claude's prefix allowlist."""
+        assert "GEMINI_" not in _CHILD_ENV_PREFIXES
+
+    def test_all_include_omb_prefix(self) -> None:
+        """OMB_ prefix must be in ALL prefix allowlists (trace/task vars)."""
         assert "OMB_" in _CHILD_ENV_PREFIXES
         assert "OMB_" in _CODEX_ENV_PREFIXES
+        assert "OMB_" in _GEMINI_ENV_PREFIXES
 
     # -- Runtime env builder isolation --
 
@@ -115,13 +161,14 @@ class TestCredentialIsolation:
             env = _claude_build_env()
         assert "GITHUB_TOKEN" not in env
 
-    def test_both_keys_present_only_correct_runner_gets_each(self) -> None:
-        """When BOTH API keys are in parent env, each runner gets only its own."""
+    def test_all_keys_present_only_correct_runner_gets_each(self) -> None:
+        """When ALL API keys are in parent env, each runner gets only its own."""
         with patch.dict(
             os.environ,
             {
                 "ANTHROPIC_API_KEY": "sk-ant-canary",
                 "OPENAI_API_KEY": "sk-openai-canary",
+                "GEMINI_API_KEY": "AIza-canary",
                 "GITHUB_TOKEN": "ghp-canary",
                 "PATH": "/usr/bin",
                 "HOME": "/home/test",
@@ -130,16 +177,25 @@ class TestCredentialIsolation:
         ):
             claude_env = _claude_build_env()
             codex_env = _codex_build_env()
+            gemini_env = _gemini_build_env()
 
-        # Claude env: should have functional vars but NOT OpenAI/GitHub keys
+        # Claude env: should have functional vars but NOT OpenAI/Gemini/GitHub keys
         assert "ANTHROPIC_API_KEY" not in claude_env  # injected by _spawn, not allowlist
         assert "OPENAI_API_KEY" not in claude_env
+        assert "GEMINI_API_KEY" not in claude_env
         assert "GITHUB_TOKEN" not in claude_env
 
-        # Codex env: should have functional vars but NOT Anthropic/GitHub keys
+        # Codex env: should have functional vars but NOT Anthropic/Gemini/GitHub keys
         assert "OPENAI_API_KEY" not in codex_env  # injected by _spawn, not allowlist
         assert "ANTHROPIC_API_KEY" not in codex_env
+        assert "GEMINI_API_KEY" not in codex_env
         assert "GITHUB_TOKEN" not in codex_env
+
+        # Gemini env: should have functional vars but NOT Anthropic/OpenAI/GitHub keys
+        assert "GEMINI_API_KEY" not in gemini_env  # injected by _spawn, not allowlist
+        assert "ANTHROPIC_API_KEY" not in gemini_env
+        assert "OPENAI_API_KEY" not in gemini_env
+        assert "GITHUB_TOKEN" not in gemini_env
 
     # -- Secret injection is from settings, not parent env --
 
@@ -155,3 +211,7 @@ class TestCredentialIsolation:
     def test_claude_injects_anthropic_from_settings_not_parent(self) -> None:
         """ClaudeCodeRunner._spawn injects ANTHROPIC_API_KEY from settings, not os.environ."""
         assert "ANTHROPIC_API_KEY" not in _CHILD_ENV_ALLOWLIST
+
+    def test_gemini_injects_key_from_settings_not_parent(self) -> None:
+        """GeminiRunner._spawn injects GEMINI_API_KEY from settings, not os.environ."""
+        assert "GEMINI_API_KEY" not in _GEMINI_ENV_ALLOWLIST

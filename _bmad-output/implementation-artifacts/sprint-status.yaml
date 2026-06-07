@@ -521,13 +521,13 @@ development_status:
   # Epic 33: Gemini adapter (6 stories, ~1.5 weeks)
   # phase: 6 · FR107 · NFR-M12 · ADR-0010 step-9 + ADR-0015
   # ---------------------------------------------------------------------------
-  epic-33: in-progress  # phase: 6 · Gemini adapter (FR107)
-  33-1-atdd-red-phase-gemini-contracts: done  # phase: 6 · FR107 · 10 xfail(strict) + 2 reference ATDD contracts
-  33-2-gemini-runner-scaffold: backlog  # phase: 6 · FR107 · GeminiRunner spawn/runtime_name/parse_output
-  33-3-gemini-credential-isolation: backlog  # phase: 6 · P6-I5 · _GEMINI_ENV_ALLOWLIST + negative tests
-  33-4-supported-runtimes-expansion-factory: backlog  # phase: 6 · FR107 · SUPPORTED_RUNTIMES += "gemini"
-  33-5-gemini-health-check-binary-detection: backlog  # phase: 6 · FR107 · installed=True/False + kill() semantics
-  33-6-separability-test-s13-gemini-optional: backlog  # phase: 6 · NFR-M12 · S-13 Gemini optional
+  epic-33: done  # phase: 6 · Gemini adapter (FR107) — ALL 6 stories done
+  33-1-atdd-red-phase-gemini-contracts: done  # phase: 6 · FR107 · 10 ATDD contracts (all green)
+  33-2-gemini-runner-scaffold: done  # phase: 6 · FR107 · GeminiRunner spawn/runtime_name/parse_output
+  33-3-gemini-credential-isolation: done  # phase: 6 · P6-I5 · _GEMINI_ENV_ALLOWLIST + denylist + negative tests
+  33-4-supported-runtimes-expansion-factory: done  # phase: 6 · FR107 · SUPPORTED_RUNTIMES += "gemini" + settings + metrics
+  33-5-gemini-health-check-binary-detection: done  # phase: 6 · FR107 · installed=True/False + blank command returns False
+  33-6-separability-test-s13-gemini-optional: done  # phase: 6 · NFR-M12 · blank gemini_command → installed=False (S-13)
 
   # ---------------------------------------------------------------------------
   # Epic 34: CI hardening + finalization (5 stories, ~1 week)
