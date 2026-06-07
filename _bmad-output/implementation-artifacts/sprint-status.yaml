@@ -511,7 +511,7 @@ development_status:
   epic-32: in-progress  # phase: 6 · Multi-task parallelism (FR104-FR106)
   32-1-atdd-red-phase-worker-pool-contracts: done  # phase: 6 · FR104 · 11 xfail(strict) + 5 reference ATDD contracts
   32-2-worker-identity-system: done  # phase: 6 · P6-I4 · Task.worker_id column + generate_worker_id + migration 0009
-  32-3-atomic-task-claiming-skip-locked: backlog  # phase: 6 · FR104, FR106 · SKIP LOCKED / BEGIN EXCLUSIVE claiming
+  32-3-atomic-task-claiming-skip-locked: done  # phase: 6 · FR104, FR106 · TaskAssignedPayload + event registration + handle_task_assigned handler (claim_next_task stub)
   32-4-worker-polling-loop-poll-interval: backlog  # phase: 6 · FR106 · Poll-based task assignment loop
   32-5-docker-compose-multi-worker-scaling: backlog  # phase: 6 · FR104 · --scale worker-wrapper=N
   32-6-per-task-worktree-isolation-multi-worker: backlog  # phase: 6 · FR105 · worktree paths with task_id

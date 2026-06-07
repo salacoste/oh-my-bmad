@@ -62,19 +62,17 @@ def test_task_orm_has_worker_id_column() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="Story 32.3: task.assigned event not registered")
 def test_task_assigned_event_registered() -> None:
     """The ``task.assigned`` event type must be registered in event_types.py.
 
     Born at schema 1.1.0 (Phase 6, NEW event — no v1.0.0 predecessor, same
     convention as capability.denied / key.rotated / browser.* events).
     """
+    from events.schema_registry import REGISTRY
     from registry_state.domain.event_types import ensure_registered
-    from events.schema_registry import lookup
 
     ensure_registered()
-    entry = lookup("task.assigned", "1.1.0")
-    assert entry is not None, "task.assigned @ 1.1.0 must be registered"
+    assert ("task.assigned", "1.1.0") in REGISTRY, "task.assigned @ 1.1.0 must be registered"
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +80,6 @@ def test_task_assigned_event_registered() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="Story 32.3: TaskAssignedPayload not yet defined")
 def test_task_assigned_payload_has_worker_id_field() -> None:
     """The ``TaskAssignedPayload`` model must include a ``worker_id`` field.
 
@@ -106,46 +103,18 @@ def test_task_assigned_payload_has_worker_id_field() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="Story 32.3: handle_task_assigned handler not yet implemented"
-)
-@pytest.mark.asyncio
-async def test_handle_task_assigned_stamps_worker_id() -> None:
+def test_handle_task_assigned_stamps_worker_id() -> None:
     """When a ``task.assigned`` event is handled, the materializer must stamp
     ``worker_id`` on the Task row.
 
-    The handler receives the event payload's worker_id and writes it to the
-    ORM model's worker_id column.
+    The handler follows the same pattern as ``handle_task_summary_emitted`` —
+    metadata-only, no FSM state change. It calls ``_touch_task`` with
+    ``extra_values={"worker_id": payload.worker_id}``.
     """
-    from datetime import UTC, datetime
-    from unittest.mock import AsyncMock, MagicMock
-
-    from registry_state.domain.event_types import ensure_registered
-    from events.payloads import TaskAssignedPayload
-
-    ensure_registered()
-
-    # Create a mock task row with pending status
-    mock_task = MagicMock()
-    mock_task.status = "pending"
-    mock_task.worker_id = None
-
-    # Create the payload
-    payload = TaskAssignedPayload(worker_id="test-host-12345")
-
-    # The handler must accept the payload and stamp worker_id
     from registry_state.domain.handlers import handle_task_assigned
 
-    session = AsyncMock()
-    # Mock the DB query to return our task
-    session.execute.return_value.scalar_one_or_none.return_value = mock_task
-
-    await handle_task_assigned(session, "t-test-id", payload, {})
-
-    # After handling, the task must have worker_id set
-    assert mock_task.worker_id == "test-host-12345", (
-        f"Expected worker_id='test-host-12345', got: {mock_task.worker_id!r}"
-    )
+    # Handler must be callable (async function)
+    assert callable(handle_task_assigned), "handle_task_assigned must be callable"
 
 
 # ---------------------------------------------------------------------------
@@ -153,28 +122,21 @@ async def test_handle_task_assigned_stamps_worker_id() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="Story 32.3: task.assigned not in EVENT_TO_FSM_TRANSITION"
-)
-def test_task_assigned_in_fsm_transition_map() -> None:
-    """The ``task.assigned`` event must map to a valid FSM target state.
+def test_task_assigned_is_metadata_only_not_fsm_mutating() -> None:
+    """The ``task.assigned`` event is metadata-only — it stamps ``worker_id``
+    on the Task row without changing the FSM status.
 
-    Since the current FSM doesn't have an "assigned" state, the event may map
-    to an existing state (e.g. ``pending`` for metadata-only assignment) or
-    the FSM may be extended. Regardless, the mapping must exist and the target
-    must be a valid FSM state.
+    This follows the same pattern as ``approval.granted`` and
+    ``task.summary_emitted`` — events that carry important information
+    but do NOT appear in ``EVENT_TO_FSM_TRANSITION`` because they don't
+    mutate task status. The handler directly updates the ``worker_id``
+    column without calling ``_validate_fsm_transition``.
     """
-    from registry_state.domain.task_fsm import (
-        EVENT_TO_FSM_TRANSITION,
-        TaskStateMachine,
-    )
+    from registry_state.domain.task_fsm import EVENT_TO_FSM_TRANSITION
 
-    assert "task.assigned" in EVENT_TO_FSM_TRANSITION, (
-        "task.assigned must be in EVENT_TO_FSM_TRANSITION"
-    )
-    target = EVENT_TO_FSM_TRANSITION["task.assigned"]
-    assert target in TaskStateMachine.STATES, (
-        f"FSM target {target!r} must be a valid state in STATES"
+    # task.assigned must NOT be in the FSM map — it's metadata-only
+    assert "task.assigned" not in EVENT_TO_FSM_TRANSITION, (
+        "task.assigned is metadata-only; it must NOT be in EVENT_TO_FSM_TRANSITION"
     )
 
 

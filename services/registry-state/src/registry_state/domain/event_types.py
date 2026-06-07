@@ -62,6 +62,7 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     SinkDeliveryFailedPayload,
     TaskApprovalRequestedPayload,
     TaskApprovalSignedPayload,
+    TaskAssignedPayload,
     TaskBlockerRaisedPayload,
     TaskBudgetEnforcementTriggeredPayload,
     TaskBudgetExceededPayload,
@@ -145,6 +146,7 @@ __all__ = [
     "SinkDeliveryFailedPayload",
     "TaskApprovalRequestedPayload",
     "TaskApprovalSignedPayload",
+    "TaskAssignedPayload",
     "TaskBlockerRaisedPayload",
     "TaskBudgetEnforcementTriggeredPayload",
     "TaskBudgetExceededPayload",
@@ -230,6 +232,11 @@ def ensure_registered() -> None:
     register("task.stop_requested", "1.0.0", TaskStopRequestedPayload)
     register("task.stop_requested", "1.0.1", TaskStopRequestedPayload)
     register("task.stop_requested", "1.1.0", TaskStopRequestedPayload)
+
+    # Story 32.3 — task.assigned event (FR104 / ADR-0019 D2). Emitted when a
+    # worker atomically claims a task from the queue. Born at 1.1.0 (Phase 6,
+    # NEW event — no v1.0.0 predecessor, same convention as browser.* events).
+    register("task.assigned", "1.1.0", TaskAssignedPayload)
 
     # Story 2.14 — v1.0.1 registrations (same models, additive envelope field).
     # Story 2.16 — secret.accessed audit-event payload (FR42 / NFR-S3).

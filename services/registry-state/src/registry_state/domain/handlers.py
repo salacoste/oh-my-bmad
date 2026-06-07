@@ -47,6 +47,7 @@ from registry_state.domain.event_types import (
     KeyRotatedPayload,
     LicenseOverridePayload,
     TaskApprovalRequestedPayload,
+    TaskAssignedPayload,
     TaskBlockerRaisedPayload,
     TaskBudgetExceededPayload,
     TaskCompletedPayload,
@@ -360,6 +361,26 @@ async def handle_task_summary_emitted(session: AsyncSession, envelope: EventEnve
     payload = _hydrate(envelope.payload, TaskSummaryEmittedPayload)
     assert isinstance(payload, TaskSummaryEmittedPayload)
     await _touch_task(session, payload.task_id, envelope)
+
+
+async def handle_task_assigned(session: AsyncSession, envelope: EventEnvelope) -> None:
+    """Stamp ``worker_id`` on the task row for ``task.assigned`` (Story 32.3).
+
+    Metadata-only handler — does NOT change task status. The FSM state stays
+    unchanged (typically ``pending``); only the ``worker_id`` column is updated
+    to record which worker claimed this task.
+
+    ADR-0019 D2: worker_id is stamped on claimed tasks for observability
+    (metrics, audit trails, crash detection).
+    """
+    payload = _hydrate(envelope.payload, TaskAssignedPayload)
+    assert isinstance(payload, TaskAssignedPayload)
+    await _touch_task(
+        session,
+        payload.task_id,
+        envelope,
+        {"worker_id": payload.worker_id},
+    )
 
 
 async def handle_task_approval_requested(session: AsyncSession, envelope: EventEnvelope) -> None:
@@ -836,6 +857,7 @@ def register_default_handlers(materializer: MaterializerProtocol) -> None:
     materializer.register_handler("task.blocker_raised", handle_task_blocker_raised)
     materializer.register_handler("task.summary_emitted", handle_task_summary_emitted)
     materializer.register_handler("task.approval_requested", handle_task_approval_requested)
+    materializer.register_handler("task.assigned", handle_task_assigned)
     materializer.register_handler("task.completed", handle_task_completed)
     # Story 6.5 — 4 decision audit event handlers.
     materializer.register_handler("approval.granted", handle_approval_granted)
@@ -886,6 +908,7 @@ __all__ = [
     "handle_file_edited",
     "handle_key_rotated",
     "handle_task_approval_requested",
+    "handle_task_assigned",
     "handle_task_blocker_raised",
     "handle_task_budget_exceeded",
     "handle_task_completed",

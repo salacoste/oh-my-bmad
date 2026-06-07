@@ -91,6 +91,25 @@ class TaskCreatedPayload(BaseModel):
         return v
 
 
+class TaskAssignedPayload(BaseModel):
+    """Payload for the ``task.assigned`` event (Story 32.3 / FR104 / ADR-0019 D2).
+
+    Emitted when a worker atomically claims a task from the queue. The
+    ``worker_id`` carries the claiming worker's unique identity (hostname-pid
+    or ``WORKER_ID`` env var override) so downstream consumers (metrics,
+    audit trails, operator dashboards) can trace which worker is processing
+    which task.
+
+    Born at schema 1.1.0 (Phase 6, NEW event — no v1.0.0 predecessor, same
+    convention as ``capability.denied`` / ``key.rotated`` / ``browser.*`` events).
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    task_id: str = Field(pattern=_TASK_ID_PATTERN)
+    worker_id: str = Field(min_length=1, max_length=64)
+
+
 class TaskPlanningStartedPayload(BaseModel):
     """Payload for the ``task.planning.started`` event."""
 
@@ -1631,4 +1650,6 @@ __all__ = [
     "RuntimeHealthCheckedPayload",
     "TaskRuntimeFallbackPayload",
     "TaskRuntimeHandoffPayload",
+    # Phase 6 — worker pool event payloads.
+    "TaskAssignedPayload",
 ]
