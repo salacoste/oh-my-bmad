@@ -231,6 +231,9 @@ _EVENT_FAMILIES: Final[tuple[str, ...]] = (
     #            browser.action_completed, browser.screenshot_captured,
     #            browser.tab_opened, browser.tab_closed (FR83 / FR86).
     #            Emitted by browser-mcp; family child pre-populated at 0.
+    "worker",  # Story 32.7 — task.assigned (NFR-O15). Per-worker metrics
+    #            labeled by worker_id and runtime. Family child for the
+    #            worker pool assignment events.
     "unknown",
 )
 

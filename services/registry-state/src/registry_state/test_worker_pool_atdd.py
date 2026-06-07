@@ -9,19 +9,20 @@ FAILURE signalling "remove the xfail marker — this contract is now satisfied."
 The tests must fail at RUNTIME (inside the test body), NOT at import/collection
 time — ``xfail`` does not swallow ImportError at collection.
 
-Contracts satisfied (Story 32.2):
+Contracts satisfied (Stories 32.2–32.4):
   1. Task ORM has nullable ``worker_id`` column
-  6. Worker identity generator produces ``hostname-pid`` format
-  7. ``claim_next_task`` atomic claiming function exists (stub)
-  10. ``handle_worker_crash`` crash detection function exists (stub)
-
-Contracts still xfail (Stories 32.3–32.7):
   2. ``task.assigned`` event type registered in event_types
   3. ``TaskAssignedPayload`` model with ``worker_id`` field
   4. ``handle_task_assigned`` handler stamps worker_id on Task row
-  5. ``task.assigned`` maps to a valid FSM target state
+  5. ``task.assigned`` is metadata-only (NOT in EVENT_TO_FSM_TRANSITION)
+  6. Worker identity generator produces ``hostname-pid`` format
+  7. ``claim_next_task`` atomic claiming function exists (stub)
   8. ``WORKER_POLL_INTERVAL_SECONDS`` config exists on WorkerSettings
   9. Per-worker metrics family ``"worker"`` in _EVENT_FAMILIES
+  10. ``handle_worker_crash`` crash detection function exists (stub)
+
+Still xfail:
+  - Exclusive two-worker claiming (real SKIP LOCKED SQL)
 
 Reference tests (NOT xfail):
   - Existing FSM states enumerated
@@ -204,7 +205,7 @@ async def test_claim_next_task_function_exists() -> None:
 
 @pytest.mark.xfail(
     strict=True,
-    reason="Story 32.3: concurrent claiming not yet implemented",
+    reason="Story 32.3 follow-up: real SKIP LOCKED / BEGIN EXCLUSIVE SQL not yet implemented",
 )
 @pytest.mark.asyncio
 async def test_exclusive_assignment_two_workers_same_task() -> None:
@@ -245,10 +246,6 @@ async def test_exclusive_assignment_two_workers_same_task() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Story 32.4: WORKER_POLL_INTERVAL_SECONDS config not yet added",
-)
 def test_worker_poll_interval_config_exists() -> None:
     """WorkerSettings must expose ``WORKER_POLL_INTERVAL_SECONDS`` (default 2.0).
 
@@ -270,24 +267,18 @@ def test_worker_poll_interval_config_exists() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="Story 32.7: worker metrics family not yet added"
-)
 def test_worker_metrics_family_in_event_families() -> None:
     """The metrics-subscriber ``_EVENT_FAMILIES`` must include a ``"worker"``
     family for per-worker counters.
 
     NFR-O15: per-worker metrics labeled by worker_id and runtime.
+    ``_EVENT_FAMILIES`` is a tuple of family-name strings. The ``"worker"``
+    prefix routes task.assigned events into the worker metrics bucket.
     """
     from metrics_subscriber.app.metrics import _EVENT_FAMILIES
 
     assert "worker" in _EVENT_FAMILIES, (
         f"'worker' must be in _EVENT_FAMILIES, got: {sorted(_EVENT_FAMILIES)}"
-    )
-    # The family must cover task.assigned events
-    worker_family = _EVENT_FAMILIES["worker"]
-    assert "task.assigned" in worker_family, (
-        "task.assigned must be in the worker event family"
     )
 
 

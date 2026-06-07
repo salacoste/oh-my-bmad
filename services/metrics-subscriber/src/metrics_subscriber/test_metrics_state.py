@@ -828,8 +828,11 @@ def test_cardinality_at_steady_state_is_bounded() -> None:
     # ``omb_events_appended_total{event_family="browser"}`` child (FR83 / FR86).
     # browser.navigated / navigation_blocked / action_completed / screenshot_captured /
     # tab_opened / tab_closed emitted by browser-mcp; family child pre-populated at 0.
-    assert canonical_timeseries <= 66, (
-        f"cardinality {canonical_timeseries} exceeds AC10 steady-state bound of 66; "
+    # Epic 32: bound 66 → 67 for the new pre-populated
+    # ``omb_events_appended_total{event_family="worker"}`` child (NFR-O15).
+    # task.assigned emitted by worker pool; family child pre-populated at 0.
+    assert canonical_timeseries <= 67, (
+        f"cardinality {canonical_timeseries} exceeds AC10 steady-state bound of 67; "
         f"families: {[(f.name, len(f.samples)) for f in timeseries]}"
     )
 
@@ -884,8 +887,10 @@ def test_cardinality_under_burst_cleanup() -> None:
     # ``omb_events_appended_total{event_family="git"}`` child (Epic 15 / FR72).
     # Epic 21 bumped 65 → 66 for the new pre-populated
     # ``omb_events_appended_total{event_family="browser"}`` child (FR83 / FR86).
-    assert canonical_timeseries <= 66, (
-        f"cardinality {canonical_timeseries} exceeds AC10 burst-cleanup bound of 66"
+    # Epic 32 bumped 66 → 67 for the new pre-populated
+    # ``omb_events_appended_total{event_family="worker"}`` child (NFR-O15).
+    assert canonical_timeseries <= 67, (
+        f"cardinality {canonical_timeseries} exceeds AC10 burst-cleanup bound of 67"
     )
 
 

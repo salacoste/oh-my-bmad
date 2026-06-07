@@ -151,6 +151,11 @@ class WorkerSettings(BaseSettings):
     worktree_path: str = ""
     heartbeat_interval_s: float = Field(default=30.0, gt=0)
 
+    # Story 32.4 — worker poll interval for task-assignment loop (FR106 / ADR-0019).
+    # Workers poll for QUEUED tasks at this interval. Default 2.0 seconds balances
+    # assignment latency against DB load at single-operator scale.
+    worker_poll_interval_seconds: float = Field(default=2.0, gt=0)
+
     # Phase 5 — runtime selection (FR89 / ADR-0015).
     # Defaults to "claude-code" for backward compat: existing deployments without
     # WORKER_RUNTIME set continue using Claude Code. Per-task override via
