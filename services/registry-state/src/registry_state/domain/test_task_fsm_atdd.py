@@ -43,8 +43,14 @@ def test_fsm_contains_all_task_states() -> None:
     from registry_state.domain.task_fsm import TaskStateMachine
 
     expected = {
-        "pending", "planning", "plan_ready", "executing",
-        "blocked", "completed", "stopped", "failed",
+        "pending",
+        "planning",
+        "plan_ready",
+        "executing",
+        "blocked",
+        "completed",
+        "stopped",
+        "failed",
     }
     assert expected.issubset(TaskStateMachine.STATES), (
         f"Missing states: {expected - TaskStateMachine.STATES}"
@@ -233,8 +239,14 @@ def test_ref_current_status_values_are_documented() -> None:
     """[Reference] Document the 8 task status values used across the codebase.
     Not xfail — this is documentation, not a contract test."""
     current_statuses = {
-        "pending", "planning", "plan_ready", "executing",
-        "blocked", "completed", "stopped", "failed",
+        "pending",
+        "planning",
+        "plan_ready",
+        "executing",
+        "blocked",
+        "completed",
+        "stopped",
+        "failed",
     }
     # Verify these match what handlers.py uses
     assert len(current_statuses) == 8

@@ -46,16 +46,18 @@ class TaskStateMachine:
         # Caller persists new_state and emits event.
     """
 
-    STATES: frozenset[str] = frozenset({
-        "pending",
-        "planning",
-        "plan_ready",
-        "executing",
-        "blocked",
-        "completed",
-        "stopped",
-        "failed",
-    })
+    STATES: frozenset[str] = frozenset(
+        {
+            "pending",
+            "planning",
+            "plan_ready",
+            "executing",
+            "blocked",
+            "completed",
+            "stopped",
+            "failed",
+        }
+    )
 
     TRANSITIONS: dict[str, frozenset[str]] = {
         # pending: initial state after task.created
@@ -90,20 +92,44 @@ class TaskStateMachine:
             InvalidStateTransition: If the transition is not permitted.
         """
         if current not in self.STATES:
-            raise InvalidStateTransition(
-                current, target, f"Unknown current state: {current!r}"
-            )
+            raise InvalidStateTransition(current, target, f"Unknown current state: {current!r}")
         if target not in self.STATES:
-            raise InvalidStateTransition(
-                current, target, f"Unknown target state: {target!r}"
-            )
+            raise InvalidStateTransition(current, target, f"Unknown target state: {target!r}")
         permitted = self.TRANSITIONS.get(current, frozenset())
         if target not in permitted:
             raise InvalidStateTransition(
-                current, target,
-                f"Permitted transitions from {current!r}: {sorted(permitted)}"
+                current, target, f"Permitted transitions from {current!r}: {sorted(permitted)}"
             )
         return target
 
 
-__all__ = ["TaskStateMachine"]
+# ---------------------------------------------------------------------------
+# Story 31.4 — Event-to-FSM mapping (P6-I4)
+# ---------------------------------------------------------------------------
+
+EVENT_TO_FSM_TRANSITION: dict[str, str] = {
+    "task.created": "pending",
+    "task.planning.started": "planning",
+    "task.plan.ready": "plan_ready",
+    "task.execution.started": "executing",
+    "task.blocker_raised": "blocked",
+    "task.budget_exceeded": "blocked",
+    "task.completed": "completed",
+    "task.stop_requested": "stopped",
+    "task.retry_requested": "pending",
+    "tier3.budget_override": "executing",
+}
+"""Map event types to the FSM target state they produce (P6-I4).
+
+Used by the handler layer to look up the target state for a given event
+type before calling ``TaskStateMachine.transition()``.  Events that do NOT
+change task status (e.g. ``approval.granted``, ``task.summary_emitted``)
+are intentionally absent -- only status-mutating events are listed.
+
+``task.created`` maps to ``"pending"`` (the initial state).  No FSM
+transition is needed for creation -- the row is INSERT-ed with
+``status="pending"`` directly.
+"""
+
+
+__all__ = ["EVENT_TO_FSM_TRANSITION", "TaskStateMachine"]

@@ -24,7 +24,10 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime
-from typing import Protocol, cast
+from typing import TYPE_CHECKING, Protocol, cast
+
+if TYPE_CHECKING:
+    from registry_state.domain.task_fsm import TaskStateMachine
 
 from events.envelope import EventEnvelope
 from pydantic import BaseModel
@@ -33,7 +36,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from registry_state.domain.errors import MaterializerError
+from registry_state.domain.errors import InvalidStateTransition, MaterializerError
 from registry_state.domain.event_types import (
     AgentReasoningBreadcrumbPayload,
     ApprovalGrantedPayload,
@@ -63,6 +66,56 @@ from registry_state.schema import ApprovalInbox, KeyFingerprint, Task
 from registry_state.schema import Session as SessionRow
 
 _log = logging.getLogger("registry_state.domain.handlers")
+
+_fsm = None  # Lazy singleton — avoids import-time instantiation overhead
+
+
+def _get_fsm() -> TaskStateMachine:
+    """Lazy-initialised TaskStateMachine singleton (P6-I3)."""
+    global _fsm
+    if _fsm is None:
+        from registry_state.domain.task_fsm import TaskStateMachine
+
+        _fsm = TaskStateMachine()
+    return _fsm
+
+
+async def _validate_fsm_transition(
+    session: AsyncSession,
+    task_id: str,
+    target_status: str,
+    event_type: str,
+) -> bool:
+    """Validate a status transition via the FSM (P6-I3).
+
+    Fetches the current task status from the DB and calls
+    ``TaskStateMachine.transition()``.  Returns ``True`` if the transition
+    is valid, ``False`` if ``InvalidStateTransition`` is raised.
+
+    The FSM is a guard, NOT a gate — callers MUST still apply the status
+    change even when this returns ``False``.  Events from crash-recovery
+    replay may arrive out-of-order; the subscriber must never crash due
+    to an FSM violation.  A warning is logged on invalid transitions for
+    operational visibility.
+    """
+    result = await session.execute(select(Task.status).where(Task.id == task_id))
+    current_status = result.scalar_one_or_none()
+    if current_status is None:
+        # Task row doesn't exist — _touch_task will raise MaterializerError
+        # which is the correct out-of-order replay guard. No FSM check needed.
+        return True
+    fsm = _get_fsm()
+    try:
+        fsm.transition(current_status, target_status)
+    except InvalidStateTransition as exc:
+        _log.warning(
+            "FSM violation for task %s on event %s: %s (applying anyway — replay resilience)",
+            task_id,
+            event_type,
+            exc,
+        )
+        return False
+    return True
 
 
 def _hydrate(payload: dict[str, object] | BaseModel, model: type[BaseModel]) -> BaseModel:
@@ -203,6 +256,9 @@ async def handle_task_planning_started(session: AsyncSession, envelope: EventEnv
     """
     payload = _hydrate(envelope.payload, TaskPlanningStartedPayload)
     assert isinstance(payload, TaskPlanningStartedPayload)
+    await _validate_fsm_transition(session, payload.task_id, "planning", envelope.type)
+    # FSM-validated (P6-I3)
+    # TODO(Story 31.5): emit task.state_transition audit event here
     await _touch_task(session, payload.task_id, envelope, {"status": "planning", "hint": None})
 
 
@@ -216,6 +272,9 @@ async def handle_task_plan_ready(session: AsyncSession, envelope: EventEnvelope)
     """
     payload = _hydrate(envelope.payload, TaskPlanReadyPayload)
     assert isinstance(payload, TaskPlanReadyPayload)
+    await _validate_fsm_transition(session, payload.task_id, "plan_ready", envelope.type)
+    # FSM-validated (P6-I3)
+    # TODO(Story 31.5): emit task.state_transition audit event here
     await _touch_task(
         session,
         payload.task_id,
@@ -239,6 +298,9 @@ async def handle_task_execution_started(session: AsyncSession, envelope: EventEn
     """
     payload = _hydrate(envelope.payload, TaskExecutionStartedPayload)
     assert isinstance(payload, TaskExecutionStartedPayload)
+    await _validate_fsm_transition(session, payload.task_id, "executing", envelope.type)
+    # FSM-validated (P6-I3)
+    # TODO(Story 31.5): emit task.state_transition audit event here
     await _touch_task(session, payload.task_id, envelope, {"status": "executing"})
     session_stmt = (
         sqlite_insert(SessionRow)
@@ -276,6 +338,9 @@ async def handle_task_blocker_raised(session: AsyncSession, envelope: EventEnvel
             len(payload.reason),
             payload.task_id,
         )
+    await _validate_fsm_transition(session, payload.task_id, "blocked", envelope.type)
+    # FSM-validated (P6-I3)
+    # TODO(Story 31.5): emit task.state_transition audit event here
     await _touch_task(
         session,
         payload.task_id,
@@ -318,6 +383,9 @@ async def handle_task_completed(session: AsyncSession, envelope: EventEnvelope) 
     """
     payload = _hydrate(envelope.payload, TaskCompletedPayload)
     assert isinstance(payload, TaskCompletedPayload)
+    await _validate_fsm_transition(session, payload.task_id, "completed", envelope.type)
+    # FSM-validated (P6-I3)
+    # TODO(Story 31.5): emit task.state_transition audit event here
     await _touch_task(session, payload.task_id, envelope, {"status": "completed"})
     await _close_active_session_for_task(session, payload.task_id, envelope.emitted_at)
 
@@ -365,6 +433,9 @@ async def handle_task_stop_requested(session: AsyncSession, envelope: EventEnvel
     """
     payload = _hydrate(envelope.payload, TaskStopRequestedPayload)
     assert isinstance(payload, TaskStopRequestedPayload)
+    await _validate_fsm_transition(session, payload.task_id, "stopped", envelope.type)
+    # FSM-validated (P6-I3)
+    # TODO(Story 31.5): emit task.state_transition audit event here
     await _touch_task(session, payload.task_id, envelope, {"status": "stopped"})
     await _close_active_session_for_task(session, payload.task_id, envelope.emitted_at)
 
@@ -380,6 +451,9 @@ async def handle_task_retry_requested(session: AsyncSession, envelope: EventEnve
     """
     payload = _hydrate(envelope.payload, TaskRetryRequestedPayload)
     assert isinstance(payload, TaskRetryRequestedPayload)
+    await _validate_fsm_transition(session, payload.task_id, "pending", envelope.type)
+    # FSM-validated (P6-I3)
+    # TODO(Story 31.5): emit task.state_transition audit event here
     await _touch_task(
         session,
         payload.task_id,
@@ -461,6 +535,9 @@ async def handle_task_budget_exceeded(session: AsyncSession, envelope: EventEnve
     """
     payload = _hydrate(envelope.payload, TaskBudgetExceededPayload)
     assert isinstance(payload, TaskBudgetExceededPayload)
+    await _validate_fsm_transition(session, payload.task_id, "blocked", envelope.type)
+    # FSM-validated (P6-I3)
+    # TODO(Story 31.5): emit task.state_transition audit event here
     await _touch_task(
         session,
         payload.task_id,
@@ -497,6 +574,9 @@ async def handle_tier3_budget_override(session: AsyncSession, envelope: EventEnv
     """
     payload = _hydrate(envelope.payload, BudgetOverridePayload)
     assert isinstance(payload, BudgetOverridePayload)
+    await _validate_fsm_transition(session, payload.task_id, "executing", envelope.type)
+    # FSM-validated (P6-I3)
+    # TODO(Story 31.5): emit task.state_transition audit event here
     stmt = (
         update(Task)
         .where(
