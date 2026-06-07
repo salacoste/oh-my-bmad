@@ -1,4 +1,4 @@
-"""GET /v1/tasks/{task_id}/events route handler (Story 7.5 / FR6).
+"""GET /v1/tasks/{task_id}/events and /transitions route handlers (Story 7.5 / FR6, Story 35.6 / FR108).
 
 Returns a JSON array of raw typed event envelopes for debugging and the
 ``oh-my-bmad-cli events --follow`` live-tail. Supports ``since`` cursor
@@ -97,6 +97,76 @@ async def get_task_events(
         rows = result.scalars().all()
 
     return [_row_to_envelope(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Story 35.6 / FR108: audit trail query endpoint
+# ---------------------------------------------------------------------------
+
+
+def _row_to_transition(row: Event) -> dict[str, Any]:
+    """Map a ``task.state_transition`` Event row to a transition dict."""
+    try:
+        payload = json.loads(row.payload_json)
+    except (json.JSONDecodeError, TypeError):
+        payload = {}
+
+    return {
+        "event_id": row.id,
+        "from_state": payload.get("from_state", ""),
+        "to_state": payload.get("to_state", ""),
+        "trigger_event": payload.get("trigger_event", ""),
+        "worker_id": payload.get("worker_id", ""),
+        "timestamp": payload.get("timestamp", row.emitted_at.isoformat()),
+        "emitted_at": row.emitted_at.isoformat(),
+        "emitted_at_monotonic_ns": row.emitted_at_monotonic_ns,
+        "trace_id": row.trace_id,
+    }
+
+
+@router.get(
+    "/tasks/{task_id}/transitions",
+    status_code=200,
+)
+async def get_task_transitions(
+    request: Request,
+    task_id: str = Path(..., pattern=_TASK_ID_PATTERN),
+    after: int | None = Query(
+        None,
+        ge=0,
+        description="Cursor: emitted_at_monotonic_ns of last transition from previous page",
+    ),  # noqa: B008
+    limit: int = Query(100, ge=1, le=1000),  # noqa: B008
+) -> list[dict[str, Any]]:
+    """GET /v1/tasks/{task_id}/transitions — ordered state transition history (FR108).
+
+    Returns a JSON array of state transition records for the task, ordered by
+    ``emitted_at`` ascending. Each record contains ``from_state``, ``to_state``,
+    ``trigger_event``, ``worker_id``, and ``timestamp`` extracted from the
+    ``task.state_transition`` audit event payload.
+
+    Supports ``after`` (monotonic_ns cursor, strict ``>``) and ``limit`` for
+    pagination, matching the ``/events`` endpoint pattern.
+    """
+    session_maker = request.app.state.session_maker
+    _log.debug(
+        "transitions query task_id=%s after=%s limit=%s", task_id, after, limit
+    )
+
+    stmt = (
+        select(Event)
+        .where(Event.task_id == task_id, Event.type == "task.state_transition")
+        .order_by(Event.emitted_at.asc(), Event.emitted_at_monotonic_ns.asc())
+        .limit(limit)
+    )
+    if after is not None:
+        stmt = stmt.where(Event.emitted_at_monotonic_ns > after)
+
+    async with session_maker() as session:
+        result = await session.execute(stmt)
+        rows = result.scalars().all()
+
+    return [_row_to_transition(row) for row in rows]
 
 
 __all__ = ["router"]
