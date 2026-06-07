@@ -43,10 +43,13 @@ from pathlib import Path
 
 from events import EventEnvelope, ensure_shared_dir
 from events.clock import Clock, SystemClock
+from events.ids import new_request_id
+from sqlalchemy import select
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from registry_state.adapters.event_log import (
+    EventLogWriter,
     read_new_envelopes_since,
     recover_all_logs,
 )
@@ -61,8 +64,12 @@ from registry_state.domain.event_types import (  # noqa: F401 — side-effect: r
     TaskPlanReadyPayload,
     TaskStopRequestedPayload,
 )
-from registry_state.domain.failure_detection import HeartbeatMonitor
+from registry_state.domain.failure_detection import (
+    HeartbeatMonitor,
+    emit_session_heartbeat_timeout,
+)
 from registry_state.domain.handlers import (
+    _get_audit_writer,
     _set_audit_writer,
     register_default_handlers,
 )
@@ -271,6 +278,7 @@ async def run_subscriber(
         [async_sessionmaker[AsyncSession]], Materializer
     ] = _default_materializer_factory,
     heartbeat_interval_s: float = 15.0,
+    detection_poll_interval_s: float = 30.0,
 ) -> None:
     """Long-lived subscriber loop: tail the JSONL event log → materialize SQLite state.
 
@@ -298,6 +306,10 @@ async def run_subscriber(
                             heartbeat monitoring. Sessions exceeding
                             ``2 * heartbeat_interval_s`` without a heartbeat are
                             flagged as overdue. Default 15.0s → timeout at 30s.
+        detection_poll_interval_s: (Story 36.4 / NFR-R5) Interval in seconds between
+                            detection loop ticks. Overdue sessions are detected and
+                            emitted as ``session.heartbeat_timeout`` events. Set to 0
+                            to disable detection. Default 30.0s → worst-case 60s SLA.
     """
     stop = stop_event if stop_event is not None else asyncio.Event()
     # Story 11.3.3 AC2: opt-in lifespan phase tracer. When
@@ -445,10 +457,18 @@ async def run_subscriber(
             startup_applied,
         )
 
+        # Story 35.3 + 36.4: the audit writer is created lazily on first
+        # detection tick (see tail loop below).  It is NOT created during
+        # startup to avoid (a) re-emitting audit events during replay and
+        # (b) the EventLogWriter mkdir/chmod overhead in the tight NFR-P3
+        # 1K-replay budget (730ms vs 500ms).  Handlers check for None and
+        # silently skip until the writer is available.
+
         # Tail loop: scan ALL *.jsonl files for newly-appended bytes until
         # stop_event fires.  Scanning every file (not just today's) means
         # events appended to yesterday's file just before the UTC-midnight
         # rollover boundary are not lost.
+        _last_detection_tick = time.monotonic()
         while not stop.is_set():
             envelopes = await _scan_new_envelopes(base_dir, offsets)
             if envelopes:
@@ -470,6 +490,54 @@ async def run_subscriber(
                         _feed_heartbeats(to_apply, monitor)
                         last_env = to_apply[-1]
                         await snapshot_policy.maybe_capture(last_env, applied)
+            # Story 36.4 / NFR-R5: detection poll tick for dead-session detection.
+            # Runs on a separate cadence from the event-processing loop so
+            # detection latency is bounded by detection_poll_interval_s
+            # (default 30s → worst-case 60s SLA = 2 × interval).
+            if detection_poll_interval_s > 0:
+                # Lazy-init the audit writer on first detection tick.
+                # Deferring from startup avoids EventLogWriter mkdir/chmod
+                # overhead in the NFR-P3 1K-replay budget and prevents
+                # audit re-emission during startup replay.
+                if _get_audit_writer() is None:
+                    _set_audit_writer(EventLogWriter(base_dir=base_dir, clock=clock))
+                _now = time.monotonic()
+                if _now - _last_detection_tick >= detection_poll_interval_s:
+                    _last_detection_tick = _now
+                    overdue = monitor.overdue_sessions_and_mark()
+                    for session_id, last_hb_at in overdue:
+                        # Look up the task_id for this session from DB.
+                        async with session_maker() as session:
+                            from registry_state.schema import Session as SessionRow
+                            result = await session.execute(
+                                select(SessionRow.task_id).where(SessionRow.id == session_id)
+                            )
+                            task_id_row = result.scalar_one_or_none()
+                        if task_id_row is None:
+                            continue
+                        try:
+                            await emit_session_heartbeat_timeout(
+                                _get_audit_writer(),  # lazy-inited above
+                                clock=SystemClock(),
+                                session_id=session_id,
+                                task_id=task_id_row,
+                                last_heartbeat_at=last_hb_at,
+                                timeout_threshold_s=monitor.timeout_threshold_s,
+                                trace_id=new_request_id(clock=SystemClock()),
+                                synthetic_source="failure-detection-system-initiated",
+                            )
+                            log.info(
+                                "detected overdue session %s (task %s, last hb %s ago)",
+                                session_id,
+                                task_id_row,
+                                f"{(clock.now() - last_hb_at).total_seconds():.0f}s",
+                            )
+                        except Exception:
+                            log.warning(
+                                "failed to emit heartbeat_timeout for session %s",
+                                session_id,
+                                exc_info=True,
+                            )
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=poll_interval_s)
     finally:
@@ -495,6 +563,11 @@ async def run_subscriber(
             Path("/tmp/ready").unlink(missing_ok=True)  # noqa: S108 — healthcheck signal, not data store
         except OSError as exc:
             log.warning("failed to delete /tmp/ready on shutdown: %s", exc)
+        # Story 36.4: clear the global audit writer so handlers don't hold a
+        # stale reference. Prevents cross-test contamination when multiple
+        # subscriber runs happen in the same process (e.g. test_main.py →
+        # test_materializer.py ordering).
+        _set_audit_writer(None)
         await engine.dispose()
 
 
