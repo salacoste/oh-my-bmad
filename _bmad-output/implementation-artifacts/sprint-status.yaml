@@ -508,14 +508,14 @@ development_status:
   # Epic 32: Multi-task parallelism (7 stories, ~2 weeks)
   # phase: 6 · FR104–FR106 · NFR-O15, NFR-S15, NFR-R11 · ADR-0019
   # ---------------------------------------------------------------------------
-  epic-32: in-progress  # phase: 6 · Multi-task parallelism (FR104-FR106)
-  32-1-atdd-red-phase-worker-pool-contracts: done  # phase: 6 · FR104 · 11 xfail(strict) + 5 reference ATDD contracts
+  epic-32: in-progress  # phase: 6 · Multi-task parallelism (FR104-FR106) — 6/7 stories done
+  32-1-atdd-red-phase-worker-pool-contracts: done  # phase: 6 · FR104 · 16 ATDD contracts (all green)
   32-2-worker-identity-system: done  # phase: 6 · P6-I4 · Task.worker_id column + generate_worker_id + migration 0009
-  32-3-atomic-task-claiming-skip-locked: done  # phase: 6 · FR104, FR106 · TaskAssignedPayload + event registration + handle_task_assigned handler (claim_next_task stub)
+  32-3-atomic-task-claiming-skip-locked: done  # phase: 6 · FR104, FR106 · SKIP LOCKED + SQLite claim + handle_task_assigned
   32-4-worker-polling-loop-poll-interval: done  # phase: 6 · FR106 · WORKER_POLL_INTERVAL_SECONDS config (default 2.0s)
-  32-5-docker-compose-multi-worker-scaling: backlog  # phase: 6 · FR104 · --scale worker-wrapper=N
-  32-6-per-task-worktree-isolation-multi-worker: backlog  # phase: 6 · FR105 · worktree paths with task_id
-  32-7-per-worker-metrics-crash-detection: in-progress  # phase: 6 · NFR-O15, NFR-S15, NFR-R11 · metrics family added; crash recovery + exclusive claiming pending
+  32-5-docker-compose-multi-worker-scaling: done  # phase: 6 · FR104 · container_name removed for --scale support
+  32-6-per-task-worktree-isolation-multi-worker: done  # phase: 6 · FR105 · Verified: worktree isolation already works (per-task paths + per-path locks)
+  32-7-per-worker-metrics-crash-detection: done  # phase: 6 · NFR-O15, NFR-S15, NFR-R11 · metrics family + crash recovery + exclusive claiming
 
   # ---------------------------------------------------------------------------
   # Epic 33: Gemini adapter (6 stories, ~1.5 weeks)

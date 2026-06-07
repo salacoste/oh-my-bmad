@@ -266,7 +266,10 @@ services:
     healthcheck: *healthcheck_mcp
 
   worker-wrapper:
-    container_name: omb-worker-wrapper
+    # Story 32.5 (FR104): container_name removed to enable
+    # `docker compose up --scale worker-wrapper=N`. Fixed container_name
+    # conflicts when N > 1. Each replica gets an auto-generated name like
+    # omb-worker-wrapper-1, omb-worker-wrapper-2, etc.
     build:
       context: .
       dockerfile: services/worker-wrapper/Dockerfile
@@ -291,6 +294,9 @@ services:
       CLAWHIP_BRIDGE_ACTOR_KIND: worker
       CLAWHIP_BRIDGE_ACTOR_ID: worker-wrapper
       WORKER_READY_FILE_PATH: /tmp/ready
+      # Story 32.5 (FR104): WORKER_ID defaults to hostname-pid inside the
+      # container, but can be overridden per-replica via env. Each replica's
+      # hostname is unique in Docker Compose (e.g. omb-worker-wrapper-1).
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]
