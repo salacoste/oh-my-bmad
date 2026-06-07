@@ -552,6 +552,16 @@ development_status:
   35-5-materializer-handler-state-transition: done  # phase: 7 · handle_task_state_transition metadata-only handler
   35-6-audit-trail-query-api: done  # phase: 7 · GET /v1/tasks/{task_id}/transitions endpoint
 
+  # ---------------------------------------------------------------------------
+  # Epic 36: Dead-Session Detection + Worker Heartbeat (4 stories)
+  # phase: 7 · FR109/FR110 · NFR-R5/R11 · FC-P6-4
+  # ---------------------------------------------------------------------------
+  epic-36: done  # phase: 7 · Dead-session detection — ALL 4 stories done
+  36-1-atdd-red-phase-dead-session-contracts: done  # phase: 7 · 7 xfail + 4 reference ATDD contracts
+  36-2-worker-heartbeat-payload-event-registration: done  # phase: 7 · FR109 · WorkerHeartbeatPayload + worker.heartbeat event registration
+  36-3-heartbeat-feeding-in-subscriber-loop: done  # phase: 7 · FR110 · _feed_heartbeats wires session.heartbeat/worker.heartbeat into HeartbeatMonitor
+  36-4-detection-poll-tick-in-subscriber-loop: done  # phase: 7 · NFR-R5 · detection_poll_interval_s + overdue_sessions_and_mark → emit_session_heartbeat_timeout
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
@@ -955,3 +965,18 @@ audit_trail:
       partially parallel with 32. All 30 stories registered in sprint-status
       as backlog. ADR-0020 acceptance checklist item "epics decomposed" now
       satisfied. DOCS/STATUS change — no code.
+  - date: "2026-06-08"
+    event: epic-36-complete
+    from: in-progress
+    to: done
+    story: 36-4-detection-poll-tick-in-subscriber-loop
+    reason: >
+      Epic 36 (Dead-Session Detection + Worker Heartbeat) COMPLETE — all 4
+      stories done. Story 36.4 adds the detection poll tick to the subscriber
+      tail loop: HeartbeatMonitor.overdue_sessions_and_mark() → DB lookup for
+      task_id → emit_session_heartbeat_timeout. Lazy-init audit writer avoids
+      NFR-P3 replay budget overhead. 403 registry-state tests pass. Closes
+      FC-P6-4 (per-worker heartbeat with registry-level timeout) and satisfies
+      NFR-R5 (detection within 60s SLA = 2 × 30s poll interval). FR109
+      (WorkerHeartbeatPayload + worker.heartbeat) + FR110 (heartbeat feeding)
+      + NFR-R11 (crash detection) now fully implemented.
