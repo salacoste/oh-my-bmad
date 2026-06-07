@@ -185,13 +185,15 @@ async def test_claim_next_task_function_exists() -> None:
     uses ``BEGIN EXCLUSIVE``. The function hides the backend difference behind
     a unified interface.
     """
-    from unittest.mock import AsyncMock
+    from unittest.mock import AsyncMock, MagicMock
 
     from registry_state.domain.worker_pool import claim_next_task
 
     session = AsyncMock()
     # Mock the DB to return no tasks (empty queue)
-    session.execute.return_value.scalar_one_or_none.return_value = None
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = None
+    session.execute.return_value = mock_result
 
     result = await claim_next_task(session, worker_id="test-worker-1")
     # No tasks in queue → None
@@ -203,42 +205,72 @@ async def test_claim_next_task_function_exists() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Story 32.3 follow-up: real SKIP LOCKED / BEGIN EXCLUSIVE SQL not yet implemented",
-)
 @pytest.mark.asyncio
 async def test_exclusive_assignment_two_workers_same_task() -> None:
     """Two workers must never claim the same task. Exactly one succeeds.
 
-    This tests the SKIP LOCKED / BEGIN EXCLUSIVE atomicity by simulating
-    two concurrent claim attempts on the same task.
+    Integration test using real in-memory SQLite. Two sequential claim
+    attempts on the same pending task: first worker stamps worker_id,
+    second worker finds no unclaimed tasks.
     """
     from datetime import UTC, datetime
-    from unittest.mock import AsyncMock, MagicMock, patch
 
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.pool import StaticPool
+
+    from registry_state.adapters.sqlite_store import get_session
     from registry_state.domain.worker_pool import claim_next_task
+    from registry_state.schema import Base, Task
 
-    # Simulate: first claim succeeds, second gets None (already locked)
-    mock_task = MagicMock()
-    mock_task.id = "t-exclusive-001"
-    mock_task.status = "pending"
+    # In-memory SQLite with StaticPool (shared connection)
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
 
-    session = AsyncMock()
-    # First call returns the task, second returns None (locked by worker-1)
-    session.execute.return_value.scalar_one_or_none.side_effect = [
-        mock_task,
-        None,
-    ]
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
-    result1 = await claim_next_task(session, worker_id="worker-A")
-    result2 = await claim_next_task(session, worker_id="worker-B")
+    session_factory = get_session(engine)
+    now = datetime(2026, 6, 7, 12, 0, 0, tzinfo=UTC)
+
+    # Insert a single pending task
+    async with session_factory() as session:
+        task = Task(
+            id="t-exclusive-001",
+            status="pending",
+            created_at=now,
+            updated_at=now,
+            actor_kind="human",
+            actor_id="op",
+        )
+        session.add(task)
+        await session.commit()
+
+    # Worker A claims first — should succeed
+    async with session_factory() as session_a:
+        result_a = await claim_next_task(session_a, worker_id="worker-A", dialect="sqlite")
+        await session_a.commit()
+
+    # Worker B claims next — should get None (task already claimed)
+    async with session_factory() as session_b:
+        result_b = await claim_next_task(session_b, worker_id="worker-B", dialect="sqlite")
+        await session_b.commit()
 
     # Exactly one worker gets the task
-    claims = [r for r in (result1, result2) if r is not None]
+    claims = [r for r in (result_a, result_b) if r is not None]
     assert len(claims) == 1, (
         f"Exactly one worker should claim the task, got {len(claims)} claims"
     )
+
+    # The claimed task must have worker_id set
+    claimed = claims[0]
+    assert claimed.worker_id == "worker-A", (
+        f"Expected worker_id='worker-A', got: {claimed.worker_id!r}"
+    )
+
+    await engine.dispose()
 
 
 # ---------------------------------------------------------------------------
