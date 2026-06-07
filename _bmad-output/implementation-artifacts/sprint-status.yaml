@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-06-07T18:00:00Z
+last_updated: 2026-06-07T19:00:00Z
 current_phase: 6  # Phase 6 opened for server execution pool (Epics 30-34), 2026-06-07
 
 development_status:
@@ -480,11 +480,65 @@ development_status:
   # Invariants: P6-I1 through P6-I5
   # =========================================================================
 
+  # ---------------------------------------------------------------------------
+  # Epic 30: Postgres migration (7 stories, ~1.5 weeks)
+  # phase: 6 · FR99–FR101 · NFR-O14, NFR-M11, NFR-S16, NFR-R12 · ADR-0017
+  # ---------------------------------------------------------------------------
   epic-30: backlog  # phase: 6 · Postgres migration (FR99-FR101)
+  30-1-atdd-red-phase-dual-backend-contracts: backlog  # phase: 6 · FR99 · xfail(strict) dual-backend contract tests
+  30-2-database-backend-config-dual-engine-factory: backlog  # phase: 6 · FR99 · REGISTRY_DATABASE_URL + aiosqlite/asyncpg engine factory
+  30-3-backend-conditional-repository-alembic-revalidation: backlog  # phase: 6 · FR99, FR100 · TaskRepository protocol + Alembic 0001-0008 revalidation
+  30-4-alembic-migration-downgrade-path: backlog  # phase: 6 · NFR-R12 · Reversible migration (downgrade path)
+  30-5-postgres-ci-service-container-job: backlog  # phase: 6 · FR101 · Postgres CI job in ci.yml
+  30-6-separability-test-s12-postgres-optional: backlog  # phase: 6 · NFR-M11 · S-12 Postgres optional
+  30-7-performance-validation-connection-security: backlog  # phase: 6 · NFR-O14, NFR-S16 · <5ms p95 + credential safety
+
+  # ---------------------------------------------------------------------------
+  # Epic 31: Task state machine (5 stories, ~1 week)
+  # phase: 6 · FR102–FR103 · NFR-O16 · ADR-0018 · resolves GATED-ARCH D4
+  # ---------------------------------------------------------------------------
   epic-31: backlog  # phase: 6 · Task state machine (FR102-FR103)
+  31-1-atdd-red-phase-fsm-contracts: backlog  # phase: 6 · FR102 · xfail(strict) FSM contract tests
+  31-2-task-state-machine-implementation: backlog  # phase: 6 · FR102 · TaskStateMachine + InvalidStateTransition
+  31-3-migrate-task-status-mutations-to-fsm: backlog  # phase: 6 · FR102, P6-I3 · All Task.status sites → fsm.transition()
+  31-4-materializer-fsm-integration-event-mapping: backlog  # phase: 6 · FR103 · Materializer delegates to FSM
+  31-5-state-machine-audit-trail: backlog  # phase: 6 · NFR-O16 · task.state_transition audit events + /v1/tasks/{id}/transitions
+
+  # ---------------------------------------------------------------------------
+  # Epic 32: Multi-task parallelism (7 stories, ~2 weeks)
+  # phase: 6 · FR104–FR106 · NFR-O15, NFR-S15, NFR-R11 · ADR-0019
+  # ---------------------------------------------------------------------------
   epic-32: backlog  # phase: 6 · Multi-task parallelism (FR104-FR106)
+  32-1-atdd-red-phase-worker-pool-contracts: backlog  # phase: 6 · FR104 · xfail(strict) worker pool contract tests
+  32-2-worker-identity-system: backlog  # phase: 6 · P6-I4 · worker_id hostname+PID + events/metrics stamps
+  32-3-atomic-task-claiming-skip-locked: backlog  # phase: 6 · FR104, FR106 · SKIP LOCKED / BEGIN EXCLUSIVE claiming
+  32-4-worker-polling-loop-poll-interval: backlog  # phase: 6 · FR106 · Poll-based task assignment loop
+  32-5-docker-compose-multi-worker-scaling: backlog  # phase: 6 · FR104 · --scale worker-wrapper=N
+  32-6-per-task-worktree-isolation-multi-worker: backlog  # phase: 6 · FR105 · worktree paths with task_id
+  32-7-per-worker-metrics-crash-detection: backlog  # phase: 6 · NFR-O15, NFR-S15, NFR-R11 · metrics + crash recovery
+
+  # ---------------------------------------------------------------------------
+  # Epic 33: Gemini adapter (6 stories, ~1.5 weeks)
+  # phase: 6 · FR107 · NFR-M12 · ADR-0010 step-9 + ADR-0015
+  # ---------------------------------------------------------------------------
   epic-33: backlog  # phase: 6 · Gemini adapter (FR107)
+  33-1-atdd-red-phase-gemini-contracts: backlog  # phase: 6 · FR107 · xfail(strict) Gemini adapter contract tests
+  33-2-gemini-runner-scaffold: backlog  # phase: 6 · FR107 · GeminiRunner spawn/runtime_name/parse_output
+  33-3-gemini-credential-isolation: backlog  # phase: 6 · P6-I5 · _GEMINI_ENV_ALLOWLIST + negative tests
+  33-4-supported-runtimes-expansion-factory: backlog  # phase: 6 · FR107 · SUPPORTED_RUNTIMES += "gemini"
+  33-5-gemini-health-check-binary-detection: backlog  # phase: 6 · FR107 · installed=True/False + kill() semantics
+  33-6-separability-test-s13-gemini-optional: backlog  # phase: 6 · NFR-M12 · S-13 Gemini optional
+
+  # ---------------------------------------------------------------------------
+  # Epic 34: CI hardening + finalization (5 stories, ~1 week)
+  # phase: 6 · cross-cutting · ship-blocker verification
+  # ---------------------------------------------------------------------------
   epic-34: backlog  # phase: 6 · CI hardening + finalization
+  34-1-phase-6-ci-gate-additions: backlog  # phase: 6 · PR-required checks per epic
+  34-2-mutation-gate-ratchet-update: backlog  # phase: 6 · NFR-O11 · Expand scope + new baseline
+  34-3-event-cardinality-ratchet-update: backlog  # phase: 6 · task.assigned + task.state_transition + task.queued
+  34-4-phase-6-ship-blocker-checklist-verification: backlog  # phase: 6 · 14-item checklist green
+  34-5-phase-6-retrospective: backlog  # phase: 6 · Lessons + carry-forward to Phase 7
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
@@ -877,3 +931,15 @@ audit_trail:
       amendment (FR99-FR107) + architecture amendment (P6-I1 through P6-I5)
       authored. Sprint-status current_phase incremented 5 → 6. Phase 6 =
       server execution pool (Epics 30-34). DOCS/STATUS change — no code.
+  - date: "2026-06-07"
+    event: phase-6-epics-decomposed
+    reason: >
+      Phase 6 epic decomposition complete. 5 epics (30-34) decomposed into 30
+      stories via bmad-create-epics-and-stories. File:
+      _bmad-output/planning-artifacts/phase-6-epics.md. Coverage: 9 FRs
+      (FR99-FR107) + 9 NFRs (NFR-O14-O16, NFR-M11-M12, NFR-S15-S16,
+      NFR-R11-R12) = 100% mapped, zero orphans. Dependency chain: Epic 30
+      (Postgres) → 31 (FSM) → 32 (multi-worker) → 34 (CI); Epic 33 (Gemini)
+      partially parallel with 32. All 30 stories registered in sprint-status
+      as backlog. ADR-0020 acceptance checklist item "epics decomposed" now
+      satisfied. DOCS/STATUS change — no code.
