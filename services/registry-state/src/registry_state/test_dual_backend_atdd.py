@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession  # noqa: F401
 from sqlalchemy.pool import AsyncAdaptedQueuePool, NullPool
 
 if TYPE_CHECKING:
@@ -39,10 +39,6 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Story 30.2 — create_engine must return asyncpg engine for postgresql+asyncpg URLs",
-)
 @pytest.mark.asyncio
 async def test_create_engine_returns_postgres_engine_for_asyncpg_url() -> None:
     """Given a postgresql+asyncpg URL, create_engine returns an engine with
@@ -58,10 +54,6 @@ async def test_create_engine_returns_postgres_engine_for_asyncpg_url() -> None:
     await engine.dispose()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Story 30.2 — generalized create_engine must accept postgresql+asyncpg URL without error",
-)
 def test_create_engine_accepts_postgres_url_without_error() -> None:
     """Given a postgresql+asyncpg URL, create_engine must not raise an error.
     Current implementation raises ValueError for non-sqlite URLs."""
@@ -112,10 +104,6 @@ async def test_ref_sqlite_backend_applies_wal_pragma() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Story 30.2 — Postgres engine must use connection pool (not NullPool)",
-)
 def test_postgres_backend_uses_connection_pool() -> None:
     """Postgres engine must use a real connection pool (AsyncAdaptedQueuePool),
     NOT NullPool (which is SQLite-only)."""
@@ -124,9 +112,7 @@ def test_postgres_backend_uses_connection_pool() -> None:
     url = "postgresql+asyncpg://test:test@localhost:5432/test_db"
     engine = create_engine(url)
     # The pool must NOT be NullPool.
-    assert not isinstance(engine.pool, NullPool), (
-        "Postgres engine must not use NullPool"
-    )
+    assert not isinstance(engine.pool, NullPool), "Postgres engine must not use NullPool"
     # The pool SHOULD be a real pool class (AsyncAdaptedQueuePool or similar).
     assert isinstance(engine.pool, AsyncAdaptedQueuePool), (
         f"Expected AsyncAdaptedQueuePool, got: {type(engine.pool).__name__}"
@@ -138,35 +124,25 @@ def test_postgres_backend_uses_connection_pool() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Story 30.2 — Postgres engine must not register SQLite pragma event listeners",
-)
 def test_postgres_backend_has_no_sqlite_pragma_listeners() -> None:
     """Postgres engine must NOT have PRAGMA event listeners attached (those
-    are SQLite-only and would fail on Postgres connections)."""
+    are SQLite-only and would fail on Postgres connections).
+
+    The SQLite pragma listener is registered via
+    ``@event.listens_for(sync_engine, "connect")`` which SQLAlchemy routes to
+    the pool's ``connect`` dispatch.  For Postgres, no such listener exists.
+    """
     from registry_state.adapters.sqlite_store import create_engine
 
     url = "postgresql+asyncpg://test:test@localhost:5432/test_db"
     engine = create_engine(url)
 
-    # Check the sync engine's event listeners for the "connect" event.
-    # SQLite pragma listener is registered via @event.listens_for(sync_engine, "connect").
-    # For Postgres, there should be no such listeners (or at least none that
-    # execute PRAGMA statements).
-    from sqlalchemy import event as sa_event
+    # The pragma listener is registered on the pool-level "connect" event.
+    # The dispatch collection is iterable — each item is a bound listener function.
+    pool_connect = engine.pool.dispatch.connect
+    has_pragma_listener = any("_set_pragmas" in getattr(fn, "__name__", "") for fn in pool_connect)
 
-    has_pragma_listener = False
-    for fn_id, fn in sa_event.contains(engine.sync_engine, "connect"):
-        # Check if the listener function name or source mentions PRAGMA
-        fn_name = getattr(fn, "__name__", "") or getattr(fn, "func_name", "")
-        if "pragma" in fn_name.lower() or "_set_pragmas" in fn_name:
-            has_pragma_listener = True
-            break
-
-    assert not has_pragma_listener, (
-        "Postgres engine must not have SQLite PRAGMA event listeners"
-    )
+    assert not has_pragma_listener, "Postgres engine must not have SQLite PRAGMA event listeners"
 
 
 # ---------------------------------------------------------------------------
@@ -205,10 +181,6 @@ def test_ref_read_only_rejects_postgres_url() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Story 30.3 — both backends must produce identical table schemas after Alembic migration",
-)
 @pytest.mark.asyncio
 async def test_both_backends_produce_identical_schema() -> None:
     """After running Alembic migrations, both SQLite and Postgres must have
@@ -233,9 +205,7 @@ async def test_both_backends_produce_identical_schema() -> None:
     # Get SQLite table names
     sqlite_tables: set[str] = set()
     async with sqlite_engine.connect() as conn:
-        result = await conn.execute(
-            text("SELECT name FROM sqlite_master WHERE type='table'")
-        )
+        result = await conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
         for row in result:
             sqlite_tables.add(row[0])
 
@@ -290,7 +260,9 @@ async def test_alembic_downgrade_sqlite() -> None:
 
 @pytest.mark.xfail(
     strict=True,
-    reason="Story 30.6 — S-12: full task lifecycle must pass on SQLite without REGISTRY_DATABASE_URL",
+    reason=(
+        "Story 30.6 — S-12: full task lifecycle must pass on SQLite without REGISTRY_DATABASE_URL"
+    ),
 )
 @pytest.mark.asyncio
 async def test_s12_sqlite_lifecycle_without_postgres() -> None:
@@ -344,10 +316,6 @@ async def test_s12_sqlite_lifecycle_without_postgres() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Story 30.7 — Postgres credentials must never appear in log output",
-)
 @pytest.mark.asyncio
 async def test_postgres_credentials_not_logged() -> None:
     """When connecting to Postgres, the password in the URL must never appear
@@ -380,9 +348,7 @@ async def test_postgres_credentials_not_logged() -> None:
         # Assert no log record contains the password
         for record in captured_records:
             msg = record.getMessage()
-            assert "secret_pass123" not in msg, (
-                f"Password leaked in log: {msg!r}"
-            )
+            assert "secret_pass123" not in msg, f"Password leaked in log: {msg!r}"
 
 
 # ---------------------------------------------------------------------------
