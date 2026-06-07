@@ -508,8 +508,8 @@ development_status:
   # Epic 32: Multi-task parallelism (7 stories, ~2 weeks)
   # phase: 6 · FR104–FR106 · NFR-O15, NFR-S15, NFR-R11 · ADR-0019
   # ---------------------------------------------------------------------------
-  epic-32: backlog  # phase: 6 · Multi-task parallelism (FR104-FR106)
-  32-1-atdd-red-phase-worker-pool-contracts: backlog  # phase: 6 · FR104 · xfail(strict) worker pool contract tests
+  epic-32: in-progress  # phase: 6 · Multi-task parallelism (FR104-FR106)
+  32-1-atdd-red-phase-worker-pool-contracts: in-progress  # phase: 6 · FR104 · 11 xfail(strict) + 5 reference ATDD contracts written
   32-2-worker-identity-system: backlog  # phase: 6 · P6-I4 · worker_id hostname+PID + events/metrics stamps
   32-3-atomic-task-claiming-skip-locked: backlog  # phase: 6 · FR104, FR106 · SKIP LOCKED / BEGIN EXCLUSIVE claiming
   32-4-worker-polling-loop-poll-interval: backlog  # phase: 6 · FR106 · Poll-based task assignment loop
