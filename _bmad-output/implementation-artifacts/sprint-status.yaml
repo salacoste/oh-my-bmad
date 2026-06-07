@@ -36,7 +36,7 @@
 
 generated: 2026-04-22
 last_updated: 2026-06-07T19:00:00Z
-current_phase: 6  # Phase 6 opened for server execution pool (Epics 30-34), 2026-06-07
+current_phase: 6  # Phase 6 COMPLETE (Epics 30-34, 30/30 stories, 14/14 ship-blocker green), 2026-06-07
 
 development_status:
   # =========================================================================
@@ -508,7 +508,7 @@ development_status:
   # Epic 32: Multi-task parallelism (7 stories, ~2 weeks)
   # phase: 6 · FR104–FR106 · NFR-O15, NFR-S15, NFR-R11 · ADR-0019
   # ---------------------------------------------------------------------------
-  epic-32: in-progress  # phase: 6 · Multi-task parallelism (FR104-FR106) — 6/7 stories done
+  epic-32: done  # phase: 6 · Multi-task parallelism (FR104-FR106) — ALL 7 stories done
   32-1-atdd-red-phase-worker-pool-contracts: done  # phase: 6 · FR104 · 16 ATDD contracts (all green)
   32-2-worker-identity-system: done  # phase: 6 · P6-I4 · Task.worker_id column + generate_worker_id + migration 0009
   32-3-atomic-task-claiming-skip-locked: done  # phase: 6 · FR104, FR106 · SKIP LOCKED + SQLite claim + handle_task_assigned
