@@ -349,15 +349,21 @@ def test_task_tokens_spent_gauge_set_and_cleared() -> None:
         ),
     )
     body = generate_latest(registry)
-    assert _metric_value(body, "omb_task_tokens_spent", labels={"task_id": task_id}) == 4200.0, (
-        "gauge should be set after task.budget_exceeded"
-    )
+    assert (
+        _metric_value(
+            body, "omb_task_tokens_spent", labels={"task_id": task_id, "runtime": "claude-code"}
+        )
+        == 4200.0
+    ), "gauge should be set after task.budget_exceeded"
     # Cleanup: task.completed removes the labelled child.
     update_for(state, _make_envelope("task.completed", payload={"task_id": task_id}))
     body = generate_latest(registry)
-    assert _metric_value(body, "omb_task_tokens_spent", labels={"task_id": task_id}) is None, (
-        "gauge labelled child should be removed after task.completed"
-    )
+    assert (
+        _metric_value(
+            body, "omb_task_tokens_spent", labels={"task_id": task_id, "runtime": "claude-code"}
+        )
+        is None
+    ), "gauge labelled child should be removed after task.completed"
 
 
 def test_task_completed_logs_final_token_usage_before_gauge_clear() -> None:
@@ -397,7 +403,12 @@ def test_task_completed_logs_final_token_usage_before_gauge_clear() -> None:
     assert entry["source"] == "task.completed"
     # Gauge is cleared after the log emission.
     body = generate_latest(registry)
-    assert _metric_value(body, "omb_task_tokens_spent", labels={"task_id": task_id}) is None
+    assert (
+        _metric_value(
+            body, "omb_task_tokens_spent", labels={"task_id": task_id, "runtime": "claude-code"}
+        )
+        is None
+    )
 
 
 def test_budget_enforcement_triggered_counts_and_clears_gauge() -> None:
@@ -441,7 +452,12 @@ def test_budget_enforcement_triggered_counts_and_clears_gauge() -> None:
         == 1.0
     )
     # Terminal → token gauge cleared.
-    assert _metric_value(body, "omb_task_tokens_spent", labels={"task_id": task_id}) is None
+    assert (
+        _metric_value(
+            body, "omb_task_tokens_spent", labels={"task_id": task_id, "runtime": "claude-code"}
+        )
+        is None
+    )
 
 
 def test_task_completed_without_token_usage_skips_final_log() -> None:
@@ -476,10 +492,20 @@ def test_task_tokens_spent_gauge_cleared_by_stop_requested() -> None:
         ),
     )
     body = generate_latest(registry)
-    assert _metric_value(body, "omb_task_tokens_spent", labels={"task_id": task_id}) == 1000.0
+    assert (
+        _metric_value(
+            body, "omb_task_tokens_spent", labels={"task_id": task_id, "runtime": "claude-code"}
+        )
+        == 1000.0
+    )
     update_for(state, _make_envelope("task.stop_requested", payload={"task_id": task_id}))
     body = generate_latest(registry)
-    assert _metric_value(body, "omb_task_tokens_spent", labels={"task_id": task_id}) is None
+    assert (
+        _metric_value(
+            body, "omb_task_tokens_spent", labels={"task_id": task_id, "runtime": "claude-code"}
+        )
+        is None
+    )
 
 
 def test_task_gauge_cleanup_then_resurrect_is_idempotent() -> None:
@@ -509,7 +535,12 @@ def test_task_gauge_cleanup_then_resurrect_is_idempotent() -> None:
         ),
     )
     body = generate_latest(registry)
-    assert _metric_value(body, "omb_task_tokens_spent", labels={"task_id": task_id}) is None, (
+    assert (
+        _metric_value(
+            body, "omb_task_tokens_spent", labels={"task_id": task_id, "runtime": "claude-code"}
+        )
+        is None
+    ), (
         "ghost-gauge leak: task_tokens_spent labelled child should remain "
         "REMOVED after task.completed; late task.budget_exceeded must NOT "
         "resurrect it (Story 10.4 P1-H3)"
@@ -903,4 +934,58 @@ def test_task_tokens_updater_handles_missing_payload_field() -> None:
         == 1.0
     )
     # Gauge not set — no labelled child.
-    assert _metric_value(body, "omb_task_tokens_spent", labels={"task_id": "t-no-tokens"}) is None
+    assert (
+        _metric_value(
+            body,
+            "omb_task_tokens_spent",
+            labels={"task_id": "t-no-tokens", "runtime": "claude-code"},
+        )
+        is None
+    )
+
+
+# ---------------------------------------------------------------------------
+# NFR-O13 — per-runtime metrics label tests.
+# ---------------------------------------------------------------------------
+
+
+def test_runtime_label_default_to_claude_code_for_legacy_events() -> None:
+    """NFR-O13 — events without runtime field default to 'claude-code'."""
+    registry = CollectorRegistry()
+    state = build_collectors(registry)
+    envelope = _make_envelope(
+        "task.budget_exceeded",
+        payload={"task_id": "t-legacy", "token_limit": 1000, "tokens_used": 500, "step": 1},
+    )
+    update_for(state, envelope)
+    body = generate_latest(registry)
+    assert (
+        _metric_value(
+            body, "omb_task_tokens_spent", labels={"task_id": "t-legacy", "runtime": "claude-code"}
+        )
+        == 500.0
+    )
+
+
+def test_runtime_label_set_for_codex_events() -> None:
+    """NFR-O13 — events with runtime='codex' get the codex label."""
+    registry = CollectorRegistry()
+    state = build_collectors(registry)
+    envelope = _make_envelope(
+        "task.budget_exceeded",
+        payload={
+            "task_id": "t-codex",
+            "token_limit": 1000,
+            "tokens_used": 200,
+            "step": 1,
+            "runtime": "codex",
+        },
+    )
+    update_for(state, envelope)
+    body = generate_latest(registry)
+    assert (
+        _metric_value(
+            body, "omb_task_tokens_spent", labels={"task_id": "t-codex", "runtime": "codex"}
+        )
+        == 200.0
+    )

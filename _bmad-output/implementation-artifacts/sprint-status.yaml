@@ -36,7 +36,7 @@
 
 generated: 2026-04-22
 last_updated: 2026-06-06T12:00:00Z
-current_phase: 4  # Phase 4 opened by ADR-0014 (docs/adr/0014-phase-4-gate.md), 2026-06-05 (Phase 3 opened by ADR-0009, 2026-06-04)
+current_phase: 5  # Phase 5 opened for multi-runtime plane (Epics 26-29), 2026-06-07
 
 development_status:
   # =========================================================================
@@ -458,6 +458,20 @@ development_status:
   epic-20-retrospective: done  # phase: 4 — produced
   epic-21-retrospective: done  # phase: 4 — produced
   epic-22-retrospective: done  # phase: 4 — produced
+
+  # =========================================================================
+  # PHASE 5 — Multi-Runtime Plane (Epics 26-29)
+  # =========================================================================
+
+  epic-26: done  # phase: 5 · RuntimeAdapter protocol + CodexRunner + credential isolation
+  epic-27: done  # phase: 5 · Per-task runtime selection + runtime event types
+  epic-28: done  # phase: 5 · Runtime handoff execution
+  epic-29: done  # phase: 5 · Budget tracking + fleet integration · ALL 4 STORIES DONE
+
+  29-1-per-runtime-budget-tracking-payload-wiring: done  # phase: 5 · FR94 · Story 29.1
+  29-2-budget-aware-handoff-rejection-test: done  # phase: 5 · FR94, P5-I3
+  29-3-fleet-smoke-test-codex: done  # phase: 5 · FR96
+  29-4-per-runtime-metrics-label: done  # phase: 5 · NFR-O13
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)

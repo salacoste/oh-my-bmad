@@ -42,7 +42,7 @@ Metric inventory (Stories 10.3 + 10.4 combined):
   | ``omb_session_lifecycle_events_total``      | Counter | phase       |
   | ``omb_secret_accessed_total``               | Counter | actor_kind  |
   | ``omb_events_appended_total``               | Counter | event_family|
-  | ``omb_task_tokens_spent``                   | Gauge   | task_id     |
+  | ``omb_task_tokens_spent``                   | Gauge   | task_id,runtime |
   | ``omb_idempotency_cache_total``             | Counter | outcome     |
   | ``omb_capability_denied_total``             | Counter | tier,bound  |
   | ``omb_event_log_lock_wait_ms``              | Histo   | (none)      |
@@ -56,10 +56,12 @@ Cardinality discipline (P2-I3, ADR-0005 §Cardinality):
     the tail-loop thread and ``generate_latest()`` from a concurrent
     scrape).  See module-level ``_TASK_LIFECYCLE_EVENT_TYPES`` etc.
   - ``omb_task_tokens_spent`` is the ONLY metric with an unbounded
-    label (``task_id``); cardinality is bounded by the active-task
-    count and the cleanup invariant: on ``task.completed`` /
-    ``task.stop_requested`` the labelled gauge child is removed via
-    ``gauge.remove(task_id)``.
+    label (``task_id``) plus a bounded ``runtime`` label (values:
+    ``"claude-code"``, ``"codex"``, ``"unknown"``); cardinality is
+    bounded by the active-task count × runtime enum and the cleanup
+    invariant: on ``task.completed`` / ``task.stop_requested`` ALL
+    runtime variants for the task_id are removed via iteration over
+    ``_RUNTIMES``.
   - Unknown envelope types increment ONLY
     ``omb_events_appended_total{event_family=<prefix>}`` where the
     prefix is itself an enum — no novel ``event_type`` leaks into a
@@ -263,6 +265,11 @@ _EVENT_LOG_LOCK_WAIT_BUCKETS: Final[tuple[float, ...]] = (0.1, 1.0, 10.0, 100.0,
 _CAPABILITY_TIERS_SET: Final[frozenset[str]] = frozenset(_CAPABILITY_TIERS)
 _CAPABILITY_BOUNDARIES_SET: Final[frozenset[str]] = frozenset(_CAPABILITY_BOUNDARIES)
 
+# Phase 5 / NFR-O13 — bounded runtime label for per-runtime attribution.
+# Cardinality is bounded by the runtime registry (currently 2 values).
+_RUNTIMES: Final[tuple[str, ...]] = ("claude-code", "codex", "unknown")
+_RUNTIMES_SET: Final[frozenset[str]] = frozenset(_RUNTIMES)
+
 
 @dataclass(slots=True)
 class MetricsState:
@@ -298,8 +305,10 @@ class MetricsState:
             ``rate(...)``, labelled by ``event_family`` (11-value
             bounded enum).
         task_tokens_spent: Gauge — per-task token-spend snapshot.
-            Labelled by ``task_id``; cleaned via ``.remove(task_id)``
-            on task termination to bound cardinality.
+            Labelled by ``task_id`` and ``runtime`` (bounded enum:
+            ``"claude-code"``, ``"codex"``, ``"unknown"``); cleaned
+            via iteration over ``_RUNTIMES`` on task termination to
+            bound cardinality.
         idempotency_cache_total: Counter — DEFERRED-preview per
             Story 10.4 D1; pre-populated at zero.
         capability_denied_total: Counter — DEFERRED-preview per
@@ -495,12 +504,14 @@ def _update_task_lifecycle_and_clear_task_gauge(
             tokens=tokens,
             source=envelope.type,
         )
+    # Phase 5 / NFR-O13 — remove ALL runtime variants for this task_id.
     # ``Gauge.remove(...)`` raises ``KeyError`` if no labelled child
-    # exists for this task — out-of-order ``task.completed`` before
-    # any token-emitting envelope is benign and must not crash the
-    # updater.
-    with contextlib.suppress(KeyError):
-        state.task_tokens_spent.remove(task_id)
+    # exists for this task_id + runtime combination — out-of-order
+    # ``task.completed`` before any token-emitting envelope is benign
+    # and must not crash the updater.
+    for rt in _RUNTIMES:
+        with contextlib.suppress(KeyError):
+            state.task_tokens_spent.remove(task_id, rt)
     # P1-H3: remember this task as terminated so any subsequent token-
     # bearing envelope (out-of-order ``task.budget_exceeded`` etc.)
     # cannot resurrect the gauge child.
@@ -547,11 +558,14 @@ def _update_task_tokens(state: MetricsState, envelope: EventEnvelope) -> None:
     # documented bounded-leak risk.
     if task_id in state._terminated_task_ids_set:
         return
+    # Phase 5 / NFR-O13 — extract runtime label, default to "claude-code" for legacy events.
+    runtime_raw = _payload_get(envelope, "runtime")
+    runtime = runtime_raw if runtime_raw in _RUNTIMES_SET else "claude-code"
     tokens = _payload_get(envelope, "token_usage")
     if tokens is None:
         tokens = _payload_get(envelope, "tokens_used")
     if isinstance(tokens, int) and tokens >= 0:
-        state.task_tokens_spent.labels(task_id=task_id).set(tokens)
+        state.task_tokens_spent.labels(task_id=task_id, runtime=runtime).set(tokens)
 
 
 def _update_session_lifecycle(state: MetricsState, envelope: EventEnvelope) -> None:
@@ -729,6 +743,10 @@ def build_collectors(registry: CollectorRegistry) -> MetricsState:
     authoritative steady-state bound is the AC10 cardinality tests
     (``test_metrics_state.py``), currently ≤ 66 timeseries (Epic 21;
     was ≤ 50 at Story 10.4 AC10, widened by later stories' label adds).
+    The ``omb_task_tokens_spent`` gauge carries a bounded ``runtime``
+    label (values: ``"claude-code"``, ``"codex"``, ``"unknown"``) in
+    addition to the unbounded ``task_id`` label; cardinality is bounded
+    by active-task count * 3 runtime values.
 
     Args:
         registry: A fresh :class:`CollectorRegistry` instance owned by
@@ -830,11 +848,11 @@ def build_collectors(registry: CollectorRegistry) -> MetricsState:
     task_tokens_spent = Gauge(
         "omb_task_tokens_spent",
         (
-            "Per-task cumulative token-spend snapshot.  Labelled by task_id; "
-            "cardinality bounded by active-task count + cleanup-on-completion "
-            "rule (see ADR-0005 §Cardinality Discipline)."
+            "Per-task cumulative token-spend snapshot.  Labelled by task_id and runtime; "
+            "cardinality bounded by active-task count * runtime enum "
+            "(see ADR-0005 §Cardinality Discipline)."
         ),
-        labelnames=("task_id",),
+        labelnames=("task_id", "runtime"),
         registry=registry,
     )
 

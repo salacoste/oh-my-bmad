@@ -46,7 +46,6 @@ from mcp import ClientSession
 from secret_hygiene.license_scan import LicenseFinding, scan_files_for_licenses
 
 from worker_wrapper.adapters.approval_waiter import ApprovalWaiter
-from worker_wrapper.adapters.claude_code_runner import ClaudeCodeResult, ClaudeCodeRunner
 from worker_wrapper.adapters.lifecycle_manager import LifecycleManager
 from worker_wrapper.adapters.mcp_clients import MCPClientGroup
 from worker_wrapper.adapters.runtime_factory import get_runtime_adapter
@@ -66,6 +65,10 @@ _CLAMP_FLOOR: float = 1.0
 _TRACE_ID_PREVIEW_LEN: int = 80
 
 
+class BudgetExceededDuringHandoffError(Exception):
+    """Runtime handoff rejected — cumulative budget exceeded (P5-I3)."""
+
+
 class _MCPClients(Protocol):
     """Structural view of the MCP client trio used by the task driver.
 
@@ -82,6 +85,46 @@ class _MCPClients(Protocol):
 def _clamp_timeout(interval_s: float) -> float:
     """Clamp MCP call timeout to at most half the heartbeat interval, minimum 1s."""
     return max(_CLAMP_FLOOR, min(_MCP_CALL_TIMEOUT, interval_s * 0.5))
+
+
+def _accumulate_runtime_tokens(
+    result: Any,
+    runtime_name: str,
+    tokens_consumed_by_runtime: dict[str, int],
+    log: structlog.stdlib.BoundLogger,
+) -> None:
+    """Phase 5 / FR94 — accumulate per-runtime token usage after runner completes.
+
+    Both ``ClaudeCodeResult`` and ``CodexResult`` carry token fields. We
+    extract the total token count from whatever fields are available and
+    accumulate it under the active runtime's name. The budget limit applies
+    to the cumulative total across all runtimes (P5-I3).
+    """
+    if result is None:
+        return
+    # ClaudeCodeResult has num_turns (approximate token proxy) and cost_usd.
+    # CodexResult has input_tokens + output_tokens.
+    tokens = 0
+    if hasattr(result, "input_tokens") and hasattr(result, "output_tokens"):
+        # CodexResult — direct token counts
+        tokens = (getattr(result, "input_tokens", 0) or 0) + (
+            getattr(result, "output_tokens", 0) or 0
+        )
+    elif hasattr(result, "cost_usd"):
+        # ClaudeCodeResult — use num_turns as a rough proxy for now.
+        # The budget supervisor handles the actual enforcement via
+        # task.budget_exceeded events; this tracking is for attribution.
+        tokens = getattr(result, "num_turns", 0) or 0
+    if tokens > 0:
+        tokens_consumed_by_runtime[runtime_name] = (
+            tokens_consumed_by_runtime.get(runtime_name, 0) + tokens
+        )
+        log.debug(
+            "runtime_tokens_accumulated",
+            runtime=runtime_name,
+            tokens_this_run=tokens,
+            total=tokens_consumed_by_runtime[runtime_name],
+        )
 
 
 def _coerce_enforcement_fields(
@@ -438,20 +481,38 @@ async def perform_runtime_handoff(
     session_id: str,
     clients: Any,
     worktree_path: Path,
+    tokens_consumed_by_runtime: dict[str, int] | None = None,
+    budget_token_limit: int | None = None,
 ) -> Any:
     """Execute a runtime handoff — terminate current adapter, spawn target (FR92).
 
     Phase 5 handoff flow (ADR-0015 / Epic 28):
-    1. Terminate current runtime adapter (SIGTERM -> grace -> SIGKILL).
-    2. Emit ``task.runtime_handoff`` event with from/to runtime and trace_id (P5-I2).
-    3. Spawn target runtime adapter via factory.
-    4. Return the new adapter (caller is responsible for running it).
+    1. Check budget — reject handoff if cumulative tokens exceed limit (P5-I3).
+    2. Terminate current runtime adapter (SIGTERM -> grace -> SIGKILL).
+    3. Emit ``task.runtime_handoff`` event with from/to runtime and trace_id (P5-I2).
+    4. Spawn target runtime adapter via factory.
+    5. Return the new adapter (caller is responsible for running it).
 
     The same trace_id spans both runtime segments (P5-I2).
     The worktree lock is NOT released during handoff (task owns it for entire lifecycle).
     """
     log = structlog.get_logger(__name__)
     source_runtime = current_adapter.runtime_name
+
+    # Phase 5 / P5-I3 — reject handoff if cumulative budget exceeded.
+    if tokens_consumed_by_runtime and budget_token_limit is not None:
+        cumulative = sum(tokens_consumed_by_runtime.values())
+        if cumulative >= budget_token_limit:
+            log.error(
+                "runtime_handoff_rejected_budget_exceeded",
+                task_id=task_id,
+                cumulative_tokens=cumulative,
+                budget_limit=budget_token_limit,
+            )
+            raise BudgetExceededDuringHandoffError(
+                f"Cumulative budget ({cumulative}) >= limit ({budget_token_limit}). "
+                f"Handoff rejected — task must be terminated (P5-I3)."
+            )
 
     # Step 1: terminate current adapter.
     log.info(
@@ -606,6 +667,11 @@ async def run_task(
     # Default: "claude-code" (backward-compatible with Phase 4 behavior).
     runner = get_runtime_adapter(settings)
 
+    # Phase 5 / FR94 — per-runtime token accounting. The budget limit applies
+    # to the cumulative total across all runtimes (P5-I3). When a handoff
+    # occurs, the new runtime's tokens accumulate on top of the prior one.
+    tokens_consumed_by_runtime: dict[str, int] = {}
+
     # Story 12.1 — spawn the budget supervisor as a shadow asyncio task that
     # subscribes to ``task.budget_exceeded`` events for this task_id and
     # SIGTERMs ``runner`` if the producer (orchestrator-adapter) signals a
@@ -686,6 +752,11 @@ async def run_task(
             result = await asyncio.wait_for(
                 runner.run(prompt, worktree_path),
                 timeout=settings.task_overall_timeout_s,
+            )
+            # Phase 5 / FR94 — accumulate per-runtime token usage after run.
+            # Both ClaudeCodeResult and CodexResult carry token fields.
+            _accumulate_runtime_tokens(
+                result, runner.runtime_name, tokens_consumed_by_runtime, log,
             )
         except TimeoutError:
             log.error(
@@ -808,6 +879,7 @@ async def run_task(
             action_taken="override_intercepted",
             post_trigger_transition="awaiting_approval",
             step=step_value,
+            runtime=runner.runtime_name,
         )
         await _call_tool_best_effort(
             clients.clawhip_bridge,
@@ -937,6 +1009,7 @@ async def run_task(
             # "failed".)
             post_trigger_transition="failed",
             step=step_value,
+            runtime=runner.runtime_name,
         )
         await _call_tool_best_effort(
             clients.clawhip_bridge,

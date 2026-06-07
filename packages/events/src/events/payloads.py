@@ -444,6 +444,8 @@ class TaskCompletedPayload(BaseModel):
     blockers_count: int | None = Field(default=None, ge=0, le=10**6)
     # Story 5.15 — cumulative token usage for observability (FR44).
     token_usage: int | None = Field(default=None, ge=0, le=10**9)
+    # Phase 5 / FR94 — per-runtime token attribution (schema 1.3.0).
+    tokens_consumed_by_runtime: dict[str, int] | None = Field(default=None)
 
 
 # ---------------------------------------------------------------------------
@@ -1066,6 +1068,8 @@ class TaskBudgetExceededPayload(BaseModel):
     token_limit: int = Field(gt=0)
     tokens_used: int = Field(gt=0)
     step: int = Field(ge=1)
+    # Phase 5 / FR94 — runtime attribution for budget breach (schema 1.2.0).
+    runtime: str | None = Field(default=None, max_length=64)
 
 
 class TaskBudgetEnforcementTriggeredPayload(BaseModel):
@@ -1114,6 +1118,8 @@ class TaskBudgetEnforcementTriggeredPayload(BaseModel):
     # Step counter from the matching task.budget_exceeded payload (PP16),
     # carried through BudgetSupervisorResult.step.
     step: int = Field(ge=1)
+    # Phase 5 / FR94 — runtime attribution for enforcement (schema 1.2.0).
+    runtime: str | None = Field(default=None, max_length=64)
 
 
 class Tier3ActionAttemptedPayload(BaseModel):

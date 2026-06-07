@@ -214,6 +214,8 @@ def ensure_registered() -> None:
     register("task.completed", "1.0.1", TaskCompletedPayload)
     register("task.completed", "1.1.0", TaskCompletedPayload)
     register("task.completed", "1.2.0", TaskCompletedPayload)  # Story 5.15 — token_usage
+    # Phase 5 / FR94 — tokens_consumed_by_runtime
+    register("task.completed", "1.3.0", TaskCompletedPayload)
 
     # Story 2.10 — 4 failure-detection event types (FR24a, NFR-R5).
     register("service.crashed", "1.0.0", ServiceCrashedPayload)
@@ -276,6 +278,7 @@ def ensure_registered() -> None:
     # Story 5.15 — task.budget_exceeded event payload (FR44 / NFR-P5).
     register("task.budget_exceeded", "1.0.0", TaskBudgetExceededPayload)
     register("task.budget_exceeded", "1.1.0", TaskBudgetExceededPayload)
+    register("task.budget_exceeded", "1.2.0", TaskBudgetExceededPayload)  # Phase 5 / FR94 — runtime
 
     # Story 12.2 — task.budget_enforcement_triggered audit event (FR67).
     # The ACTION-RECORD emitted by worker-wrapper AFTER it SIGTERMs the
@@ -287,6 +290,11 @@ def ensure_registered() -> None:
         "1.1.0",
         TaskBudgetEnforcementTriggeredPayload,
     )
+    register(
+        "task.budget_enforcement_triggered",
+        "1.2.0",
+        TaskBudgetEnforcementTriggeredPayload,
+    )  # Phase 5 / FR94 — runtime
 
     # Story 6.2 — tier3.action_attempted audit event (FR38).
     # Emitter added in Story 6.5.
