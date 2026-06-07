@@ -79,6 +79,8 @@ from registry_state.domain.event_types import (
     ServiceCrashedPayload,
     SessionHeartbeatTimeoutPayload,
     SinkDeliveryFailedPayload,
+    TaskStaleCriticalPayload,
+    TaskStaleWarningPayload,
     TaskStopRequestedPayload,
 )
 
@@ -822,12 +824,228 @@ __all__ = [
     "HeartbeatMonitor",
     "SinkFailureState",
     "SinkFailureTracker",
+    "StaleTaskDetector",
     "SYNTHETIC_SOURCE_SYSTEM_INITIATED",
     "emit_service_crashed",
     "emit_session_heartbeat_timeout",
     "emit_sink_delivery_failed",
+    "emit_task_stale_critical",
+    "emit_task_stale_warning",
     "emit_task_stop_requested",
 ]
+
+
+# ---------------------------------------------------------------------------
+# StaleTaskDetector (Epic 37 / Story 37.2 — NFR-R5 extension).
+# ---------------------------------------------------------------------------
+
+
+class StaleTaskDetector:
+    """Detects tasks that have been in non-terminal states too long.
+
+    Follows the HeartbeatMonitor pattern: edge-triggered (each stale task
+    reported only once per stale episode), clock-injected for deterministic
+    testing, and atomic check+mark to eliminate race windows.
+
+    Per-state thresholds define how long a task can remain in each
+    non-terminal state before being flagged as stale. Two severity levels
+    (warning, critical) provide graduated alerting.
+    """
+
+    # Default thresholds (seconds) per non-terminal state.
+    # Terminal states (completed, stopped) are excluded.
+    DEFAULT_WARNING_THRESHOLDS: dict[str, float] = {
+        "pending": 300.0,      # 5 min
+        "planning": 600.0,     # 10 min
+        "plan_ready": 600.0,   # 10 min
+        "executing": 1800.0,   # 30 min
+        "blocked": 1800.0,     # 30 min
+        "failed": 900.0,       # 15 min
+    }
+    DEFAULT_CRITICAL_THRESHOLDS: dict[str, float] = {
+        "pending": 900.0,      # 15 min
+        "planning": 1800.0,    # 30 min
+        "plan_ready": 1800.0,  # 30 min
+        "executing": 3600.0,   # 60 min
+        "blocked": 7200.0,     # 120 min
+        "failed": 3600.0,      # 60 min
+    }
+
+    def __init__(
+        self,
+        clock: Clock,
+        warning_thresholds: dict[str, float] | None = None,
+        critical_thresholds: dict[str, float] | None = None,
+    ) -> None:
+        if warning_thresholds is not None:
+            for v in warning_thresholds.values():
+                if not math.isfinite(v) or v <= 0:
+                    raise ValueError(f"warning threshold must be >0 and finite, got {v}")
+        if critical_thresholds is not None:
+            for v in critical_thresholds.values():
+                if not math.isfinite(v) or v <= 0:
+                    raise ValueError(f"critical threshold must be >0 and finite, got {v}")
+
+        self._clock = clock
+        self._warning_thresholds = warning_thresholds or dict(self.DEFAULT_WARNING_THRESHOLDS)
+        self._critical_thresholds = critical_thresholds or dict(self.DEFAULT_CRITICAL_THRESHOLDS)
+        # Edge-trigger: set of (task_id, severity) already emitted this episode.
+        self._emitted: set[tuple[str, str]] = set()
+
+    def check_task(
+        self,
+        task_id: str,
+        status: str,
+        updated_at: datetime,
+    ) -> list[tuple[str, str, float]]:
+        """Check if a task is stale.
+
+        Args:
+            task_id: The task identifier.
+            status: Current task status (must be non-terminal).
+            updated_at: When the task was last updated (staleness clock).
+
+        Returns:
+            List of (severity, stale_since_iso, duration_s) tuples for each
+            threshold crossed. Empty if not stale.
+        """
+        now = self._clock.now()
+        if now.utcoffset() is None or now.utcoffset() != timedelta(0):
+            raise ValueError(f"Clock must return UTC-aware datetime, got {now!r}")
+
+        results: list[tuple[str, str, float]] = []
+        elapsed_s = (now - updated_at).total_seconds()
+
+        for severity, thresholds in [
+            ("warning", self._warning_thresholds),
+            ("critical", self._critical_thresholds),
+        ]:
+            threshold_s = thresholds.get(status)
+            if threshold_s is None:
+                continue
+            key = (task_id, severity)
+            if elapsed_s > threshold_s and key not in self._emitted:
+                results.append((severity, updated_at.isoformat(), elapsed_s, threshold_s))
+
+        return results
+
+    def mark_emitted(self, task_id: str, severity: str) -> None:
+        """Mark a (task_id, severity) pair as emitted (edge-trigger guard)."""
+        self._emitted.add((task_id, severity))
+
+    def clear_emitted(self, task_id: str) -> None:
+        """Clear all emitted marks for a task (e.g. when it transitions)."""
+        self._emitted = {(tid, sev) for tid, sev in self._emitted if tid != task_id}
+
+    def overdue_tasks_and_mark(
+        self,
+        tasks: list[tuple[str, str, datetime]],
+    ) -> list[tuple[str, str, str, float, float]]:
+        """Atomically detect and mark stale tasks.
+
+        Args:
+            tasks: List of (task_id, status, updated_at) for all non-terminal tasks.
+
+        Returns:
+            List of (task_id, status, severity, stale_duration_s, threshold_s)
+            for newly-stale tasks. Each is automatically marked as emitted.
+        """
+        results: list[tuple[str, str, str, float, float]] = []
+        for task_id, status, updated_at in tasks:
+            for severity, thresholds in [
+                ("warning", self._warning_thresholds),
+                ("critical", self._critical_thresholds),
+            ]:
+                threshold_s = thresholds.get(status)
+                if threshold_s is None:
+                    continue
+                now = self._clock.now()
+                elapsed_s = (now - updated_at).total_seconds()
+                key = (task_id, severity)
+                if elapsed_s > threshold_s and key not in self._emitted:
+                    self._emitted.add(key)
+                    results.append((task_id, status, severity, elapsed_s, threshold_s))
+        return results
+
+
+async def emit_task_stale_warning(
+    writer: EventLogWriter,
+    *,
+    clock: Clock,
+    task_id: str,
+    status: str,
+    stale_since: datetime,
+    stale_duration_s: float,
+    threshold_s: float,
+    trace_id: str,
+    request_id: str | None = None,
+    parent_event_id: str | None = None,
+    synthetic_source: str = "stale-task-detector",
+) -> EventEnvelope:
+    """Emit a ``task.stale_warning`` event for a task in a non-terminal state too long."""
+    payload = TaskStaleWarningPayload(
+        task_id=task_id,
+        status=status,
+        stale_since=stale_since,
+        stale_duration_s=stale_duration_s,
+        severity="warning",
+        threshold_s=threshold_s,
+    )
+    envelope = EventEnvelope.create(
+        event_id=new_event_id(clock=clock),
+        type="task.stale_warning",
+        schema_version="1.1.0",
+        emitted_at=clock.now(),
+        emitted_at_monotonic_ns=clock.monotonic_ns(),
+        actor=Actor(kind="system", id=synthetic_source),
+        payload=payload,
+        trace_id=trace_id,
+        request_id=request_id if request_id is not None else new_request_id(clock=clock),
+        parent_event_id=parent_event_id,
+        extensions=_synthetic_source_extensions(synthetic_source),
+    )
+    await writer.append(envelope)
+    return envelope
+
+
+async def emit_task_stale_critical(
+    writer: EventLogWriter,
+    *,
+    clock: Clock,
+    task_id: str,
+    status: str,
+    stale_since: datetime,
+    stale_duration_s: float,
+    threshold_s: float,
+    trace_id: str,
+    request_id: str | None = None,
+    parent_event_id: str | None = None,
+    synthetic_source: str = "stale-task-detector",
+) -> EventEnvelope:
+    """Emit a ``task.stale_critical`` event for a task exceeding critical threshold."""
+    payload = TaskStaleCriticalPayload(
+        task_id=task_id,
+        status=status,
+        stale_since=stale_since,
+        stale_duration_s=stale_duration_s,
+        severity="critical",
+        threshold_s=threshold_s,
+    )
+    envelope = EventEnvelope.create(
+        event_id=new_event_id(clock=clock),
+        type="task.stale_critical",
+        schema_version="1.1.0",
+        emitted_at=clock.now(),
+        emitted_at_monotonic_ns=clock.monotonic_ns(),
+        actor=Actor(kind="system", id=synthetic_source),
+        payload=payload,
+        trace_id=trace_id,
+        request_id=request_id if request_id is not None else new_request_id(clock=clock),
+        parent_event_id=parent_event_id,
+        extensions=_synthetic_source_extensions(synthetic_source),
+    )
+    await writer.append(envelope)
+    return envelope
 
 
 # Public alias for the system-initiated synthetic-source label so callers can

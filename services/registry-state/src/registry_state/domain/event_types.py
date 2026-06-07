@@ -81,6 +81,8 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     TaskStateTransitionPayload,
     TaskStepCompletedPayload,
     TaskStopRequestedPayload,
+    TaskStaleCriticalPayload,
+    TaskStaleWarningPayload,
     TaskSummaryEmittedPayload,
     TelegramRejectedPayload,
     Tier3ActionAttemptedPayload,
@@ -177,6 +179,9 @@ __all__ = [
     "TaskRuntimeHandoffPayload",
     # Phase 7 — worker heartbeat payload.
     "WorkerHeartbeatPayload",
+    # Phase 7 — stale task alerting payloads (Epic 37 / Story 37.2).
+    "TaskStaleCriticalPayload",
+    "TaskStaleWarningPayload",
 ]
 
 # ---------------------------------------------------------------------------
@@ -239,6 +244,10 @@ def ensure_registered() -> None:
     register("task.stop_requested", "1.0.0", TaskStopRequestedPayload)
     register("task.stop_requested", "1.0.1", TaskStopRequestedPayload)
     register("task.stop_requested", "1.1.0", TaskStopRequestedPayload)
+
+    # Story 37.2 — Stale task alerting event types (NFR-R5 extension).
+    register("task.stale_warning", "1.1.0", TaskStaleWarningPayload)
+    register("task.stale_critical", "1.1.0", TaskStaleCriticalPayload)
 
     # Story 32.3 — task.assigned event (FR104 / ADR-0019 D2). Emitted when a
     # worker atomically claims a task from the queue. Born at 1.1.0 (Phase 6,

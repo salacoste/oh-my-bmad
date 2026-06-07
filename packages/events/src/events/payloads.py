@@ -569,6 +569,60 @@ class SessionHeartbeatTimeoutPayload(BaseModel):
         return v
 
 
+class TaskStaleWarningPayload(BaseModel):
+    """Payload for the ``task.stale_warning`` event.
+
+    Emitted when a task has been in a non-terminal state longer than
+    the configured warning threshold. Follows the SessionHeartbeatTimeoutPayload
+    pattern (edge-triggered, UTC-strict, finite thresholds).
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    task_id: str = Field(min_length=1, pattern=_TASK_ID_PATTERN)
+    status: str = Field(min_length=1, max_length=32)
+    stale_since: AwareDatetime
+    stale_duration_s: float = Field(gt=0, allow_inf_nan=False)
+    severity: Literal["warning"] = "warning"
+    threshold_s: float = Field(gt=0, allow_inf_nan=False)
+
+    @field_validator("stale_since")
+    @classmethod
+    def _stale_since_utc(cls, v: AwareDatetime) -> AwareDatetime:
+        if v.utcoffset() != timedelta(0):
+            raise ValueError(
+                f"stale_since must be UTC (zero offset); got utcoffset={v.utcoffset()!r}"
+            )
+        return v
+
+
+class TaskStaleCriticalPayload(BaseModel):
+    """Payload for the ``task.stale_critical`` event.
+
+    Emitted when a task has been in a non-terminal state longer than
+    the configured critical threshold. Same shape as TaskStaleWarningPayload
+    but with severity='critical'.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    task_id: str = Field(min_length=1, pattern=_TASK_ID_PATTERN)
+    status: str = Field(min_length=1, max_length=32)
+    stale_since: AwareDatetime
+    stale_duration_s: float = Field(gt=0, allow_inf_nan=False)
+    severity: Literal["critical"] = "critical"
+    threshold_s: float = Field(gt=0, allow_inf_nan=False)
+
+    @field_validator("stale_since")
+    @classmethod
+    def _stale_since_utc(cls, v: AwareDatetime) -> AwareDatetime:
+        if v.utcoffset() != timedelta(0):
+            raise ValueError(
+                f"stale_since must be UTC (zero offset); got utcoffset={v.utcoffset()!r}"
+            )
+        return v
+
+
 class SinkDeliveryFailedPayload(BaseModel):
     """Payload for the ``sink.delivery_failed`` event.
 
@@ -1707,4 +1761,7 @@ __all__ = [
     "TaskAssignedPayload",
     "TaskQueuedPayload",
     "TaskStateTransitionPayload",
+    # Phase 7 — stale task alerting payloads (Epic 37 / Story 37.2).
+    "TaskStaleCriticalPayload",
+    "TaskStaleWarningPayload",
 ]

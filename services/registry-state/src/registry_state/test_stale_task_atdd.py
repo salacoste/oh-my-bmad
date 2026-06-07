@@ -79,7 +79,6 @@ def test_stale_query_index_exists() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True)
 def test_task_stale_warning_payload_validates_correctly() -> None:
     """TaskStaleWarningPayload must validate with task_id, status,
     stale_since, stale_duration_s, severity, and threshold_s.
@@ -102,7 +101,6 @@ def test_task_stale_warning_payload_validates_correctly() -> None:
     assert p.threshold_s == 600.0
 
 
-@pytest.mark.xfail(strict=True)
 def test_task_stale_critical_payload_validates_correctly() -> None:
     """TaskStaleCriticalPayload must validate with the same fields as warning
     but with severity='critical'.
@@ -122,7 +120,6 @@ def test_task_stale_critical_payload_validates_correctly() -> None:
     assert p.severity == "critical"
 
 
-@pytest.mark.xfail(strict=True)
 def test_task_stale_warning_payload_rejects_naive_datetime() -> None:
     """stale_since must be AwareDatetime — naive timestamps rejected."""
     from datetime import datetime
@@ -145,7 +142,6 @@ def test_task_stale_warning_payload_rejects_naive_datetime() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True)
 def test_task_stale_warning_event_registered() -> None:
     """The ``task.stale_warning`` event type must be registered at v1.1.0."""
     from events.schema_registry import REGISTRY
@@ -156,7 +152,6 @@ def test_task_stale_warning_event_registered() -> None:
     assert ("task.stale_warning", "1.1.0") in REGISTRY
 
 
-@pytest.mark.xfail(strict=True)
 def test_task_stale_critical_event_registered() -> None:
     """The ``task.stale_critical`` event type must be registered at v1.1.0."""
     from events.schema_registry import REGISTRY
@@ -172,7 +167,6 @@ def test_task_stale_critical_event_registered() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True)
 def test_stale_task_detector_overdue_tasks_and_mark_exists() -> None:
     """StaleTaskDetector must have an overdue_tasks_and_mark method."""
     from registry_state.domain.failure_detection import StaleTaskDetector
@@ -187,7 +181,6 @@ def test_stale_task_detector_overdue_tasks_and_mark_exists() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True)
 def test_emit_task_stale_warning_exists() -> None:
     """emit_task_stale_warning must be a callable async function."""
     from registry_state.domain.failure_detection import emit_task_stale_warning
@@ -195,7 +188,6 @@ def test_emit_task_stale_warning_exists() -> None:
     assert callable(emit_task_stale_warning)
 
 
-@pytest.mark.xfail(strict=True)
 def test_emit_task_stale_critical_exists() -> None:
     """emit_task_stale_critical must be a callable async function."""
     from registry_state.domain.failure_detection import emit_task_stale_critical
