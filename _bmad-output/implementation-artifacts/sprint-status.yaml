@@ -497,9 +497,9 @@ development_status:
   # Epic 31: Task state machine (5 stories, ~1 week)
   # phase: 6 · FR102–FR103 · NFR-O16 · ADR-0018 · resolves GATED-ARCH D4
   # ---------------------------------------------------------------------------
-  epic-31: backlog  # phase: 6 · Task state machine (FR102-FR103)
-  31-1-atdd-red-phase-fsm-contracts: backlog  # phase: 6 · FR102 · xfail(strict) FSM contract tests
-  31-2-task-state-machine-implementation: backlog  # phase: 6 · FR102 · TaskStateMachine + InvalidStateTransition
+  epic-31: in-progress  # phase: 6 · Task state machine (FR102-FR103) — Stories 31-1 and 31-2 done
+  31-1-atdd-red-phase-fsm-contracts: done  # phase: 6 · FR102 · 21 xfail ATDD contracts (all now passing)
+  31-2-task-state-machine-implementation: done  # phase: 6 · FR102 · TaskStateMachine + InvalidStateTransition (22/22 ATDD green)
   31-3-migrate-task-status-mutations-to-fsm: backlog  # phase: 6 · FR102, P6-I3 · All Task.status sites → fsm.transition()
   31-4-materializer-fsm-integration-event-mapping: backlog  # phase: 6 · FR103 · Materializer delegates to FSM
   31-5-state-machine-audit-trail: backlog  # phase: 6 · NFR-O16 · task.state_transition audit events + /v1/tasks/{id}/transitions

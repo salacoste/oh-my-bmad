@@ -26,4 +26,27 @@ class MaterializerError(Exception):
         self.reason = reason
 
 
-__all__ = ["MaterializerError"]
+class InvalidStateTransition(Exception):  # noqa: N818
+    """Raised when a task state transition violates the FSM rules (P6-I3).
+
+    The FSM is the sole authority for task state transitions. No service may
+    mutate ``Task.status`` directly — all transitions must go through
+    ``TaskStateMachine.transition()``.
+
+    Attributes:
+        current: The current state of the task.
+        target:  The requested target state.
+        reason:  Human-readable explanation of why the transition is invalid.
+    """
+
+    def __init__(self, current: str, target: str, reason: str = "") -> None:
+        msg = f"Cannot transition from {current!r} to {target!r}"
+        if reason:
+            msg += f": {reason}"
+        super().__init__(msg)
+        self.current = current
+        self.target = target
+        self.reason = reason
+
+
+__all__ = ["InvalidStateTransition", "MaterializerError"]
