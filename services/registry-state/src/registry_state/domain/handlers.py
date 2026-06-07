@@ -29,6 +29,8 @@ from typing import TYPE_CHECKING, Protocol, cast
 if TYPE_CHECKING:
     from registry_state.domain.task_fsm import TaskStateMachine
 
+from events import Actor, new_event_id
+from events.clock import Clock
 from events.envelope import EventEnvelope
 from pydantic import BaseModel
 from sqlalchemy import select, update
@@ -36,6 +38,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from registry_state.adapters.event_log import EventLogWriter
 from registry_state.domain.errors import InvalidStateTransition, MaterializerError
 from registry_state.domain.event_types import (
     AgentReasoningBreadcrumbPayload,
@@ -62,6 +65,7 @@ from registry_state.domain.event_types import (
     TaskSummaryEmittedPayload,
     Tier3ActionAttemptedPayload,
     Tier3ActionPerformedPayload,
+    TaskStateTransitionPayload,
 )
 from registry_state.schema import ApprovalInbox, KeyFingerprint, Task
 from registry_state.schema import Session as SessionRow
@@ -69,6 +73,12 @@ from registry_state.schema import Session as SessionRow
 _log = logging.getLogger("registry_state.domain.handlers")
 
 _fsm = None  # Lazy singleton — avoids import-time instantiation overhead
+
+# Phase 7 / Story 35.3: module-level audit writer, injected by subscriber startup.
+# Set via ``_set_audit_writer()`` during ``run_subscriber`` init. When ``None``
+# (standalone handler tests, materializer-only use), audit emission is a no-op
+# so existing tests continue to pass without modification.
+_audit_writer: EventLogWriter | None = None  # set by _set_audit_writer()
 
 
 def _get_fsm() -> TaskStateMachine:
@@ -79,6 +89,87 @@ def _get_fsm() -> TaskStateMachine:
 
         _fsm = TaskStateMachine()
     return _fsm
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 / Story 35.3: audit event emission infrastructure
+# ---------------------------------------------------------------------------
+
+
+def _set_audit_writer(writer: EventLogWriter | None) -> None:
+    """Inject (or clear) the audit-event writer.
+
+    Called once during subscriber startup (``run_subscriber``) and cleared on
+    shutdown.  Passing ``None`` disables audit emission — used by tests that
+    exercise handlers without a live event log.
+    """
+    global _audit_writer
+    _audit_writer = writer
+
+
+def _get_audit_writer() -> EventLogWriter | None:
+    """Return the current audit writer, or ``None`` if unset."""
+    return _audit_writer
+
+
+async def _emit_state_transition(
+    *,
+    task_id: str,
+    from_state: str,
+    to_state: str,
+    trigger_event: str,
+    worker_id: str,
+    parent_envelope: EventEnvelope,
+    clock: Clock,
+) -> None:
+    """Emit a ``task.state_transition`` audit event as a child of *parent_envelope*.
+
+    Story 35.3 / FR108 / NFR-O16: every FSM state transition produces a
+    ``task.state_transition`` event on the event spine, providing a full
+    audit trail of task lifecycle changes.
+
+    The child event's ``emitted_at_monotonic_ns`` is set to the parent's
+    value + 1 to guarantee ordering within the same logical timestamp.
+
+    When the audit writer is ``None`` (standalone tests, materializer-only
+    use), this function is a silent no-op so existing callers are unaffected.
+
+    Args:
+        task_id: The task whose state changed.
+        from_state: The FSM state before the transition.
+        to_state: The FSM state after the transition.
+        trigger_event: The event type that caused the transition
+            (e.g. ``"task.planning.started"``).
+        worker_id: The worker assigned to the task (empty string if none).
+        parent_envelope: The envelope that triggered this transition.
+            The audit event becomes a child of this envelope.
+        clock: Clock used for timestamp and monotonic_ns generation.
+    """
+    writer = _get_audit_writer()
+    if writer is None:
+        return  # graceful degradation — no writer injected
+
+    payload = TaskStateTransitionPayload(
+        task_id=task_id,
+        from_state=from_state,
+        to_state=to_state,
+        trigger_event=trigger_event,
+        worker_id=worker_id,
+        timestamp=parent_envelope.emitted_at.isoformat(),
+    )
+    audit_envelope = EventEnvelope.create(
+        event_id=new_event_id(clock=clock),
+        type="task.state_transition",
+        schema_version="1.1.0",
+        emitted_at=parent_envelope.emitted_at,
+        emitted_at_monotonic_ns=parent_envelope.emitted_at_monotonic_ns + 1,
+        actor=Actor(kind="system", id="audit-trail"),
+        payload=payload,
+        trace_id=parent_envelope.trace_id,
+        request_id=parent_envelope.request_id,
+        parent_event_id=parent_envelope.event_id,
+    )
+    await writer.append(audit_envelope)
 
 
 async def _validate_fsm_transition(
@@ -901,6 +992,9 @@ def register_default_handlers(materializer: MaterializerProtocol) -> None:
 
 
 __all__ = [
+    "_emit_state_transition",
+    "_get_audit_writer",
+    "_set_audit_writer",
     "handle_agent_reasoning_breadcrumb",
     "handle_approval_granted",
     "handle_approval_inbox_opened",

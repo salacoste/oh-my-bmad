@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import pytest
 
-from events import FROZEN_EPOCH, Actor, FrozenClock, TickingClock, new_task_id, new_uuid7
+from events import FROZEN_EPOCH, Actor, FrozenClock, TickingClock, new_event_id, new_task_id, new_uuid7
 from events.envelope import EventEnvelope
 from random import Random
 
@@ -93,7 +93,6 @@ def _make_task_id(mono_ns: int = 1_000_000, seed: int = 42) -> str:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True)
 @pytest.mark.asyncio
 async def test_emit_state_transition_helper_exists() -> None:
     """The _emit_state_transition helper must exist in handlers.py."""
@@ -102,7 +101,6 @@ async def test_emit_state_transition_helper_exists() -> None:
     assert callable(_emit_state_transition)
 
 
-@pytest.mark.xfail(strict=True)
 @pytest.mark.asyncio
 async def test_emit_state_transition_constructs_valid_envelope(tmp_path) -> None:
     """_emit_state_transition must construct a task.state_transition envelope
@@ -111,51 +109,55 @@ async def test_emit_state_transition_constructs_valid_envelope(tmp_path) -> None
 
     from registry_state.adapters.event_log import EventLogWriter
     from registry_state.domain.event_types import ensure_registered
+    from registry_state.domain.handlers import _set_audit_writer
 
     ensure_registered()
 
     writer = AsyncMock(spec=EventLogWriter)
-    clock = FrozenClock(mono_ns=2_000_000, now=FROZEN_EPOCH)
-    rng = Random(42)
+    _set_audit_writer(writer)
+    try:
+        clock = FrozenClock(mono_ns=2_000_000, now=FROZEN_EPOCH)
+        rng = Random(42)
 
-    # Parent envelope that triggers the transition
-    parent = EventEnvelope.create(
-        event_id=new_uuid7(clock=clock, rng=rng),
-        type="task.planning.started",
-        schema_version="1.0.0",
-        emitted_at=clock.now(),
-        emitted_at_monotonic_ns=clock.monotonic_ns(),
-        actor=_ACTOR,
-        payload={"task_id": _make_task_id()},
-        trace_id="01917e5c-a7d1-7000-8abc-000000000099",
-    )
+        # Parent envelope that triggers the transition
+        parent = EventEnvelope.create(
+            event_id=new_event_id(clock=clock, rng=rng),
+            type="task.planning.started",
+            schema_version="1.0.0",
+            emitted_at=clock.now(),
+            emitted_at_monotonic_ns=clock.monotonic_ns(),
+            actor=_ACTOR,
+            payload={"task_id": _make_task_id()},
+            trace_id="01917e5c-a7d1-7000-8abc-000000000099",
+            request_id=new_uuid7(clock=TickingClock(start_now=FROZEN_EPOCH), rng=Random(43)),
+        )
 
-    from registry_state.domain.handlers import _emit_state_transition
+        from registry_state.domain.handlers import _emit_state_transition
 
-    await _emit_state_transition(
-        writer=writer,
-        task_id=_make_task_id(),
-        from_state="pending",
-        to_state="planning",
-        trigger_event="task.planning.started",
-        worker_id="",
-        parent_envelope=parent,
-        clock=clock,
-    )
+        await _emit_state_transition(
+            task_id=_make_task_id(),
+            from_state="pending",
+            to_state="planning",
+            trigger_event="task.planning.started",
+            worker_id="",
+            parent_envelope=parent,
+            clock=clock,
+        )
 
-    # The writer must have been called with an EventEnvelope
-    assert writer.append.call_count == 1
-    emitted: EventEnvelope = writer.append.call_args[0][0]
-    assert emitted.type == "task.state_transition"
-    assert emitted.schema_version == "1.1.0"
-    assert emitted.payload["from_state"] == "pending"
-    assert emitted.payload["to_state"] == "planning"
-    assert emitted.payload["trigger_event"] == "task.planning.started"
-    assert emitted.payload["task_id"] == _make_task_id()
-    assert emitted.payload["worker_id"] == ""
+        # The writer must have been called with an EventEnvelope
+        assert writer.append.call_count == 1
+        emitted: EventEnvelope = writer.append.call_args[0][0]
+        assert emitted.type == "task.state_transition"
+        assert emitted.schema_version == "1.1.0"
+        assert emitted.payload.from_state == "pending"
+        assert emitted.payload.to_state == "planning"
+        assert emitted.payload.trigger_event == "task.planning.started"
+        assert emitted.payload.task_id == _make_task_id()
+        assert emitted.payload.worker_id == ""
+    finally:
+        _set_audit_writer(None)
 
 
-@pytest.mark.xfail(strict=True)
 @pytest.mark.asyncio
 async def test_emit_state_transition_uses_parent_monotonic_ns_plus_one() -> None:
     """The child event's monotonic_ns must be parent's monotonic_ns + 1 for ordering."""
@@ -163,40 +165,45 @@ async def test_emit_state_transition_uses_parent_monotonic_ns_plus_one() -> None
 
     from registry_state.adapters.event_log import EventLogWriter
     from registry_state.domain.event_types import ensure_registered
+    from registry_state.domain.handlers import _set_audit_writer
 
     ensure_registered()
 
     writer = AsyncMock(spec=EventLogWriter)
-    clock = FrozenClock(mono_ns=2_000_000, now=FROZEN_EPOCH)
-    rng = Random(42)
+    _set_audit_writer(writer)
+    try:
+        clock = FrozenClock(mono_ns=2_000_000, now=FROZEN_EPOCH)
+        rng = Random(42)
 
-    parent_ns = 2_000_000
-    parent = EventEnvelope.create(
-        event_id=new_uuid7(clock=clock, rng=rng),
-        type="task.execution.started",
-        schema_version="1.0.0",
-        emitted_at=clock.now(),
-        emitted_at_monotonic_ns=parent_ns,
-        actor=_ACTOR,
-        payload={"task_id": _make_task_id()},
-        trace_id="01917e5c-a7d1-7000-8abc-000000000098",
-    )
+        parent_ns = 2_000_000
+        parent = EventEnvelope.create(
+            event_id=new_event_id(clock=clock, rng=rng),
+            type="task.execution.started",
+            schema_version="1.0.0",
+            emitted_at=clock.now(),
+            emitted_at_monotonic_ns=parent_ns,
+            actor=_ACTOR,
+            payload={"task_id": _make_task_id(), "session_id": "s-test-session"},
+            trace_id="01917e5c-a7d1-7000-8abc-000000000098",
+            request_id=new_uuid7(clock=TickingClock(start_now=FROZEN_EPOCH), rng=Random(43)),
+        )
 
-    from registry_state.domain.handlers import _emit_state_transition
+        from registry_state.domain.handlers import _emit_state_transition
 
-    await _emit_state_transition(
-        writer=writer,
-        task_id=_make_task_id(),
-        from_state="plan_ready",
-        to_state="executing",
-        trigger_event="task.execution.started",
-        worker_id="worker-01-12345",
-        parent_envelope=parent,
-        clock=clock,
-    )
+        await _emit_state_transition(
+            task_id=_make_task_id(),
+            from_state="plan_ready",
+            to_state="executing",
+            trigger_event="task.execution.started",
+            worker_id="worker-01-12345",
+            parent_envelope=parent,
+            clock=clock,
+        )
 
-    emitted: EventEnvelope = writer.append.call_args[0][0]
-    assert emitted.emitted_at_monotonic_ns == parent_ns + 1
+        emitted: EventEnvelope = writer.append.call_args[0][0]
+        assert emitted.emitted_at_monotonic_ns == parent_ns + 1
+    finally:
+        _set_audit_writer(None)
 
 
 # ---------------------------------------------------------------------------
