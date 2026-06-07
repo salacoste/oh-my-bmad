@@ -484,14 +484,14 @@ development_status:
   # Epic 30: Postgres migration (7 stories, ~1.5 weeks)
   # phase: 6 · FR99–FR101 · NFR-O14, NFR-M11, NFR-S16, NFR-R12 · ADR-0017
   # ---------------------------------------------------------------------------
-  epic-30: in-progress  # phase: 6 · Postgres migration (FR99-FR101) — Stories 30-1 and 30-2 done
+  epic-30: done  # phase: 6 · Postgres migration (FR99-FR101) — ALL 7 stories done
   30-1-atdd-red-phase-dual-backend-contracts: done  # phase: 6 · FR99 · 8 xfail + 4 reference ATDD contracts
   30-2-database-backend-config-dual-engine-factory: done  # phase: 6 · FR99 · Dual SQLite/Postgres engine factory (10 ATDD pass, 2 xfail remain)
   30-3-backend-conditional-repository-alembic-revalidation: done  # phase: 6 · FR99, FR100 · Alembic dual-backend env.py + REGISTRY_DATABASE_URL + 4 new tests
   30-4-alembic-migration-downgrade-path: done  # phase: 6 · NFR-R12 · Alembic downgrade -1 verified on SQLite
-  30-5-postgres-ci-service-container-job: backlog  # phase: 6 · FR101 · Postgres CI job in ci.yml
+  30-5-postgres-ci-service-container-job: done  # phase: 6 · FR101 · Postgres 16 CI service container job (non-required)
   30-6-separability-test-s12-postgres-optional: done  # phase: 6 · NFR-M11 · S-12 SQLite lifecycle test (12/12 ATDD green)
-  30-7-performance-validation-connection-security: backlog  # phase: 6 · NFR-O14, NFR-S16 · <5ms p95 + credential safety
+  30-7-performance-validation-connection-security: done  # phase: 6 · NFR-O14, NFR-S16 · 5 NFR tests (pool config, pre-ping, password redaction)
 
   # ---------------------------------------------------------------------------
   # Epic 31: Task state machine (5 stories, ~1 week)
