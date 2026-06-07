@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-06-06T12:00:00Z
+last_updated: 2026-06-07T12:00:00Z
 current_phase: 5  # Phase 5 opened for multi-runtime plane (Epics 26-29), 2026-06-07
 
 development_status:
@@ -835,3 +835,18 @@ audit_trail:
       browser.* cardinality ratchet in metrics-subscriber). 22-5 stays
       backlog: check_browser_image_digest.py + verify-images + S-10
       separability finalization requires ops/Docker verification.
+  - date: "2026-06-07"
+    event: phase-5-complete
+    from: 4
+    to: 5
+    reason: >
+      Phase 5 (Multi-Runtime Plane) COMPLETE — all 4 epics (26-29) done, 18
+      stories shipped across 4 atomic commits (2530816, 4ca477f, 4741a6b,
+      3247469). RuntimeAdapter protocol + CodexRunner + credential isolation
+      (Epic 26), per-task runtime selection + fallback (Epic 27), runtime
+      handoff + session continuity (Epic 28), per-runtime budget tracking +
+      fleet smoke + metrics label (Epic 29). 67 new tests. Lint/mypy/discipline
+      gates green. S-11 separability test (2 states). Phase 5 retrospective
+      produced (phase-5-retrospective-2026-06-07.md). Epic 29 retrospective
+      produced (epic-29-retrospective.md). Carry-forward: CF1 live Codex binary
+      validation, CF2 heterogeneous token model docs, CF3 pre-commit lint gate.

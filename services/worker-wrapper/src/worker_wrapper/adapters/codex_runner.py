@@ -23,12 +23,15 @@ import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
 from worker_wrapper.app.config import WorkerSettings
 from worker_wrapper.domain.runtime_adapter import HealthCheckResult
+
+if TYPE_CHECKING:
+    from worker_wrapper.adapters.claude_code_runner import TerminationResult
 
 # Graceful shutdown: wait this many seconds after SIGTERM before SIGKILL.
 _GRACE_PERIOD_S: float = 5.0
@@ -318,8 +321,14 @@ class CodexRunner:
                     )
                 # Test execution detection
                 test_keywords = (
-                    "pytest", "npm test", "cargo test", "go test",
-                    "just test", "make test", "jest", "mocha",
+                    "pytest",
+                    "npm test",
+                    "cargo test",
+                    "go test",
+                    "just test",
+                    "make test",
+                    "jest",
+                    "mocha",
                 )
                 if any(kw in command for kw in test_keywords):
                     return ExtractedEvent(
@@ -466,7 +475,7 @@ class CodexRunner:
         self,
         *,
         grace_period_s: float = 5.0,
-    ) -> "TerminationResult":
+    ) -> TerminationResult:
         """Terminate with SIGTERM → wait → SIGKILL escalation (P5-I3).
 
         Mirrors ``ClaudeCodeRunner.terminate_with_grace`` semantics exactly.

@@ -13,10 +13,6 @@ adapters.  These tests enforce the invariants from ADR-0015 D1-D6:
 
 from __future__ import annotations
 
-import asyncio
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import pytest
 
 from worker_wrapper.adapters.claude_code_runner import (
@@ -192,21 +188,24 @@ class TestCodexRunnerParsing:
 
     def test_classify_tool_bash_git_push(self) -> None:
         event = CodexRunner._classify_tool_use(
-            "bash", {"command": "git push origin main"},
+            "bash",
+            {"command": "git push origin main"},
         )
         assert event is not None
         assert event.event_type == "git.push"
 
     def test_classify_tool_bash_git_commit(self) -> None:
         event = CodexRunner._classify_tool_use(
-            "bash", {"command": "git commit -m 'fix'"},
+            "bash",
+            {"command": "git commit -m 'fix'"},
         )
         assert event is not None
         assert event.event_type == "commit.created"
 
     def test_classify_tool_bash_pytest(self) -> None:
         event = CodexRunner._classify_tool_use(
-            "bash", {"command": "pytest tests/"},
+            "bash",
+            {"command": "pytest tests/"},
         )
         assert event is not None
         assert event.event_type == "test.run"
@@ -217,20 +216,24 @@ class TestCodexRunnerParsing:
 
     def test_extract_usage(self) -> None:
         runner = CodexRunner(WorkerSettings())
-        runner._extract_usage({
-            "usage": {"input_tokens": 100, "output_tokens": 50},
-        })
+        runner._extract_usage(
+            {
+                "usage": {"input_tokens": 100, "output_tokens": 50},
+            }
+        )
         assert runner._input_tokens == 100
         assert runner._output_tokens == 50
 
     def test_extract_events_from_turn(self) -> None:
         runner = CodexRunner(WorkerSettings())
-        runner._extract_events({
-            "tool_calls": [
-                {"name": "write", "input": {"file": "a.py"}},
-                {"name": "bash", "input": {"command": "pytest"}},
-            ],
-        })
+        runner._extract_events(
+            {
+                "tool_calls": [
+                    {"name": "write", "input": {"file": "a.py"}},
+                    {"name": "bash", "input": {"command": "pytest"}},
+                ],
+            }
+        )
         assert len(runner._events) == 2
         assert runner._events[0].event_type == "file.edited"
         assert runner._events[1].event_type == "test.run"

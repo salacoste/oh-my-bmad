@@ -169,9 +169,7 @@ async def test_codex_runtime_dispatch_via_factory(tmp_path: Path) -> None:
     """get_runtime_adapter resolves runtime='codex' to a CodexRunner instance."""
     settings = _settings(tmp_path)
     adapter = get_runtime_adapter(settings, runtime="codex")
-    assert isinstance(adapter, CodexRunner), (
-        f"Expected CodexRunner, got {type(adapter).__name__}"
-    )
+    assert isinstance(adapter, CodexRunner), f"Expected CodexRunner, got {type(adapter).__name__}"
     assert adapter.runtime_name == "codex"
 
 
@@ -228,6 +226,4 @@ async def test_codex_fleet_git_tool_callable(
             "git.status",
             {"caller_trace_id": _TRACE_ID},
         )
-        assert call_result.isError is False, (
-            f"git.status raised: {call_result.content!r}"
-        )
+        assert call_result.isError is False, f"git.status raised: {call_result.content!r}"

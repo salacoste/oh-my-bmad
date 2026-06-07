@@ -1513,6 +1513,7 @@ class BrowserTabClosedPayload(BaseModel):
 # Phase 5 — Multi-runtime event payloads (FR97 / Epic 27 Story 27.3).
 # ---------------------------------------------------------------------------
 
+
 class TaskRuntimeHandoffPayload(BaseModel):
     """Payload for the ``task.runtime_handoff`` event (FR92 / Epic 28).
 

@@ -756,7 +756,10 @@ async def run_task(
             # Phase 5 / FR94 — accumulate per-runtime token usage after run.
             # Both ClaudeCodeResult and CodexResult carry token fields.
             _accumulate_runtime_tokens(
-                result, runner.runtime_name, tokens_consumed_by_runtime, log,
+                result,
+                runner.runtime_name,
+                tokens_consumed_by_runtime,
+                log,
             )
         except TimeoutError:
             log.error(

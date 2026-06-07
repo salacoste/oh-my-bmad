@@ -25,7 +25,7 @@ def _make_log() -> structlog.stdlib.BoundLogger:
         logger_factory=structlog.stdlib.LoggerFactory(),
         processors=[structlog.dev.ConsoleRenderer()],
     )
-    return structlog.get_logger().bind(logger=stdlib_logger)
+    return structlog.get_logger().bind(logger=stdlib_logger)  # type: ignore[no-any-return]
 
 
 # ---------------------------------------------------------------------------
@@ -90,4 +90,4 @@ class TestBudgetExceededDuringHandoffError:
     def test_budget_exceeded_error_message(self) -> None:
         """Error message references P5-I3 for traceability."""
         # The docstring carries P5-I3; verify the class identity.
-        assert "P5-I3" in BudgetExceededDuringHandoffError.__doc__
+        assert "P5-I3" in (BudgetExceededDuringHandoffError.__doc__ or "")

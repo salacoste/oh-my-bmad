@@ -13,8 +13,6 @@ misconfiguration).
 
 from __future__ import annotations
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING
 
 from worker_wrapper.app.config import WorkerSettings
@@ -35,7 +33,7 @@ def get_runtime_adapter(
     settings: WorkerSettings,
     *,
     runtime: str | None = None,
-) -> "RuntimeAdapter":
+) -> RuntimeAdapter:
     """Return the concrete ``RuntimeAdapter`` for the configured runtime.
 
     Selection priority:
@@ -57,10 +55,7 @@ def get_runtime_adapter(
     resolved = runtime or settings.runtime or "claude-code"
 
     if resolved not in SUPPORTED_RUNTIMES:
-        raise ValueError(
-            f"Unknown runtime: {resolved!r}. "
-            f"Supported: {sorted(SUPPORTED_RUNTIMES)}"
-        )
+        raise ValueError(f"Unknown runtime: {resolved!r}. Supported: {sorted(SUPPORTED_RUNTIMES)}")
 
     if resolved == "claude-code":
         from worker_wrapper.adapters.claude_code_runner import ClaudeCodeRunner

@@ -20,11 +20,15 @@ from unittest.mock import patch
 from worker_wrapper.adapters.claude_code_runner import (
     _CHILD_ENV_ALLOWLIST,
     _CHILD_ENV_PREFIXES,
+)
+from worker_wrapper.adapters.claude_code_runner import (
     _build_child_env as _claude_build_env,
 )
 from worker_wrapper.adapters.codex_runner import (
     _CODEX_ENV_ALLOWLIST,
     _CODEX_ENV_PREFIXES,
+)
+from worker_wrapper.adapters.codex_runner import (
     _build_child_env as _codex_build_env,
 )
 
@@ -53,11 +57,19 @@ class TestCredentialIsolation:
     def test_shared_functional_vars(self) -> None:
         """Functional vars (PATH, HOME, TLS) are in BOTH allowlists."""
         shared = {
-            "PATH", "HOME", "USER",
-            "LANG", "LC_ALL", "LC_CTYPE",
-            "TMPDIR", "TMP", "TEMP",
-            "SSL_CERT_FILE", "SSL_CERT_DIR",
-            "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+            "PATH",
+            "HOME",
+            "USER",
+            "LANG",
+            "LC_ALL",
+            "LC_CTYPE",
+            "TMPDIR",
+            "TMP",
+            "TEMP",
+            "SSL_CERT_FILE",
+            "SSL_CERT_DIR",
+            "REQUESTS_CA_BUNDLE",
+            "CURL_CA_BUNDLE",
         }
         assert shared.issubset(_CHILD_ENV_ALLOWLIST)
         assert shared.issubset(_CODEX_ENV_ALLOWLIST)
