@@ -447,6 +447,27 @@ per-task with precedence `per-task budget_token_limit > OMB_DEFAULT_TASK_BUDGET_
 > `awaiting_approval` FSM path land together in **Story 12.3a**. Until then every
 > task's effective action is necessarily `failed`.
 
+### Multi-runtime budget accounting (Phase 5 / FR94)
+
+When the worker runs on multiple runtimes within a single task (via
+`/handoff`), the budget tracks token consumption **per-runtime** in
+`tokens_consumed_by_runtime`. The total budget ceiling is runtime-agnostic,
+but the accounting units differ:
+
+| Runtime | Unit | How counted |
+|---------|------|-------------|
+| `claude-code` | turns | `result.num_turns` (Claude Code doesn't expose token counts) |
+| `codex` | tokens | `result.input_tokens + result.output_tokens` |
+
+Cross-runtime budget comparison is therefore **approximate**, not exact.
+A task consuming 5 Claude turns + 3000 Codex tokens has a combined
+"token" count of 5 + 3000 = 3005 — but the two units are not comparable.
+The budget ceiling applies to the raw sum. Operators should set ceilings
+conservatively when using heterogeneous runtimes.
+
+The `runtime` label on metrics (`omb_task_tokens_spent`) segments
+consumption by runtime so you can observe per-runtime usage independently.
+
 ## litestream WAL replication (optional disaster recovery)
 
 litestream streams registry-state's SQLite WAL off-host to an S3-compatible
