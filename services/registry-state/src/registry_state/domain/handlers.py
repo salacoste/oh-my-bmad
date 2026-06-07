@@ -509,6 +509,20 @@ async def handle_task_assigned(session: AsyncSession, envelope: EventEnvelope) -
     )
 
 
+async def handle_task_state_transition(session: AsyncSession, envelope: EventEnvelope) -> None:
+    """Materialize ``task.state_transition`` audit event (Story 35.5 / FR108).
+
+    Metadata-only handler — refreshes ``last_event_id`` and ``updated_at`` on
+    the task row but does NOT change task status. The transition already
+    happened in the triggering handler (e.g. ``handle_task_planning_started``);
+    this handler exists solely so the audit event is queryable via the events
+    table and the materializer cursor advances past it.
+    """
+    payload = _hydrate(envelope.payload, TaskStateTransitionPayload)
+    assert isinstance(payload, TaskStateTransitionPayload)
+    await _touch_task(session, payload.task_id, envelope)
+
+
 async def handle_task_approval_requested(session: AsyncSession, envelope: EventEnvelope) -> None:
     """Update last_event_id + updated_at for ``task.approval_requested``.
 
@@ -984,6 +998,7 @@ def register_default_handlers(materializer: MaterializerProtocol) -> None:
     materializer.register_handler("task.summary_emitted", handle_task_summary_emitted)
     materializer.register_handler("task.approval_requested", handle_task_approval_requested)
     materializer.register_handler("task.assigned", handle_task_assigned)
+    materializer.register_handler("task.state_transition", handle_task_state_transition)
     materializer.register_handler("task.completed", handle_task_completed)
     # Story 6.5 — 4 decision audit event handlers.
     materializer.register_handler("approval.granted", handle_approval_granted)
@@ -1051,6 +1066,7 @@ __all__ = [
     "handle_task_step_completed",
     "handle_task_stop_requested",
     "handle_task_summary_emitted",
+    "handle_task_state_transition",
     "handle_tier3_action_attempted",
     "handle_tier3_action_performed",
     "handle_tier3_budget_override",
