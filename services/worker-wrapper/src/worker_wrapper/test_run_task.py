@@ -747,6 +747,7 @@ class TestRunTaskBudgetOverrideIntercepted:
             ),
         ):
             mock_runner.return_value.run = AsyncMock(return_value=result)
+            mock_runner.return_value.runtime_name = "claude-code"
             await run_task(
                 _as_clients(clients),
                 settings,
@@ -816,6 +817,7 @@ class TestRunTaskBudgetTerminated:
             mock_runner.return_value.run = AsyncMock(
                 side_effect=BrokenPipeError("subprocess SIGTERMed mid-stream")
             )
+            mock_runner.return_value.runtime_name = "claude-code"
             await run_task(
                 _as_clients(clients),
                 settings,

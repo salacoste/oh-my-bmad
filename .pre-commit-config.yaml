@@ -10,6 +10,20 @@ repos:
         language: system
         types: [text]
         exclude: ^(\.venv/|upstream/|_bmad/|_bmad-output/|.*\.lock$|\.env\.example$|uv\.lock$|packages/secret-hygiene/src/secret_hygiene/test_.*\.py$)
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check .
+        language: system
+        pass_filenames: false
+        types: [python]
+        stages: [pre-push]
+      - id: ruff-format
+        name: ruff format check
+        entry: uv run ruff format --check .
+        language: system
+        pass_filenames: false
+        types: [python]
+        stages: [pre-push]
       - id: secret-hygiene-commit-msg
         name: secret-hygiene commit-message injection check
         entry: uv run secret-hygiene-commit-msg
