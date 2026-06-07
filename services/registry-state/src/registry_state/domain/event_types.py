@@ -73,10 +73,12 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     TaskLicenseFlaggedPayload,
     TaskPlanningStartedPayload,
     TaskPlanReadyPayload,
+    TaskQueuedPayload,
     TaskRetryRequestedPayload,
     TaskRuntimeFallbackPayload,
     TaskRuntimeHandoffPayload,
     TaskSelfRecoveredPayload,
+    TaskStateTransitionPayload,
     TaskStepCompletedPayload,
     TaskStopRequestedPayload,
     TaskSummaryEmittedPayload,
@@ -148,6 +150,8 @@ __all__ = [
     "TaskApprovalSignedPayload",
     "TaskAssignedPayload",
     "TaskBlockerRaisedPayload",
+    "TaskQueuedPayload",
+    "TaskStateTransitionPayload",
     "TaskBudgetEnforcementTriggeredPayload",
     "TaskBudgetExceededPayload",
     "TaskCompletedPayload",
@@ -237,6 +241,16 @@ def ensure_registered() -> None:
     # worker atomically claims a task from the queue. Born at 1.1.0 (Phase 6,
     # NEW event — no v1.0.0 predecessor, same convention as browser.* events).
     register("task.assigned", "1.1.0", TaskAssignedPayload)
+
+    # Story 31 — task.queued event (FR102 / NFR-O16). Emitted when a task
+    # transitions CREATED → QUEUED via the FSM. Born at 1.1.0 (Phase 6,
+    # NEW event — no v1.0.0 predecessor).
+    register("task.queued", "1.1.0", TaskQueuedPayload)
+
+    # Story 31.5 — task.state_transition audit event (NFR-O16). Emitted on
+    # every FSM state transition. Provides full audit trail of task lifecycle.
+    # Born at 1.1.0 (Phase 6, NEW event — no v1.0.0 predecessor).
+    register("task.state_transition", "1.1.0", TaskStateTransitionPayload)
 
     # Story 2.14 — v1.0.1 registrations (same models, additive envelope field).
     # Story 2.16 — secret.accessed audit-event payload (FR42 / NFR-S3).

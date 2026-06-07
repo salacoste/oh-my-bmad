@@ -245,7 +245,7 @@ scan-secrets:
     git ls-files -z | xargs -0 uv run secret-hygiene-precommit
 
 # Architectural-discipline gates: import-graph, event-registry, single-writer,
-# mcp-transport (P2-I4 stdio-only), trace-id-required (NFR-O7).
+# mcp-transport (P2-I4 stdio-only), trace-id-required (NFR-O7), task-fsm-only (P6-I3).
 # Replicates the CI `Check*` steps locally; run before opening a PR.
 check-gates:
     uv run python scripts/check_imports.py
@@ -254,6 +254,7 @@ check-gates:
     uv run python scripts/check_mcp_transport.py
     uv run python scripts/check_trace_id_required.py
     uv run python scripts/check_tier_declarations.py
+    uv run python scripts/check_task_fsm_only.py
 
 # Run the architectural-gate self-tests — exercises the bundled fixture
 # trees under scripts/checks/fixtures/ to verify each check script's own
@@ -266,6 +267,7 @@ check-gates-self-test:
     uv run python scripts/check_trace_id_required.py --self-test
     uv run python scripts/check_tier_declarations.py --self-test
     uv run python scripts/check_sbom_licenses.py --self-test
+    uv run python scripts/check_task_fsm_only.py --self-test
 
 # Scenario harness (journey-level smoke tests) lands across Stories 2.11 /
 # 2.12 / 5.18. Story 1.5 only wires the harness; real scenarios land later.

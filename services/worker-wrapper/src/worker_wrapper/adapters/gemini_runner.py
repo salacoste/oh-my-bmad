@@ -279,12 +279,8 @@ class GeminiRunner:
         # Prefer usageMetadata (Gemini convention)
         usage_meta = msg.get("usageMetadata", {})
         if isinstance(usage_meta, dict):
-            self._input_tokens += int(
-                usage_meta.get("promptTokenCount", 0) or 0
-            )
-            self._output_tokens += int(
-                usage_meta.get("candidatesTokenCount", 0) or 0
-            )
+            self._input_tokens += int(usage_meta.get("promptTokenCount", 0) or 0)
+            self._output_tokens += int(usage_meta.get("candidatesTokenCount", 0) or 0)
             return
         # Fallback to usage dict (Codex convention)
         usage = msg.get("usage", {})

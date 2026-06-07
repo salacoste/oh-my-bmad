@@ -398,7 +398,9 @@ def test_migration_0008_round_trip_downgrade_drops_table() -> None:
 
         command.downgrade(_make_cfg(url), "-1")  # 0008 → 0007
         tables_post, _, versions_post = _inspect_db(db_path)
-        assert "key_fingerprint" not in tables_post, "downgrade 0008→0007 must drop key_fingerprint table"
+        assert "key_fingerprint" not in tables_post, (
+            "downgrade 0008→0007 must drop key_fingerprint table"
+        )
         assert versions_post == ["0007"], (
             f"alembic_version must roll back to 0007; got {versions_post}"
         )

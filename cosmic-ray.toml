@@ -13,7 +13,10 @@
 # logical units where surviving mutants most directly signal a weak assertion.
 # `module-path` accepts a LIST of file paths in cosmic-ray 8.4.x (cli.py maps
 # each entry through find_modules; a `.py` file is yielded as-is), so we target
-# exactly these three files — no package-wide blast radius.
+# exactly these files — no package-wide blast radius.
+#
+# Story 34.2 (Phase 6): expanded to include task_fsm.py (FSM logic) and
+# gemini_runner.py (adapter _classify_tool_use / _extract_usage logic).
 #
 # The full run is SLOW (nightly / operator-only). `just mutation-smoke` runs a
 # hard-bounded subset (tiers.py) as the <~3min harness proof.
@@ -22,6 +25,8 @@ module-path = [
     "packages/capabilities/src/capabilities/tiers.py",
     "packages/events/src/events/schema_registry.py",
     "packages/events/src/events/canonical.py",
+    "services/registry-state/src/registry_state/domain/task_fsm.py",
+    "services/worker-wrapper/src/worker_wrapper/adapters/gemini_runner.py",
 ]
 # Per-mutant test timeout (seconds). A mutant that makes the suite hang (e.g.
 # an inverted loop bound) is recorded as a timeout (counted as not-killed) once

@@ -29,7 +29,6 @@ import socket
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select, update
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from registry_state.schema import Task
 
@@ -125,11 +124,7 @@ async def _claim_sqlite(session: AsyncSession, worker_id: str) -> Task | None:
     set and skips.
     """
     # Find an unclaimed pending task.
-    stmt = (
-        select(Task)
-        .where(Task.status == "pending", Task.worker_id.is_(None))
-        .limit(1)
-    )
+    stmt = select(Task).where(Task.status == "pending", Task.worker_id.is_(None)).limit(1)
     result = await session.execute(stmt)
     task = result.scalar_one_or_none()
     if task is None:

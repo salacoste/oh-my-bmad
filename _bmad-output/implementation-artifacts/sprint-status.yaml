@@ -533,11 +533,11 @@ development_status:
   # Epic 34: CI hardening + finalization (5 stories, ~1 week)
   # phase: 6 · cross-cutting · ship-blocker verification
   # ---------------------------------------------------------------------------
-  epic-34: backlog  # phase: 6 · CI hardening + finalization
-  34-1-phase-6-ci-gate-additions: backlog  # phase: 6 · PR-required checks per epic
-  34-2-mutation-gate-ratchet-update: backlog  # phase: 6 · NFR-O11 · Expand scope + new baseline
-  34-3-event-cardinality-ratchet-update: backlog  # phase: 6 · task.assigned + task.state_transition + task.queued
-  34-4-phase-6-ship-blocker-checklist-verification: backlog  # phase: 6 · 14-item checklist green
+  epic-34: in-progress  # phase: 6 · CI hardening + finalization — Stories 34.1–34.3 done
+  34-1-phase-6-ci-gate-additions: done  # phase: 6 · P6-I3 discipline script + noqa fixes + ruff clean
+  34-2-mutation-gate-ratchet-update: done  # phase: 6 · NFR-O11 · cosmic-ray.toml expanded with task_fsm + gemini_runner
+  34-3-event-cardinality-ratchet-update: done  # phase: 6 · task.queued + task.state_transition registered
+  34-4-phase-6-ship-blocker-checklist-verification: done  # phase: 6 · 14-item checklist verified green
   34-5-phase-6-retrospective: backlog  # phase: 6 · Lessons + carry-forward to Phase 7
 
 # ===========================================================================

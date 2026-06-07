@@ -110,6 +110,42 @@ class TaskAssignedPayload(BaseModel):
     worker_id: str = Field(min_length=1, max_length=64)
 
 
+class TaskQueuedPayload(BaseModel):
+    """Payload for the ``task.queued`` event (Story 31 / FR102 / NFR-O16).
+
+    Emitted when a task transitions to QUEUED state via the FSM. The FSM
+    is the sole authority for state transitions — this event is the audit
+    trail record of the ``CREATED → QUEUED`` transition.
+
+    Born at schema 1.1.0 (Phase 6, NEW event — no v1.0.0 predecessor).
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    task_id: str = Field(pattern=_TASK_ID_PATTERN)
+
+
+class TaskStateTransitionPayload(BaseModel):
+    """Payload for the ``task.state_transition`` audit event (Story 31.5 / NFR-O16).
+
+    Emitted on every state machine transition. Provides a full audit trail
+    of task lifecycle changes, queryable via the registry API. The
+    ``trigger_event`` field records which event caused the transition;
+    ``worker_id`` is populated when the task is assigned to a worker.
+
+    Born at schema 1.1.0 (Phase 6, NEW event — no v1.0.0 predecessor).
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    task_id: str = Field(pattern=_TASK_ID_PATTERN)
+    from_state: str = Field(min_length=1)
+    to_state: str = Field(min_length=1)
+    trigger_event: str = Field(min_length=1)
+    worker_id: str = Field(default="", max_length=64)
+    timestamp: str = Field(default="")
+
+
 class TaskPlanningStartedPayload(BaseModel):
     """Payload for the ``task.planning.started`` event."""
 
@@ -1650,6 +1686,8 @@ __all__ = [
     "RuntimeHealthCheckedPayload",
     "TaskRuntimeFallbackPayload",
     "TaskRuntimeHandoffPayload",
-    # Phase 6 — worker pool event payloads.
+    # Phase 6 — worker pool + state machine event payloads.
     "TaskAssignedPayload",
+    "TaskQueuedPayload",
+    "TaskStateTransitionPayload",
 ]

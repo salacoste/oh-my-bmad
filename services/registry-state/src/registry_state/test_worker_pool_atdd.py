@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Story 32.1 / AC1: Task ORM has nullable worker_id column
 # ---------------------------------------------------------------------------
@@ -53,9 +52,7 @@ def test_task_orm_has_worker_id_column() -> None:
     # Must be nullable (pre-worker-pool tasks have no worker_id)
     assert col.nullable is True, "worker_id must be nullable for backward compat"
     # String type for hostname-pid format (e.g. "worker-01-12345")
-    assert col.type.length == 64, (
-        f"Expected String(64), got String({col.type.length})"
-    )
+    assert col.type.length == 64, f"Expected String(64), got String({col.type.length})"
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +67,7 @@ def test_task_assigned_event_registered() -> None:
     convention as capability.denied / key.rotated / browser.* events).
     """
     from events.schema_registry import REGISTRY
+
     from registry_state.domain.event_types import ensure_registered
 
     ensure_registered()
@@ -153,7 +151,6 @@ def test_worker_identity_hostname_pid_format() -> None:
     or reads from the ``WORKER_ID`` env var if set.
     """
     import socket
-    import os
 
     from registry_state.domain.worker_pool import generate_worker_id
 
@@ -215,7 +212,7 @@ async def test_exclusive_assignment_two_workers_same_task() -> None:
     """
     from datetime import UTC, datetime
 
-    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.ext.asyncio import create_async_engine
     from sqlalchemy.pool import StaticPool
 
     from registry_state.adapters.sqlite_store import get_session
@@ -260,9 +257,7 @@ async def test_exclusive_assignment_two_workers_same_task() -> None:
 
     # Exactly one worker gets the task
     claims = [r for r in (result_a, result_b) if r is not None]
-    assert len(claims) == 1, (
-        f"Exactly one worker should claim the task, got {len(claims)} claims"
-    )
+    assert len(claims) == 1, f"Exactly one worker should claim the task, got {len(claims)} claims"
 
     # The claimed task must have worker_id set
     claimed = claims[0]
@@ -283,7 +278,10 @@ def test_worker_poll_interval_config_exists() -> None:
 
     ADR-0019 D1: workers poll at a configurable interval. Default is 2 seconds.
     """
-    from worker_wrapper.app.config import WorkerSettings
+    # ATDD cross-check: worker-wrapper is a peer service (IMP001 accepted)
+    # fmt: off — prevent ruff from wrapping noqa to next line
+    from worker_wrapper.app.config import WorkerSettings  # noqa: IMP001 — ATDD cross-check
+    # fmt: on
 
     settings = WorkerSettings()
     assert hasattr(settings, "worker_poll_interval_seconds"), (
@@ -307,7 +305,10 @@ def test_worker_metrics_family_in_event_families() -> None:
     ``_EVENT_FAMILIES`` is a tuple of family-name strings. The ``"worker"``
     prefix routes task.assigned events into the worker metrics bucket.
     """
-    from metrics_subscriber.app.metrics import _EVENT_FAMILIES
+    # ATDD cross-check: metrics-subscriber is a peer service (IMP001 accepted)
+    # fmt: off — prevent ruff from wrapping noqa to next line
+    from metrics_subscriber.app.metrics import _EVENT_FAMILIES  # noqa: IMP001 — ATDD cross-check
+    # fmt: on
 
     assert "worker" in _EVENT_FAMILIES, (
         f"'worker' must be in _EVENT_FAMILIES, got: {sorted(_EVENT_FAMILIES)}"
@@ -370,6 +371,7 @@ def test_ref_task_orm_has_status_column() -> None:
 def test_ref_existing_event_types_include_task_lifecycle() -> None:
     """[Reference] Core task lifecycle events are registered. Not xfail."""
     from events.schema_registry import REGISTRY
+
     from registry_state.domain.event_types import ensure_registered
 
     ensure_registered()

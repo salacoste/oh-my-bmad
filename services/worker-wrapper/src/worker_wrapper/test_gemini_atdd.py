@@ -32,7 +32,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Story 33.1 / AC1: Runtime factory returns GeminiRunner
 # ---------------------------------------------------------------------------
@@ -93,8 +92,8 @@ def test_gemini_runner_satisfies_protocol() -> None:
 def test_gemini_env_has_api_key() -> None:
     """GEMINI_API_KEY must be injectable into Gemini child env from settings."""
     from worker_wrapper.adapters.gemini_runner import (
-        _build_child_env,
         _GEMINI_ENV_DENYLIST,
+        _build_child_env,
     )
 
     # _build_child_env() intentionally excludes GEMINI_API_KEY via denylist.
@@ -117,9 +116,7 @@ def test_claude_env_excludes_gemini_key() -> None:
     )
 
     env = _claude_build_env()
-    assert "GEMINI_API_KEY" not in env, (
-        "GEMINI_API_KEY must not leak into Claude child env"
-    )
+    assert "GEMINI_API_KEY" not in env, "GEMINI_API_KEY must not leak into Claude child env"
 
 
 def test_gemini_env_excludes_other_keys() -> None:
@@ -127,12 +124,8 @@ def test_gemini_env_excludes_other_keys() -> None:
     from worker_wrapper.adapters.gemini_runner import _build_child_env
 
     env = _build_child_env()
-    assert "ANTHROPIC_API_KEY" not in env, (
-        "ANTHROPIC_API_KEY must not leak into Gemini child env"
-    )
-    assert "OPENAI_API_KEY" not in env, (
-        "OPENAI_API_KEY must not leak into Gemini child env"
-    )
+    assert "ANTHROPIC_API_KEY" not in env, "ANTHROPIC_API_KEY must not leak into Gemini child env"
+    assert "OPENAI_API_KEY" not in env, "OPENAI_API_KEY must not leak into Gemini child env"
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +186,9 @@ def test_worker_settings_has_gemini_fields() -> None:
 
 def test_metrics_runtimes_includes_gemini() -> None:
     """Metrics subscriber _RUNTIMES must include "gemini" (NFR-O13)."""
-    from metrics_subscriber.app.metrics import _RUNTIMES
+    # fmt: off — prevent ruff from wrapping noqa to next line
+    from metrics_subscriber.app.metrics import _RUNTIMES  # noqa: IMP001 — ATDD cross-check
+    # fmt: on
 
     assert "gemini" in _RUNTIMES, f"'gemini' must be in _RUNTIMES, got: {_RUNTIMES}"
 
