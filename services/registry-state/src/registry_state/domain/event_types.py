@@ -86,6 +86,7 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     Tier3ActionAttemptedPayload,
     Tier3ActionPerformedPayload,
     VerificationCompletedPayload,
+    WorkerHeartbeatPayload,
 )
 from events.schema_registry import register as _register
 
@@ -174,6 +175,8 @@ __all__ = [
     "RuntimeHealthCheckedPayload",
     "TaskRuntimeFallbackPayload",
     "TaskRuntimeHandoffPayload",
+    # Phase 7 — worker heartbeat payload.
+    "WorkerHeartbeatPayload",
 ]
 
 # ---------------------------------------------------------------------------
@@ -277,6 +280,8 @@ def ensure_registered() -> None:
     register("session.finished", "1.0.0", SessionFinishedPayload)
     register("session.finished", "1.0.1", SessionFinishedPayload)
     register("session.finished", "1.1.0", SessionFinishedPayload)
+    # Story 36.2 — worker heartbeat (FR109).
+    register("worker.heartbeat", "1.1.0", WorkerHeartbeatPayload)
     # Story 7.8 — restart-recovery event payloads (FR29 models, FR16 synthesis).
     register("session.reconnecting", "1.0.0", SessionReconnectingPayload)
     register("session.reconnecting", "1.1.0", SessionReconnectingPayload)

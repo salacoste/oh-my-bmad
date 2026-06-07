@@ -225,7 +225,6 @@ async def test_emit_session_heartbeat_timeout_has_production_caller() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True)
 def test_worker_heartbeat_event_registered() -> None:
     """The ``worker.heartbeat`` event type must be registered at v1.1.0."""
     from events.schema_registry import REGISTRY
@@ -236,7 +235,6 @@ def test_worker_heartbeat_event_registered() -> None:
     assert ("worker.heartbeat", "1.1.0") in REGISTRY
 
 
-@pytest.mark.xfail(strict=True)
 def test_worker_heartbeat_payload_has_required_fields() -> None:
     """WorkerHeartbeatPayload must have worker_id, active_task_id, timestamp fields."""
     from events.payloads import WorkerHeartbeatPayload

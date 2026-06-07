@@ -704,6 +704,23 @@ class SessionFinishedPayload(BaseModel):
     session_id: str = Field(min_length=1, pattern=_SESSION_ID_PATTERN)
 
 
+class WorkerHeartbeatPayload(BaseModel):
+    """Payload for the ``worker.heartbeat`` event (Story 36.2 / FR109).
+
+    Emitted periodically by each worker process to signal liveness.
+    The subscriber's detection loop monitors these heartbeats to identify
+    dead workers (no heartbeat within ``2 * interval``).
+
+    Born at schema 1.1.0 (Phase 7, NEW event — no v1.0.0 predecessor).
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    worker_id: str = Field(min_length=1, max_length=64)
+    active_task_id: str = Field(default="", max_length=64)
+    timestamp: str = Field(default="")
+
+
 class SessionReconnectingPayload(BaseModel):
     """Payload for the ``session.reconnecting`` event (FR29 / Story 7.8).
 
