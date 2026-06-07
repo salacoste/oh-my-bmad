@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-06-07T19:00:00Z
-current_phase: 6  # Phase 6 COMPLETE (Epics 30-34, 30/30 stories, 14/14 ship-blocker green), 2026-06-07
+last_updated: 2026-06-08T12:00:00Z
+current_phase: 7  # Phase 7 IN PROGRESS — Reliability & operator tooling (Epics 35-40)
 
 development_status:
   # =========================================================================
@@ -539,6 +539,18 @@ development_status:
   34-3-event-cardinality-ratchet-update: done  # phase: 6 · task.queued + task.state_transition registered
   34-4-phase-6-ship-blocker-checklist-verification: done  # phase: 6 · 14-item checklist verified green
   34-5-phase-6-retrospective: done  # phase: 6 · Retrospective written with 4 carry-forward items to Phase 7
+
+  # ---------------------------------------------------------------------------
+  # Epic 35: Audit Trail Completion + Phase-Start Hygiene (6 stories)
+  # phase: 7 · FR108 · NFR-O16 · DD-P6-3
+  # ---------------------------------------------------------------------------
+  epic-35: done  # phase: 7 · Audit trail completion — ALL 6 stories done
+  35-1-phase-start-hygiene: done  # phase: 7 · ruff format + discipline self-tests (PI-P6-1, PI-P6-2)
+  35-2-atdd-red-phase-audit-events: done  # phase: 7 · 12 xfail + 2 reference ATDD contracts
+  35-3-emit-state-transition-helper: done  # phase: 7 · _emit_state_transition() + _set_audit_writer() injection
+  35-4-wire-9-audit-emission-sites: done  # phase: 7 · 9 TODO(Story 31.5) markers replaced with _audit_transition()
+  35-5-materializer-handler-state-transition: done  # phase: 7 · handle_task_state_transition metadata-only handler
+  35-6-audit-trail-query-api: done  # phase: 7 · GET /v1/tasks/{task_id}/transitions endpoint
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
