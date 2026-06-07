@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-06-07T12:00:00Z
-current_phase: 5  # Phase 5 opened for multi-runtime plane (Epics 26-29), 2026-06-07
+last_updated: 2026-06-07T18:00:00Z
+current_phase: 6  # Phase 6 opened for server execution pool (Epics 30-34), 2026-06-07
 
 development_status:
   # =========================================================================
@@ -473,6 +473,19 @@ development_status:
   29-3-fleet-smoke-test-codex: done  # phase: 5 · FR96
   29-4-per-runtime-metrics-label: done  # phase: 5 · NFR-O13
 
+  # =========================================================================
+  # PHASE 6 — Server Execution Pool (opened by ADR-0020, 2026-06-07)
+  # Scope: FR99–FR107 from phase-6-prd-amendment.md
+  # NFRs: NFR-O14-O16, NFR-M11-M12, NFR-S15-S16, NFR-R11-R12
+  # Invariants: P6-I1 through P6-I5
+  # =========================================================================
+
+  epic-30: backlog  # phase: 6 · Postgres migration (FR99-FR101)
+  epic-31: backlog  # phase: 6 · Task state machine (FR102-FR103)
+  epic-32: backlog  # phase: 6 · Multi-task parallelism (FR104-FR106)
+  epic-33: backlog  # phase: 6 · Gemini adapter (FR107)
+  epic-34: backlog  # phase: 6 · CI hardening + finalization
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
@@ -850,3 +863,17 @@ audit_trail:
       produced (phase-5-retrospective-2026-06-07.md). Epic 29 retrospective
       produced (epic-29-retrospective.md). Carry-forward: CF1 live Codex binary
       validation, CF2 heterogeneous token model docs, CF3 pre-commit lint gate.
+  - date: "2026-06-07"
+    event: phase-6-opened
+    from: 5
+    to: 6
+    reason: >
+      Phase 6 formally OPENED (operator-authorized). ADR-0017 (Postgres
+      migration), ADR-0018 (task state machine), ADR-0019 (worker pool
+      assignment), ADR-0020 (Phase 6 gate) all accepted 2026-06-07. Phase 6
+      brainstorming converged on D1-D5: IN = Postgres migration + task state
+      machine + multi-task parallelism + Gemini adapter. OUT = remote MCP,
+      mTLS, split deployment, GLM, web dashboard, scheduled jobs. PRD
+      amendment (FR99-FR107) + architecture amendment (P6-I1 through P6-I5)
+      authored. Sprint-status current_phase incremented 5 → 6. Phase 6 =
+      server execution pool (Epics 30-34). DOCS/STATUS change — no code.
