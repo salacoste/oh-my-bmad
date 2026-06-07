@@ -182,8 +182,7 @@ def _self_test() -> None:
 
         if actual_violating != expected_violating:
             print(
-                f"FAIL: expected violations in {expected_violating}, "
-                f"got {actual_violating}",
+                f"FAIL: expected violations in {expected_violating}, got {actual_violating}",
                 file=sys.stderr,
             )
             violations_count += 1
