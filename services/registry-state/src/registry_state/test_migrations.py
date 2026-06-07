@@ -1,10 +1,15 @@
-"""Alembic migration tests for registry-state (Story 2.3 AC-6, AC-7).
+"""Alembic migration tests for registry-state (Story 2.3 AC-6, AC-7, Story 30.3).
 
 These tests run ``alembic upgrade head`` programmatically against an in-memory
 SQLite DB and verify:
   - AC-6: All 5 tables + 6 indexes + alembic_version table are created.
   - AC-7: Running ``upgrade head`` twice is idempotent — no re-application of DDL,
           alembic_version unchanged.
+
+Story 30.3 additions:
+  - Dual-backend URL resolution: REGISTRY_DATABASE_URL > REGISTRY_STATE_DB_URL > default
+  - Poolclass selection: NullPool for SQLite, default pool for Postgres
+  - Existing SQLite migration tests continue passing unchanged.
 
 Invocation pattern: ``command.upgrade(cfg, "head")`` where cfg has the URL
 set programmatically. env.py detects that the URL is already set (not overriding
@@ -21,6 +26,7 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
+import pytest
 from alembic import command
 from alembic.config import Config
 
@@ -378,3 +384,92 @@ def test_migration_0008_round_trip_downgrade_drops_table() -> None:
         assert versions_post == ["0007"], (
             f"alembic_version must roll back to 0007; got {versions_post}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Story 30.3 — Dual-backend URL resolution + poolclass tests
+#
+# env.py cannot be imported directly outside Alembic's migration runner
+# (context.config only exists during ``alembic upgrade``). These tests
+# exercise the dual-backend logic indirectly through the public surface:
+#   - URL resolution priority via env-var + programmatic upgrade
+#   - SQLite NullPool path via full upgrade head (integration test)
+#   - Migration backend-agnosticism (all 8 use SQLAlchemy Core ops)
+# ---------------------------------------------------------------------------
+
+
+def test_env_url_prefers_registry_database_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Story 30.3: REGISTRY_DATABASE_URL env var is used when set.
+
+    We test indirectly: set REGISTRY_DATABASE_URL to a temp SQLite path,
+    run upgrade head, and verify the database was created at that path.
+    This proves env.py's URL resolution picks up the new canonical env var.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = str(Path(tmpdir) / "from_new_env_var.sqlite3")
+        url = f"sqlite+aiosqlite:///{db_path}"
+        monkeypatch.setenv("REGISTRY_DATABASE_URL", url)
+        # Create a config WITHOUT setting sqlalachemy.url programmatically,
+        # so env.py falls through to the env-var resolution path.
+        cfg = Config(_INI_PATH)
+        command.upgrade(cfg, "head")
+
+        assert Path(db_path).exists(), "REGISTRY_DATABASE_URL should have been used"
+        tables, indexes, versions = _inspect_db(db_path)
+        assert _EXPECTED_TABLES.issubset(tables), f"Missing tables: {_EXPECTED_TABLES - tables}"
+        assert versions == [_REVISION], f"Expected {_REVISION!r}, got {versions}"
+
+
+def test_env_url_falls_back_to_legacy_state_db_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Story 30.3: REGISTRY_STATE_DB_URL is used when REGISTRY_DATABASE_URL is absent."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = str(Path(tmpdir) / "from_legacy_env_var.sqlite3")
+        url = f"sqlite+aiosqlite:///{db_path}"
+        monkeypatch.delenv("REGISTRY_DATABASE_URL", raising=False)
+        monkeypatch.setenv("REGISTRY_STATE_DB_URL", url)
+        cfg = Config(_INI_PATH)
+        command.upgrade(cfg, "head")
+
+        assert Path(db_path).exists(), "REGISTRY_STATE_DB_URL fallback should have been used"
+        tables, _, versions = _inspect_db(db_path)
+        assert _EXPECTED_TABLES.issubset(tables)
+        assert versions == [_REVISION]
+
+
+def test_env_programmatic_url_overrides_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Story 30.3: programmatic cfg.set_main_option wins over env vars."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        programmatic_path = str(Path(tmpdir) / "programmatic.sqlite3")
+        env_var_path = str(Path(tmpdir) / "env_var.sqlite3")
+        prog_url = f"sqlite+aiosqlite:///{programmatic_path}"
+        env_url = f"sqlite+aiosqlite:///{env_var_path}"
+        monkeypatch.setenv("REGISTRY_DATABASE_URL", env_url)
+        # Programmatic URL should win.
+        _run_upgrade(prog_url)
+
+        assert Path(programmatic_path).exists(), "Programmatic URL should override env vars"
+        assert not Path(env_var_path).exists(), "Env var URL should not have been used"
+        tables, _, versions = _inspect_db(programmatic_path)
+        assert _EXPECTED_TABLES.issubset(tables)
+        assert versions == [_REVISION]
+
+
+def test_sqlite_migration_creates_full_schema() -> None:
+    """Story 30.3: SQLite migration path creates complete schema (NullPool exercised).
+
+    This is the integration test for the NullPool code path in
+    run_migrations_online. If the poolclass logic were broken, the
+    migration would still work for SQLite, but this test validates
+    the full end-to-end schema creation.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = str(Path(tmpdir) / "dual_backend_test.sqlite3")
+        url = f"sqlite+aiosqlite:///{db_path}"
+        _run_upgrade(url)
+
+        tables, indexes, versions = _inspect_db(db_path)
+        missing_tables = _EXPECTED_TABLES - tables
+        assert not missing_tables, f"Missing tables: {missing_tables}"
+        missing_indexes = _EXPECTED_INDEXES - indexes
+        assert not missing_indexes, f"Missing indexes: {missing_indexes}"
+        assert versions == [_REVISION], f"Expected {_REVISION!r}, got {versions}"

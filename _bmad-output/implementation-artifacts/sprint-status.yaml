@@ -484,10 +484,10 @@ development_status:
   # Epic 30: Postgres migration (7 stories, ~1.5 weeks)
   # phase: 6 · FR99–FR101 · NFR-O14, NFR-M11, NFR-S16, NFR-R12 · ADR-0017
   # ---------------------------------------------------------------------------
-  epic-30: backlog  # phase: 6 · Postgres migration (FR99-FR101)
-  30-1-atdd-red-phase-dual-backend-contracts: backlog  # phase: 6 · FR99 · xfail(strict) dual-backend contract tests
-  30-2-database-backend-config-dual-engine-factory: backlog  # phase: 6 · FR99 · REGISTRY_DATABASE_URL + aiosqlite/asyncpg engine factory
-  30-3-backend-conditional-repository-alembic-revalidation: backlog  # phase: 6 · FR99, FR100 · TaskRepository protocol + Alembic 0001-0008 revalidation
+  epic-30: in-progress  # phase: 6 · Postgres migration (FR99-FR101) — Stories 30-1 and 30-2 done
+  30-1-atdd-red-phase-dual-backend-contracts: done  # phase: 6 · FR99 · 8 xfail + 4 reference ATDD contracts
+  30-2-database-backend-config-dual-engine-factory: done  # phase: 6 · FR99 · Dual SQLite/Postgres engine factory (10 ATDD pass, 2 xfail remain)
+  30-3-backend-conditional-repository-alembic-revalidation: done  # phase: 6 · FR99, FR100 · Alembic dual-backend env.py + REGISTRY_DATABASE_URL + 4 new tests
   30-4-alembic-migration-downgrade-path: backlog  # phase: 6 · NFR-R12 · Reversible migration (downgrade path)
   30-5-postgres-ci-service-container-job: backlog  # phase: 6 · FR101 · Postgres CI job in ci.yml
   30-6-separability-test-s12-postgres-optional: backlog  # phase: 6 · NFR-M11 · S-12 Postgres optional
