@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from registry_state.domain.task_fsm import TaskStateMachine
 
 from events import Actor, new_event_id
-from events.clock import Clock
+from events.clock import Clock, SystemClock
 from events.envelope import EventEnvelope
 from pydantic import BaseModel
 from sqlalchemy import select, update
@@ -170,6 +170,41 @@ async def _emit_state_transition(
         parent_event_id=parent_envelope.event_id,
     )
     await writer.append(audit_envelope)
+
+
+async def _audit_transition(
+    session: AsyncSession,
+    task_id: str,
+    to_state: str,
+    trigger_event: str,
+    parent_envelope: EventEnvelope,
+) -> None:
+    """Emit a ``task.state_transition`` audit event for a state change.
+
+    Convenience wrapper that reads ``from_state`` and ``worker_id`` from the
+    current task row and delegates to :func:`_emit_state_transition`.
+    No-op when the audit writer is not injected (tests, standalone use).
+    """
+    writer = _get_audit_writer()
+    if writer is None:
+        return
+    result = await session.execute(
+        select(Task.status, Task.worker_id).where(Task.id == task_id)
+    )
+    row = result.one_or_none()
+    if row is None:
+        return  # task doesn't exist yet — _touch_task will raise
+    from_state: str = row[0] or "unknown"
+    worker_id: str = row[1] or ""
+    await _emit_state_transition(
+        task_id=task_id,
+        from_state=from_state,
+        to_state=to_state,
+        trigger_event=trigger_event,
+        worker_id=worker_id,
+        parent_envelope=parent_envelope,
+        clock=SystemClock(),
+    )
 
 
 async def _validate_fsm_transition(
@@ -350,7 +385,7 @@ async def handle_task_planning_started(session: AsyncSession, envelope: EventEnv
     assert isinstance(payload, TaskPlanningStartedPayload)
     await _validate_fsm_transition(session, payload.task_id, "planning", envelope.type)
     # FSM-validated (P6-I3)
-    # TODO(Story 31.5): emit task.state_transition audit event here
+    await _audit_transition(session, payload.task_id, "planning", envelope.type, envelope)
     await _touch_task(session, payload.task_id, envelope, {"status": "planning", "hint": None})
 
 
@@ -366,7 +401,7 @@ async def handle_task_plan_ready(session: AsyncSession, envelope: EventEnvelope)
     assert isinstance(payload, TaskPlanReadyPayload)
     await _validate_fsm_transition(session, payload.task_id, "plan_ready", envelope.type)
     # FSM-validated (P6-I3)
-    # TODO(Story 31.5): emit task.state_transition audit event here
+    await _audit_transition(session, payload.task_id, "plan_ready", envelope.type, envelope)
     await _touch_task(
         session,
         payload.task_id,
@@ -392,7 +427,7 @@ async def handle_task_execution_started(session: AsyncSession, envelope: EventEn
     assert isinstance(payload, TaskExecutionStartedPayload)
     await _validate_fsm_transition(session, payload.task_id, "executing", envelope.type)
     # FSM-validated (P6-I3)
-    # TODO(Story 31.5): emit task.state_transition audit event here
+    await _audit_transition(session, payload.task_id, "executing", envelope.type, envelope)
     await _touch_task(session, payload.task_id, envelope, {"status": "executing"})
     session_stmt = (
         sqlite_insert(SessionRow)
@@ -432,7 +467,7 @@ async def handle_task_blocker_raised(session: AsyncSession, envelope: EventEnvel
         )
     await _validate_fsm_transition(session, payload.task_id, "blocked", envelope.type)
     # FSM-validated (P6-I3)
-    # TODO(Story 31.5): emit task.state_transition audit event here
+    await _audit_transition(session, payload.task_id, "blocked", envelope.type, envelope)
     await _touch_task(
         session,
         payload.task_id,
@@ -497,7 +532,7 @@ async def handle_task_completed(session: AsyncSession, envelope: EventEnvelope) 
     assert isinstance(payload, TaskCompletedPayload)
     await _validate_fsm_transition(session, payload.task_id, "completed", envelope.type)
     # FSM-validated (P6-I3)
-    # TODO(Story 31.5): emit task.state_transition audit event here
+    await _audit_transition(session, payload.task_id, "completed", envelope.type, envelope)
     await _touch_task(session, payload.task_id, envelope, {"status": "completed"})
     await _close_active_session_for_task(session, payload.task_id, envelope.emitted_at)
 
@@ -547,7 +582,7 @@ async def handle_task_stop_requested(session: AsyncSession, envelope: EventEnvel
     assert isinstance(payload, TaskStopRequestedPayload)
     await _validate_fsm_transition(session, payload.task_id, "stopped", envelope.type)
     # FSM-validated (P6-I3)
-    # TODO(Story 31.5): emit task.state_transition audit event here
+    await _audit_transition(session, payload.task_id, "stopped", envelope.type, envelope)
     await _touch_task(session, payload.task_id, envelope, {"status": "stopped"})
     await _close_active_session_for_task(session, payload.task_id, envelope.emitted_at)
 
@@ -565,7 +600,7 @@ async def handle_task_retry_requested(session: AsyncSession, envelope: EventEnve
     assert isinstance(payload, TaskRetryRequestedPayload)
     await _validate_fsm_transition(session, payload.task_id, "pending", envelope.type)
     # FSM-validated (P6-I3)
-    # TODO(Story 31.5): emit task.state_transition audit event here
+    await _audit_transition(session, payload.task_id, "pending", envelope.type, envelope)
     await _touch_task(
         session,
         payload.task_id,
@@ -649,7 +684,7 @@ async def handle_task_budget_exceeded(session: AsyncSession, envelope: EventEnve
     assert isinstance(payload, TaskBudgetExceededPayload)
     await _validate_fsm_transition(session, payload.task_id, "blocked", envelope.type)
     # FSM-validated (P6-I3)
-    # TODO(Story 31.5): emit task.state_transition audit event here
+    await _audit_transition(session, payload.task_id, "blocked", envelope.type, envelope)
     await _touch_task(
         session,
         payload.task_id,
@@ -688,7 +723,7 @@ async def handle_tier3_budget_override(session: AsyncSession, envelope: EventEnv
     assert isinstance(payload, BudgetOverridePayload)
     await _validate_fsm_transition(session, payload.task_id, "executing", envelope.type)
     # FSM-validated (P6-I3)
-    # TODO(Story 31.5): emit task.state_transition audit event here
+    await _audit_transition(session, payload.task_id, "executing", envelope.type, envelope)
     stmt = (
         update(Task)
         .where(
@@ -992,6 +1027,7 @@ def register_default_handlers(materializer: MaterializerProtocol) -> None:
 
 
 __all__ = [
+    "_audit_transition",
     "_emit_state_transition",
     "_get_audit_writer",
     "_set_audit_writer",
