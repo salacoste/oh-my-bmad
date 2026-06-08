@@ -97,9 +97,11 @@ async def _claim_postgres(session: AsyncSession, worker_id: str) -> Task | None:
     so concurrent workers each get a different task without blocking.
     """
     # Find an unclaimed pending task and lock it (skip already-locked rows).
+    # Story 39.3: ORDER BY priority DESC for priority-aware dispatch.
     stmt = (
         select(Task)
         .where(Task.status == "pending", Task.worker_id.is_(None))
+        .order_by(Task.priority.desc(), Task.id.asc())
         .limit(1)
         .with_for_update(skip_locked=True)
     )
@@ -123,8 +125,13 @@ async def _claim_sqlite(session: AsyncSession, worker_id: str) -> Task | None:
     worker to execute the UPDATE wins; the second sees worker_id already
     set and skips.
     """
-    # Find an unclaimed pending task.
-    stmt = select(Task).where(Task.status == "pending", Task.worker_id.is_(None)).limit(1)
+    # Find an unclaimed pending task. Story 39.3: ORDER BY priority DESC.
+    stmt = (
+        select(Task)
+        .where(Task.status == "pending", Task.worker_id.is_(None))
+        .order_by(Task.priority.desc(), Task.id.asc())
+        .limit(1)
+    )
     result = await session.execute(stmt)
     task = result.scalar_one_or_none()
     if task is None:

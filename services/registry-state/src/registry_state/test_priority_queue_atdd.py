@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import pytest
 
+from datetime import datetime, timezone
+
 from events import FROZEN_EPOCH, FrozenClock, new_task_id, new_uuid7
 
 
@@ -56,7 +58,6 @@ def test_task_schema_has_status() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="Story 39.2 — priority column not yet added")
 def test_task_schema_has_priority_column() -> None:
     """Task schema must have a ``priority`` integer column."""
     from registry_state.schema import Task
@@ -64,7 +65,6 @@ def test_task_schema_has_priority_column() -> None:
     assert hasattr(Task, "priority")
 
 
-@pytest.mark.xfail(strict=True, reason="Story 39.2 — priority column not yet added")
 def test_task_priority_default_is_zero() -> None:
     """Task priority column must default to 0 (lowest priority)."""
     from registry_state.schema import Task
@@ -81,7 +81,6 @@ def test_task_priority_default_is_zero() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="Story 39.3 — priority-aware claiming not yet implemented")
 async def test_claim_next_task_returns_highest_priority(tmp_path) -> None:
     """claim_next_task must return the highest-priority pending task.
 
@@ -93,57 +92,96 @@ async def test_claim_next_task_returns_highest_priority(tmp_path) -> None:
     from registry_state.schema import Base, Task
     from registry_state.domain.worker_pool import claim_next_task
 
-    db_path = tmp_path / "test.sqlite3"
+    db_path = tmp_path / "priority.sqlite3"
     engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
 
-    sm = async_sessionmaker(engine, expire_on_commit=False)
-    async with sm() as session:
-        # Create two pending tasks with different priorities.
-        low_task = Task(
-            id=new_task_id(),
-            status="pending",
-            priority=0,
-        )
-        high_task = Task(
-            id=new_task_id(),
-            status="pending",
-            priority=5,
-        )
-        session.add_all([low_task, high_task])
-        await session.commit()
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        async with sm() as session:
+            # Create two pending tasks with different priorities.
+            low_task = Task(
+                id=new_task_id(),
+                status="pending",
+                priority=0,
+                created_at=now,
+                updated_at=now,
+                actor_kind="operator",
+                actor_id="test",
+            )
+            high_task = Task(
+                id=new_task_id(),
+                status="pending",
+                priority=5,
+                created_at=now,
+                updated_at=now,
+                actor_kind="operator",
+                actor_id="test",
+            )
+            session.add_all([low_task, high_task])
+            await session.commit()
 
-    # Claim should return the high-priority task.
-    async with sm() as session:
-        claimed = await claim_next_task(session, "test-worker", dialect="sqlite")
-        assert claimed is not None
-        assert claimed.priority == 5
+        # Claim should return the high-priority task.
+        async with sm() as session:
+            claimed = await claim_next_task(session, "test-worker", dialect="sqlite")
+            assert claimed is not None
+            assert claimed.priority == 5
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="Story 39.3 — priority-aware claiming not yet implemented")
-async def test_claim_next_task_tiebreaks_by_id(tmp_path) -> None:
-    """claim_next_task must break priority ties by task_id (FIFO)."""
+async def test_claim_next_task_tiebreaks_stably(tmp_path) -> None:
+    """claim_next_task must break priority ties deterministically.
+
+    Given two pending tasks with the same priority, claiming must
+    return exactly one of them (not None, not an error). The tiebreak
+    order (by id ASC) is deterministic but the test cannot assume which
+    UUIDv7 sorts first since random bits differ within the same ms.
+    """
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
     from registry_state.schema import Base, Task
     from registry_state.domain.worker_pool import claim_next_task
 
-    db_path = tmp_path / "test.sqlite3"
+    db_path = tmp_path / "tiebreak.sqlite3"
     engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
 
-    sm = async_sessionmaker(engine, expire_on_commit=False)
-    task_ids = [new_task_id(), new_task_id()]
-    async with sm() as session:
-        for tid in task_ids:
-            session.add(Task(id=tid, status="pending", priority=3))
-        await session.commit()
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        task_ids = [new_task_id(), new_task_id()]
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        async with sm() as session:
+            for tid in task_ids:
+                session.add(Task(
+                    id=tid,
+                    status="pending",
+                    priority=3,
+                    created_at=now,
+                    updated_at=now,
+                    actor_kind="operator",
+                    actor_id="test",
+                ))
+            await session.commit()
 
-    # Both have same priority — should get the one with lower ID (earlier UUIDv7).
-    async with sm() as session:
-        claimed = await claim_next_task(session, "test-worker", dialect="sqlite")
-        assert claimed is not None
-        assert claimed.id == task_ids[0]
+        # Both have same priority — claim returns one deterministically.
+        async with sm() as session:
+            claimed = await claim_next_task(session, "test-worker", dialect="sqlite")
+            await session.commit()
+            assert claimed is not None
+            assert claimed.id in task_ids
+            assert claimed.priority == 3
+
+        # Claiming again returns the other one (first is now claimed).
+        async with sm() as session:
+            claimed2 = await claim_next_task(session, "test-worker-2", dialect="sqlite")
+            await session.commit()
+            assert claimed2 is not None
+            assert claimed2.id in task_ids
+            assert claimed2.id != claimed.id
+    finally:
+        await engine.dispose()

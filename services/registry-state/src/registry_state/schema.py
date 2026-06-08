@@ -140,6 +140,11 @@ class Task(Base):
     # claims a task, its unique worker_id (hostname-pid or WORKER_ID env var)
     # is stamped here and carried in events + metrics labels.
     worker_id: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
+    # Story 39.2: task priority for priority-aware dispatch (FC-P6-3).
+    # Higher value = higher priority. Default 0 = normal/FIFO. The worker pool's
+    # claim_next_task ORDER BY priority DESC, id ASC ensures high-priority tasks
+    # are claimed first, with FIFO tiebreaking within the same priority level.
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class Session(Base):
