@@ -72,13 +72,15 @@ from typing import Final
 from events import Actor, EventEnvelope
 from events.clock import Clock
 from events.envelope import ActorKind
-from events.ids import new_event_id, new_request_id
+from events.ids import new_event_id, new_request_id, new_uuid7
 
 from registry_state.adapters.event_log import EventLogWriter
 from registry_state.domain.event_types import (
     ServiceCrashedPayload,
     SessionHeartbeatTimeoutPayload,
     SinkDeliveryFailedPayload,
+    TaskAutoRetryPayload,
+    TaskAutoStopPayload,
     TaskStaleCriticalPayload,
     TaskStaleWarningPayload,
     TaskStopRequestedPayload,
@@ -1051,3 +1053,175 @@ async def emit_task_stale_critical(
 # Public alias for the system-initiated synthetic-source label so callers can
 # reference the constant rather than repeating the literal at every emit site.
 SYNTHETIC_SOURCE_SYSTEM_INITIATED: Final = _SYNTHETIC_SOURCE_LABEL_SYSTEM_INITIATED
+
+
+# ---------------------------------------------------------------------------
+# Story 38.2 — RecoveryPolicy: decides recovery action from stale severity
+# ---------------------------------------------------------------------------
+
+# Valid recovery decisions.
+RecoveryDecision = str  # Literal["auto_retry", "auto_stop", "no_op"]
+
+
+class RecoveryPolicy:
+    """Decides what recovery action to take for a stale task.
+
+    The policy maps (status, severity, retry_count) to one of three actions:
+
+    - ``auto_retry``: Requeue the task to pending (emits ``task.auto_retry``).
+      Only for ``critical`` severity — warning-level stale tasks get no action.
+    - ``auto_stop``: Stop the task (emits ``task.auto_stop``).  Triggered when
+      ``retry_count >= max_retries``.
+    - ``no_op``: No automatic action.  Warning-level stale tasks; the operator
+      still has time to intervene.
+
+    Thread-safety: instances are immutable after construction.  Safe to share
+    across concurrent subscriber-loop ticks.
+    """
+
+    DEFAULT_MAX_RETRIES: int = 3
+
+    def __init__(self, max_retries: int | None = None) -> None:
+        if max_retries is not None and max_retries < 1:
+            raise ValueError(f"max_retries must be >= 1, got {max_retries}")
+        self._max_retries = max_retries if max_retries is not None else self.DEFAULT_MAX_RETRIES
+
+    @property
+    def max_retries(self) -> int:
+        """Maximum automatic retries before escalation to auto-stop."""
+        return self._max_retries
+
+    def decide(
+        self,
+        status: str,
+        severity: str,
+        retry_count: int,
+    ) -> RecoveryDecision:
+        """Decide the recovery action for a stale task.
+
+        Args:
+            status: Current task status (e.g. "failed", "blocked", "executing").
+            severity: Staleness severity ("warning" or "critical").
+            retry_count: Number of auto-retries already applied to this task.
+
+        Returns:
+            One of ``"auto_retry"``, ``"auto_stop"``, or ``"no_op"``.
+        """
+        # Warning-level staleness: alert only, no automatic action.
+        if severity != "critical":
+            return "no_op"
+
+        # Critical staleness: check retry budget.
+        if retry_count >= self._max_retries:
+            return "auto_stop"
+
+        return "auto_retry"
+
+
+# ---------------------------------------------------------------------------
+# Story 38.3 — RecoveryExecutor: executes recovery actions via event emission
+# ---------------------------------------------------------------------------
+
+
+class RecoveryExecutor:
+    """Executes recovery actions by emitting typed events.
+
+    Each method creates a well-formed event envelope and appends it to the
+    event log via the injected ``EventLogWriter``.  The materializer will
+    pick up the event and apply the corresponding state transition.
+
+    Thread-safety: clock is read-only; writer is assumed externally
+    synchronized (the subscriber loop is single-threaded per tick).
+    """
+
+    def __init__(self, clock: Clock) -> None:
+        self._clock = clock
+
+    async def execute_auto_retry(
+        self,
+        writer: EventLogWriter,
+        *,
+        task_id: str,
+        from_status: str,
+        retry_count: int,
+        max_retries: int = RecoveryPolicy.DEFAULT_MAX_RETRIES,
+        reason: str = "stale_critical",
+    ) -> EventEnvelope:
+        """Emit a ``task.auto_retry`` event to requeue a stale task.
+
+        Args:
+            writer: Event log writer for persistence.
+            task_id: The task to retry.
+            from_status: Status at the time of retry.
+            retry_count: 1-based retry number (incremented from current).
+            max_retries: The policy ceiling for the reason field.
+            reason: Why the auto-retry was triggered.
+
+        Returns:
+            The emitted envelope.
+        """
+        payload = TaskAutoRetryPayload(
+            task_id=task_id,
+            from_status=from_status,
+            retry_count=retry_count,
+            max_retries=max_retries,
+            reason=reason,
+        )
+        envelope = EventEnvelope.create(
+            event_id=new_event_id(clock=self._clock),
+            type="task.auto_retry",
+            schema_version="1.1.0",
+            emitted_at=self._clock.now(),
+            emitted_at_monotonic_ns=self._clock.monotonic_ns(),
+            actor=Actor(kind="system", id="recovery-loop"),
+            payload=payload,
+            trace_id=new_uuid7(),
+            request_id=new_request_id(clock=self._clock),
+            parent_event_id=None,
+            extensions={"synthetic_source": "recovery-loop"},
+        )
+        await writer.append(envelope)
+        return envelope
+
+    async def execute_auto_stop(
+        self,
+        writer: EventLogWriter,
+        *,
+        task_id: str,
+        from_status: str,
+        reason: str = "max_retries_exceeded",
+        retry_count: int = 0,
+    ) -> EventEnvelope:
+        """Emit a ``task.auto_stop`` event to terminate a stale task.
+
+        Args:
+            writer: Event log writer for persistence.
+            task_id: The task to stop.
+            from_status: Status at the time of stop.
+            reason: Why the auto-stop was triggered.
+            retry_count: Total retries before stop.
+
+        Returns:
+            The emitted envelope.
+        """
+        payload = TaskAutoStopPayload(
+            task_id=task_id,
+            from_status=from_status,
+            reason=reason,
+            retry_count=retry_count,
+        )
+        envelope = EventEnvelope.create(
+            event_id=new_event_id(clock=self._clock),
+            type="task.auto_stop",
+            schema_version="1.1.0",
+            emitted_at=self._clock.now(),
+            emitted_at_monotonic_ns=self._clock.monotonic_ns(),
+            actor=Actor(kind="system", id="recovery-loop"),
+            payload=payload,
+            trace_id=new_uuid7(),
+            request_id=new_request_id(clock=self._clock),
+            parent_event_id=None,
+            extensions={"synthetic_source": "recovery-loop"},
+        )
+        await writer.append(envelope)
+        return envelope

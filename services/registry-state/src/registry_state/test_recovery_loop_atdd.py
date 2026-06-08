@@ -1,15 +1,10 @@
-"""ATDD red-phase contract tests for recovery loops (Epic 38, Story 38.1).
+"""ATDD contract tests for recovery loops (Epic 38, Stories 38.1–38.3).
 
-Phase 7 Epic 38 — Recovery Loops.  These tests assert contracts that
-are NOT YET IMPLEMENTED.  Every test is marked ``@pytest.mark.xfail(strict=True)``
-so the expected outcome is XFAILED (green PR-gate).  When the corresponding
-production code lands, each test will XPASS (unexpected pass), which is a HARD
-FAILURE signalling "remove the xfail marker — this contract is now satisfied."
+Phase 7 Epic 38 — Recovery Loops.  Originally shipped as red-phase
+(all xfail); contracts are now SATISFIED by Stories 38.2–38.3 production
+code and tests run green.
 
-The tests must fail at RUNTIME (inside the test body), NOT at import/collection
-time — ``xfail`` does not swallow ImportError at collection.
-
-Contracts tested (all xfail):
+Contracts tested (all green):
   1. RecoveryPolicy class exists with per-state action mapping
   2. RecoveryPolicy decides auto_retry for critical-stale failed tasks
   3. RecoveryPolicy decides auto_stop for critical-stale blocked tasks after max retries
@@ -32,13 +27,11 @@ from __future__ import annotations
 
 import pytest
 
-from datetime import datetime, timedelta, timezone
-
-from events import FROZEN_EPOCH, FrozenClock
+from events import FROZEN_EPOCH, FrozenClock, new_task_id
 
 
 # ---------------------------------------------------------------------------
-# Reference tests (NOT xfail) — existing infrastructure recovery builds on
+# Reference tests — existing infrastructure recovery builds on
 # ---------------------------------------------------------------------------
 
 
@@ -81,11 +74,10 @@ def test_fsm_has_stopped_as_valid_target() -> None:
 
 
 # ---------------------------------------------------------------------------
-# xfail contract tests — RecoveryPolicy (Story 38.2)
+# Contract tests — RecoveryPolicy (Story 38.2)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="Story 38.2 — RecoveryPolicy not yet implemented")
 def test_recovery_policy_class_exists() -> None:
     """RecoveryPolicy class must exist in failure_detection module."""
     from registry_state.domain.failure_detection import RecoveryPolicy
@@ -94,7 +86,6 @@ def test_recovery_policy_class_exists() -> None:
     assert policy is not None
 
 
-@pytest.mark.xfail(strict=True, reason="Story 38.2 — RecoveryPolicy not yet implemented")
 def test_recovery_policy_auto_retry_for_critical_failed() -> None:
     """RecoveryPolicy must decide auto_retry for critical-severity stale failed tasks.
 
@@ -112,7 +103,6 @@ def test_recovery_policy_auto_retry_for_critical_failed() -> None:
     assert decision == "auto_retry"
 
 
-@pytest.mark.xfail(strict=True, reason="Story 38.2 — RecoveryPolicy not yet implemented")
 def test_recovery_policy_auto_stop_after_max_retries() -> None:
     """RecoveryPolicy must decide auto_stop when retry_count >= max_retries.
 
@@ -130,7 +120,6 @@ def test_recovery_policy_auto_stop_after_max_retries() -> None:
     assert decision == "auto_stop"
 
 
-@pytest.mark.xfail(strict=True, reason="Story 38.2 — RecoveryPolicy not yet implemented")
 def test_recovery_policy_no_op_for_warning() -> None:
     """RecoveryPolicy must decide no_op for warning-severity stale tasks.
 
@@ -148,7 +137,6 @@ def test_recovery_policy_no_op_for_warning() -> None:
     assert decision == "no_op"
 
 
-@pytest.mark.xfail(strict=True, reason="Story 38.2 — RecoveryPolicy not yet implemented")
 def test_recovery_policy_has_max_retries_config() -> None:
     """RecoveryPolicy must expose max_retries_per_task configuration."""
     from registry_state.domain.failure_detection import RecoveryPolicy
@@ -162,11 +150,10 @@ def test_recovery_policy_has_max_retries_config() -> None:
 
 
 # ---------------------------------------------------------------------------
-# xfail contract tests — RecoveryExecutor (Story 38.3)
+# Contract tests — RecoveryExecutor (Story 38.3)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="Story 38.3 — RecoveryExecutor not yet implemented")
 def test_recovery_executor_class_exists() -> None:
     """RecoveryExecutor class must exist in failure_detection module."""
     from registry_state.domain.failure_detection import RecoveryExecutor
@@ -176,8 +163,8 @@ def test_recovery_executor_class_exists() -> None:
     assert executor is not None
 
 
-@pytest.mark.xfail(strict=True, reason="Story 38.3 — RecoveryExecutor not yet implemented")
-def test_recovery_executor_auto_retry_emits_event() -> None:
+@pytest.mark.asyncio
+async def test_recovery_executor_auto_retry_emits_event() -> None:
     """RecoveryExecutor auto_retry action must emit a task.auto_retry event."""
     from registry_state.domain.failure_detection import RecoveryExecutor
     from registry_state.adapters.event_log import InMemoryEventLogWriter
@@ -186,19 +173,20 @@ def test_recovery_executor_auto_retry_emits_event() -> None:
     executor = RecoveryExecutor(clock=clock)
     writer = InMemoryEventLogWriter()
 
-    envelope = executor.execute_auto_retry(
+    envelope = await executor.execute_auto_retry(
         writer=writer,
-        task_id="t-01923abc7000",
+        task_id=new_task_id(),
         from_status="failed",
         retry_count=1,
     )
 
     assert envelope is not None
     assert envelope.type == "task.auto_retry"
+    assert len(writer.envelopes) == 1
 
 
-@pytest.mark.xfail(strict=True, reason="Story 38.3 — RecoveryExecutor not yet implemented")
-def test_recovery_executor_auto_stop_emits_event() -> None:
+@pytest.mark.asyncio
+async def test_recovery_executor_auto_stop_emits_event() -> None:
     """RecoveryExecutor auto_stop action must emit a task.auto_stop event."""
     from registry_state.domain.failure_detection import RecoveryExecutor
     from registry_state.adapters.event_log import InMemoryEventLogWriter
@@ -207,23 +195,23 @@ def test_recovery_executor_auto_stop_emits_event() -> None:
     executor = RecoveryExecutor(clock=clock)
     writer = InMemoryEventLogWriter()
 
-    envelope = executor.execute_auto_stop(
+    envelope = await executor.execute_auto_stop(
         writer=writer,
-        task_id="t-01923abc7000",
+        task_id=new_task_id(),
         from_status="failed",
         reason="max_retries_exceeded",
     )
 
     assert envelope is not None
     assert envelope.type == "task.auto_stop"
+    assert len(writer.envelopes) == 1
 
 
 # ---------------------------------------------------------------------------
-# xfail contract tests — event type registration (Story 38.2)
+# Contract tests — event type registration (Story 38.2)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="Story 38.2 — task.auto_retry event not registered")
 def test_task_auto_retry_event_registered() -> None:
     """The ``task.auto_retry`` event type must be registered in schema registry."""
     from events.schema_registry import REGISTRY
@@ -231,7 +219,6 @@ def test_task_auto_retry_event_registered() -> None:
     assert ("task.auto_retry", "1.1.0") in REGISTRY
 
 
-@pytest.mark.xfail(strict=True, reason="Story 38.2 — task.auto_stop event not registered")
 def test_task_auto_stop_event_registered() -> None:
     """The ``task.auto_stop`` event type must be registered in schema registry."""
     from events.schema_registry import REGISTRY

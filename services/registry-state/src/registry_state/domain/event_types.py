@@ -83,6 +83,8 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     TaskStopRequestedPayload,
     TaskStaleCriticalPayload,
     TaskStaleWarningPayload,
+    TaskAutoRetryPayload,
+    TaskAutoStopPayload,
     TaskSummaryEmittedPayload,
     TelegramRejectedPayload,
     Tier3ActionAttemptedPayload,
@@ -182,6 +184,8 @@ __all__ = [
     # Phase 7 — stale task alerting payloads (Epic 37 / Story 37.2).
     "TaskStaleCriticalPayload",
     "TaskStaleWarningPayload",
+    "TaskAutoRetryPayload",
+    "TaskAutoStopPayload",
 ]
 
 # ---------------------------------------------------------------------------
@@ -248,6 +252,10 @@ def ensure_registered() -> None:
     # Story 37.2 — Stale task alerting event types (NFR-R5 extension).
     register("task.stale_warning", "1.1.0", TaskStaleWarningPayload)
     register("task.stale_critical", "1.1.0", TaskStaleCriticalPayload)
+
+    # Story 38.2 — Recovery loop event types (NFR-R5 recovery action).
+    register("task.auto_retry", "1.1.0", TaskAutoRetryPayload)
+    register("task.auto_stop", "1.1.0", TaskAutoStopPayload)
 
     # Story 32.3 — task.assigned event (FR104 / ADR-0019 D2). Emitted when a
     # worker atomically claims a task from the queue. Born at 1.1.0 (Phase 6,

@@ -589,9 +589,31 @@ class EventLogWriter:
             os.close(old_fd)
 
 
+# ---------------------------------------------------------------------------
+# Story 38.2 — In-memory event log writer for unit tests
+# ---------------------------------------------------------------------------
+
+
+class InMemoryEventLogWriter:
+    """In-memory ``EventLogWriter`` stand-in for unit tests.
+
+    Appends envelopes to an internal list instead of writing to disk.
+    Implements the same ``append()`` coroutine interface as
+    :class:`EventLogWriter` so test subjects can use either interchangeably.
+    """
+
+    def __init__(self) -> None:
+        self.envelopes: list[EventEnvelope] = []
+
+    async def append(self, envelope: EventEnvelope) -> None:
+        """Record the envelope in memory."""
+        self.envelopes.append(envelope)
+
+
 __all__ = [
     "EventLogReader",  # Story 10.2 AC1 re-export
     "EventLogWriter",
+    "InMemoryEventLogWriter",
     "current_day_path",
     "parse_with_pre110_backfill",
     "read_log_lines",

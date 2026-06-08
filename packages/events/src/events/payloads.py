@@ -623,6 +623,53 @@ class TaskStaleCriticalPayload(BaseModel):
         return v
 
 
+class TaskAutoRetryPayload(BaseModel):
+    """Payload for the ``task.auto_retry`` event.
+
+    Emitted by the recovery loop when a stale task is automatically
+    retried (requeued to pending).  The ``retry_count`` tracks how
+    many automatic retries this task has received — when it reaches
+    ``max_retries`` the recovery loop escalates to ``task.auto_stop``.
+
+    Field rules:
+    * ``task_id``: canonical ``t-<uuidv7>`` pattern.
+    * ``from_status``: the status the task was in when retry was triggered.
+    * ``retry_count``: 1-based — incremented on each auto-retry.
+    * ``max_retries``: the configured ceiling for this recovery policy.
+    * ``reason``: why the auto-retry was triggered (e.g. ``stale_critical``).
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    task_id: str = Field(pattern=_TASK_ID_PATTERN)
+    from_status: str = Field(min_length=1, max_length=32)
+    retry_count: int = Field(ge=1)
+    max_retries: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=128)
+
+
+class TaskAutoStopPayload(BaseModel):
+    """Payload for the ``task.auto_stop`` event.
+
+    Emitted by the recovery loop when a stale task has exhausted its
+    retry budget and is automatically stopped.  This is a terminal
+    transition (the task moves to ``stopped``).
+
+    Field rules:
+    * ``task_id``: canonical ``t-<uuidv7>`` pattern.
+    * ``from_status``: the status the task was in when auto-stop was triggered.
+    * ``reason``: why the auto-stop was triggered (e.g. ``max_retries_exceeded``).
+    * ``retry_count``: total automatic retries before stop was triggered.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    task_id: str = Field(pattern=_TASK_ID_PATTERN)
+    from_status: str = Field(min_length=1, max_length=32)
+    reason: str = Field(min_length=1, max_length=128)
+    retry_count: int = Field(ge=0)
+
+
 class SinkDeliveryFailedPayload(BaseModel):
     """Payload for the ``sink.delivery_failed`` event.
 
