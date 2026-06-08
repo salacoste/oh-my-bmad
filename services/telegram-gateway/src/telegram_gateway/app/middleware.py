@@ -132,15 +132,12 @@ from events.ids import new_event_id, new_request_id, new_uuid7  # noqa: IMP001
 # is not publicly exported from secret_hygiene, this import will fail; document
 # the divergence below and fall back to the unguarded form.
 try:
-    from secret_hygiene.audited_secret import (  # noqa: PLC2701 — intentional private-name for re-entrant guard
-        _in_emission,
-    )
+    from secret_hygiene import in_emission as _in_emission
 
     _HAS_IN_EMISSION = True
 except ImportError:
-    # TODO(architecture): expose _in_emission as a public API from secret_hygiene
-    # so AllowlistMiddleware can participate in the re-entrancy guard without
-    # importing a private name. Until then we operate without the guard.
+    # Graceful fallback if secret_hygiene version predates the public
+    # ``in_emission`` alias — operate without the re-entrancy guard.
     _in_emission = None  # type: ignore[assignment]
     _HAS_IN_EMISSION = False
 

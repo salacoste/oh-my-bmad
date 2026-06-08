@@ -483,6 +483,11 @@ _in_emission: ContextVar[bool] = ContextVar(
     "secret_hygiene_audited_secret_in_emission", default=False
 )
 
+# Public alias — callers that need to check the re-entrancy guard
+# (e.g. AllowlistMiddleware) should import ``in_emission`` from
+# ``secret_hygiene`` rather than the private ``_in_emission`` name.
+in_emission: ContextVar[bool] = _in_emission
+
 
 async def flush_pending_emissions(timeout: float = 1.0) -> None:
     """Wait for all in-flight emission tasks to complete (or *timeout*).

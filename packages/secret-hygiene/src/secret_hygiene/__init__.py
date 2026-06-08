@@ -11,6 +11,7 @@ from .audited_secret import (
     AuditedSecret,
     audited_secret_field,
     flush_pending_emissions,
+    in_emission,
 )
 
 __version__ = "0.2.0"
@@ -21,4 +22,5 @@ __all__ = [
     "__version__",
     "audited_secret_field",
     "flush_pending_emissions",
+    "in_emission",
 ]
