@@ -290,3 +290,20 @@ def test_github_scoped_token_present_broad_token_absent() -> None:
             f"{name} _ENV_ALLOWLIST forwards the BROAD GITHUB_TOKEN — G-SEC-2 "
             "regression. Only the repo-scoped GITHUB_MCP_SCOPED_TOKEN may be forwarded."
         )
+
+
+def test_per_server_env_isolation_github_scoped_token() -> None:
+    """Story 43.1 (G-SEC-2 defense-in-depth): GITHUB_MCP_SCOPED_TOKEN must
+    only reach the github MCP server, not any other MCP child."""
+    from worker_wrapper.adapters.mcp_clients import _SERVER_REQUIRED_ENV
+
+    for server_name, server_vars in _SERVER_REQUIRED_ENV.items():
+        if server_name == "github":
+            assert "GITHUB_MCP_SCOPED_TOKEN" in server_vars, (
+                "github MCP server must receive GITHUB_MCP_SCOPED_TOKEN"
+            )
+        else:
+            assert "GITHUB_MCP_SCOPED_TOKEN" not in server_vars, (
+                f"{server_name} env includes GITHUB_MCP_SCOPED_TOKEN — "
+                f"defense-in-depth violation"
+            )

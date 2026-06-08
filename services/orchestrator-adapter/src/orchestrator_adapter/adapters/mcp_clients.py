@@ -139,6 +139,39 @@ _ENV_ALLOWLIST: frozenset[str] = frozenset(
 )
 
 
+# Story 43.1 (G-SEC-2 defense-in-depth): base env vars needed by every MCP child.
+# Per-server vars are in _SERVER_REQUIRED_ENV below.
+# ⚠️ This frozenset MUST be identical to the one in
+# worker-wrapper/adapters/mcp_clients.py — enforced by
+# tests/contract/test_clawhip_client_env_allowlist_mirror.py.
+_BASE_ENV_VARS: frozenset[str] = frozenset({
+    # Process fundamentals
+    "PATH", "HOME", "USER", "LANG", "LC_ALL", "LC_CTYPE",
+    # Python runtime
+    "PYTHONPATH", "PYTHONUNBUFFERED", "TMPDIR", "TMP", "TEMP",
+    # TLS/CA bundles
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+    # Shared infrastructure (all servers need these to connect)
+    "REGISTRY_EVENTS_DIR", "REGISTRY_DB_PATH",
+    # Audit emission flag
+    "OMB_MCP_AUDIT_EMISSION_ENABLED",
+})
+
+# Story 43.1 (G-SEC-2 defense-in-depth): per-server env vars.
+# Each MCP child only receives _BASE_ENV_VARS + its own entry here.
+_SERVER_REQUIRED_ENV: dict[str, frozenset[str]] = {
+    "task-registry": frozenset({
+        "TASK_REGISTRY_DB_PATH", "TASK_REGISTRY_ACTOR_KIND", "TASK_REGISTRY_ACTOR_ID",
+    }),
+    "session-registry": frozenset({
+        "SESSION_REGISTRY_DB_PATH", "SESSION_REGISTRY_ACTOR_KIND", "SESSION_REGISTRY_ACTOR_ID",
+    }),
+    "clawhip-bridge": frozenset({
+        "CLAWHIP_BRIDGE_ACTOR_KIND", "CLAWHIP_BRIDGE_ACTOR_ID", "CLAWHIP_BRIDGE_LOG_DIR",
+    }),
+}
+
+
 def _default_env_allowlist() -> dict[str, str]:
     """Return a fresh dict of parent-env vars matching ``_ENV_ALLOWLIST``."""
     return {k: v for k, v in os.environ.items() if k in _ENV_ALLOWLIST}
@@ -202,12 +235,12 @@ class MCPClientGroup:
         args: list[str],
     ) -> ClientSession:
         log = structlog.get_logger(__name__)
-        # Story 11.3.6: forward the allowlisted env so each MCP server gets its
-        # REQUIRED vars. The SDK merges this over get_default_environment().
-        # `dict(self.env)` is a defensive per-call copy so a mutation in one
-        # spawned server's startup path cannot affect a sibling's env (the 3
-        # _connect calls share the same `self.env` reference otherwise).
-        params = StdioServerParameters(command=command, args=args, env=dict(self.env))
+        # Story 43.1: per-server env scoping for defense-in-depth.
+        # Each MCP child only receives _BASE_ENV_VARS + its own server-specific vars.
+        server_specific = _SERVER_REQUIRED_ENV.get(name, frozenset())
+        allowed_vars = _BASE_ENV_VARS | server_specific
+        filtered_env = {k: v for k, v in self.env.items() if k in allowed_vars}
+        params = StdioServerParameters(command=command, args=args, env=filtered_env)
         read, write = await self._stack.enter_async_context(stdio_client(params))
         session = await self._stack.enter_async_context(ClientSession(read, write))
         await asyncio.wait_for(session.initialize(), timeout=_INIT_TIMEOUT)
