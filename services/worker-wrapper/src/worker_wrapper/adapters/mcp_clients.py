@@ -146,54 +146,107 @@ _ENV_ALLOWLIST: frozenset[str] = frozenset(
 # ⚠️ This frozenset MUST be identical to the one in
 # orchestrator-adapter/adapters/mcp_clients.py — enforced by
 # tests/contract/test_clawhip_client_env_allowlist_mirror.py.
-_BASE_ENV_VARS: frozenset[str] = frozenset({
-    # Process fundamentals
-    "PATH", "HOME", "USER", "LANG", "LC_ALL", "LC_CTYPE",
-    # Python runtime
-    "PYTHONPATH", "PYTHONUNBUFFERED", "TMPDIR", "TMP", "TEMP",
-    # TLS/CA bundles
-    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
-    # Shared infrastructure (all servers need these to connect)
-    "REGISTRY_EVENTS_DIR", "REGISTRY_DB_PATH",
-    # Audit emission flag
-    "OMB_MCP_AUDIT_EMISSION_ENABLED",
-})
+_BASE_ENV_VARS: frozenset[str] = frozenset(
+    {
+        # Process fundamentals
+        "PATH",
+        "HOME",
+        "USER",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        # Python runtime
+        "PYTHONPATH",
+        "PYTHONUNBUFFERED",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        # TLS/CA bundles
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        # Shared infrastructure (all servers need these to connect)
+        "REGISTRY_EVENTS_DIR",
+        "REGISTRY_DB_PATH",
+        # Audit emission flag
+        "OMB_MCP_AUDIT_EMISSION_ENABLED",
+    }
+)
 
 # Story 43.1 (G-SEC-2 defense-in-depth): per-server env vars.
 # Each MCP child only receives _BASE_ENV_VARS + its own entry here.
 _SERVER_REQUIRED_ENV: dict[str, frozenset[str]] = {
-    "task-registry": frozenset({
-        "TASK_REGISTRY_DB_PATH", "TASK_REGISTRY_ACTOR_KIND", "TASK_REGISTRY_ACTOR_ID",
-    }),
-    "session-registry": frozenset({
-        "SESSION_REGISTRY_DB_PATH", "SESSION_REGISTRY_ACTOR_KIND", "SESSION_REGISTRY_ACTOR_ID",
-    }),
-    "clawhip-bridge": frozenset({
-        "CLAWHIP_BRIDGE_ACTOR_KIND", "CLAWHIP_BRIDGE_ACTOR_ID", "CLAWHIP_BRIDGE_LOG_DIR",
-    }),
-    "git": frozenset({
-        "GIT_MCP_ACTOR_KIND", "GIT_MCP_ACTOR_ID", "GIT_MCP_WORKTREE_ROOT",
-    }),
-    "github": frozenset({
-        "GITHUB_MCP_ACTOR_KIND", "GITHUB_MCP_ACTOR_ID", "GITHUB_MCP_SCOPED_TOKEN",
-    }),
-    "verification": frozenset({
-        "VERIFICATION_MCP_WORKTREE_ROOT",
-        "VERIFICATION_MCP_ACTOR_KIND",
-        "VERIFICATION_MCP_ACTOR_ID",
-    }),
-    "memory": frozenset({
-        "MEMORY_MCP_STORE_PATH", "MEMORY_MCP_ACTOR_KIND", "MEMORY_MCP_ACTOR_ID",
-    }),
-    "artifact": frozenset({
-        "ARTIFACT_MCP_STORE_PATH", "ARTIFACT_MCP_ACTOR_KIND", "ARTIFACT_MCP_ACTOR_ID",
-        "ARTIFACT_MCP_RETENTION_MAX_BYTES", "ARTIFACT_MCP_RETENTION_TTL_SECONDS",
-    }),
-    "browser": frozenset({
-        "BROWSER_MCP_ACTOR_KIND", "BROWSER_MCP_ACTOR_ID", "BROWSER_MCP_PLAYWRIGHT_IMAGE",
-        "BROWSER_MCP_EXTRA_CAPS", "BROWSER_MCP_ALLOWED_HOSTS", "BROWSER_MCP_ALLOWED_ORIGINS",
-        "BROWSER_MCP_MEMORY_LIMIT", "BROWSER_MCP_CPU_LIMIT",
-    }),
+    "task-registry": frozenset(
+        {
+            "TASK_REGISTRY_DB_PATH",
+            "TASK_REGISTRY_ACTOR_KIND",
+            "TASK_REGISTRY_ACTOR_ID",
+        }
+    ),
+    "session-registry": frozenset(
+        {
+            "SESSION_REGISTRY_DB_PATH",
+            "SESSION_REGISTRY_ACTOR_KIND",
+            "SESSION_REGISTRY_ACTOR_ID",
+        }
+    ),
+    "clawhip-bridge": frozenset(
+        {
+            "CLAWHIP_BRIDGE_ACTOR_KIND",
+            "CLAWHIP_BRIDGE_ACTOR_ID",
+            "CLAWHIP_BRIDGE_LOG_DIR",
+        }
+    ),
+    "git": frozenset(
+        {
+            "GIT_MCP_ACTOR_KIND",
+            "GIT_MCP_ACTOR_ID",
+            "GIT_MCP_WORKTREE_ROOT",
+        }
+    ),
+    "github": frozenset(
+        {
+            "GITHUB_MCP_ACTOR_KIND",
+            "GITHUB_MCP_ACTOR_ID",
+            "GITHUB_MCP_SCOPED_TOKEN",
+        }
+    ),
+    "verification": frozenset(
+        {
+            "VERIFICATION_MCP_WORKTREE_ROOT",
+            "VERIFICATION_MCP_ACTOR_KIND",
+            "VERIFICATION_MCP_ACTOR_ID",
+        }
+    ),
+    "memory": frozenset(
+        {
+            "MEMORY_MCP_STORE_PATH",
+            "MEMORY_MCP_ACTOR_KIND",
+            "MEMORY_MCP_ACTOR_ID",
+        }
+    ),
+    "artifact": frozenset(
+        {
+            "ARTIFACT_MCP_STORE_PATH",
+            "ARTIFACT_MCP_ACTOR_KIND",
+            "ARTIFACT_MCP_ACTOR_ID",
+            "ARTIFACT_MCP_RETENTION_MAX_BYTES",
+            "ARTIFACT_MCP_RETENTION_TTL_SECONDS",
+        }
+    ),
+    "browser": frozenset(
+        {
+            "BROWSER_MCP_ACTOR_KIND",
+            "BROWSER_MCP_ACTOR_ID",
+            "BROWSER_MCP_PLAYWRIGHT_IMAGE",
+            "BROWSER_MCP_EXTRA_CAPS",
+            "BROWSER_MCP_ALLOWED_HOSTS",
+            "BROWSER_MCP_ALLOWED_ORIGINS",
+            "BROWSER_MCP_MEMORY_LIMIT",
+            "BROWSER_MCP_CPU_LIMIT",
+        }
+    ),
 }
 
 

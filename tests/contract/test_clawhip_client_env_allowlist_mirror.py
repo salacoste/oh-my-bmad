@@ -304,6 +304,5 @@ def test_per_server_env_isolation_github_scoped_token() -> None:
             )
         else:
             assert "GITHUB_MCP_SCOPED_TOKEN" not in server_vars, (
-                f"{server_name} env includes GITHUB_MCP_SCOPED_TOKEN — "
-                f"defense-in-depth violation"
+                f"{server_name} env includes GITHUB_MCP_SCOPED_TOKEN — defense-in-depth violation"
             )
