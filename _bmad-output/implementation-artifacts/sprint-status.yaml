@@ -562,6 +562,16 @@ development_status:
   36-3-heartbeat-feeding-in-subscriber-loop: done  # phase: 7 · FR110 · _feed_heartbeats wires session.heartbeat/worker.heartbeat into HeartbeatMonitor
   36-4-detection-poll-tick-in-subscriber-loop: done  # phase: 7 · NFR-R5 · detection_poll_interval_s + overdue_sessions_and_mark → emit_session_heartbeat_timeout
 
+  # ---------------------------------------------------------------------------
+  # Epic 37: Stale Task Alerting (4 stories)
+  # phase: 7 · NFR-R5 extension · per-state thresholds + two-tier emission
+  # ---------------------------------------------------------------------------
+  epic-37: done  # phase: 7 · Stale task alerting — ALL 4 stories done
+  37-1-atdd-red-phase-stale-task-contracts: done  # phase: 7 · 9 xfail + 3 reference ATDD contracts
+  37-2-stale-task-detector-payload-models-event-registration: done  # phase: 7 · StaleTaskDetector + TaskStaleWarningPayload/CriticalPayload + event registration
+  37-3-subscriber-loop-wiring-stale-detection: done  # phase: 7 · Wire stale detection into subscriber poll tick
+  37-4-metrics-registration-cardinality-bump: done  # phase: 7 · Register task.stale_warning/critical in metrics subscriber
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
