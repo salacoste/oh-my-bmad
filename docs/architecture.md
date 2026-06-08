@@ -4,7 +4,7 @@ This is the runtime / operator view of oh-my-bmad. For the original solution-des
 
 ## One-paragraph summary
 
-A typed event spine connects three operator surfaces (Telegram bot, console CLI, future browser) to a Claude Code worker subprocess via an orchestrator adapter. All state lives in an append-only JSONL event log; `registry-state` is the **single writer** that materializes the log into SQLite for query, owns the UUIDv7 idempotency cache (FR28), and emits service-lifecycle events. Three always-on MCP servers (`task-registry`, `session-registry`, `clawhip-bridge`) expose tool/resource contracts to the worker. Five optional fleet MCP servers (`git`, `github`, `verification`, `memory`, `artifact`) are conditionally spawned based on `WORKER_*_COMMAND` env vars. Capability tiers gate every MCP tool call. `trace_id` correlation (schema_version 1.1.0) and a derived metrics-subscriber projection ship in Phase 2. Upstream forks (OMC, clawhip) integrate only via adapter shims under `upstream/`.
+A typed event spine connects three operator surfaces (Telegram bot, console CLI, future browser) to a Claude Code worker subprocess via an orchestrator adapter. All state lives in an append-only JSONL event log; `registry-state` is the **single writer** that materializes the log into SQLite for query, owns the UUIDv7 idempotency cache (FR28), and emits service-lifecycle events. Three always-on MCP servers (`task-registry`, `session-registry`, `clawhip-bridge`) expose tool/resource contracts to the worker. Six optional fleet MCP servers (`git`, `github`, `verification`, `memory`, `artifact`, `browser`) are conditionally spawned based on `WORKER_*_COMMAND` env vars. Capability tiers gate every MCP tool call. `trace_id` correlation (schema_version 1.1.0) and a derived metrics-subscriber projection ship in Phase 2. Upstream forks (OMC, clawhip) integrate only via adapter shims under `upstream/`.
 
 ## Data-flow diagram (text)
 
@@ -14,7 +14,7 @@ A typed event spine connects three operator surfaces (Telegram bot, console CLI,
                         ├──────────────────────┤
                         │  Telegram bot        │ ─┐
                         │  Console CLI         │  │  (Tier-tagged commands;
-                        │  (Browser, Phase 4+) │  │   idempotency key = caller's UUIDv7)
+                        │  (Browser — Phase 4) │  │   idempotency key = caller's UUIDv7)
                         └──────────────────────┘  │
                                                   ▼
                                        ┌──────────────────┐
@@ -59,6 +59,7 @@ A typed event spine connects three operator surfaces (Telegram bot, console CLI,
                 │  ─ verification *       (validation tooling)     │
                 │  ─ memory *             (knowledge store/FTS5)   │
                 │  ─ artifact *           (content-addressed store)│
+                │  ─ browser *            (Playwright automation)  │
                 │     * = conditional; spawned only when           │
                 │       WORKER_*_COMMAND env var is set            │
                 └──────────────────────────────────────────────────┘
@@ -89,17 +90,22 @@ These are non-bypassable. Most are enforced by CI gates (see [testing-guide.md](
 2. **Service-to-service imports banned.** `services.<A>` never imports `services.<B>.*`. Communication is via the event spine or registry HTTP API.
 3. **Event envelopes are immutable.** Once emitted, `event_id`, `schema_version`, `type`, `emitted_at`, `emitted_at_monotonic_ns`, `actor`, `payload`, `parent_event_id?` are never mutated.
 4. **Additive-only schema within a major.** `DROP COLUMN`, `DROP TABLE`, `ALTER COLUMN (type change)`, `RENAME`, `ADD COLUMN NOT NULL` w/o `DEFAULT` are rejected by the migrator linter.
-5. **MCP stdio-only in Phase 1--3.** Imports of `mcp.server.sse` / `mcp.server.streamable_http` are rejected. All eight MCP servers (3 always-on + 5 fleet) communicate over stdio.
+5. **MCP stdio-only.** Imports of `mcp.server.sse` / `mcp.server.streamable_http` are rejected. All MCP servers (3 always-on + 6 fleet, including `browser`) communicate over stdio.
 6. **Upstream-fork boundary.** Vendored code accessed only through `upstream/<fork>/adapter.py`.
 7. **No `anthropic` SDK in platform code.** Only `worker-wrapper` may import `anthropic`; everyone else routes via Claude Code worker through the event spine.
 8. **Capability-tier enforcement at every MCP tool boundary.** Deny-path / default-deny / escalation tests are mandatory per boundary.
 9. **Idempotency by UUIDv7.** Every command handler dedupes by the triggering event's UUIDv7 (7-day retention).
+10. **Additive-only API within a major (ADR-0021).** Within `/v1/`, no field removal, rename, or type change. Breaking changes require a new ADR + `/v2/` prefix.
+11. **Per-server env isolation (G-SEC-2).** Each MCP server child receives only its own allowlisted env vars. No cross-server secret leakage.
+12. **Runtime credential isolation (P5-I1).** Each runtime adapter's API key is injected into its own subprocess env only. `ANTHROPIC_API_KEY` absent from Codex/Gemini child envs; `OPENAI_API_KEY` absent from Claude/Gemini child envs; `GOOGLE_API_KEY` absent from Claude/Codex child envs.
+13. **Event-driven state transitions (P6-I3).** All task state changes emit events; no direct DB mutations bypassing the event spine. Invalid transitions raise `InvalidStateTransition`.
+14. **Browser session ephemerality (P4-I1).** Playwright subprocess runs with `--isolated`; no cookie/localStorage/sessionStorage state leaks between tasks.
 
 ## Cross-cutting concerns
 
 - **Event schema governance** — versioned, additive-only. New `(event_type, schema_version)` pairs register in `packages/events/src/events/`. Breaking changes ship via the one-shot Docker migrator (see [schema-evolution.md](./schema-evolution.md)).
 - **Secret hygiene** — three-layer enforcement: pre-commit scanner, structlog sanitizer in the processor chain *before* the renderer, and `secret.accessed` audit events on every secret read. The `secret-hygiene` package owns all three.
-- **Capability tiers** — applied identically at every MCP surface (`task-registry`, `session-registry`, `clawhip-bridge`, plus the five fleet servers). See `packages/capabilities` for the type contracts and [adr/0001-allowlist-middleware-auth.md](./adr/0001-allowlist-middleware-auth.md) for the authentication surface decision. The `check_tier_declarations.py` AST gate ensures every `@mcp.tool()` has a `TIER_MAP` entry at build time.
+- **Capability tiers** -- applied identically at every MCP surface (`task-registry`, `session-registry`, `clawhip-bridge`, plus the six fleet servers including `browser`). See `packages/capabilities` for the type contracts and [adr/0001-allowlist-middleware-auth.md](./adr/0001-allowlist-middleware-auth.md) for the authentication surface decision. The `check_tier_declarations.py` AST gate ensures every `@mcp.tool()` has a `TIER_MAP` entry at build time.
 - **Idempotency** — UUIDv7 client-generated keys flow from bot/console through the application API to `registry-state`. 7-day dedup cache (FR28). See `packages/idempotency`.
 - **Shutdown / recovery** — every long-running service handles SIGTERM cleanly: `registry-state` runs `PRAGMA wal_checkpoint(FULL)` + `await engine.dispose()`; workers release locks on SIGTERM; all services emit a terminal lifecycle event. Recovery replays the event log from the most recent snapshot.
 - **Structured logs vs typed events** — separate streams with different persistence semantics. **Typed events on the spine are the primary observability stream**; structured logs are secondary. See [`_bmad-output/project-context.md`](../_bmad-output/project-context.md) Cat 2/3 for binding rules.
@@ -121,14 +127,15 @@ These are non-bypassable. Most are enforced by CI gates (see [testing-guide.md](
 | `session-registry` MCP | `mcp-servers/session-registry/` | Session lifecycle | None (RPC) | No |
 | `clawhip-bridge` MCP | `mcp-servers/clawhip-bridge/` | Event emission — **sole mutation surface** | None (event RPC) | No |
 | `metrics-subscriber` | `services/metrics-subscriber/` | Derived metric projection from event log | RO event log (cursor file) | Own cursor file |
-| **Fleet MCP servers** (conditional stdio — spawned only when `WORKER_*_COMMAND` is set) | | | | |
+| **Fleet MCP servers** (conditional stdio -- spawned only when `WORKER_*_COMMAND` is set; 6 servers in Phase 4+) | | | | |
 | `git` MCP | `mcp-servers/git/` | Bounded git operations on sandboxed worktree | RW worktree tree | No |
 | `github` MCP | `mcp-servers/github/` | GitHub API operations (scoped credential) | None (RPC) | No |
 | `verification` MCP | `mcp-servers/verification/` | Verification / validation tooling | None (RPC) | No |
 | `memory` MCP | `mcp-servers/memory/` | Cross-task knowledge store (SQLite FTS5) | RW own SQLite DB | Own DB file |
 | `artifact` MCP | `mcp-servers/artifact/` | Content-addressed build/run-output store | RW own FS subtree | Own FS store |
+| `browser` MCP | `mcp-servers/browser/` | Browser automation via Playwright MCP (Tier-0--3) | None (subprocess RPC) | No |
 
-The Docker Compose stack runs 7 containers (registry-api, registry-state, telegram-gateway, worker-wrapper, orchestrator-adapter, clawhip-daemon, metrics-subscriber). The three always-on MCP servers (`task-registry`, `session-registry`, `clawhip-bridge`) are subprocess-spawned by the worker-wrapper or orchestrator-adapter — they do NOT appear in `docker-compose.yml`. The five fleet MCP servers are also stdio subprocesses but are **conditionally spawned**: the worker/orchestrator checks for `WORKER_GIT_COMMAND`, `WORKER_GITHUB_COMMAND`, etc. in the child env and only starts the server when the var is present. Fleet servers are optional — the worker and all always-on servers function correctly when any fleet server is absent (NFR-M8). `console-cli` is published as an image but is intentionally not in Compose (see [README](../README.md) and [exceptions.md](./exceptions.md)).
+The Docker Compose stack runs 7 containers (registry-api, registry-state, telegram-gateway, worker-wrapper, orchestrator-adapter, clawhip-daemon, metrics-subscriber). The three always-on MCP servers (`task-registry`, `session-registry`, `clawhip-bridge`) are subprocess-spawned by the worker-wrapper or orchestrator-adapter -- they do NOT appear in `docker-compose.yml`. The six fleet MCP servers are also stdio subprocesses but are **conditionally spawned**: the worker/orchestrator checks for `WORKER_GIT_COMMAND`, `WORKER_GITHUB_COMMAND`, `WORKER_BROWSER_COMMAND`, etc. in the child env and only starts the server when the var is present. Fleet servers are optional -- the worker and all always-on servers function correctly when any fleet server is absent (NFR-M8). `console-cli` is published as an image but is intentionally not in Compose (see [README](../README.md) and [exceptions.md](./exceptions.md)).
 
 ## Phase-2 features (shipped as v0.3.0)
 
@@ -141,9 +148,9 @@ Phase 2 shipped 2026-06-03 as **v0.3.0** (Epics 8--13 `done`; 6 ADRs accepted: A
 - **Litestream WAL replication** (Epic 13 / ADR-0007) -- read-only sidecar replicates the registry DB WAL to S3/B2/R2 for disaster recovery (not HA). Replication target is the registry DB only; fleet-server own-stores (artifact, memory) are deliberately outside litestream scope.
 - **Supply-chain triumvirate** (Epic 8 / ADR-0008) -- cosign keyless + SLSA L2 + CycloneDX SBOM; fail-closed license gate.
 
-## Phase 3 -- MCP Tooling Fleet (in progress, gate ADR-0009)
+## Phase 3 -- MCP Tooling Fleet (shipped 2026-06-04, gate ADR-0009)
 
-Phase 3 was formally opened 2026-06-04 (ADR-0009 accepted). Scope is five optional stdio MCP servers (Epics 14--19; FR72--FR77) plus a hardening warm-up epic. Each epic is independently shippable; Phase 3 releases incrementally rather than big-bang.
+Phase 3 shipped 2026-06-04 as five optional stdio MCP fleet servers (Epics 14--19 `done`; FR72--FR77). Each epic shipped independently; Phase 3 released incrementally.
 
 ### ADR-0010 authoring recipe
 
@@ -178,11 +185,75 @@ Mutating fleet-server events use the **two-location** pattern: the spine event r
 
 Epic 14 established the cosmic-ray mutation gate (`scripts/mutation_score.py`). The `just mutation-gate` recipe passes `--threshold 82` (the NFR-O11 floor). The gate targets the capability-tier kernel (`packages/capabilities`) and the event-envelope core -- a surviving mutant in `tiers.py` `check_tier` is a fleet-wide authz hole. The nightly `mutation-baseline` job tracks the score over time.
 
-## Phase 4+ forward references (not yet implemented)
+## Phase 4 -- Browser Automation Plane (shipped 2026-06-05)
 
-- Browser-automation plane (Phase 4) -- would add a 4th operator surface; integrates through the same event spine.
-- Additional CLI agents (Codex, Gemini, GLM) (Phase 5) -- swappable behind the orchestrator-adapter shim contract.
-- Remote-MCP transports (HTTP/SSE) -- deferred; MCP stays stdio-only. Requires its own ADR when a concrete remote-worker use case emerges.
+Phase 4 shipped 2026-06-05 as the browser-automation plane (Epics 20--25 `done`; FR78--FR88). Key shipped capabilities:
+
+- **`browser` MCP server** (Epic 20 / ADR-0013) -- stdio MCP fleet server wrapping Microsoft Playwright MCP (`@playwright/mcp`) as a Docker-subprocess transport. Dual tier enforcement: Playwright's `--caps` flag + oh-my-bmad's `TIER_MAP`. Container sandboxing (seccomp, user-namespace isolation); `--isolated` mode for ephemeral sessions (P4-I1).
+- **Navigation, interaction, and tab-management tools** (Epics 21--22) -- Tier-1/2 browser tools with structured accessibility-tree output. `browser_evaluate` is Tier-3 with approval gating (P4-I2). Six browser event types (`browser.*`) on the spine.
+- **Container sandboxing** (Epic 25 / ADR-0014) -- Playwright subprocess runs inside a Docker container, never bare-metal (P4-I3). Image pinned by digest; `--no-sandbox` never passed.
+
+Phase 4 invariants (P4-I1 through P4-I3) documented in ADR-0013 and the Phase-4 architecture amendment.
+
+## Phase 5 -- Multi-Runtime Adapters (shipped 2026-06-07)
+
+Phase 5 shipped 2026-06-07 as the multi-runtime plane (Epics 26--29 `done`; FR89--FR98). Key shipped capabilities:
+
+- **RuntimeAdapter protocol** (Epic 26 / ADR-0015) -- `typing.Protocol` defining the adapter interface (`spawn`, `is_healthy`, `parse_output`, `kill`). `ClaudeCodeRunner` satisfies the protocol via structural subtyping with zero behavioral change. Factory function `get_runtime_adapter()` dispatches by runtime name.
+- **Codex adapter** (Epic 26) -- `CodexRunner` spawns `codex exec --json`, parses JSONL, maps tool names to `ExtractedEvent` types. Credential isolation: `OPENAI_API_KEY` appears only in Codex's allowlist; `ANTHROPIC_API_KEY` appears only in Claude Code's (P5-I1).
+- **Per-task runtime selection + handoff** (Epics 27--28) -- `TaskCreatedPayload.preferred_runtime` selects the runner per-task. Runtime handoff preserves `trace_id` continuity (P5-I2). Per-runtime budget accounting (P5-I3).
+- **Fleet smoke test** (Epic 29) -- end-to-end integration test exercising Codex + git-mcp + verification-mcp + event spine.
+
+Phase 5 invariants (P5-I1 through P5-I3) documented in ADR-0015/ADR-0016.
+
+## Phase 6 -- Server Execution Pool (shipped 2026-06-07)
+
+Phase 6 shipped 2026-06-07 as the server-execution-pool plane (Epics 30--34 `done`; FR99--FR107). Key shipped capabilities:
+
+- **Postgres migration** (Epic 30 / ADR-0017) -- dual-backend registry: SQLite default (zero-change), Postgres opt-in via `REGISTRY_DATABASE_URL`. Alembic migrations run on both backends. CI matrix runs full suite against both. Connection pooling: `5 + 2 * num_workers` for Postgres.
+- **Task state machine** (Epic 31 / ADR-0018) -- formal FSM replaces implicit status tracking. States: `CREATED -> QUEUED -> ASSIGNED -> RUNNING -> COMPLETED|FAILED|CANCELLED`. Invalid transitions raise `InvalidStateTransition`. Event-driven: transitions triggered by `task.*` events on the spine. Resolves GATED-ARCH D4 (deferred since Phase 1).
+- **Worker pool assignment** (Epic 32 / ADR-0019) -- pull-based task claiming: workers poll for `QUEUED` tasks and atomically claim them (`SELECT FOR UPDATE SKIP LOCKED` on Postgres, `BEGIN EXCLUSIVE` on SQLite). `worker_id = <hostname>-<pid>`. Scaling: `docker compose up --scale worker-wrapper=N`.
+- **Gemini adapter** (Epic 33) -- third runtime following ADR-0010 step-9 recipe. `GOOGLE_API_KEY` isolated to Gemini's allowlist (P6-I5). FC-P6-2: structured output schema enforcement for Gemini runner.
+
+Phase 6 invariants (P6-I1 through P6-I5) documented in ADR-0017 through ADR-0020.
+
+## Phase 7 -- Reliability & Operator Tooling (shipped 2026-06-08)
+
+Phase 7 shipped 2026-06-08 as the reliability and operator-tooling plane (Epics 35--40 `done`; 24 stories). Key shipped capabilities:
+
+- **Recovery loops** (Epic 38) -- `RecoveryExecutor` + `RecoveryPolicy` drive automatic retry/auto-stop for failed tasks. `task.auto_retry` and `task.auto_stop` events on the spine. Retry count persisted in Task schema.
+- **Dead-session detection + stale-task alerting** (Epics 36--37) -- per-worker heartbeat, `StaleTaskDetector` emitting `task.stale_warning` / `task.stale_critical` events. Metrics subscriber registers stale events.
+- **Task priority queue** (Epic 39 / FC-P6-3) -- `Task.priority` column (default 0 = normal). Workers claim highest-priority `QUEUED` tasks first.
+- **Audit trail completion** (Epic 35) -- automated audit trail verification; all capability-denied and approval events tracked.
+
+## Phase 8 -- Platform Hardening & Debt Resolution (shipped 2026-06-08)
+
+Phase 8 shipped 2026-06-08 as the closure phase (Epics 41--45 `done`; FR108--FR111). **Zero open GATED items** in `deferred-work.md`. Key shipped capabilities:
+
+- **API versioning** (Epic 41 / ADR-0021) -- additive-only within `/v1/`; breaking changes require a new ADR + `/v2/` prefix. `response_model` opt-in for existing endpoints where schema matches wire contract.
+- **Per-server env scoping** (Epic 43 / G-SEC-2) -- each MCP server child receives only its own allowlisted env vars; no cross-server secret leakage. Defense-in-depth on top of the existing `CHILD_ENV_ALLOWLIST` discipline.
+- **Events composite index** (Epic 41) -- Alembic migration adds `ix_events_task_id_mono_ns` on `(task_id, emitted_at_monotonic_ns)` for faster event-log queries.
+- **Deferred-work backlog closure** (Epic 45) -- all 20 GATED items resolved (12 GATED-ARCH, 6 GATED-OPS, 1 GATED-P0, plus WONTDO documentation). State-machine GATED items closed with Phase 6/7 evidence citations.
+
+## Phase 9 -- Operational Excellence & Feature Completion (shipped 2026-06-09)
+
+Phase 9 shipped 2026-06-09 as the final operational-excellence phase (Stories 46--48). Key shipped capabilities:
+
+- **PR draft creation** (FR10 / Story 46.1) -- worker can create GitHub pull-request drafts via the `github` MCP server. `IdempotencyCacheStore` + `diff_summary` wired into the approval flow.
+- **Operator runbook updates** (Story 48.1) -- five missing operational playbooks added covering recovery, priority queue, per-server env scoping, Postgres backend, and API versioning.
+- **Dead code + stale TODO resolution** (Stories 46.2, 46.3) -- resolved stale production TODOs (health endpoint verification, dead-code documentation), closed Phase-2-era scaffold TODOs. Three remaining stale TODOs closed across the codebase.
+
+## Future work beyond Phase 9
+
+The following items were deferred across Phases 4--9 and remain unshipped:
+
+- **Remote MCP transport** (HTTP/SSE/streamable) -- deferred since Phase 2. MCP stays stdio-only. Requires its own ADR when a concrete remote-worker use case emerges.
+- **mTLS** for service-to-service authentication.
+- **Scheduled jobs** -- time-based task scheduling.
+- **Web dashboard** -- browser-based operator surface.
+- **GLM adapter** -- fourth runtime following the ADR-0015 pattern.
+- **Split deployment** -- Postgres accessible from multiple hosts for horizontal scaling of the registry layer.
+- **Historical event replay** -- re-materialize state from the event log for auditing/debugging.
 
 See `_bmad-output/planning-artifacts/architecture.md` for the full decision rationale per item.
 
