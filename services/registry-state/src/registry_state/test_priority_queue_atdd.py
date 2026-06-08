@@ -1,18 +1,16 @@
-"""ATDD red-phase contract tests for task priority queue (Epic 39, Story 39.1).
+"""ATDD contract tests for task priority queue (Epic 39, Story 39.1).
 
-Phase 7 Epic 39 — Task Priority Queue (FC-P6-3).  These tests assert
-contracts that are NOT YET IMPLEMENTED.  Every test is marked
-``@pytest.mark.xfail(strict=True)`` so the expected outcome is XFAILED
-(green PR-gate).
+Phase 7 Epic 39 — Task Priority Queue (FC-P6-3). All contracts are satisfied.
+The xfail markers were removed when the production code landed.
 
-Contracts tested (all xfail):
+Contracts verified:
   1. Task schema has priority column (integer, default 0)
   2. claim_next_task returns highest-priority pending task first
   3. claim_next_task breaks ties by task_id (FIFO within same priority)
   4. TaskCreatedPayload accepts optional priority field
   5. task.created event carries priority in payload
 
-Reference tests (NOT xfail):
+Reference tests (not gated):
   - claim_next_task exists in worker_pool module
   - Task schema has worker_id column
   - Task schema has status column

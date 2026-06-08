@@ -1,15 +1,9 @@
-"""ATDD red-phase contract tests for the task state machine (Epic 31).
+"""ATDD contract tests for the task state machine (Epic 31).
 
-Phase 6 Epic 31 — Task State Machine. These tests assert contracts that are
-NOT YET IMPLEMENTED. Every test is marked ``@pytest.mark.xfail(strict=True)``
-so the expected outcome is XFAILED (green PR-gate). When the corresponding
-production code lands, each test will XPASS (unexpected pass), which is a HARD
-FAILURE signalling "remove the xfail marker — this contract is now satisfied."
+Phase 6 Epic 31 — Task State Machine (ADR-0018). All contracts are satisfied.
+The xfail markers were removed when the production code landed.
 
-The tests must fail at RUNTIME (inside the test body), NOT at import/collection
-time — ``xfail`` does not swallow ImportError at collection.
-
-Contracts asserted (all xfail):
+Contracts verified:
   1. TaskStateMachine class exists with STATES and TRANSITIONS
   2. All 13+ valid transitions succeed and return target state
   3. Invalid transitions raise InvalidStateTransition
@@ -18,7 +12,7 @@ Contracts asserted (all xfail):
   6. FSM is pure — no database dependency, no side effects
   7. InvalidStateTransition is importable from domain.errors
 
-Reference tests (NOT xfail):
+Reference tests (not gated):
   - Current status values used in codebase are enumerated
 """
 

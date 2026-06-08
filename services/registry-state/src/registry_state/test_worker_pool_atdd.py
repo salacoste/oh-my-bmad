@@ -1,15 +1,8 @@
-"""ATDD red-phase contract tests for multi-task parallelism / worker pool (Epic 32).
+"""ATDD contract tests for multi-task parallelism / worker pool (Epic 32).
 
-Phase 6 Epic 32 — Multi-Task Parallelism. These tests assert contracts that are
-NOT YET IMPLEMENTED. Every test is marked ``@pytest.mark.xfail(strict=True)``
-so the expected outcome is XFAILED (green PR-gate). When the corresponding
-production code lands, each test will XPASS (unexpected pass), which is a HARD
-FAILURE signalling "remove the xfail marker — this contract is now satisfied."
-
-The tests must fail at RUNTIME (inside the test body), NOT at import/collection
-time — ``xfail`` does not swallow ImportError at collection.
-
-Contracts satisfied (Stories 32.2–32.4):
+Phase 6 Epic 32 — Multi-Task Parallelism. All contracts are satisfied
+(Stories 32.2–32.4 shipped). The xfail markers were removed when the
+production code landed.
   1. Task ORM has nullable ``worker_id`` column
   2. ``task.assigned`` event type registered in event_types
   3. ``TaskAssignedPayload`` model with ``worker_id`` field

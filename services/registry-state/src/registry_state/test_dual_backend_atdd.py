@@ -1,15 +1,7 @@
-"""ATDD red-phase contract tests for dual-backend database support (Epic 30).
+"""ATDD contract tests for dual-backend database support (Epic 30).
 
-Phase 6 Epic 30 — Postgres Migration. These tests assert contracts that are
-NOT YET IMPLEMENTED. Every test is marked ``@pytest.mark.xfail(strict=True)``
-so the expected outcome is XFAILED (green PR-gate). When the corresponding
-production code lands, each test will XPASS (unexpected pass), which is a HARD
-FAILURE signalling "remove the xfail marker — this contract is now satisfied."
-
-The tests must fail at RUNTIME (inside the test body), NOT at import/collection
-time — ``xfail`` does not swallow ImportError at collection.
-
-Contracts asserted (all xfail):
+Phase 6 Epic 30 — Postgres Migration. All contracts are satisfied.
+The xfail markers were removed when the production code landed.
   1. Engine factory selects backend based on URL scheme
   2. SQLite backend preserves existing pragmas
   3. Postgres backend uses connection pooling, not NullPool
