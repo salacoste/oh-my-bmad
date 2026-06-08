@@ -484,8 +484,8 @@ class HeartbeatMonitor:
 
     Performance: :meth:`overdue_sessions` is O(N) over all tracked
     sessions per call. For NFR-R5's polling-tick cadence (≥1s) this is
-    fine. TODO Phase 2 if N grows large: switch to a sorted-by-timestamp
-    structure.
+    fine. Accepted at single-operator scale — revisit only if session count
+    exceeds 10K (unlikely with a single worker pool).
     """
 
     def __init__(self, *, heartbeat_interval_s: float, clock: Clock) -> None:

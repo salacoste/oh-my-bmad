@@ -139,8 +139,9 @@ class WorkerSettings(BaseSettings):
     browser_command: str = ""
     browser_args: list[str] = ["-m", "browser_mcp"]
 
-    # TODO(Story 5.8/5.9): consumed when task/session registry MCP servers
-    # need a shared SQLite path.
+    # Latent scaffold: shared SQLite path for task/session registry MCP servers.
+    # Stories 5.8/5.9 shipped with each MCP server managing its own path.
+    # Retained for future shared-storage scenarios.
     registry_db_path: str = ""
 
     ready_file_path: str = ""

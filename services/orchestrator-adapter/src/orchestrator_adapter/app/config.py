@@ -55,6 +55,7 @@ class OrchestratorSettings(BaseSettings):
     clawhip_bridge_command: str = "python"
     clawhip_bridge_args: list[str] = ["-m", "clawhip_bridge_mcp"]
 
+    # Latent scaffold: shared SQLite path (see worker-wrapper config.py).
     registry_db_path: str = ""
     ready_file_path: str = "/tmp/ready"
 
