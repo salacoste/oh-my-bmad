@@ -64,7 +64,7 @@ class DecisionResponseLocal(BaseModel):
     Architecture note: local redefinition keeps cross-service contract as HTTP/JSON
     (architecture.md:231) — same decision as CreateTaskResponseLocal (Story 3.3 AC-2).
 
-    TODO(story-6.4): verify field names match Story 6.4's serialised JSON keys.
+    Field names verified against Story 6.4's DecisionResponse (POST /v1/tasks/{id}/decisions).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -434,11 +434,9 @@ class RegistryAPIClient:
             httpx.HTTPError:       On network / timeout errors.
 
         Note:
-            POST /v1/tasks/{id}/decisions does NOT exist server-side yet.
-            Story 6.4 owns the implementation. Until then a live call returns
-            404. Tests mock the transport layer so they are runnable today.
-            TODO(story-6.4): verify DecisionResponseLocal field names match
-            Story 6.4's serialised JSON keys when that endpoint lands.
+            POST /v1/tasks/{id}/decisions is implemented (Story 6.4).
+            DecisionResponseLocal fields verified against the server-side
+            DecisionResponse.
         """
         # M11: validate task_id shape before making any HTTP call.
         if not TASK_ID_PATTERN.match(task_id):

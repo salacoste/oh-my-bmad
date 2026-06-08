@@ -146,8 +146,7 @@ _INT64_MAX = 9_223_372_036_854_775_807
 # Telegram / MCP / worker ingress middleware can validate inbound trace_id
 # headers symmetrically with the envelope-side ``_trace_id_shape`` validator.
 # Keeping a single source of truth here avoids the registry-api / telegram-
-# gateway drift hazard called out by the Epic 9 retro candidate (Story 9.2
-# spec follow-up TODOs).
+# gateway drift hazard called out by the Epic 9 retro.
 TRACE_ID_TELEGRAM_RE = _TRACE_ID_TELEGRAM_RE
 INT64_MAX_UPDATE_ID = _INT64_MAX
 
