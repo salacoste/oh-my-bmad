@@ -758,6 +758,340 @@ event on next registry-api boot (Story 11.5 / FR65a). The rotation detector:
 
 ---
 
+## Postgres backend playbook (ADR-0017)
+
+Phase 6 added dual-backend support: SQLite (default, zero-change) and Postgres
+(for multi-task parallelism). Selection is via `REGISTRY_DATABASE_URL`. See
+[ADR-0017](./adr/0017-postgres-migration.md) for the full rationale.
+
+### Configuration
+
+```sh
+# .env — switch to Postgres
+REGISTRY_DATABASE_URL=postgresql+asyncpg://omb:password@omb-postgres:5432/omb_registry
+
+# Default (SQLite, no action required)
+# REGISTRY_DATABASE_URL is unset or starts with sqlite+aiosqlite:///
+```
+
+Both `registry-state` and `registry-api` read this env var (or the legacy
+`REGISTRY_STATE_DB_URL` fallback). The Alembic migrator also respects it.
+
+### Running migrations
+
+```sh
+# Run Alembic against whichever backend REGISTRY_DATABASE_URL selects
+just migrate
+```
+
+Migrations are backend-agnostic (SQLAlchemy Core, not raw SQL). The existing
+8 revisions (0001-0008) are validated against both SQLite and Postgres in CI.
+
+### Connection failure
+
+| Symptom | Likely cause | Fix |
+|---------|-------------|-----|
+| `OperationalError: could not connect to server` | Postgres container not running or wrong URL | `docker compose ps` to confirm; check `REGISTRY_DATABASE_URL` spelling and credentials |
+| `FATAL: password authentication failed` | Wrong credentials in URL | Verify username/password match the Postgres instance |
+| `FATAL: database "omb_registry" does not exist` | Database not created | `docker exec -it omb-postgres createdb -U omb omb_registry` |
+| `registry-state` crash-loop after URL change | Alembic schema not applied | Run `just migrate` before starting the stack |
+
+### Failover
+
+Postgres failover is **out of scope** for the platform — there is no built-in
+replication or automatic failover. Recovery is operator-managed:
+
+1. If the Postgres instance is unreachable, the stack degrades: `registry-state`
+   and `registry-api` crash-loop until connectivity is restored.
+2. To fall back to SQLite: unset `REGISTRY_DATABASE_URL` and restart the stack.
+   Note: data does NOT migrate automatically between backends.
+3. For point-in-time recovery of the Postgres data, use the operator's own
+   backup tooling (`pg_dump` / `pg_restore` or a managed-service snapshot).
+
+### Sharp edges
+
+- The SQLite-specific pragmas (`PRAGMA journal_mode=WAL`, `PRAGMA busy_timeout`,
+  `PRAGMA synchronous=NORMAL`) are skipped when the Postgres backend is active.
+- Pool size formula: `5 + 2 * num_workers` for Postgres (managed by SQLAlchemy's
+  `AsyncAdaptedQueuePool`). SQLite uses `NullPool`.
+- CI runs the full test suite against both backends in parallel; both must pass
+  before merge.
+
+---
+
+## Worker pool scaling guide (Story 32.5 / ADR-0019)
+
+Phase 6 shipped multi-task parallelism. The worker-wrapper service supports
+horizontal scaling via `docker compose up --scale`. Story 32.5 removed
+`container_name` so multiple replicas can coexist.
+
+### Scaling up
+
+```sh
+# Scale to 3 worker replicas
+docker compose up -d --scale worker-wrapper=3
+
+# Verify
+docker compose ps worker-wrapper
+# Expected: 3 rows, each with STATUS = "Up (healthy)"
+```
+
+Each replica gets an auto-generated Docker hostname (e.g. `omb-worker-wrapper-1`,
+`omb-worker-wrapper-2`). The worker's `WORKER_ID` defaults to `<hostname>-<pid>`
+inside the container, making each replica unique for task claiming and metrics
+labels (ADR-0019 D2).
+
+### Monitoring worker count
+
+```sh
+# Quick check: how many workers are running?
+docker compose ps --format json worker-wrapper | jq 'length'
+
+# Or plain-text
+docker compose ps worker-wrapper
+```
+
+Workers emit `worker.heartbeat` events carrying their `worker_id`. The
+registry-state subscriber tracks per-worker heartbeats for liveness detection.
+
+### Scaling down safely
+
+```sh
+# Reduce from 3 to 1 replica
+docker compose up -d --scale worker-wrapper=1
+```
+
+**Important:** Docker sends SIGTERM to removed replicas. Each worker handles
+SIGTERM by cleaning up its active session and exiting gracefully. Tasks claimed
+by a removed replica transition to `failed` via `handle_worker_crash` (NFR-R11 /
+NFR-S15) and become re-claimable by surviving workers.
+
+To avoid interrupting in-flight tasks:
+
+1. Wait for active tasks to complete (check `docker compose logs worker-wrapper`
+   for completion events).
+2. Scale down one replica at a time if tasks are long-running.
+3. After scaling down, the registry's stale-task detector (Epic 37) will
+   auto-retry any tasks that were interrupted.
+
+### Per-replica configuration
+
+Each replica shares the same env vars (from `.env` and `docker-compose.yml`).
+To customise a specific replica, use Docker Compose `environment` overrides or
+set `WORKER_ID` explicitly per replica in an overlay compose file.
+
+---
+
+## Multi-runtime setup (Codex and Gemini)
+
+Phase 5 shipped multi-runtime adapters (ADR-0015). The worker-wrapper supports
+three runtimes: `claude-code` (default), `codex`, and `gemini`. Selection is
+via `WORKER_RUNTIME` or per-task `runtime` override.
+
+### Runtime selection
+
+| Env var | Default | Meaning |
+|---------|---------|---------|
+| `WORKER_RUNTIME` | `claude-code` | Worker-level default runtime |
+
+The factory (`runtime_factory.py`) resolves in priority order:
+1. Per-task `runtime` field from `TaskCreatedPayload`.
+2. `WORKER_RUNTIME` env var.
+3. Fallback to `claude-code`.
+
+Unknown runtime names raise `ValueError` (fail-loud, never silent fallback).
+
+### Codex adapter configuration
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `WORKER_RUNTIME` | `claude-code` | Set to `codex` to use Codex |
+| `WORKER_CODEX_COMMAND` | `codex` | Path to `codex` binary |
+| `WORKER_CODEX_TIMEOUT_S` | `600.0` | Subprocess timeout (seconds) |
+| `WORKER_OPENAI_API_KEY` | *(empty)* | OpenAI API key for Codex (P5-I1 credential isolation) |
+
+Credential isolation (P5-I1): the Codex subprocess receives `OPENAI_API_KEY`
+injected from settings, not from the parent env. The child-env allowlist
+explicitly excludes `ANTHROPIC_API_KEY` and `GITHUB_TOKEN`.
+
+### Gemini adapter configuration
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `WORKER_RUNTIME` | `claude-code` | Set to `gemini` to use Gemini |
+| `WORKER_GEMINI_COMMAND` | `gemini` | Path to `gemini` binary |
+| `WORKER_GEMINI_TIMEOUT_S` | `600.0` | Subprocess timeout (seconds) |
+| `WORKER_GOOGLE_API_KEY` | *(empty)* | Google API key for Gemini (P6-I5 credential isolation) |
+
+Credential isolation (P6-I5): the Gemini subprocess receives `GEMINI_API_KEY`
+injected from settings, not from the parent env. The child-env allowlist
+explicitly excludes `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and `GITHUB_TOKEN`.
+
+Structured output (FC-P6-2): the Gemini adapter validates incoming JSONL
+messages against Pydantic schemas before processing. Known message types
+(`session.created`, `turn.completed`) are strictly validated; unknown types
+pass through unvalidated (best-effort). Schema violations are logged and
+skipped — the adapter never crashes on format drift.
+
+### Switching runtimes
+
+```sh
+# Switch worker to Codex
+WORKER_RUNTIME=codex docker compose up -d worker-wrapper
+
+# Switch worker to Gemini
+WORKER_RUNTIME=gemini docker compose up -d worker-wrapper
+
+# Or set in .env for persistence
+echo "WORKER_RUNTIME=codex" >> .env
+docker compose up -d worker-wrapper
+```
+
+### Health check
+
+The runtime adapter's `health_check()` probes binary availability (via
+`shutil.which`) and version (best-effort). API key validity is not probed
+(lazy, cached by caller). A missing binary produces an `installed=False`
+health result without crashing the worker.
+
+---
+
+## Recovery loops (Epic 38)
+
+Phase 7 shipped automatic task recovery. When a task is stuck in a non-terminal
+state for too long, the recovery loop automatically retries or stops it.
+
+### How it works
+
+The registry-state subscriber runs a detection loop (default: every 30s). It
+queries all non-terminal tasks and evaluates staleness against configurable
+thresholds:
+
+| Severity | Meaning | Action |
+|----------|---------|--------|
+| `warning` | Task approaching staleness | Emit `task.stale_warning` event, no action |
+| `critical` | Task definitively stale | Evaluate recovery policy (see below) |
+
+Two severity levels with per-status thresholds:
+
+| Status | Warning threshold | Critical threshold |
+|--------|------------------|--------------------|
+| `pending` | 5 min | 15 min |
+| `planning` | 10 min | 30 min |
+| `plan_ready` | 10 min | 30 min |
+| `executing` | 30 min | 60 min |
+| `blocked` | 30 min | 120 min |
+| `failed` | 15 min | 60 min |
+
+### Recovery policy
+
+For **critical-stale** tasks, the `RecoveryPolicy` decides the action:
+
+1. **`auto_retry`** — Requeue the task to `pending` (emits `task.auto_retry`).
+   Incremented `retry_count` persists across subscriber restarts.
+2. **`auto_stop`** — Stop the task (emits `task.auto_stop`). Triggered when
+   `retry_count >= max_retries`.
+3. **`no_op`** — No automatic action. Warning-level staleness only.
+
+Default `max_retries` = **3**. A task gets 3 automatic retries before the
+recovery loop escalates to auto-stop.
+
+### Event trail
+
+Each recovery action emits a typed event:
+
+- `task.stale_warning` / `task.stale_critical` — staleness detection events.
+- `task.auto_retry` — carries `retry_count`, `max_retries`, and `reason`.
+- `task.auto_stop` — carries `reason` ("max_retries_exceeded") and `retry_count`.
+
+All events are audit-logged in the JSONL event log and queryable via the
+`/trace` API.
+
+### Tuning recovery
+
+The detection loop interval (`detection_poll_interval_s`) defaults to 30s.
+This gives a worst-case 60s detection-to-action SLA (NFR-R5). The
+`heartbeat_interval_s` for session monitoring defaults to 15s (timeout at 30s).
+
+The `max_retries` parameter on `RecoveryPolicy` controls how many times a task
+is retried before auto-stop. The default (3) is hardcoded; tuning it requires
+a code change in `main.py` where `RecoveryPolicy()` is constructed.
+
+### Disabling recovery
+
+Set `detection_poll_interval_s` to `0` to disable the detection loop entirely.
+Tasks will remain in their current state indefinitely until the operator
+intervenes (via `/retry`, `/stop`, or `/approve`). Not recommended for
+unattended operation.
+
+---
+
+## Priority queue (Epic 39 / FC-P6-3)
+
+Phase 7 shipped task priority for dispatch ordering. Each task carries a
+`priority` integer field (default 0). Workers claim the highest-priority
+pending task first.
+
+### How it works
+
+The `claim_next_task` function in `worker_pool.py` orders by:
+
+```sql
+ORDER BY priority DESC, id ASC
+```
+
+Higher `priority` value = higher priority. Within the same priority level,
+tasks are claimed in FIFO order (by `id` = UUIDv7, which is monotonically
+increasing).
+
+The dispatch is priority-aware on both backends:
+
+- **Postgres**: `SELECT ... FOR UPDATE SKIP LOCKED ORDER BY priority DESC, id ASC`
+- **SQLite**: `SELECT + UPDATE` within exclusive transaction, same ordering
+
+### Priority values
+
+| Value | Meaning |
+|-------|---------|
+| `0` | Normal priority (default). FIFO among normal tasks. |
+| `1-9` | Elevated priority. Claimed before normal tasks. |
+| `10+` | High priority. Use sparingly for urgent tasks. |
+
+There is no upper bound on the integer value, but values above 10 are rarely
+necessary at single-operator scale.
+
+### Setting task priority
+
+Priority is set via the `priority` field on the `Task` ORM model (schema column
+`tasks.priority`, integer, default 0). The field is populated from the
+`task.created` event payload's `priority` field.
+
+Currently, the Telegram `/task` command and `POST /v1/tasks` API do not expose
+a `priority` parameter in their request models. To set a non-default priority:
+
+1. **Direct API call** — construct a `task.created` event with the desired
+   `priority` in the payload.
+2. **Database update** — for existing tasks, update the `priority` column
+   directly (requires DB access):
+   ```sh
+   # SQLite
+   docker compose exec registry-state sqlite3 /var/lib/oh-my-bmad/registry/state.sqlite3 \
+     "UPDATE tasks SET priority = 5 WHERE id = 't-<uuidv7>';"
+   ```
+
+A future API extension will expose `priority` in `CreateTaskRequest` and the
+Telegram `/task` command.
+
+### Monitoring priority distribution
+
+```sh
+# Check pending tasks by priority
+docker compose exec registry-state sqlite3 /var/lib/oh-my-bmad/registry/state.sqlite3 \
+  "SELECT priority, COUNT(*) FROM tasks WHERE status = 'pending' GROUP BY priority ORDER BY priority DESC;"
+```
+
+---
+
 ## Forward-referenced scenarios
 
 These failure modes are spec'd but the enforcement logic does not exist yet.
