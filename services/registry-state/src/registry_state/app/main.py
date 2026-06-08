@@ -66,7 +66,10 @@ from registry_state.domain.event_types import (  # noqa: F401 — side-effect: r
 )
 from registry_state.domain.failure_detection import (
     HeartbeatMonitor,
+    StaleTaskDetector,
     emit_session_heartbeat_timeout,
+    emit_task_stale_critical,
+    emit_task_stale_warning,
 )
 from registry_state.domain.handlers import (
     _get_audit_writer,
@@ -383,6 +386,8 @@ async def run_subscriber(
         register_default_handlers(materializer)
         # Story 36.3 / FR110: heartbeat monitor for dead-session detection.
         monitor = HeartbeatMonitor(heartbeat_interval_s=heartbeat_interval_s, clock=clock)
+        # Story 37.3 / NFR-R5 extension: stale-task detector for non-terminal states.
+        stale_detector = StaleTaskDetector(clock=clock)
         if _trace:
             log.info(
                 "lifespan phase: handlers_register complete in %.3fs", time.monotonic() - _phase_t0
@@ -538,6 +543,63 @@ async def run_subscriber(
                                 session_id,
                                 exc_info=True,
                             )
+                    # Story 37.3 / NFR-R5 extension: stale-task detection.
+                    # Query non-terminal tasks whose updated_at is older than
+                    # the configured threshold, then emit warning/critical events.
+                    from registry_state.domain.task_fsm import TaskStateMachine
+                    from registry_state.schema import Task as TaskRow
+
+                    non_terminal = {
+                        s for s, targets in TaskStateMachine.TRANSITIONS.items() if targets
+                    }
+                    async with session_maker() as session:
+                        stale_rows = (await session.execute(
+                            select(TaskRow.id, TaskRow.status, TaskRow.updated_at).where(
+                                TaskRow.status.in_(non_terminal),
+                            )
+                        )).all()
+                    if stale_rows:
+                        stale_results = stale_detector.stale_tasks_and_mark(
+                            [(r.id, r.status, r.updated_at) for r in stale_rows]
+                        )
+                        for task_id, status, severity, duration_s, threshold_s in stale_results:
+                            # Find the updated_at for this task.
+                            row_updated = next(
+                                (r.updated_at for r in stale_rows if r.id == task_id),
+                                clock.now(),
+                            )
+                            try:
+                                emit_fn = (
+                                    emit_task_stale_warning
+                                    if severity == "warning"
+                                    else emit_task_stale_critical
+                                )
+                                await emit_fn(
+                                    _get_audit_writer(),
+                                    clock=SystemClock(),
+                                    task_id=task_id,
+                                    status=status,
+                                    stale_since=row_updated,
+                                    stale_duration_s=duration_s,
+                                    threshold_s=threshold_s,
+                                    trace_id=new_request_id(clock=SystemClock()),
+                                    synthetic_source="stale-task-detector",
+                                )
+                                log.info(
+                                    "detected stale task %s (status=%s, %s, %.0fs>%0.fs)",
+                                    task_id,
+                                    status,
+                                    severity,
+                                    duration_s,
+                                    threshold_s,
+                                )
+                            except Exception:
+                                log.warning(
+                                    "failed to emit stale %s for task %s",
+                                    severity,
+                                    task_id,
+                                    exc_info=True,
+                                )
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=poll_interval_s)
     finally:

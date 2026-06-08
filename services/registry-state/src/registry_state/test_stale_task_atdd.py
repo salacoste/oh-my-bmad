@@ -1,15 +1,10 @@
-"""ATDD red-phase contract tests for stale-task alerting (Epic 37).
+"""ATDD contract tests for stale-task alerting (Epic 37).
 
-Phase 7 Epic 37 — Stale Task Alerting.  These tests assert contracts that
-are NOT YET IMPLEMENTED.  Every test is marked ``@pytest.mark.xfail(strict=True)``
-so the expected outcome is XFAILED (green PR-gate).  When the corresponding
-production code lands, each test will XPASS (unexpected pass), which is a
-HARD FAILURE signalling "remove the xfail marker — this contract is now satisfied."
+Phase 7 Epic 37 — Stale Task Alerting.  Originally shipped as red-phase
+(all xfail); contracts are now SATISFIED by Stories 37.1–37.3 production
+code and tests run green.
 
-The tests must fail at RUNTIME (inside the test body), NOT at import/collection
-time — ``xfail`` does not swallow ImportError at collection.
-
-Contracts tested (all xfail):
+Contracts tested (all green):
   1. TaskStaleWarningPayload validates correctly with required fields
   2. TaskStaleCriticalPayload validates correctly with required fields
   3. task.stale_warning event type registered at v1.1.0
@@ -200,7 +195,6 @@ def test_emit_task_stale_critical_exists() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True)
 @pytest.mark.asyncio
 async def test_stale_detection_has_production_caller() -> None:
     """Stale-task emission must have at least one production caller
