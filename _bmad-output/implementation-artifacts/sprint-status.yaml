@@ -584,6 +584,15 @@ development_status:
   38-5-dd-p6-2-relative-perf-threshold: done  # phase: 7 · Replace absolute 500ms gate with 5000ms ceiling + @pytest.mark.slow
   38-6-dd-p6-4-postgres-ci-gate-required: done  # phase: 7 · Wire registry-state-postgres as required gate via needs in pr-gate
 
+  # ---------------------------------------------------------------------------
+  # Epic 39: Task Priority Queue (3 stories)
+  # phase: 7 · FC-P6-3 · priority-aware dispatch replacing FIFO
+  # ---------------------------------------------------------------------------
+  epic-39: done  # phase: 7 · Task priority queue — ALL 3 stories done
+  39-1-atdd-red-phase-priority-queue-contracts: done  # phase: 7 · 4 xfail + 3 reference ATDD contracts
+  39-2-priority-column-in-task-schema: done  # phase: 7 · Task.priority integer column (default 0, higher=higher priority)
+  39-3-priority-aware-claim-next-task: done  # phase: 7 · ORDER BY priority DESC, id ASC in both Postgres and SQLite claim paths
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
