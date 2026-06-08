@@ -7,22 +7,21 @@ This module ships **callable primitives** for the four FR24a failure signals:
   - ``sink.delivery_failed``      — :func:`emit_sink_delivery_failed`
   - ``task.stop_requested``       — :func:`emit_task_stop_requested`
 
-…plus two in-memory detection helpers used by the polling-loop wiring that
-will be added in later epics:
+…plus two in-memory detection helpers:
 
   - :class:`HeartbeatMonitor`   — per-session last-heartbeat tracking with a
                                    ``> 2 × interval`` overdue boundary.
   - :class:`SinkFailureTracker` — per-sink consecutive-failure counter with a
                                    ``>= threshold`` emit gate.
 
-**What this module does NOT do**
+**Caller status (Phase 9 / Story 46.3):** The four emit_* functions currently
+have zero production callers. They are pre-emptive abstractions for
+process-level crash detection, distinct from Phase 7's RecoveryExecutor (which
+handles task-level recovery). The crash-detection polling loop that would call
+these functions has not been built yet. The functions remain as a stable API
+surface for future wiring.
 
-* No materializer handlers for any of the 4 new event types — state
-  transitions (e.g. ``task.stop_requested`` → ``tasks.status = "stopped"``)
-  are explicitly deferred (per AC-5) to Epic 3 (stop dispatch) and Epic 5
-  (worker / session lifecycle). For ``task.stop_requested`` the materializer
-  *does* extract the ``task_id`` and populates the ``events.task_id`` FK
-  column; no handler-driven state mutation is performed in 2.10.
+**What this module does NOT do**
 * No background polling loop — the **NFR-R5 60 s detection-to-emission
   SLA** is the contract of the polling-loop wiring (Epic 3 / Epic 5),
   not of this module. This module ships only the synchronous + async
@@ -185,15 +184,12 @@ def _redact_last_error(s: str | None) -> str | None:
 # detector). This is verified end-to-end by the AC-7 dual-write tests in
 # ``test_failure_detection.py``.
 #
-# Story 9.7 pass-3 UH-7 TODO: these emit_* functions have ZERO production
-# callers as of pass-3 (grep across services/+packages/ excluding tests).
-# They are pre-emptive abstractions that pass-2 TH-B3 hardened (trace_id
-# required) on a dead surface. The functions remain in place because
-# downstream code may import them via ``__init__.py``; do NOT delete.
-# Tracker: a future story should either (a) wire them into the polling
-# loops they were originally designed for (Epic 3 / Epic 5 follow-up) or
-# (b) fold their bodies into the call sites once those exist. See pass-3
-# review notes (UH-7) for the audit trail.
+# Design note (Phase 9 / Story 46.3): these emit_* functions are pre-emptive
+# abstractions for process-level crash detection. They address a DIFFERENT
+# layer from Phase 7's RecoveryExecutor (which handles task-level recovery
+# via task.auto_retry / task.auto_stop). The crash-detection polling loop
+# that would call these functions was never built; the functions remain as
+# a stable API surface for future crash-detection wiring. Do NOT delete.
 # ---------------------------------------------------------------------------
 
 
