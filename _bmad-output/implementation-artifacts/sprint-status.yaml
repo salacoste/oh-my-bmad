@@ -593,6 +593,13 @@ development_status:
   39-2-priority-column-in-task-schema: done  # phase: 7 · Task.priority integer column (default 0, higher=higher priority)
   39-3-priority-aware-claim-next-task: done  # phase: 7 · ORDER BY priority DESC, id ASC in both Postgres and SQLite claim paths
 
+  # ---------------------------------------------------------------------------
+  # Epic 40: Phase 7 Gate + Retrospective (1 story)
+  # phase: 7 · ship-blocker verification + retrospective
+  # ---------------------------------------------------------------------------
+  epic-40: done  # phase: 7 · Phase 7 gate + retrospective — COMPLETE
+  40-1-phase-7-ship-blocker-checklist-and-retrospective: done  # phase: 7 · All gates green, retrospective written
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
