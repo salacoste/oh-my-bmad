@@ -1039,3 +1039,33 @@ audit_trail:
       migration 0010. Resolves deferred-work D1(7-5-6). 445 registry-state
       tests pass. Also fixes all CI gate errors: ruff 0 errors (was 57),
       mypy 0 errors (was 162) across 38 files.
+  - date: "2026-06-08"
+    event: epic-43-complete
+    from: in-progress
+    to: done
+    story: 43-1-per-server-env-scoping
+    reason: >
+      Epic 43 (Security Defense-in-Depth) COMPLETE. Story 43.1 implements
+      per-server env scoping — each MCP child receives only _BASE_ENV_VARS +
+      its own server-specific vars. GITHUB_MCP_SCOPED_TOKEN no longer reaches
+      non-github servers. Contract test validates isolation. All 20 GATED
+      deferred items now CLOSED/WONTDO — zero open items remain.
+  - date: "2026-06-08"
+    event: epic-45-complete
+    from: backlog
+    to: done
+    story: 45-2-final-audit
+    reason: >
+      Epic 45 (Deferred Work Backlog Closure) COMPLETE. Lock protocol items
+      closed as WONTDO (single-operator TOCTOU accepted, stale lock is
+      operator procedure). Final audit confirms zero open GATED items in
+      deferred-work.md. Deferred work backlog is architecturally clean.
+  - date: "2026-06-08"
+    event: phase-8-complete
+    reason: >
+      Phase 8 (Platform Hardening & Debt Resolution) COMPLETE. 8/8
+      ship-blocker items green. All 20 GATED deferred items resolved.
+      CI gates green (ruff 0, mypy 0, 3156 tests). ADR-0021 accepted.
+      Events composite index migrated. Per-server env scoping implemented.
+      Project complete: 8 phases, 40+ epics, ~187 stories, 0 open debt.
+      Production-ready for single-operator deployment.
