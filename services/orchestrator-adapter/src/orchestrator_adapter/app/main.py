@@ -435,8 +435,7 @@ async def process_task(
         return
 
     # Emit task.execution.started.
-    # TODO(5.17a): replace "s-placeholder" with real worker-wrapper session ID.
-    exec_started_payload = build_execution_started_payload(task_id, "s-placeholder")
+    exec_started_payload = build_execution_started_payload(task_id, settings.resolve_session_id())
     await _emit_event(
         clients,
         "task.execution.started",

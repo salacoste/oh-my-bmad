@@ -12,7 +12,7 @@ from typing import Any, ClassVar
 
 import structlog
 from events.envelope import is_valid_trace_id
-from events.ids import new_uuid7, new_worker_id
+from events.ids import new_session_id, new_uuid7, new_worker_id
 from pydantic import AliasChoices, Field, PrivateAttr, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -59,6 +59,7 @@ class OrchestratorSettings(BaseSettings):
     ready_file_path: str = "/tmp/ready"
 
     actor_id: str = ""
+    session_id: str = ""
     omc_path: str = "upstream/omc"
     omc_timeout_s: float = Field(default=120.0, gt=0)
     poll_interval_s: float = Field(default=5.0, gt=0)
@@ -226,6 +227,7 @@ class OrchestratorSettings(BaseSettings):
     # ------------------------------------------------------------------
 
     _resolved_actor_id: str | None = PrivateAttr(default=None)
+    _resolved_session_id: str | None = PrivateAttr(default=None)
     _resolved_trace_id: str | None = PrivateAttr(default=None)
     _resolved_trace_id_source: str | None = PrivateAttr(default=None)
 
@@ -234,12 +236,16 @@ class OrchestratorSettings(BaseSettings):
     # ------------------------------------------------------------------
 
     def model_post_init(self, __context: Any) -> None:
-        """Eagerly resolve trace_id at construction (mirrors worker-side H4).
+        """Eagerly resolve trace_id and session_id at construction (mirrors worker-side H4).
 
         Story 9.6 review pass-3 TH1: ``resolve_trace_id()`` is a pure read after
         this point; no async race-window between concurrent readers.  Source
         ("env" vs "minted") is tracked in ``_resolved_trace_id_source`` so the
         ``ready`` log can advertise provenance (TM2).
+
+        Story 5.17a: ``session_id`` is resolved eagerly following the same
+        pattern as worker-wrapper — uses the configured value or mints a fresh
+        one via ``new_session_id()``.
         """
         log = structlog.get_logger(__name__)
         if self.trace_id is not None and is_valid_trace_id(self.trace_id):
@@ -254,6 +260,9 @@ class OrchestratorSettings(BaseSettings):
             self._resolved_trace_id = minted
             self._resolved_trace_id_source = "minted"
 
+        # Story 5.17a — eager session_id resolution (mirrors worker-wrapper).
+        self._resolved_session_id = self.session_id or new_session_id()
+
     # ------------------------------------------------------------------
     # Methods (Story 9.6 review pass-3 TH1).
     # ------------------------------------------------------------------
@@ -263,6 +272,19 @@ class OrchestratorSettings(BaseSettings):
         if self._resolved_actor_id is None:
             self._resolved_actor_id = self.actor_id or new_worker_id()
         return self._resolved_actor_id
+
+    def resolve_session_id(self) -> str:
+        """Return the eagerly-resolved ``session_id`` (Story 5.17a).
+
+        ``model_post_init`` guarantees this is non-None for any
+        successfully-constructed instance.
+        """
+        if self._resolved_session_id is None:
+            raise RuntimeError(
+                f"model_post_init must have populated _resolved_session_id "
+                f"(cls={type(self).__name__})"
+            )
+        return self._resolved_session_id
 
     def resolve_trace_id(self) -> str:
         """Return the eagerly-resolved ``trace_id`` (TH1 + TH6).
