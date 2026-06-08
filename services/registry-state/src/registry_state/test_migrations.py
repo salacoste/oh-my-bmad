@@ -56,6 +56,7 @@ _EXPECTED_INDEXES = frozenset(
         "ix_sessions_task_id_status",
         "ix_idempotency_cache_expires_at",
         "ix_tasks_status_updated_at",
+        "ix_events_task_id_emitted_at_monotonic_ns",  # Story 41.2
     ]
 )
 # Tracks the latest alembic head revision. Bump when a new migration is added.
@@ -65,7 +66,8 @@ _EXPECTED_INDEXES = frozenset(
 # → 0007 add approval_inbox table (Story 11.3 AC2 / FR63)
 # → 0008 add key_fingerprint table (Story 11.5 AC2 / FR65a)
 # → 0009 add tasks.worker_id column (Story 32.2 / P6-I4 / ADR-0019 D2).
-_REVISION = "0009"
+# → 0010 add ix_events_task_id_emitted_at_monotonic_ns (Story 41.2 / Epic 41).
+_REVISION = "0010"
 _INI_PATH = str(Path(__file__).parent.parent.parent / "alembic.ini")
 
 
@@ -386,15 +388,20 @@ def test_migration_0008_round_trip_downgrade_drops_table() -> None:
         # Confirm table exists post-upgrade.
         tables_pre, _, versions_pre = _inspect_db(db_path)
         assert "key_fingerprint" in tables_pre
-        assert versions_pre == ["0009"]
+        assert versions_pre == ["0010"]
+
+        # Downgrade one revision → 0009 (drops monotonic_ns index, not worker_id).
+        command.downgrade(_make_cfg(url), "-1")  # 0010 → 0009
+        tables_mid, indexes_mid, versions_mid = _inspect_db(db_path)
+        assert "ix_events_task_id_emitted_at_monotonic_ns" not in indexes_mid
+        assert versions_mid == ["0009"]
 
         # Downgrade one revision → 0008 (drops worker_id, not key_fingerprint).
-        # Downgrade again → 0007 (drops key_fingerprint).
         command.downgrade(_make_cfg(url), "-1")  # 0009 → 0008
-        tables_mid, _, versions_mid = _inspect_db(db_path)
-        assert "key_fingerprint" in tables_mid, "key_fingerprint survives 0009→0008 downgrade"
+        tables_mid2, _, versions_mid2 = _inspect_db(db_path)
+        assert "key_fingerprint" in tables_mid2, "key_fingerprint survives 0009→0008 downgrade"
         assert "worker_id" not in _get_columns(db_path, "tasks"), "worker_id dropped on 0009→0008"
-        assert versions_mid == ["0008"]
+        assert versions_mid2 == ["0008"]
 
         command.downgrade(_make_cfg(url), "-1")  # 0008 → 0007
         tables_post, _, versions_post = _inspect_db(db_path)

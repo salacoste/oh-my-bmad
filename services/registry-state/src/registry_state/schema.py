@@ -365,6 +365,14 @@ Index("ix_tasks_status_updated_at", Task.status, Task.updated_at)
 # Non-unique: many events share the same trace_id (one per operator command).
 Index("ix_events_trace_id", Event.trace_id)
 
+# Story 41.2: monotonic-ns cursor pagination for CLI follow-mode.
+# Covers: WHERE task_id = ? AND emitted_at_monotonic_ns > ? ORDER BY emitted_at_monotonic_ns
+Index(
+    "ix_events_task_id_emitted_at_monotonic_ns",
+    Event.task_id,
+    Event.emitted_at_monotonic_ns,
+)
+
 __all__ = [
     "ApprovalInbox",
     "Base",
