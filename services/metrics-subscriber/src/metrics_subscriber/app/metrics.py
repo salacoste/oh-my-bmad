@@ -154,6 +154,8 @@ _TASK_LIFECYCLE_EVENT_TYPES: Final[tuple[str, ...]] = (
     "task.budget_enforcement_triggered",
     "task.license_flagged",
     "task.summary_emitted",
+    "task.stale_warning",  # Story 37.2 — stale task warning (NFR-R5 extension)
+    "task.stale_critical",  # Story 37.2 — stale task critical (NFR-R5 extension)
 )
 
 #: Bounded enum of session phases for ``omb_session_lifecycle_events_total``
@@ -661,6 +663,9 @@ _DISPATCH: Final[dict[str, EventMetricUpdater]] = {
     # Story 12.2 (FR67) — budget-enforcement is terminal (task → failed):
     # count it AND clear the token gauge (the task is done, no live spend).
     "task.budget_enforcement_triggered": _update_task_lifecycle_and_clear_task_gauge,
+    # Story 37.2 — stale task alerting (non-terminal, use simple lifecycle updater).
+    "task.stale_warning": _update_task_lifecycle,
+    "task.stale_critical": _update_task_lifecycle,
     # Session lifecycle.
     "session.started": _update_session_lifecycle,
     "session.heartbeat": _update_session_lifecycle,
