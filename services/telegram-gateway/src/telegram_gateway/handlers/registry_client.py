@@ -80,29 +80,19 @@ class DecisionResponseLocal(BaseModel):
 
 
 class HealthResponseLocal(BaseModel):
-    """Local mirror of registry-api's eventual GET /v1/health response.
+    """Local mirror of registry-api's GET /v1/health response (Story 11.3.9).
 
     FR17 fields: registry status, worker status, clawhip queue depth, platform version.
-    Forward-compatible shape pinned by 3.5's mocked tests; alignment with the
-    eventual server-side endpoint owner (TBD — gap in current epic plan; see Dev Notes).
+    Contract parity verified — field names, types, and constraints match the
+    server-side ``HealthResponse`` in ``registry_api/routes/health.py`` exactly.
 
     H1 (permissive str typing): ``registry_status`` and ``worker_status`` use ``str``
-    rather than ``Literal[...]`` because the server-side endpoint is NOT yet
-    implemented.  If registry-api adds ``"warning"`` / ``"maintenance"`` /
-    ``"stopped"`` / ``"offline"`` states, ``Literal`` typing would silently render
-    every ``/ping`` as ``"⚠️ Registry returned an unexpected response"`` instead of
-    forwarding the actual status string.  The ``extra="ignore"`` policy in
-    ``model_config`` ensures unknown future fields are dropped cleanly.
-
-    TODO(story-TBD): verify field names match the server-side GET /v1/health response
-    when that endpoint lands. Most likely owner: Story 6.x middleware stack or a new
-    platform-observability story between Epics 5 and 7.
-    TODO(story-TBD): re-evaluate whether to narrow these to Literal once the server
-    contract is finalised.
+    rather than ``Literal[...]`` to remain forward-compatible if registry-api adds
+    new status values (``"warning"``, ``"maintenance"``, etc.). The ``extra="ignore"``
+    policy ensures unknown future fields are dropped cleanly.
     """
 
     model_config = ConfigDict(frozen=True, extra="ignore")
-    # H1: str + Field constraints rather than Literal — server contract not yet finalised.
     registry_status: str = Field(min_length=1, max_length=64)
     worker_status: str = Field(min_length=1, max_length=64)
     # L4: defensive upper bound prevents absurdly large queue depths rendering verbatim.
