@@ -113,11 +113,9 @@ from events import (  # side-effect: register() calls
 )
 from events.canonical import from_canonical_json
 from events.clock import Clock
+from events.event_log_writer import EventLogWriter
 from events.ids import new_event_id
-from registry_state.adapters.event_log import (
-    EventLogWriter,
-    read_log_lines,
-)
+from events.log_reader import read_log_lines
 
 log = logging.getLogger("null-orchestrator")
 

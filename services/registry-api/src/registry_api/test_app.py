@@ -42,14 +42,14 @@ from events import (
     new_request_id,
     new_task_id,
 )
+from events.log_reader import (
+    current_day_path,
+    read_log_lines,
+)
 from events.schema_registry import register as _reg
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from httpx import ASGITransport, AsyncClient
-from registry_state.adapters.event_log import (  # noqa: IMP001 — services→services allowed per AC-16
-    current_day_path,
-    read_log_lines,
-)
 from registry_state.adapters.sqlite_store import (  # noqa: IMP001 — services→services allowed per AC-16
     create_engine as _create_engine,
 )

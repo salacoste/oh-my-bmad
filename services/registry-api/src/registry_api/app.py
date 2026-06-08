@@ -44,12 +44,10 @@ import cachetools
 from events.clock import Clock
 from events.envelope import ActorKind  # noqa: IMP001 — services→packages allowed
 from events.errors import CapabilityDenied
+from events.event_log_writer import EventLogWriter
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from idempotency import IdempotencyCacheStore, create_idempotency_schema
-from registry_state.adapters.event_log import (  # noqa: IMP001 — services→services allowed per AC-16
-    EventLogWriter,
-)
 from registry_state.adapters.sqlite_store import (  # noqa: IMP001 — services→services allowed per AC-16
     create_engine,
     get_session,

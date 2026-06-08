@@ -723,9 +723,10 @@ def test_verify_approval_handles_non_zero_microseconds_end_to_end(tmp_path: Path
     from events import EventEnvelope
     from events.clock import FrozenClock
     from events.envelope import Actor
+    from events.event_log_writer import EventLogWriter
     from events.ids import new_event_id
     from events.payloads import TaskApprovalSignedPayload
-    from registry_state.adapters.event_log import EventLogWriter, current_day_path
+    from registry_state.adapters.event_log import current_day_path
     from registry_state.domain.event_types import ensure_registered
 
     ensure_registered()

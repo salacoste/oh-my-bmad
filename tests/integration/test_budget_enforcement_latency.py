@@ -42,9 +42,9 @@ from events import (
     new_task_id,
     new_uuid7,
 )
+from events.event_log_writer import EventLogWriter
 from events.payloads import TaskBudgetExceededPayload
 from events.schema_registry import REGISTRY, register, unregister
-from registry_state.adapters.event_log import EventLogWriter
 from worker_wrapper.adapters.claude_code_runner import (
     ClaudeCodeRunner,
     _TerminationResult,

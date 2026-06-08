@@ -79,7 +79,7 @@ from events.schema_registry import register as _register_event
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from registry_api.app import build_app
-from registry_state.adapters.event_log import (  # noqa: IMP001 — Story 2.9 AC-16
+from registry_state.adapters.event_log import (
     current_day_path,
 )
 from registry_state.adapters.sqlite_store import (  # noqa: IMP001 — Story 2.9 AC-16

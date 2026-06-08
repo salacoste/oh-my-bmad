@@ -35,13 +35,11 @@ import pytest_asyncio
 from events import FROZEN_EPOCH, FrozenClock
 from events.approval_signing import compute_key_fingerprint
 from events.envelope import Actor, EventEnvelope
+from events.event_log_writer import EventLogWriter
 from events.ids import new_event_id, new_request_id, new_uuid7
 from events.log_reader import current_day_path, read_log_lines
 from events.payloads import KeyRotatedPayload
 from pydantic import SecretStr
-from registry_state.adapters.event_log import (  # noqa: IMP001 — test fixture uses registry-state write path for detector; no prod cross-service coupling
-    EventLogWriter,
-)
 from registry_state.adapters.sqlite_store import (  # noqa: IMP001 — test fixture builds in-memory SQLite; no prod cross-service coupling
     create_engine,
     get_session,

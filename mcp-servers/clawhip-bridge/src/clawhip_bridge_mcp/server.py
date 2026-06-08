@@ -35,23 +35,23 @@ from pathlib import Path
 
 from capabilities import CallerContext, Tier, check_tier  # noqa: IMP001 — packages/
 from capabilities.emit import build_capability_denied_payload  # noqa: IMP001 — packages/
-from events import (  # noqa: IMP001 — events is packages/
+from events import (  # noqa: IMP001 — events is packages/  # noqa: IMP001 — events is packages/
     Actor,
     EventEnvelope,
+    current_day_path,
     new_event_id,
     new_request_id,
+    read_log_lines,
 )
 from events.canonical import to_canonical_json
 from events.clock import Clock
 from events.envelope import ActorKind, is_valid_trace_id
 from events.errors import CapabilityDenied  # noqa: IMP001 — packages/
-from mcp.server.fastmcp import FastMCP
-from registry_state import (  # noqa: IMP001 — mcp-servers→services allowed per AC-7/Arch line 272
+from events.event_log_writer import (  # noqa: IMP001 — events is packages/
     EventLogWriter,
-    current_day_path,
-    read_log_lines,
     recover_all_logs,
 )
+from mcp.server.fastmcp import FastMCP
 
 log = logging.getLogger(__name__)
 

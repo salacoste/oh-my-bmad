@@ -24,6 +24,11 @@ from events.errors import (
     EventValidationError,
     WorktreeLockHeld,
 )
+from events.event_log_writer import (
+    EventLogWriter,
+    InMemoryEventLogWriter,
+    recover_all_logs,
+)
 from events.external_append import EVENT_LOG_FILE_MODE, append_event_line
 from events.ids import (
     new_decision_id,
@@ -120,6 +125,8 @@ __all__ = [
     "ReplicationLaggingPayload",
     "EventEnvelope",
     "EventLogReader",
+    "EventLogWriter",
+    "InMemoryEventLogWriter",
     "EventSchemaUnknown",
     "EventValidationError",
     "EventsError",
@@ -153,6 +160,7 @@ __all__ = [
     "parse_with_pre110_backfill",
     "read_log_lines",
     "read_new_envelopes_since",
+    "recover_all_logs",
     "register",
     "to_canonical_json",
     *_payloads_all,

@@ -299,11 +299,14 @@ async def test_baseline_cardinality_at_steady_state(
     # Epic 21 / Story 21-6: exact count 65 → 66 for the new pre-populated
     # ``omb_events_appended_total{event_family="browser"}`` child (FR83 / FR86).
     # The event family count goes 17 → 18.
-    assert count == 66, (
-        f"baseline cardinality drift: got {count} canonical timeseries, expected 66. "
+    # Phase 8 hardening: exact count 66 → 69 for three new event families
+    # (``deployment``, ``file``, ``worker``) registered during Epics 43-45.
+    # The event family count goes 18 → 19, adding 3 canonical timeseries.
+    assert count == 69, (
+        f"baseline cardinality drift: got {count} canonical timeseries, expected 69. "
         f"Breakdown: {breakdown}. "
-        f"Expected: 6 baseline + 16 task + 5 session + 5 secret + 18 family "
-        f"+ 2 idempotency + 6 capability + 8 event_log_lock_wait = 66."
+        f"Expected: 6 baseline + 16 task + 5 session + 5 secret + 21 family "
+        f"+ 2 idempotency + 6 capability + 8 event_log_lock_wait = 69."
     )
 
 
@@ -432,9 +435,10 @@ async def test_cardinality_under_10k_varying_task_ids(
     # replication family — see AC2 note); bound is 64 + 1 cursor child = 65.
     # Story 15.4: baseline 64 → 65 (new event_family="git" child); bound 65+1=66.
     # Epic 21 / Story 21-6: baseline 65 → 66 (new event_family="browser" child); bound 66+1=67.
-    assert count <= 67, (
-        f"10K cardinality drift: got {count} canonical timeseries, expected <= 67 "
-        f"(66 baseline + 1 cursor-offset path child). Breakdown: {breakdown}"
+    # Phase 8 hardening: baseline 66 → 69 (3 new families); bound 69+1=70.
+    assert count <= 70, (
+        f"10K cardinality drift: got {count} canonical timeseries, expected <= 70 "
+        f"(69 baseline + 1 cursor-offset path child). Breakdown: {breakdown}"
     )
 
     # Critical: the per-task gauge has zero labelled children after
@@ -550,9 +554,10 @@ async def test_cardinality_with_n_concurrent_active_tasks(
     # +/- 1 cursor child → 164..165.
     # Story 15.4: baseline 64 → 65 (new event_family="git" child) → 165..166.
     # Epic 21 / Story 21-6: baseline 65 → 66 (new event_family="browser" child) → 166..167.
-    assert 166 <= count_mid <= 167, (
-        f"mid-flight cardinality drift: got {count_mid}, expected 166..167 "
-        f"(66 baseline + {n_tasks} per-task gauges +/- 1 cursor-offset path child). "
+    # Phase 8 hardening: baseline 66 → 69 (3 new families) → 169..170.
+    assert 169 <= count_mid <= 170, (
+        f"mid-flight cardinality drift: got {count_mid}, expected 169..170 "
+        f"(69 baseline + {n_tasks} per-task gauges +/- 1 cursor-offset path child). "
         f"Breakdown: {_family_breakdown(body)}"
     )
 
@@ -582,9 +587,10 @@ async def test_cardinality_with_n_concurrent_active_tasks(
     # Story 13.4: empirically-verified baseline 64 (see AC2 note); bound 64+1=65.
     # Story 15.4: baseline 64 → 65 (new event_family="git" child); bound 65+1=66.
     # Epic 21 / Story 21-6: baseline 65 → 66 (new event_family="browser" child); bound 66+1=67.
-    assert count_after <= 67, (
-        f"post-drain cardinality drift: got {count_after}, expected <= 67 "
-        f"(66 baseline + 1 cursor-offset path child). "
+    # Phase 8 hardening: baseline 66 → 69 (3 new families); bound 69+1=70.
+    assert count_after <= 70, (
+        f"post-drain cardinality drift: got {count_after}, expected <= 70 "
+        f"(69 baseline + 1 cursor-offset path child). "
         f"Breakdown: {_family_breakdown(body)}"
     )
 
@@ -757,9 +763,11 @@ async def test_envelope_with_unknown_family_falls_to_unknown_bucket(
     # replication event-family child — see the AC2 test for the full breakdown).
     # Story 15.4: 64 → 65 for the new ``event_family="git"`` child (Epic 15 / FR72).
     # Epic 21 / Story 21-6: 65 → 66 for the new ``event_family="browser"`` child (FR83/FR86).
+    # Phase 8 hardening: 66 → 69 for three new event families (``deployment``,
+    # ``file``, ``worker``) — see AC2 test for the full breakdown.
     count = _count_canonical_timeseries(body)
-    assert count == 66, (
-        f"AC7 cardinality drift: got {count}, expected 66 (no novel families "
+    assert count == 69, (
+        f"AC7 cardinality drift: got {count}, expected 69 (no novel families "
         f"created). Breakdown: {_family_breakdown(body)}"
     )
 

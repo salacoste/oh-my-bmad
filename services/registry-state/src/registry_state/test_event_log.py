@@ -636,9 +636,9 @@ class TestShortWriteAndPoison:
         """
         import fcntl
 
-        from registry_state.adapters import event_log as _elm
+        from events.event_log_writer import _FCNTL_AVAILABLE
 
-        if _elm._fcntl is None:  # type: ignore[attr-defined]
+        if not _FCNTL_AVAILABLE:
             pytest.skip("fcntl not available on this platform")
 
         env = _make_envelope(clock=fixed_clock)
@@ -658,7 +658,7 @@ class TestShortWriteAndPoison:
             real_flock(fd, op)
             flock_ops.append(op)
 
-        monkeypatch.setattr(_elm._fcntl, "flock", tracking_flock)  # type: ignore[attr-defined]
+        monkeypatch.setattr(fcntl, "flock", tracking_flock)
 
         original_write = os.write
 
@@ -1019,6 +1019,8 @@ class TestFileMode:
         (not propagate) — proving the skip-and-continue that prevents the
         Story 11.3.10-AC5 crash-loop.
         """
+        from events.event_log_writer import _recover_file
+
         from registry_state.adapters import event_log as _evt
 
         # Two day-files; one will "fail" recovery, the other succeeds.
@@ -1027,14 +1029,14 @@ class TestFileMode:
         good.write_bytes(b'{"ok": true}\n{"partial": ')  # partial tail → trimmable
         bad.write_bytes(b'{"x": 1}\n')
 
-        real_recover = _evt._recover_file
+        real_recover = _recover_file
 
         def _fake_recover(path: Path) -> int:
             if path.name == bad.name:
                 raise PermissionError(13, "Permission denied", str(path))
             return real_recover(path)
 
-        monkeypatch.setattr(_evt, "_recover_file", _fake_recover)
+        monkeypatch.setattr("events.event_log_writer._recover_file", _fake_recover)
 
         # MUST NOT raise — the PermissionError on `bad` is logged + skipped.
         total = await _evt.recover_all_logs(tmp_path)

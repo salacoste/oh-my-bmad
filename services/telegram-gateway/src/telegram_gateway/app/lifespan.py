@@ -2,7 +2,7 @@
 
 ``AsyncExitStack``-based lifespan that:
 
-1. Constructs an :class:`registry_state.adapters.event_log.EventLogWriter`
+1. Constructs an :class:`events.event_log_writer.EventLogWriter`
    pointed at ``settings.event_log_dir`` so audit emission has a real
    sink before any ``.value`` read fires.
 2. Calls :py:meth:`TelegramSettings.from_env` with the writer's
@@ -88,14 +88,8 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from events.clock import Clock
 from events.envelope import Actor
+from events.event_log_writer import EventLogWriter
 from fastapi import FastAPI
-
-# TODO(architecture): relocate ``EventLogWriter`` to ``packages/events/``
-# so the noqa cross-service import is no longer required.
-# (SecretAccessedPayload already relocated by Story 3.5.2.)
-from registry_state.adapters.event_log import (  # noqa: IMP001 — services→services allowed per story 3.1 (mirrors registry_api/app.py:42); see TODO above
-    EventLogWriter,
-)
 from secret_hygiene import flush_pending_emissions
 
 from telegram_gateway.app.config import TelegramSettings

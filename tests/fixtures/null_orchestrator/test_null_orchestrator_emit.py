@@ -21,8 +21,9 @@ from events import (
     new_request_id,
     new_task_id,
 )
+from events.event_log_writer import EventLogWriter
 from events.ids import new_event_id
-from registry_state.adapters.event_log import EventLogWriter, read_log_lines
+from events.log_reader import read_log_lines
 from registry_state.domain.event_types import ensure_registered
 
 from tests.fixtures.null_orchestrator.null_orchestrator import _emit_lifecycle_for_task

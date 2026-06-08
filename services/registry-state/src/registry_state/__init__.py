@@ -26,12 +26,12 @@ Public surface re-exported here:
 SQLAlchemy's own ``Session`` class in downstream code.
 """
 
-from registry_state.adapters.event_log import (
+from events.event_log_writer import (
     EventLogWriter,
-    current_day_path,
-    read_log_lines,
     recover_all_logs,
 )
+from events.log_reader import current_day_path, read_log_lines
+
 from registry_state.adapters.sqlite_store import create_engine, get_session
 from registry_state.app.main import main, run_subscriber
 from registry_state.domain.errors import MaterializerError

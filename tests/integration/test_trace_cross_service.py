@@ -68,13 +68,11 @@ from events import (
     new_task_id,
     new_uuid7,
 )
+from events.event_log_writer import EventLogWriter
 from events.log_reader import read_log_lines
 from events.schema_registry import register as _register_schema
 from httpx import ASGITransport, AsyncClient
 from registry_api.app import build_app  # noqa: IMP001 — in-process ASGI harness (see test_trace.py)
-from registry_state.adapters.event_log import (  # noqa: IMP001 — real on-disk emission path
-    EventLogWriter,
-)
 from registry_state.adapters.sqlite_store import (  # noqa: IMP001 — shared in-process state engine
     create_engine,
     get_session,

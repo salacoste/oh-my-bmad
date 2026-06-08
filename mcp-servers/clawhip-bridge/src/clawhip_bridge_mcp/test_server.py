@@ -39,12 +39,12 @@ from events import (  # mcp-servers→services allowed per AC-7
     new_task_id,
 )
 from events.errors import CapabilityDenied
-from events.schema_registry import register as _reg
-from mcp.server.fastmcp.resources.types import FunctionResource
-from registry_state.adapters.event_log import (  # noqa: IMP001 — mcp-servers→services allowed per AC-7
+from events.log_reader import (
     current_day_path,
     read_log_lines,
 )
+from events.schema_registry import register as _reg
+from mcp.server.fastmcp.resources.types import FunctionResource
 
 from clawhip_bridge_mcp.server import (  # noqa: IMP001 — test file in mcp-servers
     TIER_MAP,

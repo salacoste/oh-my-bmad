@@ -60,7 +60,7 @@ from events.envelope import EventEnvelope
 from events.schema_registry import register as _reg
 from httpx import ASGITransport, AsyncClient, Response
 from registry_api.app import build_app
-from registry_state.adapters.event_log import (  # noqa: IMP001 — services→services allowed per AC-16
+from registry_state.adapters.event_log import (
     current_day_path,
     read_log_lines,
 )

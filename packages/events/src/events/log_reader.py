@@ -6,9 +6,10 @@ during Story 10.2 so that the β metrics-subscriber service (and any other
 read-only subscribers) can consume the log without violating the P2-I1
 read-only-subscriber rule (services may not import from other services).
 
-The writer (``EventLogWriter``) remains in registry-state — only READ-side
-functions moved. ``registry_state.adapters.event_log`` re-exports these
-names for backwards compatibility with existing call-sites.
+The writer (``EventLogWriter``) has been relocated to
+``packages/events/src/events/event_log_writer.py`` — only READ-side
+functions were originally extracted. ``registry_state.adapters.event_log``
+re-exports these names for backwards compatibility with existing call-sites.
 
 Surfaces:
 

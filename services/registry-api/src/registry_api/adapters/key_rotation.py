@@ -62,11 +62,11 @@ from random import Random
 from events.approval_signing import compute_key_fingerprint
 from events.clock import Clock
 from events.envelope import Actor, EventEnvelope
+from events.event_log_writer import EventLogWriter
 from events.ids import new_event_id, new_request_id, new_uuid7
 from events.log_reader import read_log_lines
 from events.payloads import KeyRotatedPayload
 from pydantic import SecretStr
-from registry_state.adapters.event_log import EventLogWriter  # noqa: IMP001 — services→services
 from registry_state.schema import KeyFingerprint  # noqa: IMP001 — services→services
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker

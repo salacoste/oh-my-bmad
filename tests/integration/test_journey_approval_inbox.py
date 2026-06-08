@@ -58,8 +58,8 @@ from events import (
     new_event_id,
     new_uuid7,
 )
+from events.event_log_writer import EventLogWriter
 from events.schema_registry import register as _reg
-from registry_state.adapters.event_log import EventLogWriter
 from registry_state.domain.event_types import ApprovalInboxOpenedPayload
 from registry_state.domain.handlers import handle_approval_inbox_opened
 from registry_state.schema import ApprovalInbox
@@ -382,7 +382,7 @@ async def test_journey_approval_inbox_replay_does_not_dedupe_at_sink(
 
     from datetime import UTC, datetime
 
-    from registry_state.adapters.event_log import EventLogWriter
+    from events.event_log_writer import EventLogWriter
 
     events_dir = tmp_path / "events"
     events_dir.mkdir()
