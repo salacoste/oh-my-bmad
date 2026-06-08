@@ -263,14 +263,13 @@ def make_lifespan(
             # AllowlistMiddleware so only allowlisted updates consume
             # per-actor tokens. Non-allowlisted updates are silently
             # dropped by the allowlist before reaching this middleware.
+            # Thresholds are operator-tunable via TelegramSettings env-vars
+            # (defaults: capacity=10, refill=5.0/s, max_entries=1024).
             dp.update.outer_middleware.register(
                 PerActorRateLimitMiddleware(
-                    # capacity=10 allows a burst of 10 messages before throttling;
-                    # refill=5.0/s restores the bucket quickly for interactive use.
-                    # Single-operator deployment — these can be env-var tuned in
-                    # Phase 2 if multi-actor scenarios emerge.
-                    capacity=10,
-                    refill_per_second=5.0,
+                    capacity=audited.tg_per_actor_rate_limit_capacity,
+                    refill_per_second=audited.tg_per_actor_rate_limit_refill_per_sec,
+                    max_entries=audited.tg_per_actor_rate_limit_max_entries,
                     clock=clock,
                 )
             )

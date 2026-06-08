@@ -44,9 +44,8 @@ Capacity = 20 (burst), refill = 10 tokens/s for the shared bucket —
 locked by architecture.md line 215. Per-actor defaults are set at
 construction time.
 
-# TODO(Phase 2): operator-tunable thresholds via env-vars (e.g.
-# TG_WEBHOOK_RATE_LIMIT_CAPACITY) when the platform supports multiple
-# webhook endpoints / multi-channel sinks.
+# Rate-limit thresholds are operator-tunable via env-vars (see
+# TelegramSettings).  Defaults match the architecture.md:215 locked values.
 """
 
 from __future__ import annotations
@@ -54,6 +53,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -205,6 +205,7 @@ class PerActorRateLimitMiddleware(BaseMiddleware):
         capacity: int,
         refill_per_second: float,
         clock: Clock,
+        max_entries: int = 1024,
     ) -> None:
         if capacity < 1:
             raise ValueError(
@@ -215,14 +216,23 @@ class PerActorRateLimitMiddleware(BaseMiddleware):
                 f"PerActorRateLimitMiddleware: refill_per_second must be > 0,"
                 f" got {refill_per_second!r}"
             )
+        if max_entries < 1:
+            raise ValueError(
+                f"PerActorRateLimitMiddleware: max_entries must be >= 1, got {max_entries!r}"
+            )
         self._capacity = capacity
         self._refill_per_second = refill_per_second
         self._clock = clock
-        # TODO(Phase 2): bounded LRU or TTL eviction — currently unbounded because
-        # the allowlist is small (operator-controlled), so the dict cannot grow
-        # beyond |allowlist| entries in practice. If multi-tenant or dynamic
-        # allowlists are introduced, add eviction to prevent unbounded growth.
-        self._buckets: dict[int, tuple[float, int]] = {}  # user_id → (tokens, last_refill_ns)
+        self._max_entries = max_entries
+        # OrderedDict provides LRU semantics: ``move_to_end()`` on access
+        # marks an entry as most-recently-used; ``popitem(last=False)`` evicts
+        # the least-recently-used when the capacity bound is reached.
+        # Defense-in-depth: the allowlist is operator-controlled so the dict
+        # cannot grow beyond |allowlist| entries in practice, but the bound
+        # prevents unbounded growth if a misconfiguration or future code
+        # change allows non-allowlisted users to reach this middleware.
+        self._buckets: OrderedDict[int, tuple[float, int]] = OrderedDict()
+        # user_id → (tokens, last_refill_ns)
         # Single global lock is sufficient — asyncio is single-threaded, so
         # the lock prevents inter-task reordering at await points without
         # contention from parallel threads.
@@ -285,12 +295,30 @@ class PerActorRateLimitMiddleware(BaseMiddleware):
 
         async with self._lock:
             now_ns = self._clock.monotonic_ns()
-            tokens, last_ns = self._buckets.get(user_id, (float(self._capacity), now_ns))
+
+            if user_id in self._buckets:
+                # Existing user — promote to most-recently-used.
+                self._buckets.move_to_end(user_id)
+                tokens, last_ns = self._buckets[user_id]
+            else:
+                # New user — evict LRU entry if at capacity.
+                if len(self._buckets) >= self._max_entries:
+                    evicted_key, _ = self._buckets.popitem(last=False)
+                    _log.debug(
+                        "per-actor rate limit: evicted LRU entry for user %d "
+                        "(max_entries=%d reached)",
+                        evicted_key,
+                        self._max_entries,
+                    )
+                tokens = float(self._capacity)
+                last_ns = now_ns
+
             elapsed_s = max(0.0, (now_ns - last_ns) / 1e9)
             tokens = min(float(self._capacity), tokens + elapsed_s * self._refill_per_second)
 
             if tokens < 1.0:
                 self._buckets[user_id] = (tokens, last_ns)
+                self._buckets.move_to_end(user_id)
                 _log.warning(
                     "per-actor rate limit: user %d bucket empty (%.2f tokens, refill=%.1f/s)",
                     user_id,
@@ -301,6 +329,7 @@ class PerActorRateLimitMiddleware(BaseMiddleware):
 
             tokens -= 1.0
             self._buckets[user_id] = (tokens, now_ns)
+            self._buckets.move_to_end(user_id)
 
         return await handler(event, data)
 

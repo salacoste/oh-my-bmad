@@ -59,15 +59,13 @@ def build_app(*, settings: TelegramSettings, clock: Clock) -> FastAPI:
     )
     app.add_api_route("/v1/health", health, methods=["GET"])
     # Story 3.6 AC-5/6/7: token-bucket rate limiter scoped to the webhook
-    # path only. Capacity=20 (burst) and refill=10/s are LOCKED per
-    # architecture.md line 215 — do NOT expose as env-vars in Phase 1.
-    # TODO(Phase 2): operator-tunable thresholds when the platform supports
-    # multiple webhook endpoints / multi-channel sinks.
+    # path only. Thresholds are operator-tunable via TelegramSettings env-vars
+    # (defaults match architecture.md:215 locked values).
     app.add_middleware(
         WebhookRateLimitMiddleware,
         webhook_path=settings.webhook_path,
-        capacity=20,  # locked — architecture.md:215
-        refill_per_second=10.0,  # locked — architecture.md:215
+        capacity=settings.tg_webhook_rate_limit_capacity,
+        refill_per_second=settings.tg_webhook_rate_limit_refill_per_sec,
         clock=clock,
     )
     return app

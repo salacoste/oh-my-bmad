@@ -498,3 +498,207 @@ class TestStory93TraceIdRateLimitChain:
             f"rate-limit chain unexpectedly emitted envelopes for allowlisted "
             f"actor; got {captured!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Bounded LRU eviction tests (production hardening)
+# ---------------------------------------------------------------------------
+
+
+class TestPerActorBoundedLRU:
+    """Verify bounded LRU eviction in PerActorRateLimitMiddleware."""
+
+    @pytest.mark.asyncio
+    async def test_lru_evicts_oldest_when_max_entries_reached(self) -> None:
+        """When max_entries is exceeded, the least-recently-used entry is evicted."""
+        clock = TickingClock(start_ns=0, tick_ns=1)
+        mw = PerActorRateLimitMiddleware(
+            capacity=5,
+            refill_per_second=1.0,
+            clock=clock,
+            max_entries=2,
+        )
+
+        async def handler(event: Any, data: dict[str, Any]) -> Any:
+            return "OK"
+
+        # Fill both slots: user 1 and user 2.
+        u1 = Update.model_validate(_make_update(111))
+        u2 = Update.model_validate(_make_update(222))
+        await mw(handler, u1, {})
+        await mw(handler, u2, {})
+
+        assert 111 in mw._buckets
+        assert 222 in mw._buckets
+        assert len(mw._buckets) == 2
+
+        # Access user 1 again — promotes it to MRU.
+        await mw(handler, u1, {})
+
+        # Introduce user 3 — should evict user 2 (LRU, not accessed recently).
+        u3 = Update.model_validate(_make_update(333))
+        await mw(handler, u3, {})
+
+        assert 111 in mw._buckets, "user 111 should survive (was promoted to MRU)"
+        assert 222 not in mw._buckets, "user 222 should be evicted (was LRU)"
+        assert 333 in mw._buckets, "user 333 should be admitted"
+        assert len(mw._buckets) == 2
+
+    @pytest.mark.asyncio
+    async def test_lru_evicted_user_gets_fresh_bucket_on_return(self) -> None:
+        """An evicted user gets a fresh bucket when they return."""
+        clock = TickingClock(start_ns=0, tick_ns=1)
+        mw = PerActorRateLimitMiddleware(
+            capacity=1,
+            refill_per_second=1.0,
+            clock=clock,
+            max_entries=1,
+        )
+
+        invocations: list[Any] = []
+
+        async def handler(event: Any, data: dict[str, Any]) -> Any:
+            invocations.append(event)
+            return "OK"
+
+        # User 1 consumes their single token.
+        u1 = Update.model_validate(_make_update(111))
+        await mw(handler, u1, {})
+        assert len(invocations) == 1
+
+        # User 2 pushes user 1 out via LRU eviction.
+        u2 = Update.model_validate(_make_update(222))
+        await mw(handler, u2, {})
+
+        # User 1 returns — gets a fresh bucket (full capacity).
+        r = await mw(handler, u1, {})
+        assert r == "OK", "evicted user should get a fresh bucket on return"
+
+    def test_constructor_rejects_zero_max_entries(self) -> None:
+        """max_entries=0 raises ValueError."""
+        with pytest.raises(ValueError, match="max_entries must be >= 1"):
+            PerActorRateLimitMiddleware(
+                capacity=5,
+                refill_per_second=1.0,
+                clock=FrozenClock(mono_ns=0, now=FROZEN_EPOCH),
+                max_entries=0,
+            )
+
+    @pytest.mark.asyncio
+    async def test_default_max_entries_is_1024(self) -> None:
+        """Default max_entries is 1024 (defense-in-depth)."""
+        mw = PerActorRateLimitMiddleware(
+            capacity=5,
+            refill_per_second=1.0,
+            clock=FrozenClock(mono_ns=0, now=FROZEN_EPOCH),
+        )
+        assert mw._max_entries == 1024
+
+    @pytest.mark.asyncio
+    async def test_lru_does_not_evict_below_max(self) -> None:
+        """No eviction occurs when below max_entries."""
+        clock = TickingClock(start_ns=0, tick_ns=1)
+        mw = PerActorRateLimitMiddleware(
+            capacity=5,
+            refill_per_second=1.0,
+            clock=clock,
+            max_entries=100,
+        )
+
+        async def handler(event: Any, data: dict[str, Any]) -> Any:
+            return "OK"
+
+        # Add 50 users — well below max_entries=100.
+        for uid in range(50):
+            u = Update.model_validate(_make_update(uid + 1000))
+            await mw(handler, u, {})
+
+        assert len(mw._buckets) == 50
+        # All still present.
+        for uid in range(50):
+            assert uid + 1000 in mw._buckets
+
+
+# ---------------------------------------------------------------------------
+# Operator-tunable rate-limit env-var tests (production hardening)
+# ---------------------------------------------------------------------------
+
+
+class TestRateLimitEnvVarConfig:
+    """Verify rate limit thresholds are configurable via env-vars."""
+
+    def test_default_values_match_old_hardcoded(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Default settings match the previously hardcoded values."""
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "1234:fake-bot-token")
+        monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET_TOKEN", "fake-secret-token-for-testing")
+        monkeypatch.setenv("TELEGRAM_WEBHOOK_URL", "https://tunnel.example.com/v1/telegram/webhook")
+        monkeypatch.setenv("EVENT_LOG_DIR", str(tmp_path / "events"))
+
+        settings = TelegramSettings.from_env(
+            emit=None,
+            actor=_ACTOR,
+            clock=FrozenClock(mono_ns=0, now=FROZEN_EPOCH),
+        )
+        assert settings.tg_webhook_rate_limit_capacity == 20
+        assert settings.tg_webhook_rate_limit_refill_per_sec == 10.0
+        assert settings.tg_per_actor_rate_limit_capacity == 10
+        assert settings.tg_per_actor_rate_limit_refill_per_sec == 5.0
+        assert settings.tg_per_actor_rate_limit_max_entries == 1024
+
+    def test_env_vars_override_defaults(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Setting env-vars overrides the default rate limit values."""
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "1234:fake-bot-token")
+        monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET_TOKEN", "fake-secret-token-for-testing")
+        monkeypatch.setenv("TELEGRAM_WEBHOOK_URL", "https://tunnel.example.com/v1/telegram/webhook")
+        monkeypatch.setenv("EVENT_LOG_DIR", str(tmp_path / "events"))
+        monkeypatch.setenv("TG_WEBHOOK_RATE_LIMIT_CAPACITY", "5")
+        monkeypatch.setenv("TG_WEBHOOK_RATE_LIMIT_REFILL_PER_SEC", "2.5")
+        monkeypatch.setenv("TG_PER_ACTOR_RATE_LIMIT_CAPACITY", "3")
+        monkeypatch.setenv("TG_PER_ACTOR_RATE_LIMIT_REFILL_PER_SEC", "1.0")
+        monkeypatch.setenv("TG_PER_ACTOR_RATE_LIMIT_MAX_ENTRIES", "50")
+
+        settings = TelegramSettings.from_env(
+            emit=None,
+            actor=_ACTOR,
+            clock=FrozenClock(mono_ns=0, now=FROZEN_EPOCH),
+        )
+        assert settings.tg_webhook_rate_limit_capacity == 5
+        assert settings.tg_webhook_rate_limit_refill_per_sec == 2.5
+        assert settings.tg_per_actor_rate_limit_capacity == 3
+        assert settings.tg_per_actor_rate_limit_refill_per_sec == 1.0
+        assert settings.tg_per_actor_rate_limit_max_entries == 50
+
+    @pytest.mark.parametrize(
+        ("field", "bad_value"),
+        [
+            ("TG_WEBHOOK_RATE_LIMIT_CAPACITY", "0"),
+            ("TG_WEBHOOK_RATE_LIMIT_CAPACITY", "-1"),
+            ("TG_WEBHOOK_RATE_LIMIT_REFILL_PER_SEC", "0"),
+            ("TG_WEBHOOK_RATE_LIMIT_REFILL_PER_SEC", "-0.5"),
+            ("TG_PER_ACTOR_RATE_LIMIT_CAPACITY", "0"),
+            ("TG_PER_ACTOR_RATE_LIMIT_REFILL_PER_SEC", "-1"),
+            ("TG_PER_ACTOR_RATE_LIMIT_MAX_ENTRIES", "0"),
+        ],
+    )
+    def test_invalid_rate_limit_values_rejected(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, field: str, bad_value: str
+    ) -> None:
+        """Invalid rate limit values raise ValidationError at config-load."""
+        from pydantic import ValidationError
+
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "1234:fake-bot-token")
+        monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET_TOKEN", "fake-secret-token-for-testing")
+        monkeypatch.setenv("TELEGRAM_WEBHOOK_URL", "https://tunnel.example.com/v1/telegram/webhook")
+        monkeypatch.setenv("EVENT_LOG_DIR", str(tmp_path / "events"))
+        monkeypatch.setenv(field, bad_value)
+
+        with pytest.raises(ValidationError):
+            TelegramSettings.from_env(
+                emit=None,
+                actor=_ACTOR,
+                clock=FrozenClock(mono_ns=0, now=FROZEN_EPOCH),
+            )

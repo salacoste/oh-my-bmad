@@ -339,6 +339,58 @@ class TelegramSettings(AuditedBaseSettings):
         ),
     )
 
+    # ------------------------------------------------------------------
+    # Rate-limit tuning (production hardening — operator-configurable)
+    # ------------------------------------------------------------------
+    # Defaults match the architecture.md:215 locked values that were
+    # previously hardcoded in main.py and lifespan.py.  Operators can
+    # override via env-vars for multi-channel / high-volume deployments.
+
+    # Layer 1 (WebhookRateLimitMiddleware) — shared HTTP-level bucket.
+    tg_webhook_rate_limit_capacity: int = Field(
+        default=20,
+        validation_alias="TG_WEBHOOK_RATE_LIMIT_CAPACITY",
+        description=(
+            "Token-bucket capacity for the shared webhook rate limiter "
+            "(Layer 1). Default 20 matches architecture.md:215."
+        ),
+    )
+    tg_webhook_rate_limit_refill_per_sec: float = Field(
+        default=10.0,
+        validation_alias="TG_WEBHOOK_RATE_LIMIT_REFILL_PER_SEC",
+        description=(
+            "Token refill rate (tokens/s) for the shared webhook rate limiter "
+            "(Layer 1). Default 10.0 matches architecture.md:215."
+        ),
+    )
+
+    # Layer 2 (PerActorRateLimitMiddleware) — per-sender buckets.
+    tg_per_actor_rate_limit_capacity: int = Field(
+        default=10,
+        validation_alias="TG_PER_ACTOR_RATE_LIMIT_CAPACITY",
+        description=(
+            "Token-bucket capacity per allowlisted sender (Layer 2). "
+            "Default 10 allows a burst of 10 messages before throttling."
+        ),
+    )
+    tg_per_actor_rate_limit_refill_per_sec: float = Field(
+        default=5.0,
+        validation_alias="TG_PER_ACTOR_RATE_LIMIT_REFILL_PER_SEC",
+        description=(
+            "Token refill rate (tokens/s) per allowlisted sender (Layer 2). "
+            "Default 5.0 restores the bucket quickly for interactive use."
+        ),
+    )
+    tg_per_actor_rate_limit_max_entries: int = Field(
+        default=1024,
+        validation_alias="TG_PER_ACTOR_RATE_LIMIT_MAX_ENTRIES",
+        description=(
+            "Maximum number of per-actor buckets tracked simultaneously. "
+            "LRU eviction applies when the bound is reached. "
+            "Default 1024 is a defense-in-depth cap."
+        ),
+    )
+
     @field_validator("trace_allowed_chat_ids", mode="before")
     @classmethod
     def _validate_trace_allowed_chat_ids(cls, value: Any) -> frozenset[int]:
@@ -391,6 +443,46 @@ class TelegramSettings(AuditedBaseSettings):
                 f"got: {sorted(bad)!r}"
             )
         return result
+
+    @field_validator("tg_webhook_rate_limit_capacity", mode="before")
+    @classmethod
+    def _validate_webhook_capacity(cls, v: Any) -> int:
+        val = int(v)
+        if val < 1:
+            raise ValueError(f"tg_webhook_rate_limit_capacity must be >= 1, got {val}")
+        return val
+
+    @field_validator("tg_webhook_rate_limit_refill_per_sec", mode="before")
+    @classmethod
+    def _validate_webhook_refill(cls, v: Any) -> float:
+        val = float(v)
+        if val <= 0:
+            raise ValueError(f"tg_webhook_rate_limit_refill_per_sec must be > 0, got {val}")
+        return val
+
+    @field_validator("tg_per_actor_rate_limit_capacity", mode="before")
+    @classmethod
+    def _validate_per_actor_capacity(cls, v: Any) -> int:
+        val = int(v)
+        if val < 1:
+            raise ValueError(f"tg_per_actor_rate_limit_capacity must be >= 1, got {val}")
+        return val
+
+    @field_validator("tg_per_actor_rate_limit_refill_per_sec", mode="before")
+    @classmethod
+    def _validate_per_actor_refill(cls, v: Any) -> float:
+        val = float(v)
+        if val <= 0:
+            raise ValueError(f"tg_per_actor_rate_limit_refill_per_sec must be > 0, got {val}")
+        return val
+
+    @field_validator("tg_per_actor_rate_limit_max_entries", mode="before")
+    @classmethod
+    def _validate_per_actor_max_entries(cls, v: Any) -> int:
+        val = int(v)
+        if val < 1:
+            raise ValueError(f"tg_per_actor_rate_limit_max_entries must be >= 1, got {val}")
+        return val
 
     @field_validator("tg_allowlist_user_ids", mode="before")
     @classmethod
