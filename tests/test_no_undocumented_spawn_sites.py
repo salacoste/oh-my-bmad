@@ -129,11 +129,11 @@ _ALLOWLIST: dict[str, dict[int, str]] = {
     # worker-wrapper: spawns Claude Code subprocess.
     # Story 9.6 — propagates WORKER_TRACE_ID through env (FR59 / PH0).
     _rel("services/worker-wrapper/src/worker_wrapper/adapters/claude_code_runner.py"): {
-        # Line shifted from 151 → 175 → 187 → 203 → 269 → 275 → 308
-        # (G-SEC-2 env-allowlist + health_check addition shifted _spawn).
+        # Line shifted from 151 → 175 → 187 → 203 → 269 → 275 → 308 → 284
+        # (G-SEC-2 env-allowlist + health_check addition + Story 49.2 base class extract).
         # PP13 — function-keyed entry in _FUNC_ALLOWLIST below is preferred;
         # this line entry is retained as defence-in-depth.
-        308: "asyncio.create_subprocess_exec",
+        284: "asyncio.create_subprocess_exec",
     },
     # orchestrator-adapter: spawns OMC node subprocess.
     # Story 9.6 — propagates OMB_TRACE_ID through env (FR59 / TH3).
@@ -164,21 +164,24 @@ _FUNC_ALLOWLIST: dict[str, dict[str, str]] = {
     # PP35 — entries now use qualified ``Class.method`` keys instead of bare
     # method names. Distinguishes ``MockRunner._spawn`` (if ever introduced)
     # from the real production method on ``ClaudeCodeRunner._spawn``.
+    # Story 49.2 — health_check moved to BaseRunner; _spawn stays in subclasses.
+    _rel("services/worker-wrapper/src/worker_wrapper/adapters/base_runner.py"): {
+        # Story 49.2 — shared health check probes ``<binary> --version``.
+        # Short-lived, no user input, no credentials in argv/env.
+        "BaseRunner.health_check": "asyncio.create_subprocess_exec",
+    },
     _rel("services/worker-wrapper/src/worker_wrapper/adapters/claude_code_runner.py"): {
         "ClaudeCodeRunner._spawn": "asyncio.create_subprocess_exec",
-        # Phase 6 / FR95 — health check probes ``claude --version``.
-        # Short-lived, no user input, no credentials in argv/env.
-        "ClaudeCodeRunner.health_check": "asyncio.create_subprocess_exec",
     },
     _rel("services/worker-wrapper/src/worker_wrapper/adapters/codex_runner.py"): {
         # Phase 5 / Epic 26 — Codex runtime adapter. Same sandboxing as Claude.
         "CodexRunner._spawn": "asyncio.create_subprocess_exec",
-        "CodexRunner.health_check": "asyncio.create_subprocess_exec",
     },
     _rel("services/worker-wrapper/src/worker_wrapper/adapters/gemini_runner.py"): {
         # Phase 6 / Epic 33 — Gemini runtime adapter. Same sandboxing as Claude.
         "GeminiRunner._spawn": "asyncio.create_subprocess_exec",
-        "GeminiRunner.health_check": "asyncio.create_subprocess_exec",
+        # Gemini overrides health_check to add nullable-command guard; the
+        # actual subprocess spawn lives in BaseRunner.health_check (see above).
     },
     _rel("services/worker-wrapper/src/worker_wrapper/app/main.py"): {
         # Worker approval flow — ``git diff --stat`` for diff summaries.

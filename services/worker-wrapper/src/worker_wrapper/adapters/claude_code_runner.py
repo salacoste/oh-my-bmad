@@ -16,23 +16,22 @@ import asyncio
 import json
 import os
 import re
-import shutil
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
 import structlog
 
+from worker_wrapper.adapters.base_runner import (
+    _LOG_PROMPT_PREVIEW_LEN,
+    BaseRunner,
+    contextlib_suppress,
+)
 from worker_wrapper.app.config import WorkerSettings
 from worker_wrapper.domain.reasoning import (
     ReasoningBreadcrumb,
     extract_reasoning_from_content,
 )
-from worker_wrapper.domain.runtime_adapter import HealthCheckResult
-
-# Graceful shutdown: wait this many seconds after SIGTERM before SIGKILL.
-_GRACE_PERIOD_S: float = 5.0
 
 # Only stream-json is supported — the runner relies on JSON-lines output.
 _SUPPORTED_OUTPUT_FORMATS: frozenset[str] = frozenset({"stream-json"})
@@ -43,9 +42,6 @@ _TEST_PATTERN: re.Pattern[str] = re.compile(
 )
 _COMMIT_PATTERN: re.Pattern[str] = re.compile(r"^\s*git\s+commit\b")
 _GIT_PUSH_PATTERN: re.Pattern[str] = re.compile(r"^\s*git\s+push\b")
-
-# Maximum prompt length included in spawn log (prevents sensitive data leaks).
-_LOG_PROMPT_PREVIEW_LEN: int = 80
 
 # G-SEC-2 (D1) — explicit child-env allowlist for the spawned ``claude``
 # subprocess. This MUST stay an explicit allowlist: NEVER forward the whole
@@ -194,7 +190,7 @@ class TerminationResult:
 _TerminationResult = TerminationResult
 
 
-class ClaudeCodeRunner:
+class ClaudeCodeRunner(BaseRunner):
     """Supervises a ``claude`` subprocess and extracts typed events.
 
     Usage::
@@ -226,29 +222,9 @@ class ClaudeCodeRunner:
         """Runtime identifier: ``"claude-code"``."""
         return "claude-code"
 
-    async def health_check(self) -> HealthCheckResult:
-        """Probe Claude Code binary availability (FR95).
-
-        Checks:
-        1. Binary installed via ``shutil.which``.
-        2. Version via ``claude --version`` (best-effort parse).
-        API key validity is NOT probed here (lazy, cached by caller).
-        """
-        installed = shutil.which(self._settings.claude_command) is not None
-        version = ""
-        if installed:
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    self._settings.claude_command,
-                    "--version",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10.0)
-                version = stdout.decode("utf-8", errors="replace").strip()
-            except (OSError, TimeoutError):
-                pass
-        return HealthCheckResult(installed=installed, version=version)
+    def _health_check_command(self) -> str:
+        """Return the ``claude`` binary path for health probing."""
+        return self._settings.claude_command
 
     def _build_args(self, prompt: str) -> list[str]:
         """Build CLI arguments for the ``claude`` subprocess.
@@ -330,13 +306,6 @@ class ClaudeCodeRunner:
                 continue
             await self._handle_message(msg)
 
-    async def _drain_stderr(self, process: asyncio.subprocess.Process) -> str:
-        """Read all of stderr into a string.  Safe to call concurrently."""
-        if process.stderr is None:
-            return ""
-        data = await process.stderr.read()
-        return data.decode("utf-8", errors="replace").strip()
-
     async def _handle_message(self, msg: dict[str, Any]) -> None:
         """Dispatch on ``msg["type"]``: system, assistant, user, result."""
         msg_type = msg.get("type")
@@ -402,20 +371,6 @@ class ClaudeCodeRunner:
                         tool_input=tool_input,
                     )
         return None
-
-    async def _shutdown_process(self, process: asyncio.subprocess.Process) -> None:
-        """Graceful terminate -> wait -> kill."""
-        log = structlog.get_logger(__name__)
-        if process.returncode is not None:
-            return
-        log.info("claude_code_terminating", pid=process.pid)
-        process.terminate()
-        try:
-            await asyncio.wait_for(process.wait(), timeout=_GRACE_PERIOD_S)
-        except TimeoutError:
-            log.warning("claude_code_kill_after_timeout", pid=process.pid)
-            process.kill()
-            await process.wait()
 
     def _build_result(self, exit_code: int, stderr: str) -> ClaudeCodeResult:
         """Build a ``ClaudeCodeResult`` from accumulated state."""
@@ -534,136 +489,6 @@ class ClaudeCodeRunner:
             await self._shutdown_process(process)
             self._process = None
             raise
-
-    async def cancel(self) -> None:
-        """Cancel a running subprocess (forward SIGTERM)."""
-        if self._process is not None:
-            await self._shutdown_process(self._process)
-            self._process = None
-
-    async def terminate_with_grace(
-        self,
-        *,
-        grace_period_s: float = 5.0,
-    ) -> TerminationResult:
-        """Terminate the subprocess with SIGTERM → wait → SIGKILL escalation.
-
-        Story 12.1 AC2 — public termination callback used by
-        :func:`worker_wrapper.domain.budget_supervisor.watch_for_budget_exceeded`
-        when a ``task.budget_exceeded`` event arrives during task execution.
-
-        Semantics:
-
-        1. If no live subprocess is attached (``self._process is None`` or it
-           has already exited), return immediately with ``method="noop"``.
-        2. Send SIGTERM via :meth:`asyncio.subprocess.Process.terminate`.
-        3. Wait up to ``grace_period_s`` for the subprocess to exit.
-        4. On grace timeout: escalate to SIGKILL via
-           :meth:`asyncio.subprocess.Process.kill`, then wait uncapped (the
-           kernel guarantees SIGKILL delivery is O(1)).
-
-        Wall-clock duration is measured via :func:`time.monotonic` (no clock
-        injection on this adapter today; the budget supervisor measures its
-        own latencies via an injected ``Clock`` for testability).
-
-        Args:
-            grace_period_s: Seconds to wait for SIGTERM-driven exit before
-                escalating to SIGKILL. Default 5.0 per NFR-R8.
-
-        Returns:
-            :class:`TerminationResult` describing the method used, elapsed
-            wall-clock seconds, and the subprocess exit code (if any).
-        """
-        log = structlog.get_logger(__name__)
-        start = time.monotonic()
-        process = self._process
-        if process is None or process.returncode is not None:
-            elapsed = time.monotonic() - start
-            return TerminationResult(
-                method="noop",
-                elapsed_s=elapsed,
-                exit_code=process.returncode if process is not None else None,
-            )
-
-        log.info(
-            "claude_code_terminate_with_grace",
-            pid=process.pid,
-            grace_period_s=grace_period_s,
-        )
-        # PP5 — TOCTOU race: subprocess may die between the ``returncode``
-        # check above and the ``terminate()`` call below. Absence of the
-        # process IS the desired post-condition; swallow and short-circuit.
-        try:
-            process.terminate()
-        except ProcessLookupError:
-            log.info(
-                "claude_code_terminate_already_exited",
-                pid=process.pid,
-                exit_code=process.returncode,
-            )
-            return TerminationResult(
-                method="noop",
-                elapsed_s=time.monotonic() - start,
-                exit_code=process.returncode,
-            )
-        try:
-            await asyncio.wait_for(process.wait(), timeout=grace_period_s)
-            elapsed = time.monotonic() - start
-            log.info(
-                "claude_code_sigterm_succeeded",
-                pid=process.pid,
-                elapsed_s=elapsed,
-                exit_code=process.returncode,
-            )
-            return TerminationResult(
-                method="sigterm",
-                elapsed_s=elapsed,
-                exit_code=process.returncode,
-            )
-        except TimeoutError:
-            log.warning(
-                "claude_code_sigkill_escalation",
-                pid=process.pid,
-                grace_period_s=grace_period_s,
-            )
-            # PP5 — second TOCTOU window: subprocess may die during the grace
-            # period (cooperative SIGTERM finally landed, race lost to our
-            # wait_for timeout). The reap below covers both branches.
-            # PP34 — when this happens, classify as ``method="sigkill"``
-            # (we DID hit the grace timeout — the escalation branch was
-            # entered) but flag ``escalation_landed=False`` so dashboards
-            # can distinguish actual deliveries from race-window cases.
-            # The prior code mis-classified the race-window case as
-            # ``"sigterm"``, undercounting escalation counters.
-            try:
-                process.kill()
-            except ProcessLookupError:
-                log.info(
-                    "claude_code_sigkill_target_already_exited",
-                    pid=process.pid,
-                )
-                await process.wait()
-                return TerminationResult(
-                    method="sigkill",
-                    elapsed_s=time.monotonic() - start,
-                    exit_code=process.returncode,
-                    escalation_landed=False,
-                )
-            await process.wait()
-            elapsed = time.monotonic() - start
-            return TerminationResult(
-                method="sigkill",
-                elapsed_s=elapsed,
-                exit_code=process.returncode,
-                escalation_landed=True,
-            )
-
-
-def contextlib_suppress() -> Any:
-    """Return ``contextlib.suppress(Exception)`` — avoids module-level import."""
-    import contextlib
-
-    return contextlib.suppress(Exception)
 
 
 __all__ = [

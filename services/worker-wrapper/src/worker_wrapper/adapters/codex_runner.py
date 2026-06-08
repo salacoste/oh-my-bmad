@@ -19,25 +19,21 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import shutil
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from worker_wrapper.adapters.base_runner import (
+    _LOG_PROMPT_PREVIEW_LEN,
+    BaseRunner,
+    contextlib_suppress,
+)
 from worker_wrapper.app.config import WorkerSettings
-from worker_wrapper.domain.runtime_adapter import HealthCheckResult
 
 if TYPE_CHECKING:
-    from worker_wrapper.adapters.claude_code_runner import TerminationResult
-
-# Graceful shutdown: wait this many seconds after SIGTERM before SIGKILL.
-_GRACE_PERIOD_S: float = 5.0
-
-# Maximum prompt length included in spawn log (prevents sensitive data leaks).
-_LOG_PROMPT_PREVIEW_LEN: int = 80
+    pass
 
 # P5-I1 — explicit child-env allowlist for the spawned ``codex`` subprocess.
 # This MUST stay an explicit allowlist: NEVER forward the whole parent
@@ -134,7 +130,7 @@ class CodexResult:
 #   -1  → timeout (adapter-level)
 
 
-class CodexRunner:
+class CodexRunner(BaseRunner):
     """Supervises a ``codex`` subprocess and extracts typed events.
 
     Satisfies the :class:`RuntimeAdapter` protocol (FR90 / ADR-0015).
@@ -163,29 +159,9 @@ class CodexRunner:
         """Runtime identifier: ``"codex"``."""
         return "codex"
 
-    async def health_check(self) -> HealthCheckResult:
-        """Probe Codex CLI binary availability (FR95).
-
-        Checks:
-        1. Binary installed via ``shutil.which``.
-        2. Version via ``codex --version`` (best-effort parse).
-        API key validity is NOT probed here (lazy, cached by caller).
-        """
-        installed = shutil.which(self._settings.codex_command) is not None
-        version = ""
-        if installed:
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    self._settings.codex_command,
-                    "--version",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10.0)
-                version = stdout.decode("utf-8", errors="replace").strip()
-            except (OSError, TimeoutError):
-                pass
-        return HealthCheckResult(installed=installed, version=version)
+    def _health_check_command(self) -> str:
+        """Return the ``codex`` binary path for health probing."""
+        return self._settings.codex_command
 
     def _build_args(self, prompt: str) -> list[str]:
         """Build CLI arguments for ``codex exec``."""
@@ -338,27 +314,6 @@ class CodexRunner:
                     )
         return None
 
-    async def _drain_stderr(self, process: asyncio.subprocess.Process) -> str:
-        """Read all of stderr into a string.  Safe to call concurrently."""
-        if process.stderr is None:
-            return ""
-        data = await process.stderr.read()
-        return data.decode("utf-8", errors="replace").strip()
-
-    async def _shutdown_process(self, process: asyncio.subprocess.Process) -> None:
-        """Graceful terminate -> wait -> kill."""
-        log = structlog.get_logger(__name__)
-        if process.returncode is not None:
-            return
-        log.info("codex_terminating", pid=process.pid)
-        process.terminate()
-        try:
-            await asyncio.wait_for(process.wait(), timeout=_GRACE_PERIOD_S)
-        except TimeoutError:
-            log.warning("codex_kill_after_timeout", pid=process.pid)
-            process.kill()
-            await process.wait()
-
     def _build_result(self, exit_code: int, stderr: str) -> CodexResult:
         """Build a ``CodexResult`` from accumulated state."""
         result = CodexResult(
@@ -464,104 +419,6 @@ class CodexRunner:
             error=result.error,
         )
         return result
-
-    async def cancel(self) -> None:
-        """Cancel a running subprocess (forward SIGTERM)."""
-        if self._process is not None:
-            await self._shutdown_process(self._process)
-            self._process = None
-
-    async def terminate_with_grace(
-        self,
-        *,
-        grace_period_s: float = 5.0,
-    ) -> TerminationResult:
-        """Terminate with SIGTERM → wait → SIGKILL escalation (P5-I3).
-
-        Mirrors ``ClaudeCodeRunner.terminate_with_grace`` semantics exactly.
-        """
-        from worker_wrapper.adapters.claude_code_runner import (
-            TerminationResult,
-        )
-
-        log = structlog.get_logger(__name__)
-        start = time.monotonic()
-        process = self._process
-        if process is None or process.returncode is not None:
-            elapsed = time.monotonic() - start
-            return TerminationResult(
-                method="noop",
-                elapsed_s=elapsed,
-                exit_code=process.returncode if process is not None else None,
-            )
-
-        log.info(
-            "codex_terminate_with_grace",
-            pid=process.pid,
-            grace_period_s=grace_period_s,
-        )
-        try:
-            process.terminate()
-        except ProcessLookupError:
-            log.info(
-                "codex_terminate_already_exited",
-                pid=process.pid,
-                exit_code=process.returncode,
-            )
-            return TerminationResult(
-                method="noop",
-                elapsed_s=time.monotonic() - start,
-                exit_code=process.returncode,
-            )
-        try:
-            await asyncio.wait_for(process.wait(), timeout=grace_period_s)
-            elapsed = time.monotonic() - start
-            log.info(
-                "codex_sigterm_succeeded",
-                pid=process.pid,
-                elapsed_s=elapsed,
-                exit_code=process.returncode,
-            )
-            return TerminationResult(
-                method="sigterm",
-                elapsed_s=elapsed,
-                exit_code=process.returncode,
-            )
-        except TimeoutError:
-            log.warning(
-                "codex_sigkill_escalation",
-                pid=process.pid,
-                grace_period_s=grace_period_s,
-            )
-            try:
-                process.kill()
-            except ProcessLookupError:
-                log.info(
-                    "codex_sigkill_target_already_exited",
-                    pid=process.pid,
-                )
-                await process.wait()
-                return TerminationResult(
-                    method="sigkill",
-                    elapsed_s=time.monotonic() - start,
-                    exit_code=process.returncode,
-                    escalation_landed=False,
-                )
-            await process.wait()
-            elapsed = time.monotonic() - start
-            return TerminationResult(
-                method="sigkill",
-                elapsed_s=elapsed,
-                exit_code=process.returncode,
-                escalation_landed=True,
-            )
-
-
-def contextlib_suppress() -> Any:
-    """Return ``contextlib.suppress(Exception)`` — avoids module-level import."""
-    import contextlib
-
-    return contextlib.suppress(Exception)
 
 
 __all__ = [
