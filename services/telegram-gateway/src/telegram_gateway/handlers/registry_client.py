@@ -755,7 +755,7 @@ class RegistryAPIClient:
                 raise RegistryResponseError(
                     f"expected JSON array from /v1/trace, got {type(data).__name__}"
                 )
-            return data  # type: ignore[return-value]
+            return data
         except (_json.JSONDecodeError, ValueError) as exc:
             raise RegistryResponseError(f"registry-api returned malformed body: {exc}") from exc
 

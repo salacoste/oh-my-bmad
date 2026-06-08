@@ -23,9 +23,7 @@ Reference tests (NOT xfail):
 from __future__ import annotations
 
 import pytest
-
 from events import FROZEN_EPOCH, FrozenClock
-
 
 # ---------------------------------------------------------------------------
 # Reference tests (NOT xfail) — existing infrastructure that Epic 37 builds on
@@ -60,12 +58,11 @@ def test_tasks_table_has_updated_at_column() -> None:
 
 def test_stale_query_index_exists() -> None:
     """The ``ix_tasks_status_updated_at`` composite index must exist for stale queries."""
-    from sqlalchemy import inspect as sa_inspect
 
     from registry_state.schema import Task
 
     # Check that the index exists on the Task table.
-    indexes = [idx.name for idx in Task.__table__.indexes]
+    indexes = [idx.name for idx in Task.__table__.indexes]  # type: ignore[attr-defined]
     assert "ix_tasks_status_updated_at" in indexes
 
 
@@ -121,7 +118,7 @@ def test_task_stale_warning_payload_rejects_naive_datetime() -> None:
 
     from events.payloads import TaskStaleWarningPayload
 
-    with pytest.raises(Exception):  # ValidationError
+    with pytest.raises(Exception, match=""):  # noqa: B017 — pydantic v2 ValidationError
         TaskStaleWarningPayload(
             task_id="t-018f4a6b-1c2d-7e8f-9a0b-1c2d3e4f5a6c",
             status="executing",

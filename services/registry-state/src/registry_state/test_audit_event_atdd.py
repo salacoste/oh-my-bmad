@@ -28,11 +28,27 @@ Reference tests (NOT xfail):
 
 from __future__ import annotations
 
-import pytest
-
-from events import FROZEN_EPOCH, Actor, FrozenClock, TickingClock, new_event_id, new_task_id, new_uuid7
-from events.envelope import EventEnvelope
+from pathlib import Path
 from random import Random
+
+import pytest
+from events import (
+    FROZEN_EPOCH,
+    Actor,
+    FrozenClock,
+    TickingClock,
+    new_event_id,
+    new_task_id,
+    new_uuid7,
+)
+from events.envelope import EventEnvelope
+
+
+def _payload_dict(env: EventEnvelope) -> dict[str, object]:
+    """Extract envelope payload as a dict (for assertion access)."""
+    p = env.payload
+    assert isinstance(p, dict), f"Expected dict payload, got {type(p)}"
+    return p
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +117,7 @@ async def test_emit_state_transition_helper_exists() -> None:
 
 
 @pytest.mark.asyncio
-async def test_emit_state_transition_constructs_valid_envelope(tmp_path) -> None:
+async def test_emit_state_transition_constructs_valid_envelope(tmp_path: Path) -> None:
     """_emit_state_transition must construct a task.state_transition envelope
     with all required payload fields."""
     from unittest.mock import AsyncMock
@@ -148,11 +164,13 @@ async def test_emit_state_transition_constructs_valid_envelope(tmp_path) -> None
         emitted: EventEnvelope = writer.append.call_args[0][0]
         assert emitted.type == "task.state_transition"
         assert emitted.schema_version == "1.1.0"
-        assert emitted.payload.from_state == "pending"
-        assert emitted.payload.to_state == "planning"
-        assert emitted.payload.trigger_event == "task.planning.started"
-        assert emitted.payload.task_id == _make_task_id()
-        assert emitted.payload.worker_id == ""
+        payload = emitted.payload
+        assert isinstance(payload, dict) or hasattr(payload, "from_state")
+        assert getattr(payload, "from_state", None) == "pending"
+        assert getattr(payload, "to_state", None) == "planning"
+        assert getattr(payload, "trigger_event", None) == "task.planning.started"
+        assert getattr(payload, "task_id", None) == _make_task_id()
+        assert getattr(payload, "worker_id", None) == ""
     finally:
         _set_audit_writer(None)
 
@@ -213,7 +231,7 @@ async def test_emit_state_transition_uses_parent_monotonic_ns_plus_one() -> None
 # to verify a task.state_transition audit event was emitted.
 #
 # Payloads deserialized from disk are _FrozenDict, so dict-style access
-# (evt.payload["field"]) is used instead of attribute access.
+# (_payload_dict(evt)["field"]) is used instead of attribute access.
 # ---------------------------------------------------------------------------
 
 
@@ -241,7 +259,7 @@ def _make_created_envelope(
 def _make_transition_envelope(
     event_type: str,
     task_id: str,
-    payload: dict,
+    payload: dict[str, object],
     mono_ns: int = 1_100_000,
     seed: int = 99,
 ) -> EventEnvelope:
@@ -263,21 +281,21 @@ def _make_transition_envelope(
 @pytest.fixture(autouse=True)
 def _ensure_event_types_registered() -> None:
     """Register all event types before each test."""
+    from events.payloads import TaskStateTransitionPayload
     from events.schema_registry import register as _reg
 
     from registry_state.domain.event_types import (
-        ensure_registered,
+        TaskBlockerRaisedPayload,
+        TaskBudgetExceededPayload,
+        TaskCompletedPayload,
+        TaskCreatedPayload,
+        TaskExecutionStartedPayload,
         TaskPlanningStartedPayload,
         TaskPlanReadyPayload,
-        TaskExecutionStartedPayload,
-        TaskBlockerRaisedPayload,
-        TaskCompletedPayload,
-        TaskStopRequestedPayload,
         TaskRetryRequestedPayload,
-        TaskBudgetExceededPayload,
-        TaskCreatedPayload,
+        TaskStopRequestedPayload,
+        ensure_registered,
     )
-    from events.payloads import TaskStateTransitionPayload
 
     ensure_registered()
     # Ensure core types needed by these tests are registered
@@ -293,21 +311,18 @@ def _ensure_event_types_registered() -> None:
     _reg("task.state_transition", "1.1.0", TaskStateTransitionPayload)
 
 
-async def _read_audit_events(tmp_path) -> list:
+async def _read_audit_events(tmp_path: Path) -> list[EventEnvelope]:
     """Read all task.state_transition audit events from the event log."""
     from events.log_reader import current_day_path, read_log_lines
 
     log_path = current_day_path(tmp_path, FROZEN_EPOCH)
     if not log_path.exists():
         return []
-    return [
-        env for env in read_log_lines(log_path)
-        if env.type == "task.state_transition"
-    ]
+    return [env for env in read_log_lines(log_path) if env.type == "task.state_transition"]
 
 
 @pytest.mark.asyncio
-async def test_planning_started_emits_audit_event(tmp_path) -> None:
+async def test_planning_started_emits_audit_event(tmp_path: Path) -> None:
     """handle_task_planning_started must emit a task.state_transition audit event."""
     from sqlalchemy.ext.asyncio import create_async_engine
     from sqlalchemy.pool import StaticPool
@@ -353,17 +368,17 @@ async def test_planning_started_emits_audit_event(tmp_path) -> None:
         state_transitions = await _read_audit_events(tmp_path)
         assert len(state_transitions) >= 1, "Expected at least one task.state_transition event"
         evt = state_transitions[0]
-        assert evt.payload["from_state"] == "pending"
-        assert evt.payload["to_state"] == "planning"
-        assert evt.payload["trigger_event"] == "task.planning.started"
-        assert evt.payload["task_id"] == task_id
+        assert _payload_dict(evt)["from_state"] == "pending"
+        assert _payload_dict(evt)["to_state"] == "planning"
+        assert _payload_dict(evt)["trigger_event"] == "task.planning.started"
+        assert _payload_dict(evt)["task_id"] == task_id
     finally:
         _set_audit_writer(None)
         await eng.dispose()
 
 
 @pytest.mark.asyncio
-async def test_plan_ready_emits_audit_event(tmp_path) -> None:
+async def test_plan_ready_emits_audit_event(tmp_path: Path) -> None:
     """handle_task_plan_ready must emit a task.state_transition audit event."""
     from sqlalchemy.ext.asyncio import create_async_engine
     from sqlalchemy.pool import StaticPool
@@ -373,8 +388,8 @@ async def test_plan_ready_emits_audit_event(tmp_path) -> None:
     from registry_state.domain.handlers import (
         _set_audit_writer,
         handle_task_created,
-        handle_task_planning_started,
         handle_task_plan_ready,
+        handle_task_planning_started,
     )
     from registry_state.schema import Base
 
@@ -397,7 +412,12 @@ async def test_plan_ready_emits_audit_event(tmp_path) -> None:
             await handle_task_created(session, _make_created_envelope(task_id))
             await handle_task_planning_started(
                 session,
-                _make_transition_envelope("task.planning.started", task_id, {"task_id": task_id}, mono_ns=1_100_000),
+                _make_transition_envelope(
+                    "task.planning.started",
+                    task_id,
+                    {"task_id": task_id},
+                    mono_ns=1_100_000,
+                ),
             )
             await handle_task_plan_ready(
                 session,
@@ -413,7 +433,9 @@ async def test_plan_ready_emits_audit_event(tmp_path) -> None:
 
         # Verify state is plan_ready (sanity)
         from sqlalchemy import select
+
         from registry_state.schema import Task
+
         async with sm() as session:
             result = await session.execute(select(Task.status).where(Task.id == task_id))
             status = result.scalar_one()
@@ -421,20 +443,24 @@ async def test_plan_ready_emits_audit_event(tmp_path) -> None:
 
         # Check audit event
         state_transitions = await _read_audit_events(tmp_path)
-        plan_ready_events = [e for e in state_transitions if e.payload["to_state"] == "plan_ready"]
-        assert len(plan_ready_events) >= 1, "Expected at least one task.state_transition to plan_ready"
+        plan_ready_events = [
+            e for e in state_transitions if _payload_dict(e)["to_state"] == "plan_ready"
+        ]
+        assert len(plan_ready_events) >= 1, (
+            "Expected at least one task.state_transition to plan_ready"
+        )
         evt = plan_ready_events[0]
-        assert evt.payload["from_state"] == "planning"
-        assert evt.payload["to_state"] == "plan_ready"
-        assert evt.payload["trigger_event"] == "task.plan.ready"
-        assert evt.payload["task_id"] == task_id
+        assert _payload_dict(evt)["from_state"] == "planning"
+        assert _payload_dict(evt)["to_state"] == "plan_ready"
+        assert _payload_dict(evt)["trigger_event"] == "task.plan.ready"
+        assert _payload_dict(evt)["task_id"] == task_id
     finally:
         _set_audit_writer(None)
         await eng.dispose()
 
 
 @pytest.mark.asyncio
-async def test_execution_started_emits_audit_event(tmp_path) -> None:
+async def test_execution_started_emits_audit_event(tmp_path: Path) -> None:
     """handle_task_execution_started must emit a task.state_transition audit event."""
     from sqlalchemy.ext.asyncio import create_async_engine
     from sqlalchemy.pool import StaticPool
@@ -444,9 +470,9 @@ async def test_execution_started_emits_audit_event(tmp_path) -> None:
     from registry_state.domain.handlers import (
         _set_audit_writer,
         handle_task_created,
-        handle_task_planning_started,
-        handle_task_plan_ready,
         handle_task_execution_started,
+        handle_task_plan_ready,
+        handle_task_planning_started,
     )
     from registry_state.schema import Base
 
@@ -469,12 +495,18 @@ async def test_execution_started_emits_audit_event(tmp_path) -> None:
             await handle_task_created(session, _make_created_envelope(task_id))
             await handle_task_planning_started(
                 session,
-                _make_transition_envelope("task.planning.started", task_id, {"task_id": task_id}, mono_ns=1_100_000),
+                _make_transition_envelope(
+                    "task.planning.started",
+                    task_id,
+                    {"task_id": task_id},
+                    mono_ns=1_100_000,
+                ),
             )
             await handle_task_plan_ready(
                 session,
                 _make_transition_envelope(
-                    "task.plan.ready", task_id,
+                    "task.plan.ready",
+                    task_id,
                     {"task_id": task_id, "estimated_steps": 3, "plan_summary": "test"},
                     mono_ns=1_200_000,
                 ),
@@ -482,7 +514,8 @@ async def test_execution_started_emits_audit_event(tmp_path) -> None:
             await handle_task_execution_started(
                 session,
                 _make_transition_envelope(
-                    "task.execution.started", task_id,
+                    "task.execution.started",
+                    task_id,
                     {"task_id": task_id, "session_id": "s-test-exec-session"},
                     mono_ns=1_300_000,
                 ),
@@ -491,20 +524,20 @@ async def test_execution_started_emits_audit_event(tmp_path) -> None:
         await writer.close()
 
         state_transitions = await _read_audit_events(tmp_path)
-        exec_events = [e for e in state_transitions if e.payload["to_state"] == "executing"]
+        exec_events = [e for e in state_transitions if _payload_dict(e)["to_state"] == "executing"]
         assert len(exec_events) >= 1, "Expected at least one task.state_transition to executing"
         evt = exec_events[0]
-        assert evt.payload["from_state"] == "plan_ready"
-        assert evt.payload["to_state"] == "executing"
-        assert evt.payload["trigger_event"] == "task.execution.started"
-        assert evt.payload["task_id"] == task_id
+        assert _payload_dict(evt)["from_state"] == "plan_ready"
+        assert _payload_dict(evt)["to_state"] == "executing"
+        assert _payload_dict(evt)["trigger_event"] == "task.execution.started"
+        assert _payload_dict(evt)["task_id"] == task_id
     finally:
         _set_audit_writer(None)
         await eng.dispose()
 
 
 @pytest.mark.asyncio
-async def test_blocker_raised_emits_audit_event(tmp_path) -> None:
+async def test_blocker_raised_emits_audit_event(tmp_path: Path) -> None:
     """handle_task_blocker_raised must emit a task.state_transition audit event."""
     from sqlalchemy.ext.asyncio import create_async_engine
     from sqlalchemy.pool import StaticPool
@@ -513,11 +546,11 @@ async def test_blocker_raised_emits_audit_event(tmp_path) -> None:
     from registry_state.adapters.sqlite_store import get_session
     from registry_state.domain.handlers import (
         _set_audit_writer,
-        handle_task_created,
-        handle_task_planning_started,
-        handle_task_plan_ready,
-        handle_task_execution_started,
         handle_task_blocker_raised,
+        handle_task_created,
+        handle_task_execution_started,
+        handle_task_plan_ready,
+        handle_task_planning_started,
     )
     from registry_state.schema import Base
 
@@ -540,12 +573,18 @@ async def test_blocker_raised_emits_audit_event(tmp_path) -> None:
             await handle_task_created(session, _make_created_envelope(task_id))
             await handle_task_planning_started(
                 session,
-                _make_transition_envelope("task.planning.started", task_id, {"task_id": task_id}, mono_ns=1_100_000),
+                _make_transition_envelope(
+                    "task.planning.started",
+                    task_id,
+                    {"task_id": task_id},
+                    mono_ns=1_100_000,
+                ),
             )
             await handle_task_plan_ready(
                 session,
                 _make_transition_envelope(
-                    "task.plan.ready", task_id,
+                    "task.plan.ready",
+                    task_id,
                     {"task_id": task_id, "estimated_steps": 3, "plan_summary": "test"},
                     mono_ns=1_200_000,
                 ),
@@ -553,7 +592,8 @@ async def test_blocker_raised_emits_audit_event(tmp_path) -> None:
             await handle_task_execution_started(
                 session,
                 _make_transition_envelope(
-                    "task.execution.started", task_id,
+                    "task.execution.started",
+                    task_id,
                     {"task_id": task_id, "session_id": "s-test-blocker-session"},
                     mono_ns=1_300_000,
                 ),
@@ -561,7 +601,8 @@ async def test_blocker_raised_emits_audit_event(tmp_path) -> None:
             await handle_task_blocker_raised(
                 session,
                 _make_transition_envelope(
-                    "task.blocker_raised", task_id,
+                    "task.blocker_raised",
+                    task_id,
                     {"task_id": task_id, "reason": "test blocker"},
                     mono_ns=1_400_000,
                 ),
@@ -570,20 +611,20 @@ async def test_blocker_raised_emits_audit_event(tmp_path) -> None:
         await writer.close()
 
         state_transitions = await _read_audit_events(tmp_path)
-        blocked_events = [e for e in state_transitions if e.payload["to_state"] == "blocked"]
+        blocked_events = [e for e in state_transitions if _payload_dict(e)["to_state"] == "blocked"]
         assert len(blocked_events) >= 1, "Expected at least one task.state_transition to blocked"
         evt = blocked_events[0]
-        assert evt.payload["from_state"] == "executing"
-        assert evt.payload["to_state"] == "blocked"
-        assert evt.payload["trigger_event"] == "task.blocker_raised"
-        assert evt.payload["task_id"] == task_id
+        assert _payload_dict(evt)["from_state"] == "executing"
+        assert _payload_dict(evt)["to_state"] == "blocked"
+        assert _payload_dict(evt)["trigger_event"] == "task.blocker_raised"
+        assert _payload_dict(evt)["task_id"] == task_id
     finally:
         _set_audit_writer(None)
         await eng.dispose()
 
 
 @pytest.mark.asyncio
-async def test_completed_emits_audit_event(tmp_path) -> None:
+async def test_completed_emits_audit_event(tmp_path: Path) -> None:
     """handle_task_completed must emit a task.state_transition audit event."""
     from sqlalchemy.ext.asyncio import create_async_engine
     from sqlalchemy.pool import StaticPool
@@ -592,11 +633,11 @@ async def test_completed_emits_audit_event(tmp_path) -> None:
     from registry_state.adapters.sqlite_store import get_session
     from registry_state.domain.handlers import (
         _set_audit_writer,
-        handle_task_created,
-        handle_task_planning_started,
-        handle_task_plan_ready,
-        handle_task_execution_started,
         handle_task_completed,
+        handle_task_created,
+        handle_task_execution_started,
+        handle_task_plan_ready,
+        handle_task_planning_started,
     )
     from registry_state.schema import Base
 
@@ -619,12 +660,18 @@ async def test_completed_emits_audit_event(tmp_path) -> None:
             await handle_task_created(session, _make_created_envelope(task_id))
             await handle_task_planning_started(
                 session,
-                _make_transition_envelope("task.planning.started", task_id, {"task_id": task_id}, mono_ns=1_100_000),
+                _make_transition_envelope(
+                    "task.planning.started",
+                    task_id,
+                    {"task_id": task_id},
+                    mono_ns=1_100_000,
+                ),
             )
             await handle_task_plan_ready(
                 session,
                 _make_transition_envelope(
-                    "task.plan.ready", task_id,
+                    "task.plan.ready",
+                    task_id,
                     {"task_id": task_id, "estimated_steps": 3, "plan_summary": "test"},
                     mono_ns=1_200_000,
                 ),
@@ -632,7 +679,8 @@ async def test_completed_emits_audit_event(tmp_path) -> None:
             await handle_task_execution_started(
                 session,
                 _make_transition_envelope(
-                    "task.execution.started", task_id,
+                    "task.execution.started",
+                    task_id,
                     {"task_id": task_id, "session_id": "s-test-completed-session"},
                     mono_ns=1_300_000,
                 ),
@@ -640,7 +688,8 @@ async def test_completed_emits_audit_event(tmp_path) -> None:
             await handle_task_completed(
                 session,
                 _make_transition_envelope(
-                    "task.completed", task_id,
+                    "task.completed",
+                    task_id,
                     {"task_id": task_id, "summary": "done"},
                     mono_ns=1_400_000,
                 ),
@@ -649,20 +698,24 @@ async def test_completed_emits_audit_event(tmp_path) -> None:
         await writer.close()
 
         state_transitions = await _read_audit_events(tmp_path)
-        completed_events = [e for e in state_transitions if e.payload["to_state"] == "completed"]
-        assert len(completed_events) >= 1, "Expected at least one task.state_transition to completed"
+        completed_events = [
+            e for e in state_transitions if _payload_dict(e)["to_state"] == "completed"
+        ]
+        assert len(completed_events) >= 1, (
+            "Expected at least one task.state_transition to completed"
+        )
         evt = completed_events[0]
-        assert evt.payload["from_state"] == "executing"
-        assert evt.payload["to_state"] == "completed"
-        assert evt.payload["trigger_event"] == "task.completed"
-        assert evt.payload["task_id"] == task_id
+        assert _payload_dict(evt)["from_state"] == "executing"
+        assert _payload_dict(evt)["to_state"] == "completed"
+        assert _payload_dict(evt)["trigger_event"] == "task.completed"
+        assert _payload_dict(evt)["task_id"] == task_id
     finally:
         _set_audit_writer(None)
         await eng.dispose()
 
 
 @pytest.mark.asyncio
-async def test_stop_requested_emits_audit_event(tmp_path) -> None:
+async def test_stop_requested_emits_audit_event(tmp_path: Path) -> None:
     """handle_task_stop_requested must emit a task.state_transition audit event."""
     from sqlalchemy.ext.asyncio import create_async_engine
     from sqlalchemy.pool import StaticPool
@@ -672,9 +725,9 @@ async def test_stop_requested_emits_audit_event(tmp_path) -> None:
     from registry_state.domain.handlers import (
         _set_audit_writer,
         handle_task_created,
-        handle_task_planning_started,
-        handle_task_plan_ready,
         handle_task_execution_started,
+        handle_task_plan_ready,
+        handle_task_planning_started,
         handle_task_stop_requested,
     )
     from registry_state.schema import Base
@@ -698,12 +751,18 @@ async def test_stop_requested_emits_audit_event(tmp_path) -> None:
             await handle_task_created(session, _make_created_envelope(task_id))
             await handle_task_planning_started(
                 session,
-                _make_transition_envelope("task.planning.started", task_id, {"task_id": task_id}, mono_ns=1_100_000),
+                _make_transition_envelope(
+                    "task.planning.started",
+                    task_id,
+                    {"task_id": task_id},
+                    mono_ns=1_100_000,
+                ),
             )
             await handle_task_plan_ready(
                 session,
                 _make_transition_envelope(
-                    "task.plan.ready", task_id,
+                    "task.plan.ready",
+                    task_id,
                     {"task_id": task_id, "estimated_steps": 3, "plan_summary": "test"},
                     mono_ns=1_200_000,
                 ),
@@ -711,7 +770,8 @@ async def test_stop_requested_emits_audit_event(tmp_path) -> None:
             await handle_task_execution_started(
                 session,
                 _make_transition_envelope(
-                    "task.execution.started", task_id,
+                    "task.execution.started",
+                    task_id,
                     {"task_id": task_id, "session_id": "s-test-stop-session"},
                     mono_ns=1_300_000,
                 ),
@@ -719,7 +779,8 @@ async def test_stop_requested_emits_audit_event(tmp_path) -> None:
             await handle_task_stop_requested(
                 session,
                 _make_transition_envelope(
-                    "task.stop_requested", task_id,
+                    "task.stop_requested",
+                    task_id,
                     {"task_id": task_id, "actor_id": "test-operator"},
                     mono_ns=1_400_000,
                 ),
@@ -728,20 +789,20 @@ async def test_stop_requested_emits_audit_event(tmp_path) -> None:
         await writer.close()
 
         state_transitions = await _read_audit_events(tmp_path)
-        stopped_events = [e for e in state_transitions if e.payload["to_state"] == "stopped"]
+        stopped_events = [e for e in state_transitions if _payload_dict(e)["to_state"] == "stopped"]
         assert len(stopped_events) >= 1, "Expected at least one task.state_transition to stopped"
         evt = stopped_events[0]
-        assert evt.payload["from_state"] == "executing"
-        assert evt.payload["to_state"] == "stopped"
-        assert evt.payload["trigger_event"] == "task.stop_requested"
-        assert evt.payload["task_id"] == task_id
+        assert _payload_dict(evt)["from_state"] == "executing"
+        assert _payload_dict(evt)["to_state"] == "stopped"
+        assert _payload_dict(evt)["trigger_event"] == "task.stop_requested"
+        assert _payload_dict(evt)["task_id"] == task_id
     finally:
         _set_audit_writer(None)
         await eng.dispose()
 
 
 @pytest.mark.asyncio
-async def test_retry_requested_emits_audit_event(tmp_path) -> None:
+async def test_retry_requested_emits_audit_event(tmp_path: Path) -> None:
     """handle_task_retry_requested must emit a task.state_transition audit event."""
     from sqlalchemy.ext.asyncio import create_async_engine
     from sqlalchemy.pool import StaticPool
@@ -750,11 +811,11 @@ async def test_retry_requested_emits_audit_event(tmp_path) -> None:
     from registry_state.adapters.sqlite_store import get_session
     from registry_state.domain.handlers import (
         _set_audit_writer,
-        handle_task_created,
-        handle_task_planning_started,
-        handle_task_plan_ready,
-        handle_task_execution_started,
         handle_task_blocker_raised,
+        handle_task_created,
+        handle_task_execution_started,
+        handle_task_plan_ready,
+        handle_task_planning_started,
         handle_task_retry_requested,
     )
     from registry_state.schema import Base
@@ -778,12 +839,18 @@ async def test_retry_requested_emits_audit_event(tmp_path) -> None:
             await handle_task_created(session, _make_created_envelope(task_id))
             await handle_task_planning_started(
                 session,
-                _make_transition_envelope("task.planning.started", task_id, {"task_id": task_id}, mono_ns=1_100_000),
+                _make_transition_envelope(
+                    "task.planning.started",
+                    task_id,
+                    {"task_id": task_id},
+                    mono_ns=1_100_000,
+                ),
             )
             await handle_task_plan_ready(
                 session,
                 _make_transition_envelope(
-                    "task.plan.ready", task_id,
+                    "task.plan.ready",
+                    task_id,
                     {"task_id": task_id, "estimated_steps": 3, "plan_summary": "test"},
                     mono_ns=1_200_000,
                 ),
@@ -791,7 +858,8 @@ async def test_retry_requested_emits_audit_event(tmp_path) -> None:
             await handle_task_execution_started(
                 session,
                 _make_transition_envelope(
-                    "task.execution.started", task_id,
+                    "task.execution.started",
+                    task_id,
                     {"task_id": task_id, "session_id": "s-test-retry-session"},
                     mono_ns=1_300_000,
                 ),
@@ -799,7 +867,8 @@ async def test_retry_requested_emits_audit_event(tmp_path) -> None:
             await handle_task_blocker_raised(
                 session,
                 _make_transition_envelope(
-                    "task.blocker_raised", task_id,
+                    "task.blocker_raised",
+                    task_id,
                     {"task_id": task_id, "reason": "need retry"},
                     mono_ns=1_400_000,
                 ),
@@ -807,8 +876,13 @@ async def test_retry_requested_emits_audit_event(tmp_path) -> None:
             await handle_task_retry_requested(
                 session,
                 _make_transition_envelope(
-                    "task.retry_requested", task_id,
-                    {"task_id": task_id, "decision_id": "d-test-decision", "actor_id": "test-operator"},
+                    "task.retry_requested",
+                    task_id,
+                    {
+                        "task_id": task_id,
+                        "decision_id": "d-test-decision",
+                        "actor_id": "test-operator",
+                    },
                     mono_ns=1_500_000,
                 ),
             )
@@ -817,22 +891,26 @@ async def test_retry_requested_emits_audit_event(tmp_path) -> None:
 
         state_transitions = await _read_audit_events(tmp_path)
         retry_events = [
-            e for e in state_transitions
-            if e.payload["to_state"] == "pending" and e.payload["trigger_event"] == "task.retry_requested"
+            e
+            for e in state_transitions
+            if _payload_dict(e)["to_state"] == "pending"
+            and _payload_dict(e)["trigger_event"] == "task.retry_requested"
         ]
-        assert len(retry_events) >= 1, "Expected at least one task.state_transition to pending via retry"
+        assert len(retry_events) >= 1, (
+            "Expected at least one task.state_transition to pending via retry"
+        )
         evt = retry_events[0]
-        assert evt.payload["from_state"] == "blocked"
-        assert evt.payload["to_state"] == "pending"
-        assert evt.payload["trigger_event"] == "task.retry_requested"
-        assert evt.payload["task_id"] == task_id
+        assert _payload_dict(evt)["from_state"] == "blocked"
+        assert _payload_dict(evt)["to_state"] == "pending"
+        assert _payload_dict(evt)["trigger_event"] == "task.retry_requested"
+        assert _payload_dict(evt)["task_id"] == task_id
     finally:
         _set_audit_writer(None)
         await eng.dispose()
 
 
 @pytest.mark.asyncio
-async def test_budget_exceeded_emits_audit_event(tmp_path) -> None:
+async def test_budget_exceeded_emits_audit_event(tmp_path: Path) -> None:
     """handle_task_budget_exceeded must emit a task.state_transition audit event."""
     from sqlalchemy.ext.asyncio import create_async_engine
     from sqlalchemy.pool import StaticPool
@@ -841,11 +919,11 @@ async def test_budget_exceeded_emits_audit_event(tmp_path) -> None:
     from registry_state.adapters.sqlite_store import get_session
     from registry_state.domain.handlers import (
         _set_audit_writer,
-        handle_task_created,
-        handle_task_planning_started,
-        handle_task_plan_ready,
-        handle_task_execution_started,
         handle_task_budget_exceeded,
+        handle_task_created,
+        handle_task_execution_started,
+        handle_task_plan_ready,
+        handle_task_planning_started,
     )
     from registry_state.schema import Base
 
@@ -868,12 +946,18 @@ async def test_budget_exceeded_emits_audit_event(tmp_path) -> None:
             await handle_task_created(session, _make_created_envelope(task_id))
             await handle_task_planning_started(
                 session,
-                _make_transition_envelope("task.planning.started", task_id, {"task_id": task_id}, mono_ns=1_100_000),
+                _make_transition_envelope(
+                    "task.planning.started",
+                    task_id,
+                    {"task_id": task_id},
+                    mono_ns=1_100_000,
+                ),
             )
             await handle_task_plan_ready(
                 session,
                 _make_transition_envelope(
-                    "task.plan.ready", task_id,
+                    "task.plan.ready",
+                    task_id,
                     {"task_id": task_id, "estimated_steps": 3, "plan_summary": "test"},
                     mono_ns=1_200_000,
                 ),
@@ -881,7 +965,8 @@ async def test_budget_exceeded_emits_audit_event(tmp_path) -> None:
             await handle_task_execution_started(
                 session,
                 _make_transition_envelope(
-                    "task.execution.started", task_id,
+                    "task.execution.started",
+                    task_id,
                     {"task_id": task_id, "session_id": "s-test-budget-session"},
                     mono_ns=1_300_000,
                 ),
@@ -889,7 +974,8 @@ async def test_budget_exceeded_emits_audit_event(tmp_path) -> None:
             await handle_task_budget_exceeded(
                 session,
                 _make_transition_envelope(
-                    "task.budget_exceeded", task_id,
+                    "task.budget_exceeded",
+                    task_id,
                     {"task_id": task_id, "token_limit": 100000, "tokens_used": 150000, "step": 5},
                     mono_ns=1_400_000,
                 ),
@@ -899,22 +985,26 @@ async def test_budget_exceeded_emits_audit_event(tmp_path) -> None:
 
         state_transitions = await _read_audit_events(tmp_path)
         budget_events = [
-            e for e in state_transitions
-            if e.payload["to_state"] == "blocked" and e.payload["trigger_event"] == "task.budget_exceeded"
+            e
+            for e in state_transitions
+            if _payload_dict(e)["to_state"] == "blocked"
+            and _payload_dict(e)["trigger_event"] == "task.budget_exceeded"
         ]
-        assert len(budget_events) >= 1, "Expected at least one task.state_transition to blocked via budget_exceeded"
+        assert len(budget_events) >= 1, (
+            "Expected at least one task.state_transition to blocked via budget_exceeded"
+        )
         evt = budget_events[0]
-        assert evt.payload["from_state"] == "executing"
-        assert evt.payload["to_state"] == "blocked"
-        assert evt.payload["trigger_event"] == "task.budget_exceeded"
-        assert evt.payload["task_id"] == task_id
+        assert _payload_dict(evt)["from_state"] == "executing"
+        assert _payload_dict(evt)["to_state"] == "blocked"
+        assert _payload_dict(evt)["trigger_event"] == "task.budget_exceeded"
+        assert _payload_dict(evt)["task_id"] == task_id
     finally:
         _set_audit_writer(None)
         await eng.dispose()
 
 
 @pytest.mark.asyncio
-async def test_budget_override_emits_audit_event(tmp_path) -> None:
+async def test_budget_override_emits_audit_event(tmp_path: Path) -> None:
     """handle_tier3_budget_override must emit a task.state_transition audit event."""
     from sqlalchemy.ext.asyncio import create_async_engine
     from sqlalchemy.pool import StaticPool
@@ -923,11 +1013,11 @@ async def test_budget_override_emits_audit_event(tmp_path) -> None:
     from registry_state.adapters.sqlite_store import get_session
     from registry_state.domain.handlers import (
         _set_audit_writer,
-        handle_task_created,
-        handle_task_planning_started,
-        handle_task_plan_ready,
-        handle_task_execution_started,
         handle_task_budget_exceeded,
+        handle_task_created,
+        handle_task_execution_started,
+        handle_task_plan_ready,
+        handle_task_planning_started,
         handle_tier3_budget_override,
     )
     from registry_state.schema import Base
@@ -951,12 +1041,18 @@ async def test_budget_override_emits_audit_event(tmp_path) -> None:
             await handle_task_created(session, _make_created_envelope(task_id))
             await handle_task_planning_started(
                 session,
-                _make_transition_envelope("task.planning.started", task_id, {"task_id": task_id}, mono_ns=1_100_000),
+                _make_transition_envelope(
+                    "task.planning.started",
+                    task_id,
+                    {"task_id": task_id},
+                    mono_ns=1_100_000,
+                ),
             )
             await handle_task_plan_ready(
                 session,
                 _make_transition_envelope(
-                    "task.plan.ready", task_id,
+                    "task.plan.ready",
+                    task_id,
                     {"task_id": task_id, "estimated_steps": 3, "plan_summary": "test"},
                     mono_ns=1_200_000,
                 ),
@@ -964,7 +1060,8 @@ async def test_budget_override_emits_audit_event(tmp_path) -> None:
             await handle_task_execution_started(
                 session,
                 _make_transition_envelope(
-                    "task.execution.started", task_id,
+                    "task.execution.started",
+                    task_id,
                     {"task_id": task_id, "session_id": "s-test-override-session"},
                     mono_ns=1_300_000,
                 ),
@@ -972,7 +1069,8 @@ async def test_budget_override_emits_audit_event(tmp_path) -> None:
             await handle_task_budget_exceeded(
                 session,
                 _make_transition_envelope(
-                    "task.budget_exceeded", task_id,
+                    "task.budget_exceeded",
+                    task_id,
                     {"task_id": task_id, "token_limit": 100000, "tokens_used": 150000, "step": 5},
                     mono_ns=1_400_000,
                 ),
@@ -980,7 +1078,8 @@ async def test_budget_override_emits_audit_event(tmp_path) -> None:
             await handle_tier3_budget_override(
                 session,
                 _make_transition_envelope(
-                    "tier3.budget_override", task_id,
+                    "tier3.budget_override",
+                    task_id,
                     {
                         "task_id": task_id,
                         "decision_id": "d-test-override",
@@ -996,15 +1095,19 @@ async def test_budget_override_emits_audit_event(tmp_path) -> None:
 
         state_transitions = await _read_audit_events(tmp_path)
         override_events = [
-            e for e in state_transitions
-            if e.payload["to_state"] == "executing" and e.payload["trigger_event"] == "tier3.budget_override"
+            e
+            for e in state_transitions
+            if _payload_dict(e)["to_state"] == "executing"
+            and _payload_dict(e)["trigger_event"] == "tier3.budget_override"
         ]
-        assert len(override_events) >= 1, "Expected at least one task.state_transition to executing via budget_override"
+        assert len(override_events) >= 1, (
+            "Expected at least one task.state_transition to executing via budget_override"
+        )
         evt = override_events[0]
-        assert evt.payload["from_state"] == "blocked"
-        assert evt.payload["to_state"] == "executing"
-        assert evt.payload["trigger_event"] == "tier3.budget_override"
-        assert evt.payload["task_id"] == task_id
+        assert _payload_dict(evt)["from_state"] == "blocked"
+        assert _payload_dict(evt)["to_state"] == "executing"
+        assert _payload_dict(evt)["trigger_event"] == "tier3.budget_override"
+        assert _payload_dict(evt)["task_id"] == task_id
     finally:
         _set_audit_writer(None)
         await eng.dispose()

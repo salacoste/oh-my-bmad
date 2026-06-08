@@ -561,7 +561,7 @@ class RegistryAPIClient:
             raise RegistryResponseError(
                 f"expected JSON array from /v1/trace/{trace_id!r}, got {type(data).__name__}"
             )
-        return data  # type: ignore[return-value]
+        return data
 
 
 __all__ = [

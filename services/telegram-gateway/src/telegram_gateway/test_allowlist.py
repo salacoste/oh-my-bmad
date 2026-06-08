@@ -25,6 +25,7 @@ import logging
 import re
 import time
 from collections.abc import AsyncIterator, Generator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -182,8 +183,8 @@ async def test_non_allowlisted_user_rejected() -> None:
     assert len(captured) == 1
     env = captured[0]
     assert env.type == "telegram.rejected"
-    assert env.payload.user_id == 67890
-    assert env.payload.reason == "not_in_allowlist"
+    assert env.payload.user_id == 67890  # type: ignore[union-attr]
+    assert env.payload.reason == "not_in_allowlist"  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -199,8 +200,8 @@ async def test_empty_allowlist_rejects_everyone() -> None:
     assert result is None
     assert invocations == []
     assert len(captured) == 1
-    assert captured[0].payload.user_id == 12345
-    assert captured[0].payload.reason == "not_in_allowlist"
+    assert captured[0].payload.user_id == 12345  # type: ignore[union-attr]
+    assert captured[0].payload.reason == "not_in_allowlist"  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -217,8 +218,8 @@ async def test_event_without_from_user_rejected_with_sentinel() -> None:
     assert result is None
     assert invocations == []
     assert len(captured) == 1
-    assert captured[0].payload.user_id == 0
-    assert captured[0].payload.reason == "no_from_user"
+    assert captured[0].payload.user_id == 0  # type: ignore[union-attr]
+    assert captured[0].payload.reason == "no_from_user"  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -503,8 +504,8 @@ async def test_child_field_user_rejection(child_field: str, user_attr: str) -> N
     assert result is None, f"child_field={child_field!r}: should be rejected"
     assert invocations == [], f"child_field={child_field!r}: handler must not be called"
     assert len(captured) == 1
-    assert captured[0].payload.reason == "not_in_allowlist"
-    assert captured[0].payload.user_id == 12345
+    assert captured[0].payload.reason == "not_in_allowlist"  # type: ignore[union-attr]
+    assert captured[0].payload.user_id == 12345  # type: ignore[union-attr]
 
 
 # Bot-only fields that carry no user identity — should fall to no_from_user
@@ -541,8 +542,8 @@ async def test_bot_only_child_field_no_from_user(child_field: str) -> None:
     result = await mw(handler, update, {})
     assert result is None
     assert len(captured) == 1
-    assert captured[0].payload.user_id == 0
-    assert captured[0].payload.reason == "no_from_user"
+    assert captured[0].payload.user_id == 0  # type: ignore[union-attr]
+    assert captured[0].payload.reason == "no_from_user"  # type: ignore[union-attr]
 
 
 # ---------------------------------------------------------------------------
@@ -966,8 +967,8 @@ async def test_allowed_user_envelope_chain_shares_trace_id(
         captured_calls.append(kwargs)
         return _rc_mod.CreateTaskResponseLocal(
             task_id="t-00000000-0000-7000-8000-000000000000",
-            state="created",
-            actor=_rc_mod.ActorLocal(kind="operator", id="12345"),
+            event_id="e-00000000-0000-7000-8000-000000000000",
+            created_at=datetime(2024, 1, 1, tzinfo=UTC),
         )
 
     monkeypatch.setattr(_rc_mod.RegistryAPIClient, "create_task", fake_create_task)
@@ -1254,7 +1255,7 @@ class TestStory93TraceIdDerivation:
 
         assert len(captured) == 1
         env = captured[0]
-        assert env.payload.reason == "no_from_user"
+        assert env.payload.reason == "no_from_user"  # type: ignore[union-attr]
         assert env.trace_id == "tg:456"
 
     # -- AC7 #12 (integration-feeling: handler reads data["trace_id"]) ------

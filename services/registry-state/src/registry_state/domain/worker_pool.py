@@ -173,7 +173,7 @@ async def handle_worker_crash(session: AsyncSession, worker_id: str) -> int:
         .values(status="failed", worker_id=None)
     )
     result = await session.execute(stmt)
-    count = result.rowcount
+    count: int = getattr(result, "rowcount", 0)
     if count > 0:
         _log.warning(
             "worker %s crashed: %d tasks re-assigned (→ failed)",

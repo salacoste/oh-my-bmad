@@ -92,11 +92,11 @@ async def registry_client_fixture(request: pytest.FixtureRequest) -> RegistryAPI
     if raise_exc is not None:
 
         async def _transport(req: httpx.Request) -> httpx.Response:
-            raise raise_exc  # type: ignore[misc]
+            raise raise_exc
 
     else:
 
-        async def _transport(req: httpx.Request) -> httpx.Response:  # type: ignore[misc]
+        async def _transport(req: httpx.Request) -> httpx.Response:
             return httpx.Response(
                 status_code=status_code,
                 content=body.encode(),
@@ -128,12 +128,12 @@ def _make_registry_client(
     if raise_exc is not None:
 
         async def _transport_raise(request: httpx.Request) -> httpx.Response:
-            raise raise_exc  # type: ignore[misc]
+            raise raise_exc
 
         transport_fn = _transport_raise
     else:
 
-        async def _transport_ok(request: httpx.Request) -> httpx.Response:  # type: ignore[misc]
+        async def _transport_ok(request: httpx.Request) -> httpx.Response:
             return httpx.Response(
                 status_code=status_code,
                 content=body.encode(),
@@ -739,7 +739,7 @@ async def test_task_handler_forwards_positive_chat_id_and_message_id() -> None:
     captured: dict[str, object] = {}
 
     async def _transport(request: httpx.Request) -> httpx.Response:
-        captured.update(request.read() and __import__("json").loads(request.content))
+        captured.update(json.loads(request.content))
         return httpx.Response(
             status_code=201,
             content=_VALID_RESPONSE_JSON.encode(),

@@ -1,4 +1,5 @@
-"""GET /v1/tasks/{task_id}/events and /transitions route handlers (Story 7.5 / FR6, Story 35.6 / FR108).
+"""GET /v1/tasks/{task_id}/events and /transitions route handlers
+(Story 7.5 / FR6, Story 35.6 / FR108).
 
 Returns a JSON array of raw typed event envelopes for debugging and the
 ``oh-my-bmad-cli events --follow`` live-tail. Supports ``since`` cursor
@@ -149,9 +150,7 @@ async def get_task_transitions(
     pagination, matching the ``/events`` endpoint pattern.
     """
     session_maker = request.app.state.session_maker
-    _log.debug(
-        "transitions query task_id=%s after=%s limit=%s", task_id, after, limit
-    )
+    _log.debug("transitions query task_id=%s after=%s limit=%s", task_id, after, limit)
 
     stmt = (
         select(Event)

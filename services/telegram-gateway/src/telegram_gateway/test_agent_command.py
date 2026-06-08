@@ -114,7 +114,7 @@ async def test_handle_agent_http_status_error() -> None:
         request=httpx.Request("GET", "http://registry-api:8080/v1/tasks/x"),
         response=httpx.Response(500, content=b'{"detail":"error"}'),
     )
-    client.get_task = AsyncMock(side_effect=exc)  # type: ignore[method-assign]
+    client.get_task = AsyncMock(side_effect=exc)
     msg = _make_message(text=f"/agent {_TASK_ID}")
 
     await handle_agent(msg, registry_client=client)
@@ -128,9 +128,7 @@ async def test_handle_agent_http_status_error() -> None:
 async def test_handle_agent_network_error() -> None:
     """ReadTimeout → 'Could not reach registry: ReadTimeout' reply."""
     client = _make_registry_client_with_mock()
-    client.get_task = AsyncMock(  # type: ignore[method-assign]
-        side_effect=httpx.ReadTimeout("timed out")
-    )
+    client.get_task = AsyncMock(side_effect=httpx.ReadTimeout("timed out"))
     msg = _make_message(text=f"/agent {_TASK_ID}")
 
     await handle_agent(msg, registry_client=client)
@@ -146,9 +144,7 @@ async def test_handle_agent_network_error() -> None:
 async def test_handle_agent_too_many_redirects() -> None:
     """TooManyRedirects → 'too many redirects' reply."""
     client = _make_registry_client_with_mock()
-    client.get_task = AsyncMock(  # type: ignore[method-assign]
-        side_effect=httpx.TooManyRedirects("loop")
-    )
+    client.get_task = AsyncMock(side_effect=httpx.TooManyRedirects("loop"))
     msg = _make_message(text=f"/agent {_TASK_ID}")
 
     await handle_agent(msg, registry_client=client)
@@ -162,9 +158,7 @@ async def test_handle_agent_too_many_redirects() -> None:
 async def test_handle_agent_malformed_response() -> None:
     """RegistryResponseError → 'unexpected response' reply."""
     client = _make_registry_client_with_mock()
-    client.get_task = AsyncMock(  # type: ignore[method-assign]
-        side_effect=RegistryResponseError("malformed body")
-    )
+    client.get_task = AsyncMock(side_effect=RegistryResponseError("malformed body"))
     msg = _make_message(text=f"/agent {_TASK_ID}")
 
     await handle_agent(msg, registry_client=client)
@@ -180,7 +174,7 @@ async def test_handle_agent_malformed_response() -> None:
 async def test_handle_agent_unexpected_exception() -> None:
     """RuntimeError backstop → 'Internal error' reply."""
     client = _make_registry_client_with_mock()
-    client.get_task = AsyncMock(side_effect=RuntimeError("boom"))  # type: ignore[method-assign]
+    client.get_task = AsyncMock(side_effect=RuntimeError("boom"))
     msg = _make_message(text=f"/agent {_TASK_ID}")
 
     await handle_agent(msg, registry_client=client)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -28,7 +29,7 @@ _FAKE_TASK_ID = "t-019abcde-f012-7abc-8def-0123456789ab"
 
 def _make_response(
     status_code: int = 201,
-    body: dict | None = None,
+    body: Mapping[str, object] | None = None,
     headers: dict[str, str] | None = None,
 ) -> httpx.Response:
     """Build a fake httpx.Response."""
@@ -286,7 +287,7 @@ class TestCreateTaskTraceIdHeader:
 # ---------------------------------------------------------------------------
 
 
-def _task_body_for_get() -> dict:
+def _task_body_for_get() -> dict[str, object]:
     return {
         "task_id": _FAKE_TASK_ID,
         "status": "planning",
@@ -299,7 +300,7 @@ def _task_body_for_get() -> dict:
     }
 
 
-def _logs_digest_body_for_get() -> dict:
+def _logs_digest_body_for_get() -> dict[str, object]:
     return {
         "task_id": _FAKE_TASK_ID,
         "digest": "fixture digest",
@@ -308,7 +309,7 @@ def _logs_digest_body_for_get() -> dict:
     }
 
 
-def _health_body_for_get() -> dict:
+def _health_body_for_get() -> dict[str, object]:
     return {
         "registry_status": "healthy",
         "worker_status": "idle",

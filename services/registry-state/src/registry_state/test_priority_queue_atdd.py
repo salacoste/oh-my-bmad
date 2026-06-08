@@ -20,12 +20,11 @@ Reference tests (NOT xfail):
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from pathlib import Path
+
 import pytest
-
-from datetime import datetime, timezone
-
-from events import FROZEN_EPOCH, FrozenClock, new_task_id, new_uuid7
-
+from events import new_task_id
 
 # ---------------------------------------------------------------------------
 # Reference tests — existing infrastructure priority queue builds on
@@ -81,16 +80,16 @@ def test_task_priority_default_is_zero() -> None:
 
 
 @pytest.mark.asyncio
-async def test_claim_next_task_returns_highest_priority(tmp_path) -> None:
+async def test_claim_next_task_returns_highest_priority(tmp_path: Path) -> None:
     """claim_next_task must return the highest-priority pending task.
 
     Given two pending tasks with priorities 0 and 5, the one with
     priority 5 must be claimed first.
     """
-    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-    from registry_state.schema import Base, Task
     from registry_state.domain.worker_pool import claim_next_task
+    from registry_state.schema import Base, Task
 
     db_path = tmp_path / "priority.sqlite3"
     engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
@@ -99,7 +98,7 @@ async def test_claim_next_task_returns_highest_priority(tmp_path) -> None:
             await conn.run_sync(Base.metadata.create_all)
 
         sm = async_sessionmaker(engine, expire_on_commit=False)
-        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        now = datetime(2026, 1, 1, tzinfo=UTC)
         async with sm() as session:
             # Create two pending tasks with different priorities.
             low_task = Task(
@@ -133,7 +132,7 @@ async def test_claim_next_task_returns_highest_priority(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_claim_next_task_tiebreaks_stably(tmp_path) -> None:
+async def test_claim_next_task_tiebreaks_stably(tmp_path: Path) -> None:
     """claim_next_task must break priority ties deterministically.
 
     Given two pending tasks with the same priority, claiming must
@@ -141,10 +140,10 @@ async def test_claim_next_task_tiebreaks_stably(tmp_path) -> None:
     order (by id ASC) is deterministic but the test cannot assume which
     UUIDv7 sorts first since random bits differ within the same ms.
     """
-    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-    from registry_state.schema import Base, Task
     from registry_state.domain.worker_pool import claim_next_task
+    from registry_state.schema import Base, Task
 
     db_path = tmp_path / "tiebreak.sqlite3"
     engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
@@ -154,18 +153,20 @@ async def test_claim_next_task_tiebreaks_stably(tmp_path) -> None:
 
         sm = async_sessionmaker(engine, expire_on_commit=False)
         task_ids = [new_task_id(), new_task_id()]
-        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        now = datetime(2026, 1, 1, tzinfo=UTC)
         async with sm() as session:
             for tid in task_ids:
-                session.add(Task(
-                    id=tid,
-                    status="pending",
-                    priority=3,
-                    created_at=now,
-                    updated_at=now,
-                    actor_kind="operator",
-                    actor_id="test",
-                ))
+                session.add(
+                    Task(
+                        id=tid,
+                        status="pending",
+                        priority=3,
+                        created_at=now,
+                        updated_at=now,
+                        actor_kind="operator",
+                        actor_id="test",
+                    )
+                )
             await session.commit()
 
         # Both have same priority — claim returns one deterministically.

@@ -16,7 +16,7 @@ from console_cli.adapters.registry_api_client import (
 
 _VALID_TASK_ID = "t-0192a1b5-1234-7abc-89de-f0123456789a"
 
-_EVENTS_RESPONSE_BODY = [
+_EVENTS_RESPONSE_BODY: list[dict[str, object]] = [
     {
         "event_id": "e-0192a1b5-aaaa-7abc-89de-f0123456789a",
         "type": "task.created",

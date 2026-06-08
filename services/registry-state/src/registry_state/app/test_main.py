@@ -905,11 +905,11 @@ async def test_synthetic_1k_replay_relative_threshold(tmp_path: Path) -> None:
     from registry_state.adapters.sqlite_store import create_engine as _ce
     from registry_state.domain.handlers import register_default_handlers
     from registry_state.domain.materializer import Materializer
-    from registry_state.domain.snapshots import SnapshotPolicy
     from registry_state.domain.recovery import (
         compute_replay_cursor,
         restore_state_from_latest_snapshot,
     )
+    from registry_state.domain.snapshots import SnapshotPolicy
 
     db_path = tmp_path / "state.sqlite3"
     db_url = f"sqlite+aiosqlite:///{db_path}"
@@ -954,10 +954,9 @@ async def test_synthetic_1k_replay_relative_threshold(tmp_path: Path) -> None:
     # The old 500ms threshold failed on loaded CI runners (997ms observed).
     # 5000ms is 10× the original budget — generous for CI, still catches
     # pathological hangs (e.g. missing snapshot → full 1K event replay).
-    ABSOLUTE_CEILING_MS = 5_000
-    assert elapsed_ms < ABSOLUTE_CEILING_MS, (
-        f"NFR-P3 (1K) breach: {elapsed_ms:.1f}ms "
-        f"(ceiling {ABSOLUTE_CEILING_MS}ms)"
+    absolute_ceiling_ms = 5_000
+    assert elapsed_ms < absolute_ceiling_ms, (
+        f"NFR-P3 (1K) breach: {elapsed_ms:.1f}ms (ceiling {absolute_ceiling_ms}ms)"
     )
 
     # EventEnvelope.create() validates the dict and converts it to the registered

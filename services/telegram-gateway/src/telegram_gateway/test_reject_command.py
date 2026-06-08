@@ -129,7 +129,7 @@ async def test_handle_reject_success_renders_confirmation() -> None:
 async def test_handle_reject_success_with_retry_deduped() -> None:
     """idempotency_status='replayed' → '(retry deduped)' in reply."""
     client = _make_registry_client_with_mock()
-    client.submit_decision = AsyncMock(  # type: ignore[method-assign]
+    client.submit_decision = AsyncMock(
         return_value=DecisionResponseLocal(
             task_id=_TASK_ID,
             decision_id=_DECISION_ID,
@@ -211,7 +211,7 @@ async def test_handle_reject_http_status_error() -> None:
         request=httpx.Request("POST", "http://registry-api:8080/v1/tasks/x/decisions"),
         response=httpx.Response(500, content=b'{"detail":"error"}'),
     )
-    client.submit_decision = AsyncMock(side_effect=exc)  # type: ignore[method-assign]
+    client.submit_decision = AsyncMock(side_effect=exc)
     msg = _make_message(text=f"/reject {_TASK_ID}")
 
     await handle_reject(msg, registry_client=client)
@@ -225,9 +225,7 @@ async def test_handle_reject_http_status_error() -> None:
 async def test_handle_reject_network_error() -> None:
     """ReadTimeout → 'Could not reach registry: ReadTimeout' reply."""
     client = _make_registry_client_with_mock()
-    client.submit_decision = AsyncMock(  # type: ignore[method-assign]
-        side_effect=httpx.ReadTimeout("timed out")
-    )
+    client.submit_decision = AsyncMock(side_effect=httpx.ReadTimeout("timed out"))
     msg = _make_message(text=f"/reject {_TASK_ID}")
 
     await handle_reject(msg, registry_client=client)
@@ -243,9 +241,7 @@ async def test_handle_reject_network_error() -> None:
 async def test_handle_reject_too_many_redirects() -> None:
     """TooManyRedirects → 'too many redirects' reply."""
     client = _make_registry_client_with_mock()
-    client.submit_decision = AsyncMock(  # type: ignore[method-assign]
-        side_effect=httpx.TooManyRedirects("loop")
-    )
+    client.submit_decision = AsyncMock(side_effect=httpx.TooManyRedirects("loop"))
     msg = _make_message(text=f"/reject {_TASK_ID}")
 
     await handle_reject(msg, registry_client=client)
@@ -259,9 +255,7 @@ async def test_handle_reject_too_many_redirects() -> None:
 async def test_handle_reject_malformed_response() -> None:
     """RegistryResponseError → 'unexpected response' reply."""
     client = _make_registry_client_with_mock()
-    client.submit_decision = AsyncMock(  # type: ignore[method-assign]
-        side_effect=RegistryResponseError("malformed body")
-    )
+    client.submit_decision = AsyncMock(side_effect=RegistryResponseError("malformed body"))
     msg = _make_message(text=f"/reject {_TASK_ID}")
 
     await handle_reject(msg, registry_client=client)
@@ -277,7 +271,7 @@ async def test_handle_reject_malformed_response() -> None:
 async def test_handle_reject_unexpected_exception() -> None:
     """RuntimeError backstop → 'Internal error' reply."""
     client = _make_registry_client_with_mock()
-    client.submit_decision = AsyncMock(side_effect=RuntimeError("boom"))  # type: ignore[method-assign]
+    client.submit_decision = AsyncMock(side_effect=RuntimeError("boom"))
     msg = _make_message(text=f"/reject {_TASK_ID}")
 
     await handle_reject(msg, registry_client=client)

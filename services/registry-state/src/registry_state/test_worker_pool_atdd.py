@@ -52,7 +52,7 @@ def test_task_orm_has_worker_id_column() -> None:
     # Must be nullable (pre-worker-pool tasks have no worker_id)
     assert col.nullable is True, "worker_id must be nullable for backward compat"
     # String type for hostname-pid format (e.g. "worker-01-12345")
-    assert col.type.length == 64, f"Expected String(64), got String({col.type.length})"
+    assert col.type.length == 64, f"Expected String(64), got String({col.type.length})"  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------

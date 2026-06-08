@@ -35,7 +35,7 @@ def test_redact_secrets_redacts_telegram_bot_token_key_unit() -> None:
         "level": "info",
     }
 
-    result = redact_secrets(None, None, event_dict)  # type: ignore[arg-type]
+    result = redact_secrets(None, None, event_dict)
 
     # The key name ``telegram_bot_token`` is in ``_KEY_REDACT_SET`` — the
     # value is unconditionally replaced regardless of its content.

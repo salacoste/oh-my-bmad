@@ -143,7 +143,7 @@ async def handle_approve(
         if m:
             val = m.group(1).lower()
             if val in ("license", "budget"):
-                override = val
+                override = val  # type: ignore[assignment]
             else:
                 await _safe_reply(
                     message,

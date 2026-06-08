@@ -72,9 +72,9 @@ def test_postgres_engine_no_check_same_thread() -> None:
     # the ``cparams`` freevar. Inspect the closure to verify check_same_thread
     # is absent (it is a sqlite3-specific parameter).
     creator = engine.pool._creator_arg
-    freevars = creator.__code__.co_freevars
+    freevars = creator.__code__.co_freevars  # type: ignore[union-attr]
     cparams = dict(
-        zip(freevars, (cell.cell_contents for cell in creator.__closure__), strict=True)
+        zip(freevars, (cell.cell_contents for cell in creator.__closure__), strict=True)  # type: ignore[union-attr]
     ).get("cparams", {})
     assert "check_same_thread" not in cparams, (
         f"Postgres engine must not have check_same_thread in connect_args, got: {cparams}"

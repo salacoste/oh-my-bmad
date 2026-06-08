@@ -23,9 +23,7 @@ Reference tests (NOT xfail):
 from __future__ import annotations
 
 import pytest
-
 from events import FROZEN_EPOCH, FrozenClock
-
 
 # ---------------------------------------------------------------------------
 # Reference tests (NOT xfail) — existing infrastructure
@@ -56,7 +54,10 @@ def test_heartbeat_monitor_overdue_sessions_and_mark_exists() -> None:
     """HeartbeatMonitor must have an overdue_sessions_and_mark method."""
     from registry_state.domain.failure_detection import HeartbeatMonitor
 
-    monitor = HeartbeatMonitor(heartbeat_interval_s=10.0, clock=FrozenClock(mono_ns=0, now=FROZEN_EPOCH))
+    monitor = HeartbeatMonitor(
+        heartbeat_interval_s=10.0,
+        clock=FrozenClock(mono_ns=0, now=FROZEN_EPOCH),
+    )
     assert hasattr(monitor, "overdue_sessions_and_mark")
     assert callable(monitor.overdue_sessions_and_mark)
 
@@ -83,12 +84,12 @@ async def test_subscriber_feeds_session_heartbeats_into_monitor() -> None:
     """
     # This contract tests that the subscriber wiring exists.
     # Fails because the subscriber does not yet feed heartbeats into the monitor.
-    from registry_state.app.main import run_subscriber
-
     # The function must accept a heartbeat_interval_s parameter (or detection
     # must be configurable).  This import-only test fails at the assertion
     # below because the wiring is not yet in place.
     import inspect
+
+    from registry_state.app.main import run_subscriber
 
     sig = inspect.signature(run_subscriber)
     params = set(sig.parameters.keys())
@@ -196,7 +197,7 @@ async def test_heartbeat_after_timeout_resets_edge_trigger() -> None:
             self.emitted_at = at
             self.payload = {"session_id": sid}
 
-    _feed_heartbeats([_FakeEnvelope(_session_id, _emitted_at)], monitor)
+    _feed_heartbeats([_FakeEnvelope(_session_id, _emitted_at)], monitor)  # type: ignore[list-item]
 
     monitor.record_heartbeat.assert_called_once_with(_session_id, at=_emitted_at)
     monitor.remove_session.assert_not_called()
@@ -230,7 +231,12 @@ async def test_emit_session_heartbeat_timeout_has_production_caller() -> None:
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 for alias in node.names:
-                    if "emit_session_heartbeat_timeout" in (alias.name if isinstance(node, ast.Import) else (alias.name if alias else "")):
+                    name = (
+                        alias.name
+                        if isinstance(node, ast.Import)
+                        else (alias.name if alias else "")
+                    )
+                    if "emit_session_heartbeat_timeout" in name:
                         callers.append(str(pyfile))
     assert len(callers) >= 1, (
         f"emit_session_heartbeat_timeout must be imported by ≥1 production module "

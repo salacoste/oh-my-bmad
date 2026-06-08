@@ -25,7 +25,7 @@ _FAKE_TASK_ID = "t-019abcde-f012-7abc-8def-0123456789ab"
 
 def _make_get_response(
     status_code: int = 200,
-    body: dict | None = None,
+    body: dict[str, object] | None = None,
 ) -> httpx.Response:
     return httpx.Response(
         status_code=status_code,
@@ -34,7 +34,7 @@ def _make_get_response(
     )
 
 
-def _task_response_body() -> dict:
+def _task_response_body() -> dict[str, object]:
     return {
         "task_id": _FAKE_TASK_ID,
         "status": "planning",

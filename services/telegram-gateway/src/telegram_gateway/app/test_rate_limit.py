@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -135,7 +136,7 @@ class _ManualClock:
     def __init__(self, ns_value: list[int]) -> None:
         self._ns_value = ns_value
 
-    def now(self):  # type: ignore[override]
+    def now(self) -> datetime:
         from datetime import UTC, datetime  # noqa: PLC0415
 
         return datetime.now(UTC)
@@ -237,7 +238,7 @@ class TestRateLimitRefill:
         # ManualClock: tracks current ns so we can advance it between calls.
         ns_value = [0]
         clock = _ManualClock(ns_value)
-        app = build_app(settings=settings, clock=clock)  # type: ignore[arg-type]
+        app = build_app(settings=settings, clock=clock)
 
         async with (
             LifespanManager(app) as manager,
@@ -283,7 +284,7 @@ class TestRateLimitRefill:
 
         ns_value = [0]
         clock = _ManualClock(ns_value)
-        app = build_app(settings=settings, clock=clock)  # type: ignore[arg-type]
+        app = build_app(settings=settings, clock=clock)
 
         async with (
             LifespanManager(app) as manager,
@@ -535,7 +536,7 @@ class TestRateLimitClockInjection:
         class _CountingClock:
             """Wraps TickingClock and counts monotonic_ns() calls."""
 
-            def now(self) -> object:
+            def now(self) -> datetime:
                 return base_clock.now()
 
             def monotonic_ns(self) -> int:
@@ -543,7 +544,7 @@ class TestRateLimitClockInjection:
                 return base_clock.monotonic_ns()
 
         clock = _CountingClock()
-        app = build_app(settings=settings, clock=clock)  # type: ignore[arg-type]
+        app = build_app(settings=settings, clock=clock)
 
         async with (
             LifespanManager(app) as manager,
@@ -676,7 +677,7 @@ class TestRateLimitTokenBucketMath:
         # negative and silently subtract from ``_tokens``.
         ns_value = [10_000_000_000]  # 10 s → bucket initializes here
         clock = _ManualClock(ns_value)
-        app = build_app(settings=settings, clock=clock)  # type: ignore[arg-type]
+        app = build_app(settings=settings, clock=clock)
 
         async with (
             LifespanManager(app) as manager,
@@ -733,7 +734,7 @@ class TestRateLimitTokenBucketMath:
 
         ns_value = [0]
         clock = _ManualClock(ns_value)
-        app = build_app(settings=settings, clock=clock)  # type: ignore[arg-type]
+        app = build_app(settings=settings, clock=clock)
 
         async with (
             LifespanManager(app) as manager,
@@ -943,11 +944,12 @@ class TestChargeOnAttempt:
             "server": ("testserver", 80),
         }
 
-        from starlette.requests import Request  # noqa: PLC0415
+        from starlette.requests import Request
+        from starlette.responses import Response  # noqa: PLC0415
 
         request = Request(scope)
 
-        async def _raising_call_next(req: object) -> object:
+        async def _raising_call_next(req: Request) -> Response:
             raise RuntimeError("handler exploded")
 
         tokens_before = mw._tokens
@@ -994,11 +996,12 @@ class TestDynamicRetryAfter:
             "headers": [],
             "server": ("testserver", 80),
         }
-        from starlette.requests import Request  # noqa: PLC0415
+        from starlette.requests import Request
+        from starlette.responses import Response  # noqa: PLC0415
 
         request = Request(scope)
 
-        async def _noop_call_next(req: object) -> object:
+        async def _noop_call_next(req: Request) -> Response:
             return JSONResponse(content={}, status_code=200)
 
         # Drain 2 tokens.
@@ -1041,11 +1044,12 @@ class TestDynamicRetryAfter:
             "headers": [],
             "server": ("testserver", 80),
         }
-        from starlette.requests import Request  # noqa: PLC0415
+        from starlette.requests import Request
+        from starlette.responses import Response  # noqa: PLC0415
 
         request = Request(scope)
 
-        async def _noop_call_next(req: object) -> object:
+        async def _noop_call_next(req: Request) -> Response:
             return JSONResponse(content={}, status_code=200)
 
         resp = await mw.dispatch(request, _noop_call_next)
@@ -1073,11 +1077,12 @@ class TestDynamicRetryAfter:
             "headers": [],
             "server": ("testserver", 80),
         }
-        from starlette.requests import Request  # noqa: PLC0415
+        from starlette.requests import Request
+        from starlette.responses import Response  # noqa: PLC0415
 
         request = Request(scope)
 
-        async def _noop_call_next(req: object) -> object:
+        async def _noop_call_next(req: Request) -> Response:
             return JSONResponse(content={}, status_code=200)
 
         resp = await mw.dispatch(request, _noop_call_next)

@@ -433,4 +433,9 @@ def make_lifespan(
     return lifespan
 
 
-__all__ = ["make_lifespan", "TELEGRAM_GATEWAY_ACTOR", "_TELEGRAM_GATEWAY_ACTOR"]
+__all__ = [
+    "make_lifespan",
+    "make_trace_router",
+    "TELEGRAM_GATEWAY_ACTOR",
+    "_TELEGRAM_GATEWAY_ACTOR",
+]

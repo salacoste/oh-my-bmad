@@ -22,6 +22,7 @@ so previously-bare ``handle_trace(msg, client)`` calls keep working.
 
 from __future__ import annotations
 
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -53,13 +54,18 @@ def _make_message(
     return msg
 
 
-def _make_client(events: list[dict] | None = None) -> RegistryAPIClient:
+def _make_client(events: list[dict[str, object]] | None = None) -> RegistryAPIClient:
     client = MagicMock(spec=RegistryAPIClient)
     client.get_trace = AsyncMock(return_value=events if events is not None else [])
     return client
 
 
-def _make_event(i: int = 0) -> dict:
+def _get_trace_mock(client: RegistryAPIClient) -> AsyncMock:
+    """Extract the AsyncMock for get_trace from a spec-based mock client."""
+    return cast(AsyncMock, client.get_trace)
+
+
+def _make_event(i: int = 0) -> dict[str, object]:
     return {
         "event_id": f"e-00000000-0000-7000-8000-{i:012d}",
         "type": "task.created",
@@ -86,7 +92,7 @@ async def test_trace_allowlist_rejects_unauthorized_chat() -> None:
 
     # Silent drop: no reply sent, no get_trace call
     msg.reply.assert_not_called()
-    client.get_trace.assert_not_called()
+    _get_trace_mock(client).assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -117,7 +123,7 @@ async def test_trace_allowlist_empty_denies_every_chat() -> None:
     await handle_trace(msg, client, allowed_chat_ids=frozenset())
 
     # Silent drop: no API call, no reply
-    client.get_trace.assert_not_called()
+    _get_trace_mock(client).assert_not_called()
     msg.reply.assert_not_called()
 
 
@@ -214,7 +220,7 @@ async def test_trace_page_arg_invalid_shows_error() -> None:
     reply_text: str = msg.reply.call_args[0][0]
     assert "invalid" in reply_text.lower() or "page" in reply_text.lower()
     # No API call made when page arg is invalid
-    client.get_trace.assert_not_called()
+    _get_trace_mock(client).assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -228,7 +234,7 @@ async def test_trace_invalid_shape_friendly_error() -> None:
     msg.reply.assert_called_once()
     reply_text: str = msg.reply.call_args[0][0]
     assert "invalid" in reply_text.lower() or "UUIDv7" in reply_text
-    client.get_trace.assert_not_called()
+    _get_trace_mock(client).assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -275,9 +281,10 @@ async def test_trace_zwsp_prefix_stripped() -> None:
     await handle_trace(msg, client, allowed_chat_ids=_DEFAULT_ALLOWED_CHATS)
 
     # get_trace called (ZWSP was stripped, valid trace_id passed)
-    client.get_trace.assert_called_once_with(
+    mock_gt = _get_trace_mock(client)
+    mock_gt.assert_called_once_with(
         trace_id=_VALID_TRACE_ID,
-        request_id=client.get_trace.call_args.kwargs["request_id"],
+        request_id=mock_gt.call_args.kwargs["request_id"],
     )
 
 
@@ -289,9 +296,10 @@ async def test_trace_zwsp_trailing_stripped() -> None:
     msg = _make_message(text=f"/trace {trace_id_trailing}")
     client = _make_client(events=[_make_event()])
     await handle_trace(msg, client, allowed_chat_ids=_DEFAULT_ALLOWED_CHATS)
-    client.get_trace.assert_called_once_with(
+    mock_gt = _get_trace_mock(client)
+    mock_gt.assert_called_once_with(
         trace_id=_VALID_TRACE_ID,
-        request_id=client.get_trace.call_args.kwargs["request_id"],
+        request_id=mock_gt.call_args.kwargs["request_id"],
     )
 
 
@@ -305,9 +313,10 @@ async def test_trace_zwsp_embedded_stripped() -> None:
     msg = _make_message(text=f"/trace {trace_id_embedded}")
     client = _make_client(events=[_make_event()])
     await handle_trace(msg, client, allowed_chat_ids=_DEFAULT_ALLOWED_CHATS)
-    client.get_trace.assert_called_once_with(
+    mock_gt = _get_trace_mock(client)
+    mock_gt.assert_called_once_with(
         trace_id=_VALID_TRACE_ID,
-        request_id=client.get_trace.call_args.kwargs["request_id"],
+        request_id=mock_gt.call_args.kwargs["request_id"],
     )
 
 

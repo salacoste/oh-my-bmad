@@ -33,6 +33,7 @@ import asyncio
 import json
 import math
 import time
+from collections.abc import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock
 
 import aiogram.exceptions
@@ -122,7 +123,7 @@ def _make_registry_client(
 @pytest_asyncio.fixture()
 async def _registry_client_fixture(
     request: pytest.FixtureRequest,
-) -> RegistryAPIClient:  # type: ignore[misc]
+) -> AsyncGenerator[RegistryAPIClient, None]:
     """M7: async fixture with proper teardown to avoid ResourceWarning.
 
     Accepts indirect params dict: status_code, body, headers, raise_exc.
@@ -136,11 +137,11 @@ async def _registry_client_fixture(
     if raise_exc is not None:
 
         async def _transport(req: httpx.Request) -> httpx.Response:
-            raise raise_exc  # type: ignore[misc]
+            raise raise_exc
 
     else:
 
-        async def _transport(req: httpx.Request) -> httpx.Response:  # type: ignore[misc]
+        async def _transport(req: httpx.Request) -> httpx.Response:
             return httpx.Response(
                 status_code=status_code,
                 content=body.encode(),

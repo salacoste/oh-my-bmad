@@ -26,9 +26,7 @@ Reference tests (NOT xfail):
 from __future__ import annotations
 
 import pytest
-
 from events import FROZEN_EPOCH, FrozenClock, new_task_id
-
 
 # ---------------------------------------------------------------------------
 # Reference tests — existing infrastructure recovery builds on
@@ -66,9 +64,7 @@ def test_fsm_has_stopped_as_valid_target() -> None:
 
     # Multiple states can transition to stopped
     can_stop = {
-        state
-        for state, targets in TaskStateMachine.TRANSITIONS.items()
-        if "stopped" in targets
+        state for state, targets in TaskStateMachine.TRANSITIONS.items() if "stopped" in targets
     }
     assert len(can_stop) >= 3, "At least 3 states must transition to stopped"
 
@@ -166,15 +162,15 @@ def test_recovery_executor_class_exists() -> None:
 @pytest.mark.asyncio
 async def test_recovery_executor_auto_retry_emits_event() -> None:
     """RecoveryExecutor auto_retry action must emit a task.auto_retry event."""
-    from registry_state.domain.failure_detection import RecoveryExecutor
     from registry_state.adapters.event_log import InMemoryEventLogWriter
+    from registry_state.domain.failure_detection import RecoveryExecutor
 
     clock = FrozenClock(mono_ns=0, now=FROZEN_EPOCH)
     executor = RecoveryExecutor(clock=clock)
     writer = InMemoryEventLogWriter()
 
     envelope = await executor.execute_auto_retry(
-        writer=writer,
+        writer=writer,  # type: ignore[arg-type]
         task_id=new_task_id(),
         from_status="failed",
         retry_count=1,
@@ -188,15 +184,15 @@ async def test_recovery_executor_auto_retry_emits_event() -> None:
 @pytest.mark.asyncio
 async def test_recovery_executor_auto_stop_emits_event() -> None:
     """RecoveryExecutor auto_stop action must emit a task.auto_stop event."""
-    from registry_state.domain.failure_detection import RecoveryExecutor
     from registry_state.adapters.event_log import InMemoryEventLogWriter
+    from registry_state.domain.failure_detection import RecoveryExecutor
 
     clock = FrozenClock(mono_ns=0, now=FROZEN_EPOCH)
     executor = RecoveryExecutor(clock=clock)
     writer = InMemoryEventLogWriter()
 
     envelope = await executor.execute_auto_stop(
-        writer=writer,
+        writer=writer,  # type: ignore[arg-type]
         task_id=new_task_id(),
         from_status="failed",
         reason="max_retries_exceeded",

@@ -857,20 +857,20 @@ class StaleTaskDetector:
     # Default thresholds (seconds) per non-terminal state.
     # Terminal states (completed, stopped) are excluded.
     DEFAULT_WARNING_THRESHOLDS: dict[str, float] = {
-        "pending": 300.0,      # 5 min
-        "planning": 600.0,     # 10 min
-        "plan_ready": 600.0,   # 10 min
-        "executing": 1800.0,   # 30 min
-        "blocked": 1800.0,     # 30 min
-        "failed": 900.0,       # 15 min
+        "pending": 300.0,  # 5 min
+        "planning": 600.0,  # 10 min
+        "plan_ready": 600.0,  # 10 min
+        "executing": 1800.0,  # 30 min
+        "blocked": 1800.0,  # 30 min
+        "failed": 900.0,  # 15 min
     }
     DEFAULT_CRITICAL_THRESHOLDS: dict[str, float] = {
-        "pending": 900.0,      # 15 min
-        "planning": 1800.0,    # 30 min
+        "pending": 900.0,  # 15 min
+        "planning": 1800.0,  # 30 min
         "plan_ready": 1800.0,  # 30 min
-        "executing": 3600.0,   # 60 min
-        "blocked": 7200.0,     # 120 min
-        "failed": 3600.0,      # 60 min
+        "executing": 3600.0,  # 60 min
+        "blocked": 7200.0,  # 120 min
+        "failed": 3600.0,  # 60 min
     }
 
     def __init__(
@@ -899,7 +899,7 @@ class StaleTaskDetector:
         task_id: str,
         status: str,
         updated_at: datetime,
-    ) -> list[tuple[str, str, float]]:
+    ) -> list[tuple[str, str, float, float]]:
         """Check if a task is stale.
 
         Args:
@@ -908,14 +908,14 @@ class StaleTaskDetector:
             updated_at: When the task was last updated (staleness clock).
 
         Returns:
-            List of (severity, stale_since_iso, duration_s) tuples for each
+            List of (severity, stale_since_iso, duration_s, threshold_s) tuples for each
             threshold crossed. Empty if not stale.
         """
         now = self._clock.now()
         if now.utcoffset() is None or now.utcoffset() != timedelta(0):
             raise ValueError(f"Clock must return UTC-aware datetime, got {now!r}")
 
-        results: list[tuple[str, str, float]] = []
+        results: list[tuple[str, str, float, float]] = []
         elapsed_s = (now - updated_at).total_seconds()
 
         for severity, thresholds in [

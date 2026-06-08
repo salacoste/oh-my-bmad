@@ -62,12 +62,12 @@ from registry_state.domain.event_types import (
     TaskPlanningStartedPayload,
     TaskPlanReadyPayload,
     TaskRetryRequestedPayload,
+    TaskStateTransitionPayload,
     TaskStepCompletedPayload,
     TaskStopRequestedPayload,
     TaskSummaryEmittedPayload,
     Tier3ActionAttemptedPayload,
     Tier3ActionPerformedPayload,
-    TaskStateTransitionPayload,
 )
 from registry_state.schema import ApprovalInbox, KeyFingerprint, Task
 from registry_state.schema import Session as SessionRow
@@ -190,9 +190,7 @@ async def _audit_transition(
     writer = _get_audit_writer()
     if writer is None:
         return
-    result = await session.execute(
-        select(Task.status, Task.worker_id).where(Task.id == task_id)
-    )
+    result = await session.execute(select(Task.status, Task.worker_id).where(Task.id == task_id))
     row = result.one_or_none()
     if row is None:
         return  # task doesn't exist yet — _touch_task will raise

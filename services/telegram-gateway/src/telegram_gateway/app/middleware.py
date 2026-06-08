@@ -236,7 +236,7 @@ class AllowlistMiddleware(BaseMiddleware):
         actor: Actor,
         clock: Clock,
     ) -> None:
-        if emit is None:  # type: ignore[comparison-overlap]
+        if emit is None:
             raise ValueError("AllowlistMiddleware requires a non-None emit callable")
         self._allowlist = allowlist
         self._emit = emit

@@ -18,7 +18,7 @@ from console_cli.adapters.registry_api_client import (
 from console_cli.app.main import app
 
 _VALID_TASK_ID = "t-0192a1b5-1234-7abc-89de-f0123456789a"
-_DECISION_RESPONSE_BODY = {
+_DECISION_RESPONSE_BODY: dict[str, object] = {
     "task_id": _VALID_TASK_ID,
     "decision_id": "d-0192a1b5-5678-7def-90ab-cdef01234567",
     "action": "approve",

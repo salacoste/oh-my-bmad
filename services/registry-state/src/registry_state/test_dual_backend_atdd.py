@@ -339,7 +339,7 @@ async def test_postgres_credentials_not_logged() -> None:
         # Create a handler that captures log records
         captured_records: list[logging.LogRecord] = []
         handler = logging.Handler()
-        handler.emit = lambda record: captured_records.append(record)  # type: ignore[assignment]
+        handler.emit = lambda record: captured_records.append(record)  # type: ignore[method-assign]
 
         root_logger = logging.getLogger()
         root_logger.addHandler(handler)

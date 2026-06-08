@@ -13,7 +13,7 @@ from console_cli.app.main import app
 
 _VALID_TASK_ID = "t-0192a1b5-1234-7abc-89de-f0123456789a"
 
-_TASK_RESPONSE_BODY = {
+_TASK_RESPONSE_BODY: dict[str, object] = {
     "task_id": _VALID_TASK_ID,
     "status": "running",
     "title": "add idempotency middleware",

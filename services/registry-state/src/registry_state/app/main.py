@@ -259,12 +259,20 @@ def _feed_heartbeats(envelopes: list[EventEnvelope], monitor: HeartbeatMonitor) 
     for env in envelopes:
         if env.type == "session.heartbeat":
             payload = env.payload
-            session_id = payload.get("session_id") if isinstance(payload, dict) else getattr(payload, "session_id", None)
+            session_id = (
+                payload.get("session_id")
+                if isinstance(payload, dict)
+                else getattr(payload, "session_id", None)
+            )
             if session_id:
                 monitor.record_heartbeat(session_id, at=env.emitted_at)
         elif env.type == "session.finished":
             payload = env.payload
-            session_id = payload.get("session_id") if isinstance(payload, dict) else getattr(payload, "session_id", None)
+            session_id = (
+                payload.get("session_id")
+                if isinstance(payload, dict)
+                else getattr(payload, "session_id", None)
+            )
             if session_id:
                 monitor.remove_session(session_id)
 
@@ -390,6 +398,7 @@ async def run_subscriber(
         stale_detector = StaleTaskDetector(clock=clock)
         # Story 38.4: recovery policy + executor for automated stale-task recovery.
         from registry_state.domain.failure_detection import RecoveryExecutor, RecoveryPolicy
+
         recovery_policy = RecoveryPolicy()
         recovery_executor = RecoveryExecutor(clock=clock)
         if _trace:
@@ -518,6 +527,7 @@ async def run_subscriber(
                         # Look up the task_id for this session from DB.
                         async with session_maker() as session:
                             from registry_state.schema import Session as SessionRow
+
                             result = await session.execute(
                                 select(SessionRow.task_id).where(SessionRow.id == session_id)
                             )
@@ -525,8 +535,10 @@ async def run_subscriber(
                         if task_id_row is None:
                             continue
                         try:
+                            _writer = _get_audit_writer()
+                            assert _writer is not None  # lazy-inited above
                             await emit_session_heartbeat_timeout(
-                                _get_audit_writer(),  # lazy-inited above
+                                _writer,
                                 clock=SystemClock(),
                                 session_id=session_id,
                                 task_id=task_id_row,
@@ -557,11 +569,18 @@ async def run_subscriber(
                         s for s, targets in TaskStateMachine.TRANSITIONS.items() if targets
                     }
                     async with session_maker() as session:
-                        stale_rows = (await session.execute(
-                            select(TaskRow.id, TaskRow.status, TaskRow.updated_at, TaskRow.retry_count).where(
-                                TaskRow.status.in_(non_terminal),
+                        stale_rows = (
+                            await session.execute(
+                                select(
+                                    TaskRow.id,
+                                    TaskRow.status,
+                                    TaskRow.updated_at,
+                                    TaskRow.retry_count,
+                                ).where(
+                                    TaskRow.status.in_(non_terminal),
+                                )
                             )
-                        )).all()
+                        ).all()
                     if stale_rows:
                         stale_results = stale_detector.overdue_tasks_and_mark(
                             [(r.id, r.status, r.updated_at) for r in stale_rows]
@@ -578,8 +597,10 @@ async def run_subscriber(
                                     if severity == "warning"
                                     else emit_task_stale_critical
                                 )
+                                _writer = _get_audit_writer()
+                                assert _writer is not None
                                 await emit_fn(
-                                    _get_audit_writer(),
+                                    _writer,
                                     clock=SystemClock(),
                                     task_id=task_id,
                                     status=status,
@@ -608,7 +629,7 @@ async def run_subscriber(
                         # After emitting stale alerts, evaluate recovery policy
                         # and execute auto_retry or auto_stop as appropriate.
                         # retry_count is read from the DB row (persistent across restarts).
-                        for task_id, status, severity, duration_s, threshold_s in stale_results:
+                        for task_id, status, severity, _dur_s, _thresh_s in stale_results:
                             if severity != "critical":
                                 continue  # warning: no automated action
                             db_retry = next(
@@ -623,8 +644,10 @@ async def run_subscriber(
                             if decision == "auto_retry":
                                 new_retry = db_retry + 1
                                 try:
+                                    _writer = _get_audit_writer()
+                                    assert _writer is not None
                                     await recovery_executor.execute_auto_retry(
-                                        _get_audit_writer(),
+                                        _writer,
                                         task_id=task_id,
                                         from_status=status,
                                         retry_count=new_retry,
@@ -645,8 +668,10 @@ async def run_subscriber(
                                     )
                             elif decision == "auto_stop":
                                 try:
+                                    _writer = _get_audit_writer()
+                                    assert _writer is not None
                                     await recovery_executor.execute_auto_stop(
-                                        _get_audit_writer(),
+                                        _writer,
                                         task_id=task_id,
                                         from_status=status,
                                         reason="max_retries_exceeded",
