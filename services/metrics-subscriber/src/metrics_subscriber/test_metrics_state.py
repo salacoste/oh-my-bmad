@@ -558,9 +558,10 @@ def test_dispatch_table_size_meets_minimum() -> None:
     Breakdown: 10 lifecycle-only + 3 token-bearing + 3 terminal (task.completed,
     task.stop_requested, + task.budget_enforcement_triggered per Story 12.2) +
     5 session + 1 secret + 1 capability (Story 11.2 P1-H3)
-    + 2 stale-task alerting (Story 37.2) = 25.
+    + 2 stale-task alerting (Story 37.2)
+    + 1 pool auto-scaling (FC-P6-1 Story P8-FC1) = 26.
     """
-    assert len(_DISPATCH) == 25, f"dispatch table has {len(_DISPATCH)} entries, expected == 25"
+    assert len(_DISPATCH) == 26, f"dispatch table has {len(_DISPATCH)} entries, expected == 26"
 
 
 def test_dispatch_table_covers_all_task_lifecycle_event_types() -> None:
@@ -834,8 +835,10 @@ def test_cardinality_at_steady_state_is_bounded() -> None:
     # task.assigned emitted by worker pool; family child pre-populated at 0.
     # Story 37.2: bound 67 → 69 for the 2 new task lifecycle event types
     # (task.stale_warning, task.stale_critical) pre-populated at 0.
-    assert canonical_timeseries <= 69, (
-        f"cardinality {canonical_timeseries} exceeds AC10 steady-state bound of 69; "
+    # FC-P6-1: bound 69 → 70 for the new ``omb_events_appended_total{event_family="pool"}``
+    # child pre-populated at 0 (Story P8-FC1).
+    assert canonical_timeseries <= 70, (
+        f"cardinality {canonical_timeseries} exceeds AC10 steady-state bound of 70; "
         f"families: {[(f.name, len(f.samples)) for f in timeseries]}"
     )
 
@@ -894,8 +897,10 @@ def test_cardinality_under_burst_cleanup() -> None:
     # ``omb_events_appended_total{event_family="worker"}`` child (NFR-O15).
     # Story 37.2 bumped 67 → 69 for the 2 new task lifecycle event types
     # (task.stale_warning, task.stale_critical) pre-populated at 0.
-    assert canonical_timeseries <= 69, (
-        f"cardinality {canonical_timeseries} exceeds AC10 burst-cleanup bound of 69"
+    # FC-P6-1 bumped 69 → 70 for the new pre-populated
+    # ``omb_events_appended_total{event_family="pool"}`` child (Story P8-FC1).
+    assert canonical_timeseries <= 70, (
+        f"cardinality {canonical_timeseries} exceeds AC10 burst-cleanup bound of 70"
     )
 
 

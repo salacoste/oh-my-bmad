@@ -1738,6 +1738,39 @@ class RuntimeHealthCheckedPayload(BaseModel):
     trace_id: str = Field(min_length=1)
 
 
+class PoolScaledPayload(BaseModel):
+    """Payload for ``pool.scaled`` events emitted by the auto-scale controller.
+
+    FC-P6-1 / Story P8-FC1 — emitted when the worker pool size changes due to
+    auto-scaling. Records the before/after worker counts and the reason the
+    scale decision was triggered.
+
+    Born at schema 1.1.0 (NEW event — no v1.0.0 predecessor, same convention
+    as ``capability.denied`` / ``key.rotated`` / ``browser.*`` events).
+
+    Field rules:
+
+    * ``old_count`` / ``new_count``: non-negative integers (worker count before
+      and after scaling).
+    * ``trigger_reason``: bounded to 1..64 chars. One of the well-known reason
+      strings (``queue_depth_exceeded``, ``idle_workers_exceeded``) but NOT a
+      ``Literal`` so future reasons can be added without a schema bump.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    old_count: int = Field(ge=0, description="Worker count before scaling")
+    new_count: int = Field(ge=0, description="Worker count after scaling")
+    trigger_reason: str = Field(
+        min_length=1,
+        max_length=64,
+        description=(
+            "Why the scale happened: 'queue_depth_exceeded' or "
+            "'idle_workers_exceeded'"
+        ),
+    )
+
+
 __all__ = [
     "TELEGRAM_REJECTED_SCHEMA_VERSION",
     "AcceptedCommand",
@@ -1811,4 +1844,6 @@ __all__ = [
     # Phase 7 — stale task alerting payloads (Epic 37 / Story 37.2).
     "TaskStaleCriticalPayload",
     "TaskStaleWarningPayload",
+    # FC-P6-1 — worker pool auto-scaling payload.
+    "PoolScaledPayload",
 ]

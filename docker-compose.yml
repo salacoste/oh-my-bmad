@@ -245,6 +245,13 @@ services:
       SESSION_REGISTRY_ACTOR_ID: orchestrator-adapter
       CLAWHIP_BRIDGE_ACTOR_KIND: orchestrator
       CLAWHIP_BRIDGE_ACTOR_ID: orchestrator-adapter
+      # FC-P6-1 — Worker pool auto-scaling (config-gated, disabled by default).
+      WORKER_AUTOSCALE_ENABLED: ${WORKER_AUTOSCALE_ENABLED:-false}
+      WORKER_AUTOSCALE_UP_THRESHOLD: ${WORKER_AUTOSCALE_UP_THRESHOLD:-3}
+      WORKER_AUTOSCALE_DOWN_THRESHOLD: ${WORKER_AUTOSCALE_DOWN_THRESHOLD:-2}
+      WORKER_AUTOSCALE_MIN: ${WORKER_AUTOSCALE_MIN:-1}
+      WORKER_AUTOSCALE_MAX: ${WORKER_AUTOSCALE_MAX:-5}
+      WORKER_AUTOSCALE_POLL_INTERVAL_S: ${WORKER_AUTOSCALE_POLL_INTERVAL_S:-30.0}
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]

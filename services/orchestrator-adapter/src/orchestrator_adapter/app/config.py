@@ -302,3 +302,11 @@ class OrchestratorSettings(BaseSettings):
                 f"(cls={type(self).__name__})"
             )
         return self._resolved_trace_id
+
+    # FC-P6-1 — Worker pool auto-scaling (config-gated, disabled by default).
+    autoscale_enabled: bool = False
+    autoscale_up_threshold: int = 3  # Scale up when queued tasks exceed this
+    autoscale_down_threshold: int = 2  # Scale down when idle workers exceed this
+    autoscale_min: int = 1  # Minimum worker count
+    autoscale_max: int = 5  # Maximum worker count
+    autoscale_poll_interval_s: float = Field(default=30.0, gt=0)  # Seconds between poll cycles

@@ -49,6 +49,7 @@ from events.payloads import (  # noqa: F401 — intentional re-exports
     KeyRotatedPayload,
     LicenseOverridePayload,
     MemoryWrittenPayload,
+    PoolScaledPayload,
     PreCheckOutcome,
     PreCheckResults,
     RuntimeHealthCheckedPayload,
@@ -186,6 +187,8 @@ __all__ = [
     "TaskStaleWarningPayload",
     "TaskAutoRetryPayload",
     "TaskAutoStopPayload",
+    # FC-P6-1 — worker pool auto-scaling payload.
+    "PoolScaledPayload",
 ]
 
 # ---------------------------------------------------------------------------
@@ -480,6 +483,10 @@ def ensure_registered() -> None:
 
     # Story 9.7 / AC10: all event types registered under 1.1.0 above for
     # replay safety. Both 1.0.0 and 1.1.0 entries kept per AC10 option (a).
+
+    # FC-P6-1 — worker pool auto-scaling event (Story P8-FC1).
+    # Born at 1.1.0 (NEW event — no v1.0.0 predecessor).
+    register("pool.scaled", "1.1.0", PoolScaledPayload)
 
 
 # Module-load registration — runs once on first import.

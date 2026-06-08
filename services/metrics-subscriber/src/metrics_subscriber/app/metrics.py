@@ -236,6 +236,8 @@ _EVENT_FAMILIES: Final[tuple[str, ...]] = (
     "worker",  # Story 32.7 — task.assigned (NFR-O15). Per-worker metrics
     #            labeled by worker_id and runtime. Family child for the
     #            worker pool assignment events.
+    "pool",  # FC-P6-1 — pool.scaled (Story P8-FC1). Worker pool auto-scaling
+    #            events. Family child pre-populated at 0.
     "unknown",
 )
 
@@ -676,6 +678,10 @@ _DISPATCH: Final[dict[str, EventMetricUpdater]] = {
     "secret.accessed": _update_secret_accessed,
     # Capability denial (Story 11.2 P1-H3 — wires DD5 counter; emission in 11.2.1).
     "capability.denied": _update_capability_denied,
+    # FC-P6-1 — pool auto-scaling (Story P8-FC1). No dedicated counter beyond
+    # the family counter bump in update_for; dispatch entry ensures the event
+    # is recognised by the subscriber.
+    "pool.scaled": lambda _state, _envelope: None,
 }
 
 
