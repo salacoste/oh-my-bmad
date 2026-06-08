@@ -11,9 +11,11 @@ Coordinates the orchestrator-adapter's main loop:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import json
 from pathlib import Path
+from typing import cast
 
 import structlog
 from events.envelope import is_valid_trace_id
@@ -23,6 +25,7 @@ from orchestrator_adapter.adapters.github_adapter import GitHubAdapter, PRDraftR
 from orchestrator_adapter.adapters.mcp_clients import MCPClientGroup
 from orchestrator_adapter.adapters.omc_runner import OMCRunner
 from orchestrator_adapter.app.config import OrchestratorSettings
+from orchestrator_adapter.domain.autoscale import AutoscaleController, McpClientGroupProto
 from orchestrator_adapter.domain.task_dispatch import (
     BudgetTracker,
     PlanParseResult,
@@ -655,6 +658,38 @@ async def run_adapter(settings: OrchestratorSettings, stop_event: asyncio.Event)
             ready.touch()
             log.info("orchestrator_adapter_ready", actor_id=settings.resolve_actor_id())
 
-            await adapter_loop(clients, settings, stop_event)
+            # FC-P6-1 / Story P8-FC3 — start autoscale poll loop when enabled.
+            autoscale_task: asyncio.Task[None] | None = None
+            if settings.autoscale_enabled:
+                autoscale = AutoscaleController(
+                    settings=settings,
+                    log=log.bind(component="autoscale"),
+                )
+
+                async def autoscale_loop() -> None:
+                    while not stop_event.is_set():
+                        try:
+                            await autoscale.poll(
+                                cast(McpClientGroupProto, clients),
+                            )
+                        except Exception:
+                            log.warning("autoscale_poll_error", exc_info=True)
+                        await asyncio.sleep(settings.autoscale_poll_interval_s)
+
+                autoscale_task = asyncio.create_task(
+                    autoscale_loop(), name="autoscale-loop",
+                )
+                log.info(
+                    "autoscale_enabled",
+                    poll_interval=settings.autoscale_poll_interval_s,
+                )
+
+            try:
+                await adapter_loop(clients, settings, stop_event)
+            finally:
+                if autoscale_task is not None:
+                    autoscale_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await autoscale_task
         finally:
             ready.unlink(missing_ok=True)

@@ -61,8 +61,8 @@ def _make_controller(
         clock=clock,
     )
     # Override query methods to return fixed counts.
-    ctrl._query_pending_count = AsyncMock(return_value=pending)  # type: ignore[attr-defined]
-    ctrl._query_idle_count = AsyncMock(return_value=idle)  # type: ignore[attr-defined]
+    ctrl._query_pending_count = AsyncMock(return_value=pending)  # type: ignore[method-assign]
+    ctrl._query_idle_count = AsyncMock(return_value=idle)  # type: ignore[method-assign]
     return ctrl
 
 
@@ -298,12 +298,12 @@ class TestScaleDown:
         assert ctrl._idle_excess_count == 1
 
         # Simulate non-idle: override query to return 0 idle.
-        ctrl._query_idle_count = AsyncMock(return_value=0)  # type: ignore[attr-defined]
+        ctrl._query_idle_count = AsyncMock(return_value=0)  # type: ignore[method-assign]
         await ctrl.poll(mcp)
         assert ctrl._idle_excess_count == 0
 
         # Back to idle: counter restarts from 0.
-        ctrl._query_idle_count = AsyncMock(return_value=5)  # type: ignore[attr-defined]
+        ctrl._query_idle_count = AsyncMock(return_value=5)  # type: ignore[method-assign]
         await ctrl.poll(mcp)
         assert ctrl._idle_excess_count == 1
 
@@ -446,8 +446,8 @@ class TestBoundsAndCooldown:
         assert ctrl.current_count == 2
 
         # Work drains: pending=0, idle=5.
-        ctrl._query_pending_count = AsyncMock(return_value=0)  # type: ignore[attr-defined]
-        ctrl._query_idle_count = AsyncMock(return_value=5)  # type: ignore[attr-defined]
+        ctrl._query_pending_count = AsyncMock(return_value=0)  # type: ignore[method-assign]
+        ctrl._query_idle_count = AsyncMock(return_value=5)  # type: ignore[method-assign]
         ctrl._last_scale_time = 0.0  # reset cooldown
 
         # Two consecutive idle polls.
