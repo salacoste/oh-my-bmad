@@ -572,6 +572,18 @@ development_status:
   37-3-subscriber-loop-wiring-stale-detection: done  # phase: 7 · Wire stale detection into subscriber poll tick
   37-4-metrics-registration-cardinality-bump: done  # phase: 7 · Register task.stale_warning/critical in metrics subscriber
 
+  # ---------------------------------------------------------------------------
+  # Epic 38: Recovery Loops + Phase Debt (6 stories)
+  # phase: 7 · NFR-R5 recovery · auto_retry/auto_stop + DD-P6-2 + DD-P6-4
+  # ---------------------------------------------------------------------------
+  epic-38: done  # phase: 7 · Recovery loops + phase debt — ALL 6 stories done
+  38-1-atdd-red-phase-recovery-loop-contracts: done  # phase: 7 · 10 xfail + 4 reference ATDD contracts
+  38-2-recovery-policy-payload-models-event-registration: done  # phase: 7 · RecoveryPolicy + TaskAutoRetryPayload/AutoStopPayload + event registration
+  38-3-recovery-executor: done  # phase: 7 · RecoveryExecutor with auto_retry/auto_stop emission
+  38-4-subscriber-loop-wiring-recovery: done  # phase: 7 · Wire recovery policy+executor into subscriber poll tick
+  38-5-dd-p6-2-relative-perf-threshold: done  # phase: 7 · Replace absolute 500ms gate with 5000ms ceiling + @pytest.mark.slow
+  38-6-dd-p6-4-postgres-ci-gate-required: done  # phase: 7 · Wire registry-state-postgres as required gate via needs in pr-gate
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
