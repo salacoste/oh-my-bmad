@@ -625,6 +625,7 @@ async def handle_task_retry_requested(session: AsyncSession, envelope: EventEnve
             "status": "pending",
             "hint": payload.hint,
             "blocker_reason": None,
+            "retry_count": 0,  # manual retry resets the counter
         },
     )
 
@@ -654,6 +655,7 @@ async def handle_task_auto_retry(session: AsyncSession, envelope: EventEnvelope)
         extra_values={
             "status": "pending",
             "blocker_reason": None,
+            "retry_count": payload.retry_count,
         },
     )
 

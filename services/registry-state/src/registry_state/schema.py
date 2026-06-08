@@ -145,6 +145,11 @@ class Task(Base):
     # claim_next_task ORDER BY priority DESC, id ASC ensures high-priority tasks
     # are claimed first, with FIFO tiebreaking within the same priority level.
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Phase 7 follow-up: persistent recovery retry counter. Survives subscriber
+    # restarts so the recovery loop doesn't re-retry a task that already exhausted
+    # its budget. Incremented by handle_task_auto_retry, reset to 0 on any
+    # non-retry state transition (pending → planning, etc).
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class Session(Base):

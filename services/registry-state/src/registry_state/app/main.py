@@ -392,10 +392,6 @@ async def run_subscriber(
         from registry_state.domain.failure_detection import RecoveryExecutor, RecoveryPolicy
         recovery_policy = RecoveryPolicy()
         recovery_executor = RecoveryExecutor(clock=clock)
-        # Story 38.4: in-memory retry counter per task (survives across poll ticks
-        # within a single subscriber process; resets on process restart, which is
-        # acceptable — a restart implies the task's stale episode may have changed).
-        recovery_retry_counts: dict[str, int] = {}
         if _trace:
             log.info(
                 "lifespan phase: handlers_register complete in %.3fs", time.monotonic() - _phase_t0
@@ -562,7 +558,7 @@ async def run_subscriber(
                     }
                     async with session_maker() as session:
                         stale_rows = (await session.execute(
-                            select(TaskRow.id, TaskRow.status, TaskRow.updated_at).where(
+                            select(TaskRow.id, TaskRow.status, TaskRow.updated_at, TaskRow.retry_count).where(
                                 TaskRow.status.in_(non_terminal),
                             )
                         )).all()
@@ -611,18 +607,21 @@ async def run_subscriber(
                         # Story 38.4: automated recovery for critical-stale tasks.
                         # After emitting stale alerts, evaluate recovery policy
                         # and execute auto_retry or auto_stop as appropriate.
+                        # retry_count is read from the DB row (persistent across restarts).
                         for task_id, status, severity, duration_s, threshold_s in stale_results:
                             if severity != "critical":
                                 continue  # warning: no automated action
-                            retry_count = recovery_retry_counts.get(task_id, 0)
+                            db_retry = next(
+                                (r.retry_count for r in stale_rows if r.id == task_id),
+                                0,
+                            )
                             decision = recovery_policy.decide(
                                 status=status,
                                 severity=severity,
-                                retry_count=retry_count,
+                                retry_count=db_retry,
                             )
                             if decision == "auto_retry":
-                                new_retry = retry_count + 1
-                                recovery_retry_counts[task_id] = new_retry
+                                new_retry = db_retry + 1
                                 try:
                                     await recovery_executor.execute_auto_retry(
                                         _get_audit_writer(),
@@ -651,16 +650,14 @@ async def run_subscriber(
                                         task_id=task_id,
                                         from_status=status,
                                         reason="max_retries_exceeded",
-                                        retry_count=retry_count,
+                                        retry_count=db_retry,
                                     )
                                     log.info(
                                         "auto-stop task %s (status=%s, retries exhausted at %d)",
                                         task_id,
                                         status,
-                                        retry_count,
+                                        db_retry,
                                     )
-                                    # Clear retry counter — task is now terminal.
-                                    recovery_retry_counts.pop(task_id, None)
                                 except Exception:
                                     log.warning(
                                         "failed to auto-stop task %s",
