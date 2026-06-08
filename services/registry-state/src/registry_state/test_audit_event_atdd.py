@@ -224,7 +224,7 @@ def _make_created_envelope(
     rng = Random(seed)
     clk = FrozenClock(mono_ns=mono_ns, now=FROZEN_EPOCH)
     return EventEnvelope.create(
-        event_id=new_uuid7(clock=clk, rng=rng),
+        event_id=new_event_id(clock=clk, rng=rng),
         schema_version="1.0.0",
         type="task.created",
         emitted_at=clk.now(),
@@ -246,7 +246,7 @@ def _make_transition_envelope(
     rng = Random(seed)
     clk = FrozenClock(mono_ns=mono_ns, now=FROZEN_EPOCH)
     return EventEnvelope.create(
-        event_id=new_uuid7(clock=clk, rng=rng),
+        event_id=new_event_id(clock=clk, rng=rng),
         schema_version="1.0.0",
         type=event_type,
         emitted_at=clk.now(),
