@@ -117,6 +117,8 @@ EVENT_TO_FSM_TRANSITION: dict[str, str] = {
     "task.completed": "completed",
     "task.stop_requested": "stopped",
     "task.retry_requested": "pending",
+    "task.auto_retry": "pending",
+    "task.auto_stop": "stopped",
     "tier3.budget_override": "executing",
 }
 """Map event types to the FSM target state they produce (P6-I4).

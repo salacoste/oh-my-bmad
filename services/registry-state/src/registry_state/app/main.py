@@ -388,6 +388,14 @@ async def run_subscriber(
         monitor = HeartbeatMonitor(heartbeat_interval_s=heartbeat_interval_s, clock=clock)
         # Story 37.3 / NFR-R5 extension: stale-task detector for non-terminal states.
         stale_detector = StaleTaskDetector(clock=clock)
+        # Story 38.4: recovery policy + executor for automated stale-task recovery.
+        from registry_state.domain.failure_detection import RecoveryExecutor, RecoveryPolicy
+        recovery_policy = RecoveryPolicy()
+        recovery_executor = RecoveryExecutor(clock=clock)
+        # Story 38.4: in-memory retry counter per task (survives across poll ticks
+        # within a single subscriber process; resets on process restart, which is
+        # acceptable — a restart implies the task's stale episode may have changed).
+        recovery_retry_counts: dict[str, int] = {}
         if _trace:
             log.info(
                 "lifespan phase: handlers_register complete in %.3fs", time.monotonic() - _phase_t0
@@ -600,6 +608,65 @@ async def run_subscriber(
                                     task_id,
                                     exc_info=True,
                                 )
+                        # Story 38.4: automated recovery for critical-stale tasks.
+                        # After emitting stale alerts, evaluate recovery policy
+                        # and execute auto_retry or auto_stop as appropriate.
+                        for task_id, status, severity, duration_s, threshold_s in stale_results:
+                            if severity != "critical":
+                                continue  # warning: no automated action
+                            retry_count = recovery_retry_counts.get(task_id, 0)
+                            decision = recovery_policy.decide(
+                                status=status,
+                                severity=severity,
+                                retry_count=retry_count,
+                            )
+                            if decision == "auto_retry":
+                                new_retry = retry_count + 1
+                                recovery_retry_counts[task_id] = new_retry
+                                try:
+                                    await recovery_executor.execute_auto_retry(
+                                        _get_audit_writer(),
+                                        task_id=task_id,
+                                        from_status=status,
+                                        retry_count=new_retry,
+                                        max_retries=recovery_policy.max_retries,
+                                    )
+                                    log.info(
+                                        "auto-retry task %s (status=%s, retry %d/%d)",
+                                        task_id,
+                                        status,
+                                        new_retry,
+                                        recovery_policy.max_retries,
+                                    )
+                                except Exception:
+                                    log.warning(
+                                        "failed to auto-retry task %s",
+                                        task_id,
+                                        exc_info=True,
+                                    )
+                            elif decision == "auto_stop":
+                                try:
+                                    await recovery_executor.execute_auto_stop(
+                                        _get_audit_writer(),
+                                        task_id=task_id,
+                                        from_status=status,
+                                        reason="max_retries_exceeded",
+                                        retry_count=retry_count,
+                                    )
+                                    log.info(
+                                        "auto-stop task %s (status=%s, retries exhausted at %d)",
+                                        task_id,
+                                        status,
+                                        retry_count,
+                                    )
+                                    # Clear retry counter — task is now terminal.
+                                    recovery_retry_counts.pop(task_id, None)
+                                except Exception:
+                                    log.warning(
+                                        "failed to auto-stop task %s",
+                                        task_id,
+                                        exc_info=True,
+                                    )
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=poll_interval_s)
     finally:

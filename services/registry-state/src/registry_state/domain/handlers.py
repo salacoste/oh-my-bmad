@@ -51,6 +51,8 @@ from registry_state.domain.event_types import (
     LicenseOverridePayload,
     TaskApprovalRequestedPayload,
     TaskAssignedPayload,
+    TaskAutoRetryPayload,
+    TaskAutoStopPayload,
     TaskBlockerRaisedPayload,
     TaskBudgetExceededPayload,
     TaskCompletedPayload,
@@ -628,6 +630,51 @@ async def handle_task_retry_requested(session: AsyncSession, envelope: EventEnve
 
 
 # ---------------------------------------------------------------------------
+# Story 38.4 — automated recovery handlers
+# ---------------------------------------------------------------------------
+
+
+async def handle_task_auto_retry(session: AsyncSession, envelope: EventEnvelope) -> None:
+    """Automated recovery: transition task back to ``pending`` (Story 38.4).
+
+    Mirrors ``handle_task_retry_requested`` but without an operator hint —
+    the recovery loop requeues the task for fresh planning. The FSM
+    ``failed`` → ``pending`` transition is validated.
+
+    Raises ``MaterializerError`` if the task row does not exist.
+    """
+    payload = _hydrate(envelope.payload, TaskAutoRetryPayload)
+    assert isinstance(payload, TaskAutoRetryPayload)
+    await _validate_fsm_transition(session, payload.task_id, "pending", envelope.type)
+    await _audit_transition(session, payload.task_id, "pending", envelope.type, envelope)
+    await _touch_task(
+        session,
+        payload.task_id,
+        envelope,
+        extra_values={
+            "status": "pending",
+            "blocker_reason": None,
+        },
+    )
+
+
+async def handle_task_auto_stop(session: AsyncSession, envelope: EventEnvelope) -> None:
+    """Automated recovery: transition task to ``stopped`` (Story 38.4).
+
+    Mirrors ``handle_task_stop_requested`` — stop is terminal, closes
+    active sessions. Triggered when retry budget is exhausted.
+
+    Raises ``MaterializerError`` if the task row does not exist.
+    """
+    payload = _hydrate(envelope.payload, TaskAutoStopPayload)
+    assert isinstance(payload, TaskAutoStopPayload)
+    await _validate_fsm_transition(session, payload.task_id, "stopped", envelope.type)
+    await _audit_transition(session, payload.task_id, "stopped", envelope.type, envelope)
+    await _touch_task(session, payload.task_id, envelope, {"status": "stopped"})
+    await _close_active_session_for_task(session, payload.task_id, envelope.emitted_at)
+
+
+# ---------------------------------------------------------------------------
 # Story 6.6 — Tier-3 audit event materializer handlers (AC-1 through AC-3).
 # ``tier3.action_attempted`` was defined in Story 6.2 and emitted in Story 6.5;
 # this story adds the materializer handler belatedly.
@@ -1005,6 +1052,9 @@ def register_default_handlers(materializer: MaterializerProtocol) -> None:
     materializer.register_handler("approval.rejected", handle_approval_rejected)
     materializer.register_handler("task.stop_requested", handle_task_stop_requested)
     materializer.register_handler("task.retry_requested", handle_task_retry_requested)
+    # Story 38.4 — automated recovery handlers (NFR-R5 recovery action).
+    materializer.register_handler("task.auto_retry", handle_task_auto_retry)
+    materializer.register_handler("task.auto_stop", handle_task_auto_stop)
     # Story 6.6 — 3 tier-3 audit event handlers.
     materializer.register_handler("tier3.action_attempted", handle_tier3_action_attempted)
     materializer.register_handler("tier3.action_performed", handle_tier3_action_performed)
@@ -1054,6 +1104,8 @@ __all__ = [
     "handle_key_rotated",
     "handle_task_approval_requested",
     "handle_task_assigned",
+    "handle_task_auto_retry",
+    "handle_task_auto_stop",
     "handle_task_blocker_raised",
     "handle_task_budget_exceeded",
     "handle_task_completed",
