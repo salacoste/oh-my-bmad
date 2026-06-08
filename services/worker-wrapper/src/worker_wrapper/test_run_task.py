@@ -23,6 +23,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from events.envelope import is_valid_trace_id
 from events.ids import new_uuid7
+from pydantic import SecretStr
 
 from worker_wrapper.adapters.claude_code_runner import (
     ClaudeCodeResult,
@@ -837,3 +838,319 @@ class TestRunTaskBudgetTerminated:
         assert payload["budget_threshold"] == 1000
         assert payload["actual_spend"] == 2000
         assert payload["step"] == 5
+
+
+# ---------------------------------------------------------------------------
+# Story 46.1 / FR10 — PR draft creation via GitHubClient
+# ---------------------------------------------------------------------------
+
+
+def _make_pr_settings(
+    tmp_path: Path,
+    *,
+    github_repo: str = "acme/my-project",
+    github_base_branch: str = "main",
+    event_log_dir: str = "",
+) -> WorkerSettings:
+    """Settings with github_repo configured for PR draft tests."""
+    return WorkerSettings(
+        task_id="t-00000000-0000-7000-8000-000000000001",
+        worktree_path=str(tmp_path),
+        event_log_dir=event_log_dir or str(tmp_path / "logs"),
+        github_repo=github_repo,
+        github_base_branch=github_base_branch,
+        github_token=SecretStr("ghp_test_token"),
+    )
+
+
+class TestGatedActionPRDraftSuccess:
+    """When approval is granted and GitHubClient succeeds, PR draft is created."""
+
+    @pytest.mark.asyncio
+    async def test_pr_draft_created_on_approval_granted(self, tmp_path: Path) -> None:
+        from worker_wrapper.adapters.github_client import PRDraftResult
+
+        settings = _make_pr_settings(tmp_path)
+        clients = _FakeClients()
+
+        push_event = ExtractedEvent(
+            event_type="git.push",
+            tool_name="Bash",
+            tool_input={"command": "git push origin feat-x"},
+        )
+        result = ClaudeCodeResult(
+            exit_code=0,
+            session_id="s-pr-1",
+            events=[push_event],
+        )
+
+        fake_approval = MagicMock()
+        fake_approval.granted = True
+        fake_approval.event_id = "approval-evt-pr"
+        fake_approval.idempotency_key = "key-pr-1"
+        fake_approval.reason = ""
+
+        pr_result = PRDraftResult(
+            success=True,
+            url="https://github.com/acme/my-project/pull/42",
+            number=42,
+        )
+
+        with (
+            patch("worker_wrapper.app.main.get_runtime_adapter") as mock_runner,
+            patch("worker_wrapper.app.main.ApprovalWaiter") as mock_waiter,
+            patch("worker_wrapper.app.main.GitHubClient") as mock_gh_cls,
+            patch("worker_wrapper.app.main._emit_tier3_performed", new_callable=AsyncMock),
+            patch("asyncio.create_subprocess_exec") as mock_git,
+        ):
+            mock_runner.return_value.run = AsyncMock(return_value=result)
+            mock_waiter.return_value.wait_for_approval = AsyncMock(
+                return_value=fake_approval,
+            )
+
+            # Mock git rev-parse to return a branch name.
+            git_proc = AsyncMock()
+            git_proc.communicate = AsyncMock(return_value=(b"feat-x\n", b""))
+            git_proc.returncode = 0
+            mock_git.return_value = git_proc
+
+            # Mock GitHubClient context manager.
+            mock_gh = AsyncMock()
+            mock_gh.create_pr_draft = AsyncMock(return_value=pr_result)
+            mock_gh.__aenter__ = AsyncMock(return_value=mock_gh)
+            mock_gh.__aexit__ = AsyncMock(return_value=False)
+            mock_gh_cls.return_value = mock_gh
+
+            await run_task(_as_clients(clients), settings, "implement X", tmp_path)
+
+        # GitHubClient.create_pr_draft was called with correct args.
+        mock_gh.create_pr_draft.assert_awaited_once_with(
+            "acme",
+            "my-project",
+            "[Draft] t-00000000-0000-7000-8000-000000000001",
+            "feat-x",
+            "main",
+            "Automated PR draft for task t-00000000-0000-7000-8000-000000000001",
+        )
+
+        # Task completed successfully.
+        state_file = tmp_path / ".lifecycle-state.json"
+        data = json.loads(state_file.read_text())
+        assert data["state"] == "completed"
+
+
+class TestGatedActionPRDraftFailure:
+    """When GitHubClient fails, the worker still completes (no crash)."""
+
+    @pytest.mark.asyncio
+    async def test_pr_draft_failure_does_not_crash_worker(self, tmp_path: Path) -> None:
+        from worker_wrapper.adapters.github_client import PRDraftResult
+
+        settings = _make_pr_settings(tmp_path)
+        clients = _FakeClients()
+
+        push_event = ExtractedEvent(
+            event_type="git.push",
+            tool_name="Bash",
+            tool_input={"command": "git push origin feat-y"},
+        )
+        result = ClaudeCodeResult(
+            exit_code=0,
+            session_id="s-pr-fail",
+            events=[push_event],
+        )
+
+        fake_approval = MagicMock()
+        fake_approval.granted = True
+        fake_approval.event_id = "approval-evt-fail"
+        fake_approval.idempotency_key = "key-pr-fail"
+        fake_approval.reason = ""
+
+        pr_result = PRDraftResult(success=False, error="422 Validation Failed")
+
+        with (
+            patch("worker_wrapper.app.main.get_runtime_adapter") as mock_runner,
+            patch("worker_wrapper.app.main.ApprovalWaiter") as mock_waiter,
+            patch("worker_wrapper.app.main.GitHubClient") as mock_gh_cls,
+            patch("worker_wrapper.app.main._emit_tier3_performed", new_callable=AsyncMock),
+            patch("asyncio.create_subprocess_exec") as mock_git,
+        ):
+            mock_runner.return_value.run = AsyncMock(return_value=result)
+            mock_waiter.return_value.wait_for_approval = AsyncMock(
+                return_value=fake_approval,
+            )
+
+            git_proc = AsyncMock()
+            git_proc.communicate = AsyncMock(return_value=(b"feat-y\n", b""))
+            git_proc.returncode = 0
+            mock_git.return_value = git_proc
+
+            mock_gh = AsyncMock()
+            mock_gh.create_pr_draft = AsyncMock(return_value=pr_result)
+            mock_gh.__aenter__ = AsyncMock(return_value=mock_gh)
+            mock_gh.__aexit__ = AsyncMock(return_value=False)
+            mock_gh_cls.return_value = mock_gh
+
+            await run_task(_as_clients(clients), settings, "implement Y", tmp_path)
+
+        # PR draft was attempted but failed — worker still completes.
+        mock_gh.create_pr_draft.assert_awaited_once()
+        state_file = tmp_path / ".lifecycle-state.json"
+        data = json.loads(state_file.read_text())
+        assert data["state"] == "completed"
+
+
+class TestGatedActionPRDraftException:
+    """When GitHubClient raises an exception, the worker still completes."""
+
+    @pytest.mark.asyncio
+    async def test_pr_draft_exception_does_not_crash_worker(self, tmp_path: Path) -> None:
+        settings = _make_pr_settings(tmp_path)
+        clients = _FakeClients()
+
+        push_event = ExtractedEvent(
+            event_type="git.push",
+            tool_name="Bash",
+            tool_input={"command": "git push origin feat-z"},
+        )
+        result = ClaudeCodeResult(
+            exit_code=0,
+            session_id="s-pr-exc",
+            events=[push_event],
+        )
+
+        fake_approval = MagicMock()
+        fake_approval.granted = True
+        fake_approval.event_id = "approval-evt-exc"
+        fake_approval.idempotency_key = "key-pr-exc"
+        fake_approval.reason = ""
+
+        with (
+            patch("worker_wrapper.app.main.get_runtime_adapter") as mock_runner,
+            patch("worker_wrapper.app.main.ApprovalWaiter") as mock_waiter,
+            patch("worker_wrapper.app.main.GitHubClient") as mock_gh_cls,
+            patch("worker_wrapper.app.main._emit_tier3_performed", new_callable=AsyncMock),
+            patch("asyncio.create_subprocess_exec") as mock_git,
+        ):
+            mock_runner.return_value.run = AsyncMock(return_value=result)
+            mock_waiter.return_value.wait_for_approval = AsyncMock(
+                return_value=fake_approval,
+            )
+
+            git_proc = AsyncMock()
+            git_proc.communicate = AsyncMock(return_value=(b"feat-z\n", b""))
+            git_proc.returncode = 0
+            mock_git.return_value = git_proc
+
+            mock_gh = AsyncMock()
+            mock_gh.__aenter__ = AsyncMock(return_value=mock_gh)
+            mock_gh.__aexit__ = AsyncMock(return_value=False)
+            mock_gh_cls.return_value = mock_gh
+            # Simulate unexpected exception from GitHubClient context.
+            mock_gh.create_pr_draft = AsyncMock(side_effect=RuntimeError("unexpected"))
+
+            await run_task(_as_clients(clients), settings, "implement Z", tmp_path)
+
+        # Exception was swallowed — worker still completes.
+        state_file = tmp_path / ".lifecycle-state.json"
+        data = json.loads(state_file.read_text())
+        assert data["state"] == "completed"
+
+
+class TestGatedActionNoGitHubRepo:
+    """When github_repo is not configured, PR draft is skipped gracefully."""
+
+    @pytest.mark.asyncio
+    async def test_skips_when_no_github_repo(self, tmp_path: Path) -> None:
+        settings = _make_pr_settings(tmp_path, github_repo="")
+        clients = _FakeClients()
+
+        push_event = ExtractedEvent(
+            event_type="git.push",
+            tool_name="Bash",
+            tool_input={"command": "git push origin main"},
+        )
+        result = ClaudeCodeResult(
+            exit_code=0,
+            session_id="s-no-repo",
+            events=[push_event],
+        )
+
+        fake_approval = MagicMock()
+        fake_approval.granted = True
+        fake_approval.event_id = "approval-evt-no-repo"
+        fake_approval.idempotency_key = "key-no-repo"
+        fake_approval.reason = ""
+
+        with (
+            patch("worker_wrapper.app.main.get_runtime_adapter") as mock_runner,
+            patch("worker_wrapper.app.main.ApprovalWaiter") as mock_waiter,
+            patch("worker_wrapper.app.main.GitHubClient") as mock_gh_cls,
+            patch("worker_wrapper.app.main._emit_tier3_performed", new_callable=AsyncMock),
+        ):
+            mock_runner.return_value.run = AsyncMock(return_value=result)
+            mock_waiter.return_value.wait_for_approval = AsyncMock(
+                return_value=fake_approval,
+            )
+
+            await run_task(_as_clients(clients), settings, "implement W", tmp_path)
+
+        # GitHubClient was never instantiated.
+        mock_gh_cls.assert_not_called()
+
+        state_file = tmp_path / ".lifecycle-state.json"
+        data = json.loads(state_file.read_text())
+        assert data["state"] == "completed"
+
+
+class TestGatedActionNoBranch:
+    """When git branch cannot be resolved, PR draft is skipped gracefully."""
+
+    @pytest.mark.asyncio
+    async def test_skips_when_git_branch_fails(self, tmp_path: Path) -> None:
+        settings = _make_pr_settings(tmp_path)
+        clients = _FakeClients()
+
+        push_event = ExtractedEvent(
+            event_type="git.push",
+            tool_name="Bash",
+            tool_input={"command": "git push origin main"},
+        )
+        result = ClaudeCodeResult(
+            exit_code=0,
+            session_id="s-no-branch",
+            events=[push_event],
+        )
+
+        fake_approval = MagicMock()
+        fake_approval.granted = True
+        fake_approval.event_id = "approval-evt-no-branch"
+        fake_approval.idempotency_key = "key-no-branch"
+        fake_approval.reason = ""
+
+        with (
+            patch("worker_wrapper.app.main.get_runtime_adapter") as mock_runner,
+            patch("worker_wrapper.app.main.ApprovalWaiter") as mock_waiter,
+            patch("worker_wrapper.app.main.GitHubClient") as mock_gh_cls,
+            patch("worker_wrapper.app.main._emit_tier3_performed", new_callable=AsyncMock),
+            patch("asyncio.create_subprocess_exec") as mock_git,
+        ):
+            mock_runner.return_value.run = AsyncMock(return_value=result)
+            mock_waiter.return_value.wait_for_approval = AsyncMock(
+                return_value=fake_approval,
+            )
+
+            # git rev-parse fails.
+            git_proc = AsyncMock()
+            git_proc.communicate = AsyncMock(return_value=(b"", b"fatal: not a git repo"))
+            git_proc.returncode = 128
+            mock_git.return_value = git_proc
+
+            await run_task(_as_clients(clients), settings, "implement V", tmp_path)
+
+        # GitHubClient was never instantiated.
+        mock_gh_cls.assert_not_called()
+
+        state_file = tmp_path / ".lifecycle-state.json"
+        data = json.loads(state_file.read_text())
+        assert data["state"] == "completed"

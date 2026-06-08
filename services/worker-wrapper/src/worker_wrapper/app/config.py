@@ -265,6 +265,13 @@ class WorkerSettings(BaseSettings):
     github_api_base_url: str = "https://api.github.com"
     github_timeout_s: float = Field(default=10.0, gt=0)
 
+    # Story 46.1 / FR10 — GitHub repo for PR draft creation.
+    # Format: "owner/repo" (e.g. "acme/my-project"). Blank means PR draft
+    # creation is skipped (graceful no-op in _gated_action).
+    github_repo: str = ""
+    # Base branch for PR drafts (default: "main").
+    github_base_branch: str = "main"
+
     # Story 9.6 review pass-1 H2 — CLI flag gating.
     # Default OFF until Claude Code upstream consumes ``--trace-id``. The
     # ``OMB_TRACE_ID`` env var (set by ``_spawn``) is the non-breaking

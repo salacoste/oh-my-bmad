@@ -50,6 +50,7 @@ from secret_hygiene.license_scan import LicenseFinding, scan_files_for_licenses
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from worker_wrapper.adapters.approval_waiter import ApprovalWaiter
+from worker_wrapper.adapters.github_client import GitHubClient
 from worker_wrapper.adapters.lifecycle_manager import LifecycleManager
 from worker_wrapper.adapters.mcp_clients import MCPClientGroup
 from worker_wrapper.adapters.runtime_factory import get_runtime_adapter
@@ -656,19 +657,74 @@ async def run_task(
     async def _gated_action() -> None:
         """Execute git push + PR draft (Tier-3 gated action).
 
-        The actual git push was already attempted by Claude Code — the
-        gated action here is a placeholder for PR draft creation. In
-        production, this would use GitHubClient.create_pr_draft with
-        owner/repo/branch resolved from the worktree's git state.
+        The actual git push was already attempted by Claude Code. This
+        creates a draft PR via GitHubClient, resolving owner/repo from
+        settings and the head branch from the worktree's git state.
 
-        # TODO(future-story): implement real PR draft creation via
-        # GitHubClient, resolving owner/repo/head from worktree git state.
+        Failures are logged but never crash the worker — the task still
+        completes even if PR draft creation fails.
         """
-        log.warning(
-            "gated_action_placeholder",
-            task_id=task_id,
-            _hint="gated action is a no-op placeholder — PR draft creation not yet implemented",
-        )
+        repo_slug = settings.github_repo
+        if not repo_slug or "/" not in repo_slug:
+            log.warning(
+                "gated_action_skipped_no_repo",
+                task_id=task_id,
+                github_repo=repr(repo_slug),
+            )
+            return
+
+        parts = repo_slug.split("/", 1)
+        owner, repo = parts[0], parts[1]
+
+        # Resolve head branch from the worktree's current branch.
+        head_branch = ""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git",
+                "rev-parse",
+                "--abbrev-ref",
+                "HEAD",
+                cwd=str(worktree_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+            if proc.returncode == 0:
+                head_branch = stdout.decode().strip()
+        except Exception:
+            log.warning("gated_action_git_branch_failed", task_id=task_id)
+
+        if not head_branch:
+            log.warning(
+                "gated_action_skipped_no_branch",
+                task_id=task_id,
+            )
+            return
+
+        title = f"[Draft] {task_id}"
+        body = f"Automated PR draft for task {task_id}"
+        base_branch = settings.github_base_branch
+
+        try:
+            async with GitHubClient(settings) as gh:
+                result = await gh.create_pr_draft(
+                    owner, repo, title, head_branch, base_branch, body
+                )
+            if result.success:
+                log.info(
+                    "pr_draft_created",
+                    task_id=task_id,
+                    pr_url=result.url,
+                    pr_number=result.number,
+                )
+            else:
+                log.warning(
+                    "pr_draft_failed",
+                    task_id=task_id,
+                    error=result.error,
+                )
+        except Exception:
+            log.exception("pr_draft_error", task_id=task_id)
 
     # Try to restore from a previous run (restart recovery, 5.17b).
     mgr = LifecycleManager.restore_from(
