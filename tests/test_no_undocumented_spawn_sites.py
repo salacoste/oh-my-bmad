@@ -184,6 +184,10 @@ _FUNC_ALLOWLIST: dict[str, dict[str, str]] = {
         # Worker approval flow — ``git diff --stat`` for diff summaries.
         # cwd pinned to worktree, no user input in argv, no secrets in env.
         "_get_diff_summary": "asyncio.create_subprocess_exec",
+        # Story 46.1 / FR10 — PR draft creation resolves current branch via
+        # ``git rev-parse --abbrev-ref HEAD`` in worktree. Short-lived, cwd
+        # pinned to worktree, no user input, no secrets in argv/env.
+        "_gated_action": "asyncio.create_subprocess_exec",
     },
     _rel("services/orchestrator-adapter/src/orchestrator_adapter/adapters/omc_runner.py"): {
         "OMCRunner._spawn": "asyncio.create_subprocess_exec",
