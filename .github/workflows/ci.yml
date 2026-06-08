@@ -23,6 +23,7 @@ jobs:
     name: PR gate (ruff + mypy + pytest)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    needs: [registry-state-postgres]  # DD-P6-4: Postgres gate required
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
@@ -83,7 +84,7 @@ jobs:
       - name: pytest -m "not slow"
         run: uv run pytest -m "not slow"
 
-  # TODO: make required after Postgres is stable (Story 30-5 FR101)
+  # Required: Postgres matrix must pass alongside SQLite (DD-P6-4).
   registry-state-postgres:
     name: Registry-state tests (Postgres service container)
     runs-on: ubuntu-24.04
