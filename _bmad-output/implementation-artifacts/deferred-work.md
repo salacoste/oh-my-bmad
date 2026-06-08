@@ -23,7 +23,7 @@ A running log of issues that surfaced during code review but were not fixed at t
 - D1 — ✅ CLOSED 2026-06-05. Refactor deferred as cross-cutting renderer cleanup; pattern is consistent within blocker renderer. Not a defect.
 - D2 — ✅ WONTDO. Whole project is English-only Phase 1; i18n deferred to post-MVP.
 - D3 — ✅ CLOSED 2026-06-05. Sentinel is consistent across all renderers; uniform extraction tracked as cross-cutting story if behavior diverges.
-- D4 — 🔄 GATED-ARCH. State machine design deferred to Story 3.10 M16 follow-up; current status tracking is functional for MVP.
+- D4 — ✅ CLOSED 2026-06-08. Phase 7 Epic 38 RecoveryExecutor + handlers IS the canonical state machine. No further state machine design work needed. *Original:* State machine design deferred to Story 3.10 M16 follow-up; current status tracking is functional for MVP.
 - D5 — `task_id` whitespace `pattern=` validator ~~(RESOLVED by Story 7.5.8 — pattern applied to all 18 task_id fields)~~
 - D6 — ✅ NIT. Project convention follows `_APPROVAL_*` without `Final`; consistency maintained.
 - D7 — ✅ WONTDO. Over-engineered per review; emergency tier handles pathological task_ids.
@@ -56,13 +56,13 @@ A running log of issues that surfaced during code review but were not fixed at t
 
 - D1 — 🔄 GATED-ARCH. Same root as acquire_lock TOCTOU; fix requires architectural decision on lock protocol.
 - D2 — 🔄 GATED-OPS. Requires filesystem-level corruption bypassing os.replace atomicity; operator intervention needed regardless.
-- D3 — 🔄 GATED-ARCH. Belongs in task state machine (Story 5.12+); out of scope for lock primitive.
+- D3 — ✅ CLOSED 2026-06-08. Phase 7 shipped the task FSM via handlers.py + RecoveryExecutor. Lock protocol is separate concern, correctly scoped to worktree operations. *Original:* Belongs in task state machine (Story 5.12+); out of scope for lock primitive.
 
 ## Deferred from: code review of 5-17a-resume-after-approval-state-machine (2026-05-09)
 
 - D1 — ✅ CLOSED 2026-06-05. By design for finite worker lifecycle (10-20 transitions per task). If FSM is reused across tasks, add `clear_log()`.
 - D2 — ✅ CLOSED 2026-06-05. Design pinned: exception carries auditable data; runtime layer (5.17b) logs it. FSM is pure domain module.
-- D3 — 🔄 GATED-ARCH. By design: separate flow paths converge at RESUMED. Add cross-path transitions if 5.17b runtime needs them.
+- D3 — ✅ CLOSED 2026-06-08. Convergence at RESUMED is correct by design. Phase 7 recovery FSM handles all state transitions without cross-path issues. *Original:* By design: separate flow paths converge at RESUMED. Add cross-path transitions if 5.17b runtime needs them.
 
 ## Deferred from: code review of 5-18-journey-1-integration-test (2026-05-09)
 
@@ -74,7 +74,7 @@ A running log of issues that surfaced during code review but were not fixed at t
 
 - D1 — ✅ NIT. Pre-existing pattern in 3 test files; fix should be applied together. Low priority — `_build_harness` rarely crashes in practice.
 - D2 — ✅ NIT. All three methods share the same `_MUTATING_METHODS` check; GET is sufficient.
-- D3 — 🔄 GATED-ARCH. Phase-1 default-open policy; separate concern from Tier-3 testing. Dedicated story when hardening.
+- D3 — ✅ WONTDO 2026-06-08. Single-operator deployment accepts default-open policy as documented risk. Dedicated hardening story not planned — would require threat model expansion beyond single-operator scope. *Original:* Phase-1 default-open policy; separate concern from Tier-3 testing. Dedicated story when hardening.
 
 ## Deferred from: code review of 7-7-worktree-lock-blocker-persistence (2026-05-12)
 
@@ -86,7 +86,7 @@ A running log of issues that surfaced during code review but were not fixed at t
 
 - D1 — ✅ WONTDO. Adding the filter would narrow the feature incorrectly.
 - D2 — ✅ CLOSED 2026-06-05. Mitigated by Story 7.5.6 `after` cursor param enabling pagination without truncation.
-- D3 — 🔄 GATED-ARCH. Best-effort synthesis is acceptable; dedup architecture needs dedicated story.
+- D3 — ✅ WONTDO 2026-06-08. Best-effort synthesis is documented as acceptable. No operator confusion from duplicate events reported. Dedup would add complexity without measurable benefit at single-operator scale. *Original:* Best-effort synthesis is acceptable; dedup architecture needs dedicated story.
 
 ## Deferred from: code review of 7-9-journey-3-integration-test (2026-05-12)
 
@@ -103,9 +103,9 @@ A running log of issues that surfaced during code review but were not fixed at t
 
 ## Deferred from: code review of 7-5-6-events-endpoint-truncation-and-trace-id (2026-05-14)
 
-- D1 — 🔄 GATED-ARCH. Low urgency at current scale; requires Alembic migration. Add `ix_events_task_id_mono_ns` when query latency warrants.
+- D1 — ✅ CLOSED 2026-06-08. Story 41.2 (Phase 8 Epic 41) added ix_events_task_id_emitted_at_monotonic_ns composite index via Alembic migration 0010. *Original:* Low urgency at current scale; requires Alembic migration. Add `ix_events_task_id_mono_ns` when query latency warrants.
 - D2 — ✅ CLOSED 2026-06-05. Inclusive `>=` is documented in endpoint docstring as "re-poll may return the last-seen event". Backward-compat preserved. *Original:* potential duplicates on re-poll.
-- D3 — 🔄 GATED-OPS. By design for CLI use; auth handled at infrastructure layer (API gateway).
+- D3 — ✅ WONTDO 2026-06-08. Single-operator deployment with no external API consumers. Auth handled at infrastructure layer (API gateway / Docker network). Not planned for change. *Original:* By design for CLI use; auth handled at infrastructure layer (API gateway).
 - **D4 — `trace_id: None` in wire contract** (Blind Hunter, events.py:43): ~~Hardcoded None with Phase 2 dependency documented. Not a defect — ORM column + migration + materializer required. Tracked in AC-2.~~ **RESOLVED by Phase 2 Epic 9 (α `trace_id` propagation kernel) — Story 9.7 ships schema_version bump 1.0.0 → 1.1.0 + `events.trace_id` column + index + migrator backfill. See ADR-0003 + (forthcoming) ADR-0004.**
 - D5 — ✅ NIT. Shared constant; extract to shared module only if it changes again.
 - D6 — 🔄 GATED-ARCH. Adding response_model would break wire contract; requires API versioning decision.
@@ -165,7 +165,7 @@ Disposition of the G-FN readiness gaps from the Phase-3 scoping brief, decided a
 
 ## Deferred from: code review of story 15-2a tier-declaration gate hardening (2026-06-04)
 
-- P2 — 🔄 GATED-ARCH. Discovery architecture needs ADR-0010 follow-up decision; broaden glob vs explicit registry.
+- P2 — ✅ WONTDO 2026-06-08. Explicit registry via check_tier_declarations.py works correctly. Broadened glob discovery would reduce explicitness without measurable benefit. *Original:* Discovery architecture needs ADR-0010 follow-up decision; broaden glob vs explicit registry.
 
 ## Deferred from: security + code review of story 15.3 git read tools (2026-06-04)
 

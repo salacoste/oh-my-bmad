@@ -36,7 +36,7 @@
 
 generated: 2026-04-22
 last_updated: 2026-06-08T12:00:00Z
-current_phase: 7  # Phase 7 IN PROGRESS — Reliability & operator tooling (Epics 35-40)
+current_phase: 8  # Phase 8 IN PROGRESS — Platform hardening & debt resolution (Epics 41-45)
 
 development_status:
   # =========================================================================
@@ -1018,3 +1018,24 @@ audit_trail:
       NFR-R5 (detection within 60s SLA = 2 × 30s poll interval). FR109
       (WorkerHeartbeatPayload + worker.heartbeat) + FR110 (heartbeat feeding)
       + NFR-R11 (crash detection) now fully implemented.
+  - date: "2026-06-08"
+    event: phase-8-started
+    reason: >
+      Phase 8 (Platform Hardening & Debt Resolution) started. Scope: resolve
+      all 20 GATED deferred items + 2 optional feature candidates (FC-P6-1
+      auto-scaling, FC-P6-2 Gemini structured output). 5 epics (41-45).
+      Phase 7 COMPLETE with 24/24 stories, 6/6 epics, 11/11 ship-blocker
+      items green. Phase 8 PRD + architecture + epics amendments authored.
+      DOCS/STATUS change — CI gates green (ruff 0 errors, mypy 0 errors,
+      3101 tests passed).
+  - date: "2026-06-08"
+    event: epic-41-started
+    from: backlog
+    to: in-progress
+    story: 41-2-events-composite-index
+    reason: >
+      Epic 41 (API Contract Formalization) started. Story 41.2 adds
+      ix_events_task_id_emitted_at_monotonic_ns composite index via Alembic
+      migration 0010. Resolves deferred-work D1(7-5-6). 445 registry-state
+      tests pass. Also fixes all CI gate errors: ruff 0 errors (was 57),
+      mypy 0 errors (was 162) across 38 files.
