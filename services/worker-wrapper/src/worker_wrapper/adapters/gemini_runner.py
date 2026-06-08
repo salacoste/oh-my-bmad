@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import structlog
+from pydantic import BaseModel, Field, ValidationError
 
 from worker_wrapper.app.config import WorkerSettings
 from worker_wrapper.domain.runtime_adapter import HealthCheckResult
@@ -129,6 +130,60 @@ class GeminiResult:
     # Token usage from Gemini response ``usageMetadata`` fields.
     input_tokens: int = 0
     output_tokens: int = 0
+
+
+# ---------------------------------------------------------------------------
+# FC-P6-2: Pydantic models for structured output schema enforcement.
+# Each model validates a Gemini CLI --json message type before it enters
+# the processing pipeline. Unknown message types pass through unvalidated
+# (best-effort, same as before — we only validate known shapes).
+# ---------------------------------------------------------------------------
+
+
+class _SessionCreatedMessage(BaseModel):
+    """Schema for ``type == "session.created"`` messages."""
+
+    type: str = "session.created"
+    session_id: str = ""
+
+
+class _UsageMetadata(BaseModel):
+    """Gemini API convention for token usage (camelCase JSON → snake_case Python)."""
+
+    model_config = {"populate_by_name": True}
+    prompt_token_count: int = Field(default=0, alias="promptTokenCount")
+    candidates_token_count: int = Field(default=0, alias="candidatesTokenCount")
+
+
+class _UsageFallback(BaseModel):
+    """Codex-convention fallback for token usage."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+class _ToolCall(BaseModel):
+    """A single tool invocation within a turn."""
+
+    name: str = ""
+    input: dict[str, Any] = Field(default_factory=dict)
+
+
+class _TurnCompletedMessage(BaseModel):
+    """Schema for ``type == "turn.completed"`` messages."""
+
+    model_config = {"populate_by_name": True}
+    type: str = "turn.completed"
+    tool_calls: list[_ToolCall] = Field(default_factory=list)
+    usage_metadata: _UsageMetadata | None = Field(default=None, alias="usageMetadata")
+    usage: _UsageFallback | None = None
+
+
+# Map message type → Pydantic model for validation.
+_MESSAGE_SCHEMAS: dict[str, type[BaseModel]] = {
+    "session.created": _SessionCreatedMessage,
+    "turn.completed": _TurnCompletedMessage,
+}
 
 
 # Exit code mapping per architecture amendment.
@@ -239,7 +294,13 @@ class GeminiRunner:
         )
 
     async def _read_stream(self, process: asyncio.subprocess.Process) -> None:
-        """Read JSONL from stdout, dispatch each line to ``_handle_message``."""
+        """Read JSONL from stdout, validate against schema, dispatch to handler.
+
+        FC-P6-2: Each parsed JSONL message is validated against a Pydantic
+        model before processing. Unknown message types pass through unvalidated
+        (best-effort). Invalid messages are logged and skipped — the adapter
+        never crashes on format drift, it just produces empty defaults.
+        """
         if process.stdout is None:
             return
         log = structlog.get_logger(__name__)
@@ -252,6 +313,21 @@ class GeminiRunner:
             except json.JSONDecodeError:
                 log.warning("gemini_malformed_json", line=line[:200])
                 continue
+            # FC-P6-2: validate known message types against Pydantic schemas.
+            msg_type = msg.get("type") if isinstance(msg, dict) else None
+            schema_cls = _MESSAGE_SCHEMAS.get(msg_type) if msg_type else None
+            if schema_cls is not None:
+                try:
+                    validated = schema_cls.model_validate(msg)
+                    msg = validated.model_dump(by_alias=True)
+                except ValidationError as exc:
+                    log.warning(
+                        "gemini_schema_violation",
+                        msg_type=msg_type,
+                        errors=exc.error_count(),
+                        line=line[:200],
+                    )
+                    continue
             self._handle_message(msg)
 
     def _handle_message(self, msg: dict[str, Any]) -> None:
