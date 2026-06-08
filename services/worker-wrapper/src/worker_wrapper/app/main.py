@@ -26,12 +26,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 from pathlib import Path
 from typing import Any, Protocol
 
 import structlog
 from events.clock import SystemClock
 from events.payloads import (
+    DiffSummary,
     SessionFinishedPayload,
     SessionHeartbeatPayload,
     SessionStartedPayload,
@@ -40,10 +42,12 @@ from events.payloads import (
     TaskLicenseFlaggedPayload,
     Tier3ActionPerformedPayload,
 )
+from idempotency import IdempotencyCacheStore, create_idempotency_schema
 from mcp import ClientSession
 
 # secret_hygiene is a workspace package; imported here for license scan.
 from secret_hygiene.license_scan import LicenseFinding, scan_files_for_licenses
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from worker_wrapper.adapters.approval_waiter import ApprovalWaiter
 from worker_wrapper.adapters.lifecycle_manager import LifecycleManager
@@ -562,6 +566,51 @@ async def perform_runtime_handoff(
     return new_adapter
 
 
+async def _get_diff_summary(worktree_path: Path) -> DiffSummary | None:
+    """Return a ``DiffSummary`` from ``git diff --stat`` in *worktree_path*.
+
+    Returns ``None`` if git is unavailable, the worktree is not a git repo,
+    or the diff output cannot be parsed.  Never raises.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            "diff",
+            "--stat",
+            cwd=str(worktree_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode != 0:
+            return None
+
+        text = stdout.decode().strip()
+        if not text:
+            return DiffSummary(files=0, insertions=0, deletions=0)
+
+        # The last line of ``git diff --stat`` looks like:
+        #   3 files changed, 42 insertions(+), 7 deletions(-)
+        # Variants: "1 file changed, 5 insertions(+)" (no deletions),
+        # or just "2 files changed" (no insertions/deletions).
+        summary_line = text.split("\n")[-1]
+
+        files_m = re.search(r"(\d+) files? changed", summary_line)
+        ins_m = re.search(r"(\d+) insertion", summary_line)
+        del_m = re.search(r"(\d+) deletion", summary_line)
+
+        if files_m is None:
+            return None
+
+        return DiffSummary(
+            files=int(files_m.group(1)),
+            insertions=int(ins_m.group(1)) if ins_m else 0,
+            deletions=int(del_m.group(1)) if del_m else 0,
+        )
+    except Exception:
+        return None
+
+
 async def run_task(
     clients: _MCPClients,
     settings: WorkerSettings,
@@ -652,14 +701,23 @@ async def run_task(
         return
 
     # Fresh run — create LifecycleManager and run Claude Code.
-    # TODO(future-story): instantiate IdempotencyCacheStore and pass
-    # idempotency_cache= below for AC-5 exactly-once enforcement.
+    cache_db_path = worktree_path / ".idempotency-cache.sqlite3"
+    cache_engine = create_async_engine(
+        f"sqlite+aiosqlite:///{cache_db_path}",
+    )
+    await create_idempotency_schema(cache_engine)
+    cache_session_maker = async_sessionmaker(cache_engine, expire_on_commit=False)
+    idempotency_cache = IdempotencyCacheStore(
+        session_maker=cache_session_maker,
+        clock=SystemClock(),
+    )
     mgr = LifecycleManager(
         fsm=LifecycleFSM(),
         state_path=state_path,
         task_id=task_id,
         emit_event=_emit_event,
         gated_action=_gated_action,
+        idempotency_cache=idempotency_cache,
     )
 
     # Phase 5 / FR89 — select runtime adapter via factory. Per-task override
@@ -1106,12 +1164,12 @@ async def run_task(
         log.warning("license_scan_failed", task_id=task_id, exc_info=True)
 
     # Emit task.approval_requested (AC-2).
-    # TODO(future-story): populate diff_summary from git diff --stat for
-    # richer operator context in the Telegram approval renderer.
+    diff_summary = await _get_diff_summary(worktree_path)
     approval_payload = TaskApprovalRequestedPayload(
         task_id=task_id,
         action="git_push",
         justification=f"Claude Code attempted: {push_event.tool_input.get('command', 'git push')}",
+        diff_summary=diff_summary,
     )
     emit_result = await _emit_event(
         "task.approval_requested",
