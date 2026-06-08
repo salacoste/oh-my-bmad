@@ -85,10 +85,10 @@ All 20 GATED items resolved:
 | Item | Reason |
 |------|--------|
 | Epic 44: Worker pool auto-scaling (FC-P6-1) | Optional feature; manual `--scale` works fine. Revisit if scaling friction becomes tangible. |
-| Epic 44: Gemini structured output (FC-P6-2) | Optional feature; best-effort parsing works. Revisit if multi-runtime reliability degrades. |
+| ~~Epic 44: Gemini structured output (FC-P6-2)~~ | **SHIPPED post-retro** (commit `bc9bb26`). `GEMINI_OUTPUT_SCHEMA` env var enables optional JSON Schema validation on Gemini adapter output. |
 | Epic 42: GitHub write tools (real credentials) | Requires operator to provision GitHub credentials. Code already supports it via config gate (`GITHUB_MCP_WRITE_ENABLED`). |
 
-These items are explicitly **not carried forward** — they are future scope, not blockers.
+FC-P6-1 and GitHub write tools remain **future scope, not blockers**. FC-P6-2 was shipped after this retro was authored.
 
 ## Metrics
 
@@ -96,7 +96,7 @@ These items are explicitly **not carried forward** — they are future scope, no
 |--------|---------------|---------------|
 | Ruff errors | 57 | 0 |
 | Mypy errors | 162 | 0 |
-| Test count | 3101 | 3156 |
+| Test count | 3101 | 3886 (post-retro sweeps) |
 | GATED deferred items | 20 | 0 |
 | ADRs | 20 | 21 |
 | Alembic migrations | 9 | 10 |
