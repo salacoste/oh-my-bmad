@@ -559,7 +559,7 @@ async def run_subscriber(
                             )
                         )).all()
                     if stale_rows:
-                        stale_results = stale_detector.stale_tasks_and_mark(
+                        stale_results = stale_detector.overdue_tasks_and_mark(
                             [(r.id, r.status, r.updated_at) for r in stale_rows]
                         )
                         for task_id, status, severity, duration_s, threshold_s in stale_results:
