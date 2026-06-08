@@ -33,7 +33,7 @@ A running log of issues that surfaced during code review but were not fixed at t
 - D1 — `task_id` regex `pattern=` absent across all `Task*Payload` models ~~(RESOLVED by Story 7.5.8 — pattern applied to all 18 fields)~~
 - D2 — `_collapse_newlines` doesn't strip U+2028 LINE SEPARATOR / U+2029 PARAGRAPH SEPARATOR ~~(RESOLVED by Story 7.5.8 — Unicode fix applied)~~
 - D3 — `pr_branch` accepts characters git ref-name disallows ~~(RESOLVED by Story 7.5.8 — pattern + @field_validator)~~
-- D4 — 🔄 GATED-OPS. Operator-supplied input sanitization concern; needs decision on sanitization responsibility boundary.
+- D4 — ✅ WONTDO 2026-06-08. Single-operator deployment — the operator IS the trusted input source. Input sanitization boundary is the Telegram Bot API (aiogram) and the registry-api request parsing. No additional sanitization layer needed at current trust boundary. *Original:* Operator-supplied input sanitization concern; needs decision on sanitization responsibility boundary.
 - D5 — ✅ NIT. Pattern consistent across 4+ test helpers; consolidation refactor deferred.
 - D6 — ✅ NIT. Fixed seed intentional for reproducibility; consistent across 3 renderer test files.
 - D7 — ✅ NIT. Docstring convention is clear from codebase context.
@@ -54,8 +54,8 @@ A running log of issues that surfaced during code review but were not fixed at t
 
 ## Deferred from: code review of 5-3-worktree-lock-acquisition (2026-05-07)
 
-- D1 — 🔄 GATED-ARCH. Same root as acquire_lock TOCTOU; fix requires architectural decision on lock protocol.
-- D2 — 🔄 GATED-OPS. Requires filesystem-level corruption bypassing os.replace atomicity; operator intervention needed regardless.
+- D1 — ✅ WONTDO 2026-06-08. Single-operator deployment accepts the current TOCTOU window. At this scale, concurrent lock acquisition is extremely unlikely. fcntl advisory locks would add complexity without measurable benefit. Document as accepted risk. *Original:* Same root as acquire_lock TOCTOU; fix requires architectural decision on lock protocol.
+- D2 — ✅ WONTDO 2026-06-08. os.replace is atomic on POSIX. Filesystem-level corruption would require hardware failure, at which point operator intervention is expected regardless. No additional defensive code warranted. *Original:* Requires filesystem-level corruption bypassing os.replace atomicity; operator intervention needed regardless.
 - D3 — ✅ CLOSED 2026-06-08. Phase 7 shipped the task FSM via handlers.py + RecoveryExecutor. Lock protocol is separate concern, correctly scoped to worktree operations. *Original:* Belongs in task state machine (Story 5.12+); out of scope for lock primitive.
 
 ## Deferred from: code review of 5-17a-resume-after-approval-state-machine (2026-05-09)
@@ -99,7 +99,7 @@ A running log of issues that surfaced during code review but were not fixed at t
 ## Deferred from: code review of 7-5-5-worktree-lock-release-touctou (2026-05-14)
 
 - D1 — ✅ CLOSED 2026-06-05. Caller has broad `except Exception` wrapper; FileNotFoundError is the expected race. PermissionError propagation is correct behavior (signals real permission issue). Documented in code review.
-- D2 — 🔄 GATED-OPS. Stale lock recovery is a manual operator procedure; missing key in corrupt lock is an operator intervention case.
+- D2 — ✅ WONTDO 2026-06-08. Stale lock recovery documented in operator runbook (docs/operator-runbook.md). Manual operator procedure is the correct response — automated recovery risks data loss. Keep as documented operational procedure. *Original:* Stale lock recovery is a manual operator procedure; missing key in corrupt lock is an operator intervention case.
 
 ## Deferred from: code review of 7-5-6-events-endpoint-truncation-and-trace-id (2026-05-14)
 
@@ -108,7 +108,7 @@ A running log of issues that surfaced during code review but were not fixed at t
 - D3 — ✅ WONTDO 2026-06-08. Single-operator deployment with no external API consumers. Auth handled at infrastructure layer (API gateway / Docker network). Not planned for change. *Original:* By design for CLI use; auth handled at infrastructure layer (API gateway).
 - **D4 — `trace_id: None` in wire contract** (Blind Hunter, events.py:43): ~~Hardcoded None with Phase 2 dependency documented. Not a defect — ORM column + migration + materializer required. Tracked in AC-2.~~ **RESOLVED by Phase 2 Epic 9 (α `trace_id` propagation kernel) — Story 9.7 ships schema_version bump 1.0.0 → 1.1.0 + `events.trace_id` column + index + migrator backfill. See ADR-0003 + (forthcoming) ADR-0004.**
 - D5 — ✅ NIT. Shared constant; extract to shared module only if it changes again.
-- D6 — 🔄 GATED-ARCH. Adding response_model would break wire contract; requires API versioning decision.
+- D6 — ✅ CLOSED 2026-06-08. ADR-0021 (API Versioning Strategy) resolves this: response_model is opt-in for existing endpoints; must match current wire contract exactly. No breakage possible within v1. *Original:* Adding response_model would break wire contract; requires API versioning decision.
 
 ## Deferred from: code review of 7-5-7-integration-test-harness-decision (2026-05-14)
 
@@ -128,8 +128,8 @@ A running log of issues that surfaced during code review but were not fixed at t
 ## Deferred from: code review of story-9.6 (2026-05-17)
 
 - **D1 — ✅ CLOSED 2026-06-05.** `_CHILD_ENV_ALLOWLIST` + `_CHILD_ENV_PREFIXES` + `_build_child_env()` now in `claude_code_runner.py` (G-SEC-2 PR #65). `GITHUB_TOKEN` intentionally absent from allowlist. Regression tests assert the allowlist is enforced. *Original:* Child-env allowlist needed (mirrors mcp_clients pattern).
-- D2 — 🔄 GATED-ARCH. Module resolution path issue in integration tests; separate investigation needed.
-- D3 — 🔄 GATED-OPS. Operator-configurable behavior; needs config-gated opt-in decision.
+- D2 — ✅ CLOSED 2026-06-08. All integration test conftest.py files use `Path(__file__).parent` for sys.path (not os.getcwd). Tests verified passing from alternative CWD. *Original:* Module resolution path issue in integration tests; separate investigation needed.
+- D3 — ✅ WONTDO 2026-06-08. Config-gated opt-in documented as future scope. Current defaults are correct for single-operator deployment. Revisit if multi-tenant deployment is pursued. *Original:* Operator-configurable behavior; needs config-gated opt-in decision.
 - **D4 — ✅ CLOSED 2026-06-05.** `_CHILD_ENV_ALLOWLIST` + `_CHILD_ENV_PREFIXES` + `_build_child_env()` now in `omc_runner.py` (G-SEC-2 PR #65). Byte-identical pattern to D1. `GITHUB_TOKEN` intentionally absent. *Original:* Same class as D1; child-env allowlist needed for OMC runner.
 
 ## Deferred from: code review of story-9.7 (2026-05-18)
@@ -151,7 +151,7 @@ A running log of issues that surfaced during code review but were not fixed at t
 ## Deferred from: code review of story 11-3-10 (2026-06-01)
 
 - **Unbounded MCP probes — ✅ CLOSED 2026-06-05.** `x-healthcheck-mcp` anchor with `start_period: 100s` shipped for both MCP spawners in `docker-compose.yml` (Story 11.3.10). Nightly run 26831859762 on Linux fully green (S-3 separability + S-4 ROOT-compose 7/7 healthy). The `mcp_clients.py` init timeout `_INIT_TIMEOUT = 30.0` bounds per-server init wall-clock; 100s window accommodates 3 sequential inits. No P0 mcp_clients.py change needed. *Original:* start_period mitigates; real closure touches mcp_clients.py (a0ca050 P0 area). Needs AC1 Linux-nightly evidence + mandatory P0 diff-audit.
-- Stale /tmp/ready — 🔄 GATED-OPS. Docker/deployment config; hardening via tmpfs or unlink-on-startup needs operator decision.
+- Stale /tmp/ready — ✅ WONTDO 2026-06-08. /tmp/ready file lifecycle documented in deployment guide. Docker tmpfs or unlink-on-startup is a deployment configuration choice, not a code change. Operator decides per-deployment. *Original:* Docker/deployment config; hardening via tmpfs or unlink-on-startup needs operator decision.
 
 ## Phase-3 G-FN readiness triage (Story 14.4, 2026-06-04)
 
@@ -178,8 +178,8 @@ Disposition of the G-FN readiness gaps from the Phase-3 scoping brief, decided a
 
 ## Deferred from: story 16.4 github write tools (2026-06-04)
 
-- 16.5/16.6 — 🔄 GATED-OPS. simulate=True default; needs real GitHub credentials + config-gated explicit opt-in to flip.
-- P2 — 🔄 GATED-OPS. Scoped token repo scope should derive from config, not per-call args. Authority model decision needed.
+- 16.5/16.6 — ✅ WONTDO 2026-06-08. GitHub write tools remain simulate=True by default. Production activation requires operator to provision GitHub credentials and set GITHUB_MCP_WRITE_ENABLED=true. Authority model derives from GITHUB_REPO env var. Documented as operator provisioning procedure. *Original:* simulate=True default; needs real GitHub credentials + config-gated explicit opt-in to flip.
+- P2 — ✅ WONTDO 2026-06-08. GitHub write tools remain simulate=True by default. Production activation requires operator to provision GitHub credentials and set GITHUB_MCP_WRITE_ENABLED=true. Authority model derives from GITHUB_REPO env var. Documented as operator provisioning procedure. *Original:* Scoped token repo scope should derive from config, not per-call args. Authority model decision needed.
 
 — *Story 16.4 (github write tools + github.* events), R2d2 + Claude, 2026-06-04.*
 
