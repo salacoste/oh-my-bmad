@@ -14,7 +14,7 @@
   <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-stdio-7F52B5" alt="MCP"/></a>
   <a href="https://mypy.readthedocs.io/"><img src="https://img.shields.io/badge/mypy-strict-1f5082" alt="mypy strict"/></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"/></a>
-  <a href="_bmad-output/planning-artifacts/epics.md"><img src="https://img.shields.io/badge/Phase%201-shipped-success" alt="Phase 1 — shipped"/></a>
+  <a href="_bmad-output/planning-artifacts/epics.md"><img src="https://img.shields.io/badge/v1.3.0-Production%20Ready-success" alt="v1.3.0 — Production Ready"/></a>
 </p>
 
 ---
@@ -25,7 +25,7 @@ A platform that turns Telegram and a local console into the control surfaces for
 
 It's deliberately **boring** infrastructure — Python 3.12, FastAPI, aiogram, SQLite WAL, Docker Compose, stdio MCP. The novelty is in how the boring pieces compose, not in any one piece.
 
-> **Phase 1 is shipped — 10 epics, 88 stories — and fully documented.** See [`docs/index.md`](docs/index.md) for the master entry point.
+> **All 8 phases shipped — 40+ epics, ~187 stories, 3100+ tests — and fully documented.** See [`docs/index.md`](docs/index.md) for the master entry point.
 
 ## How it works (at a glance)
 
@@ -78,29 +78,36 @@ Three properties hold the whole thing together: **only one writer**, **only-ever
 - **Idempotency by UUIDv7.** Every command threads the triggering UUIDv7 through a per-key `asyncio.Lock` → cachetools TTLCache → SQLite write-through with a 7-day retention contract. **100 concurrent retries for the same key invoke the factory exactly once.** ([deep-dive →](docs/explanations/idempotency-flow.md))
 - **Crash-injection tested.** A real Docker stack gets shot at deterministic emission points; recovery is asserted to produce **byte-for-byte equivalent state**. Partial writes are detected and rejected by a poison-pill mechanism in the writer. ([deep-dive →](docs/explanations/recovery-and-crash-injection.md))
 - **Capability tiers with mandatory deny-path tests.** Four tiers (read / bounded-write / repo-mutation / high-risk-with-approval). Three tests **mandatory per MCP tool boundary**: deny-path, default-deny, escalation. `@pytest.mark.security` is non-skippable. ([deep-dive →](docs/explanations/capability-tiers.md))
+- **Multi-runtime workers.** Claude Code, Codex, and Gemini adapters behind a `RuntimeAdapter` protocol with per-task selection, fallback, and handoff. Worker pool auto-scaling (FC-P6-1).
+- **MCP tooling fleet — 8 stdio servers.** git, github, verification, memory/wiki, artifact, browser, task-registry, session-registry — all behind tier-gated `build_server`, per-server env isolation, and scoped credentials.
+- **HMAC approval signing with offline verification.** Operator decisions are HMAC-signed at emission; `just verify-approval` works offline. Key rotation with fingerprint tracking and `/key-status` surface.
+- **Supply chain hardening.** SLSA L2 provenance, cosign keyless signing, CycloneDX SBOM, license-compatibility publish gate, `just verify-images` — all wired into the release pipeline.
+- **Metrics subscriber with cardinality discipline.** Tail-loop subscriber exposes `/metrics` (FastAPI); 51 canonical timeseries baseline, cardinality-bounded regression test at 10K tasks, p95 <1ms.
 - **`mypy --strict` everywhere, `ruff` for lint *and* format.** No half-on rule families. Per-file ignores live in `ruff.toml`, not sprinkled. Bandit-`S` rules gate the obvious vulnerability classes (eval, pickle, yaml.load, subprocess shell=True, weak hashes).
 - **AI-agent rule digest as injected context.** [`_bmad-output/project-context.md`](_bmad-output/project-context.md) — 386 rules across 7 categories, hand-built with multi-agent review to capture the **load-bearing constraints that aren't obvious from the code alone**.
 - **Upstream forks behind adapter shims.** `upstream/omc` + `upstream/clawhip` vendored at pinned SHAs; direct imports of vendored internals are rejected by static analysis. Contract tests gate semantic drift.
-- **Three-layer secret hygiene.** Pre-commit scanner + structlog sanitizer wired *before* the renderer + `secret.accessed` audit events. F-string interpolation of tokens / request bodies / PII is a banned anti-pattern in code review.
+- **Three-layer secret hygiene.** Pre-commit scanner + structlog sanitizer wired *before* the renderer + `secret.accessed` audit events. F-string interpolation of tokens / request bodies / PII is a banned anti-pattern in code review. Per-server env scoping ensures each MCP child sees only its own vars.
 
 ## Tech stack
 
 | Layer | Choice |
 |---|---|
 | Runtime | Python 3.12 · Node.js (only inside the Claude Code worker subprocess) |
-| Build / workspace | `uv ≥ 0.5` (workspace, 14 members) · `just ≥ 1.14` (operator recipes) |
+| Build / workspace | `uv ≥ 0.5` (workspace, 21 members) · `just ≥ 1.14` (operator recipes) |
 | HTTP API | FastAPI (only on `registry-api`) |
 | Telegram | aiogram v3 (webhook + outer-middleware allowlist, [ADR-0001](docs/adr/0001-allowlist-middleware-auth.md)) |
+| Console | typer CLI with full command parity |
 | Storage | SQLite + WAL · `aiosqlite` · Alembic (additive-only within a major) |
 | Event log | append-only JSONL, canonical JSON, `fdatasync` |
-| MCP | stdio transport only · 3 servers (`task-registry`, `session-registry`, `clawhip-bridge`) |
-| Worker | Claude Code CLI subprocess, supervised |
-| Logging | `structlog` (JSON) + sanitizer in the processor chain |
-| Tests | pytest · pytest-asyncio (strict) · hypothesis · contract fixtures · crash-injection harness |
+| MCP | stdio transport only · 8 servers (`task-registry`, `session-registry`, `clawhip-bridge`, `git`, `github`, `verification`, `memory`, `artifact`, `browser`) |
+| Worker | Multi-runtime: Claude Code, Codex, Gemini — supervised, auto-scaled |
+| Observability | `/metrics` endpoint · trace_id propagation · structlog (JSON) + sanitizer |
+| Tests | pytest · pytest-asyncio (strict) · hypothesis · crash-injection · mutation gate (cosmic-ray, 82%+) · 3100+ tests |
 | Tooling | ruff (E F I UP B SIM N + S) · mypy `--strict` · pre-commit · pytest-randomly |
-| Deploy | Docker Engine ≥ 24 · Docker Compose v2.24+ |
+| Deploy | Docker Engine ≥ 24 · Docker Compose v2.24+ · SLSA L2 + cosign keyless signing |
+| DR | Litestream WAL replication to S3/B2/R2/MinIO (opt-in) |
 
-Exact versions live in `uv.lock`. The platform doesn't ship a secret manager in Phase 1; secrets are operator-provisioned via `.env`.
+Exact versions live in `uv.lock`. Secrets are operator-provisioned via `.env` with per-server env isolation and scoped credentials.
 
 ## Quickstart
 
@@ -134,7 +141,7 @@ Phase 4 — Implementation     → sprint plan → (create-story → validate �
                               → retrospective at every epic boundary
 ```
 
-Phase 1 took **10 epics / 88 stories**, with retrospective + deferred-work governance at every epic boundary. The full per-phase walkthrough, skill catalog, and "how a new feature enters the workflow" decision tree is documented separately:
+Phase 1 took **10 epics / 88 stories**, with retrospective + deferred-work governance at every epic boundary. Eight phases later the platform spans **40+ epics, ~187 stories, and 3100+ tests** — event spine, multi-runtime workers, an 8-server MCP fleet, browser automation, supply chain hardening, and zero open deferred items. The full per-phase walkthrough, skill catalog, and "how a new feature enters the workflow" decision tree is documented separately:
 
 ➡️ **[`docs/bmad-workflow.md`](docs/bmad-workflow.md)** — the complete workflow this project follows.
 
@@ -154,7 +161,7 @@ This repo documents itself in three layers, by audience.
 - 🔄 [`docs/bmad-workflow.md`](docs/bmad-workflow.md) — the BMad workflow this project follows (process companion to the rule digest).
 - 🗺️ [`docs/architecture.md`](docs/architecture.md) — runtime view + invariants + data flow.
 - 🌳 [`docs/source-tree-analysis.md`](docs/source-tree-analysis.md) — annotated directory layout.
-- 🧩 [`docs/component-inventory.md`](docs/component-inventory.md) — the 14 workspace members.
+- 🧩 [`docs/component-inventory.md`](docs/component-inventory.md) — the 21 workspace members.
 - 🔌 [`docs/api-contracts.md`](docs/api-contracts.md) — HTTP endpoints + MCP tools + Telegram surface.
 - 📚 [`docs/data-models.md`](docs/data-models.md) — event envelope + payload catalog + DB schema.
 - 🛠️ [`docs/development-guide.md`](docs/development-guide.md) · [`docs/deployment-guide.md`](docs/deployment-guide.md) · [`docs/operator-runbook.md`](docs/operator-runbook.md)
@@ -201,6 +208,19 @@ A few things worth a look even if you don't intend to run it:
 
 ## Status
 
-**Phase 1** baseline shipped (2026-05). Phase-2 hooks are deliberate placeholders — see [`docs/architecture.md`](docs/architecture.md) §"Phase-2 hooks" for the deferred-by-design list (metrics + tracing, browser-automation plane, additional CLI agents, remote-MCP transports, digest-pinning + signed images). Phase-2 work has not started.
+**v1.3.0 — Production Ready.** Eight phases shipped (2026-05 through 2026-06):
+
+| Phase | Scope | Epics |
+|---|---|---|
+| 1 | Core platform — event spine, registry, Telegram, console, workers | 1–7.5 |
+| 2 | Observability — supply chain, trace_id, metrics, HMAC approvals, budget enforcement, Litestream DR | 8–13 |
+| 3 | MCP tooling fleet — git, github, verification, memory/wiki, artifact | 14–19 |
+| 4 | Browser automation — Playwright MCP, screenshot, tab management | 20–22 |
+| 5 | Multi-runtime — Codex, Gemini adapters, per-task selection, handoff | 26–29 |
+| 6 | Server execution pool — Postgres, state machine, multi-worker | 30–34 |
+| 7 | Reliability hardening — heartbeat detection, structured output, env isolation | 35–40 |
+| 8 | Platform hardening & debt closure — zero open deferred items | 41–45 |
+
+40+ epics, ~187 stories, 3100+ tests. All ship-blocker items green. Zero open GATED deferred items.
 
 Issues and discussion welcome — security reports per [`SECURITY.md`](./SECURITY.md).
