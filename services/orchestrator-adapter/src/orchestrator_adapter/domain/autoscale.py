@@ -28,9 +28,7 @@ from events.payloads import PoolScaledPayload
 from orchestrator_adapter.app.config import OrchestratorSettings
 
 # Statuses that indicate a worker is actively processing a task.
-_ACTIVE_STATUSES: frozenset[str] = frozenset(
-    {"executing", "planning", "plan_ready"}
-)
+_ACTIVE_STATUSES: frozenset[str] = frozenset({"executing", "planning", "plan_ready"})
 
 # Minimum consecutive polls with idle excess before scaling down.
 _SCALE_DOWN_CONSECUTIVE_POLLS: int = 2
@@ -154,10 +152,7 @@ class AutoscaleController:
         # Enforce cooldown: skip if last scale was within poll_interval_s.
         now = time.monotonic()
         elapsed = now - self._last_scale_time
-        if (
-            self._last_scale_time > 0
-            and elapsed < self._settings.autoscale_poll_interval_s
-        ):
+        if self._last_scale_time > 0 and elapsed < self._settings.autoscale_poll_interval_s:
             self._log.debug(
                 "autoscale_cooldown_active",
                 elapsed_s=round(elapsed, 2),
@@ -195,9 +190,7 @@ class AutoscaleController:
             target_count=target_count,
         )
 
-    async def _emit_pool_scaled_event(
-        self, old_count: int, new_count: int, reason: str
-    ) -> None:
+    async def _emit_pool_scaled_event(self, old_count: int, new_count: int, reason: str) -> None:
         """Emit a ``pool.scaled`` event via the event writer (if available)."""
         if self._event_writer is None or self._clock is None:
             return

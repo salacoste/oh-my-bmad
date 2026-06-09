@@ -32,6 +32,9 @@ dependencies = [
     "secret-hygiene",
     # Story 7.3 — Anthropic SDK for LLM-powered task event digests (FR5).
     "anthropic>=0.100",
+    # Story 6.1+ — JWT authentication for registry API (replaces X-Actor-Id
+    # header trust). PyJWT provides encode/decode with HS256/RS256 support.
+    "pyjwt>=2.8",
 ]
 
 [build-system]

@@ -677,7 +677,8 @@ async def run_adapter(settings: OrchestratorSettings, stop_event: asyncio.Event)
                         await asyncio.sleep(settings.autoscale_poll_interval_s)
 
                 autoscale_task = asyncio.create_task(
-                    autoscale_loop(), name="autoscale-loop",
+                    autoscale_loop(),
+                    name="autoscale-loop",
                 )
                 log.info(
                     "autoscale_enabled",

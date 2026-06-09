@@ -2136,7 +2136,7 @@ wheels = [
 
 [[package]]
 name = "oh-my-bmad"
-version = "0.1.0"
+version = "1.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "artifact-mcp" },
@@ -2899,6 +2899,7 @@ dependencies = [
     { name = "idempotency" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "pyjwt" },
     { name = "registry-state" },
     { name = "secret-hygiene" },
     { name = "structlog" },
@@ -2920,6 +2921,7 @@ requires-dist = [
     { name = "idempotency", editable = "packages/idempotency" },
     { name = "pydantic", specifier = ">=2.8" },
     { name = "pydantic-settings", specifier = ">=2.0" },
+    { name = "pyjwt", specifier = ">=2.8" },
     { name = "registry-state", editable = "services/registry-state" },
     { name = "secret-hygiene", editable = "packages/secret-hygiene" },
     { name = "structlog", specifier = ">=24.1" },

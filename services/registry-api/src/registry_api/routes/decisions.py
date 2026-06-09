@@ -204,8 +204,8 @@ async def post_decision(
         trace_id: str = new_uuid7(clock=clock)
     else:
         trace_id = trace_id_val
-    # Phase 1: actor_id hardcoded by middleware. TODO(Story 6.1+): enforce
-    # ownership/role before allowing decision on task.
+    # actor_id from JwtAuthMiddleware (JWT-validated when JWT_SECRET_KEY is
+    # configured; Phase 1 X-Actor-Id fallback otherwise).
     actor_id: str = getattr(request.state, "actor_id", "http-api")
     idempotency_key: str = request.state.idempotency_key
 

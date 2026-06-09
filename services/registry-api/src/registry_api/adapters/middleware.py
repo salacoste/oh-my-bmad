@@ -1,4 +1,4 @@
-"""HTTP middleware stack for registry-api (Stories 2.9 / 3.6 / 6.3 / 9.2).
+"""HTTP middleware stack for registry-api (Stories 2.9 / 3.6 / 6.3 / 9.2 / 6.1+).
 
 
 Five class-based middlewares (subclassing ``BaseHTTPMiddleware``):
@@ -38,28 +38,35 @@ Five class-based middlewares (subclassing ``BaseHTTPMiddleware``):
                                 response. Route-level dedup is owned by
                                 ``routes/tasks.py`` via Story 2.13's
                                 ``IdempotencyCacheStore.get_or_run``.
-- ``ActorIdMiddleware``:        Phase 1 placeholder — hardcodes
-                                ``request.state.actor_id = "http-api"``.
-                                Real auth lands in Story 6.1+.
+- ``JwtAuthMiddleware``:        JWT authentication (Story 6.1+). Validates
+                                ``Authorization: Bearer <token>`` when
+                                ``JWT_SECRET_KEY`` is configured; extracts
+                                ``actor_id`` from the ``sub`` claim and
+                                attaches to ``request.state.actor_id``.  Sets
+                                ``request.state.authenticated = True``.
+                                When JWT is NOT configured, falls back to the
+                                Phase 1 ``X-Actor-Id`` header-trust model
+                                (backward compatible).  Preserves the
+                                ``ActorIdMiddleware`` alias for import compat.
 - ``TierEnforcementMiddleware``: enforces capability tiers on mutating routes
                                 using ``check_tier`` from the capabilities
                                 package (Story 6.3). Builds a ``CallerContext``
                                 from the configured ``actor_kind`` and the
                                 ``request.state.actor_id`` set by
-                                ``ActorIdMiddleware``; attaches it to
+                                ``JwtAuthMiddleware``; attaches it to
                                 ``request.state.caller_context``; short-circuits
                                 with 403 on ``CapabilityDenied``.
 
 Middleware registration order in ``build_app`` (outermost → innermost in
 execution order; Starlette reverses the add_middleware call order):
-  app.add_middleware(TierEnforcementMiddleware, ...)        # runs 5th (innermost)
-  app.add_middleware(ActorIdMiddleware)                      # runs 4th
+  app.add_middleware(TierEnforcementMiddleware, ...)         # runs 5th (innermost)
+  app.add_middleware(JwtAuthMiddleware, jwt_settings=...)    # runs 4th
   app.add_middleware(IdempotencyKeyMiddleware, clock=clock)  # runs 3rd
   app.add_middleware(RequestIdMiddleware, clock=clock)       # runs 2nd
   app.add_middleware(TraceIdMiddleware, clock=clock)         # runs 1st (outermost)
 
 So incoming request flows:
-  TraceId → RequestId → IdempotencyKey → ActorId → TierEnforcement → handler.
+  TraceId → RequestId → IdempotencyKey → JwtAuth → TierEnforcement → handler.
 
 ``TraceIdMiddleware`` runs OUTERMOST so the ``trace_id`` structlog binding is
 established before any inner middleware (including ``RequestIdMiddleware``)
@@ -76,6 +83,7 @@ import re
 from types import MappingProxyType
 from typing import Literal
 
+import jwt as pyjwt
 import structlog
 from capabilities import CallerContext, Tier, check_tier  # noqa: IMP001 — services→packages allowed
 from events.clock import Clock
@@ -108,6 +116,7 @@ from starlette.types import ASGIApp
 # rather than duplicating the literal in two files.
 from registry_api.adapters.errors import _MUTATING_METHODS as _MUTATING_METHODS
 from registry_api.adapters.errors import _build_capability_denied_response
+from registry_api.settings import JwtAuthSettings
 
 # Bare UUIDv7 (no prefix) — matches new_request_id / new_idempotency_key output.
 # Version nibble = 7, variant = 8/9/a/b. Same shape used by events.ids.
@@ -409,31 +418,133 @@ class IdempotencyKeyMiddleware(BaseHTTPMiddleware):
         return response
 
 
-class ActorIdMiddleware(BaseHTTPMiddleware):
-    """Phase 1: honor ``X-Actor-Id`` header from trusted internal callers.
+class JwtAuthMiddleware(BaseHTTPMiddleware):
+    """JWT authentication middleware (Story 6.1+).
 
-    Story 11.3 PD1 — pass-1 hardcoded ``request.state.actor_id = "http-api"``
-    broke the Story 11.3 P1 owner-check end-to-end: every operator was
-    rejected because registry-api persisted ``opened_by_actor_id = "http-api"``
-    rather than the operator's Telegram user-ID. Phase 1 fix: trust the
-    ``X-Actor-Id`` header from allowlisted internal callers
-    (telegram-gateway ``handlers/registry_client.py:719`` already sends it;
-    console-cli sends it too). Public auth lands in Story 6.1+ which will
-    swap this for a real token-derived actor.
+    When ``JwtAuthSettings.enabled`` (i.e. ``JWT_SECRET_KEY`` is configured):
+      1. Read ``Authorization: Bearer <token>`` header.
+      2. Validate JWT signature, expiry, ``iss`` claim, and ``sub`` claim.
+      3. Extract ``actor_id`` from the ``sub`` claim.
+      4. Set ``request.state.actor_id`` and ``request.state.authenticated = True``.
+      5. Return 401 on invalid/expired/missing tokens on mutating routes.
+         Read-only routes (GET/HEAD/OPTIONS) are allowed through without auth
+         for health checks and unauthenticated reads.
 
-    Validation mirrors the Story 11.3 P30 ``opened_by_actor_id`` pattern
-    (``^[A-Za-z0-9_-]{1,128}$``) so a hostile header cannot smuggle control
-    characters / pipe injection / shell metacharacters into the event
-    payload validator. On invalid header, fall back to ``"http-api"`` with
-    a structured-log warning.
+    When ``JwtAuthSettings.enabled`` is False (no ``JWT_SECRET_KEY``):
+      Falls back to the Phase 1 ``X-Actor-Id`` header-trust model for full
+      backward compatibility — no operator disruption during rollout.
+      Sets ``request.state.authenticated = False``.
 
-    TODO(Story 6.1+): replace header-trust with real auth token parsing.
+    Must run BEFORE ``TierEnforcementMiddleware`` so ``request.state.actor_id``
+    is populated for tier checks.
     """
 
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        jwt_settings: JwtAuthSettings | None = None,
+    ) -> None:
+        super().__init__(app)
+        # Resolve settings once at middleware construction time, not per-request.
+        # If caller passes None (e.g. tests), resolve from env.
+        self._jwt_settings = (
+            jwt_settings if jwt_settings is not None else JwtAuthSettings.from_env()
+        )
+
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        # Story 11.3 PD1 — honor X-Actor-Id from trusted internal callers in Phase 1.
-        # All callers are allowlisted internal services (registry_client.py:719 already sends it);
-        # public auth lands in Story 6.1+ which will swap this for a real token-derived actor.
+        if self._jwt_settings.enabled:
+            error_response = await self._authenticate_jwt(request)
+            if error_response is not None:
+                return error_response
+        else:
+            self._fallback_actor_id(request)
+        return await call_next(request)
+
+    async def _authenticate_jwt(self, request: Request) -> Response | None:
+        """Validate JWT bearer token and set actor_id from claims.
+
+        Returns a 401 Response on auth failure, or None on success.
+        """
+        auth_header = request.headers.get("Authorization")
+        if auth_header is None or not auth_header.startswith("Bearer "):
+            # No bearer token — check if this is a read-only request.
+            # Read-only routes are allowed through without auth for
+            # health checks, JWKS, and unauthenticated reads.
+            method = request.method.upper()
+            if method in ("GET", "HEAD", "OPTIONS"):
+                request.state.authenticated = False
+                request.state.actor_id = "anonymous"
+                return None
+            # Mutating route without auth → 401.
+            _log.warning(
+                "jwt_auth_missing_token",
+                extra={"path": request.url.path, "method": request.method},
+            )
+            return _build_401("Missing or malformed Authorization header")
+
+        token = auth_header[len("Bearer ") :]
+        if not token:
+            return _build_401("Empty bearer token")
+
+        settings = self._jwt_settings
+        assert settings.jwt_secret_key is not None  # guaranteed by .enabled
+
+        try:
+            payload = pyjwt.decode(
+                token,
+                settings.jwt_secret_key.get_secret_value(),
+                algorithms=[settings.algorithm],
+                options={
+                    "require": ["exp", "sub", "iss"],
+                    "verify_exp": True,
+                    "verify_iss": True,
+                },
+                issuer=settings.issuer,
+                leeway=settings.leeway_seconds,
+            )
+        except pyjwt.ExpiredSignatureError:
+            _log.warning("jwt_token_expired", extra={"path": request.url.path})
+            return _build_401("Token has expired")
+        except pyjwt.InvalidIssuerError:
+            _log.warning("jwt_token_invalid_issuer", extra={"path": request.url.path})
+            return _build_401("Invalid token issuer")
+        except pyjwt.MissingRequiredClaimError as exc:
+            _log.warning(
+                "jwt_token_missing_claim",
+                extra={"path": request.url.path, "missing_claim": str(exc)},
+            )
+            return _build_401(f"Missing required claim: {exc}")
+        except pyjwt.InvalidSignatureError:
+            _log.warning("jwt_token_invalid_signature", extra={"path": request.url.path})
+            return _build_401("Invalid token signature")
+        except pyjwt.InvalidTokenError as exc:
+            _log.warning(
+                "jwt_token_invalid",
+                extra={"path": request.url.path, "error": str(exc)},
+            )
+            return _build_401(f"Invalid token: {exc}")
+
+        # Extract actor_id from sub claim.
+        actor_id = payload.get("sub")
+        if not actor_id or not _ACTOR_ID_HEADER_RE.match(str(actor_id)):
+            _log.warning(
+                "jwt_token_invalid_sub",
+                extra={"sub": str(actor_id)[:80]},
+            )
+            return _build_401("Invalid or missing 'sub' claim in token")
+
+        request.state.actor_id = str(actor_id)
+        request.state.authenticated = True
+        return None
+
+    def _fallback_actor_id(self, request: Request) -> None:
+        """Phase 1 fallback: trust X-Actor-Id header from internal callers.
+
+        Story 11.3 PD1 — trust the ``X-Actor-Id`` header from allowlisted
+        internal callers (telegram-gateway, console-cli). This path runs when
+        ``JWT_SECRET_KEY`` is not configured, preserving full backward compat.
+        """
         header_value = request.headers.get("X-Actor-Id")
         if header_value is None:
             request.state.actor_id = "http-api"
@@ -449,7 +560,26 @@ class ActorIdMiddleware(BaseHTTPMiddleware):
                 },
             )
             request.state.actor_id = "http-api"
-        return await call_next(request)
+        request.state.authenticated = False
+
+
+# Backward-compat alias — existing imports of ``ActorIdMiddleware`` keep working.
+ActorIdMiddleware = JwtAuthMiddleware
+
+
+def _build_401(detail: str) -> Response:
+    """Build a 401 JSON response for auth failures.
+
+    Returns a ``Response`` directly instead of raising ``HTTPException``
+    because ``BaseHTTPMiddleware.dispatch`` does not propagate exceptions
+    to FastAPI's exception handlers — they surface as unhandled 500s.
+    """
+    from starlette.responses import JSONResponse
+
+    body = {"detail": detail}
+    response = JSONResponse(status_code=401, content=body)
+    response.headers["WWW-Authenticate"] = 'Bearer realm="registry-api"'
+    return response
 
 
 # Phase 1 route-to-tier mapping (Story 6.3). Story 6.4 adds Tier-2 entries
@@ -704,6 +834,7 @@ __all__ = [
     "ActorIdMiddleware",
     "INVALID_TRACE_LOG_MSG",
     "IdempotencyKeyMiddleware",
+    "JwtAuthMiddleware",
     "RequestIdMiddleware",
     "ROUTE_TIER_MAP",
     "TierEnforcementMiddleware",

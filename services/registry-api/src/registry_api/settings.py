@@ -203,4 +203,113 @@ class HealthProbeSettings(BaseSettings):
         return cls()
 
 
-__all__ = ["ApprovalSigningSettings", "HealthProbeSettings"]
+class JwtAuthSettings(BaseSettings):
+    """Settings for JWT authentication on the registry HTTP API (Story 6.1+).
+
+    Replaces the Phase 1 ``X-Actor-Id`` header-trust model with cryptographic
+    token validation.  When ``JWT_SECRET_KEY`` is configured, the
+    ``JwtAuthMiddleware`` validates ``Authorization: Bearer <token>`` headers
+    and extracts ``actor_id`` from the ``sub`` claim.  When unset, the
+    middleware falls back to the Phase 1 ``X-Actor-Id`` header-trust behaviour
+    (backward compatible — no operator disruption during rollout).
+
+    Design notes:
+
+    * **HS256 symmetric** — Phase 1 uses a shared secret (HMAC-SHA256) for
+      simplicity.  RS256 (asymmetric) can be added in a follow-up by extending
+      this settings class with ``JWT_PUBLIC_KEY`` / ``JWT_ALGORITHM`` fields.
+    * **``SecretStr`` wrapping** — mirrors :class:`ApprovalSigningSettings`;
+      the secret key is masked in ``repr()`` / ``model_dump()`` / logs.
+    * **``default=None``** — a missing key is NOT a startup error.  When
+      ``None``, auth is disabled and the ``X-Actor-Id`` header-trust path
+      runs instead (backward compatible).
+    * **Token defaults** — ``access_token_expire_minutes=1440`` (24 hours);
+      ``algorithm="HS256"``; ``issuer="oh-my-bmad/registry-api"``.
+    * **Clock skew** — ``leeway_seconds=30`` for token expiry validation to
+      tolerate minor clock drift between services.
+    """
+
+    model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
+        extra="ignore",
+        populate_by_name=True,
+    )
+
+    jwt_secret_key: SecretStr | None = Field(
+        default=None,
+        validation_alias="JWT_SECRET_KEY",
+        description=(
+            "Shared HMAC-SHA256 secret for JWT token validation (Story 6.1+). "
+            "When set, the registry API requires ``Authorization: Bearer`` "
+            "tokens; when unset, falls back to X-Actor-Id header trust "
+            "(Phase 1 backward compat). "
+            "Recommend: 64-char hex from `openssl rand -hex 32`."
+        ),
+    )
+
+    algorithm: str = Field(
+        default="HS256",
+        validation_alias="JWT_ALGORITHM",
+        description="JWT signing algorithm. HS256 (symmetric) for Phase 1.",
+    )
+
+    issuer: str = Field(
+        default="oh-my-bmad/registry-api",
+        validation_alias="JWT_ISSUER",
+        description="Expected ``iss`` claim in validated tokens.",
+    )
+
+    access_token_expire_minutes: int = Field(
+        default=1440,
+        ge=1,
+        le=525600,  # max 1 year
+        validation_alias="JWT_ACCESS_TOKEN_EXPIRE_MINUTES",
+        description="Default token lifetime in minutes. Used by token generation.",
+    )
+
+    leeway_seconds: int = Field(
+        default=30,
+        ge=0,
+        le=300,
+        validation_alias="JWT_LEEWAY_SECONDS",
+        description=(
+            "Clock-skew tolerance in seconds for token expiry validation. "
+            "Accounts for minor clock drift between services."
+        ),
+    )
+
+    @field_validator("jwt_secret_key", mode="after")
+    @classmethod
+    def _enforce_min_length(cls, value: SecretStr | None) -> SecretStr | None:
+        """Normalise and validate JWT_SECRET_KEY when set.
+
+        Mirrors :meth:`ApprovalSigningSettings._enforce_min_length`:
+        empty/whitespace normalised to ``None``; byte-count enforced at
+        32 bytes (256 bits) minimum for HMAC-SHA256 security.
+        """
+        if value is None:
+            return None
+        raw = value.get_secret_value()
+        if not raw.strip():
+            return None
+        raw_bytes = raw.encode("utf-8")
+        if len(raw_bytes) < 32:
+            raise ValueError(
+                "JWT_SECRET_KEY must be at least 32 BYTES (UTF-8 encoded) "
+                "/ 256 bits minimum when set "
+                f"(got {len(raw_bytes)} bytes); "
+                "recommend 64-char hex from `openssl rand -hex 32`"
+            )
+        return value
+
+    @property
+    def enabled(self) -> bool:
+        """True when JWT auth is configured (secret key is set)."""
+        return self.jwt_secret_key is not None
+
+    @classmethod
+    def from_env(cls) -> JwtAuthSettings:
+        """Construct from the process environment."""
+        return cls()
+
+
+__all__ = ["ApprovalSigningSettings", "HealthProbeSettings", "JwtAuthSettings"]

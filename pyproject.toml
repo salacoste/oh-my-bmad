@@ -1,6 +1,6 @@
 [project]
 name = "oh-my-bmad"
-version = "0.1.0"
+version = "1.3.0"
 description = "Self-hosted personal autonomous development platform — Telegram + Console control over swappable CLI coding agents."
 authors = [
     { name = "R2d2", email = "R2d2@users.noreply.github.com" },

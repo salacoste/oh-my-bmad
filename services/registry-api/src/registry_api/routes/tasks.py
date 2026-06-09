@@ -413,7 +413,8 @@ async def post_tasks(
             budget_action=body.budget_action,
         )
 
-        # Phase 1: actor_id flows from middleware. TODO(Story 6.1+): real auth.
+        # actor_id from JwtAuthMiddleware (JWT-validated when JWT_SECRET_KEY is
+        # configured; Phase 1 X-Actor-Id fallback otherwise).
         actor = Actor(kind="operator", id=request.state.actor_id)
 
         # Story 12.4 AC2/AC3: schema_version bumped to 1.2.0 — emit the

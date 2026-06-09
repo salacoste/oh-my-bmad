@@ -79,6 +79,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
+import os
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 
@@ -318,6 +319,7 @@ def make_lifespan(
             )
             registry_client = RegistryAPIClient(
                 http_client=http_client,
+                jwt_token=os.environ.get("OPERATOR_JWT_TOKEN"),
             )
 
             # LIFO teardown order (review-fix H4): push callbacks so that

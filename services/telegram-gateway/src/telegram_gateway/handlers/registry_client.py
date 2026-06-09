@@ -263,9 +263,20 @@ class RegistryAPIClient:
     Wraps POST /v1/tasks and POST /v1/tasks/{id}/decisions. Constructor takes a
     pre-built AsyncClient (lifespan-owned, reusable across requests — Story 3.1 H4
     cache-once pattern).
+
+    Story 6.1+: supports JWT Bearer token authentication.  When
+    ``OPERATOR_JWT_TOKEN`` is configured, the client sends
+    ``Authorization: Bearer <token>`` on mutating requests instead of the
+    Phase 1 ``X-Actor-Id`` header-trust model.  Falls back to ``X-Actor-Id``
+    when no token is configured (backward compatible).
     """
 
-    def __init__(self, *, http_client: httpx.AsyncClient) -> None:
+    def __init__(
+        self,
+        *,
+        http_client: httpx.AsyncClient,
+        jwt_token: str | None = None,
+    ) -> None:
         """Initialise with an already-built long-lived AsyncClient.
 
         Args:
@@ -274,13 +285,36 @@ class RegistryAPIClient:
                          and defeat the TLS session-reuse benefit.  The client's
                          ``base_url`` must already be set to the registry-api base
                          URL (e.g. ``http://registry-api:8080``) at construction.
+            jwt_token: Optional JWT token for Story 6.1+ auth.  When set,
+                       ``Authorization: Bearer`` headers are sent on mutating
+                       requests.  When None (default), falls back to Phase 1
+                       ``X-Actor-Id`` header-trust.
         """
         self._http_client = http_client
+        self._jwt_token = jwt_token
 
     @property
     def http_client(self) -> httpx.AsyncClient:
         """Expose the underlying AsyncClient (for identity-check tests)."""
         return self._http_client
+
+    def _auth_headers(
+        self,
+        operator_actor_id: str,
+    ) -> dict[str, str]:
+        """Build auth headers for registry-api requests.
+
+        Story 6.1+: when a JWT token is configured, send ``Authorization:
+        Bearer``.  Otherwise fall back to Phase 1 ``X-Actor-Id`` header-trust.
+        The ``X-Actor-Id`` is always included as a fallback identifier so
+        registry-api can log it even when JWT auth is active.
+        """
+        headers: dict[str, str] = {
+            "X-Actor-Id": operator_actor_id,
+        }
+        if self._jwt_token:
+            headers["Authorization"] = f"Bearer {self._jwt_token}"
+        return headers
 
     async def create_task(
         self,
@@ -325,9 +359,7 @@ class RegistryAPIClient:
         """
         headers: dict[str, str] = {
             "Idempotency-Key": idempotency_key,
-            # Phase 1: pass the operator Telegram id as a hint header.
-            # Story 6.1 replaces this with a proper auth token.
-            "X-Actor-Id": operator_actor_id,
+            **self._auth_headers(operator_actor_id),
         }
         if request_id is not None:
             headers["X-Request-ID"] = request_id
@@ -434,7 +466,7 @@ class RegistryAPIClient:
 
         headers: dict[str, str] = {
             "Idempotency-Key": idempotency_key,
-            "X-Actor-Id": operator_actor_id,
+            **self._auth_headers(operator_actor_id),
         }
         if request_id is not None:
             headers["X-Request-ID"] = request_id
@@ -772,7 +804,7 @@ class RegistryAPIClient:
         """
         headers: dict[str, str] = {
             "Idempotency-Key": idempotency_key,
-            "X-Actor-Id": operator_actor_id,
+            **self._auth_headers(operator_actor_id),
         }
         if request_id is not None:
             headers["X-Request-ID"] = request_id

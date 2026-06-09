@@ -1764,10 +1764,7 @@ class PoolScaledPayload(BaseModel):
     trigger_reason: str = Field(
         min_length=1,
         max_length=64,
-        description=(
-            "Why the scale happened: 'queue_depth_exceeded' or "
-            "'idle_workers_exceeded'"
-        ),
+        description=("Why the scale happened: 'queue_depth_exceeded' or 'idle_workers_exceeded'"),
     )
 
 

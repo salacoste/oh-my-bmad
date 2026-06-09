@@ -62,8 +62,8 @@ from registry_api.adapters.errors import (
 )
 from registry_api.adapters.key_rotation import detect_and_emit_key_rotation
 from registry_api.adapters.middleware import (
-    ActorIdMiddleware,
     IdempotencyKeyMiddleware,
+    JwtAuthMiddleware,
     RequestIdMiddleware,
     TierEnforcementMiddleware,
     TraceIdMiddleware,
@@ -83,6 +83,9 @@ from registry_api.routes.events import (
 from registry_api.routes.health import (
     router as health_router,
 )
+from registry_api.routes.jwks import (
+    router as jwks_router,
+)
 from registry_api.routes.key_status import (
     router as key_status_router,
 )
@@ -96,7 +99,7 @@ from registry_api.routes.tasks import (
 from registry_api.routes.trace import (
     router as trace_router,
 )
-from registry_api.settings import ApprovalSigningSettings, HealthProbeSettings
+from registry_api.settings import ApprovalSigningSettings, HealthProbeSettings, JwtAuthSettings
 
 # Idempotency-cache TTL — 7 days per FR28 (Architecture line 205). The cache is
 # created by the registry-state schema (``IdempotencyCache`` ORM model) and
@@ -196,6 +199,7 @@ def build_app(
     actor_kind: ActorKind = "operator",
     signing_settings: ApprovalSigningSettings | None = None,
     health_probe_settings: HealthProbeSettings | None = None,
+    jwt_settings: JwtAuthSettings | None = None,
     idempotency_db_url: str | None = None,
     create_idempotency_schema_on_start: bool = False,
 ) -> FastAPI:
@@ -377,6 +381,11 @@ def build_app(
             )
             app.state.health_probe_settings = resolved_health_probes
 
+            # Story 6.1+: store resolved JWT settings on app.state so the
+            # JWKS routes and other handlers can read them without re-resolving
+            # from env on every request.
+            app.state.jwt_settings = resolved_jwt
+
             # Writer last — F13 note: EventLogWriter.__init__ calls
             # base_dir.mkdir(parents=True, exist_ok=True) so a non-existent
             # base_dir is auto-bootstrapped here (Story 2.4 AC-7).
@@ -421,8 +430,8 @@ def build_app(
         lifespan=lifespan,
     )
 
-    # Middlewares — Architecture line 213 order extended by Story 9.2:
-    # trace-id → request-id → idempotency-key → actor-id → tier-enforcement.
+    # Middlewares — Architecture line 213 order extended by Story 9.2 + 6.1+:
+    # trace-id → request-id → idempotency-key → jwt-auth → tier-enforcement.
     # Starlette reverses add_middleware call order so we add in reverse:
     # last-added runs FIRST in execution flow (outermost). ``TraceIdMiddleware``
     # is OUTERMOST so the structlog ``trace_id`` bind is established before
@@ -430,7 +439,11 @@ def build_app(
     # ``EventEnvelope`` then carries the parent ``trace_id`` correlation
     # alongside the per-request ``request_id`` (FR58 HTTP ingress).
     app.add_middleware(TierEnforcementMiddleware, actor_kind=actor_kind)
-    app.add_middleware(ActorIdMiddleware)
+    # Story 6.1+: JWT auth replaces Phase 1 ActorIdMiddleware header-trust.
+    # JwtAuthSettings resolved once at middleware construction (not per-request).
+    # When JWT_SECRET_KEY is unset, falls back to X-Actor-Id header trust.
+    resolved_jwt = jwt_settings if jwt_settings is not None else JwtAuthSettings.from_env()
+    app.add_middleware(JwtAuthMiddleware, jwt_settings=resolved_jwt)
     app.add_middleware(IdempotencyKeyMiddleware, clock=clock)
     app.add_middleware(RequestIdMiddleware, clock=clock)
     app.add_middleware(TraceIdMiddleware, clock=clock)
@@ -474,6 +487,10 @@ def build_app(
     # reads via GET to decide whether to route ``task.approval_requested``
     # to the operator's pinned Forum-Topic inbox).
     app.include_router(approvals_router, prefix="/v1")
+    # Story 6.1+ — /.well-known/jwks.json + /.well-known/openid-configuration.
+    # Mounted WITHOUT /v1 prefix per RFC 8414 convention.  These endpoints
+    # are unauthenticated (read-only, no secrets exposed).
+    app.include_router(jwks_router)
 
     return app
 
