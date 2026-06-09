@@ -127,6 +127,50 @@ class TestConnectStreamableHttp:
             assert result is sessions[0]
             await group._stack.__aexit__(None, None, None)
 
+    @pytest.mark.asyncio
+    async def test_connect_with_url_calls_create_httpx_verify_arg(self) -> None:
+        """URL-based connection passes mTLS verify arg to httpx.AsyncClient."""
+        session = _make_mock_session()
+
+        class FakeTransportCtx:
+            async def __aenter__(self) -> tuple[MagicMock, MagicMock]:
+                return (MagicMock(), MagicMock())
+
+            async def __aexit__(self, *exc: object) -> None:
+                pass
+
+        class FakeSessionCtx:
+            async def __aenter__(self) -> AsyncMock:
+                return session
+
+            async def __aexit__(self, *exc: object) -> None:
+                pass
+
+        group = MCPClientGroup(settings=WorkerSettings())
+        group._stack = AsyncExitStack()
+        await group._stack.__aenter__()
+
+        with patch(
+            "worker_wrapper.adapters.mcp_clients.create_httpx_verify_arg",
+            return_value=True,
+        ) as mock_verify, patch(
+            "mcp.client.streamable_http.streamable_http_client",
+            return_value=FakeTransportCtx(),
+        ), patch(
+            "worker_wrapper.adapters.mcp_clients.ClientSession",
+            return_value=FakeSessionCtx(),
+        ):
+            result = await group._connect(
+                "task-registry",
+                command="",
+                args=[],
+                url="http://localhost:8081/mcp",
+            )
+
+        assert result is session
+        mock_verify.assert_called_once()
+        await group._stack.__aexit__(None, None, None)
+
 
 def _make_mock_session() -> AsyncMock:
     """Create a mock ClientSession with initialize() and list_tools()."""

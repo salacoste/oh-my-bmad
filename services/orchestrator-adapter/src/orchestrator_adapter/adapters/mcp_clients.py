@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 import structlog
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from mtls import create_httpx_verify_arg
 
 from orchestrator_adapter.app.config import OrchestratorSettings
 
@@ -287,11 +288,20 @@ class MCPClientGroup:
             )
         # Phase 10 / ADR-0022: streamable-http transport when URL is set.
         if url:
-            from mcp.client.streamable_http import streamable_http_client  # noqa: I001, MCP001 — ADR-0022: streamable-http allowed in mcp_clients.py
+            import httpx as _httpx
+            from mcp.client.streamable_http import (
+                streamable_http_client,  # noqa: I001, MCP001 — ADR-0022: streamable-http allowed in mcp_clients.py
+            )
 
             token = self._get_auth_token()
             headers = {"Authorization": f"Bearer {token}"} if token else {}
-            transport_context = streamable_http_client(url=url, headers=headers)
+            # Phase 11 / ADR-0023: mTLS client TLS — pass a pre-configured
+            # httpx.AsyncClient with the mTLS verify argument.
+            http_client = _httpx.AsyncClient(
+                headers=headers,
+                verify=create_httpx_verify_arg(),
+            )
+            transport_context = streamable_http_client(url=url, http_client=http_client)
             read_write = await self._stack.enter_async_context(transport_context)
             session = await self._stack.enter_async_context(ClientSession(*read_write))
             await asyncio.wait_for(session.initialize(), timeout=_INIT_TIMEOUT)

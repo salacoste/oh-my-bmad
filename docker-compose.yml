@@ -143,6 +143,11 @@ services:
       # file, so registry-api create_all's its own idempotency_cache table on
       # start (mirrors REGISTRY_STATE_AUTO_CREATE_SCHEMA; default OFF in prod).
       REGISTRY_API_AUTO_CREATE_IDEMPOTENCY_SCHEMA: ${REGISTRY_API_AUTO_CREATE_IDEMPOTENCY_SCHEMA:-1}
+      # mTLS: inert when MTLS_ENABLED=false (default).
+      MTLS_ENABLED: ${MTLS_ENABLED:-false}
+      MTLS_CERT_PATH: /certs/registry-api.pem
+      MTLS_KEY_PATH: /certs/registry-api-key.pem
+      MTLS_CA_PATH: /certs/ca.pem
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]
@@ -153,6 +158,7 @@ services:
         condition: service_healthy
     volumes:
       - oh-my-bmad-data:/var/lib/oh-my-bmad
+      - oh-my-bmad-certs:/certs:ro
     # Story 11.3.6 (H7d): registry-api is a uvicorn HTTP server — it never
     # creates /tmp/ready (the shared *healthcheck file convention is for the
     # tail-loop services). Probe the TCP port instead, mirroring the proven
@@ -177,11 +183,17 @@ services:
       # schema in-process, mirroring the S-1/S-2/S-3 test composes. Empty/unset
       # → registry-state's `== "1"` check is False → no-op.
       REGISTRY_STATE_AUTO_CREATE_SCHEMA: ${REGISTRY_STATE_AUTO_CREATE_SCHEMA:-}
+      # mTLS: inert when MTLS_ENABLED=false (default).
+      MTLS_ENABLED: ${MTLS_ENABLED:-false}
+      MTLS_CERT_PATH: /certs/registry-state.pem
+      MTLS_KEY_PATH: /certs/registry-state-key.pem
+      MTLS_CA_PATH: /certs/ca.pem
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]
     volumes:
       - oh-my-bmad-data:/var/lib/oh-my-bmad
+      - oh-my-bmad-certs:/certs:ro
     healthcheck: *healthcheck
 
   telegram-gateway:
@@ -206,9 +218,16 @@ services:
       # Production operators leave the shell var unset for normal
       # set_webhook behavior (default "0" → False).
       TELEGRAM_SKIP_WEBHOOK_SET: ${TELEGRAM_SKIP_WEBHOOK_SET:-0}
+      # mTLS: inert when MTLS_ENABLED=false (default).
+      MTLS_ENABLED: ${MTLS_ENABLED:-false}
+      MTLS_CERT_PATH: /certs/telegram-gateway.pem
+      MTLS_KEY_PATH: /certs/telegram-gateway-key.pem
+      MTLS_CA_PATH: /certs/ca.pem
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]
+    volumes:
+      - oh-my-bmad-certs:/certs:ro
     # Story 11.3.6 (H7d): telegram-gateway is a uvicorn HTTP server (binds
     # 0.0.0.0:8080) and never creates /tmp/ready — probe the TCP port instead
     healthcheck: *healthcheck_http
@@ -264,6 +283,11 @@ services:
       ARTIFACT_URL: ${ARTIFACT_URL:-}
       BROWSER_URL: ${BROWSER_URL:-}
       MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-}
+      # mTLS: inert when MTLS_ENABLED=false (default).
+      MTLS_ENABLED: ${MTLS_ENABLED:-false}
+      MTLS_CERT_PATH: /certs/orchestrator-adapter.pem
+      MTLS_KEY_PATH: /certs/orchestrator-adapter-key.pem
+      MTLS_CA_PATH: /certs/ca.pem
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]
@@ -278,6 +302,7 @@ services:
         condition: service_healthy
     volumes:
       - oh-my-bmad-data:/var/lib/oh-my-bmad
+      - oh-my-bmad-certs:/certs:ro
     # Story 11.3.10 (H7f deep-fix): *healthcheck_mcp (start_period 100s) not
     # the shared *healthcheck (~70s). 3 sequential MCP inits at
     # _INIT_TIMEOUT=30s = 90s worst-case ceiling > the 70s shared window →
@@ -328,6 +353,11 @@ services:
       ARTIFACT_URL: ${ARTIFACT_URL:-}
       BROWSER_URL: ${BROWSER_URL:-}
       MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-}
+      # mTLS: inert when MTLS_ENABLED=false (default).
+      MTLS_ENABLED: ${MTLS_ENABLED:-false}
+      MTLS_CERT_PATH: /certs/worker-wrapper.pem
+      MTLS_KEY_PATH: /certs/worker-wrapper-key.pem
+      MTLS_CA_PATH: /certs/ca.pem
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]
@@ -341,6 +371,7 @@ services:
         condition: service_healthy
     volumes:
       - oh-my-bmad-data:/var/lib/oh-my-bmad
+      - oh-my-bmad-certs:/certs:ro
     # Story 11.3.10 (H7f deep-fix): *healthcheck_mcp (start_period 100s) not
     # the shared *healthcheck (~70s). worker-wrapper mirrors the orchestrator's
     # 3-sequential-MCP-init = 90s worst-case ceiling > 70s shared window →
@@ -369,11 +400,17 @@ services:
       # when shell is set explicitly, it takes precedence — matches the
       # existing telegram-gateway contract above).
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      # mTLS: inert when MTLS_ENABLED=false (default).
+      MTLS_ENABLED: ${MTLS_ENABLED:-false}
+      MTLS_CERT_PATH: /certs/clawhip-daemon.pem
+      MTLS_KEY_PATH: /certs/clawhip-daemon-key.pem
+      MTLS_CA_PATH: /certs/ca.pem
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]
     volumes:
       - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
+      - oh-my-bmad-certs:/certs:ro
     healthcheck: *healthcheck
 
   # Story 10.6 / FR62a / NFR-M4/M5 — derived-metrics subscriber.
@@ -412,6 +449,11 @@ services:
       OMB_METRICS_METRICS_HOST: "0.0.0.0"
       OMB_METRICS_METRICS_PORT: "9090"
       OMB_METRICS_RUN_MODE: server
+      # mTLS: inert when MTLS_ENABLED=false (default).
+      MTLS_ENABLED: ${MTLS_ENABLED:-false}
+      MTLS_CERT_PATH: /certs/metrics-subscriber.pem
+      MTLS_KEY_PATH: /certs/metrics-subscriber-key.pem
+      MTLS_CA_PATH: /certs/ca.pem
     depends_on:
       registry-state:
         condition: service_healthy
@@ -420,6 +462,7 @@ services:
     networks: [oh-my-bmad-net]
     volumes:
       - oh-my-bmad-data:/var/lib/oh-my-bmad
+      - oh-my-bmad-certs:/certs:ro
     healthcheck:
       # D3 — probe /healthz over loopback (NOT /metrics — hot path
       # under Prometheus scrape would skew benchmark numbers and add
@@ -558,6 +601,11 @@ services:
       TASK_REGISTRY_DB_PATH: ${REGISTRY_DB_PATH:-/var/lib/oh-my-bmad/registry/state.sqlite3}
       TASK_REGISTRY_ACTOR_KIND: system
       TASK_REGISTRY_ACTOR_ID: task-registry-mcp-remote
+      # mTLS: inert when MTLS_ENABLED=false (default).
+      MTLS_ENABLED: ${MTLS_ENABLED:-false}
+      MTLS_CERT_PATH: /certs/task-registry-mcp.pem
+      MTLS_KEY_PATH: /certs/task-registry-mcp-key.pem
+      MTLS_CA_PATH: /certs/ca.pem
     entrypoint: ["python", "-m", "task_registry_mcp"]
     init: true
     restart: unless-stopped
@@ -567,6 +615,7 @@ services:
         condition: service_healthy
     volumes:
       - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
+      - oh-my-bmad-certs:/certs:ro
     healthcheck:
       test:
         - CMD
@@ -593,6 +642,11 @@ services:
       SESSION_REGISTRY_DB_PATH: ${REGISTRY_DB_PATH:-/var/lib/oh-my-bmad/registry/state.sqlite3}
       SESSION_REGISTRY_ACTOR_KIND: system
       SESSION_REGISTRY_ACTOR_ID: session-registry-mcp-remote
+      # mTLS: inert when MTLS_ENABLED=false (default).
+      MTLS_ENABLED: ${MTLS_ENABLED:-false}
+      MTLS_CERT_PATH: /certs/session-registry-mcp.pem
+      MTLS_KEY_PATH: /certs/session-registry-mcp-key.pem
+      MTLS_CA_PATH: /certs/ca.pem
     entrypoint: ["python", "-m", "session_registry_mcp"]
     init: true
     restart: unless-stopped
@@ -602,6 +656,7 @@ services:
         condition: service_healthy
     volumes:
       - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
+      - oh-my-bmad-certs:/certs:ro
     healthcheck:
       test:
         - CMD
@@ -628,12 +683,18 @@ services:
       GIT_MCP_WORKTREE_ROOT: ${GIT_MCP_WORKTREE_ROOT:-/var/lib/oh-my-bmad}
       GIT_MCP_ACTOR_KIND: system
       GIT_MCP_ACTOR_ID: git-mcp-remote
+      # mTLS: inert when MTLS_ENABLED=false (default).
+      MTLS_ENABLED: ${MTLS_ENABLED:-false}
+      MTLS_CERT_PATH: /certs/git-mcp.pem
+      MTLS_KEY_PATH: /certs/git-mcp-key.pem
+      MTLS_CA_PATH: /certs/ca.pem
     entrypoint: ["python", "-m", "git_mcp"]
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]
     volumes:
       - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
+      - oh-my-bmad-certs:/certs:ro
     healthcheck:
       test:
         - CMD
@@ -660,12 +721,18 @@ services:
       GITHUB_MCP_ACTOR_KIND: system
       GITHUB_MCP_ACTOR_ID: github-mcp-remote
       GITHUB_MCP_SCOPED_TOKEN: ${GITHUB_TOKEN:-}
+      # mTLS: inert when MTLS_ENABLED=false (default).
+      MTLS_ENABLED: ${MTLS_ENABLED:-false}
+      MTLS_CERT_PATH: /certs/github-mcp.pem
+      MTLS_KEY_PATH: /certs/github-mcp-key.pem
+      MTLS_CA_PATH: /certs/ca.pem
     entrypoint: ["python", "-m", "github_mcp"]
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]
     volumes:
       - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
+      - oh-my-bmad-certs:/certs:ro
     healthcheck:
       test:
         - CMD
@@ -692,12 +759,18 @@ services:
       VERIFICATION_MCP_WORKTREE_ROOT: ${VERIFICATION_MCP_WORKTREE_ROOT:-/var/lib/oh-my-bmad}
       VERIFICATION_MCP_ACTOR_KIND: system
       VERIFICATION_MCP_ACTOR_ID: verification-mcp-remote
+      # mTLS: inert when MTLS_ENABLED=false (default).
+      MTLS_ENABLED: ${MTLS_ENABLED:-false}
+      MTLS_CERT_PATH: /certs/verification-mcp.pem
+      MTLS_KEY_PATH: /certs/verification-mcp-key.pem
+      MTLS_CA_PATH: /certs/ca.pem
     entrypoint: ["python", "-m", "verification_mcp"]
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]
     volumes:
       - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
+      - oh-my-bmad-certs:/certs:ro
     healthcheck:
       test:
         - CMD
@@ -724,12 +797,18 @@ services:
       MEMORY_MCP_STORE_PATH: ${MEMORY_MCP_STORE_PATH:-/var/lib/oh-my-bmad/memory}
       MEMORY_MCP_ACTOR_KIND: system
       MEMORY_MCP_ACTOR_ID: memory-mcp-remote
+      # mTLS: inert when MTLS_ENABLED=false (default).
+      MTLS_ENABLED: ${MTLS_ENABLED:-false}
+      MTLS_CERT_PATH: /certs/memory-mcp.pem
+      MTLS_KEY_PATH: /certs/memory-mcp-key.pem
+      MTLS_CA_PATH: /certs/ca.pem
     entrypoint: ["python", "-m", "memory_mcp"]
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]
     volumes:
       - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
+      - oh-my-bmad-certs:/certs:ro
     healthcheck:
       test:
         - CMD
@@ -758,12 +837,18 @@ services:
       ARTIFACT_MCP_ACTOR_ID: artifact-mcp-remote
       ARTIFACT_MCP_RETENTION_MAX_BYTES: ${ARTIFACT_MCP_RETENTION_MAX_BYTES:-}
       ARTIFACT_MCP_RETENTION_TTL_SECONDS: ${ARTIFACT_MCP_RETENTION_TTL_SECONDS:-}
+      # mTLS: inert when MTLS_ENABLED=false (default).
+      MTLS_ENABLED: ${MTLS_ENABLED:-false}
+      MTLS_CERT_PATH: /certs/artifact-mcp.pem
+      MTLS_KEY_PATH: /certs/artifact-mcp-key.pem
+      MTLS_CA_PATH: /certs/ca.pem
     entrypoint: ["python", "-m", "artifact_mcp"]
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]
     volumes:
       - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
+      - oh-my-bmad-certs:/certs:ro
     healthcheck:
       test:
         - CMD
@@ -790,12 +875,18 @@ services:
       BROWSER_MCP_ACTOR_KIND: system
       BROWSER_MCP_ACTOR_ID: browser-mcp-remote
       BROWSER_MCP_PLAYWRIGHT_IMAGE: ${BROWSER_MCP_PLAYWRIGHT_IMAGE:-}
+      # mTLS: inert when MTLS_ENABLED=false (default).
+      MTLS_ENABLED: ${MTLS_ENABLED:-false}
+      MTLS_CERT_PATH: /certs/browser-mcp.pem
+      MTLS_KEY_PATH: /certs/browser-mcp-key.pem
+      MTLS_CA_PATH: /certs/ca.pem
     entrypoint: ["python", "-m", "browser_mcp"]
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]
     volumes:
       - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
+      - oh-my-bmad-certs:/certs:ro
     healthcheck:
       test:
         - CMD
@@ -822,6 +913,11 @@ services:
       CLAWHIP_BRIDGE_ACTOR_KIND: system
       CLAWHIP_BRIDGE_ACTOR_ID: clawhip-bridge-mcp-remote
       CLAWHIP_BRIDGE_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+      # mTLS: inert when MTLS_ENABLED=false (default).
+      MTLS_ENABLED: ${MTLS_ENABLED:-false}
+      MTLS_CERT_PATH: /certs/clawhip-bridge-mcp.pem
+      MTLS_KEY_PATH: /certs/clawhip-bridge-mcp-key.pem
+      MTLS_CA_PATH: /certs/ca.pem
     entrypoint: ["python", "-m", "clawhip_bridge_mcp"]
     init: true
     restart: unless-stopped
@@ -831,6 +927,7 @@ services:
         condition: service_healthy
     volumes:
       - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
+      - oh-my-bmad-certs:/certs:ro
     healthcheck:
       test:
         - CMD
@@ -848,4 +945,10 @@ networks:
 
 volumes:
   oh-my-bmad-data:
+    driver: local
+  # Phase 10 / ADR-0022 mTLS — shared cert volume for all services.
+  # Populated by `omb-ca provision` (packages/mtls/). Mounted :ro everywhere
+  # (services read certs at startup; only omb-ca writes). Inert when
+  # MTLS_ENABLED=false (default).
+  oh-my-bmad-certs:
     driver: local

@@ -18,6 +18,8 @@ dependencies = [
     # processor chain (AC-4) and ``app/rate_limit.py`` may emit through
     # it; the import-graph guard prefers explicit over transitive deps.
     "structlog>=24.1",
+    # Story 57 — mTLS TLS context factory for server-side TLS.
+    "mtls",
 ]
 
 [build-system]
@@ -33,6 +35,7 @@ dev = [
 [tool.uv.sources]
 secret-hygiene = { workspace = true }
 events = { workspace = true }
+mtls = { workspace = true }
 
 # Review-fix L6: exclude co-located ``test_*.py`` and ``conftest.py``
 # from the wheel — they're development-time fixtures, not runtime

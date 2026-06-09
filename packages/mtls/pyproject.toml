@@ -1,0 +1,15 @@
+[project]
+name = "mtls"
+version = "0.1.0"
+description = "TLS context factory for mTLS in oh-my-bmad Docker network (Phase 11). Creates server and client SSL contexts from environment-configured certificates."
+authors = [
+    { name = "R2d2", email = "bad.vano23ru@gmail.com" },
+]
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.0,<1.0"]
+build-backend = "uv_build"

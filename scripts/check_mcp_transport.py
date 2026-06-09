@@ -476,6 +476,207 @@ def _scan(roots: list[Path]) -> tuple[list[Violation], int]:
 
 
 # ---------------------------------------------------------------------------
+# mTLS validation (Phase 10 — Story 58)
+# ---------------------------------------------------------------------------
+
+
+def _file_defines_function(tree: ast.Module, name: str) -> bool:
+    """Return True iff *tree* contains a top-level ``def {name}``."""
+    return any(
+        isinstance(node, ast.FunctionDef) and node.name == name for node in tree.body
+    )
+
+
+def _file_imports_name(tree: ast.Module, module: str, name: str) -> bool:
+    """Return True iff *tree* contains ``from {module} import {name}``."""
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.level != 0 or node.module != module:
+            continue
+        return any(alias.name == name for alias in node.names)
+    return False
+
+
+def _file_calls_name(tree: ast.Module, name: str) -> bool:
+    """Return True iff *tree* contains a call expression whose func is *name*."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id == name:
+                return True
+            if isinstance(func, ast.Attribute) and func.attr == name:
+                return True
+    return False
+
+
+def _check_mtls_servers() -> list[Violation]:
+    """Verify every MCP server ``__main__.py`` with ``_run_streamable_http``
+    imports and calls ``create_uvicorn_ssl_config`` from ``mtls``."""
+    violations: list[Violation] = []
+    for main_py in sorted(REPO_ROOT.glob("mcp-servers/*/src/*/__main__.py")):
+        try:
+            source = main_py.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        try:
+            tree = ast.parse(source, filename=str(main_py))
+        except SyntaxError:
+            continue
+
+        if not _file_defines_function(tree, "_run_streamable_http"):
+            continue
+
+        if not _file_imports_name(tree, "mtls", "create_uvicorn_ssl_config"):
+            violations.append(
+                Violation(
+                    file=main_py,
+                    lineno=0,
+                    rule="MTLS001",
+                    message=(
+                        "file defines _run_streamable_http but does not import "
+                        "create_uvicorn_ssl_config from mtls"
+                    ),
+                )
+            )
+            continue
+
+        if not _file_calls_name(tree, "create_uvicorn_ssl_config"):
+            violations.append(
+                Violation(
+                    file=main_py,
+                    lineno=0,
+                    rule="MTLS001",
+                    message=(
+                        "file imports create_uvicorn_ssl_config from mtls "
+                        "but never calls it"
+                    ),
+                )
+            )
+
+    return violations
+
+
+def _check_mtls_clients() -> list[Violation]:
+    """Verify both ``mcp_clients.py`` files import ``create_httpx_verify_arg``
+    from ``mtls``."""
+    violations: list[Violation] = []
+    client_files = [
+        REPO_ROOT
+        / "services"
+        / "worker-wrapper"
+        / "src"
+        / "worker_wrapper"
+        / "adapters"
+        / "mcp_clients.py",
+        REPO_ROOT
+        / "services"
+        / "orchestrator-adapter"
+        / "src"
+        / "orchestrator_adapter"
+        / "adapters"
+        / "mcp_clients.py",
+    ]
+    for client_py in client_files:
+        try:
+            source = client_py.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            violations.append(
+                Violation(
+                    file=client_py,
+                    lineno=0,
+                    rule="MTLS001",
+                    message="mcp_clients.py not found or unreadable",
+                )
+            )
+            continue
+        try:
+            tree = ast.parse(source, filename=str(client_py))
+        except SyntaxError:
+            continue
+
+        if not _file_imports_name(tree, "mtls", "create_httpx_verify_arg"):
+            violations.append(
+                Violation(
+                    file=client_py,
+                    lineno=0,
+                    rule="MTLS001",
+                    message=(
+                        "mcp_clients.py does not import "
+                        "create_httpx_verify_arg from mtls"
+                    ),
+                )
+            )
+
+    return violations
+
+
+def _scan_mtls() -> list[Violation]:
+    """Run all mTLS structural checks and return violations."""
+    violations: list[Violation] = []
+    violations.extend(_check_mtls_servers())
+    violations.extend(_check_mtls_clients())
+    return violations
+
+
+# ---------------------------------------------------------------------------
+# mTLS self-test helpers (used by --self-test for MTLS fixture harness)
+# ---------------------------------------------------------------------------
+
+
+def _scan_mtls_fixture(path: Path) -> list[Violation]:
+    """Run the mTLS structural check on a single fixture *path*.
+
+    Determines check type from the fixture filename prefix:
+      - ``server_…`` → _check_mtls_servers pattern
+      - ``client_…`` → _check_mtls_clients pattern
+    """
+    try:
+        source = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    try:
+        tree = ast.parse(source, filename=str(path))
+    except SyntaxError:
+        return []
+
+    violations: list[Violation] = []
+    name = path.name
+
+    if name.startswith("server_"):
+        if _file_defines_function(tree, "_run_streamable_http"):
+            if not _file_imports_name(tree, "mtls", "create_uvicorn_ssl_config"):
+                violations.append(
+                    Violation(
+                        file=path,
+                        lineno=0,
+                        rule="MTLS001",
+                        message="missing import create_uvicorn_ssl_config from mtls",
+                    )
+                )
+            elif not _file_calls_name(tree, "create_uvicorn_ssl_config"):
+                violations.append(
+                    Violation(
+                        file=path,
+                        lineno=0,
+                        rule="MTLS001",
+                        message="create_uvicorn_ssl_config imported but not called",
+                    )
+                )
+    elif name.startswith("client_") and not _file_imports_name(tree, "mtls", "create_httpx_verify_arg"):
+        violations.append(
+            Violation(
+                file=path,
+                lineno=0,
+                rule="MTLS001",
+                message="missing import create_httpx_verify_arg from mtls",
+            )
+        )
+
+    return violations
+
+
+# ---------------------------------------------------------------------------
 # Self-test harness
 # ---------------------------------------------------------------------------
 
@@ -533,13 +734,38 @@ def _self_test() -> int:
             if not viols:
                 failures.append(f"FAIL violations/{fpath.name}: expected MCP001 but got none")
 
+    # mTLS structural fixtures — clean/mtls/ and violations/mtls/
+    mtls_fixture_root = fixture_root / "mtls"
+    mtls_clean_files: list[Path] = []
+    mtls_violation_files: list[Path] = []
+
+    mtls_clean_dir = mtls_fixture_root / "clean"
+    if mtls_clean_dir.exists():
+        mtls_clean_files = _list_fixture_files(mtls_clean_dir)
+        for fpath in mtls_clean_files:
+            viols = _scan_mtls_fixture(fpath)
+            for v in viols:
+                failures.append(
+                    f"FAIL mtls/clean/{v.file.name}: unexpected MTLS001: {v.message}"
+                )
+
+    mtls_violation_dir = mtls_fixture_root / "violations"
+    if mtls_violation_dir.exists():
+        mtls_violation_files = _list_fixture_files(mtls_violation_dir)
+        for fpath in mtls_violation_files:
+            viols = _scan_mtls_fixture(fpath)
+            if not viols:
+                failures.append(
+                    f"FAIL mtls/violations/{fpath.name}: expected MTLS001 but got none"
+                )
+
     if failures:
         print("check_mcp_transport.py --self-test FAILED:", file=sys.stderr)
         for f in failures:
             print(f"  {f}", file=sys.stderr)
         return 1
 
-    total = len(clean_files) + len(violation_files)
+    total = len(clean_files) + len(violation_files) + len(mtls_clean_files) + len(mtls_violation_files)
     print(f"✓ check_mcp_transport.py self-test OK ({total} fixtures, 0 failures)")
     return 0
 
@@ -570,13 +796,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.self_test:
         return _self_test()
 
-    violations, scanned = _scan(_SOURCE_ROOTS)
+    transport_violations, scanned = _scan(_SOURCE_ROOTS)
+    mtls_violations = _scan_mtls()
+    all_violations = transport_violations + mtls_violations
 
-    if violations:
-        for v in violations:
+    if all_violations:
+        for v in all_violations:
             print(v, file=sys.stderr)
         print(
-            f"\nmcp-transport: {len(violations)} violation(s) in {scanned} file(s) scanned.",
+            f"\nmcp-transport: {len(all_violations)} violation(s) "
+            f"({scanned} files scanned, {len(mtls_violations)} mTLS structural).",
             file=sys.stderr,
         )
         return 1
@@ -590,6 +819,9 @@ def main(argv: list[str] | None = None) -> int:
             except ValueError:
                 rel = root
             print(f"    {rel}: {count} files")
+        print(f"    mTLS structural checks: "
+              f"{len(list(REPO_ROOT.glob('mcp-servers/*/src/*/__main__.py')))} servers, "
+              f"2 clients — 0 violations")
     return 0
 
 

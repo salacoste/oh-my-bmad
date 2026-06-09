@@ -55,6 +55,7 @@ github-mcp = { workspace = true }
 idempotency = { workspace = true }
 memory-mcp = { workspace = true }
 metrics-subscriber = { workspace = true }
+mtls = { workspace = true }
 orchestrator-adapter = { workspace = true }
 registry-api = { workspace = true }
 registry-state = { workspace = true }

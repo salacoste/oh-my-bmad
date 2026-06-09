@@ -35,6 +35,8 @@ dependencies = [
     # Story 6.1+ — JWT authentication for registry API (replaces X-Actor-Id
     # header trust). PyJWT provides encode/decode with HS256/RS256 support.
     "pyjwt>=2.8",
+    # Story 57 — mTLS TLS context factory for server-side TLS.
+    "mtls",
 ]
 
 [build-system]
@@ -51,3 +53,4 @@ dev = [
 events = { workspace = true }
 registry-state = { workspace = true }
 idempotency = { workspace = true }
+mtls = { workspace = true }

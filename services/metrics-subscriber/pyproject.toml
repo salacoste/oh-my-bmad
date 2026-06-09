@@ -16,6 +16,8 @@ dependencies = [
     "prometheus-client>=0.20,<1.0",
     "fastapi>=0.115,<0.120",
     "uvicorn[standard]>=0.30,<0.35",
+    # Story 57 — mTLS TLS context factory for server-side TLS.
+    "mtls",
 ]
 
 [build-system]
@@ -37,3 +39,4 @@ dev = [
 
 [tool.uv.sources]
 events = { workspace = true }
+mtls = { workspace = true }

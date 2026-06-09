@@ -59,6 +59,7 @@ import uvicorn
 from events import EventEnvelope, ensure_shared_dir
 from events.errors import CursorSchemaVersionError, ParseSkipThresholdExceeded
 from events.log_reader import EventLogReader
+from mtls import create_uvicorn_ssl_config
 
 from metrics_subscriber import __version__
 from metrics_subscriber.app.config import MetricsSubscriberSettings
@@ -531,6 +532,13 @@ def _run_server_mode(settings: MetricsSubscriberSettings) -> int:
     from metrics_subscriber.app.main import build_app  # noqa: PLC0415
 
     app = build_app(settings=settings)
+
+    ssl_config = create_uvicorn_ssl_config()
+    if ssl_config is not None:
+        log.info("TLS enabled (mTLS)")
+    else:
+        log.info("TLS disabled (plain HTTP)")
+
     config = uvicorn.Config(
         app,
         host=settings.metrics_host,
@@ -538,6 +546,7 @@ def _run_server_mode(settings: MetricsSubscriberSettings) -> int:
         log_config=None,
         access_log=False,
         lifespan="on",
+        **(ssl_config or {}),
     )
     server = uvicorn.Server(config)
     # Hand the server back to the app so the lifespan failure-handler

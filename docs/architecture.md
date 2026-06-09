@@ -101,6 +101,9 @@ These are non-bypassable. Most are enforced by CI gates (see [testing-guide.md](
 13. **Event-driven state transitions (P6-I3).** All task state changes emit events; no direct DB mutations bypassing the event spine. Invalid transitions raise `InvalidStateTransition`.
 14. **Browser session ephemerality (P4-I1).** Playwright subprocess runs with `--isolated`; no cookie/localStorage/sessionStorage state leaks between tasks.
 15. **Remote MCP auth required (P10-I1, ADR-0022).** Any MCP server running on Streamable HTTP transport MUST validate bearer tokens. Unauthenticated Streamable HTTP is forbidden. Docker network isolation (no external ports) is the transport-layer control; bearer token is the application-layer control. Defense-in-depth.
+16. **mTLS all-or-nothing within profile (P11-I1, ADR-0023).** When `MTLS_ENABLED=true`, ALL network-facing services MUST present valid client certificates. Partial TLS config is a startup error, never silent fallback.
+17. **No committed cert/key material (P11-I2).** `.pem`, `.key`, `.crt`, `.p12` files are forbidden in the source tree. CI gate enforces. Certs generated at deploy time or test time only.
+18. **Short-lived certificates only (P11-I3).** Maximum certificate validity: 72 hours. Rotation interval: 24 hours.
 
 ## Cross-cutting concerns
 
@@ -252,16 +255,26 @@ New FRs: FR122 (Streamable HTTP transport mode), FR123 (Bearer token auth), FR12
 
 Invariants amended: Invariant 5 (stdio-by-default, streamable-http opt-in), Invariant 15 added (remote auth required).
 
-## Future work beyond Phase 10
+## Phase 11: mTLS for Internal Docker Network
 
-The following items were deferred across Phases 4--9 and remain unshipped (Remote MCP transport removed — now Phase 10):
+Phase 11 shipped 2026-06-09 (ADR-0023 accepted). Scope: Transport-layer mutual authentication for all internal Docker-network service-to-service communication. Four epics (56-59), 10 stories.
 
-- **mTLS** for service-to-service authentication.
+New FRs: FR127 (mTLS context factory), FR128 (omb-ca CLI tool), FR129 (server TLS for HTTP services), FR130 (server TLS for MCP services), FR131 (client TLS), FR132 (CI gates), FR133 (compose profile). New NFRs: NFR-S15 (profile-gated, default off), NFR-S16 (handshake <10ms), NFR-M11 (zero-change compat), NFR-R16 (clear failure), NFR-O20 (TLS observable).
+
+New invariants: P11-I1 (all-or-nothing within profile), P11-I2 (no committed cert material), P11-I3 (short-lived certs, 72h max).
+
+New packages: `packages/mtls/` (TLS context factory). New tools: `scripts/omb-ca/` (CA init/issue/rotate/check). New CI gates: `check_no_secrets.py` (P11-I2), extended `check_mcp_transport.py` (MTLS001). 78 new tests. 16 services configured for mTLS.
+
+## Future work beyond Phase 11
+
+The following items were deferred across Phases 4--9 and remain unshipped:
+
 - **Scheduled jobs** -- time-based task scheduling.
 - **Web dashboard** -- browser-based operator surface.
 - **GLM adapter** -- fourth runtime following the ADR-0015 pattern.
 - **Split deployment** -- Postgres accessible from multiple hosts for horizontal scaling of the registry layer.
 - **Historical event replay** -- re-materialize state from the event log for auditing/debugging.
+- **Postgres connection mTLS** -- Phase 11.1, extends mTLS to database connections.
 
 See `_bmad-output/planning-artifacts/architecture.md` for the full decision rationale per item.
 

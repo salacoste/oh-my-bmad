@@ -21,6 +21,7 @@ members = [
     "mcp-auth",
     "memory-mcp",
     "metrics-subscriber",
+    "mtls",
     "oh-my-bmad",
     "orchestrator-adapter",
     "registry-api",
@@ -1920,6 +1921,7 @@ source = { editable = "services/metrics-subscriber" }
 dependencies = [
     { name = "events" },
     { name = "fastapi" },
+    { name = "mtls" },
     { name = "prometheus-client" },
     { name = "pydantic-settings" },
     { name = "structlog" },
@@ -1939,6 +1941,7 @@ dev = [
 requires-dist = [
     { name = "events", editable = "packages/events" },
     { name = "fastapi", specifier = ">=0.115,<0.120" },
+    { name = "mtls", editable = "packages/mtls" },
     { name = "prometheus-client", specifier = ">=0.20,<1.0" },
     { name = "pydantic-settings", specifier = ">=2.5,<3.0" },
     { name = "structlog", specifier = ">=24.1" },
@@ -1962,6 +1965,17 @@ sdist = { url = "https://files.pythonhosted.org/packages/a2/f7/139d22fef48ac7812
 wheels = [
     { url = "https://files.pythonhosted.org/packages/cb/98/6af411189d9413534c3eb691182bff1f5c6d44ed2f93f2edfe52a1bbceb8/more_itertools-11.0.2-py3-none-any.whl", hash = "sha256:6e35b35f818b01f691643c6c611bc0902f2e92b46c18fffa77ae1e7c46e912e4", size = 71939, upload-time = "2026-04-09T15:01:32.21Z" },
 ]
+
+[[package]]
+name = "mtls"
+version = "0.1.0"
+source = { editable = "packages/mtls" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2.0" }]
 
 [[package]]
 name = "multidict"
@@ -2915,6 +2929,7 @@ dependencies = [
     { name = "events" },
     { name = "fastapi" },
     { name = "idempotency" },
+    { name = "mtls" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pyjwt" },
@@ -2937,6 +2952,7 @@ requires-dist = [
     { name = "events", editable = "packages/events" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "idempotency", editable = "packages/idempotency" },
+    { name = "mtls", editable = "packages/mtls" },
     { name = "pydantic", specifier = ">=2.8" },
     { name = "pydantic-settings", specifier = ">=2.0" },
     { name = "pyjwt", specifier = ">=2.8" },
@@ -3437,6 +3453,7 @@ dependencies = [
     { name = "aiogram" },
     { name = "events" },
     { name = "fastapi" },
+    { name = "mtls" },
     { name = "pydantic-settings" },
     { name = "secret-hygiene" },
     { name = "structlog" },
@@ -3454,6 +3471,7 @@ requires-dist = [
     { name = "aiogram", specifier = ">=3.13,<4.0" },
     { name = "events", editable = "packages/events" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "mtls", editable = "packages/mtls" },
     { name = "pydantic-settings", specifier = ">=2.5,<3.0" },
     { name = "secret-hygiene", editable = "packages/secret-hygiene" },
     { name = "structlog", specifier = ">=24.1" },

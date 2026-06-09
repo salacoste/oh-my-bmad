@@ -66,6 +66,7 @@ import structlog
 import uvicorn
 from events.clock import SystemClock
 from events.envelope import Actor, EventEnvelope
+from mtls import create_uvicorn_ssl_config
 from secret_hygiene.sanitizer import redact_secrets
 
 from telegram_gateway.app.config import TelegramSettings, apply_hermetic_defaults_to_env
@@ -232,7 +233,14 @@ def main() -> None:
     )
 
     app = build_app(settings=settings, clock=clock)
-    uvicorn.run(app, host=host, port=port)
+
+    ssl_config = create_uvicorn_ssl_config()
+    if ssl_config is not None:
+        log.info("TLS enabled (mTLS)")
+        uvicorn.run(app, host=host, port=port, **ssl_config)
+    else:
+        log.info("TLS disabled (plain HTTP)")
+        uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":

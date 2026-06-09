@@ -124,19 +124,22 @@ def _run_streamable_http(mcp: object) -> None:  # noqa: MCP001 — ADR-0022: str
         BearerTokenMiddleware,
         McpAuthSettings,
     )
+    from mtls import create_uvicorn_ssl_config  # noqa: IMP001 — packages/
 
     auth_settings = McpAuthSettings.from_env()
     port = int(os.environ.get("MCP_PORT", str(_DEFAULT_PORT)))
+    ssl_config = create_uvicorn_ssl_config()
 
     print(
         f"{_SERVER_NAME}: starting streamable-http transport on 0.0.0.0:{port} "
-        f"(auth={'enabled' if auth_settings.enabled else 'disabled'})",
+        f"(auth={'enabled' if auth_settings.enabled else 'disabled'}, "
+        f"tls={'enabled' if ssl_config else 'disabled'})",
         file=sys.stderr,
     )
 
     app = mcp.streamable_http_app()  # noqa: MCP001 — ADR-0022: streamable-http allowed in __main__.py
     app = BearerTokenMiddleware(app, auth_settings)
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=port, **(ssl_config or {}))
 
 
 if __name__ == "__main__":

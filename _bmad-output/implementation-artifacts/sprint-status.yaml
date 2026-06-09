@@ -632,6 +632,25 @@ development_status:
   55-2-full-ci-validation: done  # 3205 tests passed, ruff clean, compose validates
   55-3-phase-10-retrospective: done  # Retrospective produced, all FRs/NFRs mapped
 
+  # ── Phase 11: mTLS for Internal Docker Network (ADR-0023) ─────────────
+  epic-56: done  # mTLS package + CA tooling (FR127, FR128)
+  56-1-mtls-package: done  # packages/mtls/ — TLS context factory (42 tests)
+  56-2-omb-ca-cli: done  # omb-ca init/issue/rotate/check (21 tests)
+
+  epic-57: done  # Service integration (FR129, FR130, FR131)
+  57-1-server-tls-core: done  # TLS for registry-api, telegram-gateway, metrics-subscriber
+  57-2-server-tls-mcp: done  # TLS for all 9 remote MCP __main__.py
+  57-3-client-tls: done  # TLS for both mcp_clients.py + test
+
+  epic-58: done  # CI gates + compose mtls profile (FR132, FR133)
+  58-1-transport-gate-mtls: done  # check_mcp_transport.py extended with MTLS001
+  58-2-secrets-hygiene-gate: done  # check_no_secrets.py — P11-I2 enforcement
+  58-3-compose-mtls-profile: done  # MTLS_ENABLED + certs volume for all 16 services
+
+  epic-59: done  # Validation + retrospective
+  59-1-full-ci-validation: done  # 3224 tests, ruff clean, all gates green
+  59-2-phase-11-retrospective: done  # Retrospective produced
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================

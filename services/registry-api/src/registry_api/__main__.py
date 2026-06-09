@@ -47,6 +47,7 @@ from pathlib import Path
 import structlog
 import uvicorn
 from events.clock import SystemClock
+from mtls import create_uvicorn_ssl_config
 from secret_hygiene.sanitizer import redact_secrets
 
 from registry_api.app import build_app
@@ -192,7 +193,13 @@ def main() -> None:
         create_idempotency_schema_on_start=create_idempotency_schema_on_start,
     )
 
-    uvicorn.run(app, host=host, port=port)
+    ssl_config = create_uvicorn_ssl_config()
+    if ssl_config is not None:
+        log.info("TLS enabled (mTLS)")
+        uvicorn.run(app, host=host, port=port, **ssl_config)
+    else:
+        log.info("TLS disabled (plain HTTP)")
+        uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":
