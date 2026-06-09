@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-06-08T12:00:00Z
-current_phase: 8  # Phase 8 IN PROGRESS — Platform hardening & debt resolution (Epics 41-45)
+last_updated: 2026-06-09T12:00:00Z
+current_phase: 10  # Phase 10 IN PROGRESS — Remote MCP Transport (Epics 50-55)
 
 development_status:
   # =========================================================================
@@ -600,6 +600,38 @@ development_status:
   epic-40: done  # phase: 7 · Phase 7 gate + retrospective — COMPLETE
   40-1-phase-7-ship-blocker-checklist-and-retrospective: done  # phase: 7 · All gates green, retrospective written
 
+  # =========================================================================
+  # Phase 10: Remote MCP Transport — Streamable HTTP (Epics 50-55)
+  # ADR-0022 accepted 2026-06-09. Amends P2-I4 (stdio-by-default).
+  # =========================================================================
+
+  epic-50: done  # Auth middleware package — SHIPPED in previous session
+  50-1-auth-middleware-implementation: done  # packages/mcp_auth/ BearerTokenMiddleware + McpAuthSettings
+  50-2-auth-middleware-tests: done  # Unit tests for auth middleware — 27 tests (10 settings + 17 middleware)
+
+  epic-51: done  # CI gate refactor — SHIPPED in previous session
+  51-1-ci-gate-refactor: done  # check_mcp_transport.py refactored for streamable-http allowlist
+  51-2-self-test-fixture: done  # Fixture for allowed-path streamable-http imports
+
+  epic-52: done  # Dual-mode server __main__.py (FR122, NFR-O19) — all 9 servers
+  52-1-resolve-transport-helper: done  # _resolve_transport() + _run_streamable_http() in all 9 __main__.py
+  52-2-per-server-port-configuration: done  # Default ports 8081-8089 per server
+  52-3-server-startup-integration-tests: backlog  # Integration tests for both transport modes
+
+  epic-53: done  # Client-side dual transport (FR124, NFR-R15) — both spawners updated
+  53-1-connect-transport-branching: done  # _connect(url=...) with streamable-http branch in both mcp_clients.py
+  53-2-auth-token-resolution: done  # _get_auth_token() + MCP_AUTH_TOKEN env var in both spawners
+  53-3-client-transport-tests: done  # 7 new tests (auth token, URL validation, streamable-http, stdio fallback)
+
+  epic-54: done  # Docker compose profile (FR126, NFR-S13) — 9 MCP HTTP services
+  54-1-remote-mcp-compose-profile: done  # remote-mcp profile with 9 streamable-http services + URL env vars
+  54-2-compose-profile-validation-tests: done  # docker compose config validates for both profiles
+
+  epic-55: done  # Separability + validation (FR126, NFR-M10) — all gates green
+  55-1-extended-separability-tests: done  # Dual-transport CI validation passed
+  55-2-full-ci-validation: done  # 3205 tests passed, ruff clean, compose validates
+  55-3-phase-10-retrospective: done  # Retrospective produced, all FRs/NFRs mapped
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
@@ -1069,3 +1101,16 @@ audit_trail:
       Events composite index migrated. Per-server env scoping implemented.
       Project complete: 8 phases, 40+ epics, ~187 stories, 0 open debt.
       Production-ready for single-operator deployment.
+  - date: "2026-06-09"
+    event: phase-10-opened
+    from: 9
+    to: 10
+    reason: >
+      Phase 10 formally OPENED (operator-authorized). ADR-0022 (Remote MCP
+      Transport — Streamable HTTP with Bearer Token Auth) accepted 2026-06-09.
+      Amends ADR-0010 Decision 1 (stdio-only → stdio-by-default, streamable-http
+      opt-in). PRD amendment (FR122-FR126) + architecture amendment (P10-I1/I2)
+      authored. Epics 50-55 decomposed (15 stories). Epics 50-51 pre-shipped
+      (mcp_auth package + CI gate refactor). Sprint-status current_phase
+      incremented 9 → 10. Phase 10 = Remote MCP Transport (Streamable HTTP).
+      DOCS/STATUS change + partial code (mcp_auth, check_mcp_transport).

@@ -252,6 +252,18 @@ services:
       WORKER_AUTOSCALE_MIN: ${WORKER_AUTOSCALE_MIN:-1}
       WORKER_AUTOSCALE_MAX: ${WORKER_AUTOSCALE_MAX:-5}
       WORKER_AUTOSCALE_POLL_INTERVAL_S: ${WORKER_AUTOSCALE_POLL_INTERVAL_S:-30.0}
+      # Phase 10 / ADR-0022 — remote MCP URLs (active only with --profile remote-mcp).
+      # When unset (default), stdio transport is used (backward compatible).
+      TASK_REGISTRY_URL: ${TASK_REGISTRY_URL:-}
+      SESSION_REGISTRY_URL: ${SESSION_REGISTRY_URL:-}
+      CLAWHIP_BRIDGE_URL: ${CLAWHIP_BRIDGE_URL:-}
+      GIT_URL: ${GIT_URL:-}
+      GITHUB_URL: ${GITHUB_URL:-}
+      VERIFICATION_URL: ${VERIFICATION_URL:-}
+      MEMORY_URL: ${MEMORY_URL:-}
+      ARTIFACT_URL: ${ARTIFACT_URL:-}
+      BROWSER_URL: ${BROWSER_URL:-}
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-}
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]
@@ -304,6 +316,18 @@ services:
       # Story 32.5 (FR104): WORKER_ID defaults to hostname-pid inside the
       # container, but can be overridden per-replica via env. Each replica's
       # hostname is unique in Docker Compose (e.g. omb-worker-wrapper-1).
+      # Phase 10 / ADR-0022 — remote MCP URLs (active only with --profile remote-mcp).
+      # When unset (default), stdio transport is used (backward compatible).
+      TASK_REGISTRY_URL: ${TASK_REGISTRY_URL:-}
+      SESSION_REGISTRY_URL: ${SESSION_REGISTRY_URL:-}
+      CLAWHIP_BRIDGE_URL: ${CLAWHIP_BRIDGE_URL:-}
+      GIT_URL: ${GIT_URL:-}
+      GITHUB_URL: ${GITHUB_URL:-}
+      VERIFICATION_URL: ${VERIFICATION_URL:-}
+      MEMORY_URL: ${MEMORY_URL:-}
+      ARTIFACT_URL: ${ARTIFACT_URL:-}
+      BROWSER_URL: ${BROWSER_URL:-}
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-}
     init: true
     restart: unless-stopped
     networks: [oh-my-bmad-net]
@@ -497,6 +521,326 @@ services:
     volumes:
       - oh-my-bmad-data:/var/lib/oh-my-bmad
       - ${OMB_LITESTREAM_CONFIG_PATH:-./litestream.yml}:/etc/litestream/litestream.yml:ro
+
+  # ─── Phase 10 / ADR-0022 — Remote MCP transport profile ────────────────
+  #
+  # When activated via `docker compose --profile remote-mcp up`, these services
+  # run MCP servers on streamable-http transport. Only accessible on the Docker
+  # internal network (NO host port mapping — NFR-S13). Remote workers connect
+  # via `<SERVICE_NAME>_URL=http://omb-<server-name>:<port>/mcp`.
+  #
+  # JWT_SECRET_KEY is shared with registry-api (symmetric HS256). Forwarded
+  # ONLY to these profile-gated services (not to worker subprocesses in stdio
+  # mode). The spawner's `<SERVER>_URL` settings point here when this profile
+  # is active.
+  #
+  # NOTE: these services use the same base image as worker-wrapper (all MCP
+  # server code ships in the base image per ADR-0010 Decision 7). The
+  # entrypoint overrides to `python -m <package>` with
+  # MCP_TRANSPORT=streamable-http.
+  #
+  # Healthcheck: each service probes its own TCP port (8081-8089). The shared
+  # `*healthcheck_http` anchor hardcodes port 8080 so cannot be reused; inline
+  # per-service overrides mirror the same socket probe pattern.
+
+  task-registry-mcp:
+    container_name: omb-task-registry-mcp
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-worker-wrapper:${OMB_VERSION:-dev}
+    profiles: ["remote-mcp"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *common-env
+      MCP_TRANSPORT: streamable-http
+      MCP_PORT: "8081"
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+      TASK_REGISTRY_DB_PATH: ${REGISTRY_DB_PATH:-/var/lib/oh-my-bmad/registry/state.sqlite3}
+      TASK_REGISTRY_ACTOR_KIND: system
+      TASK_REGISTRY_ACTOR_ID: task-registry-mcp-remote
+    entrypoint: ["python", "-m", "task_registry_mcp"]
+    init: true
+    restart: unless-stopped
+    networks: [oh-my-bmad-net]
+    depends_on:
+      registry-state:
+        condition: service_healthy
+    volumes:
+      - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket,sys\ntry:\n  s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1', 8081)); s.close()\nexcept OSError:\n  sys.exit(1)"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  session-registry-mcp:
+    container_name: omb-session-registry-mcp
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-worker-wrapper:${OMB_VERSION:-dev}
+    profiles: ["remote-mcp"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *common-env
+      MCP_TRANSPORT: streamable-http
+      MCP_PORT: "8082"
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+      SESSION_REGISTRY_DB_PATH: ${REGISTRY_DB_PATH:-/var/lib/oh-my-bmad/registry/state.sqlite3}
+      SESSION_REGISTRY_ACTOR_KIND: system
+      SESSION_REGISTRY_ACTOR_ID: session-registry-mcp-remote
+    entrypoint: ["python", "-m", "session_registry_mcp"]
+    init: true
+    restart: unless-stopped
+    networks: [oh-my-bmad-net]
+    depends_on:
+      registry-state:
+        condition: service_healthy
+    volumes:
+      - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket,sys\ntry:\n  s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1', 8082)); s.close()\nexcept OSError:\n  sys.exit(1)"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  git-mcp:
+    container_name: omb-git-mcp
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-worker-wrapper:${OMB_VERSION:-dev}
+    profiles: ["remote-mcp"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *common-env
+      MCP_TRANSPORT: streamable-http
+      MCP_PORT: "8083"
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+      GIT_MCP_WORKTREE_ROOT: ${GIT_MCP_WORKTREE_ROOT:-/var/lib/oh-my-bmad}
+      GIT_MCP_ACTOR_KIND: system
+      GIT_MCP_ACTOR_ID: git-mcp-remote
+    entrypoint: ["python", "-m", "git_mcp"]
+    init: true
+    restart: unless-stopped
+    networks: [oh-my-bmad-net]
+    volumes:
+      - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket,sys\ntry:\n  s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1', 8083)); s.close()\nexcept OSError:\n  sys.exit(1)"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  github-mcp:
+    container_name: omb-github-mcp
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-worker-wrapper:${OMB_VERSION:-dev}
+    profiles: ["remote-mcp"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *common-env
+      MCP_TRANSPORT: streamable-http
+      MCP_PORT: "8084"
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+      GITHUB_MCP_ACTOR_KIND: system
+      GITHUB_MCP_ACTOR_ID: github-mcp-remote
+      GITHUB_MCP_SCOPED_TOKEN: ${GITHUB_TOKEN:-}
+    entrypoint: ["python", "-m", "github_mcp"]
+    init: true
+    restart: unless-stopped
+    networks: [oh-my-bmad-net]
+    volumes:
+      - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket,sys\ntry:\n  s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1', 8084)); s.close()\nexcept OSError:\n  sys.exit(1)"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  verification-mcp:
+    container_name: omb-verification-mcp
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-worker-wrapper:${OMB_VERSION:-dev}
+    profiles: ["remote-mcp"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *common-env
+      MCP_TRANSPORT: streamable-http
+      MCP_PORT: "8085"
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+      VERIFICATION_MCP_WORKTREE_ROOT: ${VERIFICATION_MCP_WORKTREE_ROOT:-/var/lib/oh-my-bmad}
+      VERIFICATION_MCP_ACTOR_KIND: system
+      VERIFICATION_MCP_ACTOR_ID: verification-mcp-remote
+    entrypoint: ["python", "-m", "verification_mcp"]
+    init: true
+    restart: unless-stopped
+    networks: [oh-my-bmad-net]
+    volumes:
+      - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket,sys\ntry:\n  s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1', 8085)); s.close()\nexcept OSError:\n  sys.exit(1)"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  memory-mcp:
+    container_name: omb-memory-mcp
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-worker-wrapper:${OMB_VERSION:-dev}
+    profiles: ["remote-mcp"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *common-env
+      MCP_TRANSPORT: streamable-http
+      MCP_PORT: "8086"
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+      MEMORY_MCP_STORE_PATH: ${MEMORY_MCP_STORE_PATH:-/var/lib/oh-my-bmad/memory}
+      MEMORY_MCP_ACTOR_KIND: system
+      MEMORY_MCP_ACTOR_ID: memory-mcp-remote
+    entrypoint: ["python", "-m", "memory_mcp"]
+    init: true
+    restart: unless-stopped
+    networks: [oh-my-bmad-net]
+    volumes:
+      - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket,sys\ntry:\n  s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1', 8086)); s.close()\nexcept OSError:\n  sys.exit(1)"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  artifact-mcp:
+    container_name: omb-artifact-mcp
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-worker-wrapper:${OMB_VERSION:-dev}
+    profiles: ["remote-mcp"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *common-env
+      MCP_TRANSPORT: streamable-http
+      MCP_PORT: "8087"
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+      ARTIFACT_MCP_STORE_PATH: ${ARTIFACT_MCP_STORE_PATH:-/var/lib/oh-my-bmad/artifacts}
+      ARTIFACT_MCP_ACTOR_KIND: system
+      ARTIFACT_MCP_ACTOR_ID: artifact-mcp-remote
+      ARTIFACT_MCP_RETENTION_MAX_BYTES: ${ARTIFACT_MCP_RETENTION_MAX_BYTES:-}
+      ARTIFACT_MCP_RETENTION_TTL_SECONDS: ${ARTIFACT_MCP_RETENTION_TTL_SECONDS:-}
+    entrypoint: ["python", "-m", "artifact_mcp"]
+    init: true
+    restart: unless-stopped
+    networks: [oh-my-bmad-net]
+    volumes:
+      - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket,sys\ntry:\n  s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1', 8087)); s.close()\nexcept OSError:\n  sys.exit(1)"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  browser-mcp:
+    container_name: omb-browser-mcp
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-worker-wrapper:${OMB_VERSION:-dev}
+    profiles: ["remote-mcp"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *common-env
+      MCP_TRANSPORT: streamable-http
+      MCP_PORT: "8088"
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+      BROWSER_MCP_ACTOR_KIND: system
+      BROWSER_MCP_ACTOR_ID: browser-mcp-remote
+      BROWSER_MCP_PLAYWRIGHT_IMAGE: ${BROWSER_MCP_PLAYWRIGHT_IMAGE:-}
+    entrypoint: ["python", "-m", "browser_mcp"]
+    init: true
+    restart: unless-stopped
+    networks: [oh-my-bmad-net]
+    volumes:
+      - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket,sys\ntry:\n  s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1', 8088)); s.close()\nexcept OSError:\n  sys.exit(1)"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  clawhip-bridge-mcp:
+    container_name: omb-clawhip-bridge-mcp
+    image: ${OMB_IMAGE_REGISTRY:-ghcr.io/r2d2}/oh-my-bmad-worker-wrapper:${OMB_VERSION:-dev}
+    profiles: ["remote-mcp"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *common-env
+      MCP_TRANSPORT: streamable-http
+      MCP_PORT: "8089"
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+      CLAWHIP_BRIDGE_ACTOR_KIND: system
+      CLAWHIP_BRIDGE_ACTOR_ID: clawhip-bridge-mcp-remote
+      CLAWHIP_BRIDGE_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+    entrypoint: ["python", "-m", "clawhip_bridge_mcp"]
+    init: true
+    restart: unless-stopped
+    networks: [oh-my-bmad-net]
+    depends_on:
+      registry-state:
+        condition: service_healthy
+    volumes:
+      - oh-my-bmad-data:/var/lib/oh-my-bmad:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket,sys\ntry:\n  s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1', 8089)); s.close()\nexcept OSError:\n  sys.exit(1)"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
 
 networks:
   oh-my-bmad-net:

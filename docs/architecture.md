@@ -90,7 +90,7 @@ These are non-bypassable. Most are enforced by CI gates (see [testing-guide.md](
 2. **Service-to-service imports banned.** `services.<A>` never imports `services.<B>.*`. Communication is via the event spine or registry HTTP API.
 3. **Event envelopes are immutable.** Once emitted, `event_id`, `schema_version`, `type`, `emitted_at`, `emitted_at_monotonic_ns`, `actor`, `payload`, `parent_event_id?` are never mutated.
 4. **Additive-only schema within a major.** `DROP COLUMN`, `DROP TABLE`, `ALTER COLUMN (type change)`, `RENAME`, `ADD COLUMN NOT NULL` w/o `DEFAULT` are rejected by the migrator linter.
-5. **MCP stdio-only.** Imports of `mcp.server.sse` / `mcp.server.streamable_http` are rejected. All MCP servers (3 always-on + 6 fleet, including `browser`) communicate over stdio.
+5. **MCP stdio-by-default, streamable-http opt-in (P2-I4, amended by ADR-0022).** SSE transport is permanently forbidden (`mcp.server.sse` imports rejected). Streamable HTTP is permitted when a server explicitly opts in via `MCP_TRANSPORT=streamable-http` (gated by `check_mcp_transport.py`). Stdio remains the default. Remote transport requires mandatory bearer-token auth (Invariant 15).
 6. **Upstream-fork boundary.** Vendored code accessed only through `upstream/<fork>/adapter.py`.
 7. **No `anthropic` SDK in platform code.** Only `worker-wrapper` may import `anthropic`; everyone else routes via Claude Code worker through the event spine.
 8. **Capability-tier enforcement at every MCP tool boundary.** Deny-path / default-deny / escalation tests are mandatory per boundary.
@@ -100,6 +100,7 @@ These are non-bypassable. Most are enforced by CI gates (see [testing-guide.md](
 12. **Runtime credential isolation (P5-I1).** Each runtime adapter's API key is injected into its own subprocess env only. `ANTHROPIC_API_KEY` absent from Codex/Gemini child envs; `OPENAI_API_KEY` absent from Claude/Gemini child envs; `GOOGLE_API_KEY` absent from Claude/Codex child envs.
 13. **Event-driven state transitions (P6-I3).** All task state changes emit events; no direct DB mutations bypassing the event spine. Invalid transitions raise `InvalidStateTransition`.
 14. **Browser session ephemerality (P4-I1).** Playwright subprocess runs with `--isolated`; no cookie/localStorage/sessionStorage state leaks between tasks.
+15. **Remote MCP auth required (P10-I1, ADR-0022).** Any MCP server running on Streamable HTTP transport MUST validate bearer tokens. Unauthenticated Streamable HTTP is forbidden. Docker network isolation (no external ports) is the transport-layer control; bearer token is the application-layer control. Defense-in-depth.
 
 ## Cross-cutting concerns
 
@@ -243,11 +244,18 @@ Phase 9 shipped 2026-06-09 as the final operational-excellence phase (Stories 46
 - **Operator runbook updates** (Story 48.1) -- five missing operational playbooks added covering recovery, priority queue, per-server env scoping, Postgres backend, and API versioning.
 - **Dead code + stale TODO resolution** (Stories 46.2, 46.3) -- resolved stale production TODOs (health endpoint verification, dead-code documentation), closed Phase-2-era scaffold TODOs. Three remaining stale TODOs closed across the codebase.
 
-## Future work beyond Phase 9
+## Phase 10: Remote MCP Transport (Streamable HTTP)
 
-The following items were deferred across Phases 4--9 and remain unshipped:
+Phase 10 opened 2026-06-09 (ADR-0022 accepted). Scope: Streamable HTTP transport for MCP servers with JWT bearer token auth, unlocking split deployment and remote workers. Six epics (50-55).
 
-- **Remote MCP transport** (HTTP/SSE/streamable) -- deferred since Phase 2. MCP stays stdio-only. Requires its own ADR when a concrete remote-worker use case emerges.
+New FRs: FR122 (Streamable HTTP transport mode), FR123 (Bearer token auth), FR124 (Client-side dual transport), FR125 (CI gate update), FR126 (Extended separability tests). New NFRs: NFR-S13 (no external ports), NFR-S14 (token validation <5ms), NFR-M10 (zero-change backward compatibility), NFR-O19 (transport mode observable), NFR-R15 (transport fallback).
+
+Invariants amended: Invariant 5 (stdio-by-default, streamable-http opt-in), Invariant 15 added (remote auth required).
+
+## Future work beyond Phase 10
+
+The following items were deferred across Phases 4--9 and remain unshipped (Remote MCP transport removed — now Phase 10):
+
 - **mTLS** for service-to-service authentication.
 - **Scheduled jobs** -- time-based task scheduling.
 - **Web dashboard** -- browser-based operator surface.

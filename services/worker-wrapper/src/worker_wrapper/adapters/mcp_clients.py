@@ -320,81 +320,97 @@ class MCPClientGroup:
         self._stack = AsyncExitStack()
         await self._stack.__aenter__()
         try:
+            # Phase 10 / ADR-0022: each server connects via URL (streamable-http)
+            # when a URL setting is provided, falling back to stdio otherwise.
+            # The three always-present servers (task-registry, session-registry,
+            # clawhip-bridge) always connect — URL or command, never both.
             self.task_registry = await self._connect(
                 "task-registry",
                 self.settings.task_registry_command,
                 self.settings.task_registry_args,
+                url=self.settings.task_registry_url or None,
             )
             self.session_registry = await self._connect(
                 "session-registry",
                 self.settings.session_registry_command,
                 self.settings.session_registry_args,
+                url=self.settings.session_registry_url or None,
             )
             self.clawhip_bridge = await self._connect(
                 "clawhip-bridge",
                 self.settings.clawhip_bridge_command,
                 self.settings.clawhip_bridge_args,
+                url=self.settings.clawhip_bridge_url or None,
             )
             # Story 15.5 — conditional git-mcp spawn. ONLY when the operator has
-            # opted in via a non-blank ``git_command``; otherwise git stays
-            # absent (separability S-5 "absent" state). The GIT_MCP_* required
-            # vars are forwarded via ``_ENV_ALLOWLIST``.
-            if self.settings.git_command:
+            # opted in via a non-blank ``git_command`` OR a non-blank ``git_url``;
+            # otherwise git stays absent (separability S-5 "absent" state). The
+            # GIT_MCP_* required vars are forwarded via ``_ENV_ALLOWLIST``.
+            if self.settings.git_command or self.settings.git_url:
                 self.git = await self._connect(
                     "git",
                     self.settings.git_command,
                     self.settings.git_args,
+                    url=self.settings.git_url or None,
                 )
             # Story 16.6 — conditional github-mcp spawn. ONLY when the operator
-            # opted in via a non-blank ``github_command``; otherwise github stays
-            # absent (separability S-6 "absent" state). The GITHUB_MCP_* required
-            # vars (incl. the scoped token) are forwarded via ``_ENV_ALLOWLIST``.
-            if self.settings.github_command:
+            # opted in via a non-blank ``github_command`` OR ``github_url``;
+            # otherwise github stays absent (separability S-6 "absent" state).
+            # The GITHUB_MCP_* required vars (incl. the scoped token) are forwarded
+            # via ``_ENV_ALLOWLIST``.
+            if self.settings.github_command or self.settings.github_url:
                 self.github = await self._connect(
                     "github",
                     self.settings.github_command,
                     self.settings.github_args,
+                    url=self.settings.github_url or None,
                 )
             # Story 17.5 — conditional verification-mcp spawn. ONLY when the
-            # operator opted in via a non-blank ``verification_command``; otherwise
-            # verification stays absent (separability S-7 "absent" state). The
-            # VERIFICATION_MCP_* required vars are forwarded via ``_ENV_ALLOWLIST``.
-            if self.settings.verification_command:
+            # operator opted in via a non-blank ``verification_command`` OR
+            # ``verification_url``; otherwise verification stays absent
+            # (separability S-7 "absent" state). The VERIFICATION_MCP_* required
+            # vars are forwarded via ``_ENV_ALLOWLIST``.
+            if self.settings.verification_command or self.settings.verification_url:
                 self.verification = await self._connect(
                     "verification",
                     self.settings.verification_command,
                     self.settings.verification_args,
+                    url=self.settings.verification_url or None,
                 )
             # Story 18.5 — conditional memory-mcp spawn. ONLY when the operator
-            # opted in via a non-blank ``memory_command``; otherwise memory stays
-            # absent (separability S-8 "absent" state). The MEMORY_MCP_* required
-            # vars (incl. the store path) are forwarded via ``_ENV_ALLOWLIST``.
-            if self.settings.memory_command:
+            # opted in via a non-blank ``memory_command`` OR ``memory_url``;
+            # otherwise memory stays absent (separability S-8 "absent" state). The
+            # MEMORY_MCP_* required vars (incl. the store path) are forwarded via
+            # ``_ENV_ALLOWLIST``.
+            if self.settings.memory_command or self.settings.memory_url:
                 self.memory = await self._connect(
                     "memory",
                     self.settings.memory_command,
                     self.settings.memory_args,
+                    url=self.settings.memory_url or None,
                 )
             # Story 19.5 — conditional artifact-mcp spawn. ONLY when the operator
-            # opted in via a non-blank ``artifact_command``; otherwise artifact stays
-            # absent (separability S-9 "absent" state). The ARTIFACT_MCP_* required
-            # vars (incl. the store path + retention policy) are forwarded via
-            # ``_ENV_ALLOWLIST``.
-            if self.settings.artifact_command:
+            # opted in via a non-blank ``artifact_command`` OR ``artifact_url``;
+            # otherwise artifact stays absent (separability S-9 "absent" state). The
+            # ARTIFACT_MCP_* required vars (incl. the store path + retention policy)
+            # are forwarded via ``_ENV_ALLOWLIST``.
+            if self.settings.artifact_command or self.settings.artifact_url:
                 self.artifact = await self._connect(
                     "artifact",
                     self.settings.artifact_command,
                     self.settings.artifact_args,
+                    url=self.settings.artifact_url or None,
                 )
             # Story 20.1 — conditional browser-mcp spawn. ONLY when the operator
-            # opted in via a non-blank ``browser_command``; otherwise browser stays
-            # absent (separability S-10 "absent" state). The BROWSER_MCP_* required
-            # vars are NOT in ``_ENV_ALLOWLIST`` yet (Story 20.6 fills those in).
-            if self.settings.browser_command:
+            # opted in via a non-blank ``browser_command`` OR ``browser_url``;
+            # otherwise browser stays absent (separability S-10 "absent" state). The
+            # BROWSER_MCP_* required vars are forwarded via ``_ENV_ALLOWLIST``.
+            if self.settings.browser_command or self.settings.browser_url:
                 self.browser = await self._connect(
                     "browser",
                     self.settings.browser_command,
                     self.settings.browser_args,
+                    url=self.settings.browser_url or None,
                 )
         except BaseException:
             await self.__aexit__(None, None, None)
@@ -420,13 +436,42 @@ class MCPClientGroup:
         self.artifact = None  # Story 19.5 — null the optional 8th member.
         self.browser = None  # Story 20.1 — null the optional 9th member.
 
+    def _get_auth_token(self) -> str | None:
+        """Read auth token for streamable-http MCP connections (Phase 10 / ADR-0022).
+
+        Source priority:
+        1. MCP_AUTH_TOKEN env var (pre-generated token)
+        2. None (no auth — will fail if server requires auth)
+        """
+        return os.environ.get("MCP_AUTH_TOKEN", "").strip() or None
+
     async def _connect(
         self,
         name: str,
         command: str,
         args: list[str],
+        url: str | None = None,
     ) -> ClientSession:
         log = structlog.get_logger(__name__)
+        # Phase 10 / ADR-0022: URL and command are mutually exclusive.
+        if url and command:
+            raise ValueError(
+                f"{name}: URL and command are mutually exclusive. "
+                f"Got url={url!r} and command={command!r}"
+            )
+        # Phase 10 / ADR-0022: streamable-http transport when URL is set.
+        if url:
+            from mcp.client.streamable_http import streamable_http_client  # noqa: I001, MCP001 — ADR-0022: streamable-http allowed in mcp_clients.py
+
+            token = self._get_auth_token()
+            headers = {"Authorization": f"Bearer {token}"} if token else {}
+            transport_context = streamable_http_client(url=url, headers=headers)
+            read_write = await self._stack.enter_async_context(transport_context)
+            session = await self._stack.enter_async_context(ClientSession(*read_write))
+            await asyncio.wait_for(session.initialize(), timeout=_INIT_TIMEOUT)
+            log.info("mcp_client_connected", server=name, transport="streamable-http", url=url)
+            return session
+        # Stdio transport — default path (Phase 9 baseline, unchanged).
         # Story 43.1: per-server env scoping for defense-in-depth.
         # Each MCP child only receives _BASE_ENV_VARS + its own server-specific vars.
         server_specific = _SERVER_REQUIRED_ENV.get(name, frozenset())

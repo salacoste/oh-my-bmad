@@ -18,6 +18,7 @@ members = [
     "git-mcp",
     "github-mcp",
     "idempotency",
+    "mcp-auth",
     "memory-mcp",
     "metrics-subscriber",
     "oh-my-bmad",
@@ -1872,6 +1873,21 @@ wheels = [
 ]
 
 [[package]]
+name = "mcp-auth"
+version = "0.1.0"
+source = { editable = "packages/mcp_auth" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "pyjwt" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pyjwt", specifier = ">=2.8" },
+]
+
+[[package]]
 name = "mdurl"
 version = "0.1.2"
 source = { registry = "https://pypi.org/simple" }
@@ -2149,6 +2165,7 @@ dependencies = [
     { name = "git-mcp" },
     { name = "github-mcp" },
     { name = "idempotency" },
+    { name = "mcp-auth" },
     { name = "memory-mcp" },
     { name = "metrics-subscriber" },
     { name = "orchestrator-adapter" },
@@ -2188,6 +2205,7 @@ requires-dist = [
     { name = "git-mcp", editable = "mcp-servers/git" },
     { name = "github-mcp", editable = "mcp-servers/github" },
     { name = "idempotency", editable = "packages/idempotency" },
+    { name = "mcp-auth", editable = "packages/mcp_auth" },
     { name = "memory-mcp", editable = "mcp-servers/memory" },
     { name = "metrics-subscriber", editable = "services/metrics-subscriber" },
     { name = "orchestrator-adapter", editable = "services/orchestrator-adapter" },

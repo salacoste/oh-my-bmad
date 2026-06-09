@@ -222,20 +222,27 @@ class MCPClientGroup:
         self._stack = AsyncExitStack()
         await self._stack.__aenter__()
         try:
+            # Phase 10 / ADR-0022: each server connects via URL (streamable-http)
+            # when a URL setting is provided, falling back to stdio otherwise.
+            # The three always-present servers always connect — URL or command,
+            # never both.
             self.task_registry = await self._connect(
                 "task-registry",
                 self.settings.task_registry_command,
                 self.settings.task_registry_args,
+                url=self.settings.task_registry_url or None,
             )
             self.session_registry = await self._connect(
                 "session-registry",
                 self.settings.session_registry_command,
                 self.settings.session_registry_args,
+                url=self.settings.session_registry_url or None,
             )
             self.clawhip_bridge = await self._connect(
                 "clawhip-bridge",
                 self.settings.clawhip_bridge_command,
                 self.settings.clawhip_bridge_args,
+                url=self.settings.clawhip_bridge_url or None,
             )
         except BaseException:
             await self.__aexit__(None, None, None)
@@ -255,13 +262,42 @@ class MCPClientGroup:
         self.session_registry = None
         self.clawhip_bridge = None
 
+    def _get_auth_token(self) -> str | None:
+        """Read auth token for streamable-http MCP connections (Phase 10 / ADR-0022).
+
+        Source priority:
+        1. MCP_AUTH_TOKEN env var (pre-generated token)
+        2. None (no auth — will fail if server requires auth)
+        """
+        return os.environ.get("MCP_AUTH_TOKEN", "").strip() or None
+
     async def _connect(
         self,
         name: str,
         command: str,
         args: list[str],
+        url: str | None = None,
     ) -> ClientSession:
         log = structlog.get_logger(__name__)
+        # Phase 10 / ADR-0022: URL and command are mutually exclusive.
+        if url and command:
+            raise ValueError(
+                f"{name}: URL and command are mutually exclusive. "
+                f"Got url={url!r} and command={command!r}"
+            )
+        # Phase 10 / ADR-0022: streamable-http transport when URL is set.
+        if url:
+            from mcp.client.streamable_http import streamable_http_client  # noqa: I001, MCP001 — ADR-0022: streamable-http allowed in mcp_clients.py
+
+            token = self._get_auth_token()
+            headers = {"Authorization": f"Bearer {token}"} if token else {}
+            transport_context = streamable_http_client(url=url, headers=headers)
+            read_write = await self._stack.enter_async_context(transport_context)
+            session = await self._stack.enter_async_context(ClientSession(*read_write))
+            await asyncio.wait_for(session.initialize(), timeout=_INIT_TIMEOUT)
+            log.info("mcp_client_connected", server=name, transport="streamable-http", url=url)
+            return session
+        # Stdio transport — default path (Phase 9 baseline, unchanged).
         # Story 43.1: per-server env scoping for defense-in-depth.
         # Each MCP child only receives _BASE_ENV_VARS + its own server-specific vars.
         server_specific = _SERVER_REQUIRED_ENV.get(name, frozenset())

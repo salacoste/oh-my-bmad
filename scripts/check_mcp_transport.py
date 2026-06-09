@@ -2,33 +2,38 @@
 """check_mcp_transport.py — enforce Phase-2 invariant P2-I4 "MCP transport stdio-only".
 
 CI gate: walks the first-party source trees and rejects any ``import`` /
-``from-import`` of the forbidden non-stdio MCP transport modules/names. The
-MCP servers in this repo speak the MCP protocol over **stdio only**; the SSE
-and streamable-HTTP transports must never be introduced because they would
-open a network ingress surface (P2-I4 ship-blocker; also violates P2-I5
-"no unexpected network ingress").
+``from-import`` of the forbidden non-stdio MCP transport modules/names.
 
-Pure regression-prevention: the codebase currently uses stdio exclusively
-(zero forbidden imports), so this guard MUST pass clean on the current tree
-and only fires if a future commit reaches for a non-stdio transport.
+Phase 2 baseline (still enforced):
+  SSE transport is PERMANENTLY FORBIDDEN everywhere — ``mcp.server.sse``,
+  ``SseServerTransport``, ``sse_app`` are rejected unconditionally.
+
+Phase 10 (ADR-0022) streamable-http exception:
+  Streamable-HTTP transport is allowed ONLY in designated files that are
+  authorised to mount or consume the HTTP transport (server entry points,
+  auth middleware, and client-side transport adapters). Outside these files
+  ``mcp.server.streamable_http`` / ``streamable_http_app`` remain forbidden.
 
 What it FORBIDS (AST-scan, not naive grep, so comments/strings never
 false-positive):
 
-  * Forbidden transport submodules of ``mcp.server``:
-      - ``mcp.server.sse``
-      - ``mcp.server.streamable_http``  (and any ``mcp.server.streamable*``)
-    Detected in every import form:
-      - ``import mcp.server.sse``
-      - ``import mcp.server.sse as transport``
-      - ``from mcp.server.sse import SseServerTransport``
-      - ``from mcp.server import sse``           (submodule via parent package)
-      - ``from mcp.server import streamable_http``
-  * Forbidden transport *names* (used to mount non-stdio transports),
-    regardless of where they are imported from:
-      - ``SseServerTransport``
-      - ``sse_app``
-      - ``streamable_http_app``
+  * **SSE — always forbidden everywhere**:
+      - ``mcp.server.sse`` submodule (any import form)
+      - ``SseServerTransport`` name (regardless of import source)
+      - ``sse_app`` name (regardless of import source)
+
+  * **Streamable-HTTP — forbidden OUTSIDE designated files**:
+      - ``mcp.server.streamable_http`` / ``mcp.server.streamable*`` submodule
+      - ``streamable_http_app`` name
+      - ``mcp.client.streamable_http`` / ``streamable_http_client`` (client
+        side, only in designated client files)
+
+  Designated files where streamable-HTTP is allowed:
+      - ``mcp-servers/*/src/*/__main__.py``  — server entry points
+      - ``mcp-servers/*/src/*/auth/*.py``    — auth middleware modules
+      - ``packages/mcp_auth/``               — shared auth middleware package
+      - ``services/worker-wrapper/…/mcp_clients.py``
+      - ``services/orchestrator-adapter/…/mcp_clients.py``
 
 What it ALLOWS (stdio — the sanctioned transport):
   * ``from mcp.server.stdio import stdio_server``
@@ -82,44 +87,151 @@ from checks._common import (  # noqa: E402
 # Detection sets
 # ---------------------------------------------------------------------------
 
-# Forbidden transport submodules of the ``mcp.server`` package. Matched
-# exactly for ``mcp.server.sse`` and via a ``streamable`` prefix for the
-# streamable-HTTP family (``mcp.server.streamable_http`` and any future
-# ``mcp.server.streamable*`` rename). The legitimate stdio transport lives
-# at ``mcp.server.stdio`` and is deliberately NOT in this set.
-_FORBIDDEN_SERVER_SUBMODULES: frozenset[str] = frozenset({"sse"})
-_FORBIDDEN_SERVER_SUBMODULE_PREFIXES: tuple[str, ...] = ("streamable",)
+# SSE transport — PERMANENTLY FORBIDDEN everywhere. No file is ever allowed
+# to import or reference SSE transport (P2-I4).
+_SSE_SERVER_SUBMODULE: str = "sse"
 
-# Forbidden transport names — commonly imported to mount a non-stdio
-# transport. Flagged no matter which module they are imported from, so a
-# re-export shim cannot smuggle them past the submodule check.
-_FORBIDDEN_TRANSPORT_NAMES: frozenset[str] = frozenset(
-    {
-        "SseServerTransport",
-        "sse_app",
-        "streamable_http_app",
-    }
-)
+# SSE transport names — flagged no matter which module they come from so a
+# re-export shim cannot bypass detection.
+_SSE_TRANSPORT_NAMES: frozenset[str] = frozenset({"SseServerTransport", "sse_app"})
+
+# Streamable-HTTP transport — forbidden OUTSIDE designated files (ADR-0022).
+# The server-side submodule prefix covers ``mcp.server.streamable_http`` and
+# any future ``mcp.server.streamable*`` rename.
+_STREAMABLE_HTTP_SERVER_PREFIX: str = "streamable"
+_STREAMABLE_HTTP_TRANSPORT_NAMES: frozenset[str] = frozenset({"streamable_http_app"})
+
+# Client-side streamable-HTTP module and name.
+_STREAMABLE_HTTP_CLIENT_MODULE: str = "mcp.client.streamable_http"
+_STREAMABLE_HTTP_CLIENT_NAME: str = "streamable_http_client"
+
+# Convenience unions — used by the visitor for detection.
+_ALL_FORBIDDEN_NAMES: frozenset[str] = _SSE_TRANSPORT_NAMES | _STREAMABLE_HTTP_TRANSPORT_NAMES
+
+
+def _is_sse_server_submodule(submodule: str) -> bool:
+    """True iff *submodule* is the SSE transport (``sse``)."""
+    return submodule == _SSE_SERVER_SUBMODULE
+
+
+def _is_streamable_http_server_submodule(submodule: str) -> bool:
+    """True iff *submodule* starts with the streamable-HTTP prefix."""
+    return submodule.startswith(_STREAMABLE_HTTP_SERVER_PREFIX)
 
 
 def _is_forbidden_server_submodule(submodule: str) -> bool:
-    """True iff *submodule* (the part after ``mcp.server.``) is a forbidden transport."""
-    if submodule in _FORBIDDEN_SERVER_SUBMODULES:
-        return True
-    return any(submodule.startswith(prefix) for prefix in _FORBIDDEN_SERVER_SUBMODULE_PREFIXES)
+    """True iff *submodule* (the part after ``mcp.server.``) is any forbidden transport."""
+    return _is_sse_server_submodule(submodule) or _is_streamable_http_server_submodule(submodule)
+
+
+def _is_sse_module_path(module: str) -> bool:
+    """True iff *module* is ``mcp.server.sse`` or a descendant."""
+    parts = module.split(".")
+    return (
+        len(parts) >= 3
+        and parts[0] == "mcp"
+        and parts[1] == "server"
+        and _is_sse_server_submodule(parts[2])
+    )
+
+
+def _is_streamable_http_module_path(module: str) -> bool:
+    """True iff *module* is ``mcp.server.streamable*`` or ``mcp.client.streamable_http``."""
+    parts = module.split(".")
+    if len(parts) >= 3 and parts[0] == "mcp" and parts[1] == "server":
+        return _is_streamable_http_server_submodule(parts[2])
+    return module == _STREAMABLE_HTTP_CLIENT_MODULE or module.startswith(_STREAMABLE_HTTP_CLIENT_MODULE + ".")
 
 
 def _is_forbidden_module_path(module: str) -> bool:
-    """True iff a dotted *module* path is (or descends into) a forbidden transport.
+    """True iff a dotted *module* path is (or descends into) a forbidden transport."""
+    return _is_sse_module_path(module) or _is_streamable_http_module_path(module)
 
-    Matches ``mcp.server.sse`` / ``mcp.server.sse.foo`` /
-    ``mcp.server.streamable_http`` / ``mcp.server.streamable_http.bar``. Does
-    NOT match ``mcp.server.stdio`` or any non-``mcp.server`` module.
+
+def _is_sse_name(name: str) -> bool:
+    """True iff *name* is an SSE transport name."""
+    return name in _SSE_TRANSPORT_NAMES
+
+
+def _is_streamable_http_name(name: str) -> bool:
+    """True iff *name* is a streamable-HTTP transport name."""
+    return name in _STREAMABLE_HTTP_TRANSPORT_NAMES or name == _STREAMABLE_HTTP_CLIENT_NAME
+
+
+# ---------------------------------------------------------------------------
+# Streamable-HTTP allowlist (ADR-0022 Phase 10)
+# ---------------------------------------------------------------------------
+
+
+def _is_streamable_http_allowed_file(path: Path) -> bool:
+    """True iff *path* is a designated file where streamable-HTTP imports are allowed.
+
+    Allowed patterns:
+      - ``mcp-servers/*/src/*/__main__.py``  — server entry points
+      - ``mcp-servers/*/src/*/auth/*.py``    — auth middleware modules
+      - ``packages/mcp_auth/**``             — shared auth middleware package
+      - ``services/worker-wrapper/…/mcp_clients.py``
+      - ``services/orchestrator-adapter/…/mcp_clients.py``
     """
-    parts = module.split(".")
-    if len(parts) >= 3 and parts[0] == "mcp" and parts[1] == "server":
-        return _is_forbidden_server_submodule(parts[2])
-    return False
+    try:
+        rel = path.relative_to(REPO_ROOT)
+    except ValueError:
+        return False
+
+    parts = rel.parts
+
+    # packages/mcp_auth/**  (packages/mcp_auth/src/... or packages/mcp_auth/...)
+    if len(parts) >= 2 and parts[0] == "packages" and parts[1] == "mcp_auth":
+        return True
+
+    # mcp-servers/*/src/*/__main__.py  — server entry points
+    if (
+        len(parts) >= 5
+        and parts[0] == "mcp-servers"
+        and parts[2] == "src"
+        and parts[4] == "__main__.py"
+    ):
+        return True
+
+    # mcp-servers/*/src/*/auth/*.py  — auth middleware modules
+    if (
+        len(parts) >= 6
+        and parts[0] == "mcp-servers"
+        and parts[2] == "src"
+        and parts[4] == "auth"
+        and parts[5].endswith(".py")
+    ):
+        return True
+
+    # services/worker-wrapper/…/mcp_clients.py
+    if (
+        len(parts) >= 2
+        and parts[0] == "services"
+        and parts[1] == "worker-wrapper"
+        and path.name == "mcp_clients.py"
+    ):
+        return True
+
+    # services/orchestrator-adapter/…/mcp_clients.py
+    if (
+        len(parts) >= 2
+        and parts[0] == "services"
+        and parts[1] == "orchestrator-adapter"
+        and path.name == "mcp_clients.py"
+    ):
+        return True
+
+    # scripts/checks/fixtures/mcp_transport/** — self-test fixtures simulating
+    # allowed paths.  These are excluded from the main scan (not under source
+    # roots), so the allowlist only matters for ``--self-test`` which calls
+    # ``_scan_file`` directly.
+    return (
+        len(parts) >= 4
+        and parts[0] == "scripts"
+        and parts[1] == "checks"
+        and parts[2] == "fixtures"
+        and parts[3] == "mcp_transport"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +272,11 @@ _SOURCE_SKIP: frozenset[str] = DEFAULT_SKIP_DIRS | frozenset({"tests", "fixtures
 
 
 class _TransportVisitor(ast.NodeVisitor):
-    """Collect ``(lineno, message)`` tuples for every MCP001 candidate.
+    """Collect ``(lineno, kind, message)`` tuples for every MCP001 candidate.
+
+    *kind* is ``"sse"`` or ``"streamable_http"`` and is used by ``_scan_file``
+    to decide whether the finding should be suppressed for files on the
+    streamable-HTTP allowlist.
 
     Detection covers:
       * ``import mcp.server.sse[.…]`` / ``import mcp.server.streamable_http``
@@ -175,15 +291,35 @@ class _TransportVisitor(ast.NodeVisitor):
     """
 
     def __init__(self) -> None:
-        self.findings: list[tuple[int, str]] = []
+        self.findings: list[tuple[int, str, str]] = []  # (lineno, kind, message)
+
+    @staticmethod
+    def _kind_for_module(module: str) -> str:
+        if _is_sse_module_path(module):
+            return "sse"
+        return "streamable_http"
+
+    @staticmethod
+    def _kind_for_server_submodule(submodule: str) -> str:
+        if _is_sse_server_submodule(submodule):
+            return "sse"
+        return "streamable_http"
+
+    @staticmethod
+    def _kind_for_name(name: str) -> str:
+        if _is_sse_name(name):
+            return "sse"
+        return "streamable_http"
 
     # `import mcp.server.sse` / `import mcp.server.sse as transport`
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
             if _is_forbidden_module_path(alias.name):
+                kind = self._kind_for_module(alias.name)
                 self.findings.append(
                     (
                         node.lineno,
+                        kind,
                         f"import {alias.name!r}"
                         + (f" as {alias.asname!r}" if alias.asname else "")
                         + " — non-stdio MCP transport forbidden; "
@@ -201,10 +337,12 @@ class _TransportVisitor(ast.NodeVisitor):
         if node.level == 0 and node.module is not None:
             module = node.module
             if _is_forbidden_module_path(module):
+                kind = self._kind_for_module(module)
                 names = ", ".join(alias.name for alias in node.names) or "*"
                 self.findings.append(
                     (
                         node.lineno,
+                        kind,
                         f"from {module} import {names} — "
                         "non-stdio MCP transport module forbidden; "
                         "use mcp.server.stdio (P2-I4)",
@@ -214,9 +352,11 @@ class _TransportVisitor(ast.NodeVisitor):
                 # `from mcp.server import sse` / `… import streamable_http`
                 for alias in node.names:
                     if _is_forbidden_server_submodule(alias.name):
+                        kind = self._kind_for_server_submodule(alias.name)
                         self.findings.append(
                             (
                                 node.lineno,
+                                kind,
                                 f"from mcp.server import {alias.name}"
                                 + (f" as {alias.asname}" if alias.asname else "")
                                 + " — non-stdio MCP transport submodule forbidden; "
@@ -228,11 +368,13 @@ class _TransportVisitor(ast.NodeVisitor):
         # re-export shim (`from mypkg.compat import SseServerTransport`) cannot
         # smuggle a non-stdio transport past the module-path check.
         for alias in node.names:
-            if alias.name in _FORBIDDEN_TRANSPORT_NAMES:
+            if alias.name in _ALL_FORBIDDEN_NAMES or alias.name == _STREAMABLE_HTTP_CLIENT_NAME:
                 src = node.module if node.module else "."
+                kind = self._kind_for_name(alias.name)
                 self.findings.append(
                     (
                         node.lineno,
+                        kind,
                         f"from {src} import {alias.name}"
                         + (f" as {alias.asname}" if alias.asname else "")
                         + " — non-stdio MCP transport entry point forbidden; "
@@ -271,10 +413,15 @@ def _scan_file(path: Path, *, raise_on_syntax: bool = False) -> list[Violation]:
     visitor = _TransportVisitor()
     visitor.visit(tree)
 
+    streamable_allowed = _is_streamable_http_allowed_file(path)
+
     seen: set[int] = set()
     violations: list[Violation] = []
-    for lineno, message in visitor.findings:
+    for lineno, kind, message in visitor.findings:
         if lineno in seen:
+            continue
+        # Streamable-HTTP findings are skipped in designated files (ADR-0022).
+        if kind == "streamable_http" and streamable_allowed:
             continue
         source_line = lines[lineno - 1] if lineno <= len(lines) else ""
         if has_noqa(source_line, "MCP001"):

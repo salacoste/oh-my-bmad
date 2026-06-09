@@ -53,12 +53,20 @@ class WorkerSettings(BaseSettings):
 
     task_registry_command: str = "python"
     task_registry_args: list[str] = ["-m", "task_registry_mcp"]
+    # Phase 10 / ADR-0022: streamable-http URL for task-registry. When set,
+    # streamable-http transport is used instead of stdio. Empty string (default)
+    # means stdio mode — backward compatible with Phase 9.
+    task_registry_url: str = ""
 
     session_registry_command: str = "python"
     session_registry_args: list[str] = ["-m", "session_registry_mcp"]
+    # Phase 10 / ADR-0022: streamable-http URL for session-registry.
+    session_registry_url: str = ""
 
     clawhip_bridge_command: str = "python"
     clawhip_bridge_args: list[str] = ["-m", "clawhip_bridge_mcp"]
+    # Phase 10 / ADR-0022: streamable-http URL for clawhip-bridge.
+    clawhip_bridge_url: str = ""
 
     # Epic 15 / Story 15.2 — git MCP server spawn command (recipe step 6).
     # Story 15.5 activates the spawn in MCPClientGroup, gated on this command
@@ -71,6 +79,8 @@ class WorkerSettings(BaseSettings):
     # is a stdio member spawned by worker-wrapper, NOT a container.
     git_command: str = ""
     git_args: list[str] = ["-m", "git_mcp"]
+    # Phase 10 / ADR-0022: streamable-http URL for git-mcp.
+    git_url: str = ""
 
     # Epic 16 / Story 16.2 — github MCP server spawn command (latent scaffold).
     # The spawn is LATENT here: Story 16.6 activates it in MCPClientGroup, gated
@@ -85,6 +95,8 @@ class WorkerSettings(BaseSettings):
     # NOT a container.
     github_command: str = ""
     github_args: list[str] = ["-m", "github_mcp"]
+    # Phase 10 / ADR-0022: streamable-http URL for github-mcp.
+    github_url: str = ""
 
     # Epic 17 / Story 17.2 — verification MCP server spawn command (latent scaffold).
     # The spawn is LATENT here: Story 17.5 activates it in MCPClientGroup, gated on
@@ -100,6 +112,8 @@ class WorkerSettings(BaseSettings):
     # worker-wrapper, NOT a container.
     verification_command: str = ""
     verification_args: list[str] = ["-m", "verification_mcp"]
+    # Phase 10 / ADR-0022: streamable-http URL for verification-mcp.
+    verification_url: str = ""
 
     # Epic 18 / Stories 18.1-18.2 — memory MCP server spawn command (latent scaffold).
     # The spawn + the ``_ENV_ALLOWLIST`` (MEMORY_MCP_STORE_PATH / ACTOR_KIND /
@@ -113,6 +127,8 @@ class WorkerSettings(BaseSettings):
     # NOT a container.
     memory_command: str = ""
     memory_args: list[str] = ["-m", "memory_mcp"]
+    # Phase 10 / ADR-0022: streamable-http URL for memory-mcp.
+    memory_url: str = ""
 
     # Epic 19 / Stories 19.1-19.2 — artifact MCP server spawn command (latent scaffold).
     # The spawn + the ``_ENV_ALLOWLIST`` (ARTIFACT_MCP_STORE_PATH / ACTOR_KIND /
@@ -126,6 +142,8 @@ class WorkerSettings(BaseSettings):
     # by worker-wrapper, NOT a container.
     artifact_command: str = ""
     artifact_args: list[str] = ["-m", "artifact_mcp"]
+    # Phase 10 / ADR-0022: streamable-http URL for artifact-mcp.
+    artifact_url: str = ""
 
     # Browser MCP server spawn config (Story 20.1 / FR78).
     # Blank-command toggle: WORKER_BROWSER_COMMAND="" means browser-mcp is NOT
@@ -138,6 +156,8 @@ class WorkerSettings(BaseSettings):
     # spawned by worker-wrapper, NOT a container.
     browser_command: str = ""
     browser_args: list[str] = ["-m", "browser_mcp"]
+    # Phase 10 / ADR-0022: streamable-http URL for browser-mcp.
+    browser_url: str = ""
 
     # Latent scaffold: shared SQLite path for task/session registry MCP servers.
     # Stories 5.8/5.9 shipped with each MCP server managing its own path.

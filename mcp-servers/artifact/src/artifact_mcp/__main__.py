@@ -73,6 +73,25 @@ from events.envelope import ActorKind  # noqa: IMP001 — packages/
 
 _VALID_ACTOR_KINDS = set(get_args(ActorKind))
 
+_SERVER_NAME = "artifact-mcp"
+_DEFAULT_PORT = 8087
+
+# Phase 10 (ADR-0022): streamable-http opt-in.
+_VALID_TRANSPORTS = frozenset({"stdio", "streamable-http"})
+
+
+def _resolve_transport() -> str:
+    """Read MCP_TRANSPORT env var; default stdio."""
+    transport = os.environ.get("MCP_TRANSPORT", "stdio").strip().lower()
+    if transport not in _VALID_TRANSPORTS:
+        print(
+            f"{_SERVER_NAME}: MCP_TRANSPORT={transport!r} is invalid. "
+            f"Must be one of: {', '.join(sorted(_VALID_TRANSPORTS))}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    return transport
+
 
 def _parse_optional_int(raw: str, *, env_name: str) -> int | None:
     """Parse an optional non-negative int env var; unset → None, invalid → exit 2."""
@@ -193,7 +212,34 @@ def main() -> None:
         clawhip_bridge_args=clawhip_args,
         registry_events_dir=registry_events_dir,
     )
-    mcp.run()
+
+    transport = _resolve_transport()
+    if transport == "streamable-http":
+        _run_streamable_http(mcp)
+    else:
+        mcp.run()  # stdio — zero change
+
+
+def _run_streamable_http(mcp: object) -> None:  # noqa: MCP001 — ADR-0022: streamable-http allowed in __main__.py
+    """Mount auth middleware and run with uvicorn (Phase 10 / ADR-0022)."""
+    import uvicorn  # noqa: PLC0415 — conditional import, stdio path never loads this
+    from mcp_auth import (  # noqa: MCP001 — ADR-0022: streamable-http allowed in __main__.py
+        BearerTokenMiddleware,
+        McpAuthSettings,
+    )
+
+    auth_settings = McpAuthSettings.from_env()
+    port = int(os.environ.get("MCP_PORT", str(_DEFAULT_PORT)))
+
+    print(
+        f"{_SERVER_NAME}: starting streamable-http transport on 0.0.0.0:{port} "
+        f"(auth={'enabled' if auth_settings.enabled else 'disabled'})",
+        file=sys.stderr,
+    )
+
+    app = mcp.streamable_http_app()  # noqa: MCP001 — ADR-0022: streamable-http allowed in __main__.py
+    app = BearerTokenMiddleware(app, auth_settings)
+    uvicorn.run(app, host="0.0.0.0", port=port)
 
 
 if __name__ == "__main__":

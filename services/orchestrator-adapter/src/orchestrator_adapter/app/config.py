@@ -48,12 +48,20 @@ class OrchestratorSettings(BaseSettings):
 
     task_registry_command: str = "python"
     task_registry_args: list[str] = ["-m", "task_registry_mcp"]
+    # Phase 10 / ADR-0022: streamable-http URL for task-registry. When set,
+    # streamable-http transport is used instead of stdio. Empty string (default)
+    # means stdio mode — backward compatible with Phase 9.
+    task_registry_url: str = ""
 
     session_registry_command: str = "python"
     session_registry_args: list[str] = ["-m", "session_registry_mcp"]
+    # Phase 10 / ADR-0022: streamable-http URL for session-registry.
+    session_registry_url: str = ""
 
     clawhip_bridge_command: str = "python"
     clawhip_bridge_args: list[str] = ["-m", "clawhip_bridge_mcp"]
+    # Phase 10 / ADR-0022: streamable-http URL for clawhip-bridge.
+    clawhip_bridge_url: str = ""
 
     # Latent scaffold: shared SQLite path (see worker-wrapper config.py).
     registry_db_path: str = ""
