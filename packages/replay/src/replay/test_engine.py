@@ -893,3 +893,166 @@ async def test_replay_matches_live_materializer(tmp_path: Path) -> None:
 
     assert replay_tasks == live_tasks
     assert replay_sessions == live_sessions
+
+
+# ---------------------------------------------------------------------------
+# Tests — Phase 13 archive manifest replay
+# ---------------------------------------------------------------------------
+
+
+def _write_lifecycle_manifest(
+    manifest_dir: Path,
+    *,
+    logical_date: str,
+    original_relpath: str,
+    archive_relpath: str,
+    sha256: str,
+    event_count: int,
+    first_sequence: int,
+    last_sequence: int,
+) -> Path:
+    manifest = {
+        "schema_version": 1,
+        "manifest_id": "m-test",
+        "created_at": "2026-06-10T00:00:00Z",
+        "created_by": "pytest",
+        "segments": [
+            {
+                "logical_date": logical_date,
+                "original_relpath": original_relpath,
+                "archive_relpath": archive_relpath,
+                "sha256": sha256,
+                "event_count": event_count,
+                "first_sequence": first_sequence,
+                "last_sequence": last_sequence,
+                "archived_at": "2026-06-10T00:00:00Z",
+                "actor_id": "pytest",
+            }
+        ],
+    }
+    path = manifest_dir / "lifecycle-manifest.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    return path
+
+
+def _sha256(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_replay_events_reads_archived_segment_from_manifest(tmp_path: Path) -> None:
+    """Archive-only manifest segments are included in replay_events."""
+    archive_dir = tmp_path / "archive"
+    archive_dir.mkdir()
+    rng = Random(42)
+    task_id = new_task_id(clock=FrozenClock(mono_ns=0, now=FROZEN_EPOCH), rng=rng)
+    env = _task_created_env(task_id, mono_ns=1_000_000, title="archived")
+    archive_file = archive_dir / "2026-06-09.jsonl"
+    _write_jsonl(archive_file, [env])
+    manifest = _write_lifecycle_manifest(
+        archive_dir,
+        logical_date="2026-06-09",
+        original_relpath="2026-06-09.jsonl",
+        archive_relpath="2026-06-09.jsonl",
+        sha256=_sha256(archive_file),
+        event_count=1,
+        first_sequence=1_000_000,
+        last_sequence=1_000_000,
+    )
+
+    result = await replay_events(
+        up_to=9_999_999,
+        event_log_dir=tmp_path / "hot",
+        archive_manifest_path=manifest,
+    )
+
+    assert result.metadata.event_count == 1
+    assert result.state["tasks"][0]["id"] == task_id
+    assert result.state["tasks"][0]["title"] == "archived"
+
+
+@pytest.mark.asyncio
+async def test_replay_events_rejects_archive_overlap_with_hot(tmp_path: Path) -> None:
+    """Overlapping hot/archive sequence ranges fail closed."""
+    from replay.errors import ReplayArchiveConflictError
+
+    hot_env = _task_created_env("t-00000000-0000-7000-8000-000000000001", mono_ns=1_000_000)
+    _write_jsonl(tmp_path / "2026-06-09.jsonl", [hot_env])
+    archive_dir = tmp_path / "archive"
+    archive_dir.mkdir()
+    archive_env = _task_created_env("t-00000000-0000-7000-8000-000000000002", mono_ns=1_000_000)
+    archive_file = archive_dir / "2026-06-10.jsonl"
+    _write_jsonl(archive_file, [archive_env])
+    manifest = _write_lifecycle_manifest(
+        archive_dir,
+        logical_date="2026-06-10",
+        original_relpath="2026-06-10.jsonl",
+        archive_relpath="2026-06-10.jsonl",
+        sha256=_sha256(archive_file),
+        event_count=1,
+        first_sequence=1_000_000,
+        last_sequence=1_000_000,
+    )
+
+    with pytest.raises(ReplayArchiveConflictError):
+        await replay_events(up_to=9_999_999, event_log_dir=tmp_path, archive_manifest_path=manifest)
+
+
+@pytest.mark.asyncio
+async def test_replay_events_env_manifest_missing_raises_config_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Omitted archive_manifest_path is env-aware and rejects invalid env paths."""
+    from replay.errors import ReplayArchiveConfigError
+
+    monkeypatch.setenv("REPLAY_ARCHIVE_MANIFEST", str(tmp_path / "missing.json"))
+    with pytest.raises(ReplayArchiveConfigError):
+        await replay_events(up_to=9_999_999, event_log_dir=tmp_path)
+
+
+def test_archive_manifest_env_same_path_uses_primary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both archive env vars may point to the same normalized manifest path."""
+    from replay.archive_manifest import resolve_archive_manifest_path
+
+    manifest = tmp_path / "lifecycle-manifest.json"
+    manifest.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("REPLAY_ARCHIVE_MANIFEST", str(manifest))
+    monkeypatch.setenv("EVENT_LOG_ARCHIVE_MANIFEST", str(manifest.resolve(strict=False)))
+
+    assert resolve_archive_manifest_path() == manifest.resolve(strict=False)
+
+
+def test_archive_manifest_env_different_paths_raise_config_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Different primary/legacy archive env paths fail closed."""
+    from replay.archive_manifest import resolve_archive_manifest_path
+    from replay.errors import ReplayArchiveConfigError
+
+    primary = tmp_path / "primary.json"
+    legacy = tmp_path / "legacy.json"
+    primary.write_text("{}", encoding="utf-8")
+    legacy.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("REPLAY_ARCHIVE_MANIFEST", str(primary))
+    monkeypatch.setenv("EVENT_LOG_ARCHIVE_MANIFEST", str(legacy))
+
+    with pytest.raises(ReplayArchiveConfigError):
+        resolve_archive_manifest_path()
+
+
+def test_archive_manifest_explicit_path_overrides_invalid_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Explicit archive_manifest_path wins and ignores invalid env vars."""
+    from replay.archive_manifest import resolve_archive_manifest_path
+
+    explicit = tmp_path / "explicit.json"
+    explicit.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("REPLAY_ARCHIVE_MANIFEST", str(tmp_path / "missing.json"))
+    monkeypatch.setenv("EVENT_LOG_ARCHIVE_MANIFEST", str(tmp_path / "other-missing.json"))
+
+    assert resolve_archive_manifest_path(explicit) == explicit.resolve(strict=False)

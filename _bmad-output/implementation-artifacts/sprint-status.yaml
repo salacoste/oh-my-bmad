@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-06-09T12:00:00Z
-current_phase: 10  # Phase 10 IN PROGRESS — Remote MCP Transport (Epics 50-55)
+last_updated: 2026-06-10T22:55:00+03:00
+current_phase: 13  # Phase 13 COMPLETE — Event Log Lifecycle Management (Epics 64-68)
 
 development_status:
   # =========================================================================
@@ -616,7 +616,7 @@ development_status:
   epic-52: done  # Dual-mode server __main__.py (FR122, NFR-O19) — all 9 servers
   52-1-resolve-transport-helper: done  # _resolve_transport() + _run_streamable_http() in all 9 __main__.py
   52-2-per-server-port-configuration: done  # Default ports 8081-8089 per server
-  52-3-server-startup-integration-tests: backlog  # Integration tests for both transport modes
+  52-3-server-startup-integration-tests: done  # Reconciled 2026-06-10 — Phase 10 committed complete (f6ea7ff)
 
   epic-53: done  # Client-side dual transport (FR124, NFR-R15) — both spawners updated
   53-1-connect-transport-branching: done  # _connect(url=...) with streamable-http branch in both mcp_clients.py
@@ -651,10 +651,85 @@ development_status:
   59-1-full-ci-validation: done  # 3224 tests, ruff clean, all gates green
   59-2-phase-11-retrospective: done  # Retrospective produced
 
+
+  # ── Phase 12: Historical Event Replay (ADR-0024) ─────────────────────
+  epic-60: done  # Replay engine core (FR134)
+  60-1-replay-engine-core: done  # packages/replay engine + in-memory materializer
+  60-2-replay-engine-tests: done  # replay package tests
+
+  epic-61: done  # Replay API endpoints (FR135, FR136)
+  61-1-replay-api-endpoint: done  # GET /v1/events/replay
+  61-2-task-history-endpoint: done  # GET /v1/tasks/{task_id}/history — hot log only
+
+  epic-62: done  # Replay validation + snapshots (FR137, FR138)
+  62-1-replay-validation: done  # GET /v1/events/replay/validate
+  62-2-snapshot-management: done  # snapshot create/list helpers + routes
+
+  epic-63: done  # Phase 12 validation + retrospective
+  63-1-full-ci-validation: done  # 48 replay/route tests + ruff/mypy/check_imports/check_single_writer green
+  63-2-phase-12-retrospective: done  # _bmad-output/retrospectives/phase-12-retrospective.md
+
+  # ── Phase 13: Event Log Lifecycle Management (P13-ELLM) ──────────────
+  epic-64: done  # Sprint-status/docs repair + segment contract
+  64-1-sprint-status-reconciliation: done  # Phases 11-12 reconciled; Phase 13 tracked
+  64-2-segment-contract-tests: done  # SegmentKey + manifest contract tests added
+
+  epic-65: done  # Archive manifest lifecycle, no hot deletion
+  65-1-archive-manifest-loader: done  # lifecycle-manifest.json loader + sha256 validation
+  65-2-hot-archive-conflict-detection: done  # duplicate/overlap/mismatch fail closed
+
+  epic-66: done  # Replay hot+archive equivalence + API config mapping
+  66-1-replay-events-archive-aware: done  # replay_events/validate_replay archive_manifest_path
+  66-2-route-local-problem-details: done  # replay archive errors mapped on replay/validate only
+  66-3-hot-only-snapshot-sentinel: done  # HOT_ONLY_REPLAY bypass for snapshots
+
+  epic-67: done  # Package-only streaming replay
+  67-1-replay-events-stream: done  # replay_events_stream + ReplayProgress
+  67-2-streaming-tests: done  # progress cadence + terminal equivalence tests
+
+  epic-68: done  # CI gates/docs/retro
+  68-1-full-ci-validation: done  # 57 replay/route tests + ruff/mypy/check_imports/check_single_writer green
+  68-2-phase-13-retrospective: done  # _bmad-output/retrospectives/phase-13-retrospective.md
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+
+  - date: "2026-06-10"
+    event: phase-13-complete
+    from: in-progress
+    to: done
+    reason: >
+      Phase 13 Event Log Lifecycle Management COMPLETE. Implemented archive
+      manifest resolution (`REPLAY_ARCHIVE_MANIFEST` + legacy alias),
+      checksum/manifest validation, hot+archive merge conflict detection,
+      archive-aware replay/validation, HOT_ONLY_REPLAY snapshot bypass,
+      package-only `replay_events_stream`, and route-local ProblemDetails
+      mapping for replay archive errors. Verified with 57 targeted replay/route
+      tests, ruff, mypy, check_imports, and check_single_writer.
+  - date: "2026-06-10"
+    event: phase-11-12-status-reconciled
+    from: 10
+    to: 12
+    reason: >
+      Sprint-status reconciled after committed Phase 11 and Phase 12 work.
+      Phase 11 mTLS is commit 9b9ab0f (Epics 56-59). Phase 12 Historical
+      Event Replay is commit 1eb90a4 (Epics 60-63, FR134-FR138; 48 tests and
+      ruff/mypy/check_imports/check_single_writer gates green).
+  - date: "2026-06-10"
+    event: phase-13-opened
+    from: 12
+    to: 13
+    reason: >
+      Autopilot BMad/OMX planning selected Phase 13 = Event Log Lifecycle
+      Management (P13-ELLM) as the next safe follow-up after Phase 12 replay.
+      Ralplan consensus passed sequential native Architect approval
+      (019eb306-47f0-71a0-8057-75f57fd35686) then Critic approval
+      (019eb30b-3811-7693-b06c-ef12a755b592). Scope is Epics 64-68; non-goals
+      are hot deletion/prune apply, HTTP streaming route, archived task-history,
+      object storage, scheduled jobs, and lossy compaction.
   - date: "2026-05-18"
     event: epic-9-reopened
     from: done

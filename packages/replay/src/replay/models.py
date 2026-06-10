@@ -32,6 +32,17 @@ class ReplayResult:
     metadata: ReplayMetadata
 
 
+@dataclass(frozen=True)
+class ReplayProgress:
+    """Progress emitted after each successfully applied replay batch."""
+
+    processed_events: int
+    total_events: int | None
+    current_sequence: int | None
+    elapsed_s: float
+    snapshot_source: str | None
+
+
 class ReplayMemoryError(Exception):
     """Raised when replay exceeds the configured memory budget (NFR-R17)."""
 
@@ -44,5 +55,6 @@ class ReplayMemoryError(Exception):
 __all__ = [
     "ReplayMemoryError",
     "ReplayMetadata",
+    "ReplayProgress",
     "ReplayResult",
 ]

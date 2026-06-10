@@ -17,6 +17,7 @@ from typing import Any
 
 import structlog
 
+from replay.archive_manifest import ArchiveManifestInput
 from replay.engine import replay_events
 
 _log = structlog.get_logger(__name__)
@@ -122,6 +123,7 @@ async def validate_replay(
     *,
     event_log_dir: Path,
     live_state: dict[str, Any],
+    archive_manifest_path: ArchiveManifestInput = None,
 ) -> ValidationResult:
     """Replay events and compare against live materialized state.
 
@@ -129,6 +131,7 @@ async def validate_replay(
         event_log_dir: Directory containing JSONL event-log files.
         live_state: Current materialized state from the live database,
             shaped as ``{"tasks": [...], "sessions": [...]}``.
+        archive_manifest_path: Optional archive manifest path or hot-only sentinel.
 
     Returns:
         :class:`ValidationResult` with field-level comparison details.
@@ -136,6 +139,7 @@ async def validate_replay(
     result = await replay_events(
         up_to=_MAX_INT,
         event_log_dir=event_log_dir,
+        archive_manifest_path=archive_manifest_path,
     )
     replayed_state = result.state
 

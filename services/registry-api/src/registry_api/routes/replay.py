@@ -20,12 +20,13 @@ from __future__ import annotations
 import asyncio
 import pathlib
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from events.log_reader import read_log_lines
 from fastapi import APIRouter, Path, Query, Request
 from fastapi.exceptions import HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 from registry_state.schema import (  # noqa: IMP001 — registry-api reads registry-state models for task history query (FR136)
     Session as SessionRow,
@@ -34,11 +35,21 @@ from registry_state.schema import (  # noqa: IMP001 — registry-api reads regis
     Task,
 )
 from replay import replay_events
+from replay.archive_manifest import resolve_archive_manifest_path
+from replay.errors import (
+    ReplayArchiveChecksumError,
+    ReplayArchiveConfigError,
+    ReplayArchiveConflictError,
+    ReplayArchiveError,
+    ReplayArchiveManifestError,
+    ReplayArchiveMissingSegmentError,
+)
 from replay.snapshots import create_snapshot as _create_snapshot
 from replay.snapshots import list_snapshots as _list_snapshots
 from replay.validation import validate_replay
 from sqlalchemy import select
 
+from registry_api.adapters.errors import ProblemDetails
 from registry_api.routes.tasks import _TASK_ID_PATTERN
 
 _log = structlog.get_logger(__name__)
@@ -145,7 +156,7 @@ def _event_log_dir(request: Request) -> pathlib.Path:
     """
     writer = getattr(request.app.state, "writer", None)
     if writer is not None:
-        return writer._base_dir  # noqa: SLF001 — same-service access
+        return pathlib.Path(cast(str | pathlib.Path, writer._base_dir))  # noqa: SLF001 — same-service access
     import os
 
     env_dir = os.environ.get("EVENT_LOG_DIR")
@@ -154,6 +165,71 @@ def _event_log_dir(request: Request) -> pathlib.Path:
     raise HTTPException(
         status_code=500,
         detail="event log directory not configured",
+    )
+
+
+def _archive_manifest_path(request: Request) -> pathlib.Path | None:
+    """Resolve optional replay archive manifest for archive-aware endpoints."""
+    _ = request
+    resolved = resolve_archive_manifest_path(None)
+    if resolved is None:
+        return None
+    return pathlib.Path(resolved)
+
+
+def _archive_problem_extensions(request: Request, code: str) -> dict[str, Any]:
+    """Build route-local ProblemDetails extensions while preserving trace_id."""
+    extensions: dict[str, Any] = {"code": code}
+    trace_id = getattr(request.state, "trace_id", None)
+    if trace_id is not None:
+        extensions["trace_id"] = trace_id
+    return extensions
+
+
+def _archive_problem_response(request: Request, exc: ReplayArchiveError) -> JSONResponse:
+    """Map replay archive errors to route-local RFC 7807 responses."""
+    if isinstance(exc, ReplayArchiveChecksumError):
+        status = 500
+        problem_type = "/errors/replay-archive-checksum-mismatch"
+        title = "Replay archive checksum mismatch"
+        code = "replay_archive_checksum_mismatch"
+    elif isinstance(exc, ReplayArchiveMissingSegmentError):
+        status = 500
+        problem_type = "/errors/replay-archive-missing-segment"
+        title = "Replay archive segment missing"
+        code = "replay_archive_missing_segment"
+    elif isinstance(exc, ReplayArchiveManifestError):
+        status = 500
+        problem_type = "/errors/replay-archive-manifest-invalid"
+        title = "Replay archive manifest invalid"
+        code = "replay_archive_manifest_invalid"
+    elif isinstance(exc, ReplayArchiveConfigError):
+        status = 500
+        problem_type = "/errors/replay-archive-config-error"
+        title = "Replay archive configuration error"
+        code = "replay_archive_config_error"
+    elif isinstance(exc, ReplayArchiveConflictError):
+        status = 409
+        problem_type = "/errors/replay-archive-conflict"
+        title = "Replay archive conflict"
+        code = "replay_archive_conflict"
+    else:
+        status = 500
+        problem_type = "/errors/replay-archive-manifest-invalid"
+        title = "Replay archive manifest invalid"
+        code = "replay_archive_manifest_invalid"
+    problem = ProblemDetails(
+        type=problem_type,
+        title=title,
+        status=status,
+        detail=str(exc),
+        instance=str(request.url),
+        extensions=_archive_problem_extensions(request, code),
+    )
+    return JSONResponse(
+        content=problem.model_dump(exclude_none=True),
+        status_code=status,
+        media_type="application/problem+json",
     )
 
 
@@ -232,7 +308,7 @@ async def get_replay(
     request: Request,
     to_timestamp: str | None = Query(None, description="ISO 8601 timestamp target"),
     to_sequence: int | None = Query(None, ge=0, description="Sequence number target"),
-) -> ReplayResponse:
+) -> ReplayResponse | JSONResponse:
     """GET /v1/events/replay — point-in-time state reconstruction (Story 61-1).
 
     Accepts exactly one of ``to_timestamp`` or ``to_sequence`` as the replay
@@ -269,10 +345,14 @@ async def get_replay(
     event_log_dir = _event_log_dir(request)
 
     # Run replay — the engine is async and creates its own in-memory DB
-    result = await replay_events(
-        up_to=up_to,
-        event_log_dir=event_log_dir,
-    )
+    try:
+        result = await replay_events(
+            up_to=up_to,
+            event_log_dir=event_log_dir,
+            archive_manifest_path=_archive_manifest_path(request),
+        )
+    except ReplayArchiveError as exc:
+        return _archive_problem_response(request, exc)
 
     # Audit log (NFR-S17)
     actor_id = getattr(request.state, "actor_id", "unknown")
@@ -420,7 +500,7 @@ async def _read_live_state(request: Request) -> dict[str, Any]:
     status_code=200,
     response_model=ValidateReplayResponse,
 )
-async def validate_replay_endpoint(request: Request) -> ValidateReplayResponse:
+async def validate_replay_endpoint(request: Request) -> ValidateReplayResponse | JSONResponse:
     """GET /v1/events/replay/validate -- compare replayed vs live state (Story 62-1).
 
     Replays ALL events from the event log to produce the expected state,
@@ -430,10 +510,14 @@ async def validate_replay_endpoint(request: Request) -> ValidateReplayResponse:
     event_log_dir = _event_log_dir(request)
     live_state = await _read_live_state(request)
 
-    validation = await validate_replay(
-        event_log_dir=event_log_dir,
-        live_state=live_state,
-    )
+    try:
+        validation = await validate_replay(
+            event_log_dir=event_log_dir,
+            live_state=live_state,
+            archive_manifest_path=_archive_manifest_path(request),
+        )
+    except ReplayArchiveError as exc:
+        return _archive_problem_response(request, exc)
 
     # Audit log (NFR-S17)
     actor_id = getattr(request.state, "actor_id", "unknown")

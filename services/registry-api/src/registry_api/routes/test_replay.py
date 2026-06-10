@@ -374,7 +374,7 @@ async def _insert_task_row(
     engine = create_async_engine(db_url)
     session_maker = async_sessionmaker(engine)
     async with session_maker() as session:
-        from registry_state.schema import (  # noqa: IMP001
+        from registry_state.schema import (  # noqa: IMP001 — route tests seed registry-state ORM rows for replay validation
             Task as TaskRow,
         )
 
@@ -623,3 +623,61 @@ class TestListSnapshotsEndpoint:
         assert body["total"] >= 1
         ids = [s["snapshot_id"] for s in body["snapshots"]]
         assert snap_id in ids
+
+
+class TestReplayArchiveProblemDetails:
+    """Phase 13 route-local archive error mapping tests."""
+
+    @pytest.mark.asyncio
+    async def test_replay_archive_config_error_uses_route_local_problem_details(
+        self,
+        client_with_events: AsyncClient,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Invalid archive env maps to replay_archive_config_error, not /errors/internal."""
+        monkeypatch.setenv("REPLAY_ARCHIVE_MANIFEST", str(tmp_path / "missing.json"))
+
+        resp = await client_with_events.get("/v1/events/replay?to_sequence=5000")
+
+        assert resp.status_code == 500
+        body = resp.json()
+        assert body["type"] == "/errors/replay-archive-config-error"
+        assert body["title"] == "Replay archive configuration error"
+        assert "missing" in body["detail"] or "does not exist" in body["detail"]
+        assert body["extensions"]["code"] == "replay_archive_config_error"
+        assert body["type"] != "/errors/internal"
+
+    @pytest.mark.asyncio
+    async def test_validate_archive_config_error_uses_route_local_problem_details(
+        self,
+        client_validate_matching: AsyncClient,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Validate endpoint uses the same route-local archive mapping."""
+        monkeypatch.setenv("EVENT_LOG_ARCHIVE_MANIFEST", str(tmp_path / "missing.json"))
+
+        resp = await client_validate_matching.get("/v1/events/replay/validate")
+
+        assert resp.status_code == 500
+        body = resp.json()
+        assert body["type"] == "/errors/replay-archive-config-error"
+        assert body["title"] == "Replay archive configuration error"
+        assert body["extensions"]["code"] == "replay_archive_config_error"
+        assert body["type"] != "/errors/internal"
+
+    @pytest.mark.asyncio
+    async def test_snapshot_create_ignores_invalid_archive_env(
+        self,
+        client_for_snapshots: AsyncClient,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Snapshot route remains archive-unaware when replay archive env is invalid."""
+        monkeypatch.setenv("REPLAY_ARCHIVE_MANIFEST", str(tmp_path / "missing.json"))
+
+        resp = await client_for_snapshots.post("/v1/events/replay/snapshots")
+
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["sequence_number"] == 5000

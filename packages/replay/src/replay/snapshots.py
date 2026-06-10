@@ -52,6 +52,7 @@ def create_snapshot(
     """
     import asyncio
 
+    from replay.archive_manifest import HOT_ONLY_REPLAY
     from replay.engine import replay_events
 
     snapshot_dir.mkdir(parents=True, exist_ok=True)
@@ -67,6 +68,7 @@ def create_snapshot(
         return await replay_events(
             up_to=sys.maxsize,
             event_log_dir=event_log_dir,
+            archive_manifest_path=HOT_ONLY_REPLAY,
         )
 
     if loop is not None and loop.is_running():

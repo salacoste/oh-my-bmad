@@ -351,3 +351,27 @@ class TestFindNearestSnapshot:
         """find_nearest_snapshot returns None when snapshot dir is empty."""
         result = find_nearest_snapshot(target_sequence=9999, snapshot_dir=tmp_path / "nope")
         assert result is None
+
+
+def test_create_snapshot_ignores_invalid_archive_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Snapshot creation forces hot-only replay even when archive env vars are invalid."""
+    events_dir = tmp_path / "events"
+    _write_jsonl(
+        events_dir,
+        "2026-06-09",
+        [
+            _make_task_created_envelope(
+                task_id=_TASK_ID,
+                mono_ns=5000,
+                emitted_at=datetime(2026, 6, 9, 12, 0, 0, tzinfo=UTC),
+            )
+        ],
+    )
+    monkeypatch.setenv("REPLAY_ARCHIVE_MANIFEST", str(tmp_path / "missing-manifest.json"))
+
+    info = create_snapshot(event_log_dir=events_dir, snapshot_dir=tmp_path / "snapshots")
+
+    assert info.sequence_number == 5000
+    assert info.state["tasks"][0]["id"] == _TASK_ID

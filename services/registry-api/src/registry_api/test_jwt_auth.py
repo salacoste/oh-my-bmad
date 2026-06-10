@@ -22,8 +22,12 @@ from asgi_lifespan import LifespanManager
 from events import FROZEN_EPOCH, FrozenClock
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
-from registry_state.adapters.sqlite_store import create_engine
-from registry_state.schema import Base
+from registry_state.adapters.sqlite_store import (  # noqa: IMP001 — registry-api tests create an in-memory registry-state DB
+    create_engine,
+)
+from registry_state.schema import (  # noqa: IMP001 — registry-api tests create schema tables for auth middleware
+    Base,
+)
 
 from registry_api.app import build_app
 from registry_api.cli_tokens import generate_token, verify_token

@@ -20,26 +20,28 @@ from __future__ import annotations
 import resource
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import structlog
 from events.envelope import EventEnvelope
-from events.log_reader import read_log_lines
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from replay.models import ReplayMemoryError, ReplayMetadata, ReplayResult
+from replay.archive_manifest import ArchiveManifestInput, collect_replay_envelopes
+from replay.models import ReplayMemoryError, ReplayMetadata, ReplayProgress, ReplayResult
 
 _log = structlog.get_logger(__name__)
 
 # Default memory limit: 256 MB (NFR-R17)
 _DEFAULT_MEMORY_LIMIT_BYTES = 256 * 1024 * 1024
+DEFAULT_MEMORY_LIMIT_BYTES = _DEFAULT_MEMORY_LIMIT_BYTES
 
 # Default batch size for memory-checked replay (NFR-R17)
 _DEFAULT_BATCH_SIZE = 500
+DEFAULT_BATCH_SIZE = _DEFAULT_BATCH_SIZE
 
 
 def _check_memory(limit_bytes: int) -> None:
@@ -57,19 +59,12 @@ def _check_memory(limit_bytes: int) -> None:
         raise ReplayMemoryError(current_bytes=rss, limit_bytes=limit_bytes)
 
 
-def _collect_envelopes(event_log_dir: Path) -> list[EventEnvelope]:
-    """Read all JSONL files from *event_log_dir*, sorted by filename.
-
-    Returns envelopes sorted by ``emitted_at_monotonic_ns`` (P12-I2).
-    """
-    envelopes: list[EventEnvelope] = []
-    jsonl_files = sorted(event_log_dir.glob("*.jsonl"))
-    for path in jsonl_files:
-        for env in read_log_lines(path):
-            envelopes.append(env)
-    # Sort by monotonic sequence number (P12-I2)
-    envelopes.sort(key=lambda e: e.emitted_at_monotonic_ns)
-    return envelopes
+def _collect_envelopes(
+    event_log_dir: Path,
+    archive_manifest_path: ArchiveManifestInput = None,
+) -> list[EventEnvelope]:
+    """Read hot JSONL files plus optional archived segments in replay order."""
+    return collect_replay_envelopes(event_log_dir, archive_manifest_path)
 
 
 def _filter_envelopes(
@@ -88,40 +83,46 @@ async def replay_events(
     *,
     up_to: datetime | int,
     event_log_dir: Path,
-    batch_size: int = _DEFAULT_BATCH_SIZE,
-    memory_limit_bytes: int = _DEFAULT_MEMORY_LIMIT_BYTES,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    memory_limit_bytes: int = DEFAULT_MEMORY_LIMIT_BYTES,
     snapshot_dir: Path | None = None,
+    archive_manifest_path: ArchiveManifestInput = None,
 ) -> ReplayResult:
     """Replay historical events and return the materialized point-in-time state.
 
-    Creates an in-memory SQLite database, applies events through the same
-    Materializer + handlers used by the live subscriber, and returns the
-    final state as a :class:`ReplayResult`.
+    This single-result API is preserved for Phase 13. It consumes the shared
+    iterator core without emitting progress items and returns the terminal
+    :class:`ReplayResult`.
+    """
+    async for item in replay_events_iter(
+        up_to=up_to,
+        event_log_dir=event_log_dir,
+        batch_size=batch_size,
+        memory_limit_bytes=memory_limit_bytes,
+        snapshot_dir=snapshot_dir,
+        archive_manifest_path=archive_manifest_path,
+        emit_progress=False,
+    ):
+        if isinstance(item, ReplayResult):
+            return item
+    raise RuntimeError("replay iterator ended without ReplayResult")
 
-    When *snapshot_dir* is provided and a suitable snapshot exists before the
-    replay target, the engine loads the snapshot state and only replays events
-    after the snapshot position — significantly reducing work for large logs.
 
-    The in-memory DB is discarded after the call — no write-path side effects
-    on the live database (P12-I1, NFR-M12).
+async def replay_events_iter(
+    *,
+    up_to: datetime | int,
+    event_log_dir: Path,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    memory_limit_bytes: int = DEFAULT_MEMORY_LIMIT_BYTES,
+    snapshot_dir: Path | None = None,
+    archive_manifest_path: ArchiveManifestInput = None,
+    emit_progress: bool = False,
+) -> AsyncIterator[ReplayProgress | ReplayResult]:
+    """Shared replay core for single-result and package streaming APIs.
 
-    Args:
-        up_to: Replay target — either a UTC :class:`datetime` or an
-            ``emitted_at_monotonic_ns`` integer. Events after this point
-            are excluded.
-        event_log_dir: Directory containing ``YYYY-MM-DD.jsonl`` files.
-        batch_size: Number of events per memory-check batch (default 500).
-        memory_limit_bytes: RSS limit in bytes (default 256 MB).
-        snapshot_dir: Optional directory containing snapshot JSON files.
-            When provided, the engine will attempt to find and use the
-            nearest snapshot before *up_to* to skip already-replayed events.
-
-    Returns:
-        :class:`ReplayResult` with materialized state and replay metadata.
-
-    Raises:
-        FileNotFoundError: If *event_log_dir* does not exist.
-        ReplayMemoryError: If RSS exceeds *memory_limit_bytes* during replay.
+    When ``emit_progress`` is true, yields one :class:`ReplayProgress` after
+    each successful materializer batch, followed by one terminal
+    :class:`ReplayResult`. When false, yields only the terminal result.
     """
     # Lazy imports to keep the module-level import graph light — the replay
     # package is consumed by services that already depend on registry-state.
@@ -142,7 +143,7 @@ async def replay_events(
     # snapshot before the target and replay only the delta.
     snapshot_source_id: str | None = None
     initial_state: dict[str, Any] | None = None
-    skip_before: int = 0  # skip envelopes with seq <= this value
+    skip_before: int = 0
 
     if snapshot_dir is not None and isinstance(up_to, int):
         from replay.snapshots import find_nearest_snapshot
@@ -169,7 +170,7 @@ async def replay_events(
                 )
 
     # 1. Collect and filter envelopes
-    all_envelopes = _collect_envelopes(event_log_dir)
+    all_envelopes = _collect_envelopes(event_log_dir, archive_manifest_path)
     envelopes = _filter_envelopes(all_envelopes, up_to)
 
     # If using a snapshot, skip envelopes at or before the snapshot position
@@ -179,7 +180,7 @@ async def replay_events(
     if not envelopes and initial_state is not None:
         # Snapshot already covers the target — return snapshot state directly
         elapsed = time.monotonic() - start_wall
-        return ReplayResult(
+        yield ReplayResult(
             state=initial_state,
             metadata=ReplayMetadata(
                 event_count=0,
@@ -189,9 +190,10 @@ async def replay_events(
                 snapshot_source=snapshot_source_id,
             ),
         )
+        return
 
     if not envelopes:
-        return ReplayResult(
+        yield ReplayResult(
             state={"tasks": [], "sessions": []},
             metadata=ReplayMetadata(
                 event_count=0,
@@ -201,6 +203,7 @@ async def replay_events(
                 snapshot_source=None,
             ),
         )
+        return
 
     seq_start = envelopes[0].emitted_at_monotonic_ns
     seq_end = envelopes[-1].emitted_at_monotonic_ns
@@ -222,10 +225,20 @@ async def replay_events(
             await _seed_state(session_maker, initial_state)
 
         # 4. Apply events in batches with memory checking (NFR-R17)
+        processed = 0
         for batch_start in range(0, len(envelopes), batch_size):
             batch = envelopes[batch_start : batch_start + batch_size]
             await materializer.apply_many(batch)
             _check_memory(memory_limit_bytes)
+            processed += len(batch)
+            if emit_progress:
+                yield ReplayProgress(
+                    processed_events=processed,
+                    total_events=len(envelopes),
+                    current_sequence=batch[-1].emitted_at_monotonic_ns,
+                    elapsed_s=time.monotonic() - start_wall,
+                    snapshot_source=snapshot_source_id,
+                )
 
         # 5. Read final state from in-memory DB
         state = await _read_state(session_maker)
@@ -238,7 +251,7 @@ async def replay_events(
             snapshot_source=snapshot_source_id,
         )
 
-        return ReplayResult(
+        yield ReplayResult(
             state=state,
             metadata=ReplayMetadata(
                 event_count=len(envelopes),

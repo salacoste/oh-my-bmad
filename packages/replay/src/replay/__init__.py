@@ -11,8 +11,17 @@ database.
 
 from __future__ import annotations
 
+from replay.archive_manifest import HOT_ONLY_REPLAY, HotOnlyReplaySentinel, SegmentKey
 from replay.engine import replay_events
-from replay.models import ReplayMemoryError, ReplayMetadata, ReplayResult
+from replay.errors import (
+    ReplayArchiveChecksumError,
+    ReplayArchiveConfigError,
+    ReplayArchiveConflictError,
+    ReplayArchiveError,
+    ReplayArchiveManifestError,
+    ReplayArchiveMissingSegmentError,
+)
+from replay.models import ReplayMemoryError, ReplayMetadata, ReplayProgress, ReplayResult
 from replay.snapshots import (
     SnapshotInfo,
     create_snapshot,
@@ -20,6 +29,7 @@ from replay.snapshots import (
     list_snapshots,
     load_snapshot,
 )
+from replay.streaming import replay_events_stream
 from replay.validation import (
     ValidationFieldDiff,
     ValidationResult,
@@ -27,6 +37,16 @@ from replay.validation import (
 )
 
 __all__ = [
+    "HOT_ONLY_REPLAY",
+    "HotOnlyReplaySentinel",
+    "ReplayArchiveChecksumError",
+    "ReplayArchiveConfigError",
+    "ReplayArchiveConflictError",
+    "ReplayArchiveError",
+    "ReplayArchiveManifestError",
+    "ReplayArchiveMissingSegmentError",
+    "ReplayProgress",
+    "SegmentKey",
     "ReplayMemoryError",
     "ReplayMetadata",
     "ReplayResult",
@@ -38,5 +58,6 @@ __all__ = [
     "list_snapshots",
     "load_snapshot",
     "replay_events",
+    "replay_events_stream",
     "validate_replay",
 ]
