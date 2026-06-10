@@ -26,6 +26,7 @@ members = [
     "orchestrator-adapter",
     "registry-api",
     "registry-state",
+    "replay",
     "secret-hygiene",
     "session-registry-mcp",
     "task-registry-mcp",
@@ -2185,6 +2186,7 @@ dependencies = [
     { name = "orchestrator-adapter" },
     { name = "registry-api" },
     { name = "registry-state" },
+    { name = "replay" },
     { name = "secret-hygiene" },
     { name = "session-registry-mcp" },
     { name = "task-registry-mcp" },
@@ -2225,6 +2227,7 @@ requires-dist = [
     { name = "orchestrator-adapter", editable = "services/orchestrator-adapter" },
     { name = "registry-api", editable = "services/registry-api" },
     { name = "registry-state", editable = "services/registry-state" },
+    { name = "replay", editable = "packages/replay" },
     { name = "secret-hygiene", editable = "packages/secret-hygiene" },
     { name = "session-registry-mcp", editable = "mcp-servers/session-registry" },
     { name = "task-registry-mcp", editable = "mcp-servers/task-registry" },
@@ -2934,6 +2937,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pyjwt" },
     { name = "registry-state" },
+    { name = "replay" },
     { name = "secret-hygiene" },
     { name = "structlog" },
     { name = "uvicorn", extra = ["standard"] },
@@ -2957,6 +2961,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.0" },
     { name = "pyjwt", specifier = ">=2.8" },
     { name = "registry-state", editable = "services/registry-state" },
+    { name = "replay", editable = "packages/replay" },
     { name = "secret-hygiene", editable = "packages/secret-hygiene" },
     { name = "structlog", specifier = ">=24.1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
@@ -2992,6 +2997,33 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [{ name = "asyncpg", specifier = ">=0.30" }]
+
+[[package]]
+name = "replay"
+version = "0.1.0"
+source = { editable = "packages/replay" }
+dependencies = [
+    { name = "events" },
+    { name = "registry-state" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "events", editable = "packages/events" },
+    { name = "registry-state", editable = "services/registry-state" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
 
 [[package]]
 name = "requests"

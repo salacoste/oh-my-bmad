@@ -23,6 +23,7 @@ dependencies = [
     "orchestrator-adapter",
     "registry-api",
     "registry-state",
+    "replay",
     "secret-hygiene",
     "session-registry-mcp",
     "task-registry-mcp",
@@ -59,6 +60,7 @@ mtls = { workspace = true }
 orchestrator-adapter = { workspace = true }
 registry-api = { workspace = true }
 registry-state = { workspace = true }
+replay = { workspace = true }
 secret-hygiene = { workspace = true }
 session-registry-mcp = { workspace = true }
 task-registry-mcp = { workspace = true }

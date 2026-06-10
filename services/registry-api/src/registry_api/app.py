@@ -89,6 +89,9 @@ from registry_api.routes.jwks import (
 from registry_api.routes.key_status import (
     router as key_status_router,
 )
+from registry_api.routes.replay import (
+    router as replay_router,
+)
 from registry_api.routes.tasks import (
     ResponseSlot,
     ResponseSlotCache,
@@ -491,6 +494,8 @@ def build_app(
     # Mounted WITHOUT /v1 prefix per RFC 8414 convention.  These endpoints
     # are unauthenticated (read-only, no secrets exposed).
     app.include_router(jwks_router)
+    # Phase 12 — historical event replay + task history endpoints (Stories 61-1/61-2).
+    app.include_router(replay_router, prefix="/v1")
 
     return app
 

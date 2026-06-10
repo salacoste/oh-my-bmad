@@ -1,0 +1,22 @@
+[project]
+name = "replay"
+version = "0.1.0"
+description = "Historical event replay engine for oh-my-bmad — point-in-time state reconstruction from the append-only JSONL event log."
+authors = [
+    { name = "R2d2", email = "bad.vano23ru@gmail.com" },
+]
+requires-python = ">=3.12"
+dependencies = [
+    "events",
+    "registry-state",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.0,<1.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+]
