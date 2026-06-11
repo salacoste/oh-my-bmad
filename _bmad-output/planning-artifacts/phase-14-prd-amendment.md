@@ -19,39 +19,36 @@ Turn the Phase 13 event-log lifecycle foundation into an operator-safe lifecycle
 - Planning artifacts identify destructive operations as out-of-scope unless a separate operator gate is approved.
 - ADR records the invariant that replay/archive validation must pass before any future prune/apply can be considered.
 - Any code shipped in this slice is non-destructive by construction and covered by targeted tests.
-- Because this slice changes package runtime behavior, code review and QA must use fresh replay-package verification evidence rather than a docs-only skip.
+- Because this slice adds an operator-facing route contract regression, code review and QA must use fresh registry-api replay-route verification evidence rather than a docs-only skip.
 
 
 ## Linked Design Gate
 - `docs/adr/0025-event-log-lifecycle-operations.md` — accepted ADR for non-destructive lifecycle operations and future operator-gated prune/apply preconditions.
 
-## Autopilot Slice Boundary (2026-06-11)
-This Autopilot run chooses the **package-only lifecycle dry-run planner slice**.
-It implements FR146 as executable, non-destructive planner code while preserving
-the ADR-0025 boundary that destructive apply/prune behavior remains out of
-scope until a separate operator-gated story is approved.
+## Autopilot Slice Boundary (2026-06-11, Epic 72)
+This Autopilot run chooses the **task-history archive-boundary contract-lock slice**.
+It implements FR147 by preserving the existing hot-log-only `get_task_history`
+behavior, adding route-level regression coverage for archive-manifest isolation,
+and documenting archive-aware task history as a separate future story.
 
 ### Exact Deliverables for This Run
-- `docs/adr/0025-event-log-lifecycle-operations.md`
-- `_bmad-output/planning-artifacts/phase-14-prd-amendment.md`
-- `_bmad-output/planning-artifacts/phase-14-architecture-amendment.md`
-- `_bmad-output/planning-artifacts/phase-14-epics.md`
-- `packages/replay/src/replay/archive_manifest.py`: public read-only hot
-  inventory helper for lifecycle planning.
-- `packages/replay/src/replay/lifecycle.py`: isolated non-destructive dry-run
-  planner and immutable content-addressed plan model.
-- `packages/replay/src/replay/test_lifecycle.py`: targeted lifecycle planner
-  tests.
-- `packages/replay/src/replay/__init__.py`: preserves existing replay public
-  exports and additively exports only the read-only lifecycle planner
-  dataclasses/function introduced by this slice.
-- `docs/operator-runbook.md` Phase 14 lifecycle operations boundary: validate
-  archives/replay, inspect content-addressed dry-run plan hash, require durable
-  operator authorization before any future apply, and defer destructive apply
-  to a separate approved story.
+- `_bmad-output/planning-artifacts/phase-14-prd-amendment.md`: Epic 72 slice
+  boundary and verification language.
+- `_bmad-output/planning-artifacts/phase-14-architecture-amendment.md`: route-level
+  contract-test allowance for Epic 72 while preserving no destructive behavior.
+- `_bmad-output/planning-artifacts/phase-14-epics.md`: Epic 72 active/completed
+  handoff and Epic 73 future status.
+- `services/registry-api/src/registry_api/routes/test_replay.py`: regression proving
+  archive manifests do not make `/v1/tasks/{task_id}/history` read archived-only
+  task events.
+- `services/registry-api/src/registry_api/routes/replay.py`: optional docstring
+  clarification only; no archive-aware task-history implementation.
+- `docs/api-contracts.md` and `docs/operator-runbook.md`: explicit separation of
+  replay/validate archive env vars from hot-only task-history source selection.
 
 ### Explicitly Deferred From This Run
-- No `registry-api` endpoint or API-contract change.
+- No archive-aware task-history retrieval.
+- No new task-history query parameter or response shape.
 - No CLI command for prune, apply, lifecycle, delete, truncate, move, or rewrite.
-- No archived task-history behavior change.
 - No destructive apply/delete/truncate/move/rewrite/chmod implementation.
+- No lifecycle dry-run planner semantic change.

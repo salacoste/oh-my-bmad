@@ -184,7 +184,7 @@ Phase 12/13 replay contracts live in `packages/replay` and `services/registry-ap
 - `REPLAY_ARCHIVE_MANIFEST` is the primary env var; `EVENT_LOG_ARCHIVE_MANIFEST` is a legacy alias. If both point to different files, replay fails closed.
 - `lifecycle-manifest.json` schema version `1` references archived JSONL segments by relative path and `sha256`; segments are rejected on checksum mismatch, missing file, malformed metadata, duplicate keys, or sequence overlap.
 - `HOT_ONLY_REPLAY` forces hot-log-only behavior and is used by snapshot creation.
-- `get_task_history` remains hot-log-only.
+- `get_task_history` remains hot-log-only; archive manifest env vars affect replay/validate endpoints, not task-history source selection.
 - `replay_events_stream()` is package-only; there is no public HTTP streaming endpoint yet.
 - Destructive prune/apply is not implemented and requires a separate ADR plus operator approval gate.
 

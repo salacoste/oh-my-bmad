@@ -55,7 +55,7 @@ Task history is intentionally hot-log-only:
 curl -sS http://127.0.0.1:8080/v1/tasks/<task_id>/history | jq .
 ```
 
-If an old task has been moved to archive-only storage, task-history will not surface it until archived task-history receives its own design.
+If an old task has been moved to archive-only storage, task-history will not surface it until archived task-history receives its own design. Setting `REPLAY_ARCHIVE_MANIFEST` or `EVENT_LOG_ARCHIVE_MANIFEST` affects replay/validate endpoints, not this task-history source selection.
 
 ### Replay with archived segments
 

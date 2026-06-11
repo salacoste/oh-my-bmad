@@ -391,11 +391,12 @@ async def get_task_history(
 ) -> TaskHistoryResponse:
     """GET /v1/tasks/{task_id}/history — event history for a task (Story 61-2).
 
-    Scans JSONL event-log files for events whose payload references
+    Scans hot JSONL event-log files for events whose payload references
     ``task_id``, ordered by sequence number. Paginated via ``limit`` /
-    ``offset``.
+    ``offset``. Archive manifests are intentionally ignored until a separate
+    archive-aware task-history story changes this public contract.
 
-    Returns 404 if no events reference the given task_id.
+    Returns 404 if no hot-log events reference the given task_id.
     """
     event_log_dir = _event_log_dir(request)
 

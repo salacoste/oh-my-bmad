@@ -21,29 +21,21 @@ Phase 14 keeps the event-log lifecycle path fail-safe: archive discovery and rep
 - If code is added, targeted replay/lifecycle tests plus ruff/mypy for touched packages.
 
 ## Implementation Handoff Boundary (Autopilot Slice)
-The implementation handoff for this run is a package-only lifecycle dry-run
-planner slice. The allowed tracked write set is:
+The implementation handoff for this run is the Epic 72 task-history archive
+boundary contract-lock slice. The allowed tracked write set is:
 
-- `docs/adr/0025-event-log-lifecycle-operations.md`
 - `_bmad-output/planning-artifacts/phase-14-*.md`
-- `packages/replay/src/replay/archive_manifest.py`
-- `packages/replay/src/replay/lifecycle.py`
-- `packages/replay/src/replay/test_lifecycle.py`
-- `packages/replay/src/replay/__init__.py`
+- `services/registry-api/src/registry_api/routes/test_replay.py`
+- `services/registry-api/src/registry_api/routes/replay.py` for docstring/comment
+  clarification only.
+- `docs/api-contracts.md`
 - `docs/operator-runbook.md`
 
-The forbidden write set for this run is runtime code under:
-- `services/registry-api/src/`
-- `services/registry-state/src/`
-- `services/worker-wrapper/src/`
-- `mcp-servers/`
-
-The package-only dry-run planner may additively expose read-only helpers and
-immutable plan dataclasses from `packages/replay` while preserving existing
-`replay.__init__` exports; it must not add HTTP routes, API-contract
-changes, task-history archive expansion, or destructive apply helpers. Route-level
-contract tests are only allowed in a future story if an API surface is explicitly
-approved.
+The forbidden behavior for this run is any archive-aware task-history retrieval,
+new task-history query parameter, response-shape expansion, or destructive
+lifecycle apply/delete/truncate/move/rewrite/chmod implementation. The route-level
+contract test is explicitly allowed because it locks the existing hot-log-only
+API contract rather than expanding it.
 
 ## Deliberate-Mode Safety Pre-Mortem
 1. **Accidental destructive surface appears.** A future executor adds `apply=True`, `--apply`, `delete`, `unlink`, `truncate`, `rename`, or move behavior while claiming dry-run support. Mitigation for this run: no runtime files may change; verification checks the diff has no code files under the forbidden write set.
@@ -51,13 +43,13 @@ approved.
 3. **Task history silently expands to archives.** Operators receive mixed hot+archive history without a separately tested contract. Mitigation: this slice preserves hot-only history and records archive-aware history as a future story.
 
 ## Negative Verification Required
-- Diff check: no files under the forbidden runtime write set changed.
 - Status check: every `development_status` value is a valid BMad status.
-- ADR check: ADR-0025 contains explicit non-authorization of destructive apply and future operator-gate preconditions.
-- Contract check: no API-contract or route file changed in this slice.
-- Lifecycle check: package code exposes only read-only dry-run planner surfaces
-  and contains no `apply`, `delete`, `truncate`, `move`, `rewrite`, or `chmod`
-  implementation path.
+- Contract check: task-history remains hot-log-only and archive-aware history is
+  still documented as a future story.
+- Route check: route code does not pass archive manifests into task-history
+  reads and the regression returns 404 for archive-only task IDs.
+- Lifecycle check: no destructive `apply`, `delete`, `truncate`, `move`,
+  `rewrite`, or `chmod` implementation path is introduced.
 
 ## Future Apply Gate Refinement From Review
 Future dry-run plan identity must be content-addressed. The operator authorization must bind to the exact dry-run plan hash, and apply must re-compute that hash immediately before any mutation. Authorization records must be event-spine/audit-ledger durable; a transient terminal display is not enough.

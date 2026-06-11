@@ -9,14 +9,17 @@
 Story IDs intentionally use 69-73 to continue after Phase 13 Epics 64-68.
 
 ## Autopilot Slice Selection
-This run activates Epic 71 as the package-only non-destructive lifecycle
-dry-run planner slice while preserving the previously completed Epic 69/Epic 70
-safety artifacts:
+This run activates Epic 72 as the archived task-history boundary contract-lock
+slice while preserving the previously completed Epic 69/Epic 70/Epic 71 safety
+artifacts:
 
 - Epic 69: sprint-status hygiene + Phase 14 planning artifacts.
 - Epic 70: ADR-0025 event-log lifecycle operation boundaries and operator gate.
 - Epic 71: package-only non-destructive lifecycle dry-run planner with
   content-addressed plan hash.
+- Epic 72: hot-log-only `get_task_history` contract lock with route-level
+  archive-manifest regression coverage and future-story split for archive-aware
+  task history.
 
-Epic 72 (archive-aware task-history decision) and Epic 73 (retrospective) remain
-future Phase 14 work. They must not be silently implemented in this run.
+Epic 73 (retrospective) remains future Phase 14 work. Archive-aware task-history
+retrieval must not be silently implemented in this run.

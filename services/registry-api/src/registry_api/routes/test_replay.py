@@ -34,6 +34,7 @@ from registry_state.schema import (  # noqa: IMP001 — services→services allo
 )
 
 from registry_api.app import build_app
+from registry_api.routes import replay as replay_routes
 
 _FROZEN_MONO_NS = 1_000_000
 _RNG = Random(42)
@@ -346,6 +347,46 @@ class TestGetTaskHistory:
         resp = await client_with_paginated_events.get(f"/v1/tasks/{_TASK_ID}/history")
         assert resp.status_code == 200
         assert resp.json()["limit"] == 100
+
+    @pytest.mark.asyncio
+    async def test_history_ignores_archive_configuration_and_returns_404_for_external_archive_task(
+        self,
+        client_empty_log: AsyncClient,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Task-history ignores archive config and scans only hot JSONL files."""
+        archive_dir = tmp_path / "archive"
+        archive_task_clock = FrozenClock(
+            mono_ns=2_000_000,
+            now=datetime(2026, 6, 9, 13, 0, 0, tzinfo=UTC),
+        )
+        archive_task_id = new_task_id(clock=archive_task_clock, rng=Random(7))
+        archive_env = _make_task_created_envelope(
+            task_id=archive_task_id,
+            event_id=new_event_id(clock=archive_task_clock, rng=Random(8)),
+            title="archive-only task",
+            mono_ns=2_000_000,
+            emitted_at=datetime(2026, 6, 9, 13, 0, 0, tzinfo=UTC),
+        )
+        _write_jsonl(archive_dir, "2026-06-09", [archive_env])
+
+        def fail_if_history_resolves_archive_manifest(_request: object) -> Path | None:
+            msg = "task-history must not resolve archive manifests"
+            raise AssertionError(msg)
+
+        monkeypatch.setattr(
+            replay_routes,
+            "_archive_manifest_path",
+            fail_if_history_resolves_archive_manifest,
+        )
+        monkeypatch.setenv("REPLAY_ARCHIVE_MANIFEST", str(tmp_path / "missing.json"))
+        monkeypatch.delenv("EVENT_LOG_ARCHIVE_MANIFEST", raising=False)
+
+        resp = await client_empty_log.get(f"/v1/tasks/{archive_task_id}/history")
+
+        assert resp.status_code == 404
+        assert "No events found" in resp.json()["detail"]
 
     @pytest.mark.asyncio
     async def test_history_invalid_task_id_returns_422(
