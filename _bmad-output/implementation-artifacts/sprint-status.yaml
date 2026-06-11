@@ -89,7 +89,7 @@ development_status:
   3-3-task-command: done
   3-4-approve-command: done
   3-5-ping-command: done
-  bootstrap-minimum-milestone: closed  # 2026-04-30 — closed when 3-3, 3-4, 3-5 all done (Bootstrap Minimum Subset complete; operator-control-plane MVP achieved)
+  bootstrap-minimum-milestone: done  # 2026-04-30 — legacy milestone closed when 3-3, 3-4, 3-5 all done (Bootstrap Minimum Subset complete; operator-control-plane MVP achieved)
   3-6-fastapi-middleware-stack: done
   3-7-rfc7807-error-envelope: done
   3-8-command-injection-fuzz-test: done

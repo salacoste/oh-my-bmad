@@ -1174,3 +1174,15 @@ When a page fires that matches these descriptions, refer to the owning story.
 - [Schema evolution](./schema-evolution.md) — event-log schema versioning + migrator procedure.
 - [Backup / restore](./backup-restore.md) — volume snapshot + fresh-host restore.
 - [Testing guide](./testing-guide.md) — how to run the regression suite after a change.
+
+### Phase 14 event-log lifecycle operations boundary
+
+ADR-0025 authorizes lifecycle planning and validation only; it does not authorize hot-log deletion, truncation, archive mutation, or destructive apply. The safe operator sequence for future lifecycle work is:
+
+1. Validate the archive manifest and referenced segments.
+2. Validate replay against the retained hot+archive event set.
+3. Inspect a future non-destructive dry-run plan. That plan must be persisted as an immutable/content-addressed artifact or event with a stable hash over the exact segment set, eligibility decisions, blockers, and retention inputs.
+4. Record explicit Tier-3/operator authorization for that exact plan hash in the auditable event spine or an equally durable audit ledger.
+5. Only a separately approved future apply command may mutate hot logs, and it must re-compute the plan hash immediately before mutation and fail closed on any mismatch.
+
+Until that future apply story exists, operators must treat all lifecycle output as advisory. `get_task_history` remains hot-log only; archive-aware task history is a separate future story.
