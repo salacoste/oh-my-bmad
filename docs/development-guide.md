@@ -11,18 +11,18 @@ This file is the AI-context entry into the development workflow. **Tooling quirk
 git clone <this-repo-url> oh-my-bmad && cd oh-my-bmad
 uv sync --frozen --all-packages                            # NOT --no-dev — see development.md
 uv run pre-commit install
-just bootstrap-verify                                      # 13 workspace imports must be green
+just bootstrap-verify                                      # all workspace imports must be green
 cp .env.example .env
 $EDITOR .env                                               # secrets + tunnel choice
 just dev                                                   # macOS overlay; Linux base compose
-docker compose ps                                          # expect 6/6 Up (healthy) within 60s
+docker compose ps                                          # core services should be Up/healthy within 60s
 ```
 
 ## Daily loop
 
 | Command | Purpose |
 |---|---|
-| `just bootstrap-verify` | After every `uv sync` or pull. Verifies all 13 workspace imports. |
+| `just bootstrap-verify` | After every `uv sync` or pull. Verifies all workspace imports. |
 | `just test` | PR-gate suite (`pytest -m "not slow"`). The merge bar. |
 | `just test-slow` | Full matrix (nightly only). |
 | `just test-contract` | After every `just sync-upstream <name>`. |

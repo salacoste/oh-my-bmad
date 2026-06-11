@@ -2,73 +2,84 @@
 
 ## What this is
 
-**oh-my-bmad** is a self-hosted personal autonomous-development platform. Telegram and a local console drive a Claude Code worker through a typed event spine, backed by a single-writer SQLite WAL + append-only JSONL event log that survives restarts. The architecture is built to swap in additional CLI agents (Codex, Gemini, GLM) and a dedicated browser-automation plane later without changing the spine.
+**oh-my-bmad** is a self-hosted personal autonomous-development platform. Telegram and a local console drive supervised CLI workers through a typed event spine, backed by an append-only JSONL event log and a single-writer materialized state store. The platform is designed so runtimes, MCP tools, browser automation, transports, and deployment hardening can evolve without breaking the spine.
 
-Phase 1 shipped across **10 epics / 88 stories** (all `done` as of 2026-05-15). Phase 2 added trace\_id propagation, structured metrics, HMAC event signing, Litestream WAL backups, and token-budget enforcement. Phase 3 shipped the MCP Tooling Fleet — 5 new MCP servers, mutation testing, and AST-based quality gates. The project now covers **19 epics (incl. sub-epics) / ~170+ stories** (all `done` as of 2026-06-05).
+The current repository state is **Phase 13 complete** (2026-06-10): Event Log Lifecycle Management on top of Phase 12 Historical Event Replay. The latest tagged release remains `v1.3.0`; this checkout contains later Phase 10–13 work.
 
 ## Status
 
-- **Phase:** 3 (MCP Tooling Fleet — shipped).
-- **Repository type:** monorepo (uv workspace, 19 members).
+- **Current phase:** 13 complete — Event Log Lifecycle Management.
+- **Repository type:** monorepo (`uv` workspace, 24 Python members).
 - **Language:** Python 3.12 (locked).
-- **Deployment:** Docker Compose v2 + named volume (`oh-my-bmad-data`).
+- **Deployment:** Docker Compose v2 with named volume (`oh-my-bmad-data`); optional profiles for fleet features.
+- **Canonical state:** `_bmad-output/implementation-artifacts/sprint-status.yaml`.
 
-See `_bmad-output/implementation-artifacts/sprint-status.yaml` for current state and `_bmad-output/planning-artifacts/epics.md` for the full backlog.
+## Shipped phase map
 
-## Tech stack (summary)
+| Phase | Scope |
+|---|---|
+| 1 | Core platform — event spine, registry, Telegram, console, OMC/Claude worker |
+| 2 | Observability/security — trace_id, metrics, HMAC approvals, budgets, Litestream, supply chain |
+| 3 | MCP tooling fleet — git, github, verification, memory/wiki, artifact |
+| 4 | Browser automation — Playwright MCP container plane |
+| 5 | Multi-runtime — Claude Code, Codex, Gemini adapters and handoff |
+| 6 | Server execution pool — Postgres option, task FSM, multi-worker assignment |
+| 7 | Reliability — heartbeat detection, recovery loops, priority queue, operator tooling |
+| 8 | Hardening/debt closure — API versioning, env scoping, zero open GATED deferred items |
+| 9 | Operational excellence — PR draft creation, runbooks, stale TODO cleanup |
+| 10 | Remote MCP transport — Streamable HTTP + bearer-token auth |
+| 11 | mTLS — internal Docker-network TLS profile and CA tooling |
+| 12 | Historical event replay — point-in-time replay, validation, snapshots, task history |
+| 13 | Event log lifecycle — archive manifest, hot+archive replay, package streaming progress |
+
+## Tech stack summary
 
 | Category | Choice |
 |---|---|
-| Runtime | Python 3.12 + `uv` workspace; Node.js only inside the Claude Code worker subprocess |
+| Runtime | Python 3.12 + `uv` workspace; Node.js only inside CLI worker subprocesses |
 | HTTP API | FastAPI on `registry-api` |
 | Telegram | aiogram v3 on `telegram-gateway` |
-| Storage | SQLite WAL + `aiosqlite` + Alembic on `registry-state` |
-| Event log | Append-only JSONL on the host volume |
-| MCP | stdio transport; 8 servers (3 baseline + 5 fleet) |
-| Worker | Claude Code CLI subprocess, supervised by `worker-wrapper` |
-| Upstream forks | OMC + clawhip, vendored under `upstream/` behind adapter shims |
-| Logging | structlog (JSON) + secret-hygiene sanitizer in the processor chain |
-| Tooling | ruff, mypy `--strict`, pytest + pytest-asyncio strict, hypothesis, pre-commit |
+| Storage | SQLite WAL default, optional Postgres registry backend, Alembic migrations |
+| Event log | Append-only JSONL with canonical JSON and replay/archive validation |
+| MCP | stdio by default; Streamable HTTP opt-in for remote MCP transport |
+| Workers | Claude Code, Codex, Gemini runtime adapters behind `RuntimeAdapter` |
+| Upstream forks | OMC + clawhip under `upstream/`, accessed only through adapter shims |
+| Tooling | ruff, mypy `--strict`, pytest, pytest-asyncio strict, Hypothesis, mutation gate |
 
-Exact versions live in `uv.lock`. Don't duplicate them in docs.
+Exact dependency versions live in `uv.lock`; do not duplicate them in docs.
 
 ## Repository structure
 
 ```
 oh-my-bmad/
-├── services/              # 7 backend services (deployable processes)
-├── packages/              # 4 shared libraries imported by services + MCP servers
-├── mcp-servers/           # 8 MCP servers (3 baseline + 5 fleet: git, github, verification, memory, artifact)
-├── upstream/              # vendored forks (omc, clawhip), via `just sync-upstream`
-├── tests/                 # cross-service test trees (separability, crash-injection, etc.)
-├── scripts/               # CI gates, migrator, sync-upstream tooling
-├── docs/                  # operator + AI-context documentation (this directory)
-├── _bmad-output/          # planning artifacts (product brief, PRD, architecture, sprint state)
+├── services/              # 8 deployable/service packages
+├── packages/              # 6 shared libraries
+├── mcp-servers/           # 9 MCP servers
+├── upstream/              # vendored forks (omc, clawhip), adapter-shimmed
+├── tests/                 # cross-service test trees
+├── scripts/               # CI gates, migrators, operational helpers
+├── docs/                  # operator + AI-context documentation
+├── _bmad-output/          # BMad planning, implementation, retrospectives, sprint state
 ├── _bmad/                 # BMad framework + skill configs
-├── docker-compose.yml     # base stack (Linux)
-├── docker-compose.macos.yml  # macOS overlay (bind-mounts permitted)
-├── justfile               # operator recipes (single source of truth)
+├── docker-compose.yml     # base stack
+├── docker-compose.macos.yml
+├── justfile               # operator recipes
 ├── pyproject.toml         # uv workspace root
-├── uv.lock                # locked deps (regenerate via `uv lock`; never hand-edit)
-├── .env.example           # documents every env var with default + comment
-└── README.md              # human-facing quickstart
+└── uv.lock                # locked dependencies
 ```
 
-The 19 uv-workspace members are documented in [component-inventory.md](./component-inventory.md). The annotated source tree lives in [source-tree-analysis.md](./source-tree-analysis.md).
+The current member catalog is in [component-inventory.md](./component-inventory.md).
 
 ## Architecture in one paragraph
 
-A typed event spine connects three operator surfaces (Telegram, console, future browser) to a Claude Code worker subprocess via an orchestrator adapter. All state lives in the event log; `registry-state` is the single writer that materializes the log into SQLite for query, owns idempotency dedup (UUIDv7 keys, 7-day retention), and emits service-lifecycle events. Eight MCP servers expose tool/resource contracts to the worker: the 3 baseline servers (`task-registry`, `session-registry`, `clawhip-bridge`) plus 5 Phase 3 fleet servers (`git`, `github`, `verification`, `memory`, `artifact`). Capability tiers gate every MCP tool call. Upstream forks (OMC, clawhip) integrate only via adapter shims so they can be swapped without changing the spine.
-
-For the full design rationale, read `_bmad-output/planning-artifacts/architecture.md`. For the operator-oriented summary, read [architecture.md](./architecture.md).
+A typed event spine connects operator surfaces to runtime workers and MCP tools. All durable task/session state derives from append-only event records. `registry-state` owns the materialized database projection and the single-writer rules; `registry-api` exposes versioned HTTP read/write surfaces; MCP servers expose bounded tool/resource contracts to workers under capability tiers and approval gates. Replay packages can reconstruct historical state from hot logs and, as of Phase 13, validated archived segments referenced by `lifecycle-manifest.json`. Snapshots and task history intentionally remain hot-log-only until destructive prune semantics are designed.
 
 ## Where to start
 
-- **Operating it?** → [operator-runbook.md](./operator-runbook.md), [backup-restore.md](./backup-restore.md), and the deployment guides under [deployment/](./deployment/).
-- **Developing on it?** → [development.md](./development.md) (tooling quirks) + [testing-guide.md](./testing-guide.md).
-- **Implementing a new story?** → `_bmad-output/project-context.md` (the AI-agent rule digest).
-- **Understanding *why* something is the way it is?** → [adr/](./adr/) + `docs/exceptions.md` + `_bmad-output/planning-artifacts/architecture.md`.
-- **Mapping all the parts?** → [component-inventory.md](./component-inventory.md), [api-contracts.md](./api-contracts.md), [data-models.md](./data-models.md).
+- **Operating it?** → [operator-runbook.md](./operator-runbook.md), [backup-restore.md](./backup-restore.md), and [deployment-guide.md](./deployment-guide.md).
+- **Developing on it?** → `_bmad-output/project-context.md`, [development-guide.md](./development-guide.md), and [testing-guide.md](./testing-guide.md).
+- **Understanding decisions?** → [adr/](./adr/), [architecture.md](./architecture.md), and `_bmad-output/planning-artifacts/`.
+- **Working on replay/lifecycle?** → [data-models.md](./data-models.md) §“Historical replay and event-log lifecycle” plus Phase 12/13 planning artifacts.
 
 ## License
 

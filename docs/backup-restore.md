@@ -13,12 +13,15 @@ The `oh-my-bmad_oh-my-bmad-data` named Docker volume contains:
 | Path inside volume | Content | Added |
 |--------------------|---------|-------|
 | `registry/state.sqlite3` | Task registry SQLite database (+ WAL sidecars) | Story 2.3 |
-| `registry/events/current.jsonl` | Append-only event log (JSONL, one event per line) | Story 2.4 |
+| `registry/events/*.jsonl` | Hot append-only event-log segments (JSONL, one event per line) | Story 2.4+ |
+| `registry/events/lifecycle-manifest.json` | Optional archive manifest for replay lifecycle, if operator stores it in-volume | Phase 13 |
 | `artifacts/<TASK_ID>/` | Per-task artifact blobs (patches, PR drafts, logs) | Story 2.6 |
 
 **What is NOT backed up:** `.env` (secrets live outside the volume),
 `upstream/` vendored source (re-fetchable via `just sync-upstream`), and Python
 virtual environments (re-creatable via `uv sync`).
+
+Phase 13 note: replay archives may live outside the hot volume depending on operator policy. If `REPLAY_ARCHIVE_MANIFEST` points outside `oh-my-bmad-data`, back up the manifest and every referenced archive segment alongside the volume tarball. Replay validates `sha256`, so a missing or modified archive segment fails closed.
 
 ---
 
@@ -115,7 +118,7 @@ differs (see `docker-compose.yml` vs `docker-compose.macos.yml`).
            tar -xzf "/src/<ARCHIVE_FILE>" -C /dest
 
 5. `just deploy-vps` (includes `build-base` + sync).
-6. Verify `docker compose ps` → 6/6 healthy.
+6. Verify `docker compose ps` → core services healthy.
 
 ### macOS (bind-mount overlay)
 
@@ -127,7 +130,7 @@ differs (see `docker-compose.yml` vs `docker-compose.macos.yml`).
        tar -xzf "<ARCHIVE_FILE>" -C "${HOME}/.oh-my-bmad"
 
 4. `just deploy-macos` (includes `build-base` + overlay merge + mkdir).
-5. Verify `docker compose ps` → 6/6 healthy.
+5. Verify `docker compose ps` → core services healthy.
 
 Note: `.env` is NOT restored from the archive — secrets must be re-entered
 manually. Archive only contains the `oh-my-bmad-data` volume (registry DB,
@@ -212,7 +215,7 @@ hypothesis. Run a restore drill quarterly:
 1. Provision a scratch VPS or local VM (Ubuntu 24.04 recommended).
 2. Copy a recent backup archive to the scratch host.
 3. Follow the [Restore to a fresh host](#restore-to-a-fresh-host) steps above.
-4. Verify `docker compose ps` shows 6/6 healthy.
+4. Verify `docker compose ps` shows core services healthy.
 5. (Optional) run `uv sync --dev` then `just bootstrap-verify` + `just test`
    to confirm the workspace is intact.
 6. Tear down the scratch host.

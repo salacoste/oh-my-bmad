@@ -14,7 +14,7 @@
   <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-stdio-7F52B5" alt="MCP"/></a>
   <a href="https://mypy.readthedocs.io/"><img src="https://img.shields.io/badge/mypy-strict-1f5082" alt="mypy strict"/></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"/></a>
-  <a href="_bmad-output/planning-artifacts/epics.md"><img src="https://img.shields.io/badge/v1.3.0-Production%20Ready-success" alt="v1.3.0 — Production Ready"/></a>
+  <a href="_bmad-output/planning-artifacts/epics.md"><img src="https://img.shields.io/badge/Phase%2013-Complete-success" alt="Phase 13 complete"/></a>
 </p>
 
 ---
@@ -25,7 +25,7 @@ A platform that turns Telegram and a local console into the control surfaces for
 
 It's deliberately **boring** infrastructure — Python 3.12, FastAPI, aiogram, SQLite WAL, Docker Compose, stdio MCP. The novelty is in how the boring pieces compose, not in any one piece.
 
-> **All 8 phases shipped — 40+ epics, ~187 stories, 3100+ tests — and fully documented.** See [`docs/index.md`](docs/index.md) for the master entry point.
+> **Current repo state: Phase 13 complete — event replay plus event-log lifecycle management are shipped.** Latest tagged release is `v1.3.0`; this checkout contains later Phase 10–13 work. See [`docs/index.md`](docs/index.md) for the master entry point.
 
 ## How it works (at a glance)
 
@@ -93,16 +93,16 @@ Three properties hold the whole thing together: **only one writer**, **only-ever
 | Layer | Choice |
 |---|---|
 | Runtime | Python 3.12 · Node.js (only inside the Claude Code worker subprocess) |
-| Build / workspace | `uv ≥ 0.5` (workspace, 21 members) · `just ≥ 1.14` (operator recipes) |
+| Build / workspace | `uv ≥ 0.5` (workspace, 24 members) · `just ≥ 1.14` (operator recipes) |
 | HTTP API | FastAPI (only on `registry-api`) |
 | Telegram | aiogram v3 (webhook + outer-middleware allowlist, [ADR-0001](docs/adr/0001-allowlist-middleware-auth.md)) |
 | Console | typer CLI with full command parity |
 | Storage | SQLite + WAL · `aiosqlite` · Alembic (additive-only within a major) |
 | Event log | append-only JSONL, canonical JSON, `fdatasync` |
-| MCP | stdio transport only · 8 servers (`task-registry`, `session-registry`, `clawhip-bridge`, `git`, `github`, `verification`, `memory`, `artifact`, `browser`) |
+| MCP | stdio by default, Streamable HTTP where configured · 9 servers (`task-registry`, `session-registry`, `clawhip-bridge`, `git`, `github`, `verification`, `memory`, `artifact`, `browser`) |
 | Worker | Multi-runtime: Claude Code, Codex, Gemini — supervised, auto-scaled |
 | Observability | `/metrics` endpoint · trace_id propagation · structlog (JSON) + sanitizer |
-| Tests | pytest · pytest-asyncio (strict) · hypothesis · crash-injection · mutation gate (cosmic-ray, 82%+) · 3100+ tests |
+| Tests | pytest · pytest-asyncio (strict) · hypothesis · crash-injection · mutation gate (cosmic-ray, 82%+) · 3200+ tests |
 | Tooling | ruff (E F I UP B SIM N + S) · mypy `--strict` · pre-commit · pytest-randomly |
 | Deploy | Docker Engine ≥ 24 · Docker Compose v2.24+ · SLSA L2 + cosign keyless signing |
 | DR | Litestream WAL replication to S3/B2/R2/MinIO (opt-in) |
@@ -119,11 +119,11 @@ Exact versions live in `uv.lock`. Secrets are operator-provisioned via `.env` wi
 git clone https://github.com/salacoste/oh-my-bmad && cd oh-my-bmad
 uv sync --frozen --all-packages    # NOT --no-dev — strips test deps
 uv run pre-commit install
-just bootstrap-verify              # 13 workspace imports must be green
+just bootstrap-verify              # workspace imports must be green
 cp .env.example .env
 $EDITOR .env                       # secrets + tunnel choice
 just dev                           # macOS overlay; Linux base compose
-docker compose ps                  # expect 6/6 Up (healthy) within 60s
+docker compose ps                  # core services should be Up/healthy within 60s
 ```
 
 **Full deployment guides:** [VPS (Linux)](docs/deployment/vps.md) · [macOS host](docs/deployment/macos.md) · [Deployment entry point](docs/deployment-guide.md)
@@ -141,7 +141,7 @@ Phase 4 — Implementation     → sprint plan → (create-story → validate �
                               → retrospective at every epic boundary
 ```
 
-Phase 1 took **10 epics / 88 stories**, with retrospective + deferred-work governance at every epic boundary. Eight phases later the platform spans **40+ epics, ~187 stories, and 3100+ tests** — event spine, multi-runtime workers, an 8-server MCP fleet, browser automation, supply chain hardening, and zero open deferred items. The full per-phase walkthrough, skill catalog, and "how a new feature enters the workflow" decision tree is documented separately:
+Phase 1 took **10 epics / 88 stories**, with retrospective + deferred-work governance at every epic boundary. The current repo has progressed through **13 phases** — event spine, multi-runtime workers, a 9-server MCP fleet, browser automation, supply-chain hardening, remote MCP transport, mTLS, historical replay, and event-log lifecycle management — with zero open GATED deferred items. The full per-phase walkthrough, skill catalog, and "how a new feature enters the workflow" decision tree is documented separately:
 
 ➡️ **[`docs/bmad-workflow.md`](docs/bmad-workflow.md)** — the complete workflow this project follows.
 
@@ -161,7 +161,7 @@ This repo documents itself in three layers, by audience.
 - 🔄 [`docs/bmad-workflow.md`](docs/bmad-workflow.md) — the BMad workflow this project follows (process companion to the rule digest).
 - 🗺️ [`docs/architecture.md`](docs/architecture.md) — runtime view + invariants + data flow.
 - 🌳 [`docs/source-tree-analysis.md`](docs/source-tree-analysis.md) — annotated directory layout.
-- 🧩 [`docs/component-inventory.md`](docs/component-inventory.md) — the 21 workspace members.
+- 🧩 [`docs/component-inventory.md`](docs/component-inventory.md) — the 24 workspace members.
 - 🔌 [`docs/api-contracts.md`](docs/api-contracts.md) — HTTP endpoints + MCP tools + Telegram surface.
 - 📚 [`docs/data-models.md`](docs/data-models.md) — event envelope + payload catalog + DB schema.
 - 🛠️ [`docs/development-guide.md`](docs/development-guide.md) · [`docs/deployment-guide.md`](docs/deployment-guide.md) · [`docs/operator-runbook.md`](docs/operator-runbook.md)
@@ -208,7 +208,7 @@ A few things worth a look even if you don't intend to run it:
 
 ## Status
 
-**v1.3.0 — Production Ready.** Eight phases shipped (2026-05 through 2026-06):
+**Current development state — Phase 13 complete.** Latest tagged release: `v1.3.0`. Shipped phases in this checkout:
 
 | Phase | Scope | Epics |
 |---|---|---|
@@ -220,7 +220,12 @@ A few things worth a look even if you don't intend to run it:
 | 6 | Server execution pool — Postgres, state machine, multi-worker | 30–34 |
 | 7 | Reliability hardening — heartbeat detection, structured output, env isolation | 35–40 |
 | 8 | Platform hardening & debt closure — zero open deferred items | 41–45 |
+| 9 | Operational excellence — PR drafts, runbooks, stale TODO cleanup | 46–48 |
+| 10 | Remote MCP transport — Streamable HTTP + bearer auth | 50–55 |
+| 11 | mTLS — internal Docker-network TLS profile and CA tooling | 56–59 |
+| 12 | Historical event replay — replay engine, validation, snapshots, task history | 60–63 |
+| 13 | Event log lifecycle — archive manifest, hot+archive replay, package streaming | 64–68 |
 
-40+ epics, ~187 stories, 3100+ tests. All ship-blocker items green. Zero open GATED deferred items.
+Phase 13 is complete; all current ship-blocker items are green. Zero open GATED deferred items.
 
 Issues and discussion welcome — security reports per [`SECURITY.md`](./SECURITY.md).

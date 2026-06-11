@@ -13,9 +13,9 @@ Run these three probes in order to establish a baseline before diving into per-s
 # 1. Are all containers up and healthy?
 docker compose ps
 
-# Expected: 6 rows, STATUS = "Up (healthy)" for all.
-# registry-api, registry-state, telegram-gateway,
-# orchestrator-adapter, worker-wrapper, clawhip-daemon
+# Expected: core service rows are "Up (healthy)". Optional profile services
+# appear only when enabled. Core rows include registry-api, registry-state,
+# telegram-gateway, orchestrator-adapter, worker-wrapper, clawhip-daemon.
 
 # 2. Does the workspace pass static checks?
 just lint
@@ -27,13 +27,76 @@ just lint
 # 3. Does the Python workspace resolve cleanly?
 just bootstrap-verify
 
-# Expected: 19 workspace-member import lines then:
-# ✓ bootstrap OK (19 workspace-member imports verified)
+# Expected: all workspace-member imports verified, matching the current uv workspace.
 ```
 
 If all three pass, the stack is structurally healthy. A persistent failure in
 `just lint` or `just bootstrap-verify` after a code change points to a broken
 dependency or import regression, not a runtime failure.
+
+---
+
+## Event replay and archive lifecycle operations
+
+Phase 12/13 replay is read-only by default. It can include archived JSONL segments when an archive manifest is configured, but it never prunes or deletes hot logs. Treat any destructive lifecycle action as future work requiring a separate ADR and operator approval gate.
+
+### Replay from hot logs only
+
+With no archive env vars set, replay reads the live event-log directory only:
+
+```sh
+curl -sS http://127.0.0.1:8080/v1/events/replay | jq .
+curl -sS http://127.0.0.1:8080/v1/events/replay/validate | jq .
+```
+
+Task history is intentionally hot-log-only:
+
+```sh
+curl -sS http://127.0.0.1:8080/v1/tasks/<task_id>/history | jq .
+```
+
+If an old task has been moved to archive-only storage, task-history will not surface it until archived task-history receives its own design.
+
+### Replay with archived segments
+
+Set exactly one archive manifest env var for replay/validate endpoints:
+
+```sh
+REPLAY_ARCHIVE_MANIFEST=/var/lib/oh-my-bmad/registry/events/lifecycle-manifest.json
+# EVENT_LOG_ARCHIVE_MANIFEST is accepted only as a legacy alias.
+```
+
+If both `REPLAY_ARCHIVE_MANIFEST` and `EVENT_LOG_ARCHIVE_MANIFEST` are set, they must resolve to the same file. Different paths fail closed with route-local ProblemDetails.
+
+`lifecycle-manifest.json` schema version `1` contains archived segment entries with relative paths and `sha256` checksums. Replay rejects:
+
+- unreadable or malformed manifests,
+- missing archive segment files,
+- checksum mismatches,
+- duplicate segment keys,
+- overlapping monotonic sequence ranges between hot and archived segments.
+
+### Snapshot boundaries
+
+Snapshot creation/listing remains hot-log-only even if archive env vars are present. Internally this is forced through `HOT_ONLY_REPLAY`; do not reinterpret snapshots as archive-aware until a separate story changes that contract.
+
+```sh
+curl -X POST http://127.0.0.1:8080/v1/events/replay/snapshots | jq .
+curl http://127.0.0.1:8080/v1/events/replay/snapshots | jq .
+```
+
+### Troubleshooting archive replay
+
+Replay/archive failures on `/v1/events/replay` and `/v1/events/replay/validate` use route-local RFC 7807 ProblemDetails. Common `extensions.code` values:
+
+| Code | Meaning | Action |
+|---|---|---|
+| `replay_archive_config_error` | Env path is missing, unreadable, or conflicting | Check env vars and file permissions. |
+| `replay_archive_manifest_invalid` | Manifest JSON/schema is invalid | Validate schema version, required fields, and relative paths. |
+| `replay_archive_missing_segment` | Referenced JSONL segment is absent | Restore the archive file or remove the manifest entry after review. |
+| `replay_archive_checksum_mismatch` | Segment bytes do not match `sha256` | Treat as integrity incident; restore from trusted backup. |
+| `replay_archive_conflict` | Duplicate/overlapping segment interval | Fix manifest ordering/ranges; do not replay until resolved. |
+
 
 ---
 

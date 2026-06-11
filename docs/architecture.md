@@ -265,18 +265,43 @@ New invariants: P11-I1 (all-or-nothing within profile), P11-I2 (no committed cer
 
 New packages: `packages/mtls/` (TLS context factory). New tools: `scripts/omb-ca/` (CA init/issue/rotate/check). New CI gates: `check_no_secrets.py` (P11-I2), extended `check_mcp_transport.py` (MTLS001). 78 new tests. 16 services configured for mTLS.
 
-## Future work beyond Phase 11
+## Phase 12: Historical Event Replay
 
-The following items were deferred across Phases 4--9 and remain unshipped:
+Phase 12 shipped 2026-06-10 (ADR-0024 accepted). Scope: read-only point-in-time reconstruction from the authoritative JSONL event log for auditing/debugging.
 
-- **Scheduled jobs** -- time-based task scheduling.
+New FRs: FR134 (replay engine), FR135 (replay HTTP endpoint), FR136 (task history endpoint), FR137 (replay validation), FR138 (snapshot management). New NFRs: NFR-O21 (observable replay), NFR-M12 (additive compatibility), NFR-R17 (bounded replay failure behavior), NFR-S17 (audit logging).
+
+New package: `packages/replay/` with `replay_events()`, validation helpers, and snapshot helpers. New registry-api endpoints: `GET /v1/events/replay`, `GET /v1/tasks/{task_id}/history`, `GET /v1/events/replay/validate`, and `POST/GET /v1/events/replay/snapshots`.
+
+## Phase 13: Event Log Lifecycle Management
+
+Phase 13 shipped 2026-06-10 as Event Log Lifecycle Management (P13-ELLM). Scope: make Phase 12 replay safe as logs grow without introducing destructive pruning.
+
+New FRs: FR139 (archive manifest inclusion), FR140 (archive manifest env resolution), FR141 (`HOT_ONLY_REPLAY` for snapshots), FR142 (route-local archive ProblemDetails), FR143 (package-only streaming replay progress).
+
+Key lifecycle decisions:
+
+- **Archive manifest, not hot deletion.** Archived segments are referenced by `lifecycle-manifest.json`; Phase 13 does not delete or prune hot logs.
+- **Validated hot+archive replay.** Archive segments are checksum-validated and rejected on missing files, malformed manifests, duplicate keys, or sequence overlap.
+- **Explicit archive config precedence.** Direct `archive_manifest_path` wins; otherwise `REPLAY_ARCHIVE_MANIFEST` is preferred, with `EVENT_LOG_ARCHIVE_MANIFEST` kept as a legacy alias. Conflicting env vars fail closed.
+- **Hot-only surfaces stay hot-only.** Snapshot creation uses the `HOT_ONLY_REPLAY` sentinel; task history remains hot-log-only until archived task-history and prune semantics are designed.
+- **No public streaming endpoint yet.** `replay_events_stream()` is package-only and yields frozen `ReplayProgress` updates plus a terminal `ReplayResult` equivalent to `replay_events()`.
+- **Error mapping is route-local.** Replay/archive failures on replay and validate endpoints return route-local ProblemDetails; global `/errors/internal` behavior is unchanged.
+
+## Future work beyond Phase 13
+
+The following items remain unshipped or intentionally out of scope:
+
+- **Event-log prune/apply** -- destructive lifecycle operations require a separate ADR and explicit operator gate.
+- **Archived task history** -- `GET /v1/tasks/{task_id}/history` remains hot-log-only until prune semantics are designed.
+- **Object-storage lifecycle jobs** -- archive manifests currently reference validated local/archive paths; automatic S3/B2/R2 lifecycle management is future work.
+- **Scheduled jobs** -- time-based task scheduling and lifecycle automation.
 - **Web dashboard** -- browser-based operator surface.
 - **GLM adapter** -- fourth runtime following the ADR-0015 pattern.
 - **Split deployment** -- Postgres accessible from multiple hosts for horizontal scaling of the registry layer.
-- **Historical event replay** -- re-materialize state from the event log for auditing/debugging.
-- **Postgres connection mTLS** -- Phase 11.1, extends mTLS to database connections.
+- **Postgres connection mTLS** -- extends mTLS to database connections.
 
-See `_bmad-output/planning-artifacts/architecture.md` for the full decision rationale per item.
+See `_bmad-output/planning-artifacts/architecture.md` and the phase-specific amendments for full decision rationale.
 
 ## Cross-references
 

@@ -156,7 +156,7 @@ These have invariants enforced by CI / static checks. **Don't drift them without
 - `services/registry-state/src/registry_state/eventlog/` — `EventLogWriter` is the only opener-for-write on the JSONL log.
 - `packages/events/src/events/` — event envelope + schema registry. Adding a new event type registers `(event_type, schema_version)` here.
 - `upstream/<fork>/adapter.py` — sole import path for vendored code. Direct imports of vendored internals are rejected.
-- `mcp-servers/*` — stdio transport only. Imports of `mcp.server.sse` / `mcp.server.streamable_http` are rejected.
+- `mcp-servers/*` — stdio by default; Streamable HTTP only through ADR-0022-approved transport paths. Unplanned transports are rejected.
 - `scripts/checks/check_imports.py` — runs the separability / boundary checks on PR.
 
 ## Entry-point map

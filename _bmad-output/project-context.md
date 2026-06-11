@@ -1,7 +1,7 @@
 ---
 project_name: 'oh-my-bmad'
 user_name: 'R2d2'
-date: '2026-05-15'
+date: '2026-06-11'
 sections_completed:
   - technology_stack
   - language_rules
@@ -11,7 +11,7 @@ sections_completed:
   - workflow_rules
   - critical_digest
 status: 'complete'
-rule_count: 386
+rule_count: 396
 section_count: 7
 optimized_for_llm: true
 ---
@@ -37,7 +37,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - FastAPI — HTTP surface.
 - aiogram v3 — Telegram bot (async webhook).
 - aiosqlite + Alembic — SQLite WAL store; migrations are additive-only within a major.
-- mcp — stdio transport only. Do not add SSE or HTTP transport; that boundary is an explicit ADR-gated decision. Code that opens a network socket for MCP is a hard rejection.
+- mcp — stdio by default. Streamable HTTP exists only through the Phase 10 ADR-0022 transport path with bearer-token auth; any other transport or unauthenticated remote MCP listener is a hard rejection.
 - pydantic, structlog, httpx, uvicorn.
 - anthropic SDK — never import directly in platform services. All model output must be produced by constructing a task for the Claude Code worker via the event spine. ADR required before touching the SDK in service code.
 
@@ -59,7 +59,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
   1. Root `pyproject.toml`: `[tool.uv.sources]` AND `[project.dependencies]`.
   2. Each consuming service's `pyproject.toml`: `[project.dependencies]`.
   Omitting either causes `uv sync` to succeed but imports to fail at runtime. Verify with `uv sync --all-packages` + `uv tree` showing the dep under every consumer.
-- **New runtime deps** require: `uv lock` clean, `just bootstrap-verify` green (13 workspace-member imports), and pre-commit (`uv run secret-hygiene-precommit`) clean.
+- **New runtime deps** require: `uv lock` clean, `just bootstrap-verify` green (all workspace-member imports), and pre-commit (`uv run secret-hygiene-precommit`) clean.
 - **MCP triple-naming** is load-bearing. Directory = `mcp-servers/<x>/` (kebab, no suffix); project `name` = `<x>-mcp`; Python module = `<x>_mcp` (snake, derived by `uv_build`). Never rename the import root by hand. Services and packages follow the simpler 1:1 kebab↔snake rule.
 - **Scaffold `__main__.py`** is the correct code until the owning story replaces it. Don't add business logic on top of `signal.pause()`. See `docs/exceptions.md` for the replacement-story map.
 
@@ -70,7 +70,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 **Imports & module layout**
 - `from __future__ import annotations` at the top of every module — defers evaluation so Pydantic + forward refs resolve cleanly.
 - Public packages ship `src/<module>/py.typed`. Without it, downstream `--strict` resolution silently loses signatures.
-- `__init__.py` exports `__version__: str`. `just bootstrap-verify` greps for it across all 13 workspace members.
+- `__init__.py` exports `__version__: str`. `just bootstrap-verify` greps for it across all workspace members.
 - Absolute imports across workspace members only. Relative imports across packages are banned.
 - **Service separability is enforced, not advisory.** `scripts/checks/check_imports.py` is the gate:
   - `services.<A>` may NOT import `services.<B>.*` under any circumstance.
@@ -484,7 +484,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - Stylistic preferences go in `nit:` comments; never block merge on style if ruff/mypy pass.
 
 **Daily ops via `justfile`**
-- `just bootstrap-verify` runs after every `uv sync` or pull (13 workspace imports green).
+- `just bootstrap-verify` runs after every `uv sync` or pull (all workspace imports green).
 - `just dev` for local stack; `just deploy-vps` / `just deploy-macos` for host parity.
 - `just test` is the PR-merge bar. `just test-slow` runs the full matrix nightly. `just test-contract` after every `just sync-upstream <name>`.
 - `just sync-upstream <name>` is the only sanctioned vendoring path; updates the pinned SHA in `VENDORED.md`.
@@ -965,6 +965,33 @@ Cat 7.
    additional env vars are passed to the Playwright container beyond what the
    browser-mcp server itself receives from the worker-wrapper allowlist.
 
+### Cat-7 don't-miss (Phase-12/13 replay + lifecycle gotchas)
+
+1. **Historical replay is read-only.** `packages/replay.replay_events()` uses an
+   in-memory database and must not mutate live registry state. Any replay path
+   that opens the production DB for writes is a Sev1 architecture regression.
+2. **Archive manifests are additive inputs, not prune permission.** Phase 13
+   can read archived segments via `lifecycle-manifest.json`; it does not delete
+   hot logs. Destructive prune/apply requires a new ADR plus operator gate.
+3. **Archive config precedence is load-bearing.** Direct `archive_manifest_path`
+   wins; otherwise `REPLAY_ARCHIVE_MANIFEST` is primary and
+   `EVENT_LOG_ARCHIVE_MANIFEST` is a legacy alias. If both env vars resolve to
+   different files, fail closed.
+4. **Validate archive bytes before replay.** Missing segments, checksum
+   mismatches, malformed manifests, duplicate segment keys, and overlapping
+   monotonic ranges must reject replay rather than best-effort skipping.
+5. **Snapshots stay hot-only.** Snapshot create/list paths use
+   `HOT_ONLY_REPLAY` so archive env vars cannot leak into snapshot semantics.
+6. **Task history stays hot-only.** Do not make `/v1/tasks/{task_id}/history`
+   archive-aware without a story that defines archived-history and prune
+   semantics.
+7. **Streaming replay is package-only.** `replay_events_stream()` yields
+   `ReplayProgress` and a terminal `ReplayResult`; do not expose a public HTTP
+   streaming endpoint without API versioning/design work.
+8. **Replay/archive errors are route-local ProblemDetails.** Keep archive error
+   mapping scoped to replay/validate endpoints; do not alter global
+   `/errors/internal` behavior as a side effect.
+
 ---
 
 ## Usage Guidelines
@@ -983,4 +1010,4 @@ Cat 7.
 
 ---
 
-_Last updated: 2026-06-06. Status: complete (Phase 1 baseline + Phase 2 additions — Epics 8–13 + Phase 3 additions — Epics 15–19 + Phase 4 additions — Epics 20–22, browser worker)._
+_Last updated: 2026-06-11. Status: complete through Phase 13 additions — replay/archive lifecycle rules added; sprint-status remains canonical for exact phase state._

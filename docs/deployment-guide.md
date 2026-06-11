@@ -33,7 +33,7 @@ Released images live on GHCR: `ghcr.io/<owner>/oh-my-bmad-<service>:<version>`.
 git clone <repo> oh-my-bmad && cd oh-my-bmad
 cp .env.example .env
 $EDITOR .env                   # Telegram bot token, Anthropic API key, GitHub PAT, allowlisted user IDs, tunnel choice
-just deploy-vps                # wait for 6/6 healthy
+just deploy-vps                # wait for core services healthy
 # Verify
 curl -fsS http://localhost:<port>/v1/health
 # Send /ping to the Telegram bot

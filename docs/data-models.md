@@ -60,14 +60,12 @@ Grouped by lifecycle area. Every entry is a `*Payload` Pydantic class with `froz
 ### Git mutations (Phase 3 — Epic 15)
 `GitCommittedPayload` (`git.committed`), `GitPushedPayload` (`git.pushed`) — emitted by git-mcp after Tier-2 commit / Tier-3 push. Born at 1.1.0 (no v1.0.0 predecessor; two-location registration).
 
-Planned Phase 3 read/query events (not yet registered; born 1.1.0, two-location):
-`git.status_queried`, `git.diff_queried`, `git.log_queried`, `git.branch_created`, `git.commit_created`, `git.push_completed`, `git.history_rewritten`.
+Git read/query operations are currently tool results unless an owning story explicitly adds emitted event types.
 
 ### GitHub writes (Phase 3 — Epic 16)
 `GithubIssueCreatedPayload` (`github.issue.created`), `GithubIssueUpdatedPayload` (`github.issue.updated`), `GithubPrCreatedPayload` (`github.pr.created`), `GithubPrUpdatedPayload` (`github.pr.updated`), `GithubReviewRequestedPayload` (`github.review.requested`), `GithubCommentCreatedPayload` (`github.comment.created`) — emitted by github-mcp after Tier-3 writes gated by `approval.granted`. Born at 1.1.0 (no v1.0.0 predecessor; two-location registration). Default `simulate=True` in Phase 1 (no scoped credential).
 
-Planned Phase 3 addition (not yet registered):
-`github.review.submitted` — emitted after a Tier-3 review submission.
+Additional GitHub event types require an owning story and schema-registration tests.
 
 ### Verification (Phase 3 — Epic 17)
 `VerificationCompletedPayload` (`verification.completed`, FR74) — emitted by verification-mcp after a Tier-2 `verification.run_build` / `verification.run_tests` recipe finishes. Payload carries `tool`, `recipe`, `passed`, `exit_code`, `coverage` — **never** logs or secrets. Born at 1.1.0 (no v1.0.0 predecessor; two-location registration).
@@ -111,11 +109,23 @@ SQLAlchemy 2.0 typed style: `DeclarativeBase`, `Mapped[T]`, `mapped_column(...)`
 
 Only `registry-state` opens the DB for writes. No other service declares SQLAlchemy or holds an `AsyncSession`. A static-analysis test asserts only `registry-state` writer modules contain `session.add` / `session.execute(...write...)` / `commit()` call-sites. The append-only JSONL log is opened for write only by the `EventLogWriter` class in `registry-state`; everyone else reads via `EventLogReader`.
 
-## Snapshot & replay contract
+## Snapshot, replay, and event-log lifecycle contract
 
 Recovery on restart replays the JSONL event log from the most recent snapshot. On SIGTERM, `registry-state` runs `PRAGMA wal_checkpoint(FULL)` then `await engine.dispose()` (8s budget). Snapshot materialization is the **only** path allowed to hold a write transaction >1s.
 
-The replay contract is asserted under `tests/replay/`: a frozen event-log fixture replayed through the projector produces a byte-identical state snapshot. Mandatory on every projector or event-handler change.
+Phase 12 added historical replay through `packages/replay`: `replay_events()` reconstructs point-in-time state in an in-memory database and returns `ReplayResult` without mutating live state. `validate_replay()` compares replayed state to the live projection. Registry-api exposes replay, task history, validation, and snapshot endpoints under `/v1/events/replay*` and `/v1/tasks/{task_id}/history`.
+
+Phase 13 added event-log lifecycle support without hot-log deletion:
+
+- `lifecycle-manifest.json` schema version `1` lists archived JSONL segments by relative path, `sha256`, and event count.
+- Archive segments are loaded only when explicitly configured through `archive_manifest_path`, `REPLAY_ARCHIVE_MANIFEST`, or legacy `EVENT_LOG_ARCHIVE_MANIFEST`. Conflicting env vars fail closed.
+- Replay merges hot segments and archive segments after validating checksums, missing files, duplicate segment keys, and overlapping monotonic-sequence ranges.
+- `HOT_ONLY_REPLAY` is the sentinel for surfaces that must ignore archive env vars. Snapshot creation uses it deliberately.
+- `GET /v1/tasks/{task_id}/history` remains hot-log-only; archived task history is future work.
+- `replay_events_stream()` is a package API only. It yields frozen `ReplayProgress` values and then a terminal `ReplayResult`; no public HTTP streaming endpoint exists yet.
+- Destructive prune/apply is explicitly not implemented. It requires a separate ADR and operator approval gate.
+
+The replay contract is asserted by `packages/replay` tests and historical `tests/replay/` contracts: frozen event-log fixtures replay through the projector to equivalent state. Mandatory on every projector, replay, archive, or event-handler change.
 
 ## Idempotency
 

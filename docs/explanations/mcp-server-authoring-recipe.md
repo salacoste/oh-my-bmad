@@ -8,11 +8,7 @@
 
 ## In one breath
 
-A fleet MCP server is a **stdio subprocess**, spawned by `worker-wrapper`, that exposes a handful of
-**tier-gated tools**, takes an **explicit `caller_trace_id`** on every call, routes any **spine
-events** through the one FR26 writer, receives **only allowlisted (never secret) env**, ships **in
-the base image** (no new container), and is **optional** (the worker runs fine without it). Eight
-steps; each one has a build-time gate or a contract test that fails the build if you skip it.
+A fleet MCP server is **stdio by default** (and may use ADR-approved Streamable HTTP for remote transport), exposes a handful of **tier-gated tools**, takes an **explicit `caller_trace_id`** on every call, routes any **spine events** through the one FR26 writer, receives **only allowlisted (never secret) env**, ships in the expected deployment boundary, and is **optional** (the worker runs fine without it). The recipe steps each have a build-time gate or a contract test that fails the build if skipped.
 
 ## The picture
 
@@ -37,12 +33,9 @@ steps; each one has a build-time gate or a contract test that fails the build if
         return result
 ```
 
-## Step 1 — stdio transport only (P2-I4)
+## Step 1 — stdio by default; remote transport only by ADR
 
-`FastMCP(name).run()` on stdio. No HTTP/SSE/streamable transport — a fleet server is a *tool*, not a
-network service, so it has no public surface (P2-I5). Enforced by `scripts/check_mcp_transport.py`
-(exit 0 = no `mcp.server.sse` / `streamable_http` import anywhere). The server is reachable only by
-its parent over the pipe it was spawned on.
+`FastMCP(name).run()` on stdio remains the default. ADR-0022 permits Streamable HTTP only through the explicit remote-MCP path with bearer-token auth; unplanned SSE/HTTP listeners remain forbidden. Enforced by `scripts/check_mcp_transport.py`, which distinguishes allowed transport modules from accidental public surfaces. A server is reachable only through its configured parent/transport boundary.
 
 ## Step 2 — a synchronous `build_server` factory, I/O deferred to the lifespan
 

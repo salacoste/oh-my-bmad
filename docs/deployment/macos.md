@@ -64,7 +64,7 @@ Expected output (abridged):
 events 0.1.0
 registry_api 0.1.0 | hello from registry_api
 ...
-✓ bootstrap OK (13 workspace-member imports verified)
+✓ bootstrap OK (... workspace-member imports verified)
 ```
 
 ---

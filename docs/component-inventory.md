@@ -1,83 +1,86 @@
 # Component inventory
 
-The 19 uv-workspace members. Sizes are approximate LOC of non-test Python source. "Scaffold" means `signal.pause()` + healthcheck-touch placeholder until the owning story replaces it (see [exceptions.md](./exceptions.md)).
+The current `uv` workspace has **24 Python members**: 8 services, 7 shared packages, and 9 MCP servers. Sizes are approximate and intentionally not used as gates; the authoritative dependency graph is `pyproject.toml` + each member's `pyproject.toml`.
 
 ## Services (`services/*`)
 
-Deployable backend processes. Each ships a Dockerfile, declares a `[project] name` in its own `pyproject.toml`, and exposes one `__main__.py` entry point.
+Deployable backend processes or operator binaries. Each declares a `[project] name` and an import root under `src/`.
 
-| Member | LOC | Status | Purpose |
-|---|---|---|---|
-| **clawhip-daemon** | ~2,600 | scaffold (Story 7.8 pending) | Supervises the vendored clawhip subprocess; will own outbound sink rendering (event log → operator surface text). |
-| **console-cli** | ~1,400 | production | Local Typer CLI; full command-surface parity with Telegram (FR12). Published as a GHCR image but intentionally NOT in `docker compose up` — invoked ad-hoc on the host. |
-| **orchestrator-adapter** | ~1,500 | scaffold (Story 5.10 pending) | OMC subprocess supervisor; translates platform-task events into OMC contract. Public surface: `OMCRunner`. |
-| **registry-api** | ~2,600 | production | FastAPI HTTP application surface. Handles task creation, read paths (FR4/FR5/FR6), and operator decisions. Stateless container; delegates persistence to `registry-state`. Endpoints in [api-contracts.md](./api-contracts.md). |
-| **registry-state** | ~4,200 | production | **Single writer** for the SQLite WAL store + JSONL event log. Owns the materializer, idempotency cache (FR28, 7-day TTL), snapshots (FR25), and recovery (NFR-R2). Public exports: `Task`, `SessionRow`, `Event`, `IdempotencyCache`, `Snapshot`, `EventLogWriter`, `Materializer`. |
-| **telegram-gateway** | ~4,900 | production | aiogram v3 webhook + dispatcher. `AllowlistMiddleware` is the single auth gate (ADR-0001). Renders typed events into Telegram messages per [message-design.md](./message-design.md). |
-| **worker-wrapper** | ~3,100 | production | Claude Code CLI subprocess supervisor (Story 2.12). Emits typed events via the MCP bridge; uses `atomic_write_bytes` / `atomic_write_text` for crash-safe artifact writes. The only workspace member permitted to import `anthropic`. |
+| Member | Status | Purpose |
+|---|---|---|
+| **clawhip-daemon** | production | Supervises the vendored clawhip/event sink path and outbound rendering. |
+| **console-cli** | production | Local Typer CLI with parity to Telegram/operator HTTP flows. |
+| **metrics-subscriber** | production | Read-only event-log subscriber deriving bounded-cardinality metrics. |
+| **orchestrator-adapter** | production | OMC/runtime orchestration adapter and task-driver integration. |
+| **registry-api** | production | FastAPI HTTP application surface: tasks, decisions, replay, history, snapshots, health. |
+| **registry-state** | production | Single-writer materializer for registry state, event application, migrations, snapshots, and recovery. |
+| **telegram-gateway** | production | aiogram webhook/dispatcher, allowlist auth, Telegram command and rendering surface. |
+| **worker-wrapper** | production | Runtime subprocess supervision, worktree locks, budget enforcement, MCP client group. |
 
 ## Packages (`packages/*`)
 
-Shared libraries imported by multiple services and MCP servers. No deployment artifact; each is a `py.typed` package consumed via uv-workspace sources.
+Shared libraries imported by services and MCP servers. Packages must not import services or MCP servers.
 
-| Member | LOC | Public exports | Purpose |
-|---|---|---|---|
-| **capabilities** | ~160 | `Tier`, `CallerContext`, `CapabilityOk`, `CapabilityDenied`, `check_tier`, `check_tier_with_approval` | Capability-tier classification + enforcement helpers (FR37/FR38). Single source for tier semantics across all MCP surfaces. |
-| **events** | ~2,000 | `EventEnvelope`, `Actor`, `FrozenClock` + clock variants, `new_uuid7`, `FROZEN_EPOCH`, 32+ `*Payload` types, `REGISTRY`, `register`, canonical JSON serializers | The shared event envelope, schema registry, and canonical serializer. *Every* event flows through this envelope. The schema registry is the single source of truth for `(event_type, schema_version)` pairs. |
-| **idempotency** | ~550 | `IdempotencyCacheStore`, `CacheHit`, `IdempotencyConflict` | UUIDv7 idempotency-key + `TTLCache` + SQLite-backed durability (FR28). 7-day retention. |
-| **secret-hygiene** | ~2,000 | `AuditedSecret`, `AuditedBaseSettings`, `audited_secret_field`, `flush_pending_emissions` | Three-layer secret enforcement: `secret-hygiene-precommit` scanner, structlog sanitizer processor (wired *before* the renderer), `secret.accessed` audit event emission. Also owns the `commit-msg` hook. |
+| Member | Public role |
+|---|---|
+| **capabilities** | Capability tier types and enforcement helpers. |
+| **events** | Event envelope, canonical JSON, event payload/types helpers, schema/version primitives. |
+| **idempotency** | UUIDv7 idempotency cache and persistence helpers. |
+| **mcp_auth** | Bearer-token/JWT helpers for remote MCP transport (Phase 10). |
+| **mtls** | TLS context and certificate helper package for internal mTLS (Phase 11). |
+| **replay** | Historical replay, validation, snapshots, archive manifest, streaming progress (Phases 12–13). |
+| **secret-hygiene** | Secret scanner, audited settings/secret wrappers, structlog redaction, audit events. |
 
 ## MCP servers (`mcp-servers/*`)
 
-Stdio-only MCP servers. Each is a workspace member with the canonical three-name structure (directory `<x>` → project `<x>-mcp` → import root `<x>_mcp`). Subprocess-spawned by the orchestrator; **not** in `docker-compose.yml`.
+MCP servers expose tool/resource contracts to workers. Stdio remains the default transport; Phase 10 adds Streamable HTTP where explicitly configured. Every server follows the three-name convention: directory `<x>`, project `<x>-mcp`, import root `<x>_mcp`.
 
-| Member | LOC | Registered tools | Purpose |
-|---|---|---|---|
-| **clawhip-bridge** | ~425 | `emit_event`, `emit_blocker`, `emit_summary`, `emit_approval_request`, `emit_completion` | Append-only event-emission surface (Story 2.8). **Sole mutation path to the event log.** All other workspace code reads events; only this surface writes them. |
-| **session-registry** | ~420 | `session_register`, `session_heartbeat`, `session_close` | Session lifecycle — registration, heartbeat, close. Read-only session resource queries are exposed as MCP resources. |
-| **task-registry** | ~470 | `task_add_note`, `task_attach_artifact`, `task_emit_event` | Read-only task / approval-queue / blocker queries (via resources) plus bounded write tools for notes and artifacts. |
-| **git-mcp** | — | Tier-1 read + Tier-2 add/commit + Tier-3 push tools | Sandboxed git subprocess. Emits `git.*` events. |
-| **github-mcp** | — | Tier-1 issues/prs/reviews read + Tier-3 write tools | Scoped `GITHUB_MCP_SCOPED_TOKEN`. Emits `github.*` events. |
-| **verification-mcp** | — | Tier-2 `run_build` / `run_tests` | Sandboxed worktree subprocess. Emits `verification.completed` events. |
-| **memory-mcp** | — | Tier-1 read/search + Tier-2 write | SQLite FTS5 store. Emits `memory.written` events. |
-| **artifact-mcp** | — | Tier-1 get/list + Tier-2 put + Tier-3 delete | Content-addressed FS store. Emits `artifact.stored` / `artifact.deleted` events. |
+| Member | Purpose |
+|---|---|
+| **artifact** | Content-addressed artifact storage and retrieval. |
+| **browser** | Playwright-backed browser automation plane. |
+| **clawhip-bridge** | Append-only event-emission surface into the spine. |
+| **git** | Sandboxed git read/write/push tools with capability tiers. |
+| **github** | Scoped GitHub API tools with Tier-3 approval gates for writes. |
+| **memory** | SQLite FTS5 memory/wiki store. |
+| **session-registry** | Session lifecycle tools/resources. |
+| **task-registry** | Task resources and bounded task-note/artifact/event tools. |
+| **verification** | Sandboxed build/test recipe execution. |
 
-All fleet servers added in Phase 3 follow the [ADR-0010 MCP-server-authoring](../_bmad-output/adr/ADR-0010-mcp-server-authoring.md) pattern (three-name structure, capability-tier gates, event emission).
+## Workspace topology
 
-## Workspace topology (dependency direction)
-
-```
-mcp-servers/*         services/*          (operator surfaces)
+```text
+mcp-servers/*         services/*          operator surfaces
        │                  │
        └────────┬─────────┘
                 ▼
             packages/*
-       (capabilities, events,
-        idempotency, secret-hygiene)
                 │
                 ▼
-            stdlib + pinned 3p (pydantic, structlog, httpx, …)
+            stdlib + pinned third-party deps
 ```
 
-- `services/*` may import `packages/*`. Never another service.
-- `mcp-servers/*` may import `packages/*` and the public API of at most one service (declared in `pyproject [tool.bmad.mcp-binding]`).
-- `packages/*` may NOT import `services/*` or `mcp-servers/*`.
-- `upstream/*` is reachable only via its adapter shim (`upstream/<name>/adapter.py`).
+Rules enforced by `scripts/check_imports.py`:
 
-Enforced by `scripts/checks/check_imports.py` on PR. See [`_bmad-output/project-context.md`](../_bmad-output/project-context.md) Cat 2 + Cat 4 for the full ruleset.
+- `services/*` may import `packages/*`, not other services.
+- `packages/*` may not import `services/*` or `mcp-servers/*`.
+- `mcp-servers/*` may import `packages/*` and only declared public APIs.
+- `upstream/*` is reachable only via adapter shims.
 
-## Scaffold-replacement map (excerpt)
+## Phase-added components
 
-For the full table, see [exceptions.md](./exceptions.md).
-
-| Service | Replacement story |
+| Phase | Component additions |
 |---|---|
-| `registry-api` | Story 2.9 (HTTP API + `/v1/health`) ✓ |
-| `registry-state` | Stories 2.3–2.4 (SQLite schema + WAL writer) ✓ |
-| `telegram-gateway` | Story 3.1 (aiogram webhook receiver) ✓ |
-| `worker-wrapper` | Story 5.1 (worker lifecycle management) ✓ |
-| `orchestrator-adapter` | Story 5.10 (OMC subprocess supervision) — pending |
-| `clawhip-daemon` | Story 7.8 (clawhip-bridge MCP integration) — pending |
-| `console-cli` | Story 4.6 (host shim) ✓ |
+| 2 | `metrics-subscriber` service and observability/security packages/hooks. |
+| 3 | `git`, `github`, `verification`, `memory`, `artifact` MCP servers. |
+| 4 | `browser` MCP server. |
+| 10 | `mcp_auth` package and Streamable HTTP transport support. |
+| 11 | `mtls` package and `scripts/omb-ca/` tooling. |
+| 12 | `replay` package and replay HTTP routes. |
+| 13 | replay archive manifest + package streaming extensions. |
 
-A scaffold `__main__.py` is correct code until its replacement story lands. Don't add business logic on top of `signal.pause()`.
+## Cross-references
+
+- [architecture.md](./architecture.md) — runtime view and phase summaries.
+- [api-contracts.md](./api-contracts.md) — HTTP and MCP contract surfaces.
+- [`../_bmad-output/project-context.md`](../_bmad-output/project-context.md) — enforceable rules digest.

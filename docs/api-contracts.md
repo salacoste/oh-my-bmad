@@ -1,10 +1,10 @@
 # API contracts
 
-The platform exposes three categories of contract: HTTP (registry-api), MCP tools (three stdio servers), and Telegram bot commands. This file is an index, not a generated OpenAPI/MCP-schema dump — for exact shapes consult the source, which is `--strict`-typed Pydantic.
+The platform exposes three categories of contract: HTTP (`registry-api`), MCP tools/resources (9 servers; stdio by default, Streamable HTTP where configured), and operator commands (Telegram + console). This file is an index, not a generated OpenAPI/MCP-schema dump — for exact shapes consult the source, which is `--strict`-typed Pydantic.
 
 ## HTTP API — `registry-api`
 
-Versioned at `/v1`. Versions are additive; `/v1` semantics are frozen once shipped. All handlers are async; request/response models are Pydantic v2 with `extra="forbid"`. Errors flow through a single registered exception handler that maps `<svc>Error` → `{error_id, error_code, message, trace_id}`.
+Versioned at `/v1`. Versions are additive; `/v1` semantics are frozen once shipped. All handlers are async; request/response models are Pydantic v2 with `extra="forbid"`. Errors normally flow through the registered exception handler that maps `<svc>Error` → `{error_id, error_code, message, trace_id}`. Replay/archive failures on replay and validate endpoints use route-local RFC 7807 ProblemDetails so invalid archive configuration fails closed without changing global error behavior.
 
 | Path | Method | Handler | Purpose |
 |---|---|---|---|
@@ -13,6 +13,11 @@ Versioned at `/v1`. Versions are additive; `/v1` semantics are frozen once shipp
 | `/v1/tasks/{task_id}/decisions` | POST | `post_decision` | Operator decisions: approve / reject / stop / retry (Story 6.4). |
 | `/v1/tasks/{task_id}/logs/digest` | GET | `get_logs_digest` | LLM-summarized event digest for a task (Story 7.3, FR5). |
 | `/v1/tasks/{task_id}/events` | GET | `get_task_events` | Raw event stream with pagination (Story 7.5, FR6). |
+| `/v1/events/replay` | GET | `get_events_replay` | Read-only point-in-time replay from hot logs plus optional validated archives (FR135, FR139). |
+| `/v1/tasks/{task_id}/history` | GET | `get_task_history` | Hot-log-only task event history (FR136); archived task history is intentionally out of scope. |
+| `/v1/events/replay/validate` | GET | `get_events_replay_validate` | Compare replayed state to live projection and return field diffs (FR137). |
+| `/v1/events/replay/snapshots` | GET | `get_replay_snapshots` | List replay snapshots (FR138), hot-log-only. |
+| `/v1/events/replay/snapshots` | POST | `post_replay_snapshot` | Create replay snapshot using `HOT_ONLY_REPLAY`; archive env vars are bypassed (FR141). |
 
 Health endpoints (`/healthz`, `/readyz`, `/v1/health` — FR17) emit **no** log lines under normal operation. A pytest assertion captures `structlog` output during the call to assert silence.
 
@@ -24,7 +29,7 @@ Both are bound to the structlog context at the middleware layer **before** any h
 
 ## MCP tool catalog
 
-All three servers use stdio transport (`mcp.server.stdio.stdio_server()`). Imports of `mcp.server.sse` / `mcp.server.streamable_http` are rejected by static analysis. Tool handlers are pure async functions with pydantic-validated input and pydantic-modelled output; capability-tier middleware runs at every boundary.
+The fleet has 9 MCP servers. Stdio is the default transport; Phase 10 added Streamable HTTP as an explicit opt-in for remote MCP deployments. Unplanned transports remain rejected by static analysis. Tool handlers are pure async functions with pydantic-validated input and pydantic-modelled output; capability-tier middleware runs at every boundary.
 
 Errors raise `ToolError(...)` for structured client-visible errors; never `raise ValueError(...)` (untyped). Tool error responses are mapped through the internal-vs-external error boundary — stack traces, file paths, and module names never reach the calling LLM context.
 
@@ -88,9 +93,9 @@ uv run python -m console_cli --help
 
 The CLI is published as a GHCR image (`ghcr.io/<owner>/oh-my-bmad-console-cli`) but is NOT in `docker compose up` by design — it's invoked ad-hoc on the host. See [README](../README.md) §"Upgrading" and [exceptions.md](./exceptions.md).
 
-### Phase 3 fleet MCP servers
+### Optional fleet MCP servers
 
-Five additional stdio servers introduced in Phase 3 (ADR-0010 pattern). Each declares a module-level `TIER_MAP`; every handler calls `check_tier` (Tier-0..2) or `check_tier_with_approval` (Tier-3) before any side effect. `caller_trace_id` is a required keyword-only input on every tool, validated by the byte-identical `validate_caller_trace_id` helper. Mutating spine events route through the single FR26 writer (clawhip-bridge). Ships in the base image, not as a compose service (P3-I3).
+Fleet servers introduced across Phase 3 and Phase 4 (ADR-0010 pattern). Each declares a module-level `TIER_MAP`; every handler calls `check_tier` (Tier-0..2) or `check_tier_with_approval` (Tier-3) before any side effect. `caller_trace_id` is a required keyword-only input on every tool, validated by the byte-identical `validate_caller_trace_id` helper. Mutating spine events route through the single FR26 writer (clawhip-bridge). Most ship in the base image and are spawned only when configured; browser automation uses the Phase 4 Playwright container discipline.
 
 #### `git-mcp`
 
@@ -149,6 +154,17 @@ SQLite FTS5 store for persistent key-value memory and full-text search.
 | `memory_search` | 1 (read) | Full-text search via FTS5 `MATCH` + `bm25` ranking |
 | `memory_write` | 2 (write) | Upsert a key-value entry |
 
+
+#### `browser-mcp`
+
+Playwright-backed browser automation server. Core navigation and snapshot operations are low-tier; JavaScript evaluation and similarly risky actions are Tier-3 approval-gated. Browser execution is containerized and image-pinned by digest.
+
+| Tool family | Tier | Effect |
+|---|---|---|
+| Navigation / snapshot / screenshot | 1 | Inspect pages and capture metadata/artifacts |
+| Interaction / tab management | 2 | Click/type/select/wait and manage browser state |
+| Evaluation / file-sensitive operations | 3 | Execute page JavaScript or high-risk browser operations |
+
 #### `artifact-mcp`
 
 Content-addressed filesystem store; objects keyed by `sha256` digest.
@@ -159,6 +175,18 @@ Content-addressed filesystem store; objects keyed by `sha256` digest.
 | `artifact_list` | 1 (read) | List stored artifacts |
 | `artifact_put` | 2 (write) | Store a base64-encoded payload (content-addressed) |
 | `artifact_delete` | 3 (approval-gated) | Delete an artifact by content hash |
+
+## Replay and event-log lifecycle contracts
+
+Phase 12/13 replay contracts live in `packages/replay` and `services/registry-api/src/registry_api/routes/replay.py`:
+
+- `archive_manifest_path` passed directly to package APIs has highest precedence.
+- `REPLAY_ARCHIVE_MANIFEST` is the primary env var; `EVENT_LOG_ARCHIVE_MANIFEST` is a legacy alias. If both point to different files, replay fails closed.
+- `lifecycle-manifest.json` schema version `1` references archived JSONL segments by relative path and `sha256`; segments are rejected on checksum mismatch, missing file, malformed metadata, duplicate keys, or sequence overlap.
+- `HOT_ONLY_REPLAY` forces hot-log-only behavior and is used by snapshot creation.
+- `get_task_history` remains hot-log-only.
+- `replay_events_stream()` is package-only; there is no public HTTP streaming endpoint yet.
+- Destructive prune/apply is not implemented and requires a separate ADR plus operator approval gate.
 
 ## Cross-references
 
