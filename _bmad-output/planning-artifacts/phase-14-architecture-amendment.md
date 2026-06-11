@@ -21,22 +21,29 @@ Phase 14 keeps the event-log lifecycle path fail-safe: archive discovery and rep
 - If code is added, targeted replay/lifecycle tests plus ruff/mypy for touched packages.
 
 ## Implementation Handoff Boundary (Autopilot Slice)
-The implementation handoff for this run is intentionally docs/status-only. The allowed tracked write set is:
+The implementation handoff for this run is a package-only lifecycle dry-run
+planner slice. The allowed tracked write set is:
 
 - `docs/adr/0025-event-log-lifecycle-operations.md`
 - `_bmad-output/planning-artifacts/phase-14-*.md`
-- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `packages/replay/src/replay/archive_manifest.py`
+- `packages/replay/src/replay/lifecycle.py`
+- `packages/replay/src/replay/test_lifecycle.py`
+- `packages/replay/src/replay/__init__.py`
 - `docs/operator-runbook.md`
 
-The forbidden write set for this run is any runtime code under:
-
-- `packages/replay/src/`
+The forbidden write set for this run is runtime code under:
 - `services/registry-api/src/`
 - `services/registry-state/src/`
 - `services/worker-wrapper/src/`
 - `mcp-servers/`
 
-If a later story implements a dry-run planner, it must name exact modules and tests before code work starts. The likely future touchpoints are `packages/replay` manifest/lifecycle helpers and route-level contract tests only if an API surface is explicitly approved. They are not part of this slice.
+The package-only dry-run planner may additively expose read-only helpers and
+immutable plan dataclasses from `packages/replay` while preserving existing
+`replay.__init__` exports; it must not add HTTP routes, API-contract
+changes, task-history archive expansion, or destructive apply helpers. Route-level
+contract tests are only allowed in a future story if an API surface is explicitly
+approved.
 
 ## Deliberate-Mode Safety Pre-Mortem
 1. **Accidental destructive surface appears.** A future executor adds `apply=True`, `--apply`, `delete`, `unlink`, `truncate`, `rename`, or move behavior while claiming dry-run support. Mitigation for this run: no runtime files may change; verification checks the diff has no code files under the forbidden write set.
@@ -48,6 +55,9 @@ If a later story implements a dry-run planner, it must name exact modules and te
 - Status check: every `development_status` value is a valid BMad status.
 - ADR check: ADR-0025 contains explicit non-authorization of destructive apply and future operator-gate preconditions.
 - Contract check: no API-contract or route file changed in this slice.
+- Lifecycle check: package code exposes only read-only dry-run planner surfaces
+  and contains no `apply`, `delete`, `truncate`, `move`, `rewrite`, or `chmod`
+  implementation path.
 
 ## Future Apply Gate Refinement From Review
 Future dry-run plan identity must be content-addressed. The operator authorization must bind to the exact dry-run plan hash, and apply must re-compute that hash immediately before any mutation. Authorization records must be event-spine/audit-ledger durable; a transient terminal display is not enough.

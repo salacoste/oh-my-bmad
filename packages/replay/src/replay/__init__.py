@@ -21,6 +21,15 @@ from replay.errors import (
     ReplayArchiveManifestError,
     ReplayArchiveMissingSegmentError,
 )
+from replay.lifecycle import (
+    LifecycleArchiveCoverage,
+    LifecycleBlocker,
+    LifecycleDecision,
+    LifecycleDryRunPlan,
+    LifecycleRetentionPolicy,
+    LifecycleSegmentIdentity,
+    create_lifecycle_dry_run_plan,
+)
 from replay.models import ReplayMemoryError, ReplayMetadata, ReplayProgress, ReplayResult
 from replay.snapshots import (
     SnapshotInfo,
@@ -50,10 +59,17 @@ __all__ = [
     "ReplayMemoryError",
     "ReplayMetadata",
     "ReplayResult",
+    "LifecycleArchiveCoverage",
+    "LifecycleBlocker",
+    "LifecycleDecision",
+    "LifecycleDryRunPlan",
+    "LifecycleRetentionPolicy",
+    "LifecycleSegmentIdentity",
     "SnapshotInfo",
     "ValidationFieldDiff",
     "ValidationResult",
     "create_snapshot",
+    "create_lifecycle_dry_run_plan",
     "find_nearest_snapshot",
     "list_snapshots",
     "load_snapshot",

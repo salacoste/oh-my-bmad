@@ -24,7 +24,7 @@ The current system therefore needs a lifecycle operations boundary before any de
 
 ### Decision 1 — Non-destructive dry-run is the only default operation
 
-Phase 14 may introduce lifecycle planning artifacts and dry-run outputs that classify hot event segments as eligible, retained, skipped, or blocked. A dry-run must not delete, truncate, move, rewrite, chmod, or mutate event files or archive manifests.
+Phase 14 may introduce lifecycle planning artifacts and dry-run outputs that classify hot event segments as eligible, retained, or blocked. A dry-run must not delete, truncate, move, rewrite, chmod, or mutate event files or archive manifests.
 
 A valid dry-run can read:
 

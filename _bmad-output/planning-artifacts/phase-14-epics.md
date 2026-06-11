@@ -9,9 +9,14 @@
 Story IDs intentionally use 69-73 to continue after Phase 13 Epics 64-68.
 
 ## Autopilot Slice Selection
-This run implements only Epic 69 and the design artifact portion of Epic 70:
+This run activates Epic 71 as the package-only non-destructive lifecycle
+dry-run planner slice while preserving the previously completed Epic 69/Epic 70
+safety artifacts:
 
 - Epic 69: sprint-status hygiene + Phase 14 planning artifacts.
 - Epic 70: ADR-0025 event-log lifecycle operation boundaries and operator gate.
+- Epic 71: package-only non-destructive lifecycle dry-run planner with
+  content-addressed plan hash.
 
-Epic 71 (non-destructive lifecycle dry-run planner contract), Epic 72 (archive-aware task-history decision), and Epic 73 (retrospective) remain future Phase 14 work. They must not be silently implemented in this run.
+Epic 72 (archive-aware task-history decision) and Epic 73 (retrospective) remain
+future Phase 14 work. They must not be silently implemented in this run.

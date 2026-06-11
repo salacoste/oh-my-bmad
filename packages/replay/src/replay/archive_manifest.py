@@ -191,6 +191,11 @@ def _hot_segments(event_log_dir: Path) -> list[SegmentEvents]:
     return segments
 
 
+def collect_hot_segments(event_log_dir: Path) -> list[SegmentEvents]:
+    """Return deterministic read-only hot segment inventory for lifecycle planning."""
+    return _hot_segments(event_log_dir)
+
+
 def load_archive_manifest(
     *,
     event_log_dir: Path,
@@ -333,6 +338,7 @@ __all__ = [
     "HotOnlyReplaySentinel",
     "SegmentEvents",
     "SegmentKey",
+    "collect_hot_segments",
     "collect_replay_envelopes",
     "load_archive_manifest",
     "resolve_archive_manifest_path",

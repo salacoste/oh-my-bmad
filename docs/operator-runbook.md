@@ -1177,11 +1177,33 @@ When a page fires that matches these descriptions, refer to the owning story.
 
 ### Phase 14 event-log lifecycle operations boundary
 
-ADR-0025 authorizes lifecycle planning and validation only; it does not authorize hot-log deletion, truncation, archive mutation, or destructive apply. The safe operator sequence for future lifecycle work is:
+ADR-0025 authorizes lifecycle planning and validation only; it does not authorize hot-log deletion, truncation, archive mutation, or destructive apply. Phase 14 ships a package-only dry-run planner in `replay.create_lifecycle_dry_run_plan(...)`; it returns immutable plan data and does not write an artifact itself.
+
+Example local inspection:
+
+```python
+from datetime import UTC, datetime
+from pathlib import Path
+
+from replay import create_lifecycle_dry_run_plan
+
+plan = create_lifecycle_dry_run_plan(
+    event_log_dir=Path("/var/lib/oh-my-bmad/events"),
+    archive_manifest_path=Path("/var/lib/oh-my-bmad/archive/lifecycle-manifest.json"),
+    retain_hot_days=30,
+    now=datetime.now(UTC),
+)
+print(plan.artifact_filename)
+print(plan.canonical_json())
+```
+
+The plan hash covers schema version, safety policy version, retention inputs, segment identities, archive coverage, decisions, and blockers. `generated_at` is intentionally excluded so the same safety inputs keep the same `plan_hash`.
+
+The safe operator sequence for future lifecycle work is:
 
 1. Validate the archive manifest and referenced segments.
 2. Validate replay against the retained hot+archive event set.
-3. Inspect a future non-destructive dry-run plan. That plan must be persisted as an immutable/content-addressed artifact or event with a stable hash over the exact segment set, eligibility decisions, blockers, and retention inputs.
+3. Inspect the non-destructive dry-run plan and persist it outside the hot event-log directory as an immutable/content-addressed artifact or event.
 4. Record explicit Tier-3/operator authorization for that exact plan hash in the auditable event spine or an equally durable audit ledger.
 5. Only a separately approved future apply command may mutate hot logs, and it must re-compute the plan hash immediately before mutation and fail closed on any mismatch.
 
