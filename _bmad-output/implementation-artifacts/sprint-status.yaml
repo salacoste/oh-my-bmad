@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-06-10T22:55:00+03:00
-current_phase: 13  # Phase 13 COMPLETE — Event Log Lifecycle Management (Epics 64-68)
+last_updated: 2026-06-11T22:55:57+03:00
+current_phase: 14  # Phase 14 COMPLETE — Event Log Lifecycle Operations (Epics 69-73)
 
 development_status:
   # =========================================================================
@@ -691,11 +691,40 @@ development_status:
   68-1-full-ci-validation: done  # 57 replay/route tests + ruff/mypy/check_imports/check_single_writer green
   68-2-phase-13-retrospective: done  # _bmad-output/retrospectives/phase-13-retrospective.md
 
+  # ── Phase 14: Event Log Lifecycle Operations (P14-ELLO) ──────────────
+  epic-69: done  # Sprint-status hygiene + Phase 14 planning artifacts
+  69-1-sprint-status-hygiene-and-planning-artifacts: done  # FR144; Phase 14 PRD/architecture/epics established
+
+  epic-70: done  # ADR/operator gate for lifecycle operations
+  70-1-adr-0025-lifecycle-operations-boundary: done  # FR145; destructive apply remains future operator-gated work
+
+  epic-71: done  # Non-destructive lifecycle dry-run planner
+  71-1-lifecycle-dry-run-planner-contract: done  # FR146; content-addressed plan hash, no mutation/apply path
+
+  epic-72: done  # Archived task-history boundary and future-story split
+  72-1-hot-only-task-history-archive-boundary: done  # FR147; task-history remains hot-log-only; archive-aware history future
+
+  epic-73: done  # Verification, docs, and retrospective
+  73-1-phase-14-verification-docs-retrospective: done  # FR148 closure; docs/status/retrospective only; no runtime/API diff
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
 
+
+  - date: "2026-06-11"
+    event: phase-14-complete
+    from: 13
+    to: 14
+    reason: >
+      Phase 14 Event Log Lifecycle Operations COMPLETE. Delivered sprint-status
+      hygiene and planning artifacts (Epic 69), ADR-0025 operator-gated lifecycle
+      boundaries (Epic 70), non-destructive lifecycle dry-run planner contract
+      (Epic 71), hot-only task-history archive-boundary lock (Epic 72), and
+      verification/docs/retrospective closure (Epic 73). No destructive
+      lifecycle apply/delete/truncate/move/rewrite path and no archive-aware
+      task-history implementation were introduced.
 
   - date: "2026-06-10"
     event: phase-13-complete
