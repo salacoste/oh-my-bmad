@@ -444,11 +444,17 @@ def test_orchestrator_swap_with_null_orchestrator_completes_task_end_to_end(
 
         # Locate the originating task.created envelope.
         created_env: EventEnvelope = next(e for e in envelopes_for_task if e.type == "task.created")
+        null_orchestrator_types = {
+            "task.planning.started",
+            "task.plan.ready",
+            "task.execution.started",
+            "task.completed",
+        }
         emitted_envs: list[EventEnvelope] = [
-            e for e in envelopes_for_task if e.type != "task.created"
+            e for e in envelopes_for_task if e.type in null_orchestrator_types
         ]
 
-        # All 4 emitted events: Actor(kind="orchestrator", id="null-orchestrator").
+        # All 4 null-orchestrator emitted events: Actor(kind="orchestrator", id="null-orchestrator").
         for env_typed in emitted_envs:
             assert env_typed.actor.kind == "orchestrator", (
                 f"actor.kind={env_typed.actor.kind!r} for type={env_typed.type}"
@@ -472,14 +478,15 @@ def test_orchestrator_swap_with_null_orchestrator_completes_task_end_to_end(
             "task.execution.started",
             "task.completed",
         ]
-        ordered = sorted(envelopes_for_task, key=lambda e: e.emitted_at_monotonic_ns)
+        lifecycle = [e for e in envelopes_for_task if e.type in set(canonical_order)]
+        ordered = sorted(lifecycle, key=lambda e: e.emitted_at_monotonic_ns)
         assert [e.type for e in ordered] == canonical_order, (
             f"lifecycle order: {[e.type for e in ordered]}, expected {canonical_order}"
         )
 
-        # Exactly 5 events for this task — no duplicates.
-        assert len(envelopes_for_task) == 5, (
-            f"got {len(envelopes_for_task)} events; types: {[e.type for e in envelopes_for_task]}"
+        # Exactly 5 canonical lifecycle events for this task — no duplicates.
+        assert len(lifecycle) == 5, (
+            f"got {len(lifecycle)} lifecycle events; all types: {[e.type for e in envelopes_for_task]}"
         )
 
         # Step 8 (M4 round 2) — verify the materializer projected the

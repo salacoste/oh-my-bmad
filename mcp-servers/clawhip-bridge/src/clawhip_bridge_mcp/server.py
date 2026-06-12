@@ -52,6 +52,7 @@ from events.event_log_writer import (  # noqa: IMP001 — events is packages/
     recover_all_logs,
 )
 from mcp.server.fastmcp import FastMCP
+from registry_state.domain.event_types import ensure_registered
 
 log = logging.getLogger(__name__)
 
@@ -184,6 +185,11 @@ def build_server(
     Returns:
         A ``FastMCP`` instance ready to ``mcp.run()`` on stdio.
     """
+    # This MCP process emits service-owned canonical lifecycle events.
+    # In container/runtime usage it starts in a fresh interpreter where
+    # importing ``events`` registers only package-local types, so install the
+    # registry-state canonical event schemas before any tool call validates.
+    ensure_registered()
     writer = EventLogWriter(base_dir=base_dir, clock=clock)
 
     @contextlib.asynccontextmanager

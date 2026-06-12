@@ -116,6 +116,7 @@ from events.clock import Clock
 from events.event_log_writer import EventLogWriter
 from events.ids import new_event_id
 from events.log_reader import read_log_lines
+from registry_state.domain.event_types import ensure_registered
 
 log = logging.getLogger("null-orchestrator")
 
@@ -293,7 +294,7 @@ async def _emit_lifecycle_for_task(
     # ---- 2. task.plan.ready ------------------------------------------
     env = EventEnvelope.create(
         event_id=new_event_id(clock=clock),
-        schema_version="1.0.0",
+        schema_version="1.1.0",
         type="task.plan.ready",
         emitted_at=clock.now(),
         emitted_at_monotonic_ns=clock.monotonic_ns(),
@@ -313,7 +314,7 @@ async def _emit_lifecycle_for_task(
     session_id = new_session_id(clock=clock)
     env = EventEnvelope.create(
         event_id=new_event_id(clock=clock),
-        schema_version="1.0.0",
+        schema_version="1.2.0",
         type="task.execution.started",
         emitted_at=clock.now(),
         emitted_at_monotonic_ns=clock.monotonic_ns(),
@@ -334,7 +335,7 @@ async def _emit_lifecycle_for_task(
     # ---- 4. task.completed -------------------------------------------
     env = EventEnvelope.create(
         event_id=new_event_id(clock=clock),
-        schema_version="1.0.0",
+        schema_version="1.3.0",
         type="task.completed",
         emitted_at=clock.now(),
         emitted_at_monotonic_ns=clock.monotonic_ns(),
@@ -498,6 +499,13 @@ async def _async_main() -> None:
         base_dir,
         poll_interval_s,
     )
+    # The fixture emits canonical task lifecycle events directly via
+    # EventEnvelope.create(), so it must install the same service-owned
+    # event schema registrations that production emitters rely on. Unit
+    # tests used to call ensure_registered() externally, but the Docker
+    # runtime imports this module in a fresh process where only package-local
+    # event types are registered.
+    ensure_registered()
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()

@@ -23,6 +23,11 @@ _SOURCE_FILES: tuple[str, ...] = (
     "tests/fixtures/scripted_worker_stub/__init__.py",
     "tests/fixtures/scripted_worker_stub/__main__.py",
     "uv.lock",
+    # The image vendors workspace wheels; changes to the embedded clawhip
+    # MCP server must invalidate the fixture image even when uv.lock is
+    # unchanged.
+    "mcp-servers/clawhip-bridge/src/clawhip_bridge_mcp/server.py",
+    "mcp-servers/clawhip-bridge/src/clawhip_bridge_mcp/__main__.py",
 )
 
 
