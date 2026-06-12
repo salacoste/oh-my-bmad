@@ -80,6 +80,7 @@ dev = [
     # Test-only deps elevated from service-level groups so CI's `uv sync`
     # at the workspace root materialises them for `pytest -m "not slow"`.
     "asgi-lifespan>=2.1",
+    "asyncpg>=0.30",
     "httpx>=0.27",
     # Story 14.2 (NFR-O11) — mutation-testing harness. cosmic-ray mutates
     # source IN PLACE under VCS (mutmut copies to mutants/ that this uv
