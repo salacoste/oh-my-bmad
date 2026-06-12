@@ -288,12 +288,32 @@ Key lifecycle decisions:
 - **No public streaming endpoint yet.** `replay_events_stream()` is package-only and yields frozen `ReplayProgress` updates plus a terminal `ReplayResult` equivalent to `replay_events()`.
 - **Error mapping is route-local.** Replay/archive failures on replay and validate endpoints return route-local ProblemDetails; global `/errors/internal` behavior is unchanged.
 
-## Future work beyond Phase 13
+
+## Phase 14: Event Log Lifecycle Operations
+
+Phase 14 shipped 2026-06-11 as Event Log Lifecycle Operations (P14-ELLO). Scope: define the operator-safe lifecycle boundary after Phase 13 archive-aware replay, without authorizing destructive mutation.
+
+New FRs: FR144 (sprint-status hygiene), FR145 (ADR/operator gate), FR146 (non-destructive lifecycle dry-run), FR147 (archived task-history boundary), FR148 (operator docs safe sequence).
+
+Key lifecycle-operation decisions:
+
+- **ADR-0025 gates destructive apply.** Planning, validation, and non-destructive dry-run behavior are authorized; deletion/truncation/archive mutation requires a future story and operator gate.
+- **Plan identity must be stable.** Future apply authorization must bind to the exact dry-run plan hash and re-compute that hash immediately before mutation.
+- **Task history remains hot-log-only.** Archive-aware task history changes an operator-facing query contract and remains future work with separate tests.
+- **Object storage and scheduled retention stay future.** Automatic lifecycle jobs wait until dry-run/apply safety is proven.
+
+## Phase 15: Lifecycle Documentation Reconciliation and Backlog Triage
+
+Phase 15 shipped 2026-06-12 as a docs/status-only reconciliation slice. Scope: update deeper API, operator, data-model, and architecture docs so they consistently reflect Phase 14 boundaries, and surface future lifecycle candidates without reopening implementation scope.
+
+No runtime, API, service, package, MCP, dependency, or deployment behavior changed.
+
+## Future work beyond Phase 15
 
 The following items remain unshipped or intentionally out of scope:
 
-- **Event-log prune/apply** -- destructive lifecycle operations require a separate ADR and explicit operator gate.
-- **Archived task history** -- `GET /v1/tasks/{task_id}/history` remains hot-log-only until prune semantics are designed.
+- **Event-log prune/apply** -- destructive lifecycle operations require a separate ADR/story, exact dry-run plan-hash authorization, replay validation, rollback evidence, and explicit operator gate.
+- **Archived task history** -- `GET /v1/tasks/{task_id}/history` remains hot-log-only until a separate archive-aware history contract and tests are designed.
 - **Object-storage lifecycle jobs** -- archive manifests currently reference validated local/archive paths; automatic S3/B2/R2 lifecycle management is future work.
 - **Scheduled jobs** -- time-based task scheduling and lifecycle automation.
 - **Web dashboard** -- browser-based operator surface.

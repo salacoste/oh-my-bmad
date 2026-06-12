@@ -7,8 +7,8 @@
 - **Type:** monorepo (`uv` workspace, 24 Python members) — single backend platform plus optional MCP fleet.
 - **Primary language:** Python 3.12 (locked).
 - **Architecture:** event-sourced, append-only JSONL event log, single-writer materialization, capability-tier-gated MCP boundaries, and replayable state.
-- **Current repo state:** Phase 14 complete as of 2026-06-11 — Event Log Lifecycle Operations after Event Log Lifecycle Management.
-- **Latest tagged release:** `v1.3.0`; the checked-out `main` branch contains later Phase 10–14 work.
+- **Current repo state:** Phase 15 complete as of 2026-06-12 — Lifecycle Documentation Reconciliation and Backlog Triage after Event Log Lifecycle Operations.
+- **Latest tagged release:** `v1.3.0`; the checked-out `main` branch contains later Phase 10–15 work.
 
 ## Quick Reference
 
@@ -74,7 +74,7 @@
 - [`../_bmad-output/planning-artifacts/prd.md`](../_bmad-output/planning-artifacts/prd.md)
 - [`../_bmad-output/planning-artifacts/architecture.md`](../_bmad-output/planning-artifacts/architecture.md)
 - [`../_bmad-output/planning-artifacts/epics.md`](../_bmad-output/planning-artifacts/epics.md)
-- Phase amendments: [`phase-10`](../_bmad-output/planning-artifacts/phase-10-prd-amendment.md), [`phase-11`](../_bmad-output/planning-artifacts/phase-11-prd-amendment.md), [`phase-12`](../_bmad-output/planning-artifacts/phase-12-prd-amendment.md), [`phase-13`](../_bmad-output/planning-artifacts/phase-13-prd-amendment.md), [`phase-14`](../_bmad-output/planning-artifacts/phase-14-prd-amendment.md).
+- Phase amendments: [`phase-10`](../_bmad-output/planning-artifacts/phase-10-prd-amendment.md), [`phase-11`](../_bmad-output/planning-artifacts/phase-11-prd-amendment.md), [`phase-12`](../_bmad-output/planning-artifacts/phase-12-prd-amendment.md), [`phase-13`](../_bmad-output/planning-artifacts/phase-13-prd-amendment.md), [`phase-14`](../_bmad-output/planning-artifacts/phase-14-prd-amendment.md), [`phase-15`](../_bmad-output/planning-artifacts/phase-15-prd-amendment.md).
 - [`../_bmad-output/implementation-artifacts/sprint-status.yaml`](../_bmad-output/implementation-artifacts/sprint-status.yaml) — current state and audit trail.
 
 ## Getting Started
@@ -103,10 +103,11 @@
 | 12 | Historical event replay |
 | 13 | Event log lifecycle management: archive manifest, hot+archive replay, package streaming |
 | 14 | Event log lifecycle operations: ADR-0025 operator gate, non-destructive dry-run boundary, hot-only task-history lock |
+| 15 | Lifecycle documentation reconciliation and backlog triage |
 
 ## Scope of this refresh
 
-- **Mode:** documentation canonicalization after Phase 14 closure.
+- **Mode:** documentation canonicalization after Phase 15 docs/backlog reconciliation.
 - **Date:** 2026-06-11.
 - **Project type:** backend monorepo / autonomous development platform.
 - **State file:** [project-scan-report.json](./project-scan-report.json) may lag this index; use sprint-status as canonical.

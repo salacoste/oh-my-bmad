@@ -38,7 +38,7 @@ dependency or import regression, not a runtime failure.
 
 ## Event replay and archive lifecycle operations
 
-Phase 12/13 replay is read-only by default. It can include archived JSONL segments when an archive manifest is configured, but it never prunes or deletes hot logs. Treat any destructive lifecycle action as future work requiring a separate ADR and operator approval gate.
+Phase 12-14 replay and lifecycle operations are read-only by default. Replay can include archived JSONL segments when an archive manifest is configured, and Phase 14 adds ADR-0025 plus non-destructive dry-run planning, but no shipped path prunes, deletes, truncates, moves, rewrites, or chmods hot logs. Treat any destructive lifecycle action as future work requiring a separate ADR/story and operator approval gate bound to the exact dry-run plan hash.
 
 ### Replay from hot logs only
 

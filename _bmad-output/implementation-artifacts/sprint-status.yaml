@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-06-11T22:55:57+03:00
-current_phase: 14  # Phase 14 COMPLETE — Event Log Lifecycle Operations (Epics 69-73)
+last_updated: 2026-06-12T04:27:31+03:00
+current_phase: 15  # Phase 15 COMPLETE — Lifecycle Documentation Reconciliation and Backlog Triage (Epics 74-75)
 
 development_status:
   # =========================================================================
@@ -707,10 +707,31 @@ development_status:
   epic-73: done  # Verification, docs, and retrospective
   73-1-phase-14-verification-docs-retrospective: done  # FR148 closure; docs/status/retrospective only; no runtime/API diff
 
+  # ── Phase 15: Lifecycle Documentation Reconciliation and Backlog Triage (P15-LDRBT) ──────────────
+  epic-74: done  # Lifecycle docs reconciliation
+  74-1-lifecycle-docs-reconciliation: done  # FR149; API/runbook/data/architecture docs aligned to Phase 14 boundary
+
+  epic-75: done  # Future-candidate backlog triage
+  75-1-lifecycle-future-candidate-triage: done  # FR150-FR151; future candidates surfaced without implementation scope
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+
+  - date: "2026-06-12"
+    event: phase-15-complete
+    from: 14
+    to: 15
+    reason: >
+      Phase 15 Lifecycle Documentation Reconciliation and Backlog Triage
+      COMPLETE. Reconciled API, operator, data-model, and architecture docs
+      with the Phase 14 lifecycle operations boundary, preserved ADR-0025 and
+      hot-log-only task-history constraints, and surfaced future candidates for
+      archive-aware task-history, destructive lifecycle apply, object-storage
+      lifecycle policies, and scheduled retention. No runtime/API implementation
+      files changed.
 
 
   - date: "2026-06-11"

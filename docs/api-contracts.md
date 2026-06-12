@@ -178,7 +178,7 @@ Content-addressed filesystem store; objects keyed by `sha256` digest.
 
 ## Replay and event-log lifecycle contracts
 
-Phase 12/13 replay contracts live in `packages/replay` and `services/registry-api/src/registry_api/routes/replay.py`:
+Phase 12-14 replay and lifecycle-operation contracts live in `packages/replay`, `services/registry-api/src/registry_api/routes/replay.py`, and ADR-0025:
 
 - `archive_manifest_path` passed directly to package APIs has highest precedence.
 - `REPLAY_ARCHIVE_MANIFEST` is the primary env var; `EVENT_LOG_ARCHIVE_MANIFEST` is a legacy alias. If both point to different files, replay fails closed.
@@ -186,7 +186,7 @@ Phase 12/13 replay contracts live in `packages/replay` and `services/registry-ap
 - `HOT_ONLY_REPLAY` forces hot-log-only behavior and is used by snapshot creation.
 - `get_task_history` remains hot-log-only; archive manifest env vars affect replay/validate endpoints, not task-history source selection.
 - `replay_events_stream()` is package-only; there is no public HTTP streaming endpoint yet.
-- Destructive prune/apply is not implemented and requires a separate ADR plus operator approval gate.
+- Phase 14 authorizes planning/validation and non-destructive lifecycle dry-run data only; destructive prune/apply is not implemented and requires a separate ADR/story plus operator approval gate bound to the exact dry-run plan hash.
 
 ## Cross-references
 

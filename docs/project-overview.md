@@ -4,11 +4,11 @@
 
 **oh-my-bmad** is a self-hosted personal autonomous-development platform. Telegram and a local console drive supervised CLI workers through a typed event spine, backed by an append-only JSONL event log and a single-writer materialized state store. The platform is designed so runtimes, MCP tools, browser automation, transports, and deployment hardening can evolve without breaking the spine.
 
-The current repository state is **Phase 14 complete** (2026-06-11): Event Log Lifecycle Operations on top of Phase 13 Event Log Lifecycle Management. The latest tagged release remains `v1.3.0`; this checkout contains later Phase 10–14 work.
+The current repository state is **Phase 15 complete** (2026-06-12): Lifecycle Documentation Reconciliation and Backlog Triage on top of Phase 14 Event Log Lifecycle Operations. The latest tagged release remains `v1.3.0`; this checkout contains later Phase 10–15 work.
 
 ## Status
 
-- **Current phase:** 14 complete — Event Log Lifecycle Operations.
+- **Current phase:** 15 complete — Lifecycle Documentation Reconciliation and Backlog Triage.
 - **Repository type:** monorepo (`uv` workspace, 24 Python members).
 - **Language:** Python 3.12 (locked).
 - **Deployment:** Docker Compose v2 with named volume (`oh-my-bmad-data`); optional profiles for fleet features.
@@ -32,6 +32,7 @@ The current repository state is **Phase 14 complete** (2026-06-11): Event Log Li
 | 12 | Historical event replay — point-in-time replay, validation, snapshots, task history |
 | 13 | Event log lifecycle — archive manifest, hot+archive replay, package streaming progress |
 | 14 | Event log lifecycle operations — ADR-0025 operator gate, non-destructive dry-run boundary, hot-only task-history lock |
+| 15 | Lifecycle docs/backlog reconciliation — API/runbook/data/architecture alignment and future-candidate triage |
 
 ## Tech stack summary
 
@@ -80,7 +81,7 @@ A typed event spine connects operator surfaces to runtime workers and MCP tools.
 - **Operating it?** → [operator-runbook.md](./operator-runbook.md), [backup-restore.md](./backup-restore.md), and [deployment-guide.md](./deployment-guide.md).
 - **Developing on it?** → `_bmad-output/project-context.md`, [development-guide.md](./development-guide.md), and [testing-guide.md](./testing-guide.md).
 - **Understanding decisions?** → [adr/](./adr/), [architecture.md](./architecture.md), and `_bmad-output/planning-artifacts/`.
-- **Working on replay/lifecycle?** → [data-models.md](./data-models.md) §“Historical replay and event-log lifecycle” plus Phase 12–14 planning artifacts and ADR-0025.
+- **Working on replay/lifecycle?** → [data-models.md](./data-models.md) §“Historical replay and event-log lifecycle” plus Phase 12–15 planning artifacts and ADR-0025.
 
 ## License
 

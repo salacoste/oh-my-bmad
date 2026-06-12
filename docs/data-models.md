@@ -125,6 +125,12 @@ Phase 13 added event-log lifecycle support without hot-log deletion:
 - `replay_events_stream()` is a package API only. It yields frozen `ReplayProgress` values and then a terminal `ReplayResult`; no public HTTP streaming endpoint exists yet.
 - Destructive prune/apply is explicitly not implemented. It requires a separate ADR and operator approval gate.
 
+Phase 14 added the lifecycle operations boundary without changing replay return shapes or task-history behavior:
+
+- ADR-0025 authorizes planning, validation, and non-destructive dry-run outputs only.
+- Dry-run plan identity is content-addressed by safety inputs; future apply must re-compute and match that hash before any mutation.
+- Destructive prune/apply, object-storage lifecycle jobs, scheduled retention, and archive-aware task history remain future work.
+
 The replay contract is asserted by `packages/replay` tests and historical `tests/replay/` contracts: frozen event-log fixtures replay through the projector to equivalent state. Mandatory on every projector, replay, archive, or event-handler change.
 
 ## Idempotency
