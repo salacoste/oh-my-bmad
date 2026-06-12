@@ -115,18 +115,14 @@ def unregister(event_type: str, schema_version: str) -> None:
         _rebuild_types_cache()
 
 
-# Story 3.9 AC-11 / H7 NOTE: ``task.created`` schema versions (1.0.0, 1.0.1,
-# 1.1.0) are all registered by ``registry_state.domain.event_types`` at its
-# own module-load time. A deferred packages→services import here would
-# trigger a circular-import cycle (``events.__init__`` is still in flight
-# when ``registry_state.adapters.event_log`` runs ``from events import
-# EventEnvelope``). The service-side registration is the single source of
-# truth; this module exposes only the registry primitive.
+# Story 3.9 AC-11 / H7 NOTE: canonical event schemas are registered by
+# ``events.event_types.ensure_registered()``. The schema-registry primitive
+# intentionally stays side-effect-light so tests can isolate registry state;
+# runtimes that emit or validate production event types call the shared
+# registration hook explicitly (or import the registry-state compatibility
+# shim).
 #
-# Story 8.6 / FR56a NOTE: ``deployment.signature_rejected`` (and future
-# operator-side event types in Phase 2 — Epic 11 ``task.approval_signed``,
-# Epic 13 ``replication.lagging``) register from the
-# ``packages/events/src/events/types/<domain>.py`` submodules instead. No
-# circular-import cycle there: operator-side events have no service-layer
-# emitter, so the registration site stays inside ``packages/events``. See
-# ``events/types/__init__.py`` for the rationale.
+# Story 8.6 / FR56a NOTE: operator-side event types such as
+# ``deployment.signature_rejected`` still register from
+# ``packages/events/src/events/types/<domain>.py`` on normal ``events`` import.
+# Full lifecycle/task/session schemas are installed by ``events.event_types``.

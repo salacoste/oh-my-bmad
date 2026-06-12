@@ -2,8 +2,8 @@
 
 Relocated from ``registry_state.domain.event_types`` by Story 3.5.2.
 The models are pure data classes — no side effects, no ``register()`` calls.
-Registration stays in ``registry_state.domain.event_types`` because of a
-circular-import constraint documented there.
+Canonical registration lives in ``events.event_types``;
+``registry_state.domain.event_types`` remains a compatibility shim.
 
 All models use ``ConfigDict(frozen=True, strict=True, extra="forbid")``
 matching the Story 2.1 discipline.

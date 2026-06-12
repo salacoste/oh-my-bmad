@@ -48,9 +48,9 @@ class _SimplePayload(BaseModel):
 def _isolated_registry() -> Generator[None, None, None]:
     """Register the test payload model idempotently.
 
-    We DO NOT call ``unregister_all()`` because module-load side-effect
-    registrations in registry-state (``event_types.ensure_registered()``)
-    register the production ``TaskCreatedPayload`` against the same key
+    We DO NOT call ``unregister_all()`` because canonical production registrations
+    (``event_types.ensure_registered()`` via the shared events module or the
+    registry-state compatibility shim) can register ``TaskCreatedPayload`` against the same key
     used here; wiping them would break downstream cross-service tests
     that share the pytest session (Epic 9 retro D5 — schema-registry
     is global session-scoped). We rely on ``register()`` being

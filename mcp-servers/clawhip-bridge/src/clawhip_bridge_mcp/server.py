@@ -51,8 +51,10 @@ from events.event_log_writer import (  # noqa: IMP001 — events is packages/
     EventLogWriter,
     recover_all_logs,
 )
+from events.event_types import (
+    ensure_registered,  # noqa: IMP001 — shared package schema registrations
+)
 from mcp.server.fastmcp import FastMCP
-from registry_state.domain.event_types import ensure_registered
 
 log = logging.getLogger(__name__)
 

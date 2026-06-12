@@ -372,6 +372,12 @@ def test_worker_facing_source_code_unchanged() -> None:
         # only forwards what exists), so behavior is unchanged unless the compose
         # declares the new vars — S-1's stub-worker boot path is unaffected.
         ":!services/orchestrator-adapter/src/orchestrator_adapter/adapters/mcp_clients.py",
+        # Phase 13 nightly repair: clawhip-bridge/server.py installs shared
+        # canonical event registrations at MCP runtime startup. This is an
+        # import-boundary repair for the existing writer surface, not a worker
+        # coupling change; runtime separability remains covered by the S-1
+        # end-to-end stub-worker swap above.
+        ":!mcp-servers/clawhip-bridge/src/clawhip_bridge_mcp/server.py",
         # Story 11.3.7 audit: AC1 modifies services/orchestrator-adapter/Dockerfile
         # (COPY upstream/omc, outside src/), AC2 touches
         # services/telegram-gateway/src/, AC3 touches services/clawhip-daemon/src/.
