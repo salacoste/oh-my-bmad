@@ -36,9 +36,9 @@ AI slop cleaner scoped to changed files only. Fallback/slop inventory found only
 
 ## Independent review evidence
 
-- Code-reviewer final re-review: APPROVE, no issues remaining after tightening Phase 17 allowed write set and updating sprint-status `last_updated`.
-- Architect final re-review: CLEAR, no unresolved architectural blocker after the same fixes.
+- Code-reviewer final re-review `019ebe44-dac3-79f3-9af0-9609972aa4c7`: APPROVE, no issues remaining; confirms docs/status-only scope, fail-closed contract language, and no apply/prune enablement.
+- Architect final re-review `019ebe45-01be-7320-b3d7-4b60a7d4f809`: CLEAR after resolving the prior WATCH by separating durable replay invariants from current `HOT_ONLY_REPLAY`/ProblemDetails implementation evidence and tightening operator acknowledgement into a bounded risk-acceptance exception.
 
 ## Post-push evidence
 
-To be filled by final Ultragoal checkpoint after commit/push/CI verification.
+Commit/push/CI evidence is recorded in the final Ultragoal checkpoint and quality-gate JSON for the exact pushed commit, so this committed story artifact does not need a follow-up evidence-only commit that would recursively create a new unchecked commit.

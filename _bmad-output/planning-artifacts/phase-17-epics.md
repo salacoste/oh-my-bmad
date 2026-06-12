@@ -14,15 +14,19 @@ Phase 17 converts the remaining Phase 15 lifecycle future candidate into a **pla
 
 ### Story 82.1: Plan-hash authorization contract
 
-- Scope: define future authorization evidence for exact dry-run `plan_hash`, affected segment identities, and re-computation before mutation.
-- Acceptance: docs specify fail-closed behavior for plan-hash mismatch or missing authorization.
+- Status: done in Story 82.1.
+- Scope: define future authorization evidence for exact dry-run `plan_hash`, affected segment identities, replay/rollback evidence references, operator identity, and re-computation before mutation.
+- Acceptance: docs specify fail-closed behavior for missing, stale, unsigned, unverifiable, or mismatched authorization; future apply cannot be enabled by a dry-run boolean toggle.
+- Artifact: `_bmad-output/implementation-artifacts/82-1-plan-hash-authorization-contract.md`.
 
 ## Epic 83 — Replay and rollback proof contract
 
 ### Story 83.1: Replay-validation and rollback evidence contract
 
-- Scope: define future replay validation proof and backup/restore evidence requirements for affected hot segments.
-- Acceptance: docs specify apply is blocked when replay validation, archive manifest validation, or rollback evidence is absent/ambiguous.
+- Status: done in Story 83.1.
+- Scope: define future replay validation proof and backup/restore evidence requirements for retained hot+archive event sets and every affected hot segment.
+- Acceptance: docs specify apply is blocked when replay validation, archive manifest validation, backup artifacts, restore instructions, restore drill evidence, or rollback coverage is absent, stale, failed, ambiguous, or unverifiable. Operator acknowledgement alone is only a bounded risk-acceptance exception if a future implementation story defines expiry, reviewer identity, rationale, and affected segment scope.
+- Artifact: `_bmad-output/implementation-artifacts/83-1-replay-validation-rollback-evidence-contract.md`.
 
 ## Epic 84 — Documentation reconciliation and static guard
 

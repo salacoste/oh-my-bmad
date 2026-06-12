@@ -187,7 +187,7 @@ Phase 12-17 replay and lifecycle-operation contracts live in `packages/replay`, 
 - `get_task_history` is archive-aware when archive manifest configuration is present; with no archive manifest it preserves the Phase 12-15 hot-log-only default. Invalid archive config fails closed with route-local ProblemDetails.
 - Fail-closed archive validation is intentional: a bad configured archive manifest can make task history return a route-local 5xx ProblemDetails instead of falling back to partial hot-log results.
 - `replay_events_stream()` is package-only; there is no public HTTP streaming endpoint yet.
-- Phase 14 authorizes planning/validation and non-destructive lifecycle dry-run data only; Phase 17 defines readiness requirements for a future destructive apply contract, but destructive prune/apply remains unimplemented. Any later apply surface must be distinct from dry-run and bound to the exact dry-run plan hash, replay validation, rollback evidence, and explicit operator gate.
+- Phase 14 authorizes planning/validation and non-destructive lifecycle dry-run data only; Phase 17 defines readiness requirements for a future destructive apply contract, but destructive prune/apply remains unimplemented. Story 82.1 requires any later apply surface to be distinct from dry-run and bound to durable authorization evidence for the exact dry-run `plan_hash`, affected segment identities, replay validation, rollback evidence, and explicit operator identity/event or ledger reference. Story 83.1 further requires durable replay proof and rollback evidence before any future mutation; absent, failed, stale, ambiguous, or unverifiable evidence blocks apply.
 
 ## Cross-references
 

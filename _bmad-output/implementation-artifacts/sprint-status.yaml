@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-06-13T02:27:00+03:00
+last_updated: 2026-06-13T02:59:00+03:00
 current_phase: 17  # Phase 17 OPEN — Destructive Lifecycle Apply Readiness (Epics 81-85)
 
 development_status:
@@ -734,11 +734,11 @@ development_status:
   epic-81: done  # Planning and scope lock
   81-1-phase-17-planning: done  # FR156-FR161 scope/ACs/non-goals/allowed+forbidden write set established
 
-  epic-82: backlog  # Apply precondition contract
-  82-1-plan-hash-authorization-contract: backlog  # future exact plan_hash authorization evidence contract
+  epic-82: done  # Apply precondition contract
+  82-1-plan-hash-authorization-contract: done  # future exact plan_hash authorization evidence contract
 
-  epic-83: backlog  # Replay and rollback proof contract
-  83-1-replay-validation-rollback-evidence-contract: backlog  # future replay proof + backup/restore evidence contract
+  epic-83: done  # Replay and rollback proof contract
+  83-1-replay-validation-rollback-evidence-contract: done  # future replay proof + backup/restore evidence contract
 
   epic-84: done  # Documentation reconciliation and static guard
   84-1-phase-17-docs-status-reconciliation: done  # close Phase 16 wording and open Phase 17 readiness docs + prove no runtime behavior change
@@ -752,6 +752,27 @@ development_status:
 audit_trail:
 
   - date: "2026-06-13"
+    event: phase-17-contracts-82-83-complete
+    from: backlog
+    to: done
+    reason: >
+      Phase 17 readiness contracts for Epics 82 and 83 are complete. Story 82.1
+      defines exact dry-run plan_hash authorization evidence, affected segment
+      identities, replay/rollback references, operator identity, authorization
+      event/ledger reference, immediate pre-mutation hash re-computation, and
+      fail-closed cases. Story 83.1 defines replay-validation proof and
+      rollback-evidence requirements, including archive manifest validation,
+      retained hot+archive segment identity, backup artifacts outside the hot
+      event-log directory, affected segment checksums/sizes, restore
+      instructions, and restore drill evidence; operator acknowledgement alone
+      is only a bounded risk-acceptance exception when a future implementation
+      story defines expiry, reviewer identity, rationale, and affected segment
+      scope. Scope remains docs/status-only; no runtime/package/API/
+      deployment behavior, dependencies, CI, destructive apply/prune surface,
+      archive mutation, object-storage lifecycle job, or scheduled retention
+      worker changed.
+
+  - date: "2026-06-13"
     event: phase-17-quality-gate-complete
     from: backlog
     to: done
@@ -762,9 +783,10 @@ audit_trail:
       diff hygiene, and changed-file secret hygiene passed. AI slop cleaner found
       only grounded docs/status future/backlog/unimplemented terms and no masking
       fallback slop. Independent code-reviewer re-review APPROVE and architect
-      re-review CLEAR after tightening the Phase 17 allowed write set and
-      updating sprint-status last_updated. Commit/push/CI evidence is tracked in
-      the final Ultragoal checkpoint.
+      re-review CLEAR after resolving the prior WATCH by separating durable
+      replay invariants from current implementation evidence and bounding
+      operator acknowledgement as a future risk-acceptance exception.
+      Commit/push/CI evidence is tracked in the final Ultragoal checkpoint.
 
   - date: "2026-06-13"
     event: phase-17-docs-status-reconciliation-complete

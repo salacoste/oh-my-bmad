@@ -17,8 +17,8 @@ Phase 17 defines the safety architecture for a future destructive event-log life
 1. **No mutation implementation.** Phase 17 must not add delete/truncate/move/rewrite/chmod/prune/apply behavior.
 2. **Exact plan identity.** Any later apply design must bind to `LifecycleDryRunPlan.plan_hash` and re-compute the hash immediately before mutation.
 3. **Replay-first safety.** Archive manifest validation and replay validation are preconditions to any later apply.
-4. **Operator authorization is hash-scoped.** Future Tier-3/operator approval must reference the exact plan hash, affected segment identities, and rollback evidence.
-5. **Rollback evidence is required before mutation.** Future apply design must identify backup/restore evidence for every affected hot segment.
+4. **Operator authorization is hash-scoped.** Future Tier-3/operator approval must reference the exact plan hash, affected segment identities, and rollback evidence. Story 82.1 defines this as durable evidence containing the dry-run artifact reference, safety policy version, retention input identity, affected segment identities, replay proof reference, rollback evidence reference, operator identity, timestamp, and authorization event/ledger reference.
+5. **Rollback evidence is required before mutation.** Future apply design must identify backup/restore evidence for every affected hot segment. Story 83.1 defines this as durable rollback evidence containing backup artifact references outside the hot event-log directory, affected segment checksums/sizes, restore instructions, and restore drill evidence. Operator acknowledgement alone is only acceptable when a future implementation story defines an auditable bounded risk-acceptance exception with expiry, reviewer identity, rationale, and affected segment scope.
 6. **Dry-run and apply are distinct surfaces.** A future apply command/API cannot be enabled by flipping a `dry_run=false` boolean.
 7. **Object storage and scheduling remain future.** S3/B2/R2 lifecycle policies and scheduled retention workers are still out of scope until apply semantics are proven.
 
