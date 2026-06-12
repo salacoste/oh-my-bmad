@@ -19,7 +19,7 @@ Design notes
 from __future__ import annotations
 
 import ssl
-from typing import Literal
+from typing import Literal, TypedDict
 
 import structlog
 from cryptography import x509
@@ -28,6 +28,15 @@ from mtls.certs import check_cert_expiry, resolve_cert_paths
 from mtls.settings import MTLSSettings
 
 logger = structlog.get_logger(__name__)
+
+
+class UvicornSSLConfig(TypedDict):
+    """Typed subset of uvicorn TLS keyword arguments used by registry-api."""
+
+    ssl_keyfile: str
+    ssl_certfile: str
+    ssl_ca_certs: str
+    ssl_cert_reqs: int
 
 
 def _cert_cn(cert_path: str) -> str:
@@ -86,9 +95,7 @@ def create_ssl_context(role: Literal["server", "client"]) -> ssl.SSLContext | No
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     ctx.verify_mode = ssl.CERT_REQUIRED
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-    ctx.options |= (
-        ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 | ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1
-    )
+    ctx.options |= ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 | ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1
 
     ctx.load_verify_locations(cafile=ca_path)
     ctx.load_cert_chain(certfile=cert_path, keyfile=key_path)
@@ -109,12 +116,12 @@ def create_ssl_context(role: Literal["server", "client"]) -> ssl.SSLContext | No
     return ctx
 
 
-def create_uvicorn_ssl_config() -> dict[str, str] | None:
+def create_uvicorn_ssl_config() -> UvicornSSLConfig | None:
     """Build the ``ssl`` keyword-argument dict for uvicorn.
 
     Returns
     -------
-    dict[str, str] | None
+    UvicornSSLConfig | None
         A dict suitable for ``uvicorn.Config(app, **ssl=...)`` when mTLS
         is enabled, or ``None`` when mTLS is disabled.
 
@@ -135,7 +142,7 @@ def create_uvicorn_ssl_config() -> dict[str, str] | None:
         "ssl_keyfile": key_path,
         "ssl_certfile": cert_path,
         "ssl_ca_certs": ca_path,
-        "ssl_cert_reqs": ssl.CERT_REQUIRED,
+        "ssl_cert_reqs": int(ssl.CERT_REQUIRED),
     }
 
 

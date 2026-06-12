@@ -90,12 +90,15 @@ class TestConnectStreamableHttp:
         group._stack = AsyncExitStack()
         await group._stack.__aenter__()
 
-        with patch(
-            "mcp.client.streamable_http.streamable_http_client",
-            return_value=FakeTransportCtx(),
-        ), patch(
-            "worker_wrapper.adapters.mcp_clients.ClientSession",
-            return_value=FakeSessionCtx(),
+        with (
+            patch(
+                "mcp.client.streamable_http.streamable_http_client",
+                return_value=FakeTransportCtx(),
+            ),
+            patch(
+                "worker_wrapper.adapters.mcp_clients.ClientSession",
+                return_value=FakeSessionCtx(),
+            ),
         ):
             result = await group._connect(
                 "task-registry",
@@ -150,15 +153,19 @@ class TestConnectStreamableHttp:
         group._stack = AsyncExitStack()
         await group._stack.__aenter__()
 
-        with patch(
-            "worker_wrapper.adapters.mcp_clients.create_httpx_verify_arg",
-            return_value=True,
-        ) as mock_verify, patch(
-            "mcp.client.streamable_http.streamable_http_client",
-            return_value=FakeTransportCtx(),
-        ), patch(
-            "worker_wrapper.adapters.mcp_clients.ClientSession",
-            return_value=FakeSessionCtx(),
+        with (
+            patch(
+                "worker_wrapper.adapters.mcp_clients.create_httpx_verify_arg",
+                return_value=True,
+            ) as mock_verify,
+            patch(
+                "mcp.client.streamable_http.streamable_http_client",
+                return_value=FakeTransportCtx(),
+            ),
+            patch(
+                "worker_wrapper.adapters.mcp_clients.ClientSession",
+                return_value=FakeSessionCtx(),
+            ),
         ):
             result = await group._connect(
                 "task-registry",

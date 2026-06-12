@@ -78,7 +78,8 @@ def _load_ca(
 
     ca_cert = x509.load_pem_x509_certificate(ca_cert_path.read_bytes())
     ca_key = serialization.load_pem_private_key(
-        ca_key_path.read_bytes(), password=None,
+        ca_key_path.read_bytes(),
+        password=None,
     )
     assert isinstance(ca_key, rsa.RSAPrivateKey)
     return ca_cert, ca_key
@@ -98,10 +99,12 @@ def init_ca(certs_dir: Path) -> None:
     print("generating root CA key (RSA 4096) ...", file=sys.stderr)
     key = rsa.generate_private_key(public_exponent=65537, key_size=CA_KEY_SIZE)
 
-    subject = issuer = x509.Name([
-        x509.NameAttribute(NameOID.COMMON_NAME, "oh-my-bmad CA"),
-        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "oh-my-bmad"),
-    ])
+    subject = issuer = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COMMON_NAME, "oh-my-bmad CA"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "oh-my-bmad"),
+        ]
+    )
 
     now = datetime.now(UTC)
     builder = (
@@ -175,9 +178,11 @@ def issue_cert(
     )
     key = rsa.generate_private_key(public_exponent=65537, key_size=SVC_KEY_SIZE)
 
-    subject = x509.Name([
-        x509.NameAttribute(NameOID.COMMON_NAME, service_name),
-    ])
+    subject = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COMMON_NAME, service_name),
+        ]
+    )
 
     now = datetime.now(UTC)
     builder = (
@@ -207,10 +212,12 @@ def issue_cert(
             critical=True,
         )
         .add_extension(
-            x509.ExtendedKeyUsage([
-                ExtendedKeyUsageOID.SERVER_AUTH,
-                ExtendedKeyUsageOID.CLIENT_AUTH,
-            ]),
+            x509.ExtendedKeyUsage(
+                [
+                    ExtendedKeyUsageOID.SERVER_AUTH,
+                    ExtendedKeyUsageOID.CLIENT_AUTH,
+                ]
+            ),
             critical=False,
         )
     )

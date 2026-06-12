@@ -77,8 +77,7 @@ def check_cert_expiry(cert_path: str, warning_hours: int = 24) -> None:
 
     if now >= not_after:
         raise MTLSConfigError(
-            f"Certificate has expired: {cert_path} "
-            f"(not-after={not_after.isoformat()})"
+            f"Certificate has expired: {cert_path} (not-after={not_after.isoformat()})"
         )
 
     remaining = not_after - now

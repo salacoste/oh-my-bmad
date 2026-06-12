@@ -15,7 +15,9 @@ _INIT_PY = _PKG_DIR / "__init__.py"
 
 def _bootstrap() -> None:
     spec = importlib.util.spec_from_file_location(
-        "omb_ca", _INIT_PY, submodule_search_locations=[str(_PKG_DIR)],
+        "omb_ca",
+        _INIT_PY,
+        submodule_search_locations=[str(_PKG_DIR)],
     )
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)

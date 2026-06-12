@@ -44,7 +44,7 @@ jobs:
         run: uv run ruff format --check .
 
       - name: mypy --strict (packages + registry services)
-        run: uv run mypy --strict packages/ services/registry-api services/registry-state
+        run: uv run mypy --strict --explicit-package-bases packages/ services/registry-api services/registry-state
 
       - name: Check imports
         run: uv run python scripts/check_imports.py

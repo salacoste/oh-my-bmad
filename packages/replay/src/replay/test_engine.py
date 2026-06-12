@@ -399,6 +399,30 @@ async def test_batch_boundary_across_files(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_memory_check_uses_current_rss_growth(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Memory budget is enforced against current-RSS growth, not process peak."""
+    from replay import engine as replay_engine
+
+    monkeypatch.setattr(replay_engine, "_current_rss_bytes", lambda: 1_200)
+
+    with pytest.raises(ReplayMemoryError) as exc_info:
+        replay_engine._check_memory(100, baseline_bytes=1_000)
+
+    assert exc_info.value.current_bytes == 200
+    assert exc_info.value.limit_bytes == 100
+
+
+def test_memory_check_allows_high_preexisting_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A high pre-existing process RSS does not fail when replay growth is bounded."""
+    from replay import engine as replay_engine
+
+    monkeypatch.setattr(replay_engine, "_current_rss_bytes", lambda: 500_050_000)
+
+    replay_engine._check_memory(100_000, baseline_bytes=500_000_000)
+
+
 @pytest.mark.asyncio
 async def test_memory_limit_exceeded_raises_error(tmp_path: Path) -> None:
     """Exceeding the memory limit raises ReplayMemoryError."""
@@ -407,17 +431,17 @@ async def test_memory_limit_exceeded_raises_error(tmp_path: Path) -> None:
     env = _task_created_env(task_id, mono_ns=1_000_000)
     _write_jsonl(tmp_path / "2025-01-01.jsonl", [env])
 
-    # Use an absurdly low limit that the process is guaranteed to exceed
-    # (Python process RSS is always > 1KB at this point)
+    # Use an impossible negative replay-growth budget so the check is
+    # deterministic even if the replay does not increase current RSS.
     with pytest.raises(ReplayMemoryError) as exc_info:
         await replay_events(
             up_to=999_999_999,
             event_log_dir=tmp_path,
-            memory_limit_bytes=1024,
+            memory_limit_bytes=-1,
         )
 
-    assert exc_info.value.limit_bytes == 1024
-    assert exc_info.value.current_bytes > 1024
+    assert exc_info.value.limit_bytes == -1
+    assert exc_info.value.current_bytes >= 0
 
 
 # ---------------------------------------------------------------------------

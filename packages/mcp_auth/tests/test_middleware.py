@@ -75,11 +75,13 @@ async def _invoke(
 
     async def inner_app(scope: dict[str, Any], receive: Any, send: Any) -> None:
         body = b"ok"
-        await send({
-            "type": "http.response.start",
-            "status": 200,
-            "headers": [[b"content-type", b"text/plain"], [b"content-length", b"2"]],
-        })
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [[b"content-type", b"text/plain"], [b"content-length", b"2"]],
+            }
+        )
         await send({"type": "http.response.body", "body": body})
 
     resp = _Response()
@@ -171,7 +173,8 @@ class TestValidToken:
     async def test_x_actor_id_header_injected(self) -> None:
         token = _make_token(sub="user-42")
         resp, scope = await _invoke_with_capture(
-            _settings(), headers=[(b"authorization", b"Bearer " + token)],
+            _settings(),
+            headers=[(b"authorization", b"Bearer " + token)],
         )
         assert resp.status == 200
         header_dict = dict(scope["headers"])
@@ -181,7 +184,8 @@ class TestValidToken:
     async def test_scope_state_set(self) -> None:
         token = _make_token(sub="test-actor")
         resp, scope = await _invoke_with_capture(
-            _settings(), headers=[(b"authorization", b"Bearer " + token)],
+            _settings(),
+            headers=[(b"authorization", b"Bearer " + token)],
         )
 
         assert resp.status == 200
@@ -193,7 +197,8 @@ class TestValidToken:
     async def test_actor_id_extracted_from_sub(self) -> None:
         token = _make_token(sub="custom-actor-99")
         resp, scope = await _invoke_with_capture(
-            _settings(), headers=[(b"authorization", b"Bearer " + token)],
+            _settings(),
+            headers=[(b"authorization", b"Bearer " + token)],
         )
 
         header_dict = dict(scope["headers"])

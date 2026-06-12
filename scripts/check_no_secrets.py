@@ -65,20 +65,14 @@ from checks._common import (  # noqa: E402
 # ---------------------------------------------------------------------------
 
 # Cert/key file extensions — committing any of these is a P11-I2 violation.
-_CERT_EXTENSIONS: frozenset[str] = frozenset(
-    {".pem", ".key", ".crt", ".p12", ".pfx", ".jks"}
-)
+_CERT_EXTENSIONS: frozenset[str] = frozenset({".pem", ".key", ".crt", ".p12", ".pfx", ".jks"})
 
 # Directories where committed cert/key files are allowed (deploy-time
 # generation, test fixtures, third-party, VCS).
-_CERT_FILE_SKIP_DIRS: frozenset[str] = DEFAULT_SKIP_DIRS | frozenset(
-    {"certs", "node_modules"}
-)
+_CERT_FILE_SKIP_DIRS: frozenset[str] = DEFAULT_SKIP_DIRS | frozenset({"certs", "node_modules"})
 
 # Additional directories excluded from the Python source scan.
-_SOURCE_SKIP_DIRS: frozenset[str] = DEFAULT_SKIP_DIRS | frozenset(
-    {"tests", "fixtures", "certs"}
-)
+_SOURCE_SKIP_DIRS: frozenset[str] = DEFAULT_SKIP_DIRS | frozenset({"tests", "fixtures", "certs"})
 
 # Patterns for hardcoded cert/key paths in string literals.
 # Matches absolute paths under /etc/ssl/, /certs/, or any absolute path
@@ -245,19 +239,13 @@ def _is_allowed_string(node: ast.expr, parent: ast.AST | None) -> bool:
             # f-string JoinedStr with env var
             if isinstance(child, ast.JoinedStr):
                 for val in child.values:
-                    if (
-                        isinstance(val, ast.FormattedValue)
-                        and _is_env_var_access(val.value)
-                    ):
+                    if isinstance(val, ast.FormattedValue) and _is_env_var_access(val.value):
                         return True
 
     # f-string with env var access in any FormattedValue.
     if isinstance(parent, ast.JoinedStr):
         for val in parent.values:
-            if (
-                isinstance(val, ast.FormattedValue)
-                and _is_env_var_access(val.value)
-            ):
+            if isinstance(val, ast.FormattedValue) and _is_env_var_access(val.value):
                 return True
 
     return False
@@ -324,9 +312,7 @@ class _HardcodedPathVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def _scan_file_for_hardcoded_paths(
-    path: Path, *, raise_on_syntax: bool = False
-) -> list[Violation]:
+def _scan_file_for_hardcoded_paths(path: Path, *, raise_on_syntax: bool = False) -> list[Violation]:
     """Return SECRETS001 violations for hardcoded cert paths in *path*."""
     try:
         source = path.read_text(encoding="utf-8", errors="replace")
@@ -355,9 +341,7 @@ def _scan_file_for_hardcoded_paths(
         if has_noqa(source_line, _RULE_TAG):
             continue
         seen.add(lineno)
-        violations.append(
-            Violation(file=path, lineno=lineno, rule=_RULE_TAG, message=message)
-        )
+        violations.append(Violation(file=path, lineno=lineno, rule=_RULE_TAG, message=message))
     return violations
 
 
@@ -420,9 +404,7 @@ def _self_test() -> int:
         # Check that no violations are raised for allowed cert files.
         clean_violations = _scan_cert_files([clean_dir])
         for v in clean_violations:
-            failures.append(
-                f"FAIL clean/{v.file.name}: unexpected SECRETS001: {v.message}"
-            )
+            failures.append(f"FAIL clean/{v.file.name}: unexpected SECRETS001: {v.message}")
 
         # Check clean Python fixtures.
         clean_py_files = sorted(
@@ -446,13 +428,9 @@ def _self_test() -> int:
         # Cert files in violations/ must be detected.
         # Pass include_self_test_fixtures=True so the self-test exclusion
         # doesn't mask the fixture cert files we expect to be flagged.
-        cert_viols = _scan_cert_files(
-            [violation_dir], include_self_test_fixtures=True
-        )
+        cert_viols = _scan_cert_files([violation_dir], include_self_test_fixtures=True)
         if not cert_viols:
-            failures.append(
-                "FAIL violations/: expected cert-file SECRETS001 but got none"
-            )
+            failures.append("FAIL violations/: expected cert-file SECRETS001 but got none")
         else:
             violation_count += len(cert_viols)
 
@@ -465,9 +443,7 @@ def _self_test() -> int:
         for fpath in viol_py_files:
             viols = _scan_file_for_hardcoded_paths(fpath, raise_on_syntax=True)
             if not viols:
-                failures.append(
-                    f"FAIL violations/{fpath.name}: expected SECRETS001 but got none"
-                )
+                failures.append(f"FAIL violations/{fpath.name}: expected SECRETS001 but got none")
             else:
                 violation_count += len(viols)
 
@@ -526,9 +502,7 @@ def main(argv: list[str] | None = None) -> int:
             f"{py_scanned} Python files scanned, 0 violations)"
         )
         for root in _SOURCE_ROOTS:
-            count = sum(
-                1 for _ in walk_python_files([root], skip_dirs=_SOURCE_SKIP_DIRS)
-            )
+            count = sum(1 for _ in walk_python_files([root], skip_dirs=_SOURCE_SKIP_DIRS))
             try:
                 rel = root.relative_to(REPO_ROOT)
             except ValueError:

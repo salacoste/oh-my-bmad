@@ -53,6 +53,7 @@ from events.log_reader import (
 # Story 3.5.2 — re-export payload models so consumers can use
 # ``from events import TaskCreatedPayload`` instead of cross-service imports.
 from events.payloads import *  # noqa: F403 — intentional star re-export
+from events.payloads import PoolScaledPayload
 from events.payloads import __all__ as _payloads_all
 from events.schema_registry import REGISTRY, register
 
@@ -72,6 +73,12 @@ from events.types import deployment as _types_deployment  # noqa: F401
 from events.types import replication as _types_replication  # noqa: F401
 from events.types.deployment import DeploymentSignatureRejectedPayload
 from events.types.replication import ReplicationLaggingPayload
+
+# FC-P6-1 / Story P8-FC1 — worker-pool autoscaling emits this event from
+# orchestrator-adapter. Keep it registered in the canonical events package so
+# scripts/check_event_registry.py can validate service emissions without
+# importing registry-state side effects.
+register("pool.scaled", "1.1.0", PoolScaledPayload)
 
 __version__ = "0.4.0"
 

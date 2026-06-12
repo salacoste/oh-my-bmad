@@ -98,7 +98,7 @@ class BearerTokenMiddleware:
             await self._send_unauthorized(send, "Malformed Authorization header")
             return
 
-        token = auth_value[len(b"Bearer "):].strip()
+        token = auth_value[len(b"Bearer ") :].strip()
         if not token:
             await self._send_unauthorized(send, "Empty bearer token")
             return
@@ -120,32 +120,43 @@ class BearerTokenMiddleware:
             )
         except pyjwt.ExpiredSignatureError:
             structlog.get_logger().warning(
-                "jwt_token_expired", path=path, method=method,
+                "jwt_token_expired",
+                path=path,
+                method=method,
             )
             await self._send_unauthorized(send, "Token has expired")
             return
         except pyjwt.InvalidIssuerError:
             structlog.get_logger().warning(
-                "jwt_token_invalid_issuer", path=path, method=method,
+                "jwt_token_invalid_issuer",
+                path=path,
+                method=method,
             )
             await self._send_unauthorized(send, "Invalid token issuer")
             return
         except pyjwt.MissingRequiredClaimError as exc:
             structlog.get_logger().warning(
                 "jwt_token_missing_claim",
-                path=path, method=method, missing_claim=str(exc),
+                path=path,
+                method=method,
+                missing_claim=str(exc),
             )
             await self._send_unauthorized(send, f"Missing required claim: {exc}")
             return
         except pyjwt.InvalidSignatureError:
             structlog.get_logger().warning(
-                "jwt_token_invalid_signature", path=path, method=method,
+                "jwt_token_invalid_signature",
+                path=path,
+                method=method,
             )
             await self._send_unauthorized(send, "Invalid token signature")
             return
         except pyjwt.InvalidTokenError as exc:
             structlog.get_logger().warning(
-                "jwt_token_invalid", path=path, method=method, error=str(exc),
+                "jwt_token_invalid",
+                path=path,
+                method=method,
+                error=str(exc),
             )
             await self._send_unauthorized(send, f"Invalid token: {exc}")
             return
@@ -154,7 +165,9 @@ class BearerTokenMiddleware:
         actor_id = payload.get("sub")
         if not actor_id or not isinstance(actor_id, str):
             structlog.get_logger().warning(
-                "jwt_token_invalid_sub", path=path, method=method,
+                "jwt_token_invalid_sub",
+                path=path,
+                method=method,
             )
             await self._send_unauthorized(send, "Invalid or missing 'sub' claim")
             return
@@ -176,15 +189,19 @@ class BearerTokenMiddleware:
     async def _send_unauthorized(send: Any, detail: str) -> None:
         """Send HTTP 401 JSON response."""
         body = json.dumps({"error": "unauthorized", "detail": detail}).encode("utf-8")
-        await send({
-            "type": "http.response.start",
-            "status": 401,
-            "headers": [
-                [b"content-type", b"application/json"],
-                [b"content-length", str(len(body)).encode("utf-8")],
-            ],
-        })
-        await send({
-            "type": "http.response.body",
-            "body": body,
-        })
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [
+                    [b"content-type", b"application/json"],
+                    [b"content-length", str(len(body)).encode("utf-8")],
+                ],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": body,
+            }
+        )

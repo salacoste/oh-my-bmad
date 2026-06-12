@@ -17,6 +17,9 @@ Key invariants (from PRD):
 
 from __future__ import annotations
 
+import ctypes
+import ctypes.util
+import os
 import resource
 import sys
 import time
@@ -44,19 +47,100 @@ _DEFAULT_BATCH_SIZE = 500
 DEFAULT_BATCH_SIZE = _DEFAULT_BATCH_SIZE
 
 
-def _check_memory(limit_bytes: int) -> None:
-    """Check current process RSS against *limit_bytes*.
-
-    Raises :class:`ReplayMemoryError` if the resident set size exceeds the
-    configured limit.
-
-    macOS reports ``ru_maxrss`` in bytes; Linux in kilobytes — normalised.
-    """
+def _peak_rss_bytes() -> int:
+    """Return process peak RSS in bytes as a last-resort fallback."""
     rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     if sys.platform == "linux":
         rss *= 1024
-    if rss > limit_bytes:
-        raise ReplayMemoryError(current_bytes=rss, limit_bytes=limit_bytes)
+    return rss
+
+
+def _linux_current_rss_bytes() -> int | None:
+    """Return current RSS from procfs on Linux, or ``None`` when unavailable."""
+    try:
+        statm = Path("/proc/self/statm").read_text(encoding="ascii").split()
+        resident_pages = int(statm[1])
+        return resident_pages * os.sysconf("SC_PAGE_SIZE")
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def _darwin_current_rss_bytes() -> int | None:
+    """Return current RSS via Mach task_info on macOS, or ``None`` on failure."""
+    if sys.platform != "darwin":
+        return None
+
+    libsystem_path = ctypes.util.find_library("System")
+    if libsystem_path is None:
+        return None
+
+    class TimeValue(ctypes.Structure):
+        _fields_ = [("seconds", ctypes.c_int32), ("microseconds", ctypes.c_int32)]
+
+    class MachTaskBasicInfo(ctypes.Structure):
+        _fields_ = [
+            ("virtual_size", ctypes.c_uint64),
+            ("resident_size", ctypes.c_uint64),
+            ("resident_size_max", ctypes.c_uint64),
+            ("user_time", TimeValue),
+            ("system_time", TimeValue),
+            ("policy", ctypes.c_int32),
+            ("suspend_count", ctypes.c_int32),
+        ]
+
+    try:
+        libsystem = ctypes.CDLL(libsystem_path)
+        mach_task_self = libsystem.mach_task_self
+        mach_task_self.restype = ctypes.c_uint32
+        task_info = libsystem.task_info
+        task_info.argtypes = [
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.POINTER(ctypes.c_int32),
+            ctypes.POINTER(ctypes.c_uint32),
+        ]
+        task_info.restype = ctypes.c_int32
+
+        info = MachTaskBasicInfo()
+        count = ctypes.c_uint32(ctypes.sizeof(info) // ctypes.sizeof(ctypes.c_int32))
+        result = task_info(
+            mach_task_self(),
+            20,  # MACH_TASK_BASIC_INFO
+            ctypes.cast(ctypes.byref(info), ctypes.POINTER(ctypes.c_int32)),
+            ctypes.byref(count),
+        )
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+
+    if result != 0:
+        return None
+    return int(info.resident_size)
+
+
+def _current_rss_bytes() -> int:
+    """Return current process RSS in bytes, falling back to peak RSS only if needed."""
+    if sys.platform == "linux":
+        linux_rss = _linux_current_rss_bytes()
+        if linux_rss is not None:
+            return linux_rss
+    darwin_rss = _darwin_current_rss_bytes()
+    if darwin_rss is not None:
+        return darwin_rss
+    return _peak_rss_bytes()
+
+
+def _check_memory(limit_bytes: int, *, baseline_bytes: int) -> None:
+    """Check replay-attributable current-RSS growth against *limit_bytes*.
+
+    The replay engine can run inside a long-lived pytest or service process whose
+    baseline RSS already exceeds the replay budget before replay starts. NFR-R17
+    is therefore enforced against current-RSS growth from the start of this
+    replay call, avoiding order-dependent false positives while still raising
+    when replay work itself exceeds the configured budget.
+    """
+    current_bytes = max(0, _current_rss_bytes() - baseline_bytes)
+    if current_bytes > limit_bytes:
+        raise ReplayMemoryError(current_bytes=current_bytes, limit_bytes=limit_bytes)
 
 
 def _collect_envelopes(
@@ -137,6 +221,7 @@ async def replay_events_iter(
     )
 
     start_wall = time.monotonic()
+    memory_baseline_bytes = _current_rss_bytes()
 
     # Snapshot optimization (Story 62-2): if a snapshot_dir is provided and
     # the target is an integer sequence number, attempt to find the nearest
@@ -229,7 +314,7 @@ async def replay_events_iter(
         for batch_start in range(0, len(envelopes), batch_size):
             batch = envelopes[batch_start : batch_start + batch_size]
             await materializer.apply_many(batch)
-            _check_memory(memory_limit_bytes)
+            _check_memory(memory_limit_bytes, baseline_bytes=memory_baseline_bytes)
             processed += len(batch)
             if emit_progress:
                 yield ReplayProgress(

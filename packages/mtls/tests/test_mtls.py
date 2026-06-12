@@ -6,6 +6,7 @@ import os
 import socket
 import ssl
 import threading
+from typing import Protocol
 from unittest.mock import patch
 
 import pytest
@@ -13,13 +14,19 @@ from mtls._exceptions import MTLSConfigError
 from mtls.mtls import create_httpx_verify_arg, create_ssl_context, create_uvicorn_ssl_config
 
 
-def _env_from_pair(pair: object, **overrides: str) -> dict[str, str]:
+class CertPairLike(Protocol):
+    cert_path: str
+    key_path: str
+    ca_path: str
+
+
+def _env_from_pair(pair: CertPairLike, **overrides: str) -> dict[str, str]:
     """Build an env dict that enables mTLS with the given cert pair."""
     env: dict[str, str] = {
         "MTLS_ENABLED": "true",
-        "MTLS_CERT_PATH": pair.cert_path,  # type: ignore[union-attr]
-        "MTLS_KEY_PATH": pair.key_path,  # type: ignore[union-attr]
-        "MTLS_CA_PATH": pair.ca_path,  # type: ignore[union-attr]
+        "MTLS_CERT_PATH": pair.cert_path,
+        "MTLS_KEY_PATH": pair.key_path,
+        "MTLS_CA_PATH": pair.ca_path,
     }
     env.update(overrides)
     return env
@@ -109,47 +116,47 @@ class TestCreateSslContextDisabled:
 class TestCreateSslContextEnabled:
     """When mTLS is enabled, create_ssl_context returns a configured SSLContext."""
 
-    def test_server_returns_ssl_context(self, mtls_cert_pair: object) -> None:
+    def test_server_returns_ssl_context(self, mtls_cert_pair: CertPairLike) -> None:
         env = _env_from_pair(mtls_cert_pair)
         with patch.dict(os.environ, env, clear=False):
             ctx = create_ssl_context("server")
         assert isinstance(ctx, ssl.SSLContext)
 
-    def test_server_cert_required(self, mtls_cert_pair: object) -> None:
+    def test_server_cert_required(self, mtls_cert_pair: CertPairLike) -> None:
         env = _env_from_pair(mtls_cert_pair)
         with patch.dict(os.environ, env, clear=False):
             ctx = create_ssl_context("server")
         assert ctx is not None
         assert ctx.verify_mode == ssl.CERT_REQUIRED
 
-    def test_server_check_hostname_false(self, mtls_cert_pair: object) -> None:
+    def test_server_check_hostname_false(self, mtls_cert_pair: CertPairLike) -> None:
         env = _env_from_pair(mtls_cert_pair)
         with patch.dict(os.environ, env, clear=False):
             ctx = create_ssl_context("server")
         assert ctx is not None
         assert ctx.check_hostname is False
 
-    def test_client_check_hostname_true(self, mtls_cert_pair: object) -> None:
+    def test_client_check_hostname_true(self, mtls_cert_pair: CertPairLike) -> None:
         env = _env_from_pair(mtls_cert_pair)
         with patch.dict(os.environ, env, clear=False):
             ctx = create_ssl_context("client")
         assert ctx is not None
         assert ctx.check_hostname is True
 
-    def test_client_returns_ssl_context(self, mtls_cert_pair: object) -> None:
+    def test_client_returns_ssl_context(self, mtls_cert_pair: CertPairLike) -> None:
         env = _env_from_pair(mtls_cert_pair)
         with patch.dict(os.environ, env, clear=False):
             ctx = create_ssl_context("client")
         assert isinstance(ctx, ssl.SSLContext)
 
-    def test_minimum_tls_version_12(self, mtls_cert_pair: object) -> None:
+    def test_minimum_tls_version_12(self, mtls_cert_pair: CertPairLike) -> None:
         env = _env_from_pair(mtls_cert_pair)
         with patch.dict(os.environ, env, clear=False):
             ctx = create_ssl_context("server")
         assert ctx is not None
         assert ctx.minimum_version == ssl.TLSVersion.TLSv1_2
 
-    def test_verify_mode_cert_required(self, mtls_cert_pair: object) -> None:
+    def test_verify_mode_cert_required(self, mtls_cert_pair: CertPairLike) -> None:
         env = _env_from_pair(mtls_cert_pair)
         with patch.dict(os.environ, env, clear=False):
             ctx = create_ssl_context("client")
@@ -165,7 +172,7 @@ class TestCreateSslContextEnabled:
 class TestCreateSslContextErrors:
     """Error conditions raise MTLSConfigError."""
 
-    def test_missing_cert_file_raises(self, mtls_cert_pair: object) -> None:
+    def test_missing_cert_file_raises(self, mtls_cert_pair: CertPairLike) -> None:
         env = _env_from_pair(mtls_cert_pair, MTLS_CERT_PATH="/nonexistent/path.crt")
         with (
             patch.dict(os.environ, env, clear=False),
@@ -173,7 +180,7 @@ class TestCreateSslContextErrors:
         ):
             create_ssl_context("server")
 
-    def test_expired_cert_raises(self, expired_cert_pair: object) -> None:
+    def test_expired_cert_raises(self, expired_cert_pair: CertPairLike) -> None:
         env = _env_from_pair(expired_cert_pair)
         with (
             patch.dict(os.environ, env, clear=False),
@@ -200,20 +207,20 @@ class TestTlsHandshake:
     """
 
     @staticmethod
-    def _build_server_ctx_from_pair(pair: object) -> ssl.SSLContext:
+    def _build_server_ctx_from_pair(pair: CertPairLike) -> ssl.SSLContext:
         """Build a server SSLContext suitable for server_side=True wrapping."""
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.verify_mode = ssl.CERT_REQUIRED
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         ctx.check_hostname = False
-        ctx.load_verify_locations(cafile=pair.ca_path)  # type: ignore[union-attr]
+        ctx.load_verify_locations(cafile=pair.ca_path)
         ctx.load_cert_chain(
-            certfile=pair.cert_path,  # type: ignore[union-attr]
-            keyfile=pair.key_path,  # type: ignore[union-attr]
+            certfile=pair.cert_path,
+            keyfile=pair.key_path,
         )
         return ctx
 
-    def test_valid_mutual_auth_succeeds(self, mtls_cert_pair: object) -> None:
+    def test_valid_mutual_auth_succeeds(self, mtls_cert_pair: CertPairLike) -> None:
         """Trusted client + trusted server => handshake succeeds."""
         server_ctx = self._build_server_ctx_from_pair(mtls_cert_pair)
 
@@ -228,8 +235,8 @@ class TestTlsHandshake:
 
     def test_untrusted_client_rejected(
         self,
-        mtls_cert_pair: object,
-        untrusted_cert_pair: object,
+        mtls_cert_pair: CertPairLike,
+        untrusted_cert_pair: CertPairLike,
     ) -> None:
         """Client cert signed by unknown CA => server rejects."""
         server_ctx = self._build_server_ctx_from_pair(mtls_cert_pair)
@@ -243,7 +250,7 @@ class TestTlsHandshake:
         ok, _ = _tls_handshake(server_ctx, client_ctx)
         assert not ok
 
-    def test_no_client_cert_rejected(self, mtls_cert_pair: object) -> None:
+    def test_no_client_cert_rejected(self, mtls_cert_pair: CertPairLike) -> None:
         """Server requires client cert (CERT_REQUIRED); bare client rejected."""
         server_ctx = self._build_server_ctx_from_pair(mtls_cert_pair)
 
@@ -254,7 +261,7 @@ class TestTlsHandshake:
         client_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         # Load the CA so client can verify the server cert.
         client_ctx.load_verify_locations(
-            cafile=mtls_cert_pair.ca_path,  # type: ignore[union-attr]
+            cafile=mtls_cert_pair.ca_path,
         )
 
         ok, _ = _tls_handshake(server_ctx, client_ctx)
@@ -273,14 +280,14 @@ class TestUvicornSslConfig:
         with patch.dict(os.environ, {}, clear=True):
             assert create_uvicorn_ssl_config() is None
 
-    def test_returns_dict_when_enabled(self, mtls_cert_pair: object) -> None:
+    def test_returns_dict_when_enabled(self, mtls_cert_pair: CertPairLike) -> None:
         env = _env_from_pair(mtls_cert_pair)
         with patch.dict(os.environ, env, clear=False):
             cfg = create_uvicorn_ssl_config()
         assert isinstance(cfg, dict)
-        assert cfg["ssl_keyfile"] == mtls_cert_pair.key_path  # type: ignore[union-attr]
-        assert cfg["ssl_certfile"] == mtls_cert_pair.cert_path  # type: ignore[union-attr]
-        assert cfg["ssl_ca_certs"] == mtls_cert_pair.ca_path  # type: ignore[union-attr]
+        assert cfg["ssl_keyfile"] == mtls_cert_pair.key_path
+        assert cfg["ssl_certfile"] == mtls_cert_pair.cert_path
+        assert cfg["ssl_ca_certs"] == mtls_cert_pair.ca_path
         assert cfg["ssl_cert_reqs"] == ssl.CERT_REQUIRED
 
 
@@ -296,7 +303,7 @@ class TestHttpxVerifyArg:
         with patch.dict(os.environ, {}, clear=True):
             assert create_httpx_verify_arg() is True
 
-    def test_returns_ssl_context_when_enabled(self, mtls_cert_pair: object) -> None:
+    def test_returns_ssl_context_when_enabled(self, mtls_cert_pair: CertPairLike) -> None:
         env = _env_from_pair(mtls_cert_pair)
         with patch.dict(os.environ, env, clear=False):
             result = create_httpx_verify_arg()

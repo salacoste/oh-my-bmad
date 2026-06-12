@@ -67,11 +67,20 @@ _EXPECTED_DEFAULT_SERVICES: frozenset[str] = frozenset(
 
 # Profile-gated services that are EXPECTED to exist and be off-by-default.
 # ``migrator`` pre-existed (profiles: ["migrate"]); ``litestream`` is FR69's
-# sidecar. Any service OUTSIDE this set must NOT carry a ``profiles:`` key
-# (a regression that would silently drop a service from the default stack).
+# sidecar. Remote MCP services are also intentionally profile-gated so the
+# default local stack remains the same 7 core services.
 _EXPECTED_PROFILE_GATED: dict[str, str] = {
     "migrator": "migrate",
     "litestream": "litestream",
+    "task-registry-mcp": "remote-mcp",
+    "session-registry-mcp": "remote-mcp",
+    "git-mcp": "remote-mcp",
+    "github-mcp": "remote-mcp",
+    "verification-mcp": "remote-mcp",
+    "memory-mcp": "remote-mcp",
+    "artifact-mcp": "remote-mcp",
+    "browser-mcp": "remote-mcp",
+    "clawhip-bridge-mcp": "remote-mcp",
 }
 
 
@@ -200,10 +209,10 @@ def test_default_stack_unchanged_by_litestream_profile_gating() -> None:
     contract hermetically:
 
     * the default (no-profile) activation set is exactly the 7 known services;
-    * the only profile-gated services are the expected pair (``migrator`` +
-      ``litestream``) with their expected profile names — i.e. litestream did
-      not accidentally bolt a ``profiles:`` key onto any other service (which
-      would silently drop it from the default stack).
+    * the profile-gated services are exactly the expected optional groups
+      (``migrator``, ``litestream``, and ``remote-mcp`` tools) with their
+      expected profile names — i.e. litestream did not accidentally alter the
+      core default stack.
     """
     services = _services()
 
@@ -212,7 +221,7 @@ def test_default_stack_unchanged_by_litestream_profile_gating() -> None:
         for name, cfg in services.items()
         if isinstance(cfg, dict) and "profiles" in cfg
     }
-    # Only the expected services are profile-gated (no side-effect gating).
+    # Only the expected optional services are profile-gated.
     assert set(gated) == set(_EXPECTED_PROFILE_GATED), (
         "unexpected change to the set of profile-gated services; "
         f"expected {sorted(_EXPECTED_PROFILE_GATED)}, got {sorted(gated)}"
@@ -240,10 +249,13 @@ def test_default_stack_unchanged_by_litestream_profile_gating() -> None:
         "sprint-status contract: 8 services active with --profile litestream "
         f"(7 default + litestream); got {len(active_with_litestream_profile)}"
     )
-    # Sanity: the YAML always DECLARES all 9 (7 default + migrator + litestream);
-    # profiles only gate activation, not declaration.
-    assert len(services) == 9, (
-        f"expected 9 declared services (7 default + migrator + litestream); got {len(services)}"
+    # Sanity: the YAML always DECLARES all services; profiles only gate
+    # activation, not declaration.
+    expected_declared = len(_EXPECTED_DEFAULT_SERVICES) + len(_EXPECTED_PROFILE_GATED)
+    assert len(services) == expected_declared, (
+        f"expected {expected_declared} declared services "
+        "(7 default + optional profile-gated services); "
+        f"got {len(services)}"
     )
 
 

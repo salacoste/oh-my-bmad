@@ -13,7 +13,7 @@ Phase 14 keeps the event-log lifecycle path fail-safe: archive discovery and rep
 ## Components and completed scope
 - `docs/adr/0025-event-log-lifecycle-operations.md`: accepted ADR for lifecycle operation boundaries and future destructive-gate requirements.
 - Sprint-status hygiene: Phase 14 tracking remains parseable with valid BMad story statuses.
-- Non-destructive lifecycle dry-run planner: package-level planning data only; no file mutation or apply path.
+- Non-destructive lifecycle dry-run planner: package-only, package-level planning data only; no file mutation or apply path.
 - Task-history boundary lock: hot-log-only remains the operator-facing contract; archive-aware task history is future work.
 - Epic 73 closure: planning/status/docs/retrospective evidence only.
 

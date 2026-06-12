@@ -52,7 +52,8 @@ def _make_ca(
         .not_valid_after(now + datetime.timedelta(days=365))
     )
     builder = builder.add_extension(
-        x509.BasicConstraints(ca=True, path_length=None), critical=True,
+        x509.BasicConstraints(ca=True, path_length=None),
+        critical=True,
     )
     return builder.sign(key, hashes.SHA256())
 
@@ -76,12 +77,15 @@ def _make_leaf(
         .not_valid_after(not_after or (now + datetime.timedelta(days=90)))
     )
     builder = builder.add_extension(
-        x509.BasicConstraints(ca=False, path_length=None), critical=True,
+        x509.BasicConstraints(ca=False, path_length=None),
+        critical=True,
     )
-    san = x509.SubjectAlternativeName([
-        x509.DNSName("localhost"),
-        x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
-    ])
+    san = x509.SubjectAlternativeName(
+        [
+            x509.DNSName("localhost"),
+            x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
+        ]
+    )
     builder = builder.add_extension(san, critical=False)
     return builder.sign(ca_key, hashes.SHA256())
 
@@ -180,6 +184,7 @@ def untrusted_cert_pair(
 # ---------------------------------------------------------------------------
 # Helpers for TLS handshake tests
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class TlsHandshakeResult:

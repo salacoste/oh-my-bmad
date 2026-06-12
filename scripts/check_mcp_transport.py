@@ -140,7 +140,9 @@ def _is_streamable_http_module_path(module: str) -> bool:
     parts = module.split(".")
     if len(parts) >= 3 and parts[0] == "mcp" and parts[1] == "server":
         return _is_streamable_http_server_submodule(parts[2])
-    return module == _STREAMABLE_HTTP_CLIENT_MODULE or module.startswith(_STREAMABLE_HTTP_CLIENT_MODULE + ".")
+    return module == _STREAMABLE_HTTP_CLIENT_MODULE or module.startswith(
+        _STREAMABLE_HTTP_CLIENT_MODULE + "."
+    )
 
 
 def _is_forbidden_module_path(module: str) -> bool:
@@ -482,9 +484,7 @@ def _scan(roots: list[Path]) -> tuple[list[Violation], int]:
 
 def _file_defines_function(tree: ast.Module, name: str) -> bool:
     """Return True iff *tree* contains a top-level ``def {name}``."""
-    return any(
-        isinstance(node, ast.FunctionDef) and node.name == name for node in tree.body
-    )
+    return any(isinstance(node, ast.FunctionDef) and node.name == name for node in tree.body)
 
 
 def _file_imports_name(tree: ast.Module, module: str, name: str) -> bool:
@@ -547,10 +547,7 @@ def _check_mtls_servers() -> list[Violation]:
                     file=main_py,
                     lineno=0,
                     rule="MTLS001",
-                    message=(
-                        "file imports create_uvicorn_ssl_config from mtls "
-                        "but never calls it"
-                    ),
+                    message=("file imports create_uvicorn_ssl_config from mtls but never calls it"),
                 )
             )
 
@@ -601,10 +598,7 @@ def _check_mtls_clients() -> list[Violation]:
                     file=client_py,
                     lineno=0,
                     rule="MTLS001",
-                    message=(
-                        "mcp_clients.py does not import "
-                        "create_httpx_verify_arg from mtls"
-                    ),
+                    message=("mcp_clients.py does not import create_httpx_verify_arg from mtls"),
                 )
             )
 
@@ -663,7 +657,9 @@ def _scan_mtls_fixture(path: Path) -> list[Violation]:
                         message="create_uvicorn_ssl_config imported but not called",
                     )
                 )
-    elif name.startswith("client_") and not _file_imports_name(tree, "mtls", "create_httpx_verify_arg"):
+    elif name.startswith("client_") and not _file_imports_name(
+        tree, "mtls", "create_httpx_verify_arg"
+    ):
         violations.append(
             Violation(
                 file=path,
@@ -745,9 +741,7 @@ def _self_test() -> int:
         for fpath in mtls_clean_files:
             viols = _scan_mtls_fixture(fpath)
             for v in viols:
-                failures.append(
-                    f"FAIL mtls/clean/{v.file.name}: unexpected MTLS001: {v.message}"
-                )
+                failures.append(f"FAIL mtls/clean/{v.file.name}: unexpected MTLS001: {v.message}")
 
     mtls_violation_dir = mtls_fixture_root / "violations"
     if mtls_violation_dir.exists():
@@ -755,9 +749,7 @@ def _self_test() -> int:
         for fpath in mtls_violation_files:
             viols = _scan_mtls_fixture(fpath)
             if not viols:
-                failures.append(
-                    f"FAIL mtls/violations/{fpath.name}: expected MTLS001 but got none"
-                )
+                failures.append(f"FAIL mtls/violations/{fpath.name}: expected MTLS001 but got none")
 
     if failures:
         print("check_mcp_transport.py --self-test FAILED:", file=sys.stderr)
@@ -765,7 +757,9 @@ def _self_test() -> int:
             print(f"  {f}", file=sys.stderr)
         return 1
 
-    total = len(clean_files) + len(violation_files) + len(mtls_clean_files) + len(mtls_violation_files)
+    total = (
+        len(clean_files) + len(violation_files) + len(mtls_clean_files) + len(mtls_violation_files)
+    )
     print(f"✓ check_mcp_transport.py self-test OK ({total} fixtures, 0 failures)")
     return 0
 
@@ -819,9 +813,11 @@ def main(argv: list[str] | None = None) -> int:
             except ValueError:
                 rel = root
             print(f"    {rel}: {count} files")
-        print(f"    mTLS structural checks: "
-              f"{len(list(REPO_ROOT.glob('mcp-servers/*/src/*/__main__.py')))} servers, "
-              f"2 clients — 0 violations")
+        print(
+            f"    mTLS structural checks: "
+            f"{len(list(REPO_ROOT.glob('mcp-servers/*/src/*/__main__.py')))} servers, "
+            f"2 clients — 0 violations"
+        )
     return 0
 
 

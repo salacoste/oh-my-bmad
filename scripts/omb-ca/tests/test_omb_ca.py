@@ -34,7 +34,9 @@ def _load_module() -> object:
     # Always reload to get fresh state
     init_path = OMB_CA_DIR / "__init__.py"
     spec = importlib.util.spec_from_file_location(
-        mod_name, init_path, submodule_search_locations=[str(OMB_CA_DIR)],
+        mod_name,
+        init_path,
+        submodule_search_locations=[str(OMB_CA_DIR)],
     )
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
@@ -91,7 +93,9 @@ class TestInit:
 
         cert = x509.load_pem_x509_certificate((tmp_path / "ca.pem").read_bytes())
         assert cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value == "oh-my-bmad CA"
-        assert cert.subject.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)[0].value == "oh-my-bmad"
+        assert (
+            cert.subject.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)[0].value == "oh-my-bmad"
+        )
 
         # CA=True
         bc = cert.extensions.get_extension_for_class(x509.BasicConstraints)
@@ -102,7 +106,8 @@ class TestInit:
         mod.init_ca(tmp_path)
 
         key = serialization.load_pem_private_key(
-            (tmp_path / "ca-key.pem").read_bytes(), password=None,
+            (tmp_path / "ca-key.pem").read_bytes(),
+            password=None,
         )
         assert isinstance(key, rsa.RSAPrivateKey)
         assert key.key_size == 4096
@@ -201,7 +206,8 @@ class TestIssue:
         mod.issue_cert(tmp_path, "svc")
 
         key = serialization.load_pem_private_key(
-            (tmp_path / "svc-key.pem").read_bytes(), password=None,
+            (tmp_path / "svc-key.pem").read_bytes(),
+            password=None,
         )
         assert isinstance(key, rsa.RSAPrivateKey)
         assert key.key_size == 2048
@@ -274,7 +280,8 @@ class TestCheck:
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         ca_cert = x509.load_pem_x509_certificate((tmp_path / "ca.pem").read_bytes())
         ca_key = serialization.load_pem_private_key(
-            (tmp_path / "ca-key.pem").read_bytes(), password=None,
+            (tmp_path / "ca-key.pem").read_bytes(),
+            password=None,
         )
         now = datetime.now(UTC)
         expired_cert = (
@@ -287,7 +294,9 @@ class TestCheck:
             .not_valid_after(now - timedelta(hours=1))
             .sign(ca_key, hashes.SHA256())
         )
-        (tmp_path / "expired.pem").write_bytes(expired_cert.public_bytes(serialization.Encoding.PEM))
+        (tmp_path / "expired.pem").write_bytes(
+            expired_cert.public_bytes(serialization.Encoding.PEM)
+        )
 
         assert mod.check_certs(tmp_path) == 1
 
