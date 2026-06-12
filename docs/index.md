@@ -7,8 +7,8 @@
 - **Type:** monorepo (`uv` workspace, 24 Python members) — single backend platform plus optional MCP fleet.
 - **Primary language:** Python 3.12 (locked).
 - **Architecture:** event-sourced, append-only JSONL event log, single-writer materialization, capability-tier-gated MCP boundaries, and replayable state.
-- **Current repo state:** Phase 16 open as of 2026-06-12 — Archive-Aware Task History, a read-only continuation of replay/lifecycle work.
-- **Latest tagged release:** `v1.3.0`; the checked-out `main` branch contains later Phase 10–16 work.
+- **Current repo state:** Phase 17 open as of 2026-06-13 — Destructive Lifecycle Apply Readiness, a planning/safety-contract continuation of replay/lifecycle work with no destructive apply implementation.
+- **Latest tagged release:** `v1.3.0`; the checked-out `main` branch contains later Phase 10–17 work.
 
 ## Quick Reference
 

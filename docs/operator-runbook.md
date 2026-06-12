@@ -1203,7 +1203,7 @@ print(plan.canonical_json())
 
 The plan hash covers schema version, safety policy version, retention inputs, segment identities, archive coverage, decisions, and blockers. `generated_at` is intentionally excluded so the same safety inputs keep the same `plan_hash`.
 
-The safe operator sequence for future lifecycle work is:
+The Phase 17 readiness contract keeps this as the safe operator sequence for future lifecycle apply work:
 
 1. Validate the archive manifest and referenced segments.
 2. Validate replay against the retained hot+archive event set.
@@ -1211,4 +1211,4 @@ The safe operator sequence for future lifecycle work is:
 4. Record explicit Tier-3/operator authorization for that exact plan hash in the auditable event spine or an equally durable audit ledger.
 5. Only a separately approved future apply command may mutate hot logs, and it must re-compute the plan hash immediately before mutation and fail closed on any mismatch.
 
-Until that future apply story exists, operators must treat all lifecycle output as advisory. `get_task_history` may read validated archives when archive manifest configuration is present, but it remains a read-only query and does not authorize lifecycle apply.
+Until a future apply implementation story exists, operators must treat all lifecycle output as advisory. Phase 17 documents readiness requirements only; it does not add an apply command. `get_task_history` may read validated archives when archive manifest configuration is present, but it remains a read-only query and does not authorize lifecycle apply.

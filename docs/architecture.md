@@ -310,7 +310,7 @@ No runtime, API, service, package, MCP, dependency, or deployment behavior chang
 
 ## Phase 16: Archive-Aware Task History
 
-Phase 16 opened 2026-06-12 as Archive-Aware Task History (P16-AATH), activating the first Phase 15 future candidate as a small read-only query extension. `GET /v1/tasks/{task_id}/history` now preserves its hot-log-only default when no archive manifest is configured, and can include validated archive segments when `REPLAY_ARCHIVE_MANIFEST` or the legacy alias is present. Invalid archive configuration fails closed with the same route-local ProblemDetails family used by replay/validate.
+Phase 16 shipped 2026-06-12 as Archive-Aware Task History (P16-AATH), activating the first Phase 15 future candidate as a small read-only query extension. `GET /v1/tasks/{task_id}/history` now preserves its hot-log-only default when no archive manifest is configured, and can include validated archive segments when `REPLAY_ARCHIVE_MANIFEST` or the legacy alias is present. Invalid archive configuration fails closed with the same route-local ProblemDetails family used by replay/validate.
 
 New FRs: FR152 (archive-aware task history), FR153 (hot-log default compatibility), FR154 (fail-closed archive errors), FR155 (read-only guarantee).
 
@@ -320,11 +320,24 @@ Key decisions:
 - **No lifecycle mutation is authorized.** Destructive apply/delete/truncate/move/rewrite/chmod, object-storage lifecycle jobs, and scheduled retention remain future work gated by ADR-0025.
 - **Snapshots stay hot-only.** `HOT_ONLY_REPLAY` remains the snapshot boundary.
 
-## Future work beyond Phase 16
+## Phase 17: Destructive Lifecycle Apply Readiness
 
-The following items remain unshipped or intentionally out of scope:
+Phase 17 opened 2026-06-13 as Destructive Lifecycle Apply Readiness (P17-DLAR). It is a planning/readiness phase, not an apply implementation. The phase formalizes the future destructive-apply safety contract from ADR-0025 and Phase 15 carry-forward notes.
 
-- **Event-log prune/apply** -- destructive lifecycle operations require a separate ADR/story, exact dry-run plan-hash authorization, replay validation, rollback evidence, and explicit operator gate.
+New FRs: FR156 (readiness scope), FR157 (exact dry-run plan-hash binding), FR158 (replay validation precondition), FR159 (rollback/restore evidence), FR160 (distinct apply surface), FR161 (no destructive behavior in Phase 17).
+
+Key decisions:
+
+- **Apply remains unimplemented.** Phase 17 does not add delete/truncate/move/rewrite/chmod/prune/apply behavior, archive mutation, object-storage lifecycle jobs, scheduled retention workers, or credentialed production operations.
+- **Future apply binds to exact plan identity.** A later apply design must authorize the exact `LifecycleDryRunPlan.plan_hash` and re-compute it immediately before mutation.
+- **Replay and rollback proof are mandatory.** Archive manifest validation, replay validation against the retained hot+archive set, and backup/restore evidence are future preconditions before any mutation.
+- **Dry-run and apply stay separate.** A future apply command/API must be distinct from dry-run; no `dry_run=false` toggle can authorize mutation.
+
+## Future work beyond Phase 17
+
+The following items remain unshipped or intentionally out of scope after Phase 17 planning:
+
+- **Event-log prune/apply implementation** -- destructive lifecycle operations still require a later implementation phase after the Phase 17 readiness contract, exact dry-run plan-hash authorization, replay validation, rollback evidence, and explicit operator gate.
 - **Object-storage lifecycle jobs** -- archive manifests currently reference validated local/archive paths; automatic S3/B2/R2 lifecycle management is future work.
 - **Scheduled jobs** -- time-based task scheduling and lifecycle automation.
 - **Web dashboard** -- browser-based operator surface.

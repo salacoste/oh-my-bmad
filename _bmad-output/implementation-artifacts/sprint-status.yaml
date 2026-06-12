@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-06-12T22:45:00+03:00
-current_phase: 16  # Phase 16 OPEN — Archive-Aware Task History (Epics 76-80)
+last_updated: 2026-06-13T02:27:00+03:00
+current_phase: 17  # Phase 17 OPEN — Destructive Lifecycle Apply Readiness (Epics 81-85)
 
 development_status:
   # =========================================================================
@@ -730,11 +730,71 @@ development_status:
   epic-80: done  # Final verification and release hygiene
   80-1-quality-gate-review-commit-ci: done  # verification, independent review, commit/push, CI
 
+  # ── Phase 17: Destructive Lifecycle Apply Readiness (P17-DLAR) ──────────────
+  epic-81: done  # Planning and scope lock
+  81-1-phase-17-planning: done  # FR156-FR161 scope/ACs/non-goals/allowed+forbidden write set established
+
+  epic-82: backlog  # Apply precondition contract
+  82-1-plan-hash-authorization-contract: backlog  # future exact plan_hash authorization evidence contract
+
+  epic-83: backlog  # Replay and rollback proof contract
+  83-1-replay-validation-rollback-evidence-contract: backlog  # future replay proof + backup/restore evidence contract
+
+  epic-84: done  # Documentation reconciliation and static guard
+  84-1-phase-17-docs-status-reconciliation: done  # close Phase 16 wording and open Phase 17 readiness docs + prove no runtime behavior change
+
+  epic-85: done  # Final verification and release hygiene
+  85-1-quality-gate-review-commit-ci: done  # verification, independent review, commit/push, CI
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
 
+  - date: "2026-06-13"
+    event: phase-17-quality-gate-complete
+    from: backlog
+    to: done
+    reason: >
+      Phase 17 final quality gate complete locally. Docs/status/no-runtime
+      verification passed; stale Phase-16-open wording grep and destructive source-path
+      scan returned no matches; lifecycle/route regression suite passed; ruff,
+      diff hygiene, and changed-file secret hygiene passed. AI slop cleaner found
+      only grounded docs/status future/backlog/unimplemented terms and no masking
+      fallback slop. Independent code-reviewer re-review APPROVE and architect
+      re-review CLEAR after tightening the Phase 17 allowed write set and
+      updating sprint-status last_updated. Commit/push/CI evidence is tracked in
+      the final Ultragoal checkpoint.
+
+  - date: "2026-06-13"
+    event: phase-17-docs-status-reconciliation-complete
+    from: backlog
+    to: done
+    reason: >
+      Phase 17 docs/status reconciliation complete for Epic 84. README, project
+      overview, docs index, architecture, API contracts, data models, and
+      operator runbook now identify Phase 16 as shipped and Phase 17 as
+      destructive lifecycle apply readiness planning only. Static diff proof
+      confirms changed tracked paths are limited to docs and BMAD artifacts; no
+      packages, services, MCP servers, scripts, deployment manifests, lockfiles,
+      or CI workflows changed. Destructive lifecycle apply remains unimplemented.
+
+  - date: "2026-06-13"
+    event: phase-17-opened
+    from: 16
+    to: 17
+    reason: >
+      Phase 17 Destructive Lifecycle Apply Readiness OPENED from the Phase 15
+      future candidate after Phase 16 archive-aware task history shipped. Scope
+      is BMAD planning/readiness only: define future plan-hash authorization,
+      replay validation, rollback evidence, explicit operator gate, distinct
+      apply surface, and forbidden implementation paths. Non-goals remain any
+      delete/truncate/move/rewrite/chmod implementation, archive mutation,
+      object-storage lifecycle jobs, scheduled retention workers, credentialed
+      production operations, and any weakening of ADR-0025, HOT_ONLY_REPLAY,
+      archive checksum validation, or route-local archive errors. Planning
+      artifacts: phase-17-prd-amendment.md, phase-17-architecture-amendment.md,
+      and phase-17-epics.md. Story 81.1 complete; Epics 82-85 backlog.
 
   - date: "2026-06-12"
     event: phase-16-quality-gate-complete
