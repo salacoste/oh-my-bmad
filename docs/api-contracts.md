@@ -4,7 +4,7 @@ The platform exposes three categories of contract: HTTP (`registry-api`), MCP to
 
 ## HTTP API — `registry-api`
 
-Versioned at `/v1`. Versions are additive; `/v1` semantics are frozen once shipped. All handlers are async; request/response models are Pydantic v2 with `extra="forbid"`. Errors normally flow through the registered exception handler that maps `<svc>Error` → `{error_id, error_code, message, trace_id}`. Replay/archive failures on replay and validate endpoints use route-local RFC 7807 ProblemDetails so invalid archive configuration fails closed without changing global error behavior.
+Versioned at `/v1`. Versions are additive; `/v1` semantics are frozen once shipped. All handlers are async; request/response models are Pydantic v2 with `extra="forbid"`. Errors normally flow through the registered exception handler that maps `<svc>Error` → `{error_id, error_code, message, trace_id}`. Replay/archive failures on replay, validate, and archive-aware task-history endpoints use route-local RFC 7807 ProblemDetails so invalid archive configuration fails closed without changing global error behavior.
 
 | Path | Method | Handler | Purpose |
 |---|---|---|---|
@@ -14,7 +14,7 @@ Versioned at `/v1`. Versions are additive; `/v1` semantics are frozen once shipp
 | `/v1/tasks/{task_id}/logs/digest` | GET | `get_logs_digest` | LLM-summarized event digest for a task (Story 7.3, FR5). |
 | `/v1/tasks/{task_id}/events` | GET | `get_task_events` | Raw event stream with pagination (Story 7.5, FR6). |
 | `/v1/events/replay` | GET | `get_events_replay` | Read-only point-in-time replay from hot logs plus optional validated archives (FR135, FR139). |
-| `/v1/tasks/{task_id}/history` | GET | `get_task_history` | Hot-log-only task event history (FR136); archived task history is intentionally out of scope. |
+| `/v1/tasks/{task_id}/history` | GET | `get_task_history` | Task event history from hot logs plus opt-in validated archive segments (FR136, FR152-FR155). |
 | `/v1/events/replay/validate` | GET | `get_events_replay_validate` | Compare replayed state to live projection and return field diffs (FR137). |
 | `/v1/events/replay/snapshots` | GET | `get_replay_snapshots` | List replay snapshots (FR138), hot-log-only. |
 | `/v1/events/replay/snapshots` | POST | `post_replay_snapshot` | Create replay snapshot using `HOT_ONLY_REPLAY`; archive env vars are bypassed (FR141). |
@@ -184,7 +184,8 @@ Phase 12-14 replay and lifecycle-operation contracts live in `packages/replay`, 
 - `REPLAY_ARCHIVE_MANIFEST` is the primary env var; `EVENT_LOG_ARCHIVE_MANIFEST` is a legacy alias. If both point to different files, replay fails closed.
 - `lifecycle-manifest.json` schema version `1` references archived JSONL segments by relative path and `sha256`; segments are rejected on checksum mismatch, missing file, malformed metadata, duplicate keys, or sequence overlap.
 - `HOT_ONLY_REPLAY` forces hot-log-only behavior and is used by snapshot creation.
-- `get_task_history` remains hot-log-only; archive manifest env vars affect replay/validate endpoints, not task-history source selection.
+- `get_task_history` is archive-aware when archive manifest configuration is present; with no archive manifest it preserves the Phase 12-15 hot-log-only default. Invalid archive config fails closed with route-local ProblemDetails.
+- Fail-closed archive validation is intentional: a bad configured archive manifest can make task history return a route-local 5xx ProblemDetails instead of falling back to partial hot-log results.
 - `replay_events_stream()` is package-only; there is no public HTTP streaming endpoint yet.
 - Phase 14 authorizes planning/validation and non-destructive lifecycle dry-run data only; destructive prune/apply is not implemented and requires a separate ADR/story plus operator approval gate bound to the exact dry-run plan hash.
 

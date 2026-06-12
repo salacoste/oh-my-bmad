@@ -121,7 +121,7 @@ Phase 13 added event-log lifecycle support without hot-log deletion:
 - Archive segments are loaded only when explicitly configured through `archive_manifest_path`, `REPLAY_ARCHIVE_MANIFEST`, or legacy `EVENT_LOG_ARCHIVE_MANIFEST`. Conflicting env vars fail closed.
 - Replay merges hot segments and archive segments after validating checksums, missing files, duplicate segment keys, and overlapping monotonic-sequence ranges.
 - `HOT_ONLY_REPLAY` is the sentinel for surfaces that must ignore archive env vars. Snapshot creation uses it deliberately.
-- `GET /v1/tasks/{task_id}/history` remains hot-log-only; archived task history is future work.
+- `GET /v1/tasks/{task_id}/history` defaults to hot-log-only and becomes archive-aware only when archive manifest configuration is present; it reuses validated hot+archive envelope collection and remains read-only.
 - `replay_events_stream()` is a package API only. It yields frozen `ReplayProgress` values and then a terminal `ReplayResult`; no public HTTP streaming endpoint exists yet.
 - Destructive prune/apply is explicitly not implemented. It requires a separate ADR and operator approval gate.
 
@@ -129,7 +129,7 @@ Phase 14 added the lifecycle operations boundary without changing replay return 
 
 - ADR-0025 authorizes planning, validation, and non-destructive dry-run outputs only.
 - Dry-run plan identity is content-addressed by safety inputs; future apply must re-compute and match that hash before any mutation.
-- Destructive prune/apply, object-storage lifecycle jobs, scheduled retention, and archive-aware task history remain future work.
+- Destructive prune/apply, object-storage lifecycle jobs, and scheduled retention remain future work. Archive-aware task history is a read-only Phase 16 query extension and does not authorize lifecycle mutation.
 
 The replay contract is asserted by `packages/replay` tests and historical `tests/replay/` contracts: frozen event-log fixtures replay through the projector to equivalent state. Mandatory on every projector, replay, archive, or event-handler change.
 

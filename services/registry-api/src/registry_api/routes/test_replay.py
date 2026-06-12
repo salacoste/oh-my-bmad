@@ -12,6 +12,8 @@ ensure replay's materializer can handle the event type.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -96,6 +98,45 @@ def _write_jsonl(
     with open(path, "wb") as f:
         for env in envelopes:
             f.write(to_canonical_json(env) + b"\n")
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _write_lifecycle_manifest(
+    manifest_dir: Path,
+    *,
+    logical_date: str,
+    original_relpath: str,
+    archive_relpath: str,
+    sha256: str,
+    event_count: int,
+    first_sequence: int,
+    last_sequence: int,
+) -> Path:
+    manifest = {
+        "schema_version": 1,
+        "manifest_id": "m-route-test",
+        "created_at": "2026-06-12T00:00:00Z",
+        "created_by": "pytest",
+        "segments": [
+            {
+                "logical_date": logical_date,
+                "original_relpath": original_relpath,
+                "archive_relpath": archive_relpath,
+                "sha256": sha256,
+                "event_count": event_count,
+                "first_sequence": first_sequence,
+                "last_sequence": last_sequence,
+                "archived_at": "2026-06-12T00:00:00Z",
+                "actor_id": "pytest",
+            }
+        ],
+    }
+    path = manifest_dir / "lifecycle-manifest.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -349,14 +390,39 @@ class TestGetTaskHistory:
         assert resp.json()["limit"] == 100
 
     @pytest.mark.asyncio
-    async def test_history_ignores_archive_configuration_and_returns_404_for_external_archive_task(
+    async def test_history_without_archive_manifest_uses_hot_only_fast_path(
+        self,
+        client_with_events: AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Default hot-only history does not pay the archive merge cost."""
+
+        def fail_if_archive_merge_is_used(*_args: object, **_kwargs: object) -> object:
+            msg = "hot-only task-history must not call collect_replay_envelopes"
+            raise AssertionError(msg)
+
+        monkeypatch.delenv("REPLAY_ARCHIVE_MANIFEST", raising=False)
+        monkeypatch.delenv("EVENT_LOG_ARCHIVE_MANIFEST", raising=False)
+        monkeypatch.setattr(
+            replay_routes,
+            "collect_replay_envelopes",
+            fail_if_archive_merge_is_used,
+        )
+
+        resp = await client_with_events.get(f"/v1/tasks/{_TASK_ID}/history")
+
+        assert resp.status_code == 200, f"body={resp.text!r}"
+
+    @pytest.mark.asyncio
+    async def test_history_reads_archive_only_task_when_manifest_configured(
         self,
         client_empty_log: AsyncClient,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Task-history ignores archive config and scans only hot JSONL files."""
+        """Archive manifest opt-in lets task-history return archive-only events."""
         archive_dir = tmp_path / "archive"
+        archive_dir.mkdir()
         archive_task_clock = FrozenClock(
             mono_ns=2_000_000,
             now=datetime(2026, 6, 9, 13, 0, 0, tzinfo=UTC),
@@ -370,23 +436,78 @@ class TestGetTaskHistory:
             emitted_at=datetime(2026, 6, 9, 13, 0, 0, tzinfo=UTC),
         )
         _write_jsonl(archive_dir, "2026-06-09", [archive_env])
-
-        def fail_if_history_resolves_archive_manifest(_request: object) -> Path | None:
-            msg = "task-history must not resolve archive manifests"
-            raise AssertionError(msg)
-
-        monkeypatch.setattr(
-            replay_routes,
-            "_archive_manifest_path",
-            fail_if_history_resolves_archive_manifest,
+        manifest = _write_lifecycle_manifest(
+            archive_dir,
+            logical_date="2026-06-09",
+            original_relpath="2026-06-09.jsonl",
+            archive_relpath="2026-06-09.jsonl",
+            sha256=_sha256(archive_dir / "2026-06-09.jsonl"),
+            event_count=1,
+            first_sequence=2_000_000,
+            last_sequence=2_000_000,
         )
-        monkeypatch.setenv("REPLAY_ARCHIVE_MANIFEST", str(tmp_path / "missing.json"))
+        monkeypatch.setenv("REPLAY_ARCHIVE_MANIFEST", str(manifest))
+        monkeypatch.delenv("EVENT_LOG_ARCHIVE_MANIFEST", raising=False)
+
+        resp = await client_empty_log.get(f"/v1/tasks/{archive_task_id}/history")
+
+        assert resp.status_code == 200, f"body={resp.text!r}"
+        body = resp.json()
+        assert body["total"] == 1
+        assert body["events"][0]["sequence_number"] == 2_000_000
+        assert body["events"][0]["event_type"] == "task.created"
+        assert body["events"][0]["payload_summary"]["task_id"] == archive_task_id
+
+    @pytest.mark.asyncio
+    async def test_history_without_archive_manifest_still_returns_404_for_archive_only_task(
+        self,
+        client_empty_log: AsyncClient,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No archive manifest configured preserves the previous hot-only default."""
+        archive_dir = tmp_path / "archive"
+        archive_dir.mkdir()
+        archive_task_clock = FrozenClock(
+            mono_ns=2_000_000,
+            now=datetime(2026, 6, 9, 13, 0, 0, tzinfo=UTC),
+        )
+        archive_task_id = new_task_id(clock=archive_task_clock, rng=Random(7))
+        archive_env = _make_task_created_envelope(
+            task_id=archive_task_id,
+            event_id=new_event_id(clock=archive_task_clock, rng=Random(8)),
+            title="archive-only task",
+            mono_ns=2_000_000,
+            emitted_at=datetime(2026, 6, 9, 13, 0, 0, tzinfo=UTC),
+        )
+        _write_jsonl(archive_dir, "2026-06-09", [archive_env])
+        monkeypatch.delenv("REPLAY_ARCHIVE_MANIFEST", raising=False)
         monkeypatch.delenv("EVENT_LOG_ARCHIVE_MANIFEST", raising=False)
 
         resp = await client_empty_log.get(f"/v1/tasks/{archive_task_id}/history")
 
         assert resp.status_code == 404
         assert "No events found" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_history_invalid_archive_config_uses_route_local_problem_details(
+        self,
+        client_with_events: AsyncClient,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Task-history fails closed on invalid archive config."""
+        monkeypatch.setenv("REPLAY_ARCHIVE_MANIFEST", str(tmp_path / "missing.json"))
+        monkeypatch.delenv("EVENT_LOG_ARCHIVE_MANIFEST", raising=False)
+
+        resp = await client_with_events.get(f"/v1/tasks/{_TASK_ID}/history")
+
+        assert resp.status_code == 500
+        body = resp.json()
+        assert body["type"] == "/errors/replay-archive-config-error"
+        assert body["title"] == "Replay archive configuration error"
+        assert body["extensions"]["code"] == "replay_archive_config_error"
+        assert body["type"] != "/errors/internal"
 
     @pytest.mark.asyncio
     async def test_history_invalid_task_id_returns_422(

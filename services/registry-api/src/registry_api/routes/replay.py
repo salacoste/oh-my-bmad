@@ -23,6 +23,7 @@ from datetime import datetime
 from typing import Any, cast
 
 import structlog
+from events.envelope import EventEnvelope
 from events.log_reader import read_log_lines
 from fastapi import APIRouter, Path, Query, Request
 from fastapi.exceptions import HTTPException
@@ -35,7 +36,11 @@ from registry_state.schema import (  # noqa: IMP001 — registry-api reads regis
     Task,
 )
 from replay import replay_events
-from replay.archive_manifest import resolve_archive_manifest_path
+from replay.archive_manifest import (
+    ArchiveManifestInput,
+    collect_replay_envelopes,
+    resolve_archive_manifest_path,
+)
 from replay.errors import (
     ReplayArchiveChecksumError,
     ReplayArchiveConfigError,
@@ -265,31 +270,38 @@ def _summarize_payload(envelope: object) -> dict[str, Any]:
 def _read_task_events_sync(
     event_log_dir: pathlib.Path,
     task_id: str,
+    archive_manifest_path: ArchiveManifestInput = None,
 ) -> list[TaskHistoryEntry]:
-    """Read events for a specific task from the event log (sync, for to_thread)."""
+    """Read events for a specific task from hot logs plus opt-in archives."""
     entries: list[TaskHistoryEntry] = []
-    for path in sorted(event_log_dir.glob("*.jsonl")):
-        try:
-            for env in read_log_lines(path):
-                payload = env.payload
-                if isinstance(payload, dict):
-                    env_task_id = payload.get("task_id")
-                else:
-                    env_task_id = getattr(payload, "task_id", None)
-                if env_task_id == task_id:
-                    entries.append(
-                        TaskHistoryEntry(
-                            sequence_number=env.emitted_at_monotonic_ns,
-                            emitted_at=env.emitted_at.isoformat(),
-                            event_type=env.type,
-                            actor_kind=env.actor.kind,
-                            actor_id=env.actor.id,
-                            trace_id=env.trace_id,
-                            payload_summary=_summarize_payload(env),
-                        )
-                    )
-        except FileNotFoundError:
-            continue
+    if archive_manifest_path is None:
+        envelopes: list[EventEnvelope] = []
+        for path in sorted(event_log_dir.glob("*.jsonl")):
+            try:
+                envelopes.extend(read_log_lines(path))
+            except FileNotFoundError:
+                continue
+    else:
+        envelopes = collect_replay_envelopes(event_log_dir, archive_manifest_path)
+
+    for env in envelopes:
+        payload = env.payload
+        if isinstance(payload, dict):
+            env_task_id = payload.get("task_id")
+        else:
+            env_task_id = getattr(payload, "task_id", None)
+        if env_task_id == task_id:
+            entries.append(
+                TaskHistoryEntry(
+                    sequence_number=env.emitted_at_monotonic_ns,
+                    emitted_at=env.emitted_at.isoformat(),
+                    event_type=env.type,
+                    actor_kind=env.actor.kind,
+                    actor_id=env.actor.id,
+                    trace_id=env.trace_id,
+                    payload_summary=_summarize_payload(env),
+                )
+            )
     entries.sort(key=lambda e: e.sequence_number)
     return entries
 
@@ -388,24 +400,29 @@ async def get_task_history(
     task_id: str = Path(..., pattern=_TASK_ID_PATTERN),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-) -> TaskHistoryResponse:
+) -> TaskHistoryResponse | JSONResponse:
     """GET /v1/tasks/{task_id}/history — event history for a task (Story 61-2).
 
-    Scans hot JSONL event-log files for events whose payload references
-    ``task_id``, ordered by sequence number. Paginated via ``limit`` /
-    ``offset``. Archive manifests are intentionally ignored until a separate
-    archive-aware task-history story changes this public contract.
+    Scans hot JSONL event-log files plus opt-in archive manifest segments for
+    events whose payload references ``task_id``, ordered by sequence number.
+    Paginated via ``limit`` / ``offset``. With no archive manifest configured,
+    this preserves the Phase 12-15 hot-log-only default.
 
-    Returns 404 if no hot-log events reference the given task_id.
+    Returns 404 if neither hot logs nor configured archive segments reference
+    the given task_id.
     """
     event_log_dir = _event_log_dir(request)
 
     # Read events in a thread to avoid blocking the event loop
-    all_entries = await asyncio.to_thread(
-        _read_task_events_sync,
-        event_log_dir,
-        task_id,
-    )
+    try:
+        all_entries = await asyncio.to_thread(
+            _read_task_events_sync,
+            event_log_dir,
+            task_id,
+            _archive_manifest_path(request),
+        )
+    except ReplayArchiveError as exc:
+        return _archive_problem_response(request, exc)
 
     if not all_entries:
         raise HTTPException(

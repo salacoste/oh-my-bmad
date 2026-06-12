@@ -284,7 +284,7 @@ Key lifecycle decisions:
 - **Archive manifest, not hot deletion.** Archived segments are referenced by `lifecycle-manifest.json`; Phase 13 does not delete or prune hot logs.
 - **Validated hot+archive replay.** Archive segments are checksum-validated and rejected on missing files, malformed manifests, duplicate keys, or sequence overlap.
 - **Explicit archive config precedence.** Direct `archive_manifest_path` wins; otherwise `REPLAY_ARCHIVE_MANIFEST` is preferred, with `EVENT_LOG_ARCHIVE_MANIFEST` kept as a legacy alias. Conflicting env vars fail closed.
-- **Hot-only surfaces stay hot-only.** Snapshot creation uses the `HOT_ONLY_REPLAY` sentinel; task history remains hot-log-only until archived task-history and prune semantics are designed.
+- **Hot-only surfaces stayed hot-only in Phase 13.** Snapshot creation uses the `HOT_ONLY_REPLAY` sentinel. Task history stayed hot-log-only until the separate Phase 16 archive-aware history contract.
 - **No public streaming endpoint yet.** `replay_events_stream()` is package-only and yields frozen `ReplayProgress` updates plus a terminal `ReplayResult` equivalent to `replay_events()`.
 - **Error mapping is route-local.** Replay/archive failures on replay and validate endpoints return route-local ProblemDetails; global `/errors/internal` behavior is unchanged.
 
@@ -299,7 +299,7 @@ Key lifecycle-operation decisions:
 
 - **ADR-0025 gates destructive apply.** Planning, validation, and non-destructive dry-run behavior are authorized; deletion/truncation/archive mutation requires a future story and operator gate.
 - **Plan identity must be stable.** Future apply authorization must bind to the exact dry-run plan hash and re-compute that hash immediately before mutation.
-- **Task history remains hot-log-only.** Archive-aware task history changes an operator-facing query contract and remains future work with separate tests.
+- **Task history stayed hot-log-only in Phase 14.** Archive-aware task history changes an operator-facing query contract, so it was split into the separate Phase 16 contract and tests.
 - **Object storage and scheduled retention stay future.** Automatic lifecycle jobs wait until dry-run/apply safety is proven.
 
 ## Phase 15: Lifecycle Documentation Reconciliation and Backlog Triage
@@ -308,12 +308,23 @@ Phase 15 shipped 2026-06-12 as a docs/status-only reconciliation slice. Scope: u
 
 No runtime, API, service, package, MCP, dependency, or deployment behavior changed.
 
-## Future work beyond Phase 15
+## Phase 16: Archive-Aware Task History
+
+Phase 16 opened 2026-06-12 as Archive-Aware Task History (P16-AATH), activating the first Phase 15 future candidate as a small read-only query extension. `GET /v1/tasks/{task_id}/history` now preserves its hot-log-only default when no archive manifest is configured, and can include validated archive segments when `REPLAY_ARCHIVE_MANIFEST` or the legacy alias is present. Invalid archive configuration fails closed with the same route-local ProblemDetails family used by replay/validate.
+
+New FRs: FR152 (archive-aware task history), FR153 (hot-log default compatibility), FR154 (fail-closed archive errors), FR155 (read-only guarantee).
+
+Key decisions:
+
+- **Existing archive validation is reused.** Task history delegates to the Phase 13 `collect_replay_envelopes` hot+archive merge path instead of introducing a second parser.
+- **No lifecycle mutation is authorized.** Destructive apply/delete/truncate/move/rewrite/chmod, object-storage lifecycle jobs, and scheduled retention remain future work gated by ADR-0025.
+- **Snapshots stay hot-only.** `HOT_ONLY_REPLAY` remains the snapshot boundary.
+
+## Future work beyond Phase 16
 
 The following items remain unshipped or intentionally out of scope:
 
 - **Event-log prune/apply** -- destructive lifecycle operations require a separate ADR/story, exact dry-run plan-hash authorization, replay validation, rollback evidence, and explicit operator gate.
-- **Archived task history** -- `GET /v1/tasks/{task_id}/history` remains hot-log-only until a separate archive-aware history contract and tests are designed.
 - **Object-storage lifecycle jobs** -- archive manifests currently reference validated local/archive paths; automatic S3/B2/R2 lifecycle management is future work.
 - **Scheduled jobs** -- time-based task scheduling and lifecycle automation.
 - **Web dashboard** -- browser-based operator surface.

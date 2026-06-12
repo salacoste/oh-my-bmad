@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-06-12T04:27:31+03:00
-current_phase: 15  # Phase 15 COMPLETE — Lifecycle Documentation Reconciliation and Backlog Triage (Epics 74-75)
+last_updated: 2026-06-12T22:45:00+03:00
+current_phase: 16  # Phase 16 OPEN — Archive-Aware Task History (Epics 76-80)
 
 development_status:
   # =========================================================================
@@ -714,11 +714,71 @@ development_status:
   epic-75: done  # Future-candidate backlog triage
   75-1-lifecycle-future-candidate-triage: done  # FR150-FR151; future candidates surfaced without implementation scope
 
+  # ── Phase 16: Archive-Aware Task History (P16-AATH) ──────────────
+  epic-76: done  # Planning and scope lock
+  76-1-phase-16-planning: done  # FR152-FR155 scope/ACs/non-goals/allowed write set established
+
+  epic-77: done  # Archive-aware history helper
+  77-1-deterministic-merged-task-history-collection: done  # hot+archive envelope collection filtered by task_id
+
+  epic-78: done  # Registry API route integration
+  78-1-task-history-archive-opt-in: done  # /v1/tasks/{task_id}/history archive-aware when manifest config is present
+
+  epic-79: done  # Documentation reconciliation
+  79-1-archive-aware-history-docs: done  # API/operator/data/architecture docs updated after implementation
+
+  epic-80: done  # Final verification and release hygiene
+  80-1-quality-gate-review-commit-ci: done  # verification, independent review, commit/push, CI
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
 
+
+  - date: "2026-06-12"
+    event: phase-16-quality-gate-complete
+    from: backlog
+    to: done
+    reason: >
+      Phase 16 final quality gate complete. Targeted replay/history/lifecycle
+      suite, ruff, mypy, sprint-status YAML parse, static policy checks,
+      diff hygiene, and secret hygiene passed locally. AI slop cleaner removed
+      one dead test env line after behavior lock. Independent code-reviewer
+      rerun APPROVE and architect rerun CLEAR; previous performance/docs WATCH
+      items resolved by hot-only fast path, docstring/status fixes, README badge
+      update, and fail-closed contract note. Commit/push/CI evidence is tracked
+      in the final Ultragoal checkpoint.
+
+  - date: "2026-06-12"
+    event: phase-16-epics-77-through-79-complete
+    from: backlog
+    to: done
+    reason: >
+      Phase 16 implementation/docs slice complete for Epics 77-79. Task-history
+      collection now delegates to existing hot+archive envelope merge semantics;
+      /v1/tasks/{task_id}/history is archive-aware when archive manifest config
+      is present and remains hot-log-only by default. Invalid archive config
+      fails closed with route-local ProblemDetails. Docs reconciled across API,
+      operator, data-model, architecture, project overview, index, and README.
+      Destructive lifecycle apply/delete/truncate/move/rewrite/chmod,
+      object-storage lifecycle jobs, scheduled retention, and snapshot behavior
+      changes remain future/non-goals.
+
+  - date: "2026-06-12"
+    event: phase-16-opened
+    from: 15
+    to: 16
+    reason: >
+      Phase 16 Archive-Aware Task History OPENED from the first Phase 15
+      future candidate. Scope is read-only archive-aware retrieval for
+      GET /v1/tasks/{task_id}/history when archive manifest configuration is
+      present. Non-goals remain destructive lifecycle apply/delete/truncate/
+      move/rewrite/chmod, object-storage lifecycle policies, scheduled
+      retention workers, snapshot behavior changes, and credentialed
+      production operations. Planning artifacts: phase-16-prd-amendment.md,
+      phase-16-architecture-amendment.md, and phase-16-epics.md. Story 76.1
+      complete; Epics 77-80 backlog.
 
   - date: "2026-06-12"
     event: phase-15-complete

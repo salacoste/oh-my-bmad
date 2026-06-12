@@ -49,13 +49,13 @@ curl -sS http://127.0.0.1:8080/v1/events/replay | jq .
 curl -sS http://127.0.0.1:8080/v1/events/replay/validate | jq .
 ```
 
-Task history is intentionally hot-log-only:
+Task history defaults to hot-log-only when no archive manifest is configured:
 
 ```sh
 curl -sS http://127.0.0.1:8080/v1/tasks/<task_id>/history | jq .
 ```
 
-If an old task has been moved to archive-only storage, task-history will not surface it until archived task-history receives its own design. Setting `REPLAY_ARCHIVE_MANIFEST` or `EVENT_LOG_ARCHIVE_MANIFEST` affects replay/validate endpoints, not this task-history source selection.
+If an old task has been moved to archive-only storage, set `REPLAY_ARCHIVE_MANIFEST` or legacy `EVENT_LOG_ARCHIVE_MANIFEST` to a validated `lifecycle-manifest.json`; task-history then reads hot logs plus archive segments through the same fail-closed archive validation used by replay/validate.
 
 ### Replay with archived segments
 
@@ -75,6 +75,10 @@ If both `REPLAY_ARCHIVE_MANIFEST` and `EVENT_LOG_ARCHIVE_MANIFEST` are set, they
 - checksum mismatches,
 - duplicate segment keys,
 - overlapping monotonic sequence ranges between hot and archived segments.
+
+With the same manifest configuration, `GET /v1/tasks/{task_id}/history` reads hot logs plus
+validated archive segments. Without archive manifest configuration, task history remains hot-log
+only. Invalid archive configuration fails closed before returning partial archive-derived history.
 
 ### Snapshot boundaries
 
@@ -1207,4 +1211,4 @@ The safe operator sequence for future lifecycle work is:
 4. Record explicit Tier-3/operator authorization for that exact plan hash in the auditable event spine or an equally durable audit ledger.
 5. Only a separately approved future apply command may mutate hot logs, and it must re-compute the plan hash immediately before mutation and fail closed on any mismatch.
 
-Until that future apply story exists, operators must treat all lifecycle output as advisory. `get_task_history` remains hot-log only; archive-aware task history is a separate future story.
+Until that future apply story exists, operators must treat all lifecycle output as advisory. `get_task_history` may read validated archives when archive manifest configuration is present, but it remains a read-only query and does not authorize lifecycle apply.

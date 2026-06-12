@@ -14,7 +14,7 @@
   <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-stdio-7F52B5" alt="MCP"/></a>
   <a href="https://mypy.readthedocs.io/"><img src="https://img.shields.io/badge/mypy-strict-1f5082" alt="mypy strict"/></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"/></a>
-  <a href="_bmad-output/planning-artifacts/epics.md"><img src="https://img.shields.io/badge/Phase%2013-Complete-success" alt="Phase 13 complete"/></a>
+  <a href="_bmad-output/planning-artifacts/phase-16-epics.md"><img src="https://img.shields.io/badge/Phase%2016-Open-blue" alt="Phase 16 open"/></a>
 </p>
 
 ---
@@ -25,7 +25,7 @@ A platform that turns Telegram and a local console into the control surfaces for
 
 It's deliberately **boring** infrastructure — Python 3.12, FastAPI, aiogram, SQLite WAL, Docker Compose, stdio MCP. The novelty is in how the boring pieces compose, not in any one piece.
 
-> **Current repo state: Phase 13 complete — event replay plus event-log lifecycle management are shipped.** Latest tagged release is `v1.3.0`; this checkout contains later Phase 10–13 work. See [`docs/index.md`](docs/index.md) for the master entry point.
+> **Current repo state: Phase 16 open — archive-aware task history is being shipped as a read-only replay/lifecycle continuation.** Latest tagged release is `v1.3.0`; this checkout contains later Phase 10–16 work. See [`docs/index.md`](docs/index.md) for the master entry point.
 
 ## How it works (at a glance)
 
@@ -141,7 +141,7 @@ Phase 4 — Implementation     → sprint plan → (create-story → validate �
                               → retrospective at every epic boundary
 ```
 
-Phase 1 took **10 epics / 88 stories**, with retrospective + deferred-work governance at every epic boundary. The current repo has progressed through **13 phases** — event spine, multi-runtime workers, a 9-server MCP fleet, browser automation, supply-chain hardening, remote MCP transport, mTLS, historical replay, and event-log lifecycle management — with zero open GATED deferred items. The full per-phase walkthrough, skill catalog, and "how a new feature enters the workflow" decision tree is documented separately:
+Phase 1 took **10 epics / 88 stories**, with retrospective + deferred-work governance at every epic boundary. The current repo has progressed through **16 phases** — event spine, multi-runtime workers, a 9-server MCP fleet, browser automation, supply-chain hardening, remote MCP transport, mTLS, historical replay, event-log lifecycle management, lifecycle-operation safety, docs/backlog reconciliation, and archive-aware task history — with zero open GATED deferred items. The full per-phase walkthrough, skill catalog, and "how a new feature enters the workflow" decision tree is documented separately:
 
 ➡️ **[`docs/bmad-workflow.md`](docs/bmad-workflow.md)** — the complete workflow this project follows.
 
@@ -208,7 +208,7 @@ A few things worth a look even if you don't intend to run it:
 
 ## Status
 
-**Current development state — Phase 13 complete.** Latest tagged release: `v1.3.0`. Shipped phases in this checkout:
+**Current development state — Phase 16 open.** Latest tagged release: `v1.3.0`. Shipped phases in this checkout:
 
 | Phase | Scope | Epics |
 |---|---|---|
@@ -225,7 +225,10 @@ A few things worth a look even if you don't intend to run it:
 | 11 | mTLS — internal Docker-network TLS profile and CA tooling | 56–59 |
 | 12 | Historical event replay — replay engine, validation, snapshots, task history | 60–63 |
 | 13 | Event log lifecycle — archive manifest, hot+archive replay, package streaming | 64–68 |
+| 14 | Event log lifecycle operations — ADR-0025, non-destructive dry-run, hot-only task-history boundary | 69–73 |
+| 15 | Lifecycle documentation reconciliation and backlog triage | 74–75 |
+| 16 | Archive-aware task history — read-only hot+archive history query | 76–80 |
 
-Phase 13 is complete; all current ship-blocker items are green. Zero open GATED deferred items.
+Phase 16 is open; archive-aware task history is scoped as read-only. Destructive lifecycle apply, object-storage lifecycle jobs, and scheduled retention remain future work. Zero open GATED deferred items.
 
 Issues and discussion welcome — security reports per [`SECURITY.md`](./SECURITY.md).

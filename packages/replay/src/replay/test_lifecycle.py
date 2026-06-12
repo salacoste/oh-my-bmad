@@ -375,25 +375,20 @@ def test_no_destructive_public_names_or_lifecycle_calls() -> None:
     assert all(call not in source for call in forbidden_calls)
 
 
-def test_no_route_or_api_contract_files_changed() -> None:
-    changed = _git_changed_files()
-
-    assert "docs/api-contracts.md" not in changed
-    assert all(
-        not path.startswith("services/registry-api/src/registry_api/routes/") for path in changed
+def test_no_destructive_lifecycle_route_added() -> None:
+    route_source = Path("services/registry-api/src/registry_api/routes/replay.py").read_text(
+        encoding="utf-8"
     )
 
-
-def _git_changed_files() -> set[str]:
-    import subprocess
-
-    result = subprocess.run(
-        ["git", "diff", "--name-only", "HEAD"],
-        check=True,
-        capture_output=True,
-        text=True,
+    forbidden_route_fragments = (
+        "apply_lifecycle",
+        "prune_apply",
+        "delete_lifecycle",
+        "truncate_lifecycle",
+        "rewrite_lifecycle",
+        "chmod_lifecycle",
     )
-    return set(result.stdout.splitlines())
+    assert all(fragment not in route_source for fragment in forbidden_route_fragments)
 
 
 def _assert_json_safe(value: Any) -> None:
