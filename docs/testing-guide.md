@@ -375,6 +375,9 @@ Config lives in `cosmic-ray.toml` (3-kernel gating run) and
 `cosmic-ray.smoke.toml` (tiers.py only, the fast proof).
 `cosmic-ray.expanded.toml` is a non-gating exploratory baseline for newer
 kernels and must not be wired to the 82% gate until it has a reviewed threshold.
+The current expanded baseline is an aggregate **252/387 = 65.1%** after
+focused `GeminiRunner` hardening; it is useful trend evidence, not a release
+gate or module-specific ratchet target.
 
 ### Recipes
 
@@ -409,7 +412,11 @@ The threshold is version-controlled (the `mutation-gate THRESHOLD="82"` default
 in the `justfile`, mirrored in the nightly job comment). It applies only to the
 three-kernel `cosmic-ray.toml` scope above. Expanding the gated module list
 requires an explicit reviewed baseline/threshold change; otherwise use the
-non-gating `mutation-expanded-baseline` recipe.
+non-gating `mutation-expanded-baseline` recipe. The expanded recipe currently
+tracks the same three mature kernels plus `task_fsm.py` and `gemini_runner.py`;
+its latest observed aggregate score is **252/387 = 65.1%** and does not change
+the nightly gate. Before promoting any expanded score to a ratchet or gate,
+break it down by module and review the weakest included kernel separately.
 
 **Ratchet-up policy:** as surviving mutants are killed and the score rises,
 **raise** the threshold to lock in the gain (update the `justfile` default + the

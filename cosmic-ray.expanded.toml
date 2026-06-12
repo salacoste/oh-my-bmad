@@ -3,7 +3,9 @@
 # This config deliberately DOES NOT back the nightly threshold. It tracks the
 # broader Phase-6/Gemini mutation surface until those modules have enough
 # mutation-oriented tests to justify a reviewed ratchet into cosmic-ray.toml.
-# Current observed baseline before dedicated hardening: 152/387 = 39.3%.
+# Current aggregate observed baseline after focused GeminiRunner hardening:
+# 252/387 = 65.1%. Treat this as trend evidence only; per-module ratchets
+# require separate breakdown before promotion to a gate.
 [cosmic-ray]
 module-path = [
     "packages/capabilities/src/capabilities/tiers.py",
@@ -14,7 +16,7 @@ module-path = [
 ]
 timeout = 60.0
 excluded-modules = []
-test-command = "uv run pytest packages/capabilities/src/capabilities/test_tiers.py packages/events/src/events/test_schema_registry.py packages/events/src/events/test_canonical.py packages/events/src/events/test_payload_validators.py services/registry-state/src/registry_state/domain/test_task_fsm_atdd.py services/worker-wrapper/src/worker_wrapper/test_gemini_atdd.py -p no:cacheprovider -q -x"
+test-command = "uv run pytest packages/capabilities/src/capabilities/test_tiers.py packages/events/src/events/test_schema_registry.py packages/events/src/events/test_canonical.py packages/events/src/events/test_payload_validators.py services/registry-state/src/registry_state/domain/test_task_fsm_atdd.py services/worker-wrapper/src/worker_wrapper/test_gemini_atdd.py services/worker-wrapper/src/worker_wrapper/test_gemini_runner.py -p no:cacheprovider -q -x"
 
 [cosmic-ray.distributor]
 name = "local"

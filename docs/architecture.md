@@ -187,7 +187,7 @@ Mutating fleet-server events use the **two-location** pattern: the spine event r
 
 ### Mutation testing gate (NFR-O11)
 
-Epic 14 established the cosmic-ray mutation gate (`scripts/mutation_score.py`). The `just mutation-gate` recipe passes `--threshold 82` (the NFR-O11 floor). The gate targets the capability-tier kernel (`packages/capabilities`) and the event-envelope core -- a surviving mutant in `tiers.py` `check_tier` is a fleet-wide authz hole. Newer kernels may be tracked through a separate non-gating expanded baseline until they have a reviewed threshold; the nightly gating job enforces the original three-kernel score.
+Epic 14 established the cosmic-ray mutation gate (`scripts/mutation_score.py`). The `just mutation-gate` recipe passes `--threshold 82` (the NFR-O11 floor). The gate targets the capability-tier kernel (`packages/capabilities`) and the event-envelope core -- a surviving mutant in `tiers.py` `check_tier` is a fleet-wide authz hole. Newer kernels may be tracked through a separate non-gating expanded baseline until they have a reviewed threshold; the nightly gating job enforces the original three-kernel score. The current expanded baseline, including `task_fsm.py` and `gemini_runner.py`, has an aggregate score of 252/387 = 65.1% and remains non-gating; future ratchets require per-module review rather than relying on the aggregate alone.
 
 ## Phase 4 -- Browser Automation Plane (shipped 2026-06-05)
 

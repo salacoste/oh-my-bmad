@@ -338,7 +338,7 @@ class GeminiRunner(BaseRunner):
         API convention). Also supports ``usage`` dict for parity with Codex.
         """
         # Prefer usageMetadata (Gemini convention)
-        usage_meta = msg.get("usageMetadata", {})
+        usage_meta = msg.get("usageMetadata")
         if isinstance(usage_meta, dict):
             self._input_tokens += int(usage_meta.get("promptTokenCount", 0) or 0)
             self._output_tokens += int(usage_meta.get("candidatesTokenCount", 0) or 0)
