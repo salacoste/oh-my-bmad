@@ -371,8 +371,10 @@ modules where a surviving mutant most directly signals a weak assertion:
 | `packages/events/src/events/schema_registry.py` | Event-schema registration/validation |
 | `packages/events/src/events/canonical.py` | Canonical-JSON serialization |
 
-Config lives in `cosmic-ray.toml` (3 kernels, full run) and
+Config lives in `cosmic-ray.toml` (3-kernel gating run) and
 `cosmic-ray.smoke.toml` (tiers.py only, the fast proof).
+`cosmic-ray.expanded.toml` is a non-gating exploratory baseline for newer
+kernels and must not be wired to the 82% gate until it has a reviewed threshold.
 
 ### Recipes
 
@@ -381,6 +383,7 @@ just mutation-smoke   # tiers.py only, <~3 min — the harness sanity proof
 just mutation-test    # full 3-kernel run — SLOW (minutes); nightly/operator
 just mutation-gate    # full 3-kernel run + `--threshold 82` gate (NFR-O11, gating)
 just mutation-score   # recompute the score from an existing session db
+just mutation-expanded-baseline  # non-gating newer-kernel baseline
 ```
 
 Each prints one canonical line, e.g. `mutation-score: 68/90 = 75.6%`.
@@ -403,7 +406,10 @@ still written to the run summary + a 30-day artifact even on failure (the
 publish + upload steps run `if: always()`), so a gate failure stays diagnosable.
 
 The threshold is version-controlled (the `mutation-gate THRESHOLD="82"` default
-in the `justfile`, mirrored in the nightly job comment).
+in the `justfile`, mirrored in the nightly job comment). It applies only to the
+three-kernel `cosmic-ray.toml` scope above. Expanding the gated module list
+requires an explicit reviewed baseline/threshold change; otherwise use the
+non-gating `mutation-expanded-baseline` recipe.
 
 **Ratchet-up policy:** as surviving mutants are killed and the score rises,
 **raise** the threshold to lock in the gain (update the `justfile` default + the

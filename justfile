@@ -200,6 +200,17 @@ mutation-gate THRESHOLD="82":
     uv run cosmic-ray dump mutation.sqlite > _bmad-output/test-artifacts/mutation-dump.txt
     uv run python scripts/mutation_score.py --dump-path _bmad-output/test-artifacts/mutation-dump.txt --threshold {{THRESHOLD}}
 
+# `mutation-expanded-baseline` — NON-GATING exploratory baseline for newer
+# kernels (currently task_fsm.py + gemini_runner.py). Do not wire this to
+# nightly enforcement until a reviewed threshold is established.
+mutation-expanded-baseline *ARGS="":
+    rm -f mutation-expanded.sqlite
+    mkdir -p _bmad-output/test-artifacts
+    uv run cosmic-ray init cosmic-ray.expanded.toml mutation-expanded.sqlite
+    uv run cosmic-ray exec cosmic-ray.expanded.toml mutation-expanded.sqlite
+    uv run cosmic-ray dump mutation-expanded.sqlite > _bmad-output/test-artifacts/mutation-expanded-dump.txt
+    uv run python scripts/mutation_score.py --dump-path _bmad-output/test-artifacts/mutation-expanded-dump.txt {{ARGS}}
+
 # `mutation-smoke` — hard-bounded harness proof: mutates ONLY tiers.py against
 # its co-located unit suite (<~3 min). This is the in-place-mutation sanity
 # check that proves cosmic-ray reaches the editable-installed source where

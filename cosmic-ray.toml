@@ -9,24 +9,15 @@
 # unworkable here: editable installs resolved imports back to the pristine
 # real source, yielding a false 0% (every mutant "survived").
 #
-# SCOPE (Story 14.2): three kernel modules only — the highest-value, purely
-# logical units where surviving mutants most directly signal a weak assertion.
-# `module-path` accepts a LIST of file paths in cosmic-ray 8.4.x (cli.py maps
-# each entry through find_modules; a `.py` file is yielded as-is), so we target
-# exactly these files — no package-wide blast radius.
-#
-# Story 34.2 (Phase 6): expanded to include task_fsm.py (FSM logic) and
-# gemini_runner.py (adapter _classify_tool_use / _extract_usage logic).
-#
-# The full run is SLOW (nightly / operator-only). `just mutation-smoke` runs a
-# hard-bounded subset (tiers.py) as the <~3min harness proof.
+# GATING SCOPE (Story 14.2/14.3): three mature high-value kernel modules only.
+# The 82% threshold is the first-nightly 145/176 = 82.4% baseline for exactly
+# this scope. Do not add modules to this file without also establishing a new
+# reviewed threshold; use cosmic-ray.expanded.toml for non-gating baselines.
 [cosmic-ray]
 module-path = [
     "packages/capabilities/src/capabilities/tiers.py",
     "packages/events/src/events/schema_registry.py",
     "packages/events/src/events/canonical.py",
-    "services/registry-state/src/registry_state/domain/task_fsm.py",
-    "services/worker-wrapper/src/worker_wrapper/adapters/gemini_runner.py",
 ]
 # Per-mutant test timeout (seconds). A mutant that makes the suite hang (e.g.
 # an inverted loop bound) is recorded as a timeout (counted as not-killed) once
