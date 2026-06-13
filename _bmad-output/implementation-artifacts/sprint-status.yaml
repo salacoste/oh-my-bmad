@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-06-13T04:25:00+03:00
-current_phase: 17  # Phase 17 COMPLETE — Destructive Lifecycle Apply Readiness (Epics 81-85)
+last_updated: 2026-06-13T05:18:00+03:00
+current_phase: 18  # Phase 18 OPEN — Destructive Lifecycle Apply Product Scope (PRD-only start)
 
 development_status:
   # =========================================================================
@@ -747,10 +747,42 @@ development_status:
   85-1-quality-gate-review-commit-ci: done  # verification, independent review, commit/push, CI
   85-2-phase-17-retrospective: done  # _bmad-output/retrospectives/phase-17-retrospective.md
 
+  # ── Phase 18: Destructive Lifecycle Apply Product Scope (P18-DLAPS) ──────────────
+  epic-86: done  # Product scope gate
+  86-1-phase-18-prd-amendment: done  # _bmad-output/planning-artifacts/phase-18-prd-amendment.md; docs/status-only, no runtime mutation
+  86-2-next-non-destructive-candidate-selection: done  # _bmad-output/planning-artifacts/next-non-destructive-candidate-selection.md
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+  - date: "2026-06-13"
+    event: phase-18-prd-scope-opened
+    from: 17
+    to: 18
+    story: 86-1-phase-18-prd-amendment
+    reason: >
+      Phase 18 opened as a PRD-only product-scope gate for future destructive
+      lifecycle apply. The PRD defines operator authority, exact dry-run
+      plan_hash binding, immediate pre-mutation plan verification, replay
+      validation, rollback evidence, distinct apply surface, audit evidence,
+      and forbidden implementation paths. This does not authorize runtime
+      mutation code; architecture, test-first stories, and independent security/
+      architecture review remain required before any apply/prune/delete/truncate/
+      move/rewrite/chmod implementation can land.
+
+  - date: "2026-06-13"
+    event: next-non-destructive-candidate-selected
+    from: planning
+    to: recommended
+    story: 86-2-next-non-destructive-candidate-selection
+    reason: >
+      The post-Phase-18 non-destructive branch was evaluated separately from
+      destructive apply. Read-only web dashboard discovery/planning is the
+      recommended next safer candidate because it can be scoped to operator
+      visibility with no mutation controls, no credentialed lifecycle operation,
+      and no weakening of approval gates or event-spine invariants.
 
   - date: "2026-06-13"
     event: phase-17-retrospective-complete
