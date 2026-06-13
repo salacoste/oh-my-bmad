@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-06-13T03:58:00+03:00
+last_updated: 2026-06-13T04:25:00+03:00
 current_phase: 17  # Phase 17 COMPLETE — Destructive Lifecycle Apply Readiness (Epics 81-85)
 
 development_status:
@@ -745,11 +745,25 @@ development_status:
 
   epic-85: done  # Final verification and release hygiene
   85-1-quality-gate-review-commit-ci: done  # verification, independent review, commit/push, CI
+  85-2-phase-17-retrospective: done  # _bmad-output/retrospectives/phase-17-retrospective.md
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+  - date: "2026-06-13"
+    event: phase-17-retrospective-complete
+    from: complete
+    to: complete
+    story: 85-2-phase-17-retrospective
+    reason: >
+      Phase 17 retrospective completed after Epics 81-85 shipped. The retro
+      records safety-contract wins, closure drift lessons, current-vs-historical
+      wording debt, fail-closed authorization/replay/rollback lessons, and
+      carry-forward action items for any future explicitly authorized destructive
+      lifecycle apply phase. Scope remains docs/status-only; no runtime/package/
+      API/deployment/CI/dependency behavior or destructive mutation surface changed.
 
   - date: "2026-06-13"
     event: phase-17-closure-next-route-recorded
