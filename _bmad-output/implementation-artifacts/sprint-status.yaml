@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-06-13T02:59:00+03:00
-current_phase: 17  # Phase 17 OPEN — Destructive Lifecycle Apply Readiness (Epics 81-85)
+last_updated: 2026-06-13T03:58:00+03:00
+current_phase: 17  # Phase 17 COMPLETE — Destructive Lifecycle Apply Readiness (Epics 81-85)
 
 development_status:
   # =========================================================================
@@ -741,7 +741,7 @@ development_status:
   83-1-replay-validation-rollback-evidence-contract: done  # future replay proof + backup/restore evidence contract
 
   epic-84: done  # Documentation reconciliation and static guard
-  84-1-phase-17-docs-status-reconciliation: done  # close Phase 16 wording and open Phase 17 readiness docs + prove no runtime behavior change
+  84-1-phase-17-docs-status-reconciliation: done  # close Phase 16 wording and record Phase 17 readiness docs as shipped + prove no runtime behavior change
 
   epic-85: done  # Final verification and release hygiene
   85-1-quality-gate-review-commit-ci: done  # verification, independent review, commit/push, CI
@@ -750,6 +750,22 @@ development_status:
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+  - date: "2026-06-13"
+    event: phase-17-closure-next-route-recorded
+    from: complete
+    to: complete
+    reason: >
+      Phase 17 closure wording reconciled after Epics 81-85 completed.
+      README, docs index, project overview, architecture, sprint status, and
+      Phase 17 planning artifacts now describe Phase 17 as shipped/complete
+      rather than open. Next BMAD route recorded in
+      phase-17-closure-next-route.md: destructive lifecycle apply remains future
+      work requiring a separate explicitly authorized phase/story, PRD,
+      architecture review, test-first contracts, and independent security/
+      architecture review before any runtime mutation code lands. This closure
+      is docs/status-only and does not add runtime/package/API/deployment/CI/
+      dependency behavior.
 
   - date: "2026-06-13"
     event: phase-17-contracts-82-83-complete

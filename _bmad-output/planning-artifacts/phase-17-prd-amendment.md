@@ -2,7 +2,7 @@
 
 ## Summary
 
-Phase 17 opens the next safe BMAD slice after Phase 16: **readiness and planning for a future destructive event-log lifecycle apply feature**. It does not implement apply/prune. It turns the ADR-0025 future-apply preconditions into explicit requirements, acceptance criteria, and forbidden paths so a later implementation phase cannot smuggle destructive behavior behind a dry-run flag.
+Phase 17 shipped the next safe BMAD slice after Phase 16: **readiness and planning for a future destructive event-log lifecycle apply feature**. It does not implement apply/prune. It turns the ADR-0025 future-apply preconditions into explicit requirements, acceptance criteria, and forbidden paths so a later implementation phase cannot smuggle destructive behavior behind a dry-run flag.
 
 ## Problem
 
@@ -43,7 +43,7 @@ OUT:
 ## Acceptance criteria
 
 1. Phase 17 planning artifacts define requirements, architecture constraints, epics/stories, non-goals, and forbidden paths.
-2. Sprint status shows Phase 17 open with planning/readiness story complete and later stories backlog.
+2. Sprint status shows Phase 17 complete with Epics 81-85 done.
 3. Docs/status no longer present Phase 16 as open after its shipped commit.
 4. Verification proves no destructive lifecycle apply route, public replay export, CLI/MCP tool, worker, scheduled retention, object-storage lifecycle job, or filesystem mutation helper was introduced.
 5. Final review confirms ADR-0025 remains the destructive-operation gate.

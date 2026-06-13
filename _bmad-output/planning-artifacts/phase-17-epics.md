@@ -32,12 +32,16 @@ Phase 17 converts the remaining Phase 15 lifecycle future candidate into a **pla
 
 ### Story 84.1: Phase 17 docs/status reconciliation
 
-- Scope: update README/project overview/API/operator/data/architecture docs to close Phase 16 and open Phase 17 planning/readiness only.
+- Status: done in Story 84.1.
+- Scope: update README/project overview/API/operator/data/architecture docs to close Phase 16 and record Phase 17 planning/readiness as shipped.
 - Acceptance: docs preserve that destructive apply remains unimplemented and future-gated.
+- Artifact: `_bmad-output/implementation-artifacts/84-1-phase-17-docs-status-reconciliation.md`.
 
 ## Epic 85 — Final verification and release hygiene
 
 ### Story 85.1: Quality gate, review, commit, push, CI
 
+- Status: done in Story 85.1.
 - Scope: targeted tests/static checks, ai-slop-cleaner, independent code-reviewer and architect review, commit/push, CI verification, final Ultragoal checkpoint.
+- Artifact: `_bmad-output/implementation-artifacts/85-1-quality-gate-review-commit-ci.md`.
 - Acceptance: final recommendation APPROVE, architect status CLEAR, CI green.

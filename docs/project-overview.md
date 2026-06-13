@@ -4,11 +4,11 @@
 
 **oh-my-bmad** is a self-hosted personal autonomous-development platform. Telegram and a local console drive supervised CLI workers through a typed event spine, backed by an append-only JSONL event log and a single-writer materialized state store. The platform is designed so runtimes, MCP tools, browser automation, transports, and deployment hardening can evolve without breaking the spine.
 
-The current repository state is **Phase 17 open** (2026-06-13): Destructive Lifecycle Apply Readiness, a planning/safety-contract continuation of Phase 12-17 replay/lifecycle work. The latest tagged release remains `v1.3.0`; this checkout contains later Phase 10–17 work.
+The current repository state is **Phase 17 shipped** (2026-06-13): Destructive Lifecycle Apply Readiness, a planning/safety-contract continuation of Phase 12-17 replay/lifecycle work. The latest tagged release remains `v1.3.0`; this checkout contains later Phase 10–17 work.
 
 ## Status
 
-- **Current phase:** 17 open — Destructive Lifecycle Apply Readiness (planning/readiness only; no destructive apply implementation).
+- **Current phase:** 17 shipped — Destructive Lifecycle Apply Readiness (planning/readiness only; no destructive apply implementation).
 - **Repository type:** monorepo (`uv` workspace, 24 Python members).
 - **Language:** Python 3.12 (locked).
 - **Deployment:** Docker Compose v2 with named volume (`oh-my-bmad-data`); optional profiles for fleet features.
@@ -76,7 +76,7 @@ The current member catalog is in [component-inventory.md](./component-inventory.
 
 ## Architecture in one paragraph
 
-A typed event spine connects operator surfaces to runtime workers and MCP tools. All durable task/session state derives from append-only event records. `registry-state` owns the materialized database projection and the single-writer rules; `registry-api` exposes versioned HTTP read/write surfaces; MCP servers expose bounded tool/resource contracts to workers under capability tiers and approval gates. Replay packages can reconstruct historical state from hot logs and validated archived segments referenced by `lifecycle-manifest.json`. Phase 14 adds the operator-safe lifecycle operations boundary: ADR-0025 permits planning/validation and non-destructive dry-runs only. Phase 16 makes task history archive-aware only when archive manifest configuration is present. Phase 17 opens destructive lifecycle apply readiness as planning/readiness only: snapshots remain hot-log-only, apply remains unimplemented, and any future mutation must satisfy plan-hash, replay-validation, rollback-evidence, and operator-gate preconditions.
+A typed event spine connects operator surfaces to runtime workers and MCP tools. All durable task/session state derives from append-only event records. `registry-state` owns the materialized database projection and the single-writer rules; `registry-api` exposes versioned HTTP read/write surfaces; MCP servers expose bounded tool/resource contracts to workers under capability tiers and approval gates. Replay packages can reconstruct historical state from hot logs and validated archived segments referenced by `lifecycle-manifest.json`. Phase 14 adds the operator-safe lifecycle operations boundary: ADR-0025 permits planning/validation and non-destructive dry-runs only. Phase 16 makes task history archive-aware only when archive manifest configuration is present. Phase 17 shipped destructive lifecycle apply readiness as planning/readiness only: snapshots remain hot-log-only, apply remains unimplemented, and any future mutation must satisfy plan-hash, replay-validation, rollback-evidence, and operator-gate preconditions.
 
 ## Where to start
 

@@ -14,7 +14,7 @@
   <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-stdio-7F52B5" alt="MCP"/></a>
   <a href="https://mypy.readthedocs.io/"><img src="https://img.shields.io/badge/mypy-strict-1f5082" alt="mypy strict"/></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"/></a>
-  <a href="_bmad-output/planning-artifacts/phase-17-epics.md"><img src="https://img.shields.io/badge/Phase%2017-Open-blue" alt="Phase 17 open"/></a>
+  <a href="_bmad-output/planning-artifacts/phase-17-epics.md"><img src="https://img.shields.io/badge/Phase%2017-Complete-brightgreen" alt="Phase 17 complete"/></a>
 </p>
 
 ---
@@ -25,7 +25,7 @@ A platform that turns Telegram and a local console into the control surfaces for
 
 It's deliberately **boring** infrastructure — Python 3.12, FastAPI, aiogram, SQLite WAL, Docker Compose, stdio MCP. The novelty is in how the boring pieces compose, not in any one piece.
 
-> **Current repo state: Phase 17 open — destructive lifecycle apply readiness is being planned without implementing destructive apply.** Latest tagged release is `v1.3.0`; this checkout contains later Phase 10–17 work. See [`docs/index.md`](docs/index.md) for the master entry point.
+> **Current repo state: Phase 17 shipped — destructive lifecycle apply readiness is documented without implementing destructive apply.** Latest tagged release is `v1.3.0`; this checkout contains later Phase 10–17 work. See [`docs/index.md`](docs/index.md) for the master entry point.
 
 ## How it works (at a glance)
 
@@ -208,7 +208,7 @@ A few things worth a look even if you don't intend to run it:
 
 ## Status
 
-**Current development state — Phase 17 open.** Latest tagged release: `v1.3.0`. Shipped phases in this checkout:
+**Current development state — Phase 17 shipped.** Latest tagged release: `v1.3.0`. Shipped phases in this checkout:
 
 | Phase | Scope | Epics |
 |---|---|---|
@@ -230,6 +230,6 @@ A few things worth a look even if you don't intend to run it:
 | 16 | Archive-aware task history — read-only hot+archive history query | 76–80 |
 | 17 | Destructive lifecycle apply readiness — planning/safety contract only, no destructive implementation | 81–85 |
 
-Phase 16 is shipped; Phase 17 is open as planning/readiness only. Destructive lifecycle apply is still unimplemented, and object-storage lifecycle jobs plus scheduled retention remain future work. Zero open GATED deferred items.
+Phase 17 is shipped as a planning/readiness-only safety-contract phase. Destructive lifecycle apply is still unimplemented, and object-storage lifecycle jobs plus scheduled retention remain future work. Zero open GATED deferred items.
 
 Issues and discussion welcome — security reports per [`SECURITY.md`](./SECURITY.md).

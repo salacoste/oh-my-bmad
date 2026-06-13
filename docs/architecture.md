@@ -322,7 +322,7 @@ Key decisions:
 
 ## Phase 17: Destructive Lifecycle Apply Readiness
 
-Phase 17 opened 2026-06-13 as Destructive Lifecycle Apply Readiness (P17-DLAR). It is a planning/readiness phase, not an apply implementation. The phase formalizes the future destructive-apply safety contract from ADR-0025 and Phase 15 carry-forward notes.
+Phase 17 shipped 2026-06-13 as Destructive Lifecycle Apply Readiness (P17-DLAR). It is a planning/readiness phase, not an apply implementation. The phase formalizes the future destructive-apply safety contract from ADR-0025 and Phase 15 carry-forward notes.
 
 New FRs: FR156 (readiness scope), FR157 (exact dry-run plan-hash binding), FR158 (replay validation precondition), FR159 (rollback/restore evidence), FR160 (distinct apply surface), FR161 (no destructive behavior in Phase 17).
 
@@ -335,7 +335,7 @@ Key decisions:
 
 ## Future work beyond Phase 17
 
-The following items remain unshipped or intentionally out of scope after Phase 17 planning:
+The following items remain unshipped or intentionally out of scope after Phase 17:
 
 - **Event-log prune/apply implementation** -- destructive lifecycle operations still require a later implementation phase after the Phase 17 readiness contract, exact dry-run plan-hash authorization, replay validation, rollback evidence, and explicit operator gate.
 - **Object-storage lifecycle jobs** -- archive manifests currently reference validated local/archive paths; automatic S3/B2/R2 lifecycle management is future work.
