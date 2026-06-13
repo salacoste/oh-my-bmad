@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-06-13T05:18:00+03:00
-current_phase: 18  # Phase 18 OPEN — Destructive Lifecycle Apply Product Scope (PRD-only start)
+last_updated: 2026-06-13T18:32:00+03:00
+current_phase: 19  # Phase 19 OPEN — Read-Only Web Dashboard Planning (PRD-only start)
 
 development_status:
   # =========================================================================
@@ -752,10 +752,40 @@ development_status:
   86-1-phase-18-prd-amendment: done  # _bmad-output/planning-artifacts/phase-18-prd-amendment.md; docs/status-only, no runtime mutation
   86-2-next-non-destructive-candidate-selection: done  # _bmad-output/planning-artifacts/next-non-destructive-candidate-selection.md
 
+  # ── Phase 19: Read-Only Web Dashboard Planning (P19-ROWD) ──────────────
+  epic-87: done  # Product scope gate
+  87-1-phase-19-prd-amendment: done  # _bmad-output/planning-artifacts/phase-19-prd-amendment.md; planning-only, no dashboard implementation
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+  - date: "2026-06-13"
+    event: phase-18-prd-scope-complete
+    from: open
+    to: complete
+    story: 86-1-phase-18-prd-amendment
+    reason: >
+      Phase 18 PRD-scope gate is complete as a docs/status-only product
+      requirements slice for future destructive lifecycle apply. It defines
+      operator authority, plan_hash binding, replay validation, rollback
+      evidence, distinct apply surface, and required follow-on gates, but does
+      not authorize or implement runtime mutation code.
+
+  - date: "2026-06-13"
+    event: phase-19-read-only-dashboard-prd-opened
+    from: 18
+    to: 19
+    story: 87-1-phase-19-prd-amendment
+    reason: >
+      Phase 19 opened as the selected non-destructive branch: read-only web
+      dashboard planning. The PRD scopes operator visibility over existing
+      task, session, event, trace, replay, and lifecycle-readiness state while
+      explicitly excluding approval, apply, prune, delete, truncate, move,
+      rewrite, chmod, archive mutation, credentialed lifecycle operation,
+      frontend implementation, backend route implementation, dependencies,
+      deployment changes, and CI changes.
 
   - date: "2026-06-13"
     event: phase-18-prd-scope-opened
