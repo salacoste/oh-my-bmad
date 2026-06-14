@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: 2026-05-04T05:00:00Z
+# last_updated: "2026-06-15T01:36:57+03:00"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-06-14T18:28:29+03:00
+last_updated: "2026-06-15T01:36:57+03:00"
 current_phase: 19  # Phase 19 OPEN — Read-Only Web Dashboard Planning (PRD + UX + architecture + epics planning)
 
 development_status:
@@ -759,11 +759,38 @@ development_status:
   87-3-phase-19-architecture-amendment: done  # _bmad-output/planning-artifacts/phase-19-architecture-amendment.md; planning-only, no dashboard implementation
   87-4-phase-19-epics-and-stories: done  # _bmad-output/planning-artifacts/phase-19-epics.md; planning-only, no dashboard implementation
 
+  # =========================================================================
+  # Epic 88: Read-only dashboard shell and boundary enforcement
+  # =========================================================================
+  epic-88: in-progress  # Read-only dashboard shell and boundary enforcement
+  88-1-dashboard-static-shell-read-only-banner: ready-for-dev  # _bmad-output/implementation-artifacts/88-1-dashboard-static-shell-read-only-banner.md; story context only, no dashboard implementation
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
 
+
+  - date: "2026-06-15"
+    event: story-88-1-context-created
+    from: backlog
+    to: ready-for-dev
+    story: 88-1-dashboard-static-shell-read-only-banner
+    reason: >
+      Story 88.1 ready-for-dev context created as story context only with no
+      dashboard implementation. This story event is the authoritative audit
+      record for the automatic Epic 88 backlog -> in-progress transition. It
+      opens Epic 88 for the static shell and read-only banner story while
+      preserving the Story 88.1/88.2 boundary:
+      route/method allowlist checks, forbidden-call checks, and effect-based
+      no-mutation tests remain future Story 88.2 work. This slice excludes
+      frontend implementation, backend route/API implementation, live data
+      wiring, new routes, dependency selection, runtime behavior, dependencies,
+      deployment changes, CI changes, approval, retry, cancel, budget override,
+      apply, prune, delete, truncate, move, rewrite, chmod, archive mutation,
+      manifest mutation, scheduled job, credentialed lifecycle, production
+      operation controls, hidden writes, cache-warming writes/read-side effects,
+      and background-job dispatch.
 
   - date: "2026-06-14"
     event: phase-19-epics-and-stories-complete
