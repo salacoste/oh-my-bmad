@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: 2026-06-13T19:34:00+03:00
-current_phase: 19  # Phase 19 OPEN — Read-Only Web Dashboard Planning (PRD + UX planning)
+last_updated: 2026-06-14T18:28:29+03:00
+current_phase: 19  # Phase 19 OPEN — Read-Only Web Dashboard Planning (PRD + UX + architecture planning)
 
 development_status:
   # =========================================================================
@@ -756,11 +756,29 @@ development_status:
   epic-87: done  # Product scope gate
   87-1-phase-19-prd-amendment: done  # _bmad-output/planning-artifacts/phase-19-prd-amendment.md; planning-only, no dashboard implementation
   87-2-phase-19-ux-design-specification: done  # _bmad-output/planning-artifacts/phase-19-ux-design-specification.md; planning-only, no dashboard implementation
+  87-3-phase-19-architecture-amendment: done  # _bmad-output/planning-artifacts/phase-19-architecture-amendment.md; planning-only, no dashboard implementation
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+  - date: "2026-06-14"
+    event: phase-19-architecture-amendment-complete
+    from: planning
+    to: done
+    story: 87-3-phase-19-architecture-amendment
+    reason: >
+      Phase 19 read-only web dashboard architecture amendment completed as a
+      planning-only artifact. It defines existing safe read surfaces,
+      frontend/backend boundaries, effect-based no-mutation enforcement,
+      lifecycle visibility limits, authentication reuse, provenance/error-state
+      requirements, future implementation verification strategy, and handoff to
+      epics/stories. It does not authorize frontend implementation, backend
+      route implementation, API schema changes, runtime behavior, dependencies,
+      deployment changes, approval/retry/cancel/budget override/apply/prune/
+      delete/truncate/move/rewrite/chmod/archive mutation, manifest mutation,
+      scheduled jobs, credential entry, or production operation controls.
 
   - date: "2026-06-13"
     event: phase-19-ux-design-specification-complete
