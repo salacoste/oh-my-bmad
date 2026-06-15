@@ -1,6 +1,6 @@
 # Story 91.1 — Task history and replay validation panels
 
-Status: review
+Status: done
 
 ## Scope
 
@@ -61,4 +61,4 @@ No backend/API/schema changes, no dependencies, no JavaScript, no live HTTP look
 - `uv run ruff check .` — passed.
 - `uv run pytest -q -m "not slow"` — 4178 passed, 8 skipped, 61 deselected.
 
-Final `done` remains pending independent code review, UltraQA, pushed CI, and Ultragoal reconciliation.
+Final closure: independent code-review APPROVE, architect CLEAR, UltraQA 7 scenarios passed, implementation CI 27580999500 green, and status-only closure is being reconciled through Ultragoal.
