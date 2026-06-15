@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-15T15:06:00+03:00"
+last_updated: "2026-06-15T16:13:00+03:00"
 current_phase: 19  # Phase 19 OPEN — Read-Only Web Dashboard Planning (PRD + UX + architecture + epics planning)
 
 development_status:
@@ -770,15 +770,93 @@ development_status:
   # =========================================================================
   # Epic 89: Task/session overview and task detail visibility
   # =========================================================================
-  epic-89: in-progress  # Task/session overview and task detail visibility
+  epic-89: done  # Task/session overview and task detail visibility
   89-1-overview-task-list-unavailable-fallback: done  # dashboard/static/index.html; static overview/task-list unavailable fallback implemented and review/QA/local gates clean
   89-2-task-detail-session-panel-safe-read: done  # dashboard/static/index.html; static task detail safe-read panel implemented and review/QA/local gates clean
-  89-3-sessions-visibility-panel: backlog  # future implementation story; safe reads/unavailable states only
+  89-3-sessions-visibility-panel: done  # dashboard/static/index.html; static Sessions visibility panel implemented and review/QA/local gates clean
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-15"
+    event: story-89-3-complete
+    from: review
+    to: done
+    story: 89-3-sessions-visibility-panel
+    reason: >
+      Story 89.3 completed after review-cycle-1 code-review APPROVE, architect
+      CLEAR, UltraQA 6 static adversarial scenarios passed with temporary
+      harness cleanup, focused dashboard/boundary tests passed 23 tests, hygiene
+      gates passed, and full local non-slow regression passed 4158 tests with 8
+      skipped and 61 deselected. The shipped slice remains static
+      dashboard/test/story/status only and does not authorize backend/API/route,
+      dependency, live-wiring, runtime behavior, background job, hidden write, or
+      session control changes.
+
+  - date: "2026-06-15"
+    event: epic-89-complete
+    from: in-progress
+    to: done
+    story: epic-89
+    reason: >
+      Epic 89 completed because stories 89.1, 89.2, and 89.3 are done with
+      read-only dashboard scope preserved.
+
+  - date: "2026-06-15"
+    event: story-89-3-review-cycle-1-fix
+    from: review
+    to: review
+    story: 89-3-sessions-visibility-panel
+    reason: >
+      First independent review returned code-review COMMENT for porous substring
+      assertions and architect WATCH for static-copy/schema coupling risk.
+      Autopilot returned to ralplan, received Architect CLEAR and Critic APPROVE
+      on a narrow test-hardening plan, then tightened field-contract assertions
+      to extract exact clauses instead of broad substring membership. Focused
+      dashboard/boundary tests, hygiene gates, and full non-slow regression are
+      green after the fix.
+
+  - date: "2026-06-15"
+    event: story-89-3-ready-for-review
+    from: in-progress
+    to: review
+    story: 89-3-sessions-visibility-panel
+    reason: >
+      Story 89.3 static Sessions visibility panel implemented in
+      dashboard/static/index.html with tests/dashboard/test_static_shell.py
+      coverage. Red tests first failed on missing session MCP provenance, passive
+      row contract, identifier mapping, and unavailable-state copy. Focused
+      dashboard/boundary tests passed 23 tests; hygiene gates passed; full local
+      non-slow regression passed 4158 tests with 8 skipped and 61 deselected.
+      Final done status still requires independent code review, UltraQA, CI, and
+      Ultragoal reconciliation.
+
+  - date: "2026-06-15"
+    event: story-89-3-implementation-started
+    from: ready-for-dev
+    to: in-progress
+    story: 89-3-sessions-visibility-panel
+    reason: >
+      Autopilot/Ultragoal implementation began after final ralplan consensus:
+      Architect APPROVE/CLEAR followed by Critic APPROVE on the revised Story
+      89.3 plan and test spec. Scope remains static dashboard/test/story/status
+      only, with existing MCP session resources used as inert provenance text and
+      no backend/API/dependency/live-wiring/runtime behavior changes.
+
+  - date: "2026-06-15"
+    event: story-89-3-context-created
+    from: backlog
+    to: ready-for-dev
+    story: 89-3-sessions-visibility-panel
+    reason: >
+      Story 89.3 ready-for-dev context created for the Sessions visibility panel.
+      The story distinguishes resource-native session fields from derived or
+      unavailable dashboard semantics, keeps session:// resource names as visible
+      provenance only, explicitly defers dashboard session HTTP/list/history
+      routes and live polling, and preserves read-only/no-control dashboard
+      boundaries.
+
   - date: "2026-06-15"
     event: story-89-2-implementation-started
     from: ready-for-dev

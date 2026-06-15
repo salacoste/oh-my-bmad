@@ -99,6 +99,39 @@ TASK_DETAIL_STATE_TERMS = (
     "empty successful read",
     "read error",
 )
+SESSION_RESOURCE_PROVENANCE = (
+    "session://active",
+    "session://detail/{session_id}",
+    "session://heartbeats",
+)
+SESSION_RESOURCE_NATIVE_FIELDS = (
+    "id",
+    "task_id",
+    "worker_kind",
+    "worktree_path",
+    "status",
+    "started_at",
+    "ended_at",
+    "last_heartbeat_at",
+)
+SESSION_DERIVED_UNAVAILABLE_FIELDS = (
+    "freshness_state",
+    "source",
+    "trace_id",
+)
+SESSION_STATE_TERMS = (
+    "no active sessions",
+    "active session",
+    "historical session",
+    "terminal session outcome",
+    "heartbeat/stale warning",
+    "loading",
+    "unavailable pending dashboard read contract",
+    "empty successful read",
+    "read error",
+    "unauthorized/configuration failure",
+    "stale data",
+)
 
 
 class StaticDashboardParser(HTMLParser):
@@ -110,6 +143,7 @@ class StaticDashboardParser(HTMLParser):
         self.sections: dict[str, list[str]] = {}
         self.nav_hrefs: list[str] = []
         self.section_hrefs: dict[str, list[str]] = {}
+        self.section_attrs: dict[str, list[str]] = {}
         self._section_stack: list[str] = []
         self._banner_depth = 0
         self._nav_depth = 0
@@ -127,6 +161,10 @@ class StaticDashboardParser(HTMLParser):
             self._banner_depth = 1
         if tag == "section" and attrs_dict.get("id"):
             self._section_stack.append(attrs_dict["id"] or "")
+        if self._section_stack:
+            self.section_attrs.setdefault(self._section_stack[-1], []).extend(
+                f"{tag}[{name}]={value or ''}" for name, value in attrs
+            )
         if tag == "a" and attrs_dict.get("href"):
             href = attrs_dict["href"] or ""
             if self._nav_depth:
@@ -169,6 +207,18 @@ def banner_text(parser: StaticDashboardParser) -> str:
 
 def sentences(text: str) -> list[str]:
     return [sentence.strip() for sentence in text.split(".") if sentence.strip()]
+
+
+def clause_after(text: str, prefix: str) -> str:
+    start = text.index(prefix) + len(prefix)
+    end = text.index(".", start)
+    return text[start:end].strip()
+
+
+def comma_list_clause(text: str, prefix: str) -> set[str]:
+    clause = clause_after(text, prefix)
+    normalized = clause.replace(" and ", ", ")
+    return {item.strip(" ,") for item in normalized.split(",") if item.strip(" ,")}
 
 
 def test_static_dashboard_file_exists_and_uses_safe_tags() -> None:
@@ -300,6 +350,59 @@ def test_story_89_2_thread_metadata_is_passive_and_unavailable_when_absent() -> 
     assert "not configured" in task_detail
     assert "message sending" not in task_detail
     assert "notification control" not in task_detail
+
+
+def test_story_89_3_sessions_panel_declares_safe_mcp_resource_provenance() -> None:
+    parser = parse_dashboard()
+    sessions_text = " ".join(parser.sections["sessions"]).lower()
+    session_attrs = " ".join(parser.section_attrs.get("sessions", [])).lower()
+    for resource in SESSION_RESOURCE_PROVENANCE:
+        assert resource in sessions_text, resource
+        assert resource not in session_attrs, resource
+    assert "existing mcp read resources" in sessions_text
+    assert "inert visible provenance" in sessions_text
+    assert "no live dashboard wiring" in sessions_text
+
+
+def test_story_89_3_sessions_panel_lists_passive_row_contract() -> None:
+    parser = parse_dashboard()
+    sessions_text = " ".join(parser.sections["sessions"]).lower()
+    native_fields = comma_list_clause(sessions_text, "resource-native session fields are:")
+    assert native_fields == set(SESSION_RESOURCE_NATIVE_FIELDS)
+    assert "session_id is a display label for resource-native id" in sessions_text
+    assert "not a separate resource field" in sessions_text
+    uri_template_sentence = next(
+        sentence
+        for sentence in sentences(sessions_text)
+        if "session://detail/{session_id}" in sentence
+    )
+    assert "display label for resource-native id" not in uri_template_sentence
+    derived_fields = comma_list_clause(
+        sessions_text, "derived/provenance/unavailable-only semantics are"
+    )
+    assert derived_fields == set(SESSION_DERIVED_UNAVAILABLE_FIELDS)
+    assert "derived/provenance/unavailable-only semantics" in sessions_text
+    assert "visibility placeholders only" in sessions_text
+    assert "no links or session actions appear here" in sessions_text
+    for term in CONTROL_TERMS:
+        assert term not in sessions_text, term
+
+
+def test_story_89_3_sessions_panel_states_and_unavailable_contract_are_explicit() -> None:
+    parser = parse_dashboard()
+    sessions_text = " ".join(parser.sections["sessions"]).lower()
+    for term in SESSION_STATE_TERMS:
+        assert term in sessions_text, term
+    assert "loading is not active in this static, not-wired slice" in sessions_text
+    assert "dashboard-consumable session http route" in sessions_text
+    assert "aggregate session list" in sessions_text
+    assert "aggregate historical-session list/search/read route" in sessions_text
+    assert "live polling" in sessions_text
+    assert (
+        "historical session and terminal session outcome wording is explanatory only"
+        in sessions_text
+    )
+    assert "does not authorize session history enumeration" in sessions_text
 
 
 def test_control_terms_are_negative_safety_copy_only() -> None:

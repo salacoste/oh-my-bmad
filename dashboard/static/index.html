@@ -104,9 +104,13 @@
     </section>
     <section id="sessions" aria-labelledby="sessions-title">
       <h2 id="sessions-title">Sessions</h2>
-      <p class="state">Session reads are unavailable: no safe session source is wired in Story 88.1.</p>
-      <p>Unavailable read means no approved session projection exists here; empty successful read would mean a safe source returned no matching sessions.</p>
-      <p class="meta">Source: future approved session read source. Freshness timestamp: pending. Reference: future session reference. Confidence: unavailable until a safe read is approved.</p>
+      <p class="state">Unavailable read: session reads are unavailable pending dashboard read contract; no dashboard-consumable session HTTP route, aggregate session list, aggregate historical-session list/search/read route, or live polling is wired here.</p>
+      <p>Existing MCP read resources are named as inert visible provenance only: session://active, session://detail/{session_id}, and session://heartbeats. They are no live dashboard wiring and are not links, attributes, background refresh sources, or client calls.</p>
+      <p>Resource-native session fields are: id, task_id, worker_kind, worktree_path, status, started_at, ended_at, and last_heartbeat_at. session_id is a display label for resource-native id; it is not a separate resource field.</p>
+      <p>Derived/provenance/unavailable-only semantics are freshness_state, source, and trace_id. freshness_state is only derivable from last_heartbeat_at after a future dashboard contract defines that derivation; source is panel provenance; trace_id is unavailable until a separate event or trace correlation read supplies it.</p>
+      <p>State matrix: no active sessions, active session, historical session, terminal session outcome, heartbeat/stale warning, loading, unavailable pending dashboard read contract, empty successful read, read error, unauthorized/configuration failure, and stale data. Loading is not active in this static, not-wired slice.</p>
+      <p>Historical session and terminal session outcome wording is explanatory only and does not authorize session history enumeration. Visibility placeholders only; no links or session actions appear here.</p>
+      <p class="meta">Source: existing MCP read resources as static provenance text plus BMAD Story 89.3. Freshness timestamp: pending. Reference: session resource provenance and future dashboard read contract. Confidence: unavailable until a dashboard-safe read is wired by a later story.</p>
     </section>
     <section id="events" aria-labelledby="events-title">
       <h2 id="events-title">Events</h2>
