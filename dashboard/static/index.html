@@ -229,7 +229,34 @@
         <li>problem_details_code</li>
         <li>freshness</li>
       </ul>
-      <p>problem_details_type, problem_details_status, and problem_details_code are minimal passive fail-closed placeholders; expanded archive/lifecycle ProblemDetails semantics remain Story 91.2.</p>
+      <p>Archive validation ProblemDetails are route-local ProblemDetails and passive static presentation details for unavailable archive reads, not global error behavior and not live dashboard data.</p>
+      <ul aria-label="Archive ProblemDetails passive fields">
+        <li>type</li>
+        <li>title</li>
+        <li>status</li>
+        <li>detail</li>
+        <li>instance</li>
+        <li>extensions</li>
+        <li>extensions.code</li>
+        <li>extensions.trace_id</li>
+      </ul>
+      <p>extensions.code and extensions.trace_id are route-local extension evidence. extensions.trace_id is optional and appears only when the route-local response carries it.</p>
+      <ul aria-label="Lifecycle readiness passive evidence">
+        <li>plan_hash</li>
+        <li>dry_run_artifact_ref</li>
+        <li>safety_policy_version</li>
+        <li>retention_input_digest</li>
+        <li>affected_segments</li>
+        <li>replay_validation_ref</li>
+        <li>rollback_evidence_ref</li>
+        <li>operator_identity</li>
+        <li>authorized_at</li>
+        <li>authorization_event_ref</li>
+        <li>archive_manifest_ref</li>
+        <li>archive_manifest_validation</li>
+        <li>archive_error_boundary</li>
+      </ul>
+      <p>Lifecycle readiness names are passive future-evidence slots grounded in existing lifecycle contracts, not a new dashboard API schema. Unsupported lifecycle reads remain unavailable until a separate approved read contract exists.</p>
       <ul aria-label="Replay history and validation passive states">
         <li>unavailable read</li>
         <li>loading</li>
@@ -247,10 +274,34 @@
         <li>unavailable non-read snapshot behavior</li>
         <li>future gated lifecycle work</li>
       </ul>
-      <p>Invalid archive configuration fails closed and is not a partial hot-log fallback.</p>
+      <ul aria-label="Lifecycle and archive fail-safe states">
+        <li>route-local ProblemDetails</li>
+        <li>invalid archive configuration</li>
+        <li>missing archive manifest</li>
+        <li>checksum mismatch</li>
+        <li>malformed manifest metadata</li>
+        <li>duplicate manifest keys</li>
+        <li>segment sequence overlap</li>
+        <li>missing lifecycle evidence</li>
+        <li>failed replay validation</li>
+        <li>stale replay evidence</li>
+        <li>missing authorization evidence</li>
+        <li>unsigned authorization evidence</li>
+        <li>ambiguous authorization evidence</li>
+        <li>unverifiable lifecycle evidence</li>
+        <li>missing rollback evidence</li>
+        <li>unavailable lifecycle read</li>
+        <li>empty successful lifecycle read</li>
+        <li>future gated destructive lifecycle work</li>
+        <li>retention scheduling not active</li>
+      </ul>
+      <p>Invalid archive configuration fails closed and is not partial hot-log success.</p>
+      <p>Missing, failed, stale, ambiguous, or unverifiable lifecycle evidence blocks future destructive lifecycle work. Missing, unsigned, or ambiguous authorization evidence blocks future destructive lifecycle work.</p>
       <p>Non-read snapshot behavior is outside this story and not exposed in the static dashboard. Hidden writes, cache warming, and background jobs are outside this static read view and not exposed.</p>
-      <p>Lifecycle safety copy remains Story 91.2; this story does not claim completion of expanded archive/lifecycle safety semantics.</p>
-      <p class="meta">Source: GET task-history and replay-validation route provenance as static text plus BMAD Story 91.1. Freshness timestamp: pending. Reference: task history, replay validation, snapshots read listing, archive manifest references, fail-closed placeholders, and Story 91.2 boundary. Confidence: unavailable until a dashboard-safe read is wired by a later approved story.</p>
+      <p>Retention scheduling and segment-removal work remain future gated work and are not exposed in this static view.</p>
+      <p>Future destructive lifecycle work requires distinct authorization evidence, exact plan_hash and dry-run identity, affected segment identities, replay validation, rollback evidence, and operator event or ledger reference. Absent, stale, unsigned, ambiguous, or unverifiable authorization blocks that future work.</p>
+      <p>Epic 92 owns cross-panel health, error, accessibility, and responsiveness consistency; this Story 91.2 slice only completes static lifecycle safety and archive ProblemDetails copy.</p>
+      <p class="meta">Source: GET task-history and replay-validation route provenance as static text plus BMAD Story 91.2. Freshness timestamp: pending. Reference: task history, replay validation, snapshots read listing, canonical route-local ProblemDetails fields, lifecycle evidence slots, fail-closed archive and authorization states, and Epic 92 boundary. Confidence: unavailable until a dashboard-safe read is wired by a later approved story.</p>
     </section>
     <section id="health" aria-labelledby="health-title">
       <h2 id="health-title">Health</h2>

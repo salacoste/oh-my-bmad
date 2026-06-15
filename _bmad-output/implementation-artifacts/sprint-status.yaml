@@ -788,11 +788,57 @@ development_status:
   # =========================================================================
   epic-91: in-progress  # Replay and lifecycle readiness visibility
   91-1-task-history-replay-validation-panels: done  # dashboard/static/index.html; static task history/replay validation panel implemented, reviewed, UltraQA-passed, and CI green
+  91-2-lifecycle-safety-problemdetails: review  # dashboard/static/index.html; static lifecycle safety and archive ProblemDetails copy implemented with local gates clean
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-16"
+    event: story-91-2-ready-for-review
+    from: in-progress
+    to: review
+    story: 91-2-lifecycle-safety-problemdetails
+    reason: >
+      Story 91.2 static lifecycle safety and archive ProblemDetails copy
+      implemented in dashboard/static/index.html with
+      tests/dashboard/test_static_shell.py coverage. Red tests first failed on
+      missing Archive ProblemDetails, lifecycle evidence, fail-safe lifecycle
+      states, and future-work boundary copy. Focused dashboard tests passed 40
+      tests after canonical contract-source extraction; dashboard/boundary tests
+      passed 49 tests; git diff --check, ruff
+      format --check, and ruff check passed; full local non-slow regression
+      passed with 4184 passed, 8 skipped, and 61 deselected. Final done status
+      still requires independent code review, UltraQA, CI, and Ultragoal
+      reconciliation.
+
+  - date: "2026-06-16"
+    event: story-91-2-implementation-started
+    from: ready-for-dev
+    to: in-progress
+    story: 91-2-lifecycle-safety-problemdetails
+    reason: >
+      Story 91.2 implementation started after Autopilot Ralplan consensus:
+      Architect APPROVE/CLEAR followed by Critic APPROVE. Scope remains static
+      dashboard/test/story/status only, with canonical route-local ProblemDetails
+      fields and grounded lifecycle evidence names used as inert copy and no
+      backend/API/route, dependency, live-wiring, runtime behavior, background
+      job, hidden write, lifecycle execution, archive/manifest change, or
+      mutation/control changes.
+
+  - date: "2026-06-16"
+    event: story-91-2-context-created
+    from: backlog
+    to: ready-for-dev
+    story: 91-2-lifecycle-safety-problemdetails
+    reason: >
+      Story 91.2 context created from Phase 19 Epic 91 and approved Autopilot
+      handoff. The static panel must surface archive validation ProblemDetails,
+      lifecycle-readiness evidence, fail-closed archive/lifecycle states,
+      unauthorized authorization states, retention/future-work boundaries, and
+      destructive-operation gates without adding live dashboard wiring or
+      section-local control vocabulary.
+
   - date: "2026-06-16"
     event: story-91-1-complete
     from: review

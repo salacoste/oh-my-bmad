@@ -1,9 +1,31 @@
 from __future__ import annotations
 
+import json
 from html.parser import HTMLParser
 from pathlib import Path
+from typing import cast
 
 DASHBOARD = Path("dashboard/static/index.html")
+REPLAY_LIFECYCLE_CONTRACT = Path("dashboard/static/replay-lifecycle-contract.json")
+
+
+def load_replay_lifecycle_contract() -> dict[str, object]:
+    loaded = json.loads(REPLAY_LIFECYCLE_CONTRACT.read_text(encoding="utf-8"))
+    assert isinstance(loaded, dict)
+    assert all(isinstance(key, str) for key in loaded)
+    contract = cast("dict[str, object]", loaded)
+    assert contract["version"] == 1
+    return contract
+
+
+def contract_tuple(contract: dict[str, object], key: str) -> tuple[str, ...]:
+    values = contract[key]
+    assert isinstance(values, list)
+    assert all(isinstance(value, str) for value in values)
+    return tuple(values)
+
+
+REPLAY_LIFECYCLE_CONTRACT_DATA = load_replay_lifecycle_contract()
 
 REQUIRED_PANELS = {
     "overview": "Overview",
@@ -284,6 +306,15 @@ REPLAY_STATE_TERMS = (
     "unavailable replay result",
     "unavailable non-read snapshot behavior",
     "future gated lifecycle work",
+)
+ARCHIVE_PROBLEM_DETAILS_FIELDS = contract_tuple(
+    REPLAY_LIFECYCLE_CONTRACT_DATA, "archiveProblemDetailsPassiveFields"
+)
+LIFECYCLE_READINESS_EVIDENCE_FIELDS = contract_tuple(
+    REPLAY_LIFECYCLE_CONTRACT_DATA, "lifecycleReadinessPassiveEvidence"
+)
+LIFECYCLE_ARCHIVE_FAIL_SAFE_STATES = contract_tuple(
+    REPLAY_LIFECYCLE_CONTRACT_DATA, "lifecycleAndArchiveFailSafeStates"
 )
 REPLAY_SECTION_LIVE_MARKERS = (
     "fetch(",
@@ -807,11 +838,9 @@ def test_story_91_1_replay_panel_lists_passive_history_and_validation_fields() -
     assert "presentation fields for unavailable replay validation reads" in replay_text
     assert "not replay execution output" in replay_text
     assert "not canonical jsonl replay output" in replay_text
-    assert (
-        "problem_details_type, problem_details_status, and problem_details_code are minimal passive fail-closed placeholders"
-        in replay_text
-    )
-    assert "expanded archive/lifecycle problemdetails semantics remain story 91.2" in replay_text
+    assert "archive validation problemdetails are route-local problemdetails" in replay_text
+    assert "canonical route-local problemdetails fields" in replay_text
+    assert "story 91.2" in replay_text
 
 
 def test_story_91_1_replay_panel_states_and_fail_closed_archive_contract_are_explicit() -> None:
@@ -823,10 +852,8 @@ def test_story_91_1_replay_panel_states_and_fail_closed_archive_contract_are_exp
     )
     for term in REPLAY_STATE_TERMS:
         assert term in replay_text, term
-    assert (
-        "invalid archive configuration fails closed and is not a partial hot-log fallback"
-        in replay_text
-    )
+    assert "invalid archive configuration fails closed" in replay_text
+    assert "not partial hot-log success" in replay_text
 
 
 def test_story_91_1_replay_panel_has_no_section_local_control_or_live_source_affordances() -> None:
@@ -853,11 +880,106 @@ def test_story_91_1_replay_panel_denies_mutation_and_scope_bleed_with_neutral_co
         "hidden writes, cache warming, and background jobs are outside this static read view"
         in (replay_text)
     )
-    assert "expanded archive/lifecycle problemdetails semantics remain story 91.2" in replay_text
-    assert "lifecycle safety copy remains story 91.2" in replay_text
+    assert "only completes static lifecycle safety and archive problemdetails copy" in replay_text
+    assert "epic 92 owns cross-panel" in replay_text
     assert "lifecycle safety copy is complete" not in replay_text
     for phrase in ("apply", "prune", "archive mutation", "manifest mutation"):
         assert phrase not in replay_text, phrase
+
+
+def test_story_91_2_replay_panel_lists_archive_problem_details_fields() -> None:
+    parser = parse_dashboard()
+    replay_text = " ".join(parser.sections["replay-lifecycle-readiness"]).lower()
+    replay_lists = parser.section_lists["replay-lifecycle-readiness"]
+    assert tuple(replay_lists["archive problemdetails passive fields"]) == (
+        ARCHIVE_PROBLEM_DETAILS_FIELDS
+    )
+    assert "route-local problemdetails" in replay_text
+    assert "passive static presentation details" in replay_text
+    assert "not global error behavior" in replay_text
+    assert "extensions.code and extensions.trace_id are route-local extension evidence" in (
+        replay_text
+    )
+    assert "extensions.trace_id is optional" in replay_text
+
+
+def test_story_91_2_contract_source_is_canonical_and_unique() -> None:
+    assert REPLAY_LIFECYCLE_CONTRACT.exists()
+    assert REPLAY_LIFECYCLE_CONTRACT_DATA["story"] == "91.2"
+    assert (
+        REPLAY_LIFECYCLE_CONTRACT_DATA["scope"]
+        == "static replay/lifecycle readiness dashboard contract"
+    )
+    for values in (
+        ARCHIVE_PROBLEM_DETAILS_FIELDS,
+        LIFECYCLE_READINESS_EVIDENCE_FIELDS,
+        LIFECYCLE_ARCHIVE_FAIL_SAFE_STATES,
+    ):
+        assert values
+        assert len(values) == len(set(values))
+
+
+def test_story_91_2_replay_panel_lists_lifecycle_readiness_evidence_slots() -> None:
+    parser = parse_dashboard()
+    replay_text = " ".join(parser.sections["replay-lifecycle-readiness"]).lower()
+    replay_lists = parser.section_lists["replay-lifecycle-readiness"]
+    assert tuple(replay_lists["lifecycle readiness passive evidence"]) == (
+        LIFECYCLE_READINESS_EVIDENCE_FIELDS
+    )
+    assert "passive future-evidence slots" in replay_text
+    assert "not a new dashboard api schema" in replay_text
+    assert "separate approved read contract" in replay_text
+    assert "unsupported lifecycle reads remain unavailable" in replay_text
+
+
+def test_story_91_2_replay_panel_lists_fail_safe_lifecycle_states() -> None:
+    parser = parse_dashboard()
+    replay_text = " ".join(parser.sections["replay-lifecycle-readiness"]).lower()
+    replay_lists = parser.section_lists["replay-lifecycle-readiness"]
+    assert tuple(replay_lists["lifecycle and archive fail-safe states"]) == (
+        LIFECYCLE_ARCHIVE_FAIL_SAFE_STATES
+    )
+    assert "invalid archive configuration fails closed" in replay_text
+    assert "not partial hot-log success" in replay_text
+    assert "missing, failed, stale, ambiguous, or unverifiable lifecycle evidence blocks" in (
+        replay_text
+    )
+    assert "missing, unsigned, or ambiguous authorization evidence blocks" in replay_text
+
+
+def test_story_91_2_replay_panel_keeps_control_vocabulary_and_live_wiring_absent() -> None:
+    parser = parse_dashboard()
+    replay_text = " ".join(parser.sections["replay-lifecycle-readiness"]).lower()
+    replay_attrs = " ".join(parser.section_attrs.get("replay-lifecycle-readiness", [])).lower()
+    replay_hrefs = " ".join(parser.section_hrefs.get("replay-lifecycle-readiness", [])).lower()
+    for tag in FORBIDDEN_TAGS:
+        assert tag not in parser.tags, tag
+    for marker in REPLAY_SECTION_LIVE_MARKERS:
+        assert marker not in replay_text, marker
+        assert marker not in replay_attrs, marker
+        assert marker not in replay_hrefs, marker
+    for term in CONTROL_TERMS:
+        assert term not in replay_text, term
+        assert term not in replay_attrs, term
+        assert term not in replay_hrefs, term
+
+
+def test_story_91_2_replay_panel_defers_epic_92_and_runtime_lifecycle_work() -> None:
+    parser = parse_dashboard()
+    replay_text = " ".join(parser.sections["replay-lifecycle-readiness"]).lower()
+    assert "retention scheduling and segment-removal work remain future gated work" in (replay_text)
+    assert "not exposed in this static view" in replay_text
+    assert "exact plan_hash and dry-run identity" in replay_text
+    assert "affected segment identities" in replay_text
+    assert "replay validation, rollback evidence, and operator event or ledger reference" in (
+        replay_text
+    )
+    assert "absent, stale, unsigned, ambiguous, or unverifiable authorization blocks" in (
+        replay_text
+    )
+    assert "epic 92 owns cross-panel health, error, accessibility, and responsiveness" in (
+        replay_text
+    )
 
 
 def test_control_terms_are_negative_safety_copy_only() -> None:

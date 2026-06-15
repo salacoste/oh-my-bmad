@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "story": "91.2",
+  "scope": "static replay/lifecycle readiness dashboard contract",
+  "archiveProblemDetailsPassiveFields": [
+    "type",
+    "title",
+    "status",
+    "detail",
+    "instance",
+    "extensions",
+    "extensions.code",
+    "extensions.trace_id"
+  ],
+  "lifecycleReadinessPassiveEvidence": [
+    "plan_hash",
+    "dry_run_artifact_ref",
+    "safety_policy_version",
+    "retention_input_digest",
+    "affected_segments",
+    "replay_validation_ref",
+    "rollback_evidence_ref",
+    "operator_identity",
+    "authorized_at",
+    "authorization_event_ref",
+    "archive_manifest_ref",
+    "archive_manifest_validation",
+    "archive_error_boundary"
+  ],
+  "lifecycleAndArchiveFailSafeStates": [
+    "route-local ProblemDetails",
+    "invalid archive configuration",
+    "missing archive manifest",
+    "checksum mismatch",
+    "malformed manifest metadata",
+    "duplicate manifest keys",
+    "segment sequence overlap",
+    "missing lifecycle evidence",
+    "failed replay validation",
+    "stale replay evidence",
+    "missing authorization evidence",
+    "unsigned authorization evidence",
+    "ambiguous authorization evidence",
+    "unverifiable lifecycle evidence",
+    "missing rollback evidence",
+    "unavailable lifecycle read",
+    "empty successful lifecycle read",
+    "future gated destructive lifecycle work",
+    "retention scheduling not active"
+  ]
+}

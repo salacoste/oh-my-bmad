@@ -200,3 +200,7 @@ Story 16.5 closes the **MCP-subprocess half** of G-SEC-2 (the broad `GITHUB_TOKE
 - **G-FN-3 — ✅ CLOSED 2026-06-05.** Bound liveness probes with `asyncio.wait_for`: added `_PROBE_TIMEOUT: float = 10.0` constant in both `mcp_clients.py` files; wrapped `session.list_tools()` in `asyncio.wait_for(..., timeout=_PROBE_TIMEOUT)`; `TimeoutError` handler logs warning and returns unhealthy. 5 new tests (responsive, None session, hung, slow-but-ok, exception). Commit: `b1b0b95 fix(mcp-clients): bound liveness probe with asyncio.wait_for -- G-FN-3`. *Original:* Bound liveness probes with asyncio.wait_for.
 
 — *Phase 3 retro carry-forward closures, R2d2 + Claude, 2026-06-05.*
+
+## Deferred from: code review of story 91.2 lifecycle safety ProblemDetails (2026-06-16)
+
+- **D1 — ✅ CLOSED in Story 91.2 blocker follow-up.** `dashboard/static/replay-lifecycle-contract.json` is now the canonical static-dashboard contract source for Story 91.2 exact archive ProblemDetails, lifecycle evidence, and fail-safe state lists. `tests/dashboard/test_static_shell.py` loads that JSON source before asserting the static HTML lists, and the BMad story artifact references the JSON instead of hand-maintaining those exact lists. Remaining static HTML rendering is intentional because the dashboard has no build/runtime wiring; future lifecycle/readiness changes should update the JSON source first and let tests catch HTML drift.
