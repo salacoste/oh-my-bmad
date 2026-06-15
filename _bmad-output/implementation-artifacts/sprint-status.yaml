@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-06-15T01:36:57+03:00"
+# last_updated: "2026-06-15T02:58:30+03:00"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-15T01:36:57+03:00"
+last_updated: "2026-06-15T02:58:30+03:00"
 current_phase: 19  # Phase 19 OPEN — Read-Only Web Dashboard Planning (PRD + UX + architecture + epics planning)
 
 development_status:
@@ -763,13 +763,37 @@ development_status:
   # Epic 88: Read-only dashboard shell and boundary enforcement
   # =========================================================================
   epic-88: in-progress  # Read-only dashboard shell and boundary enforcement
-  88-1-dashboard-static-shell-read-only-banner: ready-for-dev  # _bmad-output/implementation-artifacts/88-1-dashboard-static-shell-read-only-banner.md; story context only, no dashboard implementation
+  88-1-dashboard-static-shell-read-only-banner: review  # dashboard/static/index.html; static read-only shell implemented; ready for code review
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
 
+
+  - date: "2026-06-15"
+    event: story-88-1-implementation-ready-for-review
+    from: in-progress
+    to: review
+    story: 88-1-dashboard-static-shell-read-only-banner
+    reason: >
+      Story 88.1 static read-only dashboard shell implemented and verified.
+      The implementation adds only static HTML and standard-library pytest
+      assertions, preserves static assets/configuration only scope, and keeps
+      live data wiring, backend routes, dependency selection, deployment/CI
+      changes, and Story 88.2 route/method allowlist or effect-based
+      no-mutation tests out of scope.
+
+  - date: "2026-06-15"
+    event: story-88-1-implementation-started
+    from: ready-for-dev
+    to: in-progress
+    story: 88-1-dashboard-static-shell-read-only-banner
+    reason: >
+      Story 88.1 static read-only dashboard shell implementation started.
+      Scope remains static assets/configuration only: no backend routes, no live
+      data wiring, no dependency selection, no deployment or CI changes, and no
+      Story 88.2 route/method allowlist or effect-based no-mutation tests.
 
   - date: "2026-06-15"
     event: story-88-1-context-created

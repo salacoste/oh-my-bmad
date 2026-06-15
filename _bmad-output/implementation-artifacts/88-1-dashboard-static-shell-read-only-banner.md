@@ -1,6 +1,6 @@
 # Story 88.1: Dashboard static shell and read-only banner
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -22,23 +22,23 @@ so that Phase 19 can begin with visible non-mutating boundaries before any live 
 
 ## Tasks / Subtasks
 
-- [ ] Define the future static dashboard shell structure (AC: 1, 2, 6)
-  - [ ] Keep the repo location intentionally undecided in this create-story slice; the future implementation pass must choose a repo-local location through its own implementation/review gate.
-  - [ ] Document that fixture or vendored package manifests may exist and must not be treated as an approved dashboard app surface.
-  - [ ] Record the create-story intake observation, without deciding the future implementation location, that there is no detected first-party frontend/dashboard app surface in the main source tree after excluding vendored, cache, virtualenv, and generated/runtime directories.
-- [ ] Add a persistent read-only banner in the future shell implementation (AC: 1, 3)
-  - [ ] Banner copy must state: read-only visibility surface; unsafe reads render unavailable states; mutation/control operations are not available in this dashboard.
-  - [ ] Banner must not link to approval, retry, cancel, budget override, lifecycle apply/prune, archive mutation, credentialed lifecycle, or production operation controls.
-- [ ] Add static placeholder navigation for visibility panels only (AC: 2, 6)
-  - [ ] Include placeholders for tasks, sessions, events, traces, replay/lifecycle readiness, health, and Audit and Help.
-  - [ ] Use explicit unavailable-state copy for panels whose safe reads are not approved.
-  - [ ] Do not wire live task/session/event/trace/replay/health data in Story 88.1.
-- [ ] Preserve the 88.1 / 88.2 boundary (AC: 4, 5)
-  - [ ] Defer route/method allowlist checks, forbidden-call checks, and effect-based no-mutation tests to future Story 88.2.
-  - [ ] Do not add backend routes, API schemas, data adapters, cache/projection writes, or dependency selection in Story 88.1.
-- [ ] Document provenance placeholder behavior (AC: 1, 2, 6)
-  - [ ] Placeholder panels should reserve space for future source route, timestamp/freshness, trace/event/session references, and confidence copy.
-  - [ ] Placeholder copy must clearly distinguish unavailable reads from empty successful reads.
+- [x] Define the future static dashboard shell structure (AC: 1, 2, 6)
+  - [x] Keep the repo location intentionally undecided in this create-story slice; the future implementation pass must choose a repo-local location through its own implementation/review gate.
+  - [x] Document that fixture or vendored package manifests may exist and must not be treated as an approved dashboard app surface.
+  - [x] Record the create-story intake observation, without deciding the future implementation location, that there is no detected first-party frontend/dashboard app surface in the main source tree after excluding vendored, cache, virtualenv, and generated/runtime directories.
+- [x] Add a persistent read-only banner in the future shell implementation (AC: 1, 3)
+  - [x] Banner copy must state: read-only visibility surface; unsafe reads render unavailable states; mutation/control operations are not available in this dashboard.
+  - [x] Banner must not link to approval, retry, cancel, budget override, lifecycle apply/prune, archive mutation, credentialed lifecycle, or production operation controls.
+- [x] Add static placeholder navigation for visibility panels only (AC: 2, 6)
+  - [x] Include placeholders for tasks, sessions, events, traces, replay/lifecycle readiness, health, and Audit and Help.
+  - [x] Use explicit unavailable-state copy for panels whose safe reads are not approved.
+  - [x] Do not wire live task/session/event/trace/replay/health data in Story 88.1.
+- [x] Preserve the 88.1 / 88.2 boundary (AC: 4, 5)
+  - [x] Defer route/method allowlist checks, forbidden-call checks, and effect-based no-mutation tests to future Story 88.2.
+  - [x] Do not add backend routes, API schemas, data adapters, cache/projection writes, or dependency selection in Story 88.1.
+- [x] Document provenance placeholder behavior (AC: 1, 2, 6)
+  - [x] Placeholder panels should reserve space for future source route, timestamp/freshness, trace/event/session references, and confidence copy.
+  - [x] Placeholder copy must clearly distinguish unavailable reads from empty successful reads.
 
 ## Dev Notes
 
@@ -100,10 +100,40 @@ No conflict is currently resolved in this story file. The implementation pass mu
 
 ### Agent Model Used
 
-TBD by dev-story implementation agent.
+GPT-5.4 Codex via Autopilot/Ultragoal.
 
 ### Debug Log References
 
+- Red phase: `uv run pytest tests/dashboard/test_static_shell.py` failed 6/6 before `dashboard/static/index.html` existed.
+- Green phase: implemented `dashboard/static/index.html`; targeted tests initially failed on two exact banner-copy assertions, then passed after copy refinement.
+- Verification: `uv run pytest tests/dashboard/test_static_shell.py` passed 6 tests.
+- Verification: `uv run ruff check tests/dashboard/test_static_shell.py` passed.
+- Verification: `uv run ruff check .` passed.
+- Regression: `uv run pytest -q -m "not slow"` passed 4141 tests, skipped 8, deselected 61 in 143.82s.
+- Review cycle 1 fix: strengthened static-shell tests so banner semantics are scoped to `aria-label="Read-only dashboard boundary"` and control terms require banner-local negative context; `uv run pytest tests/dashboard/test_static_shell.py` and `uv run ruff check tests/dashboard/test_static_shell.py` passed.
+- Review cycle 2 fix: required every forbidden control term to be present inside the labeled banner; mutation checks and targeted pytest/ruff passed.
+
 ### Completion Notes List
 
+- Implemented a dependency-free static dashboard shell at `dashboard/static/index.html`.
+- Added a persistent read-only banner with explicit unavailable-read and no mutation/control-operation language.
+- Added static placeholder panels for tasks, sessions, events, traces, replay/lifecycle readiness, health, Audit, and Help.
+- Each panel carries local unavailable-state language plus source, freshness/timestamp, reference, and confidence placeholders.
+- Data panels distinguish an unavailable read from an empty successful read.
+- Added standard-library pytest coverage for static shell structure, per-panel provenance placeholders, banner semantics, absence of live API/browser runtime wiring, and absence of control affordance tags.
+- Strengthened false-green prevention for banner-scoped read-only semantics and banner-local negative control vocabulary assertions after code review.
+- Required every forbidden control term to remain in the labeled banner sentence carrying the exact `affordances are absent` absence phrase.
+- Preserved Story 88.1 / Story 88.2 boundary: no backend routes, live data wiring, dependency selection, route/method allowlist checks, forbidden-call checks, or effect-based no-mutation tests were added.
+
 ### File List
+
+- `dashboard/static/index.html`
+- `tests/dashboard/test_static_shell.py`
+- `_bmad-output/implementation-artifacts/88-1-dashboard-static-shell-read-only-banner.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+
+### Change Log
+
+- 2026-06-15: Implemented Story 88.1 static read-only dashboard shell and static assertion tests; moved story to review.
+- 2026-06-15: Addressed code-review false-green findings by making banner and negative-control assertions banner-scoped.
+- 2026-06-15: Addressed follow-up code-review finding by requiring all forbidden control terms to remain present in the labeled banner.

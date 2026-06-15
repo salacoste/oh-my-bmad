@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>oh-my-bmad Read-only Dashboard Shell</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+      background: #0f172a;
+      color: #e2e8f0;
+    }
+    body { margin: 0; }
+    header, main, footer { max-width: 1120px; margin: 0 auto; padding: 24px; }
+    .banner { border: 1px solid #38bdf8; background: #082f49; border-radius: 16px; padding: 18px; }
+    nav ul { display: flex; flex-wrap: wrap; gap: 12px; list-style: none; padding: 0; }
+    nav a { color: #bae6fd; text-decoration: none; border-bottom: 1px solid currentColor; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+    section { border: 1px solid #334155; border-radius: 16px; padding: 18px; background: #111827; }
+    .state { color: #facc15; font-weight: 700; }
+    .meta { color: #cbd5e1; font-size: 0.94rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <aside class="banner" aria-label="Read-only dashboard boundary">
+      <strong>Read-only visibility surface.</strong>
+      unsafe or unavailable reads render unavailable states, and mutation/control operations are not available in this dashboard.
+      Approval, retry, cancel, budget override, apply, prune, delete, truncate, move, rewrite, chmod, archive mutation,
+      manifest mutation, scheduled job, credentialed lifecycle, and production operation affordances are absent. All control affordances are absent.
+    </aside>
+    <h1>oh-my-bmad dashboard shell</h1>
+    <p>This static shell reserves the future visibility layout without connecting live data, adding routes, selecting dependencies, or changing runtime behavior.</p>
+    <nav aria-label="Visibility panels">
+      <ul>
+        <li><a href="#tasks">Tasks</a></li>
+        <li><a href="#sessions">Sessions</a></li>
+        <li><a href="#events">Events</a></li>
+        <li><a href="#traces">Traces</a></li>
+        <li><a href="#replay-lifecycle-readiness">Replay / lifecycle readiness</a></li>
+        <li><a href="#health">Health</a></li>
+        <li><a href="#audit">Audit</a></li>
+        <li><a href="#help">Help</a></li>
+      </ul>
+    </nav>
+  </header>
+  <main class="grid" aria-label="Static visibility placeholder panels">
+    <section id="tasks" aria-labelledby="tasks-title">
+      <h2 id="tasks-title">Tasks</h2>
+      <p class="state">Task reads are unavailable: no safe task list read is wired in Story 88.1.</p>
+      <p>Unavailable read means the panel lacks an approved source; empty successful read would mean an approved source returned no task records.</p>
+      <p class="meta">Source: future approved task read source. Freshness timestamp: pending. Reference: future task or trace reference. Confidence: unavailable until a safe read is approved.</p>
+    </section>
+    <section id="sessions" aria-labelledby="sessions-title">
+      <h2 id="sessions-title">Sessions</h2>
+      <p class="state">Session reads are unavailable: no safe session source is wired in Story 88.1.</p>
+      <p>Unavailable read means no approved session projection exists here; empty successful read would mean a safe source returned no matching sessions.</p>
+      <p class="meta">Source: future approved session read source. Freshness timestamp: pending. Reference: future session reference. Confidence: unavailable until a safe read is approved.</p>
+    </section>
+    <section id="events" aria-labelledby="events-title">
+      <h2 id="events-title">Events</h2>
+      <p class="state">Event timeline reads are unavailable: no live event stream is wired in Story 88.1.</p>
+      <p>Unavailable read means the timeline source is not yet approved; empty successful read would mean the approved source returned no events.</p>
+      <p class="meta">Source: future approved event read source. Freshness timestamp: pending. Reference: future event reference. Confidence: unavailable until a safe read is approved.</p>
+    </section>
+    <section id="traces" aria-labelledby="traces-title">
+      <h2 id="traces-title">Traces</h2>
+      <p class="state">Trace reads are unavailable: no trace lookup is wired in Story 88.1.</p>
+      <p>Unavailable read means trace correlation is not connected; empty successful read would mean an approved trace source found no matching trace.</p>
+      <p class="meta">Source: future approved trace read source. Freshness timestamp: pending. Reference: future trace reference. Confidence: unavailable until a safe read is approved.</p>
+    </section>
+    <section id="replay-lifecycle-readiness" aria-labelledby="replay-title">
+      <h2 id="replay-title">Replay / lifecycle readiness</h2>
+      <p class="state">Replay and lifecycle readiness reads are unavailable: no archive, replay, or lifecycle source is wired in Story 88.1.</p>
+      <p>Unavailable read means readiness evidence is not approved for display; empty successful read would mean an approved source has no readiness evidence.</p>
+      <p class="meta">Source: future approved replay or lifecycle read source. Freshness timestamp: pending. Reference: future replay, event, or session reference. Confidence: unavailable until a safe read is approved.</p>
+    </section>
+    <section id="health" aria-labelledby="health-title">
+      <h2 id="health-title">Health</h2>
+      <p class="state">Health reads are unavailable: no projection health source is wired in Story 88.1.</p>
+      <p>Unavailable read means health is not currently sourced; empty successful read would mean an approved health source reported no records for this view.</p>
+      <p class="meta">Source: future approved health read source. Freshness timestamp: pending. Reference: future health or event reference. Confidence: unavailable until a safe read is approved.</p>
+    </section>
+    <section id="audit" aria-labelledby="audit-title">
+      <h2 id="audit-title">Audit</h2>
+      <p class="state">Audit context is unavailable as live data: this static shell only explains the read-only boundary.</p>
+      <p>Source: BMAD planning artifacts. Freshness timestamp: static Story 88.1 shell. Reference: Phase 19 PRD, UX, architecture, and epics artifacts. Confidence: high for dashboard boundary copy; unavailable for runtime data.</p>
+    </section>
+    <section id="help" aria-labelledby="help-title">
+      <h2 id="help-title">Help</h2>
+      <p class="state">Help content is unavailable as live operator guidance: this static shell provides boundary guidance only.</p>
+      <p>Source: BMAD planning artifacts. Freshness timestamp: static Story 88.1 shell. Reference: future operator runbook and story references. Confidence: high for non-mutating boundary copy; unavailable for runtime data.</p>
+    </section>
+  </main>
+  <footer>
+    <p>Story 88.1 static assets/configuration only. Live wiring, routes, dependencies, and Story 88.2 no-mutation enforcement remain future work.</p>
+  </footer>
+</body>
+</html>
