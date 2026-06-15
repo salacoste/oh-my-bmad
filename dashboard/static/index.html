@@ -200,9 +200,57 @@
     </section>
     <section id="replay-lifecycle-readiness" aria-labelledby="replay-title">
       <h2 id="replay-title">Replay / lifecycle readiness</h2>
-      <p class="state">Replay and lifecycle readiness reads are unavailable: no archive, replay, or lifecycle source is wired in Story 88.1.</p>
-      <p>Unavailable read means readiness evidence is not approved for display; empty successful read would mean an approved source has no readiness evidence.</p>
-      <p class="meta">Source: future approved replay or lifecycle read source. Freshness timestamp: pending. Reference: future replay, event, or session reference. Confidence: unavailable until a safe read is approved.</p>
+      <p class="state">Replay history and validation reads are unavailable in this static shell: the panel shows a read-only contract, not runtime replay data.</p>
+      <p>Task history and replay validation route names are inert visible provenance only: not links, attributes, automatic-refresh sources, or client calls; no live dashboard wiring is present.</p>
+      <ul aria-label="Replay read route provenance">
+        <li>GET /v1/tasks/{task_id}/history</li>
+        <li>GET /v1/events/replay</li>
+        <li>GET /v1/events/replay/validate</li>
+        <li>GET /v1/events/replay/snapshots</li>
+      </ul>
+      <p>These are presentation fields for unavailable replay validation reads, not replay execution output and not canonical JSONL replay output.</p>
+      <ul aria-label="Replay history and validation passive fields">
+        <li>task_id</li>
+        <li>history_source</li>
+        <li>replay_source</li>
+        <li>validation_status</li>
+        <li>validation_timestamp</li>
+        <li>replayed_event_count</li>
+        <li>live_projection_reference</li>
+        <li>field_diffs</li>
+        <li>snapshot_id</li>
+        <li>snapshot_source</li>
+        <li>archive_manifest_reference</li>
+        <li>archive_manifest_digest</li>
+        <li>retained_hot_segments</li>
+        <li>archive_segments</li>
+        <li>problem_details_type</li>
+        <li>problem_details_status</li>
+        <li>problem_details_code</li>
+        <li>freshness</li>
+      </ul>
+      <p>problem_details_type, problem_details_status, and problem_details_code are minimal passive fail-closed placeholders; expanded archive/lifecycle ProblemDetails semantics remain Story 91.2.</p>
+      <ul aria-label="Replay history and validation passive states">
+        <li>unavailable read</li>
+        <li>loading</li>
+        <li>empty successful read</li>
+        <li>hot-log-only default</li>
+        <li>archive-aware task history</li>
+        <li>valid archive manifest configured</li>
+        <li>invalid archive configuration</li>
+        <li>fail-closed archive error</li>
+        <li>replay validation mismatch</li>
+        <li>no snapshots</li>
+        <li>stale data</li>
+        <li>route failure/read error</li>
+        <li>unavailable replay result</li>
+        <li>unavailable non-read snapshot behavior</li>
+        <li>future gated lifecycle work</li>
+      </ul>
+      <p>Invalid archive configuration fails closed and is not a partial hot-log fallback.</p>
+      <p>Non-read snapshot behavior is outside this story and not exposed in the static dashboard. Hidden writes, cache warming, and background jobs are outside this static read view and not exposed.</p>
+      <p>Lifecycle safety copy remains Story 91.2; this story does not claim completion of expanded archive/lifecycle safety semantics.</p>
+      <p class="meta">Source: GET task-history and replay-validation route provenance as static text plus BMAD Story 91.1. Freshness timestamp: pending. Reference: task history, replay validation, snapshots read listing, archive manifest references, fail-closed placeholders, and Story 91.2 boundary. Confidence: unavailable until a dashboard-safe read is wired by a later approved story.</p>
     </section>
     <section id="health" aria-labelledby="health-title">
       <h2 id="health-title">Health</h2>

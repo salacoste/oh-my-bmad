@@ -242,6 +242,60 @@ TRACE_TRUNCATE_ACTION_PHRASES = (
     "truncate button",
     "truncate action",
 )
+APPROVED_REPLAY_ROUTES = (
+    "GET /v1/tasks/{task_id}/history",
+    "GET /v1/events/replay",
+    "GET /v1/events/replay/validate",
+    "GET /v1/events/replay/snapshots",
+)
+REPLAY_PASSIVE_FIELDS = (
+    "task_id",
+    "history_source",
+    "replay_source",
+    "validation_status",
+    "validation_timestamp",
+    "replayed_event_count",
+    "live_projection_reference",
+    "field_diffs",
+    "snapshot_id",
+    "snapshot_source",
+    "archive_manifest_reference",
+    "archive_manifest_digest",
+    "retained_hot_segments",
+    "archive_segments",
+    "problem_details_type",
+    "problem_details_status",
+    "problem_details_code",
+    "freshness",
+)
+REPLAY_STATE_TERMS = (
+    "unavailable read",
+    "loading",
+    "empty successful read",
+    "hot-log-only default",
+    "archive-aware task history",
+    "valid archive manifest configured",
+    "invalid archive configuration",
+    "fail-closed archive error",
+    "replay validation mismatch",
+    "no snapshots",
+    "stale data",
+    "route failure/read error",
+    "unavailable replay result",
+    "unavailable non-read snapshot behavior",
+    "future gated lifecycle work",
+)
+REPLAY_SECTION_LIVE_MARKERS = (
+    "fetch(",
+    "xmlhttprequest",
+    "websocket",
+    "eventsource",
+    "poll",
+    "live stream",
+    "data-endpoint",
+    "data-route",
+    "hx-get",
+)
 
 
 class StaticDashboardParser(HTMLParser):
@@ -721,6 +775,89 @@ def test_story_90_2_traces_panel_denies_trace_mutation_and_scope_bleed() -> None
     assert "cache-warming/read-side effects" in traces_text
     assert "story 90.3" not in traces_text
     assert "replay/lifecycle implementation" not in traces_text
+
+
+def test_story_91_1_replay_panel_declares_safe_read_route_provenance() -> None:
+    parser = parse_dashboard()
+    replay_text = " ".join(parser.sections["replay-lifecycle-readiness"]).lower()
+    replay_attrs = " ".join(parser.section_attrs.get("replay-lifecycle-readiness", [])).lower()
+    replay_hrefs = " ".join(parser.section_hrefs.get("replay-lifecycle-readiness", [])).lower()
+    for route in APPROVED_REPLAY_ROUTES:
+        route_text = route.lower()
+        assert route_text in replay_text, route
+        assert route_text not in replay_attrs, route
+        assert route_text not in replay_hrefs, route
+    assert "inert visible provenance" in replay_text
+    assert "no live dashboard wiring" in replay_text
+    provenance_sentence = next(
+        sentence for sentence in sentences(replay_text) if "inert visible provenance" in sentence
+    )
+    assert (
+        "not links, attributes, automatic-refresh sources, or client calls" in provenance_sentence
+    )
+
+
+def test_story_91_1_replay_panel_lists_passive_history_and_validation_fields() -> None:
+    parser = parse_dashboard()
+    replay_text = " ".join(parser.sections["replay-lifecycle-readiness"]).lower()
+    replay_lists = parser.section_lists["replay-lifecycle-readiness"]
+    assert tuple(replay_lists["replay history and validation passive fields"]) == (
+        REPLAY_PASSIVE_FIELDS
+    )
+    assert "presentation fields for unavailable replay validation reads" in replay_text
+    assert "not replay execution output" in replay_text
+    assert "not canonical jsonl replay output" in replay_text
+    assert (
+        "problem_details_type, problem_details_status, and problem_details_code are minimal passive fail-closed placeholders"
+        in replay_text
+    )
+    assert "expanded archive/lifecycle problemdetails semantics remain story 91.2" in replay_text
+
+
+def test_story_91_1_replay_panel_states_and_fail_closed_archive_contract_are_explicit() -> None:
+    parser = parse_dashboard()
+    replay_text = " ".join(parser.sections["replay-lifecycle-readiness"]).lower()
+    replay_lists = parser.section_lists["replay-lifecycle-readiness"]
+    assert tuple(replay_lists["replay history and validation passive states"]) == (
+        REPLAY_STATE_TERMS
+    )
+    for term in REPLAY_STATE_TERMS:
+        assert term in replay_text, term
+    assert (
+        "invalid archive configuration fails closed and is not a partial hot-log fallback"
+        in replay_text
+    )
+
+
+def test_story_91_1_replay_panel_has_no_section_local_control_or_live_source_affordances() -> None:
+    parser = parse_dashboard()
+    replay_text = " ".join(parser.sections["replay-lifecycle-readiness"]).lower()
+    replay_attrs = " ".join(parser.section_attrs.get("replay-lifecycle-readiness", [])).lower()
+    replay_hrefs = " ".join(parser.section_hrefs.get("replay-lifecycle-readiness", [])).lower()
+    for marker in REPLAY_SECTION_LIVE_MARKERS:
+        assert marker not in replay_text, marker
+        assert marker not in replay_attrs, marker
+        assert marker not in replay_hrefs, marker
+    for term in CONTROL_TERMS:
+        assert term not in replay_text, term
+        assert term not in replay_attrs, term
+        assert term not in replay_hrefs, term
+
+
+def test_story_91_1_replay_panel_denies_mutation_and_scope_bleed_with_neutral_copy() -> None:
+    parser = parse_dashboard()
+    replay_text = " ".join(parser.sections["replay-lifecycle-readiness"]).lower()
+    assert "non-read snapshot behavior is outside this story" in replay_text
+    assert "not exposed in the static dashboard" in replay_text
+    assert (
+        "hidden writes, cache warming, and background jobs are outside this static read view"
+        in (replay_text)
+    )
+    assert "expanded archive/lifecycle problemdetails semantics remain story 91.2" in replay_text
+    assert "lifecycle safety copy remains story 91.2" in replay_text
+    assert "lifecycle safety copy is complete" not in replay_text
+    for phrase in ("apply", "prune", "archive mutation", "manifest mutation"):
+        assert phrase not in replay_text, phrase
 
 
 def test_control_terms_are_negative_safety_copy_only() -> None:
