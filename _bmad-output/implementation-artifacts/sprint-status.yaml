@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-15T13:49:00+03:00"
+last_updated: "2026-06-15T15:06:00+03:00"
 current_phase: 19  # Phase 19 OPEN — Read-Only Web Dashboard Planning (PRD + UX + architecture + epics planning)
 
 development_status:
@@ -772,13 +772,53 @@ development_status:
   # =========================================================================
   epic-89: in-progress  # Task/session overview and task detail visibility
   89-1-overview-task-list-unavailable-fallback: done  # dashboard/static/index.html; static overview/task-list unavailable fallback implemented and review/QA/local gates clean
-  89-2-task-detail-session-panel-safe-read: backlog  # future implementation story; use existing GET /v1/tasks/{task_id} read surface only
+  89-2-task-detail-session-panel-safe-read: done  # dashboard/static/index.html; static task detail safe-read panel implemented and review/QA/local gates clean
   89-3-sessions-visibility-panel: backlog  # future implementation story; safe reads/unavailable states only
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-15"
+    event: story-89-2-implementation-started
+    from: ready-for-dev
+    to: in-progress
+    story: 89-2-task-detail-session-panel-safe-read
+    reason: >
+      Autopilot/Ultragoal implementation began after ralplan consensus: Architect
+      APPROVE/CLEAR followed by Critic APPROVE on the revised Story 89.2 plan and
+      test spec. Scope remains static dashboard/test/story/status only, with no
+      backend/API/dependency/live-wiring/runtime behavior changes.
+
+  - date: "2026-06-15"
+    event: story-89-2-ready-for-review
+    from: in-progress
+    to: review
+    story: 89-2-task-detail-session-panel-safe-read
+    reason: >
+      Story 89.2 static Task Detail safe-read panel implemented in
+      dashboard/static/index.html with tests/dashboard/test_static_shell.py
+      coverage. Red test first failed on missing task detail panel, route
+      provenance, passive field contract, state/session scope, and passive thread
+      metadata. Focused dashboard tests then passed 20 tests including Story 88.2
+      no-mutation guards. Final done status still requires independent code
+      review, UltraQA, CI, and Ultragoal reconciliation.
+
+  - date: "2026-06-15"
+    event: story-89-2-context-created
+    from: backlog
+    to: ready-for-dev
+    story: 89-2-task-detail-session-panel-safe-read
+    reason: >
+      Story 89.2 ready-for-dev context created for the task detail/session panel
+      safe-read slice. The story uses the existing GET /v1/tasks/{task_id}
+      read as inert provenance only, pins a passive TaskResponse field whitelist,
+      denies command/budget/lifecycle/control fields, limits session semantics to
+      task-local worktree_lock references, and defers broader session visibility
+      to Story 89.3. This creation event does not add live wiring, backend routes,
+      dependencies, runtime behavior changes, hidden writes, background jobs, or
+      mutation/control affordances.
+
 
   - date: "2026-06-15"
     event: story-89-1-complete

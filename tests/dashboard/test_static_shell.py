@@ -8,6 +8,7 @@ DASHBOARD = Path("dashboard/static/index.html")
 REQUIRED_PANELS = {
     "overview": "Overview",
     "tasks": "Tasks",
+    "task-detail": "Task Detail",
     "sessions": "Sessions",
     "events": "Events",
     "traces": "Traces",
@@ -23,10 +24,10 @@ LIVE_API_MARKERS = (
     "XMLHttpRequest",
     "WebSocket",
     "EventSource",
-    "/v1/",
     "http://",
     "https://",
 )
+APPROVED_TASK_DETAIL_ROUTE = "GET /v1/tasks/{task_id}"
 CONTROL_TERMS = (
     "approval",
     "retry",
@@ -60,6 +61,43 @@ TASK_ROW_CONTRACT_TERMS = (
     "freshness",
     "state",
     "route/reference",
+)
+TASK_DETAIL_PASSIVE_FIELDS = (
+    "task_id",
+    "status",
+    "title",
+    "created_at",
+    "updated_at",
+    "state_since",
+    "actor.kind",
+    "actor.id",
+    "last_event.id",
+    "last_event.type",
+    "last_event.emitted_at",
+    "last_event.summary",
+    "current_step",
+    "total_steps",
+    "last_agent_action",
+    "hint",
+    "worktree_lock.held",
+    "worktree_lock.by_session_id",
+    "worktree_lock.acquired_at",
+    "chat_id",
+    "reply_to_message_id",
+)
+TASK_DETAIL_DENIED_FIELDS = (
+    "available_commands",
+    "next_commands",
+    "budget_token_limit",
+    "budget_action",
+)
+TASK_DETAIL_STATE_TERMS = (
+    "stale",
+    "missing",
+    "unauthorized",
+    "unavailable",
+    "empty successful read",
+    "read error",
 )
 
 
@@ -215,6 +253,53 @@ def test_story_89_1_task_list_keeps_future_row_contract_without_synthesized_rows
         assert term in tasks_text, term
     assert "no task rows are synthesized" in tasks_text
     assert "literal live route" not in tasks_text
+
+
+def test_story_89_2_task_detail_uses_inert_approved_route_provenance() -> None:
+    parser = parse_dashboard()
+    task_detail = " ".join(parser.sections["task-detail"]).lower()
+    assert APPROVED_TASK_DETAIL_ROUTE.lower() in task_detail
+    assert "inert provenance" in task_detail
+    assert "not live wiring" in task_detail
+    assert "no backend route" in task_detail
+    assert "no dependency" in task_detail
+
+
+def test_story_89_2_task_detail_lists_only_passive_field_contract() -> None:
+    parser = parse_dashboard()
+    task_detail = " ".join(parser.sections["task-detail"]).lower()
+    for field in TASK_DETAIL_PASSIVE_FIELDS:
+        assert field in task_detail, field
+    for field in TASK_DETAIL_DENIED_FIELDS:
+        assert field not in task_detail, field
+    assert "command field" not in task_detail
+    assert "budget policy" not in task_detail
+    assert "lifecycle field" not in task_detail
+
+
+def test_story_89_2_task_detail_state_and_session_scope_are_explicit() -> None:
+    parser = parse_dashboard()
+    task_detail = " ".join(parser.sections["task-detail"]).lower()
+    for term in TASK_DETAIL_STATE_TERMS:
+        assert term in task_detail, term
+    assert "worktree_lock" in task_detail
+    assert "task-local session reference" in task_detail
+    assert "broader session metadata" in task_detail
+    assert "heartbeat" in task_detail
+    assert "history" in task_detail
+    assert "aggregation" in task_detail
+    assert "deferred to story 89.3" in task_detail
+
+
+def test_story_89_2_thread_metadata_is_passive_and_unavailable_when_absent() -> None:
+    parser = parse_dashboard()
+    task_detail = " ".join(parser.sections["task-detail"]).lower()
+    assert "chat_id" in task_detail
+    assert "reply_to_message_id" in task_detail
+    assert "passive thread metadata" in task_detail
+    assert "not configured" in task_detail
+    assert "message sending" not in task_detail
+    assert "notification control" not in task_detail
 
 
 def test_control_terms_are_negative_safety_copy_only() -> None:
