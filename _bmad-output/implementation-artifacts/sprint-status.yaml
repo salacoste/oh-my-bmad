@@ -762,13 +762,66 @@ development_status:
   # =========================================================================
   # Epic 88: Read-only dashboard shell and boundary enforcement
   # =========================================================================
-  epic-88: in-progress  # Read-only dashboard shell and boundary enforcement
-  88-1-dashboard-static-shell-read-only-banner: review  # dashboard/static/index.html; static read-only shell implemented; ready for code review
+  epic-88: done  # Read-only dashboard shell and boundary enforcement
+  88-1-dashboard-static-shell-read-only-banner: done  # dashboard/static/index.html; static read-only shell implemented and CI green
+  88-2-route-method-allowlist-no-mutation-guard-tests: done  # tests/dashboard/test_read_only_boundary.py; static/adversarial no-mutation boundary guards shipped and CI green
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+
+  - date: "2026-06-15"
+    event: epic-88-complete
+    from: in-progress
+    to: done
+    story: epic-88
+    reason: >
+      Epic 88 read-only dashboard shell and boundary enforcement is complete.
+      Story 88.1 shipped the static read-only dashboard shell and Story 88.2
+      shipped static/adversarial route-method and no-mutation boundary guard
+      tests. Evidence anchors: commit 4993f3e219a9e702e5ded8473354bc4680441ab0,
+      CI run https://github.com/salacoste/oh-my-bmad/actions/runs/27521456863
+      completed successfully, targeted dashboard tests passed 13 tests, full
+      shipped-cycle non-slow regression passed 4148 tests with 8 skipped and 61
+      deselected, independent code review APPROVE, architect CLEAR, and UltraQA
+      passed 26 scenarios plus 2 negative controls. This status reconciliation
+      does not authorize live data wiring, backend routes, dependencies,
+      deployment changes, cache-warming writes, hidden writes, background-job
+      dispatch, mutation routes, or approval/retry/cancel/budget override/apply/
+      prune/delete/truncate/move/rewrite/chmod/archive mutation/manifest mutation/
+      scheduled job/credentialed lifecycle/production operation controls.
+
+  - date: "2026-06-15"
+    event: story-88-2-complete
+    from: backlog
+    to: done
+    story: 88-2-route-method-allowlist-no-mutation-guard-tests
+    reason: >
+      Story 88.2 route/method allowlist and no-mutation guard tests were shipped
+      in commit 4993f3e219a9e702e5ded8473354bc4680441ab0 and verified by CI run
+      https://github.com/salacoste/oh-my-bmad/actions/runs/27521456863. The
+      tests provide static/adversarial boundary coverage for the current static
+      dashboard: GET-only route vocabulary, no script/event/form/actionable/live
+      API contexts, malformed script/style finalization, exact read-only boundary
+      semantics, negative-control vocabulary, safe href canonicalization, and
+      traversal escape failures. This is not backend runtime effect proof and it
+      does not add live data wiring, backend routes, dependencies, deployment
+      changes, or mutation/control surfaces.
+
+  - date: "2026-06-15"
+    event: story-88-1-complete
+    from: review
+    to: done
+    story: 88-1-dashboard-static-shell-read-only-banner
+    reason: >
+      Story 88.1 static read-only dashboard shell is marked done after shipped
+      implementation, review, UltraQA, and green CI evidence. The shell remains
+      static assets/configuration only with explicit unavailable states and no
+      live data wiring, backend routes, dependency selection, deployment/CI
+      changes, mutation routes, hidden writes, cache-warming writes/read-side
+      effects, background-job dispatch, or mutation/control affordances.
 
 
   - date: "2026-06-15"

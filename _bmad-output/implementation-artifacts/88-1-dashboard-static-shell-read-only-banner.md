@@ -1,6 +1,6 @@
 # Story 88.1: Dashboard static shell and read-only banner
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -18,7 +18,7 @@ so that Phase 19 can begin with visible non-mutating boundaries before any live 
 4. Story 88.1 does not authorize live data wiring, new routes, or dependency selection.
 5. Story 88.2 owns route/method allowlist checks, forbidden-call checks, and effect-based no-mutation tests; Story 88.1 must not pull that work forward.
 6. The implementation uses static assets/configuration only and explicit unavailable states for panels whose safe reads are not yet approved.
-7. No dashboard implementation is performed by this create-story/status slice; this file is ready-for-dev context only.
+7. The original create-story/status slice did not perform dashboard implementation; the completed implementation evidence is recorded in the Dev Agent Record below.
 
 ## Tasks / Subtasks
 
@@ -104,6 +104,9 @@ GPT-5.4 Codex via Autopilot/Ultragoal.
 
 ### Debug Log References
 
+- Final reconciliation evidence: commit `597d9f0` shipped the static read-only dashboard shell; subsequent commit `4993f3e219a9e702e5ded8473354bc4680441ab0` preserved the shell while adding Story 88.2 guard tests.
+- CI evidence for the reconciled Epic 88 boundary: https://github.com/salacoste/oh-my-bmad/actions/runs/27521456863 completed successfully.
+- Final local reconciliation regression: `uv run pytest tests/dashboard/test_static_shell.py tests/dashboard/test_read_only_boundary.py` passed 13 tests.
 - Red phase: `uv run pytest tests/dashboard/test_static_shell.py` failed 6/6 before `dashboard/static/index.html` existed.
 - Green phase: implemented `dashboard/static/index.html`; targeted tests initially failed on two exact banner-copy assertions, then passed after copy refinement.
 - Verification: `uv run pytest tests/dashboard/test_static_shell.py` passed 6 tests.
@@ -124,6 +127,7 @@ GPT-5.4 Codex via Autopilot/Ultragoal.
 - Strengthened false-green prevention for banner-scoped read-only semantics and banner-local negative control vocabulary assertions after code review.
 - Required every forbidden control term to remain in the labeled banner sentence carrying the exact `affordances are absent` absence phrase.
 - Preserved Story 88.1 / Story 88.2 boundary: no backend routes, live data wiring, dependency selection, route/method allowlist checks, forbidden-call checks, or effect-based no-mutation tests were added.
+- Reconciled final status to done after pushed implementation, independent review, UltraQA, and green CI evidence. Story 88.1 remains static assets/configuration only and does not authorize live data wiring.
 
 ### File List
 
@@ -137,3 +141,4 @@ GPT-5.4 Codex via Autopilot/Ultragoal.
 - 2026-06-15: Implemented Story 88.1 static read-only dashboard shell and static assertion tests; moved story to review.
 - 2026-06-15: Addressed code-review false-green findings by making banner and negative-control assertions banner-scoped.
 - 2026-06-15: Addressed follow-up code-review finding by requiring all forbidden control terms to remain present in the labeled banner.
+- 2026-06-15: Marked Story 88.1 done during Epic 88 BMAD reconciliation; evidence remains static shell only, with CI green at https://github.com/salacoste/oh-my-bmad/actions/runs/27521456863.
