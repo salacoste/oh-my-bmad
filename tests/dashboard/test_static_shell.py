@@ -6,6 +6,7 @@ from pathlib import Path
 DASHBOARD = Path("dashboard/static/index.html")
 
 REQUIRED_PANELS = {
+    "overview": "Overview",
     "tasks": "Tasks",
     "sessions": "Sessions",
     "events": "Events",
@@ -44,6 +45,22 @@ CONTROL_TERMS = (
     "credentialed lifecycle",
     "production operation",
 )
+STORY_89_1_STATE_TERMS = (
+    "unavailable read",
+    "loading",
+    "empty successful read",
+    "stale/partial data",
+    "permission/configuration failure",
+    "read error",
+)
+TASK_ROW_CONTRACT_TERMS = (
+    "provenance",
+    "source",
+    "timestamp",
+    "freshness",
+    "state",
+    "route/reference",
+)
 
 
 class StaticDashboardParser(HTMLParser):
@@ -53,24 +70,39 @@ class StaticDashboardParser(HTMLParser):
         self.data: list[str] = []
         self.banner_data: list[str] = []
         self.sections: dict[str, list[str]] = {}
+        self.nav_hrefs: list[str] = []
+        self.section_hrefs: dict[str, list[str]] = {}
         self._section_stack: list[str] = []
         self._banner_depth = 0
+        self._nav_depth = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self.tags.append(tag)
         attrs_dict = dict(attrs)
+        if self._nav_depth:
+            self._nav_depth += 1
+        elif tag == "nav":
+            self._nav_depth = 1
         if self._banner_depth:
             self._banner_depth += 1
         elif tag == "aside" and attrs_dict.get("aria-label") == "Read-only dashboard boundary":
             self._banner_depth = 1
         if tag == "section" and attrs_dict.get("id"):
             self._section_stack.append(attrs_dict["id"] or "")
+        if tag == "a" and attrs_dict.get("href"):
+            href = attrs_dict["href"] or ""
+            if self._nav_depth:
+                self.nav_hrefs.append(href)
+            if self._section_stack:
+                self.section_hrefs.setdefault(self._section_stack[-1], []).append(href)
 
     def handle_endtag(self, tag: str) -> None:
         if tag == "section" and self._section_stack:
             self._section_stack.pop()
         if self._banner_depth:
             self._banner_depth -= 1
+        if self._nav_depth:
+            self._nav_depth -= 1
 
     def handle_data(self, data: str) -> None:
         stripped = " ".join(data.split())
@@ -125,6 +157,8 @@ def test_no_live_api_or_browser_runtime_wiring() -> None:
 def test_required_panels_have_local_unavailable_and_provenance_placeholders() -> None:
     parser = parse_dashboard()
     assert set(REQUIRED_PANELS).issubset(parser.sections)
+    for panel_id in REQUIRED_PANELS:
+        assert f"#{panel_id}" in parser.nav_hrefs
     for panel_id, heading in REQUIRED_PANELS.items():
         panel_text = " ".join(parser.sections[panel_id]).lower()
         assert heading.lower() in panel_text
@@ -149,6 +183,38 @@ def test_data_panels_distinguish_unavailable_from_empty_success() -> None:
         panel_text = " ".join(parser.sections[panel_id]).lower()
         assert "unavailable read" in panel_text, panel_id
         assert "empty successful read" in panel_text, panel_id
+
+
+def test_story_89_1_overview_and_tasks_use_explicit_aggregate_unavailable_fallback() -> None:
+    parser = parse_dashboard()
+    for panel_id in ("overview", "tasks"):
+        panel_text = " ".join(parser.sections[panel_id]).lower()
+        assert "aggregate task" in panel_text, panel_id
+        assert "safe aggregate task read" in panel_text, panel_id
+        assert "unavailable" in panel_text, panel_id
+        assert "no safe aggregate task read is approved or wired" in panel_text, panel_id
+        assert "empty successful read" in panel_text, panel_id
+        assert "audit" in panel_text, panel_id
+        assert "help" in panel_text, panel_id
+        assert "#audit" in parser.section_hrefs.get(panel_id, []), panel_id
+        assert "#help" in parser.section_hrefs.get(panel_id, []), panel_id
+
+
+def test_story_89_1_overview_and_tasks_name_full_state_matrix() -> None:
+    parser = parse_dashboard()
+    for panel_id in ("overview", "tasks"):
+        panel_text = " ".join(parser.sections[panel_id]).lower()
+        for term in STORY_89_1_STATE_TERMS:
+            assert term in panel_text, (panel_id, term)
+
+
+def test_story_89_1_task_list_keeps_future_row_contract_without_synthesized_rows() -> None:
+    parser = parse_dashboard()
+    tasks_text = " ".join(parser.sections["tasks"]).lower()
+    for term in TASK_ROW_CONTRACT_TERMS:
+        assert term in tasks_text, term
+    assert "no task rows are synthesized" in tasks_text
+    assert "literal live route" not in tasks_text
 
 
 def test_control_terms_are_negative_safety_copy_only() -> None:

@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-15T02:58:30+03:00"
+last_updated: "2026-06-15T13:49:00+03:00"
 current_phase: 19  # Phase 19 OPEN — Read-Only Web Dashboard Planning (PRD + UX + architecture + epics planning)
 
 development_status:
@@ -771,7 +771,7 @@ development_status:
   # Epic 89: Task/session overview and task detail visibility
   # =========================================================================
   epic-89: in-progress  # Task/session overview and task detail visibility
-  89-1-overview-task-list-unavailable-fallback: ready-for-dev  # _bmad-output/implementation-artifacts/89-1-overview-task-list-unavailable-fallback.md; create-story/status-only, no runtime implementation
+  89-1-overview-task-list-unavailable-fallback: done  # dashboard/static/index.html; static overview/task-list unavailable fallback implemented and review/QA/local gates clean
   89-2-task-detail-session-panel-safe-read: backlog  # future implementation story; use existing GET /v1/tasks/{task_id} read surface only
   89-3-sessions-visibility-panel: backlog  # future implementation story; safe reads/unavailable states only
 
@@ -780,6 +780,45 @@ development_status:
 # ===========================================================================
 audit_trail:
 
+  - date: "2026-06-15"
+    event: story-89-1-complete
+    from: review
+    to: done
+    story: 89-1-overview-task-list-unavailable-fallback
+    reason: >
+      Story 89.1 completed after final independent code-review APPROVE,
+      architect CLEAR, UltraQA static adversarial scenarios passed 19 checks,
+      focused dashboard tests passed 16 tests, lint/format/diff checks passed,
+      and full local non-slow regression passed 4151 tests with 8 skipped and 61
+      deselected. The shipped slice remains static dashboard/test/story/status
+      only and does not authorize backend/API/dependency/live-wiring/runtime
+      behavior changes, cache-warming writes, hidden writes, background jobs,
+      mutation routes, or control affordances.
+
+
+  - date: "2026-06-15"
+    event: story-89-1-implementation-started
+    from: ready-for-dev
+    to: in-progress
+    story: 89-1-overview-task-list-unavailable-fallback
+    reason: >
+      Autopilot/Ultragoal implementation began after ralplan consensus: Architect
+      APPROVE/CLEAR followed by Critic APPROVE on the revised Story 89.1 plan and
+      test spec. Scope remains static dashboard/test/story/status only, with no
+      backend/API/dependency/live-wiring/runtime behavior changes.
+
+  - date: "2026-06-15"
+    event: story-89-1-ready-for-review
+    from: in-progress
+    to: review
+    story: 89-1-overview-task-list-unavailable-fallback
+    reason: >
+      Story 89.1 static Overview and Tasks unavailable fallback implemented in
+      dashboard/static/index.html with tests/dashboard/test_static_shell.py
+      coverage. Red test first failed on missing overview/aggregate fallback/state
+      matrix/provenance placeholders; focused dashboard tests then passed 16 tests
+      including Story 88.2 no-mutation guards. Final done status still requires
+      independent code review, UltraQA, CI, and Ultragoal reconciliation.
 
 
   - date: "2026-06-15"

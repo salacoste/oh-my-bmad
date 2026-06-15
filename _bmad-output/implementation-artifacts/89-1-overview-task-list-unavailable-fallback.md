@@ -1,6 +1,6 @@
 # Story 89.1: Overview/task list with explicit unavailable fallback
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -18,34 +18,34 @@ so that Phase 19 can add situational awareness without inventing data, calling m
 4. The panel distinguishes unavailable read, loading, empty successful read, stale/partial data, permission/configuration failure, and read error states without implying mutation occurred.
 5. The panel exposes no approval, retry, cancel, budget override, apply, prune, delete, truncate, move, rewrite, chmod, archive mutation, manifest mutation, scheduled job, credentialed lifecycle, production operation, credential entry, or other mutation/control affordance.
 6. Story 89.1 does not approve any new aggregate task-list API, route, schema, live data wiring, dependency selection, deployment/CI change, lockfile change, or runtime behavior change. Only an existing safe aggregate read or a separately approved future read contract may be used by a later implementation pass.
-7. This create-story/status slice creates implementation guidance only; future dev-story work must provide tests and review evidence before moving the story beyond `ready-for-dev`.
+7. The earlier create-story/status slice created implementation guidance only; this current implementation pass must provide tests and review evidence before moving the story beyond `review` and into `done`.
 
 ## Tasks / Subtasks
 
-- [ ] Confirm the aggregate task-list read basis before implementation (AC: 1, 2, 6)
-  - [ ] Search existing registry-api/replay/dashboard surfaces for a safe aggregate task read; document the exact route/reference if one exists.
-  - [ ] If no safe aggregate read exists, keep the panel in explicit unavailable state by default.
-  - [ ] Do not create a new aggregate `GET` route in this story unless a separately approved future read contract exists and proves no hidden writes, cache-warming writes/read-side effects, or background-job dispatch.
-- [ ] Implement or refine overview/task-list presentation only inside the approved dashboard surface (AC: 2, 3, 4)
-  - [ ] Reuse the existing static dashboard shell location and conventions from Story 88.1 unless the implementation gate records a better repo-local rationale.
-  - [ ] Preserve the persistent read-only banner and unavailable-state vocabulary already established by Story 88.1.
-  - [ ] Add or refine overview/task-list copy so unavailable, empty-success, stale/partial, read-error, and permission/configuration states are visually and textually distinct.
-  - [ ] Include Audit and Help references in the unavailable aggregate-read state.
-- [ ] Preserve read-only/no-mutation boundaries (AC: 1, 5, 6)
-  - [ ] Do not add buttons, forms, event handlers, scripts, live polling, mutation routes, lifecycle controls, credential entry, or production operation controls.
-  - [ ] Do not import or call registry/event-log writers, lifecycle apply/prune helpers, snapshot creation, archive mutation, cache writers, or job-dispatch helpers.
-  - [ ] Treat local filter reset/adjustment, if implemented later, as ephemeral client/render state only; it must not issue writes or background jobs.
-- [ ] Add or update tests in the future implementation pass (AC: all)
-  - [ ] Extend existing dashboard static tests rather than bypassing them.
-  - [ ] Assert explicit unavailable fallback when aggregate task read is not approved.
-  - [ ] Assert future task rows, if any, include provenance/source, timestamp/freshness, state, and route/reference.
-  - [ ] Assert no scripts, event handlers, forms, actionable controls, unsafe hrefs, live API calls, mutation vocabulary outside required negative-control context, or non-GET route/method contexts are introduced.
-  - [ ] Keep Story 88.2 route/method and no-mutation guard coverage green.
-- [ ] Validate the implementation before review (AC: all)
-  - [ ] Run focused dashboard tests: `uv run pytest tests/dashboard/test_static_shell.py tests/dashboard/test_read_only_boundary.py` plus any new Story 89.1 tests.
-  - [ ] Run `uv run ruff format --check .` and `uv run ruff check .`.
-  - [ ] Run broader regression when runtime/source changes occur: `uv run pytest -q -m "not slow"`.
-  - [ ] Record docs/status or implementation code-review `APPROVE`, architect `CLEAR`, and UltraQA evidence before marking done.
+- [x] Confirm the aggregate task-list read basis before implementation (AC: 1, 2, 6)
+  - [x] Search existing registry-api/replay/dashboard surfaces for a safe aggregate task read; document the exact route/reference if one exists.
+  - [x] If no safe aggregate read exists, keep the panel in explicit unavailable state by default.
+  - [x] Do not create a new aggregate `GET` route in this story unless a separately approved future read contract exists and proves no hidden writes, cache-warming writes/read-side effects, or background-job dispatch.
+- [x] Implement or refine overview/task-list presentation only inside the approved dashboard surface (AC: 2, 3, 4)
+  - [x] Reuse the existing static dashboard shell location and conventions from Story 88.1 unless the implementation gate records a better repo-local rationale.
+  - [x] Preserve the persistent read-only banner and unavailable-state vocabulary already established by Story 88.1.
+  - [x] Add or refine overview/task-list copy so unavailable, empty-success, stale/partial, read-error, and permission/configuration states are visually and textually distinct.
+  - [x] Include Audit and Help references in the unavailable aggregate-read state.
+- [x] Preserve read-only/no-mutation boundaries (AC: 1, 5, 6)
+  - [x] Do not add buttons, forms, event handlers, scripts, live polling, mutation routes, lifecycle controls, credential entry, or production operation controls.
+  - [x] Do not import or call registry/event-log writers, lifecycle apply/prune helpers, snapshot creation, archive mutation, cache writers, or job-dispatch helpers.
+  - [x] Treat local filter reset/adjustment, if implemented later, as ephemeral client/render state only; it must not issue writes or background jobs.
+- [x] Add or update tests in the future implementation pass (AC: all)
+  - [x] Extend existing dashboard static tests rather than bypassing them.
+  - [x] Assert explicit unavailable fallback when aggregate task read is not approved.
+  - [x] Assert future task rows, if any, include provenance/source, timestamp/freshness, state, and route/reference.
+  - [x] Assert no scripts, event handlers, forms, actionable controls, unsafe hrefs, live API calls, mutation vocabulary outside required negative-control context, or non-GET route/method contexts are introduced.
+  - [x] Keep Story 88.2 route/method and no-mutation guard coverage green.
+- [x] Validate the implementation before review (AC: all)
+  - [x] Run focused dashboard tests: `uv run pytest tests/dashboard/test_static_shell.py tests/dashboard/test_read_only_boundary.py` plus any new Story 89.1 tests.
+  - [x] Run `uv run ruff format --check .` and `uv run ruff check .`.
+  - [x] Run broader regression when runtime/source changes occur: `uv run pytest -q -m "not slow"`.
+  - [x] Record docs/status or implementation code-review `APPROVE`, architect `CLEAR`, and UltraQA evidence before marking done.
 
 ## Dev Notes
 
@@ -54,7 +54,7 @@ so that Phase 19 can add situational awareness without inventing data, calling m
 - **FR169 — Read-only dashboard scope**: the dashboard is an operator visibility surface, not a control plane.
 - **FR170 — Task and session visibility**: current and historical task/session state should be inspectable where safe reads expose it.
 - **FR173 — Safe error and empty states**: distinguish no data, loading, invalid configuration, permission/configuration failure, stale data, and internal errors.
-- **FR174 — No behavior change in planning/create-story slices**: this story-context creation pass changes documentation/status only.
+- **FR174 — No behavior change in planning/create-story slices**: the earlier story-context creation pass changed documentation/status only; this implementation pass remains limited to static dashboard/test/story/status artifacts and does not change backend runtime behavior.
 - **NFR-S27 — Read-only by construction**: no mutating HTTP methods, approval forms, lifecycle apply controls, credential entry, or privileged operator actions.
 - **NFR-O24 — Provenance-first display**: displayed state identifies source category, route/reference, freshness, and confidence.
 - **NFR-M20 — Existing contract reuse**: prefer existing registry API/read surfaces; new contracts require separate approval.
@@ -99,7 +99,7 @@ Disabled-looking destructive controls are not acceptable placeholders. Unavailab
 ### Project Structure Notes
 
 - Current approved dashboard implementation surface from Epic 88 is `dashboard/static/index.html` plus dashboard tests under `tests/dashboard/`.
-- This create-story slice does not add or edit runtime/source/test files.
+- The earlier create-story slice did not add or edit runtime/source/test files; this implementation pass edits only the approved static dashboard/test/story/status files.
 - Future implementation must keep dependency-free/static behavior unless a later approved plan explicitly justifies a frontend stack or dependency change.
 
 ### References
@@ -116,23 +116,35 @@ Disabled-looking destructive controls are not acceptable placeholders. Unavailab
 
 ### Agent Model Used
 
-TBD by future dev-story implementation pass.
+GPT-5.4 Codex via OMX Autopilot/Ultragoal.
 
 ### Debug Log References
 
-- 2026-06-15: Story context created by Autopilot/BMad create-story slice. No runtime/source/test implementation was performed.
+- 2026-06-15: Story context created by Autopilot/BMad create-story slice. No runtime/source/test implementation was performed in that earlier slice.
+- 2026-06-15: Ralplan critic initially BLOCKED missing full AC4 state matrix, Story 88.1 non-regression, and safe local anchor/non-live route placeholder constraints; plan/spec revised and then Architect APPROVE/CLEAR plus Critic APPROVE.
+- 2026-06-15: Red test evidence: `uv run pytest tests/dashboard/test_static_shell.py -q` failed with 4 expected Story 89.1 failures for missing `section#overview`, missing aggregate unavailable fallback copy, missing state matrix, and missing task row provenance placeholder.
+- 2026-06-15: Green focused evidence: `uv run pytest tests/dashboard/test_static_shell.py tests/dashboard/test_read_only_boundary.py -q` passed 16 tests.
+- 2026-06-15: Full regression evidence: `uv run pytest -q -m "not slow"` passed 4151 tests, skipped 8, deselected 61.
+- 2026-06-15: Final review evidence: independent code-review Recommendation APPROVE; architect Architectural Status CLEAR; UltraQA static adversarial scenarios passed 19.
 
 ### Completion Notes List
 
-- Ready-for-dev context created for Story 89.1.
-- Epic 89 opened in sprint status through the Story 89.1 context-created audit event.
-- Story 89.1 remains unimplemented; future dev-story pass owns implementation, tests, review, and UltraQA evidence.
+- Confirmed no approved safe aggregate task-list read exists in the current Phase 19 architecture; Story 89.1 remains fallback-only and does not add backend routes, live wiring, dependencies, or runtime behavior.
+- Added static Overview panel and refined Tasks panel to state aggregate task overview/list data is unavailable because no safe aggregate task read is approved or wired.
+- Added full Story 89.1 state vocabulary for unavailable read, loading, empty successful read/no tasks, stale/partial data, permission/configuration failure, and read error.
+- Added safe local Audit/Help anchor references plus future row contract placeholders for provenance/source, timestamp/freshness, state, and generic route/reference.
+- Preserved Story 88.1 read-only banner, existing dashboard panels, no-live-API/no-control guard behavior, and dependency-free static shell scope.
+- Final gates are clean: code-review APPROVE, architect CLEAR, UltraQA 19 static scenarios passed, local lint/focused/full regression passed; CI evidence to be attached after push.
 
 ### File List
 
+- `dashboard/static/index.html`
+- `tests/dashboard/test_static_shell.py`
 - `_bmad-output/implementation-artifacts/89-1-overview-task-list-unavailable-fallback.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
 
 ### Change Log
 
 - 2026-06-15: Created Story 89.1 context/status artifact. Status: ready-for-dev.
+- 2026-06-15: Implemented Story 89.1 static Overview/Tasks unavailable fallback with red/green dashboard tests. Status: review.
+- 2026-06-15: Reconciled Story 89.1 to done after code-review APPROVE, architect CLEAR, UltraQA pass, and local verification gates.

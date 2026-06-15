@@ -35,6 +35,7 @@
     <p>This static shell reserves the future visibility layout without connecting live data, adding routes, selecting dependencies, or changing runtime behavior.</p>
     <nav aria-label="Visibility panels">
       <ul>
+        <li><a href="#overview">Overview</a></li>
         <li><a href="#tasks">Tasks</a></li>
         <li><a href="#sessions">Sessions</a></li>
         <li><a href="#events">Events</a></li>
@@ -47,11 +48,32 @@
     </nav>
   </header>
   <main class="grid" aria-label="Static visibility placeholder panels">
+    <section id="overview" aria-labelledby="overview-title">
+      <h2 id="overview-title">Overview</h2>
+      <p class="state">Aggregate task overview is unavailable: no safe aggregate task read is approved or wired in Story 89.1.</p>
+      <p>
+        Unavailable read means no approved aggregate task source exists here; loading would mean an approved source is still resolving;
+        empty successful read would mean an approved source returned no tasks. Stale/partial data, permission/configuration failure,
+        and read error states must remain distinct before any future aggregate task projection is displayed.
+      </p>
+      <p>
+        See <a href="#audit">Audit</a> for provenance context and <a href="#help">Help</a> for read-only guidance.
+      </p>
+      <p class="meta">Provenance source: no approved aggregate task route/reference. Freshness timestamp: pending. State: unavailable. Confidence: unavailable until a safe aggregate task read is approved.</p>
+    </section>
     <section id="tasks" aria-labelledby="tasks-title">
       <h2 id="tasks-title">Tasks</h2>
-      <p class="state">Task reads are unavailable: no safe task list read is wired in Story 88.1.</p>
-      <p>Unavailable read means the panel lacks an approved source; empty successful read would mean an approved source returned no task records.</p>
-      <p class="meta">Source: future approved task read source. Freshness timestamp: pending. Reference: future task or trace reference. Confidence: unavailable until a safe read is approved.</p>
+      <p class="state">Aggregate task-list read is unavailable: no safe aggregate task read is approved or wired in Story 89.1.</p>
+      <p>
+        Unavailable read means the task list lacks an approved aggregate source; loading would mean an approved source is resolving;
+        empty successful read would mean an approved source returned no tasks. Stale/partial data, permission/configuration failure,
+        and read error states are reserved as separate outcomes and do not imply mutation occurred.
+      </p>
+      <p>
+        See <a href="#audit">Audit</a> for source review and <a href="#help">Help</a> for unavailable-state guidance.
+      </p>
+      <p class="meta">Future row contract placeholder: provenance/source, timestamp/freshness, state, and route/reference. No task rows are synthesized while the aggregate task read remains unavailable.</p>
+      <p class="meta">Source: no approved aggregate task route/reference. Freshness timestamp: pending. State: unavailable. Confidence: unavailable until a safe aggregate task read is approved.</p>
     </section>
     <section id="sessions" aria-labelledby="sessions-title">
       <h2 id="sessions-title">Sessions</h2>
