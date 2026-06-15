@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-15T18:37:00+03:00"
+last_updated: "2026-06-15T19:35:00+03:00"
 current_phase: 19  # Phase 19 OPEN — Read-Only Web Dashboard Planning (PRD + UX + architecture + epics planning)
 
 development_status:
@@ -780,11 +780,59 @@ development_status:
   # =========================================================================
   epic-90: in-progress  # Event timeline and trace provenance visibility
   90-1-task-event-timeline: done  # dashboard/static/index.html; static Events timeline panel implemented and CI green
+  90-2-trace-correlation-panel: review  # dashboard/static/index.html; static Trace correlation panel implemented; final review/QA gate pending
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-15"
+    event: story-90-2-ready-for-review
+    from: in-progress
+    to: review
+    story: 90-2-trace-correlation-panel
+    reason: >
+      Story 90.2 static Trace correlation panel implemented in
+      dashboard/static/index.html with tests/dashboard/test_static_shell.py and
+      tests/dashboard/test_read_only_boundary.py coverage. Red tests first failed
+      on missing route provenance, metadata lists, trace contracts, state matrix,
+      causality copy, and trace mutation denials. Focused dashboard tests passed
+      28 tests; dashboard/boundary tests: 38 passed after the broad
+      passive truncate exception was narrowed to sentence-local/phrase-local
+      handling with mixed X-Trace-Truncated plus truncate action and
+      actionable passive-header regressions;
+      git diff --check, ruff format --check, and ruff check passed; full local
+      non-slow regression: 4173 passed, 8 skipped, 61 deselected.
+      Final done status
+      still requires independent code review, UltraQA, CI, and Ultragoal
+      reconciliation.
+
+  - date: "2026-06-15"
+    event: story-90-2-implementation-started
+    from: ready-for-dev
+    to: in-progress
+    story: 90-2-trace-correlation-panel
+    reason: >
+      Story 90.2 implementation started after final ralplan consensus: Architect
+      APPROVE/CLEAR followed by Critic APPROVE on the static Trace correlation
+      panel plan and test spec. Scope remains static dashboard/test/story/status
+      only, with exact route GET /v1/trace/{trace_id} used as inert provenance
+      text and no backend/API/route, dependency, live-wiring, runtime behavior,
+      background job, hidden write, replay, snapshot, mutation, or trace search
+      changes.
+
+  - date: "2026-06-15"
+    event: story-90-2-context-created
+    from: backlog
+    to: ready-for-dev
+    story: 90-2-trace-correlation-panel
+    reason: >
+      Story 90.2 context created from the Phase 19 Epic 90 plan and approved
+      Autopilot handoff. The canonical Trace metadata slots are trace_source,
+      retrieved_at, linked_event_id, linked_task_id, linked_session_id,
+      parent_event_id, request_id, and freshness; route GET /v1/trace/{trace_id}
+      remains passive provenance until a separate approved live wiring story.
+
   - date: "2026-06-15"
     event: story-90-1-complete
     from: review

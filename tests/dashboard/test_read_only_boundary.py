@@ -106,6 +106,7 @@ SENTENCE_RE = re.compile(r"[^.!?]+[.!?]?")
 NEGATIVE_BOUNDARY_MARKERS = (
     "absent",
     "not available",
+    "not a ",
     "unavailable",
     "read-only",
     "without ",
@@ -113,6 +114,11 @@ NEGATIVE_BOUNDARY_MARKERS = (
 )
 POSITIVE_BOUNDARY_RE = re.compile(
     r"\b(?:available\s+soon|click|now|run|soon|start|trigger)\b", re.IGNORECASE
+)
+
+PASSIVE_TRACE_TRUNCATE_PHRASES = (
+    "x-trace-truncated",
+    "truncated/paginated result",
 )
 
 
@@ -367,9 +373,33 @@ def assert_control_vocabulary_is_negative_non_actionable(raw: str) -> None:
             text = context.text.lower()
             if term not in text:
                 continue
+            if term == "truncate":
+                suspicious_sentences = passive_trace_truncate_suspicious_sentences(text)
+                if not suspicious_sentences:
+                    continue
+                assert context.source == "read-only-boundary", (term, context, suspicious_sentences)
+                for sentence in suspicious_sentences:
+                    assert has_negative_boundary_marker(sentence), (term, sentence, context)
+                continue
             assert context.source == "read-only-boundary", (term, context)
             for sentence in sentences_containing(text, term):
                 assert has_negative_boundary_marker(sentence), (term, sentence, context)
+
+
+def passive_trace_truncate_suspicious_sentences(text: str) -> list[str]:
+    suspicious: list[str] = []
+    for sentence in sentences_containing(text, "truncate"):
+        lowered = sentence.lower()
+        remainder = lowered
+        for phrase in PASSIVE_TRACE_TRUNCATE_PHRASES:
+            remainder = remainder.replace(phrase, "")
+        remainder = remainder.strip()
+        exact_passive = lowered.strip(" .") in PASSIVE_TRACE_TRUNCATE_PHRASES
+        if not exact_passive and (
+            "truncate" in remainder or not has_negative_boundary_marker(lowered)
+        ):
+            suspicious.append(remainder or lowered)
+    return suspicious
 
 
 def sentences_containing(text: str, term: str) -> list[str]:
@@ -411,6 +441,19 @@ def index_html() -> str:
 
 def insert_before_body_end(raw: str, fragment: str) -> str:
     return raw.replace("</body>", f"{fragment}\n</body>")
+
+
+def test_passive_trace_truncate_allowance_rejects_mixed_actionable_sentence() -> None:
+    raw = insert_before_body_end(
+        index_html(),
+        "<p>X-Trace-Truncated is passive protocol text, but truncate action is offered.</p>",
+    )
+    assert_fails(raw, "vocabulary")
+
+
+def test_passive_trace_truncate_allowance_rejects_actionable_header_sentence() -> None:
+    raw = insert_before_body_end(index_html(), "<p>Click X-Trace-Truncated now.</p>")
+    assert_fails(raw, "vocabulary")
 
 
 def test_approved_read_route_contract_contains_only_get_methods() -> None:

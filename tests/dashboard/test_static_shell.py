@@ -178,6 +178,71 @@ EVENT_SECTION_LIVE_MARKERS = (
     "live stream",
 )
 
+APPROVED_TRACE_ROUTE = "GET /v1/trace/{trace_id}"
+TRACE_METADATA_SLOTS = (
+    "trace_source",
+    "retrieved_at",
+    "linked_event_id",
+    "linked_task_id",
+    "linked_session_id",
+    "parent_event_id",
+    "request_id",
+    "freshness",
+)
+TRACE_PRESENTATION_FIELDS = (
+    "event_id",
+    "schema_version",
+    "type",
+    "emitted_at",
+    "emitted_at_monotonic_ns",
+    "actor.kind",
+    "actor.id",
+    "task_id",
+    "session_id",
+    "payload",
+    "extensions",
+    "parent_event_id",
+    "trace_id",
+    "trace_id_synthetic_source",
+    "request_id",
+)
+TRACE_QUERY_AND_HEADER_FIELDS = (
+    "trace_id",
+    "limit",
+    "after_event_id",
+    "X-Trace-Truncated",
+)
+TRACE_STATE_TERMS = (
+    "unavailable read",
+    "loading",
+    "empty successful read",
+    "absent trace",
+    "unknown trace",
+    "invalid trace id shape",
+    "unauthorized/configuration failure",
+    "stale data",
+    "truncated/paginated result",
+    "payload/extension parse fallback",
+    "route failure/read error",
+)
+TRACE_SECTION_LIVE_MARKERS = (
+    "fetch(",
+    "xmlhttprequest",
+    "websocket",
+    "eventsource",
+    "poll",
+    "live stream",
+    "data-endpoint",
+    "data-route",
+    "hx-get",
+)
+TRACE_TRUNCATE_ACTION_PHRASES = (
+    "truncate trace",
+    "truncate events",
+    "truncate button",
+    "truncate action",
+)
+
 
 class StaticDashboardParser(HTMLParser):
     def __init__(self) -> None:
@@ -284,6 +349,22 @@ def comma_list_clause(text: str, prefix: str) -> set[str]:
     clause = clause_after(text, prefix)
     normalized = clause.replace(" and ", ", ")
     return {item.strip(" ,.") for item in normalized.split(",") if item.strip(" ,.")}
+
+
+def passive_trace_truncate_remainder(text: str) -> str:
+    remainder_parts: list[str] = []
+    for sentence in sentences(text):
+        lowered = sentence.lower()
+        remainder = lowered
+        for phrase in ("x-trace-truncated", "truncated/paginated result"):
+            remainder = remainder.replace(phrase, "")
+        remainder_parts.append(remainder)
+    return " ".join(remainder_parts)
+
+
+def test_passive_trace_truncate_helper_keeps_mixed_actionable_remainder() -> None:
+    mixed = "X-Trace-Truncated is passive protocol text, but truncate action is offered."
+    assert "truncate action" in passive_trace_truncate_remainder(mixed.lower())
 
 
 def test_static_dashboard_file_exists_and_uses_safe_tags() -> None:
@@ -540,6 +621,108 @@ def test_story_90_1_events_panel_denies_timeline_refresh_side_effects() -> None:
         assert phrase not in event_attrs, phrase
 
 
+def test_story_90_2_traces_panel_declares_safe_route_provenance() -> None:
+    parser = parse_dashboard()
+    traces_text = " ".join(parser.sections["traces"]).lower()
+    trace_attrs = " ".join(parser.section_attrs.get("traces", [])).lower()
+    trace_hrefs = " ".join(parser.section_hrefs.get("traces", [])).lower()
+    assert APPROVED_TRACE_ROUTE.lower() in traces_text
+    assert APPROVED_TRACE_ROUTE.lower() not in trace_attrs
+    assert APPROVED_TRACE_ROUTE.lower() not in trace_hrefs
+    assert "inert visible provenance" in traces_text
+    assert "no live dashboard wiring" in traces_text
+    provenance_sentence = next(
+        sentence for sentence in sentences(traces_text) if "inert visible provenance" in sentence
+    )
+    assert (
+        "not links, attributes, automatic-refresh sources, or client calls" in provenance_sentence
+    )
+
+
+def test_story_90_2_traces_panel_shows_required_trace_metadata_slots() -> None:
+    parser = parse_dashboard()
+    traces_text = " ".join(parser.sections["traces"]).lower()
+    trace_lists = parser.section_lists["traces"]
+    assert tuple(trace_lists["trace metadata slots"]) == TRACE_METADATA_SLOTS
+    assert "trace_source is the existing route provenance" in traces_text
+    assert (
+        "retrieved_at and freshness are visible slots with unavailable static-shell values"
+        in traces_text
+    )
+    assert "event_id maps to linked_event_id" in traces_text
+    assert "task_id maps to linked_task_id" in traces_text
+    assert "session_id maps to linked_session_id" in traces_text
+
+
+def test_story_90_2_traces_panel_lists_passive_trace_contracts() -> None:
+    parser = parse_dashboard()
+    traces_text = " ".join(parser.sections["traces"]).lower()
+    trace_lists = parser.section_lists["traces"]
+    assert tuple(trace_lists["trace event presentation fields"]) == TRACE_PRESENTATION_FIELDS
+    assert tuple(trace_lists["trace query parameters and headers"]) == TRACE_QUERY_AND_HEADER_FIELDS
+    assert "presentation view over event rows" in traces_text
+    assert "not canonical jsonl replay" in traces_text
+    assert "x-trace-truncated is a passive response header" in traces_text
+    assert "not a dashboard action" in traces_text
+
+
+def test_story_90_2_traces_panel_states_and_deferred_contract_are_explicit() -> None:
+    parser = parse_dashboard()
+    traces_text = " ".join(parser.sections["traces"]).lower()
+    for term in TRACE_STATE_TERMS:
+        assert term in traces_text, term
+    assert "truncated/paginated result is a passive read state" in traces_text
+    assert "broader trace search/list requires a separate approved read contract" in traces_text
+    assert (
+        "canonical jsonl replay/byte-equivalent envelope display is a separate contract"
+        in traces_text
+    )
+
+
+def test_story_90_2_traces_panel_explains_causality_without_generating_graphs() -> None:
+    parser = parse_dashboard()
+    traces_text = " ".join(parser.sections["traces"]).lower()
+    assert "ordered trace rows explain related events and causal links" in traces_text
+    assert "parent_event_id" in traces_text
+    assert "linked_event_id" in traces_text
+    assert "linked_task_id" in traces_text
+    assert "route provenance" in traces_text
+    assert "does not generate a new causal graph" in traces_text
+
+
+def test_story_90_2_traces_panel_has_no_section_local_control_or_live_source_affordances() -> None:
+    parser = parse_dashboard()
+    traces_text = " ".join(parser.sections["traces"]).lower()
+    trace_attrs = " ".join(parser.section_attrs.get("traces", [])).lower()
+    trace_hrefs = " ".join(parser.section_hrefs.get("traces", [])).lower()
+    sanitized_text = passive_trace_truncate_remainder(traces_text)
+    for marker in TRACE_SECTION_LIVE_MARKERS:
+        assert marker not in traces_text, marker
+        assert marker not in trace_attrs, marker
+        assert marker not in trace_hrefs, marker
+    for term in CONTROL_TERMS:
+        if term == "truncate":
+            assert term not in sanitized_text, term
+        else:
+            assert term not in traces_text, term
+        assert term not in trace_attrs, term
+        assert term not in trace_hrefs, term
+    for phrase in TRACE_TRUNCATE_ACTION_PHRASES:
+        assert phrase not in traces_text, phrase
+
+
+def test_story_90_2_traces_panel_denies_trace_mutation_and_scope_bleed() -> None:
+    parser = parse_dashboard()
+    traces_text = " ".join(parser.sections["traces"]).lower()
+    assert "denies mutation routes" in traces_text
+    assert "background replay actions" in traces_text
+    assert "snapshot actions" in traces_text
+    assert "hidden writes" in traces_text
+    assert "cache-warming/read-side effects" in traces_text
+    assert "story 90.3" not in traces_text
+    assert "replay/lifecycle implementation" not in traces_text
+
+
 def test_control_terms_are_negative_safety_copy_only() -> None:
     parser = parse_dashboard()
     page_text = dashboard_text(parser).lower()
@@ -549,7 +732,10 @@ def test_control_terms_are_negative_safety_copy_only() -> None:
     assert "control affordances are absent" in boundary_text
     for term in CONTROL_TERMS:
         assert term in boundary_text, term
-        assert page_text.count(term) == boundary_text.count(term), term
+        comparable_page_text = page_text
+        if term == "truncate":
+            comparable_page_text = passive_trace_truncate_remainder(comparable_page_text)
+        assert comparable_page_text.count(term) == boundary_text.count(term), term
         assert any(
             term in sentence and "affordances are absent" in sentence
             for sentence in boundary_sentences

@@ -151,9 +151,52 @@
     </section>
     <section id="traces" aria-labelledby="traces-title">
       <h2 id="traces-title">Traces</h2>
-      <p class="state">Trace reads are unavailable: no trace lookup is wired in Story 88.1.</p>
-      <p>Unavailable read means trace correlation is not connected; empty successful read would mean an approved trace source found no matching trace.</p>
-      <p class="meta">Source: future approved trace read source. Freshness timestamp: pending. Reference: future trace reference. Confidence: unavailable until a safe read is approved.</p>
+      <p class="state">Unavailable read: trace correlation visibility is static only; no live dashboard wiring is present in Story 90.2.</p>
+      <p>Existing trace read route is inert visible provenance only: GET /v1/trace/{trace_id}, and it is not links, attributes, automatic-refresh sources, or client calls.</p>
+      <p>GET /v1/trace/{trace_id} is a presentation view over event rows, not canonical JSONL replay, and accepts bare UUIDv7 or tg:&lt;update_id&gt; identifiers.</p>
+      <p>Trace metadata slots are visible static-shell placeholders.</p>
+      <ul aria-label="Trace metadata slots">
+        <li>trace_source</li>
+        <li>retrieved_at</li>
+        <li>linked_event_id</li>
+        <li>linked_task_id</li>
+        <li>linked_session_id</li>
+        <li>parent_event_id</li>
+        <li>request_id</li>
+        <li>freshness</li>
+      </ul>
+      <p>trace_source is the existing route provenance. retrieved_at and freshness are visible slots with unavailable static-shell values. event_id maps to linked_event_id; task_id maps to linked_task_id; session_id maps to linked_session_id.</p>
+      <p>Trace event presentation fields are listed as route row fields, not generated dashboard rows.</p>
+      <ul aria-label="Trace event presentation fields">
+        <li>event_id</li>
+        <li>schema_version</li>
+        <li>type</li>
+        <li>emitted_at</li>
+        <li>emitted_at_monotonic_ns</li>
+        <li>actor.kind</li>
+        <li>actor.id</li>
+        <li>task_id</li>
+        <li>session_id</li>
+        <li>payload</li>
+        <li>extensions</li>
+        <li>parent_event_id</li>
+        <li>trace_id</li>
+        <li>trace_id_synthetic_source</li>
+        <li>request_id</li>
+      </ul>
+      <p>Trace query parameters and headers are passive protocol text only.</p>
+      <ul aria-label="Trace query parameters and headers">
+        <li>trace_id</li>
+        <li>limit</li>
+        <li>after_event_id</li>
+        <li>X-Trace-Truncated</li>
+      </ul>
+      <p>X-Trace-Truncated is a passive response header and not a dashboard action.</p>
+      <p>State matrix: unavailable read, loading, empty successful read, absent trace, unknown trace, invalid trace id shape, unauthorized/configuration failure, stale data, truncated/paginated result, payload/extension parse fallback, and route failure/read error. Loading is not active in this static, not-wired slice. truncated/paginated result is a passive read state and not a dashboard action.</p>
+      <p>Broader trace search/list requires a separate approved read contract. Canonical JSONL replay/byte-equivalent envelope display is a separate contract.</p>
+      <p>Ordered trace rows explain related events and causal links through parent_event_id, linked_event_id, linked_task_id, and route provenance; this static slice does not generate a new causal graph.</p>
+      <p>This panel denies mutation routes, background replay actions, snapshot actions, hidden writes, and cache-warming/read-side effects.</p>
+      <p class="meta">Source: GET /v1/trace/{trace_id} route provenance as static text plus BMAD Story 90.2. Freshness timestamp: pending. Reference: trace route provenance, metadata slots, linked event/task/session identifiers, parent event, and request id. Confidence: unavailable until a dashboard-safe read is wired by a later approved story.</p>
     </section>
     <section id="replay-lifecycle-readiness" aria-labelledby="replay-title">
       <h2 id="replay-title">Replay / lifecycle readiness</h2>
