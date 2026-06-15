@@ -114,9 +114,40 @@
     </section>
     <section id="events" aria-labelledby="events-title">
       <h2 id="events-title">Events</h2>
-      <p class="state">Event timeline reads are unavailable: no live event stream is wired in Story 88.1.</p>
-      <p>Unavailable read means the timeline source is not yet approved; empty successful read would mean the approved source returned no events.</p>
-      <p class="meta">Source: future approved event read source. Freshness timestamp: pending. Reference: future event reference. Confidence: unavailable until a safe read is approved.</p>
+      <p class="state">Unavailable read: task event timeline visibility is static only; no live dashboard wiring is present in Story 90.1.</p>
+      <p>Existing safe read routes are inert visible provenance only: GET /v1/tasks/{task_id}/events and GET /v1/tasks/{task_id}/transitions, and they are not links, attributes, automatic-refresh sources, or client calls.</p>
+      <p>Raw event envelope fields are listed as route fields, not generated dashboard rows.</p>
+      <ul aria-label="Raw event envelope fields">
+        <li>event_id</li>
+        <li>schema_version</li>
+        <li>type</li>
+        <li>emitted_at</li>
+        <li>emitted_at_monotonic_ns</li>
+        <li>actor.kind</li>
+        <li>actor.id</li>
+        <li>session_id</li>
+        <li>payload</li>
+        <li>parent_event_id</li>
+        <li>trace_id</li>
+        <li>request_id</li>
+      </ul>
+      <p>payload.summary is a derived visible summary from payload for future display copy only; no event rows or transition rows are synthesized in this static, not-wired slice.</p>
+      <p>Transition fields are listed as route fields, not generated dashboard rows.</p>
+      <ul aria-label="Transition fields">
+        <li>event_id</li>
+        <li>from_state</li>
+        <li>to_state</li>
+        <li>trigger_event</li>
+        <li>worker_id</li>
+        <li>timestamp</li>
+        <li>emitted_at</li>
+        <li>emitted_at_monotonic_ns</li>
+        <li>trace_id</li>
+      </ul>
+      <p>State matrix: empty history, missing task, unauthorized access, stale data, route failure/read error, unavailable unsupported timeline segment, loading, unavailable read, and empty successful read. Loading is not active in this static, not-wired slice.</p>
+      <p>Timeline aggregation remains unavailable pending a separate read contract. Related ProblemDetails visibility is a Story 90.1 planned unavailable/deferred summary, not a new route field.</p>
+      <p>Timeline visibility is plain explanatory text: it cannot append events, trigger replay, create snapshots, or dispatch background jobs.</p>
+      <p class="meta">Source: existing safe event and transition GET route provenance as static text plus BMAD Story 90.1. Freshness timestamp: pending. Reference: event and transition route provenance. Confidence: unavailable until a dashboard-safe read is wired by a later approved story.</p>
     </section>
     <section id="traces" aria-labelledby="traces-title">
       <h2 id="traces-title">Traces</h2>

@@ -132,6 +132,51 @@ SESSION_STATE_TERMS = (
     "unauthorized/configuration failure",
     "stale data",
 )
+APPROVED_EVENT_ROUTE = "GET /v1/tasks/{task_id}/events"
+APPROVED_TRANSITION_ROUTE = "GET /v1/tasks/{task_id}/transitions"
+EVENT_TIMELINE_FIELDS = (
+    "event_id",
+    "schema_version",
+    "type",
+    "emitted_at",
+    "emitted_at_monotonic_ns",
+    "actor.kind",
+    "actor.id",
+    "session_id",
+    "payload",
+    "parent_event_id",
+    "trace_id",
+    "request_id",
+)
+TRANSITION_TIMELINE_FIELDS = (
+    "event_id",
+    "from_state",
+    "to_state",
+    "trigger_event",
+    "worker_id",
+    "timestamp",
+    "emitted_at",
+    "emitted_at_monotonic_ns",
+    "trace_id",
+)
+EVENT_TIMELINE_STATE_TERMS = (
+    "empty history",
+    "missing task",
+    "unauthorized access",
+    "stale data",
+    "route failure/read error",
+    "unavailable unsupported timeline segment",
+    "loading",
+    "empty successful read",
+)
+EVENT_SECTION_LIVE_MARKERS = (
+    "fetch(",
+    "xmlhttprequest",
+    "websocket",
+    "eventsource",
+    "poll",
+    "live stream",
+)
 
 
 class StaticDashboardParser(HTMLParser):
@@ -144,7 +189,10 @@ class StaticDashboardParser(HTMLParser):
         self.nav_hrefs: list[str] = []
         self.section_hrefs: dict[str, list[str]] = {}
         self.section_attrs: dict[str, list[str]] = {}
+        self.section_lists: dict[str, dict[str, list[str]]] = {}
         self._section_stack: list[str] = []
+        self._list_stack: list[tuple[str, str]] = []
+        self._li_buffer: list[str] | None = None
         self._banner_depth = 0
         self._nav_depth = 0
 
@@ -165,6 +213,13 @@ class StaticDashboardParser(HTMLParser):
             self.section_attrs.setdefault(self._section_stack[-1], []).extend(
                 f"{tag}[{name}]={value or ''}" for name, value in attrs
             )
+        if tag in {"ul", "ol"} and self._section_stack and attrs_dict.get("aria-label"):
+            section_id = self._section_stack[-1]
+            list_label = (attrs_dict["aria-label"] or "").lower()
+            self._list_stack.append((section_id, list_label))
+            self.section_lists.setdefault(section_id, {}).setdefault(list_label, [])
+        if tag == "li" and self._list_stack:
+            self._li_buffer = []
         if tag == "a" and attrs_dict.get("href"):
             href = attrs_dict["href"] or ""
             if self._nav_depth:
@@ -173,6 +228,14 @@ class StaticDashboardParser(HTMLParser):
                 self.section_hrefs.setdefault(self._section_stack[-1], []).append(href)
 
     def handle_endtag(self, tag: str) -> None:
+        if tag == "li" and self._list_stack and self._li_buffer is not None:
+            section_id, list_label = self._list_stack[-1]
+            item = " ".join(self._li_buffer).strip()
+            if item:
+                self.section_lists[section_id][list_label].append(item)
+            self._li_buffer = None
+        if tag in {"ul", "ol"} and self._list_stack:
+            self._list_stack.pop()
         if tag == "section" and self._section_stack:
             self._section_stack.pop()
         if self._banner_depth:
@@ -187,6 +250,8 @@ class StaticDashboardParser(HTMLParser):
         self.data.append(stripped)
         if self._banner_depth:
             self.banner_data.append(stripped)
+        if self._li_buffer is not None:
+            self._li_buffer.append(stripped)
         if self._section_stack:
             self.sections.setdefault(self._section_stack[-1], []).append(stripped)
 
@@ -218,7 +283,7 @@ def clause_after(text: str, prefix: str) -> str:
 def comma_list_clause(text: str, prefix: str) -> set[str]:
     clause = clause_after(text, prefix)
     normalized = clause.replace(" and ", ", ")
-    return {item.strip(" ,") for item in normalized.split(",") if item.strip(" ,")}
+    return {item.strip(" ,.") for item in normalized.split(",") if item.strip(" ,.")}
 
 
 def test_static_dashboard_file_exists_and_uses_safe_tags() -> None:
@@ -403,6 +468,76 @@ def test_story_89_3_sessions_panel_states_and_unavailable_contract_are_explicit(
         in sessions_text
     )
     assert "does not authorize session history enumeration" in sessions_text
+
+
+def test_story_90_1_events_panel_declares_safe_route_provenance() -> None:
+    parser = parse_dashboard()
+    events_text = " ".join(parser.sections["events"]).lower()
+    event_attrs = " ".join(parser.section_attrs.get("events", [])).lower()
+    event_hrefs = " ".join(parser.section_hrefs.get("events", [])).lower()
+    for route in (APPROVED_EVENT_ROUTE, APPROVED_TRANSITION_ROUTE):
+        route_text = route.lower()
+        assert route_text in events_text, route
+        assert route_text not in event_attrs, route
+        assert route_text not in event_hrefs, route
+    assert "inert visible provenance" in events_text
+    assert "no live dashboard wiring" in events_text
+    provenance_sentence = next(
+        sentence for sentence in sentences(events_text) if "inert visible provenance" in sentence
+    )
+    assert (
+        "not links, attributes, automatic-refresh sources, or client calls" in provenance_sentence
+    )
+    assert "fetch" not in provenance_sentence
+    assert "poll" not in provenance_sentence
+
+
+def test_story_90_1_events_panel_lists_passive_timeline_contracts() -> None:
+    parser = parse_dashboard()
+    events_text = " ".join(parser.sections["events"]).lower()
+    event_lists = parser.section_lists["events"]
+    assert set(event_lists["raw event envelope fields"]) == set(EVENT_TIMELINE_FIELDS)
+    assert set(event_lists["transition fields"]) == set(TRANSITION_TIMELINE_FIELDS)
+    assert "payload.summary is a derived visible summary from payload" in events_text
+    assert "no event rows or transition rows are synthesized" in events_text
+
+
+def test_story_90_1_events_panel_states_and_unavailable_contract_are_explicit() -> None:
+    parser = parse_dashboard()
+    events_text = " ".join(parser.sections["events"]).lower()
+    for term in EVENT_TIMELINE_STATE_TERMS:
+        assert term in events_text, term
+    assert "timeline aggregation" in events_text
+    assert "separate read contract" in events_text
+    assert "problemdetails" in events_text
+    assert "planned unavailable/deferred summary" in events_text
+    assert "loading is not active in this static, not-wired slice" in events_text
+    assert "unavailable read" in events_text
+    assert "empty successful read" in events_text
+
+
+def test_story_90_1_events_panel_has_no_section_local_control_or_live_source_affordances() -> None:
+    parser = parse_dashboard()
+    events_text = " ".join(parser.sections["events"]).lower()
+    for term in CONTROL_TERMS:
+        assert term not in events_text, term
+    for marker in EVENT_SECTION_LIVE_MARKERS:
+        assert marker not in events_text, marker
+    assert "story 90.2" not in events_text
+    assert "trace correlation panel" not in events_text
+
+
+def test_story_90_1_events_panel_denies_timeline_refresh_side_effects() -> None:
+    parser = parse_dashboard()
+    events_text = " ".join(parser.sections["events"]).lower()
+    event_attrs = " ".join(parser.section_attrs.get("events", [])).lower()
+    assert "cannot append events" in events_text
+    assert "trigger replay" in events_text
+    assert "create snapshots" in events_text
+    assert "dispatch background jobs" in events_text
+    assert "plain explanatory text" in events_text
+    for phrase in ("append events", "trigger replay", "create snapshots", "background jobs"):
+        assert phrase not in event_attrs, phrase
 
 
 def test_control_terms_are_negative_safety_copy_only() -> None:

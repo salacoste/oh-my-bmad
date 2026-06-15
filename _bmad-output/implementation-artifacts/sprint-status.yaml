@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-15T16:13:00+03:00"
+last_updated: "2026-06-15T17:50:00+03:00"
 current_phase: 19  # Phase 19 OPEN — Read-Only Web Dashboard Planning (PRD + UX + architecture + epics planning)
 
 development_status:
@@ -775,10 +775,56 @@ development_status:
   89-2-task-detail-session-panel-safe-read: done  # dashboard/static/index.html; static task detail safe-read panel implemented and review/QA/local gates clean
   89-3-sessions-visibility-panel: done  # dashboard/static/index.html; static Sessions visibility panel implemented and review/QA/local gates clean
 
+  # =========================================================================
+  # Epic 90: Event timeline and trace provenance visibility
+  # =========================================================================
+  epic-90: in-progress  # Event timeline and trace provenance visibility
+  90-1-task-event-timeline: review  # dashboard/static/index.html; static Events timeline panel implemented; final review/QA gate pending
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-15"
+    event: story-90-1-ready-for-review
+    from: in-progress
+    to: review
+    story: 90-1-task-event-timeline
+    reason: >
+      Story 90.1 static Events timeline panel implemented in
+      dashboard/static/index.html with tests/dashboard/test_static_shell.py
+      coverage. Red tests first failed on missing route provenance, field
+      contracts, state matrix, and timeline side-effect denials. Focused
+      dashboard/boundary tests passed 28 tests; hygiene gates passed; full local
+      non-slow regression passed 4163 tests with 8 skipped and 61 deselected.
+      Final done status still requires independent code review, UltraQA, CI, and
+      Ultragoal reconciliation.
+
+  - date: "2026-06-15"
+    event: story-90-1-implementation-started
+    from: ready-for-dev
+    to: in-progress
+    story: 90-1-task-event-timeline
+    reason: >
+      Autopilot/Ultragoal implementation began after final ralplan consensus:
+      Architect APPROVE/CLEAR followed by Critic APPROVE on the Story 90.1
+      plan and test spec. Scope remains static dashboard/test/story/status
+      only, with existing event and transition GET routes used as inert
+      provenance text and no backend/API/dependency/live-wiring/runtime
+      behavior changes.
+
+  - date: "2026-06-15"
+    event: story-90-1-context-created
+    from: backlog
+    to: ready-for-dev
+    story: 90-1-task-event-timeline
+    reason: >
+      Story 90.1 ready-for-dev context created for the Task event timeline
+      panel. The story distinguishes raw event and transition read contracts
+      from derived display summaries, keeps route names as visible provenance
+      only, explicitly defers timeline aggregation and live reads, and preserves
+      read-only/no-control dashboard boundaries.
+
   - date: "2026-06-15"
     event: story-89-3-complete
     from: review
