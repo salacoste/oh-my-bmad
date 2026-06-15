@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-15T17:50:00+03:00"
+last_updated: "2026-06-15T18:37:00+03:00"
 current_phase: 19  # Phase 19 OPEN — Read-Only Web Dashboard Planning (PRD + UX + architecture + epics planning)
 
 development_status:
@@ -779,12 +779,27 @@ development_status:
   # Epic 90: Event timeline and trace provenance visibility
   # =========================================================================
   epic-90: in-progress  # Event timeline and trace provenance visibility
-  90-1-task-event-timeline: review  # dashboard/static/index.html; static Events timeline panel implemented; final review/QA gate pending
+  90-1-task-event-timeline: done  # dashboard/static/index.html; static Events timeline panel implemented and CI green
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-15"
+    event: story-90-1-complete
+    from: review
+    to: done
+    story: 90-1-task-event-timeline
+    reason: >
+      Story 90.1 completed after process-artifact correction, final independent
+      code-review APPROVE, architect CLEAR, UltraQA 7 static adversarial
+      scenarios passed with temporary harness cleanup, pushed commit c15efef,
+      and CI run 27556313447 green for both Registry-state Postgres and PR gate
+      jobs. The shipped slice remains static dashboard/test/story/status only
+      and does not authorize backend/API/route, dependency, live-wiring, runtime
+      behavior, background job, hidden write, event append, replay, snapshot, or
+      timeline aggregation changes.
+
   - date: "2026-06-15"
     event: story-90-1-ready-for-review
     from: in-progress

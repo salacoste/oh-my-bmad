@@ -1,6 +1,6 @@
 # Story 90.1: Task event timeline
 
-Status: review
+Status: done
 
 ## Story
 
@@ -38,8 +38,8 @@ As the single operator/developer, I want the read-only dashboard Events panel to
 - [x] Run focused dashboard tests and hygiene gates.
 - [x] Run full local non-slow regression.
 - [x] Move story to review for independent review and UltraQA.
-- [ ] Complete final independent review + UltraQA after process-artifact correction.
-- [ ] Mark done locally; commit/push/CI pending at time of this story update.
+- [x] Complete final independent review + UltraQA after process-artifact correction.
+- [x] Mark done locally after pushed CI green evidence.
 
 ## Dev Notes
 
@@ -69,7 +69,11 @@ This story is static/dashboard-copy/test-only. It must not add backend routes, f
 - Hygiene after fix: `git diff --check`, `uv run ruff format --check .`, `uv run ruff check .` passed.
 - Full local after fix: `uv run pytest -q -m "not slow"` passed 4163 tests, 8 skipped, 61 deselected.
 
-### Review Gate Status
+### Final Review, UltraQA, and CI Evidence
 
-- Story remains in review while the final independent review and UltraQA gate are rerun after process-artifact correction.
-- Prior review-cycle evidence confirmed the structured-list fix, but final approval/done status is intentionally deferred until the fresh gate completes.
+- Process-artifact correction: prior premature done status was reverted to review before final re-review.
+- Final independent code-review: APPROVE, 0 issues (`019ecbcf-a1f5-7fb3-a925-c4d4f34a80dc`).
+- Final independent architect review: CLEAR (`019ecbcf-a324-7b13-ab1d-5e4b1bdc0614`).
+- UltraQA: `/tmp/story_90_1_ultraqa.py` temporary harness passed 7 static adversarial scenarios after harness false-positive corrections and was removed.
+- Commit: `c15efef feat(dashboard): add task event timeline panel`.
+- CI: `https://github.com/salacoste/oh-my-bmad/actions/runs/27556313447` completed successfully; Registry-state Postgres and PR gate jobs both passed.
