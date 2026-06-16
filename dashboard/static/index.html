@@ -17,10 +17,19 @@
     .banner { border: 1px solid #38bdf8; background: #082f49; border-radius: 16px; padding: 18px; }
     nav ul { display: flex; flex-wrap: wrap; gap: 12px; list-style: none; padding: 0; }
     nav a { color: #bae6fd; text-decoration: none; border-bottom: 1px solid currentColor; }
+    nav a:focus-visible, section:focus-visible { outline: 3px solid #facc15; outline-offset: 4px; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
     section { border: 1px solid #334155; border-radius: 16px; padding: 18px; background: #111827; }
     .state { color: #facc15; font-weight: 700; }
     .meta { color: #cbd5e1; font-size: 0.94rem; }
+    @media (max-width: 720px) {
+      header, main, footer { padding: 16px; }
+      nav ul { gap: 8px; }
+      .grid { grid-template-columns: 1fr; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto; transition-duration: 0.01ms; animation-duration: 0.01ms; }
+    }
   </style>
 </head>
 <body>
@@ -337,19 +346,45 @@
         <li>extensions.code</li>
       </ul>
       <p>ProblemDetails are passive read/error presentation only, not global exception handling and not backend error mapping.</p>
-      <p>These labels and lists provide semantic/static state distinction, not Story 92.2 keyboard or responsive completion.</p>
+      <p>These labels and lists provide semantic/static state distinction; Story 92.2 static accessibility and responsive guidance now covers keyboard, screen-reader, contrast, reduced-motion, and responsive expectations while remaining read-only and non-runtime.</p>
       <p>Remediation belongs in approved external runbooks or control planes; the dashboard remains read-only, never dispatches checks, never writes caches, and never invokes production controls.</p>
       <p class="meta">Source route: GET /v1/health. Retrieved-at timestamp: pending. Freshness: unavailable. Reference: health route provenance and approved read contract boundary. Confidence: unavailable until a safe read is wired by a later approved story.</p>
     </section>
-    <section id="audit" aria-labelledby="audit-title">
+    <section id="audit" aria-labelledby="audit-title" tabindex="-1">
       <h2 id="audit-title">Audit</h2>
       <p class="state">Audit context is unavailable as live data: this static shell only explains the read-only boundary.</p>
-      <p>Source: BMAD planning artifacts. Freshness timestamp: static Story 88.1 shell. Reference: Phase 19 PRD, UX, architecture, and epics artifacts. Confidence: high for dashboard boundary copy; unavailable for runtime data.</p>
+      <p>Audit guidance is static and inert. It documents the route allowlist, provenance-first expectations, unavailable states, forbidden operator controls, and external audit and review evidence without exposing dashboard actions.</p>
+      <ul aria-label="Audit and route allowlist guidance">
+        <li>read-only boundary</li>
+        <li>approved GET-only route inventory</li>
+        <li>text-only provenance</li>
+        <li>unavailable reads</li>
+        <li>no hidden writes</li>
+        <li>no background jobs</li>
+        <li>external audit trail</li>
+      </ul>
+      <p>Panel coverage for audit review includes overview, tasks, task-detail, sessions, events, traces, replay-lifecycle-readiness, health, audit, and help.</p>
+      <p class="meta">Source: BMAD planning artifacts. Freshness timestamp: static Story 92.2 shell. Reference: Phase 19 PRD, UX, architecture, and epics artifacts. Confidence: high for dashboard boundary copy; unavailable for runtime data.</p>
     </section>
-    <section id="help" aria-labelledby="help-title">
+    <section id="help" aria-labelledby="help-title" tabindex="-1">
       <h2 id="help-title">Help</h2>
       <p class="state">Help content is unavailable as live operator guidance: this static shell provides boundary guidance only.</p>
-      <p>Source: BMAD planning artifacts. Freshness timestamp: static Story 88.1 shell. Reference: future operator runbook and story references. Confidence: high for non-mutating boundary copy; unavailable for runtime data.</p>
+      <p>Help guidance is static and inert; it does not provide live operator guidance and does not expose dashboard control actions.</p>
+      <ul aria-label="Help and accessibility guidance">
+        <li>keyboard navigation</li>
+        <li>screen-reader landmarks</li>
+        <li>labeled lists</li>
+        <li>contrast</li>
+        <li>reduced motion</li>
+        <li>responsive layout</li>
+        <li>unavailable state meanings</li>
+        <li>external runbooks/control planes</li>
+      </ul>
+      <p>Keyboard navigation uses visible focus styling on panel navigation and landmarks. Screen-reader users receive named sections, headings, aria-labeled lists, and text-only route provenance. Contrast and readability rely on the static dark background, light foreground, warning-state, and metadata tokens declared in this shell. Reduced motion and responsive layout are declared in CSS only.</p>
+      <p>Panel coverage for help includes overview, tasks, task-detail, sessions, events, traces, replay-lifecycle-readiness, health, audit, and help.</p>
+      <p>Unavailable state meanings remain passive: missing, stale, unauthorized, forbidden, degraded, route failure, and empty successful reads describe visibility states only. Escalation belongs in external runbooks/control planes, not this dashboard.</p>
+      <p>Story 92.3 final quality gate remains pending; this Story 92.2 slice provides accessibility and help guidance only.</p>
+      <p class="meta">Source: BMAD planning artifacts. Freshness timestamp: static Story 92.2 shell. Reference: future operator runbook and story references. Confidence: high for non-mutating boundary copy; unavailable for runtime data.</p>
     </section>
   </main>
   <footer>

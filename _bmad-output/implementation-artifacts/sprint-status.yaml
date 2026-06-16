@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-16T18:39:00+03:00"
+last_updated: "2026-06-16T19:25:00+03:00"
 current_phase: 19  # Phase 19 OPEN — Read-Only Web Dashboard Planning (PRD + UX + architecture + epics planning)
 
 development_status:
@@ -795,11 +795,59 @@ development_status:
   # =========================================================================
   epic-92: in-progress  # Health, stale/error states, accessibility/responsiveness, and final validation
   92-1-health-stale-empty-error-states: done  # dashboard/static/index.html; static health/error state contract implemented, reviewed, UltraQA-passed, and CI green
+  92-2-accessibility-responsiveness-audit-help-copy: review  # dashboard/static/index.html; static Audit/Help and accessibility/responsiveness contract implemented; local focused gates green
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-16"
+    event: story-92-2-ready-for-review
+    from: in-progress
+    to: review
+    story: 92-2-accessibility-responsiveness-audit-help-copy
+    reason: >
+      Story 92.2 static Audit and Help plus accessibility/responsiveness
+      contract implemented in dashboard/static/index.html with
+      tests/dashboard/test_static_shell.py coverage. Red tests first failed on
+      placeholder Audit/Help sections, missing accessibility/responsiveness CSS
+      declarations, missing contrast/readability assertions, stale Story 92.1
+      deferral copy, and missing Story 92.3 pending-gate copy. Focused static
+      dashboard tests passed 51 tests; dashboard/boundary tests passed 60
+      tests; ruff format/check, ruff check, and mypy on
+      tests/dashboard/test_static_shell.py passed. Final done status still
+      requires full local non-slow regression, ai-slop-cleaner, independent
+      code-review APPROVE, implementation architect CLEAR, UltraQA, CI, and
+      Ultragoal reconciliation.
+
+  - date: "2026-06-16"
+    event: story-92-2-implementation-started
+    from: ready-for-dev
+    to: in-progress
+    story: 92-2-accessibility-responsiveness-audit-help-copy
+    reason: >
+      Story 92.2 implementation started after Autopilot Ralplan consensus:
+      Architect APPROVE/CLEAR followed by formal Critic APPROVE after
+      contrast/readability and stale Story 92.1 deferral coverage was added to
+      the plan/test-spec. Scope remains static dashboard/test/story/status
+      only, with no backend/API/route, dependency, live-wiring, runtime
+      behavior, refresh, background job, hidden write, cache warming, or
+      mutation/control changes.
+
+  - date: "2026-06-16"
+    event: story-92-2-context-created
+    from: backlog
+    to: ready-for-dev
+    story: 92-2-accessibility-responsiveness-audit-help-copy
+    reason: >
+      Story 92.2 context created from Phase 19 Epic 92 after Story 92.1
+      completion. The static dashboard must explain read-only semantics,
+      provenance, route allowlists, unavailable states, forbidden operator
+      controls, keyboard navigation, screen-reader landmarks, labeled lists,
+      contrast/readability, reduced motion, responsive layout, and external
+      runbook/control-plane boundaries without adding live dashboard wiring or
+      controls.
+
   - date: "2026-06-16"
     event: story-92-1-complete
     from: review

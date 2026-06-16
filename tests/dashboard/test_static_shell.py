@@ -370,6 +370,28 @@ HEALTH_SECTION_LIVE_MARKERS = (
     "hx-get",
 )
 
+AUDIT_ROUTE_ALLOWLIST_GUIDANCE = (
+    "read-only boundary",
+    "approved GET-only route inventory",
+    "text-only provenance",
+    "unavailable reads",
+    "no hidden writes",
+    "no background jobs",
+    "external audit trail",
+)
+HELP_ACCESSIBILITY_GUIDANCE = (
+    "keyboard navigation",
+    "screen-reader landmarks",
+    "labeled lists",
+    "contrast",
+    "reduced motion",
+    "responsive layout",
+    "unavailable state meanings",
+    "external runbooks/control planes",
+)
+STORY_92_2_PANEL_COVERAGE = tuple(REQUIRED_PANELS)
+STALE_STORY_92_1_DEFERRAL = "not Story 92.2 keyboard or responsive completion"
+
 
 class StaticDashboardParser(HTMLParser):
     def __init__(self) -> None:
@@ -1047,7 +1069,8 @@ def test_story_92_1_health_panel_lists_metadata_slots_and_state_matrix() -> None
     for term in HEALTH_METADATA_FIELDS + HEALTH_STATE_TERMS:
         assert term.lower() in health_text, term
     assert "semantic/static state distinction" in health_text
-    assert "not story 92.2 keyboard or responsive completion" in health_text
+    assert STALE_STORY_92_1_DEFERRAL.lower() not in health_text
+    assert "story 92.2 static accessibility and responsive guidance" in health_text
 
 
 def test_story_92_1_health_panel_lists_passive_problem_details_fields() -> None:
@@ -1093,6 +1116,102 @@ def test_story_92_1_health_remediation_is_external_and_non_mutating() -> None:
         assert term not in health_text, term
         assert term not in health_attrs, term
         assert term not in health_hrefs, term
+
+
+def test_story_92_2_audit_panel_explains_read_only_boundary_and_route_allowlist() -> None:
+    parser = parse_dashboard()
+    audit_text = " ".join(parser.sections["audit"]).lower()
+    audit_lists = parser.section_lists["audit"]
+    assert (
+        tuple(audit_lists["audit and route allowlist guidance"]) == AUDIT_ROUTE_ALLOWLIST_GUIDANCE
+    )
+    for term in AUDIT_ROUTE_ALLOWLIST_GUIDANCE:
+        assert term.lower() in audit_text, term
+    for phrase in (
+        "route allowlist",
+        "provenance-first",
+        "unavailable states",
+        "forbidden operator controls",
+        "external audit and review evidence",
+    ):
+        assert phrase in audit_text
+
+
+def test_story_92_2_help_panel_explains_accessibility_and_unavailable_states() -> None:
+    parser = parse_dashboard()
+    help_text = " ".join(parser.sections["help"]).lower()
+    help_lists = parser.section_lists["help"]
+    assert tuple(help_lists["help and accessibility guidance"]) == HELP_ACCESSIBILITY_GUIDANCE
+    for term in HELP_ACCESSIBILITY_GUIDANCE:
+        assert term.lower() in help_text, term
+    assert "static and inert" in help_text
+    assert "does not provide live operator guidance" in help_text
+    assert "does not expose dashboard control actions" in help_text
+
+
+def test_story_92_2_accessibility_responsiveness_static_contract_is_declared() -> None:
+    raw = DASHBOARD.read_text(encoding="utf-8").lower()
+    parser = parse_dashboard()
+    combined_guidance = " ".join(parser.sections["audit"] + parser.sections["help"]).lower()
+    for marker in (":focus-visible", "@media (max-width", "prefers-reduced-motion", "grid"):
+        assert marker in raw, marker
+    for readability_marker in (
+        "background: #0f172a",
+        "color: #e2e8f0",
+        "background: #082f49",
+        "background: #111827",
+        "color: #facc15",
+        "color: #cbd5e1",
+    ):
+        assert readability_marker in raw, readability_marker
+    for panel_id in STORY_92_2_PANEL_COVERAGE:
+        assert panel_id in combined_guidance, panel_id
+
+
+def test_story_92_2_audit_help_have_no_live_or_control_affordances() -> None:
+    parser = parse_dashboard()
+    for panel_id in ("audit", "help"):
+        panel_text = " ".join(parser.sections[panel_id]).lower()
+        panel_attrs = " ".join(parser.section_attrs.get(panel_id, [])).lower()
+        panel_hrefs = " ".join(parser.section_hrefs.get(panel_id, [])).lower()
+        for marker in (
+            "fetch(",
+            "xmlhttprequest",
+            "websocket",
+            "eventsource",
+            "data-endpoint",
+            "data-route",
+            "hx-get",
+            "meta[http-equiv]",
+            "prefetch",
+            "preload",
+        ):
+            assert marker not in panel_text, (panel_id, marker)
+            assert marker not in panel_attrs, (panel_id, marker)
+            assert marker not in panel_hrefs, (panel_id, marker)
+        assert all(not href.startswith("/v1/") for href in parser.section_hrefs.get(panel_id, []))
+        for forbidden_tag in FORBIDDEN_TAGS:
+            assert f"{forbidden_tag}[" not in panel_attrs
+        for term in CONTROL_TERMS:
+            assert term not in panel_text, (panel_id, term)
+            assert term not in panel_attrs, (panel_id, term)
+            assert term not in panel_hrefs, (panel_id, term)
+
+
+def test_story_92_2_replaces_story_92_1_deferral_copy() -> None:
+    parser = parse_dashboard()
+    health_text = " ".join(parser.sections["health"]).lower()
+    assert STALE_STORY_92_1_DEFERRAL.lower() not in health_text
+    assert "story 92.2 static accessibility and responsive guidance" in health_text
+    assert "read-only and non-runtime" in health_text
+
+
+def test_story_92_2_does_not_claim_phase_19_final_gate() -> None:
+    parser = parse_dashboard()
+    page_text = dashboard_text(parser).lower()
+    assert "story 92.3 final quality gate remains pending" in page_text
+    assert "phase 19 final quality gate is complete" not in page_text
+    assert "phase 19 final quality gate is done" not in page_text
 
 
 def test_control_terms_are_negative_safety_copy_only() -> None:
