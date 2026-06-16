@@ -327,6 +327,48 @@ REPLAY_SECTION_LIVE_MARKERS = (
     "data-route",
     "hx-get",
 )
+APPROVED_HEALTH_ROUTE = "GET /v1/health"
+HEALTH_METADATA_FIELDS = (
+    "source route",
+    "retrieved_at",
+    "freshness",
+    "freshness_state",
+    "confidence",
+    "remediation",
+)
+HEALTH_STATE_TERMS = (
+    "loading",
+    "empty successful read",
+    "stale data",
+    "missing health source",
+    "unauthorized",
+    "forbidden",
+    "degraded",
+    "unavailable read",
+    "route failure/read error",
+    "ProblemDetails",
+)
+HEALTH_PROBLEM_DETAILS_FIELDS = (
+    "type",
+    "title",
+    "status",
+    "detail",
+    "instance",
+    "extensions.code",
+)
+HEALTH_SECTION_LIVE_MARKERS = (
+    "fetch(",
+    "xmlhttprequest",
+    "websocket",
+    "eventsource",
+    "poll",
+    "refresh interval",
+    "background check",
+    "cache warm",
+    "data-endpoint",
+    "data-route",
+    "hx-get",
+)
 
 
 class StaticDashboardParser(HTMLParser):
@@ -980,6 +1022,77 @@ def test_story_91_2_replay_panel_defers_epic_92_and_runtime_lifecycle_work() -> 
     assert "epic 92 owns cross-panel health, error, accessibility, and responsiveness" in (
         replay_text
     )
+
+
+def test_story_92_1_health_panel_uses_inert_get_health_provenance() -> None:
+    parser = parse_dashboard()
+    health_text = " ".join(parser.sections["health"]).lower()
+    health_attrs = " ".join(parser.section_attrs.get("health", [])).lower()
+    health_hrefs = " ".join(parser.section_hrefs.get("health", [])).lower()
+    assert APPROVED_HEALTH_ROUTE.lower() in health_text
+    assert APPROVED_HEALTH_ROUTE.lower() not in health_attrs
+    assert APPROVED_HEALTH_ROUTE.lower() not in health_hrefs
+    assert "inert visible provenance" in health_text
+    assert "not live wiring" in health_text
+    assert "no client calls" in health_text
+    assert "no automatic refresh source" in health_text
+
+
+def test_story_92_1_health_panel_lists_metadata_slots_and_state_matrix() -> None:
+    parser = parse_dashboard()
+    health_text = " ".join(parser.sections["health"]).lower()
+    health_lists = parser.section_lists["health"]
+    assert tuple(health_lists["health metadata slots"]) == HEALTH_METADATA_FIELDS
+    assert tuple(health_lists["health state matrix"]) == HEALTH_STATE_TERMS
+    for term in HEALTH_METADATA_FIELDS + HEALTH_STATE_TERMS:
+        assert term.lower() in health_text, term
+    assert "semantic/static state distinction" in health_text
+    assert "not story 92.2 keyboard or responsive completion" in health_text
+
+
+def test_story_92_1_health_panel_lists_passive_problem_details_fields() -> None:
+    parser = parse_dashboard()
+    health_text = " ".join(parser.sections["health"]).lower()
+    health_lists = parser.section_lists["health"]
+    assert tuple(health_lists["health problemdetails passive fields"]) == (
+        HEALTH_PROBLEM_DETAILS_FIELDS
+    )
+    assert "passive read/error presentation only" in health_text
+    assert "not global exception handling" in health_text
+    assert "not backend error mapping" in health_text
+
+
+def test_story_92_1_unapproved_metrics_and_provenance_reads_remain_unavailable() -> None:
+    parser = parse_dashboard()
+    health_text = " ".join(parser.sections["health"]).lower()
+    health_attrs = " ".join(parser.section_attrs.get("health", [])).lower()
+    assert "unapproved metrics and provenance reads" in health_text
+    assert "remain unavailable until a separate approved dashboard read contract exists" in (
+        health_text
+    )
+    for marker in ("data-endpoint", "data-route", "hx-get", "fetch(", "cache warm"):
+        assert marker not in health_text, marker
+        assert marker not in health_attrs, marker
+
+
+def test_story_92_1_health_remediation_is_external_and_non_mutating() -> None:
+    parser = parse_dashboard()
+    health_text = " ".join(parser.sections["health"]).lower()
+    health_attrs = " ".join(parser.section_attrs.get("health", [])).lower()
+    health_hrefs = " ".join(parser.section_hrefs.get("health", [])).lower()
+    assert "approved external runbooks or control planes" in health_text
+    assert "dashboard remains read-only" in health_text
+    assert "never dispatches checks" in health_text
+    assert "never writes caches" in health_text
+    assert "never invokes production controls" in health_text
+    for marker in HEALTH_SECTION_LIVE_MARKERS:
+        assert marker not in health_text, marker
+        assert marker not in health_attrs, marker
+        assert marker not in health_hrefs, marker
+    for term in CONTROL_TERMS:
+        assert term not in health_text, term
+        assert term not in health_attrs, term
+        assert term not in health_hrefs, term
 
 
 def test_control_terms_are_negative_safety_copy_only() -> None:

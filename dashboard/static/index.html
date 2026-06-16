@@ -305,9 +305,41 @@
     </section>
     <section id="health" aria-labelledby="health-title">
       <h2 id="health-title">Health</h2>
-      <p class="state">Health reads are unavailable: no projection health source is wired in Story 88.1.</p>
-      <p>Unavailable read means health is not currently sourced; empty successful read would mean an approved health source reported no records for this view.</p>
-      <p class="meta">Source: future approved health read source. Freshness timestamp: pending. Reference: future health or event reference. Confidence: unavailable until a safe read is approved.</p>
+      <p class="state">Health read is unavailable in this static shell: GET /v1/health is inert visible provenance, not live wiring.</p>
+      <p>GET /v1/health is plain text only: not a link, not an attribute, no automatic refresh source, and no client calls.</p>
+      <p>Unapproved metrics and provenance reads beyond GET /v1/health remain unavailable until a separate approved dashboard read contract exists.</p>
+      <ul aria-label="Health metadata slots">
+        <li>source route</li>
+        <li>retrieved_at</li>
+        <li>freshness</li>
+        <li>freshness_state</li>
+        <li>confidence</li>
+        <li>remediation</li>
+      </ul>
+      <ul aria-label="Health state matrix">
+        <li>loading</li>
+        <li>empty successful read</li>
+        <li>stale data</li>
+        <li>missing health source</li>
+        <li>unauthorized</li>
+        <li>forbidden</li>
+        <li>degraded</li>
+        <li>unavailable read</li>
+        <li>route failure/read error</li>
+        <li>ProblemDetails</li>
+      </ul>
+      <ul aria-label="Health ProblemDetails passive fields">
+        <li>type</li>
+        <li>title</li>
+        <li>status</li>
+        <li>detail</li>
+        <li>instance</li>
+        <li>extensions.code</li>
+      </ul>
+      <p>ProblemDetails are passive read/error presentation only, not global exception handling and not backend error mapping.</p>
+      <p>These labels and lists provide semantic/static state distinction, not Story 92.2 keyboard or responsive completion.</p>
+      <p>Remediation belongs in approved external runbooks or control planes; the dashboard remains read-only, never dispatches checks, never writes caches, and never invokes production controls.</p>
+      <p class="meta">Source route: GET /v1/health. Retrieved-at timestamp: pending. Freshness: unavailable. Reference: health route provenance and approved read contract boundary. Confidence: unavailable until a safe read is wired by a later approved story.</p>
     </section>
     <section id="audit" aria-labelledby="audit-title">
       <h2 id="audit-title">Audit</h2>
