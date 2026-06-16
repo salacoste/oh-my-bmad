@@ -166,12 +166,13 @@ Every future implementation story in this artifact must preserve this exact rule
 
 ### Story 92.3: Phase 19 final quality gate, review, commit, push, CI
 
-- Status: current planning/status story for this artifact; no runtime implementation.
-- Scope: verify this Phase 19 epics/status slice, run changed-file hygiene, obtain independent code-review/architecture evidence, commit, push, verify CI, and record Autopilot/Ultragoal completion evidence.
+- Status: current final docs/status validation story; no dashboard/runtime implementation.
+- Scope: reconcile Story 92.3 source-epic acceptance criteria, add final BMad status/story evidence, run validation/review/UltraQA/CI gates, and record Autopilot/Ultragoal completion evidence for Phase 19.
 - Governing FR/NFR: FR174, NFR-S27, NFR-M20, NFR-R20, NFR-S28.
-- Read-surface basis: Existing safe read surface not applicable to runtime because this is docs/status-only; explicit unavailable state and separately approved future read contract remain the rule for future implementation stories.
+- Read-surface basis: Existing safe read surface is regression-validation only for this docs/status story. Dashboard final-copy replacement remains deferred unless separately authorized; explicit unavailable state and separately approved future read contract remain the rule for future live dashboard work.
 - Acceptance criteria:
-  - Only `_bmad-output/planning-artifacts/phase-19-epics.md` and `_bmad-output/implementation-artifacts/sprint-status.yaml` change in tracked files.
-  - Sprint status adds only `87-4-phase-19-epics-and-stories` and `phase-19-epics-and-stories-complete` for this slice; it does not add `epic-88` through `epic-92` or `88-*` through `92-*` implementation backlog keys.
-  - Local validation, independent review, UltraQA skip/pass evidence, commit, push, and CI evidence are recorded before completion.
+  - Tracked changes are limited to docs/status final-gate artifacts: `_bmad-output/planning-artifacts/phase-19-epics.md`, `_bmad-output/implementation-artifacts/sprint-status.yaml`, and `_bmad-output/implementation-artifacts/92-3-phase-19-final-quality-gate-review-commit-push-ci.md`.
+  - `dashboard/static/index.html` and `tests/dashboard/test_static_shell.py` are not edited by this story; they are regression-validation-only surfaces.
+  - Sprint status adds `92-3-phase-19-final-quality-gate-review-commit-push-ci`; after gates pass, Story 92.3 and Epics 90, 91, and 92 are marked done with newest-first audit evidence.
+  - Local validation, independent code-review APPROVE, architecture CLEAR, UltraQA docs/status adversarial pass or explicit justified skip, commit, push, CI green, and Autopilot/Ultragoal reconciliation evidence are recorded before completion.
 - Safety guardrails: only allowlisted read routes/read methods are reachable; no mutation routes; no background-job dispatch; no hidden writes; no cache-warming writes/read-side effects; no approval, retry, cancel, budget override, apply, prune, delete, truncate, move, rewrite, chmod, archive mutation, manifest mutation, scheduled job, credentialed lifecycle, or production operation controls.
