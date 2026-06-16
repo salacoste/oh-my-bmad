@@ -1,6 +1,6 @@
 # Story 92.1 — Health, stale, empty, and error states
 
-Status: review
+Status: done
 
 ## Scope
 
@@ -47,4 +47,6 @@ No backend/API/schema changes, no dependencies, no JavaScript, no live HTTP look
 - Independent implementation architect review: CLEAR (`019ecdb1-4336-7290-a0bc-70c50c6f447b`).
 - Review synthesis: `.omx/specs/autopilot-story-92-1-code-review-final.md`.
 - UltraQA: passed 33 adversarial static assertions; report `.omx/specs/autopilot-story-92-1-ultraqa-report.md`.
-- Commit/push/CI: pending.
+- Implementation commit: `c9413d3 feat(dashboard): add health state static contract` pushed to `origin/main`.
+- CI: green — run `27629024622` (`https://github.com/salacoste/oh-my-bmad/actions/runs/27629024622`).
+- Story status: done in `sprint-status.yaml` after CI and all local/review/QA gates passed.

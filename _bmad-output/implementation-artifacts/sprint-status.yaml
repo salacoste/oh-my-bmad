@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-16T18:26:00+03:00"
+last_updated: "2026-06-16T18:39:00+03:00"
 current_phase: 19  # Phase 19 OPEN — Read-Only Web Dashboard Planning (PRD + UX + architecture + epics planning)
 
 development_status:
@@ -794,12 +794,31 @@ development_status:
   # Epic 92: Health, stale/error states, accessibility/responsiveness, and final validation
   # =========================================================================
   epic-92: in-progress  # Health, stale/error states, accessibility/responsiveness, and final validation
-  92-1-health-stale-empty-error-states: review  # dashboard/static/index.html; static health/error state contract implemented; local focused gates green
+  92-1-health-stale-empty-error-states: done  # dashboard/static/index.html; static health/error state contract implemented, reviewed, UltraQA-passed, and CI green
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-16"
+    event: story-92-1-complete
+    from: review
+    to: done
+    story: 92-1-health-stale-empty-error-states
+    reason: >
+      Story 92.1 closure completed after implementation commit c9413d3
+      passed CI run 27629024622 (https://github.com/salacoste/oh-my-bmad/actions/runs/27629024622).
+      Final gates were green: AI slop cleaner passed/no-op, focused
+      dashboard/boundary tests passed 54 tests post-cleaner, full non-slow
+      regression passed 4189 tests with 8 skipped and 61 deselected, ruff
+      format/check passed, mypy on tests/dashboard/test_static_shell.py passed,
+      independent code-review APPROVE, implementation architect CLEAR, and
+      UltraQA passed 33 adversarial static assertions. Scope remained static
+      dashboard/test/story/status only with no backend/API/route, dependency,
+      live-wiring, runtime behavior, refresh, background job, hidden write,
+      cache warming, unapproved metrics/provenance read, or mutation/control
+      changes.
+
   - date: "2026-06-16"
     event: story-92-1-ready-for-review
     from: in-progress
