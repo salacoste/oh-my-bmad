@@ -1,6 +1,6 @@
 # Story 91.2 — Lifecycle safety copy and archive ProblemDetails states
 
-Status: review
+Status: done
 
 ## Scope
 
@@ -43,8 +43,18 @@ No backend/API/schema changes, no dependencies, no JavaScript, no live HTTP look
 - `uv run ruff check .` — passed.
 - `uv run pytest -q -m "not slow"` — 4184 passed, 8 skipped, 61 deselected.
 
-Final done status still requires independent code review, architecture status CLEAR, UltraQA, push/CI, and Ultragoal reconciliation.
+Final done status reached after independent code-review APPROVE, architecture status CLEAR, UltraQA pass, implementation commit `00c9aaa`, and green CI run `27584477501`.
 
 ## Deferred follow-up
 
 - `_bmad-output/implementation-artifacts/deferred-work.md` records Story 91.2 D1: future canonical static-dashboard lifecycle contract source. This is maintenance debt from independent architect review, not a blocker for the current static/read-only slice. Story 91.2 now uses `dashboard/static/replay-lifecycle-contract.json` as the canonical source for exact static-dashboard lists; future stories should preserve that source when evolving lifecycle/readiness copy.
+
+
+## Closure evidence
+
+- Independent final code-review: APPROVE (`019ecdb1-4226-7960-84a6-d4e40641e434`), 0 unresolved issues.
+- Independent final architect review: CLEAR (`019ecdb1-4336-7290-a0bc-70c50c6f447b`) after G014 canonical contract-source extraction.
+- UltraQA: passed 6 adversarial static scenarios; report `.omx/specs/autopilot-story-91-2-ultraqa-report.md`.
+- Implementation commit: `00c9aaa feat(dashboard): add lifecycle safety static contract`.
+- CI: run `27584477501` green — https://github.com/salacoste/oh-my-bmad/actions/runs/27584477501.
+- Ultragoal reconciliation remains in `.omx/ultragoal` ledger/checkpoint state; `.omx/ultragoal` is ignored by git.
