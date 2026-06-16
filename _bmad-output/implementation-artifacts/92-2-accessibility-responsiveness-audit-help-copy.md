@@ -1,6 +1,6 @@
 # Story 92.2 — Accessibility, responsiveness, and Audit and Help copy
 
-Status: review
+Status: done
 
 ## Scope
 
@@ -37,6 +37,6 @@ No backend/API/schema changes, no dependencies, no JavaScript, no live HTTP look
 
 ## Closure evidence
 
-Completed local gates: full non-slow regression, ai-slop-cleaner no-op audit, independent code-review APPROVE, and implementation architecture CLEAR. UltraQA, commit/push/CI, final BMad done transition, and Ultragoal completion checkpoint remain pending.
+Completed gates: full non-slow regression, ai-slop-cleaner no-op audit, independent code-review APPROVE, implementation architecture CLEAR, UltraQA static adversarial pass after one docs-copy fix, implementation commit/push, and CI green. Implementation commit: `67a729c` (`feat(dashboard): add audit help accessibility contract`). CI: `https://github.com/salacoste/oh-my-bmad/actions/runs/27632844646` green for registry-state tests and PR gate. Final Ultragoal completion checkpoint remains pending until the BMad closure commit is pushed and reconciled.
 
 Story 92.3 final quality gate remains pending; this Story 92.2 slice only covers static accessibility/responsiveness plus Audit and Help copy.
