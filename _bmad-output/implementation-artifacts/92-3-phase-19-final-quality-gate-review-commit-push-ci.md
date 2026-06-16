@@ -1,6 +1,6 @@
 # Story 92.3 — Phase 19 final quality gate, review, commit, push, CI
 
-Status: review
+Status: done
 
 ## Scope
 
@@ -49,4 +49,10 @@ Independent review and QA gates completed:
 - Final code-review: APPROVE/CLEAR after staging the new Story 92.3 artifact; addendum preserved APPROVE after UltraQA wording fix.
 - UltraQA docs/status adversarial pass: Cycle 1 caught premature green-CI wording; fixed to `CI verification`; Cycle 2 passed UQA-001..UQA-006.
 
-Commit, push, CI verification, final status closure, and final Ultragoal reconciliation remain pending before this story can move from review to done.
+Pre-closure commit and CI evidence:
+
+- Review-state commit: `69868ea` (`docs(bmad): prepare story 92.3 final gate`).
+- CI run: `https://github.com/salacoste/oh-my-bmad/actions/runs/27652802842` — success.
+- CI jobs: Registry-state tests (Postgres service container) success; PR gate (ruff + mypy + pytest) success.
+
+Final status closure commit, push, CI verification for this closure commit, and final Ultragoal reconciliation remain pending.

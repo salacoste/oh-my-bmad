@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-17T01:50:00+03:00"
+last_updated: "2026-06-17T02:05:00+03:00"
 current_phase: 19  # Phase 19 OPEN — Read-Only Web Dashboard Planning (PRD + UX + architecture + epics planning)
 
 development_status:
@@ -778,7 +778,7 @@ development_status:
   # =========================================================================
   # Epic 90: Event timeline and trace provenance visibility
   # =========================================================================
-  epic-90: in-progress  # Event timeline and trace provenance visibility
+  epic-90: done  # Event timeline and trace provenance visibility
   90-1-task-event-timeline: done  # dashboard/static/index.html; static Events timeline panel implemented and CI green
   90-2-trace-correlation-panel: done  # dashboard/static/index.html; static Trace correlation panel implemented, reviewed, UltraQA-passed, and CI green
 
@@ -786,22 +786,64 @@ development_status:
   # =========================================================================
   # Epic 91: Replay and lifecycle readiness visibility
   # =========================================================================
-  epic-91: in-progress  # Replay and lifecycle readiness visibility
+  epic-91: done  # Replay and lifecycle readiness visibility
   91-1-task-history-replay-validation-panels: done  # dashboard/static/index.html; static task history/replay validation panel implemented, reviewed, UltraQA-passed, and CI green
   91-2-lifecycle-safety-problemdetails: done  # dashboard/static/index.html; static lifecycle safety and archive ProblemDetails copy implemented, reviewed, UltraQA-passed, and CI green
 
   # =========================================================================
   # Epic 92: Health, stale/error states, accessibility/responsiveness, and final validation
   # =========================================================================
-  epic-92: in-progress  # Health, stale/error states, accessibility/responsiveness, and final validation
+  epic-92: done  # Health, stale/error states, accessibility/responsiveness, and final validation
   92-1-health-stale-empty-error-states: done  # dashboard/static/index.html; static health/error state contract implemented, reviewed, UltraQA-passed, and CI green
   92-2-accessibility-responsiveness-audit-help-copy: done  # dashboard/static/index.html; static Audit/Help and accessibility/responsiveness contract implemented, reviewed, UltraQA-passed, and CI green
-  92-3-phase-19-final-quality-gate-review-commit-push-ci: review  # docs/status-only final validation gate; review/architecture/UltraQA/local gates clean, commit/push/CI verification pending before done
+  92-3-phase-19-final-quality-gate-review-commit-push-ci: done  # docs/status-only final validation gate completed after review/architecture/UltraQA/local gates and CI run 27652802842 green
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-17"
+    event: story-92-3-complete
+    from: review
+    to: done
+    story: 92-3-phase-19-final-quality-gate-review-commit-push-ci
+    reason: >
+      Story 92.3 docs/status-only final Phase 19 quality gate completed after
+      review-state commit 69868ea and CI run 27652802842 succeeded. Local gates
+      passed: source/status validation, allowed diff, git diff --check, focused
+      dashboard/read-only boundary regression 60 passed, ruff format/check,
+      ruff check, and full non-slow regression 4195 passed with 8 skipped and 61
+      deselected. ai-slop-cleaner found no masking fallback slop. Independent
+      code-review returned APPROVE and architecture returned CLEAR. UltraQA passed
+      after one wording fix from premature green-CI claim to CI-verification copy.
+      Dashboard HTML and parser tests were not edited by this story.
+
+  - date: "2026-06-17"
+    event: epic-92-complete
+    from: in-progress
+    to: done
+    story: epic-92
+    reason: >
+      Epic 92 closed because 92.1 health/error states, 92.2 accessibility/audit/help,
+      and 92.3 final docs/status quality gate are done with review/QA/CI evidence.
+
+  - date: "2026-06-17"
+    event: epic-91-complete
+    from: in-progress
+    to: done
+    story: epic-91
+    reason: >
+      Epic 91 closed because 91.1 task history/replay validation panels and 91.2
+      lifecycle safety ProblemDetails are done with review/QA/CI evidence.
+
+  - date: "2026-06-17"
+    event: epic-90-complete
+    from: in-progress
+    to: done
+    story: epic-90
+    reason: >
+      Epic 90 closed because 90.1 task event timeline and 90.2 trace correlation
+      panel are done with review/QA/CI evidence.
   - date: "2026-06-17"
     event: story-92-3-ready-for-review
     from: in-progress
