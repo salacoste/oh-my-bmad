@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-17T02:05:00+03:00"
-current_phase: 19  # Phase 19 OPEN — Read-Only Web Dashboard Planning (PRD + UX + architecture + epics planning)
+last_updated: "2026-06-17T20:13:00+03:00"
+current_phase: 20  # Phase 20 OPEN — Read-Only Dashboard Live-Read Contracts planning
 
 development_status:
   # =========================================================================
@@ -798,10 +798,49 @@ development_status:
   92-2-accessibility-responsiveness-audit-help-copy: done  # dashboard/static/index.html; static Audit/Help and accessibility/responsiveness contract implemented, reviewed, UltraQA-passed, and CI green
   92-3-phase-19-final-quality-gate-review-commit-push-ci: done  # docs/status-only final validation gate completed after review/architecture/UltraQA/local gates and CI run 27652802842 green
 
+  # =========================================================================
+  # Epic 93: Phase 20 planning and status gate
+  # =========================================================================
+  epic-93: done  # Phase 20 read-only dashboard live-read contracts planning and status gate completed docs/status-only
+  93-1-phase-20-prd-architecture-epics-status-opening: done  # docs/status-only Phase 20 PRD/architecture/epics/status opening completed; no runtime/dashboard/test/API/CI/dependency changes
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-17"
+    event: story-93-1-complete
+    from: in-progress
+    to: done
+    story: 93-1-phase-20-prd-architecture-epics-status-opening
+    reason: >
+      Story 93.1 completed as a docs/status-only Phase 20 opening gate after
+      Phase 20 PRD, architecture, epics, and sprint-status artifacts were
+      reconciled. Changed-path scans remained limited to Phase 20 planning/status/story
+      artifacts; no runtime/dashboard/test/API/CI/dependency files were changed.
+      Final gates passed: ai-slop-cleaner no-op/pass, docs/status validation,
+      git diff --check, ruff format/check, focused read-only dashboard regression
+      (60 passed, 2 warnings), independent code-reviewer APPROVE, and independent
+      architect CLEAR after candidate/provisional route and panel wording resolved
+      the prior WATCH concern. Later implementation still requires separate approved
+      stories, contract tests first, and review gates.
+
+  - date: "2026-06-17"
+    event: phase-20-opened
+    from: phase-19
+    to: phase-20
+    story: 93-1-phase-20-prd-architecture-epics-status-opening
+    reason: >
+      Phase 20 opened from the approved Ralplan consensus handoff for Read-Only
+      Dashboard Live-Read Contracts and Wiring Readiness. This is a docs/status-only
+      planning story: it creates Phase 20 PRD, architecture, and epics artifacts,
+      reconciles stale current_phase metadata, and preserves the rule that live
+      dashboard wiring, digest integration, aggregate/session-list read contracts,
+      destructive lifecycle apply, and mutation/control surfaces remain future
+      separately approved work. No runtime/dashboard/test/API/CI/dependency files
+      are authorized by this transition. Later implementation requires separate approved stories,
+      contract tests first, and review gates before any implementation.
+
   - date: "2026-06-17"
     event: story-92-3-complete
     from: review
