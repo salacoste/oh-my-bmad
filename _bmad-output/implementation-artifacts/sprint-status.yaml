@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-06-15T11:56:13+03:00"
+# last_updated: "2026-06-17T21:29:36+03:00"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-17T20:13:00+03:00"
+last_updated: "2026-06-17T21:16:00+03:00"
 current_phase: 20  # Phase 20 OPEN — Read-Only Dashboard Live-Read Contracts planning
 
 development_status:
@@ -804,10 +804,44 @@ development_status:
   epic-93: done  # Phase 20 read-only dashboard live-read contracts planning and status gate completed docs/status-only
   93-1-phase-20-prd-architecture-epics-status-opening: done  # docs/status-only Phase 20 PRD/architecture/epics/status opening completed; no runtime/dashboard/test/API/CI/dependency changes
 
+  # =========================================================================
+  # Epic 94: Contract tests and read-effect proof
+  # =========================================================================
+  epic-94: in-progress  # Phase 20 contract tests and read-effect proof
+  94-1-route-method-effect-allowlist-contract-tests: done  # tests/dashboard/test_live_read_contracts.py; contract-test-only route/method/effect allowlist guards completed, reviewed, and locally verified
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-17"
+    event: story-94-1-complete
+    from: in-progress
+    to: done
+    story: 94-1-route-method-effect-allowlist-contract-tests
+    reason: >
+      Story 94.1 completed as a contract-test-only Phase 20 slice. Added the
+      dedicated live-read contract test module reusing the existing dashboard
+      read-only route constants as the single source of truth. Verification gates
+      passed: targeted dashboard suite, full non-slow pytest, git diff --check,
+      ruff format/check, CI-scoped mypy, ai-slop-cleaner no-op scan, independent
+      code-reviewer APPROVE after the idempotency sensitivity probe fix, and
+      independent architect CLEAR. No live dashboard wiring, backend/API route,
+      digest integration, aggregate/session-list contract approval, CI/dependency
+      change, or mutation/control surface was introduced.
+
+  - date: "2026-06-17"
+    event: story-94-1-started
+    from: future
+    to: in-progress
+    story: 94-1-route-method-effect-allowlist-contract-tests
+    reason: >
+      Story 94.1 started after Autopilot Ralplan consensus approved the dedicated
+      route/method/effect allowlist contract-test slice. Scope is contract tests
+      and BMad lifecycle evidence only: no live dashboard wiring, no digest
+      integration, no aggregate/session-list read contract approval, no backend/API
+      implementation, no CI/dependency changes, and no mutation/control surfaces.
+
   - date: "2026-06-17"
     event: story-93-1-complete
     from: in-progress
