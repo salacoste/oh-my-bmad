@@ -47,6 +47,7 @@ Identifier = Literal[
     "replay_id",
     "lifecycle_manifest_id",
 ]
+PanelFamily = Literal["task-detail", "event-timeline", "trace-correlation"]
 
 
 @dataclass(frozen=True)
@@ -77,6 +78,25 @@ class ResultMeta:
     freshness_policy: FreshnessPolicy
     identifiers: Mapping[str, str]
     authoritative: bool
+
+
+@dataclass(frozen=True)
+class PanelReadRoute:
+    route_pattern: str
+    source_category: SourceCategory
+    route_input_identifiers: tuple[Identifier, ...]
+    row_display_identifiers: tuple[Identifier, ...]
+    timestamp_policy: TimestampPolicy
+    freshness_policy: FreshnessPolicy
+    allowed_states: frozenset[DisplayState]
+    non_authoritative_states: frozenset[DisplayState]
+
+
+@dataclass(frozen=True)
+class PanelContract:
+    panel_family: PanelFamily
+    title: str
+    routes: tuple[PanelReadRoute, ...]
 
 
 APPROVED_READ_CONTRACTS: tuple[ReadContract, ...] = (
@@ -206,6 +226,45 @@ NON_AUTHORITATIVE_STATES = frozenset(
         "backend-unavailable",
     }
 )
+STORY_96_1_ROUTE_PATTERNS = (
+    "/v1/tasks/{task_id}",
+    "/v1/tasks/{task_id}/events",
+    "/v1/tasks/{task_id}/transitions",
+    "/v1/trace/{trace_id}",
+)
+STORY_96_1_ROUTE_INPUT_IDENTIFIERS: Mapping[str, tuple[Identifier, ...]] = MappingProxyType(
+    {
+        "/v1/tasks/{task_id}": ("task_id",),
+        "/v1/tasks/{task_id}/events": ("task_id",),
+        "/v1/tasks/{task_id}/transitions": ("task_id",),
+        "/v1/trace/{trace_id}": ("trace_id",),
+    }
+)
+STORY_96_1_ROW_DISPLAY_IDENTIFIERS: Mapping[str, tuple[Identifier, ...]] = MappingProxyType(
+    {
+        "/v1/tasks/{task_id}": ("task_id",),
+        "/v1/tasks/{task_id}/events": ("task_id", "event_id", "trace_id"),
+        "/v1/tasks/{task_id}/transitions": ("task_id", "event_id", "trace_id"),
+        "/v1/trace/{trace_id}": ("trace_id", "event_id", "task_id", "session_id"),
+    }
+)
+STORY_96_1_PANEL_ROUTES: Mapping[PanelFamily, tuple[str, ...]] = MappingProxyType(
+    {
+        "task-detail": ("/v1/tasks/{task_id}",),
+        "event-timeline": (
+            "/v1/tasks/{task_id}/events",
+            "/v1/tasks/{task_id}/transitions",
+        ),
+        "trace-correlation": ("/v1/trace/{trace_id}",),
+    }
+)
+STORY_96_1_PANEL_TITLES: Mapping[PanelFamily, str] = MappingProxyType(
+    {
+        "task-detail": "Task detail",
+        "event-timeline": "Event timeline and transitions",
+        "trace-correlation": "Trace correlation",
+    }
+)
 
 
 def approved_read_contracts() -> tuple[ReadContract, ...]:
@@ -256,3 +315,54 @@ def result_meta(
         identifiers=MappingProxyType({} if identifiers is None else dict(identifiers)),
         authoritative=contract.route_status == "approved" and state == "healthy",
     )
+
+
+def story_96_1_route_patterns() -> tuple[str, ...]:
+    _validate_story_96_1_subset()
+    return STORY_96_1_ROUTE_PATTERNS
+
+
+def story_96_1_panel_contracts() -> tuple[PanelContract, ...]:
+    _validate_story_96_1_subset()
+    return tuple(
+        PanelContract(
+            panel_family=panel_family,
+            title=STORY_96_1_PANEL_TITLES[panel_family],
+            routes=tuple(_panel_read_route(route_pattern) for route_pattern in route_patterns),
+        )
+        for panel_family, route_patterns in STORY_96_1_PANEL_ROUTES.items()
+    )
+
+
+def _panel_read_route(route_pattern: str) -> PanelReadRoute:
+    contract = read_contract(route_pattern)
+    if contract.route_status != "approved":
+        raise ValueError(route_pattern)
+    return PanelReadRoute(
+        route_pattern=contract.route_pattern,
+        source_category=contract.source_category,
+        route_input_identifiers=STORY_96_1_ROUTE_INPUT_IDENTIFIERS[route_pattern],
+        row_display_identifiers=STORY_96_1_ROW_DISPLAY_IDENTIFIERS[route_pattern],
+        timestamp_policy=contract.timestamp_policy,
+        freshness_policy=contract.freshness_policy,
+        allowed_states=contract.allowed_states,
+        non_authoritative_states=contract.allowed_states & NON_AUTHORITATIVE_STATES,
+    )
+
+
+def _validate_story_96_1_subset() -> None:
+    selected = set(STORY_96_1_ROUTE_PATTERNS)
+    panel_selected = {
+        route_pattern
+        for route_patterns in STORY_96_1_PANEL_ROUTES.values()
+        for route_pattern in route_patterns
+    }
+    if selected != panel_selected:
+        raise ValueError("story 96.1 panel route mismatch")
+    approved = {contract.route_pattern for contract in APPROVED_READ_CONTRACTS}
+    if not selected <= approved:
+        raise ValueError("story 96.1 route is not approved")
+    blocked = selected & EXCLUDED_ROUTE_PATTERNS
+    blocked |= selected & {contract.route_pattern for contract in UNAVAILABLE_READ_CONTRACTS}
+    if blocked:
+        raise ValueError("story 96.1 route requires separate contract")
