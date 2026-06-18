@@ -820,13 +820,48 @@ development_status:
   # =========================================================================
   # Epic 96: Narrow live-read panel wiring
   # =========================================================================
-  epic-96: done  # Phase 20 narrow metadata/panel-contract wiring for approved task/event/trace panels completed
+  epic-96: done  # Phase 20 narrow metadata/panel-contract wiring for task/event/trace/replay/history/health/lifecycle-readiness panels
   96-1-task-detail-event-trace-live-read-panels: done  # metadata/panel-contract wiring only; no runtime live API calls or controls
+  96-2-replay-history-health-lifecycle-readiness-panels: done  # metadata/panel-contract wiring only; informational lifecycle/readiness visibility
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-18"
+    event: story-96-2-complete
+    from: in-progress
+    to: done
+    story: 96-2-replay-history-health-lifecycle-readiness-panels
+    reason: >
+      Story 96.2 completed as metadata/panel-contract wiring only for replay,
+      task-history, lifecycle-readiness, and health-readiness panels. Local gates
+      passed: git diff --check, ruff format/check, ruff check, strict mypy for
+      changed adapter/tests, targeted dashboard suite (95 passed), and full
+      non-slow suite (4230 passed, 8 skipped, 61 deselected). Independent
+      code-reviewer returned APPROVE/CLEAR with LOW stale comment fixed;
+      independent architect returned APPROVE/CLEAR. UltraQA is skipped clean
+      because this remains a pure adapter metadata/test slice with no runtime
+      live API calls, frontend scripts, backend route expansion, HTTP clients,
+      mutation/control behavior, dependencies, or CI/deployment changes.
+
+  - date: "2026-06-18"
+    event: story-96-2-started
+    from: future
+    to: in-progress
+    story: 96-2-replay-history-health-lifecycle-readiness-panels
+    reason: >
+      Story 96.2 started after Autopilot Ralplan consensus: Architect
+      APPROVE/CLEAR and Critic APPROVE after exact route-input versus
+      row/display identifier mappings were added. Scope is metadata/panel-contract
+      wiring only for replay, history, health, and lifecycle-readiness panel
+      families. It explicitly excludes runtime live API calls, HTTP clients,
+      frontend scripts, fetch/XHR/WebSocket/EventSource, backend route expansion,
+      digest integration, aggregate/session-list live contracts, mutation/control
+      behavior, lifecycle apply/prune/delete/truncate/move/rewrite/chmod/archive
+      mutation/manifest mutation controls, dependencies, and CI/deployment
+      changes.
+
   - date: "2026-06-18"
     event: story-96-1-complete
     from: in-progress
