@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-17T21:16:00+03:00"
+last_updated: "2026-06-18T11:25:00+03:00"
 current_phase: 20  # Phase 20 OPEN — Read-Only Dashboard Live-Read Contracts planning
 
 development_status:
@@ -807,14 +807,50 @@ development_status:
   # =========================================================================
   # Epic 94: Contract tests and read-effect proof
   # =========================================================================
-  epic-94: in-progress  # Phase 20 contract tests and read-effect proof
+  epic-94: done  # Phase 20 contract tests and read-effect proof completed
   94-1-route-method-effect-allowlist-contract-tests: done  # tests/dashboard/test_live_read_contracts.py; contract-test-only route/method/effect allowlist guards completed, reviewed, and locally verified
   94-2-provenance-freshness-stale-error-contract-tests: done  # tests/dashboard/test_live_read_state_contracts.py; provenance/freshness/degraded-state contract tests completed, reviewed, and locally verified
+
+  # =========================================================================
+  # Epic 95: Existing safe-read adapter readiness
+  # =========================================================================
+  epic-95: done  # Phase 20 minimal adapter boundary for approved existing safe reads completed
+  95-1-minimal-read-adapter-boundary: done  # route-centric dashboard/live_read_adapter.py boundary completed, reviewed, and locally verified
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-18"
+    event: story-95-1-complete
+    from: in-progress
+    to: done
+    story: 95-1-minimal-read-adapter-boundary
+    reason: >
+      Story 95.1 completed as a pure route-centric read adapter boundary for
+      approved existing safe reads. Added dashboard/live_read_adapter.py and
+      tests/dashboard/test_live_read_adapter.py. The adapter exposes source,
+      route, timestamp/freshness, identifier, and fail-closed state metadata;
+      excludes digest; keeps aggregate/session reads needs-contract; and wraps
+      result identifiers immutably. Verification gates passed: ruff format/check,
+      git diff --check, mypy strict, targeted dashboard suite, and full non-slow
+      pytest. Independent code-reviewer APPROVE and architect CLEAR. No static
+      dashboard live wiring, backend/API route, mutation/control surface,
+      dependency, CI, or deployment change was introduced.
+
+  - date: "2026-06-18"
+    event: story-95-1-started
+    from: future
+    to: in-progress
+    story: 95-1-minimal-read-adapter-boundary
+    reason: >
+      Story 95.1 started after Autopilot Ralplan consensus approved the minimal
+      read adapter boundary slice. Scope is a pure adapter boundary plus tests
+      and BMad evidence: no static dashboard live wiring, no backend/API route,
+      no digest integration, no aggregate/session read approval, no dependency
+      or CI/deployment changes, and no mutation/control surface. Initial targeted
+      dashboard regression passed with 82 tests.
+
   - date: "2026-06-18"
     event: story-94-2-complete
     from: in-progress
