@@ -824,10 +824,35 @@ development_status:
   96-1-task-detail-event-trace-live-read-panels: done  # metadata/panel-contract wiring only; no runtime live API calls or controls
   96-2-replay-history-health-lifecycle-readiness-panels: done  # metadata/panel-contract wiring only; informational lifecycle/readiness visibility
 
+  # =========================================================================
+  # Epic 97: Aggregate/session contract decision and final validation
+  # =========================================================================
+  epic-97: in-progress  # Phase 20 aggregate/session unavailable decision complete; final validation pending push/CI/checkpoint
+  97-1-aggregate-session-contract-decision: done  # aggregate/session remains unavailable/needs-contract; no new contract or wiring
+  97-2-phase-20-final-validation: in-progress  # final no-mutation/provenance/accessibility/review/CI gate pending push/CI/checkpoint
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-18"
+    event: story-97-x-started
+    from: future
+    to: in-progress
+    story: 97-x-aggregate-session-decision-and-final-validation
+    reason: >
+      Story 97.1 records the aggregate/session decision to remain
+      unavailable/needs-contract because no safe aggregate/session GET contract
+      is approved in Phase 20. Story 97.2 is now in progress for final Phase 20 validation of
+      route/method/effect allowlists, provenance/freshness/stale/error states,
+      accessibility/responsiveness/read-only boundary, independent review,
+      UltraQA decision, push, CI green, and sprint-status closure. Epic 97 remains
+      in progress until those final gates and the Ultragoal checkpoint are complete. Scope remains
+      docs/status/test-only plus final validation; it does not add runtime live
+      API calls, frontend scripts, backend route expansion, HTTP clients,
+      aggregate/session live wiring, digest integration, mutation/control
+      behavior, dependencies, lockfile changes, or CI/deployment changes.
+
   - date: "2026-06-18"
     event: story-96-2-complete
     from: in-progress
