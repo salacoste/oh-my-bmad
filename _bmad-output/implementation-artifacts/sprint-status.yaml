@@ -827,14 +827,34 @@ development_status:
   # =========================================================================
   # Epic 97: Aggregate/session contract decision and final validation
   # =========================================================================
-  epic-97: in-progress  # Phase 20 aggregate/session unavailable decision complete; final validation pending push/CI/checkpoint
+  epic-97: done  # Phase 20 aggregate/session unavailable decision and final validation complete
   97-1-aggregate-session-contract-decision: done  # aggregate/session remains unavailable/needs-contract; no new contract or wiring
-  97-2-phase-20-final-validation: in-progress  # final no-mutation/provenance/accessibility/review/CI gate pending push/CI/checkpoint
+  97-2-phase-20-final-validation: done  # final no-mutation/provenance/accessibility/review/CI gate complete
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-18"
+    event: story-97-x-complete
+    from: in-progress
+    to: done
+    story: 97-x-aggregate-session-decision-and-final-validation
+    reason: >
+      Epic 97 closed Phase 20 without adding unsafe aggregate/session live
+      wiring. Story 97.1 records aggregate/session reads as unavailable /
+      needs-contract until a separately approved contract exists. Story 97.2
+      added final validation coverage for approved route inventory, excluded
+      aggregate/session routes, panel coverage, read-only static-shell boundary,
+      and no runtime/mutation markers. Local gates passed: git diff --check,
+      ruff format/check for the final validation test, ruff check, strict mypy
+      over the dashboard adapter and live-read tests, targeted dashboard suite
+      (100 passed), and full non-slow pytest (4235 passed, 8 skipped, 61
+      deselected). Independent architect and code-review gates are APPROVE /
+      CLEAR, UltraQA is skipped clean for docs/status/test-only scope, and
+      GitHub Actions run 27786156603 passed for implementation commit
+      647f888250dd9e9f2443a205c8b3ceef5b2e574a.
+
   - date: "2026-06-18"
     event: story-97-x-started
     from: future

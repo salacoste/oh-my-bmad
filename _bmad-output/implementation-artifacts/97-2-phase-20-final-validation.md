@@ -1,6 +1,6 @@
 # Story 97.2 — Phase 20 final no-mutation, provenance, accessibility, review, and CI gate
 
-Status: in-progress
+Status: done
 
 ## Scope
 
@@ -29,13 +29,28 @@ contracts and wiring readiness.
 
 ## Review and CI evidence
 
-Final independent code-review, architecture review, UltraQA decision, commit SHA,
-push, CI URL, and CI green evidence must be recorded in the Ultragoal quality
-gate after the commit that contains this artifact is pushed. This artifact stays
-in-progress until those external gates exist.
+Implementation commit: `647f888250dd9e9f2443a205c8b3ceef5b2e574a`
+(`test(dashboard): add phase 20 final validation gate`).
+
+CI evidence: GitHub Actions run `27786156603` passed on 2026-06-18 for commit
+`647f888250dd9e9f2443a205c8b3ceef5b2e574a`.
+
+- Run URL: <https://github.com/salacoste/oh-my-bmad/actions/runs/27786156603>
+- Registry-state tests (Postgres service container): success.
+- PR gate (ruff + mypy + pytest): success, including `pytest -m "not slow"`.
+
+Independent gate evidence recorded for the Ultragoal quality gate:
+
+- Architect final gate: APPROVE / CLEAR.
+- Code-review final gate: APPROVE / CLEAR after status/artifact sequencing fix.
+- UltraQA: skipped clean because this is docs/status/test-only final validation
+  with no runtime live API calls, frontend scripts, backend route expansion,
+  HTTP clients, mutation/control behavior, dependencies, lockfile changes, or
+  CI/deployment changes.
 
 ## Closure rule
 
-Sprint status may close Story 97.2 and Epic 97 only after local gates,
-independent review, UltraQA pass or justified skip, push, and CI green are
-available in the final Ultragoal checkpoint.
+Story 97.2 and Epic 97 are closed after local gates, independent architecture
+and code review, justified UltraQA skip, push, and green CI for the implementation
+commit. The final Ultragoal checkpoint records this artifact plus the closure
+commit/CI evidence.
