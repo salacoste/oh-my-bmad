@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-19T04:35:00+03:00"
+last_updated: "2026-06-19T04:45:00+03:00"
 current_phase: 21  # Phase 21 OPEN — Dashboard Live-Read Rendering Readiness
 
 development_status:
@@ -834,13 +834,36 @@ development_status:
   # =========================================================================
   # Epic 98: Phase 21 planning and status gate
   # =========================================================================
-  epic-98: in-progress  # Phase 21 Dashboard Live-Read Rendering Readiness docs/status opening in final review
-  98-1-phase-21-prd-architecture-epics-status-opening: review  # docs/status-only; awaiting final review/CI evidence
+  epic-98: done  # Phase 21 Dashboard Live-Read Rendering Readiness docs/status opening complete
+  98-1-phase-21-prd-architecture-epics-status-opening: done  # docs/status-only; review and CI evidence recorded
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-19"
+    event: story-98-1-complete
+    from: review
+    to: done
+    story: 98-1-phase-21-prd-architecture-epics-status-opening
+    reason: >
+      Story 98.1 completed the Phase 21 docs/status opening after final
+      review and CI evidence. Created the Phase 21 PRD amendment,
+      architecture amendment, epics artifact, and Story 98.1 lifecycle
+      artifact; sprint status now records current_phase 21 and closes Epic
+      98 / Story 98.1. Local gates passed: YAML parse, exact five-file
+      changed-path allowlist, no-runtime/no-live-wiring/no-aggregate-session
+      no-digest/no-mutation guardrail scan, git diff --check, and focused
+      dashboard read-only regression (60 passed, 2 warnings). Independent
+      code-reviewer returned APPROVE/CLEAR and architect returned
+      APPROVE/CLEAR. UltraQA is skipped clean for docs/status-only scope.
+      GitHub Actions CI run 27799413302 passed for commit
+      636380fff55126fa2cc9166c5cde6cd606ff0dfa. No runtime code, dashboard
+      HTML, dashboard tests, backend/API routes, dependencies, lockfiles,
+      CI/deployment files, scripts, services, MCP servers, live browser/API
+      wiring, aggregate/session contract, digest integration, or
+      mutation/control/destructive lifecycle behavior was changed.
+
   - date: "2026-06-19"
     event: story-98-1-review-ready
     from: in-progress

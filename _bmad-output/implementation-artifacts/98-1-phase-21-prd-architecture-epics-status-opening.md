@@ -1,6 +1,6 @@
 # Story 98.1 — Phase 21 PRD, Architecture, Epics, and Sprint-Status Opening
 
-Status: review
+Status: done
 Date opened: 2026-06-19
 
 ## Summary
@@ -56,9 +56,12 @@ Allowed tracked files:
 
 Story 98.1 can be marked done only when the five allowed files contain the Phase 21 opening, verification passes, independent review gates are clean, UltraQA is passed or explicitly skipped for docs/status-only scope, the change is pushed, and CI is green.
 
-## Review-readiness evidence
+## Completion evidence
 
 - Phase 21 PRD, architecture, epics, Story 98.1 artifact, and sprint-status updates are present.
 - Local validation passed for YAML parse, exact changed-file allowlist, guardrail wording scan, and `git diff --check`.
 - Focused dashboard read-only regression passed: `uv run pytest -q tests/dashboard/test_static_shell.py tests/dashboard/test_read_only_boundary.py` => 60 passed, 2 warnings.
-- Final code-review, UltraQA decision, commit/push, CI, and Ultragoal final checkpoint remain required before this story is marked done.
+- Independent code-reviewer APPROVE/CLEAR and architect APPROVE/CLEAR are recorded.
+- UltraQA skipped clean for docs/status-only scope.
+- Commit `636380fff55126fa2cc9166c5cde6cd606ff0dfa` was pushed and GitHub Actions CI run `27799413302` passed before marking this story done.
+- Final Ultragoal checkpoint records the durable goal reconciliation and quality gate.
