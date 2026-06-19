@@ -38,6 +38,18 @@ DisplayState = Literal[
     "unauthorized",
     "backend-unavailable",
 ]
+AuthorityState = Literal["authoritative", "non-authoritative", "needs-contract"]
+DisplaySeverity = Literal["normal", "warning", "error", "blocked"]
+DegradedStateCategory = Literal[
+    "none",
+    "unavailable",
+    "needs-contract",
+    "partial",
+    "stale",
+    "invalid",
+    "unauthorized",
+    "backend-unavailable",
+]
 Identifier = Literal[
     "task_id",
     "session_id",
@@ -105,6 +117,30 @@ class PanelContract:
     panel_family: PanelFamily
     title: str
     routes: tuple[PanelReadRoute, ...]
+
+
+@dataclass(frozen=True)
+class RouteViewModel:
+    panel_family: PanelFamily
+    route_pattern: str
+    source_category: SourceCategory
+    route_input_identifiers: tuple[Identifier, ...]
+    row_display_identifiers: tuple[Identifier, ...]
+    timestamp_policy: TimestampPolicy
+    freshness_policy: FreshnessPolicy
+    display_state: DisplayState
+    degraded_state_category: DegradedStateCategory
+    authority_state: AuthorityState
+    display_severity: DisplaySeverity
+    display_copy: str
+    read_only_contract: bool = True
+
+
+@dataclass(frozen=True)
+class PanelViewModel:
+    panel_family: PanelFamily
+    title: str
+    routes: tuple[RouteViewModel, ...]
 
 
 APPROVED_READ_CONTRACTS: tuple[ReadContract, ...] = (
@@ -221,6 +257,12 @@ EXCLUDED_ROUTE_PATTERNS = frozenset(
         "/v1/tasks/{task_id}/logs/digest",
         "/v1/tasks/{task_id}/logs/digest/stream",
     }
+)
+STORY_99_1_NEEDS_SEPARATE_CONTRACT_ROUTE_PATTERNS = frozenset(
+    contract.route_pattern for contract in UNAVAILABLE_READ_CONTRACTS
+) | frozenset({"/v1/sessions/{session_id}"})
+STORY_99_1_FORBIDDEN_RENDERABLE_ROUTE_PATTERNS = frozenset(
+    STORY_99_1_NEEDS_SEPARATE_CONTRACT_ROUTE_PATTERNS | EXCLUDED_ROUTE_PATTERNS
 )
 
 NON_AUTHORITATIVE_STATES = frozenset(
@@ -422,6 +464,70 @@ def story_96_2_panel_contracts() -> tuple[PanelContract, ...]:
     )
 
 
+def story_99_1_forbidden_renderable_route_patterns() -> frozenset[str]:
+    return STORY_99_1_FORBIDDEN_RENDERABLE_ROUTE_PATTERNS
+
+
+def story_99_1_panel_view_models(
+    display_state: DisplayState = "healthy",
+) -> tuple[PanelViewModel, ...]:
+    return tuple(
+        PanelViewModel(
+            panel_family=panel.panel_family,
+            title=panel.title,
+            routes=tuple(
+                story_99_1_route_view_model(route.route_pattern, display_state=display_state)
+                for route in panel.routes
+            ),
+        )
+        for panel in _story_99_1_panel_contracts()
+    )
+
+
+def story_99_1_route_view_models(
+    display_state: DisplayState = "healthy",
+) -> tuple[RouteViewModel, ...]:
+    return tuple(
+        route
+        for panel in story_99_1_panel_view_models(display_state=display_state)
+        for route in panel.routes
+    )
+
+
+def story_99_1_route_view_model(
+    route_pattern: str,
+    display_state: DisplayState = "healthy",
+) -> RouteViewModel:
+    if route_pattern in STORY_99_1_FORBIDDEN_RENDERABLE_ROUTE_PATTERNS:
+        raise ValueError(route_pattern)
+
+    panel_route = _story_99_1_panel_route_lookup().get(route_pattern)
+    if panel_route is None:
+        raise ValueError(route_pattern)
+
+    panel_family, route = panel_route
+    contract = read_contract(route.route_pattern)
+    if contract.route_status != "approved":
+        raise ValueError(route_pattern)
+    if display_state not in contract.allowed_states:
+        raise ValueError(display_state)
+
+    return RouteViewModel(
+        panel_family=panel_family,
+        route_pattern=route.route_pattern,
+        source_category=route.source_category,
+        route_input_identifiers=route.route_input_identifiers,
+        row_display_identifiers=route.row_display_identifiers,
+        timestamp_policy=route.timestamp_policy,
+        freshness_policy=route.freshness_policy,
+        display_state=display_state,
+        degraded_state_category=_degraded_state_category(display_state),
+        authority_state=_authority_state(display_state),
+        display_severity=_display_severity(display_state),
+        display_copy=_display_copy(panel_family=panel_family, display_state=display_state),
+    )
+
+
 def _panel_read_route(
     route_pattern: str,
     *,
@@ -440,6 +546,63 @@ def _panel_read_route(
         freshness_policy=contract.freshness_policy,
         allowed_states=contract.allowed_states,
         non_authoritative_states=contract.allowed_states & NON_AUTHORITATIVE_STATES,
+    )
+
+
+def _story_99_1_panel_contracts() -> tuple[PanelContract, ...]:
+    return story_96_1_panel_contracts() + story_96_2_panel_contracts()
+
+
+def _story_99_1_panel_route_lookup() -> Mapping[str, tuple[PanelFamily, PanelReadRoute]]:
+    route_lookup: dict[str, tuple[PanelFamily, PanelReadRoute]] = {}
+    for panel in _story_99_1_panel_contracts():
+        for route in panel.routes:
+            if route.route_pattern in route_lookup:
+                raise ValueError(f"duplicate Story 99.1 panel route: {route.route_pattern}")
+            route_lookup[route.route_pattern] = (panel.panel_family, route)
+    return MappingProxyType(route_lookup)
+
+
+def _degraded_state_category(display_state: DisplayState) -> DegradedStateCategory:
+    if display_state == "healthy":
+        return "none"
+    return display_state
+
+
+def _authority_state(display_state: DisplayState) -> AuthorityState:
+    if display_state == "healthy":
+        return "authoritative"
+    if display_state == "needs-contract":
+        return "needs-contract"
+    return "non-authoritative"
+
+
+def _display_severity(display_state: DisplayState) -> DisplaySeverity:
+    if display_state == "healthy":
+        return "normal"
+    if display_state in {"unavailable", "partial", "stale"}:
+        return "warning"
+    if display_state == "needs-contract":
+        return "blocked"
+    return "error"
+
+
+def _display_copy(*, panel_family: PanelFamily, display_state: DisplayState) -> str:
+    panel_label = panel_family.replace("-", " ")
+    if display_state == "healthy":
+        return (
+            f"{panel_label} static readiness contract is prepared; "
+            "runtime data remains disconnected."
+        )
+    if display_state == "needs-contract":
+        return (
+            f"{panel_label} needs a separate read contract before presentation; "
+            "runtime data remains disconnected."
+        )
+    state_label = display_state.replace("-", " ")
+    return (
+        f"{panel_label} static readiness contract is {state_label}; "
+        "runtime data remains disconnected."
     )
 
 

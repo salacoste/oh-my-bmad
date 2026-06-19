@@ -1,9 +1,23 @@
 from __future__ import annotations
 
+import importlib.util
+import sys
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Literal
+from unittest.mock import patch
 
 from tests.dashboard import test_live_read_contracts as live_contracts
+
+_ADAPTER_SPEC = importlib.util.spec_from_file_location(
+    "dashboard_live_read_adapter_story_99_1",
+    Path("dashboard/live_read_adapter.py"),
+)
+assert _ADAPTER_SPEC is not None
+assert _ADAPTER_SPEC.loader is not None
+live_read_adapter = importlib.util.module_from_spec(_ADAPTER_SPEC)
+sys.modules[_ADAPTER_SPEC.name] = live_read_adapter
+_ADAPTER_SPEC.loader.exec_module(live_read_adapter)
 
 SourceCategory = Literal[
     "task",
@@ -86,6 +100,37 @@ UNCERTAINTY_COPY_TERMS = (
     "backend unavailable",
 )
 SUCCESS_COPY_TERMS = ("healthy", "authoritative", "success", "ok")
+STORY_99_1_FORBIDDEN_RENDERABLE_ROUTES = frozenset(
+    {
+        "/v1/tasks",
+        "/v1/sessions",
+        "/v1/sessions/{session_id}",
+        "/v1/tasks/{task_id}/logs/digest",
+        "/v1/tasks/{task_id}/logs/digest/stream",
+    }
+)
+STORY_99_1_FORBIDDEN_RENDERED_TERMS = (
+    "post",
+    "put",
+    "patch",
+    "delete",
+    "fetch",
+    "xhr",
+    "websocket",
+    "eventsource",
+    "polling",
+    "mutate",
+    "mutation",
+    "control",
+    "destructive",
+    "start",
+    "stop",
+    "retry",
+    "approve",
+    "reject",
+)
+STORY_99_1_FORBIDDEN_SUCCESS_CLAIMS = ("live", "current", "fetched", "success")
+STORY_99_1_STATIC_CONTRACT_TERMS = ("static", "readiness", "contract")
 
 
 @dataclass(frozen=True)
@@ -399,6 +444,134 @@ def test_guard_sensitivity_rejects_synthetic_authoritative_success_for_missing_c
         assert_display_state_contract_fails(fixture)
 
 
+def test_story_99_1_view_models_cover_every_approved_phase_20_panel_route() -> None:
+    view_models = live_read_adapter.story_99_1_route_view_models()
+    expected = set(live_read_adapter.story_96_1_route_patterns()) | set(
+        live_read_adapter.story_96_2_route_patterns()
+    )
+
+    assert {view_model.route_pattern for view_model in view_models} == expected
+    assert expected == {
+        contract.route_pattern for contract in live_read_adapter.approved_read_contracts()
+    }
+    assert not expected & live_read_adapter.story_99_1_forbidden_renderable_route_patterns()
+
+    panel_contracts = {
+        route.route_pattern: (panel.panel_family, route)
+        for panel in (
+            live_read_adapter.story_96_1_panel_contracts()
+            + live_read_adapter.story_96_2_panel_contracts()
+        )
+        for route in panel.routes
+    }
+    for view_model in view_models:
+        panel_family, panel_route = panel_contracts[view_model.route_pattern]
+        assert view_model.panel_family == panel_family
+        assert view_model.source_category == panel_route.source_category
+        assert view_model.route_input_identifiers == panel_route.route_input_identifiers
+        assert view_model.row_display_identifiers == panel_route.row_display_identifiers
+        assert view_model.timestamp_policy == panel_route.timestamp_policy
+        assert view_model.freshness_policy == panel_route.freshness_policy
+
+
+def test_story_99_1_view_model_metadata_is_complete_and_inert() -> None:
+    for panel in live_read_adapter.story_99_1_panel_view_models():
+        assert panel.title
+        assert panel.routes
+        for view_model in panel.routes:
+            assert view_model.panel_family == panel.panel_family
+            assert view_model.route_pattern
+            assert view_model.source_category
+            assert view_model.timestamp_policy
+            assert view_model.freshness_policy
+            assert view_model.display_state == "healthy"
+            assert view_model.degraded_state_category == "none"
+            assert view_model.authority_state == "authoritative"
+            assert view_model.display_severity == "normal"
+            assert view_model.read_only_contract is True
+            assert_story_99_1_copy_preserves_static_contract_boundary(view_model.display_copy)
+            assert_story_99_1_rendered_fields_are_inert(view_model)
+
+
+def test_story_99_1_degraded_states_are_explicit_non_authoritative_and_non_normal() -> None:
+    approved_contracts = {
+        contract.route_pattern: contract for contract in live_read_adapter.approved_read_contracts()
+    }
+
+    for route_pattern, contract in approved_contracts.items():
+        for display_state in contract.allowed_states:
+            view_model = live_read_adapter.story_99_1_route_view_model(
+                route_pattern,
+                display_state=display_state,
+            )
+            assert_story_99_1_copy_preserves_static_contract_boundary(view_model.display_copy)
+            assert_story_99_1_rendered_fields_are_inert(view_model)
+            if display_state == "healthy":
+                assert view_model.degraded_state_category == "none"
+                assert view_model.authority_state == "authoritative"
+                assert view_model.display_severity == "normal"
+            else:
+                assert view_model.degraded_state_category == display_state
+                assert view_model.authority_state in {"non-authoritative", "needs-contract"}
+                assert view_model.display_severity in {"warning", "error", "blocked"}
+                assert view_model.display_severity != "normal"
+                assert display_state.replace("-", " ") in view_model.display_copy.lower()
+
+
+def test_story_99_1_forbidden_aggregate_session_and_digest_routes_fail_closed() -> None:
+    view_model_routes = {
+        view_model.route_pattern for view_model in live_read_adapter.story_99_1_route_view_models()
+    }
+    unavailable_routes = {
+        contract.route_pattern for contract in live_read_adapter.unavailable_read_contracts()
+    }
+    excluded_routes = set(live_read_adapter.EXCLUDED_ROUTE_PATTERNS)
+    assert (
+        live_read_adapter.story_99_1_forbidden_renderable_route_patterns()
+        == unavailable_routes | excluded_routes | {"/v1/sessions/{session_id}"}
+    )
+    assert (unavailable_routes | excluded_routes | {"/v1/sessions/{session_id}"}) == (
+        STORY_99_1_FORBIDDEN_RENDERABLE_ROUTES
+    )
+    assert not view_model_routes & STORY_99_1_FORBIDDEN_RENDERABLE_ROUTES
+
+    for route_pattern in STORY_99_1_FORBIDDEN_RENDERABLE_ROUTES:
+        try:
+            live_read_adapter.story_99_1_route_view_model(route_pattern)
+        except ValueError:
+            continue
+        raise AssertionError(f"forbidden Story 99.1 route unexpectedly rendered: {route_pattern}")
+
+
+def test_story_99_1_duplicate_panel_routes_fail_fast_before_rendering() -> None:
+    panel = live_read_adapter.story_96_1_panel_contracts()[0]
+    duplicate_contracts = (panel, replace(panel, panel_family="health-readiness"))
+
+    with patch.object(
+        live_read_adapter,
+        "_story_99_1_panel_contracts",
+        return_value=duplicate_contracts,
+    ):
+        try:
+            live_read_adapter.story_99_1_route_view_models()
+        except ValueError as exc:
+            assert "duplicate Story 99.1 panel route" in str(exc)
+            return
+    raise AssertionError("duplicate Story 99.1 panel route unexpectedly rendered")
+
+
+def test_story_99_1_rendered_metadata_omits_controls_live_wiring_and_success_claims() -> None:
+    for view_model in live_read_adapter.story_99_1_route_view_models():
+        rendered = story_99_1_rendered_text(view_model)
+        lowered = rendered.lower()
+        for term in STORY_99_1_FORBIDDEN_RENDERED_TERMS:
+            assert term not in lowered, rendered
+        for term in STORY_99_1_FORBIDDEN_SUCCESS_CLAIMS:
+            assert term not in lowered, rendered
+        assert "read_only_contract" not in rendered
+        assert view_model.read_only_contract is True
+
+
 def assert_valid_live_value_contract(contract: LiveValueContract) -> None:
     assert contract.name
     assert contract.source_category
@@ -456,3 +629,38 @@ def assert_display_state_contract_fails(fixture: DisplayStateFixture) -> None:
     except AssertionError:
         return
     raise AssertionError(f"display state probe unexpectedly passed: {fixture}")
+
+
+def assert_story_99_1_copy_preserves_static_contract_boundary(copy: str) -> None:
+    lowered = copy.lower()
+    for term in STORY_99_1_STATIC_CONTRACT_TERMS:
+        assert term in lowered, copy
+    for term in STORY_99_1_FORBIDDEN_SUCCESS_CLAIMS:
+        assert term not in lowered, copy
+
+
+def assert_story_99_1_rendered_fields_are_inert(
+    view_model: live_read_adapter.RouteViewModel,
+) -> None:
+    rendered = story_99_1_rendered_text(view_model)
+    lowered = rendered.lower()
+    for term in STORY_99_1_FORBIDDEN_RENDERED_TERMS:
+        assert term not in lowered, rendered
+
+
+def story_99_1_rendered_text(view_model: live_read_adapter.RouteViewModel) -> str:
+    rendered_fields = (
+        view_model.panel_family,
+        view_model.route_pattern,
+        view_model.source_category,
+        " ".join(view_model.route_input_identifiers),
+        " ".join(view_model.row_display_identifiers),
+        view_model.timestamp_policy,
+        view_model.freshness_policy,
+        view_model.display_state,
+        view_model.degraded_state_category,
+        view_model.authority_state,
+        view_model.display_severity,
+        view_model.display_copy,
+    )
+    return " ".join(rendered_fields)

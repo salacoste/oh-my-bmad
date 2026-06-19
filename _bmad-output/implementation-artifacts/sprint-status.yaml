@@ -837,10 +837,65 @@ development_status:
   epic-98: done  # Phase 21 Dashboard Live-Read Rendering Readiness docs/status opening complete
   98-1-phase-21-prd-architecture-epics-status-opening: done  # docs/status-only; review and CI evidence recorded
 
+  # =========================================================================
+  # Epic 99: Presentation model and fixture contract tests
+  # =========================================================================
+  epic-99: in-progress  # Phase 21 presentation-model and fixture contract tests opened
+  99-1-dashboard-live-read-view-model-contract-tests: review  # pure view-model contract tests; no live wiring; local gates green
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-19"
+    event: story-99-1-review-clean
+    from: review
+    to: review
+    story: 99-1-dashboard-live-read-view-model-contract-tests
+    reason: >
+      Independent code-reviewer lane returned APPROVE with zero issues.
+      Independent architect lane first returned WATCH for duplicate route
+      collision and forbidden inventory drift risk; implementation was
+      tightened with duplicate-route fail-fast behavior and derived forbidden
+      inventory, then architect re-review returned CLEAR. UltraQA is skipped
+      for this pure contract/test/status slice because it introduces no
+      user-facing runtime behavior, static HTML, browser scripts, backend/API
+      route expansion, live wiring, dependencies, services, MCP servers,
+      aggregate/session live contract, digest integration, or mutation/control
+      surface. Push, CI green, and final Ultragoal checkpoint remain required
+      before done.
+
+  - date: "2026-06-19"
+    event: story-99-1-review-ready
+    from: in-progress
+    to: review
+    story: 99-1-dashboard-live-read-view-model-contract-tests
+    reason: >
+      Story 99.1 pure view-model contract implementation is ready for
+      independent review. Local gates passed: focused Story 99.1 contract
+      tests, live-read route/read-only boundary regression, static shell
+      regression, ruff check, ruff format check, targeted mypy, git diff
+      whitespace check, sprint-status YAML parse, changed-file allowlist,
+      and no runtime live wiring/forbidden method token scan. Review,
+      UltraQA/skip, push, CI green, and Ultragoal checkpoint evidence remain
+      required before done.
+
+  - date: "2026-06-19"
+    event: story-99-1-implementation-started
+    from: future
+    to: in-progress
+    story: 99-1-dashboard-live-read-view-model-contract-tests
+    reason: >
+      Story 99.1 implementation started after Autopilot RALPLAN consensus:
+      Architect APPROVE/CLEAR followed by Critic APPROVE/CLEAR. Scope is
+      limited to pure presentation/view-model contract tests and adapter
+      metadata derived from approved Phase 20 routes. This does not authorize
+      dashboard runtime live API calls, browser fetch/XHR/WebSocket/EventSource
+      polling, frontend scripts, backend/API route expansion, aggregate/session
+      live contracts, digest integration, mutation/control/destructive lifecycle
+      affordances, dependencies, lockfiles, CI/deployment, services, MCP
+      servers, or static HTML changes.
+
   - date: "2026-06-19"
     event: story-98-1-complete
     from: review
