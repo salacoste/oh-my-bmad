@@ -841,12 +841,33 @@ development_status:
   # Epic 99: Presentation model and fixture contract tests
   # =========================================================================
   epic-99: in-progress  # Phase 21 presentation-model and fixture contract tests opened
-  99-1-dashboard-live-read-view-model-contract-tests: review  # pure view-model contract tests; no live wiring; local gates green
+  99-1-dashboard-live-read-view-model-contract-tests: done  # pure view-model contract tests; no live wiring; CI green
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-19"
+    event: story-99-1-complete
+    from: review
+    to: done
+    story: 99-1-dashboard-live-read-view-model-contract-tests
+    reason: >
+      Story 99.1 completed as a pure presentation/view-model contract test
+      slice. Implemented frozen Story 99.1 view models from approved Phase
+      20 routes only, explicit degraded-state category/authority/severity
+      mapping, contract/static/readiness copy, fail-closed aggregate/session
+      and digest inventory, duplicate panel-route fail-fast behavior, and
+      regression tests for no live wiring or mutation/control rendered
+      metadata. Local gates passed: focused Story 99.1 route/read-only
+      tests, static shell regression, ruff check, ruff format check, targeted
+      mypy, git diff whitespace check, sprint-status YAML parse, changed-file
+      allowlist, guardrail scan, and broad non-slow pytest. Independent
+      code-reviewer returned APPROVE; architect re-review returned CLEAR
+      after WATCH fixes. UltraQA is skipped clean for pure contract/test/status
+      scope. Implementation commit efac7d5725ddd99a4156407bc46a919086bbc2ba
+      was pushed and GitHub Actions CI run 27845888487 completed successfully.
+
   - date: "2026-06-19"
     event: story-99-1-review-clean
     from: review

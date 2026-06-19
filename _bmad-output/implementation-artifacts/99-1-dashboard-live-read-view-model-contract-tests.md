@@ -1,6 +1,6 @@
 # Story 99.1 — Dashboard live-read view-model contract tests
 
-Status: review
+Status: done
 Date started: 2026-06-19
 
 ## Scope
@@ -70,3 +70,11 @@ Post-fix local gates:
 - Code-reviewer lane: APPROVE, 0 issues across code/spec/security/maintainability.
 - Architect lane: initial WATCH for duplicate-route collision and forbidden-inventory drift risk; fixes applied and re-review returned CLEAR.
 - UltraQA: skipped for this story because the diff is pure Python contract/test/status metadata and does not alter static HTML, browser scripts, backend/API routes, runtime wiring, dependencies, services, MCP servers, or user-facing runtime behavior. Contract and boundary tests plus broad non-slow regression are the appropriate adversarial evidence for this slice.
+
+## Completion evidence
+
+- Implementation commit: `efac7d5725ddd99a4156407bc46a919086bbc2ba`.
+- GitHub Actions CI run: `27845888487` — `ci` workflow completed successfully.
+  - Registry-state tests (Postgres service container): success.
+  - PR gate (ruff + mypy + pytest): success.
+- Story 99.1 remains a pure contract/test/status slice with no static HTML, browser scripts, backend/API route expansion, runtime live wiring, dependencies, services, MCP servers, aggregate/session live contract, digest integration, or mutation/control surface.
