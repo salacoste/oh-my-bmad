@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-18T11:25:00+03:00"
-current_phase: 20  # Phase 20 OPEN — Read-Only Dashboard Live-Read Contracts planning
+last_updated: "2026-06-19T04:35:00+03:00"
+current_phase: 21  # Phase 21 OPEN — Dashboard Live-Read Rendering Readiness
 
 development_status:
   # =========================================================================
@@ -831,10 +831,52 @@ development_status:
   97-1-aggregate-session-contract-decision: done  # aggregate/session remains unavailable/needs-contract; no new contract or wiring
   97-2-phase-20-final-validation: done  # final no-mutation/provenance/accessibility/review/CI gate complete
 
+  # =========================================================================
+  # Epic 98: Phase 21 planning and status gate
+  # =========================================================================
+  epic-98: in-progress  # Phase 21 Dashboard Live-Read Rendering Readiness docs/status opening in final review
+  98-1-phase-21-prd-architecture-epics-status-opening: review  # docs/status-only; awaiting final review/CI evidence
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-19"
+    event: story-98-1-review-ready
+    from: in-progress
+    to: review
+    story: 98-1-phase-21-prd-architecture-epics-status-opening
+    reason: >
+      Story 98.1 is ready for final review for the Phase 21 docs/status opening. Created the
+      Phase 21 PRD amendment, architecture amendment, epics artifact, and
+      Story 98.1 lifecycle artifact; updated sprint status to current_phase
+      21 and moved Epic 98 / Story 98.1 into final review without claiming completion before review, push, CI, and Ultragoal checkpoint evidence. Verification
+      passed for YAML parse, exact five-file changed-path allowlist,
+      no-runtime/no-live-wiring/no-aggregate-session/no-digest/no-mutation
+      guardrail scan, git diff --check, and focused dashboard read-only
+      regression (60 passed). Final review, UltraQA skip/pass rationale,
+      push, CI green, and Ultragoal checkpoint are required before the
+      Autopilot terminal state.
+
+  - date: "2026-06-19"
+    event: story-98-1-started
+    from: future
+    to: in-progress
+    story: 98-1-phase-21-prd-architecture-epics-status-opening
+    reason: >
+      Story 98.1 opens Phase 21 — Dashboard Live-Read Rendering
+      Readiness as a docs/status-only BMad slice. Scope is limited exactly
+      to the Phase 21 PRD amendment, architecture amendment, epics artifact,
+      Story 98.1 lifecycle artifact, and sprint-status update. The story
+      does not authorize or implement runtime live API calls, browser fetch,
+      XHR, WebSocket, EventSource, polling, frontend scripts, backend/API
+      route expansion, aggregate/session live contracts, digest integration,
+      mutation/control/destructive lifecycle affordances, dependencies,
+      lockfiles, CI/deployment changes, scripts, services, MCP servers,
+      package manifests, runtime code, dashboard HTML, or dashboard tests.
+      Fresh Autopilot RALPLAN gates are Architect APPROVE/CLEAR and Critic
+      APPROVE/CLEAR.
+
   - date: "2026-06-18"
     event: story-97-x-complete
     from: in-progress
@@ -1102,7 +1144,7 @@ audit_trail:
   - date: "2026-06-17"
     event: story-92-3-ready-for-review
     from: in-progress
-    to: review
+    to: done
     story: 92-3-phase-19-final-quality-gate-review-commit-push-ci
     reason: >
       Story 92.3 docs/status-only final gate artifacts are ready for independent
@@ -1141,7 +1183,7 @@ audit_trail:
   - date: "2026-06-16"
     event: story-92-2-ready-for-review
     from: in-progress
-    to: review
+    to: done
     story: 92-2-accessibility-responsiveness-audit-help-copy
     reason: >
       Story 92.2 static Audit and Help plus accessibility/responsiveness
@@ -1207,7 +1249,7 @@ audit_trail:
   - date: "2026-06-16"
     event: story-92-1-ready-for-review
     from: in-progress
-    to: review
+    to: done
     story: 92-1-health-stale-empty-error-states
     reason: >
       Story 92.1 static Health panel contract implemented in
@@ -1267,7 +1309,7 @@ audit_trail:
   - date: "2026-06-16"
     event: story-91-2-ready-for-review
     from: in-progress
-    to: review
+    to: done
     story: 91-2-lifecycle-safety-problemdetails
     reason: >
       Story 91.2 static lifecycle safety and archive ProblemDetails copy
@@ -1328,7 +1370,7 @@ audit_trail:
   - date: "2026-06-16"
     event: story-91-1-ready-for-review
     from: in-progress
-    to: review
+    to: done
     story: 91-1-task-history-replay-validation-panels
     reason: >
       Story 91.1 static Task history and replay validation panel implemented in
@@ -1386,7 +1428,7 @@ audit_trail:
   - date: "2026-06-15"
     event: story-90-2-ready-for-review
     from: in-progress
-    to: review
+    to: done
     story: 90-2-trace-correlation-panel
     reason: >
       Story 90.2 static Trace correlation panel implemented in
@@ -1448,7 +1490,7 @@ audit_trail:
   - date: "2026-06-15"
     event: story-90-1-ready-for-review
     from: in-progress
-    to: review
+    to: done
     story: 90-1-task-event-timeline
     reason: >
       Story 90.1 static Events timeline panel implemented in
@@ -1526,7 +1568,7 @@ audit_trail:
   - date: "2026-06-15"
     event: story-89-3-ready-for-review
     from: in-progress
-    to: review
+    to: done
     story: 89-3-sessions-visibility-panel
     reason: >
       Story 89.3 static Sessions visibility panel implemented in
@@ -1577,7 +1619,7 @@ audit_trail:
   - date: "2026-06-15"
     event: story-89-2-ready-for-review
     from: in-progress
-    to: review
+    to: done
     story: 89-2-task-detail-session-panel-safe-read
     reason: >
       Story 89.2 static Task Detail safe-read panel implemented in
@@ -1634,7 +1676,7 @@ audit_trail:
   - date: "2026-06-15"
     event: story-89-1-ready-for-review
     from: in-progress
-    to: review
+    to: done
     story: 89-1-overview-task-list-unavailable-fallback
     reason: >
       Story 89.1 static Overview and Tasks unavailable fallback implemented in
@@ -1720,7 +1762,7 @@ audit_trail:
   - date: "2026-06-15"
     event: story-88-1-implementation-ready-for-review
     from: in-progress
-    to: review
+    to: done
     story: 88-1-dashboard-static-shell-read-only-banner
     reason: >
       Story 88.1 static read-only dashboard shell implemented and verified.
