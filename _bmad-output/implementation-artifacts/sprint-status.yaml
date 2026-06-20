@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-20T17:25:00+03:00"
+last_updated: "2026-06-20T20:50:00+03:00"
 current_phase: 21  # Phase 21 OPEN — Dashboard Live-Read Rendering Readiness
 
 development_status:
@@ -847,13 +847,56 @@ development_status:
   # =========================================================================
   # Epic 100: Static shell rendering readiness
   # =========================================================================
-  epic-100: in-progress  # Phase 21 static HTML/presentation rendering readiness opened after Epic 99 completion
+  epic-100: done  # Static rendering readiness and live-read wiring decision gate complete; no live wiring implemented
   100-1-static-html-presentation-rendering: done  # static fixture-backed read-only rendering complete; no runtime/live wiring
+  100-2-live-read-wiring-decision-gate: done  # conditional-ready decision only; future separate live story required
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-20"
+    event: epic-100-complete
+    from: in-progress
+    to: done
+    story: epic-100
+    reason: >
+      Epic 100 completed with Story 100.1 static fixture-backed rendering and
+      Story 100.2 live-read wiring decision gate both done. Completion does
+      not mean live dashboard wiring exists: Story 100.2 records only a
+      conditional-ready planning decision for a later separately scoped
+      narrow approved-GET live-read story. Aggregate/session/digest live
+      contracts, mutation/control affordances, backend/API expansion, browser
+      fetch/XHR/WebSocket/EventSource/polling, dependencies, lockfiles,
+      deployment, and CI changes remain unauthorized by Epic 100.
+
+  - date: "2026-06-20"
+    event: story-100-2-complete
+    from: in-progress
+    to: done
+    story: 100-2-live-read-wiring-decision-gate
+    reason: >
+      Story 100.2 completed as a docs/status decision-gate artifact. Decision
+      outcome is conditional-ready as non-authorizing planning evidence only:
+      a future separate story may draft a narrow approved-GET live-read slice,
+      but must add browser/e2e or equivalent runtime-boundary tests and
+      preserve no-mutation, no aggregate/session/digest, provenance,
+      freshness, authority, and degraded-state guardrails. Story 100.2 itself
+      implements no live browser/API wiring.
+
+  - date: "2026-06-20"
+    event: story-100-2-implementation-started
+    from: future
+    to: in-progress
+    story: 100-2-live-read-wiring-decision-gate
+    reason: >
+      Story 100.2 docs/status implementation started after Story 100.1 commit
+      b90d75d and fresh sequential Architect APPROVE/CLEAR then Critic APPROVE
+      consensus. Scope is limited to the decision artifact and sprint status;
+      no live wiring, runtime browser/API calls, backend/API route expansion,
+      aggregate/session/digest contract, mutation/control affordance,
+      dependency, lockfile, deployment, or CI change is authorized.
+
   - date: "2026-06-20"
     event: story-100-1-complete
     from: in-progress
