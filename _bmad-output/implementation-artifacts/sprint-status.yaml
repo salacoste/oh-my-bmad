@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-19T04:45:00+03:00"
+last_updated: "2026-06-20T17:25:00+03:00"
 current_phase: 21  # Phase 21 OPEN — Dashboard Live-Read Rendering Readiness
 
 development_status:
@@ -840,14 +840,71 @@ development_status:
   # =========================================================================
   # Epic 99: Presentation model and fixture contract tests
   # =========================================================================
-  epic-99: in-progress  # Phase 21 presentation-model and fixture contract tests opened
+  epic-99: done  # Phase 21 presentation-model and fixture contract tests complete; 99.1 + 99.2 done
   99-1-dashboard-live-read-view-model-contract-tests: done  # pure view-model contract tests; no live wiring; CI green
   99-2-fixture-snapshot-rendering-contract-tests: done  # fixture/snapshot contract tests complete; no live wiring
+
+  # =========================================================================
+  # Epic 100: Static shell rendering readiness
+  # =========================================================================
+  epic-100: in-progress  # Phase 21 static HTML/presentation rendering readiness opened after Epic 99 completion
+  100-1-static-html-presentation-rendering: done  # static fixture-backed read-only rendering complete; no runtime/live wiring
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-20"
+    event: story-100-1-complete
+    from: in-progress
+    to: done
+    story: 100-1-static-html-presentation-rendering
+    reason: >
+      Story 100.1 completed as committed inert static HTML plus
+      parser-based fixture rendering contract tests. The static shell now
+      renders the full approved Story 99.2 fixture snapshot coverage, keeps
+      aggregate/session/digest routes fail-closed, and records degraded or
+      unavailable states as bounded non-authoritative readiness copy. Local
+      gates passed: red/green Story 100.1 tests, static shell regression,
+      dashboard fixture/state/contract/read-only boundary suite, ruff check,
+      ruff format check, strict mypy, pyright, sprint-status YAML parse,
+      git diff whitespace check, and broad non-slow pytest. AI slop cleanup
+      found no masking fallback. Independent code-reviewer returned APPROVE
+      and the LOW row-alignment test-hardening suggestion was applied;
+      independent architect returned CLEAR. UltraQA adversarial static/e2e
+      harness passed 10/10 scenarios. No runtime live API calls, browser
+      fetch/XHR/WebSocket/EventSource polling, controls, backend/API route
+      expansion, aggregate/session/digest authoritative rendering,
+      dependencies, lockfiles, CI/deployment, or generated runtime data were
+      introduced.
+
+  - date: "2026-06-20"
+    event: story-100-1-implementation-started
+    from: future
+    to: in-progress
+    story: 100-1-static-html-presentation-rendering
+    reason: >
+      Story 100.1 implementation started after Story 99.2 completion, Epic 99
+      closure, fresh sequential Architect APPROVE/CLEAR and Critic APPROVE
+      consensus reviews, and Ultragoal aggregate goal creation. Scope is
+      limited to committed inert static HTML and parser-based tests for
+      fixture-backed read-only presentation. This does not authorize browser
+      runtime live API calls, fetch/XHR/WebSocket/EventSource polling, backend
+      route/API expansion, aggregate/session/digest authoritative rendering,
+      controls, dependencies, lockfiles, CI/deployment changes, or generated
+      runtime data.
+
+  - date: "2026-06-20"
+    event: epic-99-complete
+    from: in-progress
+    to: done
+    story: epic-99
+    reason: >
+      Epic 99 completed because Story 99.1 view-model contract tests and
+      Story 99.2 fixture/snapshot rendering contract tests are both done with
+      no live wiring. Epic 100 static shell rendering readiness is now the
+      active Phase 21 follow-up.
+
   - date: "2026-06-20"
     event: story-99-2-complete
     from: review
