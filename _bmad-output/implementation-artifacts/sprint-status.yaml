@@ -842,11 +842,66 @@ development_status:
   # =========================================================================
   epic-99: in-progress  # Phase 21 presentation-model and fixture contract tests opened
   99-1-dashboard-live-read-view-model-contract-tests: done  # pure view-model contract tests; no live wiring; CI green
+  99-2-fixture-snapshot-rendering-contract-tests: done  # fixture/snapshot contract tests complete; no live wiring
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-20"
+    event: story-99-2-complete
+    from: review
+    to: done
+    story: 99-2-fixture-snapshot-rendering-contract-tests
+    reason: >
+      Story 99.2 completed as a pure fixture/snapshot contract test slice.
+      Implemented distinct frozen Story 99.2 fixture dataclasses,
+      approved-route-only fixture snapshot builders, exact route-source
+      identifiers separate from row display identifiers, static fixture/readiness
+      provenance and copy, fail-closed aggregate/session/digest probes, and
+      deterministic validation that rejects unsafe synthetic rows. Local gates
+      passed: Story 99.2 fixture tests, Story 99.1 state contracts, static
+      shell regression, live-read/read-only boundary tests, Pyright, ruff check,
+      ruff format check, strict mypy, git diff whitespace check, sprint-status
+      YAML parse, changed-file allowlist/guardrails, and broad non-slow pytest.
+      Final independent code-reviewer returned APPROVE; final architect returned
+      CLEAR. UltraQA is skipped clean for pure contract/test/status scope.
+
+  - date: "2026-06-20"
+    event: story-99-2-review-ready
+    from: in-progress
+    to: review
+    story: 99-2-fixture-snapshot-rendering-contract-tests
+    reason: >
+      Story 99.2 fixture/snapshot contract implementation is ready for
+      independent review. Fresh sequential Architect and Critic reviews both
+      returned CLEAR_WITH_NOTES with no blockers before Ultragoal implementation.
+      Implemented distinct frozen fixture dataclasses, approved-route-only
+      fixture snapshot builders, fail-closed aggregate/session/digest probes,
+      static fixture/readiness copy, deterministic public validation for unsafe
+      synthetic rows, and dedicated fixture contract tests. Local focused gates
+      passed: Story 99.2 fixture tests, Story 99.1 state contracts, static
+      shell regression, live-read route/read-only boundary tests, ruff check,
+      ruff format check, and targeted strict mypy. Final review, broad
+      regression, push/CI, and Ultragoal final checkpoint evidence remain
+      required before done.
+
+  - date: "2026-06-20"
+    event: story-99-2-implementation-started
+    from: future
+    to: in-progress
+    story: 99-2-fixture-snapshot-rendering-contract-tests
+    reason: >
+      Story 99.2 implementation started only after fresh sequential Architect
+      then Critic reviews returned CLEAR_WITH_NOTES and after Ultragoal aggregate
+      goal state was created. Scope is limited to pure fixture/snapshot contract
+      tests and adapter metadata derived from approved Phase 20 routes. This does
+      not authorize dashboard static HTML changes, browser runtime live API
+      calls, fetch/XHR/WebSocket/EventSource polling, backend/API route
+      expansion, aggregate/session live contracts, digest integration,
+      mutation/control/destructive lifecycle affordances, dependencies, lockfiles,
+      CI/deployment, services, MCP servers, scripts, or generated live data.
+
   - date: "2026-06-19"
     event: story-99-1-complete
     from: review

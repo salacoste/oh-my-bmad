@@ -4,7 +4,7 @@ import importlib.util
 import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from unittest.mock import patch
 
 from tests.dashboard import test_live_read_contracts as live_contracts
@@ -18,6 +18,9 @@ assert _ADAPTER_SPEC.loader is not None
 live_read_adapter = importlib.util.module_from_spec(_ADAPTER_SPEC)
 sys.modules[_ADAPTER_SPEC.name] = live_read_adapter
 _ADAPTER_SPEC.loader.exec_module(live_read_adapter)
+
+if TYPE_CHECKING:
+    from dashboard.live_read_adapter import RouteViewModel
 
 SourceCategory = Literal[
     "task",
@@ -640,7 +643,7 @@ def assert_story_99_1_copy_preserves_static_contract_boundary(copy: str) -> None
 
 
 def assert_story_99_1_rendered_fields_are_inert(
-    view_model: live_read_adapter.RouteViewModel,
+    view_model: RouteViewModel,
 ) -> None:
     rendered = story_99_1_rendered_text(view_model)
     lowered = rendered.lower()
@@ -648,7 +651,7 @@ def assert_story_99_1_rendered_fields_are_inert(
         assert term not in lowered, rendered
 
 
-def story_99_1_rendered_text(view_model: live_read_adapter.RouteViewModel) -> str:
+def story_99_1_rendered_text(view_model: RouteViewModel) -> str:
     rendered_fields = (
         view_model.panel_family,
         view_model.route_pattern,

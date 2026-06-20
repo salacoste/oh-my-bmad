@@ -40,6 +40,7 @@ DisplayState = Literal[
 ]
 AuthorityState = Literal["authoritative", "non-authoritative", "needs-contract"]
 DisplaySeverity = Literal["normal", "warning", "error", "blocked"]
+FixtureProvenance = Literal["static-fixture", "snapshot-fixture", "contract-fixture"]
 DegradedStateCategory = Literal[
     "none",
     "unavailable",
@@ -141,6 +142,51 @@ class PanelViewModel:
     panel_family: PanelFamily
     title: str
     routes: tuple[RouteViewModel, ...]
+
+
+@dataclass(frozen=True)
+class SourceIdentifier:
+    name: str
+    fixture_value: str
+
+
+@dataclass(frozen=True)
+class RouteFixtureRow:
+    panel_family: PanelFamily
+    source_route_pattern: str
+    source_category: SourceCategory
+    route_input_identifiers: tuple[Identifier, ...]
+    row_display_identifiers: tuple[Identifier, ...]
+    source_identifiers: tuple[SourceIdentifier, ...]
+    timestamp_policy: TimestampPolicy
+    freshness_policy: FreshnessPolicy
+    fixture_provenance: FixtureProvenance
+    fixture_timestamp_label: str
+    fixture_freshness_label: str
+    display_state: DisplayState
+    degraded_state_category: DegradedStateCategory
+    authority_state: AuthorityState
+    display_severity: DisplaySeverity
+    display_copy: str
+    renderer_context_fields: Mapping[str, str]
+    read_only_contract: bool = True
+
+
+@dataclass(frozen=True)
+class PanelFixtureSnapshot:
+    panel_family: PanelFamily
+    title: str
+    rows: tuple[RouteFixtureRow, ...]
+
+
+@dataclass(frozen=True)
+class RouteFixtureProbe:
+    source_route_pattern: str
+    renderable: bool
+    display_state: DisplayState
+    authority_state: AuthorityState
+    display_severity: DisplaySeverity
+    display_copy: str
 
 
 APPROVED_READ_CONTRACTS: tuple[ReadContract, ...] = (
@@ -526,6 +572,272 @@ def story_99_1_route_view_model(
         display_severity=_display_severity(display_state),
         display_copy=_display_copy(panel_family=panel_family, display_state=display_state),
     )
+
+
+STORY_99_2_FIXTURE_PROVENANCE: FixtureProvenance = "static-fixture"
+STORY_99_2_FIXTURE_TIMESTAMP_LABEL = (
+    "static fixture readiness timestamp label; runtime data remains disconnected"
+)
+STORY_99_2_FIXTURE_FRESHNESS_LABEL = (
+    "static fixture readiness freshness label; runtime data remains disconnected"
+)
+_MAPPING_PROXY_TYPE: type[object] = type(MappingProxyType({}))
+_STORY_99_2_FORBIDDEN_TEXT_PARTS = (
+    "<" + "script",
+    "fe" + "tch",
+    "x" + "hr",
+    "web" + "socket",
+    "event" + "source",
+    "poll" + "ing",
+    "http" + "://",
+    "https" + "://",
+    "post",
+    "put",
+    "patch",
+    "de" + "lete",
+    "form",
+    "button",
+    "input",
+    "con" + "trol",
+    "mut" + "ation",
+    "destructive",
+    "start",
+    "stop",
+    "re" + "try",
+    "approve",
+    "reject",
+    "javascript:",
+    "data:",
+    "backend success",
+    "current",
+    "fetched",
+    "live",
+)
+
+
+def story_99_2_fixture_snapshots(
+    display_state: DisplayState = "healthy",
+) -> tuple[PanelFixtureSnapshot, ...]:
+    return tuple(
+        PanelFixtureSnapshot(
+            panel_family=panel.panel_family,
+            title=panel.title,
+            rows=tuple(
+                story_99_2_route_fixture_row(route.route_pattern, display_state=display_state)
+                for route in panel.routes
+            ),
+        )
+        for panel in _story_99_1_panel_contracts()
+    )
+
+
+def story_99_2_route_fixture_row(
+    route_pattern: str,
+    display_state: DisplayState = "healthy",
+    *,
+    renderer_context_fields: Mapping[str, str] | None = None,
+) -> RouteFixtureRow:
+    if route_pattern in STORY_99_1_FORBIDDEN_RENDERABLE_ROUTE_PATTERNS:
+        raise ValueError(route_pattern)
+
+    panel_route = _story_99_1_panel_route_lookup().get(route_pattern)
+    if panel_route is None:
+        raise ValueError(route_pattern)
+
+    panel_family, route = panel_route
+    contract = read_contract(route.route_pattern)
+    if contract.route_status != "approved":
+        raise ValueError(route_pattern)
+    if display_state not in contract.allowed_states:
+        raise ValueError(display_state)
+
+    row = RouteFixtureRow(
+        panel_family=panel_family,
+        source_route_pattern=route.route_pattern,
+        source_category=route.source_category,
+        route_input_identifiers=route.route_input_identifiers,
+        row_display_identifiers=route.row_display_identifiers,
+        source_identifiers=_story_99_2_source_identifiers(route),
+        timestamp_policy=route.timestamp_policy,
+        freshness_policy=route.freshness_policy,
+        fixture_provenance=STORY_99_2_FIXTURE_PROVENANCE,
+        fixture_timestamp_label=STORY_99_2_FIXTURE_TIMESTAMP_LABEL,
+        fixture_freshness_label=STORY_99_2_FIXTURE_FRESHNESS_LABEL,
+        display_state=display_state,
+        degraded_state_category=_degraded_state_category(display_state),
+        authority_state=_authority_state(display_state),
+        display_severity=_display_severity(display_state),
+        display_copy=_story_99_2_fixture_copy(
+            panel_family=panel_family,
+            display_state=display_state,
+        ),
+        renderer_context_fields=MappingProxyType(
+            {} if renderer_context_fields is None else dict(renderer_context_fields)
+        ),
+    )
+    return validate_story_99_2_fixture_row(row)
+
+
+def story_99_2_route_fixture_probe(route_pattern: str) -> RouteFixtureProbe:
+    try:
+        row = story_99_2_route_fixture_row(route_pattern)
+    except ValueError:
+        return RouteFixtureProbe(
+            source_route_pattern=route_pattern,
+            renderable=False,
+            display_state="needs-contract",
+            authority_state="needs-contract",
+            display_severity="blocked",
+            display_copy=(
+                "static fixture readiness needs contract fixture review; "
+                "runtime data remains disconnected"
+            ),
+        )
+    return RouteFixtureProbe(
+        source_route_pattern=row.source_route_pattern,
+        renderable=True,
+        display_state=row.display_state,
+        authority_state=row.authority_state,
+        display_severity=row.display_severity,
+        display_copy=row.display_copy,
+    )
+
+
+def story_99_2_forbidden_renderable_route_patterns() -> frozenset[str]:
+    return STORY_99_1_FORBIDDEN_RENDERABLE_ROUTE_PATTERNS
+
+
+def validate_story_99_2_fixture_row(row: RouteFixtureRow) -> RouteFixtureRow:
+    if row.source_route_pattern in STORY_99_1_FORBIDDEN_RENDERABLE_ROUTE_PATTERNS:
+        raise ValueError(row.source_route_pattern)
+    panel_route = _story_99_1_panel_route_lookup().get(row.source_route_pattern)
+    if panel_route is None:
+        raise ValueError(row.source_route_pattern)
+
+    panel_family, route = panel_route
+    if row.panel_family != panel_family:
+        raise ValueError(row.panel_family)
+    if row.source_category != route.source_category:
+        raise ValueError(row.source_category)
+    if row.route_input_identifiers != route.route_input_identifiers:
+        raise ValueError(row.route_input_identifiers)
+    if row.row_display_identifiers != route.row_display_identifiers:
+        raise ValueError(row.row_display_identifiers)
+    if row.source_identifiers != _story_99_2_source_identifiers(route):
+        raise ValueError(row.source_identifiers)
+    if row.timestamp_policy != route.timestamp_policy:
+        raise ValueError(row.timestamp_policy)
+    if row.freshness_policy != route.freshness_policy:
+        raise ValueError(row.freshness_policy)
+    if row.fixture_provenance not in {"static-fixture", "snapshot-fixture", "contract-fixture"}:
+        raise ValueError(row.fixture_provenance)
+    if row.display_state not in route.allowed_states:
+        raise ValueError(row.display_state)
+    if row.degraded_state_category != _degraded_state_category(row.display_state):
+        raise ValueError(row.degraded_state_category)
+    if row.authority_state != _authority_state(row.display_state):
+        raise ValueError(row.authority_state)
+    if row.display_severity != _display_severity(row.display_state):
+        raise ValueError(row.display_severity)
+    if row.read_only_contract is not True:
+        raise ValueError("read-only marker required")
+    if not isinstance(row.renderer_context_fields, _MAPPING_PROXY_TYPE):
+        raise ValueError("renderer context fields must be immutable")
+    if row.renderer_context_fields:
+        raise ValueError("renderer context fields are not allowed for fixtures")
+
+    _validate_story_99_2_safe_text(row.display_copy)
+    _validate_story_99_2_safe_text(row.fixture_timestamp_label)
+    _validate_story_99_2_safe_text(row.fixture_freshness_label)
+    for source_identifier in row.source_identifiers:
+        _validate_story_99_2_safe_text(source_identifier.name)
+        _validate_story_99_2_safe_text(source_identifier.fixture_value)
+
+    lowered_copy = row.display_copy.lower()
+    for required in ("static", "fixture", "readiness", "runtime data remains disconnected"):
+        if required not in lowered_copy:
+            raise ValueError(row.display_copy)
+    if row.display_state == "healthy":
+        if "contract fixture authority" not in lowered_copy:
+            raise ValueError(row.display_copy)
+    elif row.display_state.replace("-", " ") not in lowered_copy:
+        raise ValueError(row.display_copy)
+    return row
+
+
+def story_99_2_fixture_rendered_metadata(row: RouteFixtureRow) -> Mapping[str, object]:
+    validate_story_99_2_fixture_row(row)
+    return MappingProxyType(
+        {
+            "panel_family": row.panel_family,
+            "source_route_pattern": row.source_route_pattern,
+            "source_category": row.source_category,
+            "route_identifier_labels": row.route_input_identifiers,
+            "row_identifier_labels": row.row_display_identifiers,
+            "source_identifiers": tuple(
+                (identifier.name, identifier.fixture_value) for identifier in row.source_identifiers
+            ),
+            "timestamp_policy": row.timestamp_policy,
+            "freshness_policy": row.freshness_policy,
+            "fixture_provenance": row.fixture_provenance,
+            "fixture_timestamp_label": row.fixture_timestamp_label,
+            "fixture_freshness_label": row.fixture_freshness_label,
+            "display_state": row.display_state,
+            "degraded_state_category": row.degraded_state_category,
+            "authority_state": row.authority_state,
+            "display_severity": row.display_severity,
+            "display_copy": row.display_copy,
+        }
+    )
+
+
+def _story_99_2_source_identifiers(route: PanelReadRoute) -> tuple[SourceIdentifier, ...]:
+    if not route.route_input_identifiers:
+        return (
+            SourceIdentifier(
+                name="source_category",
+                fixture_value=f"fixture-{route.source_category}-source",
+            ),
+        )
+    return tuple(
+        SourceIdentifier(
+            name=identifier,
+            fixture_value=f"fixture-{identifier.replace('_', '-')}",
+        )
+        for identifier in route.route_input_identifiers
+    )
+
+
+def _story_99_2_fixture_copy(
+    *,
+    panel_family: PanelFamily,
+    display_state: DisplayState,
+) -> str:
+    panel_label = panel_family.replace("-", " ")
+    if display_state == "healthy":
+        return (
+            f"{panel_label} static fixture readiness has contract fixture authority; "
+            "runtime data remains disconnected"
+        )
+    state_label = display_state.replace("-", " ")
+    if display_state == "needs-contract":
+        return (
+            f"{panel_label} static fixture readiness needs contract fixture review; "
+            "runtime data remains disconnected"
+        )
+    return (
+        f"{panel_label} static fixture readiness is {state_label}; "
+        "runtime data remains disconnected"
+    )
+
+
+def _validate_story_99_2_safe_text(text: str) -> None:
+    lowered = text.lower()
+    for part in _STORY_99_2_FORBIDDEN_TEXT_PARTS:
+        if part in lowered:
+            raise ValueError(text)
+    if "/v1/" in lowered:
+        raise ValueError(text)
 
 
 def _panel_read_route(
