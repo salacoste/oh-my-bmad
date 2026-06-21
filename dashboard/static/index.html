@@ -353,8 +353,8 @@
     </section>
     <section id="health" aria-labelledby="health-title">
       <h2 id="health-title">Health</h2>
-      <p class="state">Health read is unavailable in this static shell: GET /v1/health is inert visible provenance, not live wiring.</p>
-      <p>GET /v1/health is plain text only: not a link, not an attribute, no automatic refresh source, and no client calls.</p>
+      <p class="state" id="health-readiness-status">Health read is unavailable until the single approved live-read boundary loads: GET /v1/health.</p>
+      <p>Story 101.2 wires one single approved live-read boundary for GET /v1/health. It is not broad dashboard live wiring and it adds no automatic refresh source, aggregate/session/digest read, or operator control.</p>
       <p>Unapproved metrics and provenance reads beyond GET /v1/health remain unavailable until a separate approved dashboard read contract exists.</p>
       <ul aria-label="Health metadata slots">
         <li>source route</li>
@@ -387,7 +387,10 @@
       <p>ProblemDetails are passive read/error presentation only, not global exception handling and not backend error mapping.</p>
       <p>These labels and lists provide semantic/static state distinction; Story 92.2 static accessibility and responsive guidance now covers keyboard, screen-reader, contrast, reduced-motion, and responsive expectations while remaining read-only and non-runtime.</p>
       <p>Remediation belongs in approved external runbooks or control planes; the dashboard remains read-only, never dispatches checks, never writes caches, and never invokes production controls.</p>
-      <p class="meta">Source route: GET /v1/health. Retrieved-at timestamp: pending. Freshness: unavailable. Reference: health route provenance and approved read contract boundary. Confidence: unavailable until a safe read is wired by a later approved story.</p>
+      <p class="meta" id="health-readiness-source">Source route: GET /v1/health.</p>
+      <p class="meta" id="health-readiness-freshness">Retrieved-at timestamp: pending. Freshness: unavailable.</p>
+      <p class="meta" id="health-readiness-authority">Authority: non-authoritative until a successful health read completes.</p>
+      <p class="meta" id="health-readiness-detail">Reference: health route provenance and approved read contract boundary. Confidence: unavailable until the approved health read succeeds.</p>
     </section>
     <section id="audit" aria-labelledby="audit-title" tabindex="-1">
       <h2 id="audit-title">Audit</h2>
@@ -429,5 +432,6 @@
   <footer>
     <p>Story 88.1 static assets/configuration only. Live wiring, routes, dependencies, and Story 88.2 no-mutation enforcement remain future work.</p>
   </footer>
+  <script src="health-readiness.js" defer></script>
 </body>
 </html>

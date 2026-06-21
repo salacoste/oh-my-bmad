@@ -51,6 +51,8 @@ CONTROL_TERMS = (
     "credentialed lifecycle",
     "production operation",
 )
+APPROVED_HEALTH_RUNTIME_SCRIPT = "health-readiness.js"
+
 RUNTIME_CALL_MARKERS = (
     "fetch(",
     "xmlhttprequest",
@@ -159,7 +161,7 @@ class BoundaryParser(HTMLParser):
             self.controls.append(Context(f"<{tag}>", render_attrs(attrs_dict)))
         if tag == "script":
             self._script_depth += 1
-            self._open_script_tail = self._tail_after_starttag()
+            self._open_script_tail = "" if attrs_dict.get("src") else self._tail_after_starttag()
         if tag == "style":
             self._style_depth += 1
             self._open_style_tail = self._tail_after_starttag()
@@ -303,6 +305,14 @@ def network_contexts(parser: BoundaryParser) -> list[Context]:
     return [*parser.page_load_network_contexts, *parser.style_url_contexts]
 
 
+def unexpected_network_contexts(parser: BoundaryParser) -> list[Context]:
+    return [
+        context
+        for context in network_contexts(parser)
+        if context.text.strip() not in {"", APPROVED_HEALTH_RUNTIME_SCRIPT}
+    ]
+
+
 def runtime_contexts(parser: BoundaryParser) -> list[Context]:
     return [*actionable_contexts(parser), *network_contexts(parser)]
 
@@ -320,7 +330,7 @@ def assert_no_api_or_mutating_method_calls(raw: str) -> None:
     assert not FORBIDDEN_METHOD_RE.search(text), contexts
     assert "/v1/" not in text, contexts
     for context in network_contexts(parser):
-        assert context.text.strip() == "", context
+        assert context.text.strip() in {"", APPROVED_HEALTH_RUNTIME_SCRIPT}, context
 
 
 def assert_no_hidden_write_or_background_markers(raw: str) -> None:
@@ -473,7 +483,7 @@ def test_dashboard_static_assets_make_no_api_or_mutating_method_calls() -> None:
         parser = parse_html(raw)
         assert not parser.script_contexts, html_file
         assert not actionable_contexts(parser), html_file
-        assert not network_contexts(parser), html_file
+        assert not unexpected_network_contexts(parser), html_file
         assert_no_api_or_mutating_method_calls(raw)
 
 

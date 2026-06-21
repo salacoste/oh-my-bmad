@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-21T02:44:00+03:00"
+last_updated: "2026-06-21T03:22:00+03:00"
 current_phase: 22  # Phase 22 OPEN — Health/readiness live-read runtime-boundary planning; Phase 21 remains closed
 
 development_status:
@@ -855,13 +855,39 @@ development_status:
   # =========================================================================
   # Epic 101: Health/readiness live-read runtime boundary planning
   # =========================================================================
-  epic-101: in-progress  # Phase 22 Health/readiness runtime-boundary planning opened; no live wiring implemented
+  epic-101: in-progress  # Phase 22 Health/readiness runtime-boundary implementation in progress; only GET /v1/health live-read boundary wired
   101-1-health-readiness-live-read-runtime-boundary: done  # docs/status/test-spec-first GET /v1/health boundary planning; no runtime wiring
+  101-2-health-readiness-runtime-boundary: done  # single-module GET /v1/health browser/runtime boundary; no broad live wiring
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-21"
+    event: story-101-2-complete
+    from: in-progress
+    to: done
+    story: 101-2-health-readiness-runtime-boundary
+    reason: >
+      Story 101.2 completed the first narrow dashboard runtime live-read
+      boundary by mounting exactly one health-readiness JavaScript module and
+      calling only GET /v1/health. Runtime-boundary tests prove the module graph
+      is closed, the route/method allowlist is exact, degraded states are bounded
+      and non-authoritative, existing static/read-only/fixture regressions stay
+      green, and no aggregate, session, digest, task, event, trace, history,
+      replay, lifecycle, control, mutation, polling, dependency, backend/API,
+      CI, service, MCP, or generated live-data surface was added.
+
+  - date: "2026-06-21"
+    event: story-101-2-implementation-started
+    from: planned
+    to: in-progress
+    story: 101-2-health-readiness-runtime-boundary
+    reason: >
+      Story 101.2 implementation started only after fresh Architect APPROVE/CLEAR
+      and fresh Critic APPROVE/proceed planning gates closed the one-file module
+      graph loophole and authorized the exact GET /v1/health runtime boundary.
+
   - date: "2026-06-21"
     event: story-101-1-complete
     from: in-progress

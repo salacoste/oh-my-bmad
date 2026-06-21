@@ -40,7 +40,7 @@ REQUIRED_PANELS = {
     "help": "Help",
 }
 
-FORBIDDEN_TAGS = {"form", "button", "script", "input", "select", "textarea"}
+FORBIDDEN_TAGS = {"form", "button", "input", "select", "textarea"}
 LIVE_API_MARKERS = (
     "fetch(",
     "XMLHttpRequest",
@@ -1046,7 +1046,7 @@ def test_story_91_2_replay_panel_defers_epic_92_and_runtime_lifecycle_work() -> 
     )
 
 
-def test_story_92_1_health_panel_uses_inert_get_health_provenance() -> None:
+def test_story_101_2_health_panel_uses_approved_get_health_runtime_boundary() -> None:
     parser = parse_dashboard()
     health_text = " ".join(parser.sections["health"]).lower()
     health_attrs = " ".join(parser.section_attrs.get("health", [])).lower()
@@ -1054,10 +1054,10 @@ def test_story_92_1_health_panel_uses_inert_get_health_provenance() -> None:
     assert APPROVED_HEALTH_ROUTE.lower() in health_text
     assert APPROVED_HEALTH_ROUTE.lower() not in health_attrs
     assert APPROVED_HEALTH_ROUTE.lower() not in health_hrefs
-    assert "inert visible provenance" in health_text
-    assert "not live wiring" in health_text
-    assert "no client calls" in health_text
+    assert "single approved live-read boundary" in health_text
+    assert "not broad dashboard live wiring" in health_text
     assert "no automatic refresh source" in health_text
+    assert "operator control" in health_text
 
 
 def test_story_92_1_health_panel_lists_metadata_slots_and_state_matrix() -> None:
