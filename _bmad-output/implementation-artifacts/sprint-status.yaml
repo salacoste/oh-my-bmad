@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-21T00:15:00+03:00"
-current_phase: 21  # Phase 21 CLOSED — Dashboard Live-Read Rendering Readiness complete; live runtime wiring deferred
+last_updated: "2026-06-21T02:44:00+03:00"
+current_phase: 22  # Phase 22 OPEN — Health/readiness live-read runtime-boundary planning; Phase 21 remains closed
 
 development_status:
   # =========================================================================
@@ -852,10 +852,56 @@ development_status:
   100-2-live-read-wiring-decision-gate: done  # conditional-ready decision only; future separate live story required
   100-3-phase-21-final-validation-closure: done  # Phase 21 rendering-readiness closed; live runtime wiring deferred to future story
 
+  # =========================================================================
+  # Epic 101: Health/readiness live-read runtime boundary planning
+  # =========================================================================
+  epic-101: in-progress  # Phase 22 Health/readiness runtime-boundary planning opened; no live wiring implemented
+  101-1-health-readiness-live-read-runtime-boundary: done  # docs/status/test-spec-first GET /v1/health boundary planning; no runtime wiring
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-21"
+    event: story-101-1-complete
+    from: in-progress
+    to: done
+    story: 101-1-health-readiness-live-read-runtime-boundary
+    reason: >
+      Story 101.1 completed as docs/status/test-spec-first planning for the
+      first Health/readiness runtime-boundary slice. It selects exactly
+      GET /v1/health as the first future live-read route family, preserves
+      Phase 21 as closed rendering-readiness, lists mandatory future browser/e2e
+      or equivalent runtime-boundary tests, and implements no live browser/API
+      wiring, backend/API expansion, aggregate/session/digest live contract,
+      mutation/control affordance, dependency, lockfile, deployment, CI, service,
+      MCP, generated live-data, runtime, browser script, or test-code change.
+
+  - date: "2026-06-21"
+    event: story-101-1-implementation-started
+    from: future
+    to: in-progress
+    story: 101-1-health-readiness-live-read-runtime-boundary
+    reason: >
+      Story 101.1 implementation started after Autopilot deep-interview selected
+      the safest default first route family, Health/readiness GET /v1/health,
+      and after fresh sequential Architect APPROVE/CLEAR then Critic APPROVE/proceed
+      Ralplan consensus. Scope is limited to the Story 101.1 artifact and sprint
+      status; no live runtime wiring or code/test/backend/dependency/CI change is
+      authorized.
+
+  - date: "2026-06-21"
+    event: phase-22-opened
+    from: phase-21-closed
+    to: phase-22
+    story: 101-1-health-readiness-live-read-runtime-boundary
+    reason: >
+      Phase 22 opened as a status branch for Health/readiness live-read
+      runtime-boundary planning. Phase 21 remains closed as Dashboard Live-Read
+      Rendering Readiness complete. Phase 22 opening does not claim live runtime
+      completion; it records the next bounded planning target for a later
+      separately verified GET /v1/health implementation story.
+
   - date: "2026-06-21"
     event: phase-21-closed
     from: open
