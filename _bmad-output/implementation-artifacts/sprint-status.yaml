@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-21T03:48:00+03:00"
-current_phase: 22  # Phase 22 CLOSED — Health/readiness GET /v1/health runtime-boundary complete; Phase 21 remains closed
+last_updated: "2026-06-21T04:20:00+03:00"
+current_phase: 23  # Phase 23 OPEN — Task detail GET /v1/tasks/{task_id} live-read route selection; Phase 22 remains closed
 
 development_status:
   # =========================================================================
@@ -860,10 +860,42 @@ development_status:
   101-2-health-readiness-runtime-boundary: done  # single-module GET /v1/health browser/runtime boundary; no broad live wiring
   101-3-phase-22-final-validation-closure: done  # Phase 22/Epic 101 closure; docs/status-only, no new runtime wiring
 
+  # =========================================================================
+  # Epic 102: Task detail live-read runtime boundary
+  # =========================================================================
+  epic-102: in-progress  # Phase 23 task-detail GET /v1/tasks/{task_id} route selection opened; no runtime wiring yet
+  102-1-task-detail-live-read-route-selection: done  # Phase 23 PRD/architecture/epics/status opening; selects future GET /v1/tasks/{task_id} only
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-21"
+    event: story-102-1-complete
+    from: in-progress
+    to: done
+    story: 102-1-task-detail-live-read-route-selection
+    reason: >
+      Story 102.1 opened Phase 23 / Epic 102 as docs/status-only Task detail
+      live-read route selection. It created the Phase 23 PRD, architecture,
+      epics, story artifact, and sprint-status update; selected exactly
+      GET /v1/tasks/{task_id} as the next future route family; and authorized
+      no runtime implementation, backend/API expansion, source/test/dependency/CI
+      change, aggregate/session/digest/task-list/search/discovery/event/trace/
+      history/replay/lifecycle contract, mutation/control affordance, hidden
+      write, or additional runtime module.
+
+  - date: "2026-06-21"
+    event: story-102-1-implementation-started
+    from: planned
+    to: in-progress
+    story: 102-1-task-detail-live-read-route-selection
+    reason: >
+      Story 102.1 docs/status-only implementation started after the initial
+      Architect BLOCK was resolved by adding the full Phase 23 PRD/architecture/
+      epics opening triad and explicit no-hidden-write/static import-grep future
+      guardrails, followed by fresh Architect CLEAR and Critic PROCEED gates.
+
   - date: "2026-06-21"
     event: story-101-3-complete
     from: in-progress
