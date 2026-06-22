@@ -147,7 +147,10 @@ def test_story_101_2_guard_rejects_second_html_entrypoint_reusing_health_script(
     tmp_path: Path,
 ) -> None:
     second = tmp_path / "secondary.html"
-    second.write_text("".join(f'<script src="{script}" defer></script>' for script in APPROVED_SCRIPTS), encoding="utf-8")
+    second.write_text(
+        "".join(f'<script src="{script}" defer></script>' for script in APPROVED_SCRIPTS),
+        encoding="utf-8",
+    )
     parser = ScriptParser()
     parser.feed(second.read_text(encoding="utf-8"))
     assert parser.scripts == [{"src": script, "defer": ""} for script in APPROVED_SCRIPTS]

@@ -150,8 +150,7 @@ def test_story_102_2_runtime_script_allowlist_is_exact() -> None:
     assert not "".join(parser.inline_script_text).strip()
     assert not parser.controls
     assert all(
-        link.get("rel", "").lower() not in {"preload", "modulepreload"}
-        for link in parser.links
+        link.get("rel", "").lower() not in {"preload", "modulepreload"} for link in parser.links
     )
     assert TASK_RUNTIME.exists()
 
@@ -290,7 +289,11 @@ def test_story_102_2_runtime_behavior_maps_success_and_failures() -> None:
         },
         {
             "name": "missing-task-id",
-            "response": {"ok": True, "status": 200, "body": {"status": "running", "title": "Fixture task"}},
+            "response": {
+                "ok": True,
+                "status": 200,
+                "body": {"status": "running", "title": "Fixture task"},
+            },
             "expected": ["invalid", "non-authoritative"],
         },
         {
@@ -330,7 +333,12 @@ def test_story_102_2_runtime_behavior_maps_success_and_failures() -> None:
             "response": {
                 "ok": True,
                 "status": 200,
-                "body": {"display_state": "healthy", "task_id": VISIBLE_TASK_ID, "status": "", "title": "Fixture task"},
+                "body": {
+                    "display_state": "healthy",
+                    "task_id": VISIBLE_TASK_ID,
+                    "status": "",
+                    "title": "Fixture task",
+                },
             },
             "expected": ["invalid", "non-authoritative"],
         },
@@ -339,13 +347,21 @@ def test_story_102_2_runtime_behavior_maps_success_and_failures() -> None:
             "response": {"ok": False, "status": 403, "body": {}},
             "expected": ["unauthorized", "non-authoritative"],
         },
-        {"name": "network", "reject": "network down", "expected": ["backend unavailable", "non-authoritative"]},
+        {
+            "name": "network",
+            "reject": "network down",
+            "expected": ["backend unavailable", "non-authoritative"],
+        },
     ]
     for case in cases:
         output = run_task_runtime_case(case)
         rendered = " ".join(output["texts"].values()).lower()
         assert output["fetchCalls"] == [
-            {"route": f"{APPROVED_ROUTE_PREFIX}{VISIBLE_TASK_ID}", "method": "GET", "hasBody": False}
+            {
+                "route": f"{APPROVED_ROUTE_PREFIX}{VISIBLE_TASK_ID}",
+                "method": "GET",
+                "hasBody": False,
+            }
         ]
         for expected in case["expected"]:
             assert expected in rendered, (case["name"], expected, rendered)
