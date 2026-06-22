@@ -181,9 +181,13 @@
     </section>
     <section id="traces" aria-labelledby="traces-title">
       <h2 id="traces-title">Traces</h2>
-      <p class="state">Unavailable read: trace correlation visibility is static only; no live dashboard wiring is present in Story 90.2.</p>
-      <p>Existing trace read route is inert visible provenance only: GET /v1/trace/{trace_id}, and it is not links, attributes, automatic-refresh sources, or client calls.</p>
-      <p>GET /v1/trace/{trace_id} is a presentation view over event rows, not canonical JSONL replay, and accepts bare UUIDv7 or tg:&lt;update_id&gt; identifiers.</p>
+      <p class="state" id="trace-correlation-status">Trace correlation live-read boundary pending: waiting for the approved trace GET response.</p>
+      <p>Approved live-read route for this slice is exactly GET /v1/trace/{trace_id}. Earlier inert visible provenance remains visible as provenance context and is not links, attributes, automatic-refresh sources, or client calls. Story 104.2 wires this single trace-correlation read only. No live dashboard wiring exists beyond this approved trace runtime module, no trace search/list/discovery is available, and history/replay, lifecycle readiness, task-list/search/discovery, aggregate/session/digest, generated live data, and control surfaces remain unavailable.</p>
+      <p>
+        Visible trace_id selector: <span id="trace-correlation-trace-id-source">01917e5c-a7d1-7000-8abc-000000000001</span>.
+        The trace_id text is the only selector for the runtime read. event_id, task_id, and session_id metadata only: returned identifiers can be displayed but cannot select routes, filter hidden data, or drive adjacent discovery, replay, lifecycle, aggregate, session, or digest surfaces.
+      </p>
+      <p>GET /v1/trace/{trace_id} is a presentation view over event rows returned by the trace route, not canonical JSONL replay, and accepts an explicit visible trace_id only.</p>
       <p>Trace metadata slots are visible static-shell placeholders.</p>
       <ul aria-label="Trace metadata slots">
         <li>trace_source</li>
@@ -226,7 +230,13 @@
       <p>Broader trace search/list requires a separate approved read contract. Canonical JSONL replay/byte-equivalent envelope display is a separate contract.</p>
       <p>Ordered trace rows explain related events and causal links through parent_event_id, linked_event_id, linked_task_id, and route provenance; this static slice does not generate a new causal graph.</p>
       <p>This panel denies mutation routes, background replay actions, snapshot actions, hidden writes, and cache-warming/read-side effects.</p>
-      <p class="meta">Source: GET /v1/trace/{trace_id} route provenance as static text plus BMAD Story 90.2. Freshness timestamp: pending. Reference: trace route provenance, metadata slots, linked event/task/session identifiers, parent event, and request id. Confidence: unavailable until a dashboard-safe read is wired by a later approved story.</p>
+      <p class="meta" id="trace-correlation-source">Source: GET /v1/trace/{trace_id}. Runtime route: pending.</p>
+      <p class="meta" id="trace-correlation-trace-id">trace_id: 01917e5c-a7d1-7000-8abc-000000000001.</p>
+      <p class="meta" id="trace-correlation-freshness">Freshness: pending retrieved_at.</p>
+      <p class="meta" id="trace-correlation-authority">Authority: non-authoritative until a valid trace response is read.</p>
+      <p class="meta" id="trace-correlation-row-count">Trace rows: pending.</p>
+      <p class="meta" id="trace-correlation-linked-identifiers">Linked identifiers: pending.</p>
+      <p class="meta" id="trace-correlation-detail">Detail: no trace correlation response has been rendered yet. Confidence: unavailable until the approved trace read completes. No trace search/list/discovery; event_id, task_id, and session_id metadata only.</p>
     </section>
     <section id="replay-lifecycle-readiness" aria-labelledby="replay-title">
       <h2 id="replay-title">Replay / lifecycle readiness</h2>
@@ -455,5 +465,6 @@
   <script src="health-readiness.js" defer></script>
   <script src="task-detail.js" defer></script>
   <script src="event-timeline.js" defer></script>
+  <script src="trace-correlation.js" defer></script>
 </body>
 </html>

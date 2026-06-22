@@ -13,10 +13,12 @@ EVENT_RUNTIME = Path("dashboard/static/event-timeline.js")
 APPROVED_HEALTH_SCRIPT = "health-readiness.js"
 APPROVED_TASK_DETAIL_SCRIPT = "task-detail.js"
 APPROVED_EVENT_SCRIPT = "event-timeline.js"
+APPROVED_TRACE_SCRIPT = "trace-correlation.js"
 APPROVED_SCRIPTS = [
     APPROVED_HEALTH_SCRIPT,
     APPROVED_TASK_DETAIL_SCRIPT,
     APPROVED_EVENT_SCRIPT,
+    APPROVED_TRACE_SCRIPT,
 ]
 VISIBLE_TASK_ID = "fixture-task-id"
 EVENTS_ROUTE_PREFIX = "/v1/tasks/"
