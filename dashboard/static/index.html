@@ -88,10 +88,16 @@
     </section>
     <section id="task-detail" aria-labelledby="task-detail-title">
       <h2 id="task-detail-title">Task Detail</h2>
-      <p class="state">Task detail is unavailable as live data: approved read provenance is inert provenance only, not live wiring.</p>
+      <p class="state" id="task-detail-status">Task detail live-read boundary pending: waiting for the approved task detail GET response.</p>
       <p>
-        Source route/reference: GET /v1/tasks/{task_id}. This static panel adds no backend route, no dependency, no live call,
-        and no runtime behavior; empty successful read would mean an approved source returned no task detail.
+        Source route/reference: GET /v1/tasks/{task_id}. Story 102.2 wires this single approved live-read boundary only;
+        it adds no backend route, no dependency, no broad dashboard live wiring, and no operator control.
+        Earlier inert provenance remains visible as provenance context for other task-detail surfaces and is not live wiring beyond this approved route; the only runtime call in this panel is the approved task detail GET.
+      </p>
+      <p>
+        Visible task_id source: <span id="task-detail-task-id-source">fixture-task-id</span>.
+        This visible task_id text is the source of truth for the runtime read; hidden task-list, task-search,
+        session, aggregate, event, trace, history, replay, lifecycle, query, hash, and storage discovery are unavailable.
       </p>
       <p>
         Passive task placeholders: task_id, status, title, created_at, updated_at, state_since, actor.kind, actor.id,
@@ -110,7 +116,11 @@
       <p>
         chat_id and reply_to_message_id are passive thread metadata only; absent values render as not configured.
       </p>
-      <p class="meta">Source: approved task detail read provenance. Freshness timestamp: pending. Reference: task detail route/reference. Confidence: unavailable until a safe read is wired by a later approved story.</p>
+      <p class="meta" id="task-detail-source">Source: GET /v1/tasks/{task_id}. Runtime route: pending.</p>
+      <p class="meta" id="task-detail-task-id">task_id: fixture-task-id.</p>
+      <p class="meta" id="task-detail-freshness">Freshness: pending retrieved_at.</p>
+      <p class="meta" id="task-detail-authority">Authority: non-authoritative until a valid task detail response is read.</p>
+      <p class="meta" id="task-detail-detail">Detail: no task detail response has been rendered yet. Confidence: unavailable until the approved task detail read completes.</p>
     </section>
     <section id="sessions" aria-labelledby="sessions-title">
       <h2 id="sessions-title">Sessions</h2>
@@ -433,5 +443,6 @@
     <p>Story 88.1 static assets/configuration only. Live wiring, routes, dependencies, and Story 88.2 no-mutation enforcement remain future work.</p>
   </footer>
   <script src="health-readiness.js" defer></script>
+  <script src="task-detail.js" defer></script>
 </body>
 </html>

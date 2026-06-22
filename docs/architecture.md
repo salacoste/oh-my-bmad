@@ -333,14 +333,23 @@ Key decisions:
 - **Replay and rollback proof are mandatory.** Archive manifest validation, replay validation against the retained hot+archive set, and backup/restore evidence are future preconditions before any mutation.
 - **Dry-run and apply stay separate.** A future apply command/API must be distinct from dry-run; no `dry_run=false` toggle can authorize mutation.
 
-## Future work beyond Phase 17
+## Current status beyond Phase 17
 
-The following items remain unshipped or intentionally out of scope after Phase 17:
+
+After Phase 17, the BMad roadmap continued through read-only dashboard and live-read readiness work. The canonical story-by-story source is [`../_bmad-output/implementation-artifacts/sprint-status.yaml`](../_bmad-output/implementation-artifacts/sprint-status.yaml); [`feature-status.md`](./feature-status.md) is the derivative implemented/partial/deferred matrix.
+
+- **Phase 18 recorded destructive-apply product scope without implementation.** The PRD/status-only gate preserved the Phase 17 safety contract and selected a non-destructive dashboard branch next.
+- **Phases 19-21 shipped read-only dashboard readiness.** Static dashboard shell/panels, read-only route/method/no-mutation guards, provenance/freshness/error states, fixture snapshot rendering, and static HTML presentation contracts were added without authorizing mutation/control affordances.
+- **Phase 22 shipped a narrow health/readiness runtime boundary.** Browser runtime wiring is approved only for `GET /v1/health` in that slice.
+- **Phase 23 is closure-in-progress for the task-detail runtime boundary.** Story 102.1 selected exactly `GET /v1/tasks/{task_id}` and Story 102.2 implemented the narrow task-detail browser runtime boundary locally; Story 102.3 final closure remains pending final review, QA/skip, push, and remote CI evidence.
+- **Dashboard runtime remains intentionally narrow.** Event timeline, transitions, trace, history, replay, lifecycle-readiness, aggregate/session/digest, task-list/search/discovery, and mutation/control surfaces remain contract/static-only, unavailable, or deferred unless a later BMad phase explicitly approves a route family.
+
+The following items remain unshipped or intentionally out of scope during Phase 23 closure-prep:
 
 - **Event-log prune/apply implementation** -- destructive lifecycle operations still require a later implementation phase after the Phase 17 readiness contract, exact dry-run plan-hash authorization, replay validation, rollback evidence, and explicit operator gate.
 - **Object-storage lifecycle jobs** -- archive manifests currently reference validated local/archive paths; automatic S3/B2/R2 lifecycle management is future work.
 - **Scheduled jobs** -- time-based task scheduling and lifecycle automation.
-- **Web dashboard** -- browser-based operator surface.
+- **Broad web dashboard runtime wiring** -- browser-based operator surface exists as a read-only/static shell with narrow health and task-detail runtime boundaries; broader live-read route families require future per-route approval.
 - **GLM adapter** -- fourth runtime following the ADR-0015 pattern.
 - **Split deployment** -- Postgres accessible from multiple hosts for horizontal scaling of the registry layer.
 - **Postgres connection mTLS** -- extends mTLS to database connections.

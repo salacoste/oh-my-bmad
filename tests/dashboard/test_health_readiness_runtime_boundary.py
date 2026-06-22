@@ -11,6 +11,8 @@ from typing import NotRequired, TypedDict, cast
 DASHBOARD = Path("dashboard/static/index.html")
 HEALTH_RUNTIME = Path("dashboard/static/health-readiness.js")
 APPROVED_SCRIPT = "health-readiness.js"
+APPROVED_TASK_DETAIL_SCRIPT = "task-detail.js"
+APPROVED_SCRIPTS = [APPROVED_SCRIPT, APPROVED_TASK_DETAIL_SCRIPT]
 APPROVED_ROUTE = "/v1/health"
 FORBIDDEN_ROUTE_MARKERS = (
     "/v1/tasks",
@@ -120,7 +122,7 @@ def runtime_source() -> str:
 def test_story_101_2_runtime_script_allowlist_is_exact() -> None:
     parser = parse_scripts()
 
-    assert parser.scripts == [{"src": APPROVED_SCRIPT, "defer": ""}]
+    assert parser.scripts == [{"src": script, "defer": ""} for script in APPROVED_SCRIPTS]
     assert not "".join(parser.inline_script_text).strip()
     assert not parser.controls
     assert all(
@@ -136,7 +138,7 @@ def test_story_101_2_only_index_mounts_approved_runtime_script() -> None:
         parser = ScriptParser()
         parser.feed(html_file.read_text(encoding="utf-8"))
         if html_file == DASHBOARD:
-            assert parser.scripts == [{"src": APPROVED_SCRIPT, "defer": ""}]
+            assert parser.scripts == [{"src": script, "defer": ""} for script in APPROVED_SCRIPTS]
         else:
             assert not parser.scripts
 
@@ -145,16 +147,16 @@ def test_story_101_2_guard_rejects_second_html_entrypoint_reusing_health_script(
     tmp_path: Path,
 ) -> None:
     second = tmp_path / "secondary.html"
-    second.write_text(f'<script src="{APPROVED_SCRIPT}" defer></script>', encoding="utf-8")
+    second.write_text("".join(f'<script src="{script}" defer></script>' for script in APPROVED_SCRIPTS), encoding="utf-8")
     parser = ScriptParser()
     parser.feed(second.read_text(encoding="utf-8"))
-    assert parser.scripts == [{"src": APPROVED_SCRIPT, "defer": ""}]
+    assert parser.scripts == [{"src": script, "defer": ""} for script in APPROVED_SCRIPTS]
     assert second != DASHBOARD
 
 
 def test_story_101_2_runtime_module_graph_is_closed() -> None:
     runtime_files = sorted(path.name for path in Path("dashboard/static").glob("*.js"))
-    assert runtime_files == [APPROVED_SCRIPT]
+    assert runtime_files == [APPROVED_SCRIPT, APPROVED_TASK_DETAIL_SCRIPT]
 
     source = runtime_source()
     for marker in FORBIDDEN_RUNTIME_MARKERS:

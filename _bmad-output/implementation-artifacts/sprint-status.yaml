@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-06-17T21:29:36+03:00"
+# last_updated: "2026-06-22T03:49:24+03:00"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-21T04:20:00+03:00"
-current_phase: 23  # Phase 23 OPEN — Task detail GET /v1/tasks/{task_id} live-read route selection; Phase 22 remains closed
+last_updated: "2026-06-22T03:49:24+03:00"
+current_phase: 23  # Phase 23 OPEN — task-detail GET /v1/tasks/{task_id} route selection and runtime boundary are local/verified; final closure-prep remains pending review/QA/push/CI
 
 development_status:
   # =========================================================================
@@ -863,13 +863,46 @@ development_status:
   # =========================================================================
   # Epic 102: Task detail live-read runtime boundary
   # =========================================================================
-  epic-102: in-progress  # Phase 23 task-detail GET /v1/tasks/{task_id} route selection opened; no runtime wiring yet
+  epic-102: in-progress  # Phase 23 task-detail GET /v1/tasks/{task_id} route selection and runtime boundary are done; final closure-prep pending review/QA/push/CI
   102-1-task-detail-live-read-route-selection: done  # Phase 23 PRD/architecture/epics/status opening; selects future GET /v1/tasks/{task_id} only
+  102-2-task-detail-runtime-boundary: done  # single-module GET /v1/tasks/{task_id} browser/runtime boundary; no broad live wiring
+  102-3-phase-23-epic-102-final-closure: in-progress  # docs/status closure-prep; must remain pending until final review/QA/push/CI evidence exists
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-22"
+    event: story-102-3-closure-prep-in-progress
+    from: planned
+    to: in-progress
+    story: 102-3-phase-23-epic-102-final-closure
+    reason: >
+      Story 102.3 closure-prep is in progress after fresh Architect APPROVE/CLEAR
+      and Critic APPROVE/PROCEED on the repaired two-stage plan. Epic 102 and
+      Story 102.3 intentionally remain pending until final review, QA/skip,
+      commit/push, and remote CI evidence exist. This repairs an earlier premature
+      closed/done wording attempt found by code-review and keeps broad live dashboard
+      wiring, aggregate/session/digest, task-list/search/discovery, mutation/control,
+      backend/API expansion, and additional runtime modules unauthorized.
+
+  - date: "2026-06-21"
+    event: story-102-2-complete
+    from: in-progress
+    to: done
+    story: 102-2-task-detail-runtime-boundary
+    reason: >
+      Story 102.2 implemented exactly one new dashboard runtime module,
+      task-detail.js, for GET /v1/tasks/{task_id} using visible task_id
+      text as the source of truth. It added task-detail runtime-boundary
+      tests, updated the health/read-only allowlists for exactly the approved
+      two-script graph, preserved GET-only/no-body/no-hidden-write constraints,
+      and kept backend/API, aggregate/session/digest, task-list/search/discovery,
+      event/trace/history/replay/lifecycle, mutation/control, dependency,
+      service, MCP, generated-data, polling, storage/cache, worker, and import
+      surfaces excluded. Local verification passed with 98 dashboard tests and
+      git diff --check.
+
   - date: "2026-06-21"
     event: story-102-1-complete
     from: in-progress

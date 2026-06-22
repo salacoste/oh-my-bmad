@@ -52,6 +52,8 @@ CONTROL_TERMS = (
     "production operation",
 )
 APPROVED_HEALTH_RUNTIME_SCRIPT = "health-readiness.js"
+APPROVED_TASK_DETAIL_RUNTIME_SCRIPT = "task-detail.js"
+APPROVED_RUNTIME_SCRIPTS = {APPROVED_HEALTH_RUNTIME_SCRIPT, APPROVED_TASK_DETAIL_RUNTIME_SCRIPT}
 
 RUNTIME_CALL_MARKERS = (
     "fetch(",
@@ -309,7 +311,7 @@ def unexpected_network_contexts(parser: BoundaryParser) -> list[Context]:
     return [
         context
         for context in network_contexts(parser)
-        if context.text.strip() not in {"", APPROVED_HEALTH_RUNTIME_SCRIPT}
+        if context.text.strip() not in {"", *APPROVED_RUNTIME_SCRIPTS}
     ]
 
 
@@ -330,7 +332,7 @@ def assert_no_api_or_mutating_method_calls(raw: str) -> None:
     assert not FORBIDDEN_METHOD_RE.search(text), contexts
     assert "/v1/" not in text, contexts
     for context in network_contexts(parser):
-        assert context.text.strip() in {"", APPROVED_HEALTH_RUNTIME_SCRIPT}, context
+        assert context.text.strip() in {"", *APPROVED_RUNTIME_SCRIPTS}, context
 
 
 def assert_no_hidden_write_or_background_markers(raw: str) -> None:

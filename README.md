@@ -14,7 +14,7 @@
   <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-stdio-7F52B5" alt="MCP"/></a>
   <a href="https://mypy.readthedocs.io/"><img src="https://img.shields.io/badge/mypy-strict-1f5082" alt="mypy strict"/></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"/></a>
-  <a href="_bmad-output/planning-artifacts/phase-17-epics.md"><img src="https://img.shields.io/badge/Phase%2017-Complete-brightgreen" alt="Phase 17 complete"/></a>
+  <a href="_bmad-output/planning-artifacts/phase-23-epics.md"><img src="https://img.shields.io/badge/Phase%2023-Closure--pending-orange" alt="Phase 23 closure pending"/></a>
 </p>
 
 ---
@@ -25,7 +25,7 @@ A platform that turns Telegram and a local console into the control surfaces for
 
 It's deliberately **boring** infrastructure — Python 3.12, FastAPI, aiogram, SQLite WAL, Docker Compose, stdio MCP. The novelty is in how the boring pieces compose, not in any one piece.
 
-> **Current repo state: Phase 17 shipped — destructive lifecycle apply readiness is documented without implementing destructive apply.** Latest tagged release is `v1.3.0`; this checkout contains later Phase 10–17 work. See [`docs/index.md`](docs/index.md) for the master entry point.
+> **Current repo state: Phase 23 closure-in-progress — Story 102.2 completed the narrow task-detail runtime boundary locally; Story 102.3 final closure remains pending final review, QA/skip, push, and remote CI evidence.** Latest tagged release is `v1.3.0`; this checkout contains later BMad work through Phase 23 closure-prep. See [`docs/index.md`](docs/index.md) and the derivative [`docs/feature-status.md`](docs/feature-status.md) matrix for the current implemented/deferred feature view.
 
 ## How it works (at a glance)
 
@@ -79,7 +79,7 @@ Three properties hold the whole thing together: **only one writer**, **only-ever
 - **Crash-injection tested.** A real Docker stack gets shot at deterministic emission points; recovery is asserted to produce **byte-for-byte equivalent state**. Partial writes are detected and rejected by a poison-pill mechanism in the writer. ([deep-dive →](docs/explanations/recovery-and-crash-injection.md))
 - **Capability tiers with mandatory deny-path tests.** Four tiers (read / bounded-write / repo-mutation / high-risk-with-approval). Three tests **mandatory per MCP tool boundary**: deny-path, default-deny, escalation. `@pytest.mark.security` is non-skippable. ([deep-dive →](docs/explanations/capability-tiers.md))
 - **Multi-runtime workers.** Claude Code, Codex, and Gemini adapters behind a `RuntimeAdapter` protocol with per-task selection, fallback, and handoff. Worker pool auto-scaling (FC-P6-1).
-- **MCP tooling fleet — 8 stdio servers.** git, github, verification, memory/wiki, artifact, browser, task-registry, session-registry — all behind tier-gated `build_server`, per-server env isolation, and scoped credentials.
+- **MCP tooling fleet — 9 servers.** task-registry, session-registry, clawhip-bridge, git, github, verification, memory/wiki, artifact, and browser — all behind tier-gated `build_server`, per-server env isolation, and scoped credentials.
 - **HMAC approval signing with offline verification.** Operator decisions are HMAC-signed at emission; `just verify-approval` works offline. Key rotation with fingerprint tracking and `/key-status` surface.
 - **Supply chain hardening.** SLSA L2 provenance, cosign keyless signing, CycloneDX SBOM, license-compatibility publish gate, `just verify-images` — all wired into the release pipeline.
 - **Metrics subscriber with cardinality discipline.** Tail-loop subscriber exposes `/metrics` (FastAPI); 51 canonical timeseries baseline, cardinality-bounded regression test at 10K tasks, p95 <1ms.
@@ -141,7 +141,7 @@ Phase 4 — Implementation     → sprint plan → (create-story → validate �
                               → retrospective at every epic boundary
 ```
 
-Phase 1 took **10 epics / 88 stories**, with retrospective + deferred-work governance at every epic boundary. The current repo has progressed through **17 phases** — event spine, multi-runtime workers, a 9-server MCP fleet, browser automation, supply-chain hardening, remote MCP transport, mTLS, historical replay, event-log lifecycle management, lifecycle-operation safety, docs/backlog reconciliation, archive-aware task history, and destructive lifecycle apply readiness planning — with zero open GATED deferred items. The full per-phase walkthrough, skill catalog, and "how a new feature enters the workflow" decision tree is documented separately:
+Phase 1 took **10 epics / 88 stories**, with retrospective + deferred-work governance at every epic boundary. The current repo has progressed to **Phase 23 closure-prep** — event spine, multi-runtime workers, a 9-server MCP fleet, browser automation, supply-chain hardening, remote MCP transport, mTLS, historical replay, event-log lifecycle management, lifecycle-operation safety, docs/backlog reconciliation, archive-aware task history, destructive lifecycle apply readiness/product-scope planning, and the read-only dashboard live-read readiness/runtime boundary series. Epic 102 is closure-pending: Story 102.2 has the local task-detail runtime boundary implemented and re-verified, while Story 102.3 must still pass final review, QA/skip, push, and remote CI before the epic is marked done. The full per-phase walkthrough, skill catalog, and "how a new feature enters the workflow" decision tree is documented separately:
 
 ➡️ **[`docs/bmad-workflow.md`](docs/bmad-workflow.md)** — the complete workflow this project follows.
 
@@ -162,6 +162,7 @@ This repo documents itself in three layers, by audience.
 - 🗺️ [`docs/architecture.md`](docs/architecture.md) — runtime view + invariants + data flow.
 - 🌳 [`docs/source-tree-analysis.md`](docs/source-tree-analysis.md) — annotated directory layout.
 - 🧩 [`docs/component-inventory.md`](docs/component-inventory.md) — the 24 workspace members.
+- ✅ [`docs/feature-status.md`](docs/feature-status.md) — derivative implemented/partial/deferred feature-status matrix; sprint-status remains canonical.
 - 🔌 [`docs/api-contracts.md`](docs/api-contracts.md) — HTTP endpoints + MCP tools + Telegram surface.
 - 📚 [`docs/data-models.md`](docs/data-models.md) — event envelope + payload catalog + DB schema.
 - 🛠️ [`docs/development-guide.md`](docs/development-guide.md) · [`docs/deployment-guide.md`](docs/deployment-guide.md) · [`docs/operator-runbook.md`](docs/operator-runbook.md)
@@ -208,28 +209,34 @@ A few things worth a look even if you don't intend to run it:
 
 ## Status
 
-**Current development state — Phase 17 shipped.** Latest tagged release: `v1.3.0`. Shipped phases in this checkout:
+**Current development state — Phase 23 closure-in-progress / Epic 102 closure-pending.** Latest tagged release: `v1.3.0`. Story 102.2 task-detail runtime implementation is local and re-verified; Story 102.3 final closure is pending final review, QA/skip, push, and remote CI evidence. The canonical status source is [`_bmad-output/implementation-artifacts/sprint-status.yaml`](_bmad-output/implementation-artifacts/sprint-status.yaml); [`docs/feature-status.md`](docs/feature-status.md) is the derivative human-readable implemented/partial/deferred matrix.
 
-| Phase | Scope | Epics |
-|---|---|---|
-| 1 | Core platform — event spine, registry, Telegram, console, workers | 1–7.5 |
-| 2 | Observability — supply chain, trace_id, metrics, HMAC approvals, budget enforcement, Litestream DR | 8–13 |
-| 3 | MCP tooling fleet — git, github, verification, memory/wiki, artifact | 14–19 |
-| 4 | Browser automation — Playwright MCP, screenshot, tab management | 20–22 |
-| 5 | Multi-runtime — Codex, Gemini adapters, per-task selection, handoff | 26–29 |
-| 6 | Server execution pool — Postgres, state machine, multi-worker | 30–34 |
-| 7 | Reliability hardening — heartbeat detection, structured output, env isolation | 35–40 |
-| 8 | Platform hardening & debt closure — zero open deferred items | 41–45 |
-| 9 | Operational excellence — PR drafts, runbooks, stale TODO cleanup | 46–48 |
-| 10 | Remote MCP transport — Streamable HTTP + bearer auth | 50–55 |
-| 11 | mTLS — internal Docker-network TLS profile and CA tooling | 56–59 |
-| 12 | Historical event replay — replay engine, validation, snapshots, task history | 60–63 |
-| 13 | Event log lifecycle — archive manifest, hot+archive replay, package streaming | 64–68 |
-| 14 | Event log lifecycle operations — ADR-0025, non-destructive dry-run, hot-only task-history boundary | 69–73 |
-| 15 | Lifecycle documentation reconciliation and backlog triage | 74–75 |
-| 16 | Archive-aware task history — read-only hot+archive history query | 76–80 |
-| 17 | Destructive lifecycle apply readiness — planning/safety contract only, no destructive implementation | 81–85 |
+| Phase | Scope | Epics | Current status |
+|---|---|---|---|
+| 1 | Core platform — event spine, registry, Telegram, console, workers | 1–7.5 | Done |
+| 2 | Observability — supply chain, trace_id, metrics, HMAC approvals, budget enforcement, Litestream DR | 8–13 | Done |
+| 3 | MCP tooling fleet — git, github, verification, memory/wiki, artifact | 14–19 | Done |
+| 4 | Browser automation — Playwright MCP, screenshot, tab management | 20–22 | Done |
+| 5 | Multi-runtime — Codex, Gemini adapters, per-task selection, handoff | 26–29 | Done |
+| 6 | Server execution pool — Postgres, state machine, multi-worker | 30–34 | Done |
+| 7 | Reliability hardening — heartbeat detection, structured output, env isolation | 35–40 | Done |
+| 8 | Platform hardening & debt closure — zero open deferred items | 41–45 | Done |
+| 9 | Operational excellence — PR drafts, runbooks, stale TODO cleanup | 46–48 | Done |
+| 10 | Remote MCP transport — Streamable HTTP + bearer auth | 50–55 | Done |
+| 11 | mTLS — internal Docker-network TLS profile and CA tooling | 56–59 | Done |
+| 12 | Historical event replay — replay engine, validation, snapshots, task history | 60–63 | Done |
+| 13 | Event log lifecycle — archive manifest, hot+archive replay, package streaming | 64–68 | Done |
+| 14 | Event log lifecycle operations — ADR-0025, non-destructive dry-run, hot-only task-history boundary | 69–73 | Done |
+| 15 | Lifecycle documentation reconciliation and backlog triage | 74–75 | Done |
+| 16 | Archive-aware task history — read-only hot+archive history query | 76–80 | Done |
+| 17 | Destructive lifecycle apply readiness — planning/safety contract only, no destructive implementation | 81–85 | Done |
+| 18 | Destructive lifecycle apply product scope — PRD/status-only gate plus next non-destructive candidate selection | 86 | Done |
+| 19 | Read-only dashboard shell — static dashboard panels, read-only/no-mutation boundaries | 88–92 | Done |
+| 20 | Dashboard live-read contracts — route metadata, provenance/freshness states, unavailable aggregate/session decision | 93–97 | Done |
+| 21 | Dashboard rendering readiness — view models, fixture/static rendering, live-read wiring decision gate | 98–100 | Done |
+| 22 | Health/readiness runtime boundary — narrow `GET /v1/health` browser runtime | 101 | Done |
+| 23 | Task-detail runtime boundary — narrow `GET /v1/tasks/{task_id}` browser runtime | 102 | Closure-in-progress: 102.1 route selection and 102.2 runtime boundary are done; 102.3 final closure remains pending review/QA/push/CI |
 
-Phase 17 is shipped as a planning/readiness-only safety-contract phase. Destructive lifecycle apply is still unimplemented, and object-storage lifecycle jobs plus scheduled retention remain future work. Zero open GATED deferred items.
+Destructive lifecycle apply is still unimplemented, and object-storage lifecycle jobs plus scheduled retention remain future work. Dashboard runtime wiring remains intentionally narrow: health/readiness and task detail only. Aggregate/session/digest/task-list/search/discovery live contracts and mutation/control affordances remain unavailable unless a later BMad phase explicitly approves them.
 
 Issues and discussion welcome — security reports per [`SECURITY.md`](./SECURITY.md).

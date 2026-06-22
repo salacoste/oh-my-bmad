@@ -7,15 +7,15 @@
 - **Type:** monorepo (`uv` workspace, 24 Python members) — single backend platform plus optional MCP fleet.
 - **Primary language:** Python 3.12 (locked).
 - **Architecture:** event-sourced, append-only JSONL event log, single-writer materialization, capability-tier-gated MCP boundaries, and replayable state.
-- **Current repo state:** Phase 17 shipped as of 2026-06-13 — Destructive Lifecycle Apply Readiness, a planning/safety-contract continuation of replay/lifecycle work with no destructive apply implementation.
-- **Latest tagged release:** `v1.3.0`; the checked-out `main` branch contains later Phase 10–17 work.
+- **Current repo state:** Phase 23 closure-in-progress / Epic 102 closure-pending — Story 102.1 selected `GET /v1/tasks/{task_id}`, Story 102.2 implemented the narrow task-detail browser runtime boundary locally, and Story 102.3 final closure remains pending final review, QA/skip, push, and remote CI evidence.
+- **Latest tagged release:** `v1.3.0`; the checked-out branch contains later BMad work through Phase 23. [`feature-status.md`](./feature-status.md) summarizes implemented, partial, and deferred features; sprint-status remains canonical.
 
 ## Quick Reference
 
 - **Tech stack:** Python 3.12, FastAPI, aiogram v3, SQLAlchemy 2.0 async + Alembic, MCP stdio/Streamable HTTP where explicitly configured, structlog, Hypothesis, ruff, mypy `--strict`. Exact versions live in `uv.lock`.
 - **Entry points:** see [source-tree-analysis.md](./source-tree-analysis.md) §“Entry-point map”.
 - **Architecture pattern:** event-sourced spine; typed events; replay/snapshot safety; optional MCP fleet; runtime adapters; transport and credential isolation.
-- **Canonical status:** [`../_bmad-output/implementation-artifacts/sprint-status.yaml`](../_bmad-output/implementation-artifacts/sprint-status.yaml).
+- **Canonical status:** [`../_bmad-output/implementation-artifacts/sprint-status.yaml`](../_bmad-output/implementation-artifacts/sprint-status.yaml). Derivative human-readable matrix: [`feature-status.md`](./feature-status.md).
 
 ## Core Documentation
 
@@ -23,6 +23,7 @@
 - [Architecture](./architecture.md) — runtime view, invariants, data flow, shipped phases, future work.
 - [Source Tree Analysis](./source-tree-analysis.md) — annotated directory map + entry-point table.
 - [Component Inventory](./component-inventory.md) — workspace members and deployable components.
+- [Feature Status Matrix](./feature-status.md) — derivative implemented/partial/deferred feature inventory.
 - [API Contracts](./api-contracts.md) — HTTP endpoints + MCP tool catalog + Telegram surface.
 - [Data Models](./data-models.md) — event envelope, replay/archive contracts, registry-state DB schema.
 - [Development Guide](./development-guide.md) — AI-context entry into the dev workflow.
@@ -74,7 +75,7 @@
 - [`../_bmad-output/planning-artifacts/prd.md`](../_bmad-output/planning-artifacts/prd.md)
 - [`../_bmad-output/planning-artifacts/architecture.md`](../_bmad-output/planning-artifacts/architecture.md)
 - [`../_bmad-output/planning-artifacts/epics.md`](../_bmad-output/planning-artifacts/epics.md)
-- Phase amendments: [`phase-10`](../_bmad-output/planning-artifacts/phase-10-prd-amendment.md), [`phase-11`](../_bmad-output/planning-artifacts/phase-11-prd-amendment.md), [`phase-12`](../_bmad-output/planning-artifacts/phase-12-prd-amendment.md), [`phase-13`](../_bmad-output/planning-artifacts/phase-13-prd-amendment.md), [`phase-14`](../_bmad-output/planning-artifacts/phase-14-prd-amendment.md), [`phase-15`](../_bmad-output/planning-artifacts/phase-15-prd-amendment.md), [`phase-16`](../_bmad-output/planning-artifacts/phase-16-prd-amendment.md).
+- Phase amendments: [`phase-10`](../_bmad-output/planning-artifacts/phase-10-prd-amendment.md), [`phase-11`](../_bmad-output/planning-artifacts/phase-11-prd-amendment.md), [`phase-12`](../_bmad-output/planning-artifacts/phase-12-prd-amendment.md), [`phase-13`](../_bmad-output/planning-artifacts/phase-13-prd-amendment.md), [`phase-14`](../_bmad-output/planning-artifacts/phase-14-prd-amendment.md), [`phase-15`](../_bmad-output/planning-artifacts/phase-15-prd-amendment.md), [`phase-16`](../_bmad-output/planning-artifacts/phase-16-prd-amendment.md), [`phase-23`](../_bmad-output/planning-artifacts/phase-23-prd-amendment.md).
 - [`../_bmad-output/implementation-artifacts/sprint-status.yaml`](../_bmad-output/implementation-artifacts/sprint-status.yaml) — current state and audit trail.
 
 ## Getting Started
@@ -87,28 +88,38 @@
 
 ## Current shipped phases
 
-| Phase | Scope |
-|---|---|
-| 1 | Core platform: event spine, registry, Telegram, console, Claude worker |
-| 2 | Observability/security: trace_id, metrics, HMAC approvals, budgets, Litestream, supply chain |
-| 3 | MCP tooling fleet: git, github, verification, memory/wiki, artifact |
-| 4 | Browser automation plane |
-| 5 | Multi-runtime adapters: Codex and Gemini alongside Claude Code |
-| 6 | Server execution pool: Postgres, FSM, worker pool |
-| 7 | Reliability and operator tooling |
-| 8 | Platform hardening and deferred-work closure |
-| 9 | Operational excellence and feature completion |
-| 10 | Streamable HTTP transport for MCP servers |
-| 11 | mTLS for the internal Docker network |
-| 12 | Historical event replay |
-| 13 | Event log lifecycle management: archive manifest, hot+archive replay, package streaming |
-| 14 | Event log lifecycle operations: ADR-0025 operator gate, non-destructive dry-run boundary, hot-only task-history lock |
-| 15 | Lifecycle documentation reconciliation and backlog triage |
-| 16 | Archive-aware task history: read-only hot+archive history query, destructive lifecycle work still future |
+This table is a derivative summary. Use [`../_bmad-output/implementation-artifacts/sprint-status.yaml`](../_bmad-output/implementation-artifacts/sprint-status.yaml) for canonical story-by-story state and [`feature-status.md`](./feature-status.md) for the implemented/partial/deferred matrix.
+
+| Phase | Scope | Current status |
+|---|---|---|
+| 1 | Core platform: event spine, registry, Telegram, console, Claude worker | Done |
+| 2 | Observability/security: trace_id, metrics, HMAC approvals, budgets, Litestream, supply chain | Done |
+| 3 | MCP tooling fleet: git, github, verification, memory/wiki, artifact | Done |
+| 4 | Browser automation plane | Done |
+| 5 | Multi-runtime adapters: Codex and Gemini alongside Claude Code | Done |
+| 6 | Server execution pool: Postgres, FSM, worker pool | Done |
+| 7 | Reliability and operator tooling | Done |
+| 8 | Platform hardening and deferred-work closure | Done |
+| 9 | Operational excellence and feature completion | Done |
+| 10 | Streamable HTTP transport for MCP servers | Done |
+| 11 | mTLS for the internal Docker network | Done |
+| 12 | Historical event replay | Done |
+| 13 | Event log lifecycle management: archive manifest, hot+archive replay, package streaming | Done |
+| 14 | Event log lifecycle operations: ADR-0025 operator gate, non-destructive dry-run boundary, hot-only task-history lock | Done |
+| 15 | Lifecycle documentation reconciliation and backlog triage | Done |
+| 16 | Archive-aware task history: read-only hot+archive history query, destructive lifecycle work still future | Done |
+| 17 | Destructive lifecycle apply readiness: planning/safety contract only, no destructive apply | Done |
+| 18 | Destructive lifecycle apply product scope: PRD/status-only gate plus next non-destructive candidate selection | Done |
+| 19 | Read-only dashboard shell and panel/read-only guardrails | Done |
+| 20 | Dashboard live-read contracts and aggregate/session unavailable decision | Done |
+| 21 | Dashboard rendering readiness and live-read wiring decision gate | Done |
+| 22 | Health/readiness runtime boundary for `GET /v1/health` | Done |
+| 23 | Task-detail runtime boundary for `GET /v1/tasks/{task_id}` | Closure-in-progress: route selection and runtime boundary done; final closure pending review/QA/push/CI |
 
 ## Scope of this refresh
 
-- **Mode:** documentation canonicalization after Phase 16 archive-aware task-history implementation.
-- **Date:** 2026-06-12.
+- **Mode:** documentation canonicalization during Phase 23 task-detail runtime-boundary closure-prep; final closure remains pending review/QA/push/CI.
+- **Date:** 2026-06-22.
 - **Project type:** backend monorepo / autonomous development platform.
 - **State file:** [project-scan-report.json](./project-scan-report.json) may lag this index; use sprint-status as canonical.
+- **Deferred boundaries after Phase 23:** aggregate/session/digest, task-list/search/discovery, event timeline/transitions, trace, history/replay, lifecycle, mutation/control, destructive apply, object-storage lifecycle jobs, scheduled retention, and production credential-gated writes remain future separate-story work.
