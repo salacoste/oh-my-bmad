@@ -12,7 +12,8 @@ DASHBOARD = Path("dashboard/static/index.html")
 HEALTH_RUNTIME = Path("dashboard/static/health-readiness.js")
 APPROVED_SCRIPT = "health-readiness.js"
 APPROVED_TASK_DETAIL_SCRIPT = "task-detail.js"
-APPROVED_SCRIPTS = [APPROVED_SCRIPT, APPROVED_TASK_DETAIL_SCRIPT]
+APPROVED_EVENT_SCRIPT = "event-timeline.js"
+APPROVED_SCRIPTS = [APPROVED_SCRIPT, APPROVED_TASK_DETAIL_SCRIPT, APPROVED_EVENT_SCRIPT]
 APPROVED_ROUTE = "/v1/health"
 FORBIDDEN_ROUTE_MARKERS = (
     "/v1/tasks",
@@ -159,7 +160,7 @@ def test_story_101_2_guard_rejects_second_html_entrypoint_reusing_health_script(
 
 def test_story_101_2_runtime_module_graph_is_closed() -> None:
     runtime_files = sorted(path.name for path in Path("dashboard/static").glob("*.js"))
-    assert runtime_files == [APPROVED_SCRIPT, APPROVED_TASK_DETAIL_SCRIPT]
+    assert runtime_files == sorted(APPROVED_SCRIPTS)
 
     source = runtime_source()
     for marker in FORBIDDEN_RUNTIME_MARKERS:

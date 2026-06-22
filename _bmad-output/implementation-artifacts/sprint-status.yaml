@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-06-22T06:15:00+03:00"
+# last_updated: "2026-06-22T07:05:00+03:00"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -874,13 +874,50 @@ development_status:
   # =========================================================================
   epic-103: in-progress  # Phase 24 planning opened; runtime boundary and final closure remain future stories
   103-1-event-timeline-transitions-live-read-route-selection: done  # Phase 24 PRD/architecture/epics/status opening; selects future GET /v1/tasks/{task_id}/events and /transitions only
-  103-2-event-timeline-transitions-runtime-boundary: backlog  # future separately approved runtime-boundary story; no broad live wiring
+  103-2-event-timeline-transitions-runtime-boundary: done  # single-module event/transition runtime boundary implemented, reviewed APPROVE/CLEAR, and locally QA-verified; final closure/remote CI remains Story 103.3
   103-3-phase-24-epic-103-final-closure: backlog  # future closure after implementation, final review, QA decision, push, and CI evidence
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-22"
+    event: story-103-2-complete
+    from: in-progress
+    to: done
+    story: 103-2-event-timeline-transitions-runtime-boundary
+    reason: >
+      Story 103.2 implemented exactly one new dashboard runtime module,
+      event-timeline.js, for GET /v1/tasks/{task_id}/events and
+      GET /v1/tasks/{task_id}/transitions using visible task_id text as the
+      sole selector. It added event timeline runtime-boundary tests, updated
+      health/task-detail/read-only allowlists for exactly the approved
+      three-script graph, preserved GET-only/no-body/no-hidden-write constraints,
+      kept event_id as metadata only, and kept backend/API,
+      aggregate/session/digest, task-list/search/discovery, trace/history/
+      replay/lifecycle, mutation/control, dependency, service, MCP,
+      generated-data, polling, storage/cache, worker, and import surfaces
+      excluded. Local verification passed with mypy strict, ruff check/format,
+      113 dashboard tests, node --check, git diff --check, code-reviewer
+      APPROVE, and architect CLEAR. Epic 103 remains in-progress until Story
+      103.3 final closure records commit/push and remote CI evidence.
+
+  - date: "2026-06-22"
+    event: story-103-2-implementation-started
+    from: backlog
+    to: in-progress
+    story: 103-2-event-timeline-transitions-runtime-boundary
+    reason: >
+      Story 103.2 implementation started after Phase 24 Story 103.1 selected
+      the Event timeline / transitions route family. Local implementation adds
+      one event-timeline runtime module for GET /v1/tasks/{task_id}/events and
+      GET /v1/tasks/{task_id}/transitions only, with visible task_id as the
+      sole selector, event_id as metadata only, and no trace/history/replay/
+      lifecycle/session/aggregate/digest, task-list/search/discovery,
+      mutation/control, backend/API, dependency, service, MCP, generated-data,
+      polling, storage/cache, worker, or hidden-write surface. Story remains
+      in-progress until final review, QA decision, commit/push, and CI evidence.
+
   - date: "2026-06-22"
     event: story-103-1-complete
     from: planned
