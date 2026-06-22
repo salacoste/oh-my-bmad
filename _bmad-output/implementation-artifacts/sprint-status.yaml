@@ -872,15 +872,48 @@ development_status:
   # =========================================================================
   # Epic 103: Event timeline / transitions live-read route selection
   # =========================================================================
-  epic-103: in-progress  # Phase 24 planning opened; runtime boundary and final closure remain future stories
+  epic-103: done  # Phase 24 closed for GET /v1/tasks/{task_id}/events and GET /v1/tasks/{task_id}/transitions only; broad dashboard live wiring remains unauthorized/fail-closed
   103-1-event-timeline-transitions-live-read-route-selection: done  # Phase 24 PRD/architecture/epics/status opening; selects future GET /v1/tasks/{task_id}/events and /transitions only
-  103-2-event-timeline-transitions-runtime-boundary: done  # single-module event/transition runtime boundary implemented, reviewed APPROVE/CLEAR, and locally QA-verified; final closure/remote CI remains Story 103.3
-  103-3-phase-24-epic-103-final-closure: backlog  # future closure after implementation, final review, QA decision, push, and CI evidence
+  103-2-event-timeline-transitions-runtime-boundary: done  # single-module event/transition runtime boundary implemented, reviewed APPROVE/CLEAR, locally QA-verified, pushed, and remote-CI verified on 35ee6b7
+  103-3-phase-24-epic-103-final-closure: done  # docs/status closure for GET /v1/tasks/{task_id}/events and GET /v1/tasks/{task_id}/transitions only after push + CI 27967910766; broad dashboard live wiring remains unauthorized/fail-closed
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-22"
+    event: phase-24-epic-103-closed
+    from: in-progress
+    to: done
+    story: 103-3-phase-24-epic-103-final-closure
+    reason: >
+      Phase 24 / Epic 103 closed only for GET /v1/tasks/{task_id}/events
+      and GET /v1/tasks/{task_id}/transitions. Story 103.2 implementation
+      commit 35ee6b75b897b2f3bcb773c61d8cb8f3e607f878 was pushed to
+      origin/main and remote CI run 27967910766 completed successfully.
+      Closure adds docs/status evidence only; broad dashboard live wiring,
+      trace, history/replay, lifecycle readiness, task-list/search/discovery,
+      aggregate/session/digest, generated live data, backend/API expansion,
+      mutation/control, dependency, service, MCP, and CI workflow surfaces
+      remain unauthorized and fail-closed unless explicitly selected by a
+      future story.
+
+  - date: "2026-06-22"
+    event: story-103-3-complete
+    from: backlog
+    to: done
+    story: 103-3-phase-24-epic-103-final-closure
+    reason: >
+      Story 103.3 completed docs/status final closure for only
+      GET /v1/tasks/{task_id}/events and GET /v1/tasks/{task_id}/transitions
+      after sequential repaired ralplan consensus (Architect APPROVE/CLEAR,
+      Critic APPROVE/PROCEED), Story 103.2 review/QA evidence, push, and
+      remote CI success on run 27967910766 for head SHA
+      35ee6b75b897b2f3bcb773c61d8cb8f3e607f878. The closure artifact and
+      sprint status add no runtime/source/test/backend/API/dependency/service/
+      MCP/generated-data behavior; broad dashboard live wiring remains
+      unauthorized and fail-closed.
+
   - date: "2026-06-22"
     event: story-103-2-complete
     from: in-progress
