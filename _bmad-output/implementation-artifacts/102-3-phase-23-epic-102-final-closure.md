@@ -1,49 +1,63 @@
 # Story 102.3 — Phase 23 / Epic 102 Final Closure
 
 ## Status
-In progress — closure-prep/status hygiene pending final review, QA/skip, commit/push, and remote CI evidence.
+Done — docs/status-only final validation and closure for Phase 23 / Epic 102.
 
-## Closure-prep scope
-Phase 23 is **not finally closed yet**. This story prepares the final closure record for exactly one additional approved dashboard runtime route family:
+## Closure scope
+Phase 23 is closed as **Task detail live-read runtime boundary complete** for exactly one additional approved dashboard runtime route family:
 
 - `GET /v1/tasks/{task_id}`
 
-Current state:
+This closure means the repository completed the bounded Phase 23 sequence: Story 102.1 route selection/opening, Story 102.2 task-detail runtime-boundary implementation, Stage A remote CI verification, and Story 102.3 final validation/status hygiene.
 
-- Story 102.1 route selection is done.
-- Story 102.2 task-detail runtime-boundary implementation is local and re-verified.
-- Story 102.3 final closure remains pending final code-review, QA/skip, commit/push, and remote CI evidence.
+This closure does **not** mean broad live dashboard wiring exists. Story 102.3 adds no new browser/runtime behavior and authorizes none beyond the already-completed Story 102.2 single-module `GET /v1/tasks/{task_id}` boundary.
 
-This story adds no new browser/runtime behavior and authorizes none beyond the already-completed Story 102.2 single-module `GET /v1/tasks/{task_id}` boundary.
-
-## Phase 23 evidence prepared so far
+## Completed Phase 23 evidence
 
 - Story 102.1 — Task Detail Live-Read Route Selection: done.
   - Selected exactly `GET /v1/tasks/{task_id}` as the next route family.
   - Opened Phase 23 PRD, architecture, epics, implementation artifact, and sprint status.
   - Added no runtime wiring.
-- Story 102.2 — Task Detail Runtime Boundary: done locally.
+- Story 102.2 — Task Detail Runtime Boundary: done.
   - Added exactly one dashboard runtime module: `dashboard/static/task-detail.js`.
   - Mounted exactly one additional external script in `dashboard/static/index.html`: `task-detail.js` with `defer`.
   - Calls only `GET /v1/tasks/{task_id}` from dashboard runtime code.
   - Added/updated tests proving one-module, one-route, GET-only, visible task_id source, no broad runtime/control behavior, and bounded non-authoritative degraded states.
-- Story 102.3 — Phase 23 / Epic 102 Final Closure: in progress.
-  - Keeps Epic 102 and Story 102.3 pending while final evidence is absent.
-  - Keeps public docs/status in closure-pending / closure-in-progress wording.
-  - Adds no source/runtime/test/backend/dependency/CI/service/MCP/generated-live-data change.
+- Story 102.3 — Phase 23 / Epic 102 Final Closure: done.
+  - Records Epic 102 closure in sprint status.
+  - Updates public docs/status wording away from active closure state.
+  - Adds no source/runtime/test/backend/dependency/CI/service/MCP/generated-live-data behavior change beyond docs/status finalization.
 
 ## Planning gate evidence
 
-Fresh sequential planning consensus completed before closure-prep implementation:
+Fresh sequential planning consensus completed before docs/status implementation:
 
 1. Architect review: `.omx/specs/story-102-3-rewrite-ralplan-architect-review.md` — APPROVE / CLEAR.
 2. Critic review: `.omx/specs/story-102-3-rewrite-ralplan-critic-review.md` — APPROVE / PROCEED.
 
-Earlier plan/review artifacts are retained as history; the rewrite artifacts above govern this Stage A pending-state pass.
+## Stage A implementation/review/QA evidence
 
-## Runtime boundary under closure-prep
+- Stage A implementation commit: `2a183ed` (`2a183ed3aa36499936067b831a8ddca2cf0ac810`), followed by formatting repair commit `6289796` (`62897964b4923956c4857169e93a052fbe5bd8fb`).
+- Local Stage A dashboard bundle: 98 passed, 2 warnings.
+- `node --check dashboard/static/task-detail.js` — passed.
+- `git diff --check` — passed.
+- `uv run ruff format --check .` — passed after formatting repair.
+- `uv run ruff check .` — passed.
+- code-reviewer lane `019eecd1-516a-76a0-ba1d-3e0183d51e62`: APPROVE, 0 issues; previous false-closure finding resolved.
+- Architect lane `019eecd1-86d8-7ed3-b112-3dc65352f657`: CLEAR.
+- UltraQA/test-engineer lane `019eecd6-08f7-7f81-94d6-bb48648e8df9`: PASS, no blocking findings.
 
-The Phase 23 runtime boundary remains intentionally narrow:
+## Remote CI evidence
+
+- Stage A failed first on formatting only: CI run `27923346576`, commit `2a183ed`, `ruff format --check` reported two dashboard test files requiring formatting.
+- Stage A repair commit: `6289796`.
+- Stage A remote CI green: [`27923397535`](https://github.com/salacoste/oh-my-bmad/actions/runs/27923397535) on `6289796`.
+  - Registry-state tests (Postgres service container): passed.
+  - PR gate: ruff check, ruff format --check, mypy strict, import/event/single-writer/isolation/MCP/trace/tier/script/secrets checks, and `pytest -m "not slow"`: passed.
+
+## Runtime boundary now closed
+
+The closed Phase 23 runtime boundary is intentionally narrow:
 
 1. Browser runtime executable surface: one local file, `dashboard/static/task-detail.js`.
 2. Dashboard HTML mount surface: one deferred external script, `task-detail.js`, alongside the already closed `health-readiness.js`.
@@ -54,7 +68,7 @@ The Phase 23 runtime boundary remains intentionally narrow:
 
 ## Explicit non-authorization
 
-Story 102.3 closure-prep and the local Story 102.2 implementation authorize none of the following:
+Story 102.3 and the Phase 23 closure authorize none of the following:
 
 - Broad live dashboard runtime wiring.
 - Event timeline, transitions, trace, history, replay, lifecycle, aggregate/session/digest, task-list/search/discovery, or control live wiring.
@@ -68,7 +82,7 @@ Any future live-read work must start as a separate planned story with its own Ar
 
 ## Changed-file scope
 
-Stage A closure-prep scope is limited to docs/status pending-state repair files:
+Story 102.3 final closure/status scope is limited to docs/status closure files:
 
 - `_bmad-output/implementation-artifacts/102-3-phase-23-epic-102-final-closure.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
@@ -77,57 +91,32 @@ Stage A closure-prep scope is limited to docs/status pending-state repair files:
 - `docs/architecture.md`
 - `docs/feature-status.md`
 
-Workflow-only planning/review/checkpoint evidence remains under `.omx/`. Story 102.2 runtime/test files are pre-existing implementation scope and are re-verified, not expanded, by Story 102.3.
+Workflow-only planning/review/checkpoint evidence remains under `.omx/`. Story 102.2 runtime/test files are already committed implementation scope and are cited, not expanded, by this final closure pass.
 
-## Verification plan
+## Stage B final review and QA decision
 
-Fresh Stage A verification must include:
+- code-reviewer lane `019eece4-88b4-7753-ae51-da7fa3a894b1`: APPROVE, 0 issues across 6 docs/status files.
+- Architect lane `019eece4-b6a5-7fd2-bace-ba27b2dba5fa`: CLEAR; final closure is architecturally safe and the narrow runtime boundary remains protected.
+- Stage B UltraQA decision: skipped because the final pass is docs/status-only and Story 102.2 runtime regression evidence is fresh (98 passed, 2 warnings; `node --check` passed).
+- Evidence artifacts: `.omx/specs/story-102-3-stage-b-final-code-review.md` and `.omx/specs/story-102-3-stage-b-qa-skip.md`.
 
-- Story 102.2 dashboard bundle: `uv run pytest -q tests/dashboard/test_task_detail_runtime_boundary.py tests/dashboard/test_health_readiness_runtime_boundary.py tests/dashboard/test_read_only_boundary.py tests/dashboard/test_static_shell.py tests/dashboard/test_static_fixture_rendering.py tests/dashboard/test_live_read_contracts.py tests/dashboard/test_live_read_adapter.py`.
-- `node --check dashboard/static/task-detail.js`.
+## Final Stage B verification plan
+
+This final docs/status-only pass requires:
+
+- Static docs/status smoke checks for closed Phase 23 status, absence of active closure wording in public docs, and preserved deferred-surface language.
 - `git diff --check`.
-- Static docs/status smoke checks proving Epic 102 and Story 102.3 remain pending while review/QA/push/CI evidence is absent, active closure-pending/closure-in-progress wording exists in public docs, and deferred-surface language is preserved.
-- Requires final code-review approval/clearance before any done/closed status is recorded.
-- Requires UltraQA pass, or explicit skip only if the final pass is docs/status-only and Story 102.2 runtime scope remains covered by fresh verification.
-- Requires commit, push, and remote CI green evidence before final closure is claimed.
-
-## Fresh local verification
-
-Completed during Stage A closure-prep while Epic 102 and Story 102.3 remain pending:
-
-- `uv run pytest -q tests/dashboard/test_task_detail_runtime_boundary.py tests/dashboard/test_health_readiness_runtime_boundary.py tests/dashboard/test_read_only_boundary.py tests/dashboard/test_static_shell.py tests/dashboard/test_static_fixture_rendering.py tests/dashboard/test_live_read_contracts.py tests/dashboard/test_live_read_adapter.py` — 98 passed, 2 warnings.
-- `node --check dashboard/static/task-detail.js` — passed.
-- `git diff --check` — passed.
-- Static docs/status smoke — passed: sprint-status parses; Epic 102 and Story 102.3 are not marked done; premature closure audit events are absent; public docs retain closure-pending/closure-in-progress wording; aggregate/session/digest, task-list/search/discovery, and mutation/control deferred boundaries remain explicit; remote CI remains pending.
-
-## Stage A review evidence
-
-- Code-reviewer lane `019eecd1-516a-76a0-ba1d-3e0183d51e62`: APPROVE, 0 issues; previous false-closure finding is resolved.
-- Architect lane `019eecd1-86d8-7ed3-b112-3dc65352f657`: CLEAR; two-stage closure architecture prevents premature done/closed status.
-- Synthesis artifact: `.omx/specs/story-102-3-stage-a-code-review.md`.
-
-Stage A still requires QA, commit/push, and remote CI before Stage B final closure can begin.
-
-## Stage A QA evidence
-
-- UltraQA/test-engineer lane `019eecd6-08f7-7f81-94d6-bb48648e8df9`: PASS, no blocking findings.
-- QA proved the task-detail runtime remains narrow, Stage A is not a false closure, and Stage B remains blocked until Stage A push and remote CI are green.
-- QA artifact: `.omx/specs/story-102-3-stage-a-ultraqa-report.md`.
-
-Stage A still requires commit/push and remote CI before Stage B final closure can begin.
-
-## Remote CI evidence
-
-Pending. If push or CI cannot complete, Phase 23 / Epic 102 closure must remain blocked or pending rather than finally claimed.
+- Proportional final review/QA decision for docs/status-only finalization.
+- Commit, push, and remote CI green evidence for the final closure commit before Autopilot completion.
 
 ## AI slop cleanup report
 
-Scope: Story 102.3 docs/status closure-prep files.
+Scope: Story 102.3 docs/status closure files.
 
 Behavior lock:
-- Closure-prep changes are docs/status-only.
-- Story 102.2 runtime-boundary tests remain the behavior lock for the already implemented task-detail runtime.
-- Public docs may say Phase 23 is closure-pending or closure-in-progress; they must not claim Epic 102 done until review/QA/push/CI evidence exists.
+- Final closure changes are docs/status-only.
+- Story 102.2 runtime-boundary tests remain the behavior lock for the implemented task-detail runtime.
+- Public docs say Phase 23 is closed only while preserving the narrow route boundary and deferred-surface disclaimers.
 
 Cleanup plan:
 1. Keep scope docs/status-only.
@@ -136,8 +125,8 @@ Cleanup plan:
 4. Rerun verification after any wording change.
 
 Fallback/slop findings:
-- No masking fallback, broad compatibility shim, swallowed error, silent default, speculative runtime path, hidden HTTP client, dependency, or source-code change is introduced by this closure-prep story.
+- No masking fallback, broad compatibility shim, swallowed error, silent default, speculative runtime path, hidden HTTP client, dependency, or source-code change is introduced by this closure story.
 - Repeated guardrail wording is intentional risk mitigation, not duplication to remove.
 
 Remaining risk:
-- The phrase `runtime-boundary complete` can be misread as all dashboard live-read work complete. The mitigation is explicit closure-pending wording: only the Task detail `GET /v1/tasks/{task_id}` boundary is implemented locally in Phase 23; future live-read route families require separate stories and gates.
+- The phrase `runtime-boundary complete` can be misread as all dashboard live-read work complete. The mitigation is explicit closure wording: only the Task detail `GET /v1/tasks/{task_id}` boundary is complete in Phase 23; future live-read route families require separate stories and gates.

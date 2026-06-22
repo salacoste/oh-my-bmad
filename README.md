@@ -14,7 +14,7 @@
   <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-stdio-7F52B5" alt="MCP"/></a>
   <a href="https://mypy.readthedocs.io/"><img src="https://img.shields.io/badge/mypy-strict-1f5082" alt="mypy strict"/></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"/></a>
-  <a href="_bmad-output/planning-artifacts/phase-23-epics.md"><img src="https://img.shields.io/badge/Phase%2023-Closure--pending-orange" alt="Phase 23 closure pending"/></a>
+  <a href="_bmad-output/planning-artifacts/phase-23-epics.md"><img src="https://img.shields.io/badge/Phase%2023-Closed-brightgreen" alt="Phase 23 closed"/></a>
 </p>
 
 ---
@@ -25,7 +25,7 @@ A platform that turns Telegram and a local console into the control surfaces for
 
 It's deliberately **boring** infrastructure — Python 3.12, FastAPI, aiogram, SQLite WAL, Docker Compose, stdio MCP. The novelty is in how the boring pieces compose, not in any one piece.
 
-> **Current repo state: Phase 23 closure-in-progress — Story 102.2 completed the narrow task-detail runtime boundary locally; Story 102.3 final closure remains pending final review, QA/skip, push, and remote CI evidence.** Latest tagged release is `v1.3.0`; this checkout contains later BMad work through Phase 23 closure-prep. See [`docs/index.md`](docs/index.md) and the derivative [`docs/feature-status.md`](docs/feature-status.md) matrix for the current implemented/deferred feature view.
+> **Current repo state: Phase 23 closed — Epic 102 completed the narrow task-detail runtime boundary and final closure after Stage A CI run `27923397535` passed on `6289796`.** Latest tagged release is `v1.3.0`; this checkout contains later BMad work through Phase 23. See [`docs/index.md`](docs/index.md) and the derivative [`docs/feature-status.md`](docs/feature-status.md) matrix for the current implemented/deferred feature view.
 
 ## How it works (at a glance)
 
@@ -141,7 +141,7 @@ Phase 4 — Implementation     → sprint plan → (create-story → validate �
                               → retrospective at every epic boundary
 ```
 
-Phase 1 took **10 epics / 88 stories**, with retrospective + deferred-work governance at every epic boundary. The current repo has progressed to **Phase 23 closure-prep** — event spine, multi-runtime workers, a 9-server MCP fleet, browser automation, supply-chain hardening, remote MCP transport, mTLS, historical replay, event-log lifecycle management, lifecycle-operation safety, docs/backlog reconciliation, archive-aware task history, destructive lifecycle apply readiness/product-scope planning, and the read-only dashboard live-read readiness/runtime boundary series. Epic 102 is closure-pending: Story 102.2 has the local task-detail runtime boundary implemented and re-verified, while Story 102.3 must still pass final review, QA/skip, push, and remote CI before the epic is marked done. The full per-phase walkthrough, skill catalog, and "how a new feature enters the workflow" decision tree is documented separately:
+Phase 1 took **10 epics / 88 stories**, with retrospective + deferred-work governance at every epic boundary. The current repo has progressed through **Phase 23** — event spine, multi-runtime workers, a 9-server MCP fleet, browser automation, supply-chain hardening, remote MCP transport, mTLS, historical replay, event-log lifecycle management, lifecycle-operation safety, docs/backlog reconciliation, archive-aware task history, destructive lifecycle apply readiness/product-scope planning, and the read-only dashboard live-read readiness/runtime boundary series. Epic 102 is now closed by the final Phase 23 closure hygiene story. The full per-phase walkthrough, skill catalog, and "how a new feature enters the workflow" decision tree is documented separately:
 
 ➡️ **[`docs/bmad-workflow.md`](docs/bmad-workflow.md)** — the complete workflow this project follows.
 
@@ -209,7 +209,7 @@ A few things worth a look even if you don't intend to run it:
 
 ## Status
 
-**Current development state — Phase 23 closure-in-progress / Epic 102 closure-pending.** Latest tagged release: `v1.3.0`. Story 102.2 task-detail runtime implementation is local and re-verified; Story 102.3 final closure is pending final review, QA/skip, push, and remote CI evidence. The canonical status source is [`_bmad-output/implementation-artifacts/sprint-status.yaml`](_bmad-output/implementation-artifacts/sprint-status.yaml); [`docs/feature-status.md`](docs/feature-status.md) is the derivative human-readable implemented/partial/deferred matrix.
+**Current development state — Phase 23 closed / Epic 102 done.** Latest tagged release: `v1.3.0`. Final closure cites Stage A commit `6289796` and CI run [`27923397535`](https://github.com/salacoste/oh-my-bmad/actions/runs/27923397535) as the remote evidence gate. The canonical status source is [`_bmad-output/implementation-artifacts/sprint-status.yaml`](_bmad-output/implementation-artifacts/sprint-status.yaml); [`docs/feature-status.md`](docs/feature-status.md) is the derivative human-readable implemented/partial/deferred matrix.
 
 | Phase | Scope | Epics | Current status |
 |---|---|---|---|
@@ -235,7 +235,7 @@ A few things worth a look even if you don't intend to run it:
 | 20 | Dashboard live-read contracts — route metadata, provenance/freshness states, unavailable aggregate/session decision | 93–97 | Done |
 | 21 | Dashboard rendering readiness — view models, fixture/static rendering, live-read wiring decision gate | 98–100 | Done |
 | 22 | Health/readiness runtime boundary — narrow `GET /v1/health` browser runtime | 101 | Done |
-| 23 | Task-detail runtime boundary — narrow `GET /v1/tasks/{task_id}` browser runtime | 102 | Closure-in-progress: 102.1 route selection and 102.2 runtime boundary are done; 102.3 final closure remains pending review/QA/push/CI |
+| 23 | Task-detail runtime boundary — narrow `GET /v1/tasks/{task_id}` browser runtime | 102 | Done: 102.1 route selection, 102.2 runtime boundary, and 102.3 final closure |
 
 Destructive lifecycle apply is still unimplemented, and object-storage lifecycle jobs plus scheduled retention remain future work. Dashboard runtime wiring remains intentionally narrow: health/readiness and task detail only. Aggregate/session/digest/task-list/search/discovery live contracts and mutation/control affordances remain unavailable unless a later BMad phase explicitly approves them.
 

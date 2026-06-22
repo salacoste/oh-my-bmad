@@ -7,7 +7,7 @@
 - **Type:** monorepo (`uv` workspace, 24 Python members) — single backend platform plus optional MCP fleet.
 - **Primary language:** Python 3.12 (locked).
 - **Architecture:** event-sourced, append-only JSONL event log, single-writer materialization, capability-tier-gated MCP boundaries, and replayable state.
-- **Current repo state:** Phase 23 closure-in-progress / Epic 102 closure-pending — Story 102.1 selected `GET /v1/tasks/{task_id}`, Story 102.2 implemented the narrow task-detail browser runtime boundary locally, and Story 102.3 final closure remains pending final review, QA/skip, push, and remote CI evidence.
+- **Current repo state:** Phase 23 closed / Epic 102 done — Story 102.1 selected `GET /v1/tasks/{task_id}`, Story 102.2 implemented the narrow task-detail browser runtime boundary, and Story 102.3 recorded final closure after Stage A CI run [`27923397535`](https://github.com/salacoste/oh-my-bmad/actions/runs/27923397535) passed on `6289796`.
 - **Latest tagged release:** `v1.3.0`; the checked-out branch contains later BMad work through Phase 23. [`feature-status.md`](./feature-status.md) summarizes implemented, partial, and deferred features; sprint-status remains canonical.
 
 ## Quick Reference
@@ -114,11 +114,11 @@ This table is a derivative summary. Use [`../_bmad-output/implementation-artifac
 | 20 | Dashboard live-read contracts and aggregate/session unavailable decision | Done |
 | 21 | Dashboard rendering readiness and live-read wiring decision gate | Done |
 | 22 | Health/readiness runtime boundary for `GET /v1/health` | Done |
-| 23 | Task-detail runtime boundary for `GET /v1/tasks/{task_id}` | Closure-in-progress: route selection and runtime boundary done; final closure pending review/QA/push/CI |
+| 23 | Task-detail runtime boundary for `GET /v1/tasks/{task_id}` | Done: route selection, runtime boundary, and final closure recorded |
 
 ## Scope of this refresh
 
-- **Mode:** documentation canonicalization during Phase 23 task-detail runtime-boundary closure-prep; final closure remains pending review/QA/push/CI.
+- **Mode:** documentation canonicalization after Phase 23 task-detail runtime-boundary work.
 - **Date:** 2026-06-22.
 - **Project type:** backend monorepo / autonomous development platform.
 - **State file:** [project-scan-report.json](./project-scan-report.json) may lag this index; use sprint-status as canonical.

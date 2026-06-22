@@ -8,21 +8,20 @@
 
 ## Current BMad status
 
-- **Current phase:** Phase 23 — Task Detail Live-Read Runtime Boundary is closure-in-progress.
-- **Current epic:** Epic 102 is closure-pending until final review, QA/skip, push, and remote CI evidence exists.
-- **Done in Phase 23 so far:**
+- **Current phase:** Phase 23 — Task Detail Live-Read Runtime Boundary is closed.
+- **Current epic:** Epic 102 is done after final closure hygiene.
+- **Done in Phase 23:**
   - Story 102.1 selected exactly `GET /v1/tasks/{task_id}` for the next dashboard live-read route family and opened the Phase 23 PRD/architecture/epics/status artifacts.
   - Story 102.2 implemented the narrow browser/runtime task-detail boundary with a single dashboard runtime module.
-- **Pending in Phase 23:**
-  - Story 102.3 final closure/status hygiene. It must keep Epic 102 pending until final code-review, QA/skip, commit/push, and remote CI evidence are recorded.
+  - Story 102.3 records final Phase 23 / Epic 102 closure after Stage A commit `6289796` and CI run [`27923397535`](https://github.com/salacoste/oh-my-bmad/actions/runs/27923397535) passed.
 - **Not closed by this page:** Any later dashboard live-read route family beyond Health/readiness and Task detail.
 
 Primary evidence:
 
-- `../_bmad-output/implementation-artifacts/sprint-status.yaml` — `current_phase: 23`, `epic-102` in progress, `102-1` done, `102-2` done, and `102-3` in progress/pending final gates.
+- `../_bmad-output/implementation-artifacts/sprint-status.yaml` — `current_phase: 23`, `epic-102` done, `102-1` done, `102-2` done, and `102-3` done.
 - `../_bmad-output/planning-artifacts/phase-23-epics.md` — Phase 23 route-selection and closure guardrails.
 - `../_bmad-output/implementation-artifacts/102-2-task-detail-runtime-boundary.md` — Story 102.2 local implementation/review/QA evidence.
-- `../_bmad-output/implementation-artifacts/102-3-phase-23-epic-102-final-closure.md` — Story 102.3 closure-prep artifact; final closure remains pending until gates pass.
+- `../_bmad-output/implementation-artifacts/102-3-phase-23-epic-102-final-closure.md` — Story 102.3 final closure evidence, including Stage A commit `6289796` and CI run `27923397535`.
 - `../dashboard/static/task-detail.js` — browser runtime calls only `GET /v1/tasks/{task_id}`.
 - `../services/registry-api/src/registry_api/routes/tasks.py` — backend `GET /v1/tasks/{task_id}` route exists from the registry API.
 
@@ -31,7 +30,7 @@ Primary evidence:
 | Status | Meaning |
 |---|---|
 | Implemented | Present in code/docs/tests and marked done in BMad status. |
-| Implemented locally / closure-pending | Present in the working tree and locally verified, but enclosing story/epic final closure is pending review/QA/push/CI. |
+| Implemented with recorded closure | Present in code/docs/tests and closed by the enclosing BMad story/epic evidence. |
 | Contract/static-only | Documented, panelled, or contract-tested without browser runtime/API expansion. |
 | Deferred / not implemented | Explicitly future, unavailable, fail-closed, or credential/operator-gated. |
 
@@ -51,7 +50,7 @@ Primary evidence:
 | Lifecycle operations readiness, product scope, and archive-aware history | Implemented read-only/readiness/docs scope | Phases 14–18 / Epics 69–86: ADR-0025, non-destructive dry-run planner, archive-aware task-history boundary, destructive-apply readiness contracts, and Phase 18 product-scope/next-candidate planning. No destructive apply was added. |
 | Read-only dashboard shell and contracts | Implemented static/contract scope | Phases 19–21 / Epics 88–100: static dashboard shell, read-only panels, accessibility/help, live-read contracts, fixture/view-model/static rendering readiness, fail-closed unavailable routes. |
 | Health/readiness dashboard runtime | Implemented | Phase 22 / Epic 101: narrow browser runtime boundary for `GET /v1/health`; see `dashboard/static/health-readiness.js` and related tests. |
-| Task detail dashboard runtime | Implemented locally / closure-pending | Phase 23 / Epic 102: Story 102.2 `dashboard/static/task-detail.js` uses exactly `GET /v1/tasks/{task_id}` with visible task-id provenance and fail-closed states. Story 102.3 final closure remains pending review/QA/push/CI. |
+| Task detail dashboard runtime | Implemented with recorded closure | Phase 23 / Epic 102: Story 102.2 `dashboard/static/task-detail.js` uses exactly `GET /v1/tasks/{task_id}` with visible task-id provenance and fail-closed states; Story 102.3 records final closure. |
 
 ## Contract/static-only or intentionally narrow areas
 
