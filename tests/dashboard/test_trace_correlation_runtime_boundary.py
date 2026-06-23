@@ -184,7 +184,9 @@ def test_story_104_2_trace_runtime_script_allowlist_is_exact() -> None:
     assert parser.scripts == [{"src": script, "defer": ""} for script in APPROVED_SCRIPTS]
     assert not "".join(parser.inline_script_text).strip()
     assert not parser.controls
-    assert all(link.get("rel", "").lower() not in {"preload", "modulepreload"} for link in parser.links)
+    assert all(
+        link.get("rel", "").lower() not in {"preload", "modulepreload"} for link in parser.links
+    )
     assert TRACE_RUNTIME.exists()
 
 
@@ -315,7 +317,9 @@ def test_story_104_2_hidden_identifier_decoys_are_ignored() -> None:
             "expected": ["healthy", "authoritative", "1 rows", "metadata only"],
         }
     )
-    assert output["fetchCalls"] == [{"route": APPROVED_TRACE_ROUTE, "method": "GET", "hasBody": False}]
+    assert output["fetchCalls"] == [
+        {"route": APPROVED_TRACE_ROUTE, "method": "GET", "hasBody": False}
+    ]
     rendered = " ".join(output["texts"].values()).lower()
     for hidden in ("hidden-trace-id", "hidden-event-id", "hidden-task-id", "hidden-session-id"):
         assert hidden not in rendered
@@ -339,19 +343,73 @@ def test_story_104_2_runtime_behavior_maps_success_empty_and_failures() -> None:
             },
             "expected": ["healthy", "authoritative", "1 rows", "get /v1/trace/01917e5c"],
         },
-        {"name": "empty", "traceResponse": {"ok": True, "status": 200, "body": {"trace_id": VISIBLE_TRACE_ID, "events": []}}, "expected": ["empty", "non-authoritative", "0 rows"]},
-        {"name": "partial", "traceResponse": {"ok": True, "status": 200, "body": {"trace_id": VISIBLE_TRACE_ID, "display_state": "partial", "events": []}}, "expected": ["partial", "non-authoritative"]},
-        {"name": "stale", "traceResponse": {"ok": True, "status": 200, "body": {"trace_id": VISIBLE_TRACE_ID, "freshness_state": "stale", "events": []}}, "expected": ["stale", "non-authoritative"]},
-        {"name": "invalid-json", "traceResponse": {"ok": True, "status": 200, "jsonError": "bad json"}, "expected": ["invalid", "non-authoritative"]},
-        {"name": "unexpected-shape", "traceResponse": {"ok": True, "status": 200, "body": {"events": [{"event_id": "evt-1"}]}}, "expected": ["invalid", "non-authoritative"]},
-        {"name": "mismatched-trace-id", "traceResponse": {"ok": True, "status": 200, "body": {"trace_id": "other", "events": []}}, "expected": ["invalid", "non-authoritative"]},
-        {"name": "unauthorized", "traceResponse": {"ok": False, "status": 403, "body": {}}, "expected": ["unauthorized", "non-authoritative"]},
-        {"name": "network", "traceReject": "network down", "expected": ["backend unavailable", "non-authoritative"]},
+        {
+            "name": "empty",
+            "traceResponse": {
+                "ok": True,
+                "status": 200,
+                "body": {"trace_id": VISIBLE_TRACE_ID, "events": []},
+            },
+            "expected": ["empty", "non-authoritative", "0 rows"],
+        },
+        {
+            "name": "partial",
+            "traceResponse": {
+                "ok": True,
+                "status": 200,
+                "body": {"trace_id": VISIBLE_TRACE_ID, "display_state": "partial", "events": []},
+            },
+            "expected": ["partial", "non-authoritative"],
+        },
+        {
+            "name": "stale",
+            "traceResponse": {
+                "ok": True,
+                "status": 200,
+                "body": {"trace_id": VISIBLE_TRACE_ID, "freshness_state": "stale", "events": []},
+            },
+            "expected": ["stale", "non-authoritative"],
+        },
+        {
+            "name": "invalid-json",
+            "traceResponse": {"ok": True, "status": 200, "jsonError": "bad json"},
+            "expected": ["invalid", "non-authoritative"],
+        },
+        {
+            "name": "unexpected-shape",
+            "traceResponse": {
+                "ok": True,
+                "status": 200,
+                "body": {"events": [{"event_id": "evt-1"}]},
+            },
+            "expected": ["invalid", "non-authoritative"],
+        },
+        {
+            "name": "mismatched-trace-id",
+            "traceResponse": {
+                "ok": True,
+                "status": 200,
+                "body": {"trace_id": "other", "events": []},
+            },
+            "expected": ["invalid", "non-authoritative"],
+        },
+        {
+            "name": "unauthorized",
+            "traceResponse": {"ok": False, "status": 403, "body": {}},
+            "expected": ["unauthorized", "non-authoritative"],
+        },
+        {
+            "name": "network",
+            "traceReject": "network down",
+            "expected": ["backend unavailable", "non-authoritative"],
+        },
     ]
     for case in cases:
         output = run_trace_runtime_case(case)
         rendered = " ".join(output["texts"].values()).lower()
-        assert output["fetchCalls"] == [{"route": APPROVED_TRACE_ROUTE, "method": "GET", "hasBody": False}]
+        assert output["fetchCalls"] == [
+            {"route": APPROVED_TRACE_ROUTE, "method": "GET", "hasBody": False}
+        ]
         for expected in case["expected"]:
             assert expected in rendered, (case["name"], expected, rendered)
         if case["name"] != "healthy":
@@ -433,10 +491,20 @@ def test_story_104_2_mismatched_trace_rows_do_not_render_linked_identifiers() ->
 
 def test_story_104_2_runtime_behavior_runs_when_document_already_loaded() -> None:
     output = run_trace_runtime_case(
-        {"name": "already-loaded", "traceResponse": {"ok": True, "status": 200, "body": {"trace_id": VISIBLE_TRACE_ID, "events": []}}, "expected": ["empty"]},
+        {
+            "name": "already-loaded",
+            "traceResponse": {
+                "ok": True,
+                "status": 200,
+                "body": {"trace_id": VISIBLE_TRACE_ID, "events": []},
+            },
+            "expected": ["empty"],
+        },
         ready_state="interactive",
     )
-    assert output["fetchCalls"] == [{"route": APPROVED_TRACE_ROUTE, "method": "GET", "hasBody": False}]
+    assert output["fetchCalls"] == [
+        {"route": APPROVED_TRACE_ROUTE, "method": "GET", "hasBody": False}
+    ]
     rendered = " ".join(output["texts"].values()).lower()
     assert "empty" in rendered
     assert "non-authoritative" in rendered
@@ -510,7 +578,9 @@ def run_trace_runtime_case(case: RuntimeCase, *, ready_state: str = "loading") -
           }});
         """
     )
-    completed = subprocess.run(["node", "-e", node_code], check=True, text=True, capture_output=True)
+    completed = subprocess.run(
+        ["node", "-e", node_code], check=True, text=True, capture_output=True
+    )
     loaded = json.loads(completed.stdout)
     assert isinstance(loaded, dict)
     return cast(RuntimeOutput, loaded)

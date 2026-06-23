@@ -168,7 +168,9 @@ def test_story_102_2_visible_task_id_source_is_not_hidden_data() -> None:
 
 def test_story_102_2_runtime_module_graph_is_closed() -> None:
     runtime_files = sorted(path.name for path in Path("dashboard/static").glob("*.js"))
-    assert runtime_files == sorted([APPROVED_HEALTH_SCRIPT, APPROVED_SCRIPT, APPROVED_EVENT_SCRIPT, APPROVED_TRACE_SCRIPT])
+    assert runtime_files == sorted(
+        [APPROVED_HEALTH_SCRIPT, APPROVED_SCRIPT, APPROVED_EVENT_SCRIPT, APPROVED_TRACE_SCRIPT]
+    )
 
     source = runtime_source()
     for marker in FORBIDDEN_RUNTIME_MARKERS:
