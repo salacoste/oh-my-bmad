@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-23T02:32:00+03:00"
-current_phase: 25  # Phase 25 IN PROGRESS — Story 104.2 trace correlation runtime boundary implemented locally for exact GET /v1/trace/{trace_id}; review/QA/remote CI still pending
+last_updated: "2026-06-23T15:18:00+03:00"
+current_phase: 25  # Phase 25 CLOSED — Epic 104 trace correlation exact GET /v1/trace/{trace_id} runtime boundary reviewed, QA-verified, pushed, and remote-CI green
 
 development_status:
   # =========================================================================
@@ -881,15 +881,43 @@ development_status:
   # =========================================================================
   # Epic 104: Trace correlation live-read route selection
   # =========================================================================
-  epic-104: in-progress  # Phase 25 opened for GET /v1/trace/{trace_id} route selection only; no runtime implementation authorized; deferred surfaces fail-closed
+  epic-104: done  # Phase 25 closed for exact GET /v1/trace/{trace_id}; runtime boundary reviewed APPROVE/CLEAR, QA-verified, pushed, and remote-CI green on e0c624c
   104-1-trace-correlation-live-read-route-selection: done  # Phase 25 PRD/architecture/epics/status opening; selects future GET /v1/trace/{trace_id} only
-  104-2-trace-correlation-runtime-boundary: review  # local tests-first runtime boundary implemented for visible trace_id selector + exact GET /v1/trace/{trace_id}; code-review/QA/push/remote-CI pending
-  104-3-phase-25-epic-104-final-closure: backlog  # future docs/status closure only after Story 104.2 review/QA/push/remote-CI evidence
+  104-2-trace-correlation-runtime-boundary: done  # exact GET /v1/trace/{trace_id} runtime boundary reviewed APPROVE/CLEAR, UltraQA complete, pushed, and remote-CI green on run 28025459660
+  104-3-phase-25-epic-104-final-closure: done  # docs/status closure after Story 104.2 review/QA/push/remote-CI evidence; deferred surfaces remain fail-closed
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-23"
+    event: phase-25-epic-104-final-closure
+    from: in-progress
+    to: done
+    story: 104-3-phase-25-epic-104-final-closure
+    reason: >
+      Phase 25 / Epic 104 closed after Story 104.2 completed independent
+      code-review (019ef1ba-d9cd-7e00-a2b1-dda4eac69d01 APPROVE/CLEAR),
+      UltraQA (.omx/state/story-104-2-ultraqa-report.md), push, and remote
+      GitHub Actions CI run 28025459660 green on e0c624c. Closure is limited
+      to exact GET /v1/trace/{trace_id}; trace search/list/discovery,
+      history/replay, lifecycle readiness, task-list/search/discovery,
+      aggregate/session/digest, generated live data, broad dashboard live
+      wiring, and control surfaces remain unauthorized/fail-closed.
+
+  - date: "2026-06-23"
+    event: story-104-2-runtime-boundary-complete
+    from: review
+    to: done
+    story: 104-2-trace-correlation-runtime-boundary
+    reason: >
+      Story 104.2 completed the tests-first Trace correlation runtime boundary
+      for exactly GET /v1/trace/{trace_id}. Review cycles fixed fabricated
+      freshness fallback and mismatched row metadata leakage; final reviewer
+      019ef1ba-d9cd-7e00-a2b1-dda4eac69d01 returned APPROVE/CLEAR. UltraQA
+      passed adversarial Node VM scenarios and local PR-gate checks passed;
+      remote CI run 28025459660 succeeded on e0c624c.
+
   - date: "2026-06-23"
     event: story-104-2-runtime-boundary-to-review
     from: backlog

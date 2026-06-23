@@ -42,7 +42,7 @@ Plan and later prove a trace-scoped dashboard live-read boundary for trace corre
 
 ### Story 104.2 — Trace correlation runtime boundary
 
-**Status:** backlog.
+**Status:** done by commit `13bbc37` plus formatting CI fix `e0c624c`; final code-review APPROVE/CLEAR, UltraQA complete, and remote CI run `28025459660` green.
 
 **Intent:** Implement a separately approved, tests-first browser/runtime boundary for exactly the selected route family.
 
@@ -61,7 +61,7 @@ Plan and later prove a trace-scoped dashboard live-read boundary for trace corre
 
 ### Story 104.3 — Phase 25 / Epic 104 final validation closure
 
-**Status:** backlog.
+**Status:** done by `_bmad-output/implementation-artifacts/104-3-phase-25-epic-104-final-closure.md`.
 
 **Intent:** Complete docs/status final closure only after Story 104.2 runtime evidence, final review, QA decision, push, and remote CI evidence exist.
 
