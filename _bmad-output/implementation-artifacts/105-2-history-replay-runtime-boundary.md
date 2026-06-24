@@ -2,7 +2,7 @@
 
 ## Status
 
-Local implementation, review, architecture, and UltraQA complete — push and remote CI evidence remain pending before final runtime-completion closure.
+Done — tests-first implementation, independent code-review, architect review, UltraQA, push, and remote CI are complete.
 
 ## Scope implemented
 
@@ -76,7 +76,11 @@ Final green evidence:
 - Final code review: native code-reviewer Maxwell `019ef793-7349-72b0-b6c0-59cd7d36bfb1` returned `CODE_REVIEW: APPROVE` and `ARCHITECTURAL_STATUS: CLEAR`.
 - Architect review: native architect `019ef778-785c-7ce1-81a0-801c82fac3b9` returned `ARCHITECT_REVIEW: APPROVE` and `ARCHITECTURAL_STATUS: CLEAR`.
 - UltraQA: `.omx/state/story-105-2-ultraqa-report.md`, `ULTRAQA COMPLETE: Goal met after 1 cycle`.
-- Push and remote CI remain pending until commit/push completes.
+- Runtime/story commit: `f7d4d2f feat(dashboard): add history replay runtime boundary`.
+- Remote CI: GitHub Actions `ci` run `28072822987` for `f7d4d2fe05777088d660f016378ff898c488e693` completed successfully.
+- Registry-state tests: success.
+- PR gate: success.
+- URL: `https://github.com/salacoste/oh-my-bmad/actions/runs/28072822987`.
 
 ## Explicit non-authorization preserved
 

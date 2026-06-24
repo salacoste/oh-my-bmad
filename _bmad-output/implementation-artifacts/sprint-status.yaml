@@ -889,9 +889,9 @@ development_status:
   # =========================================================================
   # Epic 105: History / Replay live-read route selection
   # =========================================================================
-  epic-105: in-progress  # Phase 26 Epic 105 active; Story 105.2 history/replay runtime boundary locally implemented and under review/QA, final closure deferred to Story 105.3
+  epic-105: in-progress  # Phase 26 Epic 105 active; Story 105.2 history/replay runtime boundary done with review/QA/push/remote-CI evidence, final closure deferred to Story 105.3
   105-1-history-replay-live-read-route-selection: done  # Phase 26 PRD/architecture/epics/status opening; selects future history/replay routes only
-  105-2-history-replay-runtime-boundary: in-review  # tests-first runtime boundary implemented locally; awaiting independent code-review, UltraQA, push, and remote CI evidence before done
+  105-2-history-replay-runtime-boundary: done  # exact history/replay runtime boundary reviewed APPROVE/CLEAR, architect CLEAR, UltraQA complete, pushed, and remote-CI green on run 28072822987
   105-3-phase-26-epic-105-final-closure: backlog  # future closure only after Story 105.2 review/QA/push/remote-CI evidence
 
 # ===========================================================================
@@ -899,23 +899,27 @@ development_status:
 # ===========================================================================
 audit_trail:
   - date: "2026-06-24"
-    event: story-105-2-history-replay-runtime-boundary-local-implementation
-    from: backlog
-    to: in-review
+    event: story-105-2-history-replay-runtime-boundary-complete
+    from: in-review
+    to: done
     story: 105-2-history-replay-runtime-boundary
     reason: >
-      Story 105.2 adds the narrow history/replay runtime boundary selected by
+      Story 105.2 added the narrow history/replay runtime boundary selected by
       Story 105.1: GET /v1/tasks/{task_id}/history, GET /v1/events/replay
       with visible to_sequence/to_timestamp target, and GET /v1/events/replay/
-      validate. Local tests prove GET-only/body-free fetches, visible selector
-      discipline, no hidden query/hash/storage/discovery target source, bounded
-      metadata rendering, no raw replay state/task/session/diff rendering, no
-      fabricated freshness, and no lifecycle/snapshot/search/session/digest/
-      control reachability. OMX planning/review wait guardrail now records the
-      5-minute cap, one replacement spawn attempt, stale/capacity incident on
-      spawn unavailability, clean lane stop, no close_agent recovery, and no
-      unbounded waits. Story remains in-review until code-review, UltraQA,
-      push, and remote CI evidence are recorded.
+      validate. Local and remote evidence prove GET-only/body-free fetches,
+      visible selector discipline, no hidden query/hash/storage/discovery target
+      source, bounded metadata rendering, no raw replay state/task/session/diff
+      rendering, no fabricated freshness, validation mismatch fail-closed, and
+      no lifecycle/snapshot/search/session/digest/control reachability. Code
+      review returned APPROVE/CLEAR, architect returned APPROVE/CLEAR, UltraQA
+      completed after one cycle, commit f7d4d2f was pushed, and GitHub Actions
+      CI run 28072822987 completed successfully. OMX planning/review wait
+      guardrail is recorded in tracked docs/omx-guardrails.md with the 5-minute
+      cap, one replacement spawn attempt, stale/capacity incident on spawn
+      unavailability, clean lane stop, no close_agent recovery, and no
+      unbounded waits. Epic 105 remains in-progress until Story 105.3 final
+      closure.
 
   - date: "2026-06-23"
     event: story-105-1-history-replay-route-selection-complete
