@@ -18,7 +18,6 @@ CORE_APPROVED_READ_ROUTES = frozenset(
         ("GET", "/v1/tasks/{task_id}/history"),
         ("GET", "/v1/events/replay"),
         ("GET", "/v1/events/replay/validate"),
-        ("GET", "/v1/events/replay/snapshots"),
         ("GET", "/v1/health"),
     }
 )
@@ -55,11 +54,13 @@ APPROVED_HEALTH_RUNTIME_SCRIPT = "health-readiness.js"
 APPROVED_TASK_DETAIL_RUNTIME_SCRIPT = "task-detail.js"
 APPROVED_EVENT_RUNTIME_SCRIPT = "event-timeline.js"
 APPROVED_TRACE_RUNTIME_SCRIPT = "trace-correlation.js"
+APPROVED_HISTORY_REPLAY_RUNTIME_SCRIPT = "history-replay.js"
 APPROVED_RUNTIME_SCRIPTS = {
     APPROVED_HEALTH_RUNTIME_SCRIPT,
     APPROVED_TASK_DETAIL_RUNTIME_SCRIPT,
     APPROVED_EVENT_RUNTIME_SCRIPT,
     APPROVED_TRACE_RUNTIME_SCRIPT,
+    APPROVED_HISTORY_REPLAY_RUNTIME_SCRIPT,
 }
 
 RUNTIME_CALL_MARKERS = (

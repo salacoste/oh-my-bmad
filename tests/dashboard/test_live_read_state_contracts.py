@@ -28,7 +28,6 @@ SourceCategory = Literal[
     "trace",
     "history",
     "replay",
-    "lifecycle",
     "health",
     "aggregate",
     "session",
@@ -60,9 +59,7 @@ Identifier = Literal[
     "session_id",
     "event_id",
     "trace_id",
-    "snapshot_id",
     "replay_id",
-    "lifecycle_manifest_id",
 ]
 
 APPROVED_ROUTE_PATTERNS = frozenset(
@@ -77,7 +74,6 @@ EXPECTED_IDENTIFIERS_BY_ROUTE = {
     "/v1/tasks/{task_id}/history": frozenset({"task_id", "event_id"}),
     "/v1/events/replay": frozenset({"replay_id"}),
     "/v1/events/replay/validate": frozenset({"replay_id"}),
-    "/v1/events/replay/snapshots": frozenset({"snapshot_id", "lifecycle_manifest_id"}),
     "/v1/health": frozenset(),
 }
 NON_AUTHORITATIVE_STATES = frozenset(
@@ -91,7 +87,7 @@ NON_AUTHORITATIVE_STATES = frozenset(
         "backend-unavailable",
     }
 )
-REPLAY_OR_LIFECYCLE_CATEGORIES = frozenset({"replay", "lifecycle"})
+REPLAY_OR_LIFECYCLE_CATEGORIES = frozenset({"replay"})
 UNCERTAINTY_COPY_TERMS = (
     "unavailable",
     "needs contract",
@@ -235,16 +231,6 @@ LIVE_VALUE_CONTRACTS = (
         allowed_states=frozenset({"healthy", "partial", "stale", "invalid", "backend-unavailable"}),
     ),
     LiveValueContract(
-        name="snapshot-listing",
-        source_category="lifecycle",
-        route_pattern="/v1/events/replay/snapshots",
-        route_contract="approved",
-        timestamp_policy="retrieved-at-required",
-        freshness_policy="healthy-or-stale-required",
-        required_identifiers=("snapshot_id", "lifecycle_manifest_id"),
-        allowed_states=frozenset({"healthy", "partial", "stale", "invalid", "backend-unavailable"}),
-    ),
-    LiveValueContract(
         name="health",
         source_category="health",
         route_pattern="/v1/health",
@@ -308,13 +294,6 @@ DEGRADED_STATE_FIXTURES = (
         copy="Invalid replay validation result; display degraded state only.",
     ),
     DisplayStateFixture(
-        name="lifecycle-stale",
-        source_category="lifecycle",
-        route_pattern="/v1/events/replay/snapshots",
-        state="stale",
-        copy="Stale lifecycle snapshot listing; freshness expired.",
-    ),
-    DisplayStateFixture(
         name="health-backend-unavailable",
         source_category="health",
         route_pattern="/v1/health",
@@ -353,7 +332,6 @@ def test_every_future_live_value_declares_source_freshness_and_identifier_contra
         "trace",
         "history",
         "replay",
-        "lifecycle",
         "health",
         "aggregate",
         "session",

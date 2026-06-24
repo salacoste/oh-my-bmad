@@ -81,7 +81,7 @@ def test_route_inventory_is_imported_from_static_boundary_contract() -> None:
     assert APPROVED_READ_ROUTES is boundary.CORE_APPROVED_READ_ROUTES
     assert OPTIONAL_NON_CORE_READ_ROUTES is boundary.OPTIONAL_NON_CORE_READ_ROUTES
     assert FORBIDDEN_METHODS is boundary.FORBIDDEN_METHODS
-    assert len(APPROVED_READ_ROUTES) == 9
+    assert len(APPROVED_READ_ROUTES) == 8
 
 
 def test_candidate_core_read_routes_are_unique_normalized_and_get_only() -> None:

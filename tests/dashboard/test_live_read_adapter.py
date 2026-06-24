@@ -34,7 +34,7 @@ def test_adapter_contracts_cover_exact_approved_route_inventory() -> None:
         for contract in approved
     }
 
-    assert len(approved) == 9
+    assert len(approved) == 8
     assert adapter_routes == live_contracts.APPROVED_READ_ROUTES
     assert {contract.route_status for contract in approved} == {"approved"}
     assert {

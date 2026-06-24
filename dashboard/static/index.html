@@ -50,7 +50,7 @@
         <li><a href="#sessions">Sessions</a></li>
         <li><a href="#events">Events</a></li>
         <li><a href="#traces">Traces</a></li>
-        <li><a href="#replay-lifecycle-readiness">Replay / lifecycle readiness</a></li>
+        <li><a href="#history-replay-readiness">History / replay readiness</a></li>
         <li><a href="#fixture-readiness">Fixture readiness</a></li>
         <li><a href="#health">Health</a></li>
         <li><a href="#audit">Audit</a></li>
@@ -238,18 +238,25 @@
       <p class="meta" id="trace-correlation-linked-identifiers">Linked identifiers: pending.</p>
       <p class="meta" id="trace-correlation-detail">Detail: no trace correlation response has been rendered yet. Confidence: unavailable until the approved trace read completes. No trace search/list/discovery; event_id, task_id, and session_id metadata only.</p>
     </section>
-    <section id="replay-lifecycle-readiness" aria-labelledby="replay-title">
-      <h2 id="replay-title">Replay / lifecycle readiness</h2>
-      <p class="state">Replay history and validation reads are unavailable in this static shell: the panel shows a read-only contract, not runtime replay data.</p>
-      <p>Task history and replay validation route names are inert visible provenance only: not links, attributes, automatic-refresh sources, or client calls; no live dashboard wiring is present.</p>
-      <ul aria-label="Replay read route provenance">
+    <section id="history-replay-readiness" aria-labelledby="replay-title">
+      <h2 id="replay-title">History / replay readiness</h2>
+      <p class="state" id="history-replay-status">History/replay live-read boundary pending: waiting for approved task-history, replay, and replay-validation GET responses.</p>
+      <p>Approved live-read routes for this slice are exactly GET /v1/tasks/{task_id}/history, GET /v1/events/replay, and GET /v1/events/replay/validate. The old replay/lifecycle surface is reset for this current dashboard boundary: no snapshots, no lifecycle readiness, no task-list/search/discovery, no aggregate/session/digest, no generated live data, no replay execution jobs, no background jobs, no archive metadata changes, and no controls are reachable.</p>
+      <p>
+        Visible task_id source: <span id="history-replay-task-id-source">fixture-task-id</span>.
+        This visible task_id text is the only selector for task history. Hidden task-list/search, event, trace, session, aggregate, query, hash, storage, and generated discovery sources are unavailable.
+      </p>
+      <p>
+        Exactly one visible replay target is required: <span id="history-replay-target-kind-source">to_sequence</span>=<span id="history-replay-target-value-source">42</span>.
+        The only accepted target kind values are to_sequence and to_timestamp. Missing, unsupported, or empty target values fail closed without a fetch.
+      </p>
+      <ul aria-label="History replay approved routes">
         <li>GET /v1/tasks/{task_id}/history</li>
         <li>GET /v1/events/replay</li>
         <li>GET /v1/events/replay/validate</li>
-        <li>GET /v1/events/replay/snapshots</li>
       </ul>
-      <p>These are presentation fields for unavailable replay validation reads, not replay execution output and not canonical JSONL replay output.</p>
-      <ul aria-label="Replay history and validation passive fields">
+      <p>Returned event_id, trace_id, replay_id, task_id, and session_id metadata only: these identifiers can be displayed as provenance but cannot drive adjacent route fetches, filters, discovery, aggregation, sessions, digest, replay execution, or controls.</p>
+      <ul aria-label="History replay bounded fields">
         <li>task_id</li>
         <li>history_source</li>
         <li>replay_source</li>
@@ -257,47 +264,10 @@
         <li>validation_timestamp</li>
         <li>replayed_event_count</li>
         <li>live_projection_reference</li>
-        <li>field_diffs</li>
-        <li>snapshot_id</li>
-        <li>snapshot_source</li>
-        <li>archive_manifest_reference</li>
-        <li>archive_manifest_digest</li>
-        <li>retained_hot_segments</li>
-        <li>archive_segments</li>
-        <li>problem_details_type</li>
-        <li>problem_details_status</li>
-        <li>problem_details_code</li>
+        <li>field_diffs_count</li>
         <li>freshness</li>
       </ul>
-      <p>Archive validation ProblemDetails are route-local ProblemDetails and passive static presentation details for unavailable archive reads, not global error behavior and not live dashboard data.</p>
-      <ul aria-label="Archive ProblemDetails passive fields">
-        <li>type</li>
-        <li>title</li>
-        <li>status</li>
-        <li>detail</li>
-        <li>instance</li>
-        <li>extensions</li>
-        <li>extensions.code</li>
-        <li>extensions.trace_id</li>
-      </ul>
-      <p>extensions.code and extensions.trace_id are route-local extension evidence. extensions.trace_id is optional and appears only when the route-local response carries it.</p>
-      <ul aria-label="Lifecycle readiness passive evidence">
-        <li>plan_hash</li>
-        <li>dry_run_artifact_ref</li>
-        <li>safety_policy_version</li>
-        <li>retention_input_digest</li>
-        <li>affected_segments</li>
-        <li>replay_validation_ref</li>
-        <li>rollback_evidence_ref</li>
-        <li>operator_identity</li>
-        <li>authorized_at</li>
-        <li>authorization_event_ref</li>
-        <li>archive_manifest_ref</li>
-        <li>archive_manifest_validation</li>
-        <li>archive_error_boundary</li>
-      </ul>
-      <p>Lifecycle readiness names are passive future-evidence slots grounded in existing lifecycle contracts, not a new dashboard API schema. Unsupported lifecycle reads remain unavailable until a separate approved read contract exists.</p>
-      <ul aria-label="Replay history and validation passive states">
+      <ul aria-label="History replay states">
         <li>unavailable read</li>
         <li>loading</li>
         <li>empty successful read</li>
@@ -307,41 +277,22 @@
         <li>invalid archive configuration</li>
         <li>fail-closed archive error</li>
         <li>replay validation mismatch</li>
-        <li>no snapshots</li>
         <li>stale data</li>
         <li>route failure/read error</li>
         <li>unavailable replay result</li>
-        <li>unavailable non-read snapshot behavior</li>
-        <li>future gated lifecycle work</li>
       </ul>
-      <ul aria-label="Lifecycle and archive fail-safe states">
-        <li>route-local ProblemDetails</li>
-        <li>invalid archive configuration</li>
-        <li>missing archive manifest</li>
-        <li>checksum mismatch</li>
-        <li>malformed manifest metadata</li>
-        <li>duplicate manifest keys</li>
-        <li>segment sequence overlap</li>
-        <li>missing lifecycle evidence</li>
-        <li>failed replay validation</li>
-        <li>stale replay evidence</li>
-        <li>missing authorization evidence</li>
-        <li>unsigned authorization evidence</li>
-        <li>ambiguous authorization evidence</li>
-        <li>unverifiable lifecycle evidence</li>
-        <li>missing rollback evidence</li>
-        <li>unavailable lifecycle read</li>
-        <li>empty successful lifecycle read</li>
-        <li>future gated destructive lifecycle work</li>
-        <li>retention scheduling not active</li>
-      </ul>
-      <p>Invalid archive configuration fails closed and is not partial hot-log success.</p>
-      <p>Missing, failed, stale, ambiguous, or unverifiable lifecycle evidence blocks future destructive lifecycle work. Missing, unsigned, or ambiguous authorization evidence blocks future destructive lifecycle work.</p>
-      <p>Non-read snapshot behavior is outside this story and not exposed in the static dashboard. Hidden writes, cache warming, and background jobs are outside this static read view and not exposed.</p>
-      <p>Retention scheduling and segment-removal work remain future gated work and are not exposed in this static view.</p>
-      <p>Future destructive lifecycle work requires distinct authorization evidence, exact plan_hash and dry-run identity, affected segment identities, replay validation, rollback evidence, and operator event or ledger reference. Absent, stale, unsigned, ambiguous, or unverifiable authorization blocks that future work.</p>
-      <p>Epic 92 owns cross-panel health, error, accessibility, and responsiveness consistency; this Story 91.2 slice only completes static lifecycle safety and archive ProblemDetails copy.</p>
-      <p class="meta">Source: GET task-history and replay-validation route provenance as static text plus BMAD Story 91.2. Freshness timestamp: pending. Reference: task history, replay validation, snapshots read listing, canonical route-local ProblemDetails fields, lifecycle evidence slots, fail-closed archive and authorization states, and Epic 92 boundary. Confidence: unavailable until a dashboard-safe read is wired by a later approved story.</p>
+      <p>Raw replay state, task rows, session rows, and validation diff values are not rendered. The dashboard renders bounded counts, target/selector, source routes, freshness, authority, provenance metadata, and degraded-state copy only.</p>
+      <p>Invalid archive configuration fails closed and is not partial hot-log success. Unsupported reads remain unavailable until a separate approved read contract exists.</p>
+      <p class="meta" id="history-replay-source">Source: GET /v1/tasks/{task_id}/history, GET /v1/events/replay, and GET /v1/events/replay/validate. Runtime routes: pending.</p>
+      <p class="meta" id="history-replay-task-id">task_id: fixture-task-id.</p>
+      <p class="meta" id="history-replay-target">Replay target: to_sequence=42.</p>
+      <p class="meta" id="history-replay-freshness">Freshness: pending retrieved_at or emitted_at.</p>
+      <p class="meta" id="history-replay-authority">Authority: non-authoritative until valid history/replay responses are read.</p>
+      <p class="meta" id="history-replay-history-count">History events: pending.</p>
+      <p class="meta" id="history-replay-replay-count">Replayed events: pending.</p>
+      <p class="meta" id="history-replay-validation-status">Validation: pending.</p>
+      <p class="meta" id="history-replay-linked-identifiers">Linked identifiers: pending.</p>
+      <p class="meta" id="history-replay-detail">Detail: no history/replay response has been rendered yet. Confidence: unavailable until the approved reads complete. Metadata only; no snapshots and no lifecycle readiness in this current boundary.</p>
     </section>
     <section id="fixture-readiness" aria-labelledby="fixture-readiness-title">
       <h2 id="fixture-readiness-title">Fixture readiness</h2>
@@ -359,7 +310,6 @@
         <li>Panel family: task-history. Panel title: Task history. Source category: history. Source route pattern: /v1/tasks/{task_id}/history. Route input identifiers: task_id. Row display identifiers: task_id, event_id, trace_id. Source identifiers: task_id=fixture-task-id. Fixture provenance: static-fixture. Timestamp policy: retrieved-or-emitted-at-required. Freshness policy: fresh-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: task history static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
         <li>Panel family: replay-readiness. Panel title: Replay readiness. Source category: replay. Source route pattern: /v1/events/replay. Route input identifiers: none. Row display identifiers: replay_id, event_id, trace_id. Source identifiers: source_category=fixture-replay-source. Fixture provenance: static-fixture. Timestamp policy: retrieved-or-emitted-at-required. Freshness policy: fresh-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: replay readiness static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
         <li>Panel family: replay-readiness. Panel title: Replay readiness. Source category: replay. Source route pattern: /v1/events/replay/validate. Route input identifiers: none. Row display identifiers: replay_id. Source identifiers: source_category=fixture-replay-source. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: healthy-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: replay readiness static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
-        <li>Panel family: lifecycle-readiness. Panel title: Lifecycle readiness. Source category: lifecycle. Source route pattern: /v1/events/replay/snapshots. Route input identifiers: none. Row display identifiers: snapshot_id, lifecycle_manifest_id, replay_id. Source identifiers: source_category=fixture-lifecycle-source. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: healthy-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: lifecycle readiness static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
         <li>Panel family: health-readiness. Panel title: Health readiness. Source category: health. Source route pattern: /v1/health. Route input identifiers: none. Row display identifiers: none. Source identifiers: source_category=fixture-health-source. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: healthy-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: health readiness static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
       </ul>
       <p>
@@ -435,7 +385,7 @@
         <li>no background jobs</li>
         <li>external audit trail</li>
       </ul>
-      <p>Panel coverage for audit review includes overview, tasks, task-detail, sessions, events, traces, replay-lifecycle-readiness, health, audit, and help.</p>
+      <p>Panel coverage for audit review includes overview, tasks, task-detail, sessions, events, traces, history-replay-readiness, health, audit, and help.</p>
       <p class="meta">Source: BMAD planning artifacts. Freshness timestamp: static Story 92.2 shell. Reference: Phase 19 PRD, UX, architecture, and epics artifacts. Confidence: high for dashboard boundary copy; unavailable for runtime data.</p>
     </section>
     <section id="help" aria-labelledby="help-title" tabindex="-1">
@@ -453,7 +403,7 @@
         <li>external runbooks/control planes</li>
       </ul>
       <p>Keyboard navigation uses visible focus styling on panel navigation and landmarks. Screen-reader users receive named sections, headings, aria-labeled lists, and text-only route provenance. Contrast and readability rely on the static dark background, light foreground, warning-state, and metadata tokens declared in this shell. Reduced motion and responsive layout are declared in CSS only.</p>
-      <p>Panel coverage for help includes overview, tasks, task-detail, sessions, events, traces, replay-lifecycle-readiness, health, audit, and help.</p>
+      <p>Panel coverage for help includes overview, tasks, task-detail, sessions, events, traces, history-replay-readiness, health, audit, and help.</p>
       <p>Unavailable state meanings remain passive: missing, stale, unauthorized, forbidden, degraded, route failure, and empty successful reads describe visibility states only. Escalation belongs in external runbooks/control planes, not this dashboard.</p>
       <p>Story 92.3 final quality gate remains pending; this Story 92.2 slice provides accessibility and help guidance only.</p>
       <p class="meta">Source: BMAD planning artifacts. Freshness timestamp: static Story 92.2 shell. Reference: future operator runbook and story references. Confidence: high for non-mutating boundary copy; unavailable for runtime data.</p>
@@ -466,5 +416,6 @@
   <script src="task-detail.js" defer></script>
   <script src="event-timeline.js" defer></script>
   <script src="trace-correlation.js" defer></script>
+  <script src="history-replay.js" defer></script>
 </body>
 </html>

@@ -889,15 +889,34 @@ development_status:
   # =========================================================================
   # Epic 105: History / Replay live-read route selection
   # =========================================================================
-  epic-105: in-progress  # Phase 26 opened for history/replay route-family planning only; runtime deferred to Story 105.2
+  epic-105: in-progress  # Phase 26 Epic 105 active; Story 105.2 history/replay runtime boundary locally implemented and under review/QA, final closure deferred to Story 105.3
   105-1-history-replay-live-read-route-selection: done  # Phase 26 PRD/architecture/epics/status opening; selects future history/replay routes only
-  105-2-history-replay-runtime-boundary: backlog  # future tests-first runtime boundary; no implementation authorized by Story 105.1
+  105-2-history-replay-runtime-boundary: in-review  # tests-first runtime boundary implemented locally; awaiting independent code-review, UltraQA, push, and remote CI evidence before done
   105-3-phase-26-epic-105-final-closure: backlog  # future closure only after Story 105.2 review/QA/push/remote-CI evidence
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-24"
+    event: story-105-2-history-replay-runtime-boundary-local-implementation
+    from: backlog
+    to: in-review
+    story: 105-2-history-replay-runtime-boundary
+    reason: >
+      Story 105.2 adds the narrow history/replay runtime boundary selected by
+      Story 105.1: GET /v1/tasks/{task_id}/history, GET /v1/events/replay
+      with visible to_sequence/to_timestamp target, and GET /v1/events/replay/
+      validate. Local tests prove GET-only/body-free fetches, visible selector
+      discipline, no hidden query/hash/storage/discovery target source, bounded
+      metadata rendering, no raw replay state/task/session/diff rendering, no
+      fabricated freshness, and no lifecycle/snapshot/search/session/digest/
+      control reachability. OMX planning/review wait guardrail now records the
+      5-minute cap, one replacement spawn attempt, stale/capacity incident on
+      spawn unavailability, clean lane stop, no close_agent recovery, and no
+      unbounded waits. Story remains in-review until code-review, UltraQA,
+      push, and remote CI evidence are recorded.
+
   - date: "2026-06-23"
     event: story-105-1-history-replay-route-selection-complete
     from: backlog

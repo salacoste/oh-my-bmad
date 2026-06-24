@@ -11,7 +11,6 @@ SourceCategory = Literal[
     "trace",
     "history",
     "replay",
-    "lifecycle",
     "health",
     "aggregate",
     "session",
@@ -56,9 +55,7 @@ Identifier = Literal[
     "session_id",
     "event_id",
     "trace_id",
-    "snapshot_id",
     "replay_id",
-    "lifecycle_manifest_id",
 ]
 PanelFamily = Literal[
     "task-detail",
@@ -66,7 +63,6 @@ PanelFamily = Literal[
     "trace-correlation",
     "task-history",
     "replay-readiness",
-    "lifecycle-readiness",
     "health-readiness",
 ]
 
@@ -258,15 +254,6 @@ APPROVED_READ_CONTRACTS: tuple[ReadContract, ...] = (
         allowed_states=frozenset({"healthy", "partial", "stale", "invalid", "backend-unavailable"}),
     ),
     ReadContract(
-        source_category="lifecycle",
-        route_pattern="/v1/events/replay/snapshots",
-        route_status="approved",
-        timestamp_policy="retrieved-at-required",
-        freshness_policy="healthy-or-stale-required",
-        required_identifiers=("snapshot_id", "lifecycle_manifest_id"),
-        allowed_states=frozenset({"healthy", "partial", "stale", "invalid", "backend-unavailable"}),
-    ),
-    ReadContract(
         source_category="health",
         route_pattern="/v1/health",
         route_status="approved",
@@ -366,7 +353,6 @@ STORY_96_2_ROUTE_PATTERNS = (
     "/v1/tasks/{task_id}/history",
     "/v1/events/replay",
     "/v1/events/replay/validate",
-    "/v1/events/replay/snapshots",
     "/v1/health",
 )
 STORY_96_2_ROUTE_INPUT_IDENTIFIERS: Mapping[str, tuple[Identifier, ...]] = MappingProxyType(
@@ -374,7 +360,6 @@ STORY_96_2_ROUTE_INPUT_IDENTIFIERS: Mapping[str, tuple[Identifier, ...]] = Mappi
         "/v1/tasks/{task_id}/history": ("task_id",),
         "/v1/events/replay": (),
         "/v1/events/replay/validate": (),
-        "/v1/events/replay/snapshots": (),
         "/v1/health": (),
     }
 )
@@ -383,11 +368,6 @@ STORY_96_2_ROW_DISPLAY_IDENTIFIERS: Mapping[str, tuple[Identifier, ...]] = Mappi
         "/v1/tasks/{task_id}/history": ("task_id", "event_id", "trace_id"),
         "/v1/events/replay": ("replay_id", "event_id", "trace_id"),
         "/v1/events/replay/validate": ("replay_id",),
-        "/v1/events/replay/snapshots": (
-            "snapshot_id",
-            "lifecycle_manifest_id",
-            "replay_id",
-        ),
         "/v1/health": (),
     }
 )
@@ -398,7 +378,6 @@ STORY_96_2_PANEL_ROUTES: Mapping[PanelFamily, tuple[str, ...]] = MappingProxyTyp
             "/v1/events/replay",
             "/v1/events/replay/validate",
         ),
-        "lifecycle-readiness": ("/v1/events/replay/snapshots",),
         "health-readiness": ("/v1/health",),
     }
 )
@@ -406,7 +385,6 @@ STORY_96_2_PANEL_TITLES: Mapping[PanelFamily, str] = MappingProxyType(
     {
         "task-history": "Task history",
         "replay-readiness": "Replay readiness",
-        "lifecycle-readiness": "Lifecycle readiness",
         "health-readiness": "Health readiness",
     }
 )

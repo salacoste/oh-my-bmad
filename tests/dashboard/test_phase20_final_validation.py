@@ -31,7 +31,6 @@ APPROVED_PHASE20_ROUTES = frozenset(
         "/v1/tasks/{task_id}/history",
         "/v1/events/replay",
         "/v1/events/replay/validate",
-        "/v1/events/replay/snapshots",
         "/v1/health",
     }
 )

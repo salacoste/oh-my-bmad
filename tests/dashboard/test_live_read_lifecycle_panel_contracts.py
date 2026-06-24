@@ -31,7 +31,6 @@ STORY_96_2_ROUTES = (
     "/v1/tasks/{task_id}/history",
     "/v1/events/replay",
     "/v1/events/replay/validate",
-    "/v1/events/replay/snapshots",
     "/v1/health",
 )
 
@@ -49,7 +48,6 @@ def test_story_96_2_panel_contracts_have_exact_replay_history_health_subset() ->
     assert tuple(panel.panel_family for panel in panels) == (
         "task-history",
         "replay-readiness",
-        "lifecycle-readiness",
         "health-readiness",
     )
 
@@ -103,7 +101,6 @@ def test_story_96_2_route_input_identifiers_are_exact_and_not_display_metadata()
     assert routes_by_pattern["/v1/tasks/{task_id}/history"].route_input_identifiers == ("task_id",)
     assert routes_by_pattern["/v1/events/replay"].route_input_identifiers == ()
     assert routes_by_pattern["/v1/events/replay/validate"].route_input_identifiers == ()
-    assert routes_by_pattern["/v1/events/replay/snapshots"].route_input_identifiers == ()
     assert routes_by_pattern["/v1/health"].route_input_identifiers == ()
 
     assert routes_by_pattern["/v1/tasks/{task_id}/history"].row_display_identifiers == (
@@ -117,11 +114,6 @@ def test_story_96_2_route_input_identifiers_are_exact_and_not_display_metadata()
         "trace_id",
     )
     assert routes_by_pattern["/v1/events/replay/validate"].row_display_identifiers == ("replay_id",)
-    assert routes_by_pattern["/v1/events/replay/snapshots"].row_display_identifiers == (
-        "snapshot_id",
-        "lifecycle_manifest_id",
-        "replay_id",
-    )
     assert routes_by_pattern["/v1/health"].row_display_identifiers == ()
 
     for route in routes_by_pattern.values():
@@ -135,7 +127,6 @@ def test_story_96_2_replay_lifecycle_errors_are_non_authoritative() -> None:
         "/v1/tasks/{task_id}/history",
         "/v1/events/replay",
         "/v1/events/replay/validate",
-        "/v1/events/replay/snapshots",
     )
     for route_pattern in replay_lifecycle_routes:
         contract_route = story_96_2_routes_by_pattern()[route_pattern]
