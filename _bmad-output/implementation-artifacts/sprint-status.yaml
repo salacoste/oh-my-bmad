@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-23T16:10:00+03:00"
-current_phase: 26  # Phase 26 OPEN — Epic 105 history/replay route selection docs/status-only; runtime deferred to Story 105.2
+last_updated: "2026-06-24T07:35:00+03:00"
+current_phase: 26  # Phase 26 CLOSED — Epic 105 history/replay route family closed after Story 105.3 final validation
 
 development_status:
   # =========================================================================
@@ -889,15 +889,36 @@ development_status:
   # =========================================================================
   # Epic 105: History / Replay live-read route selection
   # =========================================================================
-  epic-105: in-progress  # Phase 26 Epic 105 active; Story 105.2 history/replay runtime boundary done with review/QA/push/remote-CI evidence, final closure deferred to Story 105.3
+  epic-105: done  # Phase 26 Epic 105 closed; history/replay route selection, runtime boundary, final closure, review/QA/push/remote-CI evidence complete
   105-1-history-replay-live-read-route-selection: done  # Phase 26 PRD/architecture/epics/status opening; selects future history/replay routes only
   105-2-history-replay-runtime-boundary: done  # exact history/replay runtime boundary reviewed APPROVE/CLEAR, architect CLEAR, UltraQA complete, pushed, and remote-CI green on run 28072822987
-  105-3-phase-26-epic-105-final-closure: backlog  # future closure only after Story 105.2 review/QA/push/remote-CI evidence
+  105-3-phase-26-epic-105-final-closure: done  # docs/status final closure after Story 105.2 review/QA/push/remote-CI evidence; deferred surfaces remain fail-closed
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-24"
+    event: story-105-3-phase-26-epic-105-final-closure-complete
+    from: backlog
+    to: done
+    story: 105-3-phase-26-epic-105-final-closure
+    reason: >
+      Story 105.3 closes Phase 26 / Epic 105 as docs/status-only final
+      validation after Story 105.2 history/replay runtime-boundary evidence.
+      Closure artifact _bmad-output/implementation-artifacts/105-3-phase-26-epic-105-final-validation-closure.md names the exact implemented route
+      family: GET /v1/tasks/{task_id}/history, GET /v1/events/replay with
+      exactly one visible to_sequence or to_timestamp target, and GET /v1/events/replay/validate. It cites final code-reviewer APPROVE/CLEAR,
+      architect APPROVE/CLEAR, UltraQA complete after one cycle, runtime commit
+      f7d4d2f, CI-evidence commit acdfb90, and GitHub Actions ci run
+      28072822987 success for f7d4d2fe05777088d660f016378ff898c488e693.
+      Phase 26 closes only for the History / Replay route family. Lifecycle
+      readiness, /v1/events/replay/snapshots, task-list/search/discovery,
+      aggregate/session/digest, generated live data, replay execution,
+      archive/manifest mutation, broad dashboard live wiring, backend/API
+      expansion, and controls remain unauthorized and fail-closed unless
+      explicitly selected by a later story.
+
   - date: "2026-06-24"
     event: story-105-2-history-replay-runtime-boundary-complete
     from: in-review
