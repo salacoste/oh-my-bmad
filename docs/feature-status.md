@@ -3,26 +3,27 @@
 > **Derivative status summary.** The canonical implementation status is
 > [`../_bmad-output/implementation-artifacts/sprint-status.yaml`](../_bmad-output/implementation-artifacts/sprint-status.yaml).
 > This page is a read-only, human-navigable summary last verified from the files
-> named below on 2026-06-24. If this page conflicts with sprint-status, trust
+> named below on 2026-06-25. If this page conflicts with sprint-status, trust
 > sprint-status and update this derivative matrix.
 
 ## Current BMad status
 
-- **Current phase:** Phase 27 — Lifecycle / Snapshot route family is open; Story 106.2 is locally implemented and final closure remains Story 106.3.
-- **Current epic:** Epic 106 is in progress after Story 106.1 route selection and Story 106.2 local runtime-boundary completion.
-- **Recently closed:** Phase 26 / Epic 105 — History / Replay runtime boundary and final validation closure are done.
+- **Current phase:** Phase 27 — Lifecycle / Snapshot route family is closed after Story 106.3 final validation closure.
+- **Current epic:** Epic 106 is done; no later phase is opened by this page.
+- **Recently closed:** Phase 27 / Epic 106 — Lifecycle / Snapshot runtime boundary and final validation closure are done.
 - **Done in Phase 26:**
   - Story 105.1 selected exactly `GET /v1/tasks/{task_id}/history`, `GET /v1/events/replay`, and `GET /v1/events/replay/validate`.
   - Story 105.2 implemented the narrow browser/runtime History / Replay boundary and recorded review/QA/CI evidence.
   - Story 105.3 records Phase 26 / Epic 105 closure after Story 105.2 review, QA, push, and remote CI run `28072822987` passed.
-- **Done locally in Phase 27:**
+- **Done in Phase 27:**
   - Story 106.1 selects exactly `GET /v1/events/replay/snapshots` plus passive lifecycle-readiness evidence display from `dashboard/static/replay-lifecycle-contract.json`.
-  - Story 106.2 implements the narrow browser/runtime lifecycle/snapshot boundary with bounded metadata-only rendering and local review/UltraQA evidence.
-- **Not closed by this page:** Phase 27 / Epic 106 final closure, push/remote-CI evidence, `POST /v1/events/replay/snapshots`, snapshot creation, lifecycle apply/prune/rollback, archive/manifest mutation, task-list/search/discovery, aggregate/session/digest, generated live data, replay execution, broad dashboard live wiring, backend/API expansion, and controls.
+  - Story 106.2 implements the narrow browser/runtime lifecycle/snapshot boundary with bounded metadata-only rendering and review/UltraQA evidence.
+  - Story 106.3 records Phase 27 / Epic 106 closure after Story 106.2 review, QA, push, and remote CI run `28139358221` passed.
+- **Not closed by this page:** `POST /v1/events/replay/snapshots`, snapshot creation, lifecycle apply/prune/rollback, archive/manifest mutation, task-list/search/discovery, aggregate/session/digest, generated live data, replay execution, broad dashboard live wiring, backend/API expansion, controls, services, MCP changes, deployment changes, dependencies, lockfiles, and production operations.
 
 Primary evidence:
 
-- `../_bmad-output/implementation-artifacts/sprint-status.yaml` — `current_phase: 27`, `epic-105` done, `epic-106` in-progress, `106-1` done, `106-2` done locally, and `106-3` backlog.
+- `../_bmad-output/implementation-artifacts/sprint-status.yaml` — `current_phase: 27`, `epic-105` done, `epic-106` done, `106-1` done, `106-2` done, and `106-3` done.
 - `../_bmad-output/planning-artifacts/phase-26-epics.md` — Phase 26 closed History / Replay and deferred lifecycle readiness plus `/v1/events/replay/snapshots` as the next candidate.
 - `../_bmad-output/implementation-artifacts/105-3-phase-26-epic-105-final-validation-closure.md` — Story 105.3 final closure evidence, including remote CI run `28072822987`.
 - `../_bmad-output/planning-artifacts/phase-27-prd-amendment.md` — Phase 27 lifecycle/snapshot PRD scope.
@@ -30,6 +31,7 @@ Primary evidence:
 - `../_bmad-output/planning-artifacts/phase-27-epics.md` — Epic 106 story sequence.
 - `../_bmad-output/implementation-artifacts/106-1-lifecycle-snapshot-live-read-route-selection.md` — Story 106.1 route-selection and non-authorization evidence.
 - `../_bmad-output/implementation-artifacts/106-2-lifecycle-snapshot-runtime-boundary.md` — Story 106.2 runtime implementation, review, UltraQA, and architect-clear evidence.
+- `../_bmad-output/implementation-artifacts/106-3-phase-27-epic-106-final-closure.md` — Story 106.3 final closure evidence, including remote CI run `28139358221`.
 - `../docs/api-contracts.md` — distinguishes `GET /v1/events/replay/snapshots` snapshot listing from `POST /v1/events/replay/snapshots` snapshot creation.
 - `../dashboard/static/replay-lifecycle-contract.json` — passive lifecycle-readiness evidence fields and fail-safe states.
 
@@ -64,7 +66,7 @@ Primary evidence:
 
 | Area | Status | Boundary |
 |---|---|---|
-| Dashboard lifecycle/snapshot runtime | Implemented locally with recorded review/QA approval | Phase 27 / Story 106.2 adds `dashboard/static/lifecycle-snapshot.js` and the lifecycle/snapshot panel for exactly `GET /v1/events/replay/snapshots`; output is bounded snapshot metadata only, passive lifecycle evidence fail-closes as non-authoritative when missing/degraded, and architect re-check is CLEAR after shell copy declares optional evidence injection and fail-closed behavior. |
+| Dashboard lifecycle/snapshot runtime | Implemented with recorded closure | Phase 27 / Epic 106: Story 106.2 adds `dashboard/static/lifecycle-snapshot.js` and the lifecycle/snapshot panel for exactly `GET /v1/events/replay/snapshots`; output is bounded snapshot metadata only, passive lifecycle evidence fail-closes as non-authoritative when missing/degraded, architect re-check is CLEAR after shell copy declares optional evidence injection and fail-closed behavior, and Story 106.3 records final closure with remote CI run `28139358221`. |
 | Task/session overview and sessions visibility | Contract/static-only | Static dashboard copy and metadata distinguish resource-native fields from derived/unavailable semantics; no broad session HTTP/list/history/search runtime is authorized. |
 | Fixture snapshot/static rendering | Contract/static-only | Fixture/view-model/static rendering tests prove read-only presentation behavior and fail-closed unavailable states; they do not authorize new runtime polling or mutation controls. |
 
