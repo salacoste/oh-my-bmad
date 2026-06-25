@@ -3,13 +3,13 @@
 > **Derivative status summary.** The canonical implementation status is
 > [`../_bmad-output/implementation-artifacts/sprint-status.yaml`](../_bmad-output/implementation-artifacts/sprint-status.yaml).
 > This page is a read-only, human-navigable summary last verified from the files
-> named below on 2026-06-25. If this page conflicts with sprint-status, trust
+> named below on 2026-06-26. If this page conflicts with sprint-status, trust
 > sprint-status and update this derivative matrix.
 
 ## Current BMad status
 
-- **Current phase:** Phase 28 — Snapshot Creation authorization boundary is closed after Story 107.3 final validation closure.
-- **Current epic:** Epic 107 is done; no later phase is opened by this page.
+- **Current phase:** Phase 29 — Aggregate/Session/Digest route selection planning is open as docs/status-only Story 108.1.
+- **Current epic:** Epic 108 is in progress for planning only; no Phase 29 runtime implementation is complete.
 - **Recently closed:** Phase 28 / Epic 107 — Snapshot Creation authorization runtime boundary and final validation closure are done.
 - **Done in Phase 27:**
   - Story 106.1 selected exactly `GET /v1/events/replay/snapshots` plus passive lifecycle-readiness evidence display from `dashboard/static/replay-lifecycle-contract.json`.
@@ -19,11 +19,15 @@
   - Story 107.1 selected exactly `POST /v1/events/replay/snapshots` as the snapshot creation authorization surface.
   - Story 107.2 implemented the visible operator-initiated, JWT-authenticated snapshot-create runtime boundary and recorded code-review/UltraQA/local CI evidence.
   - Story 107.3 records Phase 28 / Epic 107 closure after Story 107.2 review, QA, push, and remote CI run `28195545005` passed.
-- **Not closed by this page:** lifecycle apply/prune/rollback, destructive lifecycle authorization execution, archive/manifest mutation, snapshot deletion/restore, task-list/search/discovery, aggregate/session/digest, generated live data, replay execution target selection, broad dashboard live wiring, backend/API expansion beyond the exact snapshot-create route, additional controls, services, MCP changes, deployment changes, dependencies, lockfiles, and production operations.
+- **Done in Phase 29:**
+  - Story 108.1 selected the aggregate/session/digest family and narrowed the future candidate surface to exactly `GET /v1/tasks/{task_id}/logs/digest`.
+  - Story 108.1 is docs/status-only; it does not implement digest runtime wiring.
+  - Aggregate task list reads, session list/detail, digest streaming, task-list/search/discovery, broad dashboard wiring, generated live data, browser-side LLM generation, cache warming/background refresh, mutation/control behavior, backend/API expansion, services/MCP/dependencies/CI/deployment changes, production credentials, and production operations remain deferred/fail-closed.
+- **Not closed by this page:** lifecycle apply/prune/rollback, destructive lifecycle authorization execution, archive/manifest mutation, snapshot deletion/restore, aggregate task list reads, session list/detail, digest streaming, task-list/search/discovery, generated live data, replay execution target selection, broad dashboard live wiring, backend/API expansion beyond the exact snapshot-create route, additional controls, services, MCP changes, deployment changes, dependencies, lockfiles, and production operations.
 
 Primary evidence:
 
-- `../_bmad-output/implementation-artifacts/sprint-status.yaml` — `current_phase: 28`, `epic-107` done, `107-1` done, `107-2` done, and `107-3` done.
+- `../_bmad-output/implementation-artifacts/sprint-status.yaml` — `current_phase: 29`, `epic-108` in-progress, `108-1` done, and `108-2`/`108-3` backlog while Epic 107 remains done.
 - `../_bmad-output/planning-artifacts/phase-27-prd-amendment.md` / `phase-27-architecture-amendment.md` / `phase-27-epics.md` — Phase 27 lifecycle/snapshot listing scope and deferred snapshot-create boundary.
 - `../_bmad-output/implementation-artifacts/106-3-phase-27-epic-106-final-closure.md` — Story 106.3 final closure evidence, including remote CI run `28139358221`.
 - `../_bmad-output/planning-artifacts/phase-28-prd-amendment.md` — Phase 28 snapshot creation authorization PRD scope.
@@ -32,6 +36,10 @@ Primary evidence:
 - `../_bmad-output/implementation-artifacts/107-1-snapshot-creation-authorization-planning.md` — Story 107.1 route-selection and non-authorization evidence.
 - `../_bmad-output/implementation-artifacts/107-2-snapshot-creation-authorization-runtime-boundary.md` — Story 107.2 runtime implementation, review, UltraQA, and local CI evidence.
 - `../_bmad-output/implementation-artifacts/107-3-phase-28-epic-107-final-closure.md` — Story 107.3 final closure evidence, including remote CI run `28195545005`.
+- `../_bmad-output/planning-artifacts/phase-29-prd-amendment.md` — Phase 29 aggregate/session/digest route-selection PRD scope.
+- `../_bmad-output/planning-artifacts/phase-29-architecture-amendment.md` — exact future `GET /v1/tasks/{task_id}/logs/digest`, visible task_id, no-streaming/no-hidden-generation/no-aggregate-session/no-discovery boundaries.
+- `../_bmad-output/planning-artifacts/phase-29-epics.md` — Epic 108 story sequence.
+- `../_bmad-output/implementation-artifacts/108-1-aggregate-session-digest-route-selection-planning.md` — Story 108.1 route-family selection and non-authorization evidence.
 - `../docs/api-contracts.md` — distinguishes `GET /v1/events/replay/snapshots` snapshot listing from `POST /v1/events/replay/snapshots` snapshot creation.
 - `../dashboard/static/replay-lifecycle-contract.json` — passive lifecycle-readiness evidence fields and fail-safe states.
 
@@ -68,6 +76,7 @@ Primary evidence:
 |---|---|---|
 | Dashboard lifecycle/snapshot runtime | Implemented with recorded closure | Phase 27 / Epic 106: Story 106.2 adds `dashboard/static/lifecycle-snapshot.js` and the lifecycle/snapshot panel for exactly `GET /v1/events/replay/snapshots`; output is bounded snapshot metadata only, passive lifecycle evidence fail-closes as non-authoritative when missing/degraded, architect re-check is CLEAR after shell copy declares optional evidence injection and fail-closed behavior, and Story 106.3 records final closure with remote CI run `28139358221`. |
 | Snapshot creation authorization boundary | Implemented with recorded closure | Phase 28 / Epic 107: Story 107.2 adds the visible bearer-token operator affordance and route-local JWT authorization for exactly body-free `POST /v1/events/replay/snapshots`; HTTP 201 is required before authoritative metadata rendering, failed/unknown states do not auto-retry, duplicate in-flight clicks are blocked, tokens are not echoed or stored, and Story 107.3 records final closure with remote CI run `28195545005`. |
+| Task log digest route selection planning | Contract/static-only | Phase 29 / Epic 108: Story 108.1 selects the aggregate/session/digest family and exactly `GET /v1/tasks/{task_id}/logs/digest` as a future candidate, but implements no runtime wiring. Aggregate task list reads, session list/detail, digest streaming, task-list/search/discovery, generated live data, browser-side LLM behavior, and broad dashboard wiring remain fail-closed. |
 | Task/session overview and sessions visibility | Contract/static-only | Static dashboard copy and metadata distinguish resource-native fields from derived/unavailable semantics; no broad session HTTP/list/history/search runtime is authorized. |
 | Fixture snapshot/static rendering | Contract/static-only | Fixture/view-model/static rendering tests prove read-only presentation behavior and fail-closed unavailable states; they do not authorize new runtime polling or mutation controls. |
 
@@ -75,11 +84,13 @@ Primary evidence:
 
 | Area | Status | Reason / guardrail |
 |---|---|---|
-| Later dashboard route families after lifecycle/snapshot | Deferred / not implemented | Task-list/search/discovery and aggregate/session/digest remain higher-risk future route families requiring separate stories. |
+| Task-list/search/discovery dashboard route family | Deferred / not implemented | Phase 29 selected aggregate/session/digest instead; task-list/search/discovery remains a higher-risk future family requiring separate planning. |
+| Aggregate/session dashboard live contracts | Deferred / fail-closed | Phase 29 selected only the task-scoped digest route candidate. `/v1/tasks` aggregate/list reads, `/v1/sessions`, and `/v1/sessions/{session_id}` remain unavailable/needs-contract until separately approved. |
+| Task log digest dashboard runtime | Deferred / not implemented | Story 108.1 selected `GET /v1/tasks/{task_id}/logs/digest` as a future candidate only. Runtime implementation is deferred to Story 108.2 and must be tests-first. |
 | Destructive lifecycle apply/prune/delete/truncate/move/rewrite/chmod | Deferred / not implemented | Phase 17 is readiness-only. Future mutation requires exact dry-run plan-hash binding, replay validation, rollback/restore evidence, and explicit operator gate. |
 | Object-storage lifecycle jobs and scheduled retention | Deferred / not implemented | `docs/architecture.md` keeps automatic S3/B2/R2 lifecycle management and time-based lifecycle automation as future work. |
 | Broad dashboard live-read runtime wiring | Deferred / not implemented | Current browser runtime remains route-family-scoped. Health/readiness, task detail, event/transition, trace, history/replay, and lifecycle/snapshot have recorded narrow boundaries only; broad dashboard live wiring remains unavailable. |
-| Aggregate/session/digest dashboard live contracts | Deferred / fail-closed | Aggregate/session/digest reads are intentionally unavailable or excluded until safe contracts are approved. |
+| Digest stream dashboard runtime | Deferred / fail-closed | `/v1/tasks/{task_id}/logs/digest/stream` remains excluded; Story 108.1 selects only non-streaming `GET /v1/tasks/{task_id}/logs/digest` as a future candidate. |
 | Task-list/search/discovery hidden calls | Deferred / fail-closed | Phase 23 guardrails forbid hidden discovery, task-list/search calls, broad dashboard wiring, and backend/API expansion. |
 | Additional mutation/control affordances in dashboard | Deferred / not implemented | Only the Phase 28 visible JWT-authenticated snapshot-create affordance is authorized. Lifecycle actions, writer imports, background jobs, cache warming, snapshot deletion/restore, archive/manifest mutation, destructive lifecycle controls, and unrelated control buttons remain unauthorized/fail-closed. |
 | Production GitHub write activation | Credential/operator-gated | GitHub write behavior remains simulated/gated by operator-provisioned credentials and explicit enablement; not a default shipped operator action. |

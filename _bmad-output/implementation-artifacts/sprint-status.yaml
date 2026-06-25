@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-25T22:41:22+03:00"
-current_phase: 28  # Phase 28 CLOSED — Epic 107 done after Story 107.2 review/UltraQA, push, and remote CI run 28195545005
+last_updated: "2026-06-26T00:45:00+03:00"
+current_phase: 29  # Phase 29 OPEN — Epic 108 planning/status story selects aggregate/session/digest family and exact future GET /v1/tasks/{task_id}/logs/digest surface; no runtime implemented
 
 development_status:
   # =========================================================================
@@ -910,10 +910,48 @@ development_status:
   107-2-snapshot-creation-authorization-runtime-boundary: done  # route-local JWT-authenticated POST boundary + visible dashboard affordance; code-review/UltraQA/local CI passed; pushed in e8bb1e4; remote CI run 28195545005 green; no destructive lifecycle/broad dashboard/discovery/search/aggregate/session/digest
   107-3-phase-28-epic-107-final-closure: done  # docs/status final closure after Story 107.2 review/QA/push/remote-CI evidence; deferred surfaces remain fail-closed
 
+  # =========================================================================
+  # Epic 108: Aggregate/Session/Digest route selection planning
+  # =========================================================================
+  epic-108: in-progress  # Phase 29 opened as docs/status-only planning; selected aggregate/session/digest family and exact future GET /v1/tasks/{task_id}/logs/digest surface; no runtime implemented
+  108-1-aggregate-session-digest-route-selection-planning: done  # Phase 29 PRD/architecture/epics/status opening; selects aggregate/session/digest family and future GET /v1/tasks/{task_id}/logs/digest only; aggregate/session list, digest stream, task-list/search/discovery, broad dashboard runtime remain deferred
+  108-2-task-log-digest-runtime-boundary: backlog  # future tests-first exact GET /v1/tasks/{task_id}/logs/digest dashboard runtime boundary only; no aggregate/session/list/search/discovery/digest-stream/generated-live-data
+  108-3-phase-29-epic-108-final-closure: backlog  # future docs/status final closure after Story 108.2 review/QA/push/remote-CI evidence
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-26"
+    event: story-108-1-aggregate-session-digest-route-selection-planning-complete
+    from: backlog
+    to: done
+    story: 108-1-aggregate-session-digest-route-selection-planning
+    reason: >
+      Story 108.1 opens Phase 29 / Epic 108 as docs/status-only
+      Aggregate/Session/Digest route selection planning after Phase 28 / Epic 107
+      closed. It selects the aggregate/session/digest family and narrows the
+      future runtime candidate to exactly GET /v1/tasks/{task_id}/logs/digest.
+      Runtime implementation is deferred to Story 108.2. Aggregate task list
+      reads, session list/detail, digest stream, task-list/search/discovery,
+      generated live data, browser-side LLM generation, cache warming,
+      background refresh, broad dashboard wiring, mutation/control behavior,
+      backend/API expansion, services/MCP/dependencies/CI/deployment changes,
+      production credentials, and production operations remain unauthorized and
+      fail-closed unless explicitly selected by a later story.
+
+  - date: "2026-06-26"
+    event: phase-29-epic-108-opened
+    from: 28
+    to: 29
+    story: 108-1-aggregate-session-digest-route-selection-planning
+    reason: >
+      Phase 29 formally opened after sprint-status confirmed Phase 28 / Epic 107
+      done and no existing Story 108 entries. The selected remaining route
+      family is aggregate/session/digest, with exactly GET /v1/tasks/{task_id}/logs/digest
+      recorded as the future candidate surface. This opening is planning/status
+      only and does not implement runtime behavior.
+
   - date: "2026-06-25"
     event: story-107-3-phase-28-epic-107-final-closure-complete
     from: backlog
