@@ -8,8 +8,8 @@
 
 ## Current BMad status
 
-- **Current phase:** Phase 29 — Aggregate/Session/Digest route selection planning is open as docs/status-only Story 108.1.
-- **Current epic:** Epic 108 is in progress for planning only; no Phase 29 runtime implementation is complete.
+- **Current phase:** Phase 29 — Task log digest runtime boundary is implemented locally in Story 108.2; final closure remains pending Story 108.3 after push and remote CI evidence.
+- **Current epic:** Epic 108 is in progress with Story 108.1 planning done and Story 108.2 runtime complete locally for exactly `GET /v1/tasks/{task_id}/logs/digest`.
 - **Recently closed:** Phase 28 / Epic 107 — Snapshot Creation authorization runtime boundary and final validation closure are done.
 - **Done in Phase 27:**
   - Story 106.1 selected exactly `GET /v1/events/replay/snapshots` plus passive lifecycle-readiness evidence display from `dashboard/static/replay-lifecycle-contract.json`.
@@ -20,14 +20,14 @@
   - Story 107.2 implemented the visible operator-initiated, JWT-authenticated snapshot-create runtime boundary and recorded code-review/UltraQA/local CI evidence.
   - Story 107.3 records Phase 28 / Epic 107 closure after Story 107.2 review, QA, push, and remote CI run `28195545005` passed.
 - **Done in Phase 29:**
-  - Story 108.1 selected the aggregate/session/digest family and narrowed the future candidate surface to exactly `GET /v1/tasks/{task_id}/logs/digest`.
-  - Story 108.1 is docs/status-only; it does not implement digest runtime wiring.
-  - Aggregate task list reads, session list/detail, digest streaming, task-list/search/discovery, broad dashboard wiring, generated live data, browser-side LLM generation, cache warming/background refresh, mutation/control behavior, backend/API expansion, services/MCP/dependencies/CI/deployment changes, production credentials, and production operations remain deferred/fail-closed.
-- **Not closed by this page:** lifecycle apply/prune/rollback, destructive lifecycle authorization execution, archive/manifest mutation, snapshot deletion/restore, aggregate task list reads, session list/detail, digest streaming, task-list/search/discovery, generated live data, replay execution target selection, broad dashboard live wiring, backend/API expansion beyond the exact snapshot-create route, additional controls, services, MCP changes, deployment changes, dependencies, lockfiles, and production operations.
+  - Story 108.1 selected the aggregate/session/digest family and narrowed the candidate surface to exactly `GET /v1/tasks/{task_id}/logs/digest`.
+  - Story 108.2 implements the tests-first dashboard runtime boundary for exactly `GET /v1/tasks/{task_id}/logs/digest`, using a visible `task_id` source only, server-supplied freshness only, fail-closed digest states, final code-review `APPROVE`, UltraQA `PASS`, and local non-slow PR-gate evidence.
+  - Aggregate task list reads, session list/detail, digest streaming, task-list/search/discovery, broad dashboard wiring, generated live data, browser-side LLM generation, browser-side summarization, cache warming/background refresh, mutation/control behavior, backend/API expansion, services/MCP/dependencies/CI/deployment changes, production credentials, and production operations remain deferred/fail-closed.
+- **Not closed by this page:** lifecycle apply/prune/rollback, destructive lifecycle authorization execution, archive/manifest mutation, snapshot deletion/restore, aggregate task list reads, session list/detail, digest streaming, task-list/search/discovery, generated live data, replay execution target selection, broad dashboard live wiring, backend/API expansion beyond exact approved dashboard runtime routes, additional controls, services, MCP changes, deployment changes, dependencies, lockfiles, and production operations.
 
 Primary evidence:
 
-- `../_bmad-output/implementation-artifacts/sprint-status.yaml` — `current_phase: 29`, `epic-108` in-progress, `108-1` done, and `108-2`/`108-3` backlog while Epic 107 remains done.
+- `../_bmad-output/implementation-artifacts/sprint-status.yaml` — `current_phase: 29`, `epic-108` in-progress, `108-1` and `108-2` done, and `108-3` backlog while final remote CI/closure evidence is pending.
 - `../_bmad-output/planning-artifacts/phase-27-prd-amendment.md` / `phase-27-architecture-amendment.md` / `phase-27-epics.md` — Phase 27 lifecycle/snapshot listing scope and deferred snapshot-create boundary.
 - `../_bmad-output/implementation-artifacts/106-3-phase-27-epic-106-final-closure.md` — Story 106.3 final closure evidence, including remote CI run `28139358221`.
 - `../_bmad-output/planning-artifacts/phase-28-prd-amendment.md` — Phase 28 snapshot creation authorization PRD scope.
@@ -40,6 +40,7 @@ Primary evidence:
 - `../_bmad-output/planning-artifacts/phase-29-architecture-amendment.md` — exact future `GET /v1/tasks/{task_id}/logs/digest`, visible task_id, no-streaming/no-hidden-generation/no-aggregate-session/no-discovery boundaries.
 - `../_bmad-output/planning-artifacts/phase-29-epics.md` — Epic 108 story sequence.
 - `../_bmad-output/implementation-artifacts/108-1-aggregate-session-digest-route-selection-planning.md` — Story 108.1 route-family selection and non-authorization evidence.
+- `../_bmad-output/implementation-artifacts/108-2-task-log-digest-runtime-boundary.md` — Story 108.2 runtime implementation, review, UltraQA, and local CI evidence.
 - `../docs/api-contracts.md` — distinguishes `GET /v1/events/replay/snapshots` snapshot listing from `POST /v1/events/replay/snapshots` snapshot creation.
 - `../dashboard/static/replay-lifecycle-contract.json` — passive lifecycle-readiness evidence fields and fail-safe states.
 
@@ -76,7 +77,7 @@ Primary evidence:
 |---|---|---|
 | Dashboard lifecycle/snapshot runtime | Implemented with recorded closure | Phase 27 / Epic 106: Story 106.2 adds `dashboard/static/lifecycle-snapshot.js` and the lifecycle/snapshot panel for exactly `GET /v1/events/replay/snapshots`; output is bounded snapshot metadata only, passive lifecycle evidence fail-closes as non-authoritative when missing/degraded, architect re-check is CLEAR after shell copy declares optional evidence injection and fail-closed behavior, and Story 106.3 records final closure with remote CI run `28139358221`. |
 | Snapshot creation authorization boundary | Implemented with recorded closure | Phase 28 / Epic 107: Story 107.2 adds the visible bearer-token operator affordance and route-local JWT authorization for exactly body-free `POST /v1/events/replay/snapshots`; HTTP 201 is required before authoritative metadata rendering, failed/unknown states do not auto-retry, duplicate in-flight clicks are blocked, tokens are not echoed or stored, and Story 107.3 records final closure with remote CI run `28195545005`. |
-| Task log digest route selection planning | Contract/static-only | Phase 29 / Epic 108: Story 108.1 selects the aggregate/session/digest family and exactly `GET /v1/tasks/{task_id}/logs/digest` as a future candidate, but implements no runtime wiring. Aggregate task list reads, session list/detail, digest streaming, task-list/search/discovery, generated live data, browser-side LLM behavior, and broad dashboard wiring remain fail-closed. |
+| Task log digest dashboard runtime | Implemented locally; recorded closure pending remote CI | Phase 29 / Epic 108: Story 108.2 adds `dashboard/static/task-log-digest.js` and a bounded digest panel for exactly `GET /v1/tasks/{task_id}/logs/digest`; the selector is visible task_id text only, healthy authoritative rendering requires backend digest/summary plus server freshness, unknown/malformed states fail closed, and final closure remains pending Story 108.3 after push/remote CI evidence. Aggregate task list reads, session list/detail, digest streaming, task-list/search/discovery, generated live data, browser-side LLM behavior, and broad dashboard wiring remain fail-closed. |
 | Task/session overview and sessions visibility | Contract/static-only | Static dashboard copy and metadata distinguish resource-native fields from derived/unavailable semantics; no broad session HTTP/list/history/search runtime is authorized. |
 | Fixture snapshot/static rendering | Contract/static-only | Fixture/view-model/static rendering tests prove read-only presentation behavior and fail-closed unavailable states; they do not authorize new runtime polling or mutation controls. |
 
@@ -86,11 +87,11 @@ Primary evidence:
 |---|---|---|
 | Task-list/search/discovery dashboard route family | Deferred / not implemented | Phase 29 selected aggregate/session/digest instead; task-list/search/discovery remains a higher-risk future family requiring separate planning. |
 | Aggregate/session dashboard live contracts | Deferred / fail-closed | Phase 29 selected only the task-scoped digest route candidate. `/v1/tasks` aggregate/list reads, `/v1/sessions`, and `/v1/sessions/{session_id}` remain unavailable/needs-contract until separately approved. |
-| Task log digest dashboard runtime | Deferred / not implemented | Story 108.1 selected `GET /v1/tasks/{task_id}/logs/digest` as a future candidate only. Runtime implementation is deferred to Story 108.2 and must be tests-first. |
+| Task log digest dashboard runtime final closure | Deferred until Story 108.3 | Story 108.2 is implemented and locally reviewed/QA-green. Final phase/epic closure remains deferred until the Story 108.2 commit is pushed and remote CI evidence is recorded in Story 108.3. |
 | Destructive lifecycle apply/prune/delete/truncate/move/rewrite/chmod | Deferred / not implemented | Phase 17 is readiness-only. Future mutation requires exact dry-run plan-hash binding, replay validation, rollback/restore evidence, and explicit operator gate. |
 | Object-storage lifecycle jobs and scheduled retention | Deferred / not implemented | `docs/architecture.md` keeps automatic S3/B2/R2 lifecycle management and time-based lifecycle automation as future work. |
 | Broad dashboard live-read runtime wiring | Deferred / not implemented | Current browser runtime remains route-family-scoped. Health/readiness, task detail, event/transition, trace, history/replay, and lifecycle/snapshot have recorded narrow boundaries only; broad dashboard live wiring remains unavailable. |
-| Digest stream dashboard runtime | Deferred / fail-closed | `/v1/tasks/{task_id}/logs/digest/stream` remains excluded; Story 108.1 selects only non-streaming `GET /v1/tasks/{task_id}/logs/digest` as a future candidate. |
+| Digest stream dashboard runtime | Deferred / fail-closed | `/v1/tasks/{task_id}/logs/digest/stream` remains excluded; Story 108.2 implements only non-streaming `GET /v1/tasks/{task_id}/logs/digest`. |
 | Task-list/search/discovery hidden calls | Deferred / fail-closed | Phase 23 guardrails forbid hidden discovery, task-list/search calls, broad dashboard wiring, and backend/API expansion. |
 | Additional mutation/control affordances in dashboard | Deferred / not implemented | Only the Phase 28 visible JWT-authenticated snapshot-create affordance is authorized. Lifecycle actions, writer imports, background jobs, cache warming, snapshot deletion/restore, archive/manifest mutation, destructive lifecycle controls, and unrelated control buttons remain unauthorized/fail-closed. |
 | Production GitHub write activation | Credential/operator-gated | GitHub write behavior remains simulated/gated by operator-provisioned credentials and explicit enablement; not a default shipped operator action. |

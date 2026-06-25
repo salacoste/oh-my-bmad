@@ -48,6 +48,7 @@
         <li><a href="#tasks">Tasks</a></li>
         <li><a href="#task-detail">Task Detail</a></li>
         <li><a href="#sessions">Sessions</a></li>
+        <li><a href="#task-log-digest">Task log digest</a></li>
         <li><a href="#events">Events</a></li>
         <li><a href="#traces">Traces</a></li>
         <li><a href="#history-replay-readiness">History / replay readiness</a></li>
@@ -132,6 +133,40 @@
       <p>State matrix: no active sessions, active session, historical session, terminal session outcome, heartbeat/stale warning, loading, unavailable pending dashboard read contract, empty successful read, read error, unauthorized/configuration failure, and stale data. Loading is not active in this static, not-wired slice.</p>
       <p>Historical session and terminal session outcome wording is explanatory only and does not authorize session history enumeration. Visibility placeholders only; no links or session actions appear here.</p>
       <p class="meta">Source: existing MCP read resources as static provenance text plus BMAD Story 89.3. Freshness timestamp: pending. Reference: session resource provenance and future dashboard read contract. Confidence: unavailable until a dashboard-safe read is wired by a later story.</p>
+    </section>
+    <section id="task-log-digest" aria-labelledby="task-log-digest-title">
+      <h2 id="task-log-digest-title">Task log digest</h2>
+      <p class="state" id="task-log-digest-status">Task log digest live-read boundary pending: waiting for the approved digest GET response.</p>
+      <p>
+        Source route/reference: GET /v1/tasks/{task_id}/logs/digest. Story 108.2 wires this single approved task-scoped digest read only;
+        it adds no backend route, no dependency, no broad dashboard live wiring, no browser-side generation, and no operator control.
+      </p>
+      <p>
+        Visible task_id source: <span id="task-log-digest-task-id-source">fixture-task-id</span>.
+        This visible task_id text is the source of truth for the digest read; hidden task-list, task-search,
+        session, aggregate, event, trace, history, replay, lifecycle, query, hash, storage, and discovery selectors are unavailable.
+      </p>
+      <p>
+        The digest panel displays bounded backend response text and metadata only. Digest text is not a selector,
+        not a replay target, not an aggregate or session source, not generated live data, and not control input.
+      </p>
+      <p>
+        Deferred adjacent surfaces remain unavailable: no digest stream, no aggregate task list, no session list/detail,
+        no task-list/search/discovery, no browser-side generation, no cache warming, and no background refresh.
+      </p>
+      <p>
+        Runtime states are missing task_id, unavailable digest, no provider, provider unavailable, timeout, invalid data,
+        empty digest, stale digest, unauthorized/configuration failure, backend unavailable, route failure/read error,
+        loading, and healthy bounded display.
+      </p>
+      <p class="meta" id="task-log-digest-source">Source: GET /v1/tasks/{task_id}/logs/digest. Runtime route: pending.</p>
+      <p class="meta" id="task-log-digest-task-id">task_id: fixture-task-id.</p>
+      <p class="meta" id="task-log-digest-freshness">Freshness: pending retrieved_at or completed_at.</p>
+      <p class="meta" id="task-log-digest-authority">Authority: non-authoritative until a valid digest response is read.</p>
+      <p class="meta" id="task-log-digest-provenance">Provenance: pending backend digest metadata.</p>
+      <p class="meta" id="task-log-digest-correlation">Correlation: pending request, trace, or correlation id.</p>
+      <p class="meta" id="task-log-digest-degraded">Degraded state: unavailable read until runtime data resolves.</p>
+      <p class="meta" id="task-log-digest-detail">Digest: no digest response has been rendered yet. Confidence: unavailable until the approved digest read completes. Metadata only; digest text cannot drive adjacent routes.</p>
     </section>
     <section id="events" aria-labelledby="events-title">
       <h2 id="events-title">Events</h2>
@@ -356,6 +391,7 @@
         <li>Panel family: replay-readiness. Panel title: Replay readiness. Source category: replay. Source route pattern: /v1/events/replay. Route input identifiers: none. Row display identifiers: replay_id, event_id, trace_id. Source identifiers: source_category=fixture-replay-source. Fixture provenance: static-fixture. Timestamp policy: retrieved-or-emitted-at-required. Freshness policy: fresh-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: replay readiness static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
         <li>Panel family: replay-readiness. Panel title: Replay readiness. Source category: replay. Source route pattern: /v1/events/replay/validate. Route input identifiers: none. Row display identifiers: replay_id. Source identifiers: source_category=fixture-replay-source. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: healthy-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: replay readiness static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
         <li>Panel family: health-readiness. Panel title: Health readiness. Source category: health. Source route pattern: /v1/health. Route input identifiers: none. Row display identifiers: none. Source identifiers: source_category=fixture-health-source. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: healthy-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: health readiness static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
+        <li>Panel family: task-log-digest. Panel title: Task log digest. Source category: digest. Source route pattern: /v1/tasks/{task_id}/logs/digest. Route input identifiers: task_id. Row display identifiers: task_id, trace_id. Source identifiers: task_id=fixture-task-id. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: fresh-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: task log digest static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
       </ul>
       <p>
         Degraded or unavailable fixture display states use a bounded non-authoritative summary instead of per-route success rows.
@@ -365,13 +401,12 @@
         <li>Bounded non-authoritative summary needs contract fixture review: backend-unavailable, invalid, partial, stale, unauthorized, and unavailable states; runtime data remains disconnected.</li>
       </ul>
       <p>
-        Aggregate, session, and digest routes fail closed in this static presentation. They are not part of the approved Story 99.2 fixture-backed renderable route set.
+        Aggregate and session routes plus the digest stream fail closed in this static presentation. They are not part of the approved Story 99.2 fixture-backed renderable route set.
       </p>
       <ul aria-label="Fail-closed non-renderable routes">
         <li>Route pattern: /v1/tasks. Display state: needs-contract. Authority state: needs-contract. Display severity: blocked. Display copy: static fixture readiness needs contract fixture review; runtime data remains disconnected.</li>
         <li>Route pattern: /v1/sessions. Display state: needs-contract. Authority state: needs-contract. Display severity: blocked. Display copy: static fixture readiness needs contract fixture review; runtime data remains disconnected.</li>
         <li>Route pattern: /v1/sessions/{session_id}. Display state: needs-contract. Authority state: needs-contract. Display severity: blocked. Display copy: static fixture readiness needs contract fixture review; runtime data remains disconnected.</li>
-        <li>Route pattern: /v1/tasks/{task_id}/logs/digest. Display state: needs-contract. Authority state: needs-contract. Display severity: blocked. Display copy: static fixture readiness needs contract fixture review; runtime data remains disconnected.</li>
         <li>Route pattern: /v1/tasks/{task_id}/logs/digest/stream. Display state: needs-contract. Authority state: needs-contract. Display severity: blocked. Display copy: static fixture readiness needs contract fixture review; runtime data remains disconnected.</li>
       </ul>
       <p class="meta">Source: Story 99.2 fixture snapshot contract. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Confidence: fixture-backed static readiness only.</p>
@@ -430,7 +465,7 @@
         <li>no background jobs</li>
         <li>external audit trail</li>
       </ul>
-      <p>Panel coverage for audit review includes overview, tasks, task-detail, sessions, events, traces, history-replay-readiness, lifecycle-snapshot, fixture-readiness, health, audit, and help.</p>
+      <p>Panel coverage for audit review includes overview, tasks, task-detail, sessions, task-log-digest, events, traces, history-replay-readiness, lifecycle-snapshot, fixture-readiness, health, audit, and help.</p>
       <p class="meta">Source: BMAD planning artifacts. Freshness timestamp: static Story 92.2 shell. Reference: Phase 19 PRD, UX, architecture, and epics artifacts. Confidence: high for dashboard boundary copy; unavailable for runtime data.</p>
     </section>
     <section id="help" aria-labelledby="help-title" tabindex="-1">
@@ -448,7 +483,7 @@
         <li>external runbooks/control planes</li>
       </ul>
       <p>Keyboard navigation uses visible focus styling on panel navigation and landmarks. Screen-reader users receive named sections, headings, aria-labeled lists, and text-only route provenance. Contrast and readability rely on the static dark background, light foreground, warning-state, and metadata tokens declared in this shell. Reduced motion and responsive layout are declared in CSS only.</p>
-      <p>Panel coverage for help includes overview, tasks, task-detail, sessions, events, traces, history-replay-readiness, lifecycle-snapshot, fixture-readiness, health, audit, and help.</p>
+      <p>Panel coverage for help includes overview, tasks, task-detail, sessions, task-log-digest, events, traces, history-replay-readiness, lifecycle-snapshot, fixture-readiness, health, audit, and help.</p>
       <p>Unavailable state meanings remain passive: missing, stale, unauthorized, forbidden, degraded, route failure, and empty successful reads describe visibility states only. Escalation belongs in external runbooks/control planes, not this dashboard.</p>
       <p>Story 92.3 final quality gate remains pending; this Story 92.2 slice provides accessibility and help guidance only.</p>
       <p class="meta">Source: BMAD planning artifacts. Freshness timestamp: static Story 92.2 shell. Reference: future operator runbook and story references. Confidence: high for non-mutating boundary copy; unavailable for runtime data.</p>
@@ -463,5 +498,6 @@
   <script src="trace-correlation.js" defer></script>
   <script src="history-replay.js" defer></script>
   <script src="lifecycle-snapshot.js" defer></script>
+  <script src="task-log-digest.js" defer></script>
 </body>
 </html>

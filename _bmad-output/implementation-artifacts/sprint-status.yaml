@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-26T00:45:00+03:00"
-current_phase: 29  # Phase 29 OPEN — Epic 108 planning/status story selects aggregate/session/digest family and exact future GET /v1/tasks/{task_id}/logs/digest surface; no runtime implemented
+last_updated: "2026-06-26T01:15:00+03:00"
+current_phase: 29  # Phase 29 OPEN — Story 108.2 implements exact GET /v1/tasks/{task_id}/logs/digest dashboard runtime boundary; Story 108.3 final closure pending remote CI evidence
 
 development_status:
   # =========================================================================
@@ -913,15 +913,40 @@ development_status:
   # =========================================================================
   # Epic 108: Aggregate/Session/Digest route selection planning
   # =========================================================================
-  epic-108: in-progress  # Phase 29 opened as docs/status-only planning; selected aggregate/session/digest family and exact future GET /v1/tasks/{task_id}/logs/digest surface; no runtime implemented
+  epic-108: in-progress  # Phase 29 runtime boundary implemented locally for exact GET /v1/tasks/{task_id}/logs/digest; final closure pending Story 108.3 after push/remote CI evidence
   108-1-aggregate-session-digest-route-selection-planning: done  # Phase 29 PRD/architecture/epics/status opening; selects aggregate/session/digest family and future GET /v1/tasks/{task_id}/logs/digest only; aggregate/session list, digest stream, task-list/search/discovery, broad dashboard runtime remain deferred
-  108-2-task-log-digest-runtime-boundary: backlog  # future tests-first exact GET /v1/tasks/{task_id}/logs/digest dashboard runtime boundary only; no aggregate/session/list/search/discovery/digest-stream/generated-live-data
+  108-2-task-log-digest-runtime-boundary: done  # tests-first exact GET /v1/tasks/{task_id}/logs/digest dashboard runtime boundary; code review APPROVE, UltraQA PASS, local non-slow PR gate green; no aggregate/session/list/search/discovery/digest-stream/generated-live-data
   108-3-phase-29-epic-108-final-closure: backlog  # future docs/status final closure after Story 108.2 review/QA/push/remote-CI evidence
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-26"
+    event: story-108-2-task-log-digest-runtime-boundary-complete
+    from: backlog
+    to: done
+    story: 108-2-task-log-digest-runtime-boundary
+    reason: >
+      Story 108.2 implements the exact task-scoped dashboard digest runtime
+      boundary selected by Story 108.1: GET /v1/tasks/{task_id}/logs/digest
+      only, selected from visible task_id text only, body-free GET only, with
+      backend digest/summary text and bounded provenance/freshness metadata
+      rendered by textContent. Authoritative healthy rendering requires matching
+      task_id, digest or summary text, server retrieved_at or completed_at, and
+      freshness_state fresh/stale. Unknown display/freshness states, malformed
+      JSON, missing server freshness, mismatched task_id, missing task_id, empty
+      digest, backend failure, network failure, and unauthorized states fail
+      closed/non-authoritative. Digest stream, aggregate task list reads,
+      session list/detail, task-list/search/discovery, browser-side LLM
+      generation/summarization, cache warming, background refresh, generated live
+      data, mutation/control behavior, backend/API expansion, services/MCP,
+      dependencies/lockfiles, CI/deployment changes, production credentials, and
+      production operations remain unauthorized and fail-closed unless explicitly
+      selected by a later story. Local code review approved, UltraQA passed, and
+      local non-slow PR-gate CI-equivalent passed; Story 108.3 remains for
+      final docs/status closure after push and remote CI evidence.
+
   - date: "2026-06-26"
     event: story-108-1-aggregate-session-digest-route-selection-planning-complete
     from: backlog

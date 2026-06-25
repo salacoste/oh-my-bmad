@@ -19,15 +19,10 @@ CORE_APPROVED_READ_ROUTES = frozenset(
         ("GET", "/v1/events/replay"),
         ("GET", "/v1/events/replay/validate"),
         ("GET", "/v1/health"),
-    }
-)
-OPTIONAL_NON_CORE_READ_ROUTES = frozenset(
-    {
-        # Non-core for the static dashboard MVP: the architecture notes this digest may
-        # call an LLM adapter and can add latency or external-service dependency risk.
         ("GET", "/v1/tasks/{task_id}/logs/digest"),
     }
 )
+OPTIONAL_NON_CORE_READ_ROUTES = frozenset()
 FORBIDDEN_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 CONTROL_TAGS = frozenset(
     {"form", "button", "input", "select", "textarea", "menu", "menuitem", "dialog"}
@@ -59,6 +54,7 @@ APPROVED_EVENT_RUNTIME_SCRIPT = "event-timeline.js"
 APPROVED_TRACE_RUNTIME_SCRIPT = "trace-correlation.js"
 APPROVED_HISTORY_REPLAY_RUNTIME_SCRIPT = "history-replay.js"
 APPROVED_LIFECYCLE_RUNTIME_SCRIPT = "lifecycle-snapshot.js"
+APPROVED_DIGEST_RUNTIME_SCRIPT = "task-log-digest.js"
 APPROVED_RUNTIME_SCRIPTS = {
     APPROVED_HEALTH_RUNTIME_SCRIPT,
     APPROVED_TASK_DETAIL_RUNTIME_SCRIPT,
@@ -66,6 +62,7 @@ APPROVED_RUNTIME_SCRIPTS = {
     APPROVED_TRACE_RUNTIME_SCRIPT,
     APPROVED_HISTORY_REPLAY_RUNTIME_SCRIPT,
     APPROVED_LIFECYCLE_RUNTIME_SCRIPT,
+    APPROVED_DIGEST_RUNTIME_SCRIPT,
 }
 
 RUNTIME_CALL_MARKERS = (
@@ -513,7 +510,8 @@ def test_approved_read_route_contract_contains_only_get_methods() -> None:
         assert method == "GET", (method, route)
         assert method not in FORBIDDEN_METHODS, (method, route)
         assert route.startswith("/v1/"), route
-    assert ("GET", "/v1/tasks/{task_id}/logs/digest") not in CORE_APPROVED_READ_ROUTES
+    assert ("GET", "/v1/tasks/{task_id}/logs/digest") in CORE_APPROVED_READ_ROUTES
+    assert ("GET", "/v1/tasks/{task_id}/logs/digest/stream") not in CORE_APPROVED_READ_ROUTES
 
 
 def test_dashboard_static_assets_make_no_api_or_mutating_method_calls() -> None:
@@ -577,7 +575,7 @@ def test_guard_sensitivity_mutation_probes() -> None:
     assert_fails(
         insert_before_body_end(
             raw,
-            "<script>fetch('/v1/tasks/abc/logs/digest', {method: 'GET'})</script>",
+            "<script>fetch('/v1/tasks/abc/logs/digest/stream', {method: 'GET'})</script>",
         ),
         "api",
     )

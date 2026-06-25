@@ -32,6 +32,7 @@ REQUIRED_PANELS = {
     "tasks": "Tasks",
     "task-detail": "Task Detail",
     "sessions": "Sessions",
+    "task-log-digest": "Task log digest",
     "events": "Events",
     "traces": "Traces",
     "history-replay-readiness": "History / replay readiness",

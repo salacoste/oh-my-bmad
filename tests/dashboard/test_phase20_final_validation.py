@@ -22,7 +22,7 @@ def load_adapter() -> ModuleType:
 
 adapter = load_adapter()
 
-APPROVED_PHASE20_ROUTES = frozenset(
+APPROVED_DASHBOARD_ROUTES = frozenset(
     {
         "/v1/tasks/{task_id}",
         "/v1/tasks/{task_id}/events",
@@ -32,41 +32,41 @@ APPROVED_PHASE20_ROUTES = frozenset(
         "/v1/events/replay",
         "/v1/events/replay/validate",
         "/v1/health",
+        "/v1/tasks/{task_id}/logs/digest",
     }
 )
 NEEDS_CONTRACT_ROUTES = frozenset({"/v1/tasks", "/v1/sessions"})
-DIGEST_ROUTES = frozenset(
-    {
-        "/v1/tasks/{task_id}/logs/digest",
-        "/v1/tasks/{task_id}/logs/digest/stream",
-    }
-)
+DIGEST_STREAM_ROUTES = frozenset({"/v1/tasks/{task_id}/logs/digest/stream"})
 
 
 def _panel_route_patterns() -> tuple[str, ...]:
     return tuple(
         route.route_pattern
-        for panel in (*adapter.story_96_1_panel_contracts(), *adapter.story_96_2_panel_contracts())
+        for panel in (
+            *adapter.story_96_1_panel_contracts(),
+            *adapter.story_96_2_panel_contracts(),
+            *adapter.story_108_2_panel_contracts(),
+        )
         for route in panel.routes
     )
 
 
-def test_phase20_approved_route_inventory_is_exact_and_get_only() -> None:
+def test_dashboard_approved_route_inventory_is_exact_and_get_only() -> None:
     approved_contract_routes = {
         contract.route_pattern for contract in adapter.approved_read_contracts()
     }
     boundary_routes = {route for method, route in boundary.CORE_APPROVED_READ_ROUTES}
 
-    assert approved_contract_routes == APPROVED_PHASE20_ROUTES
-    assert boundary_routes == APPROVED_PHASE20_ROUTES
-    assert len(boundary.CORE_APPROVED_READ_ROUTES) == len(APPROVED_PHASE20_ROUTES)
-    for route_pattern in APPROVED_PHASE20_ROUTES:
+    assert approved_contract_routes == APPROVED_DASHBOARD_ROUTES
+    assert boundary_routes == APPROVED_DASHBOARD_ROUTES
+    assert len(boundary.CORE_APPROVED_READ_ROUTES) == len(APPROVED_DASHBOARD_ROUTES)
+    for route_pattern in APPROVED_DASHBOARD_ROUTES:
         request = adapter.read_request(route_pattern)
         assert request.method == "GET"
         assert live_contracts.is_allowlisted_dashboard_read("GET", route_pattern)
 
 
-def test_phase20_aggregate_and_session_decision_remains_needs_contract() -> None:
+def test_dashboard_aggregate_and_session_decision_remains_needs_contract() -> None:
     unavailable = {
         contract.source_category: contract for contract in adapter.unavailable_read_contracts()
     }
@@ -88,17 +88,17 @@ def test_phase20_aggregate_and_session_decision_remains_needs_contract() -> None
             )
 
 
-def test_phase20_panel_selectors_cover_approved_reads_and_exclude_unapproved_reads() -> None:
+def test_dashboard_panel_selectors_cover_approved_reads_and_exclude_unapproved_reads() -> None:
     panel_routes = _panel_route_patterns()
 
     assert len(panel_routes) == len(set(panel_routes))
-    assert frozenset(panel_routes) == APPROVED_PHASE20_ROUTES
+    assert frozenset(panel_routes) == APPROVED_DASHBOARD_ROUTES
     assert frozenset(panel_routes).isdisjoint(NEEDS_CONTRACT_ROUTES)
-    assert frozenset(panel_routes).isdisjoint(DIGEST_ROUTES)
+    assert frozenset(panel_routes).isdisjoint(DIGEST_STREAM_ROUTES)
     assert frozenset(panel_routes).isdisjoint(adapter.EXCLUDED_ROUTE_PATTERNS)
 
 
-def test_phase20_static_shell_remains_inert_accessible_and_read_only() -> None:
+def test_dashboard_static_shell_remains_inert_accessible_and_read_only() -> None:
     for html_file in boundary.dashboard_files():
         raw = html_file.read_text(encoding="utf-8")
         parser = boundary.parse_html(raw)
@@ -116,7 +116,7 @@ def test_phase20_static_shell_remains_inert_accessible_and_read_only() -> None:
         assert "unavailable" in page_text, html_file
 
 
-def test_phase20_adapter_has_no_runtime_or_mutation_markers() -> None:
+def test_dashboard_adapter_has_no_runtime_or_mutation_markers() -> None:
     source = Path(adapter.__file__).read_text(encoding="utf-8").lower()
     forbidden_markers = (
         "fetch(",

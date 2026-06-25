@@ -34,7 +34,7 @@ def test_adapter_contracts_cover_exact_approved_route_inventory() -> None:
         for contract in approved
     }
 
-    assert len(approved) == 8
+    assert len(approved) == 9
     assert adapter_routes == live_contracts.APPROVED_READ_ROUTES
     assert {contract.route_status for contract in approved} == {"approved"}
     assert {
@@ -82,10 +82,11 @@ def test_adapter_metadata_matches_state_contracts() -> None:
         assert not isinstance(meta.identifiers, MutableMapping)
 
 
-def test_digest_aggregate_and_session_routes_are_not_adapter_reads() -> None:
+def test_only_digest_stream_aggregate_and_session_routes_are_not_adapter_reads() -> None:
     approved_routes = {contract.route_pattern for contract in adapter.approved_read_contracts()}
     assert not (adapter.EXCLUDED_ROUTE_PATTERNS & approved_routes)
-    assert "/v1/tasks/{task_id}/logs/digest" in adapter.EXCLUDED_ROUTE_PATTERNS
+    assert "/v1/tasks/{task_id}/logs/digest" in approved_routes
+    assert "/v1/tasks/{task_id}/logs/digest/stream" in adapter.EXCLUDED_ROUTE_PATTERNS
 
     unavailable = {
         contract.source_category: contract for contract in adapter.unavailable_read_contracts()

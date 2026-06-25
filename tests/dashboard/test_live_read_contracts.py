@@ -27,7 +27,6 @@ NEEDS_SEPARATE_CONTRACT_GET_ROUTES = frozenset(
         "/v1/tasks/{task_id}/actions",
         "/v1/tasks/{task_id}/retry",
         "/v1/events/replay/snapshots/{snapshot_id}",
-        "/v1/tasks/{task_id}/logs/digest",
         "/v1/tasks/{task_id}/logs/digest/stream",
     }
 )
@@ -83,7 +82,7 @@ def test_route_inventory_is_imported_from_static_boundary_contract() -> None:
     assert APPROVED_READ_ROUTES is boundary.CORE_APPROVED_READ_ROUTES
     assert OPTIONAL_NON_CORE_READ_ROUTES is boundary.OPTIONAL_NON_CORE_READ_ROUTES
     assert FORBIDDEN_METHODS is boundary.FORBIDDEN_METHODS
-    assert len(APPROVED_READ_ROUTES) == 8
+    assert len(APPROVED_READ_ROUTES) == 9
 
 
 def test_candidate_core_read_routes_are_unique_normalized_and_get_only() -> None:
@@ -103,9 +102,9 @@ def test_forbidden_methods_are_rejected_for_every_candidate_dashboard_route() ->
             assert not is_allowlisted_dashboard_read(method, route), (method, route)
 
 
-def test_digest_and_aggregate_session_routes_need_separate_contracts() -> None:
-    assert ("GET", "/v1/tasks/{task_id}/logs/digest") in OPTIONAL_NON_CORE_READ_ROUTES
-    assert ("GET", "/v1/tasks/{task_id}/logs/digest") not in APPROVED_READ_ROUTES
+def test_only_digest_read_is_promoted_and_adjacent_routes_need_separate_contracts() -> None:
+    assert ("GET", "/v1/tasks/{task_id}/logs/digest") in APPROVED_READ_ROUTES
+    assert ("GET", "/v1/tasks/{task_id}/logs/digest/stream") not in APPROVED_READ_ROUTES
     for route in NEEDS_SEPARATE_CONTRACT_GET_ROUTES:
         assert ("GET", route) not in APPROVED_READ_ROUTES
         assert not is_allowlisted_dashboard_read("GET", route), route
@@ -131,7 +130,7 @@ def test_guard_sensitivity_rejects_unapproved_live_read_calls_and_methods() -> N
     bad_snippets = (
         "fetch('/v1/tasks', {method: 'GET'})",
         "fetch('/v1/sessions', {method: 'GET'})",
-        "fetch('/v1/tasks/abc/logs/digest', {method: 'GET'})",
+        "fetch('/v1/tasks/abc/logs/digest/stream', {method: 'GET'})",
         "fetch('/v1/tasks/abc', {method: 'POST'})",
         "fetch('/v1/tasks/abc/events', {method: 'PATCH'})",
     )

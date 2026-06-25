@@ -29,6 +29,7 @@ SourceCategory = Literal[
     "history",
     "replay",
     "health",
+    "digest",
     "aggregate",
     "session",
 ]
@@ -75,6 +76,7 @@ EXPECTED_IDENTIFIERS_BY_ROUTE = {
     "/v1/events/replay": frozenset({"replay_id"}),
     "/v1/events/replay/validate": frozenset({"replay_id"}),
     "/v1/health": frozenset(),
+    "/v1/tasks/{task_id}/logs/digest": frozenset({"task_id"}),
 }
 NON_AUTHORITATIVE_STATES = frozenset(
     {
@@ -85,6 +87,8 @@ NON_AUTHORITATIVE_STATES = frozenset(
         "invalid",
         "unauthorized",
         "backend-unavailable",
+        "provider-unavailable",
+        "empty-digest",
     }
 )
 REPLAY_OR_LIFECYCLE_CATEGORIES = frozenset({"replay"})
@@ -104,7 +108,6 @@ STORY_99_1_FORBIDDEN_RENDERABLE_ROUTES = frozenset(
         "/v1/tasks",
         "/v1/sessions",
         "/v1/sessions/{session_id}",
-        "/v1/tasks/{task_id}/logs/digest",
         "/v1/tasks/{task_id}/logs/digest/stream",
     }
 )
@@ -241,6 +244,27 @@ LIVE_VALUE_CONTRACTS = (
         allowed_states=frozenset({"healthy", "stale", "unavailable", "backend-unavailable"}),
     ),
     LiveValueContract(
+        name="task-log-digest",
+        source_category="digest",
+        route_pattern="/v1/tasks/{task_id}/logs/digest",
+        route_contract="approved",
+        timestamp_policy="retrieved-at-required",
+        freshness_policy="fresh-or-stale-required",
+        required_identifiers=("task_id",),
+        allowed_states=frozenset(
+            {
+                "healthy",
+                "unavailable",
+                "stale",
+                "invalid",
+                "unauthorized",
+                "backend-unavailable",
+                "provider-unavailable",
+                "empty-digest",
+            }
+        ),
+    ),
+    LiveValueContract(
         name="aggregate-overview",
         source_category="aggregate",
         route_pattern="/v1/tasks",
@@ -333,12 +357,13 @@ def test_every_future_live_value_declares_source_freshness_and_identifier_contra
         "history",
         "replay",
         "health",
+        "digest",
         "aggregate",
         "session",
     } <= covered_categories
 
 
-def test_unapproved_aggregate_and_session_reads_render_needs_contract_copy() -> None:
+def test_unapproved_aggregate_session_and_stream_reads_render_needs_contract_copy() -> None:
     unapproved = [
         contract
         for contract in LIVE_VALUE_CONTRACTS
@@ -427,8 +452,10 @@ def test_guard_sensitivity_rejects_synthetic_authoritative_success_for_missing_c
 
 def test_story_99_1_view_models_cover_every_approved_phase_20_panel_route() -> None:
     view_models = live_read_adapter.story_99_1_route_view_models()
-    expected = set(live_read_adapter.story_96_1_route_patterns()) | set(
-        live_read_adapter.story_96_2_route_patterns()
+    expected = (
+        set(live_read_adapter.story_96_1_route_patterns())
+        | set(live_read_adapter.story_96_2_route_patterns())
+        | set(live_read_adapter.story_108_2_route_patterns())
     )
 
     assert {view_model.route_pattern for view_model in view_models} == expected
@@ -442,6 +469,7 @@ def test_story_99_1_view_models_cover_every_approved_phase_20_panel_route() -> N
         for panel in (
             live_read_adapter.story_96_1_panel_contracts()
             + live_read_adapter.story_96_2_panel_contracts()
+            + live_read_adapter.story_108_2_panel_contracts()
         )
         for route in panel.routes
     }

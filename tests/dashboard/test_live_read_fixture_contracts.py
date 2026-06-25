@@ -26,6 +26,7 @@ EXPECTED_FIXTURE_ROUTE_PATTERNS = frozenset(
     for panel in (
         live_read_adapter.story_96_1_panel_contracts()
         + live_read_adapter.story_96_2_panel_contracts()
+        + live_read_adapter.story_108_2_panel_contracts()
     )
     for route in panel.routes
 )
@@ -37,7 +38,6 @@ EXPLICIT_FORBIDDEN_FIXTURE_ROUTES = frozenset(
         "/v1/tasks",
         "/v1/sessions",
         "/v1/sessions/{session_id}",
-        "/v1/tasks/{task_id}/logs/digest",
         "/v1/tasks/{task_id}/logs/digest/stream",
     }
 )
@@ -107,6 +107,8 @@ NON_AUTHORITATIVE_STATES = frozenset(
         "invalid",
         "unauthorized",
         "backend-unavailable",
+        "provider-unavailable",
+        "empty-digest",
     }
 )
 
@@ -130,6 +132,7 @@ def test_story_99_2_fixture_snapshot_route_coverage_matches_story_99_1_view_mode
         for panel in (
             live_read_adapter.story_96_1_panel_contracts()
             + live_read_adapter.story_96_2_panel_contracts()
+            + live_read_adapter.story_108_2_panel_contracts()
         )
         for route in panel.routes
     }

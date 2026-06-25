@@ -32,7 +32,6 @@ FORBIDDEN_STATIC_ROUTE_PATTERNS = frozenset(
         "/v1/tasks",
         "/v1/sessions",
         "/v1/sessions/{session_id}",
-        "/v1/tasks/{task_id}/logs/digest",
         "/v1/tasks/{task_id}/logs/digest/stream",
     }
 )
@@ -127,7 +126,7 @@ def test_story_100_1_degraded_unavailable_rendering_choice_is_bounded_summary() 
         assert state in text
 
 
-def test_story_100_1_forbidden_aggregate_session_and_digest_routes_fail_closed_in_static_copy() -> (
+def test_story_100_1_forbidden_aggregate_session_and_digest_stream_routes_fail_closed_in_static_copy() -> (
     None
 ):
     text = fixture_section_text()
@@ -138,7 +137,7 @@ def test_story_100_1_forbidden_aggregate_session_and_digest_routes_fail_closed_i
         assert probe.renderable is False
         assert probe.display_copy in text
         assert route_pattern in text
-    assert "aggregate, session, and digest routes fail closed" in lowered
+    assert "aggregate and session routes plus the digest stream fail closed" in lowered
     assert "needs-contract" in lowered
 
 
