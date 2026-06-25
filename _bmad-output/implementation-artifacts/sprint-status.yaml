@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-25T03:54:50+03:00"
-current_phase: 27  # Phase 27 CLOSED — Epic 106 lifecycle/snapshot route family closure complete; next phase not opened
+last_updated: "2026-06-25T19:31:30+03:00"
+current_phase: 28  # Phase 28 OPEN — Epic 107 snapshot creation authorization planning opened; Story 107.1 docs/status-only complete
 
 development_status:
   # =========================================================================
@@ -902,10 +902,54 @@ development_status:
   106-2-lifecycle-snapshot-runtime-boundary: done  # exact GET /v1/events/replay/snapshots dashboard runtime boundary; code-review APPROVE, UltraQA complete, dashboard tests green, pushed in d9d040f, remote CI green on run 28139358221; no POST snapshots/lifecycle mutation/discovery/controls
   106-3-phase-27-epic-106-final-closure: done  # docs/status final closure after Story 106.2 review/QA/push/remote-CI evidence; deferred surfaces remain fail-closed
 
+  # =========================================================================
+  # Epic 107: Snapshot creation authorization planning
+  # =========================================================================
+  epic-107: in-progress  # Phase 28 opened for POST /v1/events/replay/snapshots authorization planning only; implementation deferred to Story 107.2
+  107-1-snapshot-creation-authorization-planning: done  # Phase 28 PRD/architecture/epics/status opening; selects future POST snapshot creation authorization boundary only
+  107-2-snapshot-creation-authorization-runtime-boundary: backlog  # future tests-first implementation; no destructive lifecycle/broad dashboard/discovery/search/aggregate/session/digest
+  107-3-phase-28-epic-107-final-closure: backlog  # final closure only after Story 107.2 review/QA/push/remote-CI evidence
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-25"
+    event: story-107-1-snapshot-creation-authorization-planning-complete
+    from: backlog
+    to: done
+    story: 107-1-snapshot-creation-authorization-planning
+    reason: >
+      Story 107.1 opens Phase 28 / Epic 107 as docs/status-only Snapshot
+      Creation authorization planning after Phase 27 / Epic 106 closed. It
+      selects exactly POST /v1/events/replay/snapshots as a future candidate
+      surface and records operator-initiation, reuse of one existing authorization
+      source only, no-new-credential-system scope control, no-hidden-write,
+      bounded metadata, current body-free POST / HTTP 201 success-contract
+      preservation, concurrency/idempotency, and fail-closed future test
+      obligations. Runtime implementation is deferred to Story 107.2.
+      Destructive lifecycle apply/prune/rollback, destructive lifecycle
+      authorization execution, archive/manifest mutation, snapshot deletion or
+      restore, broad dashboard wiring, task-list/search/discovery,
+      aggregate/session/digest, generated live data, replay execution target
+      selection, services, MCP changes, dependencies, lockfiles, CI/deployment
+      changes, production credentials, and production operations remain
+      unauthorized and fail-closed unless explicitly selected by a later story.
+
+  - date: "2026-06-25"
+    event: phase-28-epic-107-opened
+    from: 27
+    to: 28
+    story: 107-1-snapshot-creation-authorization-planning
+    reason: >
+      Phase 28 formally opened after Phase 27 / Epic 106 closure. The selected
+      next candidate is snapshot creation authorization for exactly POST
+      /v1/events/replay/snapshots. This opening is planning/status only and
+      does not implement runtime behavior or authorize destructive lifecycle,
+      broad dashboard, discovery/search, aggregate/session/digest,
+      archive/manifest mutation, services/MCP/dependencies/CI, deployment, or
+      production credential changes.
+
   - date: "2026-06-25"
     event: story-106-3-phase-27-epic-106-final-closure-complete
     from: backlog
