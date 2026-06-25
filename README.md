@@ -14,7 +14,7 @@
   <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-stdio-7F52B5" alt="MCP"/></a>
   <a href="https://mypy.readthedocs.io/"><img src="https://img.shields.io/badge/mypy-strict-1f5082" alt="mypy strict"/></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"/></a>
-  <a href="_bmad-output/planning-artifacts/phase-27-epics.md"><img src="https://img.shields.io/badge/Phase%2027-Closed-brightgreen" alt="Phase 27 closed"/></a>
+  <a href="_bmad-output/planning-artifacts/phase-28-epics.md"><img src="https://img.shields.io/badge/Phase%2028-Closed-brightgreen" alt="Phase 28 closed"/></a>
 </p>
 
 ---
@@ -25,7 +25,7 @@ A platform that turns Telegram and a local console into the control surfaces for
 
 It's deliberately **boring** infrastructure — Python 3.12, FastAPI, aiogram, SQLite WAL, Docker Compose, stdio MCP. The novelty is in how the boring pieces compose, not in any one piece.
 
-> **Current repo state: Phase 27 closed — Epic 106 completed the Lifecycle / Snapshot runtime boundary and final closure after remote CI run `28139358221` passed.** Latest tagged release is `v1.3.0`; this checkout contains later BMad work through Phase 27. See [`docs/index.md`](docs/index.md) and the derivative [`docs/feature-status.md`](docs/feature-status.md) matrix for the current implemented/deferred feature view.
+> **Current repo state: Phase 28 closed — Epic 107 completed the Snapshot Creation authorization runtime boundary and final closure after remote CI run `28195545005` passed.** Latest tagged release is `v1.3.0`; this checkout contains later BMad work through Phase 28. See [`docs/index.md`](docs/index.md) and the derivative [`docs/feature-status.md`](docs/feature-status.md) matrix for the current implemented/deferred feature view.
 
 ## How it works (at a glance)
 
@@ -141,7 +141,7 @@ Phase 4 — Implementation     → sprint plan → (create-story → validate �
                               → retrospective at every epic boundary
 ```
 
-Phase 1 took **10 epics / 88 stories**, with retrospective + deferred-work governance at every epic boundary. The current repo has progressed to **Phase 27 closed** — event spine, multi-runtime workers, a 9-server MCP fleet, browser automation, supply-chain hardening, remote MCP transport, mTLS, historical replay, event-log lifecycle management, lifecycle-operation safety, docs/backlog reconciliation, archive-aware task history, destructive lifecycle apply readiness/product-scope planning, and the read-only dashboard live-read readiness/runtime boundary series through lifecycle/snapshot. Epic 106 is now closed by the final Phase 27 validation story. The full per-phase walkthrough, skill catalog, and "how a new feature enters the workflow" decision tree is documented separately:
+Phase 1 took **10 epics / 88 stories**, with retrospective + deferred-work governance at every epic boundary. The current repo has progressed to **Phase 28 closed** — event spine, multi-runtime workers, a 9-server MCP fleet, browser automation, supply-chain hardening, remote MCP transport, mTLS, historical replay, event-log lifecycle management, lifecycle-operation safety, docs/backlog reconciliation, archive-aware task history, destructive lifecycle apply readiness/product-scope planning, the read-only dashboard live-read readiness/runtime boundary series through lifecycle/snapshot, and the exact JWT-authenticated snapshot creation authorization boundary. Epic 107 is now closed by the final Phase 28 validation story. The full per-phase walkthrough, skill catalog, and "how a new feature enters the workflow" decision tree is documented separately:
 
 ➡️ **[`docs/bmad-workflow.md`](docs/bmad-workflow.md)** — the complete workflow this project follows.
 
@@ -209,7 +209,7 @@ A few things worth a look even if you don't intend to run it:
 
 ## Status
 
-**Current development state — Phase 27 closed / Epic 106 done.** Latest tagged release: `v1.3.0`. Final closure cites remote CI run [`28139358221`](https://github.com/salacoste/oh-my-bmad/actions/runs/28139358221) as the Phase 27 / Epic 106 evidence gate. The canonical status source is [`_bmad-output/implementation-artifacts/sprint-status.yaml`](_bmad-output/implementation-artifacts/sprint-status.yaml); [`docs/feature-status.md`](docs/feature-status.md) is the derivative human-readable implemented/partial/deferred matrix.
+**Current development state — Phase 28 closed / Epic 107 done.** Latest tagged release: `v1.3.0`. Final closure cites remote CI run [`28195545005`](https://github.com/salacoste/oh-my-bmad/actions/runs/28195545005) as the Phase 28 / Epic 107 evidence gate. The canonical status source is [`_bmad-output/implementation-artifacts/sprint-status.yaml`](_bmad-output/implementation-artifacts/sprint-status.yaml); [`docs/feature-status.md`](docs/feature-status.md) is the derivative human-readable implemented/partial/deferred matrix.
 
 | Phase | Scope | Epics | Current status |
 |---|---|---|---|
@@ -240,7 +240,8 @@ A few things worth a look even if you don't intend to run it:
 | 25 | Phase 25 — Trace correlation runtime boundary for exact `GET /v1/trace/{trace_id}` | 104 | Done |
 | 26 | Phase 26 — History / Replay runtime boundary for exact `GET /v1/tasks/{task_id}/history`, `GET /v1/events/replay`, and `GET /v1/events/replay/validate` with visible replay target query discipline | 105 | Done |
 | 27 | Phase 27 — Lifecycle / Snapshot runtime boundary for exact `GET /v1/events/replay/snapshots` plus passive lifecycle-readiness evidence display | 106 | Done: Story 106.3 records final closure with remote CI run `28139358221` |
+| 28 | Phase 28 — Snapshot Creation authorization runtime boundary for exact JWT-authenticated `POST /v1/events/replay/snapshots` | 107 | Done: Story 107.3 records final closure with remote CI run `28195545005` |
 
-Destructive lifecycle apply is still unimplemented, and object-storage lifecycle jobs plus scheduled retention remain future work. Dashboard runtime wiring remains intentionally narrow: health/readiness, task detail, event timeline/transitions, trace correlation, history/replay, and lifecycle/snapshot only. Aggregate/session/digest, task-list/search/discovery, broad dashboard wiring, and mutation/control affordances remain deferred/fail-closed unless a later BMad phase explicitly approves them.
+Destructive lifecycle apply is still unimplemented, and object-storage lifecycle jobs plus scheduled retention remain future work. Dashboard runtime wiring remains intentionally narrow: health/readiness, task detail, event timeline/transitions, trace correlation, history/replay, lifecycle/snapshot listing, and the single visible JWT-authenticated snapshot-create affordance only. Aggregate/session/digest, task-list/search/discovery, broad dashboard wiring, destructive lifecycle mutation, archive/manifest mutation, snapshot deletion/restore, and any other mutation/control affordances remain deferred/fail-closed unless a later BMad phase explicitly approves them.
 
 Issues and discussion welcome — security reports per [`SECURITY.md`](./SECURITY.md).

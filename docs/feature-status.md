@@ -8,30 +8,30 @@
 
 ## Current BMad status
 
-- **Current phase:** Phase 27 — Lifecycle / Snapshot route family is closed after Story 106.3 final validation closure.
-- **Current epic:** Epic 106 is done; no later phase is opened by this page.
-- **Recently closed:** Phase 27 / Epic 106 — Lifecycle / Snapshot runtime boundary and final validation closure are done.
-- **Done in Phase 26:**
-  - Story 105.1 selected exactly `GET /v1/tasks/{task_id}/history`, `GET /v1/events/replay`, and `GET /v1/events/replay/validate`.
-  - Story 105.2 implemented the narrow browser/runtime History / Replay boundary and recorded review/QA/CI evidence.
-  - Story 105.3 records Phase 26 / Epic 105 closure after Story 105.2 review, QA, push, and remote CI run `28072822987` passed.
+- **Current phase:** Phase 28 — Snapshot Creation authorization boundary is closed after Story 107.3 final validation closure.
+- **Current epic:** Epic 107 is done; no later phase is opened by this page.
+- **Recently closed:** Phase 28 / Epic 107 — Snapshot Creation authorization runtime boundary and final validation closure are done.
 - **Done in Phase 27:**
-  - Story 106.1 selects exactly `GET /v1/events/replay/snapshots` plus passive lifecycle-readiness evidence display from `dashboard/static/replay-lifecycle-contract.json`.
-  - Story 106.2 implements the narrow browser/runtime lifecycle/snapshot boundary with bounded metadata-only rendering and review/UltraQA evidence.
+  - Story 106.1 selected exactly `GET /v1/events/replay/snapshots` plus passive lifecycle-readiness evidence display from `dashboard/static/replay-lifecycle-contract.json`.
+  - Story 106.2 implemented the narrow browser/runtime lifecycle/snapshot listing boundary with bounded metadata-only rendering and review/UltraQA evidence.
   - Story 106.3 records Phase 27 / Epic 106 closure after Story 106.2 review, QA, push, and remote CI run `28139358221` passed.
-- **Not closed by this page:** `POST /v1/events/replay/snapshots`, snapshot creation, lifecycle apply/prune/rollback, archive/manifest mutation, task-list/search/discovery, aggregate/session/digest, generated live data, replay execution, broad dashboard live wiring, backend/API expansion, controls, services, MCP changes, deployment changes, dependencies, lockfiles, and production operations.
+- **Done in Phase 28:**
+  - Story 107.1 selected exactly `POST /v1/events/replay/snapshots` as the snapshot creation authorization surface.
+  - Story 107.2 implemented the visible operator-initiated, JWT-authenticated snapshot-create runtime boundary and recorded code-review/UltraQA/local CI evidence.
+  - Story 107.3 records Phase 28 / Epic 107 closure after Story 107.2 review, QA, push, and remote CI run `28195545005` passed.
+- **Not closed by this page:** lifecycle apply/prune/rollback, destructive lifecycle authorization execution, archive/manifest mutation, snapshot deletion/restore, task-list/search/discovery, aggregate/session/digest, generated live data, replay execution target selection, broad dashboard live wiring, backend/API expansion beyond the exact snapshot-create route, additional controls, services, MCP changes, deployment changes, dependencies, lockfiles, and production operations.
 
 Primary evidence:
 
-- `../_bmad-output/implementation-artifacts/sprint-status.yaml` — `current_phase: 27`, `epic-105` done, `epic-106` done, `106-1` done, `106-2` done, and `106-3` done.
-- `../_bmad-output/planning-artifacts/phase-26-epics.md` — Phase 26 closed History / Replay and deferred lifecycle readiness plus `/v1/events/replay/snapshots` as the next candidate.
-- `../_bmad-output/implementation-artifacts/105-3-phase-26-epic-105-final-validation-closure.md` — Story 105.3 final closure evidence, including remote CI run `28072822987`.
-- `../_bmad-output/planning-artifacts/phase-27-prd-amendment.md` — Phase 27 lifecycle/snapshot PRD scope.
-- `../_bmad-output/planning-artifacts/phase-27-architecture-amendment.md` — exact route, snapshot-list, passive-evidence, no-hidden-write, no-snapshot-create, no-lifecycle-mutation boundaries.
-- `../_bmad-output/planning-artifacts/phase-27-epics.md` — Epic 106 story sequence.
-- `../_bmad-output/implementation-artifacts/106-1-lifecycle-snapshot-live-read-route-selection.md` — Story 106.1 route-selection and non-authorization evidence.
-- `../_bmad-output/implementation-artifacts/106-2-lifecycle-snapshot-runtime-boundary.md` — Story 106.2 runtime implementation, review, UltraQA, and architect-clear evidence.
+- `../_bmad-output/implementation-artifacts/sprint-status.yaml` — `current_phase: 28`, `epic-107` done, `107-1` done, `107-2` done, and `107-3` done.
+- `../_bmad-output/planning-artifacts/phase-27-prd-amendment.md` / `phase-27-architecture-amendment.md` / `phase-27-epics.md` — Phase 27 lifecycle/snapshot listing scope and deferred snapshot-create boundary.
 - `../_bmad-output/implementation-artifacts/106-3-phase-27-epic-106-final-closure.md` — Story 106.3 final closure evidence, including remote CI run `28139358221`.
+- `../_bmad-output/planning-artifacts/phase-28-prd-amendment.md` — Phase 28 snapshot creation authorization PRD scope.
+- `../_bmad-output/planning-artifacts/phase-28-architecture-amendment.md` — exact `POST /v1/events/replay/snapshots`, visible operator initiation, one existing authorization source, no-hidden-write, no-lifecycle-mutation boundaries.
+- `../_bmad-output/planning-artifacts/phase-28-epics.md` — Epic 107 story sequence.
+- `../_bmad-output/implementation-artifacts/107-1-snapshot-creation-authorization-planning.md` — Story 107.1 route-selection and non-authorization evidence.
+- `../_bmad-output/implementation-artifacts/107-2-snapshot-creation-authorization-runtime-boundary.md` — Story 107.2 runtime implementation, review, UltraQA, and local CI evidence.
+- `../_bmad-output/implementation-artifacts/107-3-phase-28-epic-107-final-closure.md` — Story 107.3 final closure evidence, including remote CI run `28195545005`.
 - `../docs/api-contracts.md` — distinguishes `GET /v1/events/replay/snapshots` snapshot listing from `POST /v1/events/replay/snapshots` snapshot creation.
 - `../dashboard/static/replay-lifecycle-contract.json` — passive lifecycle-readiness evidence fields and fail-safe states.
 
@@ -67,6 +67,7 @@ Primary evidence:
 | Area | Status | Boundary |
 |---|---|---|
 | Dashboard lifecycle/snapshot runtime | Implemented with recorded closure | Phase 27 / Epic 106: Story 106.2 adds `dashboard/static/lifecycle-snapshot.js` and the lifecycle/snapshot panel for exactly `GET /v1/events/replay/snapshots`; output is bounded snapshot metadata only, passive lifecycle evidence fail-closes as non-authoritative when missing/degraded, architect re-check is CLEAR after shell copy declares optional evidence injection and fail-closed behavior, and Story 106.3 records final closure with remote CI run `28139358221`. |
+| Snapshot creation authorization boundary | Implemented with recorded closure | Phase 28 / Epic 107: Story 107.2 adds the visible bearer-token operator affordance and route-local JWT authorization for exactly body-free `POST /v1/events/replay/snapshots`; HTTP 201 is required before authoritative metadata rendering, failed/unknown states do not auto-retry, duplicate in-flight clicks are blocked, tokens are not echoed or stored, and Story 107.3 records final closure with remote CI run `28195545005`. |
 | Task/session overview and sessions visibility | Contract/static-only | Static dashboard copy and metadata distinguish resource-native fields from derived/unavailable semantics; no broad session HTTP/list/history/search runtime is authorized. |
 | Fixture snapshot/static rendering | Contract/static-only | Fixture/view-model/static rendering tests prove read-only presentation behavior and fail-closed unavailable states; they do not authorize new runtime polling or mutation controls. |
 
@@ -80,7 +81,7 @@ Primary evidence:
 | Broad dashboard live-read runtime wiring | Deferred / not implemented | Current browser runtime remains route-family-scoped. Health/readiness, task detail, event/transition, trace, history/replay, and lifecycle/snapshot have recorded narrow boundaries only; broad dashboard live wiring remains unavailable. |
 | Aggregate/session/digest dashboard live contracts | Deferred / fail-closed | Aggregate/session/digest reads are intentionally unavailable or excluded until safe contracts are approved. |
 | Task-list/search/discovery hidden calls | Deferred / fail-closed | Phase 23 guardrails forbid hidden discovery, task-list/search calls, broad dashboard wiring, and backend/API expansion. |
-| Mutation/control affordances in dashboard | Deferred / not implemented | Dashboard scope remains read-only by effect; no control buttons, lifecycle actions, writer imports, background jobs, cache warming, or snapshot creation are authorized. |
+| Additional mutation/control affordances in dashboard | Deferred / not implemented | Only the Phase 28 visible JWT-authenticated snapshot-create affordance is authorized. Lifecycle actions, writer imports, background jobs, cache warming, snapshot deletion/restore, archive/manifest mutation, destructive lifecycle controls, and unrelated control buttons remain unauthorized/fail-closed. |
 | Production GitHub write activation | Credential/operator-gated | GitHub write behavior remains simulated/gated by operator-provisioned credentials and explicit enablement; not a default shipped operator action. |
 | GLM/fourth runtime adapter | Deferred / not implemented | Future adapter candidate after the ADR-0015 pattern. |
 | Split deployment / remote Postgres horizontal scaling | Deferred / not implemented | Future deployment topology; current docs retain single-backend platform framing. |
@@ -91,4 +92,4 @@ Primary evidence:
 1. Update canonical sprint status first; update this page only as a derivative summary.
 2. Use explicit status labels rather than “done” prose when a phase is local-only or evidence-pending.
 3. Do not move deferred destructive, credentialed, or mutation-capable work to “implemented” without a BMad story, tests, review, and CI evidence.
-4. For dashboard runtime work, record the exact approved route family and keep aggregate/session/digest/task-list/search/discovery fail-closed unless a later phase changes that contract.
+4. For dashboard runtime work, record the exact approved route family/action and keep aggregate/session/digest/task-list/search/discovery plus destructive/additional mutation controls fail-closed unless a later phase changes that contract.

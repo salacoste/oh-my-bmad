@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-25T21:54:04+03:00"
-current_phase: 28  # Phase 28 OPEN — Story 107.2 runtime boundary complete locally; Story 107.3 final closure remains for evidence consolidation
+last_updated: "2026-06-25T22:41:22+03:00"
+current_phase: 28  # Phase 28 CLOSED — Epic 107 done after Story 107.2 review/UltraQA, push, and remote CI run 28195545005
 
 development_status:
   # =========================================================================
@@ -905,15 +905,34 @@ development_status:
   # =========================================================================
   # Epic 107: Snapshot creation authorization planning
   # =========================================================================
-  epic-107: in-progress  # Phase 28 opened for POST /v1/events/replay/snapshots authorization planning only; implementation deferred to Story 107.2
+  epic-107: done  # Phase 28 closed; snapshot creation authorization boundary complete with Story 107.3 evidence consolidation and remote CI run 28195545005
   107-1-snapshot-creation-authorization-planning: done  # Phase 28 PRD/architecture/epics/status opening; selects future POST snapshot creation authorization boundary only
-  107-2-snapshot-creation-authorization-runtime-boundary: done  # route-local JWT-authenticated POST boundary + visible dashboard affordance; local review/QA/CI passed; no destructive lifecycle/broad dashboard/discovery/search/aggregate/session/digest
-  107-3-phase-28-epic-107-final-closure: backlog  # final closure only after Story 107.2 review/QA/push/remote-CI evidence
+  107-2-snapshot-creation-authorization-runtime-boundary: done  # route-local JWT-authenticated POST boundary + visible dashboard affordance; code-review/UltraQA/local CI passed; pushed in e8bb1e4; remote CI run 28195545005 green; no destructive lifecycle/broad dashboard/discovery/search/aggregate/session/digest
+  107-3-phase-28-epic-107-final-closure: done  # docs/status final closure after Story 107.2 review/QA/push/remote-CI evidence; deferred surfaces remain fail-closed
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-25"
+    event: story-107-3-phase-28-epic-107-final-closure-complete
+    from: backlog
+    to: done
+    story: 107-3-phase-28-epic-107-final-closure
+    reason: >
+      Story 107.3 records Phase 28 / Epic 107 docs/status-only final
+      closure after Story 107.2 snapshot creation authorization runtime-boundary
+      evidence, final code-review APPROVE, UltraQA PASS, push in
+      e8bb1e49b4ac03141dac2c7b63cd8b050a60d462, and remote CI run 28195545005 success. Epic 107 is now done
+      for exactly POST /v1/events/replay/snapshots with the existing Registry
+      API JWT authentication source and visible operator initiation. Destructive
+      lifecycle apply/prune/rollback, archive/manifest mutation, snapshot
+      deletion/restore, task-list/search/discovery, aggregate/session/digest,
+      generated live data, replay execution target selection, broad dashboard
+      wiring, additional controls, services/MCP/dependencies/CI expansion,
+      deployment changes, and production operations remain unauthorized and
+      fail-closed unless selected by a later story.
+
   - date: "2026-06-25"
     event: story-107-2-snapshot-creation-authorization-runtime-boundary-complete
     from: backlog
