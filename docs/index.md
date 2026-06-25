@@ -7,8 +7,8 @@
 - **Type:** monorepo (`uv` workspace, 24 Python members) — single backend platform plus optional MCP fleet.
 - **Primary language:** Python 3.12 (locked).
 - **Architecture:** event-sourced, append-only JSONL event log, single-writer materialization, capability-tier-gated MCP boundaries, and replayable state.
-- **Current repo state:** Phase 23 closed / Epic 102 done — Story 102.1 selected `GET /v1/tasks/{task_id}`, Story 102.2 implemented the narrow task-detail browser runtime boundary, and Story 102.3 recorded final closure after Stage A CI run [`27923397535`](https://github.com/salacoste/oh-my-bmad/actions/runs/27923397535) passed on `6289796`.
-- **Latest tagged release:** `v1.3.0`; the checked-out branch contains later BMad work through Phase 23. [`feature-status.md`](./feature-status.md) summarizes implemented, partial, and deferred features; sprint-status remains canonical.
+- **Current repo state:** Phase 27 closed / Epic 106 done — Story 106.1 selected `GET /v1/events/replay/snapshots` plus passive lifecycle-readiness evidence display, Story 106.2 implemented the narrow Lifecycle / Snapshot browser runtime boundary, and Story 106.3 recorded final closure after remote CI run [`28139358221`](https://github.com/salacoste/oh-my-bmad/actions/runs/28139358221) passed.
+- **Latest tagged release:** `v1.3.0`; the checked-out branch contains later BMad work through Phase 27. [`feature-status.md`](./feature-status.md) summarizes implemented, partial, and deferred features; sprint-status remains canonical.
 
 ## Quick Reference
 
@@ -115,11 +115,15 @@ This table is a derivative summary. Use [`../_bmad-output/implementation-artifac
 | 21 | Dashboard rendering readiness and live-read wiring decision gate | Done |
 | 22 | Health/readiness runtime boundary for `GET /v1/health` | Done |
 | 23 | Task-detail runtime boundary for `GET /v1/tasks/{task_id}` | Done: route selection, runtime boundary, and final closure recorded |
+| 24 | Phase 24 — Event timeline / transitions runtime boundary for exact `GET /v1/tasks/{task_id}/events` and `GET /v1/tasks/{task_id}/transitions` | Done |
+| 25 | Phase 25 — Trace correlation runtime boundary for exact `GET /v1/trace/{trace_id}` | Done |
+| 26 | Phase 26 — History / Replay runtime boundary for exact `GET /v1/tasks/{task_id}/history`, `GET /v1/events/replay`, and `GET /v1/events/replay/validate` with visible replay target query discipline | Done |
+| 27 | Phase 27 — Lifecycle / Snapshot runtime boundary for exact `GET /v1/events/replay/snapshots` plus passive lifecycle-readiness evidence display | Done: Story 106.3 records Phase 27 / Epic 106 final closure with remote CI run `28139358221` |
 
 ## Scope of this refresh
 
-- **Mode:** documentation canonicalization after Phase 23 task-detail runtime-boundary work.
-- **Date:** 2026-06-22.
+- **Mode:** documentation canonicalization after Phase 27 lifecycle/snapshot runtime-boundary work.
+- **Date:** 2026-06-25.
 - **Project type:** backend monorepo / autonomous development platform.
 - **State file:** [project-scan-report.json](./project-scan-report.json) may lag this index; use sprint-status as canonical.
-- **Deferred boundaries after Phase 23:** aggregate/session/digest, task-list/search/discovery, event timeline/transitions, trace, history/replay, lifecycle, mutation/control, destructive apply, object-storage lifecycle jobs, scheduled retention, and production credential-gated writes remain future separate-story work.
+- **Deferred boundaries after Phase 27:** aggregate/session/digest, task-list/search/discovery, mutation/control, broad dashboard wiring beyond approved narrow route families, destructive apply, object-storage lifecycle jobs, scheduled retention, production credential-gated writes, snapshot creation including `POST /v1/events/replay/snapshots`, lifecycle apply/prune/rollback, and services/MCP/dependencies/CI changes remain future separate-story work.

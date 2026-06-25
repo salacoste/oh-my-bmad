@@ -341,15 +341,19 @@ After Phase 17, the BMad roadmap continued through read-only dashboard and live-
 - **Phase 18 recorded destructive-apply product scope without implementation.** The PRD/status-only gate preserved the Phase 17 safety contract and selected a non-destructive dashboard branch next.
 - **Phases 19-21 shipped read-only dashboard readiness.** Static dashboard shell/panels, read-only route/method/no-mutation guards, provenance/freshness/error states, fixture snapshot rendering, and static HTML presentation contracts were added without authorizing mutation/control affordances.
 - **Phase 22 shipped a narrow health/readiness runtime boundary.** Browser runtime wiring is approved only for `GET /v1/health` in that slice.
-- **Phase 23 is closed for the task-detail runtime boundary.** Story 102.1 selected exactly `GET /v1/tasks/{task_id}`, Story 102.2 implemented the narrow task-detail browser runtime boundary, and Story 102.3 records final Phase 23 / Epic 102 closure evidence after Stage A CI run [`27923397535`](https://github.com/salacoste/oh-my-bmad/actions/runs/27923397535) passed on `6289796`.
-- **Dashboard runtime remains intentionally narrow.** Event timeline, transitions, trace, history, replay, lifecycle-readiness, aggregate/session/digest, task-list/search/discovery, and mutation/control surfaces remain contract/static-only, unavailable, or deferred unless a later BMad phase explicitly approves a route family.
+- **Phase 23 closed the task-detail runtime boundary.** Story 102.1 selected exactly `GET /v1/tasks/{task_id}`, Story 102.2 implemented the narrow task-detail browser runtime boundary, and Story 102.3 recorded final closure evidence.
+- **Phase 24 closed Event timeline / transitions runtime boundaries.** Phase 24 selected and completed exact task-scoped read routes `GET /v1/tasks/{task_id}/events` and `GET /v1/tasks/{task_id}/transitions` without broad dashboard wiring.
+- **Phase 25 closed Trace correlation runtime boundary.** Phase 25 selected and completed exact `GET /v1/trace/{trace_id}` without discovery or mutation/control expansion.
+- **Phase 26 closed History / Replay runtime boundary.** Phase 26 selected and completed exact `GET /v1/tasks/{task_id}/history`, `GET /v1/events/replay`, and `GET /v1/events/replay/validate` with visible replay target query discipline.
+- **Phase 27 closed Lifecycle / Snapshot runtime boundary.** Phase 27 selected and completed exact `GET /v1/events/replay/snapshots` plus passive lifecycle-readiness evidence display; Story 106.3 records final Phase 27 / Epic 106 closure after remote CI run [`28139358221`](https://github.com/salacoste/oh-my-bmad/actions/runs/28139358221).
+- **Dashboard runtime remains intentionally narrow.** Approved live-read browser runtime is limited to health/readiness, task detail, event timeline/transitions, trace correlation, history/replay, and lifecycle/snapshot route families. Deferred/fail-closed/unauthorized boundaries remain: aggregate/session/digest; task-list/search/discovery; mutation/control; `POST /v1/events/replay/snapshots`; snapshot creation; lifecycle apply/prune/rollback; destructive lifecycle implementation; broad dashboard wiring; services/MCP/dependencies/CI changes.
 
-The following items remain unshipped or intentionally out of scope after Phase 23 closure:
+The following items remain unshipped or intentionally out of scope after Phase 27 closure:
 
 - **Event-log prune/apply implementation** -- destructive lifecycle operations still require a later implementation phase after the Phase 17 readiness contract, exact dry-run plan-hash authorization, replay validation, rollback evidence, and explicit operator gate.
 - **Object-storage lifecycle jobs** -- archive manifests currently reference validated local/archive paths; automatic S3/B2/R2 lifecycle management is future work.
 - **Scheduled jobs** -- time-based task scheduling and lifecycle automation.
-- **Broad web dashboard runtime wiring** -- browser-based operator surface exists as a read-only/static shell with narrow health and task-detail runtime boundaries; broader live-read route families require future per-route approval.
+- **Broad web dashboard runtime wiring** -- browser-based operator surface exists as a read-only/static shell with narrow approved health, task detail, event timeline/transitions, trace correlation, history/replay, and lifecycle/snapshot runtime boundaries; broader route families and broad dashboard wiring remain deferred/fail-closed and require future per-route approval.
 - **GLM adapter** -- fourth runtime following the ADR-0015 pattern.
 - **Split deployment** -- Postgres accessible from multiple hosts for horizontal scaling of the registry layer.
 - **Postgres connection mTLS** -- extends mTLS to database connections.
