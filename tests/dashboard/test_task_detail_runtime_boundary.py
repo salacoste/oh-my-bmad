@@ -15,6 +15,7 @@ APPROVED_HEALTH_SCRIPT = "health-readiness.js"
 APPROVED_EVENT_SCRIPT = "event-timeline.js"
 APPROVED_TRACE_SCRIPT = "trace-correlation.js"
 APPROVED_HISTORY_REPLAY_SCRIPT = "history-replay.js"
+APPROVED_LIFECYCLE_SCRIPT = "lifecycle-snapshot.js"
 APPROVED_ROUTE_PREFIX = "/v1/tasks/"
 VISIBLE_TASK_ID = "fixture-task-id"
 FORBIDDEN_ROUTE_MARKERS = (
@@ -152,6 +153,7 @@ def test_story_102_2_runtime_script_allowlist_is_exact() -> None:
         {"src": APPROVED_EVENT_SCRIPT, "defer": ""},
         {"src": APPROVED_TRACE_SCRIPT, "defer": ""},
         {"src": APPROVED_HISTORY_REPLAY_SCRIPT, "defer": ""},
+        {"src": APPROVED_LIFECYCLE_SCRIPT, "defer": ""},
     ]
     assert not "".join(parser.inline_script_text).strip()
     assert not parser.controls
@@ -177,6 +179,7 @@ def test_story_102_2_runtime_module_graph_is_closed() -> None:
             APPROVED_EVENT_SCRIPT,
             APPROVED_TRACE_SCRIPT,
             APPROVED_HISTORY_REPLAY_SCRIPT,
+            APPROVED_LIFECYCLE_SCRIPT,
         ]
     )
 

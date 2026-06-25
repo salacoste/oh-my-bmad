@@ -35,6 +35,7 @@ REQUIRED_PANELS = {
     "events": "Events",
     "traces": "Traces",
     "history-replay-readiness": "History / replay readiness",
+    "lifecycle-snapshot": "Lifecycle / snapshot readiness",
     "health": "Health",
     "audit": "Audit",
     "help": "Help",
@@ -548,7 +549,15 @@ def test_required_panels_have_local_unavailable_and_provenance_placeholders() ->
 
 def test_data_panels_distinguish_unavailable_from_empty_success() -> None:
     parser = parse_dashboard()
-    data_panels = ["tasks", "sessions", "events", "traces", "history-replay-readiness", "health"]
+    data_panels = [
+        "tasks",
+        "sessions",
+        "events",
+        "traces",
+        "history-replay-readiness",
+        "lifecycle-snapshot",
+        "health",
+    ]
     for panel_id in data_panels:
         panel_text = " ".join(parser.sections[panel_id]).lower()
         assert "unavailable read" in panel_text, panel_id

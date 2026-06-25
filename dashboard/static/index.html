@@ -51,6 +51,7 @@
         <li><a href="#events">Events</a></li>
         <li><a href="#traces">Traces</a></li>
         <li><a href="#history-replay-readiness">History / replay readiness</a></li>
+        <li><a href="#lifecycle-snapshot">Lifecycle / snapshots</a></li>
         <li><a href="#fixture-readiness">Fixture readiness</a></li>
         <li><a href="#health">Health</a></li>
         <li><a href="#audit">Audit</a></li>
@@ -294,6 +295,42 @@
       <p class="meta" id="history-replay-linked-identifiers">Linked identifiers: pending.</p>
       <p class="meta" id="history-replay-detail">Detail: no history/replay response has been rendered yet. Confidence: unavailable until the approved reads complete. Metadata only; no snapshots and no lifecycle readiness in this current boundary.</p>
     </section>
+    <section id="lifecycle-snapshot" aria-labelledby="lifecycle-snapshot-title">
+      <h2 id="lifecycle-snapshot-title">Lifecycle / snapshot readiness</h2>
+      <p class="state" id="lifecycle-snapshot-status">Lifecycle snapshot live-read boundary pending: waiting for the approved snapshot-list GET response.</p>
+      <p>
+        Source route/reference: GET /v1/events/replay/snapshots. Story 106.2 wires this single approved runtime boundary only;
+        it adds no backend route, no dependency, no broad dashboard live wiring, and no operator surface.
+      </p>
+      <p>
+        Snapshot identifiers, sequence numbers, timestamps, and size values are metadata only and not controls.
+        Returned snapshot_id values are row provenance only: they cannot select routes, filter hidden data, or drive history,
+        replay, trace, health, aggregate, session, digest, archive, or lifecycle-adjacent surfaces.
+      </p>
+      <p>
+        Runtime states are unavailable read, loading, empty successful read, healthy, stale data, invalid data,
+        unauthorized/configuration failure, backend unavailable, route failure/read error, and lifecycle evidence degraded.
+      </p>
+      <p>
+        Lifecycle evidence remains passive boundary evidence: plan_hash, dry_run_artifact_ref, safety_policy_version,
+        retention_input_digest, affected_segments, replay_validation_ref, rollback_evidence_ref, operator_identity,
+        authorized_at, authorization_event_ref, archive_manifest_ref, archive_manifest_validation, and archive_error_boundary.
+        Runtime evidence source is the optional window.LIFECYCLE_SNAPSHOT_EVIDENCE object; when absent, the panel renders
+        missing lifecycle evidence as non-authoritative instead of fetching or fabricating evidence.
+      </p>
+      <p>
+        Raw snapshot state, task lists, session lists, archive paths, replay targets, and lifecycle internals are not rendered;
+        the panel displays bounded metadata only.
+      </p>
+      <p class="meta" id="lifecycle-snapshot-source">Source: GET /v1/events/replay/snapshots. Runtime route: pending.</p>
+      <p class="meta" id="lifecycle-snapshot-count">Snapshots: pending.</p>
+      <p class="meta" id="lifecycle-snapshot-freshness">Freshness: pending retrieved_at.</p>
+      <p class="meta" id="lifecycle-snapshot-authority">Authority: non-authoritative until a valid snapshot-list response and lifecycle evidence are read.</p>
+      <p class="meta" id="lifecycle-snapshot-items">Snapshot rows: pending; metadata only.</p>
+      <p class="meta" id="lifecycle-snapshot-evidence">Lifecycle evidence: pending passive boundary evidence.</p>
+      <p class="meta" id="lifecycle-snapshot-degraded">Degraded state: unavailable read until runtime data resolves.</p>
+      <p class="meta" id="lifecycle-snapshot-detail">Detail: no lifecycle snapshot response has been rendered yet. Confidence: unavailable until the approved read completes. Metadata only; not controls.</p>
+    </section>
     <section id="fixture-readiness" aria-labelledby="fixture-readiness-title">
       <h2 id="fixture-readiness-title">Fixture readiness</h2>
       <p class="state">Static fixture readiness is rendered from Story 99.2 contract fixture rows in committed HTML; runtime data remains disconnected.</p>
@@ -385,7 +422,7 @@
         <li>no background jobs</li>
         <li>external audit trail</li>
       </ul>
-      <p>Panel coverage for audit review includes overview, tasks, task-detail, sessions, events, traces, history-replay-readiness, health, audit, and help.</p>
+      <p>Panel coverage for audit review includes overview, tasks, task-detail, sessions, events, traces, history-replay-readiness, lifecycle-snapshot, fixture-readiness, health, audit, and help.</p>
       <p class="meta">Source: BMAD planning artifacts. Freshness timestamp: static Story 92.2 shell. Reference: Phase 19 PRD, UX, architecture, and epics artifacts. Confidence: high for dashboard boundary copy; unavailable for runtime data.</p>
     </section>
     <section id="help" aria-labelledby="help-title" tabindex="-1">
@@ -403,7 +440,7 @@
         <li>external runbooks/control planes</li>
       </ul>
       <p>Keyboard navigation uses visible focus styling on panel navigation and landmarks. Screen-reader users receive named sections, headings, aria-labeled lists, and text-only route provenance. Contrast and readability rely on the static dark background, light foreground, warning-state, and metadata tokens declared in this shell. Reduced motion and responsive layout are declared in CSS only.</p>
-      <p>Panel coverage for help includes overview, tasks, task-detail, sessions, events, traces, history-replay-readiness, health, audit, and help.</p>
+      <p>Panel coverage for help includes overview, tasks, task-detail, sessions, events, traces, history-replay-readiness, lifecycle-snapshot, fixture-readiness, health, audit, and help.</p>
       <p>Unavailable state meanings remain passive: missing, stale, unauthorized, forbidden, degraded, route failure, and empty successful reads describe visibility states only. Escalation belongs in external runbooks/control planes, not this dashboard.</p>
       <p>Story 92.3 final quality gate remains pending; this Story 92.2 slice provides accessibility and help guidance only.</p>
       <p class="meta">Source: BMAD planning artifacts. Freshness timestamp: static Story 92.2 shell. Reference: future operator runbook and story references. Confidence: high for non-mutating boundary copy; unavailable for runtime data.</p>
@@ -417,5 +454,6 @@
   <script src="event-timeline.js" defer></script>
   <script src="trace-correlation.js" defer></script>
   <script src="history-replay.js" defer></script>
+  <script src="lifecycle-snapshot.js" defer></script>
 </body>
 </html>

@@ -3,27 +3,35 @@
 > **Derivative status summary.** The canonical implementation status is
 > [`../_bmad-output/implementation-artifacts/sprint-status.yaml`](../_bmad-output/implementation-artifacts/sprint-status.yaml).
 > This page is a read-only, human-navigable summary last verified from the files
-> named below on 2026-06-22. If this page conflicts with sprint-status, trust
+> named below on 2026-06-24. If this page conflicts with sprint-status, trust
 > sprint-status and update this derivative matrix.
 
 ## Current BMad status
 
-- **Current phase:** Phase 23 — Task Detail Live-Read Runtime Boundary is closed.
-- **Current epic:** Epic 102 is done after final closure hygiene.
-- **Done in Phase 23:**
-  - Story 102.1 selected exactly `GET /v1/tasks/{task_id}` for the next dashboard live-read route family and opened the Phase 23 PRD/architecture/epics/status artifacts.
-  - Story 102.2 implemented the narrow browser/runtime task-detail boundary with a single dashboard runtime module.
-  - Story 102.3 records final Phase 23 / Epic 102 closure after Stage A commit `6289796` and CI run [`27923397535`](https://github.com/salacoste/oh-my-bmad/actions/runs/27923397535) passed.
-- **Not closed by this page:** Any later dashboard live-read route family beyond Health/readiness and Task detail.
+- **Current phase:** Phase 27 — Lifecycle / Snapshot route family is open; Story 106.2 is locally implemented and final closure remains Story 106.3.
+- **Current epic:** Epic 106 is in progress after Story 106.1 route selection and Story 106.2 local runtime-boundary completion.
+- **Recently closed:** Phase 26 / Epic 105 — History / Replay runtime boundary and final validation closure are done.
+- **Done in Phase 26:**
+  - Story 105.1 selected exactly `GET /v1/tasks/{task_id}/history`, `GET /v1/events/replay`, and `GET /v1/events/replay/validate`.
+  - Story 105.2 implemented the narrow browser/runtime History / Replay boundary and recorded review/QA/CI evidence.
+  - Story 105.3 records Phase 26 / Epic 105 closure after Story 105.2 review, QA, push, and remote CI run `28072822987` passed.
+- **Done locally in Phase 27:**
+  - Story 106.1 selects exactly `GET /v1/events/replay/snapshots` plus passive lifecycle-readiness evidence display from `dashboard/static/replay-lifecycle-contract.json`.
+  - Story 106.2 implements the narrow browser/runtime lifecycle/snapshot boundary with bounded metadata-only rendering and local review/UltraQA evidence.
+- **Not closed by this page:** Phase 27 / Epic 106 final closure, push/remote-CI evidence, `POST /v1/events/replay/snapshots`, snapshot creation, lifecycle apply/prune/rollback, archive/manifest mutation, task-list/search/discovery, aggregate/session/digest, generated live data, replay execution, broad dashboard live wiring, backend/API expansion, and controls.
 
 Primary evidence:
 
-- `../_bmad-output/implementation-artifacts/sprint-status.yaml` — `current_phase: 23`, `epic-102` done, `102-1` done, `102-2` done, and `102-3` done.
-- `../_bmad-output/planning-artifacts/phase-23-epics.md` — Phase 23 route-selection and closure guardrails.
-- `../_bmad-output/implementation-artifacts/102-2-task-detail-runtime-boundary.md` — Story 102.2 local implementation/review/QA evidence.
-- `../_bmad-output/implementation-artifacts/102-3-phase-23-epic-102-final-closure.md` — Story 102.3 final closure evidence, including Stage A commit `6289796` and CI run `27923397535`.
-- `../dashboard/static/task-detail.js` — browser runtime calls only `GET /v1/tasks/{task_id}`.
-- `../services/registry-api/src/registry_api/routes/tasks.py` — backend `GET /v1/tasks/{task_id}` route exists from the registry API.
+- `../_bmad-output/implementation-artifacts/sprint-status.yaml` — `current_phase: 27`, `epic-105` done, `epic-106` in-progress, `106-1` done, `106-2` done locally, and `106-3` backlog.
+- `../_bmad-output/planning-artifacts/phase-26-epics.md` — Phase 26 closed History / Replay and deferred lifecycle readiness plus `/v1/events/replay/snapshots` as the next candidate.
+- `../_bmad-output/implementation-artifacts/105-3-phase-26-epic-105-final-validation-closure.md` — Story 105.3 final closure evidence, including remote CI run `28072822987`.
+- `../_bmad-output/planning-artifacts/phase-27-prd-amendment.md` — Phase 27 lifecycle/snapshot PRD scope.
+- `../_bmad-output/planning-artifacts/phase-27-architecture-amendment.md` — exact route, snapshot-list, passive-evidence, no-hidden-write, no-snapshot-create, no-lifecycle-mutation boundaries.
+- `../_bmad-output/planning-artifacts/phase-27-epics.md` — Epic 106 story sequence.
+- `../_bmad-output/implementation-artifacts/106-1-lifecycle-snapshot-live-read-route-selection.md` — Story 106.1 route-selection and non-authorization evidence.
+- `../_bmad-output/implementation-artifacts/106-2-lifecycle-snapshot-runtime-boundary.md` — Story 106.2 runtime implementation, review, UltraQA, and architect-clear evidence.
+- `../docs/api-contracts.md` — distinguishes `GET /v1/events/replay/snapshots` snapshot listing from `POST /v1/events/replay/snapshots` snapshot creation.
+- `../dashboard/static/replay-lifecycle-contract.json` — passive lifecycle-readiness evidence fields and fail-safe states.
 
 ## Status categories
 
@@ -56,7 +64,7 @@ Primary evidence:
 
 | Area | Status | Boundary |
 |---|---|---|
-| Dashboard event timeline, transitions, trace, history, replay, lifecycle readiness | Contract/static-only | Existing panels/tests define approved read-route metadata and unavailable/freshness states, but browser runtime wiring remains intentionally narrow unless a later PRD/story approves one route family at a time. |
+| Dashboard lifecycle/snapshot runtime | Implemented locally with recorded review/QA approval | Phase 27 / Story 106.2 adds `dashboard/static/lifecycle-snapshot.js` and the lifecycle/snapshot panel for exactly `GET /v1/events/replay/snapshots`; output is bounded snapshot metadata only, passive lifecycle evidence fail-closes as non-authoritative when missing/degraded, and architect re-check is CLEAR after shell copy declares optional evidence injection and fail-closed behavior. |
 | Task/session overview and sessions visibility | Contract/static-only | Static dashboard copy and metadata distinguish resource-native fields from derived/unavailable semantics; no broad session HTTP/list/history/search runtime is authorized. |
 | Fixture snapshot/static rendering | Contract/static-only | Fixture/view-model/static rendering tests prove read-only presentation behavior and fail-closed unavailable states; they do not authorize new runtime polling or mutation controls. |
 
@@ -64,10 +72,10 @@ Primary evidence:
 
 | Area | Status | Reason / guardrail |
 |---|---|---|
-| Later dashboard route families after task detail | Deferred / not implemented | Event timeline, transitions, trace, history, replay, lifecycle, aggregate/session/digest, and task-list/search/discovery require future separate stories. |
+| Later dashboard route families after lifecycle/snapshot | Deferred / not implemented | Task-list/search/discovery and aggregate/session/digest remain higher-risk future route families requiring separate stories. |
 | Destructive lifecycle apply/prune/delete/truncate/move/rewrite/chmod | Deferred / not implemented | Phase 17 is readiness-only. Future mutation requires exact dry-run plan-hash binding, replay validation, rollback/restore evidence, and explicit operator gate. |
 | Object-storage lifecycle jobs and scheduled retention | Deferred / not implemented | `docs/architecture.md` keeps automatic S3/B2/R2 lifecycle management and time-based lifecycle automation as future work. |
-| Broad dashboard live-read runtime wiring | Deferred / not implemented | Current browser runtime is narrow: health/readiness and task detail only. Later route families require separate PRD/architecture/test-spec approval. |
+| Broad dashboard live-read runtime wiring | Deferred / not implemented | Current browser runtime remains route-family-scoped. Health/readiness, task detail, event/transition, trace, history/replay, and lifecycle/snapshot have recorded narrow boundaries only; broad dashboard live wiring remains unavailable. |
 | Aggregate/session/digest dashboard live contracts | Deferred / fail-closed | Aggregate/session/digest reads are intentionally unavailable or excluded until safe contracts are approved. |
 | Task-list/search/discovery hidden calls | Deferred / fail-closed | Phase 23 guardrails forbid hidden discovery, task-list/search calls, broad dashboard wiring, and backend/API expansion. |
 | Mutation/control affordances in dashboard | Deferred / not implemented | Dashboard scope remains read-only by effect; no control buttons, lifecycle actions, writer imports, background jobs, cache warming, or snapshot creation are authorized. |
