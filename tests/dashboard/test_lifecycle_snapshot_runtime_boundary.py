@@ -28,7 +28,7 @@ SNAPSHOT_ROUTE = "/v1/events/replay/snapshots"
 SNAPSHOT_PATTERN = "GET /v1/events/replay/snapshots"
 FETCH_CALL_RE = re.compile(r"fetch\(\s*ROUTE(?P<options>[^)]*)\)", re.DOTALL)
 METHOD_RE = re.compile(r"method\s*:\s*['\"](?P<method>[A-Z]+)['\"]", re.IGNORECASE)
-FORBIDDEN_METHOD_RE = re.compile(r"\b(?:POST|PUT|PATCH|DELETE)\b", re.IGNORECASE)
+FORBIDDEN_METHOD_RE = re.compile(r"\b(?:PUT|PATCH|DELETE)\b", re.IGNORECASE)
 FORBIDDEN_RUNTIME_MARKERS = (
     "import ",
     "import(",
@@ -164,7 +164,7 @@ def test_story_106_2_runtime_script_allowlist_is_exact() -> None:
     parser = parse_scripts()
     assert parser.scripts == [{"src": script, "defer": ""} for script in APPROVED_SCRIPTS]
     assert not "".join(parser.inline_script_text).strip()
-    assert not parser.controls
+    assert parser.controls == ["input", "button"]
     assert all(
         link.get("rel", "").lower() not in {"preload", "modulepreload"} for link in parser.links
     )
@@ -182,7 +182,9 @@ def test_story_106_2_runtime_module_graph_is_closed() -> None:
 def test_story_106_2_runtime_route_and_method_allowlist_is_exact() -> None:
     source = runtime_source()
     assert SNAPSHOT_ROUTE in source
-    assert source.count(SNAPSHOT_ROUTE) == 1
+    assert source.count(SNAPSHOT_ROUTE) == 2
+    assert "const ROUTE = " in source
+    assert "const CREATE_ROUTE = " in source
     fetches = list(FETCH_CALL_RE.finditer(source))
     assert len(fetches) == 1
     for fetch in fetches:
@@ -190,6 +192,7 @@ def test_story_106_2_runtime_route_and_method_allowlist_is_exact() -> None:
         assert method_match is None or method_match.group("method").upper() == "GET"
         assert "body" not in fetch.group("options").lower()
     assert not FORBIDDEN_METHOD_RE.search(source)
+    assert source.count('method: "POST"') == 1
 
 
 def test_story_106_2_panel_exposes_bounded_runtime_metadata_targets() -> None:
@@ -569,3 +572,265 @@ def run_lifecycle_snapshot_runtime_case(
     loaded = json.loads(completed.stdout)
     assert isinstance(loaded, dict)
     return cast(RuntimeOutput, loaded)
+
+
+CREATE_ROUTE = "/v1/events/replay/snapshots"
+CREATE_PATTERN = "POST /v1/events/replay/snapshots"
+CREATE_TOKEN = "Bearer story-107-2-token-secret"
+
+
+class CreateRuntimeOutput(TypedDict):
+    texts: dict[str, str]
+    fetchCalls: list[dict[str, object]]
+    listeners: dict[str, int]
+    storedWrites: list[str]
+
+
+def test_story_107_2_create_affordance_is_visible_and_narrowly_allowlisted() -> None:
+    raw = DASHBOARD.read_text(encoding="utf-8")
+    for element_id in (
+        "lifecycle-snapshot-create-token",
+        "lifecycle-snapshot-create-button",
+        "lifecycle-snapshot-create-status",
+        "lifecycle-snapshot-create-result",
+    ):
+        assert f'id="{element_id}"' in raw
+    assert CREATE_PATTERN in raw
+    parser = parse_scripts()
+    controls = [control for control in parser.controls if control in {"input", "button"}]
+    assert controls == ["input", "button"]
+
+
+def test_story_107_2_create_posts_only_after_visible_click_with_exact_body_free_shape() -> None:
+    output = run_lifecycle_snapshot_create_case(
+        {
+            "tokenValue": CREATE_TOKEN,
+            "createResponse": {
+                "ok": True,
+                "status": 201,
+                "body": {
+                    "snapshot_id": "snap-created",
+                    "sequence_number": 99,
+                    "timestamp": "2026-06-25T18:00:00Z",
+                    "size_bytes": 4096,
+                    "raw_state_secret": "do-not-render",
+                },
+            },
+            "clicks": 1,
+        }
+    )
+    post_calls = [call for call in output["fetchCalls"] if call["method"] == "POST"]
+    assert post_calls == [
+        {
+            "route": CREATE_ROUTE,
+            "method": "POST",
+            "hasBody": False,
+            "authorization": CREATE_TOKEN,
+        }
+    ]
+    get_calls = [call for call in output["fetchCalls"] if call["method"] == "GET"]
+    assert get_calls == [
+        {"route": SNAPSHOT_ROUTE, "method": "GET", "hasBody": False, "authorization": None}
+    ]
+    rendered = " ".join(output["texts"].values()).lower()
+    assert "snap-created" in rendered
+    assert "sequence_number=99" in rendered
+    assert "size_bytes=4096" in rendered
+    assert "raw_state_secret" not in rendered
+    assert "story-107-2-token-secret" not in rendered
+    assert output["storedWrites"] == []
+
+
+def test_story_107_2_create_missing_or_malformed_token_fails_closed_before_fetch() -> None:
+    for token in ("", "not-bearer token"):
+        output = run_lifecycle_snapshot_create_case({"tokenValue": token, "clicks": 1})
+        post_calls = [call for call in output["fetchCalls"] if call["method"] == "POST"]
+        assert post_calls == []
+        rendered = " ".join(output["texts"].values()).lower()
+        assert "authorization required" in rendered
+        assert "non-authoritative" in rendered
+
+
+def test_story_107_2_create_failures_and_timeout_do_not_auto_retry_or_echo_token() -> None:
+    cases = [
+        {"name": "unauthorized", "createResponse": {"ok": False, "status": 403, "body": {}}},
+        {"name": "backend", "createResponse": {"ok": False, "status": 500, "body": {}}},
+        {
+            "name": "non-201-success",
+            "createResponse": {
+                "ok": True,
+                "status": 200,
+                "body": {
+                    "snapshot_id": "snap-wrong-status",
+                    "sequence_number": 99,
+                    "timestamp": "2026-06-25T18:00:00Z",
+                    "size_bytes": 4096,
+                },
+            },
+        },
+        {"name": "invalid-json", "createResponse": {"ok": True, "status": 201, "jsonError": "bad"}},
+        {
+            "name": "malformed",
+            "createResponse": {"ok": True, "status": 201, "body": {"snapshot_id": "snap"}},
+        },
+        {"name": "network", "createReject": "network down"},
+        {"name": "timeout", "createReject": "timeout unknown outcome"},
+    ]
+    for case in cases:
+        output = run_lifecycle_snapshot_create_case(
+            {"tokenValue": CREATE_TOKEN, "clicks": 1, **case}
+        )
+        post_calls = [call for call in output["fetchCalls"] if call["method"] == "POST"]
+        assert len(post_calls) == 1, case["name"]
+        rendered = " ".join(output["texts"].values()).lower()
+        assert "non-authoritative" in rendered, case["name"]
+        assert "snap-wrong-status" not in rendered, case["name"]
+        assert "story-107-2-token-secret" not in rendered
+
+
+def test_story_107_2_duplicate_in_flight_clicks_create_one_post_and_later_success_needs_fresh_click() -> (
+    None
+):
+    output = run_lifecycle_snapshot_create_case(
+        {
+            "tokenValue": CREATE_TOKEN,
+            "clicks": 2,
+            "resolveCreateAfterClicks": True,
+            "createResponse": {
+                "ok": True,
+                "status": 201,
+                "body": {
+                    "snapshot_id": "snap-first",
+                    "sequence_number": 1,
+                    "timestamp": "2026-06-25T18:00:00Z",
+                    "size_bytes": 10,
+                },
+            },
+        }
+    )
+    assert [call for call in output["fetchCalls"] if call["method"] == "POST"] == [
+        {"route": CREATE_ROUTE, "method": "POST", "hasBody": False, "authorization": CREATE_TOKEN}
+    ]
+
+    output = run_lifecycle_snapshot_create_case(
+        {
+            "tokenValue": CREATE_TOKEN,
+            "clicks": 2,
+            "createResponse": {
+                "ok": True,
+                "status": 201,
+                "body": {
+                    "snapshot_id": "snap-next",
+                    "sequence_number": 2,
+                    "timestamp": "2026-06-25T18:01:00Z",
+                    "size_bytes": 20,
+                },
+            },
+        }
+    )
+    assert len([call for call in output["fetchCalls"] if call["method"] == "POST"]) == 2
+
+
+def run_lifecycle_snapshot_create_case(case: dict[str, object]) -> CreateRuntimeOutput:
+    healthy_get = healthy_case({})["snapshotResponse"]
+    node_code = textwrap.dedent(
+        f"""
+        const fs = require('fs');
+        const vm = require('vm');
+        const source = fs.readFileSync({str(LIFECYCLE_RUNTIME)!r}, 'utf8');
+        const testCase = {json.dumps(case)};
+        const snapshotResponse = {json.dumps(healthy_get)};
+        const texts = {{}};
+        const elements = new Map();
+        const listeners = {{}};
+        const callbacks = [];
+        const storedWrites = [];
+        function element(id) {{
+          if (!elements.has(id)) {{
+            const node = {{
+              id,
+              value: id === 'lifecycle-snapshot-create-token' ? (testCase.tokenValue || '') : '',
+              disabled: false,
+              dataset: testCase.dataset || {{}},
+              _text: '',
+              _listeners: {{}},
+              set textContent(value) {{ this._text = String(value); texts[id] = String(value); }},
+              get textContent() {{ return this._text || ''; }},
+              addEventListener(name, callback) {{ this._listeners[name] = callback; listeners[id + ':' + name] = (listeners[id + ':' + name] || 0) + 1; }},
+            }};
+            elements.set(id, node);
+          }}
+          return elements.get(id);
+        }}
+        const fetchCalls = [];
+        let pendingCreate;
+        async function responseFor(route, options) {{
+          const method = (options.method || 'GET').toUpperCase();
+          if (method === 'GET' && route === {json.dumps(SNAPSHOT_ROUTE)}) return snapshotResponse;
+          if (method === 'POST' && route === {json.dumps(CREATE_ROUTE)}) {{
+            if (testCase.createReject) throw new Error(testCase.createReject);
+            if (testCase.resolveCreateAfterClicks && !pendingCreate) {{
+              pendingCreate = {{}};
+              pendingCreate.promise = new Promise((resolve) => {{ pendingCreate.resolve = resolve; }});
+              return pendingCreate.promise;
+            }}
+            return testCase.createResponse;
+          }}
+          throw new Error('unexpected route ' + method + ' ' + route);
+        }}
+        const sandbox = {{
+          console: {{ log() {{}}, warn() {{}}, error() {{}} }},
+          LIFECYCLE_SNAPSHOT_EVIDENCE: {json.dumps(healthy_case({})["lifecycleEvidence"])},
+          localStorage: {{ setItem: (...args) => storedWrites.push('localStorage:' + args.join('=')), getItem: () => null }},
+          sessionStorage: {{ setItem: (...args) => storedWrites.push('sessionStorage:' + args.join('=')), getItem: () => null }},
+          indexedDB: {{ open: () => storedWrites.push('indexedDB.open') }},
+          caches: {{ open: () => storedWrites.push('caches.open') }},
+          document: {{
+            readyState: 'loading',
+            addEventListener: (_name, callback) => callbacks.push(callback),
+            getElementById: element,
+          }},
+          window: {{}},
+          fetch: async (route, options = {{}}) => {{
+            fetchCalls.push({{ route, method: (options.method || 'GET').toUpperCase(), hasBody: Object.prototype.hasOwnProperty.call(options, 'body'), authorization: options.headers && (options.headers.Authorization || options.headers.authorization) || null }});
+            const response = await responseFor(route, options);
+            return {{
+              ok: response.ok,
+              status: response.status,
+              json: async () => {{
+                if (response.jsonError) throw new Error(response.jsonError);
+                return response.body;
+              }},
+            }};
+          }},
+        }};
+        sandbox.window = sandbox;
+        vm.createContext(sandbox);
+        vm.runInContext(source, sandbox, {{ filename: 'lifecycle-snapshot.js' }});
+        Promise.resolve(callbacks[0] ? callbacks[0]() : undefined)
+          .then(async () => {{
+            await new Promise((resolve) => setImmediate(resolve));
+            const button = element('lifecycle-snapshot-create-button');
+            const click = button._listeners.click;
+            for (let i = 0; i < (testCase.clicks || 0); i += 1) {{
+              if (click) {{
+                const result = click({{ preventDefault() {{}} }});
+                if (!testCase.resolveCreateAfterClicks && result && typeof result.then === 'function') await result;
+              }}
+            }}
+            if (pendingCreate) {{
+              pendingCreate.resolve(testCase.createResponse);
+              await new Promise((resolve) => setImmediate(resolve));
+            }}
+            await new Promise((resolve) => setImmediate(resolve));
+          }})
+          .then(() => {{ process.stdout.write(JSON.stringify({{ texts, fetchCalls, listeners, storedWrites }})); }})
+          .catch((error) => {{ console.error(error); process.exit(1); }});
+        """
+    )
+    completed = subprocess.run(
+        ["node", "-e", node_code], check=True, text=True, capture_output=True
+    )
+    loaded = json.loads(completed.stdout)
+    assert isinstance(loaded, dict)
+    return cast(CreateRuntimeOutput, loaded)

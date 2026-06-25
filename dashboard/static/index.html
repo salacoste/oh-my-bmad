@@ -300,7 +300,7 @@
       <p class="state" id="lifecycle-snapshot-status">Lifecycle snapshot live-read boundary pending: waiting for the approved snapshot-list GET response.</p>
       <p>
         Source route/reference: GET /v1/events/replay/snapshots. Story 106.2 wires this single approved runtime boundary only;
-        it adds no backend route, no dependency, no broad dashboard live wiring, and no operator surface.
+        Story 106.2 added no operator surface; Story 107.2 adds only the visible authorized snapshot-create control below.
       </p>
       <p>
         Snapshot identifiers, sequence numbers, timestamps, and size values are metadata only and not controls.
@@ -329,7 +329,15 @@
       <p class="meta" id="lifecycle-snapshot-items">Snapshot rows: pending; metadata only.</p>
       <p class="meta" id="lifecycle-snapshot-evidence">Lifecycle evidence: pending passive boundary evidence.</p>
       <p class="meta" id="lifecycle-snapshot-degraded">Degraded state: unavailable read until runtime data resolves.</p>
-      <p class="meta" id="lifecycle-snapshot-detail">Detail: no lifecycle snapshot response has been rendered yet. Confidence: unavailable until the approved read completes. Metadata only; not controls.</p>
+      <p class="meta" id="lifecycle-snapshot-detail">Detail: no lifecycle snapshot response has been rendered yet. Confidence: unavailable until the approved read completes. Metadata only; snapshot listing rows are not controls.</p>
+      <div class="snapshot-create" aria-label="Snapshot creation authorization boundary">
+        <p class="meta">Create snapshot: visible operator action only for POST /v1/events/replay/snapshots. Requires an existing Authorization: Bearer registry API token; the token is not stored, echoed, or reused by automatic retries.</p>
+        <label for="lifecycle-snapshot-create-token">Existing bearer token for snapshot creation</label>
+        <input id="lifecycle-snapshot-create-token" type="password" autocomplete="off" inputmode="text" aria-describedby="lifecycle-snapshot-create-status">
+        <button id="lifecycle-snapshot-create-button" type="button">Create replay snapshot</button>
+        <p class="meta" id="lifecycle-snapshot-create-status">Snapshot creation status: unavailable until a visible operator click submits an existing bearer token.</p>
+        <p class="meta" id="lifecycle-snapshot-create-result">Snapshot creation result: none. Returned metadata only; no snapshot internals, lifecycle-changing, archive-changing, deletion, restore, discovery, aggregate, digest, or replay target controls.</p>
+      </div>
     </section>
     <section id="fixture-readiness" aria-labelledby="fixture-readiness-title">
       <h2 id="fixture-readiness-title">Fixture readiness</h2>

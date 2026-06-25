@@ -32,6 +32,9 @@ FORBIDDEN_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 CONTROL_TAGS = frozenset(
     {"form", "button", "input", "select", "textarea", "menu", "menuitem", "dialog"}
 )
+APPROVED_STORY_107_2_CONTROL_IDS = frozenset(
+    {"lifecycle-snapshot-create-token", "lifecycle-snapshot-create-button"}
+)
 CONTROL_TERMS = (
     "approval",
     "retry",
@@ -162,6 +165,7 @@ class BoundaryParser(HTMLParser):
     _open_script_tail: str = ""
     _open_style_tail: str = ""
     _boundary_depth: int = 0
+    _snapshot_create_depth: int = 0
 
     def __post_init__(self) -> None:
         HTMLParser.__init__(self)
@@ -181,6 +185,10 @@ class BoundaryParser(HTMLParser):
             self._boundary_depth += 1
         elif is_read_only_boundary(attrs_dict):
             self._boundary_depth = 1
+        if self._snapshot_create_depth:
+            self._snapshot_create_depth += 1
+        elif is_snapshot_create_boundary(attrs_dict):
+            self._snapshot_create_depth = 1
         for name, value in attrs_dict.items():
             if name.startswith("on"):
                 self.event_handlers.append(Context(f"{tag}[{name}]", value))
@@ -204,6 +212,8 @@ class BoundaryParser(HTMLParser):
                 self._flush_style_context()
         if self._boundary_depth:
             self._boundary_depth -= 1
+        if self._snapshot_create_depth:
+            self._snapshot_create_depth -= 1
 
     def close(self) -> None:
         super().close()
@@ -246,7 +256,12 @@ class BoundaryParser(HTMLParser):
         normalized = " ".join(data.split())
         if not normalized:
             return
-        source = "read-only-boundary" if self._boundary_depth else "body"
+        if self._boundary_depth:
+            source = "read-only-boundary"
+        elif self._snapshot_create_depth:
+            source = "snapshot-create-boundary"
+        else:
+            source = "body"
         self.text_contexts.append(Context(source, normalized))
         if self._boundary_depth:
             self.boundary_texts.append(normalized)
@@ -282,6 +297,10 @@ def render_attrs(attrs: dict[str, str]) -> str:
 
 def is_read_only_boundary(attrs: dict[str, str]) -> bool:
     return attrs.get("aria-label") == "Read-only dashboard boundary"
+
+
+def is_snapshot_create_boundary(attrs: dict[str, str]) -> bool:
+    return attrs.get("aria-label") == "Snapshot creation authorization boundary"
 
 
 def css_url_contexts(source: str, css: str) -> list[Context]:
@@ -356,7 +375,14 @@ def assert_no_hidden_write_or_background_markers(raw: str) -> None:
 
 def assert_no_control_affordance_mechanics(raw: str) -> None:
     parser = parse_html(raw)
-    assert not parser.controls, parser.controls
+    unexpected_controls = [
+        context
+        for context in parser.controls
+        if not any(
+            f"id={control_id!r}" in context.text for control_id in APPROVED_STORY_107_2_CONTROL_IDS
+        )
+    ]
+    assert not unexpected_controls, unexpected_controls
     assert not parser.event_handlers, parser.event_handlers
     for context in parser.hrefs:
         href = context.text.strip().lower()
@@ -403,7 +429,10 @@ def assert_control_vocabulary_is_negative_non_actionable(raw: str) -> None:
                 for sentence in suspicious_sentences:
                     assert has_negative_boundary_marker(sentence), (term, sentence, context)
                 continue
-            assert context.source == "read-only-boundary", (term, context)
+            assert context.source in {"read-only-boundary", "snapshot-create-boundary"}, (
+                term,
+                context,
+            )
             for sentence in sentences_containing(text, term):
                 assert has_negative_boundary_marker(sentence), (term, sentence, context)
 

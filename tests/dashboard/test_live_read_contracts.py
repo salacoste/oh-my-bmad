@@ -15,6 +15,8 @@ STATIC_ROOT = DASHBOARD_ROOT / "static"
 APPROVED_READ_ROUTES = boundary.CORE_APPROVED_READ_ROUTES
 OPTIONAL_NON_CORE_READ_ROUTES = boundary.OPTIONAL_NON_CORE_READ_ROUTES
 FORBIDDEN_METHODS = boundary.FORBIDDEN_METHODS
+APPROVED_STORY_107_2_CREATE_SOURCE = str(STATIC_ROOT / "lifecycle-snapshot.js")
+APPROVED_STORY_107_2_CREATE_ROUTE = "/v1/events/replay/snapshots"
 
 NEEDS_SEPARATE_CONTRACT_GET_ROUTES = frozenset(
     {
@@ -202,13 +204,25 @@ def executable_context_text(path: Path, raw: str) -> str:
 def assert_no_forbidden_effect_markers(text: str, *, source: str) -> None:
     lowered = text.lower()
     for marker in WRITER_OR_MUTATION_IMPORT_MARKERS + LIFECYCLE_OR_BACKGROUND_EFFECT_MARKERS:
+        if source == APPROVED_STORY_107_2_CREATE_SOURCE and marker == "snapshot creation":
+            continue
         assert marker not in lowered, (source, marker)
     assert not ACTIONABLE_MUTATION_WORD_RE.search(text), source
     for match in FETCH_CALL_RE.finditer(text):
         route = match.group("route").rstrip("/")
         method_match = METHOD_RE.search(match.group("options"))
         method = method_match.group("method").upper() if method_match else "GET"
-        assert is_allowlisted_dashboard_read(method, route), (source, method, route)
+        assert is_allowlisted_dashboard_call(source, method, route), (source, method, route)
+
+
+def is_allowlisted_dashboard_call(source: str, method: str, route: str) -> bool:
+    if (
+        source == APPROVED_STORY_107_2_CREATE_SOURCE
+        and method.upper() == "POST"
+        and route == APPROVED_STORY_107_2_CREATE_ROUTE
+    ):
+        return True
+    return is_allowlisted_dashboard_read(method, route)
 
 
 def assert_live_call_contract_fails(snippet: str) -> None:

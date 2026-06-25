@@ -42,6 +42,9 @@ REQUIRED_PANELS = {
 }
 
 FORBIDDEN_TAGS = {"form", "button", "input", "select", "textarea"}
+APPROVED_STORY_107_2_CONTROL_IDS = frozenset(
+    {"lifecycle-snapshot-create-token", "lifecycle-snapshot-create-button"}
+)
 LIVE_API_MARKERS = (
     "fetch(",
     "XMLHttpRequest",
@@ -388,6 +391,7 @@ class StaticDashboardParser(HTMLParser):
         self.data: list[str] = []
         self.banner_data: list[str] = []
         self.sections: dict[str, list[str]] = {}
+        self.control_attrs: list[str] = []
         self.nav_hrefs: list[str] = []
         self.section_hrefs: dict[str, list[str]] = {}
         self.section_attrs: dict[str, list[str]] = {}
@@ -401,6 +405,10 @@ class StaticDashboardParser(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self.tags.append(tag)
         attrs_dict = dict(attrs)
+        if tag in FORBIDDEN_TAGS:
+            self.control_attrs.append(
+                " ".join(f"{tag}[{name}]={value or ''}" for name, value in attrs)
+            )
         if self._nav_depth:
             self._nav_depth += 1
         elif tag == "nav":
@@ -464,6 +472,17 @@ def parse_dashboard() -> StaticDashboardParser:
     return parser
 
 
+def assert_only_story_107_2_controls(parser: StaticDashboardParser) -> None:
+    unexpected_controls = [
+        control
+        for control in parser.control_attrs
+        if not any(
+            f"id]={control_id}" in control for control_id in APPROVED_STORY_107_2_CONTROL_IDS
+        )
+    ]
+    assert not unexpected_controls, unexpected_controls
+
+
 def dashboard_text(parser: StaticDashboardParser) -> str:
     return " ".join(parser.data)
 
@@ -507,7 +526,7 @@ def test_passive_trace_truncate_helper_keeps_mixed_actionable_remainder() -> Non
 def test_static_dashboard_file_exists_and_uses_safe_tags() -> None:
     assert DASHBOARD.exists()
     parser = parse_dashboard()
-    assert not (set(parser.tags) & FORBIDDEN_TAGS)
+    assert_only_story_107_2_controls(parser)
     assert "main" in parser.tags
     assert "nav" in parser.tags
 

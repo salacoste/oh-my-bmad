@@ -110,7 +110,7 @@ def test_phase20_static_shell_remains_inert_accessible_and_read_only() -> None:
         assert "xmlhttprequest" not in runtime_text, html_file
         assert "websocket" not in runtime_text, html_file
         assert "eventsource" not in runtime_text, html_file
-        assert not parser.controls, html_file
+        boundary.assert_no_control_affordance_mechanics(raw)
         assert not parser.form_contexts, html_file
         assert "read-only" in page_text, html_file
         assert "unavailable" in page_text, html_file

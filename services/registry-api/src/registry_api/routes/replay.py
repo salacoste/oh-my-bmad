@@ -238,6 +238,15 @@ def _archive_problem_response(request: Request, exc: ReplayArchiveError) -> JSON
     )
 
 
+def _require_snapshot_create_authorized(request: Request) -> None:
+    """Require the existing JWT-authenticated state for snapshot creation."""
+    if getattr(request.state, "authenticated", False) is not True:
+        raise HTTPException(
+            status_code=401,
+            detail="snapshot creation requires authenticated bearer authorization",
+        )
+
+
 def _snapshot_dir(request: Request) -> pathlib.Path:
     """Resolve the snapshot directory from env or default.
 
@@ -580,6 +589,7 @@ async def create_snapshot_endpoint(request: Request) -> SnapshotEntryResponse:
     Replays the entire event log to produce the current materialized state
     and persists it as a snapshot file. Returns snapshot metadata.
     """
+    _require_snapshot_create_authorized(request)
     event_log_dir = _event_log_dir(request)
     snap_dir = _snapshot_dir(request)
 

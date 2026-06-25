@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 
 from tests.dashboard.test_static_shell import (
     DASHBOARD,
-    FORBIDDEN_TAGS,
     LIVE_API_MARKERS,
+    assert_only_story_107_2_controls,
     parse_dashboard,
 )
 
@@ -150,7 +150,7 @@ def test_story_100_1_fixture_section_keeps_routes_inert_and_avoids_runtime_contr
 
     for marker in LIVE_API_MARKERS:
         assert marker not in raw
-    assert not (set(parser.tags) & FORBIDDEN_TAGS)
+    assert_only_story_107_2_controls(parser)
     assert not fixture_hrefs
     assert "/v1/" not in fixture_attrs
     assert "data-route" not in fixture_attrs

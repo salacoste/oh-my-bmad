@@ -15,10 +15,12 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import AsyncGenerator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from random import Random
+from types import SimpleNamespace
 
+import jwt as pyjwt
 import pytest
 import pytest_asyncio
 from asgi_lifespan import LifespanManager
@@ -27,7 +29,9 @@ from events.canonical import to_canonical_json
 from events.envelope import Actor, EventEnvelope
 from events.ids import new_event_id, new_request_id, new_task_id, new_uuid7
 from events.schema_registry import register as _reg
+from fastapi.routing import APIRoute
 from httpx import ASGITransport, AsyncClient
+from pydantic import SecretStr
 from registry_state.adapters.sqlite_store import (  # noqa: IMP001 — services→services allowed per AC-16
     create_engine as _create_engine,
 )
@@ -37,12 +41,40 @@ from registry_state.schema import (  # noqa: IMP001 — services→services allo
 
 from registry_api.app import build_app
 from registry_api.routes import replay as replay_routes
+from registry_api.settings import JwtAuthSettings
 
 _FROZEN_MONO_NS = 1_000_000
 _RNG = Random(42)
 _CLOCK = FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
 _TASK_ID = new_task_id(clock=_CLOCK, rng=_RNG)
 _EVENT_ID = new_event_id(clock=_CLOCK, rng=_RNG)
+
+_SNAPSHOT_CREATE_PATH = "/v1/events/replay/snapshots"
+_TEST_JWT_SECRET = "test-secret-key-for-story-107-2-snapshot-create-auth"
+_TEST_JWT_ISSUER = "oh-my-bmad/registry-api"
+
+
+def _make_snapshot_token(
+    *,
+    actor_id: str = "op-snapshot",
+    secret: str = _TEST_JWT_SECRET,
+    expires_delta: timedelta = timedelta(minutes=30),
+) -> str:
+    now = datetime.now(UTC)
+    return pyjwt.encode(
+        {
+            "sub": actor_id,
+            "iss": _TEST_JWT_ISSUER,
+            "exp": now + expires_delta,
+            "iat": now,
+        },
+        secret,
+        algorithm="HS256",
+    )
+
+
+def _snapshot_auth_headers(token: str | None = None) -> dict[str, str]:
+    return {"Authorization": "Bearer " + (token or _make_snapshot_token())}
 
 
 @pytest.fixture(autouse=True)
@@ -174,7 +206,12 @@ async def client_with_events(
         ],
     )
 
-    app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+    app = build_app(
+        base_dir=events_dir,
+        db_url=db_url,
+        clock=fixed_clock,
+        jwt_settings=JwtAuthSettings(jwt_secret_key=SecretStr(_TEST_JWT_SECRET)),
+    )
     async with (
         LifespanManager(app) as manager,
         AsyncClient(
@@ -196,7 +233,12 @@ async def client_empty_log(
     events_dir = tmp_path / "events"
     events_dir.mkdir(parents=True, exist_ok=True)
 
-    app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+    app = build_app(
+        base_dir=events_dir,
+        db_url=db_url,
+        clock=fixed_clock,
+        jwt_settings=JwtAuthSettings(jwt_secret_key=SecretStr(_TEST_JWT_SECRET)),
+    )
     async with (
         LifespanManager(app) as manager,
         AsyncClient(
@@ -233,7 +275,12 @@ async def client_with_paginated_events(
         )
     _write_jsonl(events_dir, "2026-06-09", envelopes)
 
-    app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+    app = build_app(
+        base_dir=events_dir,
+        db_url=db_url,
+        clock=fixed_clock,
+        jwt_settings=JwtAuthSettings(jwt_secret_key=SecretStr(_TEST_JWT_SECRET)),
+    )
     async with (
         LifespanManager(app) as manager,
         AsyncClient(
@@ -712,7 +759,12 @@ async def client_for_snapshots(
     prev = os.environ.get("REPLAY_SNAPSHOT_DIR")
     os.environ["REPLAY_SNAPSHOT_DIR"] = str(snap_dir)
     try:
-        app = build_app(base_dir=events_dir, db_url=db_url, clock=fixed_clock)
+        app = build_app(
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=fixed_clock,
+            jwt_settings=JwtAuthSettings(jwt_secret_key=SecretStr(_TEST_JWT_SECRET)),
+        )
         async with (
             LifespanManager(app) as manager,
             AsyncClient(
@@ -727,13 +779,150 @@ async def client_for_snapshots(
             os.environ["REPLAY_SNAPSHOT_DIR"] = prev
 
 
+class TestCreateSnapshotAuthorizationRuntimeBoundary:
+    """Story 107.2 authorization boundary tests for snapshot creation."""
+
+    @pytest.mark.asyncio
+    async def test_jwt_disabled_x_actor_id_fallback_fails_closed_before_snapshot_create(
+        self,
+        client_for_snapshots: AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        calls = 0
+
+        def forbidden_create_snapshot(**_kwargs: object) -> object:
+            nonlocal calls
+            calls += 1
+            return SimpleNamespace(
+                snapshot_id="should-not-create",
+                sequence_number=0,
+                timestamp="2026-06-25T00:00:00Z",
+                size_bytes=0,
+            )
+
+        monkeypatch.setattr(replay_routes, "_create_snapshot", forbidden_create_snapshot)
+        # Rebuild a JWT-disabled app so Phase 1 X-Actor-Id fallback is available.
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+        events_dir = tmp_path / "fallback-events"
+        _write_jsonl(
+            events_dir,
+            "2026-06-09",
+            [
+                _make_task_created_envelope(
+                    task_id=_TASK_ID,
+                    event_id=_EVENT_ID,
+                    title="snapshot fallback task",
+                    mono_ns=5000,
+                    emitted_at=datetime(2026, 6, 9, 12, 0, 0, tzinfo=UTC),
+                )
+            ],
+        )
+        app = build_app(
+            base_dir=events_dir,
+            db_url=db_url,
+            clock=FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH),
+            jwt_settings=JwtAuthSettings(),
+        )
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app),
+                base_url="http://testserver",
+            ) as client,
+        ):
+            resp = await client.post(_SNAPSHOT_CREATE_PATH, headers={"X-Actor-Id": "op-snapshot"})
+
+        assert resp.status_code == 401
+        assert calls == 0
+        assert not list((tmp_path / "snapshots").glob("*.json"))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("headers", "case_name"),
+        [
+            ({}, "missing"),
+            ({"Authorization": "Bearer"}, "malformed"),
+            (
+                {
+                    "Authorization": "Bearer "
+                    + _make_snapshot_token(expires_delta=timedelta(minutes=-5))
+                },
+                "expired",
+            ),
+            (
+                {
+                    "Authorization": "Bearer "
+                    + _make_snapshot_token(
+                        secret="wrong-secret-for-story-107-2-invalid-signature-32-bytes"
+                    )
+                },
+                "invalid-signature",
+            ),
+        ],
+    )
+    async def test_unauthorized_bearer_states_fail_before_snapshot_create(
+        self,
+        client_for_snapshots: AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        headers: dict[str, str],
+        case_name: str,
+    ) -> None:
+        calls = 0
+
+        def forbidden_create_snapshot(**_kwargs: object) -> object:
+            nonlocal calls
+            calls += 1
+            return SimpleNamespace(
+                snapshot_id="should-not-create",
+                sequence_number=0,
+                timestamp="2026-06-25T00:00:00Z",
+                size_bytes=0,
+            )
+
+        monkeypatch.setattr(replay_routes, "_create_snapshot", forbidden_create_snapshot)
+
+        resp = await client_for_snapshots.post(_SNAPSHOT_CREATE_PATH, headers=headers)
+
+        assert resp.status_code == 401
+        assert calls == 0
+        assert not list((tmp_path / "snapshots").glob("*.json"))
+
+    def test_snapshot_creation_backend_route_inventory_is_exact(self) -> None:
+        create_routes = [
+            route
+            for route in replay_routes.router.routes
+            if isinstance(route, APIRoute)
+            and route.path == "/events/replay/snapshots"
+            and "POST" in route.methods
+        ]
+        assert len(create_routes) == 1
+        assert create_routes[0].endpoint.__name__ == "create_snapshot_endpoint"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("method", ["put", "patch", "delete"])
+    async def test_non_post_write_methods_do_not_create_snapshots(
+        self, client_for_snapshots: AsyncClient, tmp_path: Path, method: str
+    ) -> None:
+        response = await getattr(client_for_snapshots, method)(
+            _SNAPSHOT_CREATE_PATH, headers=_snapshot_auth_headers()
+        )
+        assert response.status_code != 201
+        assert not list((tmp_path / "snapshots").glob("*.json"))
+
+
 class TestCreateSnapshotEndpoint:
     """Tests for POST /v1/events/replay/snapshots (Story 62-2)."""
 
     @pytest.mark.asyncio
     async def test_create_returns_201(self, client_for_snapshots: AsyncClient) -> None:
         """POST /v1/events/replay/snapshots returns 201."""
-        resp = await client_for_snapshots.post("/v1/events/replay/snapshots")
+        resp = await client_for_snapshots.post(
+            _SNAPSHOT_CREATE_PATH, headers=_snapshot_auth_headers()
+        )
         assert resp.status_code == 201, f"body={resp.text!r}"
         body = resp.json()
         assert "snapshot_id" in body
@@ -747,7 +936,9 @@ class TestCreateSnapshotEndpoint:
         self, client_for_snapshots: AsyncClient, tmp_path: Path
     ) -> None:
         """POST creates a snapshot file in REPLAY_SNAPSHOT_DIR."""
-        resp = await client_for_snapshots.post("/v1/events/replay/snapshots")
+        resp = await client_for_snapshots.post(
+            _SNAPSHOT_CREATE_PATH, headers=_snapshot_auth_headers()
+        )
         assert resp.status_code == 201
         snap_id = resp.json()["snapshot_id"]
 
@@ -774,7 +965,9 @@ class TestListSnapshotsEndpoint:
     ) -> None:
         """GET returns the snapshot created by POST."""
         # Create one
-        post_resp = await client_for_snapshots.post("/v1/events/replay/snapshots")
+        post_resp = await client_for_snapshots.post(
+            _SNAPSHOT_CREATE_PATH, headers=_snapshot_auth_headers()
+        )
         assert post_resp.status_code == 201
         snap_id = post_resp.json()["snapshot_id"]
 
@@ -839,7 +1032,9 @@ class TestReplayArchiveProblemDetails:
         """Snapshot route remains archive-unaware when replay archive env is invalid."""
         monkeypatch.setenv("REPLAY_ARCHIVE_MANIFEST", str(tmp_path / "missing.json"))
 
-        resp = await client_for_snapshots.post("/v1/events/replay/snapshots")
+        resp = await client_for_snapshots.post(
+            _SNAPSHOT_CREATE_PATH, headers=_snapshot_auth_headers()
+        )
 
         assert resp.status_code == 201, resp.text
         assert resp.json()["sequence_number"] == 5000

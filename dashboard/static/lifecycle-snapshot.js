@@ -3,6 +3,8 @@
 
   const ROUTE = "/v1/events/replay/snapshots";
   const ROUTE_LABEL = "GET snapshot list";
+  const CREATE_ROUTE = "/v1/events/replay/snapshots";
+  const CREATE_ROUTE_LABEL = "POST snapshot create";
   const DISPLAY_STATES = {
     degraded: "degraded",
     empty: "empty",
@@ -174,6 +176,116 @@
     render({ body: body });
   }
 
+
+  let createInFlight = false;
+
+  function validCreatedSnapshot(row) {
+    return validSnapshot(row);
+  }
+
+  function renderCreateStatus(status, detail) {
+    text("lifecycle-snapshot-create-status", "Snapshot creation status: " + status + "; " + detail);
+  }
+
+  function renderCreateResult(row) {
+    text(
+      "lifecycle-snapshot-create-result",
+      "Snapshot creation result: snapshot_id=" +
+        row.snapshot_id +
+        " sequence_number=" +
+        row.sequence_number +
+        " timestamp=" +
+        row.timestamp +
+        " size_bytes=" +
+        row.size_bytes +
+        "; metadata only; source=" +
+        CREATE_ROUTE_LABEL +
+        "; authorization source=existing bearer JWT."
+    );
+  }
+
+  function bearerTokenFromInput() {
+    const input = document.getElementById("lifecycle-snapshot-create-token");
+    if (!input || typeof input.value !== "string") {
+      return "";
+    }
+    return input.value.trim();
+  }
+
+  function createButton() {
+    return document.getElementById("lifecycle-snapshot-create-button");
+  }
+
+  async function createLifecycleSnapshot(event) {
+    if (event && typeof event.preventDefault === "function") {
+      event.preventDefault();
+    }
+    if (createInFlight) {
+      renderCreateStatus("in-flight", "duplicate submit blocked; non-authoritative until the current request completes.");
+      return;
+    }
+    const token = bearerTokenFromInput();
+    if (!token.startsWith("Bearer ") || token.length <= "Bearer ".length) {
+      renderCreateStatus("authorization required", "non-authoritative; enter an existing bearer token before creating a snapshot.");
+      return;
+    }
+    const button = createButton();
+    createInFlight = true;
+    if (button) {
+      button.disabled = true;
+    }
+    renderCreateStatus("in-flight", "visible operator request submitted; no automatic repeat request will be attempted.");
+    try {
+      const response = await fetch(CREATE_ROUTE, {
+        method: "POST",
+        headers: { Authorization: token },
+      });
+      if (!response.ok) {
+        renderCreateStatus(
+          response.status === 401 || response.status === 403 ? "unauthorized" : "backend unavailable",
+          "non-authoritative; snapshot create failed closed and will not be repeated automatically."
+        );
+        return;
+      }
+      if (response.status !== 201) {
+        renderCreateStatus(
+          "unexpected status",
+          "non-authoritative; snapshot create did not return HTTP 201 and will not be repeated automatically."
+        );
+        return;
+      }
+      let payload;
+      try {
+        payload = await response.json();
+      } catch (_error) {
+        renderCreateStatus("invalid", "non-authoritative; invalid creation response and no automatic repeat request.");
+        return;
+      }
+      if (!validCreatedSnapshot(payload)) {
+        renderCreateStatus("invalid", "non-authoritative; malformed creation metadata and no automatic repeat request.");
+        return;
+      }
+      renderCreateStatus("created", "authoritative POST 201 metadata returned for this visible operator action only.");
+      renderCreateResult(payload);
+    } catch (error) {
+      const message = error && typeof error.message === "string" ? error.message.toLowerCase() : "";
+      const status = message.indexOf("timeout") >= 0 ? "unknown outcome" : "backend unavailable";
+      renderCreateStatus(status, "non-authoritative; no automatic repeat request after network, timeout, or unknown result.");
+    } finally {
+      createInFlight = false;
+      if (button) {
+        button.disabled = false;
+      }
+    }
+  }
+
+  function wireSnapshotCreate() {
+    const button = createButton();
+    if (button && typeof button.addEventListener === "function") {
+      button.addEventListener("click", createLifecycleSnapshot);
+    }
+  }
+
   async function loadLifecycleSnapshot() {
     try {
       const response = await fetch(ROUTE, { method: "GET" });
@@ -195,8 +307,12 @@
   }
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", loadLifecycleSnapshot);
+    document.addEventListener("DOMContentLoaded", function () {
+      wireSnapshotCreate();
+      loadLifecycleSnapshot();
+    });
   } else {
+    wireSnapshotCreate();
     loadLifecycleSnapshot();
   }
 })();
