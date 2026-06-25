@@ -2,7 +2,7 @@
 
 ## Status
 
-Done — tests-first runtime implementation, local code review, adversarial QA, strict typecheck, lint, dashboard regression, and full non-slow PR-gate CI-equivalent passed locally.
+Done — tests-first runtime implementation, code review, adversarial QA, strict typecheck, lint, dashboard regression, full non-slow PR-gate CI-equivalent, push, and remote CI passed.
 
 ## Selected surface
 
@@ -64,6 +64,11 @@ Tests were written before implementation. Initial Story 108.2 focused runtime su
 - Full local PR-gate CI-equivalent:
   - `uv run pytest -m "not slow"`
   - Result: `4333 passed, 8 skipped, 61 deselected, 24 warnings in 155.70s (0:02:35)`.
+- Remote CI after push:
+  - Commit: `a835db97b62a005891a0b3e4ce920fc64c0215da` (`a835db9 feat(dashboard): add task log digest boundary`).
+  - GitHub Actions `ci` run `28205787033`: status `completed`, conclusion `success`.
+  - Jobs `Registry-state tests (Postgres service container)` and `PR gate (ruff + mypy + pytest)` both succeeded.
+  - URL: `https://github.com/salacoste/oh-my-bmad/actions/runs/28205787033`.
 
 ## Review and QA evidence
 
@@ -94,4 +99,4 @@ Tests were written before implementation. Initial Story 108.2 focused runtime su
 - UltraQA: `.omx/ultraqa/story-108-2-task-log-digest-runtime-boundary-report.md` — `PASS`.
 
 Generated: 2026-06-26T00:50:00+03:00
-Updated: 2026-06-26T01:22:00+03:00
+Updated: 2026-06-26T02:10:00+03:00

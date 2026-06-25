@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-26T01:15:00+03:00"
-current_phase: 29  # Phase 29 OPEN — Story 108.2 implements exact GET /v1/tasks/{task_id}/logs/digest dashboard runtime boundary; Story 108.3 final closure pending remote CI evidence
+last_updated: "2026-06-26T02:10:00+03:00"
+current_phase: 29  # Phase 29 CLOSED — Epic 108 done for exact GET /v1/tasks/{task_id}/logs/digest dashboard runtime boundary; remote CI run 28205787033 green
 
 development_status:
   # =========================================================================
@@ -913,15 +913,49 @@ development_status:
   # =========================================================================
   # Epic 108: Aggregate/Session/Digest route selection planning
   # =========================================================================
-  epic-108: in-progress  # Phase 29 runtime boundary implemented locally for exact GET /v1/tasks/{task_id}/logs/digest; final closure pending Story 108.3 after push/remote CI evidence
+  epic-108: done  # Phase 29 closed; exact GET /v1/tasks/{task_id}/logs/digest dashboard runtime boundary complete with Story 108.3 evidence consolidation and remote CI run 28205787033
   108-1-aggregate-session-digest-route-selection-planning: done  # Phase 29 PRD/architecture/epics/status opening; selects aggregate/session/digest family and future GET /v1/tasks/{task_id}/logs/digest only; aggregate/session list, digest stream, task-list/search/discovery, broad dashboard runtime remain deferred
-  108-2-task-log-digest-runtime-boundary: done  # tests-first exact GET /v1/tasks/{task_id}/logs/digest dashboard runtime boundary; code review APPROVE, UltraQA PASS, local non-slow PR gate green; no aggregate/session/list/search/discovery/digest-stream/generated-live-data
-  108-3-phase-29-epic-108-final-closure: backlog  # future docs/status final closure after Story 108.2 review/QA/push/remote-CI evidence
+  108-2-task-log-digest-runtime-boundary: done  # tests-first exact GET /v1/tasks/{task_id}/logs/digest dashboard runtime boundary; code review APPROVE, UltraQA PASS, local non-slow PR gate green; pushed in a835db9; remote CI run 28205787033 green; no aggregate/session/list/search/discovery/digest-stream/generated-live-data
+  108-3-phase-29-epic-108-final-closure: done  # docs/status final closure after Story 108.2 review/QA/push/remote-CI evidence; deferred surfaces remain fail-closed
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-26"
+    event: story-108-3-phase-29-epic-108-final-closure-complete
+    from: backlog
+    to: done
+    story: 108-3-phase-29-epic-108-final-closure
+    reason: >
+      Story 108.3 records Phase 29 / Epic 108 docs/status-only final closure
+      after Story 108.2 task log digest runtime-boundary evidence, final
+      code-review APPROVE, UltraQA PASS, push in
+      a835db97b62a005891a0b3e4ce920fc64c0215da, and remote CI run
+      28205787033 success. Epic 108 is now done for exactly GET
+      /v1/tasks/{task_id}/logs/digest with visible task_id selector only,
+      body-free GET only, backend digest/summary display only, server-supplied
+      freshness/provenance only, and fail-closed invalid/unavailable states.
+      Digest stream, aggregate task list reads, session list/detail,
+      task-list/search/discovery, browser-side LLM generation/summarization,
+      generated live data, cache warming, background refresh, broad dashboard
+      wiring, mutation/control behavior, backend/API expansion, services/MCP,
+      dependencies/lockfiles, CI/deployment changes, production credentials, and
+      production operations remain unauthorized and fail-closed unless selected
+      by a later story.
+
+  - date: "2026-06-26"
+    event: phase-29-epic-108-closed
+    from: in-progress
+    to: done
+    story: 108-3-phase-29-epic-108-final-closure
+    reason: >
+      Phase 29 / Epic 108 closed after Story 108.1 planning, Story 108.2
+      runtime implementation/review/QA, and green remote CI run 28205787033.
+      The closed surface is exactly GET /v1/tasks/{task_id}/logs/digest and no
+      adjacent aggregate/session/digest-stream/task-list/search/discovery or
+      browser-generated-live-data scope.
+
   - date: "2026-06-26"
     event: story-108-2-task-log-digest-runtime-boundary-complete
     from: backlog
