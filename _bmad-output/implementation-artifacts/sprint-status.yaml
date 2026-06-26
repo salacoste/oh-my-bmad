@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-26T05:00:00+03:00"
-current_phase: 30  # Phase 30 OPEN — Epic 109 aggregate task list runtime boundary complete locally; final push/remote-CI closure deferred to Story 109.3
+last_updated: "2026-06-26T05:30:00+03:00"
+current_phase: 30  # Phase 30 CLOSED — Epic 109 aggregate task list runtime/API boundary complete with Story 109.3 remote CI evidence
 
 development_status:
   # =========================================================================
@@ -921,15 +921,36 @@ development_status:
   # =========================================================================
   # Epic 109: Aggregate task list route selection planning
   # =========================================================================
-  epic-109: in-progress  # Phase 30 aggregate task list boundary: 109.1 route selection done; 109.2 exact GET /v1/tasks runtime/API boundary done locally; 109.3 final push/remote-CI closure remains
+  epic-109: done  # Phase 30 closed; exact GET /v1/tasks runtime/API boundary complete with Story 109.3 evidence consolidation and remote CI run 28213044828
   109-1-aggregate-task-list-route-selection-planning: done  # Phase 30 PRD/architecture/epics/status opening; selects aggregate task list read and future GET /v1/tasks only; Architect/Critic consensus, code-review APPROVE/CLEAR, and docs-only UltraQA skip recorded; runtime/API implementation deferred
-  109-2-aggregate-task-list-runtime-boundary: done  # tests-first exact GET /v1/tasks runtime/API contract boundary complete locally; code-review APPROVE, architect recheck CLEAR, UltraQA PASS, local non-slow gate green; no POST /v1/tasks, sessions, digest stream, search/discovery, hidden selectors, generated live data, mutation/control, or remote-CI claim
-  109-3-phase-30-epic-109-final-closure: backlog  # future docs/status final closure after Story 109.2 review/QA/push/remote-CI evidence
+  109-2-aggregate-task-list-runtime-boundary: done  # tests-first exact GET /v1/tasks runtime/API contract boundary; code-review APPROVE, architect recheck CLEAR, UltraQA PASS, local non-slow gate green; pushed in 3ebc2c0; remote CI run 28213044828 green; no POST /v1/tasks, sessions, digest stream, search/discovery, hidden selectors, generated live data, mutation/control
+  109-3-phase-30-epic-109-final-closure: done  # docs/status final closure after Story 109.2 review/QA/push/remote-CI evidence; deferred surfaces remain fail-closed
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-26"
+    event: story-109-3-phase-30-epic-109-final-closure-complete
+    from: backlog
+    to: done
+    story: 109-3-phase-30-epic-109-final-closure
+    reason: >
+      Story 109.3 closes Phase 30 / Epic 109 after Story 109.2 review,
+      architect recheck, UltraQA, local validation, push, and remote CI evidence.
+      Commit 3ebc2c0909e3d4dec586cb6d5f7f73c52d71010f implements exactly
+      GET /v1/tasks as a bounded aggregate task list runtime/API boundary.
+      GitHub Actions ci run 28213044828 completed successfully for that head
+      SHA at https://github.com/salacoste/oh-my-bmad/actions/runs/28213044828;
+      both Registry-state tests (Postgres service container) and PR gate
+      (ruff + mypy + pytest, including pytest -m "not slow") succeeded.
+      Story 109.3 is docs/status-only and does not authorize POST /v1/tasks,
+      session list/detail, digest streaming, task-list/search/discovery, hidden
+      selectors, automatic drill-down, browser-side generation/summarization,
+      generated live data, broad dashboard wiring, services/MCP/dependencies/CI
+      expansion/deployment changes, mutation/control behavior, production
+      credentials, or production operations.
+
   - date: "2026-06-26"
     event: story-109-2-aggregate-task-list-runtime-boundary-complete
     from: backlog

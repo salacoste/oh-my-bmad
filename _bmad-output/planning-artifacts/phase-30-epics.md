@@ -2,7 +2,7 @@
 
 ## Phase 30 theme
 
-Phase 30 continues the dashboard route-family sequence. It opens the **Aggregate Task List** branch as planning first, while narrowing the future runtime/API candidate to one exact read surface. Runtime and API work are deferred to a separate story and final closure is deferred until review, QA, push, and CI evidence exist.
+Phase 30 continued the dashboard route-family sequence and closed the **Aggregate Task List** branch. It selected, implemented, reviewed, QA-checked, pushed, and remotely validated one exact read surface: `GET /v1/tasks`.
 
 Selected family and future surface:
 
@@ -25,7 +25,7 @@ Non-selected surfaces remain future-only and fail-closed:
 
 ### Objective
 
-Plan and later prove a bounded dashboard route boundary for aggregate task summaries through `GET /v1/tasks` without session traversal, digest streaming, search/discovery, hidden row-driven selectors, broad dashboard wiring, generated live data, browser-side LLM behavior, or mutation/control side effects.
+Plan, prove, and close a bounded dashboard route boundary for aggregate task summaries through `GET /v1/tasks` without session traversal, digest streaming, search/discovery, hidden row-driven selectors, broad dashboard wiring, generated live data, browser-side LLM behavior, or mutation/control side effects.
 
 ### Story 109.1 — Aggregate task list route selection planning
 
@@ -47,11 +47,11 @@ Plan and later prove a bounded dashboard route boundary for aggregate task summa
 
 ### Story 109.2 — Aggregate task list runtime/API contract boundary
 
-**Status:** backlog.
+**Status:** done after tests-first implementation, code-review APPROVE, architect recheck CLEAR, UltraQA PASS, local validation, push, and remote CI run `28213044828` success.
 
 **Intent:** Implement a separately approved, tests-first boundary for exactly `GET /v1/tasks` if and only if the route contract is proven or implemented with narrow additive API tests.
 
-**Future acceptance criteria:**
+**Acceptance criteria completed:**
 
 1. Tests prove only `GET /v1/tasks` is reachable for this slice.
 2. Dashboard calls are GET-only and body-free.
@@ -67,11 +67,11 @@ Plan and later prove a bounded dashboard route boundary for aggregate task summa
 
 ### Story 109.3 — Phase 30 / Epic 109 final validation closure
 
-**Status:** backlog.
+**Status:** done after Story 109.2 runtime/API evidence, final review, QA decision, push, and remote CI run `28213044828` success.
 
 **Intent:** Complete docs/status final closure only after Story 109.2 runtime/API evidence, final review, QA decision, push, and remote CI evidence exist.
 
-**Future acceptance criteria:**
+**Acceptance criteria completed:**
 
 1. Closure artifact names exact implemented aggregate route, changed files, review lanes, QA decision, commit(s), and CI run.
 2. Closure wording does not imply session contracts, digest streaming, task-list/search/discovery, broad dashboard wiring, generated live data, browser-side LLM generation, services/MCP/dependencies/CI expansion, mutation/control behavior, or production operations.
@@ -80,9 +80,11 @@ Plan and later prove a bounded dashboard route boundary for aggregate task summa
 
 ## Dependency and sequencing notes
 
-1. Story 109.1 must complete before any aggregate task list runtime/API work is authorized.
-2. Story 109.2 must remain route-local to `GET /v1/tasks` and cannot add session contracts, digest streaming, task-list/search/discovery, generated live data, browser-side LLM behavior, broad dashboard wiring, services/MCP/dependencies/CI/deployment changes beyond the exact additive route contract, mutation/control behavior, or production operations.
-3. Story 109.3 must not run until implementation, final review, QA decision, push, and remote CI evidence exist.
+1. Story 109.1 completed before aggregate task list runtime/API work was authorized.
+2. Story 109.2 remained route-local to `GET /v1/tasks` and did not add session contracts, digest streaming, task-list/search/discovery, generated live data, browser-side LLM behavior, broad dashboard wiring, services/MCP/dependencies/CI/deployment changes beyond the exact additive route contract, mutation/control behavior, or production operations.
+3. Story 109.3 ran after implementation, final review, QA decision, push, and remote CI evidence existed.
 4. Session list/detail, digest stream, and task-list/search/discovery remain higher-risk and fail-closed unless selected by a later explicit product and architecture gate.
 
 Generated: 2026-06-25T23:30:38Z
+
+Closed: 2026-06-26T05:30:00+03:00
