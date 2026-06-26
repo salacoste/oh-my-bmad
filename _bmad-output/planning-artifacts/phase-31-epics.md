@@ -45,7 +45,7 @@ Plan, prove, and close a bounded dashboard route boundary for session summaries 
 
 ### Story 110.2 — Session list runtime/API contract boundary
 
-**Status:** backlog.
+**Status:** done after tests-first implementation, code-review APPROVE, architect recheck CLEAR, UltraQA PASS, push, and remote CI run `28248851773` success.
 
 **Intent:** Implement a separately approved, tests-first boundary for exactly `GET /v1/sessions` if and only if the route contract is proven or implemented with narrow additive API tests.
 
@@ -64,13 +64,13 @@ Plan, prove, and close a bounded dashboard route boundary for session summaries 
 
 ### Story 110.3 — Phase 31 / Epic 110 final validation closure
 
-**Status:** backlog.
+**Status:** done after Story 110.2 implementation, final local validation, push, remote CI run `28248851773` success, and docs/status closure evidence.
 
 **Intent:** Complete docs/status final closure only after Story 110.2 runtime/API evidence, final review, QA decision, push, and remote CI evidence exist.
 
-**Acceptance criteria planned:**
+**Acceptance criteria:**
 
-1. Closure artifact names exact implemented session-list route, changed files, review lanes, QA decision, commit(s), and CI run.
+1. Closure artifact `_bmad-output/implementation-artifacts/110-3-phase-31-epic-110-final-closure.md` names exact implemented session-list route, changed files, review lanes, QA decision, commit `a2a066f52b647f5e10cfddeb0454590da93497bd`, and CI run `28248851773`.
 2. Closure wording does not imply session-detail contracts, digest streaming, task-list/search/discovery, broad dashboard wiring, generated live data, browser-side LLM generation, services/MCP/dependencies/CI expansion, mutation/control behavior, or production operations.
 3. Sprint status marks Epic 110 done only after all Epic 110 stories are done.
 4. Final docs/status verification and `git diff --check` pass.
