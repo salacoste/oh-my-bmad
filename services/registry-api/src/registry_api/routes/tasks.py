@@ -343,6 +343,24 @@ class SessionListResponse(BaseModel):
     items: list[SessionSummaryOut]
 
 
+class SessionDetailResponse(BaseModel):
+    """200 OK response body for GET /v1/sessions/{session_id}."""
+
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    route: Literal["GET /v1/sessions/{session_id}"]
+    selected_session_id: str
+    retrieved_at: datetime
+    freshness_state: Literal["fresh"]
+    display_state: Literal["healthy"]
+    authority_state: Literal["authoritative"]
+    provenance: Literal["registry-state session detail"]
+    request_id: str
+    trace_id: str | None
+    correlation_id: str
+    item: SessionSummaryOut
+
+
 # ---------------------------------------------------------------------------
 # Router
 # ---------------------------------------------------------------------------
@@ -529,6 +547,72 @@ async def get_sessions(request: Request) -> SessionListResponse:
         next_offset=None,
         sort="last_heartbeat_at_desc_nulls_last_started_at_desc_id_asc",
         items=items,
+    )
+
+
+@router.get(
+    "/sessions/{session_id}",
+    status_code=200,
+    response_model=SessionDetailResponse,
+)
+async def get_session_detail(
+    request: Request,
+    session_id: str = Path(..., min_length=1, max_length=256),
+) -> SessionDetailResponse:
+    """GET /v1/sessions/{session_id} — bounded session detail (Story 111.2).
+
+    Route-local, selector-free read of one ``Session`` table row only. The
+    visible path parameter is the only selector; query strings and GET bodies
+    are rejected before lookup. No task/event/log/path payloads or controls are
+    returned.
+    """
+    if request.url.query:
+        raise HTTPException(
+            status_code=400,
+            detail="GET /v1/sessions/{session_id} does not accept query selectors",
+        )
+
+    if await request.body():
+        raise HTTPException(
+            status_code=400,
+            detail="GET /v1/sessions/{session_id} does not accept a request body",
+        )
+
+    session_maker = request.app.state.session_maker
+    clock = request.app.state.clock
+    request_id: str = request.state.request_id
+    trace_id: str | None = getattr(request.state, "trace_id", None)
+
+    async with session_maker() as db_session:
+        result = await db_session.execute(select(Session).where(Session.id == session_id))
+        row = result.scalar_one_or_none()
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    item = SessionSummaryOut(
+        session_id=row.id,
+        task_id=row.task_id,
+        worker_kind=row.worker_kind,
+        status=row.status,
+        started_at=row.started_at,
+        ended_at=row.ended_at,
+        last_heartbeat_at=row.last_heartbeat_at,
+        heartbeat_state=_heartbeat_state(row),
+    )
+
+    return SessionDetailResponse(
+        route="GET /v1/sessions/{session_id}",
+        selected_session_id=session_id,
+        retrieved_at=clock.now(),
+        freshness_state="fresh",
+        display_state="healthy",
+        authority_state="authoritative",
+        provenance="registry-state session detail",
+        request_id=request_id,
+        trace_id=trace_id,
+        correlation_id=request_id,
+        item=item,
     )
 
 
@@ -929,6 +1013,7 @@ __all__ = [
     "TaskListLastEventOut",
     "TaskListResponse",
     "TaskSummaryOut",
+    "SessionDetailResponse",
     "SessionListResponse",
     "SessionSummaryOut",
     "WorktreeLockOut",

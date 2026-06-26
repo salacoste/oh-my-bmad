@@ -82,6 +82,7 @@ EXPECTED_IDENTIFIERS_BY_ROUTE = {
     "/v1/tasks/{task_id}/logs/digest": frozenset({"task_id"}),
     "/v1/tasks": frozenset(),
     "/v1/sessions": frozenset(),
+    "/v1/sessions/{session_id}": frozenset({"session_id"}),
 }
 NON_AUTHORITATIVE_STATES = frozenset(
     {
@@ -112,7 +113,6 @@ UNCERTAINTY_COPY_TERMS = (
 SUCCESS_COPY_TERMS = ("healthy", "authoritative", "success", "ok")
 STORY_99_1_FORBIDDEN_RENDERABLE_ROUTES = frozenset(
     {
-        "/v1/sessions/{session_id}",
         "/v1/tasks/{task_id}/logs/digest/stream",
     }
 )
@@ -309,6 +309,25 @@ LIVE_VALUE_CONTRACTS = (
             }
         ),
     ),
+    LiveValueContract(
+        name="session-detail",
+        source_category="session",
+        route_pattern="/v1/sessions/{session_id}",
+        route_contract="approved",
+        timestamp_policy="retrieved-at-required",
+        freshness_policy="fresh-or-stale-required",
+        required_identifiers=("session_id",),
+        allowed_states=frozenset(
+            {
+                "healthy",
+                "stale",
+                "invalid",
+                "unauthorized",
+                "backend-unavailable",
+                "unavailable",
+            }
+        ),
+    ),
 )
 
 DEGRADED_STATE_FIXTURES = (
@@ -473,6 +492,7 @@ def test_story_99_1_view_models_cover_every_approved_phase_20_panel_route() -> N
         | set(live_read_adapter.story_108_2_route_patterns())
         | set(live_read_adapter.story_109_2_route_patterns())
         | set(live_read_adapter.story_110_2_route_patterns())
+        | set(live_read_adapter.story_111_2_route_patterns())
     )
 
     assert {view_model.route_pattern for view_model in view_models} == expected
@@ -489,6 +509,7 @@ def test_story_99_1_view_models_cover_every_approved_phase_20_panel_route() -> N
             + live_read_adapter.story_108_2_panel_contracts()
             + live_read_adapter.story_109_2_panel_contracts()
             + live_read_adapter.story_110_2_panel_contracts()
+            + live_read_adapter.story_111_2_panel_contracts()
         )
         for route in panel.routes
     }
@@ -546,7 +567,7 @@ def test_story_99_1_degraded_states_are_explicit_non_authoritative_and_non_norma
                 assert display_state.replace("-", " ") in view_model.display_copy.lower()
 
 
-def test_story_99_1_forbidden_session_detail_and_digest_routes_fail_closed() -> None:
+def test_story_99_1_forbidden_digest_stream_fails_closed_after_session_detail_promotion() -> None:
     view_model_routes = {
         view_model.route_pattern for view_model in live_read_adapter.story_99_1_route_view_models()
     }
@@ -556,11 +577,9 @@ def test_story_99_1_forbidden_session_detail_and_digest_routes_fail_closed() -> 
     excluded_routes = set(live_read_adapter.EXCLUDED_ROUTE_PATTERNS)
     assert (
         live_read_adapter.story_99_1_forbidden_renderable_route_patterns()
-        == unavailable_routes | excluded_routes | {"/v1/sessions/{session_id}"}
+        == unavailable_routes | excluded_routes
     )
-    assert (unavailable_routes | excluded_routes | {"/v1/sessions/{session_id}"}) == (
-        STORY_99_1_FORBIDDEN_RENDERABLE_ROUTES
-    )
+    assert (unavailable_routes | excluded_routes) == STORY_99_1_FORBIDDEN_RENDERABLE_ROUTES
     assert not view_model_routes & STORY_99_1_FORBIDDEN_RENDERABLE_ROUTES
 
     for route_pattern in STORY_99_1_FORBIDDEN_RENDERABLE_ROUTES:
@@ -632,7 +651,7 @@ def assert_render_state_is_fail_closed(fixture: DisplayStateFixture) -> None:
     assert_copy_is_bounded_uncertainty(fixture.copy)
     lowered = fixture.copy.lower()
     if fixture.source_category == "session":
-        assert fixture.route_pattern == "/v1/sessions", fixture
+        assert fixture.route_pattern in {"/v1/sessions", "/v1/sessions/{session_id}"}, fixture
         assert fixture.state in {"empty-list", "stale", "invalid", "unavailable"}, fixture
     for success_term in SUCCESS_COPY_TERMS:
         assert success_term not in lowered, fixture

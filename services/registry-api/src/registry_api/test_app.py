@@ -716,6 +716,107 @@ class TestGetSessionsAggregate:
         assert method_response.status_code in {404, 405}
 
 
+class TestGetSessionDetail:
+    """Story 111.2: GET /v1/sessions/{session_id} bounded detail boundary."""
+
+    pytestmark = pytest.mark.asyncio
+
+    async def test_get_session_detail_returns_bounded_session_table_shape(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        db_path = tmp_path / "session-detail" / "state.sqlite3"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+        session_ids = await _seed_session_list_rows(db_url, count=1)
+        app = build_app(
+            base_dir=tmp_path / "events",
+            db_url=db_url,
+            clock=fixed_clock,
+            create_idempotency_schema_on_start=True,
+        )
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://testserver"
+            ) as client,
+        ):
+            r = await client.get(f"/v1/sessions/{session_ids[0]}")
+
+        assert r.status_code == 200
+        body = r.json()
+        assert set(body) == {
+            "route",
+            "selected_session_id",
+            "retrieved_at",
+            "freshness_state",
+            "display_state",
+            "authority_state",
+            "provenance",
+            "request_id",
+            "trace_id",
+            "correlation_id",
+            "item",
+        }
+        assert body["route"] == "GET /v1/sessions/{session_id}"
+        assert body["selected_session_id"] == session_ids[0]
+        assert body["retrieved_at"] == FROZEN_EPOCH.isoformat().replace("+00:00", "Z")
+        assert body["freshness_state"] == "fresh"
+        assert body["display_state"] == "healthy"
+        assert body["authority_state"] == "authoritative"
+        assert body["provenance"] == "registry-state session detail"
+        assert body["correlation_id"] == body["request_id"]
+        row = body["item"]
+        assert set(row) == {
+            "session_id",
+            "task_id",
+            "worker_kind",
+            "status",
+            "started_at",
+            "ended_at",
+            "last_heartbeat_at",
+            "heartbeat_state",
+        }
+        assert row["session_id"] == session_ids[0]
+        serialized = str(body).lower()
+        for denied in (
+            "worktree",
+            "/private",
+            "event",
+            "payload",
+            "summary",
+            "href",
+            "url",
+            "control",
+        ):
+            assert denied not in serialized
+
+    async def test_get_session_detail_rejects_query_body_unknown_and_adjacent_methods(
+        self, session_list_client: AsyncClient
+    ) -> None:
+        list_body = (await session_list_client.get("/v1/sessions")).json()
+        session_id = list_body["items"][0]["session_id"]
+
+        query_response = await session_list_client.get(f"/v1/sessions/{session_id}?task_id=secret")
+        body_response = await session_list_client.request(
+            "GET", f"/v1/sessions/{session_id}", content=b'{"task_id":"t-secret"}'
+        )
+        unknown_response = await session_list_client.get("/v1/sessions/s-missing")
+        method_response = await session_list_client.patch(
+            f"/v1/sessions/{session_id}", json={"status": "closed"}
+        )
+        slash_response = await session_list_client.get("/v1/sessions/safe/unsafe")
+
+        assert query_response.status_code == 400
+        assert body_response.status_code == 400
+        assert "does not accept query" in query_response.text
+        assert "does not accept a request body" in body_response.text
+        assert unknown_response.status_code == 404
+        assert method_response.status_code in {404, 405}
+        assert slash_response.status_code in {404, 422}
+
+
 # ---------------------------------------------------------------------------
 # TestPostTasks
 # ---------------------------------------------------------------------------

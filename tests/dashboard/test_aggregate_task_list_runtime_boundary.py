@@ -17,6 +17,7 @@ APPROVED_SCRIPTS = [
     "task-detail.js",
     "aggregate-task-list.js",
     "session-list.js",
+    "session-detail.js",
     "event-timeline.js",
     "trace-correlation.js",
     "history-replay.js",

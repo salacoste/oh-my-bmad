@@ -29,7 +29,6 @@ FIXTURE_ROW_LIST_LABEL = "story 99.2 fixture-backed approved route rows"
 DEGRADED_SUMMARY_LIST_LABEL = "bounded degraded fixture states"
 FORBIDDEN_STATIC_ROUTE_PATTERNS = frozenset(
     {
-        "/v1/sessions/{session_id}",
         "/v1/tasks/{task_id}/logs/digest/stream",
     }
 )
@@ -125,9 +124,7 @@ def test_story_100_1_degraded_unavailable_rendering_choice_is_bounded_summary() 
         assert state in text
 
 
-def test_story_100_1_forbidden_session_and_digest_stream_routes_fail_closed_in_static_copy() -> (
-    None
-):
+def test_story_100_1_forbidden_digest_stream_route_fails_closed_in_static_copy() -> None:
     text = fixture_section_text()
     lowered = text.lower()
 
@@ -136,7 +133,7 @@ def test_story_100_1_forbidden_session_and_digest_stream_routes_fail_closed_in_s
         assert probe.renderable is False
         assert probe.display_copy in text
         assert route_pattern in text
-    assert "session detail plus the digest stream fail closed" in lowered
+    assert "digest stream fails closed" in lowered
     assert "needs-contract" in lowered
 
 

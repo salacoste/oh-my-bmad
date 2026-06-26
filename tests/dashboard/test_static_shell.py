@@ -673,7 +673,7 @@ def test_story_89_3_sessions_panel_declares_safe_session_list_provenance() -> No
         assert resource not in session_attrs, resource
     assert "no query selectors" in sessions_text
     assert "no request body" in sessions_text
-    assert "no session detail route" in sessions_text
+    assert "no automatic session detail route" in sessions_text
     assert "no live polling" in sessions_text
     assert "no operator control" in sessions_text
 
@@ -707,7 +707,10 @@ def test_story_89_3_sessions_panel_states_and_unavailable_contract_are_explicit(
     assert "get /v1/sessions" in sessions_text
     assert "aggregate historical-session list/search/read route" in sessions_text
     assert "live polling" in sessions_text
-    assert "session detail remains unavailable pending a separate contract" in sessions_text
+    assert (
+        "session detail is available only through the separate visible-source section below"
+        in sessions_text
+    )
 
 
 def test_story_90_1_events_panel_declares_safe_route_provenance() -> None:

@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-06-26T18:55:00+03:00"
+# last_updated: "2026-06-26T22:05:00+03:00"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-26T18:55:00+03:00"
-current_phase: 31  # Phase 31 CLOSED — Epic 110 exact GET /v1/sessions runtime/API boundary complete with Story 110.3 evidence consolidation and remote CI run 28248851773
+last_updated: "2026-06-26T22:05:00+03:00"
+current_phase: 32  # Phase 32 OPEN — Epic 111 session detail runtime/API boundary implemented locally for exact GET /v1/sessions/{session_id}; Story 111.2 review/UltraQA clear and Story 111.3 backlog until push/remote CI
 
 development_status:
   # =========================================================================
@@ -934,10 +934,81 @@ development_status:
   110-2-session-list-runtime-boundary: done  # tests-first exact GET /v1/sessions runtime/API contract boundary; code-review APPROVE, architect recheck CLEAR, UltraQA PASS, local non-slow gate green; pushed in a2a066f; remote CI run 28248851773 green; no session detail/digest stream/search/discovery/hidden selectors/generated live data
   110-3-phase-31-epic-110-final-closure: done  # docs/status final closure after Story 110.2 review/QA/push/remote-CI evidence; deferred surfaces remain fail-closed
 
+  # =========================================================================
+  # Epic 111: Session detail route selection planning
+  # =========================================================================
+  epic-111: in-progress  # Phase 32 opened; exact GET /v1/sessions/{session_id} selected in Story 111.1 and implemented locally in Story 111.2; final closure pending push/remote CI
+  111-1-session-detail-route-selection-planning: done  # Phase 32 PRD/architecture/epics/status opening; selects session visibility continuation and future GET /v1/sessions/{session_id} only; Architect APPROVE/CLEAR and Critic APPROVE/CLEAR consensus recorded; runtime/API implementation now authorized for tests-first Story 111.2 only
+  111-2-session-detail-runtime-boundary: review  # tests-first exact GET /v1/sessions/{session_id} runtime/API contract boundary implemented locally; code-review APPROVE/CLEAR and UltraQA PASS; awaiting push/remote CI before done
+  111-3-phase-32-epic-111-final-closure: backlog  # final closure only after Story 111.2 review/QA/push/remote-CI evidence
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-26"
+    event: story-111-2-code-review-ultraqa-clear
+    from: review
+    to: review
+    story: 111-2-session-detail-runtime-boundary
+    reason: >
+      Native code-reviewer 019f053a-0af2-7461-a0d5-331337fa22c3 first
+      returned REQUEST_CHANGES/WATCH for a timer guardrail mismatch, then
+      returned APPROVE/CLEAR after AbortSignal.timeout was removed and tests
+      were strengthened. Native verifier 019f0546-3178-7f72-b8d7-c6ac7423f934
+      returned UltraQA PASS / clean=true after adversarial API/runtime probes.
+      Story 111.2 remains review rather than done until push and remote CI
+      evidence are recorded for Story 111.3 closure.
+
+  - date: "2026-06-26"
+    event: story-111-2-session-detail-runtime-boundary-ready-for-review
+    from: backlog
+    to: review
+    story: 111-2-session-detail-runtime-boundary
+    reason: >
+      Story 111.2 adds tests-first exact GET /v1/sessions/{session_id}
+      runtime/API behavior after Story 111.1 consensus. The API route rejects
+      query strings and GET bodies, returns bounded Session-table-only detail
+      metadata, and omits raw worktree paths, event/log payloads, summaries,
+      hrefs/URLs, generated text, and controls. The dashboard session-detail
+      runtime reads only visible session_id text, percent-encodes the path
+      segment, uses one GET fetch with Accept: application/json, and adds no
+      credentials/body/storage/timers/workers/side channels or automatic
+      session-list row drill-down. Local backend and dashboard validation is
+      green; independent code-review and UltraQA remain required before done.
+
+  - date: "2026-06-26"
+    event: story-111-1-session-detail-route-selection-planning-complete
+    from: in-progress
+    to: done
+    story: 111-1-session-detail-route-selection-planning
+    reason: >
+      Story 111.1 completes Phase 32 / Epic 111 docs/status-only session detail
+      route selection planning after Phase 31 / Epic 110 closed. It selects
+      session visibility continuation and narrows the future candidate to
+      exactly GET /v1/sessions/{session_id}. Sequential Architect APPROVE/CLEAR
+      and Critic APPROVE consensus is recorded in Autopilot/RALPLAN evidence.
+      Runtime/API implementation is deferred to Story 111.2. Automatic
+      session-list row drill-down, digest streaming, task-list/search/discovery,
+      task/detail/digest/history/trace/replay traversal, hidden selectors,
+      browser-side generation/summarization, generated live data, cache warming,
+      background refresh, broad dashboard wiring, mutation/control behavior,
+      services/MCP, dependencies/lockfiles, CI/deployment modifications,
+      production credentials, and production operations remain unauthorized and
+      fail-closed unless explicitly selected by a later story.
+
+  - date: "2026-06-26"
+    event: phase-32-epic-111-opened
+    from: 31
+    to: 32
+    story: 111-1-session-detail-route-selection-planning
+    reason: >
+      Phase 32 formally opened after sprint-status confirmed Phase 31 / Epic
+      110 done. The selected remaining route family is session visibility
+      continuation, with exactly GET /v1/sessions/{session_id} recorded as the
+      future candidate surface. This opening is planning/status only and does
+      not implement runtime or API behavior.
+
   - date: "2026-06-26"
     event: story-110-3-phase-31-epic-110-final-closure-complete
     from: backlog

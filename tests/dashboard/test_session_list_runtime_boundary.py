@@ -149,7 +149,10 @@ def test_story_110_2_session_panel_exposes_bounded_runtime_metadata_targets() ->
     assert "no query selectors" in lowered
     assert "no request body" in lowered
     assert "inert display text" in lowered
-    assert "session detail remains unavailable" in lowered
+    assert (
+        "session detail is available only through the separate visible-source section below"
+        in lowered
+    )
 
 
 def test_story_110_2_session_runtime_behavior_maps_success_empty_and_failures() -> None:

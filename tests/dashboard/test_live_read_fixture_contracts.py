@@ -29,6 +29,7 @@ EXPECTED_FIXTURE_ROUTE_PATTERNS = frozenset(
         + live_read_adapter.story_108_2_panel_contracts()
         + live_read_adapter.story_109_2_panel_contracts()
         + live_read_adapter.story_110_2_panel_contracts()
+        + live_read_adapter.story_111_2_panel_contracts()
     )
     for route in panel.routes
 )
@@ -37,7 +38,6 @@ EXPECTED_APPROVED_ROUTE_PATTERNS = frozenset(
 )
 EXPLICIT_FORBIDDEN_FIXTURE_ROUTES = frozenset(
     {
-        "/v1/sessions/{session_id}",
         "/v1/tasks/{task_id}/logs/digest/stream",
     }
 )
@@ -136,6 +136,7 @@ def test_story_99_2_fixture_snapshot_route_coverage_matches_story_99_1_view_mode
             + live_read_adapter.story_108_2_panel_contracts()
             + live_read_adapter.story_109_2_panel_contracts()
             + live_read_adapter.story_110_2_panel_contracts()
+            + live_read_adapter.story_111_2_panel_contracts()
         )
         for route in panel.routes
     }
@@ -208,7 +209,7 @@ def test_story_99_2_degraded_fixture_states_are_bounded_non_authoritative() -> N
                 assert "authoritative success" not in row.display_copy.lower()
 
 
-def test_story_99_2_forbidden_session_and_digest_routes_fail_closed() -> None:
+def test_story_99_2_forbidden_digest_stream_route_fails_closed() -> None:
     assert live_read_adapter.story_99_2_forbidden_renderable_route_patterns() == (
         EXPLICIT_FORBIDDEN_FIXTURE_ROUTES
     )

@@ -20,7 +20,6 @@ APPROVED_STORY_107_2_CREATE_ROUTE = "/v1/events/replay/snapshots"
 
 NEEDS_SEPARATE_CONTRACT_GET_ROUTES = frozenset(
     {
-        "/v1/sessions/{session_id}",
         "/v1/dashboard",
         "/v1/tasks/{task_id}/actions",
         "/v1/tasks/{task_id}/retry",
@@ -83,7 +82,7 @@ def test_route_inventory_is_imported_from_static_boundary_contract() -> None:
     assert APPROVED_READ_ROUTES is boundary.CORE_APPROVED_READ_ROUTES
     assert OPTIONAL_NON_CORE_READ_ROUTES is boundary.OPTIONAL_NON_CORE_READ_ROUTES
     assert FORBIDDEN_METHODS is boundary.FORBIDDEN_METHODS
-    assert len(APPROVED_READ_ROUTES) == 11
+    assert len(APPROVED_READ_ROUTES) == 12
 
 
 def test_candidate_core_read_routes_are_unique_normalized_and_get_only() -> None:
@@ -109,6 +108,7 @@ def test_digest_aggregate_and_session_reads_are_promoted_and_adjacent_routes_nee
     assert ("GET", "/v1/tasks/{task_id}/logs/digest") in APPROVED_READ_ROUTES
     assert ("GET", "/v1/tasks") in APPROVED_READ_ROUTES
     assert ("GET", "/v1/sessions") in APPROVED_READ_ROUTES
+    assert ("GET", "/v1/sessions/{session_id}") in APPROVED_READ_ROUTES
     assert ("GET", "/v1/tasks/{task_id}/logs/digest/stream") not in APPROVED_READ_ROUTES
     for route in NEEDS_SEPARATE_CONTRACT_GET_ROUTES:
         assert ("GET", route) not in APPROVED_READ_ROUTES
@@ -139,7 +139,7 @@ def test_guard_sensitivity_rejects_unapproved_live_read_calls_and_methods() -> N
         "fetch('/v1/tasks', {method: 'GET', body: '{}'})",
         "fetch('/v1/tasks', {method: 'GET', credentials: 'include'})",
         "fetch('/v1/sessions', {method: 'GET', body: '{}'})",
-        "fetch('/v1/sessions/abc', {method: 'GET'})",
+        "fetch('/v1/sessions/abc', {method: 'GET', body: '{}'})",
         "fetch('/v1/tasks/abc/logs/digest/stream', {method: 'GET'})",
         "fetch('/v1/tasks/abc', {method: 'POST'})",
         "fetch('/v1/tasks/abc/events', {method: 'PATCH'})",
@@ -222,7 +222,9 @@ def assert_no_forbidden_effect_markers(text: str, *, source: str) -> None:
         options = match.group("options").lower()
         method_match = METHOD_RE.search(match.group("options"))
         method = method_match.group("method").upper() if method_match else "GET"
-        if route in {"/v1/tasks", "/v1/sessions"} and method == "GET":
+        if method == "GET" and (
+            route in {"/v1/tasks", "/v1/sessions"} or route.startswith("/v1/sessions/")
+        ):
             assert "body" not in options, (source, method, route, "body")
             assert 'credentials: "include"' not in options, (
                 source,
@@ -241,7 +243,7 @@ def assert_no_forbidden_effect_markers(text: str, *, source: str) -> None:
                     'credentials: "omit"' in options or "credentials: 'omit'" in options
                 )
                 assert credentials_is_omit, (source, method, route, "credentials")
-            if route == "/v1/sessions":
+            if route == "/v1/sessions" or route.startswith("/v1/sessions/"):
                 assert "credentials" not in options, (source, method, route, "credentials")
                 assert "accept" in options and "application/json" in options, (
                     source,
