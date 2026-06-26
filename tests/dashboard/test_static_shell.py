@@ -127,37 +127,37 @@ TASK_DETAIL_STATE_TERMS = (
     "read error",
 )
 SESSION_RESOURCE_PROVENANCE = (
-    "session://active",
-    "session://detail/{session_id}",
-    "session://heartbeats",
+    "get /v1/sessions",
+    "story 110.2",
+    "single approved read-only session-list read",
 )
 SESSION_RESOURCE_NATIVE_FIELDS = (
-    "id",
+    "session_id",
     "task_id",
     "worker_kind",
-    "worktree_path",
     "status",
     "started_at",
     "ended_at",
     "last_heartbeat_at",
+    "heartbeat_state",
 )
 SESSION_DERIVED_UNAVAILABLE_FIELDS = (
-    "freshness_state",
-    "source",
-    "trace_id",
+    "ended",
+    "observed",
+    "missing",
 )
 SESSION_STATE_TERMS = (
-    "no active sessions",
-    "active session",
-    "historical session",
-    "terminal session outcome",
-    "heartbeat/stale warning",
     "loading",
-    "unavailable pending dashboard read contract",
+    "healthy bounded display",
     "empty successful read",
-    "read error",
+    "invalid data",
+    "stale/ambiguous freshness",
     "unauthorized/configuration failure",
-    "stale data",
+    "backend unavailable",
+    "route failure/read error",
+    "malformed response",
+    "over-limit response",
+    "unavailable read",
 )
 APPROVED_EVENT_ROUTE = "GET /v1/tasks/{task_id}/events"
 APPROVED_TRANSITION_ROUTE = "GET /v1/tasks/{task_id}/transitions"
@@ -664,38 +664,35 @@ def test_story_89_2_thread_metadata_is_passive_and_unavailable_when_absent() -> 
     assert "notification control" not in task_detail
 
 
-def test_story_89_3_sessions_panel_declares_safe_mcp_resource_provenance() -> None:
+def test_story_89_3_sessions_panel_declares_safe_session_list_provenance() -> None:
     parser = parse_dashboard()
     sessions_text = " ".join(parser.sections["sessions"]).lower()
     session_attrs = " ".join(parser.section_attrs.get("sessions", [])).lower()
     for resource in SESSION_RESOURCE_PROVENANCE:
         assert resource in sessions_text, resource
         assert resource not in session_attrs, resource
-    assert "existing mcp read resources" in sessions_text
-    assert "inert visible provenance" in sessions_text
-    assert "no live dashboard wiring" in sessions_text
+    assert "no query selectors" in sessions_text
+    assert "no request body" in sessions_text
+    assert "no session detail route" in sessions_text
+    assert "no live polling" in sessions_text
+    assert "no operator control" in sessions_text
 
 
 def test_story_89_3_sessions_panel_lists_passive_row_contract() -> None:
     parser = parse_dashboard()
     sessions_text = " ".join(parser.sections["sessions"]).lower()
-    native_fields = comma_list_clause(sessions_text, "resource-native session fields are:")
+    native_fields = comma_list_clause(sessions_text, "row contract:")
     assert native_fields == set(SESSION_RESOURCE_NATIVE_FIELDS)
-    assert "session_id is a display label for resource-native id" in sessions_text
-    assert "not a separate resource field" in sessions_text
-    uri_template_sentence = next(
-        sentence
-        for sentence in sentences(sessions_text)
-        if "session://detail/{session_id}" in sentence
-    )
-    assert "display label for resource-native id" not in uri_template_sentence
-    derived_fields = comma_list_clause(
-        sessions_text, "derived/provenance/unavailable-only semantics are"
-    )
+    assert "session_id and task_id are inert display text only" in sessions_text
+    assert "not links" in sessions_text
+    assert "not links, route inputs, hidden attributes, storage keys" in sessions_text
+    derived_fields = {
+        field.removeprefix("or ") for field in comma_list_clause(sessions_text, "backend only as")
+    }
     assert derived_fields == set(SESSION_DERIVED_UNAVAILABLE_FIELDS)
-    assert "derived/provenance/unavailable-only semantics" in sessions_text
-    assert "visibility placeholders only" in sessions_text
-    assert "no links or session actions appear here" in sessions_text
+    assert "raw worktree_path" in sessions_text
+    assert "resource paths" in sessions_text
+    assert "generated live data are unavailable" in sessions_text
     for term in CONTROL_TERMS:
         assert term not in sessions_text, term
 
@@ -705,16 +702,12 @@ def test_story_89_3_sessions_panel_states_and_unavailable_contract_are_explicit(
     sessions_text = " ".join(parser.sections["sessions"]).lower()
     for term in SESSION_STATE_TERMS:
         assert term in sessions_text, term
-    assert "loading is not active in this static, not-wired slice" in sessions_text
-    assert "dashboard-consumable session http route" in sessions_text
-    assert "aggregate session list" in sessions_text
+    assert "non-healthy states fail closed" in sessions_text
+    assert "non-authoritative" in sessions_text
+    assert "get /v1/sessions" in sessions_text
     assert "aggregate historical-session list/search/read route" in sessions_text
     assert "live polling" in sessions_text
-    assert (
-        "historical session and terminal session outcome wording is explanatory only"
-        in sessions_text
-    )
-    assert "does not authorize session history enumeration" in sessions_text
+    assert "session detail remains unavailable pending a separate contract" in sessions_text
 
 
 def test_story_90_1_events_panel_declares_safe_route_provenance() -> None:

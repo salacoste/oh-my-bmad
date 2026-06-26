@@ -91,6 +91,11 @@ _TASK_ID_PATTERN = r"^t-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[
 # are intentionally absent until a later story defines a separate contract.
 _TASK_LIST_LIMIT = 50
 
+# Story 110.2: fixed first page for GET /v1/sessions. Selectors/pagination
+# knobs are intentionally absent until a later story defines a separate
+# contract.
+_SESSION_LIST_LIMIT = 50
+
 # Phase 1 next-commands lookup — derived from lifecycle.canonical map.
 _NEXT_COMMANDS = STATE_NEXT_COMMANDS
 
@@ -296,6 +301,48 @@ class TaskListResponse(BaseModel):
     items: list[TaskSummaryOut]
 
 
+class SessionSummaryOut(BaseModel):
+    """One bounded session summary row for GET /v1/sessions.
+
+    Story 110.2 intentionally omits raw ``worktree_path`` and every adjacent
+    traversal/control hint. ``session_id`` and ``task_id`` are display text
+    only; no links/selectors are returned by the API.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    session_id: str
+    task_id: str
+    worker_kind: str
+    status: str
+    started_at: datetime
+    ended_at: datetime | None
+    last_heartbeat_at: datetime | None
+    heartbeat_state: Literal["ended", "observed", "missing"]
+
+
+class SessionListResponse(BaseModel):
+    """200 OK response body for GET /v1/sessions."""
+
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    route: Literal["GET /v1/sessions"]
+    retrieved_at: datetime
+    freshness_state: Literal["fresh"]
+    display_state: Literal["healthy", "empty-list"]
+    authority_state: Literal["authoritative", "non-authoritative"]
+    provenance: Literal["registry-state session summary list"]
+    request_id: str
+    trace_id: str | None
+    correlation_id: str
+    limit: int
+    returned_count: int
+    has_more: bool
+    next_offset: None = None
+    sort: Literal["last_heartbeat_at_desc_nulls_last_started_at_desc_id_asc"]
+    items: list[SessionSummaryOut]
+
+
 # ---------------------------------------------------------------------------
 # Router
 # ---------------------------------------------------------------------------
@@ -392,6 +439,95 @@ async def get_tasks(request: Request) -> TaskListResponse:
         returned_count=len(items),
         has_more=has_more,
         next_offset=None,
+        items=items,
+    )
+
+
+def _heartbeat_state(row: Session) -> Literal["ended", "observed", "missing"]:
+    if row.ended_at is not None:
+        return "ended"
+    if row.last_heartbeat_at is not None:
+        return "observed"
+    return "missing"
+
+
+@router.get(
+    "/sessions",
+    status_code=200,
+    response_model=SessionListResponse,
+)
+async def get_sessions(request: Request) -> SessionListResponse:
+    """GET /v1/sessions — bounded session summary list (Story 110.2).
+
+    Route-local, selector-free read of the ``Session`` table only. It rejects
+    every query string and every GET body, exposes only display-safe row fields,
+    and keeps session detail/control/discovery surfaces out of scope.
+    """
+    if request.url.query:
+        raise HTTPException(
+            status_code=400,
+            detail="GET /v1/sessions does not accept query selectors",
+        )
+
+    if await request.body():
+        raise HTTPException(
+            status_code=400,
+            detail="GET /v1/sessions does not accept a request body",
+        )
+
+    session_maker = request.app.state.session_maker
+    clock = request.app.state.clock
+    request_id: str = request.state.request_id
+    trace_id: str | None = getattr(request.state, "trace_id", None)
+
+    async with session_maker() as db_session:
+        session_result = await db_session.execute(
+            select(Session)
+            .order_by(
+                Session.last_heartbeat_at.desc().nulls_last(),
+                Session.started_at.desc(),
+                Session.id.asc(),
+            )
+            .limit(_SESSION_LIST_LIMIT + 1)
+        )
+        fetched_sessions = list(session_result.scalars().all())
+
+    has_more = len(fetched_sessions) > _SESSION_LIST_LIMIT
+    sessions = fetched_sessions[:_SESSION_LIST_LIMIT]
+    items = [
+        SessionSummaryOut(
+            session_id=row.id,
+            task_id=row.task_id,
+            worker_kind=row.worker_kind,
+            status=row.status,
+            started_at=row.started_at,
+            ended_at=row.ended_at,
+            last_heartbeat_at=row.last_heartbeat_at,
+            heartbeat_state=_heartbeat_state(row),
+        )
+        for row in sessions
+    ]
+
+    display_state: Literal["healthy", "empty-list"] = "healthy" if items else "empty-list"
+    authority_state: Literal["authoritative", "non-authoritative"] = (
+        "authoritative" if items else "non-authoritative"
+    )
+
+    return SessionListResponse(
+        route="GET /v1/sessions",
+        retrieved_at=clock.now(),
+        freshness_state="fresh",
+        display_state=display_state,
+        authority_state=authority_state,
+        provenance="registry-state session summary list",
+        request_id=request_id,
+        trace_id=trace_id,
+        correlation_id=request_id,
+        limit=_SESSION_LIST_LIMIT,
+        returned_count=len(items),
+        has_more=has_more,
+        next_offset=None,
+        sort="last_heartbeat_at_desc_nulls_last_started_at_desc_id_asc",
         items=items,
     )
 
@@ -793,6 +929,8 @@ __all__ = [
     "TaskListLastEventOut",
     "TaskListResponse",
     "TaskSummaryOut",
+    "SessionListResponse",
+    "SessionSummaryOut",
     "WorktreeLockOut",
     "router",
 ]

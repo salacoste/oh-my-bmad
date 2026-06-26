@@ -140,13 +140,33 @@
     </section>
     <section id="sessions" aria-labelledby="sessions-title">
       <h2 id="sessions-title">Sessions</h2>
-      <p class="state">Unavailable read: session reads are unavailable pending dashboard read contract; no dashboard-consumable session HTTP route, aggregate session list, aggregate historical-session list/search/read route, or live polling is wired here.</p>
-      <p>Existing MCP read resources are named as inert visible provenance only: session://active, session://detail/{session_id}, and session://heartbeats. They are no live dashboard wiring and are not links, attributes, background refresh sources, or client calls.</p>
-      <p>Resource-native session fields are: id, task_id, worker_kind, worktree_path, status, started_at, ended_at, and last_heartbeat_at. session_id is a display label for resource-native id; it is not a separate resource field.</p>
-      <p>Derived/provenance/unavailable-only semantics are freshness_state, source, and trace_id. freshness_state is only derivable from last_heartbeat_at after a future dashboard contract defines that derivation; source is panel provenance; trace_id is unavailable until a separate event or trace correlation read supplies it.</p>
-      <p>State matrix: no active sessions, active session, historical session, terminal session outcome, heartbeat/stale warning, loading, unavailable pending dashboard read contract, empty successful read, read error, permission/configuration failure, unauthorized/configuration failure, and stale data. Loading is not active in this static, not-wired slice.</p>
-      <p>Historical session and terminal session outcome wording is explanatory only and does not authorize session history enumeration. Visibility placeholders only; no links or session actions appear here.</p>
-      <p class="meta">Source: existing MCP read resources as static provenance text plus BMAD Story 89.3. Freshness timestamp: pending. Reference: session resource provenance and future dashboard read contract. Confidence: unavailable until a dashboard-safe read is wired by a later story.</p>
+      <p class="state" id="session-list-status">Session list live-read boundary pending: waiting for the approved GET /v1/sessions response.</p>
+      <p>
+        Source route/reference: GET /v1/sessions. Story 110.2 wires this single approved read-only session-list read only;
+        it adds no query selectors, no request body, no session detail route, no aggregate historical-session list/search/read route, no live polling, and no operator control.
+      </p>
+      <p>
+        Row identifiers session_id and task_id are inert display text only. They are not links, route inputs, hidden attributes, storage keys,
+        query selectors, hash selectors, or adjacent task/session/detail/digest/history/trace/replay fetch inputs. Session detail remains unavailable pending a separate contract.
+      </p>
+      <p>
+        Row contract: session_id, task_id, worker_kind, status, started_at, ended_at, last_heartbeat_at, and heartbeat_state.
+        heartbeat_state is derived by the backend only as ended, observed, or missing. Raw worktree_path, resource paths, event payloads, logs, summaries,
+        credentials, and generated live data are unavailable.
+      </p>
+      <p>
+        Runtime states are loading, healthy bounded display, empty successful read, invalid data, stale/ambiguous freshness, unauthorized/configuration failure,
+        backend unavailable, route failure/read error, malformed response, over-limit response, and unavailable read. Non-healthy states fail closed and are non-authoritative.
+      </p>
+      <p class="meta" id="session-list-source">Source: GET /v1/sessions. Runtime route: pending.</p>
+      <p class="meta" id="session-list-freshness">Freshness: pending retrieved_at.</p>
+      <p class="meta" id="session-list-authority">Authority: non-authoritative until a valid session list response is read.</p>
+      <p class="meta" id="session-list-provenance">Provenance: pending backend session summary metadata.</p>
+      <p class="meta" id="session-list-correlation">Correlation: pending request, trace, or correlation id.</p>
+      <p class="meta" id="session-list-pagination">Pagination: fixed first page pending; no continuation input is available.</p>
+      <p class="meta" id="session-list-degraded">Degraded state: unavailable read until runtime data resolves.</p>
+      <p class="meta" id="session-list-count">Session rows: pending.</p>
+      <p class="meta" id="session-list-rows">Rows: no session list response has been rendered yet. Confidence: unavailable until the approved session list read completes.</p>
     </section>
     <section id="task-log-digest" aria-labelledby="task-log-digest-title">
       <h2 id="task-log-digest-title">Task log digest</h2>
@@ -407,6 +427,7 @@
         <li>Panel family: health-readiness. Panel title: Health readiness. Source category: health. Source route pattern: /v1/health. Route input identifiers: none. Row display identifiers: none. Source identifiers: source_category=fixture-health-source. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: healthy-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: health readiness static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
         <li>Panel family: task-log-digest. Panel title: Task log digest. Source category: digest. Source route pattern: /v1/tasks/{task_id}/logs/digest. Route input identifiers: task_id. Row display identifiers: task_id, trace_id. Source identifiers: task_id=fixture-task-id. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: fresh-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: task log digest static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
         <li>Panel family: aggregate-task-list. Panel title: Aggregate task list. Source category: aggregate. Source route pattern: /v1/tasks. Route input identifiers: none. Row display identifiers: task_id, event_id, trace_id. Source identifiers: source_category=fixture-aggregate-source. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: fresh-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: aggregate task list static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
+        <li>Panel family: session-list. Panel title: Session list. Source category: session. Source route pattern: /v1/sessions. Route input identifiers: none. Row display identifiers: session_id, task_id. Source identifiers: source_category=fixture-session-source. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: fresh-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: session list static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
       </ul>
       <p>
         Degraded or unavailable fixture display states use a bounded non-authoritative summary instead of per-route success rows.
@@ -416,10 +437,9 @@
         <li>Bounded non-authoritative summary needs contract fixture review: backend-unavailable, empty-list, invalid, partial, stale, unauthorized, and unavailable states; runtime data remains disconnected.</li>
       </ul>
       <p>
-        Session routes plus the digest stream fail closed in this static presentation. They are not part of the approved Story 99.2 fixture-backed renderable route set.
+        Session detail plus the digest stream fail closed in this static presentation. They are not part of the approved Story 99.2 fixture-backed renderable route set.
       </p>
       <ul aria-label="Fail-closed non-renderable routes">
-        <li>Route pattern: /v1/sessions. Display state: needs-contract. Authority state: needs-contract. Display severity: blocked. Display copy: static fixture readiness needs contract fixture review; runtime data remains disconnected.</li>
         <li>Route pattern: /v1/sessions/{session_id}. Display state: needs-contract. Authority state: needs-contract. Display severity: blocked. Display copy: static fixture readiness needs contract fixture review; runtime data remains disconnected.</li>
         <li>Route pattern: /v1/tasks/{task_id}/logs/digest/stream. Display state: needs-contract. Authority state: needs-contract. Display severity: blocked. Display copy: static fixture readiness needs contract fixture review; runtime data remains disconnected.</li>
       </ul>
@@ -509,6 +529,7 @@
   <script src="health-readiness.js" defer></script>
   <script src="task-detail.js" defer></script>
   <script src="aggregate-task-list.js" defer></script>
+  <script src="session-list.js" defer></script>
   <script src="event-timeline.js" defer></script>
   <script src="trace-correlation.js" defer></script>
   <script src="history-replay.js" defer></script>

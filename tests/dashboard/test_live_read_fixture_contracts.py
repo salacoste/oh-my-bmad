@@ -28,6 +28,7 @@ EXPECTED_FIXTURE_ROUTE_PATTERNS = frozenset(
         + live_read_adapter.story_96_2_panel_contracts()
         + live_read_adapter.story_108_2_panel_contracts()
         + live_read_adapter.story_109_2_panel_contracts()
+        + live_read_adapter.story_110_2_panel_contracts()
     )
     for route in panel.routes
 )
@@ -36,7 +37,6 @@ EXPECTED_APPROVED_ROUTE_PATTERNS = frozenset(
 )
 EXPLICIT_FORBIDDEN_FIXTURE_ROUTES = frozenset(
     {
-        "/v1/sessions",
         "/v1/sessions/{session_id}",
         "/v1/tasks/{task_id}/logs/digest/stream",
     }
@@ -135,6 +135,7 @@ def test_story_99_2_fixture_snapshot_route_coverage_matches_story_99_1_view_mode
             + live_read_adapter.story_96_2_panel_contracts()
             + live_read_adapter.story_108_2_panel_contracts()
             + live_read_adapter.story_109_2_panel_contracts()
+            + live_read_adapter.story_110_2_panel_contracts()
         )
         for route in panel.routes
     }

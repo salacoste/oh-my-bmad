@@ -41,6 +41,7 @@ from events import (
     TaskCreatedPayload,
     new_event_id,
     new_request_id,
+    new_session_id,
     new_task_id,
 )
 from events.log_reader import (
@@ -60,6 +61,7 @@ from registry_state.adapters.sqlite_store import (  # noqa: IMP001 — services�
 from registry_state.schema import (  # noqa: IMP001 — services→services allowed per AC-16
     Base,
     Event,
+    Session,
     Task,
 )
 
@@ -210,6 +212,57 @@ async def _seed_aggregate_task_rows(db_url: str, *, count: int = 2) -> list[str]
     return task_ids
 
 
+async def _seed_session_list_rows(db_url: str, *, count: int = 3) -> list[str]:
+    """Insert deterministic Session rows for GET /v1/sessions boundary tests."""
+    engine = _create_engine(db_url)
+    session_maker = get_session(engine)
+    session_ids: list[str] = []
+    async with session_maker() as session:
+        rng = Random(1102)
+        for index in range(count):
+            created_at = FROZEN_EPOCH + timedelta(minutes=index)
+            row_clock = FrozenClock(mono_ns=_FROZEN_MONO_NS + index, now=created_at)
+            task_id = new_task_id(clock=row_clock, rng=rng)
+            task = Task(
+                id=task_id,
+                status="executing",
+                created_at=created_at,
+                updated_at=created_at,
+                actor_kind="operator",
+                actor_id="http-api",
+                title=f"session parent task {index}",
+                last_event_id=None,
+            )
+            session.add(task)  # noqa: SW001 — test-only fixture seeding, not production write path
+            await session.flush()
+
+            session_id = new_session_id(
+                clock=FrozenClock(
+                    mono_ns=_FROZEN_MONO_NS + 100 + index,
+                    now=created_at,
+                ),
+                rng=rng,
+            )
+            session_ids.append(session_id)
+            ended_at = created_at + timedelta(minutes=30) if index == 2 else None
+            last_heartbeat_at = created_at + timedelta(minutes=10) if index in {0, 2} else None
+            session.add(  # noqa: SW001 — test-only fixture seeding, not production write path
+                Session(
+                    id=session_id,
+                    task_id=task_id,
+                    worker_kind="worker",
+                    worktree_path=f"/private/tmp/secret-worktree-{index}",
+                    status="active" if ended_at is None else "closed",
+                    started_at=created_at,
+                    ended_at=ended_at,
+                    last_heartbeat_at=last_heartbeat_at,
+                )
+            )
+        await session.commit()
+    await engine.dispose()
+    return session_ids
+
+
 # ---------------------------------------------------------------------------
 # Async client fixture for POST-only tests (no DB needed for write path)
 # ---------------------------------------------------------------------------
@@ -314,6 +367,57 @@ async def empty_aggregate_client(
     events_dir = tmp_path / "events"
     app = build_app(
         base_dir=events_dir,
+        db_url=db_url,
+        clock=fixed_clock,
+        create_idempotency_schema_on_start=True,
+    )
+
+    async with (
+        LifespanManager(app) as manager,
+        AsyncClient(
+            transport=ASGITransport(app=manager.app), base_url="http://testserver"
+        ) as client,
+    ):
+        yield client
+
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def session_list_client(
+    tmp_path: Path, fixed_clock: FrozenClock
+) -> AsyncGenerator[AsyncClient, None]:
+    """Client for GET /v1/sessions tests with seeded session rows."""
+    db_path = tmp_path / "state.sqlite3"
+    db_url = _db_url(db_path)
+    await _seed_tables(db_url)
+    await _seed_session_list_rows(db_url)
+
+    app = build_app(
+        base_dir=tmp_path / "events",
+        db_url=db_url,
+        clock=fixed_clock,
+        create_idempotency_schema_on_start=True,
+    )
+
+    async with (
+        LifespanManager(app) as manager,
+        AsyncClient(
+            transport=ASGITransport(app=manager.app), base_url="http://testserver"
+        ) as client,
+    ):
+        yield client
+
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def empty_session_list_client(
+    tmp_path: Path, fixed_clock: FrozenClock
+) -> AsyncGenerator[AsyncClient, None]:
+    """Client for GET /v1/sessions tests with no session rows."""
+    db_path = tmp_path / "state.sqlite3"
+    db_url = _db_url(db_path)
+    await _seed_tables(db_url)
+
+    app = build_app(
+        base_dir=tmp_path / "events",
         db_url=db_url,
         clock=fixed_clock,
         create_idempotency_schema_on_start=True,
@@ -467,13 +571,149 @@ class TestGetTasksAggregate:
             "/v1/tasks", json={"title": "still mutable only by POST"}
         )
         method_response = await aggregate_client.put("/v1/tasks")
-        session_response = await aggregate_client.get("/v1/sessions")
+        session_response = await aggregate_client.get("/v1/sessions/s-unapproved")
         stream_response = await aggregate_client.get("/v1/tasks/abc/logs/digest/stream")
 
         assert post_response.status_code == 201
         assert method_response.status_code in {404, 405}
-        assert session_response.status_code == 404
+        assert session_response.status_code in {404, 422}
         assert stream_response.status_code in {404, 422}
+
+
+class TestGetSessionsAggregate:
+    """Story 110.2: GET /v1/sessions bounded session summary boundary."""
+
+    pytestmark = pytest.mark.asyncio
+
+    async def test_get_sessions_returns_bounded_summary_shape(
+        self, session_list_client: AsyncClient
+    ) -> None:
+        r = await session_list_client.get("/v1/sessions")
+
+        assert r.status_code == 200
+        body = r.json()
+        assert set(body) == {
+            "route",
+            "retrieved_at",
+            "freshness_state",
+            "display_state",
+            "authority_state",
+            "provenance",
+            "request_id",
+            "trace_id",
+            "correlation_id",
+            "limit",
+            "returned_count",
+            "has_more",
+            "next_offset",
+            "sort",
+            "items",
+        }
+        assert body["route"] == "GET /v1/sessions"
+        assert body["retrieved_at"] == FROZEN_EPOCH.isoformat().replace("+00:00", "Z")
+        assert body["freshness_state"] == "fresh"
+        assert body["display_state"] == "healthy"
+        assert body["authority_state"] == "authoritative"
+        assert body["provenance"] == "registry-state session summary list"
+        assert body["limit"] == 50
+        assert body["returned_count"] == 3
+        assert body["has_more"] is False
+        assert body["next_offset"] is None
+        assert body["sort"] == "last_heartbeat_at_desc_nulls_last_started_at_desc_id_asc"
+        assert body["request_id"]
+        assert body["trace_id"]
+        assert body["correlation_id"] == body["request_id"]
+
+        rows = body["items"]
+        assert len(rows) == 3
+        assert [row["heartbeat_state"] for row in rows] == ["ended", "observed", "missing"]
+        for row in rows:
+            assert set(row) == {
+                "session_id",
+                "task_id",
+                "worker_kind",
+                "status",
+                "started_at",
+                "ended_at",
+                "last_heartbeat_at",
+                "heartbeat_state",
+            }
+            serialized = str(row).lower()
+            for denied in (
+                "worktree",
+                "/private",
+                "event",
+                "payload",
+                "summary",
+                "href",
+                "url",
+                "request_id",
+                "trace_id",
+            ):
+                assert denied not in serialized
+
+    async def test_get_sessions_empty_list_is_non_authoritative(
+        self, empty_session_list_client: AsyncClient
+    ) -> None:
+        r = await empty_session_list_client.get("/v1/sessions")
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["items"] == []
+        assert body["returned_count"] == 0
+        assert body["display_state"] == "empty-list"
+        assert body["authority_state"] == "non-authoritative"
+        assert body["has_more"] is False
+        assert body["next_offset"] is None
+
+    async def test_get_sessions_rejects_query_selectors_and_request_body(
+        self, session_list_client: AsyncClient
+    ) -> None:
+        query_response = await session_list_client.get("/v1/sessions?status=active")
+        body_response = await session_list_client.request(
+            "GET", "/v1/sessions", content=b'{"task_id":"t-secret"}'
+        )
+
+        assert query_response.status_code == 400
+        assert body_response.status_code == 400
+        assert "does not accept query" in query_response.text
+        assert "does not accept a request body" in body_response.text
+
+    async def test_get_sessions_limit_sort_and_adjacent_routes_remain_blocked(
+        self, tmp_path: Path, fixed_clock: FrozenClock, session_list_client: AsyncClient
+    ) -> None:
+        db_path = tmp_path / "many-sessions" / "state.sqlite3"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+        await _seed_session_list_rows(db_url, count=51)
+        app = build_app(
+            base_dir=tmp_path / "events",
+            db_url=db_url,
+            clock=fixed_clock,
+            create_idempotency_schema_on_start=True,
+        )
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://testserver"
+            ) as client,
+        ):
+            list_response = await client.get("/v1/sessions")
+
+        detail_response = await session_list_client.get("/v1/sessions/s-secret")
+        method_response = await session_list_client.post("/v1/sessions", json={})
+
+        assert list_response.status_code == 200
+        body = list_response.json()
+        assert body["limit"] == 50
+        assert body["returned_count"] == 50
+        assert body["has_more"] is True
+        assert body["next_offset"] is None
+        assert len(body["items"]) == 50
+        assert detail_response.status_code in {404, 422}
+        assert method_response.status_code in {404, 405}
 
 
 # ---------------------------------------------------------------------------

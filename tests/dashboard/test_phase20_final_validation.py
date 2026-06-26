@@ -34,9 +34,10 @@ APPROVED_DASHBOARD_ROUTES = frozenset(
         "/v1/health",
         "/v1/tasks/{task_id}/logs/digest",
         "/v1/tasks",
+        "/v1/sessions",
     }
 )
-NEEDS_CONTRACT_ROUTES = frozenset({"/v1/sessions"})
+NEEDS_CONTRACT_ROUTES = frozenset({"/v1/sessions/{session_id}"})
 DIGEST_STREAM_ROUTES = frozenset({"/v1/tasks/{task_id}/logs/digest/stream"})
 
 
@@ -48,6 +49,7 @@ def _panel_route_patterns() -> tuple[str, ...]:
             *adapter.story_96_2_panel_contracts(),
             *adapter.story_108_2_panel_contracts(),
             *adapter.story_109_2_panel_contracts(),
+            *adapter.story_110_2_panel_contracts(),
         )
         for route in panel.routes
     )
@@ -68,26 +70,15 @@ def test_dashboard_approved_route_inventory_is_exact_and_get_only() -> None:
         assert live_contracts.is_allowlisted_dashboard_read("GET", route_pattern)
 
 
-def test_dashboard_aggregate_is_approved_and_session_decision_remains_needs_contract() -> None:
-    unavailable = {
-        contract.source_category: contract for contract in adapter.unavailable_read_contracts()
-    }
-
-    assert set(unavailable) == {"session"}
-    assert unavailable["session"].route_pattern == "/v1/sessions"
+def test_dashboard_aggregate_and_session_list_are_approved_and_detail_remains_blocked() -> None:
+    assert adapter.unavailable_read_contracts() == ()
     assert live_contracts.is_allowlisted_dashboard_read("GET", "/v1/tasks")
+    assert live_contracts.is_allowlisted_dashboard_read("GET", "/v1/sessions")
 
-    for contract in unavailable.values():
-        assert contract.route_status == "needs-separate-contract"
-        assert contract.route_pattern in NEEDS_CONTRACT_ROUTES
-        assert contract.allowed_states <= {"unavailable", "needs-contract"}
-        assert contract.timestamp_policy == "not-available-until-contract"
-        assert contract.freshness_policy == "not-authoritative-until-contract"
+    for route_pattern in NEEDS_CONTRACT_ROUTES:
+        assert route_pattern in adapter.STORY_99_1_NEEDS_SEPARATE_CONTRACT_ROUTE_PATTERNS
         for method in ("GET", "POST", "PUT", "PATCH", "DELETE"):
-            assert not live_contracts.is_allowlisted_dashboard_read(
-                method,
-                contract.route_pattern,
-            )
+            assert not live_contracts.is_allowlisted_dashboard_read(method, route_pattern)
 
 
 def test_dashboard_panel_selectors_cover_approved_reads_and_exclude_unapproved_reads() -> None:
@@ -96,6 +87,7 @@ def test_dashboard_panel_selectors_cover_approved_reads_and_exclude_unapproved_r
     assert len(panel_routes) == len(set(panel_routes))
     assert frozenset(panel_routes) == APPROVED_DASHBOARD_ROUTES
     assert frozenset(panel_routes).isdisjoint(NEEDS_CONTRACT_ROUTES)
+    assert "/v1/sessions" in panel_routes
     assert frozenset(panel_routes).isdisjoint(DIGEST_STREAM_ROUTES)
     assert frozenset(panel_routes).isdisjoint(adapter.EXCLUDED_ROUTE_PATTERNS)
 

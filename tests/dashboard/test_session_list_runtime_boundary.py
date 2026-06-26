@@ -4,33 +4,19 @@ import json
 import re
 import subprocess
 import textwrap
-from html.parser import HTMLParser
 from pathlib import Path
 from typing import NotRequired, TypedDict
 
 DASHBOARD = Path("dashboard/static/index.html")
-RUNTIME = Path("dashboard/static/aggregate-task-list.js")
-APPROVED_ROUTE = "/v1/tasks"
-ROUTE_PATTERN = "GET /v1/tasks"
-APPROVED_SCRIPTS = [
-    "health-readiness.js",
-    "task-detail.js",
-    "aggregate-task-list.js",
-    "session-list.js",
-    "event-timeline.js",
-    "trace-correlation.js",
-    "history-replay.js",
-    "lifecycle-snapshot.js",
-    "task-log-digest.js",
-]
+RUNTIME = Path("dashboard/static/session-list.js")
+APPROVED_ROUTE = "/v1/sessions"
+ROUTE_PATTERN = "GET /v1/sessions"
 FORBIDDEN_RUNTIME_MARKERS = (
     "import ",
     "import(",
     "new Worker",
     "SharedWorker",
     "serviceWorker.register",
-    "modulepreload",
-    "preload",
     "setInterval",
     "setTimeout",
     "localStorage",
@@ -44,7 +30,9 @@ FORBIDDEN_RUNTIME_MARKERS = (
     "document.cookie",
     "credentials: 'include'",
     'credentials: "include"',
+    "data-session-id",
     "data-task-id",
+    "href",
     "location.search",
     "location.hash",
     "URLSearchParams(location",
@@ -61,16 +49,17 @@ FORBIDDEN_RUNTIME_MARKERS = (
     "cache_warm",
     "background",
     "retry(",
+    "innerHTML",
 )
 FORBIDDEN_ROUTE_MARKERS = (
+    "/v1/sessions?",
+    "/v1/sessions/",
+    "/v1/tasks/",
     "/v1/tasks?",
     "/v1/tasks/search",
-    "/v1/tasks/",
-    "/v1/sessions",
+    "/logs/digest",
     "/v1/trace/",
     "/v1/events/replay",
-    "/v1/health",
-    "/logs/digest",
     "stream",
     "search",
     "discover",
@@ -86,6 +75,7 @@ class RuntimeResponse(TypedDict, total=False):
     status: int
     body: dict[str, object]
     jsonError: str
+    contentType: str
 
 
 class RuntimeCase(TypedDict):
@@ -100,6 +90,8 @@ class FetchCall(TypedDict):
     method: str
     hasBody: bool
     credentials: str | None
+    accept: str | None
+    hasSignal: bool
 
 
 class RuntimeOutput(TypedDict):
@@ -107,65 +99,18 @@ class RuntimeOutput(TypedDict):
     fetchCalls: list[FetchCall]
 
 
-class ScriptParser(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self.scripts: list[dict[str, str]] = []
-        self.links: list[dict[str, str]] = []
-        self.inline_script_depth = 0
-        self.inline_script_text: list[str] = []
-        self.controls: list[str] = []
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        attrs_dict = {name.lower(): value or "" for name, value in attrs}
-        if tag == "script":
-            self.scripts.append(attrs_dict)
-            if not attrs_dict.get("src"):
-                self.inline_script_depth += 1
-        if tag == "link":
-            self.links.append(attrs_dict)
-        if tag in {"form", "button", "input", "select", "textarea", "dialog"}:
-            self.controls.append(tag)
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag == "script" and self.inline_script_depth:
-            self.inline_script_depth -= 1
-
-    def handle_data(self, data: str) -> None:
-        if self.inline_script_depth:
-            self.inline_script_text.append(data)
-
-
-def parse_scripts() -> ScriptParser:
-    parser = ScriptParser()
-    parser.feed(DASHBOARD.read_text(encoding="utf-8"))
-    return parser
-
-
 def runtime_source() -> str:
     return RUNTIME.read_text(encoding="utf-8")
 
 
-def test_story_109_2_runtime_script_allowlist_is_exact() -> None:
-    parser = parse_scripts()
-    assert parser.scripts == [{"src": script, "defer": ""} for script in APPROVED_SCRIPTS]
-    assert not "".join(parser.inline_script_text).strip()
-    assert parser.controls == ["input", "button"]
-    assert all(
-        link.get("rel", "").lower() not in {"preload", "modulepreload"} for link in parser.links
-    )
+def test_story_110_2_session_runtime_module_exists_and_is_closed() -> None:
     assert RUNTIME.exists()
-
-
-def test_story_109_2_runtime_module_graph_is_closed() -> None:
-    runtime_files = sorted(path.name for path in Path("dashboard/static").glob("*.js"))
-    assert runtime_files == sorted(APPROVED_SCRIPTS)
     source = runtime_source()
     for marker in FORBIDDEN_RUNTIME_MARKERS:
         assert marker not in source, marker
 
 
-def test_story_109_2_runtime_route_and_method_allowlist_is_exact() -> None:
+def test_story_110_2_session_runtime_route_and_method_allowlist_is_exact() -> None:
     source = runtime_source()
     route_literals = {match.group("route") for match in ROUTE_LITERAL_RE.finditer(source)}
     assert route_literals == {APPROVED_ROUTE}
@@ -174,80 +119,72 @@ def test_story_109_2_runtime_route_and_method_allowlist_is_exact() -> None:
     method_match = METHOD_RE.search(fetches[0].group("options"))
     assert method_match is None or method_match.group("method").upper() == "GET"
     assert "body" not in fetches[0].group("options").lower()
-    assert "credentials" in fetches[0].group("options").lower()
-    assert "omit" in fetches[0].group("options").lower()
+    assert "headers" in fetches[0].group("options").lower()
+    assert "accept" in fetches[0].group("options").lower()
+    assert "application/json" in fetches[0].group("options").lower()
+    assert "credentials" not in fetches[0].group("options").lower()
     assert "include" not in fetches[0].group("options").lower()
     assert not FORBIDDEN_METHOD_RE.search(source)
     for marker in FORBIDDEN_ROUTE_MARKERS:
         assert marker not in source, marker
 
 
-def test_story_109_2_panel_exposes_bounded_runtime_metadata_targets() -> None:
+def test_story_110_2_session_panel_exposes_bounded_runtime_metadata_targets() -> None:
     raw = DASHBOARD.read_text(encoding="utf-8")
     for element_id in (
-        "aggregate-task-list-status",
-        "aggregate-task-list-source",
-        "aggregate-task-list-freshness",
-        "aggregate-task-list-authority",
-        "aggregate-task-list-provenance",
-        "aggregate-task-list-correlation",
-        "aggregate-task-list-pagination",
-        "aggregate-task-list-degraded",
-        "aggregate-task-list-count",
-        "aggregate-task-list-rows",
+        "session-list-status",
+        "session-list-source",
+        "session-list-freshness",
+        "session-list-authority",
+        "session-list-provenance",
+        "session-list-correlation",
+        "session-list-pagination",
+        "session-list-degraded",
+        "session-list-count",
+        "session-list-rows",
     ):
         assert f'id="{element_id}"' in raw
-    assert ROUTE_PATTERN in raw
     lowered = raw.lower()
+    assert ROUTE_PATTERN.lower() in lowered
     assert "no query selectors" in lowered
     assert "no request body" in lowered
-    assert "no hidden selectors" in lowered
+    assert "inert display text" in lowered
+    assert "session detail remains unavailable" in lowered
 
 
-def test_story_109_2_runtime_behavior_maps_success_empty_and_failures() -> None:
+def test_story_110_2_session_runtime_behavior_maps_success_empty_and_failures() -> None:
     row = {
+        "session_id": "s-1",
         "task_id": "t-1",
-        "status": "plan_ready",
-        "title": "First task",
-        "created_at": "2026-06-26T00:00:00Z",
-        "updated_at": "2026-06-26T00:00:01Z",
-        "state_since": "2026-06-26T00:00:01Z",
-        "actor": {"kind": "operator", "id": "http-api"},
-        "last_event": {
-            "id": "e-1",
-            "type": "task.created",
-            "emitted_at": "2026-06-26T00:00:00Z",
-            "trace_id": "trace-1",
-        },
+        "worker_kind": "worker",
+        "status": "active",
+        "started_at": "2026-06-26T00:00:00Z",
+        "ended_at": None,
+        "last_heartbeat_at": "2026-06-26T00:00:10Z",
+        "heartbeat_state": "observed",
     }
     base_body: dict[str, object] = {
         "route": ROUTE_PATTERN,
-        "retrieved_at": "2026-06-26T00:00:02Z",
+        "retrieved_at": "2026-06-26T00:00:20Z",
         "freshness_state": "fresh",
         "display_state": "healthy",
         "authority_state": "authoritative",
-        "provenance": "registry-state task summary list",
+        "provenance": "registry-state session summary list",
         "request_id": "req-1",
         "trace_id": "trace-root",
-        "correlation_id": "corr-1",
+        "correlation_id": "req-1",
         "limit": 50,
         "returned_count": 1,
         "has_more": False,
         "next_offset": None,
+        "sort": "last_heartbeat_at_desc_nulls_last_started_at_desc_id_asc",
         "items": [row],
     }
     cases: list[RuntimeCase] = [
         {
             "name": "healthy",
             "response": {"ok": True, "status": 200, "body": base_body},
-            "expected": [
-                "healthy",
-                "authoritative",
-                "get /v1/tasks",
-                "first task",
-                "corr-1",
-                "limit 50",
-            ],
+            "expected": ["healthy", "authoritative", "get /v1/sessions", "s-1", "t-1", "observed"],
         },
         {
             "name": "empty",
@@ -276,16 +213,84 @@ def test_story_109_2_runtime_behavior_maps_success_empty_and_failures() -> None:
                     "freshness_state": "stale",
                 },
             },
-            "expected": ["stale", "non-authoritative"],
+            "expected": ["invalid", "non-authoritative"],
         },
         {
-            "name": "last-event-summary-leak",
+            "name": "unknown-field",
+            "response": {
+                "ok": True,
+                "status": 200,
+                "body": {**base_body, "items": [{**row, "worktree_path": "/private/leak"}]},
+            },
+            "expected": ["invalid", "non-authoritative"],
+        },
+        {
+            "name": "path-leak",
+            "response": {
+                "ok": True,
+                "status": 200,
+                "body": {**base_body, "items": [{**row, "status": "/private/leak"}]},
+            },
+            "expected": ["invalid", "non-authoritative"],
+        },
+        {
+            "name": "invalid-timestamp",
+            "response": {
+                "ok": True,
+                "status": 200,
+                "body": {**base_body, "retrieved_at": "not-a-timestamp"},
+            },
+            "expected": ["invalid", "non-authoritative"],
+        },
+        {
+            "name": "semantic-invalid-timestamp",
             "response": {
                 "ok": True,
                 "status": 200,
                 "body": {
                     **base_body,
-                    "items": [{**row, "last_event": {**row["last_event"], "summary": "leak"}}],
+                    "retrieved_at": "2026-99-99T99:99:99Z",
+                    "items": [{**row, "started_at": "2026-99-99T99:99:99Z"}],
+                },
+            },
+            "expected": ["invalid", "non-authoritative"],
+        },
+        {
+            "name": "malformed-metadata",
+            "response": {
+                "ok": True,
+                "status": 200,
+                "body": {**base_body, "trace_id": "/private/leak"},
+            },
+            "expected": ["invalid", "non-authoritative"],
+        },
+        {
+            "name": "correlation-mismatch",
+            "response": {
+                "ok": True,
+                "status": 200,
+                "body": {**base_body, "correlation_id": "corr-1"},
+            },
+            "expected": ["invalid", "non-authoritative"],
+        },
+        {
+            "name": "healthy-empty-incoherent",
+            "response": {
+                "ok": True,
+                "status": 200,
+                "body": {**base_body, "returned_count": 0, "items": []},
+            },
+            "expected": ["invalid", "non-authoritative"],
+        },
+        {
+            "name": "empty-with-items-incoherent",
+            "response": {
+                "ok": True,
+                "status": 200,
+                "body": {
+                    **base_body,
+                    "display_state": "empty-list",
+                    "authority_state": "non-authoritative",
                 },
             },
             "expected": ["invalid", "non-authoritative"],
@@ -300,8 +305,18 @@ def test_story_109_2_runtime_behavior_maps_success_empty_and_failures() -> None:
             "expected": ["invalid", "non-authoritative"],
         },
         {
+            "name": "non-null-offset",
+            "response": {"ok": True, "status": 200, "body": {**base_body, "next_offset": 50}},
+            "expected": ["invalid", "non-authoritative"],
+        },
+        {
             "name": "invalid-json",
             "response": {"ok": True, "status": 200, "jsonError": "bad json"},
+            "expected": ["invalid", "non-authoritative"],
+        },
+        {
+            "name": "wrong-content-type",
+            "response": {"ok": True, "status": 200, "contentType": "text/plain", "body": base_body},
             "expected": ["invalid", "non-authoritative"],
         },
         {
@@ -319,47 +334,19 @@ def test_story_109_2_runtime_behavior_maps_success_empty_and_failures() -> None:
         output = run_runtime_case(case)
         rendered = " ".join(output["texts"].values()).lower()
         assert output["fetchCalls"] == [
-            {"route": APPROVED_ROUTE, "method": "GET", "hasBody": False, "credentials": "omit"}
+            {
+                "route": APPROVED_ROUTE,
+                "method": "GET",
+                "hasBody": False,
+                "credentials": None,
+                "accept": "application/json",
+                "hasSignal": True,
+            }
         ]
         for expected in case["expected"]:
             assert expected in rendered, (case["name"], expected, rendered)
-        if case["name"] != "healthy":
-            assert "authoritative aggregate" not in rendered
-
-
-def test_story_109_2_runtime_behavior_runs_when_document_already_loaded() -> None:
-    output = run_runtime_case(
-        {
-            "name": "already-loaded",
-            "response": {
-                "ok": True,
-                "status": 200,
-                "body": {
-                    "route": ROUTE_PATTERN,
-                    "retrieved_at": "2026-06-26T00:00:02Z",
-                    "freshness_state": "fresh",
-                    "display_state": "empty-list",
-                    "authority_state": "non-authoritative",
-                    "provenance": "registry-state task summary list",
-                    "request_id": "req-1",
-                    "trace_id": "trace-root",
-                    "correlation_id": "corr-1",
-                    "limit": 50,
-                    "returned_count": 0,
-                    "has_more": False,
-                    "next_offset": None,
-                    "items": [],
-                },
-            },
-            "expected": ["empty-list"],
-        },
-        ready_state="interactive",
-    )
-    rendered = " ".join(output["texts"].values()).lower()
-    assert output["fetchCalls"] == [
-        {"route": APPROVED_ROUTE, "method": "GET", "hasBody": False, "credentials": "omit"}
-    ]
-    assert "empty-list" in rendered
+        for forbidden in ("worktree", "/private", "href", "data-session-id", "data-task-id"):
+            assert forbidden not in rendered, (case["name"], forbidden, rendered)
 
 
 def run_runtime_case(case: RuntimeCase, *, ready_state: str = "loading") -> RuntimeOutput:
@@ -392,6 +379,9 @@ def run_runtime_case(case: RuntimeCase, *, ready_state: str = "loading") -> Runt
           Array,
           String,
           Boolean,
+          AbortSignal: {{
+            timeout: (_milliseconds) => "abort-signal"
+          }},
           window: {{}},
           document: {{
             readyState: {json.dumps(ready_state)},
@@ -399,12 +389,24 @@ def run_runtime_case(case: RuntimeCase, *, ready_state: str = "loading") -> Runt
             addEventListener: (_name, callback) => callbacks.push(callback)
           }},
           fetch: async (route, options = {{}}) => {{
-            fetchCalls.push({{ route, method: options.method || 'GET', hasBody: Object.prototype.hasOwnProperty.call(options, 'body'), credentials: options.credentials || null }});
+            fetchCalls.push({{
+              route,
+              method: options.method || 'GET',
+              hasBody: Object.prototype.hasOwnProperty.call(options, 'body'),
+              credentials: options.credentials || null,
+              accept: options.headers && options.headers.Accept ? options.headers.Accept : null,
+              hasSignal: Object.prototype.hasOwnProperty.call(options, 'signal')
+            }});
             if (testCase.reject) throw new Error(testCase.reject);
             const response = testCase.response || {{ ok: true, status: 200, body: {{}} }};
             return {{
               ok: response.ok,
               status: response.status,
+              headers: {{
+                get: (name) => name.toLowerCase() === 'content-type'
+                  ? (response.contentType || 'application/json')
+                  : null
+              }},
               json: async () => {{
                 if (response.jsonError) throw new Error(response.jsonError);
                 return response.body;
@@ -413,15 +415,19 @@ def run_runtime_case(case: RuntimeCase, *, ready_state: str = "loading") -> Runt
           }}
         }};
         vm.createContext(sandbox);
-        vm.runInContext(source, sandbox, {{ filename: 'aggregate-task-list.js' }});
+        vm.runInContext(source, sandbox, {{ filename: 'session-list.js' }});
         for (const callback of callbacks) {{ await callback(); }}
-        if (sandbox.window.__aggregateTaskListReady) {{ await sandbox.window.__aggregateTaskListReady; }}
+        if (sandbox.window.__sessionListReady) {{ await sandbox.window.__sessionListReady; }}
         await Promise.resolve();
         await Promise.resolve();
         await new Promise((resolve) => setImmediate(resolve));
-        process.stdout.write(JSON.stringify({{ texts, fetchCalls }}));
-        }})();
+        process.stdout.write(JSON.stringify({{texts, fetchCalls}}));
+        }})().catch((error) => {{
+          console.error(error);
+          process.exit(1);
+        }});
         """
     )
-    result = subprocess.run(["node", "-e", node_code], check=True, text=True, capture_output=True)
-    return json.loads(result.stdout)
+    result = subprocess.run(["node", "-e", node_code], check=True, capture_output=True, text=True)
+    loaded = json.loads(result.stdout)
+    return RuntimeOutput(texts=loaded["texts"], fetchCalls=loaded["fetchCalls"])

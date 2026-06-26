@@ -81,6 +81,7 @@ EXPECTED_IDENTIFIERS_BY_ROUTE = {
     "/v1/health": frozenset(),
     "/v1/tasks/{task_id}/logs/digest": frozenset({"task_id"}),
     "/v1/tasks": frozenset(),
+    "/v1/sessions": frozenset(),
 }
 NON_AUTHORITATIVE_STATES = frozenset(
     {
@@ -111,7 +112,6 @@ UNCERTAINTY_COPY_TERMS = (
 SUCCESS_COPY_TERMS = ("healthy", "authoritative", "success", "ok")
 STORY_99_1_FORBIDDEN_RENDERABLE_ROUTES = frozenset(
     {
-        "/v1/sessions",
         "/v1/sessions/{session_id}",
         "/v1/tasks/{task_id}/logs/digest/stream",
     }
@@ -293,12 +293,21 @@ LIVE_VALUE_CONTRACTS = (
         name="session-list",
         source_category="session",
         route_pattern="/v1/sessions",
-        route_contract="needs-separate-contract",
-        timestamp_policy="not-available-until-contract",
-        freshness_policy="not-authoritative-until-contract",
-        required_identifiers=("session_id",),
-        allowed_states=frozenset({"unavailable", "needs-contract"}),
-        unavailable_copy="Session list unavailable: no approved read contract.",
+        route_contract="approved",
+        timestamp_policy="retrieved-at-required",
+        freshness_policy="fresh-or-stale-required",
+        required_identifiers=(),
+        allowed_states=frozenset(
+            {
+                "healthy",
+                "empty-list",
+                "stale",
+                "invalid",
+                "unauthorized",
+                "backend-unavailable",
+                "unavailable",
+            }
+        ),
     ),
 )
 
@@ -311,11 +320,11 @@ DEGRADED_STATE_FIXTURES = (
         copy="Empty list; aggregate display is not trusted until task rows exist.",
     ),
     DisplayStateFixture(
-        name="session-missing-contract",
+        name="session-empty-list",
         source_category="session",
         route_pattern="/v1/sessions",
-        state="unavailable",
-        copy="Unavailable: session list read is not approved.",
+        state="empty-list",
+        copy="Empty list; session display is not trusted until session rows exist.",
     ),
     DisplayStateFixture(
         name="replay-partial",
@@ -377,13 +386,13 @@ def test_every_future_live_value_declares_source_freshness_and_identifier_contra
     } <= covered_categories
 
 
-def test_unapproved_session_and_stream_reads_render_needs_contract_copy() -> None:
+def test_unapproved_reads_render_needs_contract_copy() -> None:
     unapproved = [
         contract
         for contract in LIVE_VALUE_CONTRACTS
         if contract.route_contract == "needs-separate-contract"
     ]
-    assert {contract.source_category for contract in unapproved} == {"session"}
+    assert unapproved == []
 
     for contract in unapproved:
         assert contract.route_pattern in NEEDS_SEPARATE_CONTRACT_ROUTES
@@ -438,7 +447,7 @@ def test_guard_sensitivity_rejects_synthetic_authoritative_success_for_missing_c
         DisplayStateFixture(
             name="bad-session-success",
             source_category="session",
-            route_pattern="/v1/sessions",
+            route_pattern="/v1/sessions/{session_id}",
             state="healthy",
             copy="Session list OK.",
             authoritative=True,
@@ -463,6 +472,7 @@ def test_story_99_1_view_models_cover_every_approved_phase_20_panel_route() -> N
         | set(live_read_adapter.story_96_2_route_patterns())
         | set(live_read_adapter.story_108_2_route_patterns())
         | set(live_read_adapter.story_109_2_route_patterns())
+        | set(live_read_adapter.story_110_2_route_patterns())
     )
 
     assert {view_model.route_pattern for view_model in view_models} == expected
@@ -478,6 +488,7 @@ def test_story_99_1_view_models_cover_every_approved_phase_20_panel_route() -> N
             + live_read_adapter.story_96_2_panel_contracts()
             + live_read_adapter.story_108_2_panel_contracts()
             + live_read_adapter.story_109_2_panel_contracts()
+            + live_read_adapter.story_110_2_panel_contracts()
         )
         for route in panel.routes
     }
@@ -535,7 +546,7 @@ def test_story_99_1_degraded_states_are_explicit_non_authoritative_and_non_norma
                 assert display_state.replace("-", " ") in view_model.display_copy.lower()
 
 
-def test_story_99_1_forbidden_session_and_digest_routes_fail_closed() -> None:
+def test_story_99_1_forbidden_session_detail_and_digest_routes_fail_closed() -> None:
     view_model_routes = {
         view_model.route_pattern for view_model in live_read_adapter.story_99_1_route_view_models()
     }
@@ -621,8 +632,8 @@ def assert_render_state_is_fail_closed(fixture: DisplayStateFixture) -> None:
     assert_copy_is_bounded_uncertainty(fixture.copy)
     lowered = fixture.copy.lower()
     if fixture.source_category == "session":
-        assert fixture.route_pattern in NEEDS_SEPARATE_CONTRACT_ROUTES, fixture
-        assert fixture.state in {"unavailable", "needs-contract"}, fixture
+        assert fixture.route_pattern == "/v1/sessions", fixture
+        assert fixture.state in {"empty-list", "stale", "invalid", "unavailable"}, fixture
     for success_term in SUCCESS_COPY_TERMS:
         assert success_term not in lowered, fixture
 

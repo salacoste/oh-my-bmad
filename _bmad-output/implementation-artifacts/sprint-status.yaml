@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-06-22T07:05:00+03:00"
+# last_updated: "2026-06-26T14:38:00+03:00"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-26T05:30:00+03:00"
-current_phase: 30  # Phase 30 CLOSED — Epic 109 aggregate task list runtime/API boundary complete with Story 109.3 remote CI evidence
+last_updated: "2026-06-26T14:38:00+03:00"
+current_phase: 31  # Phase 31 OPEN — Epic 110 Story 110.2 session list runtime/API boundary implemented locally; final closure deferred to Story 110.3
 
 development_status:
   # =========================================================================
@@ -926,10 +926,74 @@ development_status:
   109-2-aggregate-task-list-runtime-boundary: done  # tests-first exact GET /v1/tasks runtime/API contract boundary; code-review APPROVE, architect recheck CLEAR, UltraQA PASS, local non-slow gate green; pushed in 3ebc2c0; remote CI run 28213044828 green; no POST /v1/tasks, sessions, digest stream, search/discovery, hidden selectors, generated live data, mutation/control
   109-3-phase-30-epic-109-final-closure: done  # docs/status final closure after Story 109.2 review/QA/push/remote-CI evidence; deferred surfaces remain fail-closed
 
+  # =========================================================================
+  # Epic 110: Session list route selection planning
+  # =========================================================================
+  epic-110: in-progress  # Phase 31 opened; Story 110.2 implements exact GET /v1/sessions locally; final push/remote-CI closure deferred to Story 110.3
+  110-1-session-list-route-selection-planning: done  # Phase 31 PRD/architecture/epics/status opening; selects session visibility and future GET /v1/sessions only; repaired Architect APPROVE/CLEAR and Critic APPROVE consensus recorded; runtime/API implementation deferred
+  110-2-session-list-runtime-boundary: done  # tests-first exact GET /v1/sessions runtime/API contract boundary; code-review APPROVE, architect recheck CLEAR, UltraQA PASS, backend/dashboard/local static gates green; no session detail/digest stream/search/discovery/hidden selectors/generated live data
+  110-3-phase-31-epic-110-final-closure: backlog  # final closure only after Story 110.2 review/QA/push/remote-CI evidence
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-26"
+    event: story-110-2-session-list-runtime-boundary-complete
+    from: in-progress
+    to: done
+    story: 110-2-session-list-runtime-boundary
+    reason: >
+      Story 110.2 implements the exact GET /v1/sessions runtime/API
+      boundary after the approved plan and sequential Architect/Critic
+      consensus. Backend coverage proves the bounded Session-table-only
+      response, query/body rejection, fixed limit/sort, heartbeat_state
+      mapping, worktree_path redaction by omission, empty-list handling, and
+      session-detail/mutation denial. Dashboard coverage promotes only
+      /v1/sessions, keeps /v1/sessions/{session_id} and digest stream blocked,
+      renders inert text through session-list.js, enforces Accept:
+      application/json with no credentials override, strict content-type,
+      timestamp, metadata, row shape, path-leak, limit/sort, and display-state
+      validation, and fail-closes malformed/non-2xx states. Code-review agent
+      019f03ae-f491-7d51-be63-a05025a9a143 rechecked and APPROVED;
+      architect agent 019f03ae-f666-7590-b324-d00aea5c68f0 rechecked and
+      CLEARed; UltraQA Cycle 1 PASS is recorded in
+      .omx/ultraqa/story-110-2/scenario-matrix.md. Local verification: backend
+      test_app 54 passed, dashboard suite 199 passed, focused session/contracts
+      13 passed, Ruff passed, node --check passed, and git diff --check passed.
+      Story 110.3 remains backlog for final closure/push/remote-CI evidence.
+
+  - date: "2026-06-26"
+    event: story-110-1-session-list-route-selection-planning-complete
+    from: in-progress
+    to: done
+    story: 110-1-session-list-route-selection-planning
+    reason: >
+      Story 110.1 completes Phase 31 / Epic 110 docs/status-only session list
+      route selection planning after Phase 30 / Epic 109 closed. It selects
+      session visibility and narrows the future candidate to exactly GET
+      /v1/sessions. Repaired sequential Architect APPROVE/CLEAR and Critic
+      APPROVE consensus is recorded. Runtime/API implementation is deferred to
+      Story 110.2. Session detail /v1/sessions/{session_id}, digest stream,
+      task-list/search/discovery, hidden selectors, automatic drill-down,
+      browser-side generation/summarization, generated live data, cache warming,
+      background refresh, broad dashboard wiring, mutation/control behavior,
+      services/MCP, dependencies/lockfiles, CI/deployment modifications,
+      production credentials, and production operations remain unauthorized and
+      fail-closed unless explicitly selected by a later story.
+
+  - date: "2026-06-26"
+    event: phase-31-epic-110-opened
+    from: 30
+    to: 31
+    story: 110-1-session-list-route-selection-planning
+    reason: >
+      Phase 31 formally opened after sprint-status confirmed Phase 30 / Epic
+      109 done. The selected remaining route family is session visibility, with
+      exactly GET /v1/sessions recorded as the future candidate surface. This
+      opening is planning/status only and does not implement runtime or API
+      behavior.
+
   - date: "2026-06-26"
     event: story-109-3-phase-30-epic-109-final-closure-complete
     from: backlog

@@ -14,6 +14,7 @@ APPROVED_SCRIPT = "task-detail.js"
 APPROVED_HEALTH_SCRIPT = "health-readiness.js"
 APPROVED_EVENT_SCRIPT = "event-timeline.js"
 APPROVED_AGGREGATE_SCRIPT = "aggregate-task-list.js"
+APPROVED_SESSION_SCRIPT = "session-list.js"
 APPROVED_TRACE_SCRIPT = "trace-correlation.js"
 APPROVED_HISTORY_REPLAY_SCRIPT = "history-replay.js"
 APPROVED_LIFECYCLE_SCRIPT = "lifecycle-snapshot.js"
@@ -153,6 +154,7 @@ def test_story_102_2_runtime_script_allowlist_is_exact() -> None:
         {"src": APPROVED_HEALTH_SCRIPT, "defer": ""},
         {"src": APPROVED_SCRIPT, "defer": ""},
         {"src": APPROVED_AGGREGATE_SCRIPT, "defer": ""},
+        {"src": APPROVED_SESSION_SCRIPT, "defer": ""},
         {"src": APPROVED_EVENT_SCRIPT, "defer": ""},
         {"src": APPROVED_TRACE_SCRIPT, "defer": ""},
         {"src": APPROVED_HISTORY_REPLAY_SCRIPT, "defer": ""},
@@ -181,6 +183,7 @@ def test_story_102_2_runtime_module_graph_is_closed() -> None:
             APPROVED_HEALTH_SCRIPT,
             APPROVED_SCRIPT,
             APPROVED_AGGREGATE_SCRIPT,
+            APPROVED_SESSION_SCRIPT,
             APPROVED_EVENT_SCRIPT,
             APPROVED_TRACE_SCRIPT,
             APPROVED_HISTORY_REPLAY_SCRIPT,
