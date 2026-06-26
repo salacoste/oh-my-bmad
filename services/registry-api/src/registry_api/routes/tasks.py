@@ -87,6 +87,10 @@ ResponseSlotCache = cachetools.TTLCache[tuple[str, str], ResponseSlot]
 # UUIDv7 task-id pattern: t- prefix + standard UUIDv7 hex shape
 _TASK_ID_PATTERN = r"^t-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 
+# Story 109.2: fixed first page for GET /v1/tasks. Selectors/pagination knobs
+# are intentionally absent until a later story defines a separate contract.
+_TASK_LIST_LIMIT = 50
+
 # Phase 1 next-commands lookup — derived from lifecycle.canonical map.
 _NEXT_COMMANDS = STATE_NEXT_COMMANDS
 
@@ -235,11 +239,161 @@ class TaskResponse(BaseModel):
         return v
 
 
+class TaskListLastEventOut(BaseModel):
+    """Bounded last-event shape for GET /v1/tasks summary rows.
+
+    Story 109.2 intentionally omits payload, summary, request_id,
+    parent_event_id, session_id, and route/action links from the aggregate list.
+    Operators can request a task-detail or event-timeline route explicitly when
+    they need those richer fields.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    id: str
+    type: str
+    emitted_at: datetime
+    trace_id: str | None = None
+
+
+class TaskSummaryOut(BaseModel):
+    """One bounded task summary row for GET /v1/tasks."""
+
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    task_id: str
+    status: str
+    title: str | None
+    created_at: datetime
+    updated_at: datetime
+    state_since: datetime
+    actor: ActorOut
+    last_event: TaskListLastEventOut | None
+
+
+class TaskListResponse(BaseModel):
+    """200 OK response body for GET /v1/tasks.
+
+    This is a fixed, selector-free, first-page aggregate boundary. It carries
+    route/source/freshness/provenance metadata and only bounded summary rows.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    route: Literal["GET /v1/tasks"]
+    retrieved_at: datetime
+    freshness_state: Literal["fresh"]
+    display_state: Literal["healthy", "empty-list"]
+    authority_state: Literal["authoritative", "non-authoritative"]
+    provenance: Literal["registry-state task summary list"]
+    request_id: str
+    trace_id: str | None
+    correlation_id: str
+    limit: int
+    returned_count: int
+    has_more: bool
+    next_offset: None = None
+    items: list[TaskSummaryOut]
+
+
 # ---------------------------------------------------------------------------
 # Router
 # ---------------------------------------------------------------------------
 
 router = APIRouter()
+
+
+@router.get(
+    "/tasks",
+    status_code=200,
+    response_model=TaskListResponse,
+)
+async def get_tasks(request: Request) -> TaskListResponse:
+    """GET /v1/tasks — bounded aggregate task summary list (Story 109.2).
+
+    This route is deliberately narrow: no query selectors, no GET body, no
+    hidden pagination token, no task-detail/event/session/digest traversal, and
+    no mutation controls. It returns a fixed first page ordered by
+    ``updated_at DESC, id ASC`` so repeat reads are deterministic.
+    """
+    if request.url.query:
+        raise HTTPException(
+            status_code=400,
+            detail="GET /v1/tasks does not accept query selectors",
+        )
+
+    if await request.body():
+        raise HTTPException(
+            status_code=400,
+            detail="GET /v1/tasks does not accept a request body",
+        )
+
+    session_maker = request.app.state.session_maker
+    clock = request.app.state.clock
+    request_id: str = request.state.request_id
+    trace_id: str | None = getattr(request.state, "trace_id", None)
+
+    async with session_maker() as session:
+        task_result = await session.execute(
+            select(Task).order_by(Task.updated_at.desc(), Task.id.asc()).limit(_TASK_LIST_LIMIT + 1)
+        )
+        fetched_tasks = list(task_result.scalars().all())
+        has_more = len(fetched_tasks) > _TASK_LIST_LIMIT
+        tasks = fetched_tasks[:_TASK_LIST_LIMIT]
+
+        event_ids = [task.last_event_id for task in tasks if task.last_event_id is not None]
+        events_by_id: dict[str, Event] = {}
+        if event_ids:
+            event_result = await session.execute(select(Event).where(Event.id.in_(event_ids)))
+            events_by_id = {event.id: event for event in event_result.scalars().all()}
+
+    items: list[TaskSummaryOut] = []
+    for task in tasks:
+        last_event: TaskListLastEventOut | None = None
+        if task.last_event_id is not None:
+            event_row = events_by_id.get(task.last_event_id)
+            if event_row is not None:
+                last_event = TaskListLastEventOut(
+                    id=event_row.id,
+                    type=event_row.type,
+                    emitted_at=event_row.emitted_at,
+                    trace_id=event_row.trace_id,
+                )
+
+        items.append(
+            TaskSummaryOut(
+                task_id=task.id,
+                status=task.status,
+                title=task.title,
+                created_at=task.created_at,
+                updated_at=task.updated_at,
+                state_since=task.updated_at,
+                actor=ActorOut(kind=task.actor_kind, id=task.actor_id),
+                last_event=last_event,
+            )
+        )
+
+    display_state: Literal["healthy", "empty-list"] = "healthy" if items else "empty-list"
+    authority_state: Literal["authoritative", "non-authoritative"] = (
+        "authoritative" if items else "non-authoritative"
+    )
+
+    return TaskListResponse(
+        route="GET /v1/tasks",
+        retrieved_at=clock.now(),
+        freshness_state="fresh",
+        display_state=display_state,
+        authority_state=authority_state,
+        provenance="registry-state task summary list",
+        request_id=request_id,
+        trace_id=trace_id,
+        correlation_id=request_id,
+        limit=_TASK_LIST_LIMIT,
+        returned_count=len(items),
+        has_more=has_more,
+        next_offset=None,
+        items=items,
+    )
 
 
 @router.post(
@@ -636,6 +790,9 @@ __all__ = [
     "CreateTaskResponse",
     "LastEventOut",
     "TaskResponse",
+    "TaskListLastEventOut",
+    "TaskListResponse",
+    "TaskSummaryOut",
     "WorktreeLockOut",
     "router",
 ]

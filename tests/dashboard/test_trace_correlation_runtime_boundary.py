@@ -13,6 +13,7 @@ TRACE_RUNTIME = Path("dashboard/static/trace-correlation.js")
 APPROVED_HEALTH_SCRIPT = "health-readiness.js"
 APPROVED_TASK_DETAIL_SCRIPT = "task-detail.js"
 APPROVED_EVENT_SCRIPT = "event-timeline.js"
+APPROVED_AGGREGATE_SCRIPT = "aggregate-task-list.js"
 APPROVED_TRACE_SCRIPT = "trace-correlation.js"
 APPROVED_HISTORY_REPLAY_SCRIPT = "history-replay.js"
 APPROVED_LIFECYCLE_SCRIPT = "lifecycle-snapshot.js"
@@ -20,6 +21,7 @@ APPROVED_DIGEST_SCRIPT = "task-log-digest.js"
 APPROVED_SCRIPTS = [
     APPROVED_HEALTH_SCRIPT,
     APPROVED_TASK_DETAIL_SCRIPT,
+    APPROVED_AGGREGATE_SCRIPT,
     APPROVED_EVENT_SCRIPT,
     APPROVED_TRACE_SCRIPT,
     APPROVED_HISTORY_REPLAY_SCRIPT,

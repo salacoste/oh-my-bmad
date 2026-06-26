@@ -8,8 +8,8 @@
 
 ## Current BMad status
 
-- **Current phase:** Phase 29 — Aggregate/Session/Digest task log digest runtime boundary is closed.
-- **Current epic:** Epic 108 is done for exactly `GET /v1/tasks/{task_id}/logs/digest` after Story 108.3 final validation closure and remote CI run `28205787033` passed for commit `a835db97b62a005891a0b3e4ce920fc64c0215da`.
+- **Current phase:** Phase 30 — Aggregate task list runtime/API boundary is locally complete for exactly `GET /v1/tasks`; final push/remote-CI closure remains open for Story 109.3.
+- **Current epic:** Epic 109 is in progress after Story 109.1 selected exactly `GET /v1/tasks` and Story 109.2 implemented the exact aggregate task list runtime/API boundary with code-review APPROVE, architect recheck CLEAR, UltraQA PASS, and local PR-gate-equivalent validation. Story 109.3 remains for final closure, push, and remote CI evidence consolidation.
 - **Recently closed:** Phase 29 / Epic 108 — Task log digest runtime boundary and final validation closure are done.
 - **Done in Phase 27:**
   - Story 106.1 selected exactly `GET /v1/events/replay/snapshots` plus passive lifecycle-readiness evidence display from `dashboard/static/replay-lifecycle-contract.json`.
@@ -23,12 +23,16 @@
   - Story 108.1 selected the aggregate/session/digest family and narrowed the candidate surface to exactly `GET /v1/tasks/{task_id}/logs/digest`.
   - Story 108.2 implements the tests-first dashboard runtime boundary for exactly `GET /v1/tasks/{task_id}/logs/digest`, using a visible `task_id` source only, server-supplied freshness only, fail-closed digest states, final code-review `APPROVE`, UltraQA `PASS`, local non-slow PR-gate evidence, and remote CI run `28205787033` passed.
   - Story 108.3 records Phase 29 / Epic 108 closure after Story 108.2 review, QA, push, and remote CI run `28205787033` passed.
-  - Aggregate task list reads, session list/detail, digest streaming, task-list/search/discovery, broad dashboard wiring, generated live data, browser-side LLM generation, browser-side summarization, cache warming/background refresh, mutation/control behavior, backend/API expansion, services/MCP/dependencies/CI/deployment changes, production credentials, and production operations remain deferred/fail-closed.
-- **Not closed by this page:** lifecycle apply/prune/rollback, destructive lifecycle authorization execution, archive/manifest mutation, snapshot deletion/restore, aggregate task list reads, session list/detail, digest streaming, task-list/search/discovery, generated live data, replay execution target selection, broad dashboard live wiring, backend/API expansion beyond exact approved dashboard runtime routes, additional controls, services, MCP changes, deployment changes, dependencies, lockfiles, and production operations.
+  - Aggregate task list reads are implemented locally in Phase 30 / Story 109.2 for exactly `GET /v1/tasks`; session list/detail, digest streaming, task-list/search/discovery, broad dashboard wiring, generated live data, browser-side LLM generation, browser-side summarization, cache warming/background refresh, mutation/control behavior, backend/API expansion beyond exact approved dashboard runtime routes, services/MCP/dependencies/CI/deployment changes, production credentials, and production operations remain deferred/fail-closed.
+- **Open in Phase 30:**
+  - Story 109.1 selects the aggregate task list read family and exactly `GET /v1/tasks` as the future candidate surface; Architect APPROVE/CLEAR, Critic APPROVE, code-review APPROVE/CLEAR, and docs-only UltraQA skip are recorded.
+  - Story 109.2 implements the exact `GET /v1/tasks` runtime/API boundary locally: fixed bounded first page, no query/body, bounded task summary row shape, browser fetch with `credentials: "omit"`, fail-closed states, code-review APPROVE, architect recheck CLEAR, UltraQA PASS, and local non-slow gate evidence. It does not claim push or remote CI.
+  - Story 109.3 remains open for Phase 30 / Epic 109 final closure, including push and remote CI evidence consolidation.
+- **Not closed by this page:** lifecycle apply/prune/rollback, destructive lifecycle authorization execution, archive/manifest mutation, snapshot deletion/restore, session list/detail, digest streaming, task-list/search/discovery beyond exact `GET /v1/tasks`, generated live data, replay execution target selection, broad dashboard live wiring, backend/API expansion beyond exact approved dashboard runtime routes, additional controls, services, MCP changes, deployment changes, dependencies, lockfiles, and production operations.
 
 Primary evidence:
 
-- `../_bmad-output/implementation-artifacts/sprint-status.yaml` — `current_phase: 29`, `epic-108` done, `108-1`/`108-2`/`108-3` done, and remote CI run `28205787033` green.
+- `../_bmad-output/implementation-artifacts/sprint-status.yaml` — `current_phase: 30`, `epic-108` done, `epic-109` in progress, `109-1` done, `109-2` done locally, and `109-3` backlog.
 - `../_bmad-output/planning-artifacts/phase-27-prd-amendment.md` / `phase-27-architecture-amendment.md` / `phase-27-epics.md` — Phase 27 lifecycle/snapshot listing scope and deferred snapshot-create boundary.
 - `../_bmad-output/implementation-artifacts/106-3-phase-27-epic-106-final-closure.md` — Story 106.3 final closure evidence, including remote CI run `28139358221`.
 - `../_bmad-output/planning-artifacts/phase-28-prd-amendment.md` — Phase 28 snapshot creation authorization PRD scope.
@@ -43,6 +47,11 @@ Primary evidence:
 - `../_bmad-output/implementation-artifacts/108-1-aggregate-session-digest-route-selection-planning.md` — Story 108.1 route-family selection and non-authorization evidence.
 - `../_bmad-output/implementation-artifacts/108-2-task-log-digest-runtime-boundary.md` — Story 108.2 runtime implementation, review, UltraQA, local CI, push, and remote CI evidence.
 - `../_bmad-output/implementation-artifacts/108-3-phase-29-epic-108-final-closure.md` — Story 108.3 final closure evidence, including remote CI run `28205787033`.
+- `../_bmad-output/planning-artifacts/phase-30-prd-amendment.md` — Phase 30 aggregate task list route-selection PRD scope.
+- `../_bmad-output/planning-artifacts/phase-30-architecture-amendment.md` — exact future `GET /v1/tasks`, route-contract caveat, bounded rows, no-hidden-selector/no-session/no-stream/no-search boundaries.
+- `../_bmad-output/planning-artifacts/phase-30-epics.md` — Epic 109 story sequence.
+- `../_bmad-output/implementation-artifacts/109-1-aggregate-task-list-route-selection-planning.md` — Story 109.1 route-family selection and non-authorization evidence.
+- `../_bmad-output/implementation-artifacts/109-2-aggregate-task-list-runtime-boundary.md` — Story 109.2 exact `GET /v1/tasks` runtime/API implementation, code-review, UltraQA, and local validation evidence; push/remote CI remain deferred to Story 109.3.
 - `../docs/api-contracts.md` — distinguishes `GET /v1/events/replay/snapshots` snapshot listing from `POST /v1/events/replay/snapshots` snapshot creation.
 - `../dashboard/static/replay-lifecycle-contract.json` — passive lifecycle-readiness evidence fields and fail-safe states.
 
@@ -79,7 +88,8 @@ Primary evidence:
 |---|---|---|
 | Dashboard lifecycle/snapshot runtime | Implemented with recorded closure | Phase 27 / Epic 106: Story 106.2 adds `dashboard/static/lifecycle-snapshot.js` and the lifecycle/snapshot panel for exactly `GET /v1/events/replay/snapshots`; output is bounded snapshot metadata only, passive lifecycle evidence fail-closes as non-authoritative when missing/degraded, architect re-check is CLEAR after shell copy declares optional evidence injection and fail-closed behavior, and Story 106.3 records final closure with remote CI run `28139358221`. |
 | Snapshot creation authorization boundary | Implemented with recorded closure | Phase 28 / Epic 107: Story 107.2 adds the visible bearer-token operator affordance and route-local JWT authorization for exactly body-free `POST /v1/events/replay/snapshots`; HTTP 201 is required before authoritative metadata rendering, failed/unknown states do not auto-retry, duplicate in-flight clicks are blocked, tokens are not echoed or stored, and Story 107.3 records final closure with remote CI run `28195545005`. |
-| Task log digest dashboard runtime | Implemented with recorded closure | Phase 29 / Epic 108: Story 108.2 adds `dashboard/static/task-log-digest.js` and a bounded digest panel for exactly `GET /v1/tasks/{task_id}/logs/digest`; the selector is visible task_id text only, healthy authoritative rendering requires backend digest/summary plus server freshness, unknown/malformed states fail closed, and Story 108.3 records final closure with remote CI run `28205787033`. Aggregate task list reads, session list/detail, digest streaming, task-list/search/discovery, generated live data, browser-side LLM behavior, and broad dashboard wiring remain fail-closed. |
+| Task log digest dashboard runtime | Implemented with recorded closure | Phase 29 / Epic 108: Story 108.2 adds `dashboard/static/task-log-digest.js` and a bounded digest panel for exactly `GET /v1/tasks/{task_id}/logs/digest`; the selector is visible task_id text only, healthy authoritative rendering requires backend digest/summary plus server freshness, unknown/malformed states fail closed, and Story 108.3 records final closure with remote CI run `28205787033`. Session list/detail, digest streaming, task-list/search/discovery, generated live data, browser-side LLM behavior, and broad dashboard wiring remain fail-closed. |
+| Aggregate task list dashboard runtime | Implemented locally / closure pending | Phase 30 / Epic 109: Story 109.2 adds exact `GET /v1/tasks` API/runtime behavior and `dashboard/static/aggregate-task-list.js`; the backend rejects query strings and GET bodies, returns a fixed bounded first page of task summaries, and the browser fetch uses `credentials: "omit"` with fail-closed display states. Code-review APPROVE, architect recheck CLEAR, UltraQA PASS, and local non-slow validation are recorded; push/remote CI evidence remains deferred to Story 109.3. |
 | Task/session overview and sessions visibility | Contract/static-only | Static dashboard copy and metadata distinguish resource-native fields from derived/unavailable semantics; no broad session HTTP/list/history/search runtime is authorized. |
 | Fixture snapshot/static rendering | Contract/static-only | Fixture/view-model/static rendering tests prove read-only presentation behavior and fail-closed unavailable states; they do not authorize new runtime polling or mutation controls. |
 
@@ -87,8 +97,8 @@ Primary evidence:
 
 | Area | Status | Reason / guardrail |
 |---|---|---|
-| Task-list/search/discovery dashboard route family | Deferred / not implemented | Phase 29 selected aggregate/session/digest instead; task-list/search/discovery remains a higher-risk future family requiring separate planning. |
-| Aggregate/session dashboard live contracts | Deferred / fail-closed | Phase 29 selected only the task-scoped digest route candidate. `/v1/tasks` aggregate/list reads, `/v1/sessions`, and `/v1/sessions/{session_id}` remain unavailable/needs-contract until separately approved. |
+| Task-list/search/discovery dashboard route family | Deferred / not implemented beyond exact aggregate read | Phase 30 implements only exact aggregate task list read `GET /v1/tasks`; broader task-list/search/discovery remains a higher-risk future family requiring separate planning. |
+| Aggregate/session dashboard live contracts | Aggregate task list implemented locally; sessions fail-closed | Phase 30 / Story 109.2 implements exactly `GET /v1/tasks` for bounded aggregate task summaries. `/v1/sessions`, `/v1/sessions/{session_id}`, digest streaming, search/discovery, hidden selectors, automatic drill-down, and broad dashboard wiring remain unavailable/needs-contract until separately approved. |
 | Destructive lifecycle apply/prune/delete/truncate/move/rewrite/chmod | Deferred / not implemented | Phase 17 is readiness-only. Future mutation requires exact dry-run plan-hash binding, replay validation, rollback/restore evidence, and explicit operator gate. |
 | Object-storage lifecycle jobs and scheduled retention | Deferred / not implemented | `docs/architecture.md` keeps automatic S3/B2/R2 lifecycle management and time-based lifecycle automation as future work. |
 | Broad dashboard live-read runtime wiring | Deferred / not implemented | Current browser runtime remains route-family-scoped. Health/readiness, task detail, event/transition, trace, history/replay, and lifecycle/snapshot have recorded narrow boundaries only; broad dashboard live wiring remains unavailable. |

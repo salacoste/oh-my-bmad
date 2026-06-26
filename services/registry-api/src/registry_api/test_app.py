@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncGenerator
+from datetime import timedelta
 from pathlib import Path
 from random import Random
 from unittest.mock import patch
@@ -158,6 +159,57 @@ async def _seed_task_row(db_url: str) -> None:
     await engine.dispose()
 
 
+async def _seed_aggregate_task_rows(db_url: str, *, count: int = 2) -> list[str]:
+    """Insert deterministic Task + Event rows for GET /v1/tasks aggregate tests."""
+    engine = _create_engine(db_url)
+    session_maker = get_session(engine)
+    task_ids: list[str] = []
+    async with session_maker() as session:
+        rng = Random(1092)
+        for index in range(count):
+            created_at = FROZEN_EPOCH + timedelta(minutes=index)
+            updated_at = FROZEN_EPOCH + timedelta(minutes=index)
+            task_clock = FrozenClock(mono_ns=_FROZEN_MONO_NS + index, now=created_at)
+            task_id = new_task_id(clock=task_clock, rng=rng)
+            event_id = new_event_id(clock=task_clock, rng=rng)
+            task_ids.append(task_id)
+            task = Task(
+                id=task_id,
+                status="plan_ready",
+                created_at=created_at,
+                updated_at=updated_at,
+                actor_kind="operator",
+                actor_id=f"http-api-{index}",
+                title=f"aggregate task {index}",
+                last_event_id=None,
+            )
+            session.add(task)  # noqa: SW001 — test-only fixture seeding, not production write path
+            await session.flush()
+            event = Event(
+                id=event_id,
+                type="task.created",
+                schema_version="1.0.0",
+                emitted_at=created_at,
+                emitted_at_monotonic_ns=_FROZEN_MONO_NS + index,
+                actor_kind="operator",
+                actor_id=f"http-api-{index}",
+                task_id=task_id,
+                session_id=None,
+                parent_event_id=None,
+                trace_id=f"trace-{index}",
+                request_id=new_request_id(clock=_FROZEN_CLOCK, rng=Random(200 + index)),
+                payload_json=(
+                    '{"task_id": "' + task_id + '", "title": "aggregate task", "secret": "deny"}'
+                ),
+            )
+            session.add(event)  # noqa: SW001 — test-only fixture seeding, not production write path
+            await session.flush()
+            task.last_event_id = event_id
+        await session.commit()
+    await engine.dispose()
+    return task_ids
+
+
 # ---------------------------------------------------------------------------
 # Async client fixture for POST-only tests (no DB needed for write path)
 # ---------------------------------------------------------------------------
@@ -221,6 +273,207 @@ async def get_client(tmp_path: Path, fixed_clock: FrozenClock) -> AsyncGenerator
         ) as client,
     ):
         yield client
+
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def aggregate_client(
+    tmp_path: Path, fixed_clock: FrozenClock
+) -> AsyncGenerator[AsyncClient, None]:
+    """Client for GET /v1/tasks aggregate-list tests with seeded task rows."""
+    db_path = tmp_path / "state.sqlite3"
+    db_url = _db_url(db_path)
+    await _seed_tables(db_url)
+    await _seed_aggregate_task_rows(db_url)
+
+    events_dir = tmp_path / "events"
+    app = build_app(
+        base_dir=events_dir,
+        db_url=db_url,
+        clock=fixed_clock,
+        create_idempotency_schema_on_start=True,
+    )
+
+    async with (
+        LifespanManager(app) as manager,
+        AsyncClient(
+            transport=ASGITransport(app=manager.app), base_url="http://testserver"
+        ) as client,
+    ):
+        yield client
+
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def empty_aggregate_client(
+    tmp_path: Path, fixed_clock: FrozenClock
+) -> AsyncGenerator[AsyncClient, None]:
+    """Client for GET /v1/tasks aggregate-list tests with no task rows."""
+    db_path = tmp_path / "state.sqlite3"
+    db_url = _db_url(db_path)
+    await _seed_tables(db_url)
+
+    events_dir = tmp_path / "events"
+    app = build_app(
+        base_dir=events_dir,
+        db_url=db_url,
+        clock=fixed_clock,
+        create_idempotency_schema_on_start=True,
+    )
+
+    async with (
+        LifespanManager(app) as manager,
+        AsyncClient(
+            transport=ASGITransport(app=manager.app), base_url="http://testserver"
+        ) as client,
+    ):
+        yield client
+
+
+# ---------------------------------------------------------------------------
+# TestGetTasksAggregate
+# ---------------------------------------------------------------------------
+
+
+class TestGetTasksAggregate:
+    """Story 109.2: GET /v1/tasks bounded aggregate summary boundary."""
+
+    pytestmark = pytest.mark.asyncio
+
+    async def test_get_tasks_returns_bounded_summary_shape(
+        self, aggregate_client: AsyncClient
+    ) -> None:
+        r = await aggregate_client.get("/v1/tasks")
+
+        assert r.status_code == 200
+        body = r.json()
+        assert set(body) == {
+            "route",
+            "retrieved_at",
+            "freshness_state",
+            "display_state",
+            "authority_state",
+            "provenance",
+            "request_id",
+            "trace_id",
+            "correlation_id",
+            "limit",
+            "returned_count",
+            "has_more",
+            "next_offset",
+            "items",
+        }
+        assert body["route"] == "GET /v1/tasks"
+        assert body["freshness_state"] == "fresh"
+        assert body["display_state"] == "healthy"
+        assert body["authority_state"] == "authoritative"
+        assert body["provenance"] == "registry-state task summary list"
+        assert body["limit"] == 50
+        assert body["returned_count"] == 2
+        assert body["has_more"] is False
+        assert body["next_offset"] is None
+        assert body["request_id"]
+        assert body["trace_id"]
+        assert body["correlation_id"] == body["request_id"]
+
+        rows = body["items"]
+        assert len(rows) == 2
+        assert [row["title"] for row in rows] == ["aggregate task 1", "aggregate task 0"]
+        for row in rows:
+            assert set(row) == {
+                "task_id",
+                "status",
+                "title",
+                "created_at",
+                "updated_at",
+                "state_since",
+                "actor",
+                "last_event",
+            }
+            assert set(row["actor"]) == {"kind", "id"}
+            assert set(row["last_event"]) == {"id", "type", "emitted_at", "trace_id"}
+            serialized = str(row).lower()
+            for denied in (
+                "summary",
+                "payload",
+                "request_id",
+                "parent_event_id",
+                "session_id",
+                "available_commands",
+                "next_commands",
+                "worktree_lock",
+                "budget",
+            ):
+                assert denied not in serialized
+
+    async def test_get_tasks_empty_list_is_non_authoritative(
+        self, empty_aggregate_client: AsyncClient
+    ) -> None:
+        r = await empty_aggregate_client.get("/v1/tasks")
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["items"] == []
+        assert body["returned_count"] == 0
+        assert body["display_state"] == "empty-list"
+        assert body["authority_state"] == "non-authoritative"
+        assert body["has_more"] is False
+
+    async def test_get_tasks_rejects_query_selectors_and_request_body(
+        self, aggregate_client: AsyncClient
+    ) -> None:
+        query_response = await aggregate_client.get("/v1/tasks?status=plan_ready")
+        body_response = await aggregate_client.request(
+            "GET", "/v1/tasks", content=b'{"status":"plan_ready"}'
+        )
+
+        assert query_response.status_code == 400
+        assert body_response.status_code == 400
+        assert "does not accept query" in query_response.text
+        assert "does not accept a request body" in body_response.text
+
+    async def test_get_tasks_limit_is_fixed_and_does_not_expose_selector_offset(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+        await _seed_aggregate_task_rows(db_url, count=51)
+        app = build_app(
+            base_dir=tmp_path / "events",
+            db_url=db_url,
+            clock=fixed_clock,
+            create_idempotency_schema_on_start=True,
+        )
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://testserver"
+            ) as client,
+        ):
+            r = await client.get("/v1/tasks")
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["limit"] == 50
+        assert body["returned_count"] == 50
+        assert body["has_more"] is True
+        assert body["next_offset"] is None
+        assert len(body["items"]) == 50
+
+    async def test_get_tasks_does_not_promote_mutation_or_adjacent_routes(
+        self, aggregate_client: AsyncClient, post_client: AsyncClient
+    ) -> None:
+        post_response = await post_client.post(
+            "/v1/tasks", json={"title": "still mutable only by POST"}
+        )
+        method_response = await aggregate_client.put("/v1/tasks")
+        session_response = await aggregate_client.get("/v1/sessions")
+        stream_response = await aggregate_client.get("/v1/tasks/abc/logs/digest/stream")
+
+        assert post_response.status_code == 201
+        assert method_response.status_code in {404, 405}
+        assert session_response.status_code == 404
+        assert stream_response.status_code in {404, 422}
 
 
 # ---------------------------------------------------------------------------

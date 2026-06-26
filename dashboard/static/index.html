@@ -63,30 +63,44 @@
   <main class="grid" aria-label="Static visibility placeholder panels">
     <section id="overview" aria-labelledby="overview-title">
       <h2 id="overview-title">Overview</h2>
-      <p class="state">Aggregate task overview is unavailable: no safe aggregate task read is approved or wired in Story 89.1.</p>
+      <p class="state">Aggregate task overview uses the approved bounded task-list read from Story 109.2 and remains read-only.</p>
       <p>
-        Unavailable read means no approved aggregate task source exists here; loading would mean an approved source is still resolving;
-        empty successful read would mean an approved source returned no tasks. Stale/partial data, permission/configuration failure,
-        and read error states must remain distinct before any future aggregate task projection is displayed.
+        Unavailable read means the approved aggregate task source failed closed; loading means the approved source is still resolving;
+        empty successful read means the approved source returned no tasks. Stale/partial data, permission/configuration failure,
+        and read error states remain distinct and non-authoritative.
       </p>
       <p>
-        See <a href="#audit">Audit</a> for provenance context and <a href="#help">Help</a> for read-only guidance.
+        See <a href="#tasks">Tasks</a> for the runtime boundary, <a href="#audit">Audit</a> for provenance context, and <a href="#help">Help</a> for read-only guidance.
       </p>
-      <p class="meta">Provenance source: no approved aggregate task route/reference. Freshness timestamp: pending. State: unavailable. Confidence: unavailable until a safe aggregate task read is approved.</p>
+      <p class="meta">Provenance source/reference: GET /v1/tasks. Freshness timestamp: retrieved_at from the backend response. State: approved read-only aggregate task boundary. Confidence: bounded by source, freshness, and authority metadata.</p>
     </section>
     <section id="tasks" aria-labelledby="tasks-title">
       <h2 id="tasks-title">Tasks</h2>
-      <p class="state">Aggregate task-list read is unavailable: no safe aggregate task read is approved or wired in Story 89.1.</p>
+      <p class="state" id="aggregate-task-list-status">Aggregate task-list live-read boundary pending: waiting for the approved GET /v1/tasks response.</p>
       <p>
-        Unavailable read means the task list lacks an approved aggregate source; loading would mean an approved source is resolving;
-        empty successful read would mean an approved source returned no tasks. Stale/partial data, permission/configuration failure,
-        and read error states are reserved as separate outcomes and do not imply mutation occurred.
+        Source route/reference: GET /v1/tasks. Story 109.2 wires this single approved read-only aggregate task-list read only;
+        it adds no query selectors, no request body, no broad dashboard live wiring, no task detail traversal, no digest/history/trace/replay/session traversal, and no operator control.
+      </p>
+      <p>
+        Runtime states are loading, healthy bounded display, empty successful read, stale/partial data, stale data, invalid data, permission/configuration failure, unauthorized/configuration failure,
+        backend unavailable, route failure/read error, malformed response, over-limit response, and ambiguous freshness. Non-healthy states fail closed and are non-authoritative.
+      </p>
+      <p>
+        Row contract: provenance, source, timestamp, freshness, state, route/reference, task_id, status, title, created_at, updated_at, state_since, actor.kind, actor.id,
+        last_event.id, last_event.type, last_event.emitted_at, and last_event.trace_id. No task rows are synthesized; no hidden selectors or side channels can expand this list.
       </p>
       <p>
         See <a href="#audit">Audit</a> for source review and <a href="#help">Help</a> for unavailable-state guidance.
       </p>
-      <p class="meta">Future row contract placeholder: provenance/source, timestamp/freshness, state, and route/reference. No task rows are synthesized while the aggregate task read remains unavailable.</p>
-      <p class="meta">Source: no approved aggregate task route/reference. Freshness timestamp: pending. State: unavailable. Confidence: unavailable until a safe aggregate task read is approved.</p>
+      <p class="meta" id="aggregate-task-list-source">Source: GET /v1/tasks. Runtime route: pending.</p>
+      <p class="meta" id="aggregate-task-list-freshness">Freshness: pending retrieved_at.</p>
+      <p class="meta" id="aggregate-task-list-authority">Authority: non-authoritative until a valid aggregate task-list response is read.</p>
+      <p class="meta" id="aggregate-task-list-provenance">Provenance: pending backend task summary metadata.</p>
+      <p class="meta" id="aggregate-task-list-correlation">Correlation: pending request, trace, or correlation id.</p>
+      <p class="meta" id="aggregate-task-list-pagination">Pagination: fixed first page pending.</p>
+      <p class="meta" id="aggregate-task-list-degraded">Degraded state: unavailable read until runtime data resolves.</p>
+      <p class="meta" id="aggregate-task-list-count">Task rows: pending.</p>
+      <p class="meta" id="aggregate-task-list-rows">Rows: no aggregate task-list response has been rendered yet. Confidence: unavailable until the approved aggregate task-list read completes.</p>
     </section>
     <section id="task-detail" aria-labelledby="task-detail-title">
       <h2 id="task-detail-title">Task Detail</h2>
@@ -130,7 +144,7 @@
       <p>Existing MCP read resources are named as inert visible provenance only: session://active, session://detail/{session_id}, and session://heartbeats. They are no live dashboard wiring and are not links, attributes, background refresh sources, or client calls.</p>
       <p>Resource-native session fields are: id, task_id, worker_kind, worktree_path, status, started_at, ended_at, and last_heartbeat_at. session_id is a display label for resource-native id; it is not a separate resource field.</p>
       <p>Derived/provenance/unavailable-only semantics are freshness_state, source, and trace_id. freshness_state is only derivable from last_heartbeat_at after a future dashboard contract defines that derivation; source is panel provenance; trace_id is unavailable until a separate event or trace correlation read supplies it.</p>
-      <p>State matrix: no active sessions, active session, historical session, terminal session outcome, heartbeat/stale warning, loading, unavailable pending dashboard read contract, empty successful read, read error, unauthorized/configuration failure, and stale data. Loading is not active in this static, not-wired slice.</p>
+      <p>State matrix: no active sessions, active session, historical session, terminal session outcome, heartbeat/stale warning, loading, unavailable pending dashboard read contract, empty successful read, read error, permission/configuration failure, unauthorized/configuration failure, and stale data. Loading is not active in this static, not-wired slice.</p>
       <p>Historical session and terminal session outcome wording is explanatory only and does not authorize session history enumeration. Visibility placeholders only; no links or session actions appear here.</p>
       <p class="meta">Source: existing MCP read resources as static provenance text plus BMAD Story 89.3. Freshness timestamp: pending. Reference: session resource provenance and future dashboard read contract. Confidence: unavailable until a dashboard-safe read is wired by a later story.</p>
     </section>
@@ -156,7 +170,7 @@
       </p>
       <p>
         Runtime states are missing task_id, unavailable digest, no provider, provider unavailable, timeout, invalid data,
-        empty digest, stale digest, unauthorized/configuration failure, backend unavailable, route failure/read error,
+        empty digest, stale digest, permission/configuration failure, unauthorized/configuration failure, backend unavailable, route failure/read error,
         loading, and healthy bounded display.
       </p>
       <p class="meta" id="task-log-digest-source">Source: GET /v1/tasks/{task_id}/logs/digest. Runtime route: pending.</p>
@@ -262,7 +276,7 @@
         <li>X-Trace-Truncated</li>
       </ul>
       <p>X-Trace-Truncated is a passive response header and not a dashboard action.</p>
-      <p>State matrix: unavailable read, loading, empty successful read, absent trace, unknown trace, invalid trace id shape, unauthorized/configuration failure, stale data, truncated/paginated result, payload/extension parse fallback, and route failure/read error. Loading is not active in this static, not-wired slice. truncated/paginated result is a passive read state and not a dashboard action.</p>
+      <p>State matrix: unavailable read, loading, empty successful read, absent trace, unknown trace, invalid trace id shape, permission/configuration failure, unauthorized/configuration failure, stale data, truncated/paginated result, payload/extension parse fallback, and route failure/read error. Loading is not active in this static, not-wired slice. truncated/paginated result is a passive read state and not a dashboard action.</p>
       <p>Broader trace search/list requires a separate approved read contract. Canonical JSONL replay/byte-equivalent envelope display is a separate contract.</p>
       <p>Ordered trace rows explain related events and causal links through parent_event_id, linked_event_id, linked_task_id, and route provenance; this static slice does not generate a new causal graph.</p>
       <p>This panel denies mutation routes, background replay actions, snapshot actions, hidden writes, and cache-warming/read-side effects.</p>
@@ -344,7 +358,7 @@
       </p>
       <p>
         Runtime states are unavailable read, loading, empty successful read, healthy, stale data, invalid data,
-        unauthorized/configuration failure, backend unavailable, route failure/read error, and lifecycle evidence degraded.
+        permission/configuration failure, unauthorized/configuration failure, backend unavailable, route failure/read error, and lifecycle evidence degraded.
       </p>
       <p>
         Lifecycle evidence remains passive boundary evidence: plan_hash, dry_run_artifact_ref, safety_policy_version,
@@ -392,19 +406,19 @@
         <li>Panel family: replay-readiness. Panel title: Replay readiness. Source category: replay. Source route pattern: /v1/events/replay/validate. Route input identifiers: none. Row display identifiers: replay_id. Source identifiers: source_category=fixture-replay-source. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: healthy-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: replay readiness static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
         <li>Panel family: health-readiness. Panel title: Health readiness. Source category: health. Source route pattern: /v1/health. Route input identifiers: none. Row display identifiers: none. Source identifiers: source_category=fixture-health-source. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: healthy-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: health readiness static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
         <li>Panel family: task-log-digest. Panel title: Task log digest. Source category: digest. Source route pattern: /v1/tasks/{task_id}/logs/digest. Route input identifiers: task_id. Row display identifiers: task_id, trace_id. Source identifiers: task_id=fixture-task-id. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: fresh-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: task log digest static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
+        <li>Panel family: aggregate-task-list. Panel title: Aggregate task list. Source category: aggregate. Source route pattern: /v1/tasks. Route input identifiers: none. Row display identifiers: task_id, event_id, trace_id. Source identifiers: source_category=fixture-aggregate-source. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: fresh-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: aggregate task list static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
       </ul>
       <p>
         Degraded or unavailable fixture display states use a bounded non-authoritative summary instead of per-route success rows.
         They remain static fixture readiness copy and need contract fixture review before any runtime data source can be connected.
       </p>
       <ul aria-label="Bounded degraded fixture states">
-        <li>Bounded non-authoritative summary needs contract fixture review: backend-unavailable, invalid, partial, stale, unauthorized, and unavailable states; runtime data remains disconnected.</li>
+        <li>Bounded non-authoritative summary needs contract fixture review: backend-unavailable, empty-list, invalid, partial, stale, unauthorized, and unavailable states; runtime data remains disconnected.</li>
       </ul>
       <p>
-        Aggregate and session routes plus the digest stream fail closed in this static presentation. They are not part of the approved Story 99.2 fixture-backed renderable route set.
+        Session routes plus the digest stream fail closed in this static presentation. They are not part of the approved Story 99.2 fixture-backed renderable route set.
       </p>
       <ul aria-label="Fail-closed non-renderable routes">
-        <li>Route pattern: /v1/tasks. Display state: needs-contract. Authority state: needs-contract. Display severity: blocked. Display copy: static fixture readiness needs contract fixture review; runtime data remains disconnected.</li>
         <li>Route pattern: /v1/sessions. Display state: needs-contract. Authority state: needs-contract. Display severity: blocked. Display copy: static fixture readiness needs contract fixture review; runtime data remains disconnected.</li>
         <li>Route pattern: /v1/sessions/{session_id}. Display state: needs-contract. Authority state: needs-contract. Display severity: blocked. Display copy: static fixture readiness needs contract fixture review; runtime data remains disconnected.</li>
         <li>Route pattern: /v1/tasks/{task_id}/logs/digest/stream. Display state: needs-contract. Authority state: needs-contract. Display severity: blocked. Display copy: static fixture readiness needs contract fixture review; runtime data remains disconnected.</li>
@@ -494,6 +508,7 @@
   </footer>
   <script src="health-readiness.js" defer></script>
   <script src="task-detail.js" defer></script>
+  <script src="aggregate-task-list.js" defer></script>
   <script src="event-timeline.js" defer></script>
   <script src="trace-correlation.js" defer></script>
   <script src="history-replay.js" defer></script>

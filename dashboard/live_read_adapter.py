@@ -39,6 +39,7 @@ DisplayState = Literal[
     "backend-unavailable",
     "provider-unavailable",
     "empty-digest",
+    "empty-list",
 ]
 AuthorityState = Literal["authoritative", "non-authoritative", "needs-contract"]
 DisplaySeverity = Literal["normal", "warning", "error", "blocked"]
@@ -54,6 +55,7 @@ DegradedStateCategory = Literal[
     "backend-unavailable",
     "provider-unavailable",
     "empty-digest",
+    "empty-list",
 ]
 Identifier = Literal[
     "task_id",
@@ -70,6 +72,7 @@ PanelFamily = Literal[
     "replay-readiness",
     "health-readiness",
     "task-log-digest",
+    "aggregate-task-list",
 ]
 
 
@@ -288,18 +291,28 @@ APPROVED_READ_CONTRACTS: tuple[ReadContract, ...] = (
             }
         ),
     ),
-)
-
-UNAVAILABLE_READ_CONTRACTS: tuple[ReadContract, ...] = (
     ReadContract(
         source_category="aggregate",
         route_pattern="/v1/tasks",
-        route_status="needs-separate-contract",
-        timestamp_policy="not-available-until-contract",
-        freshness_policy="not-authoritative-until-contract",
+        route_status="approved",
+        timestamp_policy="retrieved-at-required",
+        freshness_policy="fresh-or-stale-required",
         required_identifiers=(),
-        allowed_states=frozenset({"unavailable", "needs-contract"}),
+        allowed_states=frozenset(
+            {
+                "healthy",
+                "empty-list",
+                "stale",
+                "invalid",
+                "unauthorized",
+                "backend-unavailable",
+                "unavailable",
+            }
+        ),
     ),
+)
+
+UNAVAILABLE_READ_CONTRACTS: tuple[ReadContract, ...] = (
     ReadContract(
         source_category="session",
         route_pattern="/v1/sessions",
@@ -334,6 +347,7 @@ NON_AUTHORITATIVE_STATES = frozenset(
         "backend-unavailable",
         "provider-unavailable",
         "empty-digest",
+        "empty-list",
     }
 )
 STORY_96_1_ROUTE_PATTERNS = (
@@ -428,6 +442,20 @@ STORY_108_2_PANEL_ROUTES: Mapping[PanelFamily, tuple[str, ...]] = MappingProxyTy
 )
 STORY_108_2_PANEL_TITLES: Mapping[PanelFamily, str] = MappingProxyType(
     {"task-log-digest": "Task log digest"}
+)
+
+STORY_109_2_ROUTE_PATTERNS = ("/v1/tasks",)
+STORY_109_2_ROUTE_INPUT_IDENTIFIERS: Mapping[str, tuple[Identifier, ...]] = MappingProxyType(
+    {"/v1/tasks": ()}
+)
+STORY_109_2_ROW_DISPLAY_IDENTIFIERS: Mapping[str, tuple[Identifier, ...]] = MappingProxyType(
+    {"/v1/tasks": ("task_id", "event_id", "trace_id")}
+)
+STORY_109_2_PANEL_ROUTES: Mapping[PanelFamily, tuple[str, ...]] = MappingProxyType(
+    {"aggregate-task-list": ("/v1/tasks",)}
+)
+STORY_109_2_PANEL_TITLES: Mapping[PanelFamily, str] = MappingProxyType(
+    {"aggregate-task-list": "Aggregate task list"}
 )
 
 
@@ -550,6 +578,30 @@ def story_108_2_panel_contracts() -> tuple[PanelContract, ...]:
             ),
         )
         for panel_family, route_patterns in STORY_108_2_PANEL_ROUTES.items()
+    )
+
+
+def story_109_2_route_patterns() -> tuple[str, ...]:
+    _validate_story_109_2_subset()
+    return STORY_109_2_ROUTE_PATTERNS
+
+
+def story_109_2_panel_contracts() -> tuple[PanelContract, ...]:
+    _validate_story_109_2_subset()
+    return tuple(
+        PanelContract(
+            panel_family=panel_family,
+            title=STORY_109_2_PANEL_TITLES[panel_family],
+            routes=tuple(
+                _panel_read_route(
+                    route_pattern,
+                    route_input_identifiers=STORY_109_2_ROUTE_INPUT_IDENTIFIERS,
+                    row_display_identifiers=STORY_109_2_ROW_DISPLAY_IDENTIFIERS,
+                )
+                for route_pattern in route_patterns
+            ),
+        )
+        for panel_family, route_patterns in STORY_109_2_PANEL_ROUTES.items()
     )
 
 
@@ -906,7 +958,10 @@ def _panel_read_route(
 
 def _story_99_1_panel_contracts() -> tuple[PanelContract, ...]:
     return (
-        story_96_1_panel_contracts() + story_96_2_panel_contracts() + story_108_2_panel_contracts()
+        story_96_1_panel_contracts()
+        + story_96_2_panel_contracts()
+        + story_108_2_panel_contracts()
+        + story_109_2_panel_contracts()
     )
 
 
@@ -1005,6 +1060,28 @@ def _validate_story_108_2_subset() -> None:
     blocked |= selected & {contract.route_pattern for contract in UNAVAILABLE_READ_CONTRACTS}
     if blocked:
         raise ValueError("story 108.2 route requires separate contract")
+
+
+def _validate_story_109_2_subset() -> None:
+    selected = set(STORY_109_2_ROUTE_PATTERNS)
+    panel_selected = {
+        route_pattern
+        for route_patterns in STORY_109_2_PANEL_ROUTES.values()
+        for route_pattern in route_patterns
+    }
+    if selected != panel_selected:
+        raise ValueError("story 109.2 panel route mismatch")
+    if set(STORY_109_2_ROUTE_INPUT_IDENTIFIERS) != selected:
+        raise ValueError("story 109.2 route-input identifier mismatch")
+    if set(STORY_109_2_ROW_DISPLAY_IDENTIFIERS) != selected:
+        raise ValueError("story 109.2 row-display identifier mismatch")
+    approved = {contract.route_pattern for contract in APPROVED_READ_CONTRACTS}
+    if not selected <= approved:
+        raise ValueError("story 109.2 route is not approved")
+    blocked = selected & EXCLUDED_ROUTE_PATTERNS
+    blocked |= selected & {contract.route_pattern for contract in UNAVAILABLE_READ_CONTRACTS}
+    if blocked:
+        raise ValueError("story 109.2 route requires separate contract")
 
 
 def _validate_story_96_2_subset() -> None:

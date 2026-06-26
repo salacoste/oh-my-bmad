@@ -589,10 +589,11 @@ def test_story_89_1_overview_and_tasks_use_explicit_aggregate_unavailable_fallba
     for panel_id in ("overview", "tasks"):
         panel_text = " ".join(parser.sections[panel_id]).lower()
         assert "aggregate task" in panel_text, panel_id
-        assert "safe aggregate task read" in panel_text, panel_id
+        assert "get /v1/tasks" in panel_text, panel_id
         assert "unavailable" in panel_text, panel_id
-        assert "no safe aggregate task read is approved or wired" in panel_text, panel_id
         assert "empty successful read" in panel_text, panel_id
+        assert "approved" in panel_text, panel_id
+        assert "read-only" in panel_text, panel_id
         assert "audit" in panel_text, panel_id
         assert "help" in panel_text, panel_id
         assert "#audit" in parser.section_hrefs.get(panel_id, []), panel_id

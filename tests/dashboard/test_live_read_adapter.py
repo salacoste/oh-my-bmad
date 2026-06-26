@@ -34,7 +34,7 @@ def test_adapter_contracts_cover_exact_approved_route_inventory() -> None:
         for contract in approved
     }
 
-    assert len(approved) == 9
+    assert len(approved) == 10
     assert adapter_routes == live_contracts.APPROVED_READ_ROUTES
     assert {contract.route_status for contract in approved} == {"approved"}
     assert {
@@ -82,17 +82,17 @@ def test_adapter_metadata_matches_state_contracts() -> None:
         assert not isinstance(meta.identifiers, MutableMapping)
 
 
-def test_only_digest_stream_aggregate_and_session_routes_are_not_adapter_reads() -> None:
+def test_only_digest_stream_and_session_routes_are_not_adapter_reads() -> None:
     approved_routes = {contract.route_pattern for contract in adapter.approved_read_contracts()}
     assert not (adapter.EXCLUDED_ROUTE_PATTERNS & approved_routes)
     assert "/v1/tasks/{task_id}/logs/digest" in approved_routes
+    assert "/v1/tasks" in approved_routes
     assert "/v1/tasks/{task_id}/logs/digest/stream" in adapter.EXCLUDED_ROUTE_PATTERNS
 
     unavailable = {
         contract.source_category: contract for contract in adapter.unavailable_read_contracts()
     }
-    assert set(unavailable) == {"aggregate", "session"}
-    assert unavailable["aggregate"].route_pattern == "/v1/tasks"
+    assert set(unavailable) == {"session"}
     assert unavailable["session"].route_pattern == "/v1/sessions"
     for contract in unavailable.values():
         assert contract.route_status == "needs-separate-contract"
@@ -109,8 +109,8 @@ def test_error_categories_render_fail_closed_metadata() -> None:
             assert meta.timestamp_policy == contract.timestamp_policy
             assert meta.freshness_policy == contract.freshness_policy
 
-    with pytest.raises(ValueError):
-        adapter.result_meta("/v1/tasks", "healthy")
+    assert adapter.result_meta("/v1/tasks", "healthy").authoritative is True
+    assert adapter.result_meta("/v1/tasks", "empty-list").authoritative is False
     with pytest.raises(ValueError):
         adapter.result_meta("/v1/tasks/{task_id}", "needs-contract")
 

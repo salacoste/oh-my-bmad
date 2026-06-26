@@ -33,9 +33,10 @@ APPROVED_DASHBOARD_ROUTES = frozenset(
         "/v1/events/replay/validate",
         "/v1/health",
         "/v1/tasks/{task_id}/logs/digest",
+        "/v1/tasks",
     }
 )
-NEEDS_CONTRACT_ROUTES = frozenset({"/v1/tasks", "/v1/sessions"})
+NEEDS_CONTRACT_ROUTES = frozenset({"/v1/sessions"})
 DIGEST_STREAM_ROUTES = frozenset({"/v1/tasks/{task_id}/logs/digest/stream"})
 
 
@@ -46,6 +47,7 @@ def _panel_route_patterns() -> tuple[str, ...]:
             *adapter.story_96_1_panel_contracts(),
             *adapter.story_96_2_panel_contracts(),
             *adapter.story_108_2_panel_contracts(),
+            *adapter.story_109_2_panel_contracts(),
         )
         for route in panel.routes
     )
@@ -66,14 +68,14 @@ def test_dashboard_approved_route_inventory_is_exact_and_get_only() -> None:
         assert live_contracts.is_allowlisted_dashboard_read("GET", route_pattern)
 
 
-def test_dashboard_aggregate_and_session_decision_remains_needs_contract() -> None:
+def test_dashboard_aggregate_is_approved_and_session_decision_remains_needs_contract() -> None:
     unavailable = {
         contract.source_category: contract for contract in adapter.unavailable_read_contracts()
     }
 
-    assert set(unavailable) == {"aggregate", "session"}
-    assert unavailable["aggregate"].route_pattern == "/v1/tasks"
+    assert set(unavailable) == {"session"}
     assert unavailable["session"].route_pattern == "/v1/sessions"
+    assert live_contracts.is_allowlisted_dashboard_read("GET", "/v1/tasks")
 
     for contract in unavailable.values():
         assert contract.route_status == "needs-separate-contract"

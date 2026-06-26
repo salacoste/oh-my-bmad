@@ -9,6 +9,7 @@ Versioned at `/v1`. Versions are additive; `/v1` semantics are frozen once shipp
 | Path | Method | Handler | Purpose |
 |---|---|---|---|
 | `/v1/tasks` | POST | `post_tasks` | Create a task; emits `task.created`; returns **201** with the new task ID. Idempotency key threaded from the caller. |
+| `/v1/tasks` | GET | `get_tasks` | Bounded aggregate task summary list (Story 109.2). Selector-free/body-free fixed first page ordered by `updated_at DESC, id ASC`; exposes source/freshness/provenance metadata and no task-detail/session/digest/history/trace traversal. |
 | `/v1/tasks/{task_id}` | GET | `get_task_by_id` | Fetch reconstituted task state (FR4). |
 | `/v1/tasks/{task_id}/decisions` | POST | `post_decision` | Operator decisions: approve / reject / stop / retry (Story 6.4). |
 | `/v1/tasks/{task_id}/logs/digest` | GET | `get_logs_digest` | LLM-summarized event digest for a task (Story 7.3, FR5). |

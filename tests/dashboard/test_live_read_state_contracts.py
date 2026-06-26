@@ -54,6 +54,9 @@ DisplayState = Literal[
     "invalid",
     "unauthorized",
     "backend-unavailable",
+    "provider-unavailable",
+    "empty-digest",
+    "empty-list",
 ]
 Identifier = Literal[
     "task_id",
@@ -77,6 +80,7 @@ EXPECTED_IDENTIFIERS_BY_ROUTE = {
     "/v1/events/replay/validate": frozenset({"replay_id"}),
     "/v1/health": frozenset(),
     "/v1/tasks/{task_id}/logs/digest": frozenset({"task_id"}),
+    "/v1/tasks": frozenset(),
 }
 NON_AUTHORITATIVE_STATES = frozenset(
     {
@@ -89,6 +93,7 @@ NON_AUTHORITATIVE_STATES = frozenset(
         "backend-unavailable",
         "provider-unavailable",
         "empty-digest",
+        "empty-list",
     }
 )
 REPLAY_OR_LIFECYCLE_CATEGORIES = frozenset({"replay"})
@@ -101,11 +106,11 @@ UNCERTAINTY_COPY_TERMS = (
     "invalid",
     "unauthorized",
     "backend unavailable",
+    "empty list",
 )
 SUCCESS_COPY_TERMS = ("healthy", "authoritative", "success", "ok")
 STORY_99_1_FORBIDDEN_RENDERABLE_ROUTES = frozenset(
     {
-        "/v1/tasks",
         "/v1/sessions",
         "/v1/sessions/{session_id}",
         "/v1/tasks/{task_id}/logs/digest/stream",
@@ -265,15 +270,24 @@ LIVE_VALUE_CONTRACTS = (
         ),
     ),
     LiveValueContract(
-        name="aggregate-overview",
+        name="aggregate-task-list",
         source_category="aggregate",
         route_pattern="/v1/tasks",
-        route_contract="needs-separate-contract",
-        timestamp_policy="not-available-until-contract",
-        freshness_policy="not-authoritative-until-contract",
+        route_contract="approved",
+        timestamp_policy="retrieved-at-required",
+        freshness_policy="fresh-or-stale-required",
         required_identifiers=(),
-        allowed_states=frozenset({"unavailable", "needs-contract"}),
-        unavailable_copy="Aggregate overview unavailable: needs contract before live data.",
+        allowed_states=frozenset(
+            {
+                "healthy",
+                "empty-list",
+                "stale",
+                "invalid",
+                "unauthorized",
+                "backend-unavailable",
+                "unavailable",
+            }
+        ),
     ),
     LiveValueContract(
         name="session-list",
@@ -290,11 +304,11 @@ LIVE_VALUE_CONTRACTS = (
 
 DEGRADED_STATE_FIXTURES = (
     DisplayStateFixture(
-        name="aggregate-missing-contract",
+        name="aggregate-empty-list",
         source_category="aggregate",
         route_pattern="/v1/tasks",
-        state="needs-contract",
-        copy="Unavailable: needs contract before aggregate display.",
+        state="empty-list",
+        copy="Empty list; aggregate display is not trusted until task rows exist.",
     ),
     DisplayStateFixture(
         name="session-missing-contract",
@@ -363,13 +377,13 @@ def test_every_future_live_value_declares_source_freshness_and_identifier_contra
     } <= covered_categories
 
 
-def test_unapproved_aggregate_session_and_stream_reads_render_needs_contract_copy() -> None:
+def test_unapproved_session_and_stream_reads_render_needs_contract_copy() -> None:
     unapproved = [
         contract
         for contract in LIVE_VALUE_CONTRACTS
         if contract.route_contract == "needs-separate-contract"
     ]
-    assert {contract.source_category for contract in unapproved} == {"aggregate", "session"}
+    assert {contract.source_category for contract in unapproved} == {"session"}
 
     for contract in unapproved:
         assert contract.route_pattern in NEEDS_SEPARATE_CONTRACT_ROUTES
@@ -412,7 +426,7 @@ def test_guard_sensitivity_rejects_missing_provenance_freshness_or_identifiers()
         replace(valid, timestamp_policy="not-available-until-contract"),
         replace(valid, freshness_policy="not-authoritative-until-contract"),
         replace(valid, required_identifiers=()),
-        replace(valid, route_pattern="/v1/tasks", route_contract="approved"),
+        replace(valid, route_pattern="/v1/tasks/search", route_contract="approved"),
     )
 
     for contract in invalid_contracts:
@@ -421,14 +435,6 @@ def test_guard_sensitivity_rejects_missing_provenance_freshness_or_identifiers()
 
 def test_guard_sensitivity_rejects_synthetic_authoritative_success_for_missing_contracts() -> None:
     bad_fixtures = (
-        DisplayStateFixture(
-            name="bad-aggregate-success",
-            source_category="aggregate",
-            route_pattern="/v1/tasks",
-            state="healthy",
-            copy="Healthy authoritative aggregate success.",
-            authoritative=True,
-        ),
         DisplayStateFixture(
             name="bad-session-success",
             source_category="session",
@@ -456,6 +462,7 @@ def test_story_99_1_view_models_cover_every_approved_phase_20_panel_route() -> N
         set(live_read_adapter.story_96_1_route_patterns())
         | set(live_read_adapter.story_96_2_route_patterns())
         | set(live_read_adapter.story_108_2_route_patterns())
+        | set(live_read_adapter.story_109_2_route_patterns())
     )
 
     assert {view_model.route_pattern for view_model in view_models} == expected
@@ -470,6 +477,7 @@ def test_story_99_1_view_models_cover_every_approved_phase_20_panel_route() -> N
             live_read_adapter.story_96_1_panel_contracts()
             + live_read_adapter.story_96_2_panel_contracts()
             + live_read_adapter.story_108_2_panel_contracts()
+            + live_read_adapter.story_109_2_panel_contracts()
         )
         for route in panel.routes
     }
@@ -527,7 +535,7 @@ def test_story_99_1_degraded_states_are_explicit_non_authoritative_and_non_norma
                 assert display_state.replace("-", " ") in view_model.display_copy.lower()
 
 
-def test_story_99_1_forbidden_aggregate_session_and_digest_routes_fail_closed() -> None:
+def test_story_99_1_forbidden_session_and_digest_routes_fail_closed() -> None:
     view_model_routes = {
         view_model.route_pattern for view_model in live_read_adapter.story_99_1_route_view_models()
     }
@@ -612,7 +620,7 @@ def assert_render_state_is_fail_closed(fixture: DisplayStateFixture) -> None:
     assert not fixture.authoritative, fixture
     assert_copy_is_bounded_uncertainty(fixture.copy)
     lowered = fixture.copy.lower()
-    if fixture.source_category in {"aggregate", "session"}:
+    if fixture.source_category == "session":
         assert fixture.route_pattern in NEEDS_SEPARATE_CONTRACT_ROUTES, fixture
         assert fixture.state in {"unavailable", "needs-contract"}, fixture
     for success_term in SUCCESS_COPY_TERMS:
