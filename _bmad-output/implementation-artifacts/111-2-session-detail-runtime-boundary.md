@@ -2,7 +2,7 @@
 
 ## Status
 
-Review — tests-first implementation, local validation, independent code-review, and UltraQA complete; final push/remote-CI closure pending.
+Done — tests-first implementation, local validation, independent code-review, UltraQA, push, and remote CI complete.
 
 ## Scope implemented
 
@@ -127,6 +127,16 @@ git diff --check
 # pass
 ```
 
+
+## Remote CI evidence
+
+Implementation commit `f2ce548056c3c75168460d87def4c387867cba99` was pushed to `main`. GitHub Actions `ci` run `28259115072` completed successfully: https://github.com/salacoste/oh-my-bmad/actions/runs/28259115072.
+
+Jobs passed:
+
+- Registry-state tests (Postgres service container)
+- PR gate (ruff + mypy + pytest)
+
 ## Deferred / not authorized
 
 Story 111.2 does not authorize session mutation/search/discovery, automatic session-list row drill-down, task/detail/digest/history/trace/replay traversal, digest streaming, broad dashboard wiring, generated live data, browser-side LLM generation/summarization, cache warming/background refresh, mutation/control behavior, services/MCP/dependencies/CI workflow changes, deployment changes, production credentials, or production operations.
@@ -135,6 +145,6 @@ Story 111.2 does not authorize session mutation/search/discovery, automatic sess
 
 - Independent code-review returned `APPROVE` with architectural status `CLEAR`.
 - UltraQA passed adversarial runtime/API boundary scenarios.
-- Story 111.3 may close Epic 111 only after push plus remote CI evidence.
+- Story 111.3 closes Epic 111 after push plus remote CI evidence.
 
 Generated: 2026-06-26T18:35:54Z

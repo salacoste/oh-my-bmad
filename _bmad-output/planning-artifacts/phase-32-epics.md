@@ -45,7 +45,7 @@ Plan, prove, and close a bounded dashboard route boundary for one session detail
 
 ### Story 111.2 — Session detail runtime/API contract boundary
 
-**Status:** review — tests-first implementation, local validation, code-review APPROVE/CLEAR, and UltraQA PASS complete; push/remote CI pending before done.
+**Status:** done — tests-first implementation, local validation, code-review APPROVE/CLEAR, UltraQA PASS, push, and remote CI run `28259115072` complete.
 
 **Intent:** Implement a separately approved, tests-first boundary for exactly `GET /v1/sessions/{session_id}` if and only if the route contract is proven or implemented with narrow additive API tests.
 
@@ -64,7 +64,7 @@ Plan, prove, and close a bounded dashboard route boundary for one session detail
 
 ### Story 111.3 — Phase 32 / Epic 111 final validation closure
 
-**Status:** backlog until Story 111.2 implementation, final review, QA decision, push, and remote CI evidence exist.
+**Status:** done after Story 111.2 implementation, final review, QA decision, push, and remote CI run `28259115072`.
 
 **Intent:** Complete docs/status final closure only after Story 111.2 runtime/API evidence, final review, QA decision, push, and remote CI evidence exist.
 
