@@ -33,13 +33,14 @@ APPROVED_DASHBOARD_ROUTES = frozenset(
         "/v1/events/replay/validate",
         "/v1/health",
         "/v1/tasks/{task_id}/logs/digest",
+        "/v1/tasks/{task_id}/logs/digest/stream",
         "/v1/tasks",
         "/v1/sessions",
         "/v1/sessions/{session_id}",
     }
 )
 NEEDS_CONTRACT_ROUTES = frozenset()
-DIGEST_STREAM_ROUTES = frozenset({"/v1/tasks/{task_id}/logs/digest/stream"})
+DIGEST_STREAM_ROUTES = frozenset()
 
 
 def _panel_route_patterns() -> tuple[str, ...]:
@@ -49,6 +50,7 @@ def _panel_route_patterns() -> tuple[str, ...]:
             *adapter.story_96_1_panel_contracts(),
             *adapter.story_96_2_panel_contracts(),
             *adapter.story_108_2_panel_contracts(),
+            *adapter.story_112_2_panel_contracts(),
             *adapter.story_109_2_panel_contracts(),
             *adapter.story_110_2_panel_contracts(),
             *adapter.story_111_2_panel_contracts(),
@@ -72,11 +74,14 @@ def test_dashboard_approved_route_inventory_is_exact_and_get_only() -> None:
         assert live_contracts.is_allowlisted_dashboard_read("GET", route_pattern)
 
 
-def test_dashboard_aggregate_session_list_and_detail_are_approved() -> None:
+def test_dashboard_aggregate_session_digest_stream_list_and_detail_are_approved() -> None:
     assert adapter.unavailable_read_contracts() == ()
     assert live_contracts.is_allowlisted_dashboard_read("GET", "/v1/tasks")
     assert live_contracts.is_allowlisted_dashboard_read("GET", "/v1/sessions")
     assert live_contracts.is_allowlisted_dashboard_read("GET", "/v1/sessions/{session_id}")
+    assert live_contracts.is_allowlisted_dashboard_read(
+        "GET", "/v1/tasks/{task_id}/logs/digest/stream"
+    )
 
     for route_pattern in NEEDS_CONTRACT_ROUTES:
         assert route_pattern in adapter.STORY_99_1_NEEDS_SEPARATE_CONTRACT_ROUTE_PATTERNS

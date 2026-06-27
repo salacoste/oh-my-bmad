@@ -27,6 +27,7 @@ EXPECTED_FIXTURE_ROUTE_PATTERNS = frozenset(
         live_read_adapter.story_96_1_panel_contracts()
         + live_read_adapter.story_96_2_panel_contracts()
         + live_read_adapter.story_108_2_panel_contracts()
+        + live_read_adapter.story_112_2_panel_contracts()
         + live_read_adapter.story_109_2_panel_contracts()
         + live_read_adapter.story_110_2_panel_contracts()
         + live_read_adapter.story_111_2_panel_contracts()
@@ -36,11 +37,7 @@ EXPECTED_FIXTURE_ROUTE_PATTERNS = frozenset(
 EXPECTED_APPROVED_ROUTE_PATTERNS = frozenset(
     route for method, route in live_contracts.APPROVED_READ_ROUTES if method == "GET"
 )
-EXPLICIT_FORBIDDEN_FIXTURE_ROUTES = frozenset(
-    {
-        "/v1/tasks/{task_id}/logs/digest/stream",
-    }
-)
+EXPLICIT_FORBIDDEN_FIXTURE_ROUTES = frozenset()
 STATIC_FIXTURE_TERMS = ("static", "fixture", "readiness")
 RUNTIME_DISCONNECTED_TERMS = ("runtime data remains disconnected", "contract fixture")
 FORBIDDEN_SUCCESS_CLAIMS = ("live", "current", "fetched", "backend success")
@@ -134,6 +131,7 @@ def test_story_99_2_fixture_snapshot_route_coverage_matches_story_99_1_view_mode
             live_read_adapter.story_96_1_panel_contracts()
             + live_read_adapter.story_96_2_panel_contracts()
             + live_read_adapter.story_108_2_panel_contracts()
+            + live_read_adapter.story_112_2_panel_contracts()
             + live_read_adapter.story_109_2_panel_contracts()
             + live_read_adapter.story_110_2_panel_contracts()
             + live_read_adapter.story_111_2_panel_contracts()

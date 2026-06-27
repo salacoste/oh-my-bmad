@@ -15,6 +15,7 @@ Versioned at `/v1`. Versions are additive; `/v1` semantics are frozen once shipp
 | `/v1/tasks/{task_id}` | GET | `get_task_by_id` | Fetch reconstituted task state (FR4). |
 | `/v1/tasks/{task_id}/decisions` | POST | `post_decision` | Operator decisions: approve / reject / stop / retry (Story 6.4). |
 | `/v1/tasks/{task_id}/logs/digest` | GET | `get_logs_digest` | LLM-summarized event digest for a task (Story 7.3, FR5). |
+| `/v1/tasks/{task_id}/logs/digest/stream` | GET | `get_logs_digest_stream` | Bounded task-scoped digest stream (Story 112.2). Query-free/body-free; returns `application/x-ndjson` frames (`open`, `chunk`, `final`) from the visible path `task_id` only. Provider-unavailable final frames remain non-authoritative. |
 | `/v1/tasks/{task_id}/events` | GET | `get_task_events` | Raw event stream with pagination (Story 7.5, FR6). |
 | `/v1/events/replay` | GET | `get_events_replay` | Read-only point-in-time replay from hot logs plus optional validated archives (FR135, FR139). |
 | `/v1/tasks/{task_id}/history` | GET | `get_task_history` | Task event history from hot logs plus opt-in validated archive segments (FR136, FR152-FR155). |

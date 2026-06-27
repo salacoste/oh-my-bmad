@@ -20,6 +20,7 @@ APPROVED_TRACE_SCRIPT = "trace-correlation.js"
 APPROVED_HISTORY_REPLAY_SCRIPT = "history-replay.js"
 APPROVED_LIFECYCLE_SCRIPT = "lifecycle-snapshot.js"
 APPROVED_DIGEST_SCRIPT = "task-log-digest.js"
+APPROVED_DIGEST_STREAM_SCRIPT = "digest-stream.js"
 APPROVED_SCRIPTS = [
     APPROVED_HEALTH_SCRIPT,
     APPROVED_TASK_DETAIL_SCRIPT,
@@ -31,6 +32,7 @@ APPROVED_SCRIPTS = [
     APPROVED_HISTORY_REPLAY_SCRIPT,
     APPROVED_LIFECYCLE_SCRIPT,
     APPROVED_DIGEST_SCRIPT,
+    APPROVED_DIGEST_STREAM_SCRIPT,
 ]
 VISIBLE_TASK_ID = "fixture-task-id"
 ROUTE_PREFIX = "/v1/tasks/"
@@ -203,7 +205,7 @@ def test_story_108_2_visible_task_id_source_is_not_hidden_data() -> None:
     assert "data-task-id" not in parser.task_source_attrs
     raw = DASHBOARD.read_text(encoding="utf-8").lower()
     assert "visible task_id source" in raw
-    assert "no digest stream" in raw
+    assert "digest stream is a separate story 112.2 route-local panel" in raw
     assert "no browser-side generation" in raw
 
 

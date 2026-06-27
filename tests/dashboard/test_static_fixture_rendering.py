@@ -27,11 +27,7 @@ _ADAPTER_SPEC.loader.exec_module(live_read_adapter)
 FIXTURE_SECTION_ID = "fixture-readiness"
 FIXTURE_ROW_LIST_LABEL = "story 99.2 fixture-backed approved route rows"
 DEGRADED_SUMMARY_LIST_LABEL = "bounded degraded fixture states"
-FORBIDDEN_STATIC_ROUTE_PATTERNS = frozenset(
-    {
-        "/v1/tasks/{task_id}/logs/digest/stream",
-    }
-)
+FORBIDDEN_STATIC_ROUTE_PATTERNS = frozenset()
 REQUIRED_NON_AUTHORITATIVE_STATES = frozenset(
     {
         "backend-unavailable",
@@ -124,17 +120,13 @@ def test_story_100_1_degraded_unavailable_rendering_choice_is_bounded_summary() 
         assert state in text
 
 
-def test_story_100_1_forbidden_digest_stream_route_fails_closed_in_static_copy() -> None:
+def test_story_112_2_digest_stream_route_is_fixture_renderable_after_contract() -> None:
     text = fixture_section_text()
-    lowered = text.lower()
-
-    for route_pattern in FORBIDDEN_STATIC_ROUTE_PATTERNS:
-        probe = live_read_adapter.story_99_2_route_fixture_probe(route_pattern)
-        assert probe.renderable is False
-        assert probe.display_copy in text
-        assert route_pattern in text
-    assert "digest stream fails closed" in lowered
-    assert "needs-contract" in lowered
+    route_pattern = "/v1/tasks/{task_id}/logs/digest/stream"
+    probe = live_read_adapter.story_99_2_route_fixture_probe(route_pattern)
+    assert probe.renderable is True
+    assert route_pattern in text
+    assert "digest stream static fixture readiness" in text.lower()
 
 
 def test_story_100_1_fixture_section_keeps_routes_inert_and_avoids_runtime_controls() -> None:

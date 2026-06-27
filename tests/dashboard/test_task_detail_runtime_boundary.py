@@ -20,6 +20,7 @@ APPROVED_TRACE_SCRIPT = "trace-correlation.js"
 APPROVED_HISTORY_REPLAY_SCRIPT = "history-replay.js"
 APPROVED_LIFECYCLE_SCRIPT = "lifecycle-snapshot.js"
 APPROVED_DIGEST_SCRIPT = "task-log-digest.js"
+APPROVED_DIGEST_STREAM_SCRIPT = "digest-stream.js"
 APPROVED_ROUTE_PREFIX = "/v1/tasks/"
 VISIBLE_TASK_ID = "fixture-task-id"
 FORBIDDEN_ROUTE_MARKERS = (
@@ -162,6 +163,7 @@ def test_story_102_2_runtime_script_allowlist_is_exact() -> None:
         {"src": APPROVED_HISTORY_REPLAY_SCRIPT, "defer": ""},
         {"src": APPROVED_LIFECYCLE_SCRIPT, "defer": ""},
         {"src": APPROVED_DIGEST_SCRIPT, "defer": ""},
+        {"src": APPROVED_DIGEST_STREAM_SCRIPT, "defer": ""},
     ]
     assert not "".join(parser.inline_script_text).strip()
     assert parser.controls == ["input", "button"]
@@ -192,6 +194,7 @@ def test_story_102_2_runtime_module_graph_is_closed() -> None:
             APPROVED_HISTORY_REPLAY_SCRIPT,
             APPROVED_LIFECYCLE_SCRIPT,
             APPROVED_DIGEST_SCRIPT,
+            APPROVED_DIGEST_STREAM_SCRIPT,
         ]
     )
 

@@ -20,6 +20,7 @@ CORE_APPROVED_READ_ROUTES = frozenset(
         ("GET", "/v1/events/replay/validate"),
         ("GET", "/v1/health"),
         ("GET", "/v1/tasks/{task_id}/logs/digest"),
+        ("GET", "/v1/tasks/{task_id}/logs/digest/stream"),
         ("GET", "/v1/tasks"),
         ("GET", "/v1/sessions"),
         ("GET", "/v1/sessions/{session_id}"),
@@ -61,6 +62,7 @@ APPROVED_TRACE_RUNTIME_SCRIPT = "trace-correlation.js"
 APPROVED_HISTORY_REPLAY_RUNTIME_SCRIPT = "history-replay.js"
 APPROVED_LIFECYCLE_RUNTIME_SCRIPT = "lifecycle-snapshot.js"
 APPROVED_DIGEST_RUNTIME_SCRIPT = "task-log-digest.js"
+APPROVED_DIGEST_STREAM_RUNTIME_SCRIPT = "digest-stream.js"
 APPROVED_RUNTIME_SCRIPTS = {
     APPROVED_HEALTH_RUNTIME_SCRIPT,
     APPROVED_TASK_DETAIL_RUNTIME_SCRIPT,
@@ -72,6 +74,7 @@ APPROVED_RUNTIME_SCRIPTS = {
     APPROVED_HISTORY_REPLAY_RUNTIME_SCRIPT,
     APPROVED_LIFECYCLE_RUNTIME_SCRIPT,
     APPROVED_DIGEST_RUNTIME_SCRIPT,
+    APPROVED_DIGEST_STREAM_RUNTIME_SCRIPT,
 }
 
 RUNTIME_CALL_MARKERS = (
@@ -520,7 +523,7 @@ def test_approved_read_route_contract_contains_only_get_methods() -> None:
         assert method not in FORBIDDEN_METHODS, (method, route)
         assert route.startswith("/v1/"), route
     assert ("GET", "/v1/tasks/{task_id}/logs/digest") in CORE_APPROVED_READ_ROUTES
-    assert ("GET", "/v1/tasks/{task_id}/logs/digest/stream") not in CORE_APPROVED_READ_ROUTES
+    assert ("GET", "/v1/tasks/{task_id}/logs/digest/stream") in CORE_APPROVED_READ_ROUTES
 
 
 def test_dashboard_static_assets_make_no_api_or_mutating_method_calls() -> None:

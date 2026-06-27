@@ -80,6 +80,7 @@ EXPECTED_IDENTIFIERS_BY_ROUTE = {
     "/v1/events/replay/validate": frozenset({"replay_id"}),
     "/v1/health": frozenset(),
     "/v1/tasks/{task_id}/logs/digest": frozenset({"task_id"}),
+    "/v1/tasks/{task_id}/logs/digest/stream": frozenset({"task_id"}),
     "/v1/tasks": frozenset(),
     "/v1/sessions": frozenset(),
     "/v1/sessions/{session_id}": frozenset({"session_id"}),
@@ -111,11 +112,7 @@ UNCERTAINTY_COPY_TERMS = (
     "empty list",
 )
 SUCCESS_COPY_TERMS = ("healthy", "authoritative", "success", "ok")
-STORY_99_1_FORBIDDEN_RENDERABLE_ROUTES = frozenset(
-    {
-        "/v1/tasks/{task_id}/logs/digest/stream",
-    }
-)
+STORY_99_1_FORBIDDEN_RENDERABLE_ROUTES = frozenset()
 STORY_99_1_FORBIDDEN_RENDERED_TERMS = (
     "post",
     "put",
@@ -266,6 +263,27 @@ LIVE_VALUE_CONTRACTS = (
                 "backend-unavailable",
                 "provider-unavailable",
                 "empty-digest",
+            }
+        ),
+    ),
+    LiveValueContract(
+        name="digest-stream",
+        source_category="digest",
+        route_pattern="/v1/tasks/{task_id}/logs/digest/stream",
+        route_contract="approved",
+        timestamp_policy="retrieved-at-required",
+        freshness_policy="fresh-or-stale-required",
+        required_identifiers=("task_id",),
+        allowed_states=frozenset(
+            {
+                "healthy",
+                "unavailable",
+                "partial",
+                "stale",
+                "invalid",
+                "unauthorized",
+                "backend-unavailable",
+                "provider-unavailable",
             }
         ),
     ),
@@ -490,6 +508,7 @@ def test_story_99_1_view_models_cover_every_approved_phase_20_panel_route() -> N
         set(live_read_adapter.story_96_1_route_patterns())
         | set(live_read_adapter.story_96_2_route_patterns())
         | set(live_read_adapter.story_108_2_route_patterns())
+        | set(live_read_adapter.story_112_2_route_patterns())
         | set(live_read_adapter.story_109_2_route_patterns())
         | set(live_read_adapter.story_110_2_route_patterns())
         | set(live_read_adapter.story_111_2_route_patterns())
@@ -507,6 +526,7 @@ def test_story_99_1_view_models_cover_every_approved_phase_20_panel_route() -> N
             live_read_adapter.story_96_1_panel_contracts()
             + live_read_adapter.story_96_2_panel_contracts()
             + live_read_adapter.story_108_2_panel_contracts()
+            + live_read_adapter.story_112_2_panel_contracts()
             + live_read_adapter.story_109_2_panel_contracts()
             + live_read_adapter.story_110_2_panel_contracts()
             + live_read_adapter.story_111_2_panel_contracts()
@@ -567,7 +587,7 @@ def test_story_99_1_degraded_states_are_explicit_non_authoritative_and_non_norma
                 assert display_state.replace("-", " ") in view_model.display_copy.lower()
 
 
-def test_story_99_1_forbidden_digest_stream_fails_closed_after_session_detail_promotion() -> None:
+def test_story_99_1_no_forbidden_renderable_routes_after_digest_stream_promotion() -> None:
     view_model_routes = {
         view_model.route_pattern for view_model in live_read_adapter.story_99_1_route_view_models()
     }

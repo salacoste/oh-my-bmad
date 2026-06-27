@@ -438,6 +438,228 @@ class TestLineCountBoundary:
 
 
 # ---------------------------------------------------------------------------
+# Story 112.2: GET /v1/tasks/{task_id}/logs/digest/stream NDJSON boundary
+# ---------------------------------------------------------------------------
+
+
+def _ndjson_frames(text: str) -> list[dict[str, object]]:
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
+class TestDigestStreamBoundary:
+    @pytest.mark.asyncio
+    async def test_digest_stream_returns_bounded_ndjson_open_chunk_final_frames(
+        self, digest_client: AsyncClient
+    ) -> None:
+        r = await digest_client.get(f"/v1/tasks/{_TID}/logs/digest/stream")
+
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("application/x-ndjson")
+        frames = _ndjson_frames(r.text)
+        assert [frame["type"] for frame in frames] == ["open", "chunk", "final"]
+        allowed_keys = {
+            "type",
+            "task_id",
+            "route",
+            "sequence",
+            "chunk",
+            "retrieved_at",
+            "freshness_state",
+            "display_state",
+            "authority_state",
+            "provenance",
+            "request_id",
+            "trace_id",
+            "correlation_id",
+            "truncated",
+            "line_count",
+            "chunk_count",
+        }
+        assert all(set(frame) <= allowed_keys for frame in frames)
+        assert all(frame["task_id"] == _TID for frame in frames)
+        assert frames[0]["route"] == "GET /v1/tasks/{task_id}/logs/digest/stream"
+        assert frames[0]["display_state"] == "partial"
+        assert frames[0]["authority_state"] == "non-authoritative"
+        assert frames[1]["sequence"] == 1
+        assert isinstance(frames[1]["chunk"], str)
+        assert 1 <= len(str(frames[1]["chunk"])) <= 2_000
+        assert frames[-1]["display_state"] == "healthy"
+        assert frames[-1]["authority_state"] == "authoritative"
+        assert frames[-1]["freshness_state"] == "fresh"
+        line_count = frames[-1]["line_count"]
+        assert isinstance(line_count, int)
+        assert line_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_digest_stream_rejects_query_selectors_and_request_body(
+        self, digest_client: AsyncClient
+    ) -> None:
+        query = await digest_client.get(f"/v1/tasks/{_TID}/logs/digest/stream?mode=raw")
+        body = await digest_client.request(
+            "GET", f"/v1/tasks/{_TID}/logs/digest/stream", content=b'{"raw":true}'
+        )
+
+        assert query.status_code == 400
+        assert body.status_code == 400
+        assert "does not accept query" in query.text
+        assert "does not accept a request body" in body.text
+
+    @pytest.mark.asyncio
+    async def test_digest_stream_404_when_no_events(self, no_events_client: AsyncClient) -> None:
+        r = await no_events_client.get(f"/v1/tasks/{_TID_NO_EVENTS}/logs/digest/stream")
+        assert r.status_code == 404
+        assert r.headers["content-type"].startswith("application/problem+json")
+
+    @pytest.mark.asyncio
+    async def test_digest_stream_provider_unavailable_still_streams_bounded_fallback(
+        self, no_client_configured: AsyncClient
+    ) -> None:
+        r = await no_client_configured.get(f"/v1/tasks/{_TID}/logs/digest/stream")
+
+        assert r.status_code == 200
+        frames = _ndjson_frames(r.text)
+        assert [frame["type"] for frame in frames] == ["open", "chunk", "final"]
+        assert frames[-1]["display_state"] == "provider-unavailable"
+        assert frames[-1]["authority_state"] == "non-authoritative"
+        rendered = " ".join(json.dumps(frame, sort_keys=True) for frame in frames).lower()
+        assert "llm unavailable" in rendered
+        for forbidden in (
+            "description",
+            "payload_json",
+            "prompt",
+            "anthropic",
+            "openai",
+            "provider_internal",
+            "file://",
+            "http://",
+            "https://",
+            "/users/",
+            "retry",
+            "control",
+        ):
+            assert forbidden not in rendered
+
+    @pytest.mark.asyncio
+    async def test_digest_stream_suppresses_overbroad_successful_llm_output(
+        self, tmp_path: Path
+    ) -> None:
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_task_and_events(db_url, event_count=5)
+        app = build_app(
+            base_dir=tmp_path / "events",
+            db_url=db_url,
+            clock=_FROZEN_CLOCK,
+        )
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app),
+                base_url="http://testserver",
+            ) as client,
+        ):
+            app.state.anthropic_client = _make_mock_anthropic_client(
+                "Safe-looking summary with Payload_JSON, Provider Internals, raw logs, "
+                "raw events, hrefs, URLs, source token, HTTPS://example.test/raw, "
+                "\"/Users/operator/work\", '/tmp/operator/work', `/tmp/operator/work`, "
+                '"C:\\tmp\\x", /home/operator/work, Prompts, OpenAI metadata, Retry, '
+                "Control, and control hints."
+            )
+            r = await client.get(f"/v1/tasks/{_TID}/logs/digest/stream")
+
+        assert r.status_code == 200
+        frames = _ndjson_frames(r.text)
+        assert [frame["type"] for frame in frames] == ["open", "chunk", "final"]
+        assert frames[-1]["display_state"] == "invalid"
+        assert frames[-1]["authority_state"] == "non-authoritative"
+        rendered = " ".join(json.dumps(frame, sort_keys=True) for frame in frames).lower()
+        assert "suppressed by safety boundary" in rendered
+        for forbidden in (
+            "payload_json",
+            "provider internal",
+            "raw log",
+            "raw event",
+            "href",
+            "url",
+            "source token",
+            "https://",
+            "/users/",
+            "/tmp/",
+            "/home/",
+            "c:\\",
+            "prompt",
+            "openai",
+            "retry",
+            "control",
+        ):
+            assert forbidden not in rendered
+
+    @pytest.mark.asyncio
+    async def test_digest_stream_chunks_are_bounded_for_large_digest(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_task_and_events(db_url, event_count=5)
+        app = build_app(
+            base_dir=tmp_path / "events",
+            db_url=db_url,
+            clock=_FROZEN_CLOCK,
+        )
+        app.state.anthropic_client = _make_mock_anthropic_client(
+            "\n".join(f"Line {i}" for i in range(25))
+        )
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app),
+                base_url="http://testserver",
+            ) as client,
+        ):
+            r = await client.get(f"/v1/tasks/{_TID}/logs/digest/stream")
+
+        assert r.status_code == 200
+        frames = _ndjson_frames(r.text)
+        chunks = [frame for frame in frames if frame["type"] == "chunk"]
+        assert 1 <= len(chunks) <= 10
+        assert all(1 <= len(str(frame["chunk"])) <= 2_000 for frame in chunks)
+        line_count = frames[-1]["line_count"]
+        assert frames[-1]["chunk_count"] == len(chunks)
+        assert isinstance(line_count, int)
+        assert line_count <= 20
+
+    @pytest.mark.asyncio
+    async def test_digest_stream_exactly_ten_chunks_is_not_marked_truncated(
+        self, tmp_path: Path
+    ) -> None:
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_task_and_events(db_url, event_count=5)
+        app = build_app(
+            base_dir=tmp_path / "events",
+            db_url=db_url,
+            clock=_FROZEN_CLOCK,
+        )
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app),
+                base_url="http://testserver",
+            ) as client,
+        ):
+            app.state.anthropic_client = _make_mock_anthropic_client("x" * 20_000)
+            r = await client.get(f"/v1/tasks/{_TID}/logs/digest/stream")
+
+        assert r.status_code == 200
+        frames = _ndjson_frames(r.text)
+        chunks = [frame for frame in frames if frame["type"] == "chunk"]
+        assert len(chunks) == 10
+        assert frames[-1]["chunk_count"] == 10
+        assert frames[-1]["truncated"] is False
+
+
+# ---------------------------------------------------------------------------
 # Story 7.5.4: Configurable model + malformed timestamp sentinel
 # ---------------------------------------------------------------------------
 

@@ -17,6 +17,7 @@ OPTIONAL_NON_CORE_READ_ROUTES = boundary.OPTIONAL_NON_CORE_READ_ROUTES
 FORBIDDEN_METHODS = boundary.FORBIDDEN_METHODS
 APPROVED_STORY_107_2_CREATE_SOURCE = str(STATIC_ROOT / "lifecycle-snapshot.js")
 APPROVED_STORY_107_2_CREATE_ROUTE = "/v1/events/replay/snapshots"
+APPROVED_STORY_112_2_STREAM_SOURCE = str(STATIC_ROOT / "digest-stream.js")
 
 NEEDS_SEPARATE_CONTRACT_GET_ROUTES = frozenset(
     {
@@ -24,7 +25,6 @@ NEEDS_SEPARATE_CONTRACT_GET_ROUTES = frozenset(
         "/v1/tasks/{task_id}/actions",
         "/v1/tasks/{task_id}/retry",
         "/v1/events/replay/snapshots/{snapshot_id}",
-        "/v1/tasks/{task_id}/logs/digest/stream",
     }
 )
 
@@ -82,7 +82,7 @@ def test_route_inventory_is_imported_from_static_boundary_contract() -> None:
     assert APPROVED_READ_ROUTES is boundary.CORE_APPROVED_READ_ROUTES
     assert OPTIONAL_NON_CORE_READ_ROUTES is boundary.OPTIONAL_NON_CORE_READ_ROUTES
     assert FORBIDDEN_METHODS is boundary.FORBIDDEN_METHODS
-    assert len(APPROVED_READ_ROUTES) == 12
+    assert len(APPROVED_READ_ROUTES) == 13
 
 
 def test_candidate_core_read_routes_are_unique_normalized_and_get_only() -> None:
@@ -106,10 +106,10 @@ def test_digest_aggregate_and_session_reads_are_promoted_and_adjacent_routes_nee
     None
 ):
     assert ("GET", "/v1/tasks/{task_id}/logs/digest") in APPROVED_READ_ROUTES
+    assert ("GET", "/v1/tasks/{task_id}/logs/digest/stream") in APPROVED_READ_ROUTES
     assert ("GET", "/v1/tasks") in APPROVED_READ_ROUTES
     assert ("GET", "/v1/sessions") in APPROVED_READ_ROUTES
     assert ("GET", "/v1/sessions/{session_id}") in APPROVED_READ_ROUTES
-    assert ("GET", "/v1/tasks/{task_id}/logs/digest/stream") not in APPROVED_READ_ROUTES
     for route in NEEDS_SEPARATE_CONTRACT_GET_ROUTES:
         assert ("GET", route) not in APPROVED_READ_ROUTES
         assert not is_allowlisted_dashboard_read("GET", route), route
@@ -140,7 +140,6 @@ def test_guard_sensitivity_rejects_unapproved_live_read_calls_and_methods() -> N
         "fetch('/v1/tasks', {method: 'GET', credentials: 'include'})",
         "fetch('/v1/sessions', {method: 'GET', body: '{}'})",
         "fetch('/v1/sessions/abc', {method: 'GET', body: '{}'})",
-        "fetch('/v1/tasks/abc/logs/digest/stream', {method: 'GET'})",
         "fetch('/v1/tasks/abc', {method: 'POST'})",
         "fetch('/v1/tasks/abc/events', {method: 'PATCH'})",
     )
@@ -214,6 +213,8 @@ def assert_no_forbidden_effect_markers(text: str, *, source: str) -> None:
     lowered = text.lower()
     for marker in WRITER_OR_MUTATION_IMPORT_MARKERS + LIFECYCLE_OR_BACKGROUND_EFFECT_MARKERS:
         if source == APPROVED_STORY_107_2_CREATE_SOURCE and marker == "snapshot creation":
+            continue
+        if source == APPROVED_STORY_112_2_STREAM_SOURCE and marker == "settimeout":
             continue
         assert marker not in lowered, (source, marker)
     assert not ACTIONABLE_MUTATION_WORD_RE.search(text), source

@@ -23,6 +23,7 @@ APPROVED_SCRIPTS = [
     "history-replay.js",
     "lifecycle-snapshot.js",
     "task-log-digest.js",
+    "digest-stream.js",
 ]
 FORBIDDEN_RUNTIME_MARKERS = (
     "import ",

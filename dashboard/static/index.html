@@ -211,7 +211,7 @@
         not a replay target, not an aggregate or session source, not generated live data, and not control input.
       </p>
       <p>
-        Deferred adjacent surfaces remain unavailable: no digest stream, no aggregate task list, no session list/detail,
+        Adjacent surfaces remain bounded: digest stream is a separate Story 112.2 route-local panel; no aggregate task list fallback, no session list/detail fallback,
         no task-list/search/discovery, no browser-side generation, no cache warming, and no background refresh.
       </p>
       <p>
@@ -227,6 +227,35 @@
       <p class="meta" id="task-log-digest-correlation">Correlation: pending request, trace, or correlation id.</p>
       <p class="meta" id="task-log-digest-degraded">Degraded state: unavailable read until runtime data resolves.</p>
       <p class="meta" id="task-log-digest-detail">Digest: no digest response has been rendered yet. Confidence: unavailable until the approved digest read completes. Metadata only; digest text cannot drive adjacent routes.</p>
+    </section>
+    <section id="digest-stream" aria-labelledby="digest-stream-title">
+      <h2 id="digest-stream-title">Digest stream</h2>
+      <p class="state" id="digest-stream-status">Digest stream boundary pending: waiting for the approved NDJSON stream GET response.</p>
+      <p>
+        Source route/reference: GET /v1/tasks/{task_id}/logs/digest/stream. Story 112.2 wires this single approved task-scoped digest stream only;
+        it preserves the non-streaming digest route independently and adds no task-list/search/discovery, browser-side generation, or operator control.
+      </p>
+      <p>
+        Visible task_id source: <span id="digest-stream-task-id-source">fixture-task-id</span>.
+        This visible task_id text is the only selector for the digest stream; hidden task-list, task-search,
+        session, aggregate, event, trace, history, replay, lifecycle, query, hash, storage, and discovery selectors are unavailable.
+      </p>
+      <p>
+        Selected stream contract: fetch plus ReadableStream using application/x-ndjson frames with open, chunk, and final messages only.
+        Other stream transports, automatic reconnect, polling, workers, and background refresh remain unavailable.
+      </p>
+      <p>
+        Stream chunks are bounded backend digest-stream text and metadata only. They are not raw logs, event payloads, prompts,
+        provider internals, paths, URLs, joined task/session/event data, generated browser summaries, selectors, or control input.
+      </p>
+      <p class="meta" id="digest-stream-source">Source: GET /v1/tasks/{task_id}/logs/digest/stream. Runtime route: pending.</p>
+      <p class="meta" id="digest-stream-task-id">task_id: fixture-task-id.</p>
+      <p class="meta" id="digest-stream-freshness">Freshness: pending retrieved_at.</p>
+      <p class="meta" id="digest-stream-authority">Authority: non-authoritative until a valid final stream frame is read.</p>
+      <p class="meta" id="digest-stream-provenance">Provenance: pending backend digest stream metadata.</p>
+      <p class="meta" id="digest-stream-correlation">Correlation: pending request, trace, or correlation id.</p>
+      <p class="meta" id="digest-stream-degraded">Degraded state: unavailable stream until runtime data resolves.</p>
+      <p class="meta" id="digest-stream-detail">Stream: no digest stream response has been rendered yet. Confidence: unavailable until the approved final frame completes. Metadata only; stream text cannot drive adjacent routes.</p>
     </section>
     <section id="events" aria-labelledby="events-title">
       <h2 id="events-title">Events</h2>
@@ -452,6 +481,7 @@
         <li>Panel family: replay-readiness. Panel title: Replay readiness. Source category: replay. Source route pattern: /v1/events/replay/validate. Route input identifiers: none. Row display identifiers: replay_id. Source identifiers: source_category=fixture-replay-source. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: healthy-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: replay readiness static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
         <li>Panel family: health-readiness. Panel title: Health readiness. Source category: health. Source route pattern: /v1/health. Route input identifiers: none. Row display identifiers: none. Source identifiers: source_category=fixture-health-source. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: healthy-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: health readiness static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
         <li>Panel family: task-log-digest. Panel title: Task log digest. Source category: digest. Source route pattern: /v1/tasks/{task_id}/logs/digest. Route input identifiers: task_id. Row display identifiers: task_id, trace_id. Source identifiers: task_id=fixture-task-id. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: fresh-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: task log digest static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
+        <li>Panel family: digest-stream. Panel title: Digest stream. Source category: digest. Source route pattern: /v1/tasks/{task_id}/logs/digest/stream. Route input identifiers: task_id. Row display identifiers: task_id, trace_id. Source identifiers: task_id=fixture-task-id. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: fresh-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: digest stream static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
         <li>Panel family: aggregate-task-list. Panel title: Aggregate task list. Source category: aggregate. Source route pattern: /v1/tasks. Route input identifiers: none. Row display identifiers: task_id, event_id, trace_id. Source identifiers: source_category=fixture-aggregate-source. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: fresh-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: aggregate task list static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
         <li>Panel family: session-list. Panel title: Session list. Source category: session. Source route pattern: /v1/sessions. Route input identifiers: none. Row display identifiers: session_id, task_id. Source identifiers: source_category=fixture-session-source. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: fresh-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: session list static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
         <li>Panel family: session-detail. Panel title: Session detail. Source category: session. Source route pattern: /v1/sessions/{session_id}. Route input identifiers: session_id. Row display identifiers: session_id, task_id. Source identifiers: session_id=fixture-session-id. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: fresh-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: session detail static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
@@ -464,11 +494,8 @@
         <li>Bounded non-authoritative summary needs contract fixture review: backend-unavailable, empty-list, invalid, partial, stale, unauthorized, and unavailable states; runtime data remains disconnected.</li>
       </ul>
       <p>
-        The digest stream fails closed in this static presentation. It is not part of the approved Story 99.2 fixture-backed renderable route set.
+        The digest stream now has an exact Story 112.2 fixture-backed route row while remaining route-local and inert in this static presentation.
       </p>
-      <ul aria-label="Fail-closed non-renderable routes">
-        <li>Route pattern: /v1/tasks/{task_id}/logs/digest/stream. Display state: needs-contract. Authority state: needs-contract. Display severity: blocked. Display copy: static fixture readiness needs contract fixture review; runtime data remains disconnected.</li>
-      </ul>
       <p class="meta">Source: Story 99.2 fixture snapshot contract. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Confidence: fixture-backed static readiness only.</p>
     </section>
     <section id="health" aria-labelledby="health-title">
@@ -562,5 +589,6 @@
   <script src="history-replay.js" defer></script>
   <script src="lifecycle-snapshot.js" defer></script>
   <script src="task-log-digest.js" defer></script>
+  <script src="digest-stream.js" defer></script>
 </body>
 </html>
