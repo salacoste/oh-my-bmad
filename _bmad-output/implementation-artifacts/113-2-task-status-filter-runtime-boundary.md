@@ -2,7 +2,7 @@
 
 ## Status
 
-Done locally — exact status-filter runtime/API boundary completed tests-first for `GET /v1/tasks?status={task_status}`. Remote CI and final Epic 113 closure are deferred to Story 113.3 after this implementation commit is pushed and the CI run is green.
+Done — exact status-filter runtime/API boundary completed tests-first for `GET /v1/tasks?status={task_status}`, reviewed, pushed, and proven by green remote CI run `28298018048`. Final Epic 113 closure is recorded in Story 113.3.
 
 ## Implemented exact surface
 
@@ -24,8 +24,8 @@ Done locally — exact status-filter runtime/API boundary completed tests-first 
 - `services/registry-api/src/registry_api/routes/tasks.py` — adds the finite status selector validation, OpenAPI-visible `status` query parameter enum, status-filtered query, and filtered response model metadata.
 - `services/registry-api/src/registry_api/test_app.py` — adds tests-first coverage for OpenAPI visibility, accepted finite statuses, exact filtered response metadata, row filtering, rejected extra/repeated/unknown selectors, and GET-body rejection.
 - `docs/api-contracts.md` — documents the exact additive status-filter contract and non-goals.
-- `docs/feature-status.md` — records Story 113.2 local implementation status without claiming Story 113.3 final closure.
-- `_bmad-output/implementation-artifacts/sprint-status.yaml` — marks Story 113.2 done locally and leaves Story 113.3 as the final closure backlog item.
+- `docs/feature-status.md` — records Story 113.2 implementation and Story 113.3 final closure evidence.
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` — marks Story 113.2, Story 113.3, and Epic 113 done with remote CI evidence.
 
 ## Verification evidence
 
@@ -42,9 +42,13 @@ Done locally — exact status-filter runtime/API boundary completed tests-first 
 - `uv run pytest -m "not slow"` — 4376 passed, 8 skipped, 61 deselected after the OpenAPI repair.
 - `just lint` — passed after the OpenAPI repair; secret-hygiene emitted only `scancode-toolkit not installed; license scan skipped` warnings.
 - Post-cleanup fast check: `uv run pytest services/registry-api/src/registry_api/test_app.py -k 'GetTasksAggregate' -q`, targeted Ruff format/check, `uv run mypy --strict --explicit-package-bases services/registry-api`, and `git diff --check` — passed.
+- Implementation commit: `32fdbaea23816df72bd999b9eb992bab7262ab43` (`feat(dashboard): add task status filter boundary`).
+- Remote CI: GitHub Actions `ci` run `28298018048` on `main` — success.
+- CI URL: https://github.com/salacoste/oh-my-bmad/actions/runs/28298018048.
+- Remote CI jobs passed: Registry-state tests (Postgres service container); PR gate (ruff + mypy + pytest).
 
 ## Review/QA note
 
-Initial code-review returned COMMENT/WATCH for missing OpenAPI query-parameter visibility. The implementation was repaired by declaring the `status` query parameter with enum schema visibility while retaining manual fail-closed validation for extra/repeated query keys, and by adding an OpenAPI regression test. Re-review returned APPROVE/CLEAR with no remaining scoped findings. Story 113.3 may consolidate this with implementation push and remote CI evidence.
+Initial code-review returned COMMENT/WATCH for missing OpenAPI query-parameter visibility. The implementation was repaired by declaring the `status` query parameter with enum schema visibility while retaining manual fail-closed validation for extra/repeated query keys, and by adding an OpenAPI regression test. Re-review returned APPROVE/CLEAR with no remaining scoped findings. Proportional QA used the full local non-slow/lint gate plus green remote CI because the slice is backend/API-route-local and does not add dashboard/browser runtime wiring.
 
 Generated: 2026-06-27T18:30:00Z

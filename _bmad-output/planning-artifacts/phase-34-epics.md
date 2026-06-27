@@ -46,7 +46,7 @@ Plan, prove, and close a bounded dashboard/API route boundary for one status-fil
 
 ### Story 113.2 — Task status filter runtime/API contract boundary
 
-**Status:** done locally — exact tests-first `GET /v1/tasks?status={task_status}` API/runtime boundary implemented after Story 113.1 sequential Architect then Critic approval; Story 113.3 final closure awaits implementation push and remote CI evidence.
+**Status:** done — exact tests-first `GET /v1/tasks?status={task_status}` API/runtime boundary implemented after Story 113.1 sequential Architect then Critic approval, reviewed, pushed, and proven by remote CI run `28298018048`.
 
 **Intent:** Implement a separately approved, tests-first boundary for exactly `GET /v1/tasks?status={task_status}` with narrow additive API/runtime tests and no broader dashboard/API expansion.
 
@@ -65,9 +65,9 @@ Plan, prove, and close a bounded dashboard/API route boundary for one status-fil
 
 ### Story 113.3 — Phase 34 / Epic 113 final validation closure
 
-**Status:** backlog — authorized only after Story 113.2 implementation, review, QA, push, and remote CI evidence exist; local implementation exists, push/remote CI still pending.
+**Status:** done — final validation closure complete after Story 113.2 implementation, review, proportional QA, push, and green remote CI evidence.
 
-**Intent:** Complete docs/status final closure only after Story 113.2 runtime/API evidence, final review, QA decision, push, and remote CI evidence exist.
+**Intent:** Complete docs/status final closure only after Story 113.2 runtime/API evidence, final review, QA decision, push, and remote CI evidence exist. Completed with implementation commit `32fdbaea23816df72bd999b9eb992bab7262ab43` and GitHub Actions `ci` run `28298018048`.
 
 **Acceptance criteria:**
 
@@ -80,7 +80,7 @@ Plan, prove, and close a bounded dashboard/API route boundary for one status-fil
 
 1. Story 113.1 must complete with Architect APPROVE/CLEAR followed by Critic APPROVE/CLEAR before status-filter runtime/API work is authorized.
 2. Story 113.2 must remain route-local to `GET /v1/tasks?status={task_status}` and must not add free-text search, arbitrary discovery, pagination/sort controls, generated live data, browser-side LLM behavior, broad dashboard wiring, replay execution target selection, lifecycle mutation behavior, production operations, or any services/MCP/dependencies/CI/deployment modifications. Story 113.2 may run and record CI evidence, but modifying CI/deployment/dependencies/services/MCP requires a separate explicit planning gate and story.
-3. Story 113.3 may run only after implementation, final review, verifier/QA decision, push, and remote CI evidence exist.
+3. Story 113.3 ran only after implementation, final review, proportional QA decision, push, and remote CI evidence existed; it records closure evidence and keeps deferred surfaces fail-closed.
 4. Replay execution target selection and lifecycle apply/prune/rollback remain higher-risk and fail-closed unless selected by a later explicit product and architecture gate.
 
 Generated: 2026-06-27T16:32:18Z

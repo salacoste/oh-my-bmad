@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-06-27T21:32:00+03:00"
+# last_updated: "2026-06-27T21:38:00+03:00"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-27T21:32:00+03:00"
-current_phase: 34  # Phase 34 OPEN — Epic 113 task status filter runtime/API boundary implemented locally; Story 113.3 final closure awaits push/remote-CI evidence
+last_updated: "2026-06-27T21:38:00+03:00"
+current_phase: 34  # Phase 34 CLOSED — Epic 113 task status filter runtime/API boundary and final closure complete with remote CI run 28298018048
 
 development_status:
   # =========================================================================
@@ -950,15 +950,30 @@ development_status:
   112-2-digest-stream-runtime-boundary: done  # tests-first exact GET /v1/tasks/{task_id}/logs/digest/stream runtime/API contract boundary; code-review APPROVE/CLEAR, verifier PASS/CLEAR, local non-slow gate green; pushed in 4614313; remote CI run 28291210521 green
   112-3-phase-33-epic-112-final-closure: done  # docs/status final closure after Story 112.2 review/QA/push/remote-CI evidence; deferred surfaces remain fail-closed
 
-  epic-113: in-progress  # Phase 34 opened; task-list/search/discovery planning narrowed to exact GET /v1/tasks?status={task_status}; Story 113.2 implemented locally; Story 113.3 final closure awaits push/remote-CI evidence
+  epic-113: done  # Phase 34 closed; exact GET /v1/tasks?status={task_status} runtime/API boundary complete with Story 113.3 evidence consolidation and remote CI run 28298018048
   113-1-task-status-filter-route-selection-planning: done  # Phase 34 PRD/architecture/epics/status opening; selects read-only task-list/search/discovery and future GET /v1/tasks?status={task_status} only; Architect APPROVE/CLEAR and subsequent Critic APPROVE/CLEAR consensus recorded; runtime/API implementation deferred to tests-first Story 113.2 only
-  113-2-task-status-filter-runtime-boundary: done  # tests-first exact GET /v1/tasks?status={task_status} runtime/API contract boundary implemented locally with finite status selector only; Story 113.3 awaits push/remote-CI evidence
-  113-3-phase-34-epic-113-final-closure: backlog  # future docs/status final closure only after Story 113.2 review/QA/push/remote-CI evidence
+  113-2-task-status-filter-runtime-boundary: done  # tests-first exact GET /v1/tasks?status={task_status} runtime/API contract boundary; code-review APPROVE/CLEAR, local non-slow gate green; pushed in 32fdbae; remote CI run 28298018048 green
+  113-3-phase-34-epic-113-final-closure: done  # docs/status final closure after Story 113.2 review/QA/push/remote-CI evidence; deferred surfaces remain fail-closed
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-27"
+    event: story-113-3-phase-34-epic-113-final-closure-complete
+    from: backlog
+    to: done
+    story: 113-3-phase-34-epic-113-final-closure
+    reason: >
+      Story 113.3 closes Phase 34 / Epic 113 after Story 113.2 review,
+      proportional QA, local validation, push, and remote CI evidence. Commit
+      32fdbaea23816df72bd999b9eb992bab7262ab43 implements exactly
+      GET /v1/tasks?status={task_status}; GitHub Actions ci run 28298018048
+      completed successfully on main. Free-text search, arbitrary discovery,
+      pagination/sort controls, hidden selectors, row drill-down, replay
+      execution, lifecycle mutation, broad dashboard wiring, services/MCP/CI
+      expansion, production credentials, and production operations remain
+      deferred/fail-closed.
   - date: "2026-06-27"
     event: story-112-3-phase-33-epic-112-final-closure-complete
     from: backlog
@@ -4016,22 +4031,40 @@ audit_trail:
 recent_activity:
 
   - date: "2026-06-27"
+    event: story-113-3-phase-34-epic-113-final-closure-complete
+    phase: 34
+    epic: epic-113
+    story: 113-3-phase-34-epic-113-final-closure
+    source: autopilot-story-113-3-remote-ci-closure
+    summary: >-
+      Story 113.3 closes Phase 34 / Epic 113 after Story 113.2 was
+      reviewed, locally verified, pushed, and proven by GitHub Actions ci run
+      28298018048 on main. The closed route remains exactly GET
+      /v1/tasks?status={task_status} with one finite lifecycle status selector
+      only. Free-text search, arbitrary discovery, pagination/sort controls,
+      hidden selectors, row-driven traversal, replay execution target selection,
+      lifecycle mutation, broad dashboard wiring, generated live data,
+      browser-side LLM behavior, services/MCP/dependencies/CI/deployment
+      expansion, production credentials, and production operations remain
+      deferred/fail-closed.
+
+  - date: "2026-06-27"
     event: story-113-2-task-status-filter-runtime-boundary-local-complete
     phase: 34
     epic: epic-113
     story: 113-2-task-status-filter-runtime-boundary
     source: autopilot-story-113-2-tests-first-implementation
     summary: >-
-      Story 113.2 completes the local tests-first runtime/API boundary for
-      exactly GET /v1/tasks?status={task_status}. The implementation accepts
-      exactly one status query key with values pending, planning, plan_ready,
+      Story 113.2 completed the tests-first runtime/API boundary for exactly
+      GET /v1/tasks?status={task_status}. The implementation accepts exactly
+      one status query key with values pending, planning, plan_ready,
       executing, blocked, completed, stopped, or failed; preserves the
       selector-free GET /v1/tasks route; rejects GET bodies, extra/repeated
       query keys, unknown/empty values, nested parameters, search, pagination,
       and sorting; and does not add dashboard wiring, hidden selectors, replay
       execution, lifecycle mutation, services/MCP/dependencies/CI/deployment
       changes, production credentials, or production operations. Story 113.3
-      remains backlog until implementation push and remote CI evidence exist.
+      subsequently recorded push and remote CI closure evidence.
 
   - date: "2026-06-27"
     event: story-113-1-task-status-filter-route-selection-planning-complete
