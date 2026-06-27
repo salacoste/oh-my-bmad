@@ -2,7 +2,7 @@
 
 ## Status
 
-Local implementation has Autopilot code-review cycle 6 APPROVE/CLEAR and a fresh local non-slow gate. Final done status remains pending verifier recheck after this artifact refresh plus external push/remote CI evidence.
+Done — exact digest stream runtime/API boundary completed after Autopilot code-review cycle 6 APPROVE/CLEAR, verifier PASS/CLEAR, local non-slow gate, push to `main`, and remote CI run `28291210521` success for commit `4614313637059d81ddb5d705dedede91661f0116`.
 
 ## Implemented exact surface
 
@@ -47,4 +47,4 @@ Local implementation has Autopilot code-review cycle 6 APPROVE/CLEAR and a fresh
 
 ## Review/QA note
 
-Autopilot RALPLAN consensus for implementation was recorded before coding. Code-review cycle 6 returned APPROVE/CLEAR after server-side and browser-side fail-closed hardening plus strict dashboard frame envelope validation. Verifier cycle 1 returned FAIL/BLOCK only for stale BMAD status/evidence wording; this artifact refresh records the current code-review/local-gate evidence and leaves final verifier recheck, external push, and remote CI evidence unclaimed.
+Autopilot RALPLAN consensus for implementation was recorded before coding. Code-review cycle 6 returned APPROVE/CLEAR after server-side and browser-side fail-closed hardening plus strict dashboard frame envelope validation. Verifier cycle 1 and 2 blocked only stale BMAD wording; verifier cycle 3 returned PASS/CLEAR. Implementation commit `4614313637059d81ddb5d705dedede91661f0116` was pushed to `main`, and GitHub Actions `ci` run `28291210521` completed successfully: https://github.com/salacoste/oh-my-bmad/actions/runs/28291210521.

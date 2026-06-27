@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-06-27T01:48:00+03:00"
+# last_updated: "2026-06-27T16:58:11+03:00"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-27T01:48:00+03:00"
-current_phase: 33  # Phase 33 OPEN — Epic 112 digest stream route; Story 112.2 local exact GET /v1/tasks/{task_id}/logs/digest/stream implementation has code-review APPROVE/CLEAR and local gate evidence; final closure pending verifier recheck, push, and remote CI evidence
+last_updated: "2026-06-27T16:58:11+03:00"
+current_phase: 33  # Phase 33 CLOSED — Epic 112 digest stream route completed; Story 112.3 records commit 4614313 and remote CI run 28291210521 green
 
 development_status:
   # =========================================================================
@@ -945,15 +945,48 @@ development_status:
   # =========================================================================
   # Epic 112: Digest stream route selection planning
   # =========================================================================
-  epic-112: in-progress  # Phase 33 digest stream route; Story 112.2 local implementation has code-review APPROVE/CLEAR and local gate evidence; final closure pending verifier recheck, push, and remote CI evidence
+  epic-112: done  # Phase 33 closed; exact GET /v1/tasks/{task_id}/logs/digest/stream runtime/API boundary complete with Story 112.3 evidence consolidation and remote CI run 28291210521
   112-1-digest-stream-route-selection-planning: done  # Phase 33 PRD/architecture/epics/status opening; selects task log digest continuation and future GET /v1/tasks/{task_id}/logs/digest/stream only; repaired Architect APPROVE/CLEAR and subsequent Critic APPROVE/CLEAR consensus recorded; runtime/API implementation deferred to tests-first Story 112.2 only
-  112-2-digest-stream-runtime-boundary: review  # local tests-first exact GET /v1/tasks/{task_id}/logs/digest/stream runtime/API contract boundary implemented; code-review cycle 6 APPROVE/CLEAR and local non-slow gate green; pending verifier recheck plus external push/remote CI evidence before done
-  112-3-phase-33-epic-112-final-closure: backlog  # local closure artifact prepared; final done requires Story 112.2 push/remote-CI evidence
+  112-2-digest-stream-runtime-boundary: done  # tests-first exact GET /v1/tasks/{task_id}/logs/digest/stream runtime/API contract boundary; code-review APPROVE/CLEAR, verifier PASS/CLEAR, local non-slow gate green; pushed in 4614313; remote CI run 28291210521 green
+  112-3-phase-33-epic-112-final-closure: done  # docs/status final closure after Story 112.2 review/QA/push/remote-CI evidence; deferred surfaces remain fail-closed
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-27"
+    event: story-112-3-phase-33-epic-112-final-closure-complete
+    from: backlog
+    to: done
+    story: 112-3-phase-33-epic-112-final-closure
+    reason: >
+      Story 112.3 closes Phase 33 / Epic 112 after Story 112.2 review,
+      verifier/UltraQA, local validation, push, and remote CI evidence. Commit
+      4614313637059d81ddb5d705dedede91661f0116 implements exactly
+      GET /v1/tasks/{task_id}/logs/digest/stream as a bounded task log
+      digest stream runtime/API boundary. GitHub Actions ci run 28291210521
+      completed successfully with Registry-state tests and PR gate jobs green.
+      Task-list/search/discovery, automatic task/detail/digest/history/trace/
+      replay/session traversal, digest fallback, hidden selectors, generated
+      live data, browser-side generation/summarization, broad dashboard wiring,
+      EventSource/WebSocket/XMLHttpRequest/workers/polling/retry/storage,
+      services/MCP/dependencies/CI/deployment changes, production credentials,
+      production operations, and mutation/control behavior remain unauthorized
+      and fail-closed.
+
+  - date: "2026-06-27"
+    event: story-112-2-code-review-verifier-clear
+    from: review
+    to: review
+    story: 112-2-digest-stream-runtime-boundary
+    reason: >
+      Native code-review cycles 1-5 requested hardening for stream fail-closed
+      behavior, forbidden server/browser output markers, quoted paths, strict
+      dashboard frame sequencing, and stale BMAD status wording. Code-review
+      cycle 6 returned APPROVE/CLEAR. Verifier cycles 1-2 blocked only stale
+      BMAD wording; verifier cycle 3 returned PASS/CLEAR. Story 112.2 is marked
+      done after push and remote CI evidence were recorded by Story 112.3.
+
   - date: "2026-06-27"
     event: story-112-2-digest-stream-runtime-boundary-local-review-green
     from: review
@@ -968,8 +1001,8 @@ audit_trail:
       checks, mypy, node --check, staged secret hygiene, and uv run pytest -m
       'not slow' with 4373 passed, 8 skipped, 61 deselected, and 37 warnings.
       Verifier cycle 1 blocked only stale BMAD wording, which this audit event
-      refreshes; final verifier recheck, external push, and remote CI evidence
-      remain pending before done/closure.
+      refreshed at the time; subsequent verifier rechecks, external push, and
+      remote CI evidence were later satisfied by Story 112.3 closure.
   - date: "2026-06-27"
     event: story-112-2-digest-stream-runtime-boundary-local-implementation
     from: backlog

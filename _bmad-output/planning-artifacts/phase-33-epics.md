@@ -37,13 +37,13 @@ Plan, prove, and close a bounded dashboard route boundary for one task-scoped di
 2. Phase 33 architecture amendment defines exact route, visible `task_id` source, transport-not-pre-authorized boundary, bounded stream payload expectations, freshness/provenance requirements, lifecycle/error/fail-closed states, no task-list/search/discovery traversal, and deferred-surface boundaries.
 3. Phase 33 epics file exists and sequences planning before runtime/API-boundary implementation and final closure.
 4. Story 112.1 artifact exists and records non-authorization, future test obligations, verification plan, and completion evidence.
-5. Sprint status sets `current_phase: 33`, keeps Epic 111 done, opens Epic 112, marks Story 112.1 done with repaired sequential Architect/Critic consensus evidence, and leaves Story 112.2/112.3 backlog.
+5. Sprint status originally opened Phase 33/Epic 112 after repaired Architect/Critic consensus; final closure status now records Story 112.1, 112.2, and 112.3 done with remote CI evidence.
 6. `docs/feature-status.md` is refreshed as derivative status and does not claim digest stream runtime or API implementation.
 7. No runtime/source/test/backend/API/dependency/CI/deployment/service/MCP/generated-data files change.
 
 ### Story 112.2 — Digest stream runtime/API contract boundary
 
-**Status:** review — local implementation complete with Autopilot code-review cycle 6 APPROVE/CLEAR and local non-slow gate evidence; final done remains pending verifier recheck plus push/remote CI evidence.
+**Status:** done — local implementation completed with Autopilot code-review cycle 6 APPROVE/CLEAR, verifier cycle 3 PASS/CLEAR, push, and remote CI run `28291210521` success.
 
 **Intent:** Implement a separately approved, tests-first boundary for exactly `GET /v1/tasks/{task_id}/logs/digest/stream` with narrow additive API/runtime tests and no broader dashboard/API expansion.
 
@@ -63,7 +63,7 @@ Plan, prove, and close a bounded dashboard route boundary for one task-scoped di
 
 ### Story 112.3 — Phase 33 / Epic 112 final validation closure
 
-**Status:** backlog — unauthorized until Story 112.2 implementation, final review, QA decision, push, and remote CI evidence exist.
+**Status:** done — final closure records Story 112.2 implementation, review, verifier, push, and remote CI run `28291210521` success.
 
 **Intent:** Complete docs/status final closure only after Story 112.2 runtime/API evidence, final review, QA decision, push, and remote CI evidence exist.
 
@@ -78,7 +78,7 @@ Plan, prove, and close a bounded dashboard route boundary for one task-scoped di
 
 1. Story 112.1 must complete with Architect APPROVE/CLEAR followed by Critic APPROVE/CLEAR before digest-stream runtime/API work is authorized.
 2. Story 112.2 must remain route-local to `GET /v1/tasks/{task_id}/logs/digest/stream` and must not add task-list/search/discovery, generated live data, browser-side LLM behavior, broad dashboard wiring, mutation/control behavior, production operations, or any services/MCP/dependencies/CI/deployment modifications. Story 112.2 may run and record CI evidence, but modifying CI/deployment/dependencies/services/MCP requires a separate explicit planning gate and story.
-3. Story 112.3 must run after implementation, final review, QA decision, push, and remote CI evidence exist.
+3. Story 112.3 ran after implementation, final review, verifier decision, push, and remote CI evidence existed; future closure stories should preserve that ordering.
 4. Broader task-list/search/discovery, generated live data, broad dashboard wiring, and production operations remain higher-risk and fail-closed unless selected by a later explicit product and architecture gate.
 
 Generated: 2026-06-26T22:03:46Z
