@@ -24,14 +24,14 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal, cast
 from urllib.parse import quote
 
 import cachetools
 from events import TaskCreatedPayload
 from events.envelope import Actor, EventEnvelope
 from events.ids import new_event_id, new_task_id, new_uuid7
-from fastapi import APIRouter, Path, Request, Response
+from fastapi import APIRouter, Path, Query, Request, Response
 from fastapi.exceptions import HTTPException
 from idempotency import IdempotencyCacheStore
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -49,6 +49,16 @@ log = logging.getLogger("registry_api.routes.tasks")
 # Mn2: Literal type for X-Idempotency-Status — keeps the OpenAPI ``enum``
 # constant in sync with the runtime header value at type-check time.
 IdempotencyStatus = Literal["applied", "replayed"]
+TaskStatusFilter = Literal[
+    "pending",
+    "planning",
+    "plan_ready",
+    "executing",
+    "blocked",
+    "completed",
+    "stopped",
+    "failed",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -87,9 +97,23 @@ ResponseSlotCache = cachetools.TTLCache[tuple[str, str], ResponseSlot]
 # UUIDv7 task-id pattern: t- prefix + standard UUIDv7 hex shape
 _TASK_ID_PATTERN = r"^t-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 
-# Story 109.2: fixed first page for GET /v1/tasks. Selectors/pagination knobs
-# are intentionally absent until a later story defines a separate contract.
+# Story 109.2: fixed first page for GET /v1/tasks. Pagination knobs remain
+# intentionally absent; Story 113.2 adds only one finite status selector.
 _TASK_LIST_LIMIT = 50
+_TASK_STATUS_FILTER_ROUTE: Literal["GET /v1/tasks?status={task_status}"] = (
+    "GET /v1/tasks?status={task_status}"
+)
+_TASK_STATUS_FILTER_VALUES: tuple[TaskStatusFilter, ...] = (
+    "pending",
+    "planning",
+    "plan_ready",
+    "executing",
+    "blocked",
+    "completed",
+    "stopped",
+    "failed",
+)
+_ALLOWED_TASK_STATUS_FILTERS: frozenset[TaskStatusFilter] = frozenset(_TASK_STATUS_FILTER_VALUES)
 
 # Story 110.2: fixed first page for GET /v1/sessions. Selectors/pagination
 # knobs are intentionally absent until a later story defines a separate
@@ -277,7 +301,7 @@ class TaskSummaryOut(BaseModel):
 
 
 class TaskListResponse(BaseModel):
-    """200 OK response body for GET /v1/tasks.
+    """200 OK response body for unfiltered GET /v1/tasks.
 
     This is a fixed, selector-free, first-page aggregate boundary. It carries
     route/source/freshness/provenance metadata and only bounded summary rows.
@@ -286,6 +310,33 @@ class TaskListResponse(BaseModel):
     model_config = ConfigDict(frozen=True, strict=True)
 
     route: Literal["GET /v1/tasks"]
+    retrieved_at: datetime
+    freshness_state: Literal["fresh"]
+    display_state: Literal["healthy", "empty-list"]
+    authority_state: Literal["authoritative", "non-authoritative"]
+    provenance: Literal["registry-state task summary list"]
+    request_id: str
+    trace_id: str | None
+    correlation_id: str
+    limit: int
+    returned_count: int
+    has_more: bool
+    next_offset: None = None
+    items: list[TaskSummaryOut]
+
+
+class TaskStatusFilteredListResponse(BaseModel):
+    """200 OK response body for GET /v1/tasks?status={task_status}.
+
+    Story 113.2 permits exactly one finite lifecycle status selector and no
+    other query/body selector, pagination, sorting, search, traversal, or
+    mutation affordance. Row shape remains identical to the aggregate list.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    route: Literal["GET /v1/tasks?status={task_status}"]
+    selected_status: TaskStatusFilter
     retrieved_at: datetime
     freshness_state: Literal["fresh"]
     display_state: Literal["healthy", "empty-list"]
@@ -371,27 +422,49 @@ router = APIRouter()
 @router.get(
     "/tasks",
     status_code=200,
-    response_model=TaskListResponse,
+    response_model=TaskListResponse | TaskStatusFilteredListResponse,
 )
-async def get_tasks(request: Request) -> TaskListResponse:
-    """GET /v1/tasks — bounded aggregate task summary list (Story 109.2).
+async def get_tasks(
+    request: Request,
+    status: Annotated[
+        str | None,
+        Query(
+            description=(
+                "Optional Story 113.2 task lifecycle status filter. Only one "
+                "status query key is accepted; extra or repeated query keys fail closed."
+            ),
+            json_schema_extra={"enum": list(_TASK_STATUS_FILTER_VALUES)},
+        ),
+    ] = None,
+) -> TaskListResponse | TaskStatusFilteredListResponse:
+    """GET /v1/tasks — bounded aggregate task summary list.
 
-    This route is deliberately narrow: no query selectors, no GET body, no
-    hidden pagination token, no task-detail/event/session/digest traversal, and
-    no mutation controls. It returns a fixed first page ordered by
-    ``updated_at DESC, id ASC`` so repeat reads are deterministic.
+    Story 109.2 keeps the selector-free first page. Story 113.2 adds exactly
+    one route-local status selector: ``GET /v1/tasks?status={task_status}``,
+    where status is one finite lifecycle value. No other query key, repeated
+    key, GET body, hidden pagination token, task-detail/event/session/digest
+    traversal, search, sorting, or mutation control is accepted.
     """
-    if request.url.query:
-        raise HTTPException(
-            status_code=400,
-            detail="GET /v1/tasks does not accept query selectors",
-        )
-
     if await request.body():
         raise HTTPException(
             status_code=400,
             detail="GET /v1/tasks does not accept a request body",
         )
+
+    selected_status: str | None = None
+    if request.url.query:
+        query_pairs = list(request.query_params.multi_items())
+        if len(query_pairs) != 1 or query_pairs[0][0] != "status":
+            raise HTTPException(
+                status_code=400,
+                detail="GET /v1/tasks accepts only one status query selector",
+            )
+        selected_status = status
+        if selected_status not in _ALLOWED_TASK_STATUS_FILTERS:
+            raise HTTPException(
+                status_code=400,
+                detail="GET /v1/tasks status selector is not allowed",
+            )
 
     session_maker = request.app.state.session_maker
     clock = request.app.state.clock
@@ -399,9 +472,10 @@ async def get_tasks(request: Request) -> TaskListResponse:
     trace_id: str | None = getattr(request.state, "trace_id", None)
 
     async with session_maker() as session:
-        task_result = await session.execute(
-            select(Task).order_by(Task.updated_at.desc(), Task.id.asc()).limit(_TASK_LIST_LIMIT + 1)
-        )
+        task_query = select(Task).order_by(Task.updated_at.desc(), Task.id.asc())
+        if selected_status is not None:
+            task_query = task_query.where(Task.status == selected_status)
+        task_result = await session.execute(task_query.limit(_TASK_LIST_LIMIT + 1))
         fetched_tasks = list(task_result.scalars().all())
         has_more = len(fetched_tasks) > _TASK_LIST_LIMIT
         tasks = fetched_tasks[:_TASK_LIST_LIMIT]
@@ -443,22 +517,30 @@ async def get_tasks(request: Request) -> TaskListResponse:
         "authoritative" if items else "non-authoritative"
     )
 
-    return TaskListResponse(
-        route="GET /v1/tasks",
-        retrieved_at=clock.now(),
-        freshness_state="fresh",
-        display_state=display_state,
-        authority_state=authority_state,
-        provenance="registry-state task summary list",
-        request_id=request_id,
-        trace_id=trace_id,
-        correlation_id=request_id,
-        limit=_TASK_LIST_LIMIT,
-        returned_count=len(items),
-        has_more=has_more,
-        next_offset=None,
-        items=items,
-    )
+    response_kwargs = {
+        "retrieved_at": clock.now(),
+        "freshness_state": "fresh",
+        "display_state": display_state,
+        "authority_state": authority_state,
+        "provenance": "registry-state task summary list",
+        "request_id": request_id,
+        "trace_id": trace_id,
+        "correlation_id": request_id,
+        "limit": _TASK_LIST_LIMIT,
+        "returned_count": len(items),
+        "has_more": has_more,
+        "next_offset": None,
+        "items": items,
+    }
+    if selected_status is not None:
+        selected_status_out = cast(TaskStatusFilter, selected_status)
+        return TaskStatusFilteredListResponse(
+            route=_TASK_STATUS_FILTER_ROUTE,
+            selected_status=selected_status_out,
+            **response_kwargs,
+        )
+
+    return TaskListResponse(route="GET /v1/tasks", **response_kwargs)
 
 
 def _heartbeat_state(row: Session) -> Literal["ended", "observed", "missing"]:

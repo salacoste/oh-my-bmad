@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-06-27T19:29:19+03:00"
+# last_updated: "2026-06-27T21:32:00+03:00"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-27T19:29:19+03:00"
-current_phase: 34  # Phase 34 OPEN — Epic 113 task status filter route-selection planning; Story 113.1 selects future GET /v1/tasks?status={task_status} only
+last_updated: "2026-06-27T21:32:00+03:00"
+current_phase: 34  # Phase 34 OPEN — Epic 113 task status filter runtime/API boundary implemented locally; Story 113.3 final closure awaits push/remote-CI evidence
 
 development_status:
   # =========================================================================
@@ -950,9 +950,9 @@ development_status:
   112-2-digest-stream-runtime-boundary: done  # tests-first exact GET /v1/tasks/{task_id}/logs/digest/stream runtime/API contract boundary; code-review APPROVE/CLEAR, verifier PASS/CLEAR, local non-slow gate green; pushed in 4614313; remote CI run 28291210521 green
   112-3-phase-33-epic-112-final-closure: done  # docs/status final closure after Story 112.2 review/QA/push/remote-CI evidence; deferred surfaces remain fail-closed
 
-  epic-113: in-progress  # Phase 34 opened; task-list/search/discovery planning narrowed to exact future GET /v1/tasks?status={task_status}; runtime/API implementation unauthorized until Story 113.2 after Architect/Critic consensus
+  epic-113: in-progress  # Phase 34 opened; task-list/search/discovery planning narrowed to exact GET /v1/tasks?status={task_status}; Story 113.2 implemented locally; Story 113.3 final closure awaits push/remote-CI evidence
   113-1-task-status-filter-route-selection-planning: done  # Phase 34 PRD/architecture/epics/status opening; selects read-only task-list/search/discovery and future GET /v1/tasks?status={task_status} only; Architect APPROVE/CLEAR and subsequent Critic APPROVE/CLEAR consensus recorded; runtime/API implementation deferred to tests-first Story 113.2 only
-  113-2-task-status-filter-runtime-boundary: backlog  # future tests-first exact GET /v1/tasks?status={task_status} runtime/API contract boundary only after Story 113.1 consensus
+  113-2-task-status-filter-runtime-boundary: done  # tests-first exact GET /v1/tasks?status={task_status} runtime/API contract boundary implemented locally with finite status selector only; Story 113.3 awaits push/remote-CI evidence
   113-3-phase-34-epic-113-final-closure: backlog  # future docs/status final closure only after Story 113.2 review/QA/push/remote-CI evidence
 
 # ===========================================================================
@@ -4014,6 +4014,24 @@ audit_trail:
       DOCS/STATUS change + partial code (mcp_auth, check_mcp_transport).
 
 recent_activity:
+
+  - date: "2026-06-27"
+    event: story-113-2-task-status-filter-runtime-boundary-local-complete
+    phase: 34
+    epic: epic-113
+    story: 113-2-task-status-filter-runtime-boundary
+    source: autopilot-story-113-2-tests-first-implementation
+    summary: >-
+      Story 113.2 completes the local tests-first runtime/API boundary for
+      exactly GET /v1/tasks?status={task_status}. The implementation accepts
+      exactly one status query key with values pending, planning, plan_ready,
+      executing, blocked, completed, stopped, or failed; preserves the
+      selector-free GET /v1/tasks route; rejects GET bodies, extra/repeated
+      query keys, unknown/empty values, nested parameters, search, pagination,
+      and sorting; and does not add dashboard wiring, hidden selectors, replay
+      execution, lifecycle mutation, services/MCP/dependencies/CI/deployment
+      changes, production credentials, or production operations. Story 113.3
+      remains backlog until implementation push and remote CI evidence exist.
 
   - date: "2026-06-27"
     event: story-113-1-task-status-filter-route-selection-planning-complete

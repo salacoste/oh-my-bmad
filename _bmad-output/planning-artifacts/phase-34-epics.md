@@ -46,11 +46,11 @@ Plan, prove, and close a bounded dashboard/API route boundary for one status-fil
 
 ### Story 113.2 — Task status filter runtime/API contract boundary
 
-**Status:** backlog — not authorized until Story 113.1 has sequential Architect then Critic approval.
+**Status:** done locally — exact tests-first `GET /v1/tasks?status={task_status}` API/runtime boundary implemented after Story 113.1 sequential Architect then Critic approval; Story 113.3 final closure awaits implementation push and remote CI evidence.
 
 **Intent:** Implement a separately approved, tests-first boundary for exactly `GET /v1/tasks?status={task_status}` with narrow additive API/runtime tests and no broader dashboard/API expansion.
 
-**Acceptance criteria planned:**
+**Acceptance criteria:**
 
 1. Tests prove only `GET /v1/tasks?status={task_status}` is newly reachable for this slice.
 2. Dashboard/API calls are GET-only with exactly one `status` query key and no request body.
@@ -65,7 +65,7 @@ Plan, prove, and close a bounded dashboard/API route boundary for one status-fil
 
 ### Story 113.3 — Phase 34 / Epic 113 final validation closure
 
-**Status:** backlog — not authorized until Story 113.2 implementation, review, QA, push, and remote CI evidence exist.
+**Status:** backlog — authorized only after Story 113.2 implementation, review, QA, push, and remote CI evidence exist; local implementation exists, push/remote CI still pending.
 
 **Intent:** Complete docs/status final closure only after Story 113.2 runtime/API evidence, final review, QA decision, push, and remote CI evidence exist.
 

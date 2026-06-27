@@ -161,13 +161,16 @@ async def _seed_task_row(db_url: str) -> None:
     await engine.dispose()
 
 
-async def _seed_aggregate_task_rows(db_url: str, *, count: int = 2) -> list[str]:
+async def _seed_aggregate_task_rows(
+    db_url: str, *, count: int = 2, statuses: list[str] | None = None
+) -> list[str]:
     """Insert deterministic Task + Event rows for GET /v1/tasks aggregate tests."""
     engine = _create_engine(db_url)
     session_maker = get_session(engine)
     task_ids: list[str] = []
     async with session_maker() as session:
         rng = Random(1092)
+        row_statuses = statuses or ["plan_ready"] * count
         for index in range(count):
             created_at = FROZEN_EPOCH + timedelta(minutes=index)
             updated_at = FROZEN_EPOCH + timedelta(minutes=index)
@@ -177,7 +180,7 @@ async def _seed_aggregate_task_rows(db_url: str, *, count: int = 2) -> list[str]
             task_ids.append(task_id)
             task = Task(
                 id=task_id,
-                status="plan_ready",
+                status=row_statuses[index],
                 created_at=created_at,
                 updated_at=updated_at,
                 actor_kind="operator",
@@ -521,18 +524,131 @@ class TestGetTasksAggregate:
         assert body["authority_state"] == "non-authoritative"
         assert body["has_more"] is False
 
-    async def test_get_tasks_rejects_query_selectors_and_request_body(
+    async def test_get_tasks_status_filter_is_openapi_visible(
         self, aggregate_client: AsyncClient
     ) -> None:
-        query_response = await aggregate_client.get("/v1/tasks?status=plan_ready")
-        body_response = await aggregate_client.request(
-            "GET", "/v1/tasks", content=b'{"status":"plan_ready"}'
+        schema = (await aggregate_client.get("/openapi.json")).json()
+        get_tasks = schema["paths"]["/v1/tasks"]["get"]
+        status_parameters = [
+            parameter
+            for parameter in get_tasks["parameters"]
+            if parameter["name"] == "status" and parameter["in"] == "query"
+        ]
+
+        assert len(status_parameters) == 1
+        status_schema = status_parameters[0]["schema"]
+        assert status_schema["enum"] == [
+            "pending",
+            "planning",
+            "plan_ready",
+            "executing",
+            "blocked",
+            "completed",
+            "stopped",
+            "failed",
+        ]
+        assert status_schema["title"] == "Status"
+
+    async def test_get_tasks_accepts_single_allowed_status_filter(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+        await _seed_aggregate_task_rows(
+            db_url, statuses=["pending", "plan_ready", "executing", "completed"]
+        )
+        app = build_app(
+            base_dir=tmp_path / "events",
+            db_url=db_url,
+            clock=fixed_clock,
+            create_idempotency_schema_on_start=True,
         )
 
-        assert query_response.status_code == 400
-        assert body_response.status_code == 400
-        assert "does not accept query" in query_response.text
-        assert "does not accept a request body" in body_response.text
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://testserver"
+            ) as client,
+        ):
+            r = await client.get("/v1/tasks?status=plan_ready")
+
+        assert r.status_code == 200
+        body = r.json()
+        assert set(body) == {
+            "route",
+            "selected_status",
+            "retrieved_at",
+            "freshness_state",
+            "display_state",
+            "authority_state",
+            "provenance",
+            "request_id",
+            "trace_id",
+            "correlation_id",
+            "limit",
+            "returned_count",
+            "has_more",
+            "next_offset",
+            "items",
+        }
+        assert body["route"] == "GET /v1/tasks?status={task_status}"
+        assert body["selected_status"] == "plan_ready"
+        assert body["display_state"] == "healthy"
+        assert body["authority_state"] == "authoritative"
+        assert body["returned_count"] == 1
+        assert body["has_more"] is False
+        assert body["items"][0]["status"] == "plan_ready"
+        assert body["items"][0]["title"] == "aggregate task 1"
+
+    async def test_get_tasks_status_filter_supports_only_finite_lifecycle_values(
+        self, aggregate_client: AsyncClient
+    ) -> None:
+        allowed = (
+            "pending",
+            "planning",
+            "plan_ready",
+            "executing",
+            "blocked",
+            "completed",
+            "stopped",
+            "failed",
+        )
+
+        for status in allowed:
+            r = await aggregate_client.get(f"/v1/tasks?status={status}")
+            assert r.status_code == 200, status
+            body = r.json()
+            assert body["selected_status"] == status
+            assert body["route"] == "GET /v1/tasks?status={task_status}"
+
+        for query in (
+            "status=",
+            "status=PLAN_READY",
+            "status=ready",
+            "status=pending&status=failed",
+            "status=plan_ready&sort=updated_at",
+            "status=plan_ready&limit=1",
+            "status=plan_ready&q=aggregate",
+            "status%5Bname%5D=plan_ready",
+        ):
+            r = await aggregate_client.get(f"/v1/tasks?{query}")
+            assert r.status_code == 400, query
+
+    async def test_get_tasks_rejects_request_body_for_unfiltered_and_filtered_reads(
+        self, aggregate_client: AsyncClient
+    ) -> None:
+        unfiltered_body = await aggregate_client.request(
+            "GET", "/v1/tasks", content=b'{"status":"plan_ready"}'
+        )
+        filtered_body = await aggregate_client.request(
+            "GET", "/v1/tasks?status=plan_ready", content=b'{"status":"plan_ready"}'
+        )
+
+        assert unfiltered_body.status_code == 400
+        assert filtered_body.status_code == 400
+        assert "does not accept a request body" in unfiltered_body.text
+        assert "does not accept a request body" in filtered_body.text
 
     async def test_get_tasks_limit_is_fixed_and_does_not_expose_selector_offset(
         self, tmp_path: Path, fixed_clock: FrozenClock
