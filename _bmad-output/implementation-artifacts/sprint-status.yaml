@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-06-28T22:14:45+03:00"
+# last_updated: "2026-06-28T23:10:00+03:00"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-28T22:14:45+03:00"
-current_phase: 38  # Phase 38 OPEN — Epic 116 is done after Story 116.3 final closure with final CI head 60c6f858431a1049060248f3a9f6e3754e5ac6a2 and GitHub Actions ci run 28332793428 success; Epic 117 opens docs/status-only planning for bounded task-list pagination candidate GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}
+last_updated: "2026-06-28T23:10:00+03:00"
+current_phase: 38  # Phase 38 OPEN — Epic 116 is done after Story 116.3 final closure with final CI head 60c6f858431a1049060248f3a9f6e3754e5ac6a2 and GitHub Actions ci run 28332793428 success; Epic 117 has Story 117.1 planning consensus done and Story 117.2 locally done for bounded task-list pagination API candidate GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset} after code-review/UltraQA; final closure remains pending
 
 development_status:
   # =========================================================================
@@ -983,9 +983,9 @@ development_status:
   # =========================================================================
   # Epic 117: Task list pagination route-selection planning
   # =========================================================================
-  epic-117: in-progress  # Phase 38 opened as docs/status-only planning for bounded task-list pagination / next-window API candidate; implementation and consensus pending
-  117-1-task-list-pagination-route-selection-planning: in-progress  # selects future canonical GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset} planning candidate only; no runtime/API/test/browser/dependency/CI/deployment changes authorized yet
-  117-2-task-list-pagination-runtime-boundary: backlog  # future tests-first API-local implementation only after Story 117.1 consensus
+  epic-117: in-progress  # Phase 38 bounded task-list pagination / next-window API candidate; Story 117.1 planning consensus done and Story 117.2 locally done after code-review/UltraQA pending final closure
+  117-1-task-list-pagination-route-selection-planning: done  # Phase 38 PRD/architecture/epics/status opening; selects read-only task-list pagination / next-window API planning and future canonical GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset} only; native Architect APPROVE/CLEAR and subsequent native Critic APPROVE/CLEAR consensus recorded; runtime/API implementation deferred to Story 117.2
+  117-2-task-list-pagination-runtime-boundary: done  # tests-first API-local implementation for exact canonical GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}; code-review APPROVE/CLEAR; UltraQA PASS; no browser pagination controls or broader selector composition
   117-3-phase-38-epic-117-final-closure: backlog  # future docs/status final closure after Story 117.2 review/QA/push/remote-CI evidence
 
 # ===========================================================================
@@ -4063,6 +4063,45 @@ audit_trail:
 
 recent_activity:
 
+
+
+  - date: "2026-06-28"
+    event: story-117-2-task-list-pagination-runtime-boundary-complete
+    phase: 38
+    epic: epic-117
+    story: 117-2-task-list-pagination-runtime-boundary
+    source: autopilot-ultragoal-code-review-ultraqa
+    summary: >-
+      Story 117.2 locally implements exact canonical GET
+      /v1/tasks?limit={task_list_limit}&offset={task_list_offset} with limit
+      1..50, offset 0..2147483647, canonical limit-before-offset order,
+      bounded selected-limit/selected-offset/has_more/next_offset metadata, and
+      fail-closed malformed selector/body coverage. Code-review returned
+      APPROVE/CLEAR and UltraQA passed. Browser pagination controls,
+      status+offset/status+limit+offset composition, sorting, search, broad
+      dashboard wiring, services/MCP/dependencies/CI/deployment changes, and
+      production operations remain deferred to future stories.
+
+  - date: "2026-06-28"
+    event: story-117-1-task-list-pagination-route-selection-planning-complete
+    phase: 38
+    epic: epic-117
+    story: 117-1-task-list-pagination-route-selection-planning
+    source: autopilot-phase-38-ralplan-consensus
+    summary: >-
+      Story 117.1 completes Phase 38 / Epic 117 docs/status-only task-list
+      pagination route-selection planning after native Architect APPROVE/CLEAR
+      followed by native Critic APPROVE/CLEAR. The exact selected future
+      boundary is canonical GET
+      /v1/tasks?limit={task_list_limit}&offset={task_list_offset}, with limit
+      before offset, ASCII integer limit 1 through 50, and ASCII non-negative
+      integer offset whose maximum/large-offset behavior must be approved before
+      Story 117.2 runtime code. Runtime/API/browser/test implementation, browser
+      pagination controls, status+offset/status+limit+offset composition,
+      sorting, free-text search, arbitrary discovery, hidden selectors,
+      row-derived traversal, replay/lifecycle mutation, broad dashboard wiring,
+      services/MCP/dependencies/CI/deployment changes, and production operations
+      remain unstarted/deferred pending Story 117.2.
 
   - date: "2026-06-28"
     event: phase-38-epic-117-opened

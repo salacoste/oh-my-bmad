@@ -524,7 +524,7 @@ class TestGetTasksAggregate:
         assert body["authority_state"] == "non-authoritative"
         assert body["has_more"] is False
 
-    async def test_get_tasks_status_and_limit_filters_are_openapi_visible(
+    async def test_get_tasks_status_limit_and_offset_filters_are_openapi_visible(
         self, aggregate_client: AsyncClient
     ) -> None:
         schema = (await aggregate_client.get("/openapi.json")).json()
@@ -535,7 +535,7 @@ class TestGetTasksAggregate:
             if parameter["in"] == "query"
         }
 
-        assert set(query_parameters) == {"status", "limit"}
+        assert set(query_parameters) == {"status", "limit", "offset"}
         status_schema = query_parameters["status"]["schema"]
         assert status_schema["enum"] == [
             "pending",
@@ -554,6 +554,12 @@ class TestGetTasksAggregate:
             {"type": "null"},
         ]
         assert limit_schema["title"] == "Limit"
+        offset_schema = query_parameters["offset"]["schema"]
+        assert offset_schema["anyOf"] == [
+            {"type": "integer", "maximum": 2_147_483_647, "minimum": 0},
+            {"type": "null"},
+        ]
+        assert offset_schema["title"] == "Offset"
 
     async def test_get_tasks_accepts_single_allowed_status_filter(
         self, tmp_path: Path, fixed_clock: FrozenClock
@@ -692,6 +698,157 @@ class TestGetTasksAggregate:
             "aggregate task 3",
             "aggregate task 2",
         ]
+
+    async def test_get_tasks_accepts_canonical_limit_offset_pagination_window(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+        await _seed_aggregate_task_rows(db_url, count=4)
+        app = build_app(
+            base_dir=tmp_path / "events",
+            db_url=db_url,
+            clock=fixed_clock,
+            create_idempotency_schema_on_start=True,
+        )
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://testserver"
+            ) as client,
+        ):
+            r = await client.get("/v1/tasks?limit=2&offset=1")
+
+        assert r.status_code == 200
+        body = r.json()
+        assert set(body) == {
+            "route",
+            "selected_limit",
+            "selected_offset",
+            "retrieved_at",
+            "freshness_state",
+            "display_state",
+            "authority_state",
+            "provenance",
+            "request_id",
+            "trace_id",
+            "correlation_id",
+            "limit",
+            "returned_count",
+            "has_more",
+            "next_offset",
+            "items",
+        }
+        assert body["route"] == "GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}"
+        assert body["selected_limit"] == 2
+        assert body["selected_offset"] == 1
+        assert body["limit"] == 2
+        assert body["returned_count"] == 2
+        assert body["has_more"] is True
+        assert body["next_offset"] == 3
+        assert body["display_state"] == "healthy"
+        assert body["authority_state"] == "authoritative"
+        assert [row["title"] for row in body["items"]] == [
+            "aggregate task 2",
+            "aggregate task 1",
+        ]
+
+    async def test_get_tasks_limit_offset_tail_and_empty_windows_are_explicit(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+        await _seed_aggregate_task_rows(db_url, count=4)
+        app = build_app(
+            base_dir=tmp_path / "events",
+            db_url=db_url,
+            clock=fixed_clock,
+            create_idempotency_schema_on_start=True,
+        )
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://testserver"
+            ) as client,
+        ):
+            tail = await client.get("/v1/tasks?limit=2&offset=3")
+            empty = await client.get("/v1/tasks?limit=2&offset=2147483647")
+
+        assert tail.status_code == 200
+        tail_body = tail.json()
+        assert tail_body["selected_limit"] == 2
+        assert tail_body["selected_offset"] == 3
+        assert tail_body["returned_count"] == 1
+        assert tail_body["has_more"] is False
+        assert tail_body["next_offset"] is None
+        assert tail_body["display_state"] == "healthy"
+        assert tail_body["authority_state"] == "authoritative"
+        assert [row["title"] for row in tail_body["items"]] == ["aggregate task 0"]
+
+        assert empty.status_code == 200
+        empty_body = empty.json()
+        assert empty_body["selected_limit"] == 2
+        assert empty_body["selected_offset"] == 2_147_483_647
+        assert empty_body["returned_count"] == 0
+        assert empty_body["has_more"] is False
+        assert empty_body["next_offset"] is None
+        assert empty_body["items"] == []
+        assert empty_body["display_state"] == "empty-list"
+        assert empty_body["authority_state"] == "non-authoritative"
+
+    async def test_get_tasks_limit_offset_domains_and_order_are_closed(
+        self, aggregate_client: AsyncClient
+    ) -> None:
+        for query in ("limit=1&offset=0", "limit=50&offset=2147483647"):
+            r = await aggregate_client.get(f"/v1/tasks?{query}")
+            assert r.status_code == 200, query
+            body = r.json()
+            assert (
+                body["route"]
+                == "GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}"
+            )
+            assert body["selected_limit"] == int(query.split("&", maxsplit=1)[0].split("=")[1])
+            assert body["selected_offset"] == int(query.rsplit("=", maxsplit=1)[1])
+
+        for query in (
+            "offset=1&limit=2",
+            "limit=2&&offset=1",
+            "limit=2&offset=1&",
+            "&limit=2&offset=1",
+            "limit=2&offset=",
+            "limit=2&offset=-1",
+            "limit=2&offset=1.5",
+            "limit=2&offset=two",
+            "limit=2&offset=%31",
+            "limit=2&offset=%EF%BC%91",
+            "limit=2&offset%5Bvalue%5D=1",
+            "limit=2&offset=2147483648",
+            "limit=2&offset=99999999999",
+            f"limit=2&offset={'9' * 5000}",
+            "limit=2&offset=1&offset=2",
+            "limit=2&offset=1&cursor=abc",
+            "limit=2&offset=1&page=1",
+            "limit=2&offset=1&sort=updated_at",
+            "limit=2&offset=1&q=aggregate",
+            "status=plan_ready&offset=1",
+            "status=plan_ready&limit=2&offset=1",
+        ):
+            r = await aggregate_client.get(f"/v1/tasks?{query}")
+            assert r.status_code == 400, query
+
+    async def test_get_tasks_limit_offset_next_offset_never_exceeds_domain(self) -> None:
+        from registry_api.routes.tasks import _task_list_pagination_metadata
+
+        assert _task_list_pagination_metadata(
+            fetched_count=3, effective_limit=2, selected_offset=1
+        ) == (True, 3)
+        assert _task_list_pagination_metadata(
+            fetched_count=3, effective_limit=50, selected_offset=2_147_483_600
+        ) == (False, None)
 
     async def test_get_tasks_accepts_canonical_status_limit_composition(
         self, tmp_path: Path, fixed_clock: FrozenClock
@@ -849,7 +1006,6 @@ class TestGetTasksAggregate:
             "limit=%EF%BC%92",
             "limit=%32",
             "limit=1&limit=2",
-            "limit=2&offset=0",
             "limit=2&cursor=abc",
             "limit=2&page=1",
             "limit=2&sort=updated_at",
@@ -876,15 +1032,22 @@ class TestGetTasksAggregate:
             "/v1/tasks?status=plan_ready&limit=2",
             content=b'{"status":"plan_ready","limit":2}',
         )
+        paginated_body = await aggregate_client.request(
+            "GET",
+            "/v1/tasks?limit=2&offset=1",
+            content=b'{"limit":2,"offset":1}',
+        )
 
         assert unfiltered_body.status_code == 400
         assert filtered_body.status_code == 400
         assert limited_body.status_code == 400
         assert composed_body.status_code == 400
+        assert paginated_body.status_code == 400
         assert "does not accept a request body" in unfiltered_body.text
         assert "does not accept a request body" in filtered_body.text
         assert "does not accept a request body" in limited_body.text
         assert "does not accept a request body" in composed_body.text
+        assert "does not accept a request body" in paginated_body.text
 
     async def test_get_tasks_limit_is_fixed_and_does_not_expose_selector_offset(
         self, tmp_path: Path, fixed_clock: FrozenClock
