@@ -36,12 +36,13 @@ Story 117.1 is docs/status-only. It selects one candidate for later consensus an
 - **FR320 — Response authority.** Future response design must expose selected limit, selected offset, returned_count, has_more, next_offset/null, retrieved_at, freshness_state, authority_state, provenance, and correlation/request/trace id where available before marking rows authoritative.
 - **FR321 — Deferred surfaces.** Browser pagination controls, cursor/page tokens, sorting controls, free-text search, arbitrary discovery, status+offset/status+limit+offset composition, hidden selectors, automatic drill-down, lifecycle/replay mutation, generated live data, services/MCP/dependencies/CI/deployment changes, and production operations remain unauthorized until separately planned.
 
-## Acceptance criteria for opening Story 117.1
+## Acceptance criteria for Story 117.1
 
 1. Phase 38 PRD, architecture, and epics artifacts exist and define the task-list pagination planning scope.
-2. Sprint status opens Phase 38 / Epic 117 with Story 117.1 as the planning candidate and does not mark implementation complete.
-3. `docs/feature-status.md` is refreshed as derivative status and does not claim pagination implementation.
-4. No runtime/source/test/backend/API/dependency/CI/deployment/service/MCP/generated-data files change as part of the opening.
+2. Story 117.1 artifact records selected family, exact future candidate, non-authorization statement, future test obligations, verification plan, consensus evidence, and completion evidence.
+3. Sprint status opens Phase 38 / Epic 117, marks Story 117.1 done only after sequential Architect APPROVE/CLEAR followed by Critic APPROVE/CLEAR, and does not mark implementation complete.
+4. `docs/feature-status.md` is refreshed as derivative status and does not claim pagination implementation.
+5. No runtime/source/test/backend/API/dependency/CI/deployment/service/MCP/generated-data files change as part of Story 117.1.
 
 ## Follow-on story sequence
 

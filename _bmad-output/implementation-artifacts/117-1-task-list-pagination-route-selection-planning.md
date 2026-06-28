@@ -1,7 +1,7 @@
 # Story 117.1 — Task List Pagination Route-Selection Planning
 
 Date: 2026-06-28T19:13:22Z
-Status: opened; consensus and implementation pending
+Status: done after sequential Architect APPROVE/CLEAR followed by Critic APPROVE/CLEAR consensus
 Scope: docs/status-only
 
 ## Selected route family and exact future candidate
@@ -30,12 +30,28 @@ A future tests-first implementation story must prove:
 7. existing selector-free, status-only, limit-only, status+limit, and dashboard status+limit contracts remain independently green;
 8. no browser pagination controls, automatic traversal, sort/search/discovery, status+offset/status+limit+offset composition, row-driven traversal, replay/lifecycle mutation, generated live data, services/MCP/dependencies/CI/deployment changes, production credentials, or production operations are introduced.
 
-## Opening evidence
+## Planning artifacts
 
 - `_bmad-output/planning-artifacts/phase-38-prd-amendment.md`
 - `_bmad-output/planning-artifacts/phase-38-architecture-amendment.md`
 - `_bmad-output/planning-artifacts/phase-38-epics.md`
 - `_bmad-output/implementation-artifacts/117-1-task-list-pagination-route-selection-planning.md`
+
+## Consensus evidence
+
+- Architect review: native agent `019f0fb2-0121-7d20-bc0b-3bde31b9d814` returned `verdict: approve`, `architectural_status: CLEAR`, `findings: none` on 2026-06-28; persisted at `.omx/artifacts/ralplan/story-117-1-architect-review.md`.
+- Critic review: native agent `019f0fb3-f389-7610-aa15-5be161caa673` returned `verdict: approve`, `architectural_status: CLEAR`, `findings: []` after the Architect gate on 2026-06-28; persisted at `.omx/artifacts/ralplan/story-117-1-critic-review.md`.
+
+## Completion evidence
+
+- Story 117.1 completes Phase 38 / Epic 117 docs/status-only task-list pagination route-selection planning.
+- Exact future candidate recorded: canonical `GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}` with canonical limit-then-offset order.
+- Runtime/API/test/browser/dashboard/dependency/CI/deployment/service/MCP/generated-data implementation remains deferred to Story 117.2.
+- Sprint status and derivative feature status were updated on 2026-06-28T22:30:00+03:00.
+
+## Completion timestamp
+
+Completed: 2026-06-28T19:30:35Z
 
 ## Verification plan
 

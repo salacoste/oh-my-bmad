@@ -18,9 +18,9 @@ Plan, later prove, and close a bounded API-local task-list pagination boundary w
 
 ### Story 117.1 — Task list pagination route-selection planning
 
-**Status:** opened; consensus and implementation pending.
+**Status:** done after sequential Architect APPROVE/CLEAR followed by Critic APPROVE/CLEAR consensus.
 
-**Intent:** Create Phase 38 PRD, architecture, epics, story artifact, sprint-status opening, and derivative feature-status refresh that select read-only aggregate task-list pagination / next-window API planning and exactly canonical `GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}` as the future candidate.
+**Intent:** Create Phase 38 PRD, architecture, epics, story artifact, sprint-status opening, derivative feature-status refresh, and consensus evidence that select read-only aggregate task-list pagination / next-window API planning and exactly canonical `GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}` as the future candidate.
 
 **Scope:** docs/status-only.
 
@@ -29,14 +29,14 @@ Plan, later prove, and close a bounded API-local task-list pagination boundary w
 1. Phase 38 PRD amendment exists and selects read-only aggregate task-list pagination / next-window API planning.
 2. Phase 38 architecture amendment defines exact route, selector domains, canonical query spelling/order, future metadata requirements, fail-closed states, and deferred surfaces.
 3. Phase 38 epics file exists and sequences planning before implementation and final closure.
-4. Story 117.1 artifact exists and records non-authorization, future test obligations, verification plan, and opening evidence.
-5. Sprint status opens Phase 38/Epic 117 without marking implementation complete.
+4. Story 117.1 artifact exists and records non-authorization, future test obligations, verification plan, consensus evidence, and completion evidence.
+5. Sprint status opens Phase 38/Epic 117, marks Story 117.1 done after Architect/Critic consensus, and does not mark implementation complete.
 6. `docs/feature-status.md` is refreshed as derivative status and does not claim pagination implementation.
 7. No runtime/source/test/backend/API/dependency/CI/deployment/service/MCP/generated-data files change.
 
 ### Story 117.2 — Task list pagination runtime/API boundary
 
-**Status:** future after Story 117.1 consensus.
+**Status:** backlog; eligible for tests-first implementation after Story 117.1 consensus.
 
 **Intent:** Future tests-first API-local implementation for exactly canonical `GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}`.
 
@@ -48,7 +48,7 @@ Plan, later prove, and close a bounded API-local task-list pagination boundary w
 
 ## Dependency and sequencing notes
 
-1. Story 117.1 must complete planning consensus before any runtime/API/test implementation.
+1. Story 117.1 completed planning consensus with Architect APPROVE/CLEAR followed by Critic APPROVE/CLEAR before any runtime/API/test implementation.
 2. Story 117.2 must remain API-local and must not add browser pagination controls, sort/search/discovery, status+offset/status+limit+offset composition, automatic row traversal, replay/lifecycle mutation, services/MCP/dependency/CI/deployment changes, or production operations.
 3. Story 117.3 may run only after implementation, final review, proportional QA decision, push, and remote CI evidence exist.
 
