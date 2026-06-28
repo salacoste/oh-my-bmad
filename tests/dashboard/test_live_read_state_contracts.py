@@ -64,6 +64,8 @@ Identifier = Literal[
     "event_id",
     "trace_id",
     "replay_id",
+    "task_status",
+    "task_list_limit",
 ]
 
 APPROVED_ROUTE_PATTERNS = frozenset(
@@ -82,6 +84,9 @@ EXPECTED_IDENTIFIERS_BY_ROUTE = {
     "/v1/tasks/{task_id}/logs/digest": frozenset({"task_id"}),
     "/v1/tasks/{task_id}/logs/digest/stream": frozenset({"task_id"}),
     "/v1/tasks": frozenset(),
+    "/v1/tasks?status={task_status}&limit={task_list_limit}": frozenset(
+        {"task_status", "task_list_limit"}
+    ),
     "/v1/sessions": frozenset(),
     "/v1/sessions/{session_id}": frozenset({"session_id"}),
 }
@@ -295,6 +300,26 @@ LIVE_VALUE_CONTRACTS = (
         timestamp_policy="retrieved-at-required",
         freshness_policy="fresh-or-stale-required",
         required_identifiers=(),
+        allowed_states=frozenset(
+            {
+                "healthy",
+                "empty-list",
+                "stale",
+                "invalid",
+                "unauthorized",
+                "backend-unavailable",
+                "unavailable",
+            }
+        ),
+    ),
+    LiveValueContract(
+        name="aggregate-task-list-status-limit",
+        source_category="aggregate",
+        route_pattern="/v1/tasks?status={task_status}&limit={task_list_limit}",
+        route_contract="approved",
+        timestamp_policy="retrieved-at-required",
+        freshness_policy="fresh-or-stale-required",
+        required_identifiers=("task_status", "task_list_limit"),
         allowed_states=frozenset(
             {
                 "healthy",

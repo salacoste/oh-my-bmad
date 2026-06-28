@@ -22,6 +22,7 @@ CORE_APPROVED_READ_ROUTES = frozenset(
         ("GET", "/v1/tasks/{task_id}/logs/digest"),
         ("GET", "/v1/tasks/{task_id}/logs/digest/stream"),
         ("GET", "/v1/tasks"),
+        ("GET", "/v1/tasks?status={task_status}&limit={task_list_limit}"),
         ("GET", "/v1/sessions"),
         ("GET", "/v1/sessions/{session_id}"),
     }
@@ -32,7 +33,13 @@ CONTROL_TAGS = frozenset(
     {"form", "button", "input", "select", "textarea", "menu", "menuitem", "dialog"}
 )
 APPROVED_STORY_107_2_CONTROL_IDS = frozenset(
-    {"lifecycle-snapshot-create-token", "lifecycle-snapshot-create-button"}
+    {
+        "aggregate-task-list-status-control",
+        "aggregate-task-list-limit-control",
+        "aggregate-task-list-load",
+        "lifecycle-snapshot-create-token",
+        "lifecycle-snapshot-create-button",
+    }
 )
 CONTROL_TERMS = (
     "approval",
@@ -524,6 +531,10 @@ def test_approved_read_route_contract_contains_only_get_methods() -> None:
         assert route.startswith("/v1/"), route
     assert ("GET", "/v1/tasks/{task_id}/logs/digest") in CORE_APPROVED_READ_ROUTES
     assert ("GET", "/v1/tasks/{task_id}/logs/digest/stream") in CORE_APPROVED_READ_ROUTES
+    assert (
+        "GET",
+        "/v1/tasks?status={task_status}&limit={task_list_limit}",
+    ) in CORE_APPROVED_READ_ROUTES
 
 
 def test_dashboard_static_assets_make_no_api_or_mutating_method_calls() -> None:

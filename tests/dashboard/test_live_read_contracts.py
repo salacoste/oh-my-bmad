@@ -82,7 +82,7 @@ def test_route_inventory_is_imported_from_static_boundary_contract() -> None:
     assert APPROVED_READ_ROUTES is boundary.CORE_APPROVED_READ_ROUTES
     assert OPTIONAL_NON_CORE_READ_ROUTES is boundary.OPTIONAL_NON_CORE_READ_ROUTES
     assert FORBIDDEN_METHODS is boundary.FORBIDDEN_METHODS
-    assert len(APPROVED_READ_ROUTES) == 13
+    assert len(APPROVED_READ_ROUTES) == 14
 
 
 def test_candidate_core_read_routes_are_unique_normalized_and_get_only() -> None:
@@ -108,6 +108,10 @@ def test_digest_aggregate_and_session_reads_are_promoted_and_adjacent_routes_nee
     assert ("GET", "/v1/tasks/{task_id}/logs/digest") in APPROVED_READ_ROUTES
     assert ("GET", "/v1/tasks/{task_id}/logs/digest/stream") in APPROVED_READ_ROUTES
     assert ("GET", "/v1/tasks") in APPROVED_READ_ROUTES
+    assert (
+        "GET",
+        "/v1/tasks?status={task_status}&limit={task_list_limit}",
+    ) in APPROVED_READ_ROUTES
     assert ("GET", "/v1/sessions") in APPROVED_READ_ROUTES
     assert ("GET", "/v1/sessions/{session_id}") in APPROVED_READ_ROUTES
     for route in NEEDS_SEPARATE_CONTRACT_GET_ROUTES:
@@ -135,6 +139,8 @@ def test_guard_sensitivity_rejects_unapproved_live_read_calls_and_methods() -> N
     bad_snippets = (
         "fetch('/v1/tasks', {method: 'GET'})",
         "fetch('/v1/tasks?status=open', {method: 'GET'})",
+        "fetch('/v1/tasks?limit=2&status=plan_ready', {method: 'GET'})",
+        "fetch('/v1/tasks?status=plan_ready&limit=2&sort=updated_at', {method: 'GET'})",
         "fetch('/v1/tasks/search', {method: 'GET'})",
         "fetch('/v1/tasks', {method: 'GET', body: '{}'})",
         "fetch('/v1/tasks', {method: 'GET', credentials: 'include'})",
@@ -224,7 +230,13 @@ def assert_no_forbidden_effect_markers(text: str, *, source: str) -> None:
         method_match = METHOD_RE.search(match.group("options"))
         method = method_match.group("method").upper() if method_match else "GET"
         if method == "GET" and (
-            route in {"/v1/tasks", "/v1/sessions"} or route.startswith("/v1/sessions/")
+            route
+            in {
+                "/v1/tasks",
+                "/v1/tasks?status={task_status}&limit={task_list_limit}",
+                "/v1/sessions",
+            }
+            or route.startswith("/v1/sessions/")
         ):
             assert "body" not in options, (source, method, route, "body")
             assert 'credentials: "include"' not in options, (
@@ -239,7 +251,10 @@ def assert_no_forbidden_effect_markers(text: str, *, source: str) -> None:
                 route,
                 "credentials",
             )
-            if route == "/v1/tasks":
+            if route in {
+                "/v1/tasks",
+                "/v1/tasks?status={task_status}&limit={task_list_limit}",
+            }:
                 credentials_is_omit = (
                     'credentials: "omit"' in options or "credentials: 'omit'" in options
                 )

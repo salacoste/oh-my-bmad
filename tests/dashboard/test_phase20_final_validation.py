@@ -35,6 +35,7 @@ APPROVED_DASHBOARD_ROUTES = frozenset(
         "/v1/tasks/{task_id}/logs/digest",
         "/v1/tasks/{task_id}/logs/digest/stream",
         "/v1/tasks",
+        "/v1/tasks?status={task_status}&limit={task_list_limit}",
         "/v1/sessions",
         "/v1/sessions/{session_id}",
     }
@@ -77,6 +78,9 @@ def test_dashboard_approved_route_inventory_is_exact_and_get_only() -> None:
 def test_dashboard_aggregate_session_digest_stream_list_and_detail_are_approved() -> None:
     assert adapter.unavailable_read_contracts() == ()
     assert live_contracts.is_allowlisted_dashboard_read("GET", "/v1/tasks")
+    assert live_contracts.is_allowlisted_dashboard_read(
+        "GET", "/v1/tasks?status={task_status}&limit={task_list_limit}"
+    )
     assert live_contracts.is_allowlisted_dashboard_read("GET", "/v1/sessions")
     assert live_contracts.is_allowlisted_dashboard_read("GET", "/v1/sessions/{session_id}")
     assert live_contracts.is_allowlisted_dashboard_read(

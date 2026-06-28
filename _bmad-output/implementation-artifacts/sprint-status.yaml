@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-06-28T20:34:00+03:00"
+# last_updated: "2026-06-28T21:56:00+03:00"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-28T20:34:00+03:00"
-current_phase: 37  # Phase 37 OPEN — Epic 116 started as docs/status-only planning; Story 116.1 selects dashboard aggregate-task-list browser consumption/rendering of canonical GET /v1/tasks?status={task_status}&limit={task_list_limit} from visible controls only after Architect/Critic consensus; runtime work deferred to Story 116.2
+last_updated: "2026-06-28T21:56:00+03:00"
+current_phase: 37  # Phase 37 OPEN — Epic 116 Story 116.2 locally implements dashboard aggregate-task-list browser consumption/rendering of canonical GET /v1/tasks?status={task_status}&limit={task_list_limit} from visible controls only after Story 116.1 Architect/Critic consensus; Story 116.3 final closure/push/remote-CI remains pending
 
 development_status:
   # =========================================================================
@@ -975,9 +975,9 @@ development_status:
   # =========================================================================
   # Epic 116: Task status + limit browser consumption planning
   # =========================================================================
-  epic-116: in-progress  # Phase 37 opened; Story 116.1 docs/status-only planning selects dashboard aggregate-task-list browser consumption/rendering of canonical GET /v1/tasks?status={task_status}&limit={task_list_limit} from visible controls only; runtime/browser implementation deferred to Story 116.2
-  116-1-task-status-limit-browser-consumption-planning: done  # Phase 37 PRD/architecture/epics/status opening; selects read-only aggregate task-list status+limit browser consumption and future dashboard aggregate-task-list panel consumption/rendering of canonical GET /v1/tasks?status={task_status}&limit={task_list_limit} only; native Architect APPROVE/CLEAR and subsequent native Critic APPROVE/CLEAR consensus recorded; runtime/browser implementation deferred to Story 116.2
-  116-2-task-status-limit-browser-consumption-runtime-boundary: backlog  # future tests-first browser/runtime boundary after Story 116.1 consensus only; visible controls, canonical status-then-limit query, no pagination/search/sort/hidden selectors/broad dashboard wiring/mutation
+  epic-116: in-progress  # Phase 37 opened; Story 116.1 planning consensus complete; Story 116.2 local browser/runtime implementation, code-review APPROVE/CLEAR, and UltraQA PASS complete; Story 116.3 final closure/push/remote-CI remains pending
+  116-1-task-status-limit-browser-consumption-planning: done  # Phase 37 PRD/architecture/epics/status opening; selects read-only aggregate task-list status+limit browser consumption and dashboard aggregate-task-list panel consumption/rendering of canonical GET /v1/tasks?status={task_status}&limit={task_list_limit} only; native Architect APPROVE/CLEAR and subsequent native Critic APPROVE/CLEAR consensus recorded; runtime/browser implementation completed locally in Story 116.2
+  116-2-task-status-limit-browser-consumption-runtime-boundary: done  # tests-first dashboard aggregate-task-list browser/runtime boundary complete locally with code-review APPROVE/CLEAR and UltraQA PASS; visible controls only, canonical status-then-limit query, no pagination/search/sort/hidden selectors/broad dashboard wiring/mutation; push/remote-CI closure deferred to Story 116.3
   116-3-phase-37-epic-116-final-closure: backlog  # future docs/status final closure after Story 116.2 review/QA/push/remote-CI evidence
 
 # ===========================================================================
@@ -4055,6 +4055,27 @@ audit_trail:
 
 recent_activity:
 
+
+  - date: "2026-06-28"
+    event: story-116-2-task-status-limit-browser-consumption-runtime-boundary-complete
+    phase: 37
+    epic: epic-116
+    story: 116-2-task-status-limit-browser-consumption-runtime-boundary
+    source: autopilot-story-116-2-local-review-qa
+    summary: >-
+      Story 116.2 implements the dashboard aggregate-task-list browser
+      consumption/rendering boundary for canonical GET
+      /v1/tasks?status={task_status}&limit={task_list_limit} from visible
+      aggregate-task-list status and limit controls only. The runtime fetches
+      only the canonical status-then-limit route with GET/no body/credentials
+      omit, validates visible selector domains, route pattern, selected status,
+      selected limit, freshness, authority, provenance/correlation metadata,
+      exact response/row keys, row status matching, and bounded row counts, and
+      fails closed for invalid selectors, hidden/missing controls, malformed or
+      mismatched responses, unauthorized responses, invalid JSON, and network
+      failures. Native code-review cycle 2 returned APPROVE/CLEAR and UltraQA
+      returned PASS with fresh local validation. Push, remote CI, and final
+      docs/status closure remain pending Story 116.3.
 
   - date: "2026-06-28"
     event: story-116-1-task-status-limit-browser-consumption-planning-complete

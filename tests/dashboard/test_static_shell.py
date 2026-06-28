@@ -44,7 +44,13 @@ REQUIRED_PANELS = {
 
 FORBIDDEN_TAGS = {"form", "button", "input", "select", "textarea"}
 APPROVED_STORY_107_2_CONTROL_IDS = frozenset(
-    {"lifecycle-snapshot-create-token", "lifecycle-snapshot-create-button"}
+    {
+        "aggregate-task-list-status-control",
+        "aggregate-task-list-limit-control",
+        "aggregate-task-list-load",
+        "lifecycle-snapshot-create-token",
+        "lifecycle-snapshot-create-button",
+    }
 )
 LIVE_API_MARKERS = (
     "fetch(",

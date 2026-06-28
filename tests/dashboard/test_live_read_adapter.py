@@ -34,7 +34,7 @@ def test_adapter_contracts_cover_exact_approved_route_inventory() -> None:
         for contract in approved
     }
 
-    assert len(approved) == 13
+    assert len(approved) == 14
     assert adapter_routes == live_contracts.APPROVED_READ_ROUTES
     assert {contract.route_status for contract in approved} == {"approved"}
     assert {
@@ -87,6 +87,7 @@ def test_digest_stream_is_adapter_read_after_story_112_2_promotion() -> None:
     assert not (adapter.EXCLUDED_ROUTE_PATTERNS & approved_routes)
     assert "/v1/tasks/{task_id}/logs/digest" in approved_routes
     assert "/v1/tasks" in approved_routes
+    assert "/v1/tasks?status={task_status}&limit={task_list_limit}" in approved_routes
     assert "/v1/sessions" in approved_routes
     assert "/v1/sessions/{session_id}" in approved_routes
     assert "/v1/tasks/{task_id}/logs/digest/stream" in approved_routes

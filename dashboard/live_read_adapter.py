@@ -63,6 +63,8 @@ Identifier = Literal[
     "event_id",
     "trace_id",
     "replay_id",
+    "task_status",
+    "task_list_limit",
 ]
 PanelFamily = Literal[
     "task-detail",
@@ -334,6 +336,25 @@ APPROVED_READ_CONTRACTS: tuple[ReadContract, ...] = (
         ),
     ),
     ReadContract(
+        source_category="aggregate",
+        route_pattern="/v1/tasks?status={task_status}&limit={task_list_limit}",
+        route_status="approved",
+        timestamp_policy="retrieved-at-required",
+        freshness_policy="fresh-or-stale-required",
+        required_identifiers=("task_status", "task_list_limit"),
+        allowed_states=frozenset(
+            {
+                "healthy",
+                "empty-list",
+                "stale",
+                "invalid",
+                "unauthorized",
+                "backend-unavailable",
+                "unavailable",
+            }
+        ),
+    ),
+    ReadContract(
         source_category="session",
         route_pattern="/v1/sessions",
         route_status="approved",
@@ -502,15 +523,36 @@ STORY_112_2_PANEL_TITLES: Mapping[PanelFamily, str] = MappingProxyType(
     {"digest-stream": "Digest stream"}
 )
 
-STORY_109_2_ROUTE_PATTERNS = ("/v1/tasks",)
+STORY_109_2_ROUTE_PATTERNS = (
+    "/v1/tasks",
+    "/v1/tasks?status={task_status}&limit={task_list_limit}",
+)
 STORY_109_2_ROUTE_INPUT_IDENTIFIERS: Mapping[str, tuple[Identifier, ...]] = MappingProxyType(
-    {"/v1/tasks": ()}
+    {
+        "/v1/tasks": (),
+        "/v1/tasks?status={task_status}&limit={task_list_limit}": (
+            "task_status",
+            "task_list_limit",
+        ),
+    }
 )
 STORY_109_2_ROW_DISPLAY_IDENTIFIERS: Mapping[str, tuple[Identifier, ...]] = MappingProxyType(
-    {"/v1/tasks": ("task_id", "event_id", "trace_id")}
+    {
+        "/v1/tasks": ("task_id", "event_id", "trace_id"),
+        "/v1/tasks?status={task_status}&limit={task_list_limit}": (
+            "task_id",
+            "event_id",
+            "trace_id",
+        ),
+    }
 )
 STORY_109_2_PANEL_ROUTES: Mapping[PanelFamily, tuple[str, ...]] = MappingProxyType(
-    {"aggregate-task-list": ("/v1/tasks",)}
+    {
+        "aggregate-task-list": (
+            "/v1/tasks",
+            "/v1/tasks?status={task_status}&limit={task_list_limit}",
+        )
+    }
 )
 STORY_109_2_PANEL_TITLES: Mapping[PanelFamily, str] = MappingProxyType(
     {"aggregate-task-list": "Aggregate task list"}
