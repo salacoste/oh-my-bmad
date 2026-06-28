@@ -484,20 +484,76 @@ def test_story_116_2_runtime_behavior_maps_success_empty_and_failures() -> None:
 
 def test_story_116_2_runtime_rejects_invalid_or_missing_visible_controls_before_fetch() -> None:
     invalid_cases: list[RuntimeCase] = [
-        {"name": "missing-status", "missingElements": ["aggregate-task-list-status-control"], "expected": ["invalid", "unavailable"]},
-        {"name": "missing-limit", "missingElements": ["aggregate-task-list-limit-control"], "expected": ["invalid", "unavailable"]},
-        {"name": "hidden-status", "controlTypes": {"aggregate-task-list-status-control": "hidden"}, "expected": ["invalid"]},
-        {"name": "empty-status", "controlValues": {"aggregate-task-list-status-control": ""}, "expected": ["invalid"]},
-        {"name": "unknown-status", "controlValues": {"aggregate-task-list-status-control": "ready"}, "expected": ["invalid"]},
-        {"name": "uppercase-status", "controlValues": {"aggregate-task-list-status-control": "PLAN_READY"}, "expected": ["invalid"]},
-        {"name": "empty-limit", "controlValues": {"aggregate-task-list-limit-control": ""}, "expected": ["invalid"]},
-        {"name": "zero-limit", "controlValues": {"aggregate-task-list-limit-control": "0"}, "expected": ["invalid"]},
-        {"name": "negative-limit", "controlValues": {"aggregate-task-list-limit-control": "-1"}, "expected": ["invalid"]},
-        {"name": "fractional-limit", "controlValues": {"aggregate-task-list-limit-control": "1.5"}, "expected": ["invalid"]},
-        {"name": "noninteger-limit", "controlValues": {"aggregate-task-list-limit-control": "two"}, "expected": ["invalid"]},
-        {"name": "out-of-range-limit", "controlValues": {"aggregate-task-list-limit-control": "51"}, "expected": ["invalid"]},
-        {"name": "unicode-digit-limit", "controlValues": {"aggregate-task-list-limit-control": "２"}, "expected": ["invalid"]},
-        {"name": "encoded-digit-limit", "controlValues": {"aggregate-task-list-limit-control": "%32"}, "expected": ["invalid"]},
+        {
+            "name": "missing-status",
+            "missingElements": ["aggregate-task-list-status-control"],
+            "expected": ["invalid", "unavailable"],
+        },
+        {
+            "name": "missing-limit",
+            "missingElements": ["aggregate-task-list-limit-control"],
+            "expected": ["invalid", "unavailable"],
+        },
+        {
+            "name": "hidden-status",
+            "controlTypes": {"aggregate-task-list-status-control": "hidden"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "empty-status",
+            "controlValues": {"aggregate-task-list-status-control": ""},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "unknown-status",
+            "controlValues": {"aggregate-task-list-status-control": "ready"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "uppercase-status",
+            "controlValues": {"aggregate-task-list-status-control": "PLAN_READY"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "empty-limit",
+            "controlValues": {"aggregate-task-list-limit-control": ""},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "zero-limit",
+            "controlValues": {"aggregate-task-list-limit-control": "0"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "negative-limit",
+            "controlValues": {"aggregate-task-list-limit-control": "-1"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "fractional-limit",
+            "controlValues": {"aggregate-task-list-limit-control": "1.5"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "noninteger-limit",
+            "controlValues": {"aggregate-task-list-limit-control": "two"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "out-of-range-limit",
+            "controlValues": {"aggregate-task-list-limit-control": "51"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "unicode-digit-limit",
+            "controlValues": {"aggregate-task-list-limit-control": "２"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "encoded-digit-limit",
+            "controlValues": {"aggregate-task-list-limit-control": "%32"},
+            "expected": ["invalid"],
+        },
     ]
     for case in invalid_cases:
         output = run_runtime_case(case)
@@ -533,7 +589,12 @@ def test_story_116_2_runtime_supports_only_allowed_visible_statuses_and_limits()
             }
         )
         assert output["fetchCalls"] == [
-            {"route": f"/v1/tasks?status={status}&limit=1", "method": "GET", "hasBody": False, "credentials": "omit"}
+            {
+                "route": f"/v1/tasks?status={status}&limit=1",
+                "method": "GET",
+                "hasBody": False,
+                "credentials": "omit",
+            }
         ]
 
     for limit in ("1", "2", "50"):
@@ -557,7 +618,12 @@ def test_story_116_2_runtime_supports_only_allowed_visible_statuses_and_limits()
             }
         )
         assert output["fetchCalls"] == [
-            {"route": f"/v1/tasks?status={DEFAULT_STATUS}&limit={limit}", "method": "GET", "hasBody": False, "credentials": "omit"}
+            {
+                "route": f"/v1/tasks?status={DEFAULT_STATUS}&limit={limit}",
+                "method": "GET",
+                "hasBody": False,
+                "credentials": "omit",
+            }
         ]
 
 
