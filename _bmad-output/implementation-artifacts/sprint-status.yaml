@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-28T00:00:00+03:00"
-current_phase: 35  # Phase 35 OPEN — Story 114.2 task-list limit runtime/API boundary locally complete after clean code-review/QA; Story 114.3 final closure remains backlog pending push/remote CI evidence
+last_updated: "2026-06-28T03:47:00+03:00"
+current_phase: 35  # Phase 35 CLOSED — Epic 114 complete after Story 114.3 final closure; exact GET /v1/tasks?limit={task_list_limit} boundary pushed and remote CI run 28306586314 succeeded
 
 development_status:
   # =========================================================================
@@ -958,10 +958,10 @@ development_status:
   # =========================================================================
   # Epic 114: Task list limit route selection planning
   # =========================================================================
-  epic-114: in-progress  # Phase 35 opened; Story 114.2 locally implements exact GET /v1/tasks?limit={task_list_limit} with clean code-review/QA; final closure evidence remains pending Story 114.3
+  epic-114: done  # Phase 35 closed; exact GET /v1/tasks?limit={task_list_limit} boundary implemented/reviewed/QAed, pushed in 16a55d6, and remote CI run 28306586314 succeeded
   114-1-task-list-limit-route-selection-planning: done  # Phase 35 PRD/architecture/epics/status opening; selects read-only task-list sizing and future GET /v1/tasks?limit={task_list_limit} only; Architect APPROVE/CLEAR and subsequent Critic APPROVE/CLEAR consensus recorded; runtime/API implementation deferred to Story 114.2 only
-  114-2-task-list-limit-runtime-boundary: done  # local tests-first exact GET /v1/tasks?limit={task_list_limit} runtime/API boundary complete with code-review APPROVE/CLEAR and UltraQA PASS; no push/remote CI claimed until Story 114.3; no pagination traversal/sorting/search/selector-composition/mutation
-  114-3-phase-35-epic-114-final-closure: backlog  # future docs/status final closure only after Story 114.2 review/QA/push/remote-CI evidence
+  114-2-task-list-limit-runtime-boundary: done  # tests-first exact GET /v1/tasks?limit={task_list_limit} runtime/API boundary complete with code-review APPROVE/CLEAR and UltraQA PASS; pushed in 16a55d6 and remote CI run 28306586314 succeeded; no pagination traversal/sorting/search/selector-composition/mutation
+  114-3-phase-35-epic-114-final-closure: done  # docs/status final closure after Story 114.2 review/QA/push/remote-CI evidence; remote CI run 28306586314 succeeded
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
@@ -4039,6 +4039,25 @@ audit_trail:
 recent_activity:
 
   - date: "2026-06-28"
+    event: story-114-3-phase-35-epic-114-final-closure-complete
+    phase: 35
+    epic: epic-114
+    story: 114-3-phase-35-epic-114-final-closure
+    source: autopilot-story-114-3-remote-ci-closure
+    summary: >-
+      Story 114.3 closes Phase 35 / Epic 114 after Story 114.2 implemented
+      exactly GET /v1/tasks?limit={task_list_limit}, code-review returned
+      APPROVE/CLEAR, UltraQA returned PASS, implementation commit
+      16a55d6a80d0886863463fc080ded7c6a4d37ec7 was pushed to main, and
+      GitHub Actions ci run 28306586314 succeeded. The closed surface remains
+      one integer limit query key from 1 through 50 only; offset/cursor/page
+      traversal, sorting, free-text search/discovery, status+limit composition,
+      hidden selectors, row-driven traversal, dashboard/browser runtime wiring,
+      replay execution, lifecycle mutation, services/MCP/dependencies/CI/
+      deployment changes, production credentials, and production operations
+      remain deferred/fail-closed.
+
+  - date: "2026-06-28"
     event: story-114-2-task-list-limit-runtime-boundary-local-review-qa-green
     phase: 35
     epic: epic-114
@@ -4055,8 +4074,8 @@ recent_activity:
       traversal, and sorting, and does not add dashboard/browser runtime wiring,
       replay execution, lifecycle mutation, services/MCP/dependencies/CI/
       deployment changes, production credentials, or production operations.
-      Final closure remains pending Story 114.3 push/remote CI evidence; no
-      remote CI or production deployment is claimed here.
+      Story 114.3 subsequently recorded push and green remote CI run
+      28306586314; no production deployment is claimed.
 
   - date: "2026-06-27"
     event: story-114-1-task-list-limit-route-selection-planning-complete
@@ -4070,8 +4089,8 @@ recent_activity:
       followed by native Critic APPROVE/CLEAR. The exact selected future
       boundary is GET /v1/tasks?limit={task_list_limit}; current GET /v1/tasks
       and GET /v1/tasks?status={task_status} behavior remains unchanged until
-      a tests-first Story 114.2. Story 114.2 is now locally implemented and in
-      review; Story 114.3 remains backlog pending final closure evidence.
+      a tests-first Story 114.2. Story 114.2 is now implemented and Story 114.3
+      records final closure evidence with green remote CI run 28306586314.
 
   - date: "2026-06-27"
     event: phase-35-epic-114-opened
@@ -4087,8 +4106,9 @@ recent_activity:
       implementation, offset/cursor/page traversal, sorting, free-text search,
       arbitrary discovery, selector composition, replay execution target
       selection, lifecycle mutation, broad dashboard wiring, and production
-      operations remain unauthorized pending Story 114.2 after Architect then
-      Critic approval.
+      operations were unauthorized until Story 114.2 after Architect then
+      Critic approval; Story 114.3 now records final closure evidence for the
+      exact limit route while those adjacent surfaces remain fail-closed.
 
   - date: "2026-06-27"
     event: story-113-3-phase-34-epic-113-final-closure-complete

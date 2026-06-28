@@ -2,7 +2,7 @@
 
 ## Status
 
-Local implementation/review/QA complete — tests-first exact API/runtime boundary for `GET /v1/tasks?limit={task_list_limit}` is implemented locally after Story 114.1 Architect/Critic consensus. Code-review returned APPROVE/CLEAR and UltraQA returned PASS. Remote CI/final closure are not claimed here and remain pending Story 114.3.
+Done — tests-first exact API/runtime boundary for `GET /v1/tasks?limit={task_list_limit}` is implemented after Story 114.1 Architect/Critic consensus. Code-review returned APPROVE/CLEAR, UltraQA returned PASS, and Story 114.3 records push plus green remote CI closure evidence.
 
 ## Implemented boundary
 
@@ -40,10 +40,12 @@ Story 114.2 does not introduce browser dashboard wiring, offset/cursor/page trav
 - Final code review: `.omx/reviews/phase-35-task-list-limit-runtime-boundary-code-review.md` — code-reviewer subagent `019f0b8a-820a-7490-9c7d-f0ea0f3c72d7`, APPROVE/CLEAR, no findings.
 - UltraQA/verifier: `.omx/ultraqa/phase-35-task-list-limit-runtime-boundary-report.md` — verifier subagent `019f0b95-9eef-72d0-b68a-07e57f176629`, PASS, no findings; hostile probes accepted selector-free/status/limit-only reads and rejected invalid/adjoining selectors and GET bodies.
 
-## Pending before final closure
+## Final closure evidence
 
-- Story 114.3 final closure artifact/status update after push and remote CI evidence.
-- No remote CI, commit, deployment, production credential, or production operation is claimed by Story 114.2.
+- Story 114.3 final closure artifact: `_bmad-output/implementation-artifacts/114-3-phase-35-epic-114-final-closure.md`.
+- Implementation commit: `16a55d6a80d0886863463fc080ded7c6a4d37ec7`.
+- Remote CI: GitHub Actions `ci` run `28306586314` succeeded on `main`.
+- No deployment, production credential, or production operation is claimed.
 
 Generated: 2026-06-28T00:03:43Z
-Updated: 2026-06-28T00:20:00Z
+Updated: 2026-06-28T00:47:00Z

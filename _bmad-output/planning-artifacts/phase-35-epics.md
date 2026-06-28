@@ -42,13 +42,13 @@ Plan, prove, and close a bounded dashboard/API route boundary for one limit-sele
 2. Phase 35 architecture amendment defines exact route, finite bounded integer limit selector vocabulary, single-query-key boundary, bounded row-shape/order expectations, freshness/provenance requirements, fail-closed states, no pagination traversal/sorting/search/hidden discovery/traversal, no replay/lifecycle mutation, and deferred-surface boundaries.
 3. Phase 35 epics file exists and sequences planning before runtime/API-boundary implementation and final closure.
 4. Story 114.1 artifact exists and records non-authorization, future test obligations, verification plan, and completion evidence.
-5. Sprint status opens Phase 35/Epic 114, marks Story 114.1 done after Architect/Critic consensus, and leaves Story 114.2/114.3 backlog.
+5. Sprint status initially opens Phase 35/Epic 114, marks Story 114.1 done after Architect/Critic consensus, and sequences Story 114.2/114.3 after planning consensus.
 6. `docs/feature-status.md` is refreshed as derivative status and does not claim task-list-limit runtime/API implementation.
 7. No runtime/source/test/backend/API/dependency/CI/deployment/service/MCP/generated-data files change.
 
 ### Story 114.2 — Task list limit runtime/API contract boundary
 
-**Status:** backlog — not authorized until Story 114.1 records sequential Architect then Critic approval.
+**Status:** done after tests-first implementation, code-review APPROVE/CLEAR, UltraQA PASS, push, and green remote CI run `28306586314`.
 
 **Intent:** Implement a separately approved, tests-first boundary for exactly `GET /v1/tasks?limit={task_list_limit}` with narrow additive API/runtime tests and no broader dashboard/API expansion.
 
@@ -63,11 +63,11 @@ Plan, prove, and close a bounded dashboard/API route boundary for one limit-sele
 7. Missing/invalid selector, empty result, backend unavailable, unauthorized/configuration failure, non-2xx, route failure/read error, malformed payload, unexpected keys, over-limit response, stale/ambiguous freshness, and over-broad payload render non-authoritative fail-closed copy.
 8. Limited list output exposes source route, selected limit, retrieved_at, freshness, authority/provenance, request/trace/correlation id where available, returned_count/has_more, and degraded-state metadata.
 9. Existing dashboard/API runtime-boundary suites remain green.
-10. Independent code-reviewer APPROVE/CLEAR, UltraQA PASS or explicit proportional QA, push, and remote CI green are recorded before runtime completion is claimed.
+10. Independent code-reviewer APPROVE/CLEAR, UltraQA PASS, push, and green remote CI run `28306586314` are recorded.
 
 ### Story 114.3 — Phase 35 / Epic 114 final validation closure
 
-**Status:** backlog — not authorized until Story 114.2 implementation, review, proportional QA, push, and green remote CI evidence exist.
+**Status:** done after Story 114.2 implementation, review, UltraQA, push, and green remote CI evidence.
 
 **Intent:** Complete docs/status final closure only after Story 114.2 runtime/API evidence, final review, QA decision, push, and remote CI evidence exist.
 
@@ -86,3 +86,4 @@ Plan, prove, and close a bounded dashboard/API route boundary for one limit-sele
 4. Replay execution target selection, lifecycle apply/prune/rollback, free-text search, arbitrary discovery, pagination traversal, and sorting remain higher-risk and fail-closed unless selected by a later explicit product and architecture gate.
 
 Generated: 2026-06-27T18:56:38Z
+Updated: 2026-06-28T00:47:00Z
