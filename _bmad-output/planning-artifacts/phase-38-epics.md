@@ -2,19 +2,19 @@
 
 ## Phase 38 theme
 
-Phase 38 opens a planning-only branch for one pagination-adjacent task-list API candidate after Phase 37 closed status+limit browser consumption:
+Phase 38 closes the bounded task-list pagination / next-window API branch after planning, tests-first implementation, review, QA, push, and green remote CI evidence:
 
 - Family: read-only aggregate task-list pagination / next-window API planning
 - Exact future candidate: canonical `GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}`
 - Limit selector: ASCII integer 1 through 50 inclusive
-- Offset selector: ASCII non-negative integer, with final maximum/large-offset behavior pending implementation-plan approval
-- Scope: backend/API route-local future candidate only; no browser pagination controls or traversal
+- Offset selector: ASCII non-negative integer from 0 through 2147483647 inclusive
+- Scope: backend/API route-local boundary only; no browser pagination controls or traversal
 
-## Epic 117 — Task list pagination planning boundary
+## Epic 117 — Task list pagination boundary
 
 ### Objective
 
-Plan, later prove, and close a bounded API-local task-list pagination boundary without browser traversal, infinite scroll, sorting, free-text search, arbitrary discovery, hidden selectors, row-driven drill-down, replay/lifecycle mutation, broad dashboard wiring, generated live data, or production operations.
+Plan, prove, and close a bounded API-local task-list pagination boundary without browser traversal, infinite scroll, sorting, free-text search, arbitrary discovery, hidden selectors, row-driven drill-down, replay/lifecycle mutation, broad dashboard wiring, generated live data, or production operations.
 
 ### Story 117.1 — Task list pagination route-selection planning
 
@@ -36,20 +36,20 @@ Plan, later prove, and close a bounded API-local task-list pagination boundary w
 
 ### Story 117.2 — Task list pagination runtime/API boundary
 
-**Status:** backlog; eligible for tests-first implementation after Story 117.1 consensus.
+**Status:** done after tests-first implementation, code-review APPROVE/CLEAR, UltraQA PASS, push, CI repair, and green remote CI evidence.
 
-**Intent:** Future tests-first API-local implementation for exactly canonical `GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}`.
+**Intent:** Tests-first API-local implementation for exactly canonical `GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}`.
 
 ### Story 117.3 — Phase 38 / Epic 117 final validation closure
 
-**Status:** future after Story 117.2 review, QA, push, and green remote CI evidence.
+**Status:** done after final commit/CI evidence was recorded.
 
-**Intent:** Future docs/status final closure with commit and CI evidence.
+**Intent:** Docs/status final closure with implementation commit, CI repair/final head, GitHub Actions `ci` run `28339322034` success, and nightly run `28339322019` success.
 
 ## Dependency and sequencing notes
 
 1. Story 117.1 completed planning consensus with Architect APPROVE/CLEAR followed by Critic APPROVE/CLEAR before any runtime/API/test implementation.
-2. Story 117.2 must remain API-local and must not add browser pagination controls, sort/search/discovery, status+offset/status+limit+offset composition, automatic row traversal, replay/lifecycle mutation, services/MCP/dependency/CI/deployment changes, or production operations.
-3. Story 117.3 may run only after implementation, final review, proportional QA decision, push, and remote CI evidence exist.
+2. Story 117.2 remained API-local and did not add browser pagination controls, sort/search/discovery, status+offset/status+limit+offset composition, automatic row traversal, replay/lifecycle mutation, services/MCP/dependency/CI/deployment changes, or production operations.
+3. Story 117.3 completed after implementation, final review, proportional QA, push, CI repair, and remote CI/nightly evidence existed.
 
 Generated: 2026-06-28T19:13:22Z

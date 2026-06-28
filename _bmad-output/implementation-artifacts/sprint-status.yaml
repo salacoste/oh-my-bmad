@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-06-28T23:10:00+03:00"
+# last_updated: "2026-06-29T02:22:30+03:00"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-28T23:10:00+03:00"
-current_phase: 38  # Phase 38 OPEN — Epic 116 is done after Story 116.3 final closure with final CI head 60c6f858431a1049060248f3a9f6e3754e5ac6a2 and GitHub Actions ci run 28332793428 success; Epic 117 has Story 117.1 planning consensus done and Story 117.2 locally done for bounded task-list pagination API candidate GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset} after code-review/UltraQA; final closure remains pending
+last_updated: "2026-06-29T02:22:30+03:00"
+current_phase: 38  # Phase 38 CLOSED — Epic 117 done after Story 117.1 planning consensus, Story 117.2 exact canonical GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset} API-local implementation, code-review/UltraQA, push, CI repair, final CI head 0c9ce797bd74e78f23fcd63cc873226b3ebe3be7, GitHub Actions ci run 28339322034 success, and nightly run 28339322019 success
 
 development_status:
   # =========================================================================
@@ -983,15 +983,31 @@ development_status:
   # =========================================================================
   # Epic 117: Task list pagination route-selection planning
   # =========================================================================
-  epic-117: in-progress  # Phase 38 bounded task-list pagination / next-window API candidate; Story 117.1 planning consensus done and Story 117.2 locally done after code-review/UltraQA pending final closure
+  epic-117: done  # Phase 38 closed; Story 117.1 planning consensus, Story 117.2 exact canonical limit+offset API-local implementation, code-review APPROVE/CLEAR, UltraQA PASS, push, CI repair/final head 0c9ce797bd74e78f23fcd63cc873226b3ebe3be7, GitHub Actions ci run 28339322034 success, nightly run 28339322019 success, and Story 117.3 final closure done
   117-1-task-list-pagination-route-selection-planning: done  # Phase 38 PRD/architecture/epics/status opening; selects read-only task-list pagination / next-window API planning and future canonical GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset} only; native Architect APPROVE/CLEAR and subsequent native Critic APPROVE/CLEAR consensus recorded; runtime/API implementation deferred to Story 117.2
-  117-2-task-list-pagination-runtime-boundary: done  # tests-first API-local implementation for exact canonical GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}; code-review APPROVE/CLEAR; UltraQA PASS; no browser pagination controls or broader selector composition
-  117-3-phase-38-epic-117-final-closure: backlog  # future docs/status final closure after Story 117.2 review/QA/push/remote-CI evidence
+  117-2-task-list-pagination-runtime-boundary: done  # tests-first API-local implementation for exact canonical GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}; code-review APPROVE/CLEAR; UltraQA PASS; implementation commit ba3e7fcac077458f4d72029adf7a5afda86bb74b, CI repair/final head 0c9ce797bd74e78f23fcd63cc873226b3ebe3be7, remote ci run 28339322034 success; no browser pagination controls or broader selector composition
+  117-3-phase-38-epic-117-final-closure: done  # docs/status final closure after Story 117.2 review/QA/push/CI-repair evidence; final CI head 0c9ce797bd74e78f23fcd63cc873226b3ebe3be7; GitHub Actions ci run 28339322034 and nightly run 28339322019 succeeded
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-29"
+    event: story-117-3-phase-38-epic-117-final-closure-complete
+    from: backlog
+    to: done
+    story: 117-3-phase-38-epic-117-final-closure
+    reason: >
+      Story 117.3 closes Phase 38 / Epic 117 after Story 117.2 review,
+      UltraQA, local validation, push, CI repair, and remote evidence. Primary
+      implementation commit ba3e7fcac077458f4d72029adf7a5afda86bb74b adds
+      exactly canonical GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset};
+      final CI head 0c9ce797bd74e78f23fcd63cc873226b3ebe3be7 completed
+      GitHub Actions ci run 28339322034 and nightly run 28339322019
+      successfully on main. Browser pagination controls, automatic traversal,
+      sorting, free-text search, status+offset/status+limit+offset composition,
+      hidden selectors, broad dashboard wiring, services/MCP/dependencies,
+      production credentials, and production operations remain deferred/fail-closed.
   - date: "2026-06-27"
     event: story-113-3-phase-34-epic-113-final-closure-complete
     from: backlog
@@ -4064,6 +4080,24 @@ audit_trail:
 recent_activity:
 
 
+
+  - date: "2026-06-29"
+    event: story-117-3-phase-38-epic-117-final-closure-complete
+    phase: 38
+    epic: epic-117
+    story: 117-3-phase-38-epic-117-final-closure
+    source: autopilot-story-117-3-final-closure
+    summary: >-
+      Story 117.3 closes Phase 38 / Epic 117 after Story 117.2 tests-first
+      API-local implementation, code-review APPROVE/CLEAR, UltraQA PASS, push,
+      CI repair, and green remote evidence. Primary implementation commit
+      ba3e7fcac077458f4d72029adf7a5afda86bb74b implements exactly canonical
+      GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}; final
+      CI head 0c9ce797bd74e78f23fcd63cc873226b3ebe3be7 passed GitHub Actions
+      ci run 28339322034 and nightly run 28339322019. Browser pagination
+      controls, automatic traversal, sorting, free-text search, broader selector
+      composition, broad dashboard wiring, services/MCP/dependencies, and
+      production operations remain deferred/fail-closed.
 
   - date: "2026-06-28"
     event: story-117-2-task-list-pagination-runtime-boundary-complete

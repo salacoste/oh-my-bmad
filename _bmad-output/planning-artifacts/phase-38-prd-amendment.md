@@ -4,16 +4,16 @@ Generated: 2026-06-28T19:13:22Z
 
 ## Scope statement
 
-Phase 38 opens the next narrow planning-only branch after Phase 37 / Epic 116 closed dashboard browser consumption for the exact canonical status+limit task-list route.
+Phase 38 opened and closed the next narrow task-list pagination branch after Phase 37 / Epic 116 closed dashboard browser consumption for the exact canonical status+limit task-list route.
 
-Story 117.1 is docs/status-only. It selects one candidate for later consensus and tests-first proof; it does not add runtime implementation, backend/API route implementation, dashboard JavaScript/HTML behavior changes, browser network calls, tests, dependencies, lockfiles, CI/deployment changes, services, MCP changes, generated live data, sorting controls, free-text search, arbitrary query language, hidden selectors, row-derived traversal, replay execution target selection, lifecycle apply/prune/rollback, mutation/control behavior, broad dashboard wiring, production credentials, or production operations.
+Story 117.1 was docs/status-only. It selected one candidate for later consensus and tests-first proof; it did not add runtime implementation, backend/API route implementation, dashboard JavaScript/HTML behavior changes, browser network calls, tests, dependencies, lockfiles, CI/deployment changes, services, MCP changes, generated live data, sorting controls, free-text search, arbitrary query language, hidden selectors, row-derived traversal, replay execution target selection, lifecycle apply/prune/rollback, mutation/control behavior, broad dashboard wiring, production credentials, or production operations.
 
 ## Selected family and exact future candidate
 
 - **Selected family:** read-only aggregate task-list pagination / next-window API planning.
 - **Selected exact future candidate surface:** backend/API route-local planning for canonical `GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}`.
 - **Allowed limit selector domain:** one ASCII integer task-list limit from 1 through 50 inclusive.
-- **Allowed offset selector domain:** one ASCII non-negative integer offset; final implementation bounds, maximum offset, and large-offset behavior must be approved by the Phase 38 implementation plan before any runtime code changes.
+- **Allowed offset selector domain:** one ASCII non-negative integer offset from 0 through 2147483647 inclusive, with raw spelling limited to 1-10 ASCII digits.
 - **Canonical query order:** limit first, then offset. Reversed order or additional query keys remain unauthorized unless a later consensus gate changes the contract.
 
 ## Product goals
@@ -47,5 +47,5 @@ Story 117.1 is docs/status-only. It selects one candidate for later consensus an
 ## Follow-on story sequence
 
 - Story 117.1: docs/status-only route-selection planning gate for bounded task-list pagination.
-- Story 117.2: future tests-first backend/API boundary only after Story 117.1 consensus.
-- Story 117.3: future final validation closure after Story 117.2 review, QA, push, and remote CI evidence.
+- Story 117.2: tests-first backend/API boundary completed after Story 117.1 consensus.
+- Story 117.3: final validation closure completed after Story 117.2 review, QA, push, CI repair, and remote CI/nightly evidence.
