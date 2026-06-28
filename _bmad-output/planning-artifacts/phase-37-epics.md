@@ -51,7 +51,7 @@ Plan, prove, and close a bounded dashboard/browser consumption boundary for one 
 
 ### Story 116.2 — Task status + limit browser consumption runtime boundary
 
-**Status:** planned after Story 116.1 consensus.
+**Status:** done after implementation, code-review APPROVE/CLEAR, UltraQA PASS, push, format repair, and green remote CI run `28332793428`.
 
 **Intent:** Implement a separately approved, tests-first browser/runtime boundary for exactly dashboard aggregate-task-list panel consumption/rendering of canonical `GET /v1/tasks?status={task_status}&limit={task_list_limit}` with visible selector controls only and no broader dashboard/API expansion.
 
@@ -72,7 +72,7 @@ Plan, prove, and close a bounded dashboard/browser consumption boundary for one 
 
 ### Story 116.3 — Phase 37 / Epic 116 final validation closure
 
-**Status:** planned after Story 116.2 review, QA, push, and green remote CI evidence.
+**Status:** done after Story 116.2 review, UltraQA PASS, push, format repair, and green remote CI run `28332793428`.
 
 **Intent:** Complete docs/status final closure only after Story 116.2 runtime/browser evidence, final review, QA decision, push, and remote CI evidence exist.
 
@@ -92,4 +92,4 @@ Plan, prove, and close a bounded dashboard/browser consumption boundary for one 
 
 Generated: 2026-06-28T17:26:00Z
 
-Updated: 2026-06-28T17:34:00Z
+Updated: 2026-06-28T19:14:45Z

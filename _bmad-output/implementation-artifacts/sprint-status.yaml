@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-06-28T21:56:00+03:00"
+# last_updated: "2026-06-28T22:14:45+03:00"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-28T21:56:00+03:00"
-current_phase: 37  # Phase 37 OPEN — Epic 116 Story 116.2 locally implements dashboard aggregate-task-list browser consumption/rendering of canonical GET /v1/tasks?status={task_status}&limit={task_list_limit} from visible controls only after Story 116.1 Architect/Critic consensus; Story 116.3 final closure/push/remote-CI remains pending
+last_updated: "2026-06-28T22:14:45+03:00"
+current_phase: 38  # Phase 38 OPEN — Epic 116 is done after Story 116.3 final closure with final CI head 60c6f858431a1049060248f3a9f6e3754e5ac6a2 and GitHub Actions ci run 28332793428 success; Epic 117 opens docs/status-only planning for bounded task-list pagination candidate GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}
 
 development_status:
   # =========================================================================
@@ -975,10 +975,18 @@ development_status:
   # =========================================================================
   # Epic 116: Task status + limit browser consumption planning
   # =========================================================================
-  epic-116: in-progress  # Phase 37 opened; Story 116.1 planning consensus complete; Story 116.2 local browser/runtime implementation, code-review APPROVE/CLEAR, and UltraQA PASS complete; Story 116.3 final closure/push/remote-CI remains pending
+  epic-116: done  # Phase 37 closed; Story 116.1 planning consensus, Story 116.2 dashboard status+limit browser/runtime implementation, code-review APPROVE/CLEAR, UltraQA PASS, push, format repair, and remote CI run 28332793428 succeeded; Story 116.3 final closure done
   116-1-task-status-limit-browser-consumption-planning: done  # Phase 37 PRD/architecture/epics/status opening; selects read-only aggregate task-list status+limit browser consumption and dashboard aggregate-task-list panel consumption/rendering of canonical GET /v1/tasks?status={task_status}&limit={task_list_limit} only; native Architect APPROVE/CLEAR and subsequent native Critic APPROVE/CLEAR consensus recorded; runtime/browser implementation completed locally in Story 116.2
-  116-2-task-status-limit-browser-consumption-runtime-boundary: done  # tests-first dashboard aggregate-task-list browser/runtime boundary complete locally with code-review APPROVE/CLEAR and UltraQA PASS; visible controls only, canonical status-then-limit query, no pagination/search/sort/hidden selectors/broad dashboard wiring/mutation; push/remote-CI closure deferred to Story 116.3
-  116-3-phase-37-epic-116-final-closure: backlog  # future docs/status final closure after Story 116.2 review/QA/push/remote-CI evidence
+  116-2-task-status-limit-browser-consumption-runtime-boundary: done  # tests-first dashboard aggregate-task-list browser/runtime boundary complete with code-review APPROVE/CLEAR and UltraQA PASS; visible controls only, canonical status-then-limit query, no pagination/search/sort/hidden selectors/broad dashboard wiring/mutation; implementation commit 27ddd4e and format repair/final CI head 60c6f85 pushed
+  116-3-phase-37-epic-116-final-closure: done  # docs/status final closure after Story 116.2 review/QA/push/remote-CI evidence; final CI head 60c6f858431a1049060248f3a9f6e3754e5ac6a2; GitHub Actions ci run 28332793428 succeeded
+
+  # =========================================================================
+  # Epic 117: Task list pagination route-selection planning
+  # =========================================================================
+  epic-117: in-progress  # Phase 38 opened as docs/status-only planning for bounded task-list pagination / next-window API candidate; implementation and consensus pending
+  117-1-task-list-pagination-route-selection-planning: in-progress  # selects future canonical GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset} planning candidate only; no runtime/API/test/browser/dependency/CI/deployment changes authorized yet
+  117-2-task-list-pagination-runtime-boundary: backlog  # future tests-first API-local implementation only after Story 117.1 consensus
+  117-3-phase-38-epic-117-final-closure: backlog  # future docs/status final closure after Story 117.2 review/QA/push/remote-CI evidence
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
@@ -4055,6 +4063,37 @@ audit_trail:
 
 recent_activity:
 
+
+  - date: "2026-06-28"
+    event: phase-38-epic-117-opened
+    phase: 38
+    epic: epic-117
+    story: 117-1-task-list-pagination-route-selection-planning
+    source: autopilot-story-116-3-next-candidate-handoff
+    summary: >-
+      Phase 38 opens as docs/status-only planning for bounded task-list
+      pagination / next-window API selection. The exact future candidate is
+      canonical GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}.
+      Implementation, tests, backend/API route changes, browser pagination
+      controls, sorting, free-text search, arbitrary discovery, hidden selectors,
+      row-driven traversal, replay/lifecycle mutation, services/MCP/dependency/CI
+      changes, and production operations remain unauthorized pending later
+      consensus and implementation stories.
+
+  - date: "2026-06-28"
+    event: story-116-3-phase-37-epic-116-final-closure-complete
+    phase: 37
+    epic: epic-116
+    story: 116-3-phase-37-epic-116-final-closure
+    source: autopilot-story-116-3-final-closure
+    summary: >-
+      Story 116.3 closes Phase 37 / Epic 116 after Story 116.2 dashboard
+      aggregate-task-list status+limit browser/runtime implementation, native
+      code-review APPROVE/CLEAR, UltraQA PASS, push, format repair, and green
+      GitHub Actions ci run 28332793428 on final head
+      60c6f858431a1049060248f3a9f6e3754e5ac6a2. Primary implementation commit
+      27ddd4e1d05946e178af82bbe79f8f4828045ef1 and format repair commit
+      60c6f858431a1049060248f3a9f6e3754e5ac6a2 are recorded.
 
   - date: "2026-06-28"
     event: story-116-2-task-status-limit-browser-consumption-runtime-boundary-complete
