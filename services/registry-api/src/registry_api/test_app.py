@@ -693,7 +693,6 @@ class TestGetTasksAggregate:
             "aggregate task 2",
         ]
 
-
     async def test_get_tasks_accepts_canonical_status_limit_composition(
         self, tmp_path: Path, fixed_clock: FrozenClock
     ) -> None:
