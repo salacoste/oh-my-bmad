@@ -524,19 +524,19 @@ class TestGetTasksAggregate:
         assert body["authority_state"] == "non-authoritative"
         assert body["has_more"] is False
 
-    async def test_get_tasks_status_filter_is_openapi_visible(
+    async def test_get_tasks_status_and_limit_filters_are_openapi_visible(
         self, aggregate_client: AsyncClient
     ) -> None:
         schema = (await aggregate_client.get("/openapi.json")).json()
         get_tasks = schema["paths"]["/v1/tasks"]["get"]
-        status_parameters = [
-            parameter
+        query_parameters = {
+            parameter["name"]: parameter
             for parameter in get_tasks["parameters"]
-            if parameter["name"] == "status" and parameter["in"] == "query"
-        ]
+            if parameter["in"] == "query"
+        }
 
-        assert len(status_parameters) == 1
-        status_schema = status_parameters[0]["schema"]
+        assert set(query_parameters) == {"status", "limit"}
+        status_schema = query_parameters["status"]["schema"]
         assert status_schema["enum"] == [
             "pending",
             "planning",
@@ -548,6 +548,12 @@ class TestGetTasksAggregate:
             "failed",
         ]
         assert status_schema["title"] == "Status"
+        limit_schema = query_parameters["limit"]["schema"]
+        assert limit_schema["anyOf"] == [
+            {"type": "integer", "maximum": 50, "minimum": 1},
+            {"type": "null"},
+        ]
+        assert limit_schema["title"] == "Limit"
 
     async def test_get_tasks_accepts_single_allowed_status_filter(
         self, tmp_path: Path, fixed_clock: FrozenClock
@@ -635,6 +641,89 @@ class TestGetTasksAggregate:
             r = await aggregate_client.get(f"/v1/tasks?{query}")
             assert r.status_code == 400, query
 
+    async def test_get_tasks_accepts_single_bounded_limit_selector(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+        await _seed_aggregate_task_rows(db_url, count=4)
+        app = build_app(
+            base_dir=tmp_path / "events",
+            db_url=db_url,
+            clock=fixed_clock,
+            create_idempotency_schema_on_start=True,
+        )
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://testserver"
+            ) as client,
+        ):
+            r = await client.get("/v1/tasks?limit=2")
+
+        assert r.status_code == 200
+        body = r.json()
+        assert set(body) == {
+            "route",
+            "selected_limit",
+            "retrieved_at",
+            "freshness_state",
+            "display_state",
+            "authority_state",
+            "provenance",
+            "request_id",
+            "trace_id",
+            "correlation_id",
+            "limit",
+            "returned_count",
+            "has_more",
+            "next_offset",
+            "items",
+        }
+        assert body["route"] == "GET /v1/tasks?limit={task_list_limit}"
+        assert body["selected_limit"] == 2
+        assert body["limit"] == 2
+        assert body["returned_count"] == 2
+        assert body["has_more"] is True
+        assert body["next_offset"] is None
+        assert [row["title"] for row in body["items"]] == [
+            "aggregate task 3",
+            "aggregate task 2",
+        ]
+
+    async def test_get_tasks_limit_selector_supports_only_single_integer_1_to_50(
+        self, aggregate_client: AsyncClient
+    ) -> None:
+        for limit in ("1", "2", "50"):
+            r = await aggregate_client.get(f"/v1/tasks?limit={limit}")
+            assert r.status_code == 200, limit
+            body = r.json()
+            assert body["route"] == "GET /v1/tasks?limit={task_list_limit}"
+            assert body["selected_limit"] == int(limit)
+            assert body["limit"] == int(limit)
+            assert body["returned_count"] <= int(limit)
+
+        for query in (
+            "limit=",
+            "limit=0",
+            "limit=-1",
+            "limit=51",
+            "limit=1.5",
+            "limit=two",
+            "limit=1&limit=2",
+            "limit=2&offset=0",
+            "limit=2&cursor=abc",
+            "limit=2&page=1",
+            "limit=2&sort=updated_at",
+            "limit=2&q=aggregate",
+            "status=plan_ready&limit=2",
+            "limit%5Bvalue%5D=2",
+        ):
+            r = await aggregate_client.get(f"/v1/tasks?{query}")
+            assert r.status_code == 400, query
+
     async def test_get_tasks_rejects_request_body_for_unfiltered_and_filtered_reads(
         self, aggregate_client: AsyncClient
     ) -> None:
@@ -644,11 +733,16 @@ class TestGetTasksAggregate:
         filtered_body = await aggregate_client.request(
             "GET", "/v1/tasks?status=plan_ready", content=b'{"status":"plan_ready"}'
         )
+        limited_body = await aggregate_client.request(
+            "GET", "/v1/tasks?limit=2", content=b'{"limit":2}'
+        )
 
         assert unfiltered_body.status_code == 400
         assert filtered_body.status_code == 400
+        assert limited_body.status_code == 400
         assert "does not accept a request body" in unfiltered_body.text
         assert "does not accept a request body" in filtered_body.text
+        assert "does not accept a request body" in limited_body.text
 
     async def test_get_tasks_limit_is_fixed_and_does_not_expose_selector_offset(
         self, tmp_path: Path, fixed_clock: FrozenClock

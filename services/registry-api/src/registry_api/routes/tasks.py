@@ -103,6 +103,9 @@ _TASK_LIST_LIMIT = 50
 _TASK_STATUS_FILTER_ROUTE: Literal["GET /v1/tasks?status={task_status}"] = (
     "GET /v1/tasks?status={task_status}"
 )
+_TASK_LIMIT_ROUTE: Literal["GET /v1/tasks?limit={task_list_limit}"] = (
+    "GET /v1/tasks?limit={task_list_limit}"
+)
 _TASK_STATUS_FILTER_VALUES: tuple[TaskStatusFilter, ...] = (
     "pending",
     "planning",
@@ -352,6 +355,34 @@ class TaskStatusFilteredListResponse(BaseModel):
     items: list[TaskSummaryOut]
 
 
+class TaskLimitSelectedListResponse(BaseModel):
+    """200 OK response body for GET /v1/tasks?limit={task_list_limit}.
+
+    Story 114.2 permits exactly one bounded first-page row-count selector and
+    no status composition, pagination traversal, sorting, search, hidden
+    selector, adjacent route traversal, or mutation affordance. Row shape and
+    ordering remain identical to the aggregate list.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    route: Literal["GET /v1/tasks?limit={task_list_limit}"]
+    selected_limit: int = Field(ge=1, le=_TASK_LIST_LIMIT)
+    retrieved_at: datetime
+    freshness_state: Literal["fresh"]
+    display_state: Literal["healthy", "empty-list"]
+    authority_state: Literal["authoritative", "non-authoritative"]
+    provenance: Literal["registry-state task summary list"]
+    request_id: str
+    trace_id: str | None
+    correlation_id: str
+    limit: int = Field(ge=1, le=_TASK_LIST_LIMIT)
+    returned_count: int
+    has_more: bool
+    next_offset: None = None
+    items: list[TaskSummaryOut]
+
+
 class SessionSummaryOut(BaseModel):
     """One bounded session summary row for GET /v1/sessions.
 
@@ -419,10 +450,15 @@ class SessionDetailResponse(BaseModel):
 router = APIRouter()
 
 
+TaskListReadResponse = (
+    TaskListResponse | TaskStatusFilteredListResponse | TaskLimitSelectedListResponse
+)
+
+
 @router.get(
     "/tasks",
     status_code=200,
-    response_model=TaskListResponse | TaskStatusFilteredListResponse,
+    response_model=TaskListReadResponse,
 )
 async def get_tasks(
     request: Request,
@@ -436,14 +472,35 @@ async def get_tasks(
             json_schema_extra={"enum": list(_TASK_STATUS_FILTER_VALUES)},
         ),
     ] = None,
-) -> TaskListResponse | TaskStatusFilteredListResponse:
+    limit: Annotated[
+        str | None,
+        Query(
+            description=(
+                "Optional Story 114.2 bounded first-page row limit. Only one limit "
+                "query key with an integer value from 1 through 50 is accepted."
+            ),
+            json_schema_extra={
+                "anyOf": [
+                    {
+                        "type": "integer",
+                        "maximum": _TASK_LIST_LIMIT,
+                        "minimum": 1,
+                    },
+                    {"type": "null"},
+                ],
+            },
+        ),
+    ] = None,
+) -> TaskListResponse | TaskStatusFilteredListResponse | TaskLimitSelectedListResponse:
     """GET /v1/tasks — bounded aggregate task summary list.
 
     Story 109.2 keeps the selector-free first page. Story 113.2 adds exactly
     one route-local status selector: ``GET /v1/tasks?status={task_status}``,
-    where status is one finite lifecycle value. No other query key, repeated
-    key, GET body, hidden pagination token, task-detail/event/session/digest
-    traversal, search, sorting, or mutation control is accepted.
+    where status is one finite lifecycle value. Story 114.2 adds exactly one
+    route-local limit selector: ``GET /v1/tasks?limit={task_list_limit}``,
+    where limit is an integer from 1 through 50. No selector composition,
+    repeated key, GET body, hidden pagination token, task-detail/event/session/
+    digest traversal, search, sorting, or mutation control is accepted.
     """
     if await request.body():
         raise HTTPException(
@@ -452,19 +509,36 @@ async def get_tasks(
         )
 
     selected_status: str | None = None
+    selected_limit: int | None = None
+    effective_limit = _TASK_LIST_LIMIT
     if request.url.query:
         query_pairs = list(request.query_params.multi_items())
-        if len(query_pairs) != 1 or query_pairs[0][0] != "status":
+        if len(query_pairs) != 1 or query_pairs[0][0] not in {"status", "limit"}:
             raise HTTPException(
                 status_code=400,
-                detail="GET /v1/tasks accepts only one status query selector",
+                detail="GET /v1/tasks accepts only one status or limit query selector",
             )
-        selected_status = status
-        if selected_status not in _ALLOWED_TASK_STATUS_FILTERS:
-            raise HTTPException(
-                status_code=400,
-                detail="GET /v1/tasks status selector is not allowed",
-            )
+        query_key, query_value = query_pairs[0]
+        if query_key == "status":
+            selected_status = status
+            if selected_status not in _ALLOWED_TASK_STATUS_FILTERS:
+                raise HTTPException(
+                    status_code=400,
+                    detail="GET /v1/tasks status selector is not allowed",
+                )
+        else:
+            if limit is None or not limit.isdecimal():
+                raise HTTPException(
+                    status_code=400,
+                    detail="GET /v1/tasks limit selector must be an integer from 1 through 50",
+                )
+            selected_limit = int(limit)
+            if not 1 <= selected_limit <= _TASK_LIST_LIMIT:
+                raise HTTPException(
+                    status_code=400,
+                    detail="GET /v1/tasks limit selector must be an integer from 1 through 50",
+                )
+            effective_limit = selected_limit
 
     session_maker = request.app.state.session_maker
     clock = request.app.state.clock
@@ -475,10 +549,10 @@ async def get_tasks(
         task_query = select(Task).order_by(Task.updated_at.desc(), Task.id.asc())
         if selected_status is not None:
             task_query = task_query.where(Task.status == selected_status)
-        task_result = await session.execute(task_query.limit(_TASK_LIST_LIMIT + 1))
+        task_result = await session.execute(task_query.limit(effective_limit + 1))
         fetched_tasks = list(task_result.scalars().all())
-        has_more = len(fetched_tasks) > _TASK_LIST_LIMIT
-        tasks = fetched_tasks[:_TASK_LIST_LIMIT]
+        has_more = len(fetched_tasks) > effective_limit
+        tasks = fetched_tasks[:effective_limit]
 
         event_ids = [task.last_event_id for task in tasks if task.last_event_id is not None]
         events_by_id: dict[str, Event] = {}
@@ -526,7 +600,7 @@ async def get_tasks(
         "request_id": request_id,
         "trace_id": trace_id,
         "correlation_id": request_id,
-        "limit": _TASK_LIST_LIMIT,
+        "limit": effective_limit,
         "returned_count": len(items),
         "has_more": has_more,
         "next_offset": None,
@@ -537,6 +611,13 @@ async def get_tasks(
         return TaskStatusFilteredListResponse(
             route=_TASK_STATUS_FILTER_ROUTE,
             selected_status=selected_status_out,
+            **response_kwargs,
+        )
+
+    if selected_limit is not None:
+        return TaskLimitSelectedListResponse(
+            route=_TASK_LIMIT_ROUTE,
+            selected_limit=selected_limit,
             **response_kwargs,
         )
 
@@ -1092,7 +1173,9 @@ __all__ = [
     "CreateTaskResponse",
     "LastEventOut",
     "TaskResponse",
+    "TaskLimitSelectedListResponse",
     "TaskListLastEventOut",
+    "TaskListReadResponse",
     "TaskListResponse",
     "TaskSummaryOut",
     "SessionDetailResponse",

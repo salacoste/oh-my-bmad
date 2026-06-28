@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-06-27T21:38:00+03:00"
+# last_updated: "2026-06-28T00:00:00+03:00"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-27T21:38:00+03:00"
-current_phase: 34  # Phase 34 CLOSED — Epic 113 task status filter runtime/API boundary and final closure complete with remote CI run 28298018048
+last_updated: "2026-06-28T00:00:00+03:00"
+current_phase: 35  # Phase 35 OPEN — Story 114.2 task-list limit runtime/API boundary locally complete after clean code-review/QA; Story 114.3 final closure remains backlog pending push/remote CI evidence
 
 development_status:
   # =========================================================================
@@ -954,6 +954,14 @@ development_status:
   113-1-task-status-filter-route-selection-planning: done  # Phase 34 PRD/architecture/epics/status opening; selects read-only task-list/search/discovery and future GET /v1/tasks?status={task_status} only; Architect APPROVE/CLEAR and subsequent Critic APPROVE/CLEAR consensus recorded; runtime/API implementation deferred to tests-first Story 113.2 only
   113-2-task-status-filter-runtime-boundary: done  # tests-first exact GET /v1/tasks?status={task_status} runtime/API contract boundary; code-review APPROVE/CLEAR, local non-slow gate green; pushed in 32fdbae; remote CI run 28298018048 green
   113-3-phase-34-epic-113-final-closure: done  # docs/status final closure after Story 113.2 review/QA/push/remote-CI evidence; deferred surfaces remain fail-closed
+
+  # =========================================================================
+  # Epic 114: Task list limit route selection planning
+  # =========================================================================
+  epic-114: in-progress  # Phase 35 opened; Story 114.2 locally implements exact GET /v1/tasks?limit={task_list_limit} with clean code-review/QA; final closure evidence remains pending Story 114.3
+  114-1-task-list-limit-route-selection-planning: done  # Phase 35 PRD/architecture/epics/status opening; selects read-only task-list sizing and future GET /v1/tasks?limit={task_list_limit} only; Architect APPROVE/CLEAR and subsequent Critic APPROVE/CLEAR consensus recorded; runtime/API implementation deferred to Story 114.2 only
+  114-2-task-list-limit-runtime-boundary: done  # local tests-first exact GET /v1/tasks?limit={task_list_limit} runtime/API boundary complete with code-review APPROVE/CLEAR and UltraQA PASS; no push/remote CI claimed until Story 114.3; no pagination traversal/sorting/search/selector-composition/mutation
+  114-3-phase-35-epic-114-final-closure: backlog  # future docs/status final closure only after Story 114.2 review/QA/push/remote-CI evidence
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
@@ -4029,6 +4037,58 @@ audit_trail:
       DOCS/STATUS change + partial code (mcp_auth, check_mcp_transport).
 
 recent_activity:
+
+  - date: "2026-06-28"
+    event: story-114-2-task-list-limit-runtime-boundary-local-review-qa-green
+    phase: 35
+    epic: epic-114
+    story: 114-2-task-list-limit-runtime-boundary
+    source: autopilot-story-114-2-tests-first-implementation
+    summary: >-
+      Story 114.2 locally completes the tests-first runtime/API boundary for
+      exactly GET /v1/tasks?limit={task_list_limit} after code-review APPROVE/CLEAR
+      and UltraQA PASS. The implementation accepts
+      one integer limit query key from 1 through 50, preserves selector-free GET
+      /v1/tasks and GET /v1/tasks?status={task_status}, rejects GET bodies,
+      extra/repeated query keys, status+limit composition, empty/non-integer/
+      out-of-range values, nested parameters, search, offset/cursor/page
+      traversal, and sorting, and does not add dashboard/browser runtime wiring,
+      replay execution, lifecycle mutation, services/MCP/dependencies/CI/
+      deployment changes, production credentials, or production operations.
+      Final closure remains pending Story 114.3 push/remote CI evidence; no
+      remote CI or production deployment is claimed here.
+
+  - date: "2026-06-27"
+    event: story-114-1-task-list-limit-route-selection-planning-complete
+    phase: 35
+    epic: epic-114
+    story: 114-1-task-list-limit-route-selection-planning
+    source: autopilot-phase-35-ralplan-consensus
+    summary: >-
+      Story 114.1 completes Phase 35 / Epic 114 docs/status-only task list
+      limit route-selection planning after native Architect APPROVE/CLEAR
+      followed by native Critic APPROVE/CLEAR. The exact selected future
+      boundary is GET /v1/tasks?limit={task_list_limit}; current GET /v1/tasks
+      and GET /v1/tasks?status={task_status} behavior remains unchanged until
+      a tests-first Story 114.2. Story 114.2 is now locally implemented and in
+      review; Story 114.3 remains backlog pending final closure evidence.
+
+  - date: "2026-06-27"
+    event: phase-35-epic-114-opened
+    phase: 35
+    epic: epic-114
+    story: 114-1-task-list-limit-route-selection-planning
+    source: autopilot-phase-35-route-selection
+    summary: >-
+      Phase 35 opens as docs/status-only planning. The selected safest next
+      dashboard/API boundary is the read-only task-list sizing continuation
+      narrowed to exact future GET /v1/tasks?limit={task_list_limit} with one
+      bounded integer limit selector only (1 through 50). Runtime/API/browser/test
+      implementation, offset/cursor/page traversal, sorting, free-text search,
+      arbitrary discovery, selector composition, replay execution target
+      selection, lifecycle mutation, broad dashboard wiring, and production
+      operations remain unauthorized pending Story 114.2 after Architect then
+      Critic approval.
 
   - date: "2026-06-27"
     event: story-113-3-phase-34-epic-113-final-closure-complete
