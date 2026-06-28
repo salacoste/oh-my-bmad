@@ -808,8 +808,7 @@ class TestGetTasksAggregate:
             assert r.status_code == 200, query
             body = r.json()
             assert (
-                body["route"]
-                == "GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}"
+                body["route"] == "GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}"
             )
             assert body["selected_limit"] == int(query.split("&", maxsplit=1)[0].split("=")[1])
             assert body["selected_offset"] == int(query.rsplit("=", maxsplit=1)[1])

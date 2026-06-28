@@ -423,6 +423,12 @@ def test_worker_facing_source_code_unchanged() -> None:
         # was a documented TODO in telegram-gateway's registry_client). Allowed
         # below; journey-1's stub-driven flow doesn't exercise /v1/health.
         "services/registry-api/src/registry_api/app.py",
+        # Story 117.2: registry-api task-list read route adds an API-local
+        # limit+offset selector and co-located route tests only. The Journey 1
+        # scripted-worker flow still uses POST /v1/tasks plus event projection;
+        # no worker/orchestrator coupling or traversal behavior is introduced.
+        "services/registry-api/src/registry_api/routes/tasks.py",
+        "services/registry-api/src/registry_api/test_app.py",
     }
 
     rev_parse = subprocess.run(

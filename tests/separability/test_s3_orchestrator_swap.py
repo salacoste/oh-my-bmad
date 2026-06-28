@@ -556,6 +556,12 @@ def test_spine_source_code_unchanged() -> None:
         # Story 10.2 AC1 EventLogReader extraction: see test_s1 for details.
         ":!services/registry-state/src/registry_state/adapters/event_log.py",
         ":!services/registry-state/src/registry_state/app/main.py",
+        # Story 117.2: registry-api task-list read route adds an API-local
+        # limit+offset selector and co-located route tests only. The S-3
+        # null-orchestrator swap still uses POST /v1/tasks and event projection;
+        # no orchestrator-spine coupling or traversal behavior changes.
+        ":!services/registry-api/src/registry_api/routes/tasks.py",
+        ":!services/registry-api/src/registry_api/test_app.py",
     ]
 
     # Skip on non-git checkout (e.g., source tarball).

@@ -735,8 +735,7 @@ async def get_tasks(
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        "GET /v1/tasks offset selector must be an integer from "
-                        "0 through 2147483647"
+                        "GET /v1/tasks offset selector must be an integer from 0 through 2147483647"
                     ),
                 )
             selected_offset = int(offset)
@@ -744,8 +743,7 @@ async def get_tasks(
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        "GET /v1/tasks offset selector must be an integer from "
-                        "0 through 2147483647"
+                        "GET /v1/tasks offset selector must be an integer from 0 through 2147483647"
                     ),
                 )
             effective_limit = selected_limit

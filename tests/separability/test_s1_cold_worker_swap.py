@@ -391,6 +391,12 @@ def test_worker_facing_source_code_unchanged() -> None:
         # middleware-free, DB-free, and pure liveness — S-1's stub-worker cold
         # swap path doesn't touch it, so the addition is inert here.
         ":!services/registry-api/src/registry_api/app.py",
+        # Story 117.2: registry-api task-list read route adds an API-local
+        # limit+offset selector and co-located route tests only. The S-1
+        # scripted-worker cold-swap flow still uses POST /v1/tasks and event
+        # projection; no worker-facing coupling or traversal behavior changes.
+        ":!services/registry-api/src/registry_api/routes/tasks.py",
+        ":!services/registry-api/src/registry_api/test_app.py",
     ]
 
     rev_parse = subprocess.run(
