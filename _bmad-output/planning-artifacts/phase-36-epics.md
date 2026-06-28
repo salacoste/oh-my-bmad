@@ -49,7 +49,7 @@ Plan, prove, and close a bounded dashboard/API route boundary for one status-fil
 
 ### Story 115.2 — Task status + limit runtime/API contract boundary
 
-**Status:** backlog; unauthorized until Story 115.1 has sequential Architect APPROVE/CLEAR followed by Critic APPROVE/CLEAR consensus.
+**Status:** done after Story 115.1 consensus, tests-first implementation, code-review APPROVE/CLEAR, UltraQA PASS, push, and green remote CI run `28329475903`.
 
 **Intent:** Implement a separately approved, tests-first boundary for exactly `GET /v1/tasks?status={task_status}&limit={task_list_limit}` with narrow additive API/runtime tests and no broader dashboard/API expansion.
 
@@ -70,7 +70,7 @@ Plan, prove, and close a bounded dashboard/API route boundary for one status-fil
 
 ### Story 115.3 — Phase 36 / Epic 115 final validation closure
 
-**Status:** backlog; unauthorized until Story 115.2 implementation, review, QA, push, and remote CI evidence exist.
+**Status:** done after Story 115.2 implementation, review, QA, push, and green remote CI evidence.
 
 **Intent:** Complete docs/status final closure only after Story 115.2 runtime/API evidence, final review, QA decision, push, and remote CI evidence exist.
 
@@ -90,4 +90,4 @@ Plan, prove, and close a bounded dashboard/API route boundary for one status-fil
 
 Generated: 2026-06-28T01:35:04Z
 
-Updated: 2026-06-28T01:42:26Z
+Updated: 2026-06-28T17:06:00Z
