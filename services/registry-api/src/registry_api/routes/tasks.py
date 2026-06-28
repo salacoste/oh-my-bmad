@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Literal, cast
@@ -99,12 +100,16 @@ _TASK_ID_PATTERN = r"^t-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[
 
 # Story 109.2: fixed first page for GET /v1/tasks. Pagination knobs remain
 # intentionally absent; Story 113.2 adds only one finite status selector.
+# Story 115.2 composes exactly status then limit in canonical query order.
 _TASK_LIST_LIMIT = 50
 _TASK_STATUS_FILTER_ROUTE: Literal["GET /v1/tasks?status={task_status}"] = (
     "GET /v1/tasks?status={task_status}"
 )
 _TASK_LIMIT_ROUTE: Literal["GET /v1/tasks?limit={task_list_limit}"] = (
     "GET /v1/tasks?limit={task_list_limit}"
+)
+_TASK_STATUS_LIMIT_ROUTE: Literal["GET /v1/tasks?status={task_status}&limit={task_list_limit}"] = (
+    "GET /v1/tasks?status={task_status}&limit={task_list_limit}"
 )
 _TASK_STATUS_FILTER_VALUES: tuple[TaskStatusFilter, ...] = (
     "pending",
@@ -117,6 +122,39 @@ _TASK_STATUS_FILTER_VALUES: tuple[TaskStatusFilter, ...] = (
     "failed",
 )
 _ALLOWED_TASK_STATUS_FILTERS: frozenset[TaskStatusFilter] = frozenset(_TASK_STATUS_FILTER_VALUES)
+
+
+def _is_ascii_decimal(value: str) -> bool:
+    """Return True only for non-empty ASCII decimal digits.
+
+    ``str.isdecimal()`` accepts Unicode decimal digits such as fullwidth forms;
+    the task-list limit selector is intentionally pinned to canonical ASCII
+    query spelling.
+    """
+    return bool(value) and all("0" <= char <= "9" for char in value)
+
+
+_TASKS_STATUS_RAW_RE = re.compile(rb"^status=([A-Za-z_]+)$")
+_TASKS_LIMIT_RAW_RE = re.compile(rb"^limit=([0-9]{1,2})$")
+_TASKS_STATUS_LIMIT_RAW_RE = re.compile(rb"^status=([A-Za-z_]+)&limit=([0-9]{1,2})$")
+
+
+def _has_empty_query_segment(raw_query: bytes) -> bool:
+    """Reject empty raw query segments before Starlette normalizes them away."""
+    if not raw_query:
+        return False
+    segments = raw_query.split(b"&")
+    return any(segment == b"" for segment in segments)
+
+
+def _matches_tasks_raw_query_contract(raw_query: bytes) -> bool:
+    """Return True only for exact ASCII raw spellings approved for GET /v1/tasks."""
+    return bool(
+        _TASKS_STATUS_RAW_RE.fullmatch(raw_query)
+        or _TASKS_LIMIT_RAW_RE.fullmatch(raw_query)
+        or _TASKS_STATUS_LIMIT_RAW_RE.fullmatch(raw_query)
+    )
+
 
 # Story 110.2: fixed first page for GET /v1/sessions. Selectors/pagination
 # knobs are intentionally absent until a later story defines a separate
@@ -383,6 +421,36 @@ class TaskLimitSelectedListResponse(BaseModel):
     items: list[TaskSummaryOut]
 
 
+class TaskStatusLimitSelectedListResponse(BaseModel):
+    """200 OK response body for canonical GET /v1/tasks?status=...&limit=....
+
+    Story 115.2 composes exactly the approved finite status selector and the
+    approved bounded first-page limit selector. Only canonical ``status`` then
+    ``limit`` query order is accepted; no other selector composition, query
+    order, traversal, sorting, search, adjacent route, or mutation affordance
+    is introduced.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    route: Literal["GET /v1/tasks?status={task_status}&limit={task_list_limit}"]
+    selected_status: TaskStatusFilter
+    selected_limit: int = Field(ge=1, le=_TASK_LIST_LIMIT)
+    retrieved_at: datetime
+    freshness_state: Literal["fresh"]
+    display_state: Literal["healthy", "empty-list"]
+    authority_state: Literal["authoritative", "non-authoritative"]
+    provenance: Literal["registry-state task summary list"]
+    request_id: str
+    trace_id: str | None
+    correlation_id: str
+    limit: int = Field(ge=1, le=_TASK_LIST_LIMIT)
+    returned_count: int
+    has_more: bool
+    next_offset: None = None
+    items: list[TaskSummaryOut]
+
+
 class SessionSummaryOut(BaseModel):
     """One bounded session summary row for GET /v1/sessions.
 
@@ -451,7 +519,10 @@ router = APIRouter()
 
 
 TaskListReadResponse = (
-    TaskListResponse | TaskStatusFilteredListResponse | TaskLimitSelectedListResponse
+    TaskListResponse
+    | TaskStatusFilteredListResponse
+    | TaskLimitSelectedListResponse
+    | TaskStatusLimitSelectedListResponse
 )
 
 
@@ -491,16 +562,23 @@ async def get_tasks(
             },
         ),
     ] = None,
-) -> TaskListResponse | TaskStatusFilteredListResponse | TaskLimitSelectedListResponse:
+) -> (
+    TaskListResponse
+    | TaskStatusFilteredListResponse
+    | TaskLimitSelectedListResponse
+    | TaskStatusLimitSelectedListResponse
+):
     """GET /v1/tasks — bounded aggregate task summary list.
 
     Story 109.2 keeps the selector-free first page. Story 113.2 adds exactly
     one route-local status selector: ``GET /v1/tasks?status={task_status}``,
     where status is one finite lifecycle value. Story 114.2 adds exactly one
     route-local limit selector: ``GET /v1/tasks?limit={task_list_limit}``,
-    where limit is an integer from 1 through 50. No selector composition,
-    repeated key, GET body, hidden pagination token, task-detail/event/session/
-    digest traversal, search, sorting, or mutation control is accepted.
+    where limit is an integer from 1 through 50. Story 115.2 adds only the
+    canonical-order composition ``GET /v1/tasks?status=...&limit=...``.
+    Repeated keys, GET body, reversed query order, hidden pagination token,
+    task-detail/event/session/digest traversal, search, sorting, or mutation
+    control are not accepted.
     """
     if await request.body():
         raise HTTPException(
@@ -512,22 +590,27 @@ async def get_tasks(
     selected_limit: int | None = None
     effective_limit = _TASK_LIST_LIMIT
     if request.url.query:
-        query_pairs = list(request.query_params.multi_items())
-        if len(query_pairs) != 1 or query_pairs[0][0] not in {"status", "limit"}:
+        raw_query = request.scope.get("query_string", b"")
+        if (
+            not isinstance(raw_query, bytes)
+            or _has_empty_query_segment(raw_query)
+            or not _matches_tasks_raw_query_contract(raw_query)
+        ):
             raise HTTPException(
                 status_code=400,
-                detail="GET /v1/tasks accepts only one status or limit query selector",
+                detail="GET /v1/tasks query selectors must use exact canonical ASCII spelling",
             )
-        query_key, query_value = query_pairs[0]
-        if query_key == "status":
+        query_pairs = list(request.query_params.multi_items())
+        query_keys = [key for key, _value in query_pairs]
+        if query_keys == ["status"]:
             selected_status = status
             if selected_status not in _ALLOWED_TASK_STATUS_FILTERS:
                 raise HTTPException(
                     status_code=400,
                     detail="GET /v1/tasks status selector is not allowed",
                 )
-        else:
-            if limit is None or not limit.isdecimal():
+        elif query_keys == ["limit"]:
+            if limit is None or not _is_ascii_decimal(limit):
                 raise HTTPException(
                     status_code=400,
                     detail="GET /v1/tasks limit selector must be an integer from 1 through 50",
@@ -539,6 +622,33 @@ async def get_tasks(
                     detail="GET /v1/tasks limit selector must be an integer from 1 through 50",
                 )
             effective_limit = selected_limit
+        elif query_keys == ["status", "limit"]:
+            selected_status = status
+            if selected_status not in _ALLOWED_TASK_STATUS_FILTERS:
+                raise HTTPException(
+                    status_code=400,
+                    detail="GET /v1/tasks status selector is not allowed",
+                )
+            if limit is None or not _is_ascii_decimal(limit):
+                raise HTTPException(
+                    status_code=400,
+                    detail="GET /v1/tasks limit selector must be an integer from 1 through 50",
+                )
+            selected_limit = int(limit)
+            if not 1 <= selected_limit <= _TASK_LIST_LIMIT:
+                raise HTTPException(
+                    status_code=400,
+                    detail="GET /v1/tasks limit selector must be an integer from 1 through 50",
+                )
+            effective_limit = selected_limit
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "GET /v1/tasks accepts only one status selector, one limit selector, "
+                    "or canonical status then limit selectors"
+                ),
+            )
 
     session_maker = request.app.state.session_maker
     clock = request.app.state.clock
@@ -606,6 +716,15 @@ async def get_tasks(
         "next_offset": None,
         "items": items,
     }
+    if selected_status is not None and selected_limit is not None:
+        selected_status_out = cast(TaskStatusFilter, selected_status)
+        return TaskStatusLimitSelectedListResponse(
+            route=_TASK_STATUS_LIMIT_ROUTE,
+            selected_status=selected_status_out,
+            selected_limit=selected_limit,
+            **response_kwargs,
+        )
+
     if selected_status is not None:
         selected_status_out = cast(TaskStatusFilter, selected_status)
         return TaskStatusFilteredListResponse(

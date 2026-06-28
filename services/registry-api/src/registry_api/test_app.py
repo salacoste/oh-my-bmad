@@ -631,10 +631,10 @@ class TestGetTasksAggregate:
         for query in (
             "status=",
             "status=PLAN_READY",
+            "statu%73=plan_ready",
             "status=ready",
             "status=pending&status=failed",
             "status=plan_ready&sort=updated_at",
-            "status=plan_ready&limit=1",
             "status=plan_ready&q=aggregate",
             "status%5Bname%5D=plan_ready",
         ):
@@ -693,6 +693,140 @@ class TestGetTasksAggregate:
             "aggregate task 2",
         ]
 
+
+    async def test_get_tasks_accepts_canonical_status_limit_composition(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+        await _seed_aggregate_task_rows(
+            db_url,
+            count=5,
+            statuses=["plan_ready", "blocked", "plan_ready", "plan_ready", "completed"],
+        )
+        app = build_app(
+            base_dir=tmp_path / "events",
+            db_url=db_url,
+            clock=fixed_clock,
+            create_idempotency_schema_on_start=True,
+        )
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://testserver"
+            ) as client,
+        ):
+            r = await client.get("/v1/tasks?status=plan_ready&limit=2")
+
+        assert r.status_code == 200
+        body = r.json()
+        assert set(body) == {
+            "route",
+            "selected_status",
+            "selected_limit",
+            "retrieved_at",
+            "freshness_state",
+            "display_state",
+            "authority_state",
+            "provenance",
+            "request_id",
+            "trace_id",
+            "correlation_id",
+            "limit",
+            "returned_count",
+            "has_more",
+            "next_offset",
+            "items",
+        }
+        assert body["route"] == "GET /v1/tasks?status={task_status}&limit={task_list_limit}"
+        assert body["selected_status"] == "plan_ready"
+        assert body["selected_limit"] == 2
+        assert body["limit"] == 2
+        assert body["returned_count"] == 2
+        assert body["has_more"] is True
+        assert body["next_offset"] is None
+        assert [row["status"] for row in body["items"]] == ["plan_ready", "plan_ready"]
+        assert [row["title"] for row in body["items"]] == [
+            "aggregate task 3",
+            "aggregate task 2",
+        ]
+        for row in body["items"]:
+            assert set(row) == {
+                "task_id",
+                "status",
+                "title",
+                "created_at",
+                "updated_at",
+                "state_since",
+                "actor",
+                "last_event",
+            }
+
+    async def test_get_tasks_status_limit_composition_domains_and_order_are_closed(
+        self, aggregate_client: AsyncClient
+    ) -> None:
+        allowed_statuses = (
+            "pending",
+            "planning",
+            "plan_ready",
+            "executing",
+            "blocked",
+            "completed",
+            "stopped",
+            "failed",
+        )
+        for status in allowed_statuses:
+            r = await aggregate_client.get(f"/v1/tasks?status={status}&limit=1")
+            assert r.status_code == 200, status
+            body = r.json()
+            assert body["route"] == "GET /v1/tasks?status={task_status}&limit={task_list_limit}"
+            assert body["selected_status"] == status
+            assert body["selected_limit"] == 1
+            assert body["limit"] == 1
+
+        for limit in ("1", "2", "50"):
+            r = await aggregate_client.get(f"/v1/tasks?status=plan_ready&limit={limit}")
+            assert r.status_code == 200, limit
+            body = r.json()
+            assert body["selected_status"] == "plan_ready"
+            assert body["selected_limit"] == int(limit)
+            assert body["limit"] == int(limit)
+            assert body["returned_count"] <= int(limit)
+
+        for query in (
+            "limit=2&status=plan_ready",
+            "status=plan_ready&&limit=2",
+            "status=plan_ready&limit=2&",
+            "&status=plan_ready&limit=2",
+            "statu%73=plan_ready&limit=2",
+            "status=plan_ready&lim%69t=2",
+            "status=plan_ready&limit=%32",
+            "status=",
+            "status=PLAN_READY&limit=2",
+            "status=ready&limit=2",
+            "status=plan_ready&status=failed&limit=2",
+            "status=plan_ready&limit=",
+            "status=plan_ready&limit=0",
+            "status=plan_ready&limit=-1",
+            "status=plan_ready&limit=51",
+            f"status=plan_ready&limit={'9' * 5000}",
+            "status=plan_ready&limit=1.5",
+            "status=plan_ready&limit=two",
+            "status=plan_ready&limit=%EF%BC%92",
+            "status=plan_ready&limit=1&limit=2",
+            "status=plan_ready&limit=2&offset=0",
+            "status=plan_ready&limit=2&cursor=abc",
+            "status=plan_ready&limit=2&page=1",
+            "status=plan_ready&limit=2&sort=updated_at",
+            "status=plan_ready&limit=2&q=aggregate",
+            "status%5Bname%5D=plan_ready&limit=2",
+            "status=plan_ready&limit%5Bvalue%5D=2",
+        ):
+            r = await aggregate_client.get(f"/v1/tasks?{query}")
+            assert r.status_code == 400, query
+
     async def test_get_tasks_limit_selector_supports_only_single_integer_1_to_50(
         self, aggregate_client: AsyncClient
     ) -> None:
@@ -710,15 +844,17 @@ class TestGetTasksAggregate:
             "limit=0",
             "limit=-1",
             "limit=51",
+            f"limit={'9' * 5000}",
             "limit=1.5",
             "limit=two",
+            "limit=%EF%BC%92",
+            "limit=%32",
             "limit=1&limit=2",
             "limit=2&offset=0",
             "limit=2&cursor=abc",
             "limit=2&page=1",
             "limit=2&sort=updated_at",
             "limit=2&q=aggregate",
-            "status=plan_ready&limit=2",
             "limit%5Bvalue%5D=2",
         ):
             r = await aggregate_client.get(f"/v1/tasks?{query}")
@@ -736,13 +872,20 @@ class TestGetTasksAggregate:
         limited_body = await aggregate_client.request(
             "GET", "/v1/tasks?limit=2", content=b'{"limit":2}'
         )
+        composed_body = await aggregate_client.request(
+            "GET",
+            "/v1/tasks?status=plan_ready&limit=2",
+            content=b'{"status":"plan_ready","limit":2}',
+        )
 
         assert unfiltered_body.status_code == 400
         assert filtered_body.status_code == 400
         assert limited_body.status_code == 400
+        assert composed_body.status_code == 400
         assert "does not accept a request body" in unfiltered_body.text
         assert "does not accept a request body" in filtered_body.text
         assert "does not accept a request body" in limited_body.text
+        assert "does not accept a request body" in composed_body.text
 
     async def test_get_tasks_limit_is_fixed_and_does_not_expose_selector_offset(
         self, tmp_path: Path, fixed_clock: FrozenClock

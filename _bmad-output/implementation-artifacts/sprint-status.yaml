@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-06-28T00:00:00+03:00"
+# last_updated: "2026-06-28T18:26:00+03:00"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-28T03:47:00+03:00"
-current_phase: 35  # Phase 35 CLOSED — Epic 114 complete after Story 114.3 final closure; exact GET /v1/tasks?limit={task_list_limit} boundary pushed and remote CI run 28306586314 succeeded
+last_updated: "2026-06-28T18:26:00+03:00"
+current_phase: 36  # Phase 36 OPEN — Epic 115 Story 115.2 local tests-first API/runtime implementation, code-review APPROVE/CLEAR, and UltraQA PASS complete for exact canonical GET /v1/tasks?status={task_status}&limit={task_list_limit}; push/remote-CI and Story 115.3 closure still pending
 
 development_status:
   # =========================================================================
@@ -962,6 +962,15 @@ development_status:
   114-1-task-list-limit-route-selection-planning: done  # Phase 35 PRD/architecture/epics/status opening; selects read-only task-list sizing and future GET /v1/tasks?limit={task_list_limit} only; Architect APPROVE/CLEAR and subsequent Critic APPROVE/CLEAR consensus recorded; runtime/API implementation deferred to Story 114.2 only
   114-2-task-list-limit-runtime-boundary: done  # tests-first exact GET /v1/tasks?limit={task_list_limit} runtime/API boundary complete with code-review APPROVE/CLEAR and UltraQA PASS; pushed in 16a55d6 and remote CI run 28306586314 succeeded; no pagination traversal/sorting/search/selector-composition/mutation
   114-3-phase-35-epic-114-final-closure: done  # docs/status final closure after Story 114.2 review/QA/push/remote-CI evidence; remote CI run 28306586314 succeeded
+
+
+  # =========================================================================
+  # Epic 115: Task status + limit route selection planning
+  # =========================================================================
+  epic-115: in-progress  # Phase 36 opened; Story 115.1 consensus complete; Story 115.2 local tests-first canonical status+limit API/runtime implementation has code-review APPROVE/CLEAR and UltraQA PASS, with push/remote-CI evidence pending; Story 115.3 backlog
+  115-1-task-status-limit-route-selection-planning: done  # Phase 36 PRD/architecture/epics/status opening; selects read-only task-list bounded selector composition and future GET /v1/tasks?status={task_status}&limit={task_list_limit} only; Architect APPROVE/CLEAR and subsequent Critic APPROVE/CLEAR consensus recorded; runtime/API implementation deferred to Story 115.2
+  115-2-task-status-limit-runtime-boundary: review  # local tests-first exact canonical GET /v1/tasks?status={task_status}&limit={task_list_limit} runtime/API boundary implemented; code-review APPROVE/CLEAR and UltraQA PASS recorded; push/remote-CI evidence pending before done
+  115-3-phase-36-epic-115-final-closure: backlog  # future docs/status closure after Story 115.2 review/QA/push/remote-CI evidence
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
@@ -4037,6 +4046,45 @@ audit_trail:
       DOCS/STATUS change + partial code (mcp_auth, check_mcp_transport).
 
 recent_activity:
+
+
+  - date: "2026-06-28"
+    event: story-115-1-task-status-limit-route-selection-planning-complete
+    phase: 36
+    epic: epic-115
+    story: 115-1-task-status-limit-route-selection-planning
+    source: autopilot-phase-36-ralplan-consensus
+    summary: >-
+      Story 115.1 completes Phase 36 / Epic 115 docs/status-only task
+      status+limit route-selection planning after native Architect APPROVE/CLEAR
+      followed by native Critic APPROVE/CLEAR. The exact selected future
+      boundary is GET /v1/tasks?status={task_status}&limit={task_list_limit};
+      current selector-free, status-only, and limit-only GET /v1/tasks behavior
+      remains unchanged until a later tests-first Story 115.2 consumes this
+      consensus. Runtime/API/browser/test implementation, pagination traversal,
+      sorting, free-text search, arbitrary discovery, broader selector
+      composition, replay execution, lifecycle mutation, broad dashboard wiring,
+      services/MCP/dependencies/CI/deployment changes, and production operations
+      remain unstarted/deferred in this planning lane.
+
+
+  - date: "2026-06-28"
+    event: phase-36-epic-115-opened
+    phase: 36
+    epic: epic-115
+    story: 115-1-task-status-limit-route-selection-planning
+    source: autopilot-phase-36-route-selection
+    summary: >-
+      Phase 36 opens as docs/status-only planning. The selected safest next
+      dashboard/API boundary is the read-only task-list bounded selector
+      composition narrowed to exact future GET /v1/tasks?status={task_status}&limit={task_list_limit}
+      with one finite lifecycle status selector and one bounded integer limit
+      selector only. Runtime/API/browser/test implementation, offset/cursor/page
+      traversal, sorting, free-text search, arbitrary discovery, replay execution
+      target selection, lifecycle mutation, broad dashboard wiring, generated
+      live data, services/MCP/dependencies/CI/deployment changes, and production
+      operations remain unauthorized pending Story 115.2 after Architect then
+      Critic approval.
 
   - date: "2026-06-28"
     event: story-114-3-phase-35-epic-114-final-closure-complete
