@@ -78,8 +78,8 @@
       <h2 id="tasks-title">Tasks</h2>
       <p class="state" id="aggregate-task-list-status">Aggregate task-list limit+offset live-read boundary pending: waiting for the approved GET /v1/tasks?limit={task_list_limit}&amp;offset={task_list_offset} response.</p>
       <p>
-        Source route/reference: GET /v1/tasks?limit={task_list_limit}&amp;offset={task_list_offset}. Story 118.2 wires this single approved read-only aggregate task-list pagination read only;
-        selectors come from the visible limit and offset controls below. It adds no selector-free aggregate browser fetch, no status composition, no automatic traversal, no infinite scroll, no search, no sort, no request body, no broad dashboard live wiring, no task detail traversal, no digest/history/trace/replay/session traversal, and no operator control.
+        Source route/reference: GET /v1/tasks?limit={task_list_limit}&amp;offset={task_list_offset}. Stories 118.2 and 119.2 wire this single approved read-only aggregate task-list pagination read only;
+        selectors come from the visible limit and offset controls below, plus visible manual previous and manual next controls that perform one explicit load at a time. It adds no selector-free aggregate browser fetch, no status composition, no automatic traversal, no infinite scroll, no search, no sort, no request body, no broad dashboard live wiring, no task detail traversal, no digest/history/trace/replay/session traversal, and no mutation or operator-control action.
       </p>
       <p>
         Runtime states are loading, healthy bounded display, empty successful read, stale/partial data, stale data, invalid data, permission/configuration failure, unauthorized/configuration failure,
@@ -98,6 +98,8 @@
         <label for="aggregate-task-list-offset-control">Task list offset</label>
         <input id="aggregate-task-list-offset-control" name="aggregate-task-list-offset-control" type="number" min="0" max="2147483647" step="1" value="0">
         <button id="aggregate-task-list-load" type="button">Load task list</button>
+        <button id="aggregate-task-list-previous-offset" type="button">Previous offset</button>
+        <button id="aggregate-task-list-next-offset" type="button">Next offset</button>
       </p>
       <p class="meta" id="aggregate-task-list-source">Source: GET /v1/tasks?limit={task_list_limit}&amp;offset={task_list_offset}. Runtime route: pending.</p>
       <p class="meta" id="aggregate-task-list-selected-limit">Selected limit: 50 visible control value.</p>
@@ -106,7 +108,7 @@
       <p class="meta" id="aggregate-task-list-authority">Authority: non-authoritative until a valid aggregate task-list response is read.</p>
       <p class="meta" id="aggregate-task-list-provenance">Provenance: pending backend task summary metadata.</p>
       <p class="meta" id="aggregate-task-list-correlation">Correlation: pending request, trace, or correlation id.</p>
-      <p class="meta" id="aggregate-task-list-pagination">Pagination: selected limit+offset window pending; next_offset is inert metadata only.</p>
+      <p class="meta" id="aggregate-task-list-pagination">Pagination: selected limit+offset window pending; next_offset enables only the visible manual next control after authoritative validation.</p>
       <p class="meta" id="aggregate-task-list-degraded">Degraded state: unavailable read until runtime data resolves.</p>
       <p class="meta" id="aggregate-task-list-count">Task rows: pending.</p>
       <p class="meta" id="aggregate-task-list-rows">Rows: no aggregate task-list response has been rendered yet. Confidence: unavailable until the approved aggregate task-list read completes.</p>

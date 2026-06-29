@@ -8,6 +8,8 @@
   const LIMIT_CONTROL_ID = "aggregate-task-list-limit-control";
   const OFFSET_CONTROL_ID = "aggregate-task-list-offset-control";
   const LOAD_CONTROL_ID = "aggregate-task-list-load";
+  const PREVIOUS_CONTROL_ID = "aggregate-task-list-previous-offset";
+  const NEXT_CONTROL_ID = "aggregate-task-list-next-offset";
   const ALLOWED_ROW_STATUSES = new Set(["pending", "planning", "plan_ready", "executing", "blocked", "completed", "stopped", "failed"]);
   const ROW_KEYS = ["task_id", "status", "title", "created_at", "updated_at", "state_since", "actor", "last_event"];
   const ACTOR_KEYS = ["kind", "id"];
@@ -15,6 +17,8 @@
   const BODY_KEYS = ["route", "selected_limit", "selected_offset", "retrieved_at", "freshness_state", "display_state", "authority_state", "provenance", "request_id", "trace_id", "correlation_id", "limit", "returned_count", "has_more", "next_offset", "items"];
   const ALLOWED_DISPLAY_STATES = new Set(["healthy", "empty-list", "stale", "invalid", "unauthorized", "backend-unavailable", "unavailable"]);
   const ALLOWED_FRESHNESS_STATES = new Set(["fresh", "stale"]);
+  const navigationState = { limit: null, offset: null, previousOffset: null, nextOffset: null };
+  let loadInFlight = false;
 
   function element(id) {
     return document.getElementById(id);
@@ -126,6 +130,66 @@
     return state === "healthy" ? "authoritative" : "non-authoritative";
   }
 
+  function previousOffsetFromSelectors(selectors) {
+    if (!selectors) return null;
+    const limit = Number(selectors.limit);
+    const offset = Number(selectors.offset);
+    return offset > 0 ? Math.max(offset - limit, 0) : null;
+  }
+
+  function updateNavigation(limit, offset, previousOffset, nextOffset) {
+    navigationState.limit = limit;
+    navigationState.offset = offset;
+    navigationState.previousOffset = previousOffset;
+    navigationState.nextOffset = nextOffset;
+    const previousButton = element(PREVIOUS_CONTROL_ID);
+    const nextButton = element(NEXT_CONTROL_ID);
+    if (previousButton) previousButton.disabled = loadInFlight || previousOffset === null;
+    if (nextButton) nextButton.disabled = loadInFlight || nextOffset === null;
+  }
+
+  function disableNavigation() {
+    updateNavigation(null, null, null, null);
+  }
+
+  function setControlsLoading(isLoading) {
+    loadInFlight = isLoading;
+    const loadButton = element(LOAD_CONTROL_ID);
+    const previousButton = element(PREVIOUS_CONTROL_ID);
+    const nextButton = element(NEXT_CONTROL_ID);
+    if (loadButton) loadButton.disabled = isLoading;
+    if (isLoading) {
+      if (previousButton) previousButton.disabled = true;
+      if (nextButton) nextButton.disabled = true;
+    }
+  }
+
+  function refreshNavigationForSelectorEdit() {
+    const selectors = readSelectors();
+    const previousOffset = previousOffsetFromSelectors(selectors);
+    navigationState.previousOffset = previousOffset;
+    const previousButton = element(PREVIOUS_CONTROL_ID);
+    const nextButton = element(NEXT_CONTROL_ID);
+    if (previousButton) previousButton.disabled = loadInFlight || previousOffset === null;
+    if (nextButton) nextButton.disabled = loadInFlight || !(selectors && navigationState.nextOffset !== null && selectorsMatchNavigation(selectors));
+  }
+
+  function navigationFromBody(body, selectors) {
+    if (body.display_state !== "healthy" || body.authority_state !== "authoritative") {
+      disableNavigation();
+      return;
+    }
+    const limit = Number(selectors.limit);
+    const offset = Number(selectors.offset);
+    const previousOffset = previousOffsetFromSelectors(selectors);
+    const nextOffset = body.has_more === true && typeof body.next_offset === "number" ? body.next_offset : null;
+    updateNavigation(limit, offset, previousOffset, nextOffset);
+  }
+
+  function selectorsMatchNavigation(selectors) {
+    return navigationState.limit === Number(selectors.limit) && navigationState.offset === Number(selectors.offset);
+  }
+
   function render(state, authority, freshness, provenance, correlation, selectedLimit, selectedOffset, runtimeRoute, pagination, degraded, count, rows) {
     write("aggregate-task-list-status", `Aggregate task list state: ${state}.`);
     write("aggregate-task-list-source", `Source: ${ROUTE_PATTERN}. Runtime route: ${runtimeRoute}.`);
@@ -142,10 +206,11 @@
   }
 
   function renderClosed(state, detail, selectors) {
+    disableNavigation();
     const selectedLimit = selectors ? selectors.limit : "unavailable";
     const selectedOffset = selectors ? selectors.offset : "unavailable";
     const runtimeRoute = selectors ? selectedRoute(selectors) : ROUTE_PATTERN;
-    render(state, "non-authoritative", "missing server freshness", "backend task summary list", "not provided", selectedLimit, selectedOffset, runtimeRoute, "selected window unavailable", state, "0", detail);
+    render(state, "non-authoritative", "missing server freshness", "backend task summary list", "not provided", selectedLimit, selectedOffset, runtimeRoute, "selected window unavailable; manual previous/next controls disabled", state, "0", detail);
   }
 
   function rowText(row) {
@@ -160,11 +225,15 @@
       return;
     }
     const state = body.display_state;
+    navigationFromBody(body, selectors);
     const authority = authorityFor(state);
     const correlation = label(body.correlation_id, label(body.request_id, label(body.trace_id, "not provided")));
     const provenance = label(body.provenance, "backend task summary list");
     const nextOffset = body.next_offset === null ? "none" : String(body.next_offset);
-    const pagination = `selected limit ${body.selected_limit}; selected offset ${body.selected_offset}; returned ${body.returned_count}; has_more ${body.has_more}; next_offset ${nextOffset}`;
+    const previousOffset = navigationState.previousOffset === null ? "none" : String(navigationState.previousOffset);
+    const manualNext = navigationState.nextOffset === null ? "disabled" : `enabled to ${navigationState.nextOffset}`;
+    const manualPrevious = navigationState.previousOffset === null ? "disabled" : `enabled to ${navigationState.previousOffset}`;
+    const pagination = `selected limit ${body.selected_limit}; selected offset ${body.selected_offset}; returned ${body.returned_count}; has_more ${body.has_more}; next_offset ${nextOffset}; manual_previous ${manualPrevious}; manual_next ${manualNext}`;
     const runtimeRoute = selectedRoute(selectors);
     if (state === "empty-list") {
       render(state, "non-authoritative", body.retrieved_at, provenance, correlation, String(body.selected_limit), String(body.selected_offset), runtimeRoute, pagination, state, "0", "empty successful read; no task rows returned.");
@@ -178,36 +247,97 @@
   }
 
   async function loadAggregateTaskList() {
+    if (loadInFlight) return undefined;
     const selectors = readSelectors();
     if (!selectors) {
       renderClosed("invalid", "invalid visible aggregate task-list limit or offset selector; not authoritative.", null);
-      return;
+      return undefined;
     }
     const route = selectedRoute(selectors);
+    setControlsLoading(true);
     try {
       const response = await fetch(route, { method: "GET", credentials: "omit" });
       if (!response.ok) {
         const state = response.status === 401 || response.status === 403 ? "unauthorized" : "backend-unavailable";
         renderClosed(state, `${state.replace(/-/g, " ")} response for aggregate task list limit and offset read; not authoritative.`, selectors);
-        return;
+        return undefined;
       }
       let body;
       try {
         body = await response.json();
       } catch (_error) {
         renderClosed("invalid", "invalid aggregate task list limit and offset response; not authoritative.", selectors);
-        return;
+        return undefined;
       }
       renderBody(body, selectors);
+      return undefined;
     } catch (_error) {
       renderClosed("backend-unavailable", "backend unavailable for aggregate task list limit and offset read; not authoritative.", selectors);
+      return undefined;
+    } finally {
+      setControlsLoading(false);
+      refreshNavigationForSelectorEdit();
     }
   }
 
+  function setOffsetAndLoad(offset) {
+    if (loadInFlight) return undefined;
+    const offsetControl = element(OFFSET_CONTROL_ID);
+    if (!offsetControl) return undefined;
+    offsetControl.value = String(offset);
+    return loadAggregateTaskList();
+  }
+
+  function loadPreviousOffset() {
+    if (loadInFlight) return undefined;
+    const selectors = readSelectors();
+    if (!selectors) {
+      renderClosed("invalid", "invalid visible aggregate task-list limit or offset selector; not authoritative.", null);
+      return undefined;
+    }
+    const previousOffset = previousOffsetFromSelectors(selectors);
+    if (previousOffset === null) {
+      refreshNavigationForSelectorEdit();
+      return undefined;
+    }
+    return setOffsetAndLoad(previousOffset);
+  }
+
+  function loadNextOffset() {
+    if (loadInFlight) return undefined;
+    const selectors = readSelectors();
+    if (!selectors) {
+      disableNavigation();
+      return undefined;
+    }
+    if (navigationState.nextOffset === null || !selectorsMatchNavigation(selectors)) {
+      refreshNavigationForSelectorEdit();
+      return undefined;
+    }
+    return setOffsetAndLoad(navigationState.nextOffset);
+  }
+
   function startAggregateTaskList() {
+    disableNavigation();
     const loadButton = element(LOAD_CONTROL_ID);
+    const limitControl = element(LIMIT_CONTROL_ID);
+    const offsetControl = element(OFFSET_CONTROL_ID);
+    const previousButton = element(PREVIOUS_CONTROL_ID);
+    const nextButton = element(NEXT_CONTROL_ID);
     if (loadButton && typeof loadButton.addEventListener === "function") {
       loadButton.addEventListener("click", loadAggregateTaskList);
+    }
+    for (const control of [limitControl, offsetControl]) {
+      if (control && typeof control.addEventListener === "function") {
+        control.addEventListener("input", refreshNavigationForSelectorEdit);
+        control.addEventListener("change", refreshNavigationForSelectorEdit);
+      }
+    }
+    if (previousButton && typeof previousButton.addEventListener === "function") {
+      previousButton.addEventListener("click", loadPreviousOffset);
+    }
+    if (nextButton && typeof nextButton.addEventListener === "function") {
+      nextButton.addEventListener("click", loadNextOffset);
     }
     return loadAggregateTaskList();
   }

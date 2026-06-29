@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-29T04:12:19+03:00"
-current_phase: 39  # Phase 39 CLOSED — Epic 118 done after Story 118.1 planning consensus, Story 118.2 implementation/review/UltraQA, format repair/final CI head d8ac76db3a0d9a07c47ff8380d4ced12bbfc36cd, GitHub Actions ci run 28342809322 success, and Story 118.3 final closure
+last_updated: "2026-06-29T01:43:57Z"
+current_phase: 40  # Phase 40 OPEN — Epic 119 Story 119.2 manual aggregate task-list previous/next offset controls locally done after code-review APPROVE and UltraQA PASS; Story 119.3 remote CI closure pending
 
 development_status:
   # =========================================================================
@@ -996,10 +996,91 @@ development_status:
   118-2-task-list-pagination-browser-runtime-boundary: done  # tests-first dashboard aggregate-task-list browser/runtime implementation for exact canonical GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}; visible limit+offset controls only; GET/bodyless/credentials omit; metadata validation/fail-closed states; no automatic traversal/infinite scroll/search/sort/status composition/backend/API/dependency/CI/deployment/service/MCP/prod changes
   118-3-phase-39-epic-118-final-closure: done  # docs/status final closure after Story 118.2 implementation commit 5880d10730188f8a2f57d92c9802e0cb92ff71bc, format repair/final CI head d8ac76db3a0d9a07c47ff8380d4ced12bbfc36cd, and GitHub Actions ci run 28342809322 success
 
+  # =========================================================================
+  # Epic 119: Manual task-list pagination navigation planning
+  # =========================================================================
+  epic-119: in-progress  # Phase 40 open; Story 119.1 planning done and Story 119.2 implementation locally done after final code-review APPROVE and UltraQA PASS; Story 119.3 commit/push/remote-CI closure pending
+  119-1-manual-task-list-pagination-navigation-planning: done  # Phase 40 PRD/architecture/epics/status opening; selects future visible manual previous/next offset controls using existing canonical GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}; native Architect APPROVE/CLEAR followed by native Critic APPROVE/CLEAR consensus recorded
+  119-2-manual-task-list-pagination-navigation-runtime-boundary: done  # tests-first dashboard aggregate-task-list manual previous/next navigation implemented locally after final code-review APPROVE and UltraQA PASS; visible controls only; one explicit load at a time; no automatic traversal/infinite scroll/search/sort/status composition/URL-storage state/backend/API/dependency/CI/deployment/service/MCP/prod changes
+  119-3-phase-40-epic-119-final-closure: in-progress  # docs/status closure pending Story 119.2 implementation commit/push and green remote CI evidence
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-29"
+    event: story-119-2-manual-task-list-pagination-navigation-runtime-boundary-done-local
+    from: review
+    to: done
+    epic: epic-119
+    story: 119-2-manual-task-list-pagination-navigation-runtime-boundary
+    source: autopilot-story-119-2-code-review-ultraqa
+    reason: >-
+      Story 119.2 is locally done after tests-first implementation, final native
+      code-review agent 019f112b-0923-77a0-b63d-0da8a718c1b5 returned APPROVE
+      with no findings, and native verifier agent 019f112e-517e-7193-9544-e024cafea8a6
+      returned UltraQA PASS. The runtime adds visible manual Previous offset and
+      Next offset controls only for canonical GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset};
+      previous derives from current visible selectors, next requires authoritative
+      has_more/next_offset metadata, selector edits fail stale next closed, and
+      loadInFlight prevents concurrent navigation reads. Automatic traversal,
+      infinite scroll, search, sort, status+offset/status+limit+offset composition,
+      URL/storage state, hidden/row-derived selectors, backend/API changes,
+      services/MCP/dependencies, CI/deployment changes, production credentials,
+      and production operations remain unauthorized.
+  - date: "2026-06-29"
+    event: story-119-2-manual-task-list-pagination-navigation-runtime-boundary-local-implementation
+    from: backlog
+    to: review
+    epic: epic-119
+    story: 119-2-manual-task-list-pagination-navigation-runtime-boundary
+    source: autopilot-story-119-2-tests-first-implementation
+    reason: >-
+      Story 119.2 implements the tests-first dashboard aggregate-task-list manual
+      previous-offset and next-offset controls for the existing canonical GET
+      /v1/tasks?limit={task_list_limit}&offset={task_list_offset} route. Manual
+      next requires authoritative has_more/next_offset metadata; manual previous
+      computes max(current_offset - current_limit, 0); each activation performs
+      at most one explicit canonical read. Automatic traversal, infinite scroll,
+      search, sort, status+offset/status+limit+offset composition, URL/storage
+      state, row-driven traversal, backend/API changes, services/MCP/dependencies,
+      CI/deployment changes, production credentials, and production operations
+      remain unauthorized.
+  - date: "2026-06-29"
+    event: story-119-1-manual-task-list-pagination-navigation-planning-complete
+    from: in-progress
+    to: done
+    epic: epic-119
+    story: 119-1-manual-task-list-pagination-navigation-planning
+    source: autopilot-story-119-1-planning
+    reason: >-
+      Story 119.1 completes Phase 40 docs/status-only manual pagination navigation
+      planning after native Architect agent 019f110c-7d68-7d72-b5fb-5664ae56f36a
+      returned APPROVE/CLEAR first and native Critic agent 019f110e-901b-7e63-9329-18ab15a9a7b3
+      returned APPROVE/CLEAR after the Architect gate. The exact selected future
+      boundary is visible manual previous-offset and next-offset aggregate task-list
+      controls using only canonical GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}.
+      Automatic traversal, infinite scroll, search, sort, status+offset/status+limit+offset
+      composition, URL/storage state, hidden selectors, row-driven traversal,
+      backend/API changes, broad dashboard wiring, services/MCP/dependencies,
+      production credentials, and production operations remain deferred/fail-closed.
+  - date: "2026-06-29"
+    event: phase-40-epic-119-opened
+    from: backlog
+    to: in-progress
+    epic: epic-119
+    story: 119-1-manual-task-list-pagination-navigation-planning
+    source: autopilot-story-119-1-planning
+    reason: >-
+      Phase 40 opens as docs/status-only planning for visible manual aggregate
+      task-list previous-offset and next-offset controls using the existing
+      canonical GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}
+      browser-consumed route only. Runtime/browser controls, backend/API route
+      changes, tests, automatic traversal, infinite scroll, sorting, free-text
+      search, status+offset/status+limit+offset composition, URL/storage state,
+      hidden selectors, row-driven traversal, broad dashboard wiring,
+      services/MCP/dependencies, production credentials, and production operations
+      remain deferred/fail-closed pending sequential Architect then Critic consensus.
   - date: "2026-06-29"
     event: story-118-3-phase-39-epic-118-final-closure-complete
     from: backlog

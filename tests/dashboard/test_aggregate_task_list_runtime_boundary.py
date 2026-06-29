@@ -132,10 +132,14 @@ class RuntimeCase(TypedDict):
     name: str
     expected: list[str]
     response: NotRequired[RuntimeResponse]
+    responses: NotRequired[list[RuntimeResponse]]
     reject: NotRequired[str]
     controlValues: NotRequired[dict[str, str]]
     controlTypes: NotRequired[dict[str, str]]
     missingElements: NotRequired[list[str]]
+    clickTargets: NotRequired[list[str]]
+    concurrentClickTargets: NotRequired[list[str]]
+    mutateBeforeClicks: NotRequired[dict[str, str]]
 
 
 class FetchCall(TypedDict):
@@ -148,6 +152,8 @@ class FetchCall(TypedDict):
 class RuntimeOutput(TypedDict):
     texts: dict[str, str]
     fetchCalls: list[FetchCall]
+    controlValues: dict[str, str]
+    disabled: dict[str, bool]
 
 
 class ScriptParser(HTMLParser):
@@ -195,7 +201,7 @@ def test_story_118_2_runtime_script_allowlist_and_visible_controls_are_exact() -
     parser = parse_scripts()
     assert parser.scripts == [{"src": script, "defer": ""} for script in APPROVED_SCRIPTS]
     assert not "".join(parser.inline_script_text).strip()
-    assert parser.controls == ["input", "input", "button", "input", "button"]
+    assert parser.controls == ["input", "input", "button", "button", "button", "input", "button"]
     controls_by_id = {control.get("id"): control for control in parser.control_attrs}
     assert "aggregate-task-list-status-control" not in controls_by_id
     assert controls_by_id["aggregate-task-list-limit-control"] == {
@@ -223,6 +229,16 @@ def test_story_118_2_runtime_script_allowlist_and_visible_controls_are_exact() -
     assert controls_by_id["aggregate-task-list-load"] == {
         "tag": "button",
         "id": "aggregate-task-list-load",
+        "type": "button",
+    }
+    assert controls_by_id["aggregate-task-list-previous-offset"] == {
+        "tag": "button",
+        "id": "aggregate-task-list-previous-offset",
+        "type": "button",
+    }
+    assert controls_by_id["aggregate-task-list-next-offset"] == {
+        "tag": "button",
+        "id": "aggregate-task-list-next-offset",
         "type": "button",
     }
     assert controls_by_id["lifecycle-snapshot-create-token"]["tag"] == "input"
@@ -264,6 +280,8 @@ def test_story_118_2_panel_exposes_limit_offset_runtime_metadata_targets() -> No
         "aggregate-task-list-limit-control",
         "aggregate-task-list-offset-control",
         "aggregate-task-list-load",
+        "aggregate-task-list-previous-offset",
+        "aggregate-task-list-next-offset",
         "aggregate-task-list-status",
         "aggregate-task-list-source",
         "aggregate-task-list-selected-limit",
@@ -290,6 +308,8 @@ def test_story_118_2_panel_exposes_limit_offset_runtime_metadata_targets() -> No
     assert "no sort" in lowered
     assert "no request body" in lowered
     assert "no hidden selectors" in lowered
+    assert "manual previous" in lowered
+    assert "manual next" in lowered
 
 
 def task_row(**overrides: object) -> dict[str, object]:
@@ -339,6 +359,317 @@ def assert_default_limit_offset_fetch(output: RuntimeOutput) -> None:
     assert output["fetchCalls"] == [
         {"route": DEFAULT_ROUTE, "method": "GET", "hasBody": False, "credentials": "omit"}
     ]
+
+
+def test_story_119_2_manual_navigation_controls_are_explicit_and_bounded() -> None:
+    no_click = run_runtime_case(
+        {
+            "name": "next-metadata-without-click-does-not-traverse",
+            "controlValues": {
+                "aggregate-task-list-limit-control": "2",
+                "aggregate-task-list-offset-control": "1",
+            },
+            "response": {
+                "ok": True,
+                "status": 200,
+                "body": response_body(
+                    selected_limit=2,
+                    selected_offset=1,
+                    limit=2,
+                    returned_count=2,
+                    has_more=True,
+                    next_offset=3,
+                    items=[task_row(task_id="t-2"), task_row(task_id="t-1")],
+                ),
+            },
+            "expected": ["next_offset 3"],
+        }
+    )
+    assert no_click["fetchCalls"] == [
+        {"route": "/v1/tasks?limit=2&offset=1", "method": "GET", "hasBody": False, "credentials": "omit"}
+    ]
+    assert no_click["disabled"]["aggregate-task-list-next-offset"] is False
+    assert no_click["disabled"]["aggregate-task-list-previous-offset"] is False
+
+    next_click = run_runtime_case(
+        {
+            "name": "manual-next-click",
+            "controlValues": {
+                "aggregate-task-list-limit-control": "2",
+                "aggregate-task-list-offset-control": "1",
+            },
+            "responses": [
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": response_body(
+                        selected_limit=2,
+                        selected_offset=1,
+                        limit=2,
+                        returned_count=2,
+                        has_more=True,
+                        next_offset=3,
+                        items=[task_row(task_id="t-2"), task_row(task_id="t-1")],
+                    ),
+                },
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": response_body(
+                        selected_limit=2,
+                        selected_offset=3,
+                        limit=2,
+                        returned_count=0,
+                        has_more=False,
+                        next_offset=None,
+                        items=[],
+                        display_state="empty-list",
+                        authority_state="non-authoritative",
+                    ),
+                },
+            ],
+            "clickTargets": ["aggregate-task-list-next-offset"],
+            "expected": ["selected offset: 3"],
+        }
+    )
+    assert next_click["fetchCalls"] == [
+        {"route": "/v1/tasks?limit=2&offset=1", "method": "GET", "hasBody": False, "credentials": "omit"},
+        {"route": "/v1/tasks?limit=2&offset=3", "method": "GET", "hasBody": False, "credentials": "omit"},
+    ]
+    assert next_click["controlValues"]["aggregate-task-list-offset-control"] == "3"
+
+    previous_click = run_runtime_case(
+        {
+            "name": "manual-previous-click",
+            "controlValues": {
+                "aggregate-task-list-limit-control": "2",
+                "aggregate-task-list-offset-control": "3",
+            },
+            "responses": [
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": response_body(
+                        selected_limit=2,
+                        selected_offset=3,
+                        limit=2,
+                        returned_count=1,
+                        has_more=False,
+                        next_offset=None,
+                        items=[task_row(task_id="t-3")],
+                    ),
+                },
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": response_body(
+                        selected_limit=2,
+                        selected_offset=1,
+                        limit=2,
+                        returned_count=1,
+                        has_more=False,
+                        next_offset=None,
+                        items=[task_row(task_id="t-1")],
+                    ),
+                },
+            ],
+            "clickTargets": ["aggregate-task-list-previous-offset"],
+            "expected": ["selected offset: 1"],
+        }
+    )
+    assert previous_click["fetchCalls"] == [
+        {"route": "/v1/tasks?limit=2&offset=3", "method": "GET", "hasBody": False, "credentials": "omit"},
+        {"route": "/v1/tasks?limit=2&offset=1", "method": "GET", "hasBody": False, "credentials": "omit"},
+    ]
+    assert previous_click["controlValues"]["aggregate-task-list-offset-control"] == "1"
+
+    concurrent_previous_click = run_runtime_case(
+        {
+            "name": "manual-previous-concurrent-clicks-fail-closed",
+            "controlValues": {
+                "aggregate-task-list-limit-control": "2",
+                "aggregate-task-list-offset-control": "10",
+            },
+            "responses": [
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": response_body(
+                        selected_limit=2,
+                        selected_offset=10,
+                        limit=2,
+                        returned_count=1,
+                        has_more=False,
+                        next_offset=None,
+                        items=[task_row(task_id="t-10")],
+                    ),
+                },
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": response_body(
+                        selected_limit=2,
+                        selected_offset=8,
+                        limit=2,
+                        returned_count=0,
+                        has_more=False,
+                        next_offset=None,
+                        items=[],
+                        display_state="empty-list",
+                        authority_state="non-authoritative",
+                    ),
+                },
+            ],
+            "concurrentClickTargets": [
+                "aggregate-task-list-previous-offset",
+                "aggregate-task-list-previous-offset",
+            ],
+            "expected": ["selected offset: 8"],
+        }
+    )
+    assert concurrent_previous_click["fetchCalls"] == [
+        {"route": "/v1/tasks?limit=2&offset=10", "method": "GET", "hasBody": False, "credentials": "omit"},
+        {"route": "/v1/tasks?limit=2&offset=8", "method": "GET", "hasBody": False, "credentials": "omit"},
+    ]
+    assert concurrent_previous_click["controlValues"]["aggregate-task-list-offset-control"] == "8"
+
+    mutated_previous = run_runtime_case(
+        {
+            "name": "manual-previous-recomputes-from-edited-visible-controls",
+            "controlValues": {
+                "aggregate-task-list-limit-control": "2",
+                "aggregate-task-list-offset-control": "3",
+            },
+            "responses": [
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": response_body(
+                        selected_limit=2,
+                        selected_offset=3,
+                        limit=2,
+                        returned_count=1,
+                        has_more=False,
+                        next_offset=None,
+                        items=[task_row(task_id="t-3")],
+                    ),
+                },
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": response_body(
+                        selected_limit=2,
+                        selected_offset=8,
+                        limit=2,
+                        returned_count=0,
+                        has_more=False,
+                        next_offset=None,
+                        items=[],
+                        display_state="empty-list",
+                        authority_state="non-authoritative",
+                    ),
+                },
+            ],
+            "mutateBeforeClicks": {"aggregate-task-list-offset-control": "10"},
+            "clickTargets": ["aggregate-task-list-previous-offset"],
+            "expected": ["selected offset: 8"],
+        }
+    )
+    assert mutated_previous["fetchCalls"] == [
+        {"route": "/v1/tasks?limit=2&offset=3", "method": "GET", "hasBody": False, "credentials": "omit"},
+        {"route": "/v1/tasks?limit=2&offset=8", "method": "GET", "hasBody": False, "credentials": "omit"},
+    ]
+    assert mutated_previous["controlValues"]["aggregate-task-list-offset-control"] == "8"
+
+    mutated_previous_from_disabled = run_runtime_case(
+        {
+            "name": "manual-previous-enables-after-visible-offset-edit-from-zero",
+            "controlValues": {
+                "aggregate-task-list-limit-control": "2",
+                "aggregate-task-list-offset-control": "0",
+            },
+            "responses": [
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": response_body(
+                        selected_limit=2,
+                        selected_offset=0,
+                        limit=2,
+                        returned_count=2,
+                        has_more=True,
+                        next_offset=2,
+                        items=[task_row(task_id="t-2"), task_row(task_id="t-1")],
+                    ),
+                },
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": response_body(
+                        selected_limit=2,
+                        selected_offset=8,
+                        limit=2,
+                        returned_count=0,
+                        has_more=False,
+                        next_offset=None,
+                        items=[],
+                        display_state="empty-list",
+                        authority_state="non-authoritative",
+                    ),
+                },
+            ],
+            "mutateBeforeClicks": {"aggregate-task-list-offset-control": "10"},
+            "clickTargets": ["aggregate-task-list-previous-offset"],
+            "expected": ["selected offset: 8"],
+        }
+    )
+    assert mutated_previous_from_disabled["fetchCalls"] == [
+        {"route": "/v1/tasks?limit=2&offset=0", "method": "GET", "hasBody": False, "credentials": "omit"},
+        {"route": "/v1/tasks?limit=2&offset=8", "method": "GET", "hasBody": False, "credentials": "omit"},
+    ]
+    assert mutated_previous_from_disabled["controlValues"]["aggregate-task-list-offset-control"] == "8"
+
+    mutated_next = run_runtime_case(
+        {
+            "name": "manual-next-fails-closed-after-visible-selector-edit",
+            "controlValues": {
+                "aggregate-task-list-limit-control": "2",
+                "aggregate-task-list-offset-control": "1",
+            },
+            "response": {
+                "ok": True,
+                "status": 200,
+                "body": response_body(
+                    selected_limit=2,
+                    selected_offset=1,
+                    limit=2,
+                    returned_count=2,
+                    has_more=True,
+                    next_offset=3,
+                    items=[task_row(task_id="t-2"), task_row(task_id="t-1")],
+                ),
+            },
+            "mutateBeforeClicks": {"aggregate-task-list-limit-control": "3"},
+            "clickTargets": ["aggregate-task-list-next-offset"],
+            "expected": ["next_offset 3"],
+        }
+    )
+    assert mutated_next["fetchCalls"] == [
+        {"route": "/v1/tasks?limit=2&offset=1", "method": "GET", "hasBody": False, "credentials": "omit"}
+    ]
+    assert mutated_next["disabled"]["aggregate-task-list-next-offset"] is True
+    assert mutated_next["disabled"]["aggregate-task-list-previous-offset"] is False
+
+    invalid_click = run_runtime_case(
+        {
+            "name": "invalid-response-next-click-fails-closed",
+            "response": {"ok": True, "status": 200, "body": response_body(has_more=True, next_offset=1)},
+            "clickTargets": ["aggregate-task-list-next-offset"],
+            "expected": ["invalid"],
+        }
+    )
+    assert_default_limit_offset_fetch(invalid_click)
+    assert invalid_click["disabled"]["aggregate-task-list-next-offset"] is True
 
 
 def test_story_118_2_runtime_behavior_maps_success_empty_pagination_and_failures() -> None:
@@ -715,6 +1046,7 @@ def run_runtime_case(case: RuntimeCase, *, ready_state: str = "loading") -> Runt
         const texts = {{}};
         const elements = new Map();
         const callbacks = [];
+        const listeners = new Map();
         const missing = new Set(testCase.missingElements || []);
         const controlValues = Object.assign({{
           'aggregate-task-list-limit-control': {json.dumps(DEFAULT_LIMIT)},
@@ -730,10 +1062,14 @@ def run_runtime_case(case: RuntimeCase, *, ready_state: str = "loading") -> Runt
             const node = {{
               value: Object.prototype.hasOwnProperty.call(controlValues, id) ? controlValues[id] : '',
               type: Object.prototype.hasOwnProperty.call(controlTypes, id) ? controlTypes[id] : undefined,
+              disabled: false,
               _text: '',
               set textContent(value) {{ this._text = String(value); texts[id] = String(value); }},
               get textContent() {{ return this._text || ''; }},
-              addEventListener: () => undefined,
+              addEventListener: (name, callback) => {{
+                if (!listeners.has(id)) listeners.set(id, {{}});
+                listeners.get(id)[name] = callback;
+              }},
             }};
             elements.set(id, node);
           }}
@@ -758,7 +1094,8 @@ def run_runtime_case(case: RuntimeCase, *, ready_state: str = "loading") -> Runt
           fetch: async (route, options = {{}}) => {{
             fetchCalls.push({{ route, method: options.method || 'GET', hasBody: Object.prototype.hasOwnProperty.call(options, 'body'), credentials: options.credentials || null }});
             if (testCase.reject) throw new Error(testCase.reject);
-            const response = testCase.response || {{ ok: true, status: 200, body: {{}} }};
+            const responses = testCase.responses || (testCase.response ? [testCase.response] : [{{ ok: true, status: 200, body: {{}} }}]);
+            const response = responses[Math.min(fetchCalls.length - 1, responses.length - 1)];
             return {{
               ok: response.ok,
               status: response.status,
@@ -775,8 +1112,46 @@ def run_runtime_case(case: RuntimeCase, *, ready_state: str = "loading") -> Runt
         if (sandbox.window.__aggregateTaskListReady) {{ await sandbox.window.__aggregateTaskListReady; }}
         await Promise.resolve();
         await Promise.resolve();
+        for (const [id, value] of Object.entries(testCase.mutateBeforeClicks || {{}})) {{
+          const node = element(id);
+          if (node) {{
+            node.value = String(value);
+            const inputHandler = listeners.get(id)?.input;
+            const changeHandler = listeners.get(id)?.change;
+            if (inputHandler) inputHandler();
+            if (changeHandler) changeHandler();
+          }}
+        }}
+        const concurrentClicks = [];
+        for (const clickId of testCase.concurrentClickTargets || []) {{
+          const node = elements.get(clickId);
+          const handler = listeners.get(clickId)?.click;
+          if (node && !node.disabled && handler) {{
+            const clicked = handler();
+            if (clicked && typeof clicked.then === 'function') concurrentClicks.push(clicked);
+          }}
+        }}
+        for (const clicked of concurrentClicks) {{ await clicked; }}
+        if (concurrentClicks.length && sandbox.window.__aggregateTaskListReady) {{ await sandbox.window.__aggregateTaskListReady; }}
+        for (const clickId of testCase.clickTargets || []) {{
+          const node = elements.get(clickId);
+          const handler = listeners.get(clickId)?.click;
+          if (node && !node.disabled && handler) {{
+            const clicked = handler();
+            if (clicked && typeof clicked.then === 'function') await clicked;
+            if (sandbox.window.__aggregateTaskListReady) {{ await sandbox.window.__aggregateTaskListReady; }}
+            await Promise.resolve();
+            await Promise.resolve();
+          }}
+        }}
         await new Promise((resolve) => setImmediate(resolve));
-        process.stdout.write(JSON.stringify({{ texts, fetchCalls }}));
+        const controlSnapshot = {{}};
+        const disabled = {{}};
+        for (const [id, node] of elements.entries()) {{
+          controlSnapshot[id] = String(node.value ?? '');
+          disabled[id] = Boolean(node.disabled);
+        }}
+        process.stdout.write(JSON.stringify({{ texts, fetchCalls, controlValues: controlSnapshot, disabled }}));
         }})();
         """
     )
