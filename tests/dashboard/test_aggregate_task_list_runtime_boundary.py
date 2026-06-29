@@ -386,7 +386,12 @@ def test_story_119_2_manual_navigation_controls_are_explicit_and_bounded() -> No
         }
     )
     assert no_click["fetchCalls"] == [
-        {"route": "/v1/tasks?limit=2&offset=1", "method": "GET", "hasBody": False, "credentials": "omit"}
+        {
+            "route": "/v1/tasks?limit=2&offset=1",
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        }
     ]
     assert no_click["disabled"]["aggregate-task-list-next-offset"] is False
     assert no_click["disabled"]["aggregate-task-list-previous-offset"] is False
@@ -433,8 +438,18 @@ def test_story_119_2_manual_navigation_controls_are_explicit_and_bounded() -> No
         }
     )
     assert next_click["fetchCalls"] == [
-        {"route": "/v1/tasks?limit=2&offset=1", "method": "GET", "hasBody": False, "credentials": "omit"},
-        {"route": "/v1/tasks?limit=2&offset=3", "method": "GET", "hasBody": False, "credentials": "omit"},
+        {
+            "route": "/v1/tasks?limit=2&offset=1",
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        },
+        {
+            "route": "/v1/tasks?limit=2&offset=3",
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        },
     ]
     assert next_click["controlValues"]["aggregate-task-list-offset-control"] == "3"
 
@@ -478,8 +493,18 @@ def test_story_119_2_manual_navigation_controls_are_explicit_and_bounded() -> No
         }
     )
     assert previous_click["fetchCalls"] == [
-        {"route": "/v1/tasks?limit=2&offset=3", "method": "GET", "hasBody": False, "credentials": "omit"},
-        {"route": "/v1/tasks?limit=2&offset=1", "method": "GET", "hasBody": False, "credentials": "omit"},
+        {
+            "route": "/v1/tasks?limit=2&offset=3",
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        },
+        {
+            "route": "/v1/tasks?limit=2&offset=1",
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        },
     ]
     assert previous_click["controlValues"]["aggregate-task-list-offset-control"] == "1"
 
@@ -528,8 +553,18 @@ def test_story_119_2_manual_navigation_controls_are_explicit_and_bounded() -> No
         }
     )
     assert concurrent_previous_click["fetchCalls"] == [
-        {"route": "/v1/tasks?limit=2&offset=10", "method": "GET", "hasBody": False, "credentials": "omit"},
-        {"route": "/v1/tasks?limit=2&offset=8", "method": "GET", "hasBody": False, "credentials": "omit"},
+        {
+            "route": "/v1/tasks?limit=2&offset=10",
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        },
+        {
+            "route": "/v1/tasks?limit=2&offset=8",
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        },
     ]
     assert concurrent_previous_click["controlValues"]["aggregate-task-list-offset-control"] == "8"
 
@@ -576,8 +611,18 @@ def test_story_119_2_manual_navigation_controls_are_explicit_and_bounded() -> No
         }
     )
     assert mutated_previous["fetchCalls"] == [
-        {"route": "/v1/tasks?limit=2&offset=3", "method": "GET", "hasBody": False, "credentials": "omit"},
-        {"route": "/v1/tasks?limit=2&offset=8", "method": "GET", "hasBody": False, "credentials": "omit"},
+        {
+            "route": "/v1/tasks?limit=2&offset=3",
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        },
+        {
+            "route": "/v1/tasks?limit=2&offset=8",
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        },
     ]
     assert mutated_previous["controlValues"]["aggregate-task-list-offset-control"] == "8"
 
@@ -624,10 +669,22 @@ def test_story_119_2_manual_navigation_controls_are_explicit_and_bounded() -> No
         }
     )
     assert mutated_previous_from_disabled["fetchCalls"] == [
-        {"route": "/v1/tasks?limit=2&offset=0", "method": "GET", "hasBody": False, "credentials": "omit"},
-        {"route": "/v1/tasks?limit=2&offset=8", "method": "GET", "hasBody": False, "credentials": "omit"},
+        {
+            "route": "/v1/tasks?limit=2&offset=0",
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        },
+        {
+            "route": "/v1/tasks?limit=2&offset=8",
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        },
     ]
-    assert mutated_previous_from_disabled["controlValues"]["aggregate-task-list-offset-control"] == "8"
+    assert (
+        mutated_previous_from_disabled["controlValues"]["aggregate-task-list-offset-control"] == "8"
+    )
 
     mutated_next = run_runtime_case(
         {
@@ -655,7 +712,12 @@ def test_story_119_2_manual_navigation_controls_are_explicit_and_bounded() -> No
         }
     )
     assert mutated_next["fetchCalls"] == [
-        {"route": "/v1/tasks?limit=2&offset=1", "method": "GET", "hasBody": False, "credentials": "omit"}
+        {
+            "route": "/v1/tasks?limit=2&offset=1",
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        }
     ]
     assert mutated_next["disabled"]["aggregate-task-list-next-offset"] is True
     assert mutated_next["disabled"]["aggregate-task-list-previous-offset"] is False
@@ -663,7 +725,11 @@ def test_story_119_2_manual_navigation_controls_are_explicit_and_bounded() -> No
     invalid_click = run_runtime_case(
         {
             "name": "invalid-response-next-click-fails-closed",
-            "response": {"ok": True, "status": 200, "body": response_body(has_more=True, next_offset=1)},
+            "response": {
+                "ok": True,
+                "status": 200,
+                "body": response_body(has_more=True, next_offset=1),
+            },
             "clickTargets": ["aggregate-task-list-next-offset"],
             "expected": ["invalid"],
         }
