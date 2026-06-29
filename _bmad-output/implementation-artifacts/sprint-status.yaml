@@ -1016,15 +1016,32 @@ development_status:
   # =========================================================================
   # Epic 121: Task status + limit + offset browser consumption planning
   # =========================================================================
-  epic-121: in-progress  # Phase 42 in progress after Story 121.2 local implementation/review/QA passed; Story 121.3 final closure awaiting commit/push and green CI evidence
+  epic-121: done  # Phase 42 closed after Story 121.3 records implementation commit aa90a29c3e5988d617614453517ae44962249699 and green ci run 28400048812
   121-1-task-status-limit-offset-browser-consumption-planning: done  # Phase 42 docs/status-only planning selected exact canonical dashboard aggregate-task-list GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}; native Architect APPROVE/CLEAR followed by native Critic APPROVE/CLEAR consensus recorded; implementation deferred to exact Story 121.2 boundary
   121-2-task-status-limit-offset-browser-runtime-boundary: done  # Dashboard aggregate-task-list browser/runtime implementation complete after tests-first implementation, code-review APPROVE, architect CLEAR, strict mypy, dashboard/non-integration pytest, ruff, and diff-check evidence; visible status+limit+offset controls only, bodyless GET, credentials omit, strict validation, fail-closed states
-  121-3-phase-42-epic-121-final-closure: in-progress  # Final closure in progress: commit/push and green CI evidence pending after Story 121.2 local review/QA completion
+  121-3-phase-42-epic-121-final-closure: done  # Final closure complete with implementation commit aa90a29c3e5988d617614453517ae44962249699 and green ci run 28400048812
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+  - date: "2026-06-29"
+    event: story-121-3-phase-42-epic-121-final-closure-complete
+    from: in-progress
+    to: done
+    epic: epic-121
+    story: 121-3-phase-42-epic-121-final-closure
+    source: autopilot-story-121-3-remote-ci-closure
+    reason: >-
+      Story 121.3 closes Phase 42 / Epic 121 after implementation commit
+      aa90a29c3e5988d617614453517ae44962249699 was pushed and GitHub Actions
+      ci run 28400048812 completed successfully. The closed browser boundary
+      remains exact GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}
+      from visible aggregate-task-list status, limit, and offset controls only;
+      GET remains bodyless with credentials omit, strict validation, selector-edit
+      fail-closed invalidation, and no automatic traversal/search/sort/hidden
+      selectors or broader dashboard/backend/API/dependency/service expansion.
 
   - date: "2026-06-29"
     event: story-121-2-task-status-limit-offset-browser-runtime-boundary-local-complete
