@@ -11,7 +11,9 @@ from typing import NotRequired, TypedDict
 DASHBOARD = Path("dashboard/static/index.html")
 RUNTIME = Path("dashboard/static/aggregate-task-list.js")
 APPROVED_ROUTE_BASE = "/v1/tasks"
-ROUTE_PATTERN = "GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}"
+ROUTE_PATTERN = (
+    "GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}"
+)
 MAX_OFFSET = 2_147_483_647
 ALLOWED_ROW_STATUSES = (
     "pending",
@@ -25,8 +27,19 @@ ALLOWED_ROW_STATUSES = (
 )
 
 
-def dashboard_default_selectors() -> tuple[str, str]:
+def dashboard_default_selectors() -> tuple[str, str, str]:
     raw = DASHBOARD.read_text(encoding="utf-8")
+    status_match = re.search(
+        r'<select id="aggregate-task-list-status-control"(?P<attrs>[^>]*)>(?P<body>.*?)</select>',
+        raw,
+        re.DOTALL,
+    )
+    assert status_match is not None
+    selected_status_match = re.search(
+        r'<option value="(?P<status>[^"]+)" selected>',
+        status_match.group("body"),
+    )
+    assert selected_status_match is not None
     limit_match = re.search(
         r'<input id="aggregate-task-list-limit-control"(?P<attrs>[^>]*)>',
         raw,
@@ -41,11 +54,15 @@ def dashboard_default_selectors() -> tuple[str, str]:
     assert offset_match is not None
     selected_offset_match = re.search(r'\bvalue="(?P<offset>[^"]+)"', offset_match.group("attrs"))
     assert selected_offset_match is not None
-    return selected_limit_match.group("limit"), selected_offset_match.group("offset")
+    return (
+        selected_status_match.group("status"),
+        selected_limit_match.group("limit"),
+        selected_offset_match.group("offset"),
+    )
 
 
-DEFAULT_LIMIT, DEFAULT_OFFSET = dashboard_default_selectors()
-DEFAULT_ROUTE = f"/v1/tasks?limit={DEFAULT_LIMIT}&offset={DEFAULT_OFFSET}"
+DEFAULT_STATUS, DEFAULT_LIMIT, DEFAULT_OFFSET = dashboard_default_selectors()
+DEFAULT_ROUTE = f"/v1/tasks?status={DEFAULT_STATUS}&limit={DEFAULT_LIMIT}&offset={DEFAULT_OFFSET}"
 APPROVED_SCRIPTS = [
     "health-readiness.js",
     "task-detail.js",
@@ -109,7 +126,6 @@ FORBIDDEN_ROUTE_MARKERS = (
     "stream",
     "search",
     "discover",
-    "status=",
     "cursor=",
     "page=",
     "sort=",
@@ -201,9 +217,22 @@ def test_story_118_2_runtime_script_allowlist_and_visible_controls_are_exact() -
     parser = parse_scripts()
     assert parser.scripts == [{"src": script, "defer": ""} for script in APPROVED_SCRIPTS]
     assert not "".join(parser.inline_script_text).strip()
-    assert parser.controls == ["input", "input", "button", "button", "button", "input", "button"]
+    assert parser.controls == [
+        "select",
+        "input",
+        "input",
+        "button",
+        "button",
+        "button",
+        "input",
+        "button",
+    ]
     controls_by_id = {control.get("id"): control for control in parser.control_attrs}
-    assert "aggregate-task-list-status-control" not in controls_by_id
+    assert controls_by_id["aggregate-task-list-status-control"] == {
+        "tag": "select",
+        "id": "aggregate-task-list-status-control",
+        "name": "aggregate-task-list-status-control",
+    }
     assert controls_by_id["aggregate-task-list-limit-control"] == {
         "tag": "input",
         "id": "aggregate-task-list-limit-control",
@@ -277,6 +306,7 @@ def test_story_118_2_runtime_route_and_method_allowlist_is_exact() -> None:
 def test_story_118_2_panel_exposes_limit_offset_runtime_metadata_targets() -> None:
     raw = DASHBOARD.read_text(encoding="utf-8")
     for element_id in (
+        "aggregate-task-list-status-control",
         "aggregate-task-list-limit-control",
         "aggregate-task-list-offset-control",
         "aggregate-task-list-load",
@@ -296,12 +326,14 @@ def test_story_118_2_panel_exposes_limit_offset_runtime_metadata_targets() -> No
         "aggregate-task-list-rows",
     ):
         assert f'id="{element_id}"' in raw
-    assert 'id="aggregate-task-list-selected-status"' not in raw
-    assert 'id="aggregate-task-list-status-control"' not in raw
-    assert "GET /v1/tasks?limit={task_list_limit}&amp;offset={task_list_offset}" in raw
+    assert 'id="aggregate-task-list-selected-status"' in raw
+    assert 'id="aggregate-task-list-status-control"' in raw
+    assert (
+        "GET /v1/tasks?status={task_status}&amp;limit={task_list_limit}&amp;offset={task_list_offset}"
+        in raw
+    )
     lowered = raw.lower()
-    assert "visible limit and offset controls" in lowered
-    assert "no status composition" in lowered
+    assert "visible status, limit, and offset controls" in lowered
     assert "no automatic traversal" in lowered
     assert "no infinite scroll" in lowered
     assert "no search" in lowered
@@ -335,6 +367,7 @@ def task_row(**overrides: object) -> dict[str, object]:
 def response_body(**overrides: object) -> dict[str, object]:
     body: dict[str, object] = {
         "route": ROUTE_PATTERN,
+        "selected_status": DEFAULT_STATUS,
         "selected_limit": int(DEFAULT_LIMIT),
         "selected_offset": int(DEFAULT_OFFSET),
         "retrieved_at": "2026-06-29T00:00:02Z",
@@ -355,7 +388,7 @@ def response_body(**overrides: object) -> dict[str, object]:
     return body
 
 
-def assert_default_limit_offset_fetch(output: RuntimeOutput) -> None:
+def assert_default_status_limit_offset_fetch(output: RuntimeOutput) -> None:
     assert output["fetchCalls"] == [
         {"route": DEFAULT_ROUTE, "method": "GET", "hasBody": False, "credentials": "omit"}
     ]
@@ -387,7 +420,7 @@ def test_story_119_2_manual_navigation_controls_are_explicit_and_bounded() -> No
     )
     assert no_click["fetchCalls"] == [
         {
-            "route": "/v1/tasks?limit=2&offset=1",
+            "route": "/v1/tasks?status=pending&limit=2&offset=1",
             "method": "GET",
             "hasBody": False,
             "credentials": "omit",
@@ -439,13 +472,13 @@ def test_story_119_2_manual_navigation_controls_are_explicit_and_bounded() -> No
     )
     assert next_click["fetchCalls"] == [
         {
-            "route": "/v1/tasks?limit=2&offset=1",
+            "route": "/v1/tasks?status=pending&limit=2&offset=1",
             "method": "GET",
             "hasBody": False,
             "credentials": "omit",
         },
         {
-            "route": "/v1/tasks?limit=2&offset=3",
+            "route": "/v1/tasks?status=pending&limit=2&offset=3",
             "method": "GET",
             "hasBody": False,
             "credentials": "omit",
@@ -494,13 +527,13 @@ def test_story_119_2_manual_navigation_controls_are_explicit_and_bounded() -> No
     )
     assert previous_click["fetchCalls"] == [
         {
-            "route": "/v1/tasks?limit=2&offset=3",
+            "route": "/v1/tasks?status=pending&limit=2&offset=3",
             "method": "GET",
             "hasBody": False,
             "credentials": "omit",
         },
         {
-            "route": "/v1/tasks?limit=2&offset=1",
+            "route": "/v1/tasks?status=pending&limit=2&offset=1",
             "method": "GET",
             "hasBody": False,
             "credentials": "omit",
@@ -554,13 +587,13 @@ def test_story_119_2_manual_navigation_controls_are_explicit_and_bounded() -> No
     )
     assert concurrent_previous_click["fetchCalls"] == [
         {
-            "route": "/v1/tasks?limit=2&offset=10",
+            "route": "/v1/tasks?status=pending&limit=2&offset=10",
             "method": "GET",
             "hasBody": False,
             "credentials": "omit",
         },
         {
-            "route": "/v1/tasks?limit=2&offset=8",
+            "route": "/v1/tasks?status=pending&limit=2&offset=8",
             "method": "GET",
             "hasBody": False,
             "credentials": "omit",
@@ -570,121 +603,82 @@ def test_story_119_2_manual_navigation_controls_are_explicit_and_bounded() -> No
 
     mutated_previous = run_runtime_case(
         {
-            "name": "manual-previous-recomputes-from-edited-visible-controls",
+            "name": "manual-previous-fails-closed-after-visible-offset-edit",
             "controlValues": {
                 "aggregate-task-list-limit-control": "2",
                 "aggregate-task-list-offset-control": "3",
             },
-            "responses": [
-                {
-                    "ok": True,
-                    "status": 200,
-                    "body": response_body(
-                        selected_limit=2,
-                        selected_offset=3,
-                        limit=2,
-                        returned_count=1,
-                        has_more=False,
-                        next_offset=None,
-                        items=[task_row(task_id="t-3")],
-                    ),
-                },
-                {
-                    "ok": True,
-                    "status": 200,
-                    "body": response_body(
-                        selected_limit=2,
-                        selected_offset=8,
-                        limit=2,
-                        returned_count=0,
-                        has_more=False,
-                        next_offset=None,
-                        items=[],
-                        display_state="empty-list",
-                        authority_state="non-authoritative",
-                    ),
-                },
-            ],
+            "response": {
+                "ok": True,
+                "status": 200,
+                "body": response_body(
+                    selected_limit=2,
+                    selected_offset=3,
+                    limit=2,
+                    returned_count=1,
+                    has_more=False,
+                    next_offset=None,
+                    items=[task_row(task_id="t-3")],
+                ),
+            },
             "mutateBeforeClicks": {"aggregate-task-list-offset-control": "10"},
             "clickTargets": ["aggregate-task-list-previous-offset"],
-            "expected": ["selected offset: 8"],
+            "expected": ["invalid"],
         }
     )
     assert mutated_previous["fetchCalls"] == [
         {
-            "route": "/v1/tasks?limit=2&offset=3",
+            "route": "/v1/tasks?status=pending&limit=2&offset=3",
             "method": "GET",
             "hasBody": False,
             "credentials": "omit",
-        },
-        {
-            "route": "/v1/tasks?limit=2&offset=8",
-            "method": "GET",
-            "hasBody": False,
-            "credentials": "omit",
-        },
+        }
     ]
-    assert mutated_previous["controlValues"]["aggregate-task-list-offset-control"] == "8"
+    rendered = " ".join(mutated_previous["texts"].values()).lower()
+    assert "non-authoritative" in rendered
+    assert "reload required before manual pagination" in rendered
+    assert "authority: authoritative" not in rendered
+    assert mutated_previous["controlValues"]["aggregate-task-list-offset-control"] == "10"
+    assert mutated_previous["disabled"]["aggregate-task-list-previous-offset"] is True
 
     mutated_previous_from_disabled = run_runtime_case(
         {
-            "name": "manual-previous-enables-after-visible-offset-edit-from-zero",
+            "name": "manual-previous-stays-closed-after-visible-offset-edit-from-zero",
             "controlValues": {
                 "aggregate-task-list-limit-control": "2",
                 "aggregate-task-list-offset-control": "0",
             },
-            "responses": [
-                {
-                    "ok": True,
-                    "status": 200,
-                    "body": response_body(
-                        selected_limit=2,
-                        selected_offset=0,
-                        limit=2,
-                        returned_count=2,
-                        has_more=True,
-                        next_offset=2,
-                        items=[task_row(task_id="t-2"), task_row(task_id="t-1")],
-                    ),
-                },
-                {
-                    "ok": True,
-                    "status": 200,
-                    "body": response_body(
-                        selected_limit=2,
-                        selected_offset=8,
-                        limit=2,
-                        returned_count=0,
-                        has_more=False,
-                        next_offset=None,
-                        items=[],
-                        display_state="empty-list",
-                        authority_state="non-authoritative",
-                    ),
-                },
-            ],
+            "response": {
+                "ok": True,
+                "status": 200,
+                "body": response_body(
+                    selected_limit=2,
+                    selected_offset=0,
+                    limit=2,
+                    returned_count=2,
+                    has_more=True,
+                    next_offset=2,
+                    items=[task_row(task_id="t-2"), task_row(task_id="t-1")],
+                ),
+            },
             "mutateBeforeClicks": {"aggregate-task-list-offset-control": "10"},
             "clickTargets": ["aggregate-task-list-previous-offset"],
-            "expected": ["selected offset: 8"],
+            "expected": ["invalid"],
         }
     )
     assert mutated_previous_from_disabled["fetchCalls"] == [
         {
-            "route": "/v1/tasks?limit=2&offset=0",
+            "route": "/v1/tasks?status=pending&limit=2&offset=0",
             "method": "GET",
             "hasBody": False,
             "credentials": "omit",
-        },
-        {
-            "route": "/v1/tasks?limit=2&offset=8",
-            "method": "GET",
-            "hasBody": False,
-            "credentials": "omit",
-        },
+        }
     ]
-    assert (
-        mutated_previous_from_disabled["controlValues"]["aggregate-task-list-offset-control"] == "8"
-    )
+    rendered = " ".join(mutated_previous_from_disabled["texts"].values()).lower()
+    assert "non-authoritative" in rendered
+    assert "reload required before manual pagination" in rendered
+    assert "authority: authoritative" not in rendered
+    assert mutated_previous_from_disabled["disabled"]["aggregate-task-list-previous-offset"] is True
 
     mutated_next = run_runtime_case(
         {
@@ -708,19 +702,52 @@ def test_story_119_2_manual_navigation_controls_are_explicit_and_bounded() -> No
             },
             "mutateBeforeClicks": {"aggregate-task-list-limit-control": "3"},
             "clickTargets": ["aggregate-task-list-next-offset"],
-            "expected": ["next_offset 3"],
+            "expected": ["invalid"],
         }
     )
     assert mutated_next["fetchCalls"] == [
         {
-            "route": "/v1/tasks?limit=2&offset=1",
+            "route": "/v1/tasks?status=pending&limit=2&offset=1",
             "method": "GET",
             "hasBody": False,
             "credentials": "omit",
         }
     ]
+    rendered = " ".join(mutated_next["texts"].values()).lower()
+    assert "non-authoritative" in rendered
+    assert "reload required before manual pagination" in rendered
+    assert "authority: authoritative" not in rendered
     assert mutated_next["disabled"]["aggregate-task-list-next-offset"] is True
-    assert mutated_next["disabled"]["aggregate-task-list-previous-offset"] is False
+    assert mutated_next["disabled"]["aggregate-task-list-previous-offset"] is True
+
+    invalid_status_edit = run_runtime_case(
+        {
+            "name": "visible-invalid-status-edit-clears-authoritative-state",
+            "response": {"ok": True, "status": 200, "body": response_body()},
+            "mutateBeforeClicks": {"aggregate-task-list-status-control": "ready"},
+            "expected": ["invalid"],
+        }
+    )
+    rendered = " ".join(invalid_status_edit["texts"].values()).lower()
+    assert_default_status_limit_offset_fetch(invalid_status_edit)
+    assert "non-authoritative" in rendered
+    assert "invalid visible aggregate task-list status, limit, or offset selector" in rendered
+    assert "authority: authoritative" not in rendered
+
+    valid_status_edit = run_runtime_case(
+        {
+            "name": "visible-status-edit-clears-authoritative-state",
+            "response": {"ok": True, "status": 200, "body": response_body()},
+            "mutateBeforeClicks": {"aggregate-task-list-status-control": "completed"},
+            "expected": ["invalid"],
+        }
+    )
+    rendered = " ".join(valid_status_edit["texts"].values()).lower()
+    assert_default_status_limit_offset_fetch(valid_status_edit)
+    assert "selected status: completed" in rendered
+    assert "non-authoritative" in rendered
+    assert "reload required before manual pagination" in rendered
+    assert "authority: authoritative" not in rendered
 
     invalid_click = run_runtime_case(
         {
@@ -734,7 +761,7 @@ def test_story_119_2_manual_navigation_controls_are_explicit_and_bounded() -> No
             "expected": ["invalid"],
         }
     )
-    assert_default_limit_offset_fetch(invalid_click)
+    assert_default_status_limit_offset_fetch(invalid_click)
     assert invalid_click["disabled"]["aggregate-task-list-next-offset"] is True
 
 
@@ -746,8 +773,9 @@ def test_story_118_2_runtime_behavior_maps_success_empty_pagination_and_failures
             "expected": [
                 "healthy",
                 "authoritative",
-                "get /v1/tasks?limit={task_list_limit}&offset={task_list_offset}",
-                "runtime route: /v1/tasks?limit=50&offset=0",
+                "get /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}",
+                "runtime route: /v1/tasks?status=pending&limit=50&offset=0",
+                "selected status: pending",
                 "selected limit: 50",
                 "selected offset: 0",
                 "first task",
@@ -776,6 +804,7 @@ def test_story_118_2_runtime_behavior_maps_success_empty_pagination_and_failures
                 ),
             },
             "expected": [
+                "selected status: pending",
                 "selected limit: 2",
                 "selected offset: 1",
                 "has_more true",
@@ -829,11 +858,11 @@ def test_story_118_2_runtime_behavior_maps_success_empty_pagination_and_failures
             "expected": ["invalid", "non-authoritative"],
         },
         {
-            "name": "unexpected-selected-status",
+            "name": "selected-status-mismatch",
             "response": {
                 "ok": True,
                 "status": 200,
-                "body": {**response_body(), "selected_status": "pending"},
+                "body": response_body(selected_status="completed"),
             },
             "expected": ["invalid", "non-authoritative"],
         },
@@ -889,14 +918,14 @@ def test_story_118_2_runtime_behavior_maps_success_empty_pagination_and_failures
         if case["name"] == "has-more":
             assert output["fetchCalls"] == [
                 {
-                    "route": "/v1/tasks?limit=2&offset=1",
+                    "route": "/v1/tasks?status=pending&limit=2&offset=1",
                     "method": "GET",
                     "hasBody": False,
                     "credentials": "omit",
                 }
             ]
         else:
-            assert_default_limit_offset_fetch(output)
+            assert_default_status_limit_offset_fetch(output)
         for expected in case["expected"]:
             assert expected in rendered, (case["name"], expected, rendered)
         if case["name"] not in {"healthy", "has-more"}:
@@ -905,6 +934,31 @@ def test_story_118_2_runtime_behavior_maps_success_empty_pagination_and_failures
 
 def test_story_118_2_runtime_rejects_invalid_or_missing_visible_controls_before_fetch() -> None:
     invalid_cases: list[RuntimeCase] = [
+        {
+            "name": "missing-status",
+            "missingElements": ["aggregate-task-list-status-control"],
+            "expected": ["invalid", "unavailable"],
+        },
+        {
+            "name": "hidden-status",
+            "controlTypes": {"aggregate-task-list-status-control": "hidden"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "empty-status",
+            "controlValues": {"aggregate-task-list-status-control": ""},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "unknown-status",
+            "controlValues": {"aggregate-task-list-status-control": "ready"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "encoded-status",
+            "controlValues": {"aggregate-task-list-status-control": "plan%5Fready"},
+            "expected": ["invalid"],
+        },
         {
             "name": "missing-limit",
             "missingElements": ["aggregate-task-list-limit-control"],
@@ -1019,7 +1073,35 @@ def test_story_118_2_runtime_rejects_invalid_or_missing_visible_controls_before_
             assert expected in rendered, (case["name"], expected, rendered)
 
 
-def test_story_118_2_runtime_supports_only_allowed_visible_limits_and_offsets() -> None:
+def test_story_121_2_runtime_supports_only_allowed_visible_statuses_limits_and_offsets() -> None:
+    for status in ALLOWED_ROW_STATUSES:
+        output = run_runtime_case(
+            {
+                "name": f"status-{status}",
+                "controlValues": {"aggregate-task-list-status-control": status},
+                "response": {
+                    "ok": True,
+                    "status": 200,
+                    "body": response_body(
+                        selected_status=status,
+                        returned_count=0,
+                        items=[],
+                        display_state="empty-list",
+                        authority_state="non-authoritative",
+                    ),
+                },
+                "expected": [status],
+            }
+        )
+        assert output["fetchCalls"] == [
+            {
+                "route": f"/v1/tasks?status={status}&limit={DEFAULT_LIMIT}&offset={DEFAULT_OFFSET}",
+                "method": "GET",
+                "hasBody": False,
+                "credentials": "omit",
+            }
+        ]
+
     for limit in ("1", "2", "50"):
         output = run_runtime_case(
             {
@@ -1042,7 +1124,7 @@ def test_story_118_2_runtime_supports_only_allowed_visible_limits_and_offsets() 
         )
         assert output["fetchCalls"] == [
             {
-                "route": f"/v1/tasks?limit={limit}&offset={DEFAULT_OFFSET}",
+                "route": f"/v1/tasks?status={DEFAULT_STATUS}&limit={limit}&offset={DEFAULT_OFFSET}",
                 "method": "GET",
                 "hasBody": False,
                 "credentials": "omit",
@@ -1070,7 +1152,7 @@ def test_story_118_2_runtime_supports_only_allowed_visible_limits_and_offsets() 
         )
         assert output["fetchCalls"] == [
             {
-                "route": f"/v1/tasks?limit={DEFAULT_LIMIT}&offset={offset}",
+                "route": f"/v1/tasks?status={DEFAULT_STATUS}&limit={DEFAULT_LIMIT}&offset={offset}",
                 "method": "GET",
                 "hasBody": False,
                 "credentials": "omit",
@@ -1097,7 +1179,7 @@ def test_story_118_2_runtime_behavior_runs_when_document_already_loaded() -> Non
         ready_state="interactive",
     )
     rendered = " ".join(output["texts"].values()).lower()
-    assert_default_limit_offset_fetch(output)
+    assert_default_status_limit_offset_fetch(output)
     assert "empty-list" in rendered
 
 
@@ -1115,10 +1197,12 @@ def run_runtime_case(case: RuntimeCase, *, ready_state: str = "loading") -> Runt
         const listeners = new Map();
         const missing = new Set(testCase.missingElements || []);
         const controlValues = Object.assign({{
+          'aggregate-task-list-status-control': {json.dumps(DEFAULT_STATUS)},
           'aggregate-task-list-limit-control': {json.dumps(DEFAULT_LIMIT)},
           'aggregate-task-list-offset-control': {json.dumps(DEFAULT_OFFSET)},
         }}, testCase.controlValues || {{}});
         const controlTypes = Object.assign({{
+          'aggregate-task-list-status-control': 'select-one',
           'aggregate-task-list-limit-control': 'number',
           'aggregate-task-list-offset-control': 'number',
         }}, testCase.controlTypes || {{}});

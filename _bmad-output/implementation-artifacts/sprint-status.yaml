@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-06-29T14:35:13Z"
+# last_updated: "2026-06-29T17:13:33Z"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-29T14:35:13Z"
-current_phase: 41  # Phase 41 CLOSED — Epic 120 exact status+limit+offset API-local boundary closed after implementation commit 4953b40149cc71fd927ce30dcc3d14cb98e985ae and GitHub Actions ci run 28379470504 success
+last_updated: "2026-06-29T17:08:09Z"
+current_phase: 42  # Phase 42 OPEN — Epic 121 exact dashboard aggregate-task-list status+limit+offset browser boundary; Story 121.1 planning consensus complete and Story 121.2 implementation authorized/in progress
 
 development_status:
   # =========================================================================
@@ -1013,10 +1013,67 @@ development_status:
   120-2-task-status-limit-offset-api-local-runtime-boundary: done  # Tests-first API-route-local implementation for exact canonical status+limit+offset composition complete; final code-review APPROVE/CLEAR and UltraQA PASS; remote CI evidence recorded by Story 120.3
   120-3-phase-41-epic-120-final-closure: done  # Docs/status final closure after implementation commit 4953b40149cc71fd927ce30dcc3d14cb98e985ae and GitHub Actions ci run 28379470504 success
 
+  # =========================================================================
+  # Epic 121: Task status + limit + offset browser consumption planning
+  # =========================================================================
+  epic-121: in-progress  # Phase 42 in progress after Story 121.2 local implementation/review/QA passed; Story 121.3 final closure awaiting commit/push and green CI evidence
+  121-1-task-status-limit-offset-browser-consumption-planning: done  # Phase 42 docs/status-only planning selected exact canonical dashboard aggregate-task-list GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}; native Architect APPROVE/CLEAR followed by native Critic APPROVE/CLEAR consensus recorded; implementation deferred to exact Story 121.2 boundary
+  121-2-task-status-limit-offset-browser-runtime-boundary: done  # Dashboard aggregate-task-list browser/runtime implementation complete after tests-first implementation, code-review APPROVE, architect CLEAR, strict mypy, dashboard/non-integration pytest, ruff, and diff-check evidence; visible status+limit+offset controls only, bodyless GET, credentials omit, strict validation, fail-closed states
+  121-3-phase-42-epic-121-final-closure: in-progress  # Final closure in progress: commit/push and green CI evidence pending after Story 121.2 local review/QA completion
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+  - date: "2026-06-29"
+    event: story-121-2-task-status-limit-offset-browser-runtime-boundary-local-complete
+    from: in-progress
+    to: done
+    epic: epic-121
+    story: 121-2-task-status-limit-offset-browser-runtime-boundary
+    source: autopilot-story-121-2-tests-review-qa
+    reason: >-
+      Story 121.2 completed tests-first dashboard aggregate-task-list browser
+      consumption of exact GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}
+      from visible status, limit, and offset controls only. The browser GET is
+      bodyless with credentials omit, strict response validation, selector-edit
+      fail-closed invalidation, finite status/limit/offset domains, code-review
+      APPROVE, architect CLEAR, strict mypy success, dashboard/non-integration
+      pytest success, ruff success, and diff-check success. Story 121.3 is now
+      in progress for commit, push, and green CI evidence.
+  - date: "2026-06-29"
+    event: story-121-1-task-status-limit-offset-browser-consumption-planning-complete
+    from: in-progress
+    to: done
+    epic: epic-121
+    story: 121-1-task-status-limit-offset-browser-consumption-planning
+    source: autopilot-story-121-1-ralplan-consensus
+    reason: >-
+      Story 121.1 completes Phase 42 docs/status-only planning after native
+      Architect APPROVE/CLEAR followed by native Critic APPROVE/CLEAR. The exact
+      future implementation boundary is dashboard aggregate-task-list browser
+      consumption of GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}
+      from visible status, limit, and offset controls only, with bodyless GET,
+      credentials omit, strict response validation, fail-closed states, no
+      automatic traversal/search/sort/hidden selectors, and no backend/API,
+      service/MCP/dependency/CI/deployment, credential, or production expansion.
+  - date: "2026-06-29"
+    event: phase-42-epic-121-opened
+    from: backlog
+    to: in-progress
+    epic: epic-121
+    story: 121-1-task-status-limit-offset-browser-consumption-planning
+    source: autopilot-story-121-1-route-selection
+    reason: >-
+      Phase 42 opens as docs/status-only planning. The selected safest next
+      dashboard aggregate-task-list boundary is exact future GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}
+      from visible status, limit, and offset controls only. Runtime/browser/test
+      implementation, automatic traversal, infinite scroll, sorting, free-text
+      search, arbitrary discovery, hidden selectors, row-driven traversal,
+      backend/API changes, services/MCP/dependencies/CI/deployment expansion,
+      production credentials, and production operations remain unauthorized
+      pending Story 121.2 after Architect then Critic approval.
   - date: "2026-06-29"
     event: story-120-3-phase-41-epic-120-final-closure-complete
     from: in-progress

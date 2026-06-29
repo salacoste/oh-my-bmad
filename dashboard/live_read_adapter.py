@@ -65,6 +65,7 @@ Identifier = Literal[
     "replay_id",
     "task_status",
     "task_list_limit",
+    "task_list_offset",
 ]
 PanelFamily = Literal[
     "task-detail",
@@ -374,6 +375,25 @@ APPROVED_READ_CONTRACTS: tuple[ReadContract, ...] = (
         ),
     ),
     ReadContract(
+        source_category="aggregate",
+        route_pattern="/v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}",
+        route_status="approved",
+        timestamp_policy="retrieved-at-required",
+        freshness_policy="fresh-or-stale-required",
+        required_identifiers=("task_status", "task_list_limit", "task_list_offset"),
+        allowed_states=frozenset(
+            {
+                "healthy",
+                "empty-list",
+                "stale",
+                "invalid",
+                "unauthorized",
+                "backend-unavailable",
+                "unavailable",
+            }
+        ),
+    ),
+    ReadContract(
         source_category="session",
         route_pattern="/v1/sessions",
         route_status="approved",
@@ -414,7 +434,7 @@ APPROVED_READ_CONTRACTS: tuple[ReadContract, ...] = (
 
 UNAVAILABLE_READ_CONTRACTS: tuple[ReadContract, ...] = ()
 
-EXCLUDED_ROUTE_PATTERNS = frozenset()
+EXCLUDED_ROUTE_PATTERNS: frozenset[str] = frozenset()
 STORY_99_1_NEEDS_SEPARATE_CONTRACT_ROUTE_PATTERNS: frozenset[str] = frozenset()
 STORY_99_1_FORBIDDEN_RENDERABLE_ROUTE_PATTERNS = frozenset(
     STORY_99_1_NEEDS_SEPARATE_CONTRACT_ROUTE_PATTERNS | EXCLUDED_ROUTE_PATTERNS
@@ -544,12 +564,13 @@ STORY_112_2_PANEL_TITLES: Mapping[PanelFamily, str] = MappingProxyType(
 
 # Aggregate task-list approved-route inventory is cumulative: earlier approved
 # route contracts stay as inert fixture/adapter evidence so historical dashboard
-# contracts remain independently green. Story 118.2 runtime consumption below uses
-# only the visible limit+offset controls and exact canonical limit+offset fetch.
+# contracts remain independently green. Story 121.2 runtime consumption below uses
+# only the visible status+limit+offset controls and exact canonical fetch.
 STORY_109_2_ROUTE_PATTERNS = (
     "/v1/tasks",
     "/v1/tasks?status={task_status}&limit={task_list_limit}",
     "/v1/tasks?limit={task_list_limit}&offset={task_list_offset}",
+    "/v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}",
 )
 STORY_109_2_ROUTE_INPUT_IDENTIFIERS: Mapping[str, tuple[Identifier, ...]] = MappingProxyType(
     {
@@ -559,6 +580,11 @@ STORY_109_2_ROUTE_INPUT_IDENTIFIERS: Mapping[str, tuple[Identifier, ...]] = Mapp
             "task_list_limit",
         ),
         "/v1/tasks?limit={task_list_limit}&offset={task_list_offset}": (
+            "task_list_limit",
+            "task_list_offset",
+        ),
+        "/v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}": (
+            "task_status",
             "task_list_limit",
             "task_list_offset",
         ),
@@ -577,6 +603,11 @@ STORY_109_2_ROW_DISPLAY_IDENTIFIERS: Mapping[str, tuple[Identifier, ...]] = Mapp
             "event_id",
             "trace_id",
         ),
+        "/v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}": (
+            "task_id",
+            "event_id",
+            "trace_id",
+        ),
     }
 )
 STORY_109_2_PANEL_ROUTES: Mapping[PanelFamily, tuple[str, ...]] = MappingProxyType(
@@ -585,6 +616,7 @@ STORY_109_2_PANEL_ROUTES: Mapping[PanelFamily, tuple[str, ...]] = MappingProxyTy
             "/v1/tasks",
             "/v1/tasks?status={task_status}&limit={task_list_limit}",
             "/v1/tasks?limit={task_list_limit}&offset={task_list_offset}",
+            "/v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}",
         )
     }
 )
