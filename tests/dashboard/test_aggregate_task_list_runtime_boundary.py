@@ -378,7 +378,12 @@ def test_story_118_2_runtime_behavior_maps_success_empty_pagination_and_failures
                     items=[task_row(task_id="t-2"), task_row(task_id="t-1")],
                 ),
             },
-            "expected": ["selected limit: 2", "selected offset: 1", "has_more true", "next_offset 3"],
+            "expected": [
+                "selected limit: 2",
+                "selected offset: 1",
+                "has_more true",
+                "next_offset 3",
+            ],
         },
         {
             "name": "empty",
@@ -409,7 +414,11 @@ def test_story_118_2_runtime_behavior_maps_success_empty_pagination_and_failures
         },
         {
             "name": "healthy-non-authoritative",
-            "response": {"ok": True, "status": 200, "body": response_body(authority_state="non-authoritative")},
+            "response": {
+                "ok": True,
+                "status": 200,
+                "body": response_body(authority_state="non-authoritative"),
+            },
             "expected": ["invalid", "non-authoritative"],
         },
         {
@@ -433,12 +442,20 @@ def test_story_118_2_runtime_behavior_maps_success_empty_pagination_and_failures
         },
         {
             "name": "bad-next-offset",
-            "response": {"ok": True, "status": 200, "body": response_body(has_more=True, next_offset=1)},
+            "response": {
+                "ok": True,
+                "status": 200,
+                "body": response_body(has_more=True, next_offset=1),
+            },
             "expected": ["invalid", "non-authoritative"],
         },
         {
             "name": "row-status-not-finite",
-            "response": {"ok": True, "status": 200, "body": response_body(items=[task_row(status="ready")])},
+            "response": {
+                "ok": True,
+                "status": 200,
+                "body": response_body(items=[task_row(status="ready")]),
+            },
             "expected": ["invalid", "non-authoritative"],
         },
         {
@@ -474,7 +491,12 @@ def test_story_118_2_runtime_behavior_maps_success_empty_pagination_and_failures
         rendered = " ".join(output["texts"].values()).lower()
         if case["name"] == "has-more":
             assert output["fetchCalls"] == [
-                {"route": "/v1/tasks?limit=2&offset=1", "method": "GET", "hasBody": False, "credentials": "omit"}
+                {
+                    "route": "/v1/tasks?limit=2&offset=1",
+                    "method": "GET",
+                    "hasBody": False,
+                    "credentials": "omit",
+                }
             ]
         else:
             assert_default_limit_offset_fetch(output)
@@ -486,27 +508,111 @@ def test_story_118_2_runtime_behavior_maps_success_empty_pagination_and_failures
 
 def test_story_118_2_runtime_rejects_invalid_or_missing_visible_controls_before_fetch() -> None:
     invalid_cases: list[RuntimeCase] = [
-        {"name": "missing-limit", "missingElements": ["aggregate-task-list-limit-control"], "expected": ["invalid", "unavailable"]},
-        {"name": "missing-offset", "missingElements": ["aggregate-task-list-offset-control"], "expected": ["invalid", "unavailable"]},
-        {"name": "hidden-limit", "controlTypes": {"aggregate-task-list-limit-control": "hidden"}, "expected": ["invalid"]},
-        {"name": "hidden-offset", "controlTypes": {"aggregate-task-list-offset-control": "hidden"}, "expected": ["invalid"]},
-        {"name": "empty-limit", "controlValues": {"aggregate-task-list-limit-control": ""}, "expected": ["invalid"]},
-        {"name": "zero-limit", "controlValues": {"aggregate-task-list-limit-control": "0"}, "expected": ["invalid"]},
-        {"name": "negative-limit", "controlValues": {"aggregate-task-list-limit-control": "-1"}, "expected": ["invalid"]},
-        {"name": "fractional-limit", "controlValues": {"aggregate-task-list-limit-control": "1.5"}, "expected": ["invalid"]},
-        {"name": "noninteger-limit", "controlValues": {"aggregate-task-list-limit-control": "two"}, "expected": ["invalid"]},
-        {"name": "out-of-range-limit", "controlValues": {"aggregate-task-list-limit-control": "51"}, "expected": ["invalid"]},
-        {"name": "unicode-digit-limit", "controlValues": {"aggregate-task-list-limit-control": "２"}, "expected": ["invalid"]},
-        {"name": "encoded-digit-limit", "controlValues": {"aggregate-task-list-limit-control": "%32"}, "expected": ["invalid"]},
-        {"name": "empty-offset", "controlValues": {"aggregate-task-list-offset-control": ""}, "expected": ["invalid"]},
-        {"name": "negative-offset", "controlValues": {"aggregate-task-list-offset-control": "-1"}, "expected": ["invalid"]},
-        {"name": "fractional-offset", "controlValues": {"aggregate-task-list-offset-control": "1.5"}, "expected": ["invalid"]},
-        {"name": "noninteger-offset", "controlValues": {"aggregate-task-list-offset-control": "two"}, "expected": ["invalid"]},
-        {"name": "unicode-digit-offset", "controlValues": {"aggregate-task-list-offset-control": "２"}, "expected": ["invalid"]},
-        {"name": "encoded-digit-offset", "controlValues": {"aggregate-task-list-offset-control": "%31"}, "expected": ["invalid"]},
-        {"name": "leading-zero-offset", "controlValues": {"aggregate-task-list-offset-control": "01"}, "expected": ["invalid"]},
-        {"name": "out-of-range-offset", "controlValues": {"aggregate-task-list-offset-control": "2147483648"}, "expected": ["invalid"]},
-        {"name": "oversized-offset-spelling", "controlValues": {"aggregate-task-list-offset-control": "99999999999"}, "expected": ["invalid"]},
+        {
+            "name": "missing-limit",
+            "missingElements": ["aggregate-task-list-limit-control"],
+            "expected": ["invalid", "unavailable"],
+        },
+        {
+            "name": "missing-offset",
+            "missingElements": ["aggregate-task-list-offset-control"],
+            "expected": ["invalid", "unavailable"],
+        },
+        {
+            "name": "hidden-limit",
+            "controlTypes": {"aggregate-task-list-limit-control": "hidden"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "hidden-offset",
+            "controlTypes": {"aggregate-task-list-offset-control": "hidden"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "empty-limit",
+            "controlValues": {"aggregate-task-list-limit-control": ""},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "zero-limit",
+            "controlValues": {"aggregate-task-list-limit-control": "0"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "negative-limit",
+            "controlValues": {"aggregate-task-list-limit-control": "-1"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "fractional-limit",
+            "controlValues": {"aggregate-task-list-limit-control": "1.5"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "noninteger-limit",
+            "controlValues": {"aggregate-task-list-limit-control": "two"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "out-of-range-limit",
+            "controlValues": {"aggregate-task-list-limit-control": "51"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "unicode-digit-limit",
+            "controlValues": {"aggregate-task-list-limit-control": "２"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "encoded-digit-limit",
+            "controlValues": {"aggregate-task-list-limit-control": "%32"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "empty-offset",
+            "controlValues": {"aggregate-task-list-offset-control": ""},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "negative-offset",
+            "controlValues": {"aggregate-task-list-offset-control": "-1"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "fractional-offset",
+            "controlValues": {"aggregate-task-list-offset-control": "1.5"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "noninteger-offset",
+            "controlValues": {"aggregate-task-list-offset-control": "two"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "unicode-digit-offset",
+            "controlValues": {"aggregate-task-list-offset-control": "２"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "encoded-digit-offset",
+            "controlValues": {"aggregate-task-list-offset-control": "%31"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "leading-zero-offset",
+            "controlValues": {"aggregate-task-list-offset-control": "01"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "out-of-range-offset",
+            "controlValues": {"aggregate-task-list-offset-control": "2147483648"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "oversized-offset-spelling",
+            "controlValues": {"aggregate-task-list-offset-control": "99999999999"},
+            "expected": ["invalid"],
+        },
     ]
     for case in invalid_cases:
         output = run_runtime_case(case)
@@ -538,7 +644,12 @@ def test_story_118_2_runtime_supports_only_allowed_visible_limits_and_offsets() 
             }
         )
         assert output["fetchCalls"] == [
-            {"route": f"/v1/tasks?limit={limit}&offset={DEFAULT_OFFSET}", "method": "GET", "hasBody": False, "credentials": "omit"}
+            {
+                "route": f"/v1/tasks?limit={limit}&offset={DEFAULT_OFFSET}",
+                "method": "GET",
+                "hasBody": False,
+                "credentials": "omit",
+            }
         ]
 
     for offset in ("0", "1", str(MAX_OFFSET)):
@@ -561,7 +672,12 @@ def test_story_118_2_runtime_supports_only_allowed_visible_limits_and_offsets() 
             }
         )
         assert output["fetchCalls"] == [
-            {"route": f"/v1/tasks?limit={DEFAULT_LIMIT}&offset={offset}", "method": "GET", "hasBody": False, "credentials": "omit"}
+            {
+                "route": f"/v1/tasks?limit={DEFAULT_LIMIT}&offset={offset}",
+                "method": "GET",
+                "hasBody": False,
+                "credentials": "omit",
+            }
         ]
 
 
