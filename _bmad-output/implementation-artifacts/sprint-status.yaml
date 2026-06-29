@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-06-29T02:22:30+03:00"
+# last_updated: "2026-06-29T03:18:00+03:00"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-29T02:22:30+03:00"
-current_phase: 38  # Phase 38 CLOSED — Epic 117 done after Story 117.1 planning consensus, Story 117.2 exact canonical GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset} API-local implementation, code-review/UltraQA, push, CI repair, final CI head 0c9ce797bd74e78f23fcd63cc873226b3ebe3be7, GitHub Actions ci run 28339322034 success, and nightly run 28339322019 success
+last_updated: "2026-06-29T03:18:00+03:00"
+current_phase: 39  # Phase 39 OPEN — Epic 118 in progress after Story 118.1 docs/status-only consensus for dashboard aggregate-task-list browser consumption of canonical GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}; Story 118.2 browser/runtime implementation remains backlog/not started
 
 development_status:
   # =========================================================================
@@ -988,10 +988,53 @@ development_status:
   117-2-task-list-pagination-runtime-boundary: done  # tests-first API-local implementation for exact canonical GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}; code-review APPROVE/CLEAR; UltraQA PASS; implementation commit ba3e7fcac077458f4d72029adf7a5afda86bb74b, CI repair/final head 0c9ce797bd74e78f23fcd63cc873226b3ebe3be7, remote ci run 28339322034 success; no browser pagination controls or broader selector composition
   117-3-phase-38-epic-117-final-closure: done  # docs/status final closure after Story 117.2 review/QA/push/CI-repair evidence; final CI head 0c9ce797bd74e78f23fcd63cc873226b3ebe3be7; GitHub Actions ci run 28339322034 and nightly run 28339322019 succeeded
 
+  # =========================================================================
+  # Epic 118: Task list pagination browser consumption planning
+  # =========================================================================
+  epic-118: in-progress  # Phase 39 open; Story 118.1 planning consensus done for dashboard aggregate-task-list browser consumption of canonical GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}; Story 118.2 browser/runtime implementation remains backlog/not started
+  118-1-task-list-pagination-browser-consumption-planning: done  # Phase 39 PRD/architecture/epics/status opening; selects future dashboard aggregate-task-list consumption/rendering of exact canonical GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}; native Architect APPROVE/CLEAR followed by native Critic APPROVE/CLEAR consensus recorded; runtime/browser/API/test implementation deferred to Story 118.2
+  118-2-task-list-pagination-browser-runtime-boundary: backlog  # selected future dashboard/browser candidate from Story 118.1 consensus; implementation remains deferred/not started until a separately approved Story 118.2 begins; no automatic traversal/sort/search/status composition/mutation/broad wiring
+  118-3-phase-39-epic-118-final-closure: backlog  # future docs/status final closure after Story 118.2 review/QA/push/CI evidence, if implemented
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-29"
+    event: story-118-1-task-list-pagination-browser-consumption-planning-complete
+    from: in-progress
+    to: done
+    epic: epic-118
+    story: 118-1-task-list-pagination-browser-consumption-planning
+    source: autopilot-story-118-1-planning
+    reason: >
+      Story 118.1 completes Phase 39 docs/status-only route-selection and
+      UX-boundary consensus for dashboard aggregate-task-list browser consumption
+      of canonical GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}.
+      Native Architect agent 019f10af-eabf-7cf0-9d2f-f889cab07895 returned
+      APPROVE/CLEAR first; native Critic agent 019f10b1-ac3c-7f03-8606-bbfe2593507c
+      returned APPROVE/CLEAR after the Architect gate. Runtime/browser controls,
+      backend/API route changes, tests, automatic traversal, sorting, free-text
+      search, status+offset/status+limit+offset composition, hidden selectors,
+      broad dashboard wiring, services/MCP/dependencies, production credentials,
+      and production operations remain deferred/fail-closed for Story 118.1.
+  - date: "2026-06-29"
+    event: phase-39-epic-118-opened
+    from: backlog
+    to: in-progress
+    epic: epic-118
+    story: 118-1-task-list-pagination-browser-consumption-planning
+    source: autopilot-story-118-1-planning
+    reason: >
+      Phase 39 opens as docs/status-only planning for dashboard aggregate-task-list
+      browser consumption of the completed API-local pagination route. The exact
+      proposed future candidate is canonical GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}
+      from visible aggregate-task-list selectors only. Runtime/browser controls,
+      backend/API route changes, tests, automatic traversal, sorting, free-text
+      search, status+offset/status+limit+offset composition, hidden selectors,
+      broad dashboard wiring, services/MCP/dependencies, production credentials,
+      and production operations remain deferred/fail-closed pending sequential
+      Architect then Critic consensus.
   - date: "2026-06-29"
     event: story-117-3-phase-38-epic-117-final-closure-complete
     from: backlog
