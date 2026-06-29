@@ -25,7 +25,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Annotated, Literal, cast
+from typing import Annotated, Literal
 from urllib.parse import quote
 
 import cachetools
@@ -101,7 +101,8 @@ _TASK_ID_PATTERN = r"^t-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[
 # Story 109.2: fixed first page for GET /v1/tasks. Story 113.2 adds only
 # one finite status selector. Story 115.2 composes exactly status then limit
 # in canonical query order. Story 117.2 adds exactly canonical limit then
-# offset pagination, without status composition or browser traversal.
+# offset pagination. Story 120.2 adds only canonical status then limit then
+# offset API-local composition, without browser traversal.
 _TASK_LIST_LIMIT = 50
 _TASK_LIST_OFFSET_MAX = 2_147_483_647
 _TASK_STATUS_FILTER_ROUTE: Literal["GET /v1/tasks?status={task_status}"] = (
@@ -116,6 +117,9 @@ _TASK_STATUS_LIMIT_ROUTE: Literal["GET /v1/tasks?status={task_status}&limit={tas
 _TASK_LIMIT_OFFSET_ROUTE: Literal[
     "GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}"
 ] = "GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}"
+_TASK_STATUS_LIMIT_OFFSET_ROUTE: Literal[
+    "GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}"
+] = "GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}"
 _TASK_STATUS_FILTER_VALUES: tuple[TaskStatusFilter, ...] = (
     "pending",
     "planning",
@@ -143,6 +147,9 @@ _TASKS_STATUS_RAW_RE = re.compile(rb"^status=([A-Za-z_]+)$")
 _TASKS_LIMIT_RAW_RE = re.compile(rb"^limit=([0-9]{1,2})$")
 _TASKS_STATUS_LIMIT_RAW_RE = re.compile(rb"^status=([A-Za-z_]+)&limit=([0-9]{1,2})$")
 _TASKS_LIMIT_OFFSET_RAW_RE = re.compile(rb"^limit=([0-9]{1,2})&offset=([0-9]{1,10})$")
+_TASKS_STATUS_LIMIT_OFFSET_RAW_RE = re.compile(
+    rb"^status=([A-Za-z_]+)&limit=([0-9]{1,2})&offset=([0-9]{1,10})$"
+)
 
 
 def _has_empty_query_segment(raw_query: bytes) -> bool:
@@ -154,13 +161,63 @@ def _has_empty_query_segment(raw_query: bytes) -> bool:
 
 
 def _matches_tasks_raw_query_contract(raw_query: bytes) -> bool:
-    """Return True only for exact ASCII raw spellings approved for GET /v1/tasks."""
+    """Return True only for exact ASCII raw spellings approved for GET /v1/tasks.
+
+    This byte-level gate is the intentional route contract: each approved
+    selector composition must be explicitly registered here and then handled by
+    the query-key branch below. It prevents framework normalization from
+    broadening spelling, order, encoded-key, repeated-key, or empty-segment
+    behavior as new bounded selector combinations are added.
+    """
     return bool(
         _TASKS_STATUS_RAW_RE.fullmatch(raw_query)
         or _TASKS_LIMIT_RAW_RE.fullmatch(raw_query)
         or _TASKS_STATUS_LIMIT_RAW_RE.fullmatch(raw_query)
         or _TASKS_LIMIT_OFFSET_RAW_RE.fullmatch(raw_query)
+        or _TASKS_STATUS_LIMIT_OFFSET_RAW_RE.fullmatch(raw_query)
     )
+
+
+def _parse_task_status_selector(value: str | None) -> TaskStatusFilter:
+    """Return an approved task status selector or fail closed."""
+    if value not in _ALLOWED_TASK_STATUS_FILTERS:
+        raise HTTPException(
+            status_code=400,
+            detail="GET /v1/tasks status selector is not allowed",
+        )
+    return value
+
+
+def _parse_task_limit_selector(value: str | None) -> int:
+    """Return an approved task-list limit selector or fail closed."""
+    if value is None or not _is_ascii_decimal(value):
+        raise HTTPException(
+            status_code=400,
+            detail="GET /v1/tasks limit selector must be an integer from 1 through 50",
+        )
+    selected_limit = int(value)
+    if not 1 <= selected_limit <= _TASK_LIST_LIMIT:
+        raise HTTPException(
+            status_code=400,
+            detail="GET /v1/tasks limit selector must be an integer from 1 through 50",
+        )
+    return selected_limit
+
+
+def _parse_task_offset_selector(value: str | None) -> int:
+    """Return an approved task-list offset selector or fail closed."""
+    if value is None or not _is_ascii_decimal(value):
+        raise HTTPException(
+            status_code=400,
+            detail=("GET /v1/tasks offset selector must be an integer from 0 through 2147483647"),
+        )
+    selected_offset = int(value)
+    if not 0 <= selected_offset <= _TASK_LIST_OFFSET_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=("GET /v1/tasks offset selector must be an integer from 0 through 2147483647"),
+        )
+    return selected_offset
 
 
 def _task_list_pagination_metadata(
@@ -505,6 +562,39 @@ class TaskLimitOffsetSelectedListResponse(BaseModel):
     items: list[TaskSummaryOut]
 
 
+class TaskStatusLimitOffsetSelectedListResponse(BaseModel):
+    """200 OK response body for canonical GET /v1/tasks?status=...&limit=...&offset=....
+
+    Story 120.2 composes exactly the approved finite status selector, bounded
+    limit selector, and bounded offset selector in canonical order. The route
+    remains API-local: no dashboard/browser consumption, status+offset without
+    limit, sorting, search, hidden discovery, adjacent traversal, or mutation
+    affordance is introduced.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    route: Literal[
+        "GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}"
+    ]
+    selected_status: TaskStatusFilter
+    selected_limit: int = Field(ge=1, le=_TASK_LIST_LIMIT)
+    selected_offset: int = Field(ge=0, le=_TASK_LIST_OFFSET_MAX)
+    retrieved_at: datetime
+    freshness_state: Literal["fresh"]
+    display_state: Literal["healthy", "empty-list"]
+    authority_state: Literal["authoritative", "non-authoritative"]
+    provenance: Literal["registry-state task summary list"]
+    request_id: str
+    trace_id: str | None
+    correlation_id: str
+    limit: int = Field(ge=1, le=_TASK_LIST_LIMIT)
+    returned_count: int
+    has_more: bool
+    next_offset: int | None = Field(default=None, ge=0, le=_TASK_LIST_OFFSET_MAX)
+    items: list[TaskSummaryOut]
+
+
 class SessionSummaryOut(BaseModel):
     """One bounded session summary row for GET /v1/sessions.
 
@@ -578,6 +668,7 @@ TaskListReadResponse = (
     | TaskLimitSelectedListResponse
     | TaskStatusLimitSelectedListResponse
     | TaskLimitOffsetSelectedListResponse
+    | TaskStatusLimitOffsetSelectedListResponse
 )
 
 
@@ -643,6 +734,7 @@ async def get_tasks(
     | TaskLimitSelectedListResponse
     | TaskStatusLimitSelectedListResponse
     | TaskLimitOffsetSelectedListResponse
+    | TaskStatusLimitOffsetSelectedListResponse
 ):
     """GET /v1/tasks — bounded aggregate task summary list.
 
@@ -653,9 +745,10 @@ async def get_tasks(
     where limit is an integer from 1 through 50. Story 115.2 adds only the
     canonical-order composition ``GET /v1/tasks?status=...&limit=...``.
     Story 117.2 adds only canonical ``GET /v1/tasks?limit=...&offset=...``.
+    Story 120.2 adds only canonical ``GET /v1/tasks?status=...&limit=...&offset=...``.
     Repeated keys, GET body, reversed query order, hidden pagination token,
-    status+offset/status+limit+offset composition, task-detail/event/session/
-    digest traversal, search, sorting, or mutation control are not accepted.
+    status+offset without limit, task-detail/event/session/digest traversal,
+    search, sorting, or mutation control are not accepted.
     """
     if await request.body():
         raise HTTPException(
@@ -663,7 +756,7 @@ async def get_tasks(
             detail="GET /v1/tasks does not accept a request body",
         )
 
-    selected_status: str | None = None
+    selected_status: TaskStatusFilter | None = None
     selected_limit: int | None = None
     selected_offset: int | None = None
     effective_limit = _TASK_LIST_LIMIT
@@ -681,79 +774,30 @@ async def get_tasks(
         query_pairs = list(request.query_params.multi_items())
         query_keys = [key for key, _value in query_pairs]
         if query_keys == ["status"]:
-            selected_status = status
-            if selected_status not in _ALLOWED_TASK_STATUS_FILTERS:
-                raise HTTPException(
-                    status_code=400,
-                    detail="GET /v1/tasks status selector is not allowed",
-                )
+            selected_status = _parse_task_status_selector(status)
         elif query_keys == ["limit"]:
-            if limit is None or not _is_ascii_decimal(limit):
-                raise HTTPException(
-                    status_code=400,
-                    detail="GET /v1/tasks limit selector must be an integer from 1 through 50",
-                )
-            selected_limit = int(limit)
-            if not 1 <= selected_limit <= _TASK_LIST_LIMIT:
-                raise HTTPException(
-                    status_code=400,
-                    detail="GET /v1/tasks limit selector must be an integer from 1 through 50",
-                )
+            selected_limit = _parse_task_limit_selector(limit)
             effective_limit = selected_limit
         elif query_keys == ["status", "limit"]:
-            selected_status = status
-            if selected_status not in _ALLOWED_TASK_STATUS_FILTERS:
-                raise HTTPException(
-                    status_code=400,
-                    detail="GET /v1/tasks status selector is not allowed",
-                )
-            if limit is None or not _is_ascii_decimal(limit):
-                raise HTTPException(
-                    status_code=400,
-                    detail="GET /v1/tasks limit selector must be an integer from 1 through 50",
-                )
-            selected_limit = int(limit)
-            if not 1 <= selected_limit <= _TASK_LIST_LIMIT:
-                raise HTTPException(
-                    status_code=400,
-                    detail="GET /v1/tasks limit selector must be an integer from 1 through 50",
-                )
+            selected_status = _parse_task_status_selector(status)
+            selected_limit = _parse_task_limit_selector(limit)
+            effective_limit = selected_limit
+        elif query_keys == ["status", "limit", "offset"]:
+            selected_status = _parse_task_status_selector(status)
+            selected_limit = _parse_task_limit_selector(limit)
+            selected_offset = _parse_task_offset_selector(offset)
             effective_limit = selected_limit
         elif query_keys == ["limit", "offset"]:
-            if limit is None or not _is_ascii_decimal(limit):
-                raise HTTPException(
-                    status_code=400,
-                    detail="GET /v1/tasks limit selector must be an integer from 1 through 50",
-                )
-            selected_limit = int(limit)
-            if not 1 <= selected_limit <= _TASK_LIST_LIMIT:
-                raise HTTPException(
-                    status_code=400,
-                    detail="GET /v1/tasks limit selector must be an integer from 1 through 50",
-                )
-            if offset is None or not _is_ascii_decimal(offset):
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "GET /v1/tasks offset selector must be an integer from 0 through 2147483647"
-                    ),
-                )
-            selected_offset = int(offset)
-            if not 0 <= selected_offset <= _TASK_LIST_OFFSET_MAX:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "GET /v1/tasks offset selector must be an integer from 0 through 2147483647"
-                    ),
-                )
+            selected_limit = _parse_task_limit_selector(limit)
+            selected_offset = _parse_task_offset_selector(offset)
             effective_limit = selected_limit
         else:
             raise HTTPException(
                 status_code=400,
                 detail=(
                     "GET /v1/tasks accepts only one status selector, one limit selector, "
-                    "canonical status then limit selectors, or canonical limit then "
-                    "offset selectors"
+                    "canonical status then limit selectors, canonical limit then "
+                    "offset selectors, or canonical status then limit then offset selectors"
                 ),
             )
 
@@ -833,20 +877,27 @@ async def get_tasks(
         "next_offset": next_offset,
         "items": items,
     }
+    if selected_status is not None and selected_limit is not None and selected_offset is not None:
+        return TaskStatusLimitOffsetSelectedListResponse(
+            route=_TASK_STATUS_LIMIT_OFFSET_ROUTE,
+            selected_status=selected_status,
+            selected_limit=selected_limit,
+            selected_offset=selected_offset,
+            **response_kwargs,
+        )
+
     if selected_status is not None and selected_limit is not None:
-        selected_status_out = cast(TaskStatusFilter, selected_status)
         return TaskStatusLimitSelectedListResponse(
             route=_TASK_STATUS_LIMIT_ROUTE,
-            selected_status=selected_status_out,
+            selected_status=selected_status,
             selected_limit=selected_limit,
             **response_kwargs,
         )
 
     if selected_status is not None:
-        selected_status_out = cast(TaskStatusFilter, selected_status)
         return TaskStatusFilteredListResponse(
             route=_TASK_STATUS_FILTER_ROUTE,
-            selected_status=selected_status_out,
+            selected_status=selected_status,
             **response_kwargs,
         )
 
