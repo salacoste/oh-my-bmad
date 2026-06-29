@@ -87,6 +87,9 @@ EXPECTED_IDENTIFIERS_BY_ROUTE = {
     "/v1/tasks?status={task_status}&limit={task_list_limit}": frozenset(
         {"task_status", "task_list_limit"}
     ),
+    "/v1/tasks?limit={task_list_limit}&offset={task_list_offset}": frozenset(
+        {"task_list_limit", "task_list_offset"}
+    ),
     "/v1/sessions": frozenset(),
     "/v1/sessions/{session_id}": frozenset({"session_id"}),
 }
@@ -320,6 +323,26 @@ LIVE_VALUE_CONTRACTS = (
         timestamp_policy="retrieved-at-required",
         freshness_policy="fresh-or-stale-required",
         required_identifiers=("task_status", "task_list_limit"),
+        allowed_states=frozenset(
+            {
+                "healthy",
+                "empty-list",
+                "stale",
+                "invalid",
+                "unauthorized",
+                "backend-unavailable",
+                "unavailable",
+            }
+        ),
+    ),
+    LiveValueContract(
+        name="aggregate-task-list-limit-offset",
+        source_category="aggregate",
+        route_pattern="/v1/tasks?limit={task_list_limit}&offset={task_list_offset}",
+        route_contract="approved",
+        timestamp_policy="retrieved-at-required",
+        freshness_policy="fresh-or-stale-required",
+        required_identifiers=("task_list_limit", "task_list_offset"),
         allowed_states=frozenset(
             {
                 "healthy",

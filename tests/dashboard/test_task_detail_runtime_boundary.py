@@ -166,7 +166,7 @@ def test_story_102_2_runtime_script_allowlist_is_exact() -> None:
         {"src": APPROVED_DIGEST_STREAM_SCRIPT, "defer": ""},
     ]
     assert not "".join(parser.inline_script_text).strip()
-    assert parser.controls == ["select", "input", "button", "input", "button"]
+    assert parser.controls == ["input", "input", "button", "input", "button"]
     assert all(
         link.get("rel", "").lower() not in {"preload", "modulepreload"} for link in parser.links
     )

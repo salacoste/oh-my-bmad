@@ -11,8 +11,9 @@ from typing import NotRequired, TypedDict
 DASHBOARD = Path("dashboard/static/index.html")
 RUNTIME = Path("dashboard/static/aggregate-task-list.js")
 APPROVED_ROUTE_BASE = "/v1/tasks"
-ROUTE_PATTERN = "GET /v1/tasks?status={task_status}&limit={task_list_limit}"
-ALLOWED_STATUSES = (
+ROUTE_PATTERN = "GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}"
+MAX_OFFSET = 2_147_483_647
+ALLOWED_ROW_STATUSES = (
     "pending",
     "planning",
     "plan_ready",
@@ -26,17 +27,6 @@ ALLOWED_STATUSES = (
 
 def dashboard_default_selectors() -> tuple[str, str]:
     raw = DASHBOARD.read_text(encoding="utf-8")
-    select_match = re.search(
-        r'<select id="aggregate-task-list-status-control"[^>]*>(?P<options>.*?)</select>',
-        raw,
-        re.DOTALL,
-    )
-    assert select_match is not None
-    selected_status_match = re.search(
-        r'<option value="(?P<status>[^"]+)" selected>',
-        select_match.group("options"),
-    )
-    assert selected_status_match is not None
     limit_match = re.search(
         r'<input id="aggregate-task-list-limit-control"(?P<attrs>[^>]*)>',
         raw,
@@ -44,11 +34,18 @@ def dashboard_default_selectors() -> tuple[str, str]:
     assert limit_match is not None
     selected_limit_match = re.search(r'\bvalue="(?P<limit>[^"]+)"', limit_match.group("attrs"))
     assert selected_limit_match is not None
-    return selected_status_match.group("status"), selected_limit_match.group("limit")
+    offset_match = re.search(
+        r'<input id="aggregate-task-list-offset-control"(?P<attrs>[^>]*)>',
+        raw,
+    )
+    assert offset_match is not None
+    selected_offset_match = re.search(r'\bvalue="(?P<offset>[^"]+)"', offset_match.group("attrs"))
+    assert selected_offset_match is not None
+    return selected_limit_match.group("limit"), selected_offset_match.group("offset")
 
 
-DEFAULT_STATUS, DEFAULT_LIMIT = dashboard_default_selectors()
-DEFAULT_ROUTE = f"/v1/tasks?status={DEFAULT_STATUS}&limit={DEFAULT_LIMIT}"
+DEFAULT_LIMIT, DEFAULT_OFFSET = dashboard_default_selectors()
+DEFAULT_ROUTE = f"/v1/tasks?limit={DEFAULT_LIMIT}&offset={DEFAULT_OFFSET}"
 APPROVED_SCRIPTS = [
     "health-readiness.js",
     "task-detail.js",
@@ -112,7 +109,7 @@ FORBIDDEN_ROUTE_MARKERS = (
     "stream",
     "search",
     "discover",
-    "offset=",
+    "status=",
     "cursor=",
     "page=",
     "sort=",
@@ -194,15 +191,13 @@ def runtime_source() -> str:
     return RUNTIME.read_text(encoding="utf-8")
 
 
-def test_story_116_2_runtime_script_allowlist_and_visible_controls_are_exact() -> None:
+def test_story_118_2_runtime_script_allowlist_and_visible_controls_are_exact() -> None:
     parser = parse_scripts()
     assert parser.scripts == [{"src": script, "defer": ""} for script in APPROVED_SCRIPTS]
     assert not "".join(parser.inline_script_text).strip()
-    assert parser.controls == ["select", "input", "button", "input", "button"]
+    assert parser.controls == ["input", "input", "button", "input", "button"]
     controls_by_id = {control.get("id"): control for control in parser.control_attrs}
-    assert controls_by_id["aggregate-task-list-status-control"]["tag"] == "select"
-    assert DEFAULT_STATUS == "pending"
-    assert DEFAULT_STATUS in ALLOWED_STATUSES
+    assert "aggregate-task-list-status-control" not in controls_by_id
     assert controls_by_id["aggregate-task-list-limit-control"] == {
         "tag": "input",
         "id": "aggregate-task-list-limit-control",
@@ -214,6 +209,17 @@ def test_story_116_2_runtime_script_allowlist_and_visible_controls_are_exact() -
         "value": "50",
     }
     assert controls_by_id["aggregate-task-list-limit-control"]["value"] == DEFAULT_LIMIT
+    assert controls_by_id["aggregate-task-list-offset-control"] == {
+        "tag": "input",
+        "id": "aggregate-task-list-offset-control",
+        "name": "aggregate-task-list-offset-control",
+        "type": "number",
+        "min": "0",
+        "max": str(MAX_OFFSET),
+        "step": "1",
+        "value": "0",
+    }
+    assert controls_by_id["aggregate-task-list-offset-control"]["value"] == DEFAULT_OFFSET
     assert controls_by_id["aggregate-task-list-load"] == {
         "tag": "button",
         "id": "aggregate-task-list-load",
@@ -227,7 +233,7 @@ def test_story_116_2_runtime_script_allowlist_and_visible_controls_are_exact() -
     assert RUNTIME.exists()
 
 
-def test_story_116_2_runtime_module_graph_is_closed() -> None:
+def test_story_118_2_runtime_module_graph_is_closed() -> None:
     runtime_files = sorted(path.name for path in Path("dashboard/static").glob("*.js"))
     assert runtime_files == sorted(APPROVED_SCRIPTS)
     source = runtime_source()
@@ -235,7 +241,7 @@ def test_story_116_2_runtime_module_graph_is_closed() -> None:
         assert marker not in source, marker
 
 
-def test_story_116_2_runtime_route_and_method_allowlist_is_exact() -> None:
+def test_story_118_2_runtime_route_and_method_allowlist_is_exact() -> None:
     source = runtime_source()
     route_literals = {match.group("route") for match in ROUTE_LITERAL_RE.finditer(source)}
     assert route_literals == {APPROVED_ROUTE_BASE}
@@ -252,16 +258,16 @@ def test_story_116_2_runtime_route_and_method_allowlist_is_exact() -> None:
         assert marker not in source, marker
 
 
-def test_story_116_2_panel_exposes_status_limit_runtime_metadata_targets() -> None:
+def test_story_118_2_panel_exposes_limit_offset_runtime_metadata_targets() -> None:
     raw = DASHBOARD.read_text(encoding="utf-8")
     for element_id in (
-        "aggregate-task-list-status-control",
         "aggregate-task-list-limit-control",
+        "aggregate-task-list-offset-control",
         "aggregate-task-list-load",
         "aggregate-task-list-status",
         "aggregate-task-list-source",
-        "aggregate-task-list-selected-status",
         "aggregate-task-list-selected-limit",
+        "aggregate-task-list-selected-offset",
         "aggregate-task-list-freshness",
         "aggregate-task-list-authority",
         "aggregate-task-list-provenance",
@@ -272,40 +278,46 @@ def test_story_116_2_panel_exposes_status_limit_runtime_metadata_targets() -> No
         "aggregate-task-list-rows",
     ):
         assert f'id="{element_id}"' in raw
-    assert "GET /v1/tasks?status={task_status}&amp;limit={task_list_limit}" in raw
+    assert 'id="aggregate-task-list-selected-status"' not in raw
+    assert 'id="aggregate-task-list-status-control"' not in raw
+    assert "GET /v1/tasks?limit={task_list_limit}&amp;offset={task_list_offset}" in raw
     lowered = raw.lower()
-    assert "visible status and limit controls" in lowered
-    assert "no selector-free aggregate browser fetch" in lowered
-    assert "no status-only browser fetch" in lowered
-    assert "no limit-only browser fetch" in lowered
+    assert "visible limit and offset controls" in lowered
+    assert "no status composition" in lowered
+    assert "no automatic traversal" in lowered
+    assert "no infinite scroll" in lowered
+    assert "no search" in lowered
+    assert "no sort" in lowered
     assert "no request body" in lowered
     assert "no hidden selectors" in lowered
 
 
-def task_row() -> dict[str, object]:
-    return {
+def task_row(**overrides: object) -> dict[str, object]:
+    row: dict[str, object] = {
         "task_id": "t-1",
-        "status": DEFAULT_STATUS,
+        "status": "pending",
         "title": "First task",
-        "created_at": "2026-06-26T00:00:00Z",
-        "updated_at": "2026-06-26T00:00:01Z",
-        "state_since": "2026-06-26T00:00:01Z",
+        "created_at": "2026-06-29T00:00:00Z",
+        "updated_at": "2026-06-29T00:00:01Z",
+        "state_since": "2026-06-29T00:00:01Z",
         "actor": {"kind": "operator", "id": "http-api"},
         "last_event": {
             "id": "e-1",
             "type": "task.created",
-            "emitted_at": "2026-06-26T00:00:00Z",
+            "emitted_at": "2026-06-29T00:00:00Z",
             "trace_id": "trace-1",
         },
     }
+    row.update(overrides)
+    return row
 
 
 def response_body(**overrides: object) -> dict[str, object]:
     body: dict[str, object] = {
         "route": ROUTE_PATTERN,
-        "selected_status": DEFAULT_STATUS,
         "selected_limit": int(DEFAULT_LIMIT),
-        "retrieved_at": "2026-06-26T00:00:02Z",
+        "selected_offset": int(DEFAULT_OFFSET),
+        "retrieved_at": "2026-06-29T00:00:02Z",
         "freshness_state": "fresh",
         "display_state": "healthy",
         "authority_state": "authoritative",
@@ -323,13 +335,13 @@ def response_body(**overrides: object) -> dict[str, object]:
     return body
 
 
-def assert_default_status_limit_fetch(output: RuntimeOutput) -> None:
+def assert_default_limit_offset_fetch(output: RuntimeOutput) -> None:
     assert output["fetchCalls"] == [
         {"route": DEFAULT_ROUTE, "method": "GET", "hasBody": False, "credentials": "omit"}
     ]
 
 
-def test_story_116_2_runtime_behavior_maps_success_empty_and_failures() -> None:
+def test_story_118_2_runtime_behavior_maps_success_empty_pagination_and_failures() -> None:
     cases: list[RuntimeCase] = [
         {
             "name": "healthy",
@@ -337,14 +349,36 @@ def test_story_116_2_runtime_behavior_maps_success_empty_and_failures() -> None:
             "expected": [
                 "healthy",
                 "authoritative",
-                "get /v1/tasks?status={task_status}&limit={task_list_limit}",
-                "runtime route: /v1/tasks?status=pending&limit=50",
-                "selected status: pending",
+                "get /v1/tasks?limit={task_list_limit}&offset={task_list_offset}",
+                "runtime route: /v1/tasks?limit=50&offset=0",
                 "selected limit: 50",
+                "selected offset: 0",
                 "first task",
                 "corr-1",
                 "has_more false",
+                "next_offset none",
             ],
+        },
+        {
+            "name": "has-more",
+            "controlValues": {
+                "aggregate-task-list-limit-control": "2",
+                "aggregate-task-list-offset-control": "1",
+            },
+            "response": {
+                "ok": True,
+                "status": 200,
+                "body": response_body(
+                    selected_limit=2,
+                    selected_offset=1,
+                    limit=2,
+                    returned_count=2,
+                    has_more=True,
+                    next_offset=3,
+                    items=[task_row(task_id="t-2"), task_row(task_id="t-1")],
+                ),
+            },
+            "expected": ["selected limit: 2", "selected offset: 1", "has_more true", "next_offset 3"],
         },
         {
             "name": "empty",
@@ -375,11 +409,7 @@ def test_story_116_2_runtime_behavior_maps_success_empty_and_failures() -> None:
         },
         {
             "name": "healthy-non-authoritative",
-            "response": {
-                "ok": True,
-                "status": 200,
-                "body": response_body(authority_state="non-authoritative"),
-            },
+            "response": {"ok": True, "status": 200, "body": response_body(authority_state="non-authoritative")},
             "expected": ["invalid", "non-authoritative"],
         },
         {
@@ -388,60 +418,27 @@ def test_story_116_2_runtime_behavior_maps_success_empty_and_failures() -> None:
             "expected": ["invalid", "non-authoritative"],
         },
         {
-            "name": "selected-status-mismatch",
+            "name": "selected-offset-mismatch",
+            "response": {"ok": True, "status": 200, "body": response_body(selected_offset=1)},
+            "expected": ["invalid", "non-authoritative"],
+        },
+        {
+            "name": "unexpected-selected-status",
             "response": {
                 "ok": True,
                 "status": 200,
-                "body": response_body(selected_status="blocked"),
+                "body": {**response_body(), "selected_status": "pending"},
             },
             "expected": ["invalid", "non-authoritative"],
         },
         {
-            "name": "selected-limit-mismatch",
-            "response": {"ok": True, "status": 200, "body": response_body(selected_limit=3)},
+            "name": "bad-next-offset",
+            "response": {"ok": True, "status": 200, "body": response_body(has_more=True, next_offset=1)},
             "expected": ["invalid", "non-authoritative"],
         },
         {
-            "name": "ambiguous-freshness",
-            "response": {
-                "ok": True,
-                "status": 200,
-                "body": response_body(freshness_state="ambiguous"),
-            },
-            "expected": ["invalid", "non-authoritative"],
-        },
-        {
-            "name": "unexpected-top-level-key",
-            "response": {
-                "ok": True,
-                "status": 200,
-                "body": {**response_body(), "debug": "leak"},
-            },
-            "expected": ["invalid", "non-authoritative"],
-        },
-        {
-            "name": "last-event-summary-leak",
-            "response": {
-                "ok": True,
-                "status": 200,
-                "body": response_body(
-                    items=[
-                        {
-                            **task_row(),
-                            "last_event": {**task_row()["last_event"], "summary": "leak"},
-                        }
-                    ]
-                ),
-            },
-            "expected": ["invalid", "non-authoritative"],
-        },
-        {
-            "name": "row-status-mismatch",
-            "response": {
-                "ok": True,
-                "status": 200,
-                "body": response_body(items=[{**task_row(), "status": "failed"}]),
-            },
+            "name": "row-status-not-finite",
+            "response": {"ok": True, "status": 200, "body": response_body(items=[task_row(status="ready")])},
             "expected": ["invalid", "non-authoritative"],
         },
         {
@@ -475,85 +472,41 @@ def test_story_116_2_runtime_behavior_maps_success_empty_and_failures() -> None:
     for case in cases:
         output = run_runtime_case(case)
         rendered = " ".join(output["texts"].values()).lower()
-        assert_default_status_limit_fetch(output)
+        if case["name"] == "has-more":
+            assert output["fetchCalls"] == [
+                {"route": "/v1/tasks?limit=2&offset=1", "method": "GET", "hasBody": False, "credentials": "omit"}
+            ]
+        else:
+            assert_default_limit_offset_fetch(output)
         for expected in case["expected"]:
             assert expected in rendered, (case["name"], expected, rendered)
-        if case["name"] != "healthy":
+        if case["name"] not in {"healthy", "has-more"}:
             assert "authoritative aggregate" not in rendered
 
 
-def test_story_116_2_runtime_rejects_invalid_or_missing_visible_controls_before_fetch() -> None:
+def test_story_118_2_runtime_rejects_invalid_or_missing_visible_controls_before_fetch() -> None:
     invalid_cases: list[RuntimeCase] = [
-        {
-            "name": "missing-status",
-            "missingElements": ["aggregate-task-list-status-control"],
-            "expected": ["invalid", "unavailable"],
-        },
-        {
-            "name": "missing-limit",
-            "missingElements": ["aggregate-task-list-limit-control"],
-            "expected": ["invalid", "unavailable"],
-        },
-        {
-            "name": "hidden-status",
-            "controlTypes": {"aggregate-task-list-status-control": "hidden"},
-            "expected": ["invalid"],
-        },
-        {
-            "name": "empty-status",
-            "controlValues": {"aggregate-task-list-status-control": ""},
-            "expected": ["invalid"],
-        },
-        {
-            "name": "unknown-status",
-            "controlValues": {"aggregate-task-list-status-control": "ready"},
-            "expected": ["invalid"],
-        },
-        {
-            "name": "uppercase-status",
-            "controlValues": {"aggregate-task-list-status-control": "PLAN_READY"},
-            "expected": ["invalid"],
-        },
-        {
-            "name": "empty-limit",
-            "controlValues": {"aggregate-task-list-limit-control": ""},
-            "expected": ["invalid"],
-        },
-        {
-            "name": "zero-limit",
-            "controlValues": {"aggregate-task-list-limit-control": "0"},
-            "expected": ["invalid"],
-        },
-        {
-            "name": "negative-limit",
-            "controlValues": {"aggregate-task-list-limit-control": "-1"},
-            "expected": ["invalid"],
-        },
-        {
-            "name": "fractional-limit",
-            "controlValues": {"aggregate-task-list-limit-control": "1.5"},
-            "expected": ["invalid"],
-        },
-        {
-            "name": "noninteger-limit",
-            "controlValues": {"aggregate-task-list-limit-control": "two"},
-            "expected": ["invalid"],
-        },
-        {
-            "name": "out-of-range-limit",
-            "controlValues": {"aggregate-task-list-limit-control": "51"},
-            "expected": ["invalid"],
-        },
-        {
-            "name": "unicode-digit-limit",
-            "controlValues": {"aggregate-task-list-limit-control": "２"},
-            "expected": ["invalid"],
-        },
-        {
-            "name": "encoded-digit-limit",
-            "controlValues": {"aggregate-task-list-limit-control": "%32"},
-            "expected": ["invalid"],
-        },
+        {"name": "missing-limit", "missingElements": ["aggregate-task-list-limit-control"], "expected": ["invalid", "unavailable"]},
+        {"name": "missing-offset", "missingElements": ["aggregate-task-list-offset-control"], "expected": ["invalid", "unavailable"]},
+        {"name": "hidden-limit", "controlTypes": {"aggregate-task-list-limit-control": "hidden"}, "expected": ["invalid"]},
+        {"name": "hidden-offset", "controlTypes": {"aggregate-task-list-offset-control": "hidden"}, "expected": ["invalid"]},
+        {"name": "empty-limit", "controlValues": {"aggregate-task-list-limit-control": ""}, "expected": ["invalid"]},
+        {"name": "zero-limit", "controlValues": {"aggregate-task-list-limit-control": "0"}, "expected": ["invalid"]},
+        {"name": "negative-limit", "controlValues": {"aggregate-task-list-limit-control": "-1"}, "expected": ["invalid"]},
+        {"name": "fractional-limit", "controlValues": {"aggregate-task-list-limit-control": "1.5"}, "expected": ["invalid"]},
+        {"name": "noninteger-limit", "controlValues": {"aggregate-task-list-limit-control": "two"}, "expected": ["invalid"]},
+        {"name": "out-of-range-limit", "controlValues": {"aggregate-task-list-limit-control": "51"}, "expected": ["invalid"]},
+        {"name": "unicode-digit-limit", "controlValues": {"aggregate-task-list-limit-control": "２"}, "expected": ["invalid"]},
+        {"name": "encoded-digit-limit", "controlValues": {"aggregate-task-list-limit-control": "%32"}, "expected": ["invalid"]},
+        {"name": "empty-offset", "controlValues": {"aggregate-task-list-offset-control": ""}, "expected": ["invalid"]},
+        {"name": "negative-offset", "controlValues": {"aggregate-task-list-offset-control": "-1"}, "expected": ["invalid"]},
+        {"name": "fractional-offset", "controlValues": {"aggregate-task-list-offset-control": "1.5"}, "expected": ["invalid"]},
+        {"name": "noninteger-offset", "controlValues": {"aggregate-task-list-offset-control": "two"}, "expected": ["invalid"]},
+        {"name": "unicode-digit-offset", "controlValues": {"aggregate-task-list-offset-control": "２"}, "expected": ["invalid"]},
+        {"name": "encoded-digit-offset", "controlValues": {"aggregate-task-list-offset-control": "%31"}, "expected": ["invalid"]},
+        {"name": "leading-zero-offset", "controlValues": {"aggregate-task-list-offset-control": "01"}, "expected": ["invalid"]},
+        {"name": "out-of-range-offset", "controlValues": {"aggregate-task-list-offset-control": "2147483648"}, "expected": ["invalid"]},
+        {"name": "oversized-offset-spelling", "controlValues": {"aggregate-task-list-offset-control": "99999999999"}, "expected": ["invalid"]},
     ]
     for case in invalid_cases:
         output = run_runtime_case(case)
@@ -563,40 +516,7 @@ def test_story_116_2_runtime_rejects_invalid_or_missing_visible_controls_before_
             assert expected in rendered, (case["name"], expected, rendered)
 
 
-def test_story_116_2_runtime_supports_only_allowed_visible_statuses_and_limits() -> None:
-    for status in ALLOWED_STATUSES:
-        output = run_runtime_case(
-            {
-                "name": f"status-{status}",
-                "controlValues": {
-                    "aggregate-task-list-status-control": status,
-                    "aggregate-task-list-limit-control": "1",
-                },
-                "response": {
-                    "ok": True,
-                    "status": 200,
-                    "body": response_body(
-                        selected_status=status,
-                        selected_limit=1,
-                        limit=1,
-                        returned_count=0,
-                        items=[],
-                        display_state="empty-list",
-                        authority_state="non-authoritative",
-                    ),
-                },
-                "expected": [status],
-            }
-        )
-        assert output["fetchCalls"] == [
-            {
-                "route": f"/v1/tasks?status={status}&limit=1",
-                "method": "GET",
-                "hasBody": False,
-                "credentials": "omit",
-            }
-        ]
-
+def test_story_118_2_runtime_supports_only_allowed_visible_limits_and_offsets() -> None:
     for limit in ("1", "2", "50"):
         output = run_runtime_case(
             {
@@ -618,16 +538,34 @@ def test_story_116_2_runtime_supports_only_allowed_visible_statuses_and_limits()
             }
         )
         assert output["fetchCalls"] == [
+            {"route": f"/v1/tasks?limit={limit}&offset={DEFAULT_OFFSET}", "method": "GET", "hasBody": False, "credentials": "omit"}
+        ]
+
+    for offset in ("0", "1", str(MAX_OFFSET)):
+        output = run_runtime_case(
             {
-                "route": f"/v1/tasks?status={DEFAULT_STATUS}&limit={limit}",
-                "method": "GET",
-                "hasBody": False,
-                "credentials": "omit",
+                "name": f"offset-{offset}",
+                "controlValues": {"aggregate-task-list-offset-control": offset},
+                "response": {
+                    "ok": True,
+                    "status": 200,
+                    "body": response_body(
+                        selected_offset=int(offset),
+                        returned_count=0,
+                        items=[],
+                        display_state="empty-list",
+                        authority_state="non-authoritative",
+                    ),
+                },
+                "expected": [offset],
             }
+        )
+        assert output["fetchCalls"] == [
+            {"route": f"/v1/tasks?limit={DEFAULT_LIMIT}&offset={offset}", "method": "GET", "hasBody": False, "credentials": "omit"}
         ]
 
 
-def test_story_116_2_runtime_behavior_runs_when_document_already_loaded() -> None:
+def test_story_118_2_runtime_behavior_runs_when_document_already_loaded() -> None:
     output = run_runtime_case(
         {
             "name": "already-loaded",
@@ -646,7 +584,7 @@ def test_story_116_2_runtime_behavior_runs_when_document_already_loaded() -> Non
         ready_state="interactive",
     )
     rendered = " ".join(output["texts"].values()).lower()
-    assert_default_status_limit_fetch(output)
+    assert_default_limit_offset_fetch(output)
     assert "empty-list" in rendered
 
 
@@ -663,12 +601,12 @@ def run_runtime_case(case: RuntimeCase, *, ready_state: str = "loading") -> Runt
         const callbacks = [];
         const missing = new Set(testCase.missingElements || []);
         const controlValues = Object.assign({{
-          'aggregate-task-list-status-control': {json.dumps(DEFAULT_STATUS)},
           'aggregate-task-list-limit-control': {json.dumps(DEFAULT_LIMIT)},
+          'aggregate-task-list-offset-control': {json.dumps(DEFAULT_OFFSET)},
         }}, testCase.controlValues || {{}});
         const controlTypes = Object.assign({{
-          'aggregate-task-list-status-control': 'select-one',
           'aggregate-task-list-limit-control': 'number',
+          'aggregate-task-list-offset-control': 'number',
         }}, testCase.controlTypes || {{}});
         function element(id) {{
           if (missing.has(id)) return null;

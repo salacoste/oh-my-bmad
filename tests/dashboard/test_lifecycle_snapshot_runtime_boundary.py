@@ -174,7 +174,7 @@ def test_story_106_2_runtime_script_allowlist_is_exact() -> None:
     parser = parse_scripts()
     assert parser.scripts == [{"src": script, "defer": ""} for script in APPROVED_SCRIPTS]
     assert not "".join(parser.inline_script_text).strip()
-    assert parser.controls == ["select", "input", "button", "input", "button"]
+    assert parser.controls == ["input", "input", "button", "input", "button"]
     assert all(
         link.get("rel", "").lower() not in {"preload", "modulepreload"} for link in parser.links
     )
@@ -608,7 +608,7 @@ def test_story_107_2_create_affordance_is_visible_and_narrowly_allowlisted() -> 
     assert CREATE_PATTERN in raw
     parser = parse_scripts()
     controls = [control for control in parser.controls if control in {"input", "button"}]
-    assert controls == ["input", "button", "input", "button"]
+    assert controls == ["input", "input", "button", "input", "button"]
     assert controls[-2:] == ["input", "button"]
 
 

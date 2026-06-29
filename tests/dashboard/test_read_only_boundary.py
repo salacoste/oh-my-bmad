@@ -23,6 +23,7 @@ CORE_APPROVED_READ_ROUTES = frozenset(
         ("GET", "/v1/tasks/{task_id}/logs/digest/stream"),
         ("GET", "/v1/tasks"),
         ("GET", "/v1/tasks?status={task_status}&limit={task_list_limit}"),
+        ("GET", "/v1/tasks?limit={task_list_limit}&offset={task_list_offset}"),
         ("GET", "/v1/sessions"),
         ("GET", "/v1/sessions/{session_id}"),
     }
@@ -34,8 +35,8 @@ CONTROL_TAGS = frozenset(
 )
 APPROVED_STORY_107_2_CONTROL_IDS = frozenset(
     {
-        "aggregate-task-list-status-control",
         "aggregate-task-list-limit-control",
+        "aggregate-task-list-offset-control",
         "aggregate-task-list-load",
         "lifecycle-snapshot-create-token",
         "lifecycle-snapshot-create-button",

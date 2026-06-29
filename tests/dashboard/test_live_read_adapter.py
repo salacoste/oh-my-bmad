@@ -34,7 +34,7 @@ def test_adapter_contracts_cover_exact_approved_route_inventory() -> None:
         for contract in approved
     }
 
-    assert len(approved) == 14
+    assert len(approved) == 15
     assert adapter_routes == live_contracts.APPROVED_READ_ROUTES
     assert {contract.route_status for contract in approved} == {"approved"}
     assert {
@@ -88,6 +88,7 @@ def test_digest_stream_is_adapter_read_after_story_112_2_promotion() -> None:
     assert "/v1/tasks/{task_id}/logs/digest" in approved_routes
     assert "/v1/tasks" in approved_routes
     assert "/v1/tasks?status={task_status}&limit={task_list_limit}" in approved_routes
+    assert "/v1/tasks?limit={task_list_limit}&offset={task_list_offset}" in approved_routes
     assert "/v1/sessions" in approved_routes
     assert "/v1/sessions/{session_id}" in approved_routes
     assert "/v1/tasks/{task_id}/logs/digest/stream" in approved_routes
@@ -128,3 +129,20 @@ def test_static_dashboard_still_has_no_live_wiring_after_adapter_boundary() -> N
         runtime_text = boundary.context_text(boundary.runtime_contexts(parser)).lower()
         assert "/v1/" not in runtime_text, html_file
         assert not boundary.FORBIDDEN_METHOD_RE.search(runtime_text), html_file
+
+
+def test_aggregate_task_list_route_inventory_preserves_legacy_contracts_as_inert_evidence() -> None:
+    panel_routes = {
+        route.route_pattern
+        for panel in adapter.story_109_2_panel_contracts()
+        for route in panel.routes
+    }
+    assert {
+        "/v1/tasks",
+        "/v1/tasks?status={task_status}&limit={task_list_limit}",
+        "/v1/tasks?limit={task_list_limit}&offset={task_list_offset}",
+    } <= panel_routes
+    runtime = Path("dashboard/static/aggregate-task-list.js").read_text(encoding="utf-8")
+    assert "GET /v1/tasks?limit={task_list_limit}&offset={task_list_offset}" in runtime
+    assert "status={task_status}" not in runtime
+    assert "aggregate-task-list-status-control" not in runtime

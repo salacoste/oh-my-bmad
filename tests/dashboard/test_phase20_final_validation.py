@@ -36,6 +36,7 @@ APPROVED_DASHBOARD_ROUTES = frozenset(
         "/v1/tasks/{task_id}/logs/digest/stream",
         "/v1/tasks",
         "/v1/tasks?status={task_status}&limit={task_list_limit}",
+        "/v1/tasks?limit={task_list_limit}&offset={task_list_offset}",
         "/v1/sessions",
         "/v1/sessions/{session_id}",
     }
