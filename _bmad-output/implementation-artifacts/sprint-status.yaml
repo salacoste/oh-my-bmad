@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-06-29T14:28:04Z"
+# last_updated: "2026-06-29T14:35:13Z"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-29T14:28:04Z"
-current_phase: 41  # Phase 41 OPEN — Epic 120 exact status+limit+offset API-local boundary has Story 120.1/120.2 done locally; Story 120.3 awaiting remote CI closure
+last_updated: "2026-06-29T14:35:13Z"
+current_phase: 41  # Phase 41 CLOSED — Epic 120 exact status+limit+offset API-local boundary closed after implementation commit 4953b40149cc71fd927ce30dcc3d14cb98e985ae and GitHub Actions ci run 28379470504 success
 
 development_status:
   # =========================================================================
@@ -1008,15 +1008,34 @@ development_status:
   # =========================================================================
   # Epic 120: Task status + limit + offset API-local route composition planning
   # =========================================================================
-  epic-120: in-progress  # Phase 41 open; Story 120.1 docs/status-only planning/consensus done; Story 120.2 exact canonical GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset} API-local implementation is locally complete/in review; Story 120.3 closure future
+  epic-120: done  # Phase 41 closed after Story 120.1 planning, Story 120.2 exact canonical GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset} API-local implementation/review/UltraQA, implementation commit 4953b40149cc71fd927ce30dcc3d14cb98e985ae, and GitHub Actions ci run 28379470504 success
   120-1-task-status-limit-offset-api-local-planning: done  # Phase 41 docs/status-only planning selected exact canonical GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}; native Architect APPROVE/CLEAR followed by native Critic APPROVE/CLEAR consensus recorded; runtime/API implementation deferred to Story 120.2
-  120-2-task-status-limit-offset-api-local-runtime-boundary: done  # Tests-first API-route-local implementation for exact canonical status+limit+offset composition complete; final code-review APPROVE/CLEAR and UltraQA PASS; remote CI evidence pending Story 120.3
-  120-3-phase-41-epic-120-final-closure: in-progress  # Docs/status final closure started; awaiting implementation commit push and green remote CI evidence
+  120-2-task-status-limit-offset-api-local-runtime-boundary: done  # Tests-first API-route-local implementation for exact canonical status+limit+offset composition complete; final code-review APPROVE/CLEAR and UltraQA PASS; remote CI evidence recorded by Story 120.3
+  120-3-phase-41-epic-120-final-closure: done  # Docs/status final closure after implementation commit 4953b40149cc71fd927ce30dcc3d14cb98e985ae and GitHub Actions ci run 28379470504 success
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-06-29"
+    event: story-120-3-phase-41-epic-120-final-closure-complete
+    from: in-progress
+    to: done
+    epic: epic-120
+    story: 120-3-phase-41-epic-120-final-closure
+    source: autopilot-story-120-3-final-closure
+    reason: >-
+      Story 120.3 closes Phase 41 / Epic 120 after Story 120.1 planning
+      consensus, Story 120.2 tests-first API-route-local implementation, final
+      code-review APPROVE, UltraQA PASS, implementation commit 4953b40149cc71fd927ce30dcc3d14cb98e985ae,
+      and GitHub Actions ci run 28379470504 completed successfully. The runtime
+      boundary is limited to exact canonical GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}
+      with finite status, limit, and offset selector domains; status filtering
+      happens before offset windowing; and GET request bodies remain rejected.
+      Dashboard/browser consumption, status+offset without limit, automatic
+      traversal, infinite scroll, search, sort, hidden/row-derived selectors,
+      services/MCP/dependencies/CI/deployment changes, production credentials,
+      and production operations remain deferred/fail-closed.
   - date: "2026-06-29"
     event: story-119-3-phase-40-epic-119-final-closure-complete
     from: in-progress

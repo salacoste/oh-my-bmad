@@ -1,19 +1,20 @@
 # Story 120.3 — Phase 41 / Epic 120 Final Validation Closure
 
-Date: 2026-06-29T17:28:04+03:00
-Status: in-progress pending push and green remote CI evidence
+Date: 2026-06-29T17:35:13+03:00
+Status: done
 Scope: docs/status final closure
 
 ## Closure summary
 
-Phase 41 / Epic 120 is ready for remote CI closure.
+Phase 41 / Epic 120 is closed with commit and green remote CI evidence.
 
 - Story 120.1 completed docs/status-only planning and sequential Architect APPROVE/CLEAR then Critic APPROVE/CLEAR consensus for exact API-local `GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}`.
 - Story 120.2 implemented the tests-first API-route-local runtime boundary for that exact canonical route only.
-- Story 120.3 will be marked done after this implementation is pushed and green remote CI evidence is recorded.
+- Story 120.3 records implementation commit `4953b40149cc71fd927ce30dcc3d14cb98e985ae` and GitHub Actions `ci` run `28379470504` success for that head.
 
-## Local implementation evidence
+## Implementation evidence
 
+- Implementation commit: `4953b40149cc71fd927ce30dcc3d14cb98e985ae` (`feat(api): add task status limit offset route`).
 - Story 120.2 changed `services/registry-api/src/registry_api/routes/tasks.py` and `services/registry-api/src/registry_api/test_app.py` for exact status+limit+offset API-local composition.
 - No dashboard/browser/dependency/CI/service/MCP/production expansion was added.
 
@@ -50,7 +51,10 @@ git diff --check
 
 ## Remote CI evidence
 
-Pending push.
+- GitHub Actions `ci` run `28379470504`: success.
+- URL: https://github.com/salacoste/oh-my-bmad/actions/runs/28379470504
+- Head SHA: `4953b40149cc71fd927ce30dcc3d14cb98e985ae`.
+- Jobs: `Registry-state tests (Postgres service container)` success; `PR gate (ruff + mypy + pytest)` success, including `ruff check`, `ruff format --check`, `mypy --strict`, static policy checks, secret scan, and `pytest -m "not slow"` success.
 
 ## Final deferred surfaces
 
