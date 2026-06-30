@@ -14,6 +14,9 @@ APPROVED_ROUTE_BASE = "/v1/tasks"
 ROUTE_PATTERN = (
     "GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}"
 )
+SORT_ROUTE_PATTERN = "GET /v1/tasks?sort={task_sort}"
+SORT_VALUE = "updated_at_desc_id_asc"
+SORT_ROUTE = f"/v1/tasks?sort={SORT_VALUE}"
 MAX_OFFSET = 2_147_483_647
 ALLOWED_ROW_STATUSES = (
     "pending",
@@ -128,7 +131,6 @@ FORBIDDEN_ROUTE_MARKERS = (
     "discover",
     "cursor=",
     "page=",
-    "sort=",
     "q=",
 )
 FORBIDDEN_METHOD_RE = re.compile(r"\b(?:POST|PUT|PATCH|DELETE)\b", re.IGNORECASE)
@@ -213,6 +215,24 @@ def runtime_source() -> str:
     return RUNTIME.read_text(encoding="utf-8")
 
 
+
+
+def raw_sort_options() -> list[tuple[str, bool]]:
+    raw = DASHBOARD.read_text(encoding="utf-8")
+    match = re.search(
+        r'<select id="aggregate-task-list-sort-control"[^>]*>(?P<body>.*?)</select>',
+        raw,
+        re.DOTALL,
+    )
+    assert match is not None
+    return [
+        (option_match.group("value"), "selected" in (option_match.group("attrs") + option_match.group("attrs_after")))
+        for option_match in re.finditer(
+            r'<option(?P<attrs>[^>]*)value="(?P<value>[^"]+)"(?P<attrs_after>[^>]*)>',
+            match.group("body"),
+        )
+    ]
+
 def test_story_118_2_runtime_script_allowlist_and_visible_controls_are_exact() -> None:
     parser = parse_scripts()
     assert parser.scripts == [{"src": script, "defer": ""} for script in APPROVED_SCRIPTS]
@@ -223,6 +243,8 @@ def test_story_118_2_runtime_script_allowlist_and_visible_controls_are_exact() -
         "input",
         "button",
         "button",
+        "button",
+        "select",
         "button",
         "input",
         "button",
@@ -270,6 +292,17 @@ def test_story_118_2_runtime_script_allowlist_and_visible_controls_are_exact() -
         "id": "aggregate-task-list-next-offset",
         "type": "button",
     }
+    assert controls_by_id["aggregate-task-list-sort-control"] == {
+        "tag": "select",
+        "id": "aggregate-task-list-sort-control",
+        "name": "aggregate-task-list-sort-control",
+    }
+    assert controls_by_id["aggregate-task-list-sort-load"] == {
+        "tag": "button",
+        "id": "aggregate-task-list-sort-load",
+        "type": "button",
+    }
+    assert raw_sort_options() == [(SORT_VALUE, True)]
     assert controls_by_id["lifecycle-snapshot-create-token"]["tag"] == "input"
     assert controls_by_id["lifecycle-snapshot-create-button"]["tag"] == "button"
     assert all(
@@ -291,13 +324,14 @@ def test_story_118_2_runtime_route_and_method_allowlist_is_exact() -> None:
     route_literals = {match.group("route") for match in ROUTE_LITERAL_RE.finditer(source)}
     assert route_literals == {APPROVED_ROUTE_BASE}
     fetches = list(FETCH_CALL_RE.finditer(source))
-    assert len(fetches) == 1
-    method_match = METHOD_RE.search(fetches[0].group("options"))
-    assert method_match is None or method_match.group("method").upper() == "GET"
-    assert "body" not in fetches[0].group("options").lower()
-    assert "credentials" in fetches[0].group("options").lower()
-    assert "omit" in fetches[0].group("options").lower()
-    assert "include" not in fetches[0].group("options").lower()
+    assert len(fetches) == 2
+    for fetch in fetches:
+        method_match = METHOD_RE.search(fetch.group("options"))
+        assert method_match is None or method_match.group("method").upper() == "GET"
+        assert "body" not in fetch.group("options").lower()
+        assert "credentials" in fetch.group("options").lower()
+        assert "omit" in fetch.group("options").lower()
+        assert "include" not in fetch.group("options").lower()
     assert not FORBIDDEN_METHOD_RE.search(source)
     for marker in FORBIDDEN_ROUTE_MARKERS:
         assert marker not in source, marker
@@ -312,6 +346,8 @@ def test_story_118_2_panel_exposes_limit_offset_runtime_metadata_targets() -> No
         "aggregate-task-list-load",
         "aggregate-task-list-previous-offset",
         "aggregate-task-list-next-offset",
+        "aggregate-task-list-sort-control",
+        "aggregate-task-list-sort-load",
         "aggregate-task-list-status",
         "aggregate-task-list-source",
         "aggregate-task-list-selected-limit",
@@ -324,6 +360,17 @@ def test_story_118_2_panel_exposes_limit_offset_runtime_metadata_targets() -> No
         "aggregate-task-list-degraded",
         "aggregate-task-list-count",
         "aggregate-task-list-rows",
+        "aggregate-task-list-sort-status",
+        "aggregate-task-list-sort-source",
+        "aggregate-task-list-sort-selected-sort",
+        "aggregate-task-list-sort-freshness",
+        "aggregate-task-list-sort-authority",
+        "aggregate-task-list-sort-provenance",
+        "aggregate-task-list-sort-correlation",
+        "aggregate-task-list-sort-pagination",
+        "aggregate-task-list-sort-degraded",
+        "aggregate-task-list-sort-count",
+        "aggregate-task-list-sort-rows",
     ):
         assert f'id="{element_id}"' in raw
     assert 'id="aggregate-task-list-selected-status"' in raw
@@ -337,7 +384,9 @@ def test_story_118_2_panel_exposes_limit_offset_runtime_metadata_targets() -> No
     assert "no automatic traversal" in lowered
     assert "no infinite scroll" in lowered
     assert "no search" in lowered
-    assert "no sort" in lowered
+    assert "singleton sort controls" in lowered
+    assert "no broader sort vocabulary" in lowered
+    assert "no sort composition with status/limit/offset" in lowered
     assert "no request body" in lowered
     assert "no hidden selectors" in lowered
     assert "manual previous" in lowered
@@ -388,10 +437,223 @@ def response_body(**overrides: object) -> dict[str, object]:
     return body
 
 
+def sorted_response_body(**overrides: object) -> dict[str, object]:
+    body: dict[str, object] = {
+        "route": SORT_ROUTE_PATTERN,
+        "selected_sort": SORT_VALUE,
+        "retrieved_at": "2026-06-29T00:00:03Z",
+        "freshness_state": "fresh",
+        "display_state": "healthy",
+        "authority_state": "authoritative",
+        "provenance": "registry-state task summary list",
+        "request_id": "req-sort-1",
+        "trace_id": "trace-sort",
+        "correlation_id": "corr-sort-1",
+        "limit": 50,
+        "returned_count": 2,
+        "has_more": False,
+        "next_offset": None,
+        "items": [
+            task_row(task_id="t-new", status="completed", updated_at="2026-06-29T00:00:03Z"),
+            task_row(task_id="t-old", status="pending", updated_at="2026-06-29T00:00:01Z"),
+        ],
+    }
+    body.update(overrides)
+    return body
+
+
 def assert_default_status_limit_offset_fetch(output: RuntimeOutput) -> None:
     assert output["fetchCalls"] == [
         {"route": DEFAULT_ROUTE, "method": "GET", "hasBody": False, "credentials": "omit"}
     ]
+
+
+def test_story_123_2_singleton_sort_control_fetches_exact_route_without_composition() -> None:
+    output = run_runtime_case(
+        {
+            "name": "singleton-sort-click",
+            "controlValues": {
+                "aggregate-task-list-status-control": "failed",
+                "aggregate-task-list-limit-control": "2",
+                "aggregate-task-list-offset-control": "7",
+            },
+            "responses": [
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": response_body(
+                        selected_status="failed",
+                        selected_limit=2,
+                        selected_offset=7,
+                        limit=2,
+                        returned_count=2,
+                        has_more=True,
+                        next_offset=9,
+                        items=[task_row(task_id="failed-1", status="failed"), task_row(task_id="failed-2", status="failed")],
+                    ),
+                },
+                {"ok": True, "status": 200, "body": sorted_response_body()},
+            ],
+            "clickTargets": ["aggregate-task-list-sort-load"],
+            "expected": ["updated_at_desc_id_asc", "runtime route"],
+        }
+    )
+    assert output["fetchCalls"] == [
+        {
+            "route": "/v1/tasks?status=failed&limit=2&offset=7",
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        },
+        {"route": SORT_ROUTE, "method": "GET", "hasBody": False, "credentials": "omit"},
+    ]
+    rendered = " ".join(output["texts"].values()).lower()
+    sort_rendered = " ".join(
+        text for key, text in output["texts"].items() if key.startswith("aggregate-task-list-sort-")
+    ).lower()
+    assert "sort source: get /v1/tasks?sort={task_sort}" in sort_rendered
+    assert "runtime route: /v1/tasks?sort=updated_at_desc_id_asc" in sort_rendered
+    assert "selected sort: updated_at_desc_id_asc" in sort_rendered
+    assert "t-new completed" in sort_rendered
+    assert "selected status: failed" in rendered
+    assert "selected limit: 2" in rendered
+    assert "selected offset: 7" in rendered
+    assert output["disabled"]["aggregate-task-list-previous-offset"] is False
+    assert output["disabled"]["aggregate-task-list-next-offset"] is False
+
+
+def test_story_123_2_singleton_sort_control_rejects_invalid_visible_sort_before_fetch() -> None:
+    invalid_cases: list[RuntimeCase] = [
+        {
+            "name": "missing-sort",
+            "missingElements": ["aggregate-task-list-sort-control"],
+            "clickTargets": ["aggregate-task-list-sort-load"],
+            "response": {"ok": True, "status": 200, "body": response_body()},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "hidden-sort",
+            "controlTypes": {"aggregate-task-list-sort-control": "hidden"},
+            "clickTargets": ["aggregate-task-list-sort-load"],
+            "response": {"ok": True, "status": 200, "body": response_body()},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "empty-sort",
+            "controlValues": {"aggregate-task-list-sort-control": ""},
+            "clickTargets": ["aggregate-task-list-sort-load"],
+            "response": {"ok": True, "status": 200, "body": response_body()},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "alias-sort",
+            "controlValues": {"aggregate-task-list-sort-control": "updated_at"},
+            "clickTargets": ["aggregate-task-list-sort-load"],
+            "response": {"ok": True, "status": 200, "body": response_body()},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "encoded-sort",
+            "controlValues": {"aggregate-task-list-sort-control": "updated_at_desc_id%5Fasc"},
+            "clickTargets": ["aggregate-task-list-sort-load"],
+            "response": {"ok": True, "status": 200, "body": response_body()},
+            "expected": ["invalid"],
+        },
+    ]
+    for case in invalid_cases:
+        output = run_runtime_case(case)
+        sort_rendered = " ".join(
+            text for key, text in output["texts"].items() if key.startswith("aggregate-task-list-sort-")
+        ).lower()
+        assert_default_status_limit_offset_fetch(output)
+        assert "invalid visible aggregate task-list singleton sort selector" in sort_rendered
+        assert "sort authority: authoritative" not in sort_rendered
+
+
+def test_story_123_2_singleton_sort_response_validation_fails_closed() -> None:
+    cases: list[RuntimeCase] = [
+        {
+            "name": "sort-route-mismatch",
+            "responses": [
+                {"ok": True, "status": 200, "body": response_body()},
+                {"ok": True, "status": 200, "body": sorted_response_body(route="GET /v1/tasks")},
+            ],
+            "clickTargets": ["aggregate-task-list-sort-load"],
+            "expected": ["invalid"],
+        },
+        {
+            "name": "sort-selected-mismatch",
+            "responses": [
+                {"ok": True, "status": 200, "body": response_body()},
+                {"ok": True, "status": 200, "body": sorted_response_body(selected_sort="updated_at")},
+            ],
+            "clickTargets": ["aggregate-task-list-sort-load"],
+            "expected": ["invalid"],
+        },
+        {
+            "name": "sort-next-offset-present",
+            "responses": [
+                {"ok": True, "status": 200, "body": response_body()},
+                {"ok": True, "status": 200, "body": sorted_response_body(next_offset=50)},
+            ],
+            "clickTargets": ["aggregate-task-list-sort-load"],
+            "expected": ["invalid"],
+        },
+        {
+            "name": "sort-healthy-non-authoritative",
+            "responses": [
+                {"ok": True, "status": 200, "body": response_body()},
+                {"ok": True, "status": 200, "body": sorted_response_body(authority_state="non-authoritative")},
+            ],
+            "clickTargets": ["aggregate-task-list-sort-load"],
+            "expected": ["invalid"],
+        },
+        {
+            "name": "sort-invalid-json",
+            "responses": [
+                {"ok": True, "status": 200, "body": response_body()},
+                {"ok": True, "status": 200, "jsonError": "bad json"},
+            ],
+            "clickTargets": ["aggregate-task-list-sort-load"],
+            "expected": ["invalid"],
+        },
+        {
+            "name": "sort-unauthorized",
+            "responses": [
+                {"ok": True, "status": 200, "body": response_body()},
+                {"ok": False, "status": 403, "body": {}},
+            ],
+            "clickTargets": ["aggregate-task-list-sort-load"],
+            "expected": ["unauthorized"],
+        },
+        {
+            "name": "sort-network",
+            "response": {"ok": True, "status": 200, "body": response_body()},
+            "reject": "network down",
+            "clickTargets": ["aggregate-task-list-sort-load"],
+            "expected": ["backend-unavailable"],
+        },
+    ]
+    for case in cases:
+        output = run_runtime_case(case)
+        sort_rendered = " ".join(
+            text for key, text in output["texts"].items() if key.startswith("aggregate-task-list-sort-")
+        ).lower()
+        assert output["fetchCalls"][0] == {
+            "route": DEFAULT_ROUTE,
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        }
+        assert output["fetchCalls"][1] == {
+            "route": SORT_ROUTE,
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        }
+        for expected in case["expected"]:
+            assert expected in sort_rendered, (case["name"], expected, sort_rendered)
+        assert "sort authority: authoritative" not in sort_rendered
 
 
 def test_story_119_2_manual_navigation_controls_are_explicit_and_bounded() -> None:
@@ -1200,11 +1462,13 @@ def run_runtime_case(case: RuntimeCase, *, ready_state: str = "loading") -> Runt
           'aggregate-task-list-status-control': {json.dumps(DEFAULT_STATUS)},
           'aggregate-task-list-limit-control': {json.dumps(DEFAULT_LIMIT)},
           'aggregate-task-list-offset-control': {json.dumps(DEFAULT_OFFSET)},
+          'aggregate-task-list-sort-control': {json.dumps(SORT_VALUE)},
         }}, testCase.controlValues || {{}});
         const controlTypes = Object.assign({{
           'aggregate-task-list-status-control': 'select-one',
           'aggregate-task-list-limit-control': 'number',
           'aggregate-task-list-offset-control': 'number',
+          'aggregate-task-list-sort-control': 'select-one',
         }}, testCase.controlTypes || {{}});
         function element(id) {{
           if (missing.has(id)) return null;

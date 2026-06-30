@@ -76,17 +76,17 @@
     </section>
     <section id="tasks" aria-labelledby="tasks-title">
       <h2 id="tasks-title">Tasks</h2>
-      <p class="state" id="aggregate-task-list-status">Aggregate task-list status+limit+offset live-read boundary pending: waiting for the approved GET /v1/tasks?status={task_status}&amp;limit={task_list_limit}&amp;offset={task_list_offset} response.</p>
+      <p class="state" id="aggregate-task-list-status">Aggregate task-list status+limit+offset and singleton sort live-read boundaries pending: waiting for approved aggregate task-list responses.</p>
       <p>
         Source route/reference: GET /v1/tasks?status={task_status}&amp;limit={task_list_limit}&amp;offset={task_list_offset}. Story 121.2 wires this single approved read-only aggregate task-list filtered pagination read only;
-        selectors come from the visible status, limit, and offset controls below, plus visible manual previous and manual next controls that perform one explicit load at a time. It adds no selector-free aggregate browser fetch, no automatic traversal, no infinite scroll, no search, no sort, no request body, no hidden selectors, no broad dashboard live wiring, no task detail traversal, no digest/history/trace/replay/session traversal, and no mutation or operator-control action.
+        selectors come from the visible status, limit, and offset controls below, plus visible manual previous and manual next controls that perform one explicit load at a time. Story 123.2 also adds visible singleton sort controls that perform only the exact GET /v1/tasks?sort=updated_at_desc_id_asc read. It adds no selector-free aggregate browser fetch, no automatic traversal, no infinite scroll, no search, no broader sort vocabulary, no sort composition with status/limit/offset, no request body, no hidden selectors, no broad dashboard live wiring, no task detail traversal, no digest/history/trace/replay/session traversal, and no mutation or operator-control action.
       </p>
       <p>
         Runtime states are loading, healthy bounded display, empty successful read, stale/partial data, stale data, invalid data, permission/configuration failure, unauthorized/configuration failure,
         backend unavailable, route failure/read error, malformed response, over-limit response, and ambiguous freshness. Non-healthy states fail closed and are non-authoritative.
       </p>
       <p>
-        Row contract: provenance, source, timestamp, freshness, state, route/reference, task_id, status, title, created_at, updated_at, state_since, actor.kind, actor.id,
+        Row contract: provenance, source, timestamp, freshness, state, route/reference, selected sort when applicable, task_id, status, title, created_at, updated_at, state_since, actor.kind, actor.id,
         last_event.id, last_event.type, last_event.emitted_at, and last_event.trace_id. No task rows are synthesized; no hidden selectors or side channels can expand this list.
       </p>
       <p>
@@ -111,6 +111,11 @@
         <button id="aggregate-task-list-load" type="button">Load task list</button>
         <button id="aggregate-task-list-previous-offset" type="button">Previous offset</button>
         <button id="aggregate-task-list-next-offset" type="button">Next offset</button>
+        <label for="aggregate-task-list-sort-control">Task list sort</label>
+        <select id="aggregate-task-list-sort-control" name="aggregate-task-list-sort-control">
+          <option value="updated_at_desc_id_asc" selected>Updated newest, id ascending</option>
+        </select>
+        <button id="aggregate-task-list-sort-load" type="button">Load sorted task list</button>
       </p>
       <p class="meta" id="aggregate-task-list-source">Source: GET /v1/tasks?status={task_status}&amp;limit={task_list_limit}&amp;offset={task_list_offset}. Runtime route: pending.</p>
       <p class="meta" id="aggregate-task-list-selected-status">Selected status: pending visible control value.</p>
@@ -120,10 +125,21 @@
       <p class="meta" id="aggregate-task-list-authority">Authority: non-authoritative until a valid aggregate task-list response is read.</p>
       <p class="meta" id="aggregate-task-list-provenance">Provenance: pending backend task summary metadata.</p>
       <p class="meta" id="aggregate-task-list-correlation">Correlation: pending request, trace, or correlation id.</p>
-      <p class="meta" id="aggregate-task-list-pagination">Pagination: selected status+limit+offset window pending; next_offset enables only the visible manual next control after authoritative validation.</p>
+      <p class="meta" id="aggregate-task-list-pagination">Pagination: selected status+limit+offset window pending; next_offset enables only the visible manual next control after authoritative validation. Singleton sorted reads render separately and do not compose with status, limit, or offset.</p>
       <p class="meta" id="aggregate-task-list-degraded">Degraded state: unavailable read until runtime data resolves.</p>
       <p class="meta" id="aggregate-task-list-count">Task rows: pending.</p>
       <p class="meta" id="aggregate-task-list-rows">Rows: no aggregate task-list response has been rendered yet. Confidence: unavailable until the approved aggregate task-list read completes.</p>
+      <p class="state" id="aggregate-task-list-sort-status">Aggregate task-list singleton sort state: unavailable until the visible sorted-read action is requested.</p>
+      <p class="meta" id="aggregate-task-list-sort-source">Sort source: GET /v1/tasks?sort={task_sort}. Runtime route: pending.</p>
+      <p class="meta" id="aggregate-task-list-sort-selected-sort">Selected sort: updated_at_desc_id_asc visible control value.</p>
+      <p class="meta" id="aggregate-task-list-sort-freshness">Sort freshness: pending retrieved_at.</p>
+      <p class="meta" id="aggregate-task-list-sort-authority">Sort authority: non-authoritative until a valid singleton sort response is read.</p>
+      <p class="meta" id="aggregate-task-list-sort-provenance">Sort provenance: pending backend task summary metadata.</p>
+      <p class="meta" id="aggregate-task-list-sort-correlation">Sort correlation: pending request, trace, or correlation id.</p>
+      <p class="meta" id="aggregate-task-list-sort-pagination">Sort pagination: fixed singleton first page; manual previous/next status-window controls are independent.</p>
+      <p class="meta" id="aggregate-task-list-sort-degraded">Sort degraded state: unavailable read until runtime data resolves.</p>
+      <p class="meta" id="aggregate-task-list-sort-count">Sorted task rows: pending.</p>
+      <p class="meta" id="aggregate-task-list-sort-rows">Sorted rows: no singleton sort response has been rendered yet. Confidence: unavailable until the approved singleton sort read completes.</p>
     </section>
     <section id="task-detail" aria-labelledby="task-detail-title">
       <h2 id="task-detail-title">Task Detail</h2>

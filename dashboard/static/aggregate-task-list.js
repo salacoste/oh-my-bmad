@@ -3,6 +3,8 @@
 
   const ROUTE = "/v1/tasks";
   const ROUTE_PATTERN = "GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}";
+  const SORT_ROUTE_PATTERN = "GET /v1/tasks?sort={task_sort}";
+  const SORT_VALUE = "updated_at_desc_id_asc";
   const MAX_LIMIT = 50;
   const MAX_OFFSET = 2147483647;
   const STATUS_CONTROL_ID = "aggregate-task-list-status-control";
@@ -11,15 +13,19 @@
   const LOAD_CONTROL_ID = "aggregate-task-list-load";
   const PREVIOUS_CONTROL_ID = "aggregate-task-list-previous-offset";
   const NEXT_CONTROL_ID = "aggregate-task-list-next-offset";
+  const SORT_CONTROL_ID = "aggregate-task-list-sort-control";
+  const SORT_LOAD_CONTROL_ID = "aggregate-task-list-sort-load";
   const ALLOWED_ROW_STATUSES = new Set(["pending", "planning", "plan_ready", "executing", "blocked", "completed", "stopped", "failed"]);
   const ROW_KEYS = ["task_id", "status", "title", "created_at", "updated_at", "state_since", "actor", "last_event"];
   const ACTOR_KEYS = ["kind", "id"];
   const EVENT_KEYS = ["id", "type", "emitted_at", "trace_id"];
   const BODY_KEYS = ["route", "selected_status", "selected_limit", "selected_offset", "retrieved_at", "freshness_state", "display_state", "authority_state", "provenance", "request_id", "trace_id", "correlation_id", "limit", "returned_count", "has_more", "next_offset", "items"];
+  const SORT_BODY_KEYS = ["route", "selected_sort", "retrieved_at", "freshness_state", "display_state", "authority_state", "provenance", "request_id", "trace_id", "correlation_id", "limit", "returned_count", "has_more", "next_offset", "items"];
   const ALLOWED_DISPLAY_STATES = new Set(["healthy", "empty-list", "stale", "invalid", "unauthorized", "backend-unavailable", "unavailable"]);
   const ALLOWED_FRESHNESS_STATES = new Set(["fresh", "stale"]);
   const navigationState = { status: null, limit: null, offset: null, previousOffset: null, nextOffset: null };
   let loadInFlight = false;
+  let sortLoadInFlight = false;
   let selectorEditInvalidated = false;
 
   function element(id) {
@@ -57,7 +63,7 @@
       sameKeys(row, ROW_KEYS) &&
         typeof row.task_id === "string" &&
         ALLOWED_ROW_STATUSES.has(row.status) &&
-        row.status === selectedStatus &&
+        (selectedStatus === null || row.status === selectedStatus) &&
         (row.title === null || typeof row.title === "string") &&
         typeof row.created_at === "string" &&
         typeof row.updated_at === "string" &&
@@ -70,6 +76,13 @@
   function decimalText(value, pattern) {
     const text = label(value, "");
     return pattern.test(text) ? text : null;
+  }
+
+  function readSortSelector() {
+    const sortControl = element(SORT_CONTROL_ID);
+    if (!sortControl || sortControl.type === "hidden") return null;
+    const sort = label(sortControl.value, "");
+    return sort === SORT_VALUE ? sort : null;
   }
 
   function readSelectors() {
@@ -129,8 +142,37 @@
     return body.items.every((row) => validRow(row, selectors.status));
   }
 
+  function validSortMetadata(body, selectedSort) {
+    if (!body || typeof body !== "object" || Array.isArray(body)) return false;
+    if (!sameKeys(body, SORT_BODY_KEYS)) return false;
+    if (body.route !== SORT_ROUTE_PATTERN) return false;
+    if (body.selected_sort !== selectedSort) return false;
+    if (!ALLOWED_FRESHNESS_STATES.has(label(body.freshness_state, ""))) return false;
+    if (!ALLOWED_DISPLAY_STATES.has(label(body.display_state, ""))) return false;
+    if (body.authority_state !== "authoritative" && body.authority_state !== "non-authoritative") return false;
+    if (body.display_state === "healthy" && body.authority_state !== "authoritative") return false;
+    if (body.display_state !== "healthy" && body.authority_state === "authoritative") return false;
+    if (typeof body.retrieved_at !== "string" || !body.retrieved_at) return false;
+    if (typeof body.provenance !== "string" || !body.provenance) return false;
+    if (typeof body.request_id !== "string" || !body.request_id) return false;
+    if (body.trace_id !== null && typeof body.trace_id !== "string") return false;
+    if (typeof body.correlation_id !== "string" || !body.correlation_id) return false;
+    if (typeof body.limit !== "number" || !Number.isInteger(body.limit) || body.limit < 1 || body.limit > MAX_LIMIT) return false;
+    if (typeof body.returned_count !== "number" || !Number.isInteger(body.returned_count) || body.returned_count < 0) return false;
+    if (body.returned_count > body.limit) return false;
+    if (typeof body.has_more !== "boolean") return false;
+    if (body.next_offset !== null) return false;
+    if (!Array.isArray(body.items) || body.items.length > body.limit) return false;
+    if (body.items.length !== body.returned_count) return false;
+    return body.items.every((row) => validRow(row, null));
+  }
+
   function selectedRoute(selectors) {
     return `${ROUTE}?status=${selectors.status}&limit=${selectors.limit}&offset=${selectors.offset}`;
+  }
+
+  function selectedSortRoute(sort) {
+    return `${ROUTE}?sort=${sort}`;
   }
 
   function authorityFor(state) {
@@ -170,6 +212,12 @@
       if (previousButton) previousButton.disabled = true;
       if (nextButton) nextButton.disabled = true;
     }
+  }
+
+  function setSortControlsLoading(isLoading) {
+    sortLoadInFlight = isLoading;
+    const sortButton = element(SORT_LOAD_CONTROL_ID);
+    if (sortButton) sortButton.disabled = isLoading;
   }
 
   function refreshNavigationForSelectorEdit() {
@@ -243,10 +291,52 @@
     render(state, "non-authoritative", "missing server freshness", "backend task summary list", "not provided", selectedStatus, selectedLimit, selectedOffset, runtimeRoute, "selected window unavailable; manual previous/next controls disabled", state, "0", detail);
   }
 
+  function renderSort(state, authority, freshness, provenance, correlation, selectedSort, runtimeRoute, pagination, degraded, count, rows) {
+    write("aggregate-task-list-sort-status", `Aggregate task-list singleton sort state: ${state}.`);
+    write("aggregate-task-list-sort-source", `Sort source: ${SORT_ROUTE_PATTERN}. Runtime route: ${runtimeRoute}.`);
+    write("aggregate-task-list-sort-selected-sort", `Selected sort: ${selectedSort}.`);
+    write("aggregate-task-list-sort-freshness", `Sort freshness: ${freshness}.`);
+    write("aggregate-task-list-sort-authority", `Sort authority: ${authority}.`);
+    write("aggregate-task-list-sort-provenance", `Sort provenance: ${provenance}.`);
+    write("aggregate-task-list-sort-correlation", `Sort correlation: ${correlation}.`);
+    write("aggregate-task-list-sort-pagination", `Sort pagination: ${pagination}.`);
+    write("aggregate-task-list-sort-degraded", `Sort degraded state: ${degraded}.`);
+    write("aggregate-task-list-sort-count", `Sorted task rows: ${count}.`);
+    write("aggregate-task-list-sort-rows", rows);
+  }
+
+  function renderSortClosed(state, detail, selectedSort) {
+    const runtimeRoute = selectedSort ? selectedSortRoute(selectedSort) : SORT_ROUTE_PATTERN;
+    const sortLabel = selectedSort || "unavailable";
+    renderSort(state, "non-authoritative", "missing server freshness", "backend task summary list", "not provided", sortLabel, runtimeRoute, "sorted window unavailable; status/limit/offset manual navigation controls unchanged", state, "0", detail);
+  }
+
   function rowText(row) {
     const event = row.last_event;
     const eventText = event ? `last_event ${event.id} ${event.type} ${event.emitted_at} trace ${label(event.trace_id, "not provided")}` : "last_event none";
     return `${row.task_id} ${row.status} ${label(row.title, "untitled")} created ${row.created_at} updated ${row.updated_at} state_since ${row.state_since} actor ${row.actor.kind}/${row.actor.id} ${eventText}`;
+  }
+
+  function renderSortBody(body, selectedSort) {
+    if (!validSortMetadata(body, selectedSort)) {
+      renderSortClosed("invalid", "invalid aggregate task list singleton sort response; not authoritative.", selectedSort);
+      return;
+    }
+    const state = body.display_state;
+    const authority = authorityFor(state);
+    const correlation = label(body.correlation_id, label(body.request_id, label(body.trace_id, "not provided")));
+    const provenance = label(body.provenance, "backend task summary list");
+    const pagination = `selected sort ${body.selected_sort}; returned ${body.returned_count}; has_more ${body.has_more}; next_offset none; status_window_controls unchanged`;
+    const runtimeRoute = selectedSortRoute(selectedSort);
+    if (state === "empty-list") {
+      renderSort(state, "non-authoritative", body.retrieved_at, provenance, correlation, String(body.selected_sort), runtimeRoute, pagination, state, "0", "empty successful sorted read; no task rows returned.");
+      return;
+    }
+    if (state !== "healthy") {
+      renderSort(state, "non-authoritative", body.retrieved_at, provenance, correlation, String(body.selected_sort), runtimeRoute, pagination, state, String(body.returned_count), `${state} aggregate task list singleton sort response; not authoritative.`);
+      return;
+    }
+    renderSort(state, authority, body.retrieved_at, provenance, correlation, String(body.selected_sort), runtimeRoute, pagination, "none", String(body.returned_count), body.items.map(rowText).join("\n"));
   }
 
   function renderBody(body, selectors) {
@@ -274,6 +364,39 @@
       return;
     }
     render(state, authority, body.retrieved_at, provenance, correlation, String(body.selected_status), String(body.selected_limit), String(body.selected_offset), runtimeRoute, pagination, "none", String(body.returned_count), body.items.map(rowText).join("\n"));
+  }
+
+  async function loadSortedAggregateTaskList() {
+    if (sortLoadInFlight) return undefined;
+    const selectedSort = readSortSelector();
+    if (!selectedSort) {
+      renderSortClosed("invalid", "invalid visible aggregate task-list singleton sort selector; not authoritative.", null);
+      return undefined;
+    }
+    const route = selectedSortRoute(selectedSort);
+    setSortControlsLoading(true);
+    try {
+      const response = await fetch(route, { method: "GET", credentials: "omit" });
+      if (!response.ok) {
+        const state = response.status === 401 || response.status === 403 ? "unauthorized" : "backend-unavailable";
+        renderSortClosed(state, `${state.replace(/-/g, " ")} response for aggregate task list singleton sort read; not authoritative.`, selectedSort);
+        return undefined;
+      }
+      let body;
+      try {
+        body = await response.json();
+      } catch (_error) {
+        renderSortClosed("invalid", "invalid aggregate task list singleton sort response; not authoritative.", selectedSort);
+        return undefined;
+      }
+      renderSortBody(body, selectedSort);
+      return undefined;
+    } catch (_error) {
+      renderSortClosed("backend-unavailable", "backend unavailable for aggregate task list singleton sort read; not authoritative.", selectedSort);
+      return undefined;
+    } finally {
+      setSortControlsLoading(false);
+    }
   }
 
   async function loadAggregateTaskList() {
@@ -356,6 +479,7 @@
     const offsetControl = element(OFFSET_CONTROL_ID);
     const previousButton = element(PREVIOUS_CONTROL_ID);
     const nextButton = element(NEXT_CONTROL_ID);
+    const sortButton = element(SORT_LOAD_CONTROL_ID);
     if (loadButton && typeof loadButton.addEventListener === "function") {
       loadButton.addEventListener("click", loadAggregateTaskList);
     }
@@ -370,6 +494,9 @@
     }
     if (nextButton && typeof nextButton.addEventListener === "function") {
       nextButton.addEventListener("click", loadNextOffset);
+    }
+    if (sortButton && typeof sortButton.addEventListener === "function") {
+      sortButton.addEventListener("click", loadSortedAggregateTaskList);
     }
     return loadAggregateTaskList();
   }

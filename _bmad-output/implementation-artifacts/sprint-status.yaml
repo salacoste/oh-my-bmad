@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-06-30T00:18:57Z"
+# last_updated: "2026-06-30T15:20:27Z"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-30T00:18:57Z"
-current_phase: 43  # Phase 43 CLOSED — Epic 122 exact task-list sort API-local boundary closed after Story 122.3 recorded implementation commit 568970fbfae3c3af718896ac55ecd4f2b1ebf9ac and green ci run 28411221860
+last_updated: "2026-06-30T15:20:27Z"
+current_phase: 44  # Phase 44 CLOSED — Epic 123 done after Story 123.3 records Story 123.2 browser-control verification, code-review APPROVE/CLEAR, UltraQA PASS, and local dashboard validation
 
 development_status:
   # =========================================================================
@@ -1030,10 +1030,88 @@ development_status:
   122-2-task-list-sort-api-local-runtime-boundary: done  # Tests-first API-route-local implementation complete for exact GET /v1/tasks?sort={task_sort} with singleton selected_sort updated_at_desc_id_asc, fail-closed body/malformed/composed selectors, code-review APPROVE/CLEAR, and UltraQA PASS; no browser wiring/search/hidden selectors/auto traversal/sort composition
   122-3-phase-43-epic-122-final-closure: done  # Docs/status final closure after implementation commit 568970fbfae3c3af718896ac55ecd4f2b1ebf9ac, format repair/final CI head b62848b4b8187cc069e6794190e7277f68c8ebde, and GitHub Actions ci run 28411221860 success
 
+
+
+  # =========================================================================
+  # Epic 123: Task list sort browser controls planning
+  # =========================================================================
+  epic-123: done  # Phase 44 closed after Story 123.3 records Story 123.2 visible dashboard singleton sort controls, code-review APPROVE/CLEAR, UltraQA PASS, and local dashboard validation evidence
+  123-1-task-list-sort-browser-controls-planning: done  # Phase 44 docs/status-only planning selected visible aggregate-task-list sort controls for exact GET /v1/tasks?sort=updated_at_desc_id_asc; native Architect APPROVE/CLEAR followed by native Critic APPROVE/CLEAR consensus recorded; implementation deferred to exact future Story 123.2 boundary
+  123-2-task-list-sort-browser-controls-runtime-boundary: done  # Local tests-first dashboard/browser implementation complete for visible singleton sort controls issuing exact GET /v1/tasks?sort=updated_at_desc_id_asc; preserves status/limit/offset/manual navigation separately; no API changes/sort composition/broader vocabulary/search/hidden selectors/automatic traversal
+  123-3-phase-44-epic-123-final-closure: done  # Docs/status final closure records Story 123.2 browser-control verification, review/QA gates, fresh local validation, and deferred/fail-closed adjacent surfaces; no remote CI or commit evidence is claimed by this local closeout
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+  - date: "2026-06-30"
+    event: story-123-3-phase-44-epic-123-final-closure-complete
+    from: backlog
+    to: done
+    epic: epic-123
+    story: 123-3-phase-44-epic-123-final-closure
+    source: autopilot-phase-44-epic-123-closure
+    reason: >-
+      Phase 44 / Epic 123 is closed locally after Story 123.2 browser controls
+      were verified by review/QA evidence and fresh local dashboard validation.
+      Closure evidence records visible singleton sort controls for exactly
+      GET /v1/tasks?sort=updated_at_desc_id_asc, separate singleton-sort rendering,
+      unchanged status/limit/offset/manual pagination state, and fail-closed
+      rejection of sort composition, broader vocabulary, hidden selectors, automatic
+      traversal, backend/API expansion, services/MCP/dependency/CI/deployment changes,
+      credentials, and production operations. No remote CI or commit evidence is
+      claimed by this local closeout.
+
+  - date: "2026-06-30"
+    event: story-123-2-task-list-sort-browser-controls-runtime-boundary-complete
+    from: backlog
+    to: done
+    epic: epic-123
+    story: 123-2-task-list-sort-browser-controls-runtime-boundary
+    source: autopilot-story-123-2-ultragoal
+    reason: >-
+      Story 123.2 locally implements visible aggregate-task-list singleton sort
+      controls that issue exactly GET /v1/tasks?sort=updated_at_desc_id_asc.
+      The dashboard runtime validates selected_sort metadata, renders sorted reads
+      in a separate singleton-sort subtree, leaves status/limit/offset/manual
+      pagination state unchanged, and preserves fail-closed behavior. Local
+      verification passed: uv run pytest tests/dashboard -q (218 passed).
+
+  - date: "2026-06-30"
+    event: story-123-1-task-list-sort-browser-controls-planning-complete
+    from: in-progress
+    to: done
+    epic: epic-123
+    story: 123-1-task-list-sort-browser-controls-planning
+    source: autopilot-story-123-1-ralplan-consensus
+    reason: >-
+      Story 123.1 completes Phase 44 docs/status-only planning after native
+      Architect APPROVE/CLEAR followed by native Critic APPROVE/CLEAR. The exact
+      future browser/dashboard implementation boundary is visible aggregate-task-list
+      sort controls for GET /v1/tasks?sort=updated_at_desc_id_asc only, using the
+      existing singleton API-local sort route while keeping broader sort vocabulary,
+      sort composition with status/limit/offset, search/discovery, hidden selectors,
+      automatic traversal, services/MCP/dependencies/CI/deployment expansion,
+      production credentials, production operations, and mutation/control behavior
+      deferred/fail-closed.
+
+  - date: "2026-06-30"
+    event: phase-44-epic-123-opened
+    from: backlog
+    to: in-progress
+    epic: epic-123
+    story: 123-1-task-list-sort-browser-controls-planning
+    source: autopilot-story-123-1-route-selection
+    reason: >-
+      Phase 44 opens as docs/status-only planning. The selected safest next
+      deferred surface is browser/dashboard aggregate-task-list singleton sort
+      controls for exact GET /v1/tasks?sort=updated_at_desc_id_asc, after Phase 43
+      closed the API-local singleton sort route. Runtime dashboard implementation,
+      broader sort vocabulary, sort composition with status/limit/offset,
+      search/discovery, hidden selectors, automatic traversal, services/MCP/
+      dependencies/CI/deployment expansion, production credentials, and production
+      operations remain unstarted/deferred pending a future Story 123.2.
 
   - date: "2026-06-30"
     event: story-122-3-phase-43-epic-122-final-closure-complete
