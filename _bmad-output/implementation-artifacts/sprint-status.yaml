@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-06-29T17:13:33Z"
+# last_updated: "2026-06-29T23:58:00Z"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-29T17:08:09Z"
-current_phase: 42  # Phase 42 OPEN — Epic 121 exact dashboard aggregate-task-list status+limit+offset browser boundary; Story 121.1 planning consensus complete and Story 121.2 implementation authorized/in progress
+last_updated: "2026-06-29T23:58:00Z"
+current_phase: 43  # Phase 43 OPEN — Epic 122 exact task-list sort API-local boundary; Story 122.2 implementation/review/QA complete locally; Story 122.3 final closure remains backlog
 
 development_status:
   # =========================================================================
@@ -1021,10 +1021,80 @@ development_status:
   121-2-task-status-limit-offset-browser-runtime-boundary: done  # Dashboard aggregate-task-list browser/runtime implementation complete after tests-first implementation, code-review APPROVE, architect CLEAR, strict mypy, dashboard/non-integration pytest, ruff, and diff-check evidence; visible status+limit+offset controls only, bodyless GET, credentials omit, strict validation, fail-closed states
   121-3-phase-42-epic-121-final-closure: done  # Final closure complete with implementation commit aa90a29c3e5988d617614453517ae44962249699 and green ci run 28400048812
 
+
+  # =========================================================================
+  # Epic 122: Task list sort API-local planning
+  # =========================================================================
+  epic-122: in-progress  # Phase 43 in progress after Story 122.2 local runtime/API implementation, code-review APPROVE/CLEAR, and UltraQA PASS; Story 122.3 final closure remains backlog
+  122-1-task-list-sort-api-local-planning: done  # Phase 43 docs/status-only planning selected exact future canonical GET /v1/tasks?sort={task_sort} with singleton approved sort vocabulary `updated_at_desc_id_asc`; native Architect APPROVE/CLEAR followed by native Critic APPROVE/CLEAR consensus recorded; implementation deferred to exact future Story 122.2 boundary
+  122-2-task-list-sort-api-local-runtime-boundary: done  # Tests-first API-route-local implementation complete for exact GET /v1/tasks?sort={task_sort} with singleton selected_sort updated_at_desc_id_asc, fail-closed body/malformed/composed selectors, code-review APPROVE/CLEAR, and UltraQA PASS; no browser wiring/search/hidden selectors/auto traversal/sort composition
+  122-3-phase-43-epic-122-final-closure: backlog  # Future docs/status final closure with implementation commit and green CI evidence after Story 122.2 local implementation/review/QA
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+  - date: "2026-06-29"
+    event: story-122-2-task-list-sort-api-local-runtime-boundary-complete
+    from: backlog
+    to: done
+    epic: epic-122
+    story: 122-2-task-list-sort-api-local-runtime-boundary
+    source: autopilot-story-122-2-implementation-review-ultraqa
+    reason: >-
+      Story 122.2 implements exact API-local GET /v1/tasks?sort={task_sort}
+      with singleton approved selected_sort value updated_at_desc_id_asc. The
+      route remains bodyless and fail-closed for malformed, encoded, repeated,
+      extra, and status/limit/offset-composed selectors; response metadata keeps
+      bounded task summary rows, freshness/authority/provenance, request/trace/
+      correlation ids, fixed limit, has_more, and next_offset null. Local
+      verification passed registry-api pytest, dashboard aggregate runtime
+      regression, strict mypy, and diff check after review rework. Final
+      code-review recorded APPROVE/CLEAR and UltraQA PASS. Browser controls,
+      search/discovery, broader sort vocabulary/composition, hidden selectors,
+      automatic traversal, services/MCP/dependencies/CI/deployment expansion,
+      credentials, and production operations remain deferred/fail-closed.
+
+  - date: "2026-06-29"
+    event: story-122-1-task-list-sort-api-local-planning-complete
+    from: in-progress
+    to: done
+    epic: epic-122
+    story: 122-1-task-list-sort-api-local-planning
+    source: autopilot-story-122-1-ralplan-consensus
+    reason: >-
+      Story 122.1 completes Phase 43 docs/status-only planning after native
+      Architect APPROVE/CLEAR followed by native Critic APPROVE/CLEAR. The exact
+      future implementation boundary is API-local GET /v1/tasks?sort={task_sort}
+      with singleton approved sort vocabulary `updated_at_desc_id_asc` only, matching the
+      current implicit updated_at descending/id ascending ordering while keeping
+      existing task-list status/limit/offset/dashboard/manual-navigation
+      contracts unchanged. Runtime/API/test/browser implementation, search,
+      arbitrary sort grammar, sort composition with status/limit/offset,
+      hidden selectors, automatic traversal, services/MCP/dependencies/CI/
+      deployment expansion, production credentials, and production operations
+      remain unstarted/deferred pending a future Story 122.2.
+
+  - date: "2026-06-29"
+    event: phase-43-epic-122-opened
+    from: backlog
+    to: in-progress
+    epic: epic-122
+    story: 122-1-task-list-sort-api-local-planning
+    source: autopilot-story-122-1-route-selection
+    reason: >-
+      Phase 43 opens as docs/status-only planning. The selected safest next
+      task-list boundary is exact future API-local GET /v1/tasks?sort={task_sort}
+      with singleton approved sort vocabulary `updated_at_desc_id_asc` only, preserving the
+      current implicit updated_at descending/id ascending ordering while keeping
+      every existing task-list status/limit/offset/dashboard/manual-navigation
+      contract unchanged. Runtime/API/test/browser implementation, search,
+      arbitrary sort grammar, sort composition with status/limit/offset,
+      hidden selectors, automatic traversal, services/MCP/dependencies/CI/
+      deployment expansion, production credentials, and production operations
+      remain unauthorized pending Story 122.2 after Architect then Critic
+      approval.
 
   - date: "2026-06-29"
     event: story-121-3-phase-42-epic-121-final-closure-complete

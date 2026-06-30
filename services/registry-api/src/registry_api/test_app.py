@@ -524,7 +524,7 @@ class TestGetTasksAggregate:
         assert body["authority_state"] == "non-authoritative"
         assert body["has_more"] is False
 
-    async def test_get_tasks_status_limit_and_offset_filters_are_openapi_visible(
+    async def test_get_tasks_status_limit_offset_and_sort_filters_are_openapi_visible(
         self, aggregate_client: AsyncClient
     ) -> None:
         schema = (await aggregate_client.get("/openapi.json")).json()
@@ -535,7 +535,7 @@ class TestGetTasksAggregate:
             if parameter["in"] == "query"
         }
 
-        assert set(query_parameters) == {"status", "limit", "offset"}
+        assert set(query_parameters) == {"status", "limit", "offset", "sort"}
         status_schema = query_parameters["status"]["schema"]
         assert status_schema["enum"] == [
             "pending",
@@ -560,6 +560,149 @@ class TestGetTasksAggregate:
             {"type": "null"},
         ]
         assert offset_schema["title"] == "Offset"
+        sort_schema = query_parameters["sort"]["schema"]
+        assert sort_schema["enum"] == ["updated_at_desc_id_asc"]
+        assert sort_schema["title"] == "Sort"
+        sort_description = query_parameters["sort"]["description"]
+        assert "mutually exclusive with status, limit, and offset" in sort_description
+        assert "sort must be the sole query key" in sort_description
+
+    async def test_get_tasks_accepts_singleton_sort_selector(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+        task_ids = await _seed_aggregate_task_rows(db_url, count=3)
+        engine = _create_engine(db_url)
+        session_maker = get_session(engine)
+        async with session_maker() as session:
+            first = await session.get(Task, task_ids[0])
+            second = await session.get(Task, task_ids[1])
+            assert first is not None
+            assert second is not None
+            second.updated_at = first.updated_at
+            await session.commit()
+        await engine.dispose()
+        app = build_app(
+            base_dir=tmp_path / "events",
+            db_url=db_url,
+            clock=fixed_clock,
+            create_idempotency_schema_on_start=True,
+        )
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://testserver"
+            ) as client,
+        ):
+            r = await client.get("/v1/tasks?sort=updated_at_desc_id_asc")
+
+        assert r.status_code == 200
+        body = r.json()
+        assert set(body) == {
+            "route",
+            "selected_sort",
+            "retrieved_at",
+            "freshness_state",
+            "display_state",
+            "authority_state",
+            "provenance",
+            "request_id",
+            "trace_id",
+            "correlation_id",
+            "limit",
+            "returned_count",
+            "has_more",
+            "next_offset",
+            "items",
+        }
+        assert body["route"] == "GET /v1/tasks?sort={task_sort}"
+        assert body["selected_sort"] == "updated_at_desc_id_asc"
+        assert body["freshness_state"] == "fresh"
+        assert body["display_state"] == "healthy"
+        assert body["authority_state"] == "authoritative"
+        assert body["provenance"] == "registry-state task summary list"
+        assert body["limit"] == 50
+        assert body["returned_count"] == 3
+        assert body["has_more"] is False
+        assert body["next_offset"] is None
+        assert body["request_id"]
+        assert body["trace_id"]
+        assert body["correlation_id"] == body["request_id"]
+        rows = body["items"]
+        assert [row["title"] for row in rows] == [
+            "aggregate task 2",
+            "aggregate task 0",
+            "aggregate task 1",
+        ]
+        assert rows[1]["updated_at"] == rows[2]["updated_at"]
+        assert rows[1]["task_id"] < rows[2]["task_id"]
+        for row in rows:
+            assert set(row) == {
+                "task_id",
+                "status",
+                "title",
+                "created_at",
+                "updated_at",
+                "state_since",
+                "actor",
+                "last_event",
+            }
+
+    async def test_get_tasks_sort_selector_supports_only_singleton_raw_ascii_value(
+        self, aggregate_client: AsyncClient
+    ) -> None:
+        allowed = await aggregate_client.get("/v1/tasks?sort=updated_at_desc_id_asc")
+
+        assert allowed.status_code == 200
+        body = allowed.json()
+        assert body["route"] == "GET /v1/tasks?sort={task_sort}"
+        assert body["selected_sort"] == "updated_at_desc_id_asc"
+
+        for query in (
+            "sort=",
+            "sort=updated_at",
+            "sort=updated_desc",
+            "sort=created_at_desc",
+            "sort=status_asc",
+            "sort=title_asc",
+            "sort=updated_at:desc",
+            "sort=updated_at.desc",
+            "sort={%22field%22:%22updated_at%22}",
+            "sort[field]=updated_at",
+            "sort=updated_at_desc_id_asc&sort=updated_at_desc_id_asc",
+            "sort=updated_at_desc_id_asc&q=aggregate",
+            "sort=updated_at_desc_id_asc&cursor=abc",
+            "sort=updated_at_desc_id_asc&",
+            "&sort=updated_at_desc_id_asc",
+            "sort=%75pdated_at_desc_id_asc",
+            "sort=updated_at_desc_id_%61sc",
+            "sort=%EF%BD%95pdated_at_desc_id_asc",
+            "s%6Frt=updated_at_desc_id_asc",
+            "sort%5Bvalue%5D=updated_at_desc_id_asc",
+        ):
+            r = await aggregate_client.get(f"/v1/tasks?{query}")
+            assert r.status_code == 400, query
+
+    async def test_get_tasks_sort_composition_remains_closed(
+        self, aggregate_client: AsyncClient
+    ) -> None:
+        for query in (
+            "status=plan_ready&sort=updated_at_desc_id_asc",
+            "sort=updated_at_desc_id_asc&status=plan_ready",
+            "limit=2&sort=updated_at_desc_id_asc",
+            "sort=updated_at_desc_id_asc&limit=2",
+            "limit=2&offset=0&sort=updated_at_desc_id_asc",
+            "sort=updated_at_desc_id_asc&limit=2&offset=0",
+            "status=plan_ready&limit=2&sort=updated_at_desc_id_asc",
+            "status=plan_ready&sort=updated_at_desc_id_asc&limit=2",
+            "status=plan_ready&limit=2&offset=0&sort=updated_at_desc_id_asc",
+            "sort=updated_at_desc_id_asc&status=plan_ready&limit=2&offset=0",
+        ):
+            r = await aggregate_client.get(f"/v1/tasks?{query}")
+            assert r.status_code == 400, query
 
     async def test_get_tasks_accepts_single_allowed_status_filter(
         self, tmp_path: Path, fixed_clock: FrozenClock
@@ -1213,6 +1356,11 @@ class TestGetTasksAggregate:
             "/v1/tasks?status=plan_ready&limit=2&offset=1",
             content=b'{"status":"plan_ready","limit":2,"offset":1}',
         )
+        sorted_body = await aggregate_client.request(
+            "GET",
+            "/v1/tasks?sort=updated_at_desc_id_asc",
+            content=b'{"sort":"updated_at_desc_id_asc"}',
+        )
 
         assert unfiltered_body.status_code == 400
         assert filtered_body.status_code == 400
@@ -1220,11 +1368,13 @@ class TestGetTasksAggregate:
         assert composed_body.status_code == 400
         assert paginated_body.status_code == 400
         assert status_limit_offset_body.status_code == 400
+        assert sorted_body.status_code == 400
         assert "does not accept a request body" in unfiltered_body.text
         assert "does not accept a request body" in filtered_body.text
         assert "does not accept a request body" in limited_body.text
         assert "does not accept a request body" in composed_body.text
         assert "does not accept a request body" in paginated_body.text
+        assert "does not accept a request body" in sorted_body.text
 
     async def test_get_tasks_limit_is_fixed_and_does_not_expose_selector_offset(
         self, tmp_path: Path, fixed_clock: FrozenClock

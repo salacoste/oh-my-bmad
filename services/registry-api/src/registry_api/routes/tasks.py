@@ -60,6 +60,7 @@ TaskStatusFilter = Literal[
     "stopped",
     "failed",
 ]
+TaskSortSelector = Literal["updated_at_desc_id_asc"]
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +121,10 @@ _TASK_LIMIT_OFFSET_ROUTE: Literal[
 _TASK_STATUS_LIMIT_OFFSET_ROUTE: Literal[
     "GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}"
 ] = "GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}"
+_TASK_SORT_ROUTE: Literal["GET /v1/tasks?sort={task_sort}"] = (
+    "GET /v1/tasks?sort={task_sort}"
+)
+_TASK_SORT_VALUE: TaskSortSelector = "updated_at_desc_id_asc"
 _TASK_STATUS_FILTER_VALUES: tuple[TaskStatusFilter, ...] = (
     "pending",
     "planning",
@@ -150,6 +155,7 @@ _TASKS_LIMIT_OFFSET_RAW_RE = re.compile(rb"^limit=([0-9]{1,2})&offset=([0-9]{1,1
 _TASKS_STATUS_LIMIT_OFFSET_RAW_RE = re.compile(
     rb"^status=([A-Za-z_]+)&limit=([0-9]{1,2})&offset=([0-9]{1,10})$"
 )
+_TASKS_SORT_RAW_RE = re.compile(rb"^sort=updated_at_desc_id_asc$")
 
 
 def _has_empty_query_segment(raw_query: bytes) -> bool:
@@ -175,6 +181,7 @@ def _matches_tasks_raw_query_contract(raw_query: bytes) -> bool:
         or _TASKS_STATUS_LIMIT_RAW_RE.fullmatch(raw_query)
         or _TASKS_LIMIT_OFFSET_RAW_RE.fullmatch(raw_query)
         or _TASKS_STATUS_LIMIT_OFFSET_RAW_RE.fullmatch(raw_query)
+        or _TASKS_SORT_RAW_RE.fullmatch(raw_query)
     )
 
 
@@ -218,6 +225,16 @@ def _parse_task_offset_selector(value: str | None) -> int:
             detail=("GET /v1/tasks offset selector must be an integer from 0 through 2147483647"),
         )
     return selected_offset
+
+
+def _parse_task_sort_selector(value: str | None) -> TaskSortSelector:
+    """Return the singleton approved task-list sort selector or fail closed."""
+    if value != _TASK_SORT_VALUE:
+        raise HTTPException(
+            status_code=400,
+            detail="GET /v1/tasks sort selector is not allowed",
+        )
+    return value
 
 
 def _task_list_pagination_metadata(
@@ -595,6 +612,35 @@ class TaskStatusLimitOffsetSelectedListResponse(BaseModel):
     items: list[TaskSummaryOut]
 
 
+class TaskSortSelectedListResponse(BaseModel):
+    """200 OK response body for canonical GET /v1/tasks?sort=....
+
+    Story 122.2 permits exactly one API-local singleton sort selector. The
+    selected value makes the existing deterministic first-page order explicit:
+    ``updated_at DESC`` followed by ``id ASC``. It adds no status/limit/offset
+    composition, pagination traversal, search, browser control, adjacent route,
+    or mutation affordance.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    route: Literal["GET /v1/tasks?sort={task_sort}"]
+    selected_sort: TaskSortSelector
+    retrieved_at: datetime
+    freshness_state: Literal["fresh"]
+    display_state: Literal["healthy", "empty-list"]
+    authority_state: Literal["authoritative", "non-authoritative"]
+    provenance: Literal["registry-state task summary list"]
+    request_id: str
+    trace_id: str | None
+    correlation_id: str
+    limit: int
+    returned_count: int
+    has_more: bool
+    next_offset: None = None
+    items: list[TaskSummaryOut]
+
+
 class SessionSummaryOut(BaseModel):
     """One bounded session summary row for GET /v1/sessions.
 
@@ -669,6 +715,7 @@ TaskListReadResponse = (
     | TaskStatusLimitSelectedListResponse
     | TaskLimitOffsetSelectedListResponse
     | TaskStatusLimitOffsetSelectedListResponse
+    | TaskSortSelectedListResponse
 )
 
 
@@ -728,6 +775,18 @@ async def get_tasks(
             },
         ),
     ] = None,
+    sort: Annotated[
+        str | None,
+        Query(
+            description=(
+                "Optional Story 122.2 singleton task-list sort selector. Only "
+                "the exact raw ASCII value updated_at_desc_id_asc is accepted. "
+                "This selector is mutually exclusive with status, limit, and "
+                "offset; sort must be the sole query key."
+            ),
+            json_schema_extra={"enum": [_TASK_SORT_VALUE]},
+        ),
+    ] = None,
 ) -> (
     TaskListResponse
     | TaskStatusFilteredListResponse
@@ -735,6 +794,7 @@ async def get_tasks(
     | TaskStatusLimitSelectedListResponse
     | TaskLimitOffsetSelectedListResponse
     | TaskStatusLimitOffsetSelectedListResponse
+    | TaskSortSelectedListResponse
 ):
     """GET /v1/tasks — bounded aggregate task summary list.
 
@@ -746,9 +806,10 @@ async def get_tasks(
     canonical-order composition ``GET /v1/tasks?status=...&limit=...``.
     Story 117.2 adds only canonical ``GET /v1/tasks?limit=...&offset=...``.
     Story 120.2 adds only canonical ``GET /v1/tasks?status=...&limit=...&offset=...``.
+    Story 122.2 adds only canonical ``GET /v1/tasks?sort=updated_at_desc_id_asc``.
     Repeated keys, GET body, reversed query order, hidden pagination token,
     status+offset without limit, task-detail/event/session/digest traversal,
-    search, sorting, or mutation control are not accepted.
+    search, sort composition, or mutation control are not accepted.
     """
     if await request.body():
         raise HTTPException(
@@ -759,6 +820,7 @@ async def get_tasks(
     selected_status: TaskStatusFilter | None = None
     selected_limit: int | None = None
     selected_offset: int | None = None
+    selected_sort: TaskSortSelector | None = None
     effective_limit = _TASK_LIST_LIMIT
     if request.url.query:
         raw_query = request.scope.get("query_string", b"")
@@ -791,13 +853,22 @@ async def get_tasks(
             selected_limit = _parse_task_limit_selector(limit)
             selected_offset = _parse_task_offset_selector(offset)
             effective_limit = selected_limit
+        elif query_keys == ["sort"]:
+            # Story 122.2 deliberately keeps the singleton sort token in the
+            # same explicit raw-query dispatcher as prior task-list selectors:
+            # the shared code path preserves the existing first-page row
+            # contract while the branch below keeps sort mutually exclusive.
+            # Do not add more sort values or status/limit/offset composition
+            # here without a separate planning/refactor story.
+            selected_sort = _parse_task_sort_selector(sort)
         else:
             raise HTTPException(
                 status_code=400,
                 detail=(
                     "GET /v1/tasks accepts only one status selector, one limit selector, "
                     "canonical status then limit selectors, canonical limit then "
-                    "offset selectors, or canonical status then limit then offset selectors"
+                    "offset selectors, canonical status then limit then offset selectors, "
+                    "or one canonical sort selector"
                 ),
             )
 
@@ -912,6 +983,13 @@ async def get_tasks(
         return TaskLimitSelectedListResponse(
             route=_TASK_LIMIT_ROUTE,
             selected_limit=selected_limit,
+            **response_kwargs,
+        )
+
+    if selected_sort is not None:
+        return TaskSortSelectedListResponse(
+            route=_TASK_SORT_ROUTE,
+            selected_sort=selected_sort,
             **response_kwargs,
         )
 
