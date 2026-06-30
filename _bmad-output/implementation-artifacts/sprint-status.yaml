@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-06-29T23:58:00Z"
+# last_updated: "2026-06-30T00:18:57Z"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-29T23:58:00Z"
-current_phase: 43  # Phase 43 OPEN — Epic 122 exact task-list sort API-local boundary; Story 122.2 implementation/review/QA complete locally; Story 122.3 final closure remains backlog
+last_updated: "2026-06-30T00:18:57Z"
+current_phase: 43  # Phase 43 CLOSED — Epic 122 exact task-list sort API-local boundary closed after Story 122.3 recorded implementation commit 568970fbfae3c3af718896ac55ecd4f2b1ebf9ac and green ci run 28411221860
 
 development_status:
   # =========================================================================
@@ -1025,15 +1025,33 @@ development_status:
   # =========================================================================
   # Epic 122: Task list sort API-local planning
   # =========================================================================
-  epic-122: in-progress  # Phase 43 in progress after Story 122.2 local runtime/API implementation, code-review APPROVE/CLEAR, and UltraQA PASS; Story 122.3 final closure remains backlog
+  epic-122: done  # Phase 43 closed after Story 122.3 records implementation commit 568970fbfae3c3af718896ac55ecd4f2b1ebf9ac, format repair/final CI head b62848b4b8187cc069e6794190e7277f68c8ebde, and green ci run 28411221860
   122-1-task-list-sort-api-local-planning: done  # Phase 43 docs/status-only planning selected exact future canonical GET /v1/tasks?sort={task_sort} with singleton approved sort vocabulary `updated_at_desc_id_asc`; native Architect APPROVE/CLEAR followed by native Critic APPROVE/CLEAR consensus recorded; implementation deferred to exact future Story 122.2 boundary
   122-2-task-list-sort-api-local-runtime-boundary: done  # Tests-first API-route-local implementation complete for exact GET /v1/tasks?sort={task_sort} with singleton selected_sort updated_at_desc_id_asc, fail-closed body/malformed/composed selectors, code-review APPROVE/CLEAR, and UltraQA PASS; no browser wiring/search/hidden selectors/auto traversal/sort composition
-  122-3-phase-43-epic-122-final-closure: backlog  # Future docs/status final closure with implementation commit and green CI evidence after Story 122.2 local implementation/review/QA
+  122-3-phase-43-epic-122-final-closure: done  # Docs/status final closure after implementation commit 568970fbfae3c3af718896ac55ecd4f2b1ebf9ac, format repair/final CI head b62848b4b8187cc069e6794190e7277f68c8ebde, and GitHub Actions ci run 28411221860 success
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+  - date: "2026-06-30"
+    event: story-122-3-phase-43-epic-122-final-closure-complete
+    from: backlog
+    to: done
+    epic: epic-122
+    story: 122-3-phase-43-epic-122-final-closure
+    source: autopilot-story-122-3-final-closure
+    reason: >-
+      Story 122.3 closes Phase 43 / Epic 122 after implementation commit
+      568970fbfae3c3af718896ac55ecd4f2b1ebf9ac, format repair/final CI head b62848b4b8187cc069e6794190e7277f68c8ebde, and GitHub Actions ci run
+      28411221860 success. The closed boundary remains exactly API-local
+      GET /v1/tasks?sort={task_sort} with singleton approved selector
+      updated_at_desc_id_asc. Browser/dashboard sort controls, broader sort
+      vocabulary, sort composition with status/limit/offset, search/discovery,
+      hidden selectors, automatic traversal, services/MCP/dependencies/
+      deployment expansion, credentials, production operations, and mutation/
+      control behavior remain deferred/fail-closed.
 
   - date: "2026-06-29"
     event: story-122-2-task-list-sort-api-local-runtime-boundary-complete
