@@ -23,9 +23,10 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
 import cachetools
@@ -60,8 +61,6 @@ TaskStatusFilter = Literal[
     "stopped",
     "failed",
 ]
-TaskSortSelector = Literal["updated_at_desc_id_asc"]
-
 
 # ---------------------------------------------------------------------------
 # Side-channel response cache types (Story 2.13 review C1/C3/M6)
@@ -89,6 +88,20 @@ class ResponseSlot:
 
     body: bytes
     task_id: bytes
+
+
+@dataclass(frozen=True)
+class TaskSortSpec:
+    """Route-local task-list sort vocabulary and ordering definition.
+
+    The approved token and SQL order live together so a future route-local sort
+    expansion cannot update validation/OpenAPI/raw-query acceptance, default
+    ordering, or SQL order without also declaring the corresponding
+    deterministic database order.
+    """
+
+    value: str
+    order_by: Sequence[Any]
 
 
 # Type alias for the side-channel cache. Kept here (not in app.py) to avoid
@@ -122,7 +135,18 @@ _TASK_STATUS_LIMIT_OFFSET_ROUTE: Literal[
     "GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}"
 ] = "GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}"
 _TASK_SORT_ROUTE: Literal["GET /v1/tasks?sort={task_sort}"] = "GET /v1/tasks?sort={task_sort}"
-_TASK_SORT_VALUE: TaskSortSelector = "updated_at_desc_id_asc"
+_TASK_SORT_SPECS: tuple[TaskSortSpec, ...] = (
+    TaskSortSpec(
+        value="updated_at_desc_id_asc",
+        order_by=(Task.updated_at.desc(), Task.id.asc()),
+    ),
+    TaskSortSpec(
+        value="created_at_desc_id_asc",
+        order_by=(Task.created_at.desc(), Task.id.asc()),
+    ),
+)
+_DEFAULT_TASK_SORT_SPEC = _TASK_SORT_SPECS[0]
+_TASK_SORT_VALUES: tuple[str, ...] = tuple(spec.value for spec in _TASK_SORT_SPECS)
 _TASK_STATUS_FILTER_VALUES: tuple[TaskStatusFilter, ...] = (
     "pending",
     "planning",
@@ -153,7 +177,11 @@ _TASKS_LIMIT_OFFSET_RAW_RE = re.compile(rb"^limit=([0-9]{1,2})&offset=([0-9]{1,1
 _TASKS_STATUS_LIMIT_OFFSET_RAW_RE = re.compile(
     rb"^status=([A-Za-z_]+)&limit=([0-9]{1,2})&offset=([0-9]{1,10})$"
 )
-_TASKS_SORT_RAW_RE = re.compile(rb"^sort=updated_at_desc_id_asc$")
+_TASKS_SORT_RAW_RE = re.compile(
+    rb"^sort=("
+    + b"|".join(re.escape(value.encode("ascii")) for value in _TASK_SORT_VALUES)
+    + rb")$"
+)
 
 
 def _has_empty_query_segment(raw_query: bytes) -> bool:
@@ -225,14 +253,22 @@ def _parse_task_offset_selector(value: str | None) -> int:
     return selected_offset
 
 
-def _parse_task_sort_selector(value: str | None) -> TaskSortSelector:
-    """Return the singleton approved task-list sort selector or fail closed."""
-    if value != _TASK_SORT_VALUE:
+def _parse_task_sort_selector(value: str | None) -> str:
+    """Return an approved task-list sort selector or fail closed."""
+    if value not in _TASK_SORT_VALUES:
         raise HTTPException(
             status_code=400,
             detail="GET /v1/tasks sort selector is not allowed",
         )
     return value
+
+
+def _task_sort_spec(selector: str) -> TaskSortSpec:
+    """Return the route-local sort spec for an already validated selector."""
+    for spec in _TASK_SORT_SPECS:
+        if spec.value == selector:
+            return spec
+    raise AssertionError(f"unregistered task sort selector: {selector}")
 
 
 def _task_list_pagination_metadata(
@@ -613,17 +649,17 @@ class TaskStatusLimitOffsetSelectedListResponse(BaseModel):
 class TaskSortSelectedListResponse(BaseModel):
     """200 OK response body for canonical GET /v1/tasks?sort=....
 
-    Story 122.2 permits exactly one API-local singleton sort selector. The
-    selected value makes the existing deterministic first-page order explicit:
-    ``updated_at DESC`` followed by ``id ASC``. It adds no status/limit/offset
-    composition, pagination traversal, search, browser control, adjacent route,
-    or mutation affordance.
+    Story 122.2 permits exactly one API-local singleton sort selector. Story
+    124.2 extends the standalone selector vocabulary to exactly two values:
+    ``updated_at DESC`` followed by ``id ASC`` or ``created_at DESC`` followed
+    by ``id ASC``. It adds no status/limit/offset composition, pagination
+    traversal, search, browser control, adjacent route, or mutation affordance.
     """
 
     model_config = ConfigDict(frozen=True, strict=True)
 
     route: Literal["GET /v1/tasks?sort={task_sort}"]
-    selected_sort: TaskSortSelector
+    selected_sort: str
     retrieved_at: datetime
     freshness_state: Literal["fresh"]
     display_state: Literal["healthy", "empty-list"]
@@ -777,12 +813,13 @@ async def get_tasks(
         str | None,
         Query(
             description=(
-                "Optional Story 122.2 singleton task-list sort selector. Only "
-                "the exact raw ASCII value updated_at_desc_id_asc is accepted. "
-                "This selector is mutually exclusive with status, limit, and "
-                "offset; sort must be the sole query key."
+                "Optional Story 124.2 singleton task-list sort selector. Only "
+                "the exact raw ASCII values updated_at_desc_id_asc and "
+                "created_at_desc_id_asc are accepted. This selector is mutually "
+                "exclusive with status, limit, and offset; sort must be the "
+                "sole query key."
             ),
-            json_schema_extra={"enum": [_TASK_SORT_VALUE]},
+            json_schema_extra={"enum": list(_TASK_SORT_VALUES)},
         ),
     ] = None,
 ) -> (
@@ -804,7 +841,8 @@ async def get_tasks(
     canonical-order composition ``GET /v1/tasks?status=...&limit=...``.
     Story 117.2 adds only canonical ``GET /v1/tasks?limit=...&offset=...``.
     Story 120.2 adds only canonical ``GET /v1/tasks?status=...&limit=...&offset=...``.
-    Story 122.2 adds only canonical ``GET /v1/tasks?sort=updated_at_desc_id_asc``.
+    Story 124.2 permits only canonical standalone ``GET /v1/tasks?sort=...``
+    with exact values ``updated_at_desc_id_asc`` or ``created_at_desc_id_asc``.
     Repeated keys, GET body, reversed query order, hidden pagination token,
     status+offset without limit, task-detail/event/session/digest traversal,
     search, sort composition, or mutation control are not accepted.
@@ -818,7 +856,7 @@ async def get_tasks(
     selected_status: TaskStatusFilter | None = None
     selected_limit: int | None = None
     selected_offset: int | None = None
-    selected_sort: TaskSortSelector | None = None
+    selected_sort: str | None = None
     effective_limit = _TASK_LIST_LIMIT
     if request.url.query:
         raw_query = request.scope.get("query_string", b"")
@@ -852,11 +890,10 @@ async def get_tasks(
             selected_offset = _parse_task_offset_selector(offset)
             effective_limit = selected_limit
         elif query_keys == ["sort"]:
-            # Story 122.2 deliberately keeps the singleton sort token in the
+            # Story 124.2 deliberately keeps the finite sort vocabulary in the
             # same explicit raw-query dispatcher as prior task-list selectors:
-            # the shared code path preserves the existing first-page row
-            # contract while the branch below keeps sort mutually exclusive.
-            # Do not add more sort values or status/limit/offset composition
+            # the branch below keeps sort mutually exclusive with status,
+            # limit, and offset. Do not add more sort values or composition
             # here without a separate planning/refactor story.
             selected_sort = _parse_task_sort_selector(sort)
         else:
@@ -876,7 +913,10 @@ async def get_tasks(
     trace_id: str | None = getattr(request.state, "trace_id", None)
 
     async with session_maker() as session:
-        task_query = select(Task).order_by(Task.updated_at.desc(), Task.id.asc())
+        selected_sort_spec = (
+            _task_sort_spec(selected_sort) if selected_sort is not None else _DEFAULT_TASK_SORT_SPEC
+        )
+        task_query = select(Task).order_by(*selected_sort_spec.order_by)
         if selected_status is not None:
             task_query = task_query.where(Task.status == selected_status)
         if selected_offset is not None:
