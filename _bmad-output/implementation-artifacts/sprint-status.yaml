@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-06-30T16:21:28Z"
+# last_updated: "2026-06-30T21:18:00Z"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-30T16:21:28Z"
-current_phase: 44  # Phase 44 CLOSED — Epic 123 done after Story 123.3 records Story 123.2 browser-control verification, code-review APPROVE/CLEAR, UltraQA PASS, implementation commit 13e90cac0eca1410523bc33446fe1e8597c52a7f, and green CI run 28459079070
+last_updated: "2026-06-30T21:18:00Z"
+current_phase: 45  # Phase 45 CLOSED — Epic 124 done after Story 124.3 records Story 124.2 API-local sort vocabulary runtime evidence, implementation commit dceae62f30cacd118b03ec08a8970b642d7ba333, and green ci run 28476062586
 
 development_status:
   # =========================================================================
@@ -1040,10 +1040,110 @@ development_status:
   123-2-task-list-sort-browser-controls-runtime-boundary: done  # Local tests-first dashboard/browser implementation complete for visible singleton sort controls issuing exact GET /v1/tasks?sort=updated_at_desc_id_asc; preserves status/limit/offset/manual navigation separately; no API changes/sort composition/broader vocabulary/search/hidden selectors/automatic traversal
   123-3-phase-44-epic-123-final-closure: done  # Docs/status final closure records Story 123.2 browser-control verification, review/QA gates, fresh local validation, implementation commit 13e90cac0eca1410523bc33446fe1e8597c52a7f, final CI head b43f4dff53c17e2ba44757d8c84fa8af061101c8, green CI run 28459079070, and deferred/fail-closed adjacent surfaces
 
+
+  # =========================================================================
+  # Epic 124: Task list sort vocabulary API-local planning
+  # =========================================================================
+  epic-124: done  # Phase 45 closed after Story 124.3 records Story 124.2 API-local finite sort vocabulary implementation, code-review APPROVE/CLEAR, UltraQA PASS, implementation commit dceae62f30cacd118b03ec08a8970b642d7ba333, and green ci run 28476062586
+  124-1-task-list-sort-vocabulary-planning: done  # Phase 45 docs/status-only planning selected the finite API-local sort vocabulary contract defined canonically in phase-45-architecture-amendment.md; native Architect APPROVE/CLEAR followed by native Critic APPROVE/CLEAR consensus recorded; implementation deferred to exact future Story 124.2 boundary
+  124-2-task-list-sort-vocabulary-runtime-boundary: done  # Tests-first API-route-local implementation complete for exact standalone GET /v1/tasks?sort={task_sort} with values updated_at_desc_id_asc and created_at_desc_id_asc, selected_sort metadata, deterministic per-token ordering, fail-closed malformed/composed/body selectors, code-review APPROVE/CLEAR, and UltraQA PASS; no browser controls/search/hidden selectors/auto traversal/sort composition
+  124-3-phase-45-epic-124-final-closure: done  # Docs/status final closure records Story 124.2 runtime/test/review/QA evidence, implementation commit dceae62f30cacd118b03ec08a8970b642d7ba333, green CI run 28476062586, and deferred/fail-closed adjacent surfaces
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+
+  - date: "2026-06-30"
+    event: story-124-3-phase-45-epic-124-final-closure-complete
+    from: backlog
+    to: done
+    epic: epic-124
+    story: 124-3-phase-45-epic-124-final-closure
+    source: autopilot-phase-45-epic-124-closure
+    reason: >-
+      Phase 45 / Epic 124 is closed after Story 124.2 API-local task-list
+      sort vocabulary implementation was verified by targeted local tests,
+      Ruff, mypy, code-review APPROVE/CLEAR, UltraQA PASS, implementation
+      commit dceae62f30cacd118b03ec08a8970b642d7ba333, and green remote ci run 28476062586. Closure evidence records
+      exact standalone GET /v1/tasks?sort={task_sort} support for only
+      updated_at_desc_id_asc and created_at_desc_id_asc, selected_sort metadata,
+      deterministic id tie-breaks, fail-closed body/malformed/composed selector
+      rejection, and continued deferral of browser vocabulary changes, sort
+      composition with status/limit/offset, arbitrary sort grammar,
+      search/discovery, hidden selectors, automatic traversal, services/MCP/
+      dependencies/CI/deployment expansion, credentials, production operations,
+      and mutation/control behavior.
+
+  - date: "2026-06-30"
+    event: story-124-2-task-list-sort-vocabulary-runtime-boundary-complete
+    from: backlog
+    to: done
+    epic: epic-124
+    story: 124-2-task-list-sort-vocabulary-runtime-boundary
+    source: autopilot-story-124-2-ultragoal
+    reason: >-
+      Story 124.2 completes tests-first API-route-local runtime implementation
+      for the Phase 45 finite sort vocabulary. The route accepts only exact raw
+      ASCII standalone sort values updated_at_desc_id_asc and
+      created_at_desc_id_asc, returns selected_sort, orders by the selected
+      timestamp descending with id ascending tie-break, rejects GET bodies,
+      aliases, encoded keys/values, repeated/extra/composed selectors, and keeps
+      browser controls, sort composition, search/discovery, hidden selectors,
+      automatic traversal, services/MCP/dependencies/CI/deployment expansion,
+      production credentials, production operations, and mutation/control
+      behavior deferred/fail-closed.
+
+  - date: "2026-06-30"
+    event: phase-45-epic-124-closed
+    from: in-progress
+    to: done
+    epic: epic-124
+    story: 124-3-phase-45-epic-124-final-closure
+    source: autopilot-phase-45-closure-validation
+    reason: >-
+      Epic 124 / Phase 45 is closed because Story 124.1 planning, Story 124.2
+      API-local runtime implementation, and Story 124.3 docs/status closure are
+      all done with local validation, review/QA, implementation commit, and
+      remote CI evidence recorded.
+
+  - date: "2026-06-30"
+    event: story-124-1-task-list-sort-vocabulary-planning-complete
+    from: in-progress
+    to: done
+    epic: epic-124
+    story: 124-1-task-list-sort-vocabulary-planning
+    source: autopilot-story-124-1-ralplan-consensus
+    reason: >-
+      Story 124.1 completes Phase 45 docs/status-only planning after native
+      Architect APPROVE/CLEAR followed by native Critic APPROVE/CLEAR. The exact
+      future API-local implementation boundary is defined canonically in
+      phase-45-architecture-amendment.md for Story 124.2. Runtime/API/test/
+      browser implementation, browser vocabulary changes,
+      sort composition with status/limit/offset, arbitrary sort grammar,
+      search/discovery, hidden selectors, automatic traversal, services/MCP/
+      dependencies/CI/deployment expansion, production credentials, production
+      operations, and mutation/control behavior remain deferred/fail-closed.
+
+  - date: "2026-06-30"
+    event: phase-45-epic-124-opened
+    from: backlog
+    to: in-progress
+    epic: epic-124
+    story: 124-1-task-list-sort-vocabulary-planning
+    source: autopilot-story-124-1-route-selection
+    reason: >-
+      Phase 45 opens as docs/status-only planning. The selected safest next
+      deferred surface after Phase 44 / Epic 123 is API-local finite task-list
+      sort vocabulary expansion, with the exact future contract defined
+      canonically in phase-45-architecture-amendment.md. Runtime/API/test/
+      browser implementation, sort composition with status/limit/offset,
+      browser vocabulary changes,
+      arbitrary sort grammar, search/discovery, hidden selectors, automatic
+      traversal, services/MCP/dependencies/CI/deployment expansion, production
+      credentials, and production operations remain unauthorized pending
+      Story 124.1 Architect then Critic consensus.
 
   - date: "2026-06-30"
     event: story-123-3-phase-44-epic-123-final-closure-complete
