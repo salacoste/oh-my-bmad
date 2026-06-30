@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-06-30T15:20:27Z"
+# last_updated: "2026-06-30T16:21:28Z"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-30T15:20:27Z"
-current_phase: 44  # Phase 44 CLOSED — Epic 123 done after Story 123.3 records Story 123.2 browser-control verification, code-review APPROVE/CLEAR, UltraQA PASS, and local dashboard validation
+last_updated: "2026-06-30T16:21:28Z"
+current_phase: 44  # Phase 44 CLOSED — Epic 123 done after Story 123.3 records Story 123.2 browser-control verification, code-review APPROVE/CLEAR, UltraQA PASS, implementation commit 13e90cac0eca1410523bc33446fe1e8597c52a7f, and green CI run 28459079070
 
 development_status:
   # =========================================================================
@@ -1035,10 +1035,10 @@ development_status:
   # =========================================================================
   # Epic 123: Task list sort browser controls planning
   # =========================================================================
-  epic-123: done  # Phase 44 closed after Story 123.3 records Story 123.2 visible dashboard singleton sort controls, code-review APPROVE/CLEAR, UltraQA PASS, and local dashboard validation evidence
+  epic-123: done  # Phase 44 closed after Story 123.3 records Story 123.2 visible dashboard singleton sort controls, code-review APPROVE/CLEAR, UltraQA PASS, implementation commit 13e90cac0eca1410523bc33446fe1e8597c52a7f, final CI head b43f4dff53c17e2ba44757d8c84fa8af061101c8, and green CI run 28459079070
   123-1-task-list-sort-browser-controls-planning: done  # Phase 44 docs/status-only planning selected visible aggregate-task-list sort controls for exact GET /v1/tasks?sort=updated_at_desc_id_asc; native Architect APPROVE/CLEAR followed by native Critic APPROVE/CLEAR consensus recorded; implementation deferred to exact future Story 123.2 boundary
   123-2-task-list-sort-browser-controls-runtime-boundary: done  # Local tests-first dashboard/browser implementation complete for visible singleton sort controls issuing exact GET /v1/tasks?sort=updated_at_desc_id_asc; preserves status/limit/offset/manual navigation separately; no API changes/sort composition/broader vocabulary/search/hidden selectors/automatic traversal
-  123-3-phase-44-epic-123-final-closure: done  # Docs/status final closure records Story 123.2 browser-control verification, review/QA gates, fresh local validation, and deferred/fail-closed adjacent surfaces; no remote CI or commit evidence is claimed by this local closeout
+  123-3-phase-44-epic-123-final-closure: done  # Docs/status final closure records Story 123.2 browser-control verification, review/QA gates, fresh local validation, implementation commit 13e90cac0eca1410523bc33446fe1e8597c52a7f, final CI head b43f4dff53c17e2ba44757d8c84fa8af061101c8, green CI run 28459079070, and deferred/fail-closed adjacent surfaces
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
@@ -1053,15 +1053,17 @@ audit_trail:
     story: 123-3-phase-44-epic-123-final-closure
     source: autopilot-phase-44-epic-123-closure
     reason: >-
-      Phase 44 / Epic 123 is closed locally after Story 123.2 browser controls
-      were verified by review/QA evidence and fresh local dashboard validation.
-      Closure evidence records visible singleton sort controls for exactly
-      GET /v1/tasks?sort=updated_at_desc_id_asc, separate singleton-sort rendering,
-      unchanged status/limit/offset/manual pagination state, and fail-closed
-      rejection of sort composition, broader vocabulary, hidden selectors, automatic
-      traversal, backend/API expansion, services/MCP/dependency/CI/deployment changes,
-      credentials, and production operations. No remote CI or commit evidence is
-      claimed by this local closeout.
+      Phase 44 / Epic 123 is closed after Story 123.2 browser controls were
+      verified by review/QA evidence, fresh local dashboard validation,
+      implementation commit 13e90cac0eca1410523bc33446fe1e8597c52a7f, format
+      repair/final CI head b43f4dff53c17e2ba44757d8c84fa8af061101c8, and green
+      remote ci run 28459079070. Closure evidence records visible singleton sort
+      controls for exactly GET /v1/tasks?sort=updated_at_desc_id_asc, separate
+      singleton-sort rendering, unchanged status/limit/offset/manual pagination
+      state, and fail-closed rejection of sort composition, broader vocabulary,
+      hidden selectors, automatic traversal, backend/API expansion,
+      services/MCP/dependency/CI/deployment changes, credentials, and production
+      operations.
 
   - date: "2026-06-30"
     event: story-123-2-task-list-sort-browser-controls-runtime-boundary-complete

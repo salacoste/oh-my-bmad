@@ -1,10 +1,10 @@
 # Story 123.3 — Phase 44 / Epic 123 final closure
 
-Generated: 2026-06-30T15:20:27Z
+Generated: 2026-06-30T16:21:28Z
 
 ## Closure scope
 
-Story 123.3 closes Phase 44 / Epic 123 locally after:
+Story 123.3 closes Phase 44 / Epic 123 after:
 
 - Story 123.1 selected the exact browser/dashboard singleton sort-control boundary with Architect APPROVE/CLEAR followed by Critic APPROVE/CLEAR.
 - Story 123.2 implemented and verified visible aggregate task-list browser controls for exactly `GET /v1/tasks?sort=updated_at_desc_id_asc`.
@@ -45,9 +45,14 @@ Story 123.2 recorded these local validation commands before closure:
 
 Story 123.3 refreshed the docs/status closure and revalidated it in `.omx/artifacts/ultragoal/story-123-3/closure-verification.log`: `node --check` passed, targeted aggregate dashboard tests passed (12 passed), full dashboard tests passed (218 passed), YAML/status assertions passed, stale current Phase 44 open/backlog wording check passed, and `git diff --check` passed.
 
-## No remote CI claim
+## Implementation commit and remote CI evidence
 
-This local closeout does **not** claim a pushed commit SHA or remote GitHub Actions run. The closure evidence is the existing Story 123.2 review/QA gate evidence plus local dashboard validation and docs/status consistency checks.
+- Implementation/local closure commit: `13e90cac0eca1410523bc33446fe1e8597c52a7f` (`feat(dashboard): add task sort controls`).
+- Initial remote `ci` run `28458968977` failed at `ruff format --check` only after registry-state tests passed.
+- Format repair/final implementation CI head: `b43f4dff53c17e2ba44757d8c84fa8af061101c8` (`style(dashboard): format task sort tests`).
+- Final remote `ci` run: `28459079070` — success.
+- CI URL: https://github.com/salacoste/oh-my-bmad/actions/runs/28459079070.
+- Successful jobs in final run: `Registry-state tests (Postgres service container)` and `PR gate (ruff + mypy + pytest)`, including `ruff check`, `ruff format --check`, strict mypy, guard scripts, full-tree secret check, and `pytest -m "not slow"`.
 
 ## Final boundary statement
 
@@ -55,4 +60,4 @@ The dashboard/browser route is exactly `GET /v1/tasks?sort=updated_at_desc_id_as
 
 ## Completion timestamp
 
-2026-06-30T15:20:27Z
+2026-06-30T16:21:28Z
