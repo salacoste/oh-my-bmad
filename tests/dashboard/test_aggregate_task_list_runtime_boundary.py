@@ -215,8 +215,6 @@ def runtime_source() -> str:
     return RUNTIME.read_text(encoding="utf-8")
 
 
-
-
 def raw_sort_options() -> list[tuple[str, bool]]:
     raw = DASHBOARD.read_text(encoding="utf-8")
     match = re.search(
@@ -226,12 +224,16 @@ def raw_sort_options() -> list[tuple[str, bool]]:
     )
     assert match is not None
     return [
-        (option_match.group("value"), "selected" in (option_match.group("attrs") + option_match.group("attrs_after")))
+        (
+            option_match.group("value"),
+            "selected" in (option_match.group("attrs") + option_match.group("attrs_after")),
+        )
         for option_match in re.finditer(
             r'<option(?P<attrs>[^>]*)value="(?P<value>[^"]+)"(?P<attrs_after>[^>]*)>',
             match.group("body"),
         )
     ]
+
 
 def test_story_118_2_runtime_script_allowlist_and_visible_controls_are_exact() -> None:
     parser = parse_scripts()
@@ -489,7 +491,10 @@ def test_story_123_2_singleton_sort_control_fetches_exact_route_without_composit
                         returned_count=2,
                         has_more=True,
                         next_offset=9,
-                        items=[task_row(task_id="failed-1", status="failed"), task_row(task_id="failed-2", status="failed")],
+                        items=[
+                            task_row(task_id="failed-1", status="failed"),
+                            task_row(task_id="failed-2", status="failed"),
+                        ],
                     ),
                 },
                 {"ok": True, "status": 200, "body": sorted_response_body()},
@@ -563,7 +568,9 @@ def test_story_123_2_singleton_sort_control_rejects_invalid_visible_sort_before_
     for case in invalid_cases:
         output = run_runtime_case(case)
         sort_rendered = " ".join(
-            text for key, text in output["texts"].items() if key.startswith("aggregate-task-list-sort-")
+            text
+            for key, text in output["texts"].items()
+            if key.startswith("aggregate-task-list-sort-")
         ).lower()
         assert_default_status_limit_offset_fetch(output)
         assert "invalid visible aggregate task-list singleton sort selector" in sort_rendered
@@ -585,7 +592,11 @@ def test_story_123_2_singleton_sort_response_validation_fails_closed() -> None:
             "name": "sort-selected-mismatch",
             "responses": [
                 {"ok": True, "status": 200, "body": response_body()},
-                {"ok": True, "status": 200, "body": sorted_response_body(selected_sort="updated_at")},
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": sorted_response_body(selected_sort="updated_at"),
+                },
             ],
             "clickTargets": ["aggregate-task-list-sort-load"],
             "expected": ["invalid"],
@@ -603,7 +614,11 @@ def test_story_123_2_singleton_sort_response_validation_fails_closed() -> None:
             "name": "sort-healthy-non-authoritative",
             "responses": [
                 {"ok": True, "status": 200, "body": response_body()},
-                {"ok": True, "status": 200, "body": sorted_response_body(authority_state="non-authoritative")},
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": sorted_response_body(authority_state="non-authoritative"),
+                },
             ],
             "clickTargets": ["aggregate-task-list-sort-load"],
             "expected": ["invalid"],
@@ -637,7 +652,9 @@ def test_story_123_2_singleton_sort_response_validation_fails_closed() -> None:
     for case in cases:
         output = run_runtime_case(case)
         sort_rendered = " ".join(
-            text for key, text in output["texts"].items() if key.startswith("aggregate-task-list-sort-")
+            text
+            for key, text in output["texts"].items()
+            if key.startswith("aggregate-task-list-sort-")
         ).lower()
         assert output["fetchCalls"][0] == {
             "route": DEFAULT_ROUTE,
