@@ -121,9 +121,7 @@ _TASK_LIMIT_OFFSET_ROUTE: Literal[
 _TASK_STATUS_LIMIT_OFFSET_ROUTE: Literal[
     "GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}"
 ] = "GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}"
-_TASK_SORT_ROUTE: Literal["GET /v1/tasks?sort={task_sort}"] = (
-    "GET /v1/tasks?sort={task_sort}"
-)
+_TASK_SORT_ROUTE: Literal["GET /v1/tasks?sort={task_sort}"] = "GET /v1/tasks?sort={task_sort}"
 _TASK_SORT_VALUE: TaskSortSelector = "updated_at_desc_id_asc"
 _TASK_STATUS_FILTER_VALUES: tuple[TaskStatusFilter, ...] = (
     "pending",
