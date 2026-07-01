@@ -16,7 +16,10 @@ ROUTE_PATTERN = (
 )
 SORT_ROUTE_PATTERN = "GET /v1/tasks?sort={task_sort}"
 SORT_VALUE = "updated_at_desc_id_asc"
+CREATED_SORT_VALUE = "created_at_desc_id_asc"
+SORT_VALUES = (SORT_VALUE, CREATED_SORT_VALUE)
 SORT_ROUTE = f"/v1/tasks?sort={SORT_VALUE}"
+CREATED_SORT_ROUTE = f"/v1/tasks?sort={CREATED_SORT_VALUE}"
 MAX_OFFSET = 2_147_483_647
 ALLOWED_ROW_STATUSES = (
     "pending",
@@ -304,7 +307,7 @@ def test_story_118_2_runtime_script_allowlist_and_visible_controls_are_exact() -
         "id": "aggregate-task-list-sort-load",
         "type": "button",
     }
-    assert raw_sort_options() == [(SORT_VALUE, True)]
+    assert raw_sort_options() == [(SORT_VALUE, True), (CREATED_SORT_VALUE, False)]
     assert controls_by_id["lifecycle-snapshot-create-token"]["tag"] == "input"
     assert controls_by_id["lifecycle-snapshot-create-button"]["tag"] == "button"
     assert all(
@@ -386,7 +389,9 @@ def test_story_118_2_panel_exposes_limit_offset_runtime_metadata_targets() -> No
     assert "no automatic traversal" in lowered
     assert "no infinite scroll" in lowered
     assert "no search" in lowered
-    assert "singleton sort controls" in lowered
+    assert "standalone sort controls" in lowered
+    assert "singleton" not in lowered
+    assert "created_at_desc_id_asc" in lowered
     assert "no broader sort vocabulary" in lowered
     assert "no sort composition with status/limit/offset" in lowered
     assert "no request body" in lowered
@@ -439,10 +444,10 @@ def response_body(**overrides: object) -> dict[str, object]:
     return body
 
 
-def sorted_response_body(**overrides: object) -> dict[str, object]:
+def sorted_response_body(selected_sort: str = SORT_VALUE, **overrides: object) -> dict[str, object]:
     body: dict[str, object] = {
         "route": SORT_ROUTE_PATTERN,
-        "selected_sort": SORT_VALUE,
+        "selected_sort": selected_sort,
         "retrieved_at": "2026-06-29T00:00:03Z",
         "freshness_state": "fresh",
         "display_state": "healthy",
@@ -527,6 +532,73 @@ def test_story_123_2_singleton_sort_control_fetches_exact_route_without_composit
     assert output["disabled"]["aggregate-task-list-next-offset"] is False
 
 
+def test_story_125_1_created_at_sort_control_fetches_exact_route_without_composition() -> None:
+    output = run_runtime_case(
+        {
+            "name": "created-at-sort-click",
+            "controlValues": {
+                "aggregate-task-list-status-control": "failed",
+                "aggregate-task-list-limit-control": "2",
+                "aggregate-task-list-offset-control": "7",
+                "aggregate-task-list-sort-control": CREATED_SORT_VALUE,
+            },
+            "responses": [
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": response_body(
+                        selected_status="failed",
+                        selected_limit=2,
+                        selected_offset=7,
+                        limit=2,
+                        returned_count=2,
+                        has_more=True,
+                        next_offset=9,
+                        items=[
+                            task_row(task_id="failed-1", status="failed"),
+                            task_row(task_id="failed-2", status="failed"),
+                        ],
+                    ),
+                },
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": sorted_response_body(
+                        CREATED_SORT_VALUE,
+                        items=[
+                            task_row(task_id="created-new", status="completed", created_at="2026-06-29T00:00:03Z"),
+                            task_row(task_id="created-old", status="pending", created_at="2026-06-29T00:00:01Z"),
+                        ],
+                    ),
+                },
+            ],
+            "clickTargets": ["aggregate-task-list-sort-load"],
+            "expected": ["created_at_desc_id_asc", "runtime route"],
+        }
+    )
+    assert output["fetchCalls"] == [
+        {
+            "route": "/v1/tasks?status=failed&limit=2&offset=7",
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        },
+        {
+            "route": CREATED_SORT_ROUTE,
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        },
+    ]
+    sort_rendered = " ".join(
+        text for key, text in output["texts"].items() if key.startswith("aggregate-task-list-sort-")
+    ).lower()
+    assert "sort source: get /v1/tasks?sort={task_sort}" in sort_rendered
+    assert "runtime route: /v1/tasks?sort=created_at_desc_id_asc" in sort_rendered
+    assert "selected sort: created_at_desc_id_asc" in sort_rendered
+    assert "created-new completed" in sort_rendered
+
+
 def test_story_123_2_singleton_sort_control_rejects_invalid_visible_sort_before_fetch() -> None:
     invalid_cases: list[RuntimeCase] = [
         {
@@ -573,7 +645,7 @@ def test_story_123_2_singleton_sort_control_rejects_invalid_visible_sort_before_
             if key.startswith("aggregate-task-list-sort-")
         ).lower()
         assert_default_status_limit_offset_fetch(output)
-        assert "invalid visible aggregate task-list singleton sort selector" in sort_rendered
+        assert "invalid visible aggregate task-list standalone sort selector" in sort_rendered
         assert "sort authority: authoritative" not in sort_rendered
 
 

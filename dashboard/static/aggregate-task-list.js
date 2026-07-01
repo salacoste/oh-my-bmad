@@ -4,7 +4,7 @@
   const ROUTE = "/v1/tasks";
   const ROUTE_PATTERN = "GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}";
   const SORT_ROUTE_PATTERN = "GET /v1/tasks?sort={task_sort}";
-  const SORT_VALUE = "updated_at_desc_id_asc";
+  const SORT_VALUES = new Set(["updated_at_desc_id_asc", "created_at_desc_id_asc"]);
   const MAX_LIMIT = 50;
   const MAX_OFFSET = 2147483647;
   const STATUS_CONTROL_ID = "aggregate-task-list-status-control";
@@ -82,7 +82,7 @@
     const sortControl = element(SORT_CONTROL_ID);
     if (!sortControl || sortControl.type === "hidden") return null;
     const sort = label(sortControl.value, "");
-    return sort === SORT_VALUE ? sort : null;
+    return SORT_VALUES.has(sort) ? sort : null;
   }
 
   function readSelectors() {
@@ -292,7 +292,7 @@
   }
 
   function renderSort(state, authority, freshness, provenance, correlation, selectedSort, runtimeRoute, pagination, degraded, count, rows) {
-    write("aggregate-task-list-sort-status", `Aggregate task-list singleton sort state: ${state}.`);
+    write("aggregate-task-list-sort-status", `Aggregate task-list standalone sort state: ${state}.`);
     write("aggregate-task-list-sort-source", `Sort source: ${SORT_ROUTE_PATTERN}. Runtime route: ${runtimeRoute}.`);
     write("aggregate-task-list-sort-selected-sort", `Selected sort: ${selectedSort}.`);
     write("aggregate-task-list-sort-freshness", `Sort freshness: ${freshness}.`);
@@ -319,7 +319,7 @@
 
   function renderSortBody(body, selectedSort) {
     if (!validSortMetadata(body, selectedSort)) {
-      renderSortClosed("invalid", "invalid aggregate task list singleton sort response; not authoritative.", selectedSort);
+      renderSortClosed("invalid", "invalid aggregate task list standalone sort response; not authoritative.", selectedSort);
       return;
     }
     const state = body.display_state;
@@ -329,11 +329,11 @@
     const pagination = `selected sort ${body.selected_sort}; returned ${body.returned_count}; has_more ${body.has_more}; next_offset none; status_window_controls unchanged`;
     const runtimeRoute = selectedSortRoute(selectedSort);
     if (state === "empty-list") {
-      renderSort(state, "non-authoritative", body.retrieved_at, provenance, correlation, String(body.selected_sort), runtimeRoute, pagination, state, "0", "empty successful sorted read; no task rows returned.");
+      renderSort(state, "non-authoritative", body.retrieved_at, provenance, correlation, String(body.selected_sort), runtimeRoute, pagination, state, "0", "empty successful standalone sorted read; no task rows returned.");
       return;
     }
     if (state !== "healthy") {
-      renderSort(state, "non-authoritative", body.retrieved_at, provenance, correlation, String(body.selected_sort), runtimeRoute, pagination, state, String(body.returned_count), `${state} aggregate task list singleton sort response; not authoritative.`);
+      renderSort(state, "non-authoritative", body.retrieved_at, provenance, correlation, String(body.selected_sort), runtimeRoute, pagination, state, String(body.returned_count), `${state} aggregate task list standalone sort response; not authoritative.`);
       return;
     }
     renderSort(state, authority, body.retrieved_at, provenance, correlation, String(body.selected_sort), runtimeRoute, pagination, "none", String(body.returned_count), body.items.map(rowText).join("\n"));
@@ -370,7 +370,7 @@
     if (sortLoadInFlight) return undefined;
     const selectedSort = readSortSelector();
     if (!selectedSort) {
-      renderSortClosed("invalid", "invalid visible aggregate task-list singleton sort selector; not authoritative.", null);
+      renderSortClosed("invalid", "invalid visible aggregate task-list standalone sort selector; not authoritative.", null);
       return undefined;
     }
     const route = selectedSortRoute(selectedSort);
@@ -379,20 +379,20 @@
       const response = await fetch(route, { method: "GET", credentials: "omit" });
       if (!response.ok) {
         const state = response.status === 401 || response.status === 403 ? "unauthorized" : "backend-unavailable";
-        renderSortClosed(state, `${state.replace(/-/g, " ")} response for aggregate task list singleton sort read; not authoritative.`, selectedSort);
+        renderSortClosed(state, `${state.replace(/-/g, " ")} response for aggregate task list standalone sort read; not authoritative.`, selectedSort);
         return undefined;
       }
       let body;
       try {
         body = await response.json();
       } catch (_error) {
-        renderSortClosed("invalid", "invalid aggregate task list singleton sort response; not authoritative.", selectedSort);
+        renderSortClosed("invalid", "invalid aggregate task list standalone sort response; not authoritative.", selectedSort);
         return undefined;
       }
       renderSortBody(body, selectedSort);
       return undefined;
     } catch (_error) {
-      renderSortClosed("backend-unavailable", "backend unavailable for aggregate task list singleton sort read; not authoritative.", selectedSort);
+      renderSortClosed("backend-unavailable", "backend unavailable for aggregate task list standalone sort read; not authoritative.", selectedSort);
       return undefined;
     } finally {
       setSortControlsLoading(false);
