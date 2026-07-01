@@ -52,7 +52,6 @@ APPROVED_STORY_107_2_CONTROL_IDS = frozenset(
         "aggregate-task-list-previous-offset",
         "aggregate-task-list-next-offset",
         "aggregate-task-list-sort-control",
-        "aggregate-task-list-sort-load",
         "lifecycle-snapshot-create-token",
         "lifecycle-snapshot-create-button",
     }

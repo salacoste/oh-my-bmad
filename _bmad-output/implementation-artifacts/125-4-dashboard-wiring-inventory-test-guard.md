@@ -11,7 +11,7 @@ Critic review: `.omx/artifacts/ralplan/story-125-3-125-4-critic-review.md`
 
 ## Decision
 
-Story 125.4 starts broad dashboard cleanup with inventory and behavior-preserving test guards only. It does not perform dashboard runtime cleanup, source rewiring, API/backend behavior changes, browser behavior changes, dependency changes, or production operations.
+Story 125.4 starts broad dashboard cleanup with inventory and behavior-preserving test guards only. It does not perform dashboard runtime cleanup, source rewiring, API/backend behavior changes, browser behavior changes, dependency changes, or production operations. Phase 47 / Story 126.2 intentionally updates this shared guard to reflect the now-approved browser-visible aggregate task-list full selector composition route.
 
 ## Parseable inventory
 
@@ -46,8 +46,7 @@ Story 125.4 starts broad dashboard cleanup with inventory and behavior-preservin
     "runtime_path": "dashboard/static/aggregate-task-list.js",
     "test_path": "tests/dashboard/test_aggregate_task_list_runtime_boundary.py",
     "approved_route_patterns": [
-      "GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}",
-      "GET /v1/tasks?sort={task_sort}"
+      "GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}"
     ],
     "approved_fetch_base": "/v1/tasks",
     "visible_control_ids": [
@@ -57,8 +56,7 @@ Story 125.4 starts broad dashboard cleanup with inventory and behavior-preservin
       "aggregate-task-list-load",
       "aggregate-task-list-previous-offset",
       "aggregate-task-list-next-offset",
-      "aggregate-task-list-sort-control",
-      "aggregate-task-list-sort-load"
+      "aggregate-task-list-sort-control"
     ],
     "metadata_target_ids": [
       "aggregate-task-list-status",
@@ -66,6 +64,7 @@ Story 125.4 starts broad dashboard cleanup with inventory and behavior-preservin
       "aggregate-task-list-selected-status",
       "aggregate-task-list-selected-limit",
       "aggregate-task-list-selected-offset",
+      "aggregate-task-list-selected-sort",
       "aggregate-task-list-freshness",
       "aggregate-task-list-authority",
       "aggregate-task-list-provenance",
@@ -73,18 +72,7 @@ Story 125.4 starts broad dashboard cleanup with inventory and behavior-preservin
       "aggregate-task-list-pagination",
       "aggregate-task-list-degraded",
       "aggregate-task-list-count",
-      "aggregate-task-list-rows",
-      "aggregate-task-list-sort-status",
-      "aggregate-task-list-sort-source",
-      "aggregate-task-list-sort-selected-sort",
-      "aggregate-task-list-sort-freshness",
-      "aggregate-task-list-sort-authority",
-      "aggregate-task-list-sort-provenance",
-      "aggregate-task-list-sort-correlation",
-      "aggregate-task-list-sort-pagination",
-      "aggregate-task-list-sort-degraded",
-      "aggregate-task-list-sort-count",
-      "aggregate-task-list-sort-rows"
+      "aggregate-task-list-rows"
     ],
     "authorized_sort_values": [
       "updated_at_desc_id_asc",
@@ -95,7 +83,7 @@ Story 125.4 starts broad dashboard cleanup with inventory and behavior-preservin
   "runtime_modules": [
     {"script": "health-readiness.js", "boundary": "GET /v1/health", "status": "live_guarded"},
     {"script": "task-detail.js", "boundary": "GET /v1/tasks/{task_id}", "status": "live_guarded"},
-    {"script": "aggregate-task-list.js", "boundary": "approved aggregate task-list reads only", "status": "live_guarded"},
+    {"script": "aggregate-task-list.js", "boundary": "GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}", "status": "live_guarded"},
     {"script": "session-list.js", "boundary": "GET /v1/sessions", "status": "live_guarded"},
     {"script": "session-detail.js", "boundary": "GET /v1/sessions/{session_id}", "status": "live_guarded"},
     {"script": "event-timeline.js", "boundary": "task-scoped events/transitions read", "status": "live_guarded"},
@@ -146,7 +134,7 @@ Story 125.4 starts broad dashboard cleanup with inventory and behavior-preservin
 
 ## Live vs deferred classification
 
-- Live guarded: the eleven static dashboard scripts and their already-approved route/read boundaries listed above.
+- Live guarded: the eleven static dashboard scripts and their already-approved route/read boundaries listed above, including Phase 47 / Story 126.2 aggregate task-list full selector composition.
 - Deferred: task-list search/discovery runtime, arbitrary query grammar, hidden selectors, automatic traversal, generated live data, and broad dashboard cleanup.
 - Not a cleanup target in this story: runtime JavaScript, HTML wiring, backend/API routes, services, dependencies, lockfiles, CI/deployment, credentials, and production operations.
 

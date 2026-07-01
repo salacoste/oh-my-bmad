@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-07-01T22:30:42Z"
+# last_updated: "2026-07-01T23:08:45Z"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-07-01T22:30:42Z"
-current_phase: 46  # Phase 46 CLOSED — Epic 125 is done after Story 125.1 browser-visible two-value sort vocabulary implementation, Story 125.2 API-local sort composition, Story 125.3 search/discovery implementation-planning gate, Story 125.4 dashboard inventory/test guards, final closure verification, and green post-push ci/nightly evidence
+last_updated: "2026-07-01T23:08:45Z"
+current_phase: 47  # Phase 47 / Epic 126 done locally — browser aggregate-task-list full selector composition implemented for exact status+limit+offset+sort route after code-review APPROVE/CLEAR and UltraQA PASS
 
 development_status:
   # =========================================================================
@@ -1065,10 +1065,59 @@ development_status:
   125-4-dashboard-wiring-inventory-test-guard: done  # Parseable dashboard module/contract inventory plus behavior-preserving regression guards; no dashboard runtime JS/HTML/backend/API rewiring
   125-5-phase-46-epic-125-final-closure: done  # Docs/status closure records Story 125.1 browser sort vocabulary commit a21c998, Story 125.2-125.4 review/QA artifacts, fresh broad local verification, green post-push ci run 28548956857 and nightly run 28548956835, and retained fail-closed adjacent surfaces
 
+
+
+  # =========================================================================
+  # Epic 126: Dashboard/browser full selector composition
+  # =========================================================================
+  epic-126: done  # Phase 47 browser aggregate-task-list full selector composition complete locally after code-review APPROVE/CLEAR and UltraQA PASS; search/discovery and broad rewiring remain closed
+  126-1-browser-full-selector-composition-planning: done  # Phase 47 PRD/architecture/epics plus Story 126.2 plan/test spec approved by native Architect APPROVE/CLEAR followed by native Critic APPROVE/CLEAR
+  126-2-browser-full-selector-composition-runtime-boundary: done  # Dashboard runtime/test implementation complete for exact GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}; code-review APPROVE/CLEAR and UltraQA PASS
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+
+  - date: "2026-07-01"
+    event: story-126-2-browser-full-selector-composition-done
+    from: review
+    to: done
+    epic: epic-126
+    story: 126-2-browser-full-selector-composition-runtime-boundary
+    source: autopilot-phase-47-epic-126
+    reason: >-
+      Story 126.2 completes the browser aggregate-task-list full selector
+      composition boundary for exact GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}
+      from visible status, limit, offset, and finite sort controls only.
+      Manual previous/next controls require the last authoritative selector
+      tuple before fetching; invalid, stale, unauthorized, backend-unavailable,
+      malformed, empty-list, and non-authoritative paths keep navigation
+      fail-closed until an explicit successful authoritative reload. Native
+      code-review returned APPROVE/CLEAR and native UltraQA returned PASS;
+      targeted dashboard guards, full dashboard suite, ruff checks, node
+      syntax check, and diff whitespace checks pass. Search/discovery,
+      hidden selectors, automatic traversal, row-driven traversal, broad
+      dashboard rewiring, backend/API changes, dependencies, credentials,
+      CI/deployment changes, and production operations remain deferred/fail-closed.
+
+
+  - date: "2026-07-01"
+    event: story-126-2-browser-full-selector-composition-local-implementation
+    from: in-progress
+    to: review
+    epic: epic-126
+    story: 126-2-browser-full-selector-composition-runtime-boundary
+    source: autopilot-phase-47-epic-126
+    reason: >-
+      Story 126.2 locally implements exact browser aggregate-task-list full
+      selector composition for GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}
+      from visible status, limit, offset, and finite sort controls only. Local
+      targeted dashboard runtime boundary tests pass. Search/discovery,
+      hidden selectors, automatic traversal, broad dashboard rewiring,
+      backend/API changes, dependencies, credentials, and production operations
+      remain deferred/fail-closed.
 
 
   - date: "2026-07-01"

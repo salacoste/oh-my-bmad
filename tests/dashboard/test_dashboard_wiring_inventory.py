@@ -92,14 +92,13 @@ def test_story_125_4_inventory_matches_aggregate_task_list_contract_targets() ->
     assert aggregate["runtime_path"] == str(AGGREGATE_RUNTIME)
     assert aggregate["approved_fetch_base"] == "/v1/tasks"
     assert aggregate["approved_route_patterns"] == [
-        "GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}",
-        "GET /v1/tasks?sort={task_sort}",
+        "GET /v1/tasks?status={task_status}&limit={task_list_limit}"
+        "&offset={task_list_offset}&sort={task_sort}",
     ]
     assert (
-        "GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}"
-        in runtime
+        "GET /v1/tasks?status={task_status}&limit={task_list_limit}"
+        "&offset={task_list_offset}&sort={task_sort}" in runtime
     )
-    assert "GET /v1/tasks?sort={task_sort}" in runtime
 
     for element_id in aggregate["visible_control_ids"] + aggregate["metadata_target_ids"]:
         assert f'id="{element_id}"' in dashboard
