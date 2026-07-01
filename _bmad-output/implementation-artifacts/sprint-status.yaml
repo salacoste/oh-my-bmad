@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-07-01T21:05:00Z"
+# last_updated: "2026-07-01T22:30:42Z"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-07-01T21:05:00Z"
-current_phase: 46  # Phase 46 CLOSED — Epic 125 is done after Story 125.2 API-local sort composition, Story 125.3 search/discovery implementation-planning gate, Story 125.4 dashboard inventory/test guards, and final closure verification
+last_updated: "2026-07-01T22:30:42Z"
+current_phase: 46  # Phase 46 CLOSED — Epic 125 is done after Story 125.1 browser-visible two-value sort vocabulary implementation, Story 125.2 API-local sort composition, Story 125.3 search/discovery implementation-planning gate, Story 125.4 dashboard inventory/test guards, final closure verification, and green post-push ci/nightly evidence
 
 development_status:
   # =========================================================================
@@ -1053,8 +1053,8 @@ development_status:
   # =========================================================================
   # Epic 125: Dashboard task-list expansion planning matrix
   # =========================================================================
-  epic-125: done  # Phase 46 closed after Story 125.2 API-local full selector composition, Story 125.3 search/discovery implementation-planning gate, Story 125.4 dashboard inventory/test guards, code-review/QA evidence, and final closure verification
-  125-1-task-list-sort-browser-vocabulary-planning: done  # Planning-only selection of future visible dashboard finite sort vocabulary controls for updated_at_desc_id_asc and created_at_desc_id_asc; no sort composition/search/hidden selectors/automatic traversal/backend/API changes
+  epic-125: done  # Phase 46 closed after Story 125.1 browser-visible finite sort vocabulary commit a21c998, Story 125.2 API-local full selector composition, Story 125.3 search/discovery implementation-planning gate, Story 125.4 dashboard inventory/test guards, code-review/QA evidence, final closure verification, and green post-push ci run 28548956857 plus nightly run 28548956835
+  125-1-task-list-sort-browser-vocabulary-planning: done  # Planning selected finite browser sort vocabulary and pushed commit a21c998 shipped visible dashboard controls for exactly updated_at_desc_id_asc and created_at_desc_id_asc; no sort composition/search/hidden selectors/automatic traversal/backend/API changes
   125-2-task-list-sort-composition-planning: done  # Planning-only record of future API-local status+limit+offset+sort composition candidate; implementation followed under exact Story 125.2 runtime boundary
   125-2-task-list-sort-composition-runtime-boundary: done  # Tests-first API-route-local implementation complete for exact canonical GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}; finite/bounded domains, selected_sort metadata, fail-closed malformed/partial/body selectors, no browser composition/search/hidden selectors
   125-3-task-list-search-discovery-planning: done  # Planning-only high-risk classification; no task-list search/discovery runtime selected or authorized in Phase 46
@@ -1063,12 +1063,32 @@ development_status:
   125-4-broad-dashboard-wiring-cleanup-planning: done  # Planning-only high-risk classification; no broad dashboard rewiring/runtime cleanup authorized in Phase 46
   125-4-broad-dashboard-wiring-cleanup-further-planning: done  # Further planning-only inventory/test-guard contract; no broad dashboard runtime rewiring
   125-4-dashboard-wiring-inventory-test-guard: done  # Parseable dashboard module/contract inventory plus behavior-preserving regression guards; no dashboard runtime JS/HTML/backend/API rewiring
-  125-5-phase-46-epic-125-final-closure: done  # Docs/status closure records Story 125.2-125.4 review/QA artifacts, fresh broad local verification, and retained fail-closed adjacent surfaces
+  125-5-phase-46-epic-125-final-closure: done  # Docs/status closure records Story 125.1 browser sort vocabulary commit a21c998, Story 125.2-125.4 review/QA artifacts, fresh broad local verification, green post-push ci run 28548956857 and nightly run 28548956835, and retained fail-closed adjacent surfaces
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+
+  - date: "2026-07-01"
+    event: story-125-post-push-status-reconciliation-complete
+    from: review
+    to: done
+    epic: epic-125
+    story: 125-post-push-status-reconciliation
+    source: autopilot-post-push-status-reconciliation
+    reason: >-
+      Post-push reconciliation records green remote ci run 28548956857 and
+      nightly run 28548956835 for the Phase 46 closure head, and corrects
+      docs/status to state that commit a21c998 actually shipped the
+      browser-visible two-value aggregate-task-list sort vocabulary controls
+      for updated_at_desc_id_asc and created_at_desc_id_asc rather than
+      leaving that browser vocabulary as only a future candidate. Browser
+      full selector composition, search/discovery runtime, hidden selectors,
+      automatic traversal, broad dashboard rewiring, dependencies,
+      CI/deployment changes, credentials, and production operations remain
+      deferred/fail-closed until separately selected.
 
 
   - date: "2026-07-01"
