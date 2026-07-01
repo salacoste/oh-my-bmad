@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-06-30T21:18:00Z"
+# last_updated: "2026-06-30T21:44:33Z"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-30T21:18:00Z"
-current_phase: 45  # Phase 45 CLOSED — Epic 124 done after Story 124.3 records Story 124.2 API-local sort vocabulary runtime evidence, implementation commit dceae62f30cacd118b03ec08a8970b642d7ba333, and green ci run 28476062586
+last_updated: "2026-06-30T21:44:33Z"
+current_phase: 46  # Phase 46 OPEN — Epic 125 docs/status-only planning matrix complete for four requested aggregate-task-list/dashboard candidates; implementation remains future-only
 
 development_status:
   # =========================================================================
@@ -1049,10 +1049,61 @@ development_status:
   124-2-task-list-sort-vocabulary-runtime-boundary: done  # Tests-first API-route-local implementation complete for exact standalone GET /v1/tasks?sort={task_sort} with values updated_at_desc_id_asc and created_at_desc_id_asc, selected_sort metadata, deterministic per-token ordering, fail-closed malformed/composed/body selectors, code-review APPROVE/CLEAR, and UltraQA PASS; no browser controls/search/hidden selectors/auto traversal/sort composition
   124-3-phase-45-epic-124-final-closure: done  # Docs/status final closure records Story 124.2 runtime/test/review/QA evidence, implementation commit dceae62f30cacd118b03ec08a8970b642d7ba333, green CI run 28476062586, and deferred/fail-closed adjacent surfaces
 
+
+  # =========================================================================
+  # Epic 125: Dashboard task-list expansion planning matrix
+  # =========================================================================
+  epic-125: in-progress  # Phase 46 planning matrix complete after Architect/Critic consensus; remains open for a future implementation story if selected, and currently authorizes no runtime changes for four requested follow-up points: browser sort vocabulary expansion, API-local sort composition planning, task-list search/discovery planning, and broad dashboard wiring cleanup planning; no runtime/API/browser/test/dependency/CI changes authorized
+  125-1-task-list-sort-browser-vocabulary-planning: done  # Planning-only selection of future visible dashboard finite sort vocabulary controls for updated_at_desc_id_asc and created_at_desc_id_asc; no sort composition/search/hidden selectors/automatic traversal/backend/API changes
+  125-2-task-list-sort-composition-planning: done  # Planning-only record of future API-local status+limit+offset+sort composition candidate; no implementation/browser composition/search/hidden selectors authorized
+  125-3-task-list-search-discovery-planning: done  # Planning-only high-risk classification; no task-list search/discovery runtime selected or authorized in Phase 46
+  125-4-broad-dashboard-wiring-cleanup-planning: done  # Planning-only high-risk classification; no broad dashboard rewiring/runtime cleanup authorized in Phase 46
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+
+  - date: "2026-06-30"
+    event: story-125-planning-matrix-consensus-complete
+    from: review
+    to: done
+    epic: epic-125
+    story: 125-1-through-125-4-planning-matrix
+    source: autopilot-phase-46-ralplan-consensus
+    reason: >-
+      Stories 125.1 through 125.4 complete docs/status-only planning after
+      sequential native Architect final APPROVE/CLEAR followed by native Critic
+      APPROVE/CLEAR. Story 125.1 selects only the future visible browser
+      two-token sort vocabulary candidate. Story 125.2 records only a future
+      API-local sort composition candidate. Stories 125.3 and 125.4 classify
+      search/discovery and broad dashboard cleanup as high-risk deferred. No
+      runtime/source/test/backend/API/dashboard behavior/dependency/CI changes
+      are authorized.
+
+
+  - date: "2026-06-30"
+    event: phase-46-epic-125-opened-planning-matrix-review
+    from: backlog
+    to: in-progress
+    epic: epic-125
+    story: 125-1-task-list-sort-browser-vocabulary-planning
+    source: autopilot-phase-46-epic-125-planning
+    reason: >-
+      Phase 46 / Epic 125 opens as docs/status-only planning and enters review for the four
+      requested aggregate-task-list/dashboard follow-up points, handled one by
+      one: browser sort vocabulary expansion, API-local sort composition
+      planning, task-list search/discovery planning, and broad dashboard wiring
+      cleanup planning. Story 125.1 selects only the future visible dashboard
+      finite sort vocabulary candidate backed by existing API values
+      updated_at_desc_id_asc and created_at_desc_id_asc. Story 125.2 records a
+      future API-local composition candidate only. Stories 125.3 and 125.4
+      classify search/discovery and broad dashboard cleanup as high-risk and do
+      not authorize runtime implementation. Backend/API changes, dashboard
+      runtime behavior, tests, dependencies, lockfiles, CI/deployment, hidden
+      selectors, automatic traversal, generated data, credentials, production
+      operations, and mutation/control behavior remain unauthorized.
 
 
   - date: "2026-06-30"
