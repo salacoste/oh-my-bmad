@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-06-30T21:44:33Z"
+# last_updated: "2026-07-01T21:05:00Z"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-06-30T21:44:33Z"
-current_phase: 46  # Phase 46 OPEN — Epic 125 docs/status-only planning matrix complete for four requested aggregate-task-list/dashboard candidates; implementation remains future-only
+last_updated: "2026-07-01T21:05:00Z"
+current_phase: 46  # Phase 46 CLOSED — Epic 125 is done after Story 125.2 API-local sort composition, Story 125.3 search/discovery implementation-planning gate, Story 125.4 dashboard inventory/test guards, and final closure verification
 
 development_status:
   # =========================================================================
@@ -1053,16 +1053,75 @@ development_status:
   # =========================================================================
   # Epic 125: Dashboard task-list expansion planning matrix
   # =========================================================================
-  epic-125: in-progress  # Phase 46 planning matrix complete after Architect/Critic consensus; remains open for a future implementation story if selected, and currently authorizes no runtime changes for four requested follow-up points: browser sort vocabulary expansion, API-local sort composition planning, task-list search/discovery planning, and broad dashboard wiring cleanup planning; no runtime/API/browser/test/dependency/CI changes authorized
+  epic-125: done  # Phase 46 closed after Story 125.2 API-local full selector composition, Story 125.3 search/discovery implementation-planning gate, Story 125.4 dashboard inventory/test guards, code-review/QA evidence, and final closure verification
   125-1-task-list-sort-browser-vocabulary-planning: done  # Planning-only selection of future visible dashboard finite sort vocabulary controls for updated_at_desc_id_asc and created_at_desc_id_asc; no sort composition/search/hidden selectors/automatic traversal/backend/API changes
-  125-2-task-list-sort-composition-planning: done  # Planning-only record of future API-local status+limit+offset+sort composition candidate; no implementation/browser composition/search/hidden selectors authorized
+  125-2-task-list-sort-composition-planning: done  # Planning-only record of future API-local status+limit+offset+sort composition candidate; implementation followed under exact Story 125.2 runtime boundary
+  125-2-task-list-sort-composition-runtime-boundary: done  # Tests-first API-route-local implementation complete for exact canonical GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}; finite/bounded domains, selected_sort metadata, fail-closed malformed/partial/body selectors, no browser composition/search/hidden selectors
   125-3-task-list-search-discovery-planning: done  # Planning-only high-risk classification; no task-list search/discovery runtime selected or authorized in Phase 46
+  125-3-task-list-search-discovery-further-planning: done  # Further planning-only decision-input contract for future search/discovery; no runtime/API/browser implementation
+  125-3-task-list-search-discovery-implementation-planning: done  # Implementation-planning gate records missing future search/discovery runtime contract inputs; runtime remains unauthorized
   125-4-broad-dashboard-wiring-cleanup-planning: done  # Planning-only high-risk classification; no broad dashboard rewiring/runtime cleanup authorized in Phase 46
+  125-4-broad-dashboard-wiring-cleanup-further-planning: done  # Further planning-only inventory/test-guard contract; no broad dashboard runtime rewiring
+  125-4-dashboard-wiring-inventory-test-guard: done  # Parseable dashboard module/contract inventory plus behavior-preserving regression guards; no dashboard runtime JS/HTML/backend/API rewiring
+  125-5-phase-46-epic-125-final-closure: done  # Docs/status closure records Story 125.2-125.4 review/QA artifacts, fresh broad local verification, and retained fail-closed adjacent surfaces
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+
+  - date: "2026-07-01"
+    event: story-125-5-phase-46-epic-125-final-closure-complete
+    from: review
+    to: done
+    epic: epic-125
+    story: 125-5-phase-46-epic-125-final-closure
+    source: autopilot-phase-46-epic-125-final-closure
+    reason: >-
+      Phase 46 / Epic 125 is closed after Story 125.2 implements the exact
+      API-local canonical GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}
+      boundary, Story 125.3 records the search/discovery implementation-planning
+      non-authorization gate, Story 125.4 records dashboard wiring inventory
+      and behavior-preserving test guards, and fresh local closure verification
+      passes. Search/discovery runtime, browser sort composition, broad dashboard
+      rewiring, hidden selectors, automatic traversal, generated live data,
+      dependencies, CI/deployment changes, credentials, and production operations
+      remain deferred/fail-closed.
+
+
+  - date: "2026-07-01"
+    event: story-125-3-implementation-planning-and-125-4-inventory-test-guards-local-complete
+    from: review
+    to: done
+    epic: epic-125
+    story: 125-3-implementation-planning-plus-125-4-inventory-test-guard
+    source: autopilot-story-125-3-125-4
+    reason: >-
+      Story 125.3 records an implementation-planning gate that keeps
+      task-list search/discovery runtime unauthorized until exact fields,
+      grammar, authority/freshness/provenance/privacy, selector interactions,
+      and adversarial tests are defined by a separate future contract. Story
+      125.4 adds a parseable dashboard wiring inventory and behavior-preserving
+      test guards only; no dashboard runtime JS/HTML, backend/API behavior,
+      dependency, service, CI/deployment, credential, or production-operation
+      change is authorized.
+
+
+  - date: "2026-07-01"
+    event: story-125-2-runtime-and-125-3-125-4-further-planning-local-complete
+    from: review
+    to: done
+    epic: epic-125
+    story: 125-2-runtime-plus-125-3-125-4-further-planning
+    source: autopilot-story-125-2
+    reason: >-
+      Story 125.2 implements exact API-local canonical GET
+      /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}
+      after native Architect APPROVE/CLEAR followed by native Critic APPROVE/CLEAR.
+      Story 125.3 and Story 125.4 further artifacts remain planning-only risk
+      contracts for search/discovery and broad dashboard cleanup. Local
+      verification includes registry-api test_app.py passing with 74 tests.
 
 
   - date: "2026-06-30"

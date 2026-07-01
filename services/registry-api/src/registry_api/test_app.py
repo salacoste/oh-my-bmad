@@ -567,8 +567,9 @@ class TestGetTasksAggregate:
         ]
         assert sort_schema["title"] == "Sort"
         sort_description = query_parameters["sort"]["description"]
-        assert "mutually exclusive with status, limit, and offset" in sort_description
-        assert "sort must be the sole query key" in sort_description
+        assert "standalone sort selector" in sort_description
+        assert "canonical status, limit, offset, then sort composition" in sort_description
+        assert "partial sort compositions fail closed" in sort_description
 
     async def test_get_tasks_accepts_singleton_sort_selector(
         self, tmp_path: Path, fixed_clock: FrozenClock
@@ -744,9 +745,18 @@ class TestGetTasksAggregate:
             r = await aggregate_client.get(f"/v1/tasks?{query}")
             assert r.status_code == 400, query
 
-    async def test_get_tasks_sort_composition_remains_closed(
+    async def test_get_tasks_partial_and_noncanonical_sort_composition_remains_closed(
         self, aggregate_client: AsyncClient
     ) -> None:
+        allowed = await aggregate_client.get(
+            "/v1/tasks?status=plan_ready&limit=2&offset=0&sort=updated_at_desc_id_asc"
+        )
+        assert allowed.status_code == 200
+        assert allowed.json()["route"] == (
+            "GET /v1/tasks?status={task_status}&limit={task_list_limit}"
+            "&offset={task_list_offset}&sort={task_sort}"
+        )
+
         for query in (
             "status=plan_ready&sort=updated_at_desc_id_asc",
             "sort=updated_at_desc_id_asc&status=plan_ready",
@@ -764,10 +774,15 @@ class TestGetTasksAggregate:
             "status=plan_ready&sort=updated_at_desc_id_asc&limit=2",
             "status=plan_ready&limit=2&sort=created_at_desc_id_asc",
             "status=plan_ready&sort=created_at_desc_id_asc&limit=2",
-            "status=plan_ready&limit=2&offset=0&sort=updated_at_desc_id_asc",
             "sort=updated_at_desc_id_asc&status=plan_ready&limit=2&offset=0",
-            "status=plan_ready&limit=2&offset=0&sort=created_at_desc_id_asc",
-            "sort=created_at_desc_id_asc&status=plan_ready&limit=2&offset=0",
+            "status=plan_ready&limit=2&sort=updated_at_desc_id_asc&offset=0",
+            "status=plan_ready&limit=2&offset=0&sort=updated_at_desc_id_asc&cursor=abc",
+            "status=plan_ready&limit=2&offset=0&sort=updated_at_desc_id_asc&page=1",
+            "status=plan_ready&limit=2&offset=0&sort=updated_at_desc_id_asc&q=aggregate",
+            "status=plan_ready&limit=2&offset=0&sort=updated_at_desc_id_asc&sort=updated_at_desc_id_asc",
+            "status=plan_ready&limit=2&offset=0&sort=created_at_desc_id_asc&sort=created_at_desc_id_asc",
+            "status=plan_ready&limit=2&offset=0&sort=updated_at_desc_id_%61sc",
+            "status=plan_ready&limit=2&offset=0&s%6Frt=updated_at_desc_id_asc",
         ):
             r = await aggregate_client.get(f"/v1/tasks?{query}")
             assert r.status_code == 400, query
@@ -1129,6 +1144,127 @@ class TestGetTasksAggregate:
                 "last_event",
             }
 
+    async def test_get_tasks_accepts_canonical_status_limit_offset_sort_composition(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+        task_ids = await _seed_aggregate_task_rows(
+            db_url,
+            count=6,
+            statuses=[
+                "plan_ready",
+                "blocked",
+                "plan_ready",
+                "plan_ready",
+                "completed",
+                "plan_ready",
+            ],
+        )
+        engine = _create_engine(db_url)
+        session_maker = get_session(engine)
+        async with session_maker() as session:
+            first = await session.get(Task, task_ids[0])
+            third = await session.get(Task, task_ids[2])
+            assert first is not None
+            assert third is not None
+            # Pin a tie so the test proves the selected sort's id ASC tie-break.
+            third.created_at = first.created_at
+            await session.commit()
+        await engine.dispose()
+        app = build_app(
+            base_dir=tmp_path / "events",
+            db_url=db_url,
+            clock=fixed_clock,
+            create_idempotency_schema_on_start=True,
+        )
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://testserver"
+            ) as client,
+        ):
+            created_page = await client.get(
+                "/v1/tasks?status=plan_ready&limit=2&offset=1&sort=created_at_desc_id_asc"
+            )
+            updated_page = await client.get(
+                "/v1/tasks?status=plan_ready&limit=2&offset=0&sort=updated_at_desc_id_asc"
+            )
+            empty = await client.get(
+                "/v1/tasks?status=plan_ready&limit=2&offset=2147483647&sort=created_at_desc_id_asc"
+            )
+
+        assert created_page.status_code == 200
+        body = created_page.json()
+        assert set(body) == {
+            "route",
+            "selected_status",
+            "selected_limit",
+            "selected_offset",
+            "selected_sort",
+            "retrieved_at",
+            "freshness_state",
+            "display_state",
+            "authority_state",
+            "provenance",
+            "request_id",
+            "trace_id",
+            "correlation_id",
+            "limit",
+            "returned_count",
+            "has_more",
+            "next_offset",
+            "items",
+        }
+        expected_route = (
+            "GET /v1/tasks?status={task_status}&limit={task_list_limit}"
+            "&offset={task_list_offset}&sort={task_sort}"
+        )
+        assert body["route"] == expected_route
+        assert body["selected_status"] == "plan_ready"
+        assert body["selected_limit"] == 2
+        assert body["selected_offset"] == 1
+        assert body["selected_sort"] == "created_at_desc_id_asc"
+        assert body["limit"] == 2
+        assert body["returned_count"] == 2
+        assert body["has_more"] is True
+        assert body["next_offset"] == 3
+        assert body["display_state"] == "healthy"
+        assert body["authority_state"] == "authoritative"
+        assert [row["status"] for row in body["items"]] == ["plan_ready", "plan_ready"]
+        assert [row["title"] for row in body["items"]] == [
+            "aggregate task 3",
+            "aggregate task 0",
+        ]
+
+        assert updated_page.status_code == 200
+        updated_body = updated_page.json()
+        assert updated_body["route"] == expected_route
+        assert updated_body["selected_sort"] == "updated_at_desc_id_asc"
+        assert updated_body["selected_status"] == "plan_ready"
+        assert updated_body["selected_limit"] == 2
+        assert updated_body["selected_offset"] == 0
+        assert [row["title"] for row in updated_body["items"]] == [
+            "aggregate task 5",
+            "aggregate task 3",
+        ]
+
+        assert empty.status_code == 200
+        empty_body = empty.json()
+        assert empty_body["route"] == expected_route
+        assert empty_body["selected_status"] == "plan_ready"
+        assert empty_body["selected_limit"] == 2
+        assert empty_body["selected_offset"] == 2_147_483_647
+        assert empty_body["selected_sort"] == "created_at_desc_id_asc"
+        assert empty_body["returned_count"] == 0
+        assert empty_body["has_more"] is False
+        assert empty_body["next_offset"] is None
+        assert empty_body["items"] == []
+        assert empty_body["display_state"] == "empty-list"
+        assert empty_body["authority_state"] == "non-authoritative"
+
     async def test_get_tasks_accepts_canonical_status_limit_offset_composition(
         self, tmp_path: Path, fixed_clock: FrozenClock
     ) -> None:
@@ -1434,6 +1570,11 @@ class TestGetTasksAggregate:
             "/v1/tasks?sort=created_at_desc_id_asc",
             content=b'{"sort":"created_at_desc_id_asc"}',
         )
+        full_composed_sorted_body = await aggregate_client.request(
+            "GET",
+            "/v1/tasks?status=plan_ready&limit=2&offset=1&sort=created_at_desc_id_asc",
+            content=b'{"status":"plan_ready","limit":2,"offset":1,"sort":"created_at_desc_id_asc"}',
+        )
 
         assert unfiltered_body.status_code == 400
         assert filtered_body.status_code == 400
@@ -1443,6 +1584,7 @@ class TestGetTasksAggregate:
         assert status_limit_offset_body.status_code == 400
         assert sorted_body.status_code == 400
         assert created_sorted_body.status_code == 400
+        assert full_composed_sorted_body.status_code == 400
         assert "does not accept a request body" in unfiltered_body.text
         assert "does not accept a request body" in filtered_body.text
         assert "does not accept a request body" in limited_body.text
@@ -1450,6 +1592,7 @@ class TestGetTasksAggregate:
         assert "does not accept a request body" in paginated_body.text
         assert "does not accept a request body" in sorted_body.text
         assert "does not accept a request body" in created_sorted_body.text
+        assert "does not accept a request body" in full_composed_sorted_body.text
 
     async def test_get_tasks_limit_is_fixed_and_does_not_expose_selector_offset(
         self, tmp_path: Path, fixed_clock: FrozenClock

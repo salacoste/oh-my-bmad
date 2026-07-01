@@ -566,8 +566,16 @@ def test_story_125_1_created_at_sort_control_fetches_exact_route_without_composi
                     "body": sorted_response_body(
                         CREATED_SORT_VALUE,
                         items=[
-                            task_row(task_id="created-new", status="completed", created_at="2026-06-29T00:00:03Z"),
-                            task_row(task_id="created-old", status="pending", created_at="2026-06-29T00:00:01Z"),
+                            task_row(
+                                task_id="created-new",
+                                status="completed",
+                                created_at="2026-06-29T00:00:03Z",
+                            ),
+                            task_row(
+                                task_id="created-old",
+                                status="pending",
+                                created_at="2026-06-29T00:00:01Z",
+                            ),
                         ],
                     ),
                 },

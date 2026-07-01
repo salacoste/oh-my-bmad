@@ -135,6 +135,13 @@ _TASK_STATUS_LIMIT_OFFSET_ROUTE: Literal[
     "GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}"
 ] = "GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}"
 _TASK_SORT_ROUTE: Literal["GET /v1/tasks?sort={task_sort}"] = "GET /v1/tasks?sort={task_sort}"
+_TASK_STATUS_LIMIT_OFFSET_SORT_ROUTE: Literal[
+    "GET /v1/tasks?status={task_status}&limit={task_list_limit}"
+    "&offset={task_list_offset}&sort={task_sort}"
+] = (
+    "GET /v1/tasks?status={task_status}&limit={task_list_limit}"
+    "&offset={task_list_offset}&sort={task_sort}"
+)
 _TASK_SORT_SPECS: tuple[TaskSortSpec, ...] = (
     TaskSortSpec(
         value="updated_at_desc_id_asc",
@@ -170,6 +177,14 @@ def _is_ascii_decimal(value: str) -> bool:
     return bool(value) and all("0" <= char <= "9" for char in value)
 
 
+_TASK_QUERY_KEYS_STATUS = ("status",)
+_TASK_QUERY_KEYS_LIMIT = ("limit",)
+_TASK_QUERY_KEYS_STATUS_LIMIT = ("status", "limit")
+_TASK_QUERY_KEYS_LIMIT_OFFSET = ("limit", "offset")
+_TASK_QUERY_KEYS_STATUS_LIMIT_OFFSET = ("status", "limit", "offset")
+_TASK_QUERY_KEYS_SORT = ("sort",)
+_TASK_QUERY_KEYS_STATUS_LIMIT_OFFSET_SORT = ("status", "limit", "offset", "sort")
+
 _TASKS_STATUS_RAW_RE = re.compile(rb"^status=([A-Za-z_]+)$")
 _TASKS_LIMIT_RAW_RE = re.compile(rb"^limit=([0-9]{1,2})$")
 _TASKS_STATUS_LIMIT_RAW_RE = re.compile(rb"^status=([A-Za-z_]+)&limit=([0-9]{1,2})$")
@@ -177,10 +192,21 @@ _TASKS_LIMIT_OFFSET_RAW_RE = re.compile(rb"^limit=([0-9]{1,2})&offset=([0-9]{1,1
 _TASKS_STATUS_LIMIT_OFFSET_RAW_RE = re.compile(
     rb"^status=([A-Za-z_]+)&limit=([0-9]{1,2})&offset=([0-9]{1,10})$"
 )
-_TASKS_SORT_RAW_RE = re.compile(
-    rb"^sort=("
-    + b"|".join(re.escape(value.encode("ascii")) for value in _TASK_SORT_VALUES)
+_TASK_SORT_VALUE_RAW_RE = b"|".join(re.escape(value.encode("ascii")) for value in _TASK_SORT_VALUES)
+_TASKS_SORT_RAW_RE = re.compile(rb"^sort=(" + _TASK_SORT_VALUE_RAW_RE + rb")$")
+_TASKS_STATUS_LIMIT_OFFSET_SORT_RAW_RE = re.compile(
+    rb"^status=([A-Za-z_]+)&limit=([0-9]{1,2})&offset=([0-9]{1,10})&sort=("
+    + _TASK_SORT_VALUE_RAW_RE
     + rb")$"
+)
+_TASKS_RAW_QUERY_PATTERNS: tuple[re.Pattern[bytes], ...] = (
+    _TASKS_STATUS_RAW_RE,
+    _TASKS_LIMIT_RAW_RE,
+    _TASKS_STATUS_LIMIT_RAW_RE,
+    _TASKS_LIMIT_OFFSET_RAW_RE,
+    _TASKS_STATUS_LIMIT_OFFSET_RAW_RE,
+    _TASKS_SORT_RAW_RE,
+    _TASKS_STATUS_LIMIT_OFFSET_SORT_RAW_RE,
 )
 
 
@@ -201,14 +227,7 @@ def _matches_tasks_raw_query_contract(raw_query: bytes) -> bool:
     broadening spelling, order, encoded-key, repeated-key, or empty-segment
     behavior as new bounded selector combinations are added.
     """
-    return bool(
-        _TASKS_STATUS_RAW_RE.fullmatch(raw_query)
-        or _TASKS_LIMIT_RAW_RE.fullmatch(raw_query)
-        or _TASKS_STATUS_LIMIT_RAW_RE.fullmatch(raw_query)
-        or _TASKS_LIMIT_OFFSET_RAW_RE.fullmatch(raw_query)
-        or _TASKS_STATUS_LIMIT_OFFSET_RAW_RE.fullmatch(raw_query)
-        or _TASKS_SORT_RAW_RE.fullmatch(raw_query)
-    )
+    return any(pattern.fullmatch(raw_query) for pattern in _TASKS_RAW_QUERY_PATTERNS)
 
 
 def _parse_task_status_selector(value: str | None) -> TaskStatusFilter:
@@ -652,8 +671,8 @@ class TaskSortSelectedListResponse(BaseModel):
     Story 122.2 permits exactly one API-local singleton sort selector. Story
     124.2 extends the standalone selector vocabulary to exactly two values:
     ``updated_at DESC`` followed by ``id ASC`` or ``created_at DESC`` followed
-    by ``id ASC``. It adds no status/limit/offset composition, pagination
-    traversal, search, browser control, adjacent route, or mutation affordance.
+    by ``id ASC``. Standalone sort adds no pagination traversal, search,
+    browser control, adjacent route, or mutation affordance.
     """
 
     model_config = ConfigDict(frozen=True, strict=True)
@@ -672,6 +691,41 @@ class TaskSortSelectedListResponse(BaseModel):
     returned_count: int
     has_more: bool
     next_offset: None = None
+    items: list[TaskSummaryOut]
+
+
+class TaskStatusLimitOffsetSortSelectedListResponse(BaseModel):
+    """200 OK response body for canonical GET /v1/tasks?status=...&limit=...&offset=...&sort=....
+
+    Story 125.2 composes exactly the approved finite status selector, bounded
+    limit selector, bounded offset selector, and finite sort selector in
+    canonical order. This is API-local only: no browser composition,
+    partial sort composition, search/discovery, hidden selector, adjacent
+    route traversal, or mutation affordance is introduced.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    route: Literal[
+        "GET /v1/tasks?status={task_status}&limit={task_list_limit}"
+        "&offset={task_list_offset}&sort={task_sort}"
+    ]
+    selected_status: TaskStatusFilter
+    selected_limit: int = Field(ge=1, le=_TASK_LIST_LIMIT)
+    selected_offset: int = Field(ge=0, le=_TASK_LIST_OFFSET_MAX)
+    selected_sort: str
+    retrieved_at: datetime
+    freshness_state: Literal["fresh"]
+    display_state: Literal["healthy", "empty-list"]
+    authority_state: Literal["authoritative", "non-authoritative"]
+    provenance: Literal["registry-state task summary list"]
+    request_id: str
+    trace_id: str | None
+    correlation_id: str
+    limit: int = Field(ge=1, le=_TASK_LIST_LIMIT)
+    returned_count: int
+    has_more: bool
+    next_offset: int | None = Field(default=None, ge=0, le=_TASK_LIST_OFFSET_MAX)
     items: list[TaskSummaryOut]
 
 
@@ -750,6 +804,7 @@ TaskListReadResponse = (
     | TaskLimitOffsetSelectedListResponse
     | TaskStatusLimitOffsetSelectedListResponse
     | TaskSortSelectedListResponse
+    | TaskStatusLimitOffsetSortSelectedListResponse
 )
 
 
@@ -813,11 +868,10 @@ async def get_tasks(
         str | None,
         Query(
             description=(
-                "Optional Story 124.2 singleton task-list sort selector. Only "
-                "the exact raw ASCII values updated_at_desc_id_asc and "
-                "created_at_desc_id_asc are accepted. This selector is mutually "
-                "exclusive with status, limit, and offset; sort must be the "
-                "sole query key."
+                "Optional Story 124.2/125.2 task-list standalone sort selector "
+                "or final selector in canonical status, limit, offset, then sort composition. "
+                "Only the exact raw ASCII values updated_at_desc_id_asc and "
+                "created_at_desc_id_asc are accepted; partial sort compositions fail closed."
             ),
             json_schema_extra={"enum": list(_TASK_SORT_VALUES)},
         ),
@@ -830,6 +884,7 @@ async def get_tasks(
     | TaskLimitOffsetSelectedListResponse
     | TaskStatusLimitOffsetSelectedListResponse
     | TaskSortSelectedListResponse
+    | TaskStatusLimitOffsetSortSelectedListResponse
 ):
     """GET /v1/tasks — bounded aggregate task summary list.
 
@@ -843,9 +898,12 @@ async def get_tasks(
     Story 120.2 adds only canonical ``GET /v1/tasks?status=...&limit=...&offset=...``.
     Story 124.2 permits only canonical standalone ``GET /v1/tasks?sort=...``
     with exact values ``updated_at_desc_id_asc`` or ``created_at_desc_id_asc``.
-    Repeated keys, GET body, reversed query order, hidden pagination token,
-    status+offset without limit, task-detail/event/session/digest traversal,
-    search, sort composition, or mutation control are not accepted.
+    Story 125.2 adds only canonical API-local
+    ``GET /v1/tasks?status=...&limit=...&offset=...&sort=...`` with the same
+    finite sort values. Repeated keys, GET body, reversed query order, hidden
+    pagination token, status+offset without limit, task-detail/event/session/
+    digest traversal, search, partial sort composition, browser composition,
+    or mutation control are not accepted.
     """
     if await request.body():
         raise HTTPException(
@@ -871,30 +929,35 @@ async def get_tasks(
             )
         query_pairs = list(request.query_params.multi_items())
         query_keys = [key for key, _value in query_pairs]
-        if query_keys == ["status"]:
+        query_key_shape = tuple(query_keys)
+        if query_key_shape == _TASK_QUERY_KEYS_STATUS:
             selected_status = _parse_task_status_selector(status)
-        elif query_keys == ["limit"]:
+        elif query_key_shape == _TASK_QUERY_KEYS_LIMIT:
             selected_limit = _parse_task_limit_selector(limit)
             effective_limit = selected_limit
-        elif query_keys == ["status", "limit"]:
+        elif query_key_shape == _TASK_QUERY_KEYS_STATUS_LIMIT:
             selected_status = _parse_task_status_selector(status)
             selected_limit = _parse_task_limit_selector(limit)
             effective_limit = selected_limit
-        elif query_keys == ["status", "limit", "offset"]:
+        elif query_key_shape == _TASK_QUERY_KEYS_STATUS_LIMIT_OFFSET:
             selected_status = _parse_task_status_selector(status)
             selected_limit = _parse_task_limit_selector(limit)
             selected_offset = _parse_task_offset_selector(offset)
             effective_limit = selected_limit
-        elif query_keys == ["limit", "offset"]:
+        elif query_key_shape == _TASK_QUERY_KEYS_STATUS_LIMIT_OFFSET_SORT:
+            selected_status = _parse_task_status_selector(status)
+            selected_limit = _parse_task_limit_selector(limit)
+            selected_offset = _parse_task_offset_selector(offset)
+            selected_sort = _parse_task_sort_selector(sort)
+            effective_limit = selected_limit
+        elif query_key_shape == _TASK_QUERY_KEYS_LIMIT_OFFSET:
             selected_limit = _parse_task_limit_selector(limit)
             selected_offset = _parse_task_offset_selector(offset)
             effective_limit = selected_limit
-        elif query_keys == ["sort"]:
-            # Story 124.2 deliberately keeps the finite sort vocabulary in the
-            # same explicit raw-query dispatcher as prior task-list selectors:
-            # the branch below keeps sort mutually exclusive with status,
-            # limit, and offset. Do not add more sort values or composition
-            # here without a separate planning/refactor story.
+        elif query_key_shape == _TASK_QUERY_KEYS_SORT:
+            # Standalone sort remains an explicit single-selector branch. The
+            # only approved status/limit/offset composition with sort is the
+            # canonical Story 125.2 branch handled above.
             selected_sort = _parse_task_sort_selector(sort)
         else:
             raise HTTPException(
@@ -903,7 +966,8 @@ async def get_tasks(
                     "GET /v1/tasks accepts only one status selector, one limit selector, "
                     "canonical status then limit selectors, canonical limit then "
                     "offset selectors, canonical status then limit then offset selectors, "
-                    "or one canonical sort selector"
+                    "one canonical sort selector, or canonical status then limit "
+                    "then offset then sort selectors"
                 ),
             )
 
@@ -986,6 +1050,21 @@ async def get_tasks(
         "next_offset": next_offset,
         "items": items,
     }
+    if (
+        selected_status is not None
+        and selected_limit is not None
+        and selected_offset is not None
+        and selected_sort is not None
+    ):
+        return TaskStatusLimitOffsetSortSelectedListResponse(
+            route=_TASK_STATUS_LIMIT_OFFSET_SORT_ROUTE,
+            selected_status=selected_status,
+            selected_limit=selected_limit,
+            selected_offset=selected_offset,
+            selected_sort=selected_sort,
+            **response_kwargs,
+        )
+
     if selected_status is not None and selected_limit is not None and selected_offset is not None:
         return TaskStatusLimitOffsetSelectedListResponse(
             route=_TASK_STATUS_LIMIT_OFFSET_ROUTE,
@@ -1587,6 +1666,7 @@ __all__ = [
     "TaskListLastEventOut",
     "TaskListReadResponse",
     "TaskListResponse",
+    "TaskStatusLimitOffsetSortSelectedListResponse",
     "TaskSummaryOut",
     "SessionDetailResponse",
     "SessionListResponse",
