@@ -182,6 +182,10 @@ def test_story_106_2_runtime_script_allowlist_is_exact() -> None:
         "button",
         "button",
         "select",
+        "select",
+        "select",
+        "input",
+        "button",
         "input",
         "button",
     ]
@@ -618,7 +622,17 @@ def test_story_107_2_create_affordance_is_visible_and_narrowly_allowlisted() -> 
     assert CREATE_PATTERN in raw
     parser = parse_scripts()
     controls = [control for control in parser.controls if control in {"input", "button"}]
-    assert controls == ["input", "input", "button", "button", "button", "input", "button"]
+    assert controls == [
+        "input",
+        "input",
+        "button",
+        "button",
+        "button",
+        "input",
+        "button",
+        "input",
+        "button",
+    ]
     assert controls[-2:] == ["input", "button"]
 
 

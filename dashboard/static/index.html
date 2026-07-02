@@ -78,16 +78,16 @@
       <h2 id="tasks-title">Tasks</h2>
       <p class="state" id="aggregate-task-list-status">Aggregate task-list status+limit+offset+sort live-read boundary pending: waiting for an approved aggregate task-list response.</p>
       <p>
-        Source route/reference: GET /v1/tasks?status={task_status}&amp;limit={task_list_limit}&amp;offset={task_list_offset}&amp;sort={task_sort}. Story 126.2 wires this single approved read-only aggregate task-list full-composition read only;
-        selectors come from the visible status, limit, offset, and sort controls below, plus visible manual previous and manual next controls that perform one explicit load at a time while preserving the selected sort. It adds no selector-free aggregate browser fetch, no automatic traversal, no infinite scroll, no search, no broader sort vocabulary beyond the two visible values, no request body, no hidden selectors, no broad dashboard live wiring, no task detail traversal, no digest/history/trace/replay/session traversal, and no mutation or operator-control action.
+        Source route/reference: GET /v1/tasks?status={task_status}&amp;limit={task_list_limit}&amp;offset={task_list_offset}&amp;sort={task_sort} and GET /v1/tasks?field={task_search_field}&amp;op={task_search_operator}&amp;q={task_search_query}&amp;status={task_status}&amp;limit={task_list_limit}&amp;offset={task_list_offset}&amp;sort={task_sort}. Story 127.3 preserves the read-only full-composition read and wires visible-control-only search/discovery for the aggregate task list;
+        selectors come from the visible status, limit, offset, sort, search field, search operator, and search query controls below. The normal list button and search button each perform one explicit GET with no request body and omitted credentials while preserving the selected sort. It adds no selector-free aggregate browser fetch, no automatic traversal, no infinite scroll, no search-driven manual previous or manual next traversal, no hidden selectors, no broader sort vocabulary beyond the two visible values, no URL/hash/storage/cookie selectors, no row-derived selectors, no broad dashboard live wiring, no task detail traversal, no digest/history/trace/replay/session traversal, and no mutation or operator-control action.
       </p>
       <p>
         Runtime states are loading, healthy bounded display, empty successful read, stale/partial data, stale data, invalid data, permission/configuration failure, unauthorized/configuration failure,
         backend unavailable, route failure/read error, malformed response, over-limit response, and ambiguous freshness. Non-healthy states fail closed and are non-authoritative.
       </p>
       <p>
-        Row contract: provenance, source, timestamp, freshness, state, route/reference, selected status, selected limit, selected offset, selected sort, task_id, status, title, created_at, updated_at, state_since, actor.kind, actor.id,
-        last_event.id, last_event.type, last_event.emitted_at, and last_event.trace_id. No task rows are synthesized; no hidden selectors or side channels can expand this list.
+        Row contract: provenance, source, timestamp, freshness, state, route/reference, selected search field, selected search operator, selected search query, selected status, selected limit, selected offset, selected sort, task_id, status, title, created_at, updated_at, state_since, actor.kind, actor.id,
+        last_event.id, last_event.type, last_event.emitted_at, last_event.trace_id, request_id, trace_id, correlation_id, freshness, authority, provenance, returned count, and redaction state. No task rows are synthesized; no hidden selectors or side channels can expand this list.
       </p>
       <p>
         See <a href="#audit">Audit</a> for source review and <a href="#help">Help</a> for unavailable-state guidance.
@@ -116,8 +116,32 @@
           <option value="updated_at_desc_id_asc" selected>Updated newest, id ascending</option>
           <option value="created_at_desc_id_asc">Created newest, id ascending</option>
         </select>
+        <label for="aggregate-task-list-search-field-control">Task search field</label>
+        <select id="aggregate-task-list-search-field-control" name="aggregate-task-list-search-field-control">
+          <option value="task_id" selected>task_id</option>
+          <option value="title">title</option>
+          <option value="actor_id">actor_id</option>
+          <option value="last_event_type">last_event_type</option>
+          <option value="updated_at">updated_at</option>
+          <option value="created_at">created_at</option>
+        </select>
+        <label for="aggregate-task-list-search-op-control">Task search operator</label>
+        <select id="aggregate-task-list-search-op-control" name="aggregate-task-list-search-op-control">
+          <option value="eq" selected>eq</option>
+          <option value="contains">contains</option>
+          <option value="prefix">prefix</option>
+          <option value="gte">gte</option>
+          <option value="lte">lte</option>
+        </select>
+        <label for="aggregate-task-list-search-query-control">Task search query</label>
+        <input id="aggregate-task-list-search-query-control" name="aggregate-task-list-search-query-control" type="text" value="fixture-task-id" autocomplete="off">
+        <button id="aggregate-task-list-search-load" type="button">Search task list</button>
       </p>
-      <p class="meta" id="aggregate-task-list-source">Source: GET /v1/tasks?status={task_status}&amp;limit={task_list_limit}&amp;offset={task_list_offset}&amp;sort={task_sort}. Runtime route: pending.</p>
+      <p class="meta" id="aggregate-task-list-source">Source: GET /v1/tasks?status={task_status}&amp;limit={task_list_limit}&amp;offset={task_list_offset}&amp;sort={task_sort}; search source GET /v1/tasks?field={task_search_field}&amp;op={task_search_operator}&amp;q={task_search_query}&amp;status={task_status}&amp;limit={task_list_limit}&amp;offset={task_list_offset}&amp;sort={task_sort}. Runtime route: pending.</p>
+      <p class="meta" id="aggregate-task-list-selected-search-field">Selected search field: task_id visible control value.</p>
+      <p class="meta" id="aggregate-task-list-selected-search-op">Selected search operator: eq visible control value.</p>
+      <p class="meta" id="aggregate-task-list-selected-search-query">Selected search query: fixture-task-id visible control value.</p>
+      <p class="meta" id="aggregate-task-list-redaction">Redaction: summary-only-no-snippets expected for search responses.</p>
       <p class="meta" id="aggregate-task-list-selected-status">Selected status: pending visible control value.</p>
       <p class="meta" id="aggregate-task-list-selected-limit">Selected limit: 50 visible control value.</p>
       <p class="meta" id="aggregate-task-list-selected-offset">Selected offset: 0 visible control value.</p>
@@ -241,7 +265,7 @@
       </p>
       <p>
         Adjacent surfaces remain bounded: digest stream is a separate Story 112.2 route-local panel; no aggregate task list fallback, no session list/detail fallback,
-        no task-list/search/discovery, no browser-side generation, no cache warming, and no background refresh.
+        no adjacent task-list search/discovery traversal, no browser-side generation, no cache warming, and no background refresh.
       </p>
       <p>
         Runtime states are missing task_id, unavailable digest, no provider, provider unavailable, timeout, invalid data,
@@ -515,6 +539,7 @@
         <li>Panel family: aggregate-task-list. Panel title: Aggregate task list. Source category: aggregate. Source route pattern: /v1/tasks?status={task_status}&amp;limit={task_list_limit}. Route input identifiers: task_status, task_list_limit. Row display identifiers: task_id, event_id, trace_id. Source identifiers: task_status=fixture-task-status, task_list_limit=fixture-task-list-limit. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: fresh-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: aggregate task list static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
         <li>Panel family: aggregate-task-list. Panel title: Aggregate task list. Source category: aggregate. Source route pattern: /v1/tasks?limit={task_list_limit}&amp;offset={task_list_offset}. Route input identifiers: task_list_limit, task_list_offset. Row display identifiers: task_id, event_id, trace_id. Source identifiers: task_list_limit=fixture-task-list-limit, task_list_offset=fixture-task-list-offset. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: fresh-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: aggregate task list static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
         <li>Panel family: aggregate-task-list. Panel title: Aggregate task list. Source category: aggregate. Source route pattern: /v1/tasks?status={task_status}&amp;limit={task_list_limit}&amp;offset={task_list_offset}. Route input identifiers: task_status, task_list_limit, task_list_offset. Row display identifiers: task_id, event_id, trace_id. Source identifiers: task_status=fixture-task-status, task_list_limit=fixture-task-list-limit, task_list_offset=fixture-task-list-offset. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: fresh-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: aggregate task list static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
+        <li>Panel family: aggregate-task-list. Panel title: Aggregate task list. Source category: aggregate. Source route pattern: /v1/tasks?field={task_search_field}&amp;op={task_search_operator}&amp;q={task_search_query}&amp;status={task_status}&amp;limit={task_list_limit}&amp;offset={task_list_offset}&amp;sort={task_sort}. Route input identifiers: task_search_field, task_search_operator, task_search_query, task_status, task_list_limit, task_list_offset, task_sort. Row display identifiers: task_id, event_id, trace_id. Source identifiers: task_search_field=fixture-task-search-field, task_search_operator=fixture-task-search-operator, task_search_query=fixture-task-search-query, task_status=fixture-task-status, task_list_limit=fixture-task-list-limit, task_list_offset=fixture-task-list-offset, task_sort=fixture-task-sort. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: fresh-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: aggregate task list static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
         <li>Panel family: session-list. Panel title: Session list. Source category: session. Source route pattern: /v1/sessions. Route input identifiers: none. Row display identifiers: session_id, task_id. Source identifiers: source_category=fixture-session-source. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: fresh-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: session list static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
         <li>Panel family: session-detail. Panel title: Session detail. Source category: session. Source route pattern: /v1/sessions/{session_id}. Route input identifiers: session_id. Row display identifiers: session_id, task_id. Source identifiers: session_id=fixture-session-id. Fixture provenance: static-fixture. Timestamp policy: retrieved-at-required. Freshness policy: fresh-or-stale-required. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Display state: healthy. Degraded state category: none. Authority state: authoritative. Display severity: normal. Display copy: session detail static fixture readiness has contract fixture authority; runtime data remains disconnected.</li>
       </ul>
@@ -527,7 +552,7 @@
       </ul>
       <p>
         The digest stream now has an exact Story 112.2 fixture-backed route row while remaining route-local and inert in this static presentation.
-        Aggregate task-list fixture rows are cumulative compatibility evidence: the current Story 118.2 browser runtime uses only the visible limit and offset controls for the exact limit+offset route, while earlier selector-free and status+limit rows remain inert historical fixtures.
+        Aggregate task-list fixture rows are cumulative compatibility evidence: the current Story 127.3 browser runtime uses visible status, limit, offset, sort, and search controls for exact approved aggregate routes, while earlier selector-free/status/limit/offset rows remain inert historical fixtures.
       </p>
       <p class="meta">Source: Story 99.2 fixture snapshot contract. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Confidence: fixture-backed static readiness only.</p>
     </section>

@@ -25,6 +25,10 @@ CORE_APPROVED_READ_ROUTES = frozenset(
         ("GET", "/v1/tasks?status={task_status}&limit={task_list_limit}"),
         ("GET", "/v1/tasks?limit={task_list_limit}&offset={task_list_offset}"),
         ("GET", "/v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}"),
+        (
+            "GET",
+            "/v1/tasks?field={task_search_field}&op={task_search_operator}&q={task_search_query}&status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}",
+        ),
         ("GET", "/v1/sessions"),
         ("GET", "/v1/sessions/{session_id}"),
     }
@@ -43,6 +47,10 @@ APPROVED_STORY_107_2_CONTROL_IDS = frozenset(
         "aggregate-task-list-previous-offset",
         "aggregate-task-list-next-offset",
         "aggregate-task-list-sort-control",
+        "aggregate-task-list-search-field-control",
+        "aggregate-task-list-search-op-control",
+        "aggregate-task-list-search-query-control",
+        "aggregate-task-list-search-load",
         "lifecycle-snapshot-create-token",
         "lifecycle-snapshot-create-button",
     }

@@ -34,7 +34,7 @@ def test_adapter_contracts_cover_exact_approved_route_inventory() -> None:
         for contract in approved
     }
 
-    assert len(approved) == 16
+    assert len(approved) == 17
     assert adapter_routes == live_contracts.APPROVED_READ_ROUTES
     assert {contract.route_status for contract in approved} == {"approved"}
     assert {
@@ -93,6 +93,10 @@ def test_digest_stream_is_adapter_read_after_story_112_2_promotion() -> None:
         "/v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}"
         in approved_routes
     )
+    assert (
+        "/v1/tasks?field={task_search_field}&op={task_search_operator}&q={task_search_query}&status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}"
+        in approved_routes
+    )
     assert "/v1/sessions" in approved_routes
     assert "/v1/sessions/{session_id}" in approved_routes
     assert "/v1/tasks/{task_id}/logs/digest/stream" in approved_routes
@@ -146,6 +150,7 @@ def test_aggregate_task_list_route_inventory_preserves_legacy_contracts_as_inert
         "/v1/tasks?status={task_status}&limit={task_list_limit}",
         "/v1/tasks?limit={task_list_limit}&offset={task_list_offset}",
         "/v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}",
+        "/v1/tasks?field={task_search_field}&op={task_search_operator}&q={task_search_query}&status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}",
     } <= panel_routes
     runtime = Path("dashboard/static/aggregate-task-list.js").read_text(encoding="utf-8")
     assert (
@@ -153,3 +158,4 @@ def test_aggregate_task_list_route_inventory_preserves_legacy_contracts_as_inert
         in runtime
     )
     assert "aggregate-task-list-status-control" in runtime
+    assert "aggregate-task-list-search-field-control" in runtime

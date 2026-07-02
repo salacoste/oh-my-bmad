@@ -67,6 +67,10 @@ Identifier = Literal[
     "task_status",
     "task_list_limit",
     "task_list_offset",
+    "task_sort",
+    "task_search_field",
+    "task_search_operator",
+    "task_search_query",
 ]
 
 APPROVED_ROUTE_PATTERNS = frozenset(
@@ -93,6 +97,17 @@ EXPECTED_IDENTIFIERS_BY_ROUTE = {
     ),
     "/v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}": frozenset(
         {"task_status", "task_list_limit", "task_list_offset"}
+    ),
+    "/v1/tasks?field={task_search_field}&op={task_search_operator}&q={task_search_query}&status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}": frozenset(
+        {
+            "task_search_field",
+            "task_search_operator",
+            "task_search_query",
+            "task_status",
+            "task_list_limit",
+            "task_list_offset",
+            "task_sort",
+        }
     ),
     "/v1/sessions": frozenset(),
     "/v1/sessions/{session_id}": frozenset({"session_id"}),
@@ -367,6 +382,34 @@ LIVE_VALUE_CONTRACTS = (
         timestamp_policy="retrieved-at-required",
         freshness_policy="fresh-or-stale-required",
         required_identifiers=("task_status", "task_list_limit", "task_list_offset"),
+        allowed_states=frozenset(
+            {
+                "healthy",
+                "empty-list",
+                "stale",
+                "invalid",
+                "unauthorized",
+                "backend-unavailable",
+                "unavailable",
+            }
+        ),
+    ),
+    LiveValueContract(
+        name="aggregate-task-list-search-discovery",
+        source_category="aggregate",
+        route_pattern="/v1/tasks?field={task_search_field}&op={task_search_operator}&q={task_search_query}&status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}",
+        route_contract="approved",
+        timestamp_policy="retrieved-at-required",
+        freshness_policy="fresh-or-stale-required",
+        required_identifiers=(
+            "task_search_field",
+            "task_search_operator",
+            "task_search_query",
+            "task_status",
+            "task_list_limit",
+            "task_list_offset",
+            "task_sort",
+        ),
         allowed_states=frozenset(
             {
                 "healthy",

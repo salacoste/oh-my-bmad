@@ -66,6 +66,10 @@ Identifier = Literal[
     "task_status",
     "task_list_limit",
     "task_list_offset",
+    "task_sort",
+    "task_search_field",
+    "task_search_operator",
+    "task_search_query",
 ]
 PanelFamily = Literal[
     "task-detail",
@@ -199,6 +203,12 @@ class RouteFixtureProbe:
     display_severity: DisplaySeverity
     display_copy: str
 
+
+STORY_127_3_SEARCH_ROUTE_PATTERN = (
+    "/v1/tasks?field={task_search_field}&op={task_search_operator}"
+    "&q={task_search_query}&status={task_status}&limit={task_list_limit}"
+    "&offset={task_list_offset}&sort={task_sort}"
+)
 
 APPROVED_READ_CONTRACTS: tuple[ReadContract, ...] = (
     ReadContract(
@@ -394,6 +404,33 @@ APPROVED_READ_CONTRACTS: tuple[ReadContract, ...] = (
         ),
     ),
     ReadContract(
+        source_category="aggregate",
+        route_pattern=STORY_127_3_SEARCH_ROUTE_PATTERN,
+        route_status="approved",
+        timestamp_policy="retrieved-at-required",
+        freshness_policy="fresh-or-stale-required",
+        required_identifiers=(
+            "task_search_field",
+            "task_search_operator",
+            "task_search_query",
+            "task_status",
+            "task_list_limit",
+            "task_list_offset",
+            "task_sort",
+        ),
+        allowed_states=frozenset(
+            {
+                "healthy",
+                "empty-list",
+                "stale",
+                "invalid",
+                "unauthorized",
+                "backend-unavailable",
+                "unavailable",
+            }
+        ),
+    ),
+    ReadContract(
         source_category="session",
         route_pattern="/v1/sessions",
         route_status="approved",
@@ -571,6 +608,7 @@ STORY_109_2_ROUTE_PATTERNS = (
     "/v1/tasks?status={task_status}&limit={task_list_limit}",
     "/v1/tasks?limit={task_list_limit}&offset={task_list_offset}",
     "/v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}",
+    STORY_127_3_SEARCH_ROUTE_PATTERN,
 )
 STORY_109_2_ROUTE_INPUT_IDENTIFIERS: Mapping[str, tuple[Identifier, ...]] = MappingProxyType(
     {
@@ -587,6 +625,15 @@ STORY_109_2_ROUTE_INPUT_IDENTIFIERS: Mapping[str, tuple[Identifier, ...]] = Mapp
             "task_status",
             "task_list_limit",
             "task_list_offset",
+        ),
+        STORY_127_3_SEARCH_ROUTE_PATTERN: (
+            "task_search_field",
+            "task_search_operator",
+            "task_search_query",
+            "task_status",
+            "task_list_limit",
+            "task_list_offset",
+            "task_sort",
         ),
     }
 )
@@ -608,6 +655,11 @@ STORY_109_2_ROW_DISPLAY_IDENTIFIERS: Mapping[str, tuple[Identifier, ...]] = Mapp
             "event_id",
             "trace_id",
         ),
+        STORY_127_3_SEARCH_ROUTE_PATTERN: (
+            "task_id",
+            "event_id",
+            "trace_id",
+        ),
     }
 )
 STORY_109_2_PANEL_ROUTES: Mapping[PanelFamily, tuple[str, ...]] = MappingProxyType(
@@ -617,6 +669,7 @@ STORY_109_2_PANEL_ROUTES: Mapping[PanelFamily, tuple[str, ...]] = MappingProxyTy
             "/v1/tasks?status={task_status}&limit={task_list_limit}",
             "/v1/tasks?limit={task_list_limit}&offset={task_list_offset}",
             "/v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}",
+            STORY_127_3_SEARCH_ROUTE_PATTERN,
         )
     }
 )

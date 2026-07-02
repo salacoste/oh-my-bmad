@@ -94,10 +94,15 @@ def test_story_125_4_inventory_matches_aggregate_task_list_contract_targets() ->
     assert aggregate["approved_route_patterns"] == [
         "GET /v1/tasks?status={task_status}&limit={task_list_limit}"
         "&offset={task_list_offset}&sort={task_sort}",
+        "GET /v1/tasks?field={task_search_field}&op={task_search_operator}&q={task_search_query}&status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}",
     ]
     assert (
         "GET /v1/tasks?status={task_status}&limit={task_list_limit}"
         "&offset={task_list_offset}&sort={task_sort}" in runtime
+    )
+    assert (
+        "GET /v1/tasks?field={task_search_field}&op={task_search_operator}&q={task_search_query}&status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}"
+        in runtime
     )
 
     for element_id in aggregate["visible_control_ids"] + aggregate["metadata_target_ids"]:
@@ -120,7 +125,11 @@ def test_story_125_4_inventory_keeps_search_discovery_and_broad_rewiring_closed(
     assert gate["next_allowed_surface"] == (
         "Story 125.4 inventory and behavior-preserving test guards only"
     )
-    assert data["search_discovery"]["runtime_authorized"] is False
+    assert data["search_discovery"]["runtime_authorized"] is True
+    assert data["search_discovery"]["authorized_story"] == "127.3"
+    assert data["search_discovery"]["authorized_route_patterns"] == [
+        "GET /v1/tasks?field={task_search_field}&op={task_search_operator}&q={task_search_query}&status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}"
+    ]
     assert data["broad_cleanup"]["runtime_rewiring_authorized"] is False
 
     assert set(gate["missing_runtime_contract_inputs"]) == {
@@ -150,14 +159,12 @@ def test_story_125_4_inventory_keeps_search_discovery_and_broad_rewiring_closed(
     }
     assert set(data["search_discovery"]["forbidden_markers"]) == {
         "/v1/tasks/search",
-        "task-search",
-        "discover",
-        "q=",
         "cursor=",
         "page=",
         "hidden selectors",
         "automatic traversal",
-        "URL/hash/storage selectors",
+        "URL/hash/storage/cookie selectors",
+        "row-derived selectors",
         "generated live data",
     }
 

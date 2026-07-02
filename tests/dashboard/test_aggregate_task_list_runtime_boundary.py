@@ -12,6 +12,10 @@ DASHBOARD = Path("dashboard/static/index.html")
 RUNTIME = Path("dashboard/static/aggregate-task-list.js")
 APPROVED_ROUTE_BASE = "/v1/tasks"
 ROUTE_PATTERN = "GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}"
+SEARCH_API_ROUTE_PATTERN = (
+    "GET /v1/tasks?field={task_search_field}&op={task_search_operator}&q={task_search_query}"
+)
+SEARCH_FETCH_ROUTE_PATTERN = "GET /v1/tasks?field={task_search_field}&op={task_search_operator}&q={task_search_query}&status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}"
 SORT_VALUE = "updated_at_desc_id_asc"
 CREATED_SORT_VALUE = "created_at_desc_id_asc"
 SORT_VALUES = (SORT_VALUE, CREATED_SORT_VALUE)
@@ -125,11 +129,8 @@ FORBIDDEN_ROUTE_MARKERS = (
     "/v1/health",
     "/logs/digest",
     "stream",
-    "search",
-    "discover",
     "cursor=",
     "page=",
-    "q=",
 )
 FORBIDDEN_METHOD_RE = re.compile(r"\b(?:POST|PUT|PATCH|DELETE)\b", re.IGNORECASE)
 ROUTE_LITERAL_RE = re.compile(r"['\"](?P<route>/v1/[^'\"]+)['\"]")
@@ -246,6 +247,10 @@ def test_story_118_2_runtime_script_allowlist_and_visible_controls_are_exact() -
         "button",
         "button",
         "select",
+        "select",
+        "select",
+        "input",
+        "button",
         "input",
         "button",
     ]
@@ -298,6 +303,29 @@ def test_story_118_2_runtime_script_allowlist_and_visible_controls_are_exact() -
         "name": "aggregate-task-list-sort-control",
     }
     assert raw_sort_options() == [(SORT_VALUE, True), (CREATED_SORT_VALUE, False)]
+    assert controls_by_id["aggregate-task-list-search-field-control"] == {
+        "tag": "select",
+        "id": "aggregate-task-list-search-field-control",
+        "name": "aggregate-task-list-search-field-control",
+    }
+    assert controls_by_id["aggregate-task-list-search-op-control"] == {
+        "tag": "select",
+        "id": "aggregate-task-list-search-op-control",
+        "name": "aggregate-task-list-search-op-control",
+    }
+    assert controls_by_id["aggregate-task-list-search-query-control"] == {
+        "tag": "input",
+        "id": "aggregate-task-list-search-query-control",
+        "name": "aggregate-task-list-search-query-control",
+        "type": "text",
+        "value": "fixture-task-id",
+        "autocomplete": "off",
+    }
+    assert controls_by_id["aggregate-task-list-search-load"] == {
+        "tag": "button",
+        "id": "aggregate-task-list-search-load",
+        "type": "button",
+    }
     assert controls_by_id["lifecycle-snapshot-create-token"]["tag"] == "input"
     assert controls_by_id["lifecycle-snapshot-create-button"]["tag"] == "button"
     assert all(
@@ -355,6 +383,14 @@ def test_story_118_2_panel_exposes_limit_offset_runtime_metadata_targets() -> No
         "aggregate-task-list-count",
         "aggregate-task-list-rows",
         "aggregate-task-list-selected-sort",
+        "aggregate-task-list-search-field-control",
+        "aggregate-task-list-search-op-control",
+        "aggregate-task-list-search-query-control",
+        "aggregate-task-list-search-load",
+        "aggregate-task-list-selected-search-field",
+        "aggregate-task-list-selected-search-op",
+        "aggregate-task-list-selected-search-query",
+        "aggregate-task-list-redaction",
     ):
         assert f'id="{element_id}"' in raw
     assert 'id="aggregate-task-list-selected-status"' in raw
@@ -364,10 +400,15 @@ def test_story_118_2_panel_exposes_limit_offset_runtime_metadata_targets() -> No
         in raw
     )
     lowered = raw.lower()
-    assert "visible status, limit, offset, and sort controls" in lowered
+    assert (
+        "visible status, limit, offset, sort, search field, search operator, and search query controls"
+        in lowered
+    )
     assert "no automatic traversal" in lowered
     assert "no infinite scroll" in lowered
-    assert "no search" in lowered
+    assert "visible-control-only search/discovery" in lowered
+    assert "no url/hash/storage/cookie selectors" in lowered
+    assert "no row-derived selectors" in lowered
     assert "full-composition read" in lowered
     assert "singleton" not in lowered
     assert "created_at_desc_id_asc" in lowered
@@ -419,6 +460,35 @@ def response_body(**overrides: object) -> dict[str, object]:
         "has_more": False,
         "next_offset": None,
         "items": [task_row()],
+    }
+    body.update(overrides)
+    return body
+
+
+def search_response_body(**overrides: object) -> dict[str, object]:
+    body: dict[str, object] = {
+        "route": SEARCH_API_ROUTE_PATTERN,
+        "selected_field": "task_id",
+        "selected_op": "eq",
+        "selected_query": "fixture-task-id",
+        "selected_status": DEFAULT_STATUS,
+        "selected_limit": int(DEFAULT_LIMIT),
+        "selected_offset": int(DEFAULT_OFFSET),
+        "selected_sort": SORT_VALUE,
+        "redaction_state": "summary-only-no-snippets",
+        "retrieved_at": "2026-06-29T00:00:03Z",
+        "freshness_state": "fresh",
+        "display_state": "healthy",
+        "authority_state": "authoritative",
+        "provenance": "registry-state task search summary list",
+        "request_id": "req-search-1",
+        "trace_id": "trace-search",
+        "correlation_id": "corr-search-1",
+        "limit": int(DEFAULT_LIMIT),
+        "returned_count": 1,
+        "has_more": False,
+        "next_offset": None,
+        "items": [task_row(task_id="fixture-task-id")],
     }
     body.update(overrides)
     return body
@@ -1636,6 +1706,283 @@ def test_story_118_2_runtime_behavior_runs_when_document_already_loaded() -> Non
     assert "empty-list" in rendered
 
 
+def test_story_127_3_visible_search_controls_issue_one_raw_explicit_get_after_initial_load() -> (
+    None
+):
+    search_route = "/v1/tasks?field=actor_id&op=eq&q=actor:@id&status=pending&limit=2&offset=0&sort=updated_at_desc_id_asc"
+    output = run_runtime_case(
+        {
+            "name": "actor-id-visible-search",
+            "controlValues": {
+                "aggregate-task-list-limit-control": "2",
+                "aggregate-task-list-search-field-control": "actor_id",
+                "aggregate-task-list-search-op-control": "eq",
+                "aggregate-task-list-search-query-control": "actor:@id",
+            },
+            "responses": [
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": response_body(
+                        selected_limit=2,
+                        limit=2,
+                        returned_count=1,
+                        items=[task_row(task_id="initial")],
+                    ),
+                },
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": search_response_body(
+                        selected_field="actor_id",
+                        selected_op="eq",
+                        selected_query="actor:@id",
+                        selected_limit=2,
+                        limit=2,
+                        returned_count=1,
+                        items=[
+                            task_row(
+                                task_id="actor-match", actor={"kind": "operator", "id": "actor:@id"}
+                            )
+                        ],
+                    ),
+                },
+            ],
+            "clickTargets": ["aggregate-task-list-search-load"],
+            "expected": ["actor-match", "summary-only-no-snippets"],
+        }
+    )
+    assert output["fetchCalls"] == [
+        {
+            "route": "/v1/tasks?status=pending&limit=2&offset=0&sort=updated_at_desc_id_asc",
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        },
+        {"route": search_route, "method": "GET", "hasBody": False, "credentials": "omit"},
+    ]
+    rendered = " ".join(output["texts"].values()).lower()
+    assert "field=actor_id&op=eq&q=actor:@id" in rendered
+    assert "%3a" not in rendered
+    assert "%40" not in rendered
+    assert "selected search field: actor_id" in rendered
+    assert "selected search operator: eq" in rendered
+    assert "selected search query: actor:@id" in rendered
+    assert "authority: authoritative" in rendered
+
+
+def test_story_127_3_timestamp_search_query_stays_unencoded_and_response_route_is_disambiguated() -> (
+    None
+):
+    query = "2026-01-01T00:00:00Z"
+    output = run_runtime_case(
+        {
+            "name": "timestamp-search-raw-query",
+            "controlValues": {
+                "aggregate-task-list-search-field-control": "updated_at",
+                "aggregate-task-list-search-op-control": "gte",
+                "aggregate-task-list-search-query-control": query,
+            },
+            "responses": [
+                {"ok": True, "status": 200, "body": response_body()},
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": search_response_body(
+                        selected_field="updated_at",
+                        selected_op="gte",
+                        selected_query=query,
+                    ),
+                },
+            ],
+            "clickTargets": ["aggregate-task-list-search-load"],
+            "expected": [query],
+        }
+    )
+    assert output["fetchCalls"][1] == {
+        "route": f"/v1/tasks?field=updated_at&op=gte&q={query}&status=pending&limit=50&offset=0&sort=updated_at_desc_id_asc",
+        "method": "GET",
+        "hasBody": False,
+        "credentials": "omit",
+    }
+    rendered = " ".join(output["texts"].values()).lower()
+    assert SEARCH_FETCH_ROUTE_PATTERN.lower() in rendered
+    assert SEARCH_API_ROUTE_PATTERN.lower() not in output["fetchCalls"][1]["route"].lower()
+    assert "%3a" not in rendered
+
+
+def test_story_127_3_hidden_malformed_and_row_derived_search_selectors_fail_closed_before_search_fetch() -> (
+    None
+):
+    cases: list[RuntimeCase] = [
+        {
+            "name": "hidden-search-field",
+            "controlTypes": {"aggregate-task-list-search-field-control": "hidden"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "unsupported-field",
+            "controlValues": {"aggregate-task-list-search-field-control": "status"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "malformed-encoded-query",
+            "controlValues": {"aggregate-task-list-search-query-control": "actor%40id"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "malformed-plus-query",
+            "controlValues": {"aggregate-task-list-search-query-control": "actor+id"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "malformed-leading-space-query",
+            "controlValues": {
+                "aggregate-task-list-search-field-control": "title",
+                "aggregate-task-list-search-op-control": "contains",
+                "aggregate-task-list-search-query-control": " First",
+            },
+            "expected": ["invalid"],
+        },
+        {
+            "name": "malformed-trailing-space-query",
+            "controlValues": {
+                "aggregate-task-list-search-field-control": "title",
+                "aggregate-task-list-search-op-control": "contains",
+                "aggregate-task-list-search-query-control": "First ",
+            },
+            "expected": ["invalid"],
+        },
+        {
+            "name": "malformed-spaced-field",
+            "controlValues": {"aggregate-task-list-search-field-control": " task_id"},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "malformed-spaced-operator",
+            "controlValues": {"aggregate-task-list-search-op-control": "eq "},
+            "expected": ["invalid"],
+        },
+        {
+            "name": "operator-field-mismatch",
+            "controlValues": {
+                "aggregate-task-list-search-field-control": "task_id",
+                "aggregate-task-list-search-op-control": "contains",
+            },
+            "expected": ["invalid"],
+        },
+        {
+            "name": "missing-query-control",
+            "missingElements": ["aggregate-task-list-search-query-control"],
+            "expected": ["invalid"],
+        },
+    ]
+    for case in cases:
+        case["response"] = {"ok": True, "status": 200, "body": response_body()}
+        case["clickTargets"] = ["aggregate-task-list-search-load"]
+        output = run_runtime_case(case)
+        assert output["fetchCalls"] == [
+            {"route": DEFAULT_ROUTE, "method": "GET", "hasBody": False, "credentials": "omit"}
+        ], case["name"]
+        rendered = " ".join(output["texts"].values()).lower()
+        assert "invalid" in rendered
+        assert "authority: authoritative" not in rendered
+
+
+def test_story_127_3_search_controls_do_not_auto_fetch_from_load_or_selector_edits() -> None:
+    output = run_runtime_case(
+        {
+            "name": "search-controls-edited-no-search-click",
+            "response": {"ok": True, "status": 200, "body": response_body()},
+            "mutateBeforeClicks": {
+                "aggregate-task-list-search-field-control": "title",
+                "aggregate-task-list-search-op-control": "contains",
+                "aggregate-task-list-search-query-control": "First",
+            },
+            "expected": ["invalid"],
+        }
+    )
+    assert output["fetchCalls"] == [
+        {"route": DEFAULT_ROUTE, "method": "GET", "hasBody": False, "credentials": "omit"}
+    ]
+    assert all("field=" not in call["route"] for call in output["fetchCalls"])
+
+
+def test_story_127_3_search_response_mismatch_and_pagination_fail_closed_without_traversal() -> (
+    None
+):
+    mismatch = run_runtime_case(
+        {
+            "name": "search-response-selected-query-mismatch",
+            "responses": [
+                {"ok": True, "status": 200, "body": response_body()},
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": search_response_body(selected_query="other-task"),
+                },
+            ],
+            "clickTargets": ["aggregate-task-list-search-load"],
+            "expected": ["invalid"],
+        }
+    )
+    assert len(mismatch["fetchCalls"]) == 2
+    rendered = " ".join(mismatch["texts"].values()).lower()
+    assert "invalid aggregate task list search response" in rendered
+    assert "authority: authoritative" not in rendered
+
+    paged = run_runtime_case(
+        {
+            "name": "search-has-more-does-not-enable-manual-navigation",
+            "controlValues": {"aggregate-task-list-limit-control": "2"},
+            "responses": [
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": response_body(
+                        selected_limit=2,
+                        limit=2,
+                        returned_count=2,
+                        has_more=True,
+                        next_offset=2,
+                        items=[task_row(task_id="a"), task_row(task_id="b")],
+                    ),
+                },
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": search_response_body(
+                        selected_limit=2,
+                        limit=2,
+                        returned_count=2,
+                        has_more=True,
+                        next_offset=2,
+                        items=[task_row(task_id="search-a"), task_row(task_id="search-b")],
+                    ),
+                },
+            ],
+            "clickTargets": ["aggregate-task-list-search-load", "aggregate-task-list-next-offset"],
+            "expected": ["manual_next disabled"],
+        }
+    )
+    assert paged["fetchCalls"] == [
+        {
+            "route": "/v1/tasks?status=pending&limit=2&offset=0&sort=updated_at_desc_id_asc",
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        },
+        {
+            "route": "/v1/tasks?field=task_id&op=eq&q=fixture-task-id&status=pending&limit=2&offset=0&sort=updated_at_desc_id_asc",
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        },
+    ]
+    assert paged["disabled"]["aggregate-task-list-next-offset"] is True
+    assert paged["disabled"]["aggregate-task-list-previous-offset"] is True
+
+
 def run_runtime_case(case: RuntimeCase, *, ready_state: str = "loading") -> RuntimeOutput:
     node_code = textwrap.dedent(
         f"""
@@ -1654,12 +2001,18 @@ def run_runtime_case(case: RuntimeCase, *, ready_state: str = "loading") -> Runt
           'aggregate-task-list-limit-control': {json.dumps(DEFAULT_LIMIT)},
           'aggregate-task-list-offset-control': {json.dumps(DEFAULT_OFFSET)},
           'aggregate-task-list-sort-control': {json.dumps(SORT_VALUE)},
+          'aggregate-task-list-search-field-control': 'task_id',
+          'aggregate-task-list-search-op-control': 'eq',
+          'aggregate-task-list-search-query-control': 'fixture-task-id',
         }}, testCase.controlValues || {{}});
         const controlTypes = Object.assign({{
           'aggregate-task-list-status-control': 'select-one',
           'aggregate-task-list-limit-control': 'number',
           'aggregate-task-list-offset-control': 'number',
           'aggregate-task-list-sort-control': 'select-one',
+          'aggregate-task-list-search-field-control': 'select-one',
+          'aggregate-task-list-search-op-control': 'select-one',
+          'aggregate-task-list-search-query-control': 'text',
         }}, testCase.controlTypes || {{}});
         function element(id) {{
           if (missing.has(id)) return null;

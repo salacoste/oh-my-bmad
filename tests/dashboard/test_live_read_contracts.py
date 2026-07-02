@@ -82,7 +82,7 @@ def test_route_inventory_is_imported_from_static_boundary_contract() -> None:
     assert APPROVED_READ_ROUTES is boundary.CORE_APPROVED_READ_ROUTES
     assert OPTIONAL_NON_CORE_READ_ROUTES is boundary.OPTIONAL_NON_CORE_READ_ROUTES
     assert FORBIDDEN_METHODS is boundary.FORBIDDEN_METHODS
-    assert len(APPROVED_READ_ROUTES) == 16
+    assert len(APPROVED_READ_ROUTES) == 17
 
 
 def test_candidate_core_read_routes_are_unique_normalized_and_get_only() -> None:
@@ -119,6 +119,10 @@ def test_digest_aggregate_and_session_reads_are_promoted_and_adjacent_routes_nee
     assert (
         "GET",
         "/v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}",
+    ) in APPROVED_READ_ROUTES
+    assert (
+        "GET",
+        "/v1/tasks?field={task_search_field}&op={task_search_operator}&q={task_search_query}&status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}",
     ) in APPROVED_READ_ROUTES
     assert ("GET", "/v1/sessions") in APPROVED_READ_ROUTES
     assert ("GET", "/v1/sessions/{session_id}") in APPROVED_READ_ROUTES
@@ -244,6 +248,7 @@ def assert_no_forbidden_effect_markers(text: str, *, source: str) -> None:
                 "/v1/tasks?status={task_status}&limit={task_list_limit}",
                 "/v1/tasks?limit={task_list_limit}&offset={task_list_offset}",
                 "/v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}",
+                "/v1/tasks?field={task_search_field}&op={task_search_operator}&q={task_search_query}&status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}",
                 "/v1/sessions",
             }
             or route.startswith("/v1/sessions/")
@@ -266,6 +271,7 @@ def assert_no_forbidden_effect_markers(text: str, *, source: str) -> None:
                 "/v1/tasks?status={task_status}&limit={task_list_limit}",
                 "/v1/tasks?limit={task_list_limit}&offset={task_list_offset}",
                 "/v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}",
+                "/v1/tasks?field={task_search_field}&op={task_search_operator}&q={task_search_query}&status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}",
             }:
                 credentials_is_omit = (
                     'credentials: "omit"' in options or "credentials: 'omit'" in options

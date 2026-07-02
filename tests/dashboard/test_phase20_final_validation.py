@@ -38,6 +38,7 @@ APPROVED_DASHBOARD_ROUTES = frozenset(
         "/v1/tasks?status={task_status}&limit={task_list_limit}",
         "/v1/tasks?limit={task_list_limit}&offset={task_list_offset}",
         "/v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}",
+        "/v1/tasks?field={task_search_field}&op={task_search_operator}&q={task_search_query}&status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}",
         "/v1/sessions",
         "/v1/sessions/{session_id}",
     }
@@ -82,6 +83,10 @@ def test_dashboard_aggregate_session_digest_stream_list_and_detail_are_approved(
     assert live_contracts.is_allowlisted_dashboard_read("GET", "/v1/tasks")
     assert live_contracts.is_allowlisted_dashboard_read(
         "GET", "/v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}"
+    )
+    assert live_contracts.is_allowlisted_dashboard_read(
+        "GET",
+        "/v1/tasks?field={task_search_field}&op={task_search_operator}&q={task_search_query}&status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}",
     )
     assert live_contracts.is_allowlisted_dashboard_read("GET", "/v1/sessions")
     assert live_contracts.is_allowlisted_dashboard_read("GET", "/v1/sessions/{session_id}")
