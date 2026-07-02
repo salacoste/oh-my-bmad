@@ -17,6 +17,10 @@
   const SEARCH_QUERY_CONTROL_ID = "aggregate-task-list-search-query-control";
   const LOAD_CONTROL_ID = "aggregate-task-list-load";
   const SEARCH_LOAD_CONTROL_ID = "aggregate-task-list-search-load";
+  const TRAVERSAL_BUDGET_CONTROL_ID = "aggregate-task-list-traversal-budget-control";
+  const TRAVERSAL_RATE_CONTROL_ID = "aggregate-task-list-traversal-rate-control";
+  const TRAVERSAL_ENABLE_CONTROL_ID = "aggregate-task-list-traversal-enable";
+  const TRAVERSAL_CANCEL_CONTROL_ID = "aggregate-task-list-traversal-cancel";
   const PREVIOUS_CONTROL_ID = "aggregate-task-list-previous-offset";
   const NEXT_CONTROL_ID = "aggregate-task-list-next-offset";
   const ALLOWED_ROW_STATUSES = new Set(["pending", "planning", "plan_ready", "executing", "blocked", "completed", "stopped", "failed"]);
@@ -27,6 +31,8 @@
   const SEARCH_BODY_KEYS = ["route", "selected_field", "selected_op", "selected_query", "selected_status", "selected_limit", "selected_offset", "selected_sort", "redaction_state", "retrieved_at", "freshness_state", "display_state", "authority_state", "provenance", "request_id", "trace_id", "correlation_id", "limit", "returned_count", "has_more", "next_offset", "items"];
   const ALLOWED_DISPLAY_STATES = new Set(["healthy", "empty-list", "stale", "invalid", "unauthorized", "backend-unavailable", "unavailable"]);
   const ALLOWED_FRESHNESS_STATES = new Set(["fresh", "stale"]);
+  const TRAVERSAL_RATE_VALUES = new Set(["one_page_per_response"]);
+  const MAX_TRAVERSAL_BUDGET = 5;
   const SEARCH_OPS_BY_FIELD = {
     task_id: new Set(["eq"]),
     title: new Set(["contains", "prefix"]),
@@ -39,6 +45,8 @@
   let loadInFlight = false;
   let selectorEditInvalidated = false;
   let searchRendered = false;
+  let traversalCancelRequested = false;
+  const traversalState = { selectors: null, nextOffset: null, active: false, pagesRead: 0, budget: 0, rate: null };
 
   function element(id) {
     return document.getElementById(id);
@@ -256,10 +264,113 @@
     const nextButton = element(NEXT_CONTROL_ID);
     if (loadButton) loadButton.disabled = isLoading;
     if (searchButton) searchButton.disabled = isLoading;
+    refreshTraversalButtons();
     if (isLoading) {
       if (previousButton) previousButton.disabled = true;
       if (nextButton) nextButton.disabled = true;
     }
+  }
+
+  function sameSearchSelectors(left, right) {
+    return Boolean(
+      left &&
+        right &&
+        left.field === right.field &&
+        left.op === right.op &&
+        left.query === right.query &&
+        left.status === right.status &&
+        left.limit === right.limit &&
+        left.offset === right.offset &&
+        left.sort === right.sort
+    );
+  }
+
+  function traversalTuple(selectors) {
+    if (!selectors) return "unavailable";
+    return `field ${selectors.field}; op ${selectors.op}; query ${selectors.query}; status ${selectors.status}; limit ${selectors.limit}; offset ${selectors.offset}; sort ${selectors.sort}`;
+  }
+
+  function traversalAvailable() {
+    return Boolean(traversalState.selectors && traversalState.nextOffset !== null && !traversalState.active);
+  }
+
+  function refreshTraversalButtons() {
+    const enableButton = element(TRAVERSAL_ENABLE_CONTROL_ID);
+    const cancelButton = element(TRAVERSAL_CANCEL_CONTROL_ID);
+    const budgetControl = element(TRAVERSAL_BUDGET_CONTROL_ID);
+    const rateControl = element(TRAVERSAL_RATE_CONTROL_ID);
+    if (enableButton) enableButton.disabled = loadInFlight || !traversalAvailable();
+    if (cancelButton) cancelButton.disabled = !traversalState.active;
+    if (budgetControl) budgetControl.disabled = traversalState.active;
+    if (rateControl) rateControl.disabled = traversalState.active;
+  }
+
+  function writeTraversalState(state, detail, selectors) {
+    const tuple = traversalTuple(selectors || traversalState.selectors);
+    const rate = traversalState.rate || "one_page_per_response";
+    const remaining = Math.max(traversalState.budget - traversalState.pagesRead, 0);
+    write(
+      "aggregate-task-list-traversal-state",
+      `Traversal: ${state}. Budget ${traversalState.budget}; pages_read ${traversalState.pagesRead}; remaining ${remaining}; rate_limit ${rate}; selector tuple ${tuple}; cancel control ${traversalState.active ? "enabled" : "disabled"}; stale-state copy: ${detail}.`
+    );
+    refreshTraversalButtons();
+  }
+
+  function clearTraversal(detail) {
+    traversalState.selectors = null;
+    traversalState.nextOffset = null;
+    traversalState.active = false;
+    traversalState.pagesRead = 0;
+    traversalState.budget = 0;
+    traversalState.rate = null;
+    traversalCancelRequested = false;
+    writeTraversalState("disabled", detail || "enable after an authoritative search response with has_more true", null);
+  }
+
+  function updateTraversalFromSearch(body, selectors, preserveActive) {
+    if (!preserveActive) {
+      traversalState.active = false;
+      traversalCancelRequested = false;
+      traversalState.pagesRead = 0;
+      traversalState.budget = 0;
+      traversalState.rate = null;
+    }
+    const authoritative = body.display_state === "healthy" && body.authority_state === "authoritative";
+    if (authoritative && body.has_more === true && typeof body.next_offset === "number") {
+      traversalState.selectors = { ...selectors };
+      traversalState.nextOffset = body.next_offset;
+      writeTraversalState(preserveActive ? "enabled" : "available", `next_offset ${body.next_offset}; ${preserveActive ? "waiting for current response boundary before next traversal read" : "explicit enable required before any traversal read"}`, selectors);
+      return;
+    }
+    if (preserveActive && authoritative) {
+      traversalState.selectors = { ...selectors };
+      traversalState.nextOffset = null;
+      writeTraversalState("enabled", "authoritative traversal page returned no next_offset", selectors);
+      return;
+    }
+    if (preserveActive) {
+      traversalState.nextOffset = null;
+      writeTraversalState("stopping", "non-authoritative or stale traversal response", selectors);
+      return;
+    }
+    clearTraversal("no authoritative next page available");
+  }
+
+  function readTraversalControls() {
+    const budgetControl = element(TRAVERSAL_BUDGET_CONTROL_ID);
+    const rateControl = element(TRAVERSAL_RATE_CONTROL_ID);
+    if (!budgetControl || !rateControl) return null;
+    if (budgetControl.type === "hidden" || rateControl.type === "hidden") return null;
+    const budgetText = decimalText(budgetControl.value, /^[1-5]$/);
+    const rate = label(rateControl.value, "");
+    if (budgetText === null || !TRAVERSAL_RATE_VALUES.has(rate)) return null;
+    const budget = Number(budgetText);
+    if (!Number.isInteger(budget) || budget < 1 || budget > MAX_TRAVERSAL_BUDGET) return null;
+    return { budget, rate };
+  }
+
+  function sameTraversalControls(controls) {
+    return Boolean(controls && controls.budget === traversalState.budget && controls.rate === traversalState.rate);
   }
 
   function selectorsMatchNavigation(selectors) {
@@ -291,8 +402,9 @@
     write("aggregate-task-list-rows", rows);
   }
 
-  function renderClosed(state, detail, selectors) {
+  function renderClosed(state, detail, selectors, preserveTraversal) {
     disableNavigation();
+    if (!preserveTraversal) clearTraversal(detail);
     selectorEditInvalidated = true;
     const selectedStatus = selectors ? selectors.status : "unavailable";
     const selectedLimit = selectors ? selectors.limit : "unavailable";
@@ -303,8 +415,9 @@
     render(state, "non-authoritative", "missing server freshness", "backend task summary list", "not provided", selectedStatus, selectedLimit, selectedOffset, selectedSort, runtimeRoute, "selected sorted window unavailable; manual previous/next controls disabled", state, "0", detail, ROUTE_PATTERN);
   }
 
-  function renderSearchClosed(state, detail, selectors) {
+  function renderSearchClosed(state, detail, selectors, preserveTraversal) {
     disableNavigation();
+    if (!preserveTraversal) clearTraversal(detail);
     searchRendered = true;
     const selectedStatus = selectors ? selectors.status : "unavailable";
     const selectedLimit = selectors ? selectors.limit : "unavailable";
@@ -324,14 +437,14 @@
     if (!selectors) {
       if (hasLoadedNavigation || selectorEditInvalidated || searchRendered) {
         selectorEditInvalidated = true;
-        renderClosed("invalid", "invalid visible aggregate task-list status, limit, offset, or sort selector; not authoritative.", null);
+        renderClosed("invalid", "invalid visible aggregate task-list status, limit, offset, or sort selector; not authoritative.", null, traversalState.active);
       } else {
         disableNavigation();
       }
       return;
     }
     if (searchRendered) {
-      renderSearchClosed("invalid", "visible aggregate task-list search selector changed after the last authoritative search; re-search required.", readSearchSelectors());
+      renderSearchClosed("invalid", "visible aggregate task-list search selector changed after the last authoritative search; re-search required.", readSearchSelectors(), traversalState.active);
       return;
     }
     if (selectorEditInvalidated && !hasLoadedNavigation) {
@@ -377,6 +490,7 @@
 
   function renderBody(body, selectors) {
     searchRendered = false;
+    clearTraversal("normal aggregate list read resets traversal mode");
     if (!validMetadata(body, selectors)) {
       renderClosed("invalid", "invalid aggregate task list status, limit, offset, and sort response; not authoritative.", selectors);
       return false;
@@ -404,13 +518,14 @@
     return true;
   }
 
-  function renderSearchBody(body, selectors) {
+  function renderSearchBody(body, selectors, preserveTraversalActive) {
     if (!validSearchMetadata(body, selectors)) {
-      renderSearchClosed("invalid", "invalid aggregate task list search response; not authoritative.", selectors);
+      renderSearchClosed("invalid", "invalid aggregate task list search response; not authoritative.", selectors, preserveTraversalActive);
       return false;
     }
     searchRendered = true;
     disableNavigation();
+    updateTraversalFromSearch(body, selectors, preserveTraversalActive);
     const state = body.display_state;
     const authority = authorityFor(state);
     const correlation = correlationText(body);
@@ -481,6 +596,11 @@
     setControlsLoading(true);
     try {
       const result = await requestRoute(route);
+      const visibleSelectorsAfterRead = readSearchSelectors();
+      if (!sameSearchSelectors(visibleSelectorsAfterRead, selectors)) {
+        renderSearchClosed("invalid", "visible search selector tuple changed while search read was in flight; search response not rendered.", visibleSelectorsAfterRead);
+        return undefined;
+      }
       if (!result.ok) {
         const state = result.state;
         renderSearchClosed(state, `${state.replace(/-/g, " ")} response for aggregate task list search read; not authoritative.`, selectors);
@@ -495,6 +615,120 @@
       setControlsLoading(false);
       disableNavigation();
     }
+  }
+
+  function stopTraversal(state, detail, selectors, clearCursor) {
+    traversalState.active = false;
+    traversalCancelRequested = false;
+    if (clearCursor) {
+      traversalState.selectors = null;
+      traversalState.nextOffset = null;
+    }
+    writeTraversalState(state, detail, selectors || traversalState.selectors);
+  }
+
+  async function loadBoundedTraversal() {
+    if (loadInFlight || traversalState.active) return undefined;
+    const controls = readTraversalControls();
+    const currentSelectors = readSearchSelectors();
+    if (!controls || !currentSelectors || !traversalState.selectors || traversalState.nextOffset === null || !sameSearchSelectors(currentSelectors, traversalState.selectors)) {
+      renderSearchClosed("invalid", "invalid or stale visible traversal selector tuple; traversal not started.", currentSelectors);
+      return undefined;
+    }
+    traversalState.active = true;
+    traversalCancelRequested = false;
+    traversalState.pagesRead = 0;
+    traversalState.budget = controls.budget;
+    traversalState.rate = controls.rate;
+    writeTraversalState("enabled", "one page is read only after the previous response completes; cancel stops after the current read", currentSelectors);
+    refreshTraversalButtons();
+    try {
+      while (traversalState.active && !traversalCancelRequested && traversalState.nextOffset !== null && traversalState.pagesRead < traversalState.budget) {
+        const nextSelectors = { ...traversalState.selectors, offset: String(traversalState.nextOffset) };
+        const offsetControl = element(OFFSET_CONTROL_ID);
+        if (!offsetControl) {
+          const detail = "missing visible offset control during traversal; traversal stopped.";
+          renderSearchClosed("invalid", detail, nextSelectors, true);
+          stopTraversal("stopped", detail, nextSelectors, true);
+          return undefined;
+        }
+        offsetControl.value = nextSelectors.offset;
+        const visibleSelectors = readSearchSelectors();
+        if (!sameSearchSelectors(visibleSelectors, nextSelectors)) {
+          const detail = "visible selector tuple became stale during traversal; traversal stopped.";
+          renderSearchClosed("invalid", detail, visibleSelectors, true);
+          stopTraversal("stopped", detail, visibleSelectors, true);
+          return undefined;
+        }
+        setControlsLoading(true);
+        let result;
+        try {
+          result = await requestRoute(selectedSearchRoute(nextSelectors));
+        } catch (_error) {
+          const detail = "network error during bounded traversal; traversal stopped.";
+          renderSearchClosed("backend-unavailable", detail, nextSelectors, true);
+          stopTraversal("stopped", detail, nextSelectors, true);
+          return undefined;
+        } finally {
+          setControlsLoading(false);
+        }
+        traversalState.pagesRead += 1;
+        if (traversalCancelRequested) {
+          stopTraversal("cancelled", "cancel requested by visible control; traversal stopped after current read", nextSelectors);
+          return undefined;
+        }
+        const visibleSelectorsAfterRead = readSearchSelectors();
+        if (!sameSearchSelectors(visibleSelectorsAfterRead, nextSelectors)) {
+          const detail = "visible selector tuple changed while traversal read was in flight; traversal stopped before rendering stale data.";
+          renderSearchClosed("invalid", detail, visibleSelectorsAfterRead, true);
+          stopTraversal("stopped", detail, visibleSelectorsAfterRead, true);
+          return undefined;
+        }
+        if (!sameTraversalControls(readTraversalControls())) {
+          const detail = "visible traversal budget or rate changed while traversal read was in flight; traversal stopped before rendering stale data.";
+          renderSearchClosed("invalid", detail, nextSelectors, true);
+          stopTraversal("stopped", detail, nextSelectors, true);
+          return undefined;
+        }
+        if (!result.ok) {
+          const detail = `${result.state.replace(/-/g, " ")} response during bounded traversal; traversal stopped.`;
+          renderSearchClosed(result.state, detail, nextSelectors, true);
+          stopTraversal("stopped", detail, nextSelectors, true);
+          return undefined;
+        }
+        const rendered = renderSearchBody(result.body, nextSelectors, true);
+        if (!rendered) {
+          stopTraversal("stopped", "non-authoritative or stale traversal response; traversal stopped", nextSelectors, true);
+          return undefined;
+        }
+        if (traversalState.nextOffset === null) {
+          stopTraversal("complete", "no next_offset remains after authoritative traversal response", nextSelectors);
+          return undefined;
+        }
+      }
+      if (traversalCancelRequested) {
+        stopTraversal("cancelled", "cancel requested by visible control", traversalState.selectors);
+      } else if (traversalState.pagesRead >= traversalState.budget) {
+        stopTraversal("budget-exhausted", "read/page budget exhausted; explicit re-enable required", traversalState.selectors);
+      } else {
+        stopTraversal("complete", "no additional traversal read was needed", traversalState.selectors);
+      }
+      return undefined;
+    } finally {
+      setControlsLoading(false);
+      disableNavigation();
+      refreshTraversalButtons();
+    }
+  }
+
+  function cancelBoundedTraversal() {
+    traversalCancelRequested = true;
+    if (!traversalState.active) {
+      stopTraversal("cancelled", "cancel requested while traversal was inactive", traversalState.selectors);
+    } else {
+      writeTraversalState("cancelling", "cancel requested by visible control; current read will finish before stop", traversalState.selectors);
+    }
+    return undefined;
   }
 
   function setOffsetAndLoad(offset) {
@@ -544,6 +778,10 @@
     const searchFieldControl = element(SEARCH_FIELD_CONTROL_ID);
     const searchOpControl = element(SEARCH_OP_CONTROL_ID);
     const searchQueryControl = element(SEARCH_QUERY_CONTROL_ID);
+    const traversalBudgetControl = element(TRAVERSAL_BUDGET_CONTROL_ID);
+    const traversalRateControl = element(TRAVERSAL_RATE_CONTROL_ID);
+    const traversalEnableButton = element(TRAVERSAL_ENABLE_CONTROL_ID);
+    const traversalCancelButton = element(TRAVERSAL_CANCEL_CONTROL_ID);
     const previousButton = element(PREVIOUS_CONTROL_ID);
     const nextButton = element(NEXT_CONTROL_ID);
     if (loadButton && typeof loadButton.addEventListener === "function") {
@@ -552,10 +790,22 @@
     if (searchButton && typeof searchButton.addEventListener === "function") {
       searchButton.addEventListener("click", loadSearchTaskList);
     }
+    if (traversalEnableButton && typeof traversalEnableButton.addEventListener === "function") {
+      traversalEnableButton.addEventListener("click", loadBoundedTraversal);
+    }
+    if (traversalCancelButton && typeof traversalCancelButton.addEventListener === "function") {
+      traversalCancelButton.addEventListener("click", cancelBoundedTraversal);
+    }
     for (const control of [statusControl, limitControl, offsetControl, sortControl, searchFieldControl, searchOpControl, searchQueryControl]) {
       if (control && typeof control.addEventListener === "function") {
         control.addEventListener("input", refreshNavigationForSelectorEdit);
         control.addEventListener("change", refreshNavigationForSelectorEdit);
+      }
+    }
+    for (const control of [traversalBudgetControl, traversalRateControl]) {
+      if (control && typeof control.addEventListener === "function") {
+        control.addEventListener("input", refreshTraversalButtons);
+        control.addEventListener("change", refreshTraversalButtons);
       }
     }
     if (previousButton && typeof previousButton.addEventListener === "function") {
@@ -564,6 +814,7 @@
     if (nextButton && typeof nextButton.addEventListener === "function") {
       nextButton.addEventListener("click", loadNextOffset);
     }
+    clearTraversal("explicit enable required after an authoritative search response with has_more true");
     return loadAggregateTaskList();
   }
 

@@ -18,6 +18,7 @@ FORBIDDEN_METHODS = boundary.FORBIDDEN_METHODS
 APPROVED_STORY_107_2_CREATE_SOURCE = str(STATIC_ROOT / "lifecycle-snapshot.js")
 APPROVED_STORY_107_2_CREATE_ROUTE = "/v1/events/replay/snapshots"
 APPROVED_STORY_112_2_STREAM_SOURCE = str(STATIC_ROOT / "digest-stream.js")
+APPROVED_STORY_127_4_TRAVERSAL_SOURCE = str(STATIC_ROOT / "aggregate-task-list.js")
 
 NEEDS_SEPARATE_CONTRACT_GET_ROUTES = frozenset(
     {
@@ -235,7 +236,10 @@ def assert_no_forbidden_effect_markers(text: str, *, source: str) -> None:
         if source == APPROVED_STORY_112_2_STREAM_SOURCE and marker == "settimeout":
             continue
         assert marker not in lowered, (source, marker)
-    assert not ACTIONABLE_MUTATION_WORD_RE.search(text), source
+    actionable_text = text
+    if source == APPROVED_STORY_127_4_TRAVERSAL_SOURCE:
+        actionable_text = re.sub(r"\bcancel\b", "", actionable_text, flags=re.IGNORECASE)
+    assert not ACTIONABLE_MUTATION_WORD_RE.search(actionable_text), source
     for match in FETCH_CALL_RE.finditer(text):
         route = match.group("route").rstrip("/")
         options = match.group("options").lower()

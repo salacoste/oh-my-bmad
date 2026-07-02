@@ -211,6 +211,15 @@ As the operator, I want any multi-page traversal to be explicit, bounded, cancel
 **When** `has_more` or `next_offset` is returned
 **Then** no automatic next read, prefetch, timer, worker, observer, websocket/EventSource/XHR side channel, retry loop, or cache warming runs.
 
+**Story 127.4 implementation detail:**
+
+- Dashboard runtime is implemented in `dashboard/static/aggregate-task-list.js` and markup in `dashboard/static/index.html`; no backend/API route behavior changes.
+- Traversal controls are visible-only: `aggregate-task-list-traversal-budget-control`, `aggregate-task-list-traversal-rate-control`, `aggregate-task-list-traversal-enable`, `aggregate-task-list-traversal-cancel`, and `aggregate-task-list-traversal-state`.
+- Traversal availability is derived only from a healthy authoritative search response with `has_more=true` and numeric `next_offset`; search pagination never enables manual previous/next.
+- Enable validates the visible budget/rate controls and exact unchanged search selector tuple; each traversal page updates the visible offset control and reuses the same canonical raw search route with no body and omitted credentials.
+- Traversal stops on budget exhaustion, no next offset, visible stop control, selector edit/mismatch, stale/non-authoritative/malformed response, unauthorized/backend/network failure, or hidden/invalid traversal controls.
+- Disabled mode remains inert: no automatic next read, prefetch, timer, worker, observer, web-socket/event-source/XMLHttpRequest side channel, repeated-attempt loop, cache warming, hidden selector, row-derived selector, URL/hash/storage/cookie selector, broad dashboard wiring, mutation, dependency, credential, deployment, or production-operation expansion.
+
 ### Story 127.5: Search/Discovery and Traversal Closure Evidence
 As the operator, I want proof that search/discovery and traversal are production-ready or intentionally disabled, so that this formerly deferred area can close.
 

@@ -51,6 +51,10 @@ APPROVED_STORY_107_2_CONTROL_IDS = frozenset(
         "aggregate-task-list-search-op-control",
         "aggregate-task-list-search-query-control",
         "aggregate-task-list-search-load",
+        "aggregate-task-list-traversal-budget-control",
+        "aggregate-task-list-traversal-rate-control",
+        "aggregate-task-list-traversal-enable",
+        "aggregate-task-list-traversal-cancel",
         "lifecycle-snapshot-create-token",
         "lifecycle-snapshot-create-button",
     }
@@ -444,7 +448,14 @@ def normalize_local_reference(href: str) -> str | None:
 
 def assert_control_vocabulary_is_negative_non_actionable(raw: str) -> None:
     parser = parse_html(raw)
-    actionable = context_text([*runtime_contexts(parser), *parser.controls]).lower()
+    unapproved_control_contexts = [
+        context
+        for context in parser.controls
+        if not any(
+            f"id={control_id!r}" in context.text for control_id in APPROVED_STORY_107_2_CONTROL_IDS
+        )
+    ]
+    actionable = context_text([*runtime_contexts(parser), *unapproved_control_contexts]).lower()
     for term in CONTROL_TERMS:
         assert term not in actionable, term
         for context in parser.text_contexts:

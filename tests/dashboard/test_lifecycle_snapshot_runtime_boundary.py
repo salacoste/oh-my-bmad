@@ -187,6 +187,10 @@ def test_story_106_2_runtime_script_allowlist_is_exact() -> None:
         "input",
         "button",
         "input",
+        "select",
+        "button",
+        "button",
+        "input",
         "button",
     ]
     assert all(
@@ -629,6 +633,9 @@ def test_story_107_2_create_affordance_is_visible_and_narrowly_allowlisted() -> 
         "button",
         "button",
         "input",
+        "button",
+        "input",
+        "button",
         "button",
         "input",
         "button",

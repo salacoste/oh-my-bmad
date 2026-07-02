@@ -210,6 +210,10 @@ def test_story_104_2_trace_runtime_script_allowlist_is_exact() -> None:
         "input",
         "button",
         "input",
+        "select",
+        "button",
+        "button",
+        "input",
         "button",
     ]
     assert all(

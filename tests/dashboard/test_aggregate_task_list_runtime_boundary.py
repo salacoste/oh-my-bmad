@@ -145,18 +145,28 @@ class RuntimeResponse(TypedDict, total=False):
     jsonError: str
 
 
+class RuntimeMutation(TypedDict):
+    fetchCallNumber: int
+    values: dict[str, str]
+
+
 class RuntimeCase(TypedDict):
     name: str
     expected: list[str]
     response: NotRequired[RuntimeResponse]
     responses: NotRequired[list[RuntimeResponse]]
     reject: NotRequired[str]
+    rejectFetchCallNumber: NotRequired[int]
     controlValues: NotRequired[dict[str, str]]
     controlTypes: NotRequired[dict[str, str]]
     missingElements: NotRequired[list[str]]
     clickTargets: NotRequired[list[str]]
     concurrentClickTargets: NotRequired[list[str]]
+    postClickConcurrentClickTargets: NotRequired[list[str]]
+    postClickTargets: NotRequired[list[str]]
     mutateBeforeClicks: NotRequired[dict[str, str]]
+    postClickMutations: NotRequired[dict[str, str]]
+    mutateDuringFetch: NotRequired[RuntimeMutation]
     mutateBeforeClicksSilently: NotRequired[dict[str, str]]
 
 
@@ -252,6 +262,10 @@ def test_story_118_2_runtime_script_allowlist_and_visible_controls_are_exact() -
         "input",
         "button",
         "input",
+        "select",
+        "button",
+        "button",
+        "input",
         "button",
     ]
     controls_by_id = {control.get("id"): control for control in parser.control_attrs}
@@ -326,6 +340,31 @@ def test_story_118_2_runtime_script_allowlist_and_visible_controls_are_exact() -
         "id": "aggregate-task-list-search-load",
         "type": "button",
     }
+    assert controls_by_id["aggregate-task-list-traversal-budget-control"] == {
+        "tag": "input",
+        "id": "aggregate-task-list-traversal-budget-control",
+        "name": "aggregate-task-list-traversal-budget-control",
+        "type": "number",
+        "min": "1",
+        "max": "5",
+        "step": "1",
+        "value": "2",
+    }
+    assert controls_by_id["aggregate-task-list-traversal-rate-control"] == {
+        "tag": "select",
+        "id": "aggregate-task-list-traversal-rate-control",
+        "name": "aggregate-task-list-traversal-rate-control",
+    }
+    assert controls_by_id["aggregate-task-list-traversal-enable"] == {
+        "tag": "button",
+        "id": "aggregate-task-list-traversal-enable",
+        "type": "button",
+    }
+    assert controls_by_id["aggregate-task-list-traversal-cancel"] == {
+        "tag": "button",
+        "id": "aggregate-task-list-traversal-cancel",
+        "type": "button",
+    }
     assert controls_by_id["lifecycle-snapshot-create-token"]["tag"] == "input"
     assert controls_by_id["lifecycle-snapshot-create-button"]["tag"] == "button"
     assert all(
@@ -391,6 +430,11 @@ def test_story_118_2_panel_exposes_limit_offset_runtime_metadata_targets() -> No
         "aggregate-task-list-selected-search-op",
         "aggregate-task-list-selected-search-query",
         "aggregate-task-list-redaction",
+        "aggregate-task-list-traversal-budget-control",
+        "aggregate-task-list-traversal-rate-control",
+        "aggregate-task-list-traversal-enable",
+        "aggregate-task-list-traversal-cancel",
+        "aggregate-task-list-traversal-state",
     ):
         assert f'id="{element_id}"' in raw
     assert 'id="aggregate-task-list-selected-status"' in raw
@@ -401,10 +445,18 @@ def test_story_118_2_panel_exposes_limit_offset_runtime_metadata_targets() -> No
     )
     lowered = raw.lower()
     assert (
-        "visible status, limit, offset, sort, search field, search operator, and search query controls"
+        "visible status, limit, offset, sort, search field, search operator, search query, traversal budget, and traversal rate controls"
         in lowered
     )
     assert "no automatic traversal" in lowered
+    assert "no automatic next read" in lowered
+    assert "no prefetch" in lowered
+    assert "no timer" in lowered
+    assert "no worker" in lowered
+    assert "no observer" in lowered
+    assert "no web-socket/event-source/xml-http-request side channel" in lowered
+    assert "no repeated-attempt loop" in lowered
+    assert "no cache warming" in lowered
     assert "no infinite scroll" in lowered
     assert "visible-control-only search/discovery" in lowered
     assert "no url/hash/storage/cookie selectors" in lowered
@@ -1889,6 +1941,44 @@ def test_story_127_3_hidden_malformed_and_row_derived_search_selectors_fail_clos
         assert "authority: authoritative" not in rendered
 
 
+def test_story_127_3_search_selector_edit_during_fetch_stops_before_stale_render_or_traversal_available() -> (
+    None
+):
+    output = run_runtime_case(
+        {
+            "name": "search-inflight-selector-edit",
+            "responses": [
+                {"ok": True, "status": 200, "body": response_body()},
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": search_response_body(
+                        returned_count=1,
+                        has_more=True,
+                        next_offset=2,
+                        items=[task_row(task_id="stale-search-old")],
+                    ),
+                },
+            ],
+            "clickTargets": [
+                "aggregate-task-list-search-load",
+                "aggregate-task-list-traversal-enable",
+            ],
+            "mutateDuringFetch": {
+                "fetchCallNumber": 2,
+                "values": {"aggregate-task-list-search-query-control": "other-task"},
+            },
+            "expected": ["invalid"],
+        }
+    )
+    assert len(output["fetchCalls"]) == 2
+    rendered = " ".join(output["texts"].values()).lower()
+    assert "visible search selector tuple changed while search read was in flight" in rendered
+    assert "stale-search-old" not in rendered
+    assert "authority: authoritative" not in rendered
+    assert output["disabled"]["aggregate-task-list-traversal-enable"] is True
+
+
 def test_story_127_3_search_controls_do_not_auto_fetch_from_load_or_selector_edits() -> None:
     output = run_runtime_case(
         {
@@ -1981,6 +2071,649 @@ def test_story_127_3_search_response_mismatch_and_pagination_fail_closed_without
     ]
     assert paged["disabled"]["aggregate-task-list-next-offset"] is True
     assert paged["disabled"]["aggregate-task-list-previous-offset"] is True
+    assert paged["disabled"]["aggregate-task-list-traversal-enable"] is False
+
+
+def test_story_127_4_search_has_more_requires_explicit_bounded_traversal_enable() -> None:
+    output = run_runtime_case(
+        {
+            "name": "bounded-traversal-budget-two",
+            "controlValues": {
+                "aggregate-task-list-limit-control": "2",
+                "aggregate-task-list-traversal-budget-control": "1",
+            },
+            "responses": [
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": response_body(
+                        selected_limit=2,
+                        limit=2,
+                        returned_count=2,
+                        has_more=True,
+                        next_offset=2,
+                        items=[task_row(task_id="initial-a"), task_row(task_id="initial-b")],
+                    ),
+                },
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": search_response_body(
+                        selected_limit=2,
+                        limit=2,
+                        returned_count=2,
+                        has_more=True,
+                        next_offset=2,
+                        items=[task_row(task_id="search-a"), task_row(task_id="search-b")],
+                    ),
+                },
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": search_response_body(
+                        selected_limit=2,
+                        selected_offset=2,
+                        limit=2,
+                        returned_count=2,
+                        has_more=True,
+                        next_offset=4,
+                        items=[task_row(task_id="search-c"), task_row(task_id="search-d")],
+                    ),
+                },
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": search_response_body(
+                        selected_limit=2,
+                        selected_offset=4,
+                        limit=2,
+                        returned_count=2,
+                        has_more=True,
+                        next_offset=6,
+                        items=[task_row(task_id="search-e"), task_row(task_id="search-f")],
+                    ),
+                },
+            ],
+            "clickTargets": ["aggregate-task-list-search-load"],
+            "postClickMutations": {"aggregate-task-list-traversal-budget-control": "2"},
+            "postClickTargets": ["aggregate-task-list-traversal-enable"],
+            "expected": ["budget-exhausted"],
+        }
+    )
+    assert output["fetchCalls"] == [
+        {
+            "route": "/v1/tasks?status=pending&limit=2&offset=0&sort=updated_at_desc_id_asc",
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        },
+        {
+            "route": "/v1/tasks?field=task_id&op=eq&q=fixture-task-id&status=pending&limit=2&offset=0&sort=updated_at_desc_id_asc",
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        },
+        {
+            "route": "/v1/tasks?field=task_id&op=eq&q=fixture-task-id&status=pending&limit=2&offset=2&sort=updated_at_desc_id_asc",
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        },
+        {
+            "route": "/v1/tasks?field=task_id&op=eq&q=fixture-task-id&status=pending&limit=2&offset=4&sort=updated_at_desc_id_asc",
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        },
+    ]
+    rendered = " ".join(output["texts"].values()).lower()
+    assert "traversal: budget-exhausted" in rendered
+    assert "budget 2" in rendered
+    assert "pages_read 2" in rendered
+    assert "rate_limit one_page_per_response" in rendered
+    assert "selector tuple field task_id; op eq; query fixture-task-id" in rendered
+    assert "cancel control disabled" in rendered
+    assert output["controlValues"]["aggregate-task-list-offset-control"] == "4"
+    assert output["disabled"]["aggregate-task-list-traversal-enable"] is False
+    assert output["disabled"]["aggregate-task-list-traversal-cancel"] is True
+
+
+def test_story_127_4_bounded_traversal_cancel_stops_after_current_read() -> None:
+    output = run_runtime_case(
+        {
+            "name": "bounded-traversal-cancel",
+            "controlValues": {
+                "aggregate-task-list-limit-control": "2",
+                "aggregate-task-list-traversal-budget-control": "5",
+            },
+            "responses": [
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": response_body(selected_limit=2, limit=2, returned_count=2),
+                },
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": search_response_body(
+                        selected_limit=2,
+                        limit=2,
+                        returned_count=2,
+                        has_more=True,
+                        next_offset=2,
+                        items=[task_row(task_id="search-a"), task_row(task_id="search-b")],
+                    ),
+                },
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": search_response_body(
+                        selected_limit=2,
+                        selected_offset=2,
+                        limit=2,
+                        returned_count=2,
+                        has_more=True,
+                        next_offset=4,
+                        items=[task_row(task_id="search-c"), task_row(task_id="search-d")],
+                    ),
+                },
+            ],
+            "clickTargets": ["aggregate-task-list-search-load"],
+            "postClickConcurrentClickTargets": [
+                "aggregate-task-list-traversal-enable",
+                "aggregate-task-list-traversal-cancel",
+            ],
+            "expected": ["cancelled"],
+        }
+    )
+    assert output["fetchCalls"] == [
+        {
+            "route": "/v1/tasks?status=pending&limit=2&offset=0&sort=updated_at_desc_id_asc",
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        },
+        {
+            "route": "/v1/tasks?field=task_id&op=eq&q=fixture-task-id&status=pending&limit=2&offset=0&sort=updated_at_desc_id_asc",
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        },
+        {
+            "route": "/v1/tasks?field=task_id&op=eq&q=fixture-task-id&status=pending&limit=2&offset=2&sort=updated_at_desc_id_asc",
+            "method": "GET",
+            "hasBody": False,
+            "credentials": "omit",
+        },
+    ]
+    rendered = " ".join(output["texts"].values()).lower()
+    assert "traversal: cancelled" in rendered
+    assert "cancel requested by visible control" in rendered
+    assert "pages_read 1" in rendered
+    assert output["controlValues"]["aggregate-task-list-offset-control"] == "2"
+    assert output["disabled"]["aggregate-task-list-traversal-cancel"] is True
+
+
+def test_story_127_4_bounded_traversal_stops_on_stale_non_authoritative_page() -> None:
+    output = run_runtime_case(
+        {
+            "name": "bounded-traversal-stale-stop",
+            "controlValues": {
+                "aggregate-task-list-limit-control": "2",
+                "aggregate-task-list-traversal-budget-control": "5",
+            },
+            "responses": [
+                {"ok": True, "status": 200, "body": response_body(selected_limit=2, limit=2)},
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": search_response_body(
+                        selected_limit=2,
+                        limit=2,
+                        returned_count=2,
+                        has_more=True,
+                        next_offset=2,
+                        items=[task_row(task_id="search-a"), task_row(task_id="search-b")],
+                    ),
+                },
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": search_response_body(
+                        selected_limit=2,
+                        selected_offset=2,
+                        freshness_state="stale",
+                        display_state="stale",
+                        authority_state="non-authoritative",
+                        limit=2,
+                        returned_count=0,
+                        has_more=False,
+                        next_offset=None,
+                        items=[],
+                    ),
+                },
+            ],
+            "clickTargets": [
+                "aggregate-task-list-search-load",
+                "aggregate-task-list-traversal-enable",
+            ],
+            "expected": ["stale"],
+        }
+    )
+    assert len(output["fetchCalls"]) == 3
+    assert output["fetchCalls"][-1]["route"].endswith(
+        "q=fixture-task-id&status=pending&limit=2&offset=2&sort=updated_at_desc_id_asc"
+    )
+    rendered = " ".join(output["texts"].values()).lower()
+    assert "traversal: stopped" in rendered
+    assert "non-authoritative or stale traversal response" in rendered
+    assert "authority: authoritative" not in rendered
+    assert output["disabled"]["aggregate-task-list-traversal-enable"] is True
+    assert output["disabled"]["aggregate-task-list-traversal-cancel"] is True
+
+
+def test_story_127_4_selector_edit_during_traversal_fetch_stops_before_stale_render() -> None:
+    output = run_runtime_case(
+        {
+            "name": "bounded-traversal-inflight-selector-edit",
+            "controlValues": {
+                "aggregate-task-list-limit-control": "2",
+                "aggregate-task-list-traversal-budget-control": "5",
+            },
+            "responses": [
+                {"ok": True, "status": 200, "body": response_body(selected_limit=2, limit=2)},
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": search_response_body(
+                        selected_limit=2,
+                        limit=2,
+                        returned_count=2,
+                        has_more=True,
+                        next_offset=2,
+                        items=[task_row(task_id="search-a"), task_row(task_id="search-b")],
+                    ),
+                },
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": search_response_body(
+                        selected_limit=2,
+                        selected_offset=2,
+                        limit=2,
+                        returned_count=2,
+                        has_more=True,
+                        next_offset=4,
+                        items=[
+                            task_row(task_id="stale-old-a"),
+                            task_row(task_id="stale-old-b"),
+                        ],
+                    ),
+                },
+            ],
+            "clickTargets": [
+                "aggregate-task-list-search-load",
+                "aggregate-task-list-traversal-enable",
+            ],
+            "mutateDuringFetch": {
+                "fetchCallNumber": 3,
+                "values": {"aggregate-task-list-search-query-control": "other-task"},
+            },
+            "expected": ["invalid"],
+        }
+    )
+    assert len(output["fetchCalls"]) == 3
+    rendered = " ".join(output["texts"].values()).lower()
+    assert "visible selector tuple changed while traversal read was in flight" in rendered
+    assert "budget 5" in rendered
+    assert "pages_read 1" in rendered
+    assert "stale-old-a" not in rendered
+    assert "authority: authoritative" not in rendered
+    assert output["controlValues"]["aggregate-task-list-search-query-control"] == "other-task"
+    assert output["disabled"]["aggregate-task-list-traversal-enable"] is True
+    assert output["disabled"]["aggregate-task-list-traversal-cancel"] is True
+
+
+def test_story_127_4_invalid_base_selector_edit_during_traversal_fetch_preserves_accounting() -> (
+    None
+):
+    output = run_runtime_case(
+        {
+            "name": "bounded-traversal-inflight-invalid-base-selector-edit",
+            "controlValues": {
+                "aggregate-task-list-limit-control": "2",
+                "aggregate-task-list-traversal-budget-control": "5",
+            },
+            "responses": [
+                {"ok": True, "status": 200, "body": response_body(selected_limit=2, limit=2)},
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": search_response_body(
+                        selected_limit=2,
+                        limit=2,
+                        returned_count=2,
+                        has_more=True,
+                        next_offset=2,
+                        items=[task_row(task_id="search-a"), task_row(task_id="search-b")],
+                    ),
+                },
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": search_response_body(
+                        selected_limit=2,
+                        selected_offset=2,
+                        limit=2,
+                        returned_count=2,
+                        has_more=True,
+                        next_offset=4,
+                        items=[
+                            task_row(task_id="stale-invalid-base-a"),
+                            task_row(task_id="stale-invalid-base-b"),
+                        ],
+                    ),
+                },
+            ],
+            "clickTargets": [
+                "aggregate-task-list-search-load",
+                "aggregate-task-list-traversal-enable",
+            ],
+            "mutateDuringFetch": {
+                "fetchCallNumber": 3,
+                "values": {"aggregate-task-list-limit-control": "bad"},
+            },
+            "expected": ["invalid"],
+        }
+    )
+    assert len(output["fetchCalls"]) == 3
+    rendered = " ".join(output["texts"].values()).lower()
+    assert "visible selector tuple changed while traversal read was in flight" in rendered
+    assert "traversal: stopped" in rendered
+    assert "budget 5" in rendered
+    assert "pages_read 1" in rendered
+    assert "stale-invalid-base-a" not in rendered
+    assert "authority: authoritative" not in rendered
+    assert output["controlValues"]["aggregate-task-list-limit-control"] == "bad"
+    assert output["disabled"]["aggregate-task-list-traversal-enable"] is True
+    assert output["disabled"]["aggregate-task-list-traversal-cancel"] is True
+
+
+def test_story_127_4_traversal_budget_edit_during_fetch_stops_with_accounting() -> None:
+    output = run_runtime_case(
+        {
+            "name": "bounded-traversal-inflight-budget-edit",
+            "controlValues": {
+                "aggregate-task-list-limit-control": "2",
+                "aggregate-task-list-traversal-budget-control": "5",
+            },
+            "responses": [
+                {"ok": True, "status": 200, "body": response_body(selected_limit=2, limit=2)},
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": search_response_body(
+                        selected_limit=2,
+                        limit=2,
+                        returned_count=2,
+                        has_more=True,
+                        next_offset=2,
+                        items=[task_row(task_id="search-a"), task_row(task_id="search-b")],
+                    ),
+                },
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": search_response_body(
+                        selected_limit=2,
+                        selected_offset=2,
+                        limit=2,
+                        returned_count=2,
+                        has_more=True,
+                        next_offset=4,
+                        items=[
+                            task_row(task_id="stale-budget-a"),
+                            task_row(task_id="stale-budget-b"),
+                        ],
+                    ),
+                },
+            ],
+            "clickTargets": [
+                "aggregate-task-list-search-load",
+                "aggregate-task-list-traversal-enable",
+            ],
+            "mutateDuringFetch": {
+                "fetchCallNumber": 3,
+                "values": {"aggregate-task-list-traversal-budget-control": "1"},
+            },
+            "expected": ["invalid"],
+        }
+    )
+    assert len(output["fetchCalls"]) == 3
+    rendered = " ".join(output["texts"].values()).lower()
+    assert "visible traversal budget or rate changed while traversal read was in flight" in rendered
+    assert "traversal: stopped" in rendered
+    assert "budget 5" in rendered
+    assert "pages_read 1" in rendered
+    assert "stale-budget-a" not in rendered
+    assert "authority: authoritative" not in rendered
+    assert output["disabled"]["aggregate-task-list-traversal-enable"] is True
+
+
+def test_story_127_4_malformed_traversal_response_preserves_terminal_accounting() -> None:
+    output = run_runtime_case(
+        {
+            "name": "bounded-traversal-malformed-response-accounting",
+            "controlValues": {
+                "aggregate-task-list-limit-control": "2",
+                "aggregate-task-list-traversal-budget-control": "5",
+            },
+            "responses": [
+                {"ok": True, "status": 200, "body": response_body(selected_limit=2, limit=2)},
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": search_response_body(
+                        selected_limit=2,
+                        limit=2,
+                        returned_count=2,
+                        has_more=True,
+                        next_offset=2,
+                        items=[task_row(task_id="search-a"), task_row(task_id="search-b")],
+                    ),
+                },
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": search_response_body(
+                        selected_limit=2,
+                        selected_offset=999,
+                        limit=2,
+                        returned_count=2,
+                        has_more=True,
+                        next_offset=4,
+                        items=[
+                            task_row(task_id="malformed-a"),
+                            task_row(task_id="malformed-b"),
+                        ],
+                    ),
+                },
+            ],
+            "clickTargets": [
+                "aggregate-task-list-search-load",
+                "aggregate-task-list-traversal-enable",
+            ],
+            "expected": ["invalid"],
+        }
+    )
+    assert len(output["fetchCalls"]) == 3
+    rendered = " ".join(output["texts"].values()).lower()
+    assert "invalid aggregate task list search response" in rendered
+    assert "traversal: stopped" in rendered
+    assert "budget 5" in rendered
+    assert "pages_read 1" in rendered
+    assert "malformed-a" not in rendered
+    assert "authority: authoritative" not in rendered
+    assert output["disabled"]["aggregate-task-list-traversal-enable"] is True
+
+
+def test_story_127_4_traversal_backend_and_network_failures_disable_reenable() -> None:
+    initial_list = {"ok": True, "status": 200, "body": response_body(selected_limit=2, limit=2)}
+    initial_search = {
+        "ok": True,
+        "status": 200,
+        "body": search_response_body(
+            selected_limit=2,
+            limit=2,
+            returned_count=2,
+            has_more=True,
+            next_offset=2,
+            items=[task_row(task_id="search-a"), task_row(task_id="search-b")],
+        ),
+    }
+    cases: list[RuntimeCase] = [
+        {
+            "name": "bounded-traversal-backend-unavailable-disable-reenable",
+            "controlValues": {
+                "aggregate-task-list-limit-control": "2",
+                "aggregate-task-list-traversal-budget-control": "5",
+            },
+            "responses": [
+                initial_list,
+                initial_search,
+                {"ok": False, "status": 503, "body": {}},
+            ],
+            "clickTargets": [
+                "aggregate-task-list-search-load",
+                "aggregate-task-list-traversal-enable",
+            ],
+            "expected": ["backend-unavailable"],
+        },
+        {
+            "name": "bounded-traversal-network-error-disable-reenable",
+            "controlValues": {
+                "aggregate-task-list-limit-control": "2",
+                "aggregate-task-list-traversal-budget-control": "5",
+            },
+            "responses": [initial_list, initial_search],
+            "reject": "network down",
+            "rejectFetchCallNumber": 3,
+            "clickTargets": [
+                "aggregate-task-list-search-load",
+                "aggregate-task-list-traversal-enable",
+            ],
+            "expected": ["backend-unavailable"],
+        },
+    ]
+    for case in cases:
+        output = run_runtime_case(case)
+        assert len(output["fetchCalls"]) == 3, case["name"]
+        rendered = " ".join(output["texts"].values()).lower()
+        assert "traversal: stopped" in rendered, case["name"]
+        assert "backend-unavailable" in rendered, case["name"]
+        assert "budget 5" in rendered, case["name"]
+        assert "pages_read" in rendered, case["name"]
+        assert output["disabled"]["aggregate-task-list-traversal-enable"] is True, case["name"]
+        assert output["disabled"]["aggregate-task-list-traversal-cancel"] is True, case["name"]
+
+
+def test_story_127_4_selector_edit_and_invalid_traversal_controls_fail_closed_before_traversal_fetch() -> (
+    None
+):
+    selector_edit = run_runtime_case(
+        {
+            "name": "traversal-selector-edit",
+            "controlValues": {"aggregate-task-list-limit-control": "2"},
+            "responses": [
+                {"ok": True, "status": 200, "body": response_body(selected_limit=2, limit=2)},
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": search_response_body(
+                        selected_limit=2,
+                        limit=2,
+                        returned_count=2,
+                        has_more=True,
+                        next_offset=2,
+                        items=[task_row(task_id="search-a"), task_row(task_id="search-b")],
+                    ),
+                },
+            ],
+            "clickTargets": ["aggregate-task-list-search-load"],
+            "postClickMutations": {"aggregate-task-list-search-query-control": "other-task"},
+            "postClickTargets": ["aggregate-task-list-traversal-enable"],
+            "expected": ["invalid"],
+        }
+    )
+    assert len(selector_edit["fetchCalls"]) == 2
+    rendered = " ".join(selector_edit["texts"].values()).lower()
+    assert "visible aggregate task-list search selector changed" in rendered
+    assert selector_edit["disabled"]["aggregate-task-list-traversal-enable"] is True
+
+    invalid_budget = run_runtime_case(
+        {
+            "name": "invalid-traversal-budget",
+            "controlValues": {
+                "aggregate-task-list-limit-control": "2",
+                "aggregate-task-list-traversal-budget-control": "6",
+            },
+            "responses": [
+                {"ok": True, "status": 200, "body": response_body(selected_limit=2, limit=2)},
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": search_response_body(
+                        selected_limit=2,
+                        limit=2,
+                        returned_count=2,
+                        has_more=True,
+                        next_offset=2,
+                        items=[task_row(task_id="search-a"), task_row(task_id="search-b")],
+                    ),
+                },
+            ],
+            "clickTargets": [
+                "aggregate-task-list-search-load",
+                "aggregate-task-list-traversal-enable",
+            ],
+            "expected": ["invalid"],
+        }
+    )
+    assert len(invalid_budget["fetchCalls"]) == 2
+    rendered = " ".join(invalid_budget["texts"].values()).lower()
+    assert "invalid or stale visible traversal selector tuple" in rendered
+    assert "authority: authoritative" not in rendered
+
+    hidden_rate = run_runtime_case(
+        {
+            "name": "hidden-traversal-rate",
+            "controlValues": {"aggregate-task-list-limit-control": "2"},
+            "controlTypes": {"aggregate-task-list-traversal-rate-control": "hidden"},
+            "responses": [
+                {"ok": True, "status": 200, "body": response_body(selected_limit=2, limit=2)},
+                {
+                    "ok": True,
+                    "status": 200,
+                    "body": search_response_body(
+                        selected_limit=2,
+                        limit=2,
+                        returned_count=2,
+                        has_more=True,
+                        next_offset=2,
+                        items=[task_row(task_id="search-a"), task_row(task_id="search-b")],
+                    ),
+                },
+            ],
+            "clickTargets": [
+                "aggregate-task-list-search-load",
+                "aggregate-task-list-traversal-enable",
+            ],
+            "expected": ["invalid"],
+        }
+    )
+    assert len(hidden_rate["fetchCalls"]) == 2
+    rendered = " ".join(hidden_rate["texts"].values()).lower()
+    assert "invalid or stale visible traversal selector tuple" in rendered
 
 
 def run_runtime_case(case: RuntimeCase, *, ready_state: str = "loading") -> RuntimeOutput:
@@ -2004,6 +2737,8 @@ def run_runtime_case(case: RuntimeCase, *, ready_state: str = "loading") -> Runt
           'aggregate-task-list-search-field-control': 'task_id',
           'aggregate-task-list-search-op-control': 'eq',
           'aggregate-task-list-search-query-control': 'fixture-task-id',
+          'aggregate-task-list-traversal-budget-control': '2',
+          'aggregate-task-list-traversal-rate-control': 'one_page_per_response',
         }}, testCase.controlValues || {{}});
         const controlTypes = Object.assign({{
           'aggregate-task-list-status-control': 'select-one',
@@ -2013,6 +2748,8 @@ def run_runtime_case(case: RuntimeCase, *, ready_state: str = "loading") -> Runt
           'aggregate-task-list-search-field-control': 'select-one',
           'aggregate-task-list-search-op-control': 'select-one',
           'aggregate-task-list-search-query-control': 'text',
+          'aggregate-task-list-traversal-budget-control': 'number',
+          'aggregate-task-list-traversal-rate-control': 'select-one',
         }}, testCase.controlTypes || {{}});
         function element(id) {{
           if (missing.has(id)) return null;
@@ -2033,6 +2770,16 @@ def run_runtime_case(case: RuntimeCase, *, ready_state: str = "loading") -> Runt
           }}
           return elements.get(id);
         }}
+        function mutateControl(id, value) {{
+          const node = element(id);
+          if (node) {{
+            node.value = String(value);
+            const inputHandler = listeners.get(id)?.input;
+            const changeHandler = listeners.get(id)?.change;
+            if (inputHandler) inputHandler();
+            if (changeHandler) changeHandler();
+          }}
+        }}
         const fetchCalls = [];
         const sandbox = {{
           console,
@@ -2051,7 +2798,14 @@ def run_runtime_case(case: RuntimeCase, *, ready_state: str = "loading") -> Runt
           }},
           fetch: async (route, options = {{}}) => {{
             fetchCalls.push({{ route, method: options.method || 'GET', hasBody: Object.prototype.hasOwnProperty.call(options, 'body'), credentials: options.credentials || null }});
-            if (testCase.reject) throw new Error(testCase.reject);
+            const mutateDuringFetch = testCase.mutateDuringFetch;
+            if (mutateDuringFetch && fetchCalls.length === mutateDuringFetch.fetchCallNumber) {{
+              for (const [id, value] of Object.entries(mutateDuringFetch.values || {{}})) {{
+                mutateControl(id, value);
+              }}
+              await Promise.resolve();
+            }}
+            if (testCase.reject && (!testCase.rejectFetchCallNumber || fetchCalls.length === testCase.rejectFetchCallNumber)) throw new Error(testCase.reject);
             const responses = testCase.responses || (testCase.response ? [testCase.response] : [{{ ok: true, status: 200, body: {{}} }}]);
             const response = responses[Math.min(fetchCalls.length - 1, responses.length - 1)];
             return {{
@@ -2096,6 +2850,38 @@ def run_runtime_case(case: RuntimeCase, *, ready_state: str = "loading") -> Runt
         for (const clicked of concurrentClicks) {{ await clicked; }}
         if (concurrentClicks.length && sandbox.window.__aggregateTaskListReady) {{ await sandbox.window.__aggregateTaskListReady; }}
         for (const clickId of testCase.clickTargets || []) {{
+          const node = elements.get(clickId);
+          const handler = listeners.get(clickId)?.click;
+          if (node && !node.disabled && handler) {{
+            const clicked = handler();
+            if (clicked && typeof clicked.then === 'function') await clicked;
+            if (sandbox.window.__aggregateTaskListReady) {{ await sandbox.window.__aggregateTaskListReady; }}
+            await Promise.resolve();
+            await Promise.resolve();
+          }}
+        }}
+        for (const [id, value] of Object.entries(testCase.postClickMutations || {{}})) {{
+          const node = element(id);
+          if (node) {{
+            node.value = String(value);
+            const inputHandler = listeners.get(id)?.input;
+            const changeHandler = listeners.get(id)?.change;
+            if (inputHandler) inputHandler();
+            if (changeHandler) changeHandler();
+          }}
+        }}
+        const postClickConcurrentClicks = [];
+        for (const clickId of testCase.postClickConcurrentClickTargets || []) {{
+          const node = elements.get(clickId);
+          const handler = listeners.get(clickId)?.click;
+          if (node && !node.disabled && handler) {{
+            const clicked = handler();
+            if (clicked && typeof clicked.then === 'function') postClickConcurrentClicks.push(clicked);
+          }}
+        }}
+        for (const clicked of postClickConcurrentClicks) {{ await clicked; }}
+        if (postClickConcurrentClicks.length && sandbox.window.__aggregateTaskListReady) {{ await sandbox.window.__aggregateTaskListReady; }}
+        for (const clickId of testCase.postClickTargets || []) {{
           const node = elements.get(clickId);
           const handler = listeners.get(clickId)?.click;
           if (node && !node.disabled && handler) {{

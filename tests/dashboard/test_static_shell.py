@@ -56,6 +56,10 @@ APPROVED_STORY_107_2_CONTROL_IDS = frozenset(
         "aggregate-task-list-search-op-control",
         "aggregate-task-list-search-query-control",
         "aggregate-task-list-search-load",
+        "aggregate-task-list-traversal-budget-control",
+        "aggregate-task-list-traversal-rate-control",
+        "aggregate-task-list-traversal-enable",
+        "aggregate-task-list-traversal-cancel",
         "lifecycle-snapshot-create-token",
         "lifecycle-snapshot-create-button",
     }

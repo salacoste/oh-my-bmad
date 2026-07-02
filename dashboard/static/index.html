@@ -78,8 +78,8 @@
       <h2 id="tasks-title">Tasks</h2>
       <p class="state" id="aggregate-task-list-status">Aggregate task-list status+limit+offset+sort live-read boundary pending: waiting for an approved aggregate task-list response.</p>
       <p>
-        Source route/reference: GET /v1/tasks?status={task_status}&amp;limit={task_list_limit}&amp;offset={task_list_offset}&amp;sort={task_sort} and GET /v1/tasks?field={task_search_field}&amp;op={task_search_operator}&amp;q={task_search_query}&amp;status={task_status}&amp;limit={task_list_limit}&amp;offset={task_list_offset}&amp;sort={task_sort}. Story 127.3 preserves the read-only full-composition read and wires visible-control-only search/discovery for the aggregate task list;
-        selectors come from the visible status, limit, offset, sort, search field, search operator, and search query controls below. The normal list button and search button each perform one explicit GET with no request body and omitted credentials while preserving the selected sort. It adds no selector-free aggregate browser fetch, no automatic traversal, no infinite scroll, no search-driven manual previous or manual next traversal, no hidden selectors, no broader sort vocabulary beyond the two visible values, no URL/hash/storage/cookie selectors, no row-derived selectors, no broad dashboard live wiring, no task detail traversal, no digest/history/trace/replay/session traversal, and no mutation or operator-control action.
+        Source route/reference: GET /v1/tasks?status={task_status}&amp;limit={task_list_limit}&amp;offset={task_list_offset}&amp;sort={task_sort} and GET /v1/tasks?field={task_search_field}&amp;op={task_search_operator}&amp;q={task_search_query}&amp;status={task_status}&amp;limit={task_list_limit}&amp;offset={task_list_offset}&amp;sort={task_sort}. Story 127.4 preserves the read-only full-composition read, visible-control-only search/discovery, and an explicit bounded traversal mode for the aggregate task list;
+        selectors come from the visible status, limit, offset, sort, search field, search operator, search query, traversal budget, and traversal rate controls below. The normal list button, search button, and traversal enable button each require explicit visible controls, perform GET requests with no request body and omitted credentials while preserving the selected sort, and keep traversal limited to one page per completed response. When traversal is not explicitly enabled it adds no selector-free aggregate browser fetch, no automatic traversal, no automatic next read, no prefetch, no timer, no worker, no observer, no web-socket/event-source/xml-http-request side channel, no repeated-attempt loop, no cache warming, no infinite scroll, no search-driven manual previous or manual next traversal, no hidden selectors, no broader sort vocabulary beyond the two visible values, no URL/hash/storage/cookie selectors, no row-derived selectors, no broad dashboard live wiring, no task detail traversal, no digest/history/trace/replay/session traversal, and no mutation or operator-control action.
       </p>
       <p>
         Runtime states are loading, healthy bounded display, empty successful read, stale/partial data, stale data, invalid data, permission/configuration failure, unauthorized/configuration failure,
@@ -136,8 +136,17 @@
         <label for="aggregate-task-list-search-query-control">Task search query</label>
         <input id="aggregate-task-list-search-query-control" name="aggregate-task-list-search-query-control" type="text" value="fixture-task-id" autocomplete="off">
         <button id="aggregate-task-list-search-load" type="button">Search task list</button>
+        <label for="aggregate-task-list-traversal-budget-control">Traversal read/page budget</label>
+        <input id="aggregate-task-list-traversal-budget-control" name="aggregate-task-list-traversal-budget-control" type="number" min="1" max="5" step="1" value="2">
+        <label for="aggregate-task-list-traversal-rate-control">Traversal rate limit</label>
+        <select id="aggregate-task-list-traversal-rate-control" name="aggregate-task-list-traversal-rate-control">
+          <option value="one_page_per_response" selected>One page per response boundary</option>
+        </select>
+        <button id="aggregate-task-list-traversal-enable" type="button">Enable bounded traversal</button>
+        <button id="aggregate-task-list-traversal-cancel" type="button">Stop traversal</button>
       </p>
       <p class="meta" id="aggregate-task-list-source">Source: GET /v1/tasks?status={task_status}&amp;limit={task_list_limit}&amp;offset={task_list_offset}&amp;sort={task_sort}; search source GET /v1/tasks?field={task_search_field}&amp;op={task_search_operator}&amp;q={task_search_query}&amp;status={task_status}&amp;limit={task_list_limit}&amp;offset={task_list_offset}&amp;sort={task_sort}. Runtime route: pending.</p>
+      <p class="meta" id="aggregate-task-list-traversal-state">Traversal: disabled. Explicit enable requires a healthy authoritative search response with has_more true, visible selector tuple unchanged, read/page budget 1-5, rate limit one page per response, and visible stop control; stale or non-authoritative traversal responses fail closed.</p>
       <p class="meta" id="aggregate-task-list-selected-search-field">Selected search field: task_id visible control value.</p>
       <p class="meta" id="aggregate-task-list-selected-search-op">Selected search operator: eq visible control value.</p>
       <p class="meta" id="aggregate-task-list-selected-search-query">Selected search query: fixture-task-id visible control value.</p>
@@ -552,7 +561,7 @@
       </ul>
       <p>
         The digest stream now has an exact Story 112.2 fixture-backed route row while remaining route-local and inert in this static presentation.
-        Aggregate task-list fixture rows are cumulative compatibility evidence: the current Story 127.3 browser runtime uses visible status, limit, offset, sort, and search controls for exact approved aggregate routes, while earlier selector-free/status/limit/offset rows remain inert historical fixtures.
+        Aggregate task-list fixture rows are cumulative compatibility evidence: the current Story 127.4 browser runtime uses visible status, limit, offset, sort, search, traversal budget, and traversal rate controls for exact approved aggregate routes, while earlier selector-free/status/limit/offset rows remain inert historical fixtures.
       </p>
       <p class="meta">Source: Story 99.2 fixture snapshot contract. Freshness label: static fixture readiness freshness label; runtime data remains disconnected. Timestamp label: static fixture readiness timestamp label; runtime data remains disconnected. Confidence: fixture-backed static readiness only.</p>
     </section>

@@ -36,7 +36,7 @@
 
 generated: 2026-04-22
 last_updated: "2026-07-02T14:55:00Z"
-current_phase: 48  # Phase 48 / Epic 127 Story 127.3 browser visible-control search/discovery complete locally; traversal and closure evidence remain deferred until later implementation stories
+current_phase: 48  # Phase 48 / Epic 127 Stories 127.1-127.4 complete locally; explicit bounded traversal is done and closure evidence remains deferred to Story 127.5
 
 development_status:
   # =========================================================================
@@ -1079,11 +1079,11 @@ development_status:
   # =========================================================================
   # Epic 127: Search, discovery, selector provenance, and controlled traversal
   # =========================================================================
-  epic-127: in-progress  # Phase 48 Epic 127 has Stories 127.1-127.3 complete locally; explicit traversal and closure evidence remain future stories
+  epic-127: in-progress  # Phase 48 Epic 127 has Stories 127.1-127.4 complete locally; closure evidence remains future Story 127.5
   127-1-search-discovery-product-architecture-contract: done  # Docs/status-only contract pins exact fields/operators, raw ASCII q caps (1..96 global bytes, 1..64 task/title/actor, 1..80 event type, 20 chars timestamps), percent and Unicode/non-ASCII rejection, duplicate field=status/status= fail-closed semantics, URL/hash/storage/cookie and hidden/row-derived selector denial, automatic traversal disabled until Story 127.4, and sequential native Architect APPROVE/CLEAR followed by Critic APPROVE/CLEAR
   127-2-api-local-task-search-discovery-runtime-boundary: done  # Implements route-local bodyless GET /v1/tasks field/op/q search with exact raw ASCII query grammar, finite fields/operators, literal title/actor matching, semantic UTC timestamp bounds, current-last-event filtering, duplicate field=status/status= fail-closed semantics, selected search/suffix metadata, redaction state, and bounded pagination
   127-3-browser-search-discovery-controls-visible-state: done  # Dashboard aggregate task-list visible field/op/query controls and explicit search button compose canonical raw search+status+limit+offset+sort GET with credentials omitted, no body, selected search metadata, fail-closed hidden/malformed/response-mismatched/side-channel selectors, and no automatic/manual traversal from search pagination
-  127-4-explicit-bounded-traversal-infinite-scroll-mode: backlog
+  127-4-explicit-bounded-traversal-infinite-scroll-mode: done  # Dashboard aggregate task-list search traversal is explicit, visible-control-only, budgeted 1..5 pages, one page per response, cancellable/stoppable, stale-selector safe after awaits, and disabled-mode inert for automatic next reads, prefetch, timers, workers, observers, side channels, repeated-attempt loops, and cache warming
   127-5-search-discovery-traversal-closure-evidence: backlog
 
 # ===========================================================================
@@ -1091,6 +1091,30 @@ development_status:
 # ===========================================================================
 audit_trail:
 
+
+
+  - date: "2026-07-02"
+    event: story-127-4-explicit-bounded-traversal-infinite-scroll-mode-done
+    from: backlog
+    to: done
+    epic: epic-127
+    story: 127-4-explicit-bounded-traversal-infinite-scroll-mode
+    source: autopilot-story-127-4
+    reason: >-
+      Story 127.4 implemented explicit bounded traversal for dashboard aggregate
+      task-list search results only. Traversal is available only after a healthy
+      authoritative search response with has_more and numeric next_offset, then
+      requires visible budget/rate controls plus explicit enable. Each page uses
+      the same canonical bodyless GET search route with credentials omitted,
+      revalidates visible selector tuples after awaits before rendering, updates
+      the visible offset control, and stops on budget exhaustion, no next offset,
+      stop/cancel control, selector edit/mismatch, stale/non-authoritative or
+      malformed response, network/backend/unauthorized failure, or hidden/invalid
+      traversal controls. Disabled mode remains inert for automatic next reads,
+      prefetch, timers, workers, observers, web-socket/event-source/XMLHttpRequest
+      side channels, repeated-attempt loops, and cache warming. Local evidence:
+      aggregate runtime 28 passed, dashboard suite 238 passed, ruff format/check,
+      mypy strict, and git diff checks passed; code-review blockers were reworked.
 
   - date: "2026-07-02"
     event: story-127-2-api-local-task-search-discovery-runtime-boundary-done
