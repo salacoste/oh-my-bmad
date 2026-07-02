@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-07-02T14:55:00Z"
+# last_updated: "2026-07-03T00:00:00+03:00"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-07-02T14:55:00Z"
-current_phase: 48  # Phase 48 / Epic 127 Stories 127.1-127.4 complete locally; explicit bounded traversal is done and closure evidence remains deferred to Story 127.5
+last_updated: "2026-07-03T00:00:00+03:00"
+current_phase: 48  # Phase 48 / Epic 127 complete locally after Story 127.5 closure evidence; Epic 128 is next and remote CI/shipped evidence remains pending until push
 
 development_status:
   # =========================================================================
@@ -1079,12 +1079,12 @@ development_status:
   # =========================================================================
   # Epic 127: Search, discovery, selector provenance, and controlled traversal
   # =========================================================================
-  epic-127: in-progress  # Phase 48 Epic 127 has Stories 127.1-127.4 complete locally; closure evidence remains future Story 127.5
+  epic-127: done  # Phase 48 Epic 127 complete locally after exact search/discovery, visible selector provenance, explicit bounded traversal, local verification, review, UltraQA, and closure evidence; remote CI/shipped evidence pending until push
   127-1-search-discovery-product-architecture-contract: done  # Docs/status-only contract pins exact fields/operators, raw ASCII q caps (1..96 global bytes, 1..64 task/title/actor, 1..80 event type, 20 chars timestamps), percent and Unicode/non-ASCII rejection, duplicate field=status/status= fail-closed semantics, URL/hash/storage/cookie and hidden/row-derived selector denial, automatic traversal disabled until Story 127.4, and sequential native Architect APPROVE/CLEAR followed by Critic APPROVE/CLEAR
   127-2-api-local-task-search-discovery-runtime-boundary: done  # Implements route-local bodyless GET /v1/tasks field/op/q search with exact raw ASCII query grammar, finite fields/operators, literal title/actor matching, semantic UTC timestamp bounds, current-last-event filtering, duplicate field=status/status= fail-closed semantics, selected search/suffix metadata, redaction state, and bounded pagination
   127-3-browser-search-discovery-controls-visible-state: done  # Dashboard aggregate task-list visible field/op/query controls and explicit search button compose canonical raw search+status+limit+offset+sort GET with credentials omitted, no body, selected search metadata, fail-closed hidden/malformed/response-mismatched/side-channel selectors, and no automatic/manual traversal from search pagination
   127-4-explicit-bounded-traversal-infinite-scroll-mode: done  # Dashboard aggregate task-list search traversal is explicit, visible-control-only, budgeted 1..5 pages, one page per response, cancellable/stoppable, stale-selector safe after awaits, and disabled-mode inert for automatic next reads, prefetch, timers, workers, observers, side channels, repeated-attempt loops, and cache warming
-  127-5-search-discovery-traversal-closure-evidence: backlog
+  127-5-search-discovery-traversal-closure-evidence: done  # Local closure records Stories 127.1-127.4 commits, API test_app 76 passed, dashboard suite 238 passed, aggregate traversal 28 passed, ruff format/check, mypy strict, git diff check, code-review APPROVE, UltraQA PASS, and explicit arbitrary-discovery/automation forbiddance; remote CI pending post-push
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
@@ -1092,6 +1092,26 @@ development_status:
 audit_trail:
 
 
+
+  - date: "2026-07-03"
+    event: story-127-5-search-discovery-traversal-closure-evidence-done
+    from: backlog
+    to: done
+    epic: epic-127
+    story: 127-5-search-discovery-traversal-closure-evidence
+    source: autopilot-story-127-5
+    reason: >-
+      Story 127.5 recorded local closure evidence for Epic 127 after Stories
+      127.1 through 127.4 completed locally. Evidence includes implementation
+      commits 13b80a2, 85d10c9, 83a667f, and eb54665; API-local task tests
+      76 passed; dashboard suite 238 passed; focused aggregate traversal tests
+      28 passed; node syntax, ruff format/check, mypy strict, and git diff
+      checks passed; Story 127.4 final code-review APPROVE; and UltraQA PASS.
+      The closure distinguishes implemented exact field/op/q search plus explicit
+      bounded traversal from still-forbidden arbitrary discovery, hidden selectors,
+      row-derived selectors, automatic traversal side channels, credentials,
+      mutation routes, deployment, and production operations. Remote CI/shipped
+      evidence remains pending until these local commits are pushed.
 
   - date: "2026-07-02"
     event: story-127-4-explicit-bounded-traversal-infinite-scroll-mode-done

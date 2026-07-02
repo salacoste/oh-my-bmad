@@ -226,8 +226,17 @@ As the operator, I want proof that search/discovery and traversal are production
 **Acceptance Criteria:**
 **Given** Stories 127.1-127.4 are complete
 **When** closure validation runs
-**Then** API/dashboard tests, hidden-selector negative tests, traversal budget/cancel tests, forbidden-marker tests, code-review APPROVE/CLEAR, UltraQA PASS, and CI evidence are recorded
-**And** docs distinguish implemented contracts from still-forbidden arbitrary discovery.
+**Then** API/dashboard tests, hidden-selector negative tests, traversal budget/cancel tests, forbidden-marker tests, code-review APPROVE/CLEAR, UltraQA PASS, and local closure evidence are recorded
+**And** docs distinguish implemented contracts from still-forbidden arbitrary discovery
+**And** remote CI/shipped evidence is recorded only after the local commits are pushed and GitHub Actions run ids are available.
+
+**Story 127.5 local closure detail:**
+
+- Local closure evidence is recorded in `_bmad-output/implementation-artifacts/127-5-phase-48-epic-127-final-closure.md`.
+- Epic 127 is complete locally after Stories 127.1 through 127.4 with commits `13b80a2`, `85d10c9`, `83a667f`, and `eb54665`.
+- Verification evidence covers API-local task tests (`76 passed`), dashboard suite (`238 passed`), focused aggregate traversal (`28 passed`), JavaScript syntax, ruff format/check, mypy strict, and git diff hygiene.
+- The implemented contract remains exact raw ASCII `field`/`op`/`q` search plus Story 127.4 explicit bounded traversal only; arbitrary discovery, hidden selectors, row-derived selectors, automatic traversal side channels, credentials, mutations, deployment, and production operations remain forbidden/fail-closed.
+- Remote CI/shipped evidence is pending until the local commits are pushed and GitHub Actions run ids are recorded.
 
 ## Epic 128: Behavior-Preserving Broad Dashboard Rewiring Cleanup
 
