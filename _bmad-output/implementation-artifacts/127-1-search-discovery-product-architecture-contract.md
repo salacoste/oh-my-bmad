@@ -1,32 +1,17 @@
-# Phase 48 PRD Amendment — Remaining Production-Readiness Closure Portfolio
+# Story 127.1 — Search/Discovery Product and Architecture Contract
 
-Generated: 2026-07-02T11:45:00Z
+Generated: 2026-07-02T13:05:27Z
+Status: done — docs/status-only contract.
 
-## Scope statement
+## Consensus evidence
 
-Phase 48 is a comprehensive planning portfolio for the remaining deferred / fail-closed production-readiness zones after Phase 47 / Epic 126 shipped browser full selector composition. It does not implement runtime behavior by itself. It creates the BMAD epic/story backlog required to make the project production-ready once implemented.
+- Architect cycle 2: APPROVE / CLEAR — `.omx/artifacts/ralplan/story-127-1-architect-review-cycle-2.md` (native subagent `019f22ea-6862-7250-bc9e-547e7e6f934a`).
+- Critic cycle 2: APPROVE / CLEAR — `.omx/artifacts/ralplan/story-127-1-critic-review-cycle-2.md` (native subagent `019f22eb-9d4f-70d2-a88d-d8148fb10134`).
+- Prior Critic cycle 1 BLOCK was resolved by pinning exact `q` caps/encoding, fail-closed status duplication, and verification allowlist.
 
-## Product decision
+## Runtime authorization
 
-Open seven production-readiness epics:
-
-1. Epic 127 — Search, discovery, selector provenance, and controlled traversal.
-2. Epic 128 — Behavior-preserving broad dashboard rewiring cleanup.
-3. Epic 129 — Destructive lifecycle mutation controls.
-4. Epic 130 — Object-storage lifecycle jobs and scheduled retention.
-5. Epic 131 — Production operations, deployment changes, credentials, and GitHub write activation.
-6. Epic 132 — Split deployment and remote Postgres horizontal scaling.
-7. Epic 133 — DB connection mTLS.
-
-## Product goals
-
-- Convert all named deferred/fail-closed areas into implementation-ready BMAD epics and stories.
-- Preserve current Phase 47 route and dashboard safety boundaries until a specific story changes them.
-- Treat dangerous areas as production capabilities only when they have exact contracts, approval gates, rollback/disable behavior, tests, review, QA, and CI evidence.
-
-## Non-goals
-
-Phase 48 itself does not authorize runtime implementation, backend/API changes, dashboard JavaScript/HTML behavior changes, destructive lifecycle mutation, scheduled jobs, object-storage deletion, production credentials, real GitHub writes, deployment topology changes, remote Postgres rollout, DB mTLS enablement, dependencies, lockfiles, CI/deployment edits, or production operations.
+Story 127.1 authorizes no runtime behavior. It does not change API handlers, dashboard JavaScript/HTML behavior, runtime tests, dependencies, lockfiles, CI/deployment, services/MCP, credentials, production operations, mutation/control behavior, or traversal.
 
 ## Story 127.1 search/discovery contract decisions
 
@@ -66,9 +51,9 @@ Selector provenance and traversal:
 - Future browser controls may use only visible form controls and one explicit operator action. URL/hash/storage/cookie, hidden input, row-derived, server-provided route string, and background-derived selectors remain forbidden.
 - Story 127.1 does not enable traversal. Search results do not authorize automatic traversal, background prefetch, infinite scroll, timers, workers, observers, retry loops, cache warming, websocket/EventSource/XMLHttpRequest side channels, or automatic next-page reads. Traversal remains disabled until Story 127.4 defines an explicit bounded/cancellable mode.
 
-## Acceptance criteria
 
-1. A phase-scoped BMAD epic/story artifact exists and covers every user-listed deferred zone.
-2. Each epic has independently valuable user outcome, FR mapping, story sequence, and testable acceptance criteria.
-3. The artifact records that implementation requires future Architect/Critic consensus, code-review, UltraQA, and CI evidence per story/epic.
-4. Current docs remain truthful: Phase 48 is planning, not implementation.
+## Closure verification expectations
+
+- Contract docs must contain Story 127.1, exact `q` caps, encoding rejection rules, duplicate status fail-closed rule, hidden/row/url/storage/cookie selector denials, arbitrary grammar denials, and traversal denials.
+- `git diff --name-only` must remain within docs/status/planning/evidence files approved by the Ralplan plan.
+- `git diff --check` must pass.

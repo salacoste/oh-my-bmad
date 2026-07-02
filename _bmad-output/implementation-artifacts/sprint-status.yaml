@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-07-02T08:39:06Z"
+# last_updated: "2026-07-02T13:05:27Z"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-07-02T08:39:06Z"
-current_phase: 47  # Phase 47 / Epic 126 shipped/green — browser aggregate-task-list full selector composition implemented for exact status+limit+offset+sort route after code-review APPROVE/CLEAR, UltraQA PASS, commit 8d6cfc6, green ci run 28555502488, and green nightly run 28565399310
+last_updated: "2026-07-02T13:05:27Z"
+current_phase: 48  # Phase 48 / Epic 127 Story 127.1 search/discovery product and architecture contract complete as docs/status-only; runtime search/discovery and traversal remain deferred until later implementation stories
 
 development_status:
   # =========================================================================
@@ -1075,10 +1075,41 @@ development_status:
   126-2-browser-full-selector-composition-runtime-boundary: done  # Dashboard runtime/test implementation complete for exact GET /v1/tasks?status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}; code-review APPROVE/CLEAR, UltraQA PASS, implementation commit 8d6cfc6, green ci run 28555502488, and green nightly run 28565399310
   126-3-phase-47-epic-126-final-closure: done  # Docs/status final closure records Phase 47 / Epic 126 browser full selector composition shipped at commit 8d6cfc6 with green ci run 28555502488 and green nightly run 28565399310; adjacent search/discovery/broad rewiring surfaces remain fail-closed
 
+
+  # =========================================================================
+  # Epic 127: Search, discovery, selector provenance, and controlled traversal
+  # =========================================================================
+  epic-127: in-progress  # Phase 48 opened with Story 127.1 product/architecture contract complete; runtime search/discovery, browser controls, traversal, and closure evidence remain future stories
+  127-1-search-discovery-product-architecture-contract: done  # Docs/status-only contract pins exact fields/operators, raw ASCII q caps (1..96 global bytes, 1..64 task/title/actor, 1..80 event type, 20 chars timestamps), percent and Unicode/non-ASCII rejection, duplicate field=status/status= fail-closed semantics, URL/hash/storage/cookie and hidden/row-derived selector denial, automatic traversal disabled until Story 127.4, and sequential native Architect APPROVE/CLEAR followed by Critic APPROVE/CLEAR
+  127-2-api-local-task-search-discovery-runtime-boundary: backlog
+  127-3-browser-search-discovery-controls-visible-state: backlog
+  127-4-explicit-bounded-traversal-infinite-scroll-mode: backlog
+  127-5-search-discovery-traversal-closure-evidence: backlog
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+
+  - date: "2026-07-02"
+    event: story-127-1-search-discovery-product-architecture-contract-done
+    from: backlog
+    to: done
+    epic: epic-127
+    story: 127-1-search-discovery-product-architecture-contract
+    source: autopilot-story-127-1
+    reason: >-
+      Story 127.1 completed docs/status-only product and architecture contract
+      after native Architect APPROVE/CLEAR followed by native Critic
+      APPROVE/CLEAR. Future search/discovery stays route-local to bodyless
+      GET /v1/tasks field/op/q grammar with exact raw ASCII q caps
+      (1..96 global bytes, 1..64 task/title/actor, 1..80 event type,
+      20 chars timestamps), percent and Unicode/non-ASCII rejection, and
+      field/operator allowlists; duplicate field=status plus status= semantics
+      fail closed; hidden/row-derived and URL/hash/storage/cookie selectors
+      plus automatic traversal remain prohibited. Runtime API/dashboard behavior remains
+      deferred to later Story 127 implementation gates.
 
 
   - date: "2026-07-02"

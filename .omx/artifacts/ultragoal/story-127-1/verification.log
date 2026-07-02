@@ -1,0 +1,20 @@
+Story 127.1 docs/status-only verification
+
+Commands/evidence:
+- structural contract token check: PASS
+  - required across PRD/architecture/epic/story artifact/api contracts/feature status/sprint status/plan:
+    Story 127.1, 1..96, 1..64, 1..80, 20 chars, percent, Unicode/non-ASCII, field=status, status=, hidden, row-derived, URL/hash/storage/cookie, automatic traversal.
+- docs/status changed-file allowlist: PASS
+  - changed paths:
+    _bmad-output/implementation-artifacts/sprint-status.yaml
+    _bmad-output/planning-artifacts/phase-48-architecture-amendment.md
+    _bmad-output/planning-artifacts/phase-48-prd-amendment.md
+    _bmad-output/planning-artifacts/phase-48-production-readiness-epics.md
+    docs/api-contracts.md
+    docs/feature-status.md
+    _bmad-output/implementation-artifacts/127-1-search-discovery-product-architecture-contract.md
+- YAML parse for sprint-status.yaml: PASS
+  - current_phase == 48
+  - epic-127 == in-progress
+  - 127-1-search-discovery-product-architecture-contract == done
+- git diff --check: PASS

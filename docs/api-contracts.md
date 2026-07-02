@@ -23,6 +23,15 @@ Versioned at `/v1`. Versions are additive; `/v1` semantics are frozen once shipp
 | `/v1/events/replay/snapshots` | GET | `get_replay_snapshots` | List replay snapshots (FR138), hot-log-only. |
 | `/v1/events/replay/snapshots` | POST | `post_replay_snapshot` | Create replay snapshot using `HOT_ONLY_REPLAY`; archive env vars are bypassed (FR141). |
 
+
+### Planned task-list search/discovery contract (Story 127.1; not implemented)
+
+Story 127.1 records a future contract only. No runtime route behavior changes until Story 127.2+ implements and verifies them. The approved candidate remains route-local to the aggregate list as bodyless `GET /v1/tasks?field={task_search_field}&op={task_search_operator}&q={task_search_query}` followed only by optional existing selectors in canonical order: `status`, `limit`, `offset`, `sort`.
+
+Search fields/operators are exactly `task_id:eq`, `title:contains|prefix`, `status:eq`, `actor_id:eq|prefix`, `last_event_type:eq`, `updated_at:gte|lte`, and `created_at:gte|lte`. Global `q` is required, raw ASCII-only, `1..96` bytes, with per-field caps `task_id/title/actor_id 1..64`, `last_event_type 1..80`, and timestamp fields exactly 20 chars in UTC `YYYY-MM-DDTHH:MM:SSZ`; full raw query strings are capped at `1..256` bytes. Percent encoding / percent-encoded bytes, `+`, raw spaces, controls, Unicode/non-ASCII, repeated/encoded keys, aliases, reordered keys, empty values, GET bodies, boolean DSL, regex, fuzzy search, SQL-like syntax, wildcards, nesting, multiple search fields, and arbitrary JSON remain rejected. `field=status` with a separate `status=` selector is fail-closed duplicate status semantics.
+
+Story 127.1 keeps browser search and traversal unimplemented. Future browser work must use visible controls and one explicit operator action only; URL/hash/storage/cookie, hidden input, row-derived, server-provided route string, and background-derived selectors remain forbidden. Search results do not authorize automatic traversal, prefetch, infinite scroll, timers, workers, observers, retry loops, cache warming, websocket/EventSource/XMLHttpRequest side channels, or automatic next-page reads.
+
 Health endpoints (`/healthz`, `/readyz`, `/v1/health` — FR17) emit **no** log lines under normal operation. A pytest assertion captures `structlog` output during the call to assert silence.
 
 Trace context is pulled from inbound headers:

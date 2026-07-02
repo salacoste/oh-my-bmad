@@ -1,0 +1,26 @@
+# Autopilot Context Snapshot — Story 127.1 Search/Discovery Contract
+
+- Task seed: `$autopilot` commit Phase 48 planning artifacts, then run Autopilot one by one for each story of each Phase 48 epic, starting with Epic 127 / Story 127.1.
+- Original task status: activation-prompt.
+- Desired outcome: Story 127.1 creates/updates product and architecture contract artifacts for bounded search/discovery, hidden selector prohibitions, and traversal boundaries, with sequential Architect then Critic approval before any runtime implementation.
+- Known facts/evidence:
+  - Phase 48 planning bundle committed as `2e4c934 docs: add phase 48 production readiness plan`.
+  - Story 127.1 acceptance requires PRD/architecture definitions for exact fields, operators, lengths, encoding, sort/pagination composition, response metadata, privacy/redaction, fail-closed states, and prohibitions for row-derived selectors, URL/hash/storage/cookie selectors, hidden inputs, arbitrary grammar, background prefetch, and automatic traversal.
+  - Phase 47 / Epic 126 is baseline; runtime search/discovery remains deferred.
+- Constraints:
+  - Planning/contract story only; no runtime API/dashboard behavior changes unless a later story authorizes them.
+  - Preserve Phase 47 selector composition and fail-closed boundaries.
+  - No new dependencies unless explicitly requested.
+  - Each implementation story requires fresh sequential Ralplan consensus and code-review/UltraQA evidence.
+- Unknowns/open questions:
+  - Exact field/operator vocabulary should be derived from existing task-list route/data contracts and narrowed to safe visible/operator-owned selectors.
+  - Whether Story 127.1 should update phase-specific PRD/architecture only or also derivative docs/api-contracts/feature-status.
+- Likely codebase touchpoints:
+  - `_bmad-output/planning-artifacts/phase-48-production-readiness-epics.md`
+  - `_bmad-output/planning-artifacts/phase-48-prd-amendment.md`
+  - `_bmad-output/planning-artifacts/phase-48-architecture-amendment.md`
+  - `docs/api-contracts.md`
+  - `docs/feature-status.md`
+  - `dashboard/static/aggregate-task-list.js`
+  - `tests/dashboard/test_aggregate_task_list_runtime_boundary.py`
+- Scope note: this seed is the Autopilot activation prompt plus current repository evidence; it is not guaranteed prior conversation context beyond files in the repository.

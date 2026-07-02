@@ -155,6 +155,18 @@ As the operator, I want searchable fields, query grammar, privacy rules, selecto
 **When** the planning gate runs
 **Then** Architect APPROVE/CLEAR followed by Critic APPROVE/CLEAR is recorded.
 
+
+**Story 127.1 contract detail:**
+- Future search/discovery remains route-local to bodyless `GET /v1/tasks?field={task_search_field}&op={task_search_operator}&q={task_search_query}` with optional `status`, `limit`, `offset`, and `sort` only in that canonical order after `q`.
+- Search fields/operators are exactly `task_id:eq`, `title:contains|prefix`, `status:eq`, `actor_id:eq|prefix`, `last_event_type:eq`, `updated_at:gte|lte`, and `created_at:gte|lte`.
+- `q` is required, raw ASCII-only, globally `1..96` bytes, with field caps `task_id/title/actor_id 1..64`, `last_event_type 1..80`, and timestamp fields exactly 20 chars in UTC `YYYY-MM-DDTHH:MM:SSZ`; full raw query strings are capped at `1..256` bytes.
+- Percent encoding / percent-encoded bytes, `+`, raw spaces, controls, Unicode/non-ASCII, repeated/encoded keys, aliases, reordered keys, empty values, GET bodies, boolean DSL, regex, fuzzy search, SQL-like syntax, wildcards, nesting, multiple search fields, and arbitrary JSON fail closed.
+- `field=status` plus a separate `status=` selector is fail-closed duplicate status semantics.
+- Privacy boundary denies worktree/resource paths, logs, event payloads, summaries/generated text, decisions/approval text, credentials/secrets, raw JSON blobs, arbitrary metadata, and non-allowlisted fields.
+- Response metadata must include selected field/op/query, selected status/limit/offset/sort when present, returned count, pagination, freshness, authority, provenance, request/trace/correlation ids, redaction state, and explicit fail-closed display state.
+- Browser provenance remains visible-control-only and explicit-action-only; URL/hash/storage/cookie, hidden input, row-derived, server-provided route string, and background-derived selectors are prohibited.
+- Traversal stays disabled until Story 127.4; search results cannot trigger background prefetch, infinite scroll, timers, workers, observers, retry loops, cache warming, websocket/EventSource/XMLHttpRequest side channels, or automatic next-page reads.
+
 ### Story 127.2: API-local Task Search/Discovery Runtime Boundary
 As the operator, I want a bounded API-local task search/discovery route, so that I can find tasks by approved fields without weakening existing contracts.
 

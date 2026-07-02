@@ -1,0 +1,13 @@
+Story 127.1 rework cycle 1 verification
+
+Code-review finding fixed:
+- docs/feature-status.md no longer presents Phase 47 / Epic 126 as current.
+- Current phase now says Phase 48 / Epic 127 in progress.
+- Current epic now says Epic 127 active, Story 127.1 done, Stories 127.2-127.5 backlog.
+- Evidence bullet now references sprint-status current_phase: 48 and epic-127 in-progress while preserving Epic 126 as shipped/green baseline.
+
+Commands/evidence:
+- feature status stale phase repair check: PASS
+- structural contract token check: PASS
+- sprint-status YAML parse: PASS
+- git diff --check: PASS

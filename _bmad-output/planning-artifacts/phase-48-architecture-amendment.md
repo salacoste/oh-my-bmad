@@ -20,6 +20,36 @@ Phase 47 / Epic 126 is shipped/green. The current platform has narrow, explicit 
 6. Profile-gated infrastructure: split deployment, remote Postgres production mode, scheduled jobs, real GitHub writes, and DB mTLS are opt-in/profile-gated and must preserve local/default compatibility.
 7. Closure evidence: no zone leaves deferred status until implementation, targeted tests, negative tests, docs/status updates, code-review APPROVE/CLEAR, UltraQA PASS or justified skip, and CI/nightly evidence exist.
 
+## Story 127.1 architecture contract — task-list search/discovery
+
+Story 127.1 selects no runtime implementation. It constrains later runtime stories to a route-local, fail-closed extension of the existing aggregate task-list read boundary.
+
+### Route and query boundary
+
+- Future candidate route family: bodyless `GET /v1/tasks?field={task_search_field}&op={task_search_operator}&q={task_search_query}` followed only by optional existing selectors in canonical order: `status`, `limit`, `offset`, `sort`.
+- Existing shipped `/v1/tasks` selector routes remain unchanged until a later implementation story changes route code and tests.
+- Raw query order is exact. Reordered, repeated, extra, encoded, alias, unknown, or body-bearing requests fail closed.
+- `field=status` and a separate `status=` selector in the same request are duplicate status semantics and must fail closed; there is no implicit intersection, override, or fallback.
+
+### Field/operator/encoding boundary
+
+- Search fields/operators are exactly those in the Story 127.1 product contract: `task_id:eq`, `title:contains|prefix`, `status:eq`, `actor_id:eq|prefix`, `last_event_type:eq`, `updated_at:gte|lte`, `created_at:gte|lte`.
+- Global `q` is `1..96` raw ASCII bytes; full raw query string is `1..256` bytes.
+- Per-field `q` caps are `task_id 1..64`, `title 1..64`, `actor_id 1..64`, `last_event_type 1..80`, timestamp fields exactly 20 chars in UTC `YYYY-MM-DDTHH:MM:SSZ`.
+- The route rejects percent-encoded bytes (`%xx`), `+`, raw spaces, controls, Unicode/non-ASCII, normalization-dependent text, slash/backslash path syntax, NUL, CR/LF, tabs, empty values, repeated/encoded keys, boolean DSL, regex, fuzzy search, SQL-like syntax, wildcards, nesting, multiple fields, and arbitrary JSON.
+
+### Data, privacy, and metadata boundary
+
+- Search may evaluate only approved aggregate task-list columns and already-safe summary metadata.
+- Worktree/resource paths, logs, event payloads, summaries/generated text, decision/approval text, credentials/secrets, trace internals beyond existing trace/correlation ids, raw JSON blobs, and arbitrary metadata are denied.
+- Future response models must carry selected field/op/query, optional selected status/limit/offset/sort, returned_count, bounded pagination metadata, freshness, authority, provenance, request_id, trace_id, correlation_id, redaction_state, and fail-closed display_state.
+
+### Browser and traversal boundary
+
+- Browser search may be implemented only from visible controls and one explicit operator-triggered read. It must not consume URL/hash/storage/cookie state, hidden controls, row-derived values, server-provided route strings, or background-derived selectors.
+- Story 127.1 leaves traversal disabled. Search results cannot trigger automatic next reads, background prefetch, infinite scroll, timers, workers, observers, retry loops, cache warming, websocket/EventSource/XMLHttpRequest side channels, or hidden traversal.
+- Story 127.4 is the first story that may authorize explicit bounded/cancellable traversal.
+
 ## Deferred until implementation stories
 
 This amendment does not authorize runtime code, dashboard behavior, mutation, scheduled jobs, deployment config, credentials, GitHub writes, remote Postgres rollout, or DB mTLS changes. It authorizes only the backlog shape and constraints.
