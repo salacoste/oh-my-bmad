@@ -25,7 +25,7 @@ import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
@@ -42,7 +42,7 @@ from registry_state.schema import (  # noqa: IMP001 — services→services allo
     Session,
     Task,
 )
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from registry_api.lifecycle import STATE_NEXT_COMMANDS
 
@@ -61,6 +61,17 @@ TaskStatusFilter = Literal[
     "stopped",
     "failed",
 ]
+
+TaskSearchField = Literal[
+    "task_id",
+    "title",
+    "status",
+    "actor_id",
+    "last_event_type",
+    "updated_at",
+    "created_at",
+]
+TaskSearchOperator = Literal["eq", "contains", "prefix", "gte", "lte"]
 
 # ---------------------------------------------------------------------------
 # Side-channel response cache types (Story 2.13 review C1/C3/M6)
@@ -88,6 +99,16 @@ class ResponseSlot:
 
     body: bytes
     task_id: bytes
+
+
+@dataclass(frozen=True)
+class TaskSearchSpec:
+    """Validated route-local task search selector."""
+
+    field: str
+    op: str
+    query: str
+    parsed_datetime: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -166,6 +187,36 @@ _TASK_STATUS_FILTER_VALUES: tuple[TaskStatusFilter, ...] = (
 )
 _ALLOWED_TASK_STATUS_FILTERS: frozenset[TaskStatusFilter] = frozenset(_TASK_STATUS_FILTER_VALUES)
 
+_TASK_SEARCH_ROUTE: Literal[
+    "GET /v1/tasks?field={task_search_field}&op={task_search_operator}&q={task_search_query}"
+] = "GET /v1/tasks?field={task_search_field}&op={task_search_operator}&q={task_search_query}"
+_TASK_SEARCH_FIELD_VALUES: tuple[str, ...] = (
+    "task_id",
+    "title",
+    "status",
+    "actor_id",
+    "last_event_type",
+    "updated_at",
+    "created_at",
+)
+_TASK_SEARCH_OPERATOR_VALUES: tuple[str, ...] = ("eq", "contains", "prefix", "gte", "lte")
+_TASK_SEARCH_ALLOWED_OPERATORS: dict[str, frozenset[str]] = {
+    "task_id": frozenset(("eq",)),
+    "title": frozenset(("contains", "prefix")),
+    "status": frozenset(("eq",)),
+    "actor_id": frozenset(("eq", "prefix")),
+    "last_event_type": frozenset(("eq",)),
+    "updated_at": frozenset(("gte", "lte")),
+    "created_at": frozenset(("gte", "lte")),
+}
+_TASK_SEARCH_Q_GLOBAL_MAX_BYTES = 96
+_TASK_SEARCH_RAW_QUERY_MAX_BYTES = 256
+_TASK_SEARCH_TASK_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
+_TASK_SEARCH_TITLE_RE = re.compile(r"^[A-Za-z0-9._~:-]{1,64}$")
+_TASK_SEARCH_ACTOR_ID_RE = re.compile(r"^[A-Za-z0-9._:@-]{1,64}$")
+_TASK_SEARCH_LAST_EVENT_TYPE_RE = re.compile(r"^[A-Za-z0-9._:-]{1,80}$")
+_TASK_SEARCH_TIMESTAMP_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+
 
 def _is_ascii_decimal(value: str) -> bool:
     """Return True only for non-empty ASCII decimal digits.
@@ -184,6 +235,29 @@ _TASK_QUERY_KEYS_LIMIT_OFFSET = ("limit", "offset")
 _TASK_QUERY_KEYS_STATUS_LIMIT_OFFSET = ("status", "limit", "offset")
 _TASK_QUERY_KEYS_SORT = ("sort",)
 _TASK_QUERY_KEYS_STATUS_LIMIT_OFFSET_SORT = ("status", "limit", "offset", "sort")
+_TASK_QUERY_KEYS_SEARCH = ("field", "op", "q")
+_TASK_QUERY_KEYS_SEARCH_STATUS = ("field", "op", "q", "status")
+_TASK_QUERY_KEYS_SEARCH_LIMIT = ("field", "op", "q", "limit")
+_TASK_QUERY_KEYS_SEARCH_STATUS_LIMIT = ("field", "op", "q", "status", "limit")
+_TASK_QUERY_KEYS_SEARCH_LIMIT_OFFSET = ("field", "op", "q", "limit", "offset")
+_TASK_QUERY_KEYS_SEARCH_STATUS_LIMIT_OFFSET = (
+    "field",
+    "op",
+    "q",
+    "status",
+    "limit",
+    "offset",
+)
+_TASK_QUERY_KEYS_SEARCH_SORT = ("field", "op", "q", "sort")
+_TASK_QUERY_KEYS_SEARCH_STATUS_LIMIT_OFFSET_SORT = (
+    "field",
+    "op",
+    "q",
+    "status",
+    "limit",
+    "offset",
+    "sort",
+)
 
 _TASKS_STATUS_RAW_RE = re.compile(rb"^status=([A-Za-z_]+)$")
 _TASKS_LIMIT_RAW_RE = re.compile(rb"^limit=([0-9]{1,2})$")
@@ -198,6 +272,118 @@ _TASKS_STATUS_LIMIT_OFFSET_SORT_RAW_RE = re.compile(
     rb"^status=([A-Za-z_]+)&limit=([0-9]{1,2})&offset=([0-9]{1,10})&sort=("
     + _TASK_SORT_VALUE_RAW_RE
     + rb")$"
+)
+
+_TASK_SEARCH_FIELD_VALUE_RAW_RE = b"|".join(
+    re.escape(value.encode("ascii")) for value in _TASK_SEARCH_FIELD_VALUES
+)
+_TASK_SEARCH_OPERATOR_VALUE_RAW_RE = b"|".join(
+    re.escape(value.encode("ascii")) for value in _TASK_SEARCH_OPERATOR_VALUES
+)
+_TASK_SEARCH_Q_RAW_RE = rb"[-A-Za-z0-9._~:@]{1,96}"
+_TASK_SEARCH_LIMIT_VALUE_RAW_RE = rb"(?:[1-9]|[1-4][0-9]|50)"
+_TASK_SEARCH_OFFSET_VALUE_RAW_RE = rb"(?:0|[1-9][0-9]{0,9})"
+_TASKS_SEARCH_RAW_RE = re.compile(
+    rb"^field=("
+    + _TASK_SEARCH_FIELD_VALUE_RAW_RE
+    + rb")&op=("
+    + _TASK_SEARCH_OPERATOR_VALUE_RAW_RE
+    + rb")&q=("
+    + _TASK_SEARCH_Q_RAW_RE
+    + rb")$"
+)
+_TASKS_SEARCH_STATUS_RAW_RE = re.compile(
+    rb"^field=("
+    + _TASK_SEARCH_FIELD_VALUE_RAW_RE
+    + rb")&op=("
+    + _TASK_SEARCH_OPERATOR_VALUE_RAW_RE
+    + rb")&q=("
+    + _TASK_SEARCH_Q_RAW_RE
+    + rb")&status=([A-Za-z_]+)$"
+)
+_TASKS_SEARCH_LIMIT_RAW_RE = re.compile(
+    rb"^field=("
+    + _TASK_SEARCH_FIELD_VALUE_RAW_RE
+    + rb")&op=("
+    + _TASK_SEARCH_OPERATOR_VALUE_RAW_RE
+    + rb")&q=("
+    + _TASK_SEARCH_Q_RAW_RE
+    + rb")&limit=("
+    + _TASK_SEARCH_LIMIT_VALUE_RAW_RE
+    + rb")$"
+)
+_TASKS_SEARCH_STATUS_LIMIT_RAW_RE = re.compile(
+    rb"^field=("
+    + _TASK_SEARCH_FIELD_VALUE_RAW_RE
+    + rb")&op=("
+    + _TASK_SEARCH_OPERATOR_VALUE_RAW_RE
+    + rb")&q=("
+    + _TASK_SEARCH_Q_RAW_RE
+    + rb")&status=([A-Za-z_]+)&limit=("
+    + _TASK_SEARCH_LIMIT_VALUE_RAW_RE
+    + rb")$"
+)
+_TASKS_SEARCH_LIMIT_OFFSET_RAW_RE = re.compile(
+    rb"^field=("
+    + _TASK_SEARCH_FIELD_VALUE_RAW_RE
+    + rb")&op=("
+    + _TASK_SEARCH_OPERATOR_VALUE_RAW_RE
+    + rb")&q=("
+    + _TASK_SEARCH_Q_RAW_RE
+    + rb")&limit=("
+    + _TASK_SEARCH_LIMIT_VALUE_RAW_RE
+    + rb")&offset=("
+    + _TASK_SEARCH_OFFSET_VALUE_RAW_RE
+    + rb")$"
+)
+_TASKS_SEARCH_STATUS_LIMIT_OFFSET_RAW_RE = re.compile(
+    rb"^field=("
+    + _TASK_SEARCH_FIELD_VALUE_RAW_RE
+    + rb")&op=("
+    + _TASK_SEARCH_OPERATOR_VALUE_RAW_RE
+    + rb")&q=("
+    + _TASK_SEARCH_Q_RAW_RE
+    + rb")&status=([A-Za-z_]+)&limit=("
+    + _TASK_SEARCH_LIMIT_VALUE_RAW_RE
+    + rb")&offset=("
+    + _TASK_SEARCH_OFFSET_VALUE_RAW_RE
+    + rb")$"
+)
+_TASKS_SEARCH_SORT_RAW_RE = re.compile(
+    rb"^field=("
+    + _TASK_SEARCH_FIELD_VALUE_RAW_RE
+    + rb")&op=("
+    + _TASK_SEARCH_OPERATOR_VALUE_RAW_RE
+    + rb")&q=("
+    + _TASK_SEARCH_Q_RAW_RE
+    + rb")&sort=("
+    + _TASK_SORT_VALUE_RAW_RE
+    + rb")$"
+)
+_TASKS_SEARCH_STATUS_LIMIT_OFFSET_SORT_RAW_RE = re.compile(
+    rb"^field=("
+    + _TASK_SEARCH_FIELD_VALUE_RAW_RE
+    + rb")&op=("
+    + _TASK_SEARCH_OPERATOR_VALUE_RAW_RE
+    + rb")&q=("
+    + _TASK_SEARCH_Q_RAW_RE
+    + rb")&status=([A-Za-z_]+)&limit=("
+    + _TASK_SEARCH_LIMIT_VALUE_RAW_RE
+    + rb")&offset=("
+    + _TASK_SEARCH_OFFSET_VALUE_RAW_RE
+    + rb")&sort=("
+    + _TASK_SORT_VALUE_RAW_RE
+    + rb")$"
+)
+_TASKS_SEARCH_RAW_QUERY_PATTERNS: tuple[re.Pattern[bytes], ...] = (
+    _TASKS_SEARCH_RAW_RE,
+    _TASKS_SEARCH_STATUS_RAW_RE,
+    _TASKS_SEARCH_LIMIT_RAW_RE,
+    _TASKS_SEARCH_STATUS_LIMIT_RAW_RE,
+    _TASKS_SEARCH_LIMIT_OFFSET_RAW_RE,
+    _TASKS_SEARCH_STATUS_LIMIT_OFFSET_RAW_RE,
+    _TASKS_SEARCH_SORT_RAW_RE,
+    _TASKS_SEARCH_STATUS_LIMIT_OFFSET_SORT_RAW_RE,
 )
 _TASKS_RAW_QUERY_PATTERNS: tuple[re.Pattern[bytes], ...] = (
     _TASKS_STATUS_RAW_RE,
@@ -227,7 +413,11 @@ def _matches_tasks_raw_query_contract(raw_query: bytes) -> bool:
     broadening spelling, order, encoded-key, repeated-key, or empty-segment
     behavior as new bounded selector combinations are added.
     """
-    return any(pattern.fullmatch(raw_query) for pattern in _TASKS_RAW_QUERY_PATTERNS)
+    if any(pattern.fullmatch(raw_query) for pattern in _TASKS_RAW_QUERY_PATTERNS):
+        return True
+    if not 1 <= len(raw_query) <= _TASK_SEARCH_RAW_QUERY_MAX_BYTES:
+        return False
+    return any(pattern.fullmatch(raw_query) for pattern in _TASKS_SEARCH_RAW_QUERY_PATTERNS)
 
 
 def _parse_task_status_selector(value: str | None) -> TaskStatusFilter:
@@ -288,6 +478,95 @@ def _task_sort_spec(selector: str) -> TaskSortSpec:
         if spec.value == selector:
             return spec
     raise AssertionError(f"unregistered task sort selector: {selector}")
+
+
+def _parse_task_search_timestamp(value: str) -> datetime:
+    """Parse a UTC second-precision search timestamp or fail closed."""
+    if not _TASK_SEARCH_TIMESTAMP_RE.fullmatch(value):
+        raise HTTPException(
+            status_code=400,
+            detail="GET /v1/tasks search timestamp must be YYYY-MM-DDTHH:MM:SSZ",
+        )
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="GET /v1/tasks search timestamp must be a valid UTC timestamp",
+        ) from exc
+
+
+def _parse_task_search_selector(
+    *, field: str | None, op: str | None, query: str | None
+) -> TaskSearchSpec:
+    """Return an approved task search selector or fail closed."""
+    if field not in _TASK_SEARCH_ALLOWED_OPERATORS:
+        raise HTTPException(status_code=400, detail="GET /v1/tasks search field is not allowed")
+    if op not in _TASK_SEARCH_ALLOWED_OPERATORS[field]:
+        raise HTTPException(
+            status_code=400,
+            detail="GET /v1/tasks search operator is not allowed for field",
+        )
+    if query is None or len(query.encode("ascii")) > _TASK_SEARCH_Q_GLOBAL_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="GET /v1/tasks search query is not allowed")
+
+    parsed_datetime: datetime | None = None
+    if field == "task_id":
+        allowed = _TASK_SEARCH_TASK_ID_RE.fullmatch(query) is not None
+    elif field == "title":
+        allowed = _TASK_SEARCH_TITLE_RE.fullmatch(query) is not None
+    elif field == "status":
+        allowed = query in _ALLOWED_TASK_STATUS_FILTERS
+    elif field == "actor_id":
+        allowed = _TASK_SEARCH_ACTOR_ID_RE.fullmatch(query) is not None
+    elif field == "last_event_type":
+        allowed = _TASK_SEARCH_LAST_EVENT_TYPE_RE.fullmatch(query) is not None
+    elif field in {"updated_at", "created_at"}:
+        parsed_datetime = _parse_task_search_timestamp(query)
+        allowed = True
+    else:  # pragma: no cover - field allowlist above makes this unreachable.
+        allowed = False
+
+    if not allowed:
+        raise HTTPException(status_code=400, detail="GET /v1/tasks search query is not allowed")
+    return TaskSearchSpec(field=field, op=op, query=query, parsed_datetime=parsed_datetime)
+
+
+def _literal_contains(column: Any, value: str) -> Any:
+    """Return a SQL expression for literal substring search."""
+    return func.instr(column, value) > 0
+
+
+def _literal_prefix(column: Any, value: str) -> Any:
+    """Return a SQL expression for literal prefix search."""
+    return func.substr(column, 1, len(value)) == value
+
+
+def _apply_task_search(task_query: Any, search: TaskSearchSpec) -> Any:
+    """Apply an already validated route-local task search predicate."""
+    if search.field == "task_id":
+        return task_query.where(Task.id == search.query)
+    if search.field == "title":
+        task_query = task_query.where(Task.title.is_not(None))
+        if search.op == "contains":
+            return task_query.where(_literal_contains(Task.title, search.query))
+        return task_query.where(_literal_prefix(Task.title, search.query))
+    if search.field == "status":
+        return task_query.where(Task.status == search.query)
+    if search.field == "actor_id":
+        if search.op == "eq":
+            return task_query.where(Task.actor_id == search.query)
+        return task_query.where(_literal_prefix(Task.actor_id, search.query))
+    if search.field == "last_event_type":
+        return task_query.join(Event, Task.last_event_id == Event.id).where(
+            Event.type == search.query
+        )
+
+    assert search.parsed_datetime is not None
+    column = Task.updated_at if search.field == "updated_at" else Task.created_at
+    if search.op == "gte":
+        return task_query.where(column >= search.parsed_datetime)
+    return task_query.where(column <= search.parsed_datetime)
 
 
 def _task_list_pagination_metadata(
@@ -729,6 +1008,42 @@ class TaskStatusLimitOffsetSortSelectedListResponse(BaseModel):
     items: list[TaskSummaryOut]
 
 
+class TaskSearchDiscoveryListResponse(BaseModel):
+    """200 OK response body for Story 127.2 task search/discovery.
+
+    Search remains route-local to ``GET /v1/tasks`` and returns only the same
+    bounded summary rows as the aggregate list, plus explicit selector and
+    redaction metadata.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    route: Literal[
+        "GET /v1/tasks?field={task_search_field}&op={task_search_operator}&q={task_search_query}"
+    ]
+    selected_field: str
+    selected_op: str
+    selected_query: str
+    selected_status: TaskStatusFilter | None = None
+    selected_limit: int | None = Field(default=None, ge=1, le=_TASK_LIST_LIMIT)
+    selected_offset: int | None = Field(default=None, ge=0, le=_TASK_LIST_OFFSET_MAX)
+    selected_sort: str | None = None
+    redaction_state: Literal["summary-only-no-snippets"]
+    retrieved_at: datetime
+    freshness_state: Literal["fresh"]
+    display_state: Literal["healthy", "empty-list"]
+    authority_state: Literal["authoritative", "non-authoritative"]
+    provenance: Literal["registry-state task summary list"]
+    request_id: str
+    trace_id: str | None
+    correlation_id: str
+    limit: int = Field(ge=1, le=_TASK_LIST_LIMIT)
+    returned_count: int
+    has_more: bool
+    next_offset: int | None = Field(default=None, ge=0, le=_TASK_LIST_OFFSET_MAX)
+    items: list[TaskSummaryOut]
+
+
 class SessionSummaryOut(BaseModel):
     """One bounded session summary row for GET /v1/sessions.
 
@@ -805,6 +1120,7 @@ TaskListReadResponse = (
     | TaskStatusLimitOffsetSelectedListResponse
     | TaskSortSelectedListResponse
     | TaskStatusLimitOffsetSortSelectedListResponse
+    | TaskSearchDiscoveryListResponse
 )
 
 
@@ -876,6 +1192,36 @@ async def get_tasks(
             json_schema_extra={"enum": list(_TASK_SORT_VALUES)},
         ),
     ] = None,
+    field_: Annotated[
+        str | None,
+        Query(
+            alias="field",
+            description=(
+                "Optional Story 127.2 task search field. Only canonical field, op, "
+                "q order is accepted; search remains route-local to GET /v1/tasks."
+            ),
+            json_schema_extra={"enum": list(_TASK_SEARCH_FIELD_VALUES)},
+        ),
+    ] = None,
+    op: Annotated[
+        str | None,
+        Query(
+            description=(
+                "Optional Story 127.2 task search operator. The operator must be "
+                "valid for the selected field and appear after field."
+            ),
+            json_schema_extra={"enum": list(_TASK_SEARCH_OPERATOR_VALUES)},
+        ),
+    ] = None,
+    q: Annotated[
+        str | None,
+        Query(
+            description=(
+                "Optional Story 127.2 raw ASCII task search query. It must be "
+                "1 through 96 bytes and use the selected field's finite grammar."
+            ),
+        ),
+    ] = None,
 ) -> (
     TaskListResponse
     | TaskStatusFilteredListResponse
@@ -885,6 +1231,7 @@ async def get_tasks(
     | TaskStatusLimitOffsetSelectedListResponse
     | TaskSortSelectedListResponse
     | TaskStatusLimitOffsetSortSelectedListResponse
+    | TaskSearchDiscoveryListResponse
 ):
     """GET /v1/tasks — bounded aggregate task summary list.
 
@@ -900,10 +1247,12 @@ async def get_tasks(
     with exact values ``updated_at_desc_id_asc`` or ``created_at_desc_id_asc``.
     Story 125.2 adds only canonical API-local
     ``GET /v1/tasks?status=...&limit=...&offset=...&sort=...`` with the same
-    finite sort values. Repeated keys, GET body, reversed query order, hidden
+    finite sort values. Story 127.2 adds only canonical API-local search
+    ``GET /v1/tasks?field=...&op=...&q=...`` plus the explicitly registered
+    selector suffixes. Repeated keys, GET body, reversed query order, hidden
     pagination token, status+offset without limit, task-detail/event/session/
-    digest traversal, search, partial sort composition, browser composition,
-    or mutation control are not accepted.
+    digest traversal, unregistered search grammar, partial sort composition,
+    browser composition, or mutation control are not accepted.
     """
     if await request.body():
         raise HTTPException(
@@ -915,6 +1264,7 @@ async def get_tasks(
     selected_limit: int | None = None
     selected_offset: int | None = None
     selected_sort: str | None = None
+    selected_search: TaskSearchSpec | None = None
     effective_limit = _TASK_LIST_LIMIT
     if request.url.query:
         raw_query = request.scope.get("query_string", b"")
@@ -959,6 +1309,31 @@ async def get_tasks(
             # only approved status/limit/offset composition with sort is the
             # canonical Story 125.2 branch handled above.
             selected_sort = _parse_task_sort_selector(sort)
+        elif query_key_shape in {
+            _TASK_QUERY_KEYS_SEARCH,
+            _TASK_QUERY_KEYS_SEARCH_STATUS,
+            _TASK_QUERY_KEYS_SEARCH_LIMIT,
+            _TASK_QUERY_KEYS_SEARCH_STATUS_LIMIT,
+            _TASK_QUERY_KEYS_SEARCH_LIMIT_OFFSET,
+            _TASK_QUERY_KEYS_SEARCH_STATUS_LIMIT_OFFSET,
+            _TASK_QUERY_KEYS_SEARCH_SORT,
+            _TASK_QUERY_KEYS_SEARCH_STATUS_LIMIT_OFFSET_SORT,
+        }:
+            selected_search = _parse_task_search_selector(field=field_, op=op, query=q)
+            if "status" in query_key_shape:
+                if selected_search.field == "status":
+                    raise HTTPException(
+                        status_code=400,
+                        detail="GET /v1/tasks search status and status selector are duplicates",
+                    )
+                selected_status = _parse_task_status_selector(status)
+            if "limit" in query_key_shape:
+                selected_limit = _parse_task_limit_selector(limit)
+                effective_limit = selected_limit
+            if "offset" in query_key_shape:
+                selected_offset = _parse_task_offset_selector(offset)
+            if "sort" in query_key_shape:
+                selected_sort = _parse_task_sort_selector(sort)
         else:
             raise HTTPException(
                 status_code=400,
@@ -966,8 +1341,8 @@ async def get_tasks(
                     "GET /v1/tasks accepts only one status selector, one limit selector, "
                     "canonical status then limit selectors, canonical limit then "
                     "offset selectors, canonical status then limit then offset selectors, "
-                    "one canonical sort selector, or canonical status then limit "
-                    "then offset then sort selectors"
+                    "one canonical sort selector, canonical status then limit then offset "
+                    "then sort selectors, or registered search/discovery selector shapes"
                 ),
             )
 
@@ -981,6 +1356,8 @@ async def get_tasks(
             _task_sort_spec(selected_sort) if selected_sort is not None else _DEFAULT_TASK_SORT_SPEC
         )
         task_query = select(Task).order_by(*selected_sort_spec.order_by)
+        if selected_search is not None:
+            task_query = _apply_task_search(task_query, selected_search)
         if selected_status is not None:
             task_query = task_query.where(Task.status == selected_status)
         if selected_offset is not None:
@@ -1050,6 +1427,20 @@ async def get_tasks(
         "next_offset": next_offset,
         "items": items,
     }
+    if selected_search is not None:
+        return TaskSearchDiscoveryListResponse(
+            route=_TASK_SEARCH_ROUTE,
+            selected_field=selected_search.field,
+            selected_op=selected_search.op,
+            selected_query=selected_search.query,
+            selected_status=selected_status,
+            selected_limit=selected_limit,
+            selected_offset=selected_offset,
+            selected_sort=selected_sort,
+            redaction_state="summary-only-no-snippets",
+            **response_kwargs,
+        )
+
     if (
         selected_status is not None
         and selected_limit is not None

@@ -179,6 +179,14 @@ As the operator, I want a bounded API-local task search/discovery route, so that
 **When** the request is handled
 **Then** it fails closed without fallback to broader search.
 
+**Story 127.2 implementation detail:**
+
+- API-local runtime is implemented in `services/registry-api/src/registry_api/routes/tasks.py` for bodyless `GET /v1/tasks` only.
+- Accepted search shapes are exact `field`, `op`, `q` raw ASCII query prefixes with only the registered suffix families: no suffix, `status`, `limit`, `status&limit`, `limit&offset`, `status&limit&offset`, `sort`, and `status&limit&offset&sort`.
+- Search uses only allowlisted fields/operators; title/actor substring and prefix filters are literal, timestamps are semantically parsed as UTC second-precision values, and `last_event_type` filters only the current `Task.last_event_id` event before pagination.
+- Search responses expose only bounded task summary rows plus selected search/suffix metadata, redaction state, freshness, authority, provenance, request/trace/correlation ids, and pagination metadata.
+- Browser search controls, selector provenance UX, automatic traversal, hidden selectors, prefetch/infinite scroll, adjacent route traversal, mutation, credentials, dependencies, and production operations remain deferred.
+
 ### Story 127.3: Browser Search/Discovery Controls from Visible Operator State
 As the operator, I want dashboard search/discovery controls that use only visible selector state, so that browser search is explicit and auditable.
 

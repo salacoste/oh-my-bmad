@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-07-02T13:05:27Z"
+# last_updated: "2026-07-02T13:47:26Z"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-07-02T13:05:27Z"
-current_phase: 48  # Phase 48 / Epic 127 Story 127.1 search/discovery product and architecture contract complete as docs/status-only; runtime search/discovery and traversal remain deferred until later implementation stories
+last_updated: "2026-07-02T13:47:26Z"
+current_phase: 48  # Phase 48 / Epic 127 Story 127.2 API-local search/discovery runtime boundary complete; browser controls and traversal remain deferred until later implementation stories
 
 development_status:
   # =========================================================================
@@ -1079,9 +1079,9 @@ development_status:
   # =========================================================================
   # Epic 127: Search, discovery, selector provenance, and controlled traversal
   # =========================================================================
-  epic-127: in-progress  # Phase 48 opened with Story 127.1 product/architecture contract complete; runtime search/discovery, browser controls, traversal, and closure evidence remain future stories
+  epic-127: in-progress  # Phase 48 Epic 127 has Story 127.1 contract and Story 127.2 API-local runtime complete; browser controls, traversal, and closure evidence remain future stories
   127-1-search-discovery-product-architecture-contract: done  # Docs/status-only contract pins exact fields/operators, raw ASCII q caps (1..96 global bytes, 1..64 task/title/actor, 1..80 event type, 20 chars timestamps), percent and Unicode/non-ASCII rejection, duplicate field=status/status= fail-closed semantics, URL/hash/storage/cookie and hidden/row-derived selector denial, automatic traversal disabled until Story 127.4, and sequential native Architect APPROVE/CLEAR followed by Critic APPROVE/CLEAR
-  127-2-api-local-task-search-discovery-runtime-boundary: backlog
+  127-2-api-local-task-search-discovery-runtime-boundary: done  # Implements route-local bodyless GET /v1/tasks field/op/q search with exact raw ASCII query grammar, finite fields/operators, literal title/actor matching, semantic UTC timestamp bounds, current-last-event filtering, duplicate field=status/status= fail-closed semantics, selected search/suffix metadata, redaction state, and bounded pagination; browser controls/traversal remain deferred
   127-3-browser-search-discovery-controls-visible-state: backlog
   127-4-explicit-bounded-traversal-infinite-scroll-mode: backlog
   127-5-search-discovery-traversal-closure-evidence: backlog
@@ -1090,6 +1090,25 @@ development_status:
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+
+  - date: "2026-07-02"
+    event: story-127-2-api-local-task-search-discovery-runtime-boundary-done
+    from: backlog
+    to: done
+    epic: epic-127
+    story: 127-2-api-local-task-search-discovery-runtime-boundary
+    source: autopilot-story-127-2
+    reason: >-
+      Story 127.2 implemented the API-local bodyless GET /v1/tasks search/discovery
+      runtime boundary from Story 127.1. The route accepts only exact field/op/q
+      raw ASCII search shapes with approved suffix families, finite field/operator
+      domains, semantic UTC timestamp bounds, literal title/actor matching,
+      current-last-event filtering before pagination, duplicate field=status plus
+      status= fail-closed semantics, selected search/suffix metadata, redaction
+      state, freshness/authority/provenance/request/trace/correlation ids, and
+      bounded pagination. Browser search controls, traversal, hidden selectors,
+      and production-operation surfaces remain deferred.
 
 
   - date: "2026-07-02"

@@ -215,6 +215,113 @@ async def _seed_aggregate_task_rows(
     return task_ids
 
 
+async def _seed_search_task_rows(db_url: str) -> dict[str, str]:
+    """Insert deterministic rows for Story 127.2 task search tests."""
+    engine = _create_engine(db_url)
+    session_maker = get_session(engine)
+    rows = [
+        {
+            "key": "alpha",
+            "status": "pending",
+            "title": "alpha-title",
+            "actor_id": "operator-alpha",
+            "last_event_type": "task.created",
+        },
+        {
+            "key": "target",
+            "status": "plan_ready",
+            "title": "prefix-only-title",
+            "actor_id": "actor-prefix-1",
+            "last_event_type": "task.search_target",
+        },
+        {
+            "key": "historical",
+            "status": "executing",
+            "title": "middle-prefix-token",
+            "actor_id": "actor-axb",
+            "last_event_type": "task.created",
+            "historical_event_type": "task.search_target",
+        },
+        {
+            "key": "literal",
+            "status": "plan_ready",
+            "title": "literal-a_b-title",
+            "actor_id": "actor-a_b",
+            "last_event_type": "task.created",
+        },
+        {
+            "key": "wildcard_guard",
+            "status": "plan_ready",
+            "title": "literal-axb-title",
+            "actor_id": "actor-axb-extra",
+            "last_event_type": "task.created",
+        },
+    ]
+    ids: dict[str, str] = {}
+    async with session_maker() as session:
+        rng = Random(1272)
+        for index, row in enumerate(rows):
+            created_at = FROZEN_EPOCH + timedelta(minutes=index)
+            updated_at = FROZEN_EPOCH + timedelta(minutes=index)
+            task_clock = FrozenClock(mono_ns=_FROZEN_MONO_NS + 700 + index, now=created_at)
+            task_id = new_task_id(clock=task_clock, rng=rng)
+            ids[row["key"]] = task_id
+            task = Task(
+                id=task_id,
+                status=row["status"],
+                created_at=created_at,
+                updated_at=updated_at,
+                actor_kind="operator",
+                actor_id=row["actor_id"],
+                title=row["title"],
+                last_event_id=None,
+            )
+            session.add(task)  # noqa: SW001 — test-only fixture seeding, not production write path
+            await session.flush()
+            if historical_event_type := row.get("historical_event_type"):
+                session.add(  # noqa: SW001 — test-only fixture seeding, not production write path
+                    Event(
+                        id=new_event_id(clock=task_clock, rng=rng),
+                        type=historical_event_type,
+                        schema_version="1.0.0",
+                        emitted_at=created_at,
+                        emitted_at_monotonic_ns=_FROZEN_MONO_NS + 650 + index,
+                        actor_kind="operator",
+                        actor_id=row["actor_id"],
+                        task_id=task_id,
+                        session_id=None,
+                        parent_event_id=None,
+                        trace_id=f"historical-trace-{index}",
+                        request_id=new_request_id(clock=_FROZEN_CLOCK, rng=Random(800 + index)),
+                        payload_json='{"summary": "task.search_target historical only"}',
+                    )
+                )
+                await session.flush()
+            event_id = new_event_id(clock=task_clock, rng=rng)
+            session.add(  # noqa: SW001 — test-only fixture seeding, not production write path
+                Event(
+                    id=event_id,
+                    type=row["last_event_type"],
+                    schema_version="1.0.0",
+                    emitted_at=created_at,
+                    emitted_at_monotonic_ns=_FROZEN_MONO_NS + 700 + index,
+                    actor_kind="operator",
+                    actor_id=row["actor_id"],
+                    task_id=task_id,
+                    session_id=None,
+                    parent_event_id=None,
+                    trace_id=f"search-trace-{index}",
+                    request_id=new_request_id(clock=_FROZEN_CLOCK, rng=Random(900 + index)),
+                    payload_json='{"secret": "deny", "summary": "deny"}',
+                )
+            )
+            await session.flush()
+            task.last_event_id = event_id
+        await session.commit()
+    await engine.dispose()
+    return ids
+
+
 async def _seed_session_list_rows(db_url: str, *, count: int = 3) -> list[str]:
     """Insert deterministic Session rows for GET /v1/sessions boundary tests."""
     engine = _create_engine(db_url)
@@ -535,7 +642,7 @@ class TestGetTasksAggregate:
             if parameter["in"] == "query"
         }
 
-        assert set(query_parameters) == {"status", "limit", "offset", "sort"}
+        assert set(query_parameters) == {"status", "limit", "offset", "sort", "field", "op", "q"}
         status_schema = query_parameters["status"]["schema"]
         assert status_schema["enum"] == [
             "pending",
@@ -570,6 +677,264 @@ class TestGetTasksAggregate:
         assert "standalone sort selector" in sort_description
         assert "canonical status, limit, offset, then sort composition" in sort_description
         assert "partial sort compositions fail closed" in sort_description
+        field_schema = query_parameters["field"]["schema"]
+        assert field_schema["enum"] == [
+            "task_id",
+            "title",
+            "status",
+            "actor_id",
+            "last_event_type",
+            "updated_at",
+            "created_at",
+        ]
+        op_schema = query_parameters["op"]["schema"]
+        assert op_schema["enum"] == ["eq", "contains", "prefix", "gte", "lte"]
+        assert "raw ASCII task search query" in query_parameters["q"]["description"]
+
+    async def test_get_tasks_search_response_shape_and_operator_semantics(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+        ids = await _seed_search_task_rows(db_url)
+        app = build_app(
+            base_dir=tmp_path / "events",
+            db_url=db_url,
+            clock=fixed_clock,
+            create_idempotency_schema_on_start=True,
+        )
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://testserver"
+            ) as client,
+        ):
+            shape = await client.get("/v1/tasks?field=title&op=contains&q=a_b")
+            cases = [
+                (f"field=task_id&op=eq&q={ids['target']}", ["prefix-only-title"]),
+                ("field=task_id&op=eq&q=t", []),
+                ("field=title&op=contains&q=prefix", ["middle-prefix-token", "prefix-only-title"]),
+                ("field=title&op=prefix&q=prefix", ["prefix-only-title"]),
+                ("field=status&op=eq&q=executing", ["middle-prefix-token"]),
+                ("field=actor_id&op=eq&q=actor-a_b", ["literal-a_b-title"]),
+                ("field=actor_id&op=prefix&q=actor-a_b", ["literal-a_b-title"]),
+                ("field=last_event_type&op=eq&q=task.search_target&limit=1", ["prefix-only-title"]),
+                (
+                    "field=created_at&op=gte&q=2026-01-01T00:02:00Z",
+                    ["literal-axb-title", "literal-a_b-title", "middle-prefix-token"],
+                ),
+                (
+                    "field=created_at&op=lte&q=2026-01-01T00:01:00Z",
+                    ["prefix-only-title", "alpha-title"],
+                ),
+                (
+                    "field=updated_at&op=gte&q=2026-01-01T00:03:00Z",
+                    ["literal-axb-title", "literal-a_b-title"],
+                ),
+                (
+                    "field=updated_at&op=lte&q=2026-01-01T00:00:00Z",
+                    ["alpha-title"],
+                ),
+            ]
+            results = [(query, await client.get(f"/v1/tasks?{query}")) for query, _ in cases]
+            composed = await client.get(
+                "/v1/tasks?field=actor_id&op=prefix&q=actor-&status=plan_ready"
+                "&limit=2&offset=0&sort=created_at_desc_id_asc"
+            )
+
+        assert shape.status_code == 200
+        shape_body = shape.json()
+        assert set(shape_body) == {
+            "route",
+            "selected_field",
+            "selected_op",
+            "selected_query",
+            "selected_status",
+            "selected_limit",
+            "selected_offset",
+            "selected_sort",
+            "redaction_state",
+            "retrieved_at",
+            "freshness_state",
+            "display_state",
+            "authority_state",
+            "provenance",
+            "request_id",
+            "trace_id",
+            "correlation_id",
+            "limit",
+            "returned_count",
+            "has_more",
+            "next_offset",
+            "items",
+        }
+        assert shape_body["route"] == (
+            "GET /v1/tasks?field={task_search_field}&op={task_search_operator}"
+            "&q={task_search_query}"
+        )
+        assert shape_body["selected_field"] == "title"
+        assert shape_body["selected_op"] == "contains"
+        assert shape_body["selected_query"] == "a_b"
+        assert shape_body["selected_status"] is None
+        assert shape_body["selected_limit"] is None
+        assert shape_body["selected_offset"] is None
+        assert shape_body["selected_sort"] is None
+        assert shape_body["redaction_state"] == "summary-only-no-snippets"
+        assert shape_body["freshness_state"] == "fresh"
+        assert shape_body["display_state"] == "healthy"
+        assert shape_body["authority_state"] == "authoritative"
+        assert shape_body["provenance"] == "registry-state task summary list"
+        assert shape_body["request_id"]
+        assert shape_body["trace_id"]
+        assert shape_body["correlation_id"] == shape_body["request_id"]
+        assert shape_body["limit"] == 50
+        assert shape_body["returned_count"] == 1
+        assert shape_body["has_more"] is False
+        assert shape_body["next_offset"] is None
+        assert [row["title"] for row in shape_body["items"]] == ["literal-a_b-title"]
+        assert "literal-axb-title" not in [row["title"] for row in shape_body["items"]]
+        for row in shape_body["items"]:
+            assert set(row) == {
+                "task_id",
+                "status",
+                "title",
+                "created_at",
+                "updated_at",
+                "state_since",
+                "actor",
+                "last_event",
+            }
+        serialized = str(shape_body["items"]).lower()
+        for denied in (
+            "payload",
+            "summary",
+            "secret",
+            "worktree",
+            "available_commands",
+            "next_commands",
+            "snippet",
+            "score",
+        ):
+            assert denied not in serialized
+
+        for query, response in results:
+            assert response.status_code == 200, query
+            assert [row["title"] for row in response.json()["items"]] == dict(cases)[query]
+
+        assert composed.status_code == 200
+        composed_body = composed.json()
+        assert composed_body["selected_field"] == "actor_id"
+        assert composed_body["selected_op"] == "prefix"
+        assert composed_body["selected_query"] == "actor-"
+        assert composed_body["selected_status"] == "plan_ready"
+        assert composed_body["selected_limit"] == 2
+        assert composed_body["selected_offset"] == 0
+        assert composed_body["selected_sort"] == "created_at_desc_id_asc"
+        assert composed_body["limit"] == 2
+        assert composed_body["has_more"] is True
+        assert composed_body["next_offset"] == 2
+        assert [row["title"] for row in composed_body["items"]] == [
+            "literal-axb-title",
+            "literal-a_b-title",
+        ]
+
+    async def test_get_tasks_search_accepts_only_exact_raw_contract(
+        self, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        db_path = tmp_path / "state.sqlite3"
+        db_url = _db_url(db_path)
+        await _seed_tables(db_url)
+        await _seed_search_task_rows(db_url)
+        app = build_app(
+            base_dir=tmp_path / "events",
+            db_url=db_url,
+            clock=fixed_clock,
+            create_idempotency_schema_on_start=True,
+        )
+
+        async with (
+            LifespanManager(app) as manager,
+            AsyncClient(
+                transport=ASGITransport(app=manager.app), base_url="http://testserver"
+            ) as client,
+        ):
+            allowed = [
+                "field=title&op=contains&q=alpha",
+                "field=title&op=contains&q=alpha&status=pending",
+                "field=title&op=contains&q=alpha&limit=1",
+                "field=title&op=contains&q=alpha&status=pending&limit=1",
+                "field=title&op=contains&q=alpha&limit=1&offset=0",
+                "field=title&op=contains&q=alpha&status=pending&limit=1&offset=0",
+                "field=title&op=contains&q=alpha&sort=updated_at_desc_id_asc",
+                (
+                    "field=title&op=contains&q=alpha&status=pending&limit=1"
+                    "&offset=0&sort=updated_at_desc_id_asc"
+                ),
+            ]
+            allowed_responses = [await client.get(f"/v1/tasks?{query}") for query in allowed]
+            rejected_queries = [
+                "field=unknown&op=eq&q=alpha",
+                "field=title&op=eq&q=alpha",
+                "field=actor_id&op=contains&q=actor",
+                "field=created_at&op=contains&q=2026-01-01T00:00:00Z",
+                "field=title&op=contains&q=",
+                f"field=title&op=contains&q={'a' * 65}",
+                f"field=last_event_type&op=eq&q={'a' * 81}",
+                f"field=task_id&op=eq&q={'a' * 65}",
+                f"field=title&op=contains&q={'a' * 229}",
+                "field=created_at&op=gte&q=2021-99-99T99:99:99Z",
+                "field=title&op=contains&q=alpha%20title",
+                "field=title&op=contains&q=alpha+title",
+                "field=title&op=contains&q=alpha title",
+                "field=title&op=contains&q=alph%C3%A1",
+                "field=title&op=contains&q=alpha/title",
+                "field=title&op=contains&q=alpha\\title",
+                "field=title&op=contains&q=*",
+                "field=title&op=contains&q=alpha.*",
+                "field=title&op=contains&q=alpha%25",
+                "field=title&op=contains&q=alpha&hidden=true",
+                "field=title&op=contains&q=alpha&url=http://x",
+                "field=title&op=contains&q=alpha&hash=abc",
+                "field=title&op=contains&q=alpha&storage=abc",
+                "field=title&op=contains&q=alpha&q=alpha",
+                "f%69eld=title&op=contains&q=alpha",
+                "op=contains&field=title&q=alpha",
+                "field=title&q=alpha&op=contains",
+                "field=title&op=contains&q=alpha&status=pending&sort=updated_at_desc_id_asc",
+                "field=title&op=contains&q=alpha&limit=01",
+                "field=title&op=contains&q=alpha&limit=1&offset=0001",
+                "field=title&op=contains&q=alpha&limit=1&sort=updated_at_desc_id_asc",
+                "field=title&op=contains&q=alpha&limit=1&offset=0&sort=updated_at_desc_id_asc",
+                "field=title&op=contains&q=alpha&status=pending&limit=1&sort=updated_at_desc_id_asc",
+                "field=title&op=contains&q=alpha&offset=0",
+                "field=status&op=eq&q=plan_ready&status=plan_ready",
+                "field=status&op=eq&q=plan_ready&status=plan_ready&limit=1",
+                "field=status&op=eq&q=plan_ready&status=plan_ready&limit=1&offset=0",
+                (
+                    "field=status&op=eq&q=plan_ready&status=plan_ready&limit=1"
+                    "&offset=0&sort=updated_at_desc_id_asc"
+                ),
+            ]
+            rejected_responses = [
+                (query, await client.get(f"/v1/tasks?{query}")) for query in rejected_queries
+            ]
+            body_rejected = await client.request(
+                "GET",
+                "/v1/tasks?field=title&op=contains&q=alpha",
+                content=b"not-allowed",
+            )
+
+        for response in allowed_responses:
+            assert response.status_code == 200, response.text
+            assert response.json()["route"] == (
+                "GET /v1/tasks?field={task_search_field}&op={task_search_operator}"
+                "&q={task_search_query}"
+            )
+        for query, response in rejected_responses:
+            assert response.status_code == 400, query
+        assert body_rejected.status_code == 400
 
     async def test_get_tasks_accepts_singleton_sort_selector(
         self, tmp_path: Path, fixed_clock: FrozenClock

@@ -1,0 +1,30 @@
+## Story 127.2 rework verification cycle 2
+2026-07-02T14:02:43Z
+$ uv run pytest services/registry-api/src/registry_api/test_app.py -q -k GetTasksAggregate
+.........................                                                [100%]
+=============================== warnings summary ===============================
+.venv/lib/python3.12/site-packages/_hypothesis_pytestplugin.py:481
+  /Users/r2d2/Documents/Code_Projects/00_mcp/oh-my-bmad/.venv/lib/python3.12/site-packages/_hypothesis_pytestplugin.py:481: UserWarning: Skipping collection of '.hypothesis' directory - this usually means you've explicitly set the `norecursedirs` pytest config option, replacing rather than extending the default ignores.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+25 passed, 51 deselected, 1 warning in 1.49s
+$ uv run pytest services/registry-api/src/registry_api/test_app.py -q
+........................................................................ [ 94%]
+....                                                                     [100%]
+=============================== warnings summary ===============================
+.venv/lib/python3.12/site-packages/_hypothesis_pytestplugin.py:481
+  /Users/r2d2/Documents/Code_Projects/00_mcp/oh-my-bmad/.venv/lib/python3.12/site-packages/_hypothesis_pytestplugin.py:481: UserWarning: Skipping collection of '.hypothesis' directory - this usually means you've explicitly set the `norecursedirs` pytest config option, replacing rather than extending the default ignores.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+76 passed, 1 warning in 2.73s
+$ uv run ruff format --check services/registry-api/src/registry_api/routes/tasks.py services/registry-api/src/registry_api/test_app.py
+2 files already formatted
+$ uv run ruff check services/registry-api/src/registry_api/routes/tasks.py services/registry-api/src/registry_api/test_app.py
+All checks passed!
+$ uv run mypy --strict --explicit-package-bases packages/ services/registry-api services/registry-state
+Success: no issues found in 182 source files
+$ uv run python YAML/status parse
+sprint-status 127.2 done with updated timestamp
+$ git diff --check
