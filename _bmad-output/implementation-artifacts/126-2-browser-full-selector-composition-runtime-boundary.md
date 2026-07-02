@@ -1,6 +1,6 @@
 # Story 126.2 — Browser Full Selector Composition Runtime Boundary
 
-Status: done locally after code-review APPROVE/CLEAR and UltraQA PASS  
+Status: shipped/green after code-review APPROVE/CLEAR, UltraQA PASS, implementation commit `8d6cfc6`, green remote `ci` run `28555502488`, and green remote `nightly` run `28565399310`
 Phase/Epic: Phase 47 / Epic 126  
 Generated: 2026-07-01T22:58:27Z
 
@@ -38,3 +38,9 @@ Search/discovery runtime, arbitrary query grammar, hidden selectors, URL/hash/st
 
 - Code-review: `.omx/artifacts/code-review/story-126-2-code-review.md` — native code-reviewer `019f200b-1c42-7810-90fd-2e16a4f842e5`, Recommendation `APPROVE`, Architectural status `CLEAR`, required changes none.
 - UltraQA: `.omx/artifacts/ultraqa/story-126-2-ultraqa.md` — native verifier `019f2011-afb6-7223-89db-3053ca371a90`, Verdict `PASS`, blocking issues none.
+
+## Post-push remote evidence
+
+- Implementation commit: `8d6cfc664b9e85caf42ad5f0fe633ed10913584c` (`8d6cfc6`) — `feat: add browser full selector composition`.
+- GitHub Actions `ci` run `28555502488` — completed `success` for head `8d6cfc664b9e85caf42ad5f0fe633ed10913584c`.
+- GitHub Actions `nightly` run `28565399310` — completed `success` for head `8d6cfc664b9e85caf42ad5f0fe633ed10913584c`.
