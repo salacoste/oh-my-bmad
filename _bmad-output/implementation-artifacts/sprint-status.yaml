@@ -36,7 +36,7 @@
 
 generated: 2026-04-22
 last_updated: "2026-07-03T00:00:00+03:00"
-current_phase: 48  # Phase 48 / Epic 127 complete locally after Story 127.5 closure evidence; Epic 128 is next and remote CI/shipped evidence remains pending until push
+current_phase: 48  # Phase 48 / Epic 128 in progress locally after Story 128.1 inventory/test-guard refresh; Epic 127 complete locally and remote CI/shipped evidence remains pending until push
 
 development_status:
   # =========================================================================
@@ -1086,10 +1086,38 @@ development_status:
   127-4-explicit-bounded-traversal-infinite-scroll-mode: done  # Dashboard aggregate task-list search traversal is explicit, visible-control-only, budgeted 1..5 pages, one page per response, cancellable/stoppable, stale-selector safe after awaits, and disabled-mode inert for automatic next reads, prefetch, timers, workers, observers, side channels, repeated-attempt loops, and cache warming
   127-5-search-discovery-traversal-closure-evidence: done  # Local closure records Stories 127.1-127.4 commits, API test_app 76 passed, dashboard suite 238 passed, aggregate traversal 28 passed, ruff format/check, mypy strict, git diff check, code-review APPROVE, UltraQA PASS, and explicit arbitrary-discovery/automation forbiddance; remote CI pending post-push
 
+
+
+  # =========================================================================
+  # Epic 128: Behavior-preserving broad dashboard rewiring cleanup
+  # =========================================================================
+  epic-128: in-progress  # Story 128.1 inventory/test-guard refresh complete locally; runtime cleanup slices 128.2-128.7 remain pending and remote CI/shipped evidence remains pending until push
+  128-1-dashboard-wiring-inventory-cleanup-contract-refresh: done  # Post-Epic-127 dashboard modules/script order/DOM ids/routes/selectors/metadata/classification/owner inventory refreshed with bidirectional drift tests; no dashboard runtime/backend/API/dependency/deployment/credential/production behavior changes
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+
+  - date: "2026-07-03"
+    event: story-128-1-dashboard-wiring-inventory-cleanup-contract-refresh-done
+    from: backlog
+    to: done
+    epic: epic-128
+    story: 128-1-dashboard-wiring-inventory-cleanup-contract-refresh
+    source: autopilot-story-128-1
+    reason: >-
+      Story 128.1 refreshed the factual post-Epic-127 dashboard wiring
+      inventory and cleanup contract before runtime cleanup. The story records
+      modules, static script order, DOM ids, route/fetch signatures, visible
+      selector sources, metadata targets, live/deferred/forbidden
+      classification, and owner story/phase in a parseable implementation
+      artifact. The dashboard wiring guard now checks bidirectional drift so
+      uninventoryed runtime fetches and stale inventory route entries fail.
+      Story 128.1 is local docs/tests/status-only; Epic 128 remains
+      in-progress, runtime cleanup slices remain pending, and remote
+      CI/shipped evidence remains pending until push.
 
 
 

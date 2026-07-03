@@ -200,7 +200,7 @@
         row.size_bytes +
         "; metadata only; source=" +
         CREATE_ROUTE_LABEL +
-        "; authorization source=existing bearer JWT."
+        "; authorization source=existing bearer token."
     );
   }
 
