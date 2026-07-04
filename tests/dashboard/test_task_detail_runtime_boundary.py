@@ -516,3 +516,12 @@ def run_task_runtime_case(case: RuntimeCase, *, ready_state: str = "loading") ->
     loaded = json.loads(completed.stdout)
     assert isinstance(loaded, dict)
     return cast(RuntimeOutput, loaded)
+
+
+def test_story_128_3_task_detail_cleanup_helpers_remain_module_local() -> None:
+    source = runtime_source()
+    assert "function visibleText(" in source
+    assert "function readFailureState(" in source
+    assert "function renderNoFetch(" in source
+    assert "function renderReadFailure(" in source
+    assert "dashboard-shared" not in source

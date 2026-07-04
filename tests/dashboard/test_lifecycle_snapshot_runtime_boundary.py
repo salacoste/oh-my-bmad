@@ -876,3 +876,17 @@ def run_lifecycle_snapshot_create_case(case: dict[str, object]) -> CreateRuntime
     loaded = json.loads(completed.stdout)
     assert isinstance(loaded, dict)
     return cast(CreateRuntimeOutput, loaded)
+
+
+def test_story_128_4_lifecycle_snapshot_cleanup_helpers_remain_module_local() -> None:
+    source = runtime_source()
+    assert "function readFailureStatus(" in source
+    assert "dashboard-shared" not in source
+    for marker in (
+        "applyLifecycle",
+        "pruneLifecycle",
+        "deleteLifecycle",
+        "rollbackLifecycle",
+        "retentionJob",
+    ):
+        assert marker not in source

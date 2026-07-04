@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-07-03T00:00:00+03:00"
+# last_updated: "2026-07-04T00:00:00+03:00"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-07-03T00:00:00+03:00"
-current_phase: 48  # Phase 48 / Epic 128 in progress locally after Story 128.2 aggregate task-list helper seed; Epic 127 complete locally and remote CI/shipped evidence remains pending until push
+last_updated: "2026-07-04T00:00:00+03:00"
+current_phase: 48  # Phase 48 / Epic 128 complete after Stories 128.1-128.7 with PR #67 remote CI gate; shipped/merged evidence pending until merge
 
 development_status:
   # =========================================================================
@@ -1091,14 +1091,58 @@ development_status:
   # =========================================================================
   # Epic 128: Behavior-preserving broad dashboard rewiring cleanup
   # =========================================================================
-  epic-128: in-progress  # Stories 128.1 and 128.2 complete locally; runtime cleanup slices 128.3-128.7 remain pending and remote CI/shipped evidence remains pending until push
+  epic-128: done  # Stories 128.1-128.7 complete with clean code-review, UltraQA, push, and PR #67 remote CI gate; shipped/merged evidence pending until merge
   128-1-dashboard-wiring-inventory-cleanup-contract-refresh: done  # Post-Epic-127 dashboard modules/script order/DOM ids/routes/selectors/metadata/classification/owner inventory refreshed with bidirectional drift tests; no dashboard runtime/backend/API/dependency/deployment/credential/production behavior changes
   128-2-aggregate-task-list-read-state-helper-seed: done  # Aggregate task-list-local read-state/fail-closed helper seed in aggregate-task-list runtime/tests only; selector-free/status/limit/offset/sort/search/traversal contracts unchanged; focused local verification passed
+  128-3-task-detail-event-timeline-trace-cleanup-slice: done  # Module-local read-state/fail-closed cleanup for task detail, event timeline, and trace panels; route/DOM/failure-state contracts unchanged; focused tests passed
+  128-4-history-replay-lifecycle-snapshot-cleanup-slice: done  # Module-local cleanup for history/replay and lifecycle/snapshot visibility; archive/replay/lifecycle boundaries preserved; focused tests passed
+  128-5-session-digest-panel-cleanup-slice: done  # Module-local cleanup for session and digest panels; provider unavailable, visible id provenance, stream, and no-summary contracts preserved; focused tests passed
+  128-6-dashboard-shared-helper-expansion-after-panel-slices: done  # Post-slice helper expansion completed as module-local helpers; no new shared runtime module/script/dependency introduced
+  128-7-dashboard-rewiring-production-closure: done  # Closure records Stories 128.1-128.6 evidence, code-review APPROVE/CLEAR, UltraQA PASS, push, and PR #67 remote CI gate; shipped/merged evidence pending until merge
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+
+  - date: "2026-07-04"
+    event: epic-128-dashboard-rewiring-production-closure-local-done
+    from: review
+    to: done
+    epic: epic-128
+    story: 128-7-dashboard-rewiring-production-closure
+    source: autopilot-epic-128-remaining
+    reason: >-
+      Epic 128 local dashboard rewiring cleanup closure completed after clean
+      code-review APPROVE/CLEAR and UltraQA PASS. Local evidence covers
+      Stories 128.1 through 128.7, full dashboard suite 255 passed, node
+      syntax checks, ruff, git diff hygiene, static/accessibility smoke,
+      inventory guards, and no route/selector/mutation/status-overclaim drift.
+      Remote PR CI evidence is green for PR #67 on the PR #67 checks page; shipped/merged evidence remains pending until merge.
+
+
+  - date: "2026-07-04"
+    event: epic-128-dashboard-rewiring-production-closure-local-candidate
+    from: in-progress
+    to: review
+    epic: epic-128
+    story: 128-7-dashboard-rewiring-production-closure
+    source: autopilot-epic-128-remaining
+    reason: >-
+      Stories 128.3 through 128.6 completed behavior-preserving dashboard
+      cleanup after sequential Ralplan Architect APPROVE/CLEAR and Critic
+      APPROVE/CLEAR for the remaining Epic 128 sequence. Cleanup stayed
+      module-local for task detail, event timeline, trace correlation,
+      history/replay, lifecycle/snapshot, session, and digest panels; route,
+      selector provenance, failure/empty/stale/provider-unavailable, stream,
+      archive ProblemDetails, replay validation, lifecycle readiness, mutation,
+      dependency, credential, deployment, and production-operation boundaries
+      remain unchanged. Local implementation closure candidate evidence is
+      recorded in _bmad-output/implementation-artifacts/128-7-dashboard-rewiring-production-closure.md.
+      Autopilot code-review and UltraQA gates remain pending until their
+      durable evidence exists; remote CI/shipped evidence remains pending until
+      push and GitHub Actions run identifiers exist.
 
 
   - date: "2026-07-03"

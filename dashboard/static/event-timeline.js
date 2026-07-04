@@ -16,9 +16,13 @@
     if (target) target.textContent = value;
   }
 
-  function visibleTaskId() {
-    const source = element("event-timeline-task-id-source");
+  function visibleText(id) {
+    const source = element(id);
     return source ? source.textContent.trim() : "";
+  }
+
+  function visibleTaskId() {
+    return visibleText("event-timeline-task-id-source");
   }
 
   function render(state, authority, detail, taskId, routesText, freshness, eventCount, transitionCount) {
@@ -46,12 +50,16 @@
     return body[rowsKey].length ? "healthy" : "empty";
   }
 
+  function readFailureState(status) {
+    return status === 401 || status === 403 ? "unauthorized" : "backend unavailable";
+  }
+
   async function readRoute(route, rowsKey, taskId) {
     try {
       const response = await fetch(route, { method: "GET" });
       if (!response.ok) {
         return {
-          state: response.status === 401 || response.status === 403 ? "unauthorized" : "backend unavailable",
+          state: readFailureState(response.status),
           rows: 0,
           freshness: new Date().toISOString(),
         };

@@ -68,6 +68,10 @@
     render(state, "non-authoritative", detail, taskId, ROUTE_PATTERN, "pending", "pending", "pending", state);
   }
 
+  function readFailureState(status) {
+    return status === 401 || status === 403 ? "unauthorized" : "backend-unavailable";
+  }
+
   function digestText(body) {
     return label(body.digest, label(body.summary, ""));
   }
@@ -142,7 +146,7 @@
     try {
       const response = await fetch(route, { method: "GET" });
       if (!response.ok) {
-        const state = response.status === 401 || response.status === 403 ? "unauthorized" : "backend-unavailable";
+        const state = readFailureState(response.status);
         render(state, "non-authoritative", `${state.replace(/-/g, " ")} response for task log digest; not authoritative.`, taskId, `GET ${route}`, "missing server freshness", "backend digest response", "not provided", state);
         return;
       }

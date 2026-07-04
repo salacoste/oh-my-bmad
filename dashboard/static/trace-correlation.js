@@ -13,9 +13,13 @@
     if (target) target.textContent = value;
   }
 
-  function visible_trace_id() {
-    const source = element("trace-correlation-trace-id-source");
+  function visible_text(id) {
+    const source = element(id);
     return source ? source.textContent.trim() : "";
+  }
+
+  function visible_trace_id() {
+    return visible_text("trace-correlation-trace-id-source");
   }
 
   function render(state, authority, detail, trace_id, route_text, freshness, row_count, linked_text) {
@@ -49,6 +53,10 @@
     return rows.length ? "healthy" : "empty";
   }
 
+  function read_failure_state(status) {
+    return status === 401 || status === 403 ? "unauthorized" : "backend unavailable";
+  }
+
   function linked_identifiers(rows) {
     const values = [];
     for (const row of rows) {
@@ -64,7 +72,7 @@
       const response = await fetch(route, { method: "GET" });
       if (!response.ok) {
         return {
-          state: response.status === 401 || response.status === 403 ? "unauthorized" : "backend unavailable",
+          state: read_failure_state(response.status),
           rows: [],
           freshness: "not returned",
         };

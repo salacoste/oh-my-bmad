@@ -76,6 +76,10 @@
     render(state, "non-authoritative", detail, taskId, route, "missing server freshness", "backend digest stream response", "not provided", state);
   }
 
+  function readFailureState(status) {
+    return status === 401 || status === 403 ? "unauthorized" : "backend-unavailable";
+  }
+
   function hasOnlyAllowedKeys(frame) {
     return Object.keys(frame).every((key) => ALLOWED_FRAME_KEYS.has(key));
   }
@@ -191,7 +195,7 @@
     try {
       const response = await fetch(route, { method: "GET", signal: controller.signal });
       if (!response.ok) {
-        const state = response.status === 401 || response.status === 403 ? "unauthorized" : "backend-unavailable";
+        const state = readFailureState(response.status);
         failClosed(state, `${state.replace(/-/g, " ")} digest stream response; not authoritative.`, taskId, `GET ${route}`);
         return;
       }

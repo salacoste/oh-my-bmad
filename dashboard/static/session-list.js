@@ -151,6 +151,10 @@
     render(state, "non-authoritative", "missing server freshness", "backend session summary list", "not provided", "fixed first page unavailable", state, "0", detail);
   }
 
+  function readFailureState(status) {
+    return status === 401 || status === 403 ? "unauthorized" : "backend-unavailable";
+  }
+
   function rowText(row) {
     return `${row.session_id} task ${row.task_id} worker ${row.worker_kind} status ${row.status} started ${row.started_at} ended ${label(row.ended_at, "not ended")} heartbeat ${label(row.last_heartbeat_at, "not observed")} heartbeat_state ${row.heartbeat_state}`;
   }
@@ -175,7 +179,7 @@
       const signal = timeoutSignal();
       const response = await fetch(ROUTE, { method: "GET", headers: { Accept: "application/json" }, signal });
       if (!response.ok) {
-        const state = response.status === 401 || response.status === 403 ? "unauthorized" : "backend-unavailable";
+        const state = readFailureState(response.status);
         renderClosed(state, `${state.replace(/-/g, " ")} response for session list; not authoritative.`);
         return;
       }

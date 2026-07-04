@@ -176,6 +176,9 @@
     render({ body: body });
   }
 
+  function readFailureStatus(status) {
+    return status === 401 || status === 403 ? "unauthorized" : "backend unavailable";
+  }
 
   let createInFlight = false;
 
@@ -290,7 +293,7 @@
     try {
       const response = await fetch(ROUTE, { method: "GET" });
       if (!response.ok) {
-        renderFailure(response.status === 401 || response.status === 403 ? "unauthorized" : "backend unavailable");
+        renderFailure(readFailureStatus(response.status));
         return;
       }
       let payload;

@@ -137,6 +137,11 @@
     render(state, "non-authoritative", "missing server freshness", "backend session detail", "not provided", state, detail);
   }
 
+  function readFailureState(status) {
+    if (status === 404) return "not-found";
+    return status === 401 || status === 403 ? "unauthorized" : "backend-unavailable";
+  }
+
   function rowText(row) {
     return `${row.session_id} task ${row.task_id} worker ${row.worker_kind} status ${row.status} started ${row.started_at} ended ${label(row.ended_at, "not ended")} heartbeat ${label(row.last_heartbeat_at, "not observed")} heartbeat_state ${row.heartbeat_state}`;
   }
@@ -160,7 +165,7 @@
     try {
       const response = await fetch(route, { method: "GET", headers: { Accept: "application/json" } });
       if (!response.ok) {
-        const state = response.status === 404 ? "not-found" : response.status === 401 || response.status === 403 ? "unauthorized" : "backend-unavailable";
+        const state = readFailureState(response.status);
         renderClosed(state, `${state.replace(/-/g, " ")} response for session detail; not authoritative.`);
         return;
       }

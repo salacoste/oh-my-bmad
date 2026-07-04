@@ -13,9 +13,13 @@
     if (target) target.textContent = value;
   }
 
-  function visibleTaskId() {
-    const source = element("task-detail-task-id-source");
+  function visibleText(id) {
+    const source = element(id);
     return source ? source.textContent.trim() : "";
+  }
+
+  function visibleTaskId() {
+    return visibleText("task-detail-task-id-source");
   }
 
   function render(state, authority, detail, taskId, route, freshness) {
@@ -55,6 +59,18 @@
     return state === "healthy" ? "authoritative" : "non-authoritative";
   }
 
+  function readFailureState(status) {
+    return status === 401 || status === 403 ? "unauthorized" : "backend unavailable";
+  }
+
+  function renderNoFetch(state, detail, taskId) {
+    render(state, "non-authoritative", detail, taskId, ROUTE_PATTERN, "pending");
+  }
+
+  function renderReadFailure(state, taskId, route, freshness) {
+    render(state, "non-authoritative", `${state} response for task detail; not authoritative.`, taskId, route, freshness);
+  }
+
   function detailFor(body, state) {
     if (!body || typeof body !== "object") return "invalid task detail response shape.";
     if (state !== "healthy") return `${state} task detail response; not authoritative.`;
@@ -66,7 +82,7 @@
   async function loadTaskDetail() {
     const taskId = visibleTaskId();
     if (!taskId) {
-      render("missing task_id", "non-authoritative", "missing task_id visible source; no fetch attempted.", "missing", ROUTE_PATTERN, "pending");
+      renderNoFetch("missing task_id", "missing task_id visible source; no fetch attempted.", "missing");
       return;
     }
 
@@ -74,8 +90,7 @@
     try {
       const response = await fetch(route, { method: "GET" });
       if (!response.ok) {
-        const state = response.status === 401 || response.status === 403 ? "unauthorized" : "backend unavailable";
-        render(state, "non-authoritative", `${state} response for task detail; not authoritative.`, taskId, `GET ${route}`, new Date().toISOString());
+        renderReadFailure(readFailureState(response.status), taskId, `GET ${route}`, new Date().toISOString());
         return;
       }
       const body = await response.json();
