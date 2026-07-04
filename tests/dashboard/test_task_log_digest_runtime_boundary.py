@@ -588,3 +588,9 @@ def run_digest_runtime_case(case: RuntimeCase, *, ready_state: str = "loading") 
     loaded = json.loads(completed.stdout)
     assert isinstance(loaded, dict)
     return cast(RuntimeOutput, loaded)
+
+
+def test_story_128_5_task_log_digest_cleanup_helpers_remain_module_local() -> None:
+    source = runtime_source()
+    assert "function readFailureState(" in source
+    assert "dashboard-shared" not in source

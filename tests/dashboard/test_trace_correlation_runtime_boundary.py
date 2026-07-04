@@ -616,3 +616,10 @@ def run_trace_runtime_case(case: RuntimeCase, *, ready_state: str = "loading") -
     loaded = json.loads(completed.stdout)
     assert isinstance(loaded, dict)
     return cast(RuntimeOutput, loaded)
+
+
+def test_story_128_3_trace_correlation_cleanup_helpers_remain_module_local() -> None:
+    source = runtime_source()
+    assert "function visible_text(" in source
+    assert "function read_failure_state(" in source
+    assert "dashboard-shared" not in source

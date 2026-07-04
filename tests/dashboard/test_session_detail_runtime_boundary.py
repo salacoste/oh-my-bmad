@@ -322,3 +322,9 @@ def run_runtime_case(case: RuntimeCase) -> RuntimeOutput:
     result = subprocess.run(["node", "-e", node_code], check=True, capture_output=True, text=True)
     loaded = json.loads(result.stdout)
     return RuntimeOutput(texts=loaded["texts"], fetchCalls=loaded["fetchCalls"])
+
+
+def test_story_128_5_session_detail_cleanup_helpers_remain_module_local() -> None:
+    source = runtime_source()
+    assert "function readFailureState(" in source
+    assert "dashboard-shared" not in source

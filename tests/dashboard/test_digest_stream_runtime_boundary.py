@@ -605,3 +605,9 @@ def run_stream_runtime_case(case: RuntimeCase, *, ready_state: str = "loading") 
     loaded = json.loads(completed.stdout)
     assert isinstance(loaded, dict)
     return cast(RuntimeOutput, loaded)
+
+
+def test_story_128_5_digest_stream_cleanup_helpers_remain_module_local() -> None:
+    source = runtime_source()
+    assert "function readFailureState(" in source
+    assert "dashboard-shared" not in source

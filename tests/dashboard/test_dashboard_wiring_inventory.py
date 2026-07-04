@@ -347,7 +347,7 @@ def test_story_128_1_lifecycle_passive_global_evidence_source_is_inventoried() -
     assert "typeof LIFECYCLE_SNAPSHOT_EVIDENCE" in text
 
 
-def test_story_128_1_status_docs_remain_local_only_and_epic_128_in_progress() -> None:
+def test_story_128_status_docs_remain_local_complete_pending_remote() -> None:
     data = inventory()
     feature_status = FEATURE_STATUS.read_text(encoding="utf-8")
     sprint_status_text = SPRINT_STATUS.read_text(encoding="utf-8")
@@ -355,11 +355,12 @@ def test_story_128_1_status_docs_remain_local_only_and_epic_128_in_progress() ->
 
     assert data["story"] == "128.1"
     assert "Story 128.1 is docs/tests/status-only" in feature_status
-    assert "Epic 128 is now in progress" in feature_status
+    assert "Epic 128 is locally complete after Stories 128.1-128.7" in feature_status
     assert "remote CI/shipped evidence remains pending until push" in feature_status
     assert "Epic 128 is shipped" not in feature_status
     assert "Epic 128 is complete" not in feature_status
-    assert sprint_status["development_status"]["epic-128"] == "in-progress"
+    assert "remote CI/shipped evidence remains pending until push" in feature_status
+    assert sprint_status["development_status"]["epic-128"] == "done"
     assert (
         sprint_status["development_status"][
             "128-1-dashboard-wiring-inventory-cleanup-contract-refresh"
@@ -367,3 +368,18 @@ def test_story_128_1_status_docs_remain_local_only_and_epic_128_in_progress() ->
         == "done"
     )
     assert "remote CI/shipped evidence remains pending until push" in sprint_status_text
+
+
+
+def test_story_128_6_panel_local_state_vocabulary_is_intentional() -> None:
+    assert "backend unavailable" in runtime_text("task-detail.js")
+    assert "backend unavailable" in runtime_text("event-timeline.js")
+    assert "backend unavailable" in runtime_text("trace-correlation.js")
+    assert "backend unavailable" in runtime_text("history-replay.js")
+    assert "backend unavailable" in runtime_text("lifecycle-snapshot.js")
+    assert "backend-unavailable" in runtime_text("session-list.js")
+    assert "backend-unavailable" in runtime_text("session-detail.js")
+    assert "not-found" in runtime_text("session-detail.js")
+    assert "backend-unavailable" in runtime_text("task-log-digest.js")
+    assert "backend-unavailable" in runtime_text("digest-stream.js")
+    assert not (STATIC_DIR / "dashboard-shared.js").exists()

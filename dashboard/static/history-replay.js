@@ -41,6 +41,14 @@
     render(state, "non-authoritative", detail, task, target, `${HISTORY_PATTERN}; ${REPLAY_PATTERN}; ${VALIDATE_PATTERN}`, "pending", "pending", "pending", "pending", "pending");
   }
 
+  function readFailureState(status) {
+    return status === 401 || status === 403 ? "unauthorized" : "backend unavailable";
+  }
+
+  function authorityFor(state) {
+    return state === "healthy" ? "authoritative" : "non-authoritative";
+  }
+
   function replayTarget() {
     const kind = visible("history-replay-target-kind-source");
     const value = visible("history-replay-target-value-source");
@@ -84,7 +92,7 @@
     try {
       const response = await fetch(route, { method: "GET" });
       if (!response.ok) {
-        return { state: response.status === 401 || response.status === 403 ? "unauthorized" : "backend unavailable", body: null, count: 0, fresh: "not returned" };
+        return { state: readFailureState(response.status), body: null, count: 0, fresh: "not returned" };
       }
       let body;
       try {
@@ -123,6 +131,13 @@
     return values.length ? values.join(", ") : "none returned";
   }
 
+  function freshestRead(results) {
+    for (const result of results) {
+      if (result.fresh !== "not returned") return result.fresh;
+    }
+    return "not returned";
+  }
+
   async function loadHistoryReplay() {
     const task = visible("history-replay-task-id-source");
     const target = replayTarget();
@@ -144,11 +159,11 @@
     ]);
     const state = combine([historyResult, replayResult, validateResult]);
     const validation = validateResult.body && validateResult.body.validation_status ? validateResult.body.validation_status : state;
-    const fresh = historyResult.fresh !== "not returned" ? historyResult.fresh : (replayResult.fresh !== "not returned" ? replayResult.fresh : validateResult.fresh);
+    const fresh = freshestRead([historyResult, replayResult, validateResult]);
     const detail = state === "healthy"
       ? `authoritative success; metadata only for history/replay identifiers.`
       : `${state} history/replay response; metadata only; not authoritative.`;
-    render(state, state === "healthy" ? "authoritative" : "non-authoritative", detail, task, target.text, `GET ${route}; GET ${replay}; GET ${VALIDATE_ROUTE}`, fresh, historyResult.count, replayResult.count, validation, linked(historyResult.body, replayResult.body, validateResult.body));
+    render(state, authorityFor(state), detail, task, target.text, `GET ${route}; GET ${replay}; GET ${VALIDATE_ROUTE}`, fresh, historyResult.count, replayResult.count, validation, linked(historyResult.body, replayResult.body, validateResult.body));
   }
 
   if (document.readyState === "loading") {
