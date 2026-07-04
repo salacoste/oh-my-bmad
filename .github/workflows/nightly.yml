@@ -61,10 +61,10 @@ jobs:
       - name: Install just
         # ``just test-crash`` and ``just build-base`` require the just CLI;
         # ubuntu-latest does not ship with it.
-        uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6  # v2
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3  # v4.0.0
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
         with:
           enable-cache: true
           python-version: "3.12"
@@ -138,10 +138,10 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
       - name: Install just
-        uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6  # v2
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3  # v4.0.0
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
         with:
           enable-cache: true
           python-version: "3.12"
@@ -189,7 +189,7 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
       - name: Install just
-        uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6  # v2
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3  # v4.0.0
 
       - name: Run litestream restore drill
         run: just litestream-restore-drill
@@ -212,10 +212,10 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
       - name: Install just
-        uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6  # v2
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3  # v4.0.0
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
         with:
           enable-cache: true
           python-version: "3.12"
@@ -254,10 +254,10 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
       - name: Install just
-        uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6  # v2
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3  # v4.0.0
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
         with:
           enable-cache: true
           python-version: "3.12"
@@ -322,10 +322,10 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
       - name: Install just
-        uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6  # v2
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3  # v4.0.0
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
         with:
           enable-cache: true
           python-version: "3.12"
