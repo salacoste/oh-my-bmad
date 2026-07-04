@@ -186,7 +186,7 @@ jobs:
       - name: Generate SLSA L2 provenance attestation (base)
         id: attest-base
         if: steps.build.outputs.digest != ''  # defense-in-depth — validate-digest-base above is the primary contract
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373  # v4.1.1
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.OWNER }}/oh-my-bmad-base
           subject-digest: ${{ steps.build.outputs.digest }}
@@ -427,7 +427,7 @@ jobs:
       - name: Generate SLSA L2 provenance attestation (${{ matrix.service }})
         id: attest-service
         if: steps.build.outputs.digest != ''  # defense-in-depth — validate-digest-service above is the primary contract
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373  # v4.1.1
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.OWNER }}/oh-my-bmad-${{ matrix.service }}
           subject-digest: ${{ steps.build.outputs.digest }}
