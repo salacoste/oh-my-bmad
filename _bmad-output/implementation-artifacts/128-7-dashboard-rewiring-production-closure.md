@@ -22,7 +22,7 @@ Arbitrary discovery, hidden selectors, row-derived selectors, URL/hash/storage/c
 - Code-review APPROVE/CLEAR: `.omx/artifacts/code-review/epic-128-remaining-code-review-final.md`. UltraQA PASS: `.omx/artifacts/ultraqa/epic-128-remaining-ultraqa.md`.
 
 ## CI/shipping status
-Local CI-equivalent evidence, clean code-review, and UltraQA PASS are recorded in this artifact set. Remote evidence: remote PR CI run `28712434956` passed for PR #67 (`codex/epic-128-dashboard-cleanup-closure`) at head `ba68a90`; shipped/merged evidence remains pending until merge. CI URL: https://github.com/salacoste/oh-my-bmad/actions/runs/28712434956.
+Local CI-equivalent evidence, clean code-review, and UltraQA PASS are recorded in this artifact set. Remote evidence: PR #67 (`codex/epic-128-dashboard-cleanup-closure`) carries the remote PR CI gate; shipped/merged evidence remains pending until merge. PR checks URL: https://github.com/salacoste/oh-my-bmad/pull/67/checks.
 
 ## Local verification completed
 - `node --check` for all touched dashboard runtime files — passed.

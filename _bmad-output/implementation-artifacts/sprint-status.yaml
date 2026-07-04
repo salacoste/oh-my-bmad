@@ -36,7 +36,7 @@
 
 generated: 2026-04-22
 last_updated: "2026-07-04T00:00:00+03:00"
-current_phase: 48  # Phase 48 / Epic 128 complete after Stories 128.1-128.7 with PR #67 remote CI run 28712434956 green; shipped/merged evidence pending until merge
+current_phase: 48  # Phase 48 / Epic 128 complete after Stories 128.1-128.7 with PR #67 remote CI gate; shipped/merged evidence pending until merge
 
 development_status:
   # =========================================================================
@@ -1091,14 +1091,14 @@ development_status:
   # =========================================================================
   # Epic 128: Behavior-preserving broad dashboard rewiring cleanup
   # =========================================================================
-  epic-128: done  # Stories 128.1-128.7 complete with clean code-review, UltraQA, push, and PR #67 remote CI run 28712434956 green; shipped/merged evidence pending until merge
+  epic-128: done  # Stories 128.1-128.7 complete with clean code-review, UltraQA, push, and PR #67 remote CI gate; shipped/merged evidence pending until merge
   128-1-dashboard-wiring-inventory-cleanup-contract-refresh: done  # Post-Epic-127 dashboard modules/script order/DOM ids/routes/selectors/metadata/classification/owner inventory refreshed with bidirectional drift tests; no dashboard runtime/backend/API/dependency/deployment/credential/production behavior changes
   128-2-aggregate-task-list-read-state-helper-seed: done  # Aggregate task-list-local read-state/fail-closed helper seed in aggregate-task-list runtime/tests only; selector-free/status/limit/offset/sort/search/traversal contracts unchanged; focused local verification passed
   128-3-task-detail-event-timeline-trace-cleanup-slice: done  # Module-local read-state/fail-closed cleanup for task detail, event timeline, and trace panels; route/DOM/failure-state contracts unchanged; focused tests passed
   128-4-history-replay-lifecycle-snapshot-cleanup-slice: done  # Module-local cleanup for history/replay and lifecycle/snapshot visibility; archive/replay/lifecycle boundaries preserved; focused tests passed
   128-5-session-digest-panel-cleanup-slice: done  # Module-local cleanup for session and digest panels; provider unavailable, visible id provenance, stream, and no-summary contracts preserved; focused tests passed
   128-6-dashboard-shared-helper-expansion-after-panel-slices: done  # Post-slice helper expansion completed as module-local helpers; no new shared runtime module/script/dependency introduced
-  128-7-dashboard-rewiring-production-closure: done  # Closure records Stories 128.1-128.6 evidence, code-review APPROVE/CLEAR, UltraQA PASS, push, and PR #67 remote CI run 28712434956 green; shipped/merged evidence pending until merge
+  128-7-dashboard-rewiring-production-closure: done  # Closure records Stories 128.1-128.6 evidence, code-review APPROVE/CLEAR, UltraQA PASS, push, and PR #67 remote CI gate; shipped/merged evidence pending until merge
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
@@ -1119,8 +1119,7 @@ audit_trail:
       Stories 128.1 through 128.7, full dashboard suite 255 passed, node
       syntax checks, ruff, git diff hygiene, static/accessibility smoke,
       inventory guards, and no route/selector/mutation/status-overclaim drift.
-      Remote PR CI evidence is green for PR #67 on run 28712434956 at
-      head ba68a90; shipped/merged evidence remains pending until merge.
+      Remote PR CI evidence is green for PR #67 on the PR #67 checks page; shipped/merged evidence remains pending until merge.
 
 
   - date: "2026-07-04"
