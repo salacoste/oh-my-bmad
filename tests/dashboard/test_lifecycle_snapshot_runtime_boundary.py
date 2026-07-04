@@ -882,5 +882,11 @@ def test_story_128_4_lifecycle_snapshot_cleanup_helpers_remain_module_local() ->
     source = runtime_source()
     assert "function readFailureStatus(" in source
     assert "dashboard-shared" not in source
-    for marker in ("applyLifecycle", "pruneLifecycle", "deleteLifecycle", "rollbackLifecycle", "retentionJob"):
+    for marker in (
+        "applyLifecycle",
+        "pruneLifecycle",
+        "deleteLifecycle",
+        "rollbackLifecycle",
+        "retentionJob",
+    ):
         assert marker not in source

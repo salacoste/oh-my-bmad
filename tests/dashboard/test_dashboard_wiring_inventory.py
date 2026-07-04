@@ -370,7 +370,6 @@ def test_story_128_status_docs_remain_local_complete_pending_remote() -> None:
     assert "remote CI/shipped evidence remains pending until push" in sprint_status_text
 
 
-
 def test_story_128_6_panel_local_state_vocabulary_is_intentional() -> None:
     assert "backend unavailable" in runtime_text("task-detail.js")
     assert "backend unavailable" in runtime_text("event-timeline.js")
