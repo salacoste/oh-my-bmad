@@ -1,6 +1,6 @@
 # Story 128.7 — Dashboard Rewiring Production Closure
 
-Status: done locally on 2026-07-04 after clean Autopilot code-review and UltraQA gates.
+Status: done on 2026-07-04 after clean Autopilot code-review, UltraQA, push, and remote PR CI gates.
 
 ## Local completion scope
 Epic 128 broad dashboard rewiring cleanup is complete locally after Stories 128.1-128.6:
@@ -22,7 +22,7 @@ Arbitrary discovery, hidden selectors, row-derived selectors, URL/hash/storage/c
 - Code-review APPROVE/CLEAR: `.omx/artifacts/code-review/epic-128-remaining-code-review-final.md`. UltraQA PASS: `.omx/artifacts/ultraqa/epic-128-remaining-ultraqa.md`.
 
 ## CI/shipping status
-Local CI-equivalent evidence, clean code-review, and UltraQA PASS are recorded in this artifact set. Remote CI/shipped evidence remains pending until the local changes are pushed and GitHub Actions run identifiers are available.
+Local CI-equivalent evidence, clean code-review, and UltraQA PASS are recorded in this artifact set. Remote evidence: remote PR CI run `28712434956` passed for PR #67 (`codex/epic-128-dashboard-cleanup-closure`) at head `ba68a90`; shipped/merged evidence remains pending until merge. CI URL: https://github.com/salacoste/oh-my-bmad/actions/runs/28712434956.
 
 ## Local verification completed
 - `node --check` for all touched dashboard runtime files — passed.
