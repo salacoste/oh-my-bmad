@@ -3,6 +3,8 @@
 
   const ROUTE = "/v1/events/replay/snapshots";
   const ROUTE_LABEL = "GET snapshot list";
+  const MUTATION_ROUTE = "/v1/events/replay/lifecycle/mutations";
+  const MUTATION_ROUTE_LABEL = "GET lifecycle mutation status list";
   const CREATE_ROUTE = "/v1/events/replay/snapshots";
   const CREATE_ROUTE_LABEL = "POST snapshot create";
   const DISPLAY_STATES = {
@@ -80,6 +82,46 @@
       .join("; ");
   }
 
+  function validMutation(row) {
+    return (
+      row &&
+      hasText(row.plan_hash) &&
+      hasText(row.status) &&
+      Number.isFinite(row.affected_count) &&
+      typeof row.approved === "boolean" &&
+      typeof row.applied === "boolean" &&
+      typeof row.rolled_back === "boolean" &&
+      hasText(row.freshness_state)
+    );
+  }
+
+  function mutationSummary(rows) {
+    if (!rows.length) {
+      return "Lifecycle mutation rows: empty successful read; status metadata only.";
+    }
+    return rows
+      .map(function (row) {
+        return (
+          "plan_hash=" +
+          row.plan_hash +
+          " status=" +
+          row.status +
+          " affected_count=" +
+          row.affected_count +
+          " approved=" +
+          row.approved +
+          " applied=" +
+          row.applied +
+          " rolled_back=" +
+          row.rolled_back +
+          " freshness_state=" +
+          row.freshness_state +
+          " metadata only"
+        );
+      })
+      .join("; ");
+  }
+
   function evidenceFromGlobal() {
     if (typeof window !== "undefined" && window.LIFECYCLE_SNAPSHOT_EVIDENCE) {
       return window.LIFECYCLE_SNAPSHOT_EVIDENCE;
@@ -151,6 +193,30 @@
     };
   }
 
+  function mutationBodyState(body) {
+    if (!body || typeof body !== "object" || !Array.isArray(body.mutations)) {
+      return { status: "invalid", rows: [], total: 0 };
+    }
+    const rows = body.mutations;
+    const total = Number.isFinite(body.total) ? body.total : rows.length;
+    if (total !== rows.length || !rows.every(validMutation)) {
+      return { status: "invalid", rows: [], total: rows.length };
+    }
+    const hasStale = rows.some(function (row) {
+      const state = lower(row.freshness_state);
+      return state === "stale" || state === "expired";
+    });
+    const hasProblem = rows.some(function (row) {
+      const status = lower(row.status);
+      return hasText(row.problem_code) || status.indexOf("failed") >= 0 || status.indexOf("blocked") >= 0;
+    });
+    return {
+      status: hasProblem ? "blocked" : hasStale ? "stale" : rows.length === 0 ? "empty" : "healthy",
+      rows: rows,
+      total: total,
+    };
+  }
+
   function render(result) {
     const evidence = evidenceState(evidenceFromGlobal());
     const body = result.body;
@@ -174,6 +240,28 @@
   function renderFailure(status) {
     const body = { status: status, rows: [], freshness: "not returned", total: 0 };
     render({ body: body });
+  }
+
+  function renderMutationStatus(body) {
+    const authoritative = body.status === "healthy" || body.status === "empty";
+    text("lifecycle-mutation-status", "Lifecycle mutation status: " + body.status + ".");
+    text(
+      "lifecycle-mutation-source",
+      "Source: " + MUTATION_ROUTE_LABEL + ". Runtime route read once with GET."
+    );
+    text("lifecycle-mutation-count", "Lifecycle mutation plans: " + body.total + ".");
+    text("lifecycle-mutation-authority", "Authority: " + (authoritative ? "authoritative" : "non-authoritative") + ".");
+    text("lifecycle-mutation-items", mutationSummary(body.rows));
+    text(
+      "lifecycle-mutation-detail",
+        "Detail: " +
+        body.status +
+        "; audit/status metadata only; no operator action controls."
+    );
+  }
+
+  function renderMutationFailure(status) {
+    renderMutationStatus({ status: status, rows: [], total: 0 });
   }
 
   function readFailureStatus(status) {
@@ -309,13 +397,35 @@
     }
   }
 
+  async function loadLifecycleMutations() {
+    try {
+      const response = await fetch(MUTATION_ROUTE, { method: "GET" });
+      if (!response.ok) {
+        renderMutationFailure(readFailureStatus(response.status));
+        return;
+      }
+      let payload;
+      try {
+        payload = await response.json();
+      } catch (_error) {
+        renderMutationFailure("invalid");
+        return;
+      }
+      renderMutationStatus(mutationBodyState(payload));
+    } catch (_error) {
+      renderMutationFailure("backend unavailable");
+    }
+  }
+
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", function () {
       wireSnapshotCreate();
       loadLifecycleSnapshot();
+      loadLifecycleMutations();
     });
   } else {
     wireSnapshotCreate();
     loadLifecycleSnapshot();
+    loadLifecycleMutations();
   }
 })();

@@ -18,6 +18,7 @@ Audit logging (NFR-S17): both endpoints log every operation via structlog.
 from __future__ import annotations
 
 import asyncio
+import os
 import pathlib
 from datetime import datetime
 from typing import Any, cast
@@ -28,14 +29,16 @@ from events.log_reader import read_log_lines
 from fastapi import APIRouter, Path, Query, Request
 from fastapi.exceptions import HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from registry_state.schema import (  # noqa: IMP001 — registry-api reads registry-state models for task history query (FR136)
     Session as SessionRow,
 )
 from registry_state.schema import (  # noqa: IMP001 — registry-api reads registry-state models for task history query (FR136)
     Task,
 )
-from replay import replay_events
+from replay import (
+    replay_events,
+)
 from replay.archive_manifest import (
     ArchiveManifestInput,
     collect_replay_envelopes,
@@ -48,6 +51,15 @@ from replay.errors import (
     ReplayArchiveError,
     ReplayArchiveManifestError,
     ReplayArchiveMissingSegmentError,
+)
+from replay.lifecycle import (
+    LifecycleMutationError,
+    apply_lifecycle_plan,
+    approve_lifecycle_plan,
+    get_lifecycle_plan_status,
+    list_lifecycle_mutations,
+    record_lifecycle_dry_run,
+    rollback_lifecycle_plan,
 )
 from replay.snapshots import create_snapshot as _create_snapshot
 from replay.snapshots import list_snapshots as _list_snapshots
@@ -136,6 +148,99 @@ class SnapshotEntryResponse(BaseModel):
     sequence_number: int
     timestamp: str
     size_bytes: int
+
+
+class LifecycleDryRunRequest(BaseModel):
+    """Request for POST /v1/events/replay/lifecycle/dry-runs."""
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    retain_hot_days: int
+    expires_in_seconds: int = 3600
+
+
+class LifecycleApprovalRequest(BaseModel):
+    """Approval evidence for an exact lifecycle plan hash."""
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    approval_event_ref: str
+    expires_in_seconds: int = 3600
+
+
+class LifecycleApplyRequest(BaseModel):
+    """Apply request bound to a lifecycle plan hash and idempotency key."""
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    idempotency_key: str
+    mutation_class: str = "prune_hot_segment"
+
+
+class LifecycleRollbackRequest(BaseModel):
+    """Rollback request bound to a lifecycle plan hash and idempotency key."""
+
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    idempotency_key: str
+    rollback_event_ref: str
+
+
+class LifecycleDryRunResponse(BaseModel):
+    """Durable lifecycle dry-run evidence response."""
+
+    model_config = ConfigDict(frozen=True)
+
+    plan_hash: str
+    artifact_path: str
+    expires_at: str
+    affected_count: int
+    risk_summary: str
+    replay_validation_ref: str
+    rollback_evidence_ref: str
+    status: str
+
+
+class LifecyclePlanStatusResponse(BaseModel):
+    """Read-only lifecycle plan status response."""
+
+    model_config = ConfigDict(frozen=True)
+
+    plan_hash: str
+    status: str
+    affected_count: int = 0
+    approved: bool = False
+    applied: bool = False
+    rolled_back: bool = False
+    supported_mutation_class: str = "prune_hot_segment"
+    unsupported_mutation_classes: list[str] = Field(default_factory=list)
+    plan_expires_at: str | None = None
+    approval_expires_at: str | None = None
+    freshness_state: str = "unknown"
+    problem_code: str | None = None
+    journal: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class LifecycleMutationResponse(BaseModel):
+    """Apply/rollback response."""
+
+    model_config = ConfigDict(frozen=True)
+
+    plan_hash: str
+    action: str
+    status: str
+    affected_count: int
+    idempotency_key: str | None
+    replayed: bool = False
+
+
+class LifecycleMutationListResponse(BaseModel):
+    """Read-only lifecycle mutation status list."""
+
+    model_config = ConfigDict(frozen=True)
+
+    mutations: list[dict[str, Any]]
+    total: int
 
 
 class SnapshotListResponse(BaseModel):
@@ -234,6 +339,31 @@ def _archive_problem_response(request: Request, exc: ReplayArchiveError) -> JSON
     return JSONResponse(
         content=problem.model_dump(exclude_none=True),
         status_code=status,
+        media_type="application/problem+json",
+    )
+
+
+def _lifecycle_evidence_dir(request: Request) -> pathlib.Path | None:
+    """Resolve optional lifecycle evidence directory override."""
+    env_dir = os.environ.get("LIFECYCLE_EVIDENCE_DIR")
+    if env_dir:
+        return pathlib.Path(env_dir)
+    return None
+
+
+def _lifecycle_problem_response(request: Request, exc: LifecycleMutationError) -> JSONResponse:
+    """Map lifecycle mutation errors to route-local ProblemDetails."""
+    problem = ProblemDetails(
+        type=f"/errors/lifecycle-{exc.code.replace('_', '-')}",
+        title="Lifecycle mutation blocked",
+        status=exc.status_code,
+        detail=exc.message,
+        instance=str(request.url),
+        extensions=_archive_problem_extensions(request, exc.code),
+    )
+    return JSONResponse(
+        content=problem.model_dump(exclude_none=True),
+        status_code=exc.status_code,
         media_type="application/problem+json",
     )
 
@@ -657,7 +787,210 @@ async def list_snapshots_endpoint(request: Request) -> SnapshotListResponse:
     )
 
 
+# ---------------------------------------------------------------------------
+# Epic 129: approval-bound lifecycle dry-run/apply/rollback/status routes
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/events/replay/lifecycle/dry-runs",
+    status_code=201,
+    response_model=LifecycleDryRunResponse,
+)
+async def create_lifecycle_dry_run_endpoint(
+    body: LifecycleDryRunRequest, request: Request
+) -> LifecycleDryRunResponse | JSONResponse:
+    """Create durable non-mutating lifecycle dry-run evidence."""
+    _require_snapshot_create_authorized(request)
+    event_log_dir = _event_log_dir(request)
+    archive_manifest_path = _archive_manifest_path(request)
+    try:
+        validation = await validate_replay(
+            event_log_dir=event_log_dir,
+            live_state=await _read_live_state(request),
+            archive_manifest_path=archive_manifest_path,
+        )
+        if validation.mismatching_fields:
+            raise LifecycleMutationError(
+                "replay_validation_not_current",
+                "replay validation has mismatching fields",
+                409,
+            )
+        artifact = await asyncio.to_thread(
+            record_lifecycle_dry_run,
+            event_log_dir=event_log_dir,
+            archive_manifest_path=archive_manifest_path,
+            retain_hot_days=body.retain_hot_days,
+            evidence_dir=_lifecycle_evidence_dir(request),
+            expires_in_seconds=body.expires_in_seconds,
+            replay_validation_ref=(
+                "replay-validation:"
+                f"total={validation.total_fields}:matching={validation.matching_fields}:"
+                f"mismatching={validation.mismatching_fields}"
+            ),
+            replay_validation_status="passed",
+            trace_id=getattr(request.state, "trace_id", None),
+            request_id=getattr(request.state, "request_id", None),
+        )
+    except ReplayArchiveError as exc:
+        return _archive_problem_response(request, exc)
+    except LifecycleMutationError as exc:
+        return _lifecycle_problem_response(request, exc)
+    _log.info(
+        "lifecycle_dry_run_recorded_api",
+        actor_id=getattr(request.state, "actor_id", "unknown"),
+        plan_hash=artifact.plan_hash,
+        affected_count=len(artifact.expected_mutations),
+    )
+    return LifecycleDryRunResponse(
+        plan_hash=artifact.plan_hash,
+        artifact_path=artifact.artifact_path,
+        expires_at=artifact.expires_at,
+        affected_count=len(artifact.expected_mutations),
+        risk_summary=artifact.risk_summary,
+        replay_validation_ref=artifact.replay_validation_ref,
+        rollback_evidence_ref=artifact.rollback_evidence_ref,
+        status="dry_run_recorded",
+    )
+
+
+@router.post(
+    "/events/replay/lifecycle/plans/{plan_hash}/approve",
+    status_code=200,
+    response_model=LifecyclePlanStatusResponse,
+)
+async def approve_lifecycle_plan_endpoint(
+    body: LifecycleApprovalRequest, request: Request, plan_hash: str = Path(...)
+) -> LifecyclePlanStatusResponse | JSONResponse:
+    """Persist operator approval evidence for an exact lifecycle plan hash."""
+    _require_snapshot_create_authorized(request)
+    try:
+        await asyncio.to_thread(
+            approve_lifecycle_plan,
+            event_log_dir=_event_log_dir(request),
+            evidence_dir=_lifecycle_evidence_dir(request),
+            plan_hash=plan_hash,
+            operator_identity=getattr(request.state, "actor_id", "unknown"),
+            approval_event_ref=body.approval_event_ref,
+            expires_in_seconds=body.expires_in_seconds,
+        )
+        status = await asyncio.to_thread(
+            get_lifecycle_plan_status,
+            event_log_dir=_event_log_dir(request),
+            evidence_dir=_lifecycle_evidence_dir(request),
+            plan_hash=plan_hash,
+        )
+    except LifecycleMutationError as exc:
+        return _lifecycle_problem_response(request, exc)
+    return LifecyclePlanStatusResponse.model_validate(status)
+
+
+@router.post(
+    "/events/replay/lifecycle/plans/{plan_hash}/apply",
+    status_code=200,
+    response_model=LifecycleMutationResponse,
+)
+async def apply_lifecycle_plan_endpoint(
+    body: LifecycleApplyRequest, request: Request, plan_hash: str = Path(...)
+) -> LifecycleMutationResponse | JSONResponse:
+    """Apply the supported approval-bound lifecycle prune action."""
+    _require_snapshot_create_authorized(request)
+    try:
+        result = await asyncio.to_thread(
+            apply_lifecycle_plan,
+            event_log_dir=_event_log_dir(request),
+            evidence_dir=_lifecycle_evidence_dir(request),
+            plan_hash=plan_hash,
+            idempotency_key=body.idempotency_key,
+            mutation_class=body.mutation_class,
+        )
+    except LifecycleMutationError as exc:
+        return _lifecycle_problem_response(request, exc)
+    return LifecycleMutationResponse(
+        plan_hash=result.plan_hash,
+        action=result.action,
+        status=result.status,
+        affected_count=result.affected_count,
+        idempotency_key=result.idempotency_key,
+        replayed=result.replayed,
+    )
+
+
+@router.post(
+    "/events/replay/lifecycle/plans/{plan_hash}/rollback",
+    status_code=200,
+    response_model=LifecycleMutationResponse,
+)
+async def rollback_lifecycle_plan_endpoint(
+    body: LifecycleRollbackRequest, request: Request, plan_hash: str = Path(...)
+) -> LifecycleMutationResponse | JSONResponse:
+    """Rollback/restore a previously applied lifecycle prune action."""
+    _require_snapshot_create_authorized(request)
+    try:
+        result = await asyncio.to_thread(
+            rollback_lifecycle_plan,
+            event_log_dir=_event_log_dir(request),
+            evidence_dir=_lifecycle_evidence_dir(request),
+            plan_hash=plan_hash,
+            idempotency_key=body.idempotency_key,
+            rollback_event_ref=body.rollback_event_ref,
+        )
+    except LifecycleMutationError as exc:
+        return _lifecycle_problem_response(request, exc)
+    return LifecycleMutationResponse(
+        plan_hash=result.plan_hash,
+        action=result.action,
+        status=result.status,
+        affected_count=result.affected_count,
+        idempotency_key=result.idempotency_key,
+        replayed=result.replayed,
+    )
+
+
+@router.get(
+    "/events/replay/lifecycle/plans/{plan_hash}",
+    status_code=200,
+    response_model=LifecyclePlanStatusResponse,
+)
+async def get_lifecycle_plan_status_endpoint(
+    request: Request, plan_hash: str = Path(...)
+) -> LifecyclePlanStatusResponse | JSONResponse:
+    """Read lifecycle plan status and audit journal without mutation."""
+    try:
+        status = await asyncio.to_thread(
+            get_lifecycle_plan_status,
+            event_log_dir=_event_log_dir(request),
+            evidence_dir=_lifecycle_evidence_dir(request),
+            plan_hash=plan_hash,
+        )
+    except LifecycleMutationError as exc:
+        return _lifecycle_problem_response(request, exc)
+    return LifecyclePlanStatusResponse.model_validate(status)
+
+
+@router.get(
+    "/events/replay/lifecycle/mutations",
+    status_code=200,
+    response_model=LifecycleMutationListResponse,
+)
+async def list_lifecycle_mutations_endpoint(request: Request) -> LifecycleMutationListResponse:
+    """List lifecycle mutation statuses without mutation."""
+    rows = await asyncio.to_thread(
+        list_lifecycle_mutations,
+        event_log_dir=_event_log_dir(request),
+        evidence_dir=_lifecycle_evidence_dir(request),
+    )
+    return LifecycleMutationListResponse(mutations=rows, total=len(rows))
+
+
 __all__ = [
+    "LifecycleApplyRequest",
+    "LifecycleApprovalRequest",
+    "LifecycleDryRunRequest",
+    "LifecycleDryRunResponse",
+    "LifecycleMutationListResponse",
+    "LifecycleMutationResponse",
+    "LifecyclePlanStatusResponse",
     "ReplayResponse",
     "SnapshotEntryResponse",
     "SnapshotListResponse",

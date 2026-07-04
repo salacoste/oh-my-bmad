@@ -429,6 +429,13 @@ def test_worker_facing_source_code_unchanged() -> None:
         # no worker/orchestrator coupling or traversal behavior is introduced.
         "services/registry-api/src/registry_api/routes/tasks.py",
         "services/registry-api/src/registry_api/test_app.py",
+        # Epic 129: registry-api replay lifecycle controls extend the existing
+        # replay API with auth-gated lifecycle mutation endpoints and read-only
+        # status/list visibility. Journey 1's scripted-worker path still uses
+        # POST /v1/tasks plus event projection; no worker/orchestrator coupling
+        # or traversal behavior is introduced.
+        "services/registry-api/src/registry_api/routes/replay.py",
+        "services/registry-api/src/registry_api/routes/test_replay.py",
     }
 
     rev_parse = subprocess.run(

@@ -36,7 +36,10 @@ APPROVED_SCRIPTS = [
 ]
 SNAPSHOT_ROUTE = "/v1/events/replay/snapshots"
 SNAPSHOT_PATTERN = "GET /v1/events/replay/snapshots"
+MUTATION_ROUTE = "/v1/events/replay/lifecycle/mutations"
+MUTATION_PATTERN = "GET /v1/events/replay/lifecycle/mutations"
 FETCH_CALL_RE = re.compile(r"fetch\(\s*ROUTE(?P<options>[^)]*)\)", re.DOTALL)
+MUTATION_FETCH_CALL_RE = re.compile(r"fetch\(\s*MUTATION_ROUTE(?P<options>[^)]*)\)", re.DOTALL)
 METHOD_RE = re.compile(r"method\s*:\s*['\"](?P<method>[A-Z]+)['\"]", re.IGNORECASE)
 FORBIDDEN_METHOD_RE = re.compile(r"\b(?:PUT|PATCH|DELETE)\b", re.IGNORECASE)
 FORBIDDEN_RUNTIME_MARKERS = (
@@ -115,6 +118,8 @@ class RuntimeCase(TypedDict):
     expected: list[str]
     snapshotResponse: NotRequired[RuntimeResponse]
     snapshotReject: NotRequired[str]
+    mutationResponse: NotRequired[RuntimeResponse]
+    mutationReject: NotRequired[str]
     hiddenSnapshotId: NotRequired[str]
     hiddenLifecycleAction: NotRequired[str]
     lifecycleEvidence: NotRequired[dict[str, object]]
@@ -211,10 +216,13 @@ def test_story_106_2_runtime_route_and_method_allowlist_is_exact() -> None:
     source = runtime_source()
     assert SNAPSHOT_ROUTE in source
     assert source.count(SNAPSHOT_ROUTE) == 2
+    assert MUTATION_ROUTE in source
+    assert source.count(MUTATION_ROUTE) == 1
     assert "const ROUTE = " in source
+    assert "const MUTATION_ROUTE = " in source
     assert "const CREATE_ROUTE = " in source
-    fetches = list(FETCH_CALL_RE.finditer(source))
-    assert len(fetches) == 1
+    fetches = list(FETCH_CALL_RE.finditer(source)) + list(MUTATION_FETCH_CALL_RE.finditer(source))
+    assert len(fetches) == 2
     for fetch in fetches:
         method_match = METHOD_RE.search(fetch.group("options"))
         assert method_match is None or method_match.group("method").upper() == "GET"
@@ -235,9 +243,16 @@ def test_story_106_2_panel_exposes_bounded_runtime_metadata_targets() -> None:
         "lifecycle-snapshot-evidence",
         "lifecycle-snapshot-degraded",
         "lifecycle-snapshot-detail",
+        "lifecycle-mutation-source",
+        "lifecycle-mutation-status",
+        "lifecycle-mutation-count",
+        "lifecycle-mutation-authority",
+        "lifecycle-mutation-items",
+        "lifecycle-mutation-detail",
     ):
         assert f'id="{element_id}"' in raw
     assert SNAPSHOT_PATTERN in raw
+    assert MUTATION_PATTERN in raw
     panel_text = raw[raw.index('id="lifecycle-snapshot"') : raw.index('id="health"')]
     assert "metadata only" in panel_text.lower()
     assert "not controls" in panel_text.lower()
@@ -247,9 +262,16 @@ def test_story_106_2_panel_exposes_bounded_runtime_metadata_targets() -> None:
 
 def test_story_106_2_fetches_exact_snapshot_route_once() -> None:
     output = run_lifecycle_snapshot_runtime_case(healthy_case({}))
-    assert output["fetchCalls"] == [{"route": SNAPSHOT_ROUTE, "method": "GET", "hasBody": False}]
+    assert output["fetchCalls"] == expected_get_calls()
     rendered = " ".join(output["texts"].values()).lower()
-    for expected in ("healthy", "authoritative", "snapshots: 1", "snapshot_id=snap-1"):
+    for expected in (
+        "healthy",
+        "authoritative",
+        "snapshots: 1",
+        "snapshot_id=snap-1",
+        "lifecycle mutation plans: 1",
+        "plan_hash=plan-1",
+    ):
         assert expected in rendered
 
 
@@ -262,7 +284,7 @@ def test_story_106_2_hidden_selector_decoys_are_ignored() -> None:
             }
         )
     )
-    assert output["fetchCalls"] == [{"route": SNAPSHOT_ROUTE, "method": "GET", "hasBody": False}]
+    assert output["fetchCalls"] == expected_get_calls()
     rendered = " ".join(output["texts"].values()).lower()
     assert "snap-hidden" not in rendered
     assert "run-hidden-lifecycle" not in rendered
@@ -285,6 +307,55 @@ def test_story_106_2_runtime_behavior_maps_success_empty_and_failures() -> None:
             },
             "expected": ["stale", "non-authoritative"],
         },
+        healthy_case(
+            {
+                "name": "stale-mutation-status",
+                "mutationResponse": {
+                    "ok": True,
+                    "status": 200,
+                    "body": {
+                        "mutations": [
+                            {
+                                "plan_hash": "plan-1",
+                                "status": "approved",
+                                "affected_count": 1,
+                                "approved": True,
+                                "applied": False,
+                                "rolled_back": False,
+                                "freshness_state": "stale",
+                            }
+                        ],
+                        "total": 1,
+                    },
+                },
+                "expected": ["lifecycle mutation status: stale", "non-authoritative"],
+            }
+        ),
+        healthy_case(
+            {
+                "name": "blocked-mutation-status",
+                "mutationResponse": {
+                    "ok": True,
+                    "status": 200,
+                    "body": {
+                        "mutations": [
+                            {
+                                "plan_hash": "plan-1",
+                                "status": "apply_failed_partial",
+                                "affected_count": 1,
+                                "approved": True,
+                                "applied": False,
+                                "rolled_back": False,
+                                "freshness_state": "fresh",
+                                "problem_code": "apply_failed_partial",
+                            }
+                        ],
+                        "total": 1,
+                    },
+                },
+                "expected": ["lifecycle mutation status: blocked", "non-authoritative"],
+            }
+        ),
         {
             "name": "invalid-json",
             "snapshotResponse": {"ok": True, "status": 200, "jsonError": "bad json"},
@@ -322,9 +393,7 @@ def test_story_106_2_runtime_behavior_maps_success_empty_and_failures() -> None:
     ]
     for case in cases:
         output = run_lifecycle_snapshot_runtime_case(case)
-        assert output["fetchCalls"] == [
-            {"route": SNAPSHOT_ROUTE, "method": "GET", "hasBody": False}
-        ]
+        assert output["fetchCalls"] == expected_get_calls()
         rendered = " ".join(output["texts"].values()).lower()
         for expected in case["expected"]:
             assert expected in rendered, (case["name"], expected, rendered)
@@ -481,7 +550,7 @@ def test_story_106_2_missing_returned_freshness_is_not_fabricated() -> None:
 
 def test_story_106_2_runtime_behavior_runs_when_document_already_loaded() -> None:
     output = run_lifecycle_snapshot_runtime_case(healthy_case({}), ready_state="interactive")
-    assert output["fetchCalls"] == [{"route": SNAPSHOT_ROUTE, "method": "GET", "hasBody": False}]
+    assert output["fetchCalls"] == expected_get_calls()
     rendered = " ".join(output["texts"].values()).lower()
     assert "healthy" in rendered
     assert "authoritative" in rendered
@@ -506,6 +575,25 @@ def healthy_case(overrides: dict[str, object]) -> RuntimeCase:
                 "total": 1,
             },
         },
+        "mutationResponse": {
+            "ok": True,
+            "status": 200,
+            "body": {
+                "mutations": [
+                    {
+                        "plan_hash": "plan-1",
+                        "status": "approved",
+                        "affected_count": 1,
+                        "approved": True,
+                        "applied": False,
+                        "rolled_back": False,
+                        "freshness_state": "fresh",
+                        "raw_journal_secret": "do-not-render",
+                    }
+                ],
+                "total": 1,
+            },
+        },
         "lifecycleEvidence": {
             "plan_hash": "plan-hash-1",
             "dry_run_artifact_ref": "dry-run-ref",
@@ -525,6 +613,13 @@ def healthy_case(overrides: dict[str, object]) -> RuntimeCase:
     }
     base.update(cast(RuntimeCase, overrides))
     return base
+
+
+def expected_get_calls() -> list[FetchCall]:
+    return [
+        {"route": SNAPSHOT_ROUTE, "method": "GET", "hasBody": False},
+        {"route": MUTATION_ROUTE, "method": "GET", "hasBody": False},
+    ]
 
 
 def run_lifecycle_snapshot_runtime_case(
@@ -556,6 +651,10 @@ def run_lifecycle_snapshot_runtime_case(
           if (route === {json.dumps(SNAPSHOT_ROUTE)}) {{
             if (testCase.snapshotReject) throw new Error(testCase.snapshotReject);
             return testCase.snapshotResponse;
+          }}
+          if (route === {json.dumps(MUTATION_ROUTE)}) {{
+            if (testCase.mutationReject) throw new Error(testCase.mutationReject);
+            return testCase.mutationResponse || {{ ok: true, status: 200, body: {{ mutations: [], total: 0 }} }};
           }}
           throw new Error('unexpected route ' + route);
         }}
@@ -672,7 +771,8 @@ def test_story_107_2_create_posts_only_after_visible_click_with_exact_body_free_
     ]
     get_calls = [call for call in output["fetchCalls"] if call["method"] == "GET"]
     assert get_calls == [
-        {"route": SNAPSHOT_ROUTE, "method": "GET", "hasBody": False, "authorization": None}
+        {"route": SNAPSHOT_ROUTE, "method": "GET", "hasBody": False, "authorization": None},
+        {"route": MUTATION_ROUTE, "method": "GET", "hasBody": False, "authorization": None},
     ]
     rendered = " ".join(output["texts"].values()).lower()
     assert "snap-created" in rendered
@@ -809,6 +909,9 @@ def run_lifecycle_snapshot_create_case(case: dict[str, object]) -> CreateRuntime
         async function responseFor(route, options) {{
           const method = (options.method || 'GET').toUpperCase();
           if (method === 'GET' && route === {json.dumps(SNAPSHOT_ROUTE)}) return snapshotResponse;
+          if (method === 'GET' && route === {json.dumps(MUTATION_ROUTE)}) {{
+            return {{ ok: true, status: 200, body: {{ mutations: [], total: 0 }} }};
+          }}
           if (method === 'POST' && route === {json.dumps(CREATE_ROUTE)}) {{
             if (testCase.createReject) throw new Error(testCase.createReject);
             if (testCase.resolveCreateAfterClicks && !pendingCreate) {{

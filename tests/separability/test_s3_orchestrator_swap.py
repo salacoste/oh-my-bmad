@@ -562,6 +562,12 @@ def test_spine_source_code_unchanged() -> None:
         # no orchestrator-spine coupling or traversal behavior changes.
         ":!services/registry-api/src/registry_api/routes/tasks.py",
         ":!services/registry-api/src/registry_api/test_app.py",
+        # Epic 129: replay lifecycle controls are API-local and scoped to
+        # auth-gated replay lifecycle endpoints plus read-only status/list
+        # visibility. The S-3 null-orchestrator swap still uses POST /v1/tasks
+        # and event projection; no orchestrator-spine coupling changes.
+        ":!services/registry-api/src/registry_api/routes/replay.py",
+        ":!services/registry-api/src/registry_api/routes/test_replay.py",
     ]
 
     # Skip on non-git checkout (e.g., source tarball).

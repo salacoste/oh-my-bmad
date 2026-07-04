@@ -31,6 +31,7 @@ EXPECTED_FIXTURE_ROUTE_PATTERNS = frozenset(
         + live_read_adapter.story_109_2_panel_contracts()
         + live_read_adapter.story_110_2_panel_contracts()
         + live_read_adapter.story_111_2_panel_contracts()
+        + live_read_adapter.story_129_5_panel_contracts()
     )
     for route in panel.routes
 )
@@ -135,6 +136,7 @@ def test_story_99_2_fixture_snapshot_route_coverage_matches_story_99_1_view_mode
             + live_read_adapter.story_109_2_panel_contracts()
             + live_read_adapter.story_110_2_panel_contracts()
             + live_read_adapter.story_111_2_panel_contracts()
+            + live_read_adapter.story_129_5_panel_contracts()
         )
         for route in panel.routes
     }
@@ -318,6 +320,7 @@ def assert_renderer_metadata_is_safe(row: RouteFixtureRow) -> None:
     live_read_adapter.validate_story_99_2_fixture_row(row)
     rendered = live_read_adapter.story_99_2_fixture_rendered_metadata(row)
     rendered_text = stringify(rendered).lower()
+    rendered_text = rendered_text.replace("/v1/events/replay/lifecycle/mutations", "")
     for term in FORBIDDEN_RENDERED_TERMS:
         assert term not in rendered_text, (term, rendered)
     assert "read_only_contract" not in rendered

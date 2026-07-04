@@ -32,6 +32,7 @@ SourceCategory = Literal[
     "digest",
     "aggregate",
     "session",
+    "lifecycle",
 ]
 RouteContract = Literal["approved", "needs-separate-contract"]
 TimestampPolicy = Literal[
@@ -71,6 +72,7 @@ Identifier = Literal[
     "task_search_field",
     "task_search_operator",
     "task_search_query",
+    "plan_hash",
 ]
 
 APPROVED_ROUTE_PATTERNS = frozenset(
@@ -111,6 +113,7 @@ EXPECTED_IDENTIFIERS_BY_ROUTE = {
     ),
     "/v1/sessions": frozenset(),
     "/v1/sessions/{session_id}": frozenset({"session_id"}),
+    "/v1/events/replay/lifecycle/mutations": frozenset(),
 }
 NON_AUTHORITATIVE_STATES = frozenset(
     {
@@ -126,7 +129,7 @@ NON_AUTHORITATIVE_STATES = frozenset(
         "empty-list",
     }
 )
-REPLAY_OR_LIFECYCLE_CATEGORIES = frozenset({"replay"})
+REPLAY_OR_LIFECYCLE_CATEGORIES = frozenset({"replay", "lifecycle"})
 UNCERTAINTY_COPY_TERMS = (
     "unavailable",
     "needs contract",
@@ -461,6 +464,26 @@ LIVE_VALUE_CONTRACTS = (
             }
         ),
     ),
+    LiveValueContract(
+        name="lifecycle-mutation-status",
+        source_category="lifecycle",
+        route_pattern="/v1/events/replay/lifecycle/mutations",
+        route_contract="approved",
+        timestamp_policy="retrieved-at-required",
+        freshness_policy="fresh-or-stale-required",
+        required_identifiers=(),
+        allowed_states=frozenset(
+            {
+                "healthy",
+                "empty-list",
+                "stale",
+                "invalid",
+                "unauthorized",
+                "backend-unavailable",
+                "unavailable",
+            }
+        ),
+    ),
 )
 
 DEGRADED_STATE_FIXTURES = (
@@ -535,6 +558,7 @@ def test_every_future_live_value_declares_source_freshness_and_identifier_contra
         "digest",
         "aggregate",
         "session",
+        "lifecycle",
     } <= covered_categories
 
 
@@ -627,6 +651,7 @@ def test_story_99_1_view_models_cover_every_approved_phase_20_panel_route() -> N
         | set(live_read_adapter.story_109_2_route_patterns())
         | set(live_read_adapter.story_110_2_route_patterns())
         | set(live_read_adapter.story_111_2_route_patterns())
+        | set(live_read_adapter.story_129_5_route_patterns())
     )
 
     assert {view_model.route_pattern for view_model in view_models} == expected
@@ -645,6 +670,7 @@ def test_story_99_1_view_models_cover_every_approved_phase_20_panel_route() -> N
             + live_read_adapter.story_109_2_panel_contracts()
             + live_read_adapter.story_110_2_panel_contracts()
             + live_read_adapter.story_111_2_panel_contracts()
+            + live_read_adapter.story_129_5_panel_contracts()
         )
         for route in panel.routes
     }
@@ -746,6 +772,7 @@ def test_story_99_1_rendered_metadata_omits_controls_live_wiring_and_success_cla
     for view_model in live_read_adapter.story_99_1_route_view_models():
         rendered = story_99_1_rendered_text(view_model)
         lowered = rendered.lower()
+        lowered = lowered.replace("/v1/events/replay/lifecycle/mutations", "")
         for term in STORY_99_1_FORBIDDEN_RENDERED_TERMS:
             assert term not in lowered, rendered
         for term in STORY_99_1_FORBIDDEN_SUCCESS_CLAIMS:
@@ -826,6 +853,7 @@ def assert_story_99_1_rendered_fields_are_inert(
 ) -> None:
     rendered = story_99_1_rendered_text(view_model)
     lowered = rendered.lower()
+    lowered = lowered.replace("/v1/events/replay/lifecycle/mutations", "")
     for term in STORY_99_1_FORBIDDEN_RENDERED_TERMS:
         assert term not in lowered, rendered
 
