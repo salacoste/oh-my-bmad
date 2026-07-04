@@ -41,6 +41,7 @@ APPROVED_DASHBOARD_ROUTES = frozenset(
         "/v1/tasks?field={task_search_field}&op={task_search_operator}&q={task_search_query}&status={task_status}&limit={task_list_limit}&offset={task_list_offset}&sort={task_sort}",
         "/v1/sessions",
         "/v1/sessions/{session_id}",
+        "/v1/events/replay/lifecycle/mutations",
     }
 )
 NEEDS_CONTRACT_ROUTES = frozenset()
@@ -58,6 +59,7 @@ def _panel_route_patterns() -> tuple[str, ...]:
             *adapter.story_109_2_panel_contracts(),
             *adapter.story_110_2_panel_contracts(),
             *adapter.story_111_2_panel_contracts(),
+            *adapter.story_129_5_panel_contracts(),
         )
         for route in panel.routes
     )

@@ -1038,3 +1038,214 @@ class TestReplayArchiveProblemDetails:
 
         assert resp.status_code == 201, resp.text
         assert resp.json()["sequence_number"] == 5000
+
+
+# ---------------------------------------------------------------------------
+# Epic 129: lifecycle mutation controls
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def client_for_lifecycle_mutations(
+    tmp_path: Path, fixed_clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
+) -> AsyncGenerator[AsyncClient, None]:
+    db_path = tmp_path / "state.sqlite3"
+    db_url = _db_url(db_path)
+    await _seed_tables(db_url)
+
+    events_dir = tmp_path / "events"
+    env = _make_task_created_envelope(
+        task_id=_TASK_ID,
+        event_id=_EVENT_ID,
+        title="lifecycle mutation task",
+        mono_ns=5000,
+        emitted_at=datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC),
+    )
+    _write_jsonl(events_dir, "2026-06-01", [env])
+    emitted_at = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
+    await _insert_task_row(db_url, _TASK_ID, "lifecycle mutation task", emitted_at, emitted_at)
+    hot_path = events_dir / "2026-06-01.jsonl"
+
+    archive_dir = tmp_path / "archive"
+    archive_dir.mkdir()
+    archive_path = archive_dir / "2026-06-01.jsonl"
+    archive_path.write_bytes(hot_path.read_bytes())
+    manifest = _write_lifecycle_manifest(
+        archive_dir,
+        logical_date="2026-06-01",
+        original_relpath="2026-06-01.jsonl",
+        archive_relpath="2026-06-01.jsonl",
+        sha256=_sha256(archive_path),
+        event_count=1,
+        first_sequence=5000,
+        last_sequence=5000,
+    )
+    monkeypatch.setenv("REPLAY_ARCHIVE_MANIFEST", str(manifest))
+    monkeypatch.delenv("EVENT_LOG_ARCHIVE_MANIFEST", raising=False)
+
+    app = build_app(
+        base_dir=events_dir,
+        db_url=db_url,
+        clock=fixed_clock,
+        jwt_settings=JwtAuthSettings(jwt_secret_key=SecretStr(_TEST_JWT_SECRET)),
+    )
+    async with (
+        LifespanManager(app) as manager,
+        AsyncClient(
+            transport=ASGITransport(app=manager.app),
+            base_url="http://testserver",
+        ) as client,
+    ):
+        yield client
+
+
+async def _create_lifecycle_plan(client: AsyncClient) -> str:
+    resp = await client.post(
+        "/v1/events/replay/lifecycle/dry-runs",
+        headers=_snapshot_auth_headers(),
+        json={"retain_hot_days": 7, "expires_in_seconds": 3600},
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["status"] == "dry_run_recorded"
+    assert body["affected_count"] == 1
+    return str(body["plan_hash"])
+
+
+class TestLifecycleMutationControls:
+    @pytest.mark.asyncio
+    async def test_dry_run_approve_apply_status_and_rollback(
+        self, client_for_lifecycle_mutations: AsyncClient, tmp_path: Path
+    ) -> None:
+        plan_hash = await _create_lifecycle_plan(client_for_lifecycle_mutations)
+
+        approve = await client_for_lifecycle_mutations.post(
+            f"/v1/events/replay/lifecycle/plans/{plan_hash}/approve",
+            headers=_snapshot_auth_headers(),
+            json={"approval_event_ref": "approval.granted:e-route", "expires_in_seconds": 3600},
+        )
+        assert approve.status_code == 200, approve.text
+        assert approve.json()["approved"] is True
+        assert approve.json()["freshness_state"] == "fresh"
+
+        apply = await client_for_lifecycle_mutations.post(
+            f"/v1/events/replay/lifecycle/plans/{plan_hash}/apply",
+            headers=_snapshot_auth_headers(),
+            json={"idempotency_key": "route-apply"},
+        )
+        assert apply.status_code == 200, apply.text
+        assert apply.json()["status"] == "apply_succeeded"
+        assert not (tmp_path / "events" / "2026-06-01.jsonl").exists()
+
+        status = await client_for_lifecycle_mutations.get(
+            f"/v1/events/replay/lifecycle/plans/{plan_hash}"
+        )
+        assert status.status_code == 200, status.text
+        body = status.json()
+        assert body["applied"] is True
+        assert body["freshness_state"] == "fresh"
+        assert body["plan_expires_at"]
+        assert body["approval_expires_at"]
+        assert any(row["state"] == "apply_succeeded" for row in body["journal"])
+
+        rollback = await client_for_lifecycle_mutations.post(
+            f"/v1/events/replay/lifecycle/plans/{plan_hash}/rollback",
+            headers=_snapshot_auth_headers(),
+            json={
+                "idempotency_key": "route-rollback",
+                "rollback_event_ref": "rollback.approved:e-route",
+            },
+        )
+        assert rollback.status_code == 200, rollback.text
+        assert rollback.json()["status"] == "rollback_succeeded"
+        assert (tmp_path / "events" / "2026-06-01.jsonl").exists()
+
+    @pytest.mark.asyncio
+    async def test_mutating_routes_require_bearer_before_package_call(
+        self, client_for_lifecycle_mutations: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = 0
+
+        def forbidden_record(**_kwargs: object) -> object:
+            nonlocal calls
+            calls += 1
+            raise AssertionError("must not call package without JWT")
+
+        monkeypatch.setattr(replay_routes, "record_lifecycle_dry_run", forbidden_record)
+        resp = await client_for_lifecycle_mutations.post(
+            "/v1/events/replay/lifecycle/dry-runs",
+            json={"retain_hot_days": 7, "expires_in_seconds": 3600},
+        )
+
+        assert resp.status_code == 401
+        assert calls == 0
+
+    @pytest.mark.asyncio
+    async def test_unsupported_mutation_class_problem_details(
+        self, client_for_lifecycle_mutations: AsyncClient
+    ) -> None:
+        plan_hash = await _create_lifecycle_plan(client_for_lifecycle_mutations)
+        approve = await client_for_lifecycle_mutations.post(
+            f"/v1/events/replay/lifecycle/plans/{plan_hash}/approve",
+            headers=_snapshot_auth_headers(),
+            json={"approval_event_ref": "approval.granted:e-route"},
+        )
+        assert approve.status_code == 200
+
+        resp = await client_for_lifecycle_mutations.post(
+            f"/v1/events/replay/lifecycle/plans/{plan_hash}/apply",
+            headers=_snapshot_auth_headers(),
+            json={"idempotency_key": "route-bad", "mutation_class": "delete"},
+        )
+
+        assert resp.status_code == 422
+        assert resp.headers["content-type"].startswith("application/problem+json")
+        body = resp.json()
+        assert body["extensions"]["code"] == "unsupported_mutation_class"
+
+    @pytest.mark.asyncio
+    async def test_evidence_dir_override_outside_event_log_problem_details(
+        self,
+        client_for_lifecycle_mutations: AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        outside = tmp_path / "external-evidence"
+        monkeypatch.setenv("LIFECYCLE_EVIDENCE_DIR", str(outside))
+
+        resp = await client_for_lifecycle_mutations.post(
+            "/v1/events/replay/lifecycle/dry-runs",
+            headers=_snapshot_auth_headers(),
+            json={"retain_hot_days": 7, "expires_in_seconds": 3600},
+        )
+
+        assert resp.status_code == 422
+        assert resp.headers["content-type"].startswith("application/problem+json")
+        assert resp.json()["extensions"]["code"] == "evidence_dir_outside_event_log"
+        assert not outside.exists()
+
+    @pytest.mark.asyncio
+    async def test_read_only_status_does_not_invoke_mutation_helpers(
+        self, client_for_lifecycle_mutations: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        plan_hash = await _create_lifecycle_plan(client_for_lifecycle_mutations)
+
+        def forbidden_apply(**_kwargs: object) -> object:
+            raise AssertionError("GET status must not apply")
+
+        monkeypatch.setattr(replay_routes, "apply_lifecycle_plan", forbidden_apply)
+        status = await client_for_lifecycle_mutations.get(
+            f"/v1/events/replay/lifecycle/plans/{plan_hash}"
+        )
+        listing = await client_for_lifecycle_mutations.get("/v1/events/replay/lifecycle/mutations")
+
+        assert status.status_code == 200, status.text
+        assert listing.status_code == 200, listing.text
+        assert listing.json()["total"] >= 1
+        row = listing.json()["mutations"][0]
+        assert row["freshness_state"] == "fresh"
+        assert "operator_identity" not in row
+        assert "approval_event_ref" not in row
+        assert "last_idempotency_key" not in row
+        assert "detail" not in row
+        assert "partial_moved" not in row

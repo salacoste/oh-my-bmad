@@ -31,6 +31,7 @@ CORE_APPROVED_READ_ROUTES = frozenset(
         ),
         ("GET", "/v1/sessions"),
         ("GET", "/v1/sessions/{session_id}"),
+        ("GET", "/v1/events/replay/lifecycle/mutations"),
     }
 )
 OPTIONAL_NON_CORE_READ_ROUTES = frozenset()

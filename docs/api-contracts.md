@@ -22,6 +22,20 @@ Versioned at `/v1`. Versions are additive; `/v1` semantics are frozen once shipp
 | `/v1/events/replay/validate` | GET | `get_events_replay_validate` | Compare replayed state to live projection and return field diffs (FR137). |
 | `/v1/events/replay/snapshots` | GET | `get_replay_snapshots` | List replay snapshots (FR138), hot-log-only. |
 | `/v1/events/replay/snapshots` | POST | `post_replay_snapshot` | Create replay snapshot using `HOT_ONLY_REPLAY`; archive env vars are bypassed (FR141). |
+| `/v1/events/replay/lifecycle/dry-runs` | POST | `create_lifecycle_dry_run_endpoint` | Epic 129 approval-bound lifecycle dry-run. Persists non-mutating plan evidence with plan hash, affected identities, replay-validation ref, rollback evidence ref, expiry, risk summary, and expected supported mutation class. Requires existing snapshot-create authorization. |
+| `/v1/events/replay/lifecycle/plans/{plan_hash}/approve` | POST | `approve_lifecycle_plan_endpoint` | Epic 129 operator approval event for an exact dry-run plan hash. Approval is expiry-bound and fail-closed if plan evidence is stale, missing, or mismatched. Requires existing snapshot-create authorization. |
+| `/v1/events/replay/lifecycle/plans/{plan_hash}/apply` | POST | `apply_lifecycle_plan_endpoint` | Epic 129 supported reversible mutation execution. The only supported class is `prune_hot_segment`, implemented as archive-covered hot JSONL segment quarantine under a plan-hash-scoped trash directory after approval, replay-validation, rollback-evidence, expiry, and target-identity revalidation. |
+| `/v1/events/replay/lifecycle/plans/{plan_hash}/rollback` | POST | `rollback_lifecycle_plan_endpoint` | Epic 129 rollback/restore for a previously applied `prune_hot_segment` plan. Restores quarantined hot segments and verifies hashes. |
+| `/v1/events/replay/lifecycle/plans/{plan_hash}` | GET | `get_lifecycle_plan_status_endpoint` | Read-only lifecycle plan status, expiry freshness (`plan_expires_at`, `approval_expires_at`, `freshness_state`), and audit journal. No mutation or approval is performed. |
+| `/v1/events/replay/lifecycle/mutations` | GET | `list_lifecycle_mutations_endpoint` | Read-only lifecycle mutation status list for dashboard/API inspection, including expiry freshness fields so stale evidence is non-authoritative. No mutation or approval is performed. |
+
+### Destructive lifecycle mutation controls (Epic 129)
+
+Supported in this delivery:
+
+- `prune_hot_segment`: moves archive-covered eligible hot JSONL segment files into a plan-hash-scoped quarantine under `.lifecycle-trash/{plan_hash}/...` and supports rollback restore with hash verification.
+
+Unsupported and fail-closed in this delivery: hard delete, truncate, arbitrary move, rewrite, chmod, archive/manifest mutation, object-storage deletion, scheduled retention, production credentials, and cross-service destructive operations. All unsupported mutation classes return route-local ProblemDetails / lifecycle error codes instead of performing filesystem or archive mutation.
 
 
 ### Task-list search/discovery contract (Story 127.1; API-local runtime implemented by Story 127.2; browser visible controls implemented by Story 127.3)

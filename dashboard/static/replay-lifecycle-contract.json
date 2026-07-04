@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "story": "91.2",
-  "scope": "static replay/lifecycle readiness dashboard contract",
+  "story": "129.5",
+  "scope": "static replay/lifecycle readiness and mutation status dashboard contract",
   "archiveProblemDetailsPassiveFields": [
     "type",
     "title",
@@ -46,6 +46,44 @@
     "unavailable lifecycle read",
     "empty successful lifecycle read",
     "future gated destructive lifecycle work",
-    "retention scheduling not active"
+    "retention scheduling not active",
+    "approval missing",
+    "approval expired",
+    "plan expired",
+    "unsupported mutation class",
+    "target identity drift",
+    "rollback evidence missing",
+    "apply failed partial",
+    "rollback failed partial"
+  ],
+  "lifecycleMutationStatusReadOnlyRoute": "GET /v1/events/replay/lifecycle/mutations",
+  "lifecycleMutationStatusFields": [
+    "plan_hash",
+    "status",
+    "affected_count",
+    "approved",
+    "applied",
+    "rolled_back",
+    "supported_mutation_class",
+    "unsupported_mutation_classes",
+    "plan_expires_at",
+    "approval_expires_at",
+    "freshness_state",
+    "problem_code"
+  ],
+  "supportedLifecycleMutationClasses": [
+    "prune_hot_segment"
+  ],
+  "unsupportedLifecycleMutationClasses": [
+    "delete",
+    "truncate",
+    "move",
+    "rewrite",
+    "chmod",
+    "archive_mutation",
+    "manifest_mutation",
+    "hard_delete",
+    "object_storage_delete",
+    "scheduled_retention"
   ]
 }

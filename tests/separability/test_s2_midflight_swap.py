@@ -490,6 +490,12 @@ def test_worker_facing_source_code_unchanged() -> None:
         # projection; no worker-facing coupling or traversal behavior changes.
         ":!services/registry-api/src/registry_api/routes/tasks.py",
         ":!services/registry-api/src/registry_api/test_app.py",
+        # Epic 129: replay lifecycle controls are API-local and scoped to
+        # auth-gated replay lifecycle endpoints plus read-only status/list
+        # visibility. The S-2 mid-flight scripted-worker swap still uses POST
+        # /v1/tasks and event projection; no worker-facing coupling changes.
+        ":!services/registry-api/src/registry_api/routes/replay.py",
+        ":!services/registry-api/src/registry_api/routes/test_replay.py",
     ]
 
     rev_parse = subprocess.run(

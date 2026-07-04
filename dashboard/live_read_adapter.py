@@ -15,6 +15,7 @@ SourceCategory = Literal[
     "digest",
     "aggregate",
     "session",
+    "lifecycle",
 ]
 RouteStatus = Literal["approved", "needs-separate-contract"]
 TimestampPolicy = Literal[
@@ -70,6 +71,7 @@ Identifier = Literal[
     "task_search_field",
     "task_search_operator",
     "task_search_query",
+    "plan_hash",
 ]
 PanelFamily = Literal[
     "task-detail",
@@ -83,6 +85,7 @@ PanelFamily = Literal[
     "aggregate-task-list",
     "session-list",
     "session-detail",
+    "lifecycle-snapshot",
 ]
 
 
@@ -467,6 +470,25 @@ APPROVED_READ_CONTRACTS: tuple[ReadContract, ...] = (
             }
         ),
     ),
+    ReadContract(
+        source_category="lifecycle",
+        route_pattern="/v1/events/replay/lifecycle/mutations",
+        route_status="approved",
+        timestamp_policy="retrieved-at-required",
+        freshness_policy="fresh-or-stale-required",
+        required_identifiers=(),
+        allowed_states=frozenset(
+            {
+                "healthy",
+                "empty-list",
+                "stale",
+                "invalid",
+                "unauthorized",
+                "backend-unavailable",
+                "unavailable",
+            }
+        ),
+    ),
 )
 
 UNAVAILABLE_READ_CONTRACTS: tuple[ReadContract, ...] = ()
@@ -705,6 +727,20 @@ STORY_111_2_PANEL_TITLES: Mapping[PanelFamily, str] = MappingProxyType(
     {"session-detail": "Session detail"}
 )
 
+STORY_129_5_ROUTE_PATTERNS = ("/v1/events/replay/lifecycle/mutations",)
+STORY_129_5_ROUTE_INPUT_IDENTIFIERS: Mapping[str, tuple[Identifier, ...]] = MappingProxyType(
+    {"/v1/events/replay/lifecycle/mutations": ()}
+)
+STORY_129_5_ROW_DISPLAY_IDENTIFIERS: Mapping[str, tuple[Identifier, ...]] = MappingProxyType(
+    {"/v1/events/replay/lifecycle/mutations": ("plan_hash",)}
+)
+STORY_129_5_PANEL_ROUTES: Mapping[PanelFamily, tuple[str, ...]] = MappingProxyType(
+    {"lifecycle-snapshot": ("/v1/events/replay/lifecycle/mutations",)}
+)
+STORY_129_5_PANEL_TITLES: Mapping[PanelFamily, str] = MappingProxyType(
+    {"lifecycle-snapshot": "Lifecycle mutation status"}
+)
+
 
 def approved_read_contracts() -> tuple[ReadContract, ...]:
     return APPROVED_READ_CONTRACTS
@@ -921,6 +957,30 @@ def story_111_2_panel_contracts() -> tuple[PanelContract, ...]:
             ),
         )
         for panel_family, route_patterns in STORY_111_2_PANEL_ROUTES.items()
+    )
+
+
+def story_129_5_route_patterns() -> tuple[str, ...]:
+    _validate_story_129_5_subset()
+    return STORY_129_5_ROUTE_PATTERNS
+
+
+def story_129_5_panel_contracts() -> tuple[PanelContract, ...]:
+    _validate_story_129_5_subset()
+    return tuple(
+        PanelContract(
+            panel_family=panel_family,
+            title=STORY_129_5_PANEL_TITLES[panel_family],
+            routes=tuple(
+                _panel_read_route(
+                    route_pattern,
+                    route_input_identifiers=STORY_129_5_ROUTE_INPUT_IDENTIFIERS,
+                    row_display_identifiers=STORY_129_5_ROW_DISPLAY_IDENTIFIERS,
+                )
+                for route_pattern in route_patterns
+            ),
+        )
+        for panel_family, route_patterns in STORY_129_5_PANEL_ROUTES.items()
     )
 
 
@@ -1284,6 +1344,7 @@ def _story_99_1_panel_contracts() -> tuple[PanelContract, ...]:
         + story_109_2_panel_contracts()
         + story_110_2_panel_contracts()
         + story_111_2_panel_contracts()
+        + story_129_5_panel_contracts()
     )
 
 
@@ -1492,3 +1553,25 @@ def _validate_story_96_2_subset() -> None:
     blocked |= selected & {contract.route_pattern for contract in UNAVAILABLE_READ_CONTRACTS}
     if blocked:
         raise ValueError("story 96.2 route requires separate contract")
+
+
+def _validate_story_129_5_subset() -> None:
+    selected = set(STORY_129_5_ROUTE_PATTERNS)
+    panel_selected = {
+        route_pattern
+        for route_patterns in STORY_129_5_PANEL_ROUTES.values()
+        for route_pattern in route_patterns
+    }
+    if selected != panel_selected:
+        raise ValueError("story 129.5 panel route mismatch")
+    if set(STORY_129_5_ROUTE_INPUT_IDENTIFIERS) != selected:
+        raise ValueError("story 129.5 route-input identifier mismatch")
+    if set(STORY_129_5_ROW_DISPLAY_IDENTIFIERS) != selected:
+        raise ValueError("story 129.5 row-display identifier mismatch")
+    approved = {contract.route_pattern for contract in APPROVED_READ_CONTRACTS}
+    if not selected <= approved:
+        raise ValueError("story 129.5 route is not approved")
+    blocked = selected & EXCLUDED_ROUTE_PATTERNS
+    blocked |= selected & {contract.route_pattern for contract in UNAVAILABLE_READ_CONTRACTS}
+    if blocked:
+        raise ValueError("story 129.5 route requires separate contract")

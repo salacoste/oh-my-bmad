@@ -1442,6 +1442,27 @@ The inventory is a factual cleanup contract for later Epic 128 slices. Runtime s
           ]
         },
         {
+          "name": "lifecycle-mutation-status-list",
+          "pattern": "GET /v1/events/replay/lifecycle/mutations",
+          "method": "GET",
+          "classification": "live_read_status_metadata_only",
+          "owner_story": "129.5",
+          "owner_phase": "Phase 48",
+          "selector_source": "none",
+          "credentials": "default",
+          "headers": [],
+          "request_body": "none",
+          "trigger": "DOMContentLoaded",
+          "fetch_argument": "MUTATION_ROUTE",
+          "notes": "read-only lifecycle mutation plan status/audit metadata; no approval/apply/rollback controls",
+          "uses_signal": false,
+          "body_argument_present": false,
+          "source_markers": [
+            "const MUTATION_ROUTE = \"/v1/events/replay/lifecycle/mutations\"",
+            "fetch(MUTATION_ROUTE"
+          ]
+        },
+        {
           "name": "snapshot-create-visible-bearer-token",
           "pattern": "POST /v1/events/replay/snapshots",
           "method": "POST",
@@ -1481,6 +1502,12 @@ The inventory is a factual cleanup contract for later Epic 128 slices. Runtime s
         "lifecycle-snapshot-evidence",
         "lifecycle-snapshot-degraded",
         "lifecycle-snapshot-detail",
+        "lifecycle-mutation-source",
+        "lifecycle-mutation-status",
+        "lifecycle-mutation-count",
+        "lifecycle-mutation-authority",
+        "lifecycle-mutation-items",
+        "lifecycle-mutation-detail",
         "lifecycle-snapshot-create-status",
         "lifecycle-snapshot-create-result"
       ],
@@ -1598,6 +1625,48 @@ The inventory is a factual cleanup contract for later Epic 128 slices. Runtime s
           "classification": "live_metadata_target",
           "owner_story": "107.2",
           "owner_phase": "Phase 28"
+        },
+        {
+          "id": "lifecycle-mutation-source",
+          "role": "metadata_target",
+          "classification": "live_metadata_target",
+          "owner_story": "129.5",
+          "owner_phase": "Phase 48"
+        },
+        {
+          "id": "lifecycle-mutation-status",
+          "role": "metadata_target",
+          "classification": "live_metadata_target",
+          "owner_story": "129.5",
+          "owner_phase": "Phase 48"
+        },
+        {
+          "id": "lifecycle-mutation-count",
+          "role": "metadata_target",
+          "classification": "live_metadata_target",
+          "owner_story": "129.5",
+          "owner_phase": "Phase 48"
+        },
+        {
+          "id": "lifecycle-mutation-authority",
+          "role": "metadata_target",
+          "classification": "live_metadata_target",
+          "owner_story": "129.5",
+          "owner_phase": "Phase 48"
+        },
+        {
+          "id": "lifecycle-mutation-items",
+          "role": "metadata_target",
+          "classification": "live_metadata_target",
+          "owner_story": "129.5",
+          "owner_phase": "Phase 48"
+        },
+        {
+          "id": "lifecycle-mutation-detail",
+          "role": "metadata_target",
+          "classification": "live_metadata_target",
+          "owner_story": "129.5",
+          "owner_phase": "Phase 48"
         }
       ],
       "passive_global_sources": [
