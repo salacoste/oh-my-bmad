@@ -29,6 +29,9 @@
   const EVENT_KEYS = ["id", "type", "emitted_at", "trace_id"];
   const BODY_KEYS = ["route", "selected_status", "selected_limit", "selected_offset", "selected_sort", "retrieved_at", "freshness_state", "display_state", "authority_state", "provenance", "request_id", "trace_id", "correlation_id", "limit", "returned_count", "has_more", "next_offset", "items"];
   const SEARCH_BODY_KEYS = ["route", "selected_field", "selected_op", "selected_query", "selected_status", "selected_limit", "selected_offset", "selected_sort", "redaction_state", "retrieved_at", "freshness_state", "display_state", "authority_state", "provenance", "request_id", "trace_id", "correlation_id", "limit", "returned_count", "has_more", "next_offset", "items"];
+  const INVALID_AGGREGATE_SELECTOR_DETAIL = "invalid visible aggregate task-list status, limit, offset, or sort selector; not authoritative.";
+  const AGGREGATE_SELECTOR_CHANGED_DETAIL = "visible aggregate task-list status, limit, offset, or sort selector changed after the last authoritative read; reload required before manual pagination.";
+  const INVALID_SEARCH_SELECTOR_DETAIL = "invalid visible aggregate task-list search field, operator, query, status, limit, offset, or sort selector; not authoritative.";
   const ALLOWED_DISPLAY_STATES = new Set(["healthy", "empty-list", "stale", "invalid", "unauthorized", "backend-unavailable", "unavailable"]);
   const ALLOWED_FRESHNESS_STATES = new Set(["fresh", "stale"]);
   const TRAVERSAL_RATE_VALUES = new Set(["one_page_per_response"]);
@@ -402,33 +405,37 @@
     write("aggregate-task-list-rows", rows);
   }
 
+  function selectorReadValue(selectors, key) {
+    return selectors ? selectors[key] : "unavailable";
+  }
+
+  function selectedWindowReadState(selectors) {
+    return {
+      selectedStatus: selectorReadValue(selectors, "status"),
+      selectedLimit: selectorReadValue(selectors, "limit"),
+      selectedOffset: selectorReadValue(selectors, "offset"),
+      selectedSort: selectorReadValue(selectors, "sort"),
+    };
+  }
+
   function renderClosed(state, detail, selectors, preserveTraversal) {
     disableNavigation();
     if (!preserveTraversal) clearTraversal(detail);
     selectorEditInvalidated = true;
-    const selectedStatus = selectors ? selectors.status : "unavailable";
-    const selectedLimit = selectors ? selectors.limit : "unavailable";
-    const selectedOffset = selectors ? selectors.offset : "unavailable";
-    const selectedSort = selectors ? selectors.sort : "unavailable";
+    const readState = selectedWindowReadState(selectors);
     const runtimeRoute = selectors ? selectedRoute(selectors) : ROUTE_PATTERN;
     renderSearchFields("unavailable", "unavailable", "unavailable", "not evaluated");
-    render(state, "non-authoritative", "missing server freshness", "backend task summary list", "not provided", selectedStatus, selectedLimit, selectedOffset, selectedSort, runtimeRoute, "selected sorted window unavailable; manual previous/next controls disabled", state, "0", detail, ROUTE_PATTERN);
+    render(state, "non-authoritative", "missing server freshness", "backend task summary list", "not provided", readState.selectedStatus, readState.selectedLimit, readState.selectedOffset, readState.selectedSort, runtimeRoute, "selected sorted window unavailable; manual previous/next controls disabled", state, "0", detail, ROUTE_PATTERN);
   }
 
   function renderSearchClosed(state, detail, selectors, preserveTraversal) {
     disableNavigation();
     if (!preserveTraversal) clearTraversal(detail);
     searchRendered = true;
-    const selectedStatus = selectors ? selectors.status : "unavailable";
-    const selectedLimit = selectors ? selectors.limit : "unavailable";
-    const selectedOffset = selectors ? selectors.offset : "unavailable";
-    const selectedSort = selectors ? selectors.sort : "unavailable";
-    const field = selectors ? selectors.field : "unavailable";
-    const op = selectors ? selectors.op : "unavailable";
-    const query = selectors ? selectors.query : "unavailable";
+    const readState = selectedWindowReadState(selectors);
     const runtimeRoute = selectors ? selectedSearchRoute(selectors) : SEARCH_FETCH_ROUTE_PATTERN;
-    renderSearchFields(field, op, query, "not authoritative");
-    render(state, "non-authoritative", "missing server freshness", "backend task search summary list", "not provided", selectedStatus, selectedLimit, selectedOffset, selectedSort, runtimeRoute, "selected search window unavailable; manual previous/next controls disabled; automatic traversal unavailable", state, "0", detail, SEARCH_FETCH_ROUTE_PATTERN);
+    renderSearchFields(selectorReadValue(selectors, "field"), selectorReadValue(selectors, "op"), selectorReadValue(selectors, "query"), "not authoritative");
+    render(state, "non-authoritative", "missing server freshness", "backend task search summary list", "not provided", readState.selectedStatus, readState.selectedLimit, readState.selectedOffset, readState.selectedSort, runtimeRoute, "selected search window unavailable; manual previous/next controls disabled; automatic traversal unavailable", state, "0", detail, SEARCH_FETCH_ROUTE_PATTERN);
   }
 
   function refreshNavigationForSelectorEdit() {
@@ -437,7 +444,7 @@
     if (!selectors) {
       if (hasLoadedNavigation || selectorEditInvalidated || searchRendered) {
         selectorEditInvalidated = true;
-        renderClosed("invalid", "invalid visible aggregate task-list status, limit, offset, or sort selector; not authoritative.", null, traversalState.active);
+        renderClosed("invalid", INVALID_AGGREGATE_SELECTOR_DETAIL, null, traversalState.active);
       } else {
         disableNavigation();
       }
@@ -448,12 +455,12 @@
       return;
     }
     if (selectorEditInvalidated && !hasLoadedNavigation) {
-      renderClosed("invalid", "visible aggregate task-list status, limit, offset, or sort selector changed after the last authoritative read; reload required before manual pagination.", selectors);
+      renderClosed("invalid", AGGREGATE_SELECTOR_CHANGED_DETAIL, selectors);
       return;
     }
     if (hasLoadedNavigation && !selectorsMatchNavigation(selectors)) {
       selectorEditInvalidated = true;
-      renderClosed("invalid", "visible aggregate task-list status, limit, offset, or sort selector changed after the last authoritative read; reload required before manual pagination.", selectors);
+      renderClosed("invalid", AGGREGATE_SELECTOR_CHANGED_DETAIL, selectors);
       return;
     }
     const previousOffset = previousOffsetFromSelectors(selectors);
@@ -560,7 +567,7 @@
     if (loadInFlight) return undefined;
     const selectors = readSelectors();
     if (!selectors) {
-      renderClosed("invalid", "invalid visible aggregate task-list status, limit, offset, or sort selector; not authoritative.", null);
+      renderClosed("invalid", INVALID_AGGREGATE_SELECTOR_DETAIL, null);
       return undefined;
     }
     const route = selectedRoute(selectors);
@@ -589,7 +596,7 @@
     if (loadInFlight) return undefined;
     const selectors = readSearchSelectors();
     if (!selectors) {
-      renderSearchClosed("invalid", "invalid visible aggregate task-list search field, operator, query, status, limit, offset, or sort selector; not authoritative.", null);
+      renderSearchClosed("invalid", INVALID_SEARCH_SELECTOR_DETAIL, null);
       return undefined;
     }
     const route = selectedSearchRoute(selectors);
@@ -743,7 +750,7 @@
     if (loadInFlight) return undefined;
     const selectors = readSelectors();
     if (!selectors) {
-      renderClosed("invalid", "invalid visible aggregate task-list status, limit, offset, or sort selector; not authoritative.", null);
+      renderClosed("invalid", INVALID_AGGREGATE_SELECTOR_DETAIL, null);
       return undefined;
     }
     if (navigationState.previousOffset === null || !selectorsMatchNavigation(selectors)) {
@@ -757,7 +764,7 @@
     if (loadInFlight) return undefined;
     const selectors = readSelectors();
     if (!selectors) {
-      renderClosed("invalid", "invalid visible aggregate task-list status, limit, offset, or sort selector; not authoritative.", null);
+      renderClosed("invalid", INVALID_AGGREGATE_SELECTOR_DETAIL, null);
       return undefined;
     }
     if (navigationState.nextOffset === null || !selectorsMatchNavigation(selectors)) {

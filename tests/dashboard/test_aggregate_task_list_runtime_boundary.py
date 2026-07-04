@@ -381,6 +381,50 @@ def test_story_118_2_runtime_module_graph_is_closed() -> None:
         assert marker not in source, marker
 
 
+def test_story_128_2_read_state_helper_seed_is_aggregate_task_list_local() -> None:
+    runtime_files = sorted(path.name for path in Path("dashboard/static").glob("*.js"))
+    assert runtime_files == sorted(APPROVED_SCRIPTS)
+    source = runtime_source()
+    assert "function selectedWindowReadState(" in source
+    assert "runtimeRoute:" not in source
+    assert "/v1/tasks/search" not in source
+    assert "URLSearchParams(location" not in source
+
+
+def test_story_128_2_read_state_helper_preserves_closed_state_values() -> None:
+    primary_invalid = run_runtime_case(
+        {
+            "name": "story-128-2-primary-invalid-read-state",
+            "controlValues": {"aggregate-task-list-limit-control": "0"},
+            "expected": ["invalid"],
+        }
+    )
+    assert primary_invalid["fetchCalls"] == []
+    primary_rendered = " ".join(primary_invalid["texts"].values()).lower()
+    assert "selected status: unavailable" in primary_rendered
+    assert "selected limit: unavailable" in primary_rendered
+    assert "selected offset: unavailable" in primary_rendered
+    assert "selected sort: unavailable" in primary_rendered
+    assert "runtime route: get /v1/tasks?status={task_status}" in primary_rendered
+    assert "authority: authoritative" not in primary_rendered
+
+    search_invalid = run_runtime_case(
+        {
+            "name": "story-128-2-search-invalid-read-state",
+            "controlValues": {"aggregate-task-list-search-query-control": ""},
+            "response": {"ok": True, "status": 200, "body": response_body()},
+            "clickTargets": ["aggregate-task-list-search-load"],
+            "expected": ["invalid"],
+        }
+    )
+    assert_default_status_limit_offset_fetch(search_invalid)
+    search_rendered = " ".join(search_invalid["texts"].values()).lower()
+    assert "selected status: unavailable" in search_rendered
+    assert "selected search query: unavailable" in search_rendered
+    assert "runtime route: get /v1/tasks?field={task_search_field}" in search_rendered
+    assert "authority: authoritative" not in search_rendered
+
+
 def test_story_118_2_runtime_route_and_method_allowlist_is_exact() -> None:
     source = runtime_source()
     route_literals = {match.group("route") for match in ROUTE_LITERAL_RE.finditer(source)}
