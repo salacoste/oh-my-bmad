@@ -156,7 +156,7 @@ class LifecycleDryRunRequest(BaseModel):
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
     retain_hot_days: int
-    expires_in_seconds: int = 3600
+    expires_in_seconds: int = Field(default=3600, gt=0)
 
 
 class LifecycleApprovalRequest(BaseModel):
@@ -165,7 +165,7 @@ class LifecycleApprovalRequest(BaseModel):
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
     approval_event_ref: str
-    expires_in_seconds: int = 3600
+    expires_in_seconds: int = Field(default=3600, gt=0)
 
 
 class LifecycleApplyRequest(BaseModel):
