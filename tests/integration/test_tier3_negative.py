@@ -73,6 +73,11 @@ from registry_state.adapters.sqlite_store import create_engine as _create_engine
 from registry_state.schema import Base, Task
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from tests.integration._aiosqlite_teardown import (
+    current_event_loop_or_none,
+    drain_aiosqlite_workers_before_loop_close,
+)
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -162,12 +167,7 @@ def _assert_ready(h: _Harness) -> None:
 def _build_harness(tmp_path: Path, actor_kind: str) -> _Harness:
     """Build a harness with the given actor_kind for tier enforcement."""
     h = _Harness()
-    try:
-        prev_loop: asyncio.AbstractEventLoop | None = (
-            asyncio.get_event_loop_policy().get_event_loop()
-        )
-    except RuntimeError:
-        prev_loop = None
+    prev_loop = current_event_loop_or_none()
     loop = asyncio.new_event_loop()
     h.loop = loop
     asyncio.set_event_loop(loop)
@@ -224,6 +224,7 @@ def _teardown_harness(h: _Harness) -> None:
             await h.writable_engine.dispose()
 
     h.loop.run_until_complete(_teardown())
+    drain_aiosqlite_workers_before_loop_close(h.loop)
     asyncio.set_event_loop(prev_loop)
     h.loop.close()
 

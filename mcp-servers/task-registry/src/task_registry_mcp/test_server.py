@@ -17,6 +17,7 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -48,8 +49,10 @@ _VALID_TRACE_ID = "01917e5c-a7d1-7000-8abc-0123456789ab"
 _VALID_TG_TRACE_ID = "tg:42"
 
 
-@pytest_asyncio.fixture
-async def db_session_maker(tmp_path: Path) -> async_sessionmaker[AsyncSession]:
+@pytest_asyncio.fixture(loop_scope="function")
+async def db_session_maker(
+    tmp_path: Path,
+) -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
     """Create an in-memory SQLite with schema and return a session maker."""
     engine: AsyncEngine = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
@@ -133,7 +136,10 @@ async def db_session_maker(tmp_path: Path) -> async_sessionmaker[AsyncSession]:
         session.add_all([e1, e2])
         await session.commit()
 
-    return session_maker
+    try:
+        yield session_maker
+    finally:
+        await engine.dispose()
 
 
 def _build(

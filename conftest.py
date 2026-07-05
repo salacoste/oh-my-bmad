@@ -161,11 +161,15 @@ def _assert_no_leaked_tasks_after_test() -> Generator[None, None, None]:
     assertion failure for use in dedicated audit runs.
     """
     yield
-    try:
-        # asyncio.get_event_loop() raises DeprecationWarning in 3.12+ when no
-        # current loop exists; use a try/except guard rather than the new API.
-        loop = asyncio.get_event_loop_policy().get_event_loop()
-    except RuntimeError:
+    policy = asyncio.get_event_loop_policy()
+    # Do not call policy.get_event_loop() here: on Python 3.12 it emits a
+    # deprecation warning and creates a brand-new loop when none is set, which
+    # turns this leak check into the source of warning noise for sync tests.
+    # The default policy stores the already-current loop in thread-local state;
+    # if no loop has been set for this test there is nothing to inspect.
+    local = getattr(policy, "_local", None)
+    loop = getattr(local, "_loop", None)
+    if loop is None:
         return  # no loop in this test
     if loop.is_closed():
         return

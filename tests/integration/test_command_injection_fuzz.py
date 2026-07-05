@@ -93,6 +93,11 @@ from telegram_gateway.handlers.task_command import (  # noqa: IMP001 — Story 2
     handle_task,
 )
 
+from tests.integration._aiosqlite_teardown import (
+    current_event_loop_or_none,
+    drain_aiosqlite_workers_before_loop_close,
+)
+
 # ---------------------------------------------------------------------------
 # Hypothesis strategies — six NFR-S5 attack classes
 # ---------------------------------------------------------------------------
@@ -571,12 +576,7 @@ def harness(tmp_path: Path) -> Iterator[_Harness]:
     # restore it on teardown — leaving ``asyncio.set_event_loop(None)`` on
     # exit corrupts pytest-asyncio's policy mid-session and causes
     # subsequent integration tests in the same process to hang.
-    try:
-        prev_loop: asyncio.AbstractEventLoop | None = (
-            asyncio.get_event_loop_policy().get_event_loop()
-        )
-    except RuntimeError:
-        prev_loop = None
+    prev_loop = current_event_loop_or_none()
     loop = asyncio.new_event_loop()
     h.loop = loop
     asyncio.set_event_loop(loop)
@@ -641,6 +641,7 @@ def harness(tmp_path: Path) -> Iterator[_Harness]:
             loop.run_until_complete(_teardown())
         finally:
             # Story 3.8 review M3: restore prior loop instead of clobbering.
+            drain_aiosqlite_workers_before_loop_close(loop)
             asyncio.set_event_loop(prev_loop)
             loop.close()
 

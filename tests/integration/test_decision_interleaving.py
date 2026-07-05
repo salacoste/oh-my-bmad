@@ -90,6 +90,11 @@ from registry_state.schema import Base, Task
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from tests.integration._aiosqlite_teardown import (
+    current_event_loop_or_none,
+    drain_aiosqlite_workers_before_loop_close,
+)
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -174,12 +179,7 @@ def harness(tmp_path) -> _Harness:
     owns event loop, builds ASGI app in-process, tears down cleanly.
     """
     h = _Harness()
-    try:
-        prev_loop: asyncio.AbstractEventLoop | None = (
-            asyncio.get_event_loop_policy().get_event_loop()
-        )
-    except RuntimeError:
-        prev_loop = None
+    prev_loop = current_event_loop_or_none()
     loop = asyncio.new_event_loop()
     h.loop = loop
     asyncio.set_event_loop(loop)
@@ -227,6 +227,7 @@ def harness(tmp_path) -> _Harness:
                 await h.writable_engine.dispose()
 
         loop.run_until_complete(_teardown())
+        drain_aiosqlite_workers_before_loop_close(loop)
         asyncio.set_event_loop(prev_loop)
         loop.close()
 

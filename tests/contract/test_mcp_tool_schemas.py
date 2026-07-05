@@ -45,6 +45,7 @@ from __future__ import annotations
 import ast
 import inspect
 import textwrap
+from collections.abc import AsyncGenerator
 from pathlib import Path
 
 import pytest
@@ -133,7 +134,7 @@ def _should_require_caller_trace_id(tool_name: str, server: str) -> bool:
 
 
 @pytest_asyncio.fixture
-async def _empty_session_maker() -> async_sessionmaker[AsyncSession]:
+async def _empty_session_maker() -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
     """Minimal session_maker for the registry-MCP build_server() factories."""
     engine: AsyncEngine = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
@@ -149,7 +150,10 @@ async def _empty_session_maker() -> async_sessionmaker[AsyncSession]:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    return async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        yield async_sessionmaker(engine, expire_on_commit=False)
+    finally:
+        await engine.dispose()
 
 
 # ---------------------------------------------------------------------------

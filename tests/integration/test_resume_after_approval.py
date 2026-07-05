@@ -13,9 +13,11 @@ and stub callbacks for event emission and gated actions.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncGenerator
 from pathlib import Path
 
 import pytest
+import pytest_asyncio
 from events.clock import FROZEN_EPOCH, FrozenClock
 from idempotency.cache import _IDEMPOTENCY_TABLE, IdempotencyCacheStore
 from sqlalchemy.ext.asyncio import (
@@ -38,6 +40,16 @@ from worker_wrapper.domain.lifecycle import (
 _MEM_URL = "sqlite+aiosqlite:///:memory:"
 _TASK_ID = "t-0000000000000000000000000001"
 _APPROVAL_KEY = "approve-key-001"
+_CACHE_ENGINES = []
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _dispose_cache_engines() -> AsyncGenerator[None, None]:
+    try:
+        yield
+    finally:
+        while _CACHE_ENGINES:
+            await _CACHE_ENGINES.pop().dispose()
 
 
 async def _make_cache() -> IdempotencyCacheStore:
@@ -47,6 +59,7 @@ async def _make_cache() -> IdempotencyCacheStore:
         poolclass=StaticPool,
         connect_args={"check_same_thread": False},
     )
+    _CACHE_ENGINES.append(engine)
     async with engine.begin() as conn:
         await conn.run_sync(_IDEMPOTENCY_TABLE.metadata.create_all)
     session_maker = async_sessionmaker(engine, expire_on_commit=False)

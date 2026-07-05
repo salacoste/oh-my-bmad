@@ -23,11 +23,14 @@ conftest.py).
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncGenerator
 from datetime import datetime, timedelta
 
 import pytest
+import pytest_asyncio
 from events.clock import FROZEN_EPOCH, FrozenClock, TickingClock
 from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
@@ -49,6 +52,16 @@ _MEM_URL = "sqlite+aiosqlite:///:memory:"
 _KEY = "test-idempotency-key-0001"
 _RESULT_EVT = "e-0000000000000000000000000000000001"
 _REQUEST_ID = "00000000-0000-0000-0000-000000000001"
+_TEST_ENGINES: list[AsyncEngine] = []
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _dispose_test_engines() -> AsyncGenerator[None, None]:
+    try:
+        yield
+    finally:
+        while _TEST_ENGINES:
+            await _TEST_ENGINES.pop().dispose()
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +89,7 @@ async def _make_store(
         poolclass=StaticPool,
         connect_args={"check_same_thread": False},
     )
+    _TEST_ENGINES.append(engine)
 
     async with engine.begin() as conn:
         await conn.run_sync(_IDEMPOTENCY_TABLE.metadata.create_all)

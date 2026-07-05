@@ -33,6 +33,7 @@ Test architecture choice (documented in DAR):
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncGenerator
 from pathlib import Path
 from unittest.mock import patch
 
@@ -69,8 +70,10 @@ def fixed_clock() -> FrozenClock:
     return FrozenClock(mono_ns=_FROZEN_MONO_NS, now=FROZEN_EPOCH)
 
 
-@pytest_asyncio.fixture
-async def db_session_maker(tmp_path: Path) -> async_sessionmaker[AsyncSession]:
+@pytest_asyncio.fixture(loop_scope="function")
+async def db_session_maker(
+    tmp_path: Path,
+) -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
     """Create an in-memory SQLite schema for the task-registry server."""
     engine: AsyncEngine = create_async_engine(
         "sqlite+aiosqlite:///:memory:",

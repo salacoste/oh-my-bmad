@@ -761,491 +761,506 @@ async def run_task(
     cache_engine = create_async_engine(
         f"sqlite+aiosqlite:///{cache_db_path}",
     )
-    await create_idempotency_schema(cache_engine)
-    cache_session_maker = async_sessionmaker(cache_engine, expire_on_commit=False)
-    idempotency_cache = IdempotencyCacheStore(
-        session_maker=cache_session_maker,
-        clock=SystemClock(),
-    )
-    mgr = LifecycleManager(
-        fsm=LifecycleFSM(),
-        state_path=state_path,
-        task_id=task_id,
-        emit_event=_emit_event,
-        gated_action=_gated_action,
-        idempotency_cache=idempotency_cache,
-    )
+    try:
+        await create_idempotency_schema(cache_engine)
+        cache_session_maker = async_sessionmaker(cache_engine, expire_on_commit=False)
+        idempotency_cache = IdempotencyCacheStore(
+            session_maker=cache_session_maker,
+            clock=SystemClock(),
+        )
+        mgr = LifecycleManager(
+            fsm=LifecycleFSM(),
+            state_path=state_path,
+            task_id=task_id,
+            emit_event=_emit_event,
+            gated_action=_gated_action,
+            idempotency_cache=idempotency_cache,
+        )
 
-    # Phase 5 / FR89 — select runtime adapter via factory. Per-task override
-    # is handled by passing the preferred_runtime through get_runtime_adapter.
-    # Default: "claude-code" (backward-compatible with Phase 4 behavior).
-    runner = get_runtime_adapter(settings)
+        # Phase 5 / FR89 — select runtime adapter via factory. Per-task override
+        # is handled by passing the preferred_runtime through get_runtime_adapter.
+        # Default: "claude-code" (backward-compatible with Phase 4 behavior).
+        runner = get_runtime_adapter(settings)
 
-    # Phase 5 / FR94 — per-runtime token accounting. The budget limit applies
-    # to the cumulative total across all runtimes (P5-I3). When a handoff
-    # occurs, the new runtime's tokens accumulate on top of the prior one.
-    tokens_consumed_by_runtime: dict[str, int] = {}
+        # Phase 5 / FR94 — per-runtime token accounting. The budget limit applies
+        # to the cumulative total across all runtimes (P5-I3). When a handoff
+        # occurs, the new runtime's tokens accumulate on top of the prior one.
+        tokens_consumed_by_runtime: dict[str, int] = {}
 
-    # Story 12.1 — spawn the budget supervisor as a shadow asyncio task that
-    # subscribes to ``task.budget_exceeded`` events for this task_id and
-    # SIGTERMs ``runner`` if the producer (orchestrator-adapter) signals a
-    # budget breach. The shadow is retired cleanly on natural runner exit via
-    # ``budget_cancel`` (Decision D4 — runner-first cancel ordering).
-    #
-    # Skip the supervisor when ``event_log_dir`` is not configured — in that
-    # case no event log exists for the supervisor to tail. Production workers
-    # always configure ``event_log_dir``; this fallback preserves backwards
-    # compatibility for tests / minimal-config runs.
-    budget_supervisor_task: asyncio.Task[_BudgetSupervisorResult] | None = None
-    budget_cancel = asyncio.Event()
-    # Grace period MUST agree with the join timeout below — the supervisor's
-    # callback can spend up to ``grace_period_s`` inside ``terminate_with_grace``
-    # before returning; the join must wait at least that long (PP6).
-    budget_grace_period_s: float = 5.0
-    if settings.event_log_dir:
-        budget_event_log_dir = Path(settings.event_log_dir)
+        # Story 12.1 — spawn the budget supervisor as a shadow asyncio task that
+        # subscribes to ``task.budget_exceeded`` events for this task_id and
+        # SIGTERMs ``runner`` if the producer (orchestrator-adapter) signals a
+        # budget breach. The shadow is retired cleanly on natural runner exit via
+        # ``budget_cancel`` (Decision D4 — runner-first cancel ordering).
+        #
+        # Skip the supervisor when ``event_log_dir`` is not configured — in that
+        # case no event log exists for the supervisor to tail. Production workers
+        # always configure ``event_log_dir``; this fallback preserves backwards
+        # compatibility for tests / minimal-config runs.
+        budget_supervisor_task: asyncio.Task[_BudgetSupervisorResult] | None = None
+        budget_cancel = asyncio.Event()
+        # Grace period MUST agree with the join timeout below — the supervisor's
+        # callback can spend up to ``grace_period_s`` inside ``terminate_with_grace``
+        # before returning; the join must wait at least that long (PP6).
+        budget_grace_period_s: float = 5.0
+        if settings.event_log_dir:
+            budget_event_log_dir = Path(settings.event_log_dir)
 
-        async def _terminate_for_budget() -> object:
-            # Return the TerminationResult so the supervisor can propagate
-            # ``method`` into its BudgetSupervisorResult (PP21).
-            term_result = await runner.terminate_with_grace(
-                grace_period_s=budget_grace_period_s,
+            async def _terminate_for_budget() -> object:
+                # Return the TerminationResult so the supervisor can propagate
+                # ``method`` into its BudgetSupervisorResult (PP21).
+                term_result = await runner.terminate_with_grace(
+                    grace_period_s=budget_grace_period_s,
+                )
+                log.info(
+                    "budget_termination",
+                    task_id=task_id,
+                    method=term_result.method,
+                    elapsed_s=term_result.elapsed_s,
+                    exit_code=term_result.exit_code,
+                )
+                return term_result
+
+            budget_supervisor_task = asyncio.create_task(
+                watch_for_budget_exceeded(
+                    task_id=task_id,
+                    event_log_dir=budget_event_log_dir,
+                    terminate_callback=_terminate_for_budget,
+                    clock=SystemClock(),
+                    cancel_event=budget_cancel,
+                    # Story 12.3a Phase 2 — wire the grace-window state machine.
+                    # ``budget_action`` selects "failed" (immediate SIGTERM, today's
+                    # behavior, the default) vs "awaiting_approval" (open a bounded
+                    # override grace window). ``grace_window_s`` is the OVERRIDE
+                    # window the supervisor waits for an inbound budget override —
+                    # DISTINCT from ``budget_grace_period_s`` above, which is the
+                    # SIGTERM→SIGKILL escalation grace inside ``terminate_with_grace``.
+                    budget_action=settings.default_budget_action,
+                    grace_window_s=settings.budget_grace_window_s,
+                ),
+                name=f"budget-supervisor-{task_id}",
+            )
+
+        # PP1 (P0) — separate capture of any runner exception. Previously
+        # ``budget_result`` was only declared inside the ``finally`` clause, so
+        # an exception raised by ``runner.run()`` (BrokenPipeError when the
+        # supervisor SIGTERMs Claude Code mid-stream, CancelledError, etc.)
+        # propagated past the post-finally block and the ``triggered=True`` path
+        # was never reached — the lifecycle FSM stayed in IN_PROGRESS and no
+        # audit event was emitted. The runner-raised case is now captured
+        # explicitly; budget-enforced paths run BEFORE any re-raise.
+        runner_raised: BaseException | None = None
+        result: Any = None  # Adapter-specific result (ClaudeCodeResult, CodexResult, etc.)
+        budget_result: _BudgetSupervisorResult | None = None
+        try:
+            # PP4 — defensive ceiling on ``runner.run()``. If the supervisor
+            # SIGKILLs the subprocess but the runner's stdout reader fails to
+            # observe EOF (rare kernel/pipe-state edge), the await would hang
+            # forever and wedge the worker. ``task_overall_timeout_s`` defaults
+            # to 900s — far above ``claude_timeout_s`` so this only trips on
+            # pathological hangs, never on healthy long runs.
+            # PP24 — when the outer ceiling fires, ``wait_for`` cancels the
+            # coroutine but does NOT kill the underlying subprocess. We kill it
+            # here before re-raising so the worker doesn't leak an orphan
+            # process consuming tokens until OS reap.
+            try:
+                result = await asyncio.wait_for(
+                    runner.run(prompt, worktree_path),
+                    timeout=settings.task_overall_timeout_s,
+                )
+                # Phase 5 / FR94 — accumulate per-runtime token usage after run.
+                # Both ClaudeCodeResult and CodexResult carry token fields.
+                _accumulate_runtime_tokens(
+                    result,
+                    runner.runtime_name,
+                    tokens_consumed_by_runtime,
+                    log,
+                )
+            except TimeoutError:
+                log.error(
+                    "runner_overall_timeout_exceeded",
+                    task_id=task_id,
+                    timeout_s=settings.task_overall_timeout_s,
+                )
+                with contextlib.suppress(Exception):
+                    await runner.terminate_with_grace(grace_period_s=5.0)
+                raise
+        except asyncio.CancelledError:
+            # PP25 — graceful shutdown path. ``CancelledError`` is a BaseException
+            # (PEP 654 distinct from Exception in 3.11+) so the old
+            # ``except BaseException`` capture would join the supervisor for up
+            # to 7s before re-raising — turning a shutdown that should be
+            # milliseconds into a 7s pause. Set cancel, do a tight 100ms join,
+            # cancel the supervisor if still running, and re-raise immediately.
+            log.info("run_task_cancelled", task_id=task_id)
+            if budget_supervisor_task is not None:
+                with contextlib.suppress(Exception):  # PP26 — defensive
+                    budget_cancel.set()
+                with contextlib.suppress(Exception, asyncio.CancelledError, asyncio.TimeoutError):
+                    await asyncio.wait_for(budget_supervisor_task, timeout=0.1)
+                if not budget_supervisor_task.done():
+                    budget_supervisor_task.cancel()
+                    with contextlib.suppress(
+                        Exception, asyncio.CancelledError, asyncio.TimeoutError
+                    ):
+                        await asyncio.wait_for(budget_supervisor_task, timeout=0.5)
+            raise
+        except Exception as exc:  # noqa: BLE001 — PP25 — narrowed from BaseException
+            # PP25 — runner-side Exception capture. ``CancelledError`` no longer
+            # routes here (handled above); ``KeyboardInterrupt`` / ``SystemExit``
+            # propagate. The captured exception is re-raised after the
+            # budget-enforced path is reachable (PP1).
+            runner_raised = exc
+        finally:
+            # Decision D4: runner-first cancel — signal the supervisor to exit
+            # cleanly, then join. PP6 — join timeout MUST exceed the supervisor's
+            # grace period (the supervisor may be mid-``terminate_with_grace``
+            # when the cancel fires). 7.0s = 5s grace + 2s buffer.
+            # NOTE: this finally clause only runs on the normal-exit /
+            # runner-Exception paths; the CancelledError branch above re-raises
+            # before reaching here (PP25).
+            if budget_supervisor_task is not None and not budget_supervisor_task.done():
+                # PP26 — pathological event-loop teardown could raise from
+                # ``Event.set()``; suppress so the original ``runner_raised``
+                # is not masked by Python's finally-overrides-try semantic.
+                with contextlib.suppress(Exception):
+                    budget_cancel.set()
+                try:
+                    budget_result = await asyncio.wait_for(
+                        budget_supervisor_task,
+                        timeout=budget_grace_period_s + 2.0,
+                    )
+                except (TimeoutError, asyncio.CancelledError) as join_exc:
+                    # PP25 — broader catch: TimeoutError covers the 7s ceiling;
+                    # CancelledError covers a stray cancel propagating up.
+                    log.warning(
+                        "budget_supervisor_join_timeout_or_cancelled",
+                        task_id=task_id,
+                        exc_type=type(join_exc).__name__,
+                    )
+                    budget_supervisor_task.cancel()
+                    # PP30 — ``await supervisor_task`` after ``cancel()`` does
+                    # NOT interrupt the in-flight ``asyncio.to_thread`` worker.
+                    # Wrap with a hard 2s ceiling so a stuck scan can't wedge
+                    # the lifespan finally.
+                    with contextlib.suppress(
+                        asyncio.CancelledError, Exception, asyncio.TimeoutError
+                    ):
+                        await asyncio.wait_for(budget_supervisor_task, timeout=2.0)
+                except Exception as supervisor_exc:  # noqa: BLE001 — PP9 isolation
+                    # Supervisor itself raised on join (e.g. a future-set
+                    # exception path). Log loudly but DO NOT clobber any
+                    # in-flight runner exception — the lifespan still owns
+                    # error reporting.
+                    log.error(
+                        "budget_supervisor_join_raised",
+                        task_id=task_id,
+                        error_type=type(supervisor_exc).__name__,
+                        error=str(supervisor_exc),
+                    )
+                    budget_result = None
+            elif budget_supervisor_task is not None:
+                # Task already done — just read its result.
+                with contextlib.suppress(Exception, asyncio.CancelledError):
+                    budget_result = budget_supervisor_task.result()
+
+        if (
+            budget_result is not None
+            and budget_result.triggered
+            and budget_result.override_received
+        ):
+            # Story 12.3a Phase 2 — OVERRIDE-INTERCEPTED path (FR68 headline).
+            # A budget breach WAS observed but an operator budget override arrived
+            # inside the grace window (only reachable when
+            # ``default_budget_action == "awaiting_approval"``), so the supervisor
+            # ABORTED this termination — the subprocess is STILL ALIVE and runs to
+            # natural completion. We do NOT drive the FSM to FAILED and we do NOT
+            # ``return``; we record the prevented-enforcement audit event and FALL
+            # THROUGH to the normal-completion path below (re-raise of a real runner
+            # error, or TASK_COMPLETED / approval gate) so the runner's natural
+            # ``result`` is processed.
+            #
+            # SCOPE (3-lane review, critic MAJOR-1 — honest framing): this is a
+            # ONE-SHOT REPRIEVE, not a re-enforced higher ceiling. 12.3a does NOT
+            # re-spawn the supervisor with the override's ``new_limit`` and does NOT
+            # re-couple the orchestrator-adapter BudgetTracker — so after this abort
+            # the task runs WITHOUT further budget enforcement, bounded only by
+            # ``task_overall_timeout_s`` (default 900s). Enforcing the new ceiling
+            # going forward is deferred to Story 12.3c (tracked). The operator
+            # explicitly chose ``--override budget`` (= "let this task exceed its
+            # budget"), so finishing the run is the intended semantic for now.
+            #
+            # post_trigger_transition="awaiting_approval" is audit-truthful here:
+            # the task was NOT failed — it parks for / continues under operator
+            # approval (the 12.2 H1/H2 audit-integrity principle: the field MUST
+            # match the actual FSM outcome).
+            # Story 12.3c AC6 (DRY) — shared coalescing + missing-field audit logs.
+            step_value, threshold_value, spend_value = _coerce_enforcement_fields(
+                budget_result, task_id, log
+            )
+            override_payload = TaskBudgetEnforcementTriggeredPayload(
+                task_id=task_id,
+                budget_threshold=threshold_value,
+                actual_spend=spend_value,
+                action_taken="override_intercepted",
+                post_trigger_transition="awaiting_approval",
+                step=step_value,
+                runtime=runner.runtime_name,
+            )
+            await _call_tool_best_effort(
+                clients.clawhip_bridge,
+                "emit_event",
+                {
+                    "type": "task.budget_enforcement_triggered",
+                    "payload": override_payload.model_dump(),
+                    "caller_trace_id": settings.resolve_trace_id(),
+                },
+                label="emit_budget_override_intercepted",
             )
             log.info(
-                "budget_termination",
-                task_id=task_id,
-                method=term_result.method,
-                elapsed_s=term_result.elapsed_s,
-                exit_code=term_result.exit_code,
-            )
-            return term_result
-
-        budget_supervisor_task = asyncio.create_task(
-            watch_for_budget_exceeded(
-                task_id=task_id,
-                event_log_dir=budget_event_log_dir,
-                terminate_callback=_terminate_for_budget,
-                clock=SystemClock(),
-                cancel_event=budget_cancel,
-                # Story 12.3a Phase 2 — wire the grace-window state machine.
-                # ``budget_action`` selects "failed" (immediate SIGTERM, today's
-                # behavior, the default) vs "awaiting_approval" (open a bounded
-                # override grace window). ``grace_window_s`` is the OVERRIDE
-                # window the supervisor waits for an inbound budget override —
-                # DISTINCT from ``budget_grace_period_s`` above, which is the
-                # SIGTERM→SIGKILL escalation grace inside ``terminate_with_grace``.
-                budget_action=settings.default_budget_action,
-                grace_window_s=settings.budget_grace_window_s,
-            ),
-            name=f"budget-supervisor-{task_id}",
-        )
-
-    # PP1 (P0) — separate capture of any runner exception. Previously
-    # ``budget_result`` was only declared inside the ``finally`` clause, so
-    # an exception raised by ``runner.run()`` (BrokenPipeError when the
-    # supervisor SIGTERMs Claude Code mid-stream, CancelledError, etc.)
-    # propagated past the post-finally block and the ``triggered=True`` path
-    # was never reached — the lifecycle FSM stayed in IN_PROGRESS and no
-    # audit event was emitted. The runner-raised case is now captured
-    # explicitly; budget-enforced paths run BEFORE any re-raise.
-    runner_raised: BaseException | None = None
-    result: Any = None  # Adapter-specific result (ClaudeCodeResult, CodexResult, etc.)
-    budget_result: _BudgetSupervisorResult | None = None
-    try:
-        # PP4 — defensive ceiling on ``runner.run()``. If the supervisor
-        # SIGKILLs the subprocess but the runner's stdout reader fails to
-        # observe EOF (rare kernel/pipe-state edge), the await would hang
-        # forever and wedge the worker. ``task_overall_timeout_s`` defaults
-        # to 900s — far above ``claude_timeout_s`` so this only trips on
-        # pathological hangs, never on healthy long runs.
-        # PP24 — when the outer ceiling fires, ``wait_for`` cancels the
-        # coroutine but does NOT kill the underlying subprocess. We kill it
-        # here before re-raising so the worker doesn't leak an orphan
-        # process consuming tokens until OS reap.
-        try:
-            result = await asyncio.wait_for(
-                runner.run(prompt, worktree_path),
-                timeout=settings.task_overall_timeout_s,
-            )
-            # Phase 5 / FR94 — accumulate per-runtime token usage after run.
-            # Both ClaudeCodeResult and CodexResult carry token fields.
-            _accumulate_runtime_tokens(
-                result,
-                runner.runtime_name,
-                tokens_consumed_by_runtime,
-                log,
-            )
-        except TimeoutError:
-            log.error(
-                "runner_overall_timeout_exceeded",
-                task_id=task_id,
-                timeout_s=settings.task_overall_timeout_s,
-            )
-            with contextlib.suppress(Exception):
-                await runner.terminate_with_grace(grace_period_s=5.0)
-            raise
-    except asyncio.CancelledError:
-        # PP25 — graceful shutdown path. ``CancelledError`` is a BaseException
-        # (PEP 654 distinct from Exception in 3.11+) so the old
-        # ``except BaseException`` capture would join the supervisor for up
-        # to 7s before re-raising — turning a shutdown that should be
-        # milliseconds into a 7s pause. Set cancel, do a tight 100ms join,
-        # cancel the supervisor if still running, and re-raise immediately.
-        log.info("run_task_cancelled", task_id=task_id)
-        if budget_supervisor_task is not None:
-            with contextlib.suppress(Exception):  # PP26 — defensive
-                budget_cancel.set()
-            with contextlib.suppress(Exception, asyncio.CancelledError, asyncio.TimeoutError):
-                await asyncio.wait_for(budget_supervisor_task, timeout=0.1)
-            if not budget_supervisor_task.done():
-                budget_supervisor_task.cancel()
-                with contextlib.suppress(Exception, asyncio.CancelledError, asyncio.TimeoutError):
-                    await asyncio.wait_for(budget_supervisor_task, timeout=0.5)
-        raise
-    except Exception as exc:  # noqa: BLE001 — PP25 — narrowed from BaseException
-        # PP25 — runner-side Exception capture. ``CancelledError`` no longer
-        # routes here (handled above); ``KeyboardInterrupt`` / ``SystemExit``
-        # propagate. The captured exception is re-raised after the
-        # budget-enforced path is reachable (PP1).
-        runner_raised = exc
-    finally:
-        # Decision D4: runner-first cancel — signal the supervisor to exit
-        # cleanly, then join. PP6 — join timeout MUST exceed the supervisor's
-        # grace period (the supervisor may be mid-``terminate_with_grace``
-        # when the cancel fires). 7.0s = 5s grace + 2s buffer.
-        # NOTE: this finally clause only runs on the normal-exit /
-        # runner-Exception paths; the CancelledError branch above re-raises
-        # before reaching here (PP25).
-        if budget_supervisor_task is not None and not budget_supervisor_task.done():
-            # PP26 — pathological event-loop teardown could raise from
-            # ``Event.set()``; suppress so the original ``runner_raised``
-            # is not masked by Python's finally-overrides-try semantic.
-            with contextlib.suppress(Exception):
-                budget_cancel.set()
-            try:
-                budget_result = await asyncio.wait_for(
-                    budget_supervisor_task,
-                    timeout=budget_grace_period_s + 2.0,
-                )
-            except (TimeoutError, asyncio.CancelledError) as join_exc:
-                # PP25 — broader catch: TimeoutError covers the 7s ceiling;
-                # CancelledError covers a stray cancel propagating up.
-                log.warning(
-                    "budget_supervisor_join_timeout_or_cancelled",
-                    task_id=task_id,
-                    exc_type=type(join_exc).__name__,
-                )
-                budget_supervisor_task.cancel()
-                # PP30 — ``await supervisor_task`` after ``cancel()`` does
-                # NOT interrupt the in-flight ``asyncio.to_thread`` worker.
-                # Wrap with a hard 2s ceiling so a stuck scan can't wedge
-                # the lifespan finally.
-                with contextlib.suppress(asyncio.CancelledError, Exception, asyncio.TimeoutError):
-                    await asyncio.wait_for(budget_supervisor_task, timeout=2.0)
-            except Exception as supervisor_exc:  # noqa: BLE001 — PP9 isolation
-                # Supervisor itself raised on join (e.g. a future-set
-                # exception path). Log loudly but DO NOT clobber any
-                # in-flight runner exception — the lifespan still owns
-                # error reporting.
-                log.error(
-                    "budget_supervisor_join_raised",
-                    task_id=task_id,
-                    error_type=type(supervisor_exc).__name__,
-                    error=str(supervisor_exc),
-                )
-                budget_result = None
-        elif budget_supervisor_task is not None:
-            # Task already done — just read its result.
-            with contextlib.suppress(Exception, asyncio.CancelledError):
-                budget_result = budget_supervisor_task.result()
-
-    if budget_result is not None and budget_result.triggered and budget_result.override_received:
-        # Story 12.3a Phase 2 — OVERRIDE-INTERCEPTED path (FR68 headline).
-        # A budget breach WAS observed but an operator budget override arrived
-        # inside the grace window (only reachable when
-        # ``default_budget_action == "awaiting_approval"``), so the supervisor
-        # ABORTED this termination — the subprocess is STILL ALIVE and runs to
-        # natural completion. We do NOT drive the FSM to FAILED and we do NOT
-        # ``return``; we record the prevented-enforcement audit event and FALL
-        # THROUGH to the normal-completion path below (re-raise of a real runner
-        # error, or TASK_COMPLETED / approval gate) so the runner's natural
-        # ``result`` is processed.
-        #
-        # SCOPE (3-lane review, critic MAJOR-1 — honest framing): this is a
-        # ONE-SHOT REPRIEVE, not a re-enforced higher ceiling. 12.3a does NOT
-        # re-spawn the supervisor with the override's ``new_limit`` and does NOT
-        # re-couple the orchestrator-adapter BudgetTracker — so after this abort
-        # the task runs WITHOUT further budget enforcement, bounded only by
-        # ``task_overall_timeout_s`` (default 900s). Enforcing the new ceiling
-        # going forward is deferred to Story 12.3c (tracked). The operator
-        # explicitly chose ``--override budget`` (= "let this task exceed its
-        # budget"), so finishing the run is the intended semantic for now.
-        #
-        # post_trigger_transition="awaiting_approval" is audit-truthful here:
-        # the task was NOT failed — it parks for / continues under operator
-        # approval (the 12.2 H1/H2 audit-integrity principle: the field MUST
-        # match the actual FSM outcome).
-        # Story 12.3c AC6 (DRY) — shared coalescing + missing-field audit logs.
-        step_value, threshold_value, spend_value = _coerce_enforcement_fields(
-            budget_result, task_id, log
-        )
-        override_payload = TaskBudgetEnforcementTriggeredPayload(
-            task_id=task_id,
-            budget_threshold=threshold_value,
-            actual_spend=spend_value,
-            action_taken="override_intercepted",
-            post_trigger_transition="awaiting_approval",
-            step=step_value,
-            runtime=runner.runtime_name,
-        )
-        await _call_tool_best_effort(
-            clients.clawhip_bridge,
-            "emit_event",
-            {
-                "type": "task.budget_enforcement_triggered",
-                "payload": override_payload.model_dump(),
-                "caller_trace_id": settings.resolve_trace_id(),
-            },
-            label="emit_budget_override_intercepted",
-        )
-        log.info(
-            "budget_override_intercepted",
-            task_id=task_id,
-            event_id=budget_result.event_id,
-            detection_latency_s=budget_result.detection_latency_s,
-        )
-        # FALL THROUGH — no FSM transition, no return; the subprocess survived
-        # so the normal-completion path (~below) processes the runner result.
-
-    elif budget_result is not None and budget_result.triggered:
-        # Story 12.1 — task was terminated by budget enforcement.
-        # ``task.completed`` is NOT emitted; Story 12.2 will emit
-        # ``task.budget_enforcement_triggered`` here (FR67) with the
-        # detection / termination latency breakdown captured below.
-        #
-        # PP23 — if the supervisor's terminate_callback raised, the
-        # subprocess may STILL BE ALIVE consuming tokens. Retry termination
-        # directly via the runner adapter before transitioning the FSM. The
-        # supervisor returns ``triggered=True`` AND ``enforcement_failed=True``
-        # to signal this; the retry is best-effort (suppressed) — even on
-        # failure we still transition the FSM because the budget decision
-        # has been made.
-        if budget_result.enforcement_failed:
-            log.warning(
-                "budget_enforcement_callback_failed_retrying",
+                "budget_override_intercepted",
                 task_id=task_id,
                 event_id=budget_result.event_id,
+                detection_latency_s=budget_result.detection_latency_s,
             )
-            retry_method: str | None = None
-            retry_exit_code: int | None = None
-            try:
-                retry_result = await runner.terminate_with_grace(
-                    grace_period_s=5.0,
-                )
-                retry_method = retry_result.method
-                retry_exit_code = retry_result.exit_code
-            except Exception as retry_exc:  # noqa: BLE001 — best-effort retry
-                log.error(
-                    "budget_enforcement_retry_raised",
-                    exc_info=retry_exc,
+            # FALL THROUGH — no FSM transition, no return; the subprocess survived
+            # so the normal-completion path (~below) processes the runner result.
+
+        elif budget_result is not None and budget_result.triggered:
+            # Story 12.1 — task was terminated by budget enforcement.
+            # ``task.completed`` is NOT emitted; Story 12.2 will emit
+            # ``task.budget_enforcement_triggered`` here (FR67) with the
+            # detection / termination latency breakdown captured below.
+            #
+            # PP23 — if the supervisor's terminate_callback raised, the
+            # subprocess may STILL BE ALIVE consuming tokens. Retry termination
+            # directly via the runner adapter before transitioning the FSM. The
+            # supervisor returns ``triggered=True`` AND ``enforcement_failed=True``
+            # to signal this; the retry is best-effort (suppressed) — even on
+            # failure we still transition the FSM because the budget decision
+            # has been made.
+            if budget_result.enforcement_failed:
+                log.warning(
+                    "budget_enforcement_callback_failed_retrying",
                     task_id=task_id,
                     event_id=budget_result.event_id,
                 )
-            else:
+                retry_method: str | None = None
+                retry_exit_code: int | None = None
+                try:
+                    retry_result = await runner.terminate_with_grace(
+                        grace_period_s=5.0,
+                    )
+                    retry_method = retry_result.method
+                    retry_exit_code = retry_result.exit_code
+                except Exception as retry_exc:  # noqa: BLE001 — best-effort retry
+                    log.error(
+                        "budget_enforcement_retry_raised",
+                        exc_info=retry_exc,
+                        task_id=task_id,
+                        event_id=budget_result.event_id,
+                    )
+                else:
+                    log.info(
+                        "budget_enforcement_retry_completed",
+                        task_id=task_id,
+                        event_id=budget_result.event_id,
+                        method=retry_method,
+                        exit_code=retry_exit_code,
+                    )
+            #
+            # PP1 — if the runner ALSO raised (the common case: the supervisor's
+            # SIGTERM caused BrokenPipeError on the stdout reader), treat the
+            # exception as the expected cascade of budget enforcement and log it
+            # for forensics rather than re-raising.
+            # PP37 — pass ``exc_info`` so the traceback is retained for
+            # operator-side forensics; the prior string-only log discarded it.
+            if runner_raised is not None:
                 log.info(
-                    "budget_enforcement_retry_completed",
+                    "runner_raised_after_budget_enforcement",
+                    exc_info=runner_raised,
                     task_id=task_id,
-                    event_id=budget_result.event_id,
-                    method=retry_method,
-                    exit_code=retry_exit_code,
+                    exc_type=type(runner_raised).__name__,
+                    exc_str=str(runner_raised),
                 )
-        #
-        # PP1 — if the runner ALSO raised (the common case: the supervisor's
-        # SIGTERM caused BrokenPipeError on the stdout reader), treat the
-        # exception as the expected cascade of budget enforcement and log it
-        # for forensics rather than re-raising.
-        # PP37 — pass ``exc_info`` so the traceback is retained for
-        # operator-side forensics; the prior string-only log discarded it.
-        if runner_raised is not None:
+
+            # Story 12.2 (FR67) — emit the task.budget_enforcement_triggered AUDIT
+            # event: the durable ACTION-RECORD that the platform terminated the
+            # subprocess in response to the budget overage. Populated from the
+            # supervisor result (token_limit → budget_threshold, tokens_used →
+            # actual_spend, step). ``post_trigger_transition`` is hard-pinned to
+            # "failed" below — this branch ALWAYS drives ``TASK_FAILED``, so the
+            # audit field MUST say "failed" to stay truthful (Story 12.3a Phase 2;
+            # the override-intercepted branch above owns "awaiting_approval").
+            # Best-effort via _call_tool_best_effort —
+            # an audit-emit failure must NOT block the FSM transition or leak the
+            # subprocess (enforcement already happened). NFR-R8 unaffected: this
+            # is AFTER termination.
+            # CODE-REVIEW M3 — FR67 requires the audit event after EVERY
+            # enforcement, so we MUST emit even if an optional field is missing.
+            # ``token_limit``/``tokens_used`` are isinstance-int-validated by the
+            # supervisor (budget_supervisor.py) so they are guaranteed set when
+            # ``triggered=True``; ``step`` is parsed best-effort from the raw
+            # task.budget_exceeded payload and CAN be None on a malformed/older
+            # producer. Rather than DROP the whole audit record over a missing
+            # ``step``, default it to the schema floor (1, ``Field(ge=1)``) and
+            # log that the source step was absent. ``budget_threshold`` /
+            # ``actual_spend`` fall back to the supervisor values; if THOSE were
+            # somehow None (should be impossible per the supervisor contract) the
+            # payload's ``gt=0`` validation would reject 0 — so we coerce a None to
+            # the smallest valid sentinel and log loudly, still preserving a record.
+            # Story 12.3c AC6 (DRY) — shared coalescing + missing-field audit logs
+            # (identical to the override-intercepted branch above).
+            step_value, threshold_value, spend_value = _coerce_enforcement_fields(
+                budget_result, task_id, log
+            )
+            enforcement_payload = TaskBudgetEnforcementTriggeredPayload(
+                task_id=task_id,
+                budget_threshold=threshold_value,
+                actual_spend=spend_value,
+                action_taken="subprocess_terminated",
+                # Story 12.2 H1/H2 audit-integrity: ``post_trigger_transition`` MUST
+                # match the FSM transition this branch actually drives. The
+                # terminated branch ALWAYS drives ``TASK_FAILED`` below, so the audit
+                # field is hard-pinned to "failed" — even when the operator policy
+                # was ``default_budget_action="awaiting_approval"`` but NO override
+                # arrived in the grace window (fail-closed → the subprocess WAS
+                # terminated → the task failed). The audit must record what truly
+                # happened to the task, not the configured intent. The override-
+                # intercepted branch above is the only path that emits
+                # ``post_trigger_transition="awaiting_approval"``, and only there
+                # does the task continue rather than fail. (Story 12.3a Phase 2
+                # removed the now-obsolete ``_reject_unwired_budget_action``
+                # validator that pinned ``settings.default_budget_action`` to
+                # "failed".)
+                post_trigger_transition="failed",
+                step=step_value,
+                runtime=runner.runtime_name,
+            )
+            await _call_tool_best_effort(
+                clients.clawhip_bridge,
+                "emit_event",
+                {
+                    "type": "task.budget_enforcement_triggered",
+                    "payload": enforcement_payload.model_dump(),
+                    "caller_trace_id": settings.resolve_trace_id(),
+                },
+                label="emit_budget_enforcement_triggered",
+            )
+
+            await mgr.handle_event(LifecycleEvent.TASK_FAILED)
             log.info(
-                "runner_raised_after_budget_enforcement",
-                exc_info=runner_raised,
+                "budget_enforced_task_terminated",
                 task_id=task_id,
-                exc_type=type(runner_raised).__name__,
-                exc_str=str(runner_raised),
+                event_id=budget_result.event_id,
+                tokens_used=budget_result.tokens_used,
+                token_limit=budget_result.token_limit,
+                step=budget_result.step,
+                detection_latency_s=budget_result.detection_latency_s,
+                termination_latency_s=budget_result.termination_latency_s,
+                termination_method=budget_result.termination_method,
+                enforcement_failed=budget_result.enforcement_failed,
             )
+            return
 
-        # Story 12.2 (FR67) — emit the task.budget_enforcement_triggered AUDIT
-        # event: the durable ACTION-RECORD that the platform terminated the
-        # subprocess in response to the budget overage. Populated from the
-        # supervisor result (token_limit → budget_threshold, tokens_used →
-        # actual_spend, step). ``post_trigger_transition`` is hard-pinned to
-        # "failed" below — this branch ALWAYS drives ``TASK_FAILED``, so the
-        # audit field MUST say "failed" to stay truthful (Story 12.3a Phase 2;
-        # the override-intercepted branch above owns "awaiting_approval").
-        # Best-effort via _call_tool_best_effort —
-        # an audit-emit failure must NOT block the FSM transition or leak the
-        # subprocess (enforcement already happened). NFR-R8 unaffected: this
-        # is AFTER termination.
-        # CODE-REVIEW M3 — FR67 requires the audit event after EVERY
-        # enforcement, so we MUST emit even if an optional field is missing.
-        # ``token_limit``/``tokens_used`` are isinstance-int-validated by the
-        # supervisor (budget_supervisor.py) so they are guaranteed set when
-        # ``triggered=True``; ``step`` is parsed best-effort from the raw
-        # task.budget_exceeded payload and CAN be None on a malformed/older
-        # producer. Rather than DROP the whole audit record over a missing
-        # ``step``, default it to the schema floor (1, ``Field(ge=1)``) and
-        # log that the source step was absent. ``budget_threshold`` /
-        # ``actual_spend`` fall back to the supervisor values; if THOSE were
-        # somehow None (should be impossible per the supervisor contract) the
-        # payload's ``gt=0`` validation would reject 0 — so we coerce a None to
-        # the smallest valid sentinel and log loudly, still preserving a record.
-        # Story 12.3c AC6 (DRY) — shared coalescing + missing-field audit logs
-        # (identical to the override-intercepted branch above).
-        step_value, threshold_value, spend_value = _coerce_enforcement_fields(
-            budget_result, task_id, log
-        )
-        enforcement_payload = TaskBudgetEnforcementTriggeredPayload(
-            task_id=task_id,
-            budget_threshold=threshold_value,
-            actual_spend=spend_value,
-            action_taken="subprocess_terminated",
-            # Story 12.2 H1/H2 audit-integrity: ``post_trigger_transition`` MUST
-            # match the FSM transition this branch actually drives. The
-            # terminated branch ALWAYS drives ``TASK_FAILED`` below, so the audit
-            # field is hard-pinned to "failed" — even when the operator policy
-            # was ``default_budget_action="awaiting_approval"`` but NO override
-            # arrived in the grace window (fail-closed → the subprocess WAS
-            # terminated → the task failed). The audit must record what truly
-            # happened to the task, not the configured intent. The override-
-            # intercepted branch above is the only path that emits
-            # ``post_trigger_transition="awaiting_approval"``, and only there
-            # does the task continue rather than fail. (Story 12.3a Phase 2
-            # removed the now-obsolete ``_reject_unwired_budget_action``
-            # validator that pinned ``settings.default_budget_action`` to
-            # "failed".)
-            post_trigger_transition="failed",
-            step=step_value,
-            runtime=runner.runtime_name,
-        )
-        await _call_tool_best_effort(
-            clients.clawhip_bridge,
-            "emit_event",
-            {
-                "type": "task.budget_enforcement_triggered",
-                "payload": enforcement_payload.model_dump(),
-                "caller_trace_id": settings.resolve_trace_id(),
-            },
-            label="emit_budget_enforcement_triggered",
-        )
+        # PP1 — no budget enforcement fired. Re-raise any runner exception now;
+        # the natural-completion path below is only reached on a clean result.
+        if runner_raised is not None:
+            raise runner_raised
+        # Narrow the Optional[ClaudeCodeResult] for the natural-completion path;
+        # ``result`` is non-None whenever ``runner_raised`` is None.
+        # PP40 — converted from ``assert`` to runtime check. Under ``-O`` /
+        # ``PYTHONOPTIMIZE=1`` ``assert`` is stripped so a future refactor that
+        # broke the invariant would silently fall through into the ``None`` deref
+        # below. ``RuntimeError`` is unstrippable and surfaces louder.
+        if result is None:
+            raise RuntimeError("invariant: result must be set when runner did not raise (PP40)")
 
-        await mgr.handle_event(LifecycleEvent.TASK_FAILED)
-        log.info(
-            "budget_enforced_task_terminated",
-            task_id=task_id,
-            event_id=budget_result.event_id,
-            tokens_used=budget_result.tokens_used,
-            token_limit=budget_result.token_limit,
-            step=budget_result.step,
-            detection_latency_s=budget_result.detection_latency_s,
-            termination_latency_s=budget_result.termination_latency_s,
-            termination_method=budget_result.termination_method,
-            enforcement_failed=budget_result.enforcement_failed,
-        )
-        return
+        push_event = needs_approval(result.events)
+        if push_event is None:
+            # Normal completion — no Tier-3 actions detected.
+            await mgr.handle_event(LifecycleEvent.TASK_COMPLETED)
+            log.info(
+                "task_completed_no_approval",
+                task_id=task_id,
+                events=len(result.events),
+            )
+            return
 
-    # PP1 — no budget enforcement fired. Re-raise any runner exception now;
-    # the natural-completion path below is only reached on a clean result.
-    if runner_raised is not None:
-        raise runner_raised
-    # Narrow the Optional[ClaudeCodeResult] for the natural-completion path;
-    # ``result`` is non-None whenever ``runner_raised`` is None.
-    # PP40 — converted from ``assert`` to runtime check. Under ``-O`` /
-    # ``PYTHONOPTIMIZE=1`` ``assert`` is stripped so a future refactor that
-    # broke the invariant would silently fall through into the ``None`` deref
-    # below. ``RuntimeError`` is unstrippable and surfaces louder.
-    if result is None:
-        raise RuntimeError("invariant: result must be set when runner did not raise (PP40)")
+        # Validate event_log_dir BEFORE entering approval state — if it's not
+        # configured the task cannot complete the approval workflow.
+        if not settings.event_log_dir:
+            log.error("event_log_dir_not_configured_pre_check", task_id=task_id)
+            await mgr.handle_event(LifecycleEvent.TASK_FAILED)
+            return
 
-    push_event = needs_approval(result.events)
-    if push_event is None:
-        # Normal completion — no Tier-3 actions detected.
-        await mgr.handle_event(LifecycleEvent.TASK_COMPLETED)
-        log.info(
-            "task_completed_no_approval",
-            task_id=task_id,
-            events=len(result.events),
-        )
-        return
+        # Tier-3 action detected — enter approval gate.
+        log.info("tier3_detected", task_id=task_id, event_type=push_event.event_type)
+        await mgr.handle_event(LifecycleEvent.TASK_AWAITING_APPROVAL)
 
-    # Validate event_log_dir BEFORE entering approval state — if it's not
-    # configured the task cannot complete the approval workflow.
-    if not settings.event_log_dir:
-        log.error("event_log_dir_not_configured_pre_check", task_id=task_id)
-        await mgr.handle_event(LifecycleEvent.TASK_FAILED)
-        return
+        # --- License scan pre-check (Story 6.10, FR40) ---
+        try:
+            all_files = [
+                str(p)
+                for p in worktree_path.rglob("*")
+                if p.is_file() and not p.name.startswith(".")
+            ]
 
-    # Tier-3 action detected — enter approval gate.
-    log.info("tier3_detected", task_id=task_id, event_type=push_event.event_type)
-    await mgr.handle_event(LifecycleEvent.TASK_AWAITING_APPROVAL)
+            def _sync_scan() -> list[LicenseFinding]:
+                return scan_files_for_licenses(all_files)
 
-    # --- License scan pre-check (Story 6.10, FR40) ---
-    try:
-        all_files = [
-            str(p) for p in worktree_path.rglob("*") if p.is_file() and not p.name.startswith(".")
-        ]
-
-        def _sync_scan() -> list[LicenseFinding]:
-            return scan_files_for_licenses(all_files)
-
-        license_findings = await asyncio.to_thread(_sync_scan)
-        if license_findings:
-            await _emit_event(
-                "task.license_flagged",
-                TaskLicenseFlaggedPayload(
+            license_findings = await asyncio.to_thread(_sync_scan)
+            if license_findings:
+                await _emit_event(
+                    "task.license_flagged",
+                    TaskLicenseFlaggedPayload(
+                        task_id=task_id,
+                        reason_code=license_findings[0].reason_code,
+                        file_list=[f.file_path for f in license_findings],
+                        detected_licenses=list(
+                            dict.fromkeys(f.license_detected for f in license_findings)
+                        ),
+                    ).model_dump(),
+                )
+                log.warning(
+                    "license_flagged",
                     task_id=task_id,
-                    reason_code=license_findings[0].reason_code,
-                    file_list=[f.file_path for f in license_findings],
-                    detected_licenses=list(
-                        dict.fromkeys(f.license_detected for f in license_findings)
-                    ),
-                ).model_dump(),
-            )
-            log.warning(
-                "license_flagged",
-                task_id=task_id,
-                findings=len(license_findings),
-            )
-    except (OSError, ValueError):
-        log.warning("license_scan_failed", task_id=task_id, exc_info=True)
+                    findings=len(license_findings),
+                )
+        except (OSError, ValueError):
+            log.warning("license_scan_failed", task_id=task_id, exc_info=True)
 
-    # Emit task.approval_requested (AC-2).
-    diff_summary = await _get_diff_summary(worktree_path)
-    approval_payload = TaskApprovalRequestedPayload(
-        task_id=task_id,
-        action="git_push",
-        justification=f"Claude Code attempted: {push_event.tool_input.get('command', 'git push')}",
-        diff_summary=diff_summary,
-    )
-    emit_result = await _emit_event(
-        "task.approval_requested",
-        approval_payload.model_dump(),
-    )
-    if not emit_result:
-        # Emission failed — operator will never see the request, so the
-        # approval workflow cannot complete.  Fail the task immediately
-        # rather than polling for an approval that will never arrive.
-        log.error("approval_request_emission_failed", task_id=task_id)
-        await mgr.handle_event(LifecycleEvent.TASK_FAILED)
-        return
+        # Emit task.approval_requested (AC-2).
+        diff_summary = await _get_diff_summary(worktree_path)
+        approval_payload = TaskApprovalRequestedPayload(
+            task_id=task_id,
+            action="git_push",
+            justification=(
+                f"Claude Code attempted: {push_event.tool_input.get('command', 'git push')}"
+            ),
+            diff_summary=diff_summary,
+        )
+        emit_result = await _emit_event(
+            "task.approval_requested",
+            approval_payload.model_dump(),
+        )
+        if not emit_result:
+            # Emission failed — operator will never see the request, so the
+            # approval workflow cannot complete.  Fail the task immediately
+            # rather than polling for an approval that will never arrive.
+            log.error("approval_request_emission_failed", task_id=task_id)
+            await mgr.handle_event(LifecycleEvent.TASK_FAILED)
+            return
 
-    # Wait for approval (AC-3).
-    await _handle_pending_approval(
-        mgr,
-        clients,
-        settings,
-        task_id,
-    )
+        # Wait for approval (AC-3).
+        await _handle_pending_approval(
+            mgr,
+            clients,
+            settings,
+            task_id,
+        )
+    finally:
+        await cache_engine.dispose()
 
 
 async def _handle_pending_approval(
