@@ -1225,6 +1225,25 @@ class TestLifecycleMutationControls:
         assert not outside.exists()
 
     @pytest.mark.asyncio
+    async def test_mutation_listing_invalid_evidence_dir_problem_details(
+        self,
+        client_for_lifecycle_mutations: AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        outside = tmp_path / "external-evidence"
+        monkeypatch.setenv("LIFECYCLE_EVIDENCE_DIR", str(outside))
+
+        resp = await client_for_lifecycle_mutations.get("/v1/events/replay/lifecycle/mutations")
+
+        assert resp.status_code == 422
+        assert resp.headers["content-type"].startswith("application/problem+json")
+        body = resp.json()
+        assert body["title"] == "Lifecycle mutation blocked"
+        assert body["extensions"]["code"] == "evidence_dir_outside_event_log"
+        assert not outside.exists()
+
+    @pytest.mark.asyncio
     async def test_read_only_status_does_not_invoke_mutation_helpers(
         self, client_for_lifecycle_mutations: AsyncClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
