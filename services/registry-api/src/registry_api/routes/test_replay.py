@@ -1114,6 +1114,58 @@ async def _create_lifecycle_plan(client: AsyncClient) -> str:
 
 class TestLifecycleMutationControls:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("path", "payload"),
+        [
+            (
+                "/v1/events/replay/lifecycle/dry-runs",
+                {"retain_hot_days": 7, "expires_in_seconds": 0},
+            ),
+            (
+                "/v1/events/replay/lifecycle/dry-runs",
+                {"retain_hot_days": 7, "expires_in_seconds": -1},
+            ),
+        ],
+    )
+    async def test_dry_run_rejects_non_positive_expiry_at_schema(
+        self,
+        client_for_lifecycle_mutations: AsyncClient,
+        path: str,
+        payload: dict[str, int],
+    ) -> None:
+        resp = await client_for_lifecycle_mutations.post(
+            path,
+            headers=_snapshot_auth_headers(),
+            json=payload,
+        )
+
+        assert resp.status_code == 422
+        validation_errors = resp.json()["extensions"]["validation_errors"]
+        assert any(row["loc"] == ["body", "expires_in_seconds"] for row in validation_errors)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("expires_in_seconds", [0, -1])
+    async def test_approval_rejects_non_positive_expiry_at_schema(
+        self,
+        client_for_lifecycle_mutations: AsyncClient,
+        expires_in_seconds: int,
+    ) -> None:
+        plan_hash = await _create_lifecycle_plan(client_for_lifecycle_mutations)
+
+        resp = await client_for_lifecycle_mutations.post(
+            f"/v1/events/replay/lifecycle/plans/{plan_hash}/approve",
+            headers=_snapshot_auth_headers(),
+            json={
+                "approval_event_ref": "approval.granted:e-route",
+                "expires_in_seconds": expires_in_seconds,
+            },
+        )
+
+        assert resp.status_code == 422
+        validation_errors = resp.json()["extensions"]["validation_errors"]
+        assert any(row["loc"] == ["body", "expires_in_seconds"] for row in validation_errors)
+
+    @pytest.mark.asyncio
     async def test_dry_run_approve_apply_status_and_rollback(
         self, client_for_lifecycle_mutations: AsyncClient, tmp_path: Path
     ) -> None:
@@ -1222,6 +1274,25 @@ class TestLifecycleMutationControls:
         assert resp.status_code == 422
         assert resp.headers["content-type"].startswith("application/problem+json")
         assert resp.json()["extensions"]["code"] == "evidence_dir_outside_event_log"
+        assert not outside.exists()
+
+    @pytest.mark.asyncio
+    async def test_mutation_listing_invalid_evidence_dir_problem_details(
+        self,
+        client_for_lifecycle_mutations: AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        outside = tmp_path / "external-evidence"
+        monkeypatch.setenv("LIFECYCLE_EVIDENCE_DIR", str(outside))
+
+        resp = await client_for_lifecycle_mutations.get("/v1/events/replay/lifecycle/mutations")
+
+        assert resp.status_code == 422
+        assert resp.headers["content-type"].startswith("application/problem+json")
+        body = resp.json()
+        assert body["title"] == "Lifecycle mutation blocked"
+        assert body["extensions"]["code"] == "evidence_dir_outside_event_log"
         assert not outside.exists()
 
     @pytest.mark.asyncio

@@ -156,7 +156,7 @@ class LifecycleDryRunRequest(BaseModel):
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
     retain_hot_days: int
-    expires_in_seconds: int = 3600
+    expires_in_seconds: int = Field(default=3600, gt=0)
 
 
 class LifecycleApprovalRequest(BaseModel):
@@ -165,7 +165,7 @@ class LifecycleApprovalRequest(BaseModel):
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
     approval_event_ref: str
-    expires_in_seconds: int = 3600
+    expires_in_seconds: int = Field(default=3600, gt=0)
 
 
 class LifecycleApplyRequest(BaseModel):
@@ -973,13 +973,18 @@ async def get_lifecycle_plan_status_endpoint(
     status_code=200,
     response_model=LifecycleMutationListResponse,
 )
-async def list_lifecycle_mutations_endpoint(request: Request) -> LifecycleMutationListResponse:
+async def list_lifecycle_mutations_endpoint(
+    request: Request,
+) -> LifecycleMutationListResponse | JSONResponse:
     """List lifecycle mutation statuses without mutation."""
-    rows = await asyncio.to_thread(
-        list_lifecycle_mutations,
-        event_log_dir=_event_log_dir(request),
-        evidence_dir=_lifecycle_evidence_dir(request),
-    )
+    try:
+        rows = await asyncio.to_thread(
+            list_lifecycle_mutations,
+            event_log_dir=_event_log_dir(request),
+            evidence_dir=_lifecycle_evidence_dir(request),
+        )
+    except LifecycleMutationError as exc:
+        return _lifecycle_problem_response(request, exc)
     return LifecycleMutationListResponse(mutations=rows, total=len(rows))
 
 

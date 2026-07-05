@@ -477,6 +477,46 @@ def test_epic129_apply_requires_approval_and_rollback_evidence(tmp_path: Path) -
     assert hot_path.exists()
 
 
+@pytest.mark.parametrize("expires_in_seconds", [0, -1])
+def test_epic129_approve_rejects_non_positive_ttl_without_mutation(
+    tmp_path: Path, expires_in_seconds: int
+) -> None:
+    hot_path = _hot_segment(tmp_path, "2026-06-01.jsonl", mono_ns=1)
+    _, manifest = _archived_copy(tmp_path, hot_path)
+    artifact = _record_validated_lifecycle_dry_run(
+        event_log_dir=tmp_path / "hot",
+        archive_manifest_path=manifest,
+        retain_hot_days=7,
+        now=_NOW,
+    )
+    plan_dir = Path(artifact.artifact_path).parent
+    status_before = json.loads((plan_dir / "status.json").read_text(encoding="utf-8"))
+    journal_before = (plan_dir / "journal.jsonl").read_text(encoding="utf-8")
+
+    with pytest.raises(LifecycleMutationError) as excinfo:
+        approve_lifecycle_plan(
+            event_log_dir=tmp_path / "hot",
+            plan_hash=artifact.plan_hash,
+            operator_identity="operator-1",
+            approval_event_ref="approval.granted:e-1",
+            expires_in_seconds=expires_in_seconds,
+            now=_NOW,
+        )
+
+    assert excinfo.value.code == "invalid_expiry"
+    assert excinfo.value.status_code == 422
+    assert excinfo.value.message == "expires_in_seconds must be > 0"
+    assert hot_path.exists()
+    assert not (plan_dir / "approval.json").exists()
+    assert json.loads((plan_dir / "status.json").read_text(encoding="utf-8")) == status_before
+    assert (plan_dir / "journal.jsonl").read_text(encoding="utf-8") == journal_before
+    status = get_lifecycle_plan_status(event_log_dir=tmp_path / "hot", plan_hash=artifact.plan_hash)
+    assert status["status"] == "dry_run_recorded"
+    assert status["approved"] is False
+    journal = cast(list[dict[str, Any]], status["journal"])
+    assert all(row["state"] != "approved" for row in journal)
+
+
 def test_epic129_apply_quarantines_only_eligible_and_is_idempotent(tmp_path: Path) -> None:
     old_hot = _hot_segment(tmp_path, "2026-06-01.jsonl", mono_ns=1)
     recent_hot = _hot_segment(tmp_path, "2026-06-10.jsonl", mono_ns=10)

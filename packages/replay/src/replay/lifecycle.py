@@ -544,6 +544,12 @@ def approve_lifecycle_plan(
 ) -> LifecycleApprovalEvidence:
     """Persist approval evidence bound to an exact dry-run plan hash."""
     effective_now = _normalize_now(now)
+    if expires_in_seconds <= 0:
+        raise LifecycleMutationError(
+            code="invalid_expiry",
+            message="expires_in_seconds must be > 0",
+            status_code=422,
+        )
     if not operator_identity.strip() or not approval_event_ref.strip():
         raise LifecycleMutationError(
             code="approval_evidence_missing",
