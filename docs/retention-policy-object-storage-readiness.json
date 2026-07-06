@@ -57,7 +57,10 @@
       "explicit eventual-consistency stale-read classification",
       "metadata-only audit response without credential material"
     ],
-    "supported_modes_in_this_story": ["static_contract", "dry_run_contract_only"],
+    "supported_modes_in_this_story": [
+      "static_contract",
+      "dry_run_contract_only"
+    ],
     "unsupported_modes_in_this_story": [
       "scheduled retention job runner",
       "object storage delete",
@@ -91,10 +94,11 @@
     "attempted apply delete transition backup pruning archive mutation or scheduled job activation in Story 130.1"
   ],
   "docs_refs": [
-    "docs/production-operations.md#story-1301-retention-policy-and-object-storage-adapter-contract",
-    "docs/operator-runbook.md#retention-policy-and-object-storage-adapter-contract-story-1301",
+    "_bmad-output/implementation-artifacts/130-1-retention-policy-object-storage-adapter-contract.md",
+    "_bmad-output/implementation-artifacts/130-2-object-storage-lifecycle-dry-run-manifest-validation.md",
     "docs/feature-status.md#current-bmad-status",
-    "_bmad-output/implementation-artifacts/130-1-retention-policy-object-storage-adapter-contract.md"
+    "docs/operator-runbook.md#retention-policy-and-object-storage-adapter-contract-story-1301",
+    "docs/production-operations.md#story-1301-retention-policy-and-object-storage-adapter-contract"
   ],
   "non_goals": [
     "no scheduled retention job runner",
@@ -105,5 +109,32 @@
     "no production credential loading",
     "no runtime audit emitter",
     "no dashboard command surface or registry mutation endpoint"
-  ]
+  ],
+  "story_130_2_evidence": {
+    "module_ref": "packages/replay/src/replay/retention.py",
+    "test_ref": "packages/replay/src/replay/test_retention.py",
+    "artifact_ref": "_bmad-output/implementation-artifacts/130-2-object-storage-lifecycle-dry-run-manifest-validation.md",
+    "dry_run_function": "create_retention_dry_run_plan",
+    "public_types": [
+      "RetentionDryRunPlan",
+      "RetentionDecision",
+      "RetentionBlocker",
+      "RetentionPlanError"
+    ],
+    "authoritative_rules": [
+      "per-domain allowed_actions required and includes retain",
+      "default_action must be retain",
+      "last_modified_at_utc age basis",
+      "strict UTC timestamps and evidence_max_age_days freshness",
+      "any repeated domain/object_key fails closed",
+      "planned transition/delete are metadata-only"
+    ],
+    "non_goals_preserved": [
+      "no scheduled retention job runner",
+      "no object storage deletion or transition",
+      "no external object storage calls",
+      "no production credential loading",
+      "no runtime audit emitter"
+    ]
+  }
 }
