@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-07-04T00:00:00+03:00"
+# last_updated: "2026-07-06T00:00:00+03:00"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-07-04T00:00:00+03:00"
-current_phase: 48  # Phase 48 / Epic 128 complete after Stories 128.1-128.7 with PR #67 remote CI gate; shipped/merged evidence pending until merge
+last_updated: "2026-07-06T00:00:00+03:00"
+current_phase: 48  # Phase 48 locally reconciled through Epic 129 status/docs closure; Epic 127, Epic 128, and Epic 129 are locally complete, and the next major feature priority is Epic 131 production operations before Epic 130 retention/object-storage jobs
 
 development_status:
   # =========================================================================
@@ -1100,10 +1100,44 @@ development_status:
   128-6-dashboard-shared-helper-expansion-after-panel-slices: done  # Post-slice helper expansion completed as module-local helpers; no new shared runtime module/script/dependency introduced
   128-7-dashboard-rewiring-production-closure: done  # Closure records Stories 128.1-128.6 evidence, code-review APPROVE/CLEAR, UltraQA PASS, push, and PR #67 remote CI gate; shipped/merged evidence pending until merge
 
+
+  # =========================================================================
+  # Epic 129: Destructive lifecycle mutation controls
+  # =========================================================================
+  epic-129: done  # Local implementation and closure reconciliation complete for exactly the supported reversible `prune_hot_segment` mutation class; unsupported classes remain fail-closed, including hard delete, truncate, arbitrary move, rewrite, chmod, archive/manifest mutation, object-storage deletion, scheduled retention, production credentials, and cross-service destructive operations
+  129-1-destructive-lifecycle-plan-hash-authorization-contract: done  # Plan-hash authorization, canonical payload binding, operator approval, expiry/stale-evidence rules, replay validation refs, rollback evidence refs, and unsupported mutation registry are complete; support remains bounded to `prune_hot_segment` only and unsupported classes fail-closed
+  129-2-lifecycle-dry-run-plan-generation-and-evidence-store: done  # Dry-run evidence records plan hash, affected identities, expected `prune_hot_segment` mutations, risk summary, expiry, trace/request ids, replay validation, rollback prerequisites, and audit without file movement; unsupported classes fail-closed
+  129-3-approval-gated-lifecycle-apply-prune-delete-execution: done  # Approval-gated apply executes only the supported reversible `prune_hot_segment` quarantine path after current dry-run hash, approval, locks, idempotency, target revalidation, and rollback evidence; delete/truncate/move/rewrite/chmod/archive/object-storage/scheduled-retention classes fail-closed
+  129-4-lifecycle-rollback-restore-execution-and-verification: done  # Rollback/restore is complete only for reversible `prune_hot_segment` quarantine evidence with hash/replay verification, audit/status emission, idempotency, and unsupported-state fail-closed behavior
+  129-5-dashboard-and-api-lifecycle-mutation-visibility: done  # Read-only API/dashboard lifecycle mutation status exposes dry-run, approval, execution, rollback readiness, audit trail, freshness, and ProblemDetails without triggering mutation helpers; unsupported classes remain fail-closed
+  129-6-epic-129-destructive-lifecycle-mutation-controls-closure: done  # Closure artifact records Autopilot completion, code-review APPROVE/CLEAR, UltraQA clean, focused pytest 3 passed, targeted pytest 348 passed, Ruff/node_check/py_compile/git_diff_check passed, Stories 129.1-129.6 complete, supported `prune_hot_segment` only, and unsupported classes fail-closed
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+
+  - date: "2026-07-06"
+    event: epic-129-status-docs-local-done-reconciliation
+    from: review
+    to: done
+    epic: epic-129
+    story: 129-6-epic-129-destructive-lifecycle-mutation-controls-closure
+    source: autopilot-epic-129-status-docs-reconciliation
+    reason: >-
+      Local docs/status reconciliation marks Epic 129 and Stories 129.1-129.6
+      done without runtime changes. Evidence paths: .omx/handoff/epic129-state-5-complete.json;
+      .omx/artifacts/ultragoal/epic-129/ledger.md;
+      .omx/artifacts/ultragoal/epic-129/implementation-evidence.md;
+      .omx/artifacts/ultragoal/epic-129/rework-evidence.md;
+      .omx/artifacts/ultragoal/epic-129/rework-2-evidence.md;
+      .omx/handoff/epic-129-rework-ultraqa-report.md;
+      .omx/plans/epic-129-destructive-lifecycle-mutation-controls-plan.md;
+      .omx/specs/epic-129-destructive-lifecycle-mutation-controls-test-spec.md;
+      and _bmad-output/implementation-artifacts/129-6-epic-129-destructive-lifecycle-mutation-controls-closure.md.
+      Supported mutation class is only reversible `prune_hot_segment`;
+      unsupported classes remain fail-closed.
 
 
   - date: "2026-07-04"
