@@ -68,6 +68,9 @@ jobs:
       - name: Check tier declarations (P3-I1)
         run: uv run python scripts/check_tier_declarations.py
 
+      - name: Check retention policy readiness (Story 130.1)
+        run: uv run python scripts/check_retention_policy_readiness.py
+
       - name: Check production credentials (Story 131.2)
         run: uv run python scripts/check_production_credentials.py
 
@@ -93,6 +96,7 @@ jobs:
           uv run python scripts/check_trace_id_required.py --self-test
           uv run python scripts/check_tier_declarations.py --self-test
           uv run python scripts/check_sbom_licenses.py --self-test
+          uv run python scripts/check_retention_policy_readiness.py --self-test
           uv run python scripts/check_production_credentials.py --self-test
           uv run python scripts/check_github_write_activation.py --self-test
           uv run python scripts/check_deployment_change_readiness.py --self-test

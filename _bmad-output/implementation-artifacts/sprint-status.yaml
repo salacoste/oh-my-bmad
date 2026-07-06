@@ -1112,6 +1112,13 @@ development_status:
   129-5-dashboard-and-api-lifecycle-mutation-visibility: done  # Read-only API/dashboard lifecycle mutation status exposes dry-run, approval, execution, rollback readiness, audit trail, freshness, and ProblemDetails without triggering mutation helpers; unsupported classes remain fail-closed
   129-6-epic-129-destructive-lifecycle-mutation-controls-closure: done  # Closure artifact records Autopilot completion, code-review APPROVE/CLEAR, UltraQA clean, focused pytest 3 passed, targeted pytest 348 passed, Ruff/node_check/py_compile/git_diff_check passed, Stories 129.1-129.6 complete, supported `prune_hot_segment` only, and unsupported classes fail-closed
 
+
+  # =========================================================================
+  # Epic 130: Object-storage lifecycle jobs and scheduled retention
+  # =========================================================================
+  epic-130: in-progress  # Story 130.1 opens Epic 130 as a static retention policy/object-storage adapter readiness contract only; no scheduled job, object-storage deletion/transition, archive/manifest mutation, backup pruning, external storage call, production credential loading, command surface, registry mutation endpoint, or runtime audit emitter is enabled
+  130-1-retention-policy-and-object-storage-adapter-contract: done  # Defines executable retention policy and adapter readiness contract/checker for policy fields, manifest-backed object identity, holds/exclusions, dry-run/apply separation, UTC clock semantics, eventual-consistency fail-closed handling, and CI/just/docs wiring; scheduled retention jobs and storage mutations remain disabled/deferred
+
   # =========================================================================
   # Epic 131: Production operations runbook and preflight contract
   # =========================================================================
@@ -1130,6 +1137,38 @@ audit_trail:
 
 
 
+
+
+  - date: "2026-07-06"
+    event: story-130-1-retention-policy-object-storage-adapter-contract-local-done
+    from: planned
+    to: done
+    epic: epic-130
+    story: 130-1-retention-policy-and-object-storage-adapter-contract
+    source: scoped-autopilot-story-130-1
+    operation_id: story-130-1-retention-policy-object-storage-adapter-contract
+    operation_class: lifecycle_retention
+    target_environment: repo-static-readiness
+    target_repository_or_service: retention-policy-object-storage-adapter-contract
+    authority_source: _bmad-output/planning-artifacts/phase-48-production-readiness-epics.md
+    dry_run_evidence_ref: scripts/check_retention_policy_readiness.py
+    approval_ref: docs/production-operations.md#story-1301-retention-policy-and-object-storage-adapter-contract
+    request_trace_correlation_id: epic-130-story-130-1
+    emergency_disable_state: fail-closed-no-retention-job-or-storage-mutation
+    actor: codex-autonomous-coding-agent
+    risk_summary: >-
+      Story 130.1 records static retention policy/object-storage adapter readiness
+      only. It does not add scheduled retention jobs, object-storage deletion or
+      transition, archive/manifest mutation, backup pruning, external object
+      storage calls, production credential loading, command surfaces, registry
+      mutation endpoints, or runtime audit emitters.
+    rollback_ref: revert-story-130-1-retention-policy-object-storage-adapter-contract-diff
+    expiry_freshness: static-readiness-entry-refresh-on-story-130-2-dry-run-or-retention-policy-contract-change
+    status: done
+    summary: >-
+      Story 130.1 defines executable policy/adapter prerequisites and fail-closed
+      evidence for future retention automation. Verification is executable through
+      scripts/check_retention_policy_readiness.py, its self-test, and focused pytest.
 
   - date: "2026-07-06"
     event: story-131-6-production-operations-readiness-closure-local-done

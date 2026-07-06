@@ -11,6 +11,25 @@ This document is the operator checklist future Stories 131.2-131.6 must satisfy
 before they activate any production action. The contract is intentionally stricter
 than the current implementation surface.
 
+
+## Story 130.1 retention policy and object-storage adapter contract
+
+Story 130.1 starts Epic 130 with a static policy/readiness contract in
+`docs/retention-policy-object-storage-readiness.json` and an executable gate in
+`scripts/check_retention_policy_readiness.py`. The contract defines required
+retention policy fields, manifest-backed object identity, adapter capability
+prerequisites, dry-run/apply separation, UTC clock semantics, eventual-consistency
+stale-read handling, legal holds/exclusions, recovery references, and fail-closed
+conditions.
+
+Scheduled retention jobs remain disabled in this slice. Current non-goals include
+no object-storage deletion or transition, no archive or lifecycle-manifest mutation,
+no backup pruning, no external object storage calls, no production credential
+loading, no runtime audit emitter, no dashboard command surface, and no registry
+mutation endpoint. Future Stories 130.2-130.4 must provide dry-run validation,
+lock/idempotency-protected scheduling, approval-bound apply evidence, audit, and
+recovery proof before retention automation can mutate anything.
+
 ## Operating principles
 
 - **No authority by documentation alone.** This document describes evidence and

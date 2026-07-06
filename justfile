@@ -247,6 +247,7 @@ lint:
     uv run python scripts/check_single_writer.py
     uv run python scripts/check_no_subprocess.py
     uv run python scripts/check_mcp_transport.py
+    uv run python scripts/check_retention_policy_readiness.py
     uv run python scripts/check_production_credentials.py
     uv run python scripts/check_github_write_activation.py
     uv run python scripts/check_deployment_change_readiness.py
@@ -270,6 +271,7 @@ check-gates:
     uv run python scripts/check_mcp_transport.py
     uv run python scripts/check_trace_id_required.py
     uv run python scripts/check_tier_declarations.py
+    uv run python scripts/check_retention_policy_readiness.py
     uv run python scripts/check_production_credentials.py
     uv run python scripts/check_github_write_activation.py
     uv run python scripts/check_deployment_change_readiness.py
@@ -288,6 +290,7 @@ check-gates-self-test:
     uv run python scripts/check_trace_id_required.py --self-test
     uv run python scripts/check_tier_declarations.py --self-test
     uv run python scripts/check_sbom_licenses.py --self-test
+    uv run python scripts/check_retention_policy_readiness.py --self-test
     uv run python scripts/check_production_credentials.py --self-test
     uv run python scripts/check_github_write_activation.py --self-test
     uv run python scripts/check_deployment_change_readiness.py --self-test
